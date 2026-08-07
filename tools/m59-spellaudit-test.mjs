@@ -215,8 +215,8 @@ write([
   // asserting on only exists on the success path, which execFileSync does not hand back.
   const { spawnSync } = await import('node:child_process');
   const { existsSync } = await import('node:fs');
-  const { pathToFileURL } = await import('node:url');
-  const here = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const here = fileURLToPath(new URL('.', import.meta.url));
   const fixture = join(dir, 'm59-guard-test.mjs');       // the name is the point
   // pathToFileURL, not the bare path: on Windows `C:/...` in an import specifier is
   // read as the URL scheme `c:` and throws ERR_UNSUPPORTED_ESM_URL_SCHEME — which

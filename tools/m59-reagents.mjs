@@ -27,6 +27,7 @@
 // The keeper already banks above its threshold, so money flows one way; this spends what
 // is IN HAND, which is what selling just produced.
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const arg = (n, d = null) => {
@@ -126,8 +127,8 @@ const KEEP = ['shilling', 'elderberry', 'herb',
 // the mushroom-and-gem pile goes to the counter.
 const FOOD = (() => {
   try {
-    const j = JSON.parse(readFileSync(new URL('../substrate/m59-items.json', import.meta.url)
-                                        .pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'utf8'));
+    const j = JSON.parse(readFileSync(
+      fileURLToPath(new URL('../substrate/m59-items.json', import.meta.url)), 'utf8'));
     return new Set(Object.values(j.food ?? {}).filter(f => (f.nutrition ?? 0) > 0)
                      .map(f => String(f.name).toLowerCase()));
   } catch { return new Set(); }

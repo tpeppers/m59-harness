@@ -40,11 +40,12 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const M59_ROOT = process.env.M59_ROOT || 'C:/code/meridian59';
 const HOST = process.env.M59_HOST || '127.0.0.1';
 const ADMIN_PORT = Number(process.env.M59_ADMIN_PORT || 9998);
-const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = process.env.M59_SPELLS || path.join(here, '..', 'substrate', 'm59-spells.json');
 
 // kod/include/blakston.khd:2027

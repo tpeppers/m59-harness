@@ -30,8 +30,9 @@
 // nearestCity() answers it from the room graph rather than from a hunch.
 
 import { readFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const MAP_FILE   = process.env.M59_MAP_FILE   || here('../substrate/m59-map.json');
 const ZONES_FILE = process.env.M59_ZONES_FILE || here('../compendium/data/zones.json');
 
@@ -272,8 +273,7 @@ export function citiesByDistance(roomNum, opts = {}) {
 }
 
 // ---------------------------------------------------------------------- cli
-if (import.meta.url === `file://${process.argv[1]}` ||
-    process.argv[1]?.endsWith('m59-underworld.mjs')) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const arg = process.argv[2];
   if (arg) {
     const map = loadJSON(MAP_FILE);

@@ -36,19 +36,20 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadRoo, RoomGeometry } from './m59-roo.mjs';
 import { loadCodeExits } from './m59-codeexits.mjs';
 
 // Exits that exist only as code in the room class — see m59-codeexits.mjs. Built by:
 // node tools/m59-codeexits.mjs
 const CODE_EXITS_FILE = process.env.M59_CODE_EXITS ||
-  path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')),
+  path.join(path.dirname(fileURLToPath(import.meta.url)),
             '..', 'substrate', 'm59-codeexits.json');
 
 const HOST = process.env.M59_HOST || '127.0.0.1';
 const ADMIN_PORT = Number(process.env.M59_ADMIN_PORT || 9998);
 const MAP_FILE = process.env.M59_MAP ||
-  path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'substrate', 'm59-map.json');
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'substrate', 'm59-map.json');
 
 // blakston.khd:1219-1226. Note LEAVE_x and ENTER_x share numbers with opposite
 // meanings, so never mix the two vocabularies.

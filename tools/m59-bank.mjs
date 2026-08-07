@@ -64,8 +64,9 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const BANK_DIR = process.env.M59_BANK_DIR || here('../substrate/banks');
 
 // Enough to see where the money came from without the file growing without bound.
@@ -351,9 +352,7 @@ export function backfill({ substrate = here('../substrate'), agentToCharacter = 
 
 // ------------------------------------------------------------------ the CLI
 
-const isMain = process.argv[1] &&
-  import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href
-    .replace(/file:\/\/([A-Za-z]:)/, 'file:///$1');
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 async function agentMapFromBroker() {
   const port = process.env.M59_BROKER_PORT || 8901;

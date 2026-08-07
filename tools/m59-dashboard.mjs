@@ -10,6 +10,7 @@
 // looks like progress and is not: a kill at or below your own level fails the
 // advancement test outright, so a character can kill all night and gain nothing.
 import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { summarise, readLedger } from './m59-ledger.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 
@@ -30,7 +31,7 @@ const { label: FLEET_LABEL, ledgerDir: LEDGER_DIR } = resolveFleet();
 // wrong one of those is worse than no link.
 const COMPENDIUM = process.env.M59_COMPENDIUM || 'http://localhost:8099';
 const MAP_FILE = process.env.M59_MAP_FILE ||
-  new URL('../substrate/m59-map.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-map.json', import.meta.url));
 
 const zoneByNum = new Map(), zoneByName = new Map();
 try {
@@ -55,7 +56,7 @@ const slug = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const KINDS = ['items', 'spells', 'skills', 'creatures', 'zones'];
 const compendiumIndex = new Map();      // slug -> "kind/file"
 try {
-  const root = new URL('../compendium/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const root = fileURLToPath(new URL('../compendium/', import.meta.url));
   for (const kind of KINDS) {
     let files = [];
     try { files = readdirSync(root + kind); } catch { continue; }

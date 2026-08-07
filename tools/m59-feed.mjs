@@ -30,6 +30,7 @@
 // throw — the same invariant deploy() and outfitPair() needed, learned the same way,
 // which is by finding characters standing in towns with nothing driving them.
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 // foodValue knows what a name is actually worth — and, just as importantly, that plain,
 // blue, red and purple mushrooms are not food. isFood agrees; the fleet's pack contents
 // did not.
@@ -69,8 +70,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const ITEMS = (() => {
   try {
-    return JSON.parse(readFileSync(new URL('../substrate/m59-items.json', import.meta.url)
-                                     .pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'utf8'));
+    return JSON.parse(readFileSync(
+      fileURLToPath(new URL('../substrate/m59-items.json', import.meta.url)), 'utf8'));
   } catch { return null; }
 })();
 const foodValue = (n) => ITEMS?.food?.[String(n || '').trim().toLowerCase()] || null;

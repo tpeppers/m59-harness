@@ -23,6 +23,7 @@
 // that triggers it. The geometry can then turn a condition into a square to walk to.
 import { readFileSync, readdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // RID_FOO = 534 out of blakston.khd, so a branch naming RID_C4 becomes room 534.
 export function loadRids(khdPath) {
@@ -156,7 +157,7 @@ export function loadCodeExits(file) {
 }
 
 if (process.argv[1]?.endsWith('m59-codeexits.mjs')) {
-  const root = new URL('../', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const root = fileURLToPath(new URL('../', import.meta.url));
   const kod = process.env.M59_KOD || 'C:/code/meridian59/kod';
   if (!existsSync(kod)) { console.error('no kod source at ' + kod); process.exit(1); }
   const idx = buildCodeExits({ kodRoot: kod, mapFile: root + 'substrate/m59-map.json',

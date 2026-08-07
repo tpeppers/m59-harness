@@ -22,6 +22,7 @@
 import { createServer } from 'node:http';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf('--' + name);
@@ -29,8 +30,7 @@ const arg = (name, dflt) => {
 };
 const BROKER = `http://127.0.0.1:${arg('broker', '8901')}/`;
 const PORT = Number(arg('port', '8903'));
-const DISPUTES = new URL('../substrate/m59-spot-disputes.jsonl', import.meta.url)
-  .pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const DISPUTES = fileURLToPath(new URL('../substrate/m59-spot-disputes.jsonl', import.meta.url));
 
 let rpc = 0;
 async function call(name, args) {

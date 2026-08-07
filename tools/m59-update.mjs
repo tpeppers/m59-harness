@@ -53,6 +53,7 @@
 //     reconnect on their own and need nothing.
 //   * The game server is NOT restarted. It holds the world; this holds the players.
 import { spawn, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const arg = (n, d = null) => {
   const i = process.argv.indexOf('--' + n);
@@ -83,7 +84,7 @@ async function call(name, args = {}) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const stamp = () => new Date().toISOString().slice(11, 19);
-const here = rel => new URL(rel, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = rel => fileURLToPath(new URL(rel, import.meta.url));
 
 function run(script, args) {
   return new Promise((res, rej) => {

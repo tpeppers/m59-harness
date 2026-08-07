@@ -33,8 +33,9 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const TRANSIT_DIR = process.env.M59_TRANSIT_DIR || here('../substrate/transits');
 
 // A few hours of travel for a busy character. Crossings are far rarer than hits — one per

@@ -109,7 +109,14 @@ async function health(port = HTTP_PORT, timeoutMs = 2500) {
 
 const sameRepo = (h) => {
   if (!h?.root) return false;
-  const norm = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  // The broker derives its root from import.meta.url, whose pathname percent-encodes
+  // spaces on Windows ("M59%20Bot"). REPO is a native filesystem path. Compare the
+  // decoded forms so the service can recognize—and safely stop—its own broker.
+  const norm = s => {
+    let value = String(s);
+    try { value = decodeURIComponent(value); } catch { /* keep malformed input literal */ }
+    return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  };
   return norm(h.root) === norm(REPO);
 };
 const sameFleet = (h) => (h?.fleet || 'default') === LABEL;

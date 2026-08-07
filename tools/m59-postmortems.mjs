@@ -55,8 +55,9 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR || here('../substrate/postmortems');
 
 // How fresh an observation has to be to place a death. See the table above.
@@ -330,8 +331,7 @@ export function facets(rows) {
 
 // ------------------------------------------------------------------ the command line
 
-if (import.meta.url === `file://${process.argv[1]}` ||
-    import.meta.url === `file:///${String(process.argv[1]).replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const arg = (n, d = null) => {
     const i = process.argv.indexOf('--' + n);
     return i < 0 ? d : (process.argv[i + 1] ?? true);
