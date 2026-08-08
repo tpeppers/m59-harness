@@ -19,6 +19,7 @@
 // the proficiency names against the server's own resource strings.
 
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { buildFromCharacter, COOKIE, importUrl } from './m59-compendium.mjs';
 import { proficiencyFor, WEAPON_PROFICIENCY } from './m59-skills.mjs';
 
@@ -31,8 +32,8 @@ const eq = (what, got, want) =>
   ok(what, JSON.stringify(got) === JSON.stringify(want),
      `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
 
-const DATA = JSON.parse(readFileSync(new URL('../compendium/creatures.json', import.meta.url)
-  .pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'utf8'));
+const DATA = JSON.parse(readFileSync(
+  fileURLToPath(new URL('../compendium/creatures.json', import.meta.url)), 'utf8'));
 
 // A character as the three broker tools report one.
 const character = ({ name = 'Kermit', equipped = [], skills = [], health = 29 } = {}) => ({

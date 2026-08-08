@@ -25,6 +25,7 @@
 // and nothing said so. Everything here is read from the live fleet instead, which is
 // also what lets this repository be public.
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const arg = (n, d = null) => {
   const i = process.argv.indexOf('--' + n);
@@ -656,8 +657,7 @@ async function reclaimDrops() {
   reclaimBusy = true;
   reclaimAt = Date.now();
   const { spawn } = await import('node:child_process');
-  const script = new URL('./m59-reclaim.mjs', import.meta.url).pathname
-                   .replace(/^\/([A-Za-z]:)/, '$1');
+  const script = fileURLToPath(new URL('./m59-reclaim.mjs', import.meta.url));
   console.log(`   reclaiming drops (m59-reclaim.mjs --sites ${RECLAIM_SITES})`);
   try {
     await new Promise(res => {
@@ -682,8 +682,7 @@ async function spreadReagents(rows) {
   if (almonerBusy || Date.now() - almonerAt < ALMONER_EVERY_MS) return;
   almonerBusy = true;
   almonerAt = Date.now();
-  const script = new URL('./m59-almoner.mjs', import.meta.url).pathname
-                   .replace(/^\/([A-Za-z]:)/, '$1');
+  const script = fileURLToPath(new URL('./m59-almoner.mjs', import.meta.url));
   console.log(`   spreading reagents (m59-almoner.mjs --amount ${ALMONER_SHARE})`);
   try {
     await new Promise(res => {
@@ -712,8 +711,7 @@ async function spreadReagents(rows) {
 // per-town bank accounts, the shop-reply race, and putting the keeper's orders back.
 async function outfitPair(a, b) {
   const { spawn } = await import('node:child_process');
-  const script = new URL('./m59-outfit.mjs', import.meta.url).pathname
-                   .replace(/^\/([A-Za-z]:)/, '$1');
+  const script = fileURLToPath(new URL('./m59-outfit.mjs', import.meta.url));
   try {
     await new Promise(res => {
       const p = spawn(process.execPath, [script, '--agents', `${a.agent},${b.agent}`,
@@ -772,8 +770,7 @@ if (isEntryPoint) {
   // Keyed by PORT, not by fleet name: this file has no fleet of its own, it supervises
   // whichever broker answers on that port, and two supervisors on one port are the
   // collision that matters.
-  const LOCK = new URL(`../substrate/supervise-${PORT}.pid`, import.meta.url)
-                 .pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const LOCK = fileURLToPath(new URL(`../substrate/supervise-${PORT}.pid`, import.meta.url));
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   if (existsSync(LOCK)) {
     const held = Number(String(readFileSync(LOCK, 'utf8')).trim());

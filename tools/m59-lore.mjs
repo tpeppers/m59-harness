@@ -35,8 +35,9 @@
 // An empty result and a malformed question look identical in JSON. Only one of them is
 // worth acting on.
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const M59_ROOT = process.env.M59_ROOT || 'C:/code/Meridian59';
 const GITHUB = 'https://github.com/Meridian59/Meridian59/blob/main';
 

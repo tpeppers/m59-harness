@@ -30,6 +30,7 @@
 // So: match case-insensitively, and walk the parent chain only when the class itself is
 // silent.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const arg = (n, d = null) => {
   const i = process.argv.indexOf('--' + n);
@@ -39,7 +40,7 @@ const arg = (n, d = null) => {
 };
 const PRINT_ONLY = !!arg('print', false);
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const KODDB = here('../compendium/data/koddb.json');
 const SPELLS = here('../substrate/m59-spells.json');
 const OUT = here('../compendium/data/planner.json');

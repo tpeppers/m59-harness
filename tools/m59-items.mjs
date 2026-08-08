@@ -31,8 +31,9 @@
 // is room when there is not, which is the bug this exists to prevent.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const HERE = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const HERE = dirname(fileURLToPath(import.meta.url));
 const KODDB = join(HERE, '..', 'compendium', 'data', 'koddb.json');
 export const ITEMS_FILE = join(HERE, '..', 'substrate', 'm59-items.json');
 
@@ -248,8 +249,7 @@ function build() {
   console.log('  heaviest:', heavy.map(h => `${h.name} ${h.weight}`).join(', '));
 }
 
-if (import.meta.url === `file://${process.argv[1]}` ||
-    import.meta.url.endsWith(String(process.argv[1]).replace(/\\/g, '/'))) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const arg = process.argv[2];
   if (arg === 'build') build();
   else if (arg) {

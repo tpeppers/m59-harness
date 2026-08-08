@@ -35,6 +35,7 @@ import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
 import { describeObject, affordances, OF, dropSpec } from './m59-parse.mjs';
@@ -293,7 +294,7 @@ const sessions = new Map();             // agent name -> Session
 //
 // Rotated by wall clock and capped, so an overnight fleet does not fill a disk.
 const RECORD_DIR = process.env.M59_RECORD_DIR ||
-  new URL('../substrate/recordings/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/recordings/', import.meta.url));
 const RECORD_WINDOW_MS = Number(process.env.M59_RECORD_WINDOW_MS || 120_000);   // 2 minutes
 const RECORD_KEEP = Number(process.env.M59_RECORD_KEEP || 15);                  // ~30 minutes
 
@@ -347,7 +348,7 @@ const { fleet: FLEET, stateFile: STATE_FILE } = (() => {
 // running at once, and "a node process with m59-broker in its command line" is
 // not an identity — treating it as one let a shutdown in one repository log out
 // another repository's whole fleet.
-const BROKER_ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const BROKER_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 // Which rooms generate which creatures. Built by: node tools/m59-spawns.mjs
 // The Grand Museum of Raza. The map labels it "Tutorial Exit Inside"; the portal is
@@ -358,12 +359,12 @@ const MUSEUM_ROOM = Number(process.env.M59_MUSEUM_ROOM || 1018);
 const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
-  new URL('../substrate/m59-spawns.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 // Which squares have actually held under attack, learned by standing in them. Shared
 // with the keeper, which is what writes it — one character's experiment is every
 // character's knowledge.
 const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
-  new URL('../substrate/m59-safespots.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
 
 const fleetState = new Map();   // agent -> { credentials, autopilot }
 
@@ -7462,7 +7463,7 @@ function handleControl(action, res) {
     return reply(200, { ok: true, note: out ? `rejoining ${out} character(s) — watch the log` : 'everyone is already in game' });
   }
   if (action === 'restart' || action === 'stop') {
-    const svc = new URL('./m59-service.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+    const svc = fileURLToPath(new URL('./m59-service.mjs', import.meta.url));
     const args = [svc, action];
     if (FLEET) args.push('--fleet', FLEET);
     try {

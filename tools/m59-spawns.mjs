@@ -18,6 +18,7 @@
 // the class definitions), because the danger of a room is the level of the WORST
 // thing in it, not of the thing you meant to hunt.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // Room keys in spawns.json are kod class names — "OutdoorsF7" — and the map records
 // the same string as `cls`, so this join is exact. (The creature PAGES cite the .roo
@@ -791,7 +792,7 @@ export function scorePrey(spawns, character, {
 }
 
 if (process.argv[1]?.endsWith('m59-spawns.mjs')) {
-  const root = new URL('../', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const root = fileURLToPath(new URL('../', import.meta.url));
   const idx = buildSpawnIndex({
     spawnsFile: root + 'compendium/data/spawns.json',
     mapFile: root + 'substrate/m59-map.json',

@@ -51,6 +51,7 @@
 // their twelve quiet seconds again with a character standing on them.
 import { selectForRetest, reinstateUntested } from './m59-safespots.mjs';
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const arg = (n) => process.argv.includes('--' + n);
 const argVal = (n) => { const i = process.argv.indexOf('--' + n); return i < 0 ? null : process.argv[i + 1]; };
@@ -105,8 +106,7 @@ const BEFORE = (() => {
   return t;
 })();
 
-const FILE = new URL('../substrate/m59-safespots.json', import.meta.url).pathname
-               .replace(/^\/([A-Za-z]:)/, '$1');
+const FILE = fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
 if (!existsSync(FILE)) { console.error('no safe-spot book at ' + FILE); process.exit(1); }
 
 const book = JSON.parse(readFileSync(FILE, 'utf8'));

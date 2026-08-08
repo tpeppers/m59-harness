@@ -54,9 +54,9 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const DESC_DIR = process.env.M59_DESC_DIR || here('../substrate/descriptions');
 
 // clientd3d/object.h:30 — the client's own edit box limit, and therefore the longest

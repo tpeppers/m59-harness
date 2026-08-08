@@ -31,8 +31,9 @@
 // is driving, and it is reassigned. The character is the thing that has the skills.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const ABILITY_DIR = process.env.M59_ABILITY_DIR || here('../substrate/abilities');
 
 // How long a cached answer is served before it is re-read. This is a SAFETY NET, not

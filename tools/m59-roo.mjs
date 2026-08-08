@@ -49,6 +49,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ROO_MAGIC = Buffer.from([0x52, 0x4f, 0x4f, 0xb1]);
 const ROO_MIN_VERSION = 4;
@@ -955,7 +956,7 @@ if (import.meta.filename === process.argv[1]) {
   // directly rather than imported: m59-map.mjs imports THIS file to bake geometry
   // in, so importing it back would deadlock on the circular top-level await.
   const mapPath = process.env.M59_MAP ||
-    path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'substrate', 'm59-map.json');
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'substrate', 'm59-map.json');
   const viaMap = needle => {
     let map;
     try { map = JSON.parse(fs.readFileSync(mapPath, 'utf8')); }

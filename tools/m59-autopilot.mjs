@@ -35,16 +35,17 @@ import * as party from './m59-party.mjs';
 import { mayShareSpot } from './m59-party.mjs';
 import { CITY_INNS } from './m59-underworld.mjs';
 import { mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // Built by: node tools/m59-spawns.mjs
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
-  new URL('../substrate/m59-spawns.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 // Learned by standing in them. See SafeSpotBook.
 const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
-  new URL('../substrate/m59-safespots.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
 // One file per death. Gitignored, like everything a running fleet writes.
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR ||
-  new URL('../substrate/postmortems', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/postmortems', import.meta.url));
 
 // How long a spot must go quiet, with something adjacent to us that wants to kill us,
 // before we believe it works. Two passes' worth: one quiet reading is also what you
@@ -297,8 +298,7 @@ const REAGENT_TARGET = 20;
 // zero, which reads as "not worth a walk" and is the safe direction to fail in.
 const ITEM_VALUE = (() => {
   try {
-    const p = new URL('../substrate/m59-values.json', import.meta.url)
-                .pathname.replace(/^\/([A-Za-z]:)/, '$1');
+    const p = fileURLToPath(new URL('../substrate/m59-values.json', import.meta.url));
     return JSON.parse(readFileSync(p, 'utf8')).values ?? {};
   } catch { return {}; }
 })();

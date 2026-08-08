@@ -33,8 +33,9 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const HITS_DIR = process.env.M59_HITS_DIR || here('../substrate/hits');
 
 // Enough to cover a long session without the file growing without bound. A busy character
@@ -157,7 +158,7 @@ export function summarise(book, { since = 0 } = {}) {
 
 // ------------------------------------------------------------------ the command line
 
-if (import.meta.url === (process.argv[1] ? new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href : '')
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
     || process.argv[1]?.endsWith('m59-hits.mjs')) {
   const arg = (name, dflt = null) => {
     const i = process.argv.indexOf(`--${name}`);

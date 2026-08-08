@@ -37,8 +37,9 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const here = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const TOUGHER_DIR = process.env.M59_TOUGHER_DIR || here('../substrate/tougher');
 
 // What the server says when it happens. Both lines are sent together; the first is the
@@ -260,8 +261,7 @@ export function toughSummary(gains) {
 
 // ------------------------------------------------------------------ the command line
 
-if (import.meta.url === `file://${process.argv[1]}` ||
-    import.meta.url === `file:///${String(process.argv[1]).replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const gains = allGains({});
   const s = toughSummary(gains);
   console.log(`${s.total} max-health points on record` +

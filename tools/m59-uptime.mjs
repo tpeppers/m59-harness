@@ -21,9 +21,9 @@
 // keeper, and a keeper that is gone cannot write "I am gone".
 import { appendFileSync, readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const HERE = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const HERE = dirname(fileURLToPath(import.meta.url));
 export const UPTIME_FILE = process.env.M59_UPTIME_FILE ||
   join(HERE, '..', 'substrate', 'keeper-uptime.jsonl');
 
@@ -240,4 +240,3 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
                   `${new Date(o.from).toISOString().slice(11, 19)}${o.open ? '  STILL DOWN' : ''}  ${o.why ?? ''}`);
   }
 }
-

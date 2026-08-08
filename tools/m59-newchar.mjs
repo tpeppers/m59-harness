@@ -23,6 +23,7 @@
 // thing cannot get past level 15. So everything here validates BEFORE sending, and
 // refuses to send anything it is not sure of. A loud error beats a quiet cripple.
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // Group 2, slots 1..6 (m59-parse.mjs STAT_NAMES). Order is the wire order; slot 7 is
 // karma, which is not allocated at creation.
@@ -86,8 +87,7 @@ export const SPELL_LOADOUTS = {
 let catalogue = null;
 function spells(file) {
   if (catalogue) return catalogue;
-  const f = file || new URL('../substrate/m59-spells.json', import.meta.url)
-    .pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const f = file || fileURLToPath(new URL('../substrate/m59-spells.json', import.meta.url));
   try { catalogue = JSON.parse(readFileSync(f, 'utf8')).spells || []; } catch { catalogue = []; }
   return catalogue;
 }
