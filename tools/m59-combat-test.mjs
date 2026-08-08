@@ -25,7 +25,7 @@ import {
   signetPayout, signetOwnerOf, SIGNET_OWNERS,
   parseDeathBroadcast, deathBroadcastFor,
 } from './m59-skills.mjs';
-import { Autopilot, bearingIn, DEBUG_STATES } from './m59-autopilot.mjs';
+import { Autopilot, bearingIn, DEBUG_STATES, shouldWaitForProvision } from './m59-autopilot.mjs';
 import { isFood } from './m59-items.mjs';
 import { outages, outageAround, recoverCrash, readLedger, ACTIVE_FILE } from './m59-uptime.mjs';
 import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -34,8 +34,8 @@ import { join } from 'node:path';
 const recoverCrashAt = (activeFile, ledgerFile) => recoverCrash({ activeFile, ledgerFile });
 const readLedgerAt = (f) => readLedger(f);
 import { RoomGeometry } from './m59-roo.mjs';
-import { roomCap, karmaSafe } from './m59-spawns.mjs';
-import { OF } from './m59-parse.mjs';
+import { inheritsClass, roomCap, karmaSafe } from './m59-spawns.mjs';
+import { OF, prepareActTarget } from './m59-parse.mjs';
 import { nearestSafeSpot, safeSpots, exposureAt, lineOfSight, MAX_ATTACKERS } from './m59-safespots.mjs';
 
 let pass = 0, fail = 0;
@@ -43,6 +43,18 @@ const ok = (what, cond, extra = '') => {
   if (cond) { pass++; console.log(`  ok   ${what}`); }
   else { fail++; console.log(`  FAIL ${what}${extra ? ` — ${extra}` : ''}`); }
 };
+
+console.log('\nprovisioning without long post-floor stalls');
+{
+  ok('keeps waiting while still below the configured fighting floor',
+     shouldWaitForProvision({ vigor: 90, floor: 100, wait: 127, hurt: false }));
+  ok('sets out above the floor instead of waiting minutes for the ceiling',
+     !shouldWaitForProvision({ vigor: 131, floor: 100, wait: 127, hurt: false }));
+  ok('waits above the floor when the next top-up is close',
+     shouldWaitForProvision({ vigor: 131, floor: 100, wait: 45, hurt: false }));
+  ok('waits above the floor when digestion time also heals damage',
+     shouldWaitForProvision({ vigor: 131, floor: 100, wait: 127, hurt: true }));
+}
 
 // A client whose inventory is a list of [id, name], and whose `use` replies the way the
 // server does: either a refusal text from the script, or silence and the id joining the
@@ -823,6 +835,45 @@ console.log('\ndropping a stack needs the quantity');
   ok('a missing object does not throw', k.dropSpec(undefined) === undefined);
 }
 
+console.log('\nthe broker act contract validates drop quantities before the wire');
+{
+  const stack = { id: 7, tag: 1, amount: 20 };
+  const whole = prepareActTarget({ verb: 'drop', target: stack });
+  ok('omitting amount drops the whole observed stack',
+     JSON.stringify(whole.wire_target) === '{"id":7,"amount":20}' &&
+     whole.requested_amount === 20, JSON.stringify(whole));
+  const partial = prepareActTarget({ verb: 'drop', target: stack, amount: 5 });
+  ok('a bounded partial stack drop preserves its requested count',
+     JSON.stringify(partial.wire_target) === '{"id":7,"amount":5}' &&
+     partial.requested_amount === 5, JSON.stringify(partial));
+  const ordinary = prepareActTarget({ verb: 'drop', target: { id: 8 } });
+  ok('an ordinary item stays a bare wire id and reports one requested item',
+     ordinary.wire_target === 8 && ordinary.requested_amount === 1, JSON.stringify(ordinary));
+  ok('fractional stack amounts are rejected', (() => {
+    try { prepareActTarget({ verb: 'drop', target: stack, amount: 1.5 }); return false; }
+    catch (error) { return /whole number/.test(error.message); }
+  })());
+  ok('zero stack amounts are rejected', (() => {
+    try { prepareActTarget({ verb: 'drop', target: stack, amount: 0 }); return false; }
+    catch (error) { return /whole number/.test(error.message); }
+  })());
+  ok('more than the observed stack is rejected before the server chat refusal', (() => {
+    try { prepareActTarget({ verb: 'drop', target: stack, amount: 21 }); return false; }
+    catch (error) { return /only 20/.test(error.message); }
+  })());
+  ok('a quantity on a non-stack item is rejected instead of ignored', (() => {
+    try { prepareActTarget({ verb: 'drop', target: { id: 8 }, amount: 1 }); return false; }
+    catch (error) { return /stackable/.test(error.message); }
+  })());
+  ok('amount on another act verb is rejected instead of silently ignored', (() => {
+    try { prepareActTarget({ verb: 'use', target: stack, amount: 1 }); return false; }
+    catch (error) { return /only valid for drop/.test(error.message); }
+  })());
+  const use = prepareActTarget({ verb: 'use', target: stack });
+  ok('ordinary act verbs retain their object id and no requested amount',
+     use.wire_target === 7 && use.requested_amount === null, JSON.stringify(use));
+}
+
 console.log('\nthe room that filled up with what nobody would kill');
 {
   // East Merchant Way as found live: cap 10, and ten monsters in it — eight baby
@@ -853,7 +904,9 @@ console.log('\nthe room that filled up with what nobody would kill');
     objs.set(1, { id: 1, nameRsc: 'Beaker', flags: OF_ATTACKABLE | OF_PLAYER });   // a fleetmate
     const k = new Autopilot({ name: 't6', world: { room: { num: 554 } },
       client: { selfId: 9, room: { objects: objs }, rsc: { get: r => r },
-                vitals: () => ({ health: { value: 25, max: 25 } }) } }, {});
+                vitals: () => ({ health: {
+                  value: policy.characterLevel ?? 25, max: policy.characterLevel ?? 25,
+                } }) } }, {});
     Object.assign(k.policy, { hunt: 'centipede', maxThreatOver: 6 }, policy);
     return k;
   };
@@ -941,6 +994,37 @@ console.log('\nthe room that filled up with what nobody would kill');
   ok('and says it was the missing row, not the safety band',
      /nothing is known about it/.test(ust.blocked.find(x => x.name === 'rat')?.why ?? ''),
      ust.blocked.find(x => x.name === 'rat')?.why);
+
+  // Rebel troops are the one political class that does have an ordinary spawn-table
+  // row. They remain conditional faction actors, not housekeeping prey. A high-level
+  // character must not initiate a fight with them merely to free a spawn slot.
+  const rebels = mk({ 'rebel soldier': 8, centipede: 2 }, { characterLevel: 100 });
+  const rst = rebels.capBlockers({ num: 554 });
+  ok('a catalogued political troop is excluded from incidental clearing',
+     rst.clearable.length === 0 && rst.blocked[0]?.name === 'rebel soldier', JSON.stringify(rst));
+  ok('and the reason distinguishes faction behavior from raw combat level',
+     /political faction troop/.test(rst.blocked[0]?.why ?? ''), rst.blocked[0]?.why);
+}
+
+console.log('\nsource-derived political troop classification');
+{
+  const parents = new Map([
+    ['duketroop', 'factiontroop'],
+    ['princesstroop', 'factiontroop'],
+    ['veteranduke', 'duketroop'],
+    ['factiontroop', 'monster'],
+    ['ant', 'monster'],
+    ['cyclea', 'cycleb'],
+    ['cycleb', 'cyclea'],
+  ]);
+  ok('direct faction-troop subclasses are recognized',
+     inheritsClass(parents, 'DukeTroop', 'FactionTroop'));
+  ok('deeper subclasses inherit the classification without another hardcoded name',
+     inheritsClass(parents, 'VeteranDuke', 'FactionTroop'));
+  ok('ordinary monsters are not political troops',
+     !inheritsClass(parents, 'Ant', 'FactionTroop'));
+  ok('a malformed parent cycle terminates and fails closed',
+     !inheritsClass(parents, 'CycleA', 'FactionTroop'));
 }
 
 
@@ -1100,6 +1184,22 @@ console.log('\nrefusing to hunt with nothing in hand');
   // the guard catches empty hands rather than becoming a new way to stop.
   ok('an unreadable use list is treated as armed, not as unarmed',
      keeper([], false).armed() === true);
+
+  const spells = names => {
+    const resources = new Map(names.map((name, index) => [index + 1, name]));
+    const k = Object.create(Autopilot.prototype);
+    k.s = {
+      client: {
+        spells: names.map((_, index) => ({ nameRsc: index + 1 })),
+        rsc: { get: id => resources.get(id) },
+      },
+    };
+    return k;
+  };
+  ok('a character that knows create weapon can use the mana recovery path',
+     spells(['Blink', 'Create Weapon']).knowsCreateWeapon() === true);
+  ok('other spells do not justify waiting forever for create weapon',
+     spells(['Blink']).knowsCreateWeapon() === false);
 }
 
 

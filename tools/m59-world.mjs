@@ -587,3 +587,56 @@ export function spreadEdges(candidates) {
   }
   return out;
 }
+
+// A `go` sent immediately after the last movement update can disappear without either
+// a refusal or a room transition. Retry only that silent case, once by default. A
+// spoken refusal or a room change is authoritative, and the bound prevents a dead exit
+// from becoming a loop.
+export function retrySilentGo({ attempt = 0, maxAttempts = 2, entered = false, messages = [] } = {}) {
+  return entered !== true && (!Array.isArray(messages) || messages.length === 0)
+    && attempt < maxAttempts;
+}
+
+// Run the complete bounded request sequence without owning any broker state. Keeping
+// the sequencing here makes the late-entry and cancellation races executable in the
+// offline suite instead of leaving them as comments around Session.goThrough.
+export async function boundedSilentGo({
+  sequence,
+  eventsSince,
+  send,
+  waitForEntry,
+  cancelled = () => false,
+  maxAttempts = 2,
+} = {}) {
+  if (![sequence, eventsSince, send, waitForEntry, cancelled].every(fn => typeof fn === 'function'))
+    throw new TypeError('boundedSilentGo requires sequence, eventsSince, send, waitForEntry, and cancelled functions');
+  const before = sequence();
+  let attempts = 0, entered = null;
+  const messages = [];
+  while (attempts < maxAttempts) {
+    if (cancelled())
+      return { cancelled: true, entered: null, messages, attempts };
+    // An entry can land after the prior wait timed out but before the retry. Observe
+    // the whole request window here; never send a second go after a late success.
+    const lateEntry = eventsSince(before).find(event => event.kind === 'room-entered');
+    if (lateEntry) { entered = lateEntry; break; }
+
+    const attemptBefore = sequence();
+    await send();
+    attempts++;
+    entered = await waitForEntry(attemptBefore) ?? null;
+    // Only messages produced after this go count. A stand-up acknowledgement or
+    // unrelated event before the request must not suppress the one allowed retry.
+    const attemptMessages = eventsSince(attemptBefore)
+      .filter(event => event.text)
+      .map(event => event.text);
+    messages.push(...attemptMessages);
+    if (!retrySilentGo({
+      attempt: attempts,
+      maxAttempts,
+      entered: !!entered,
+      messages: attemptMessages,
+    })) break;
+  }
+  return { cancelled: false, entered, messages, attempts };
+}

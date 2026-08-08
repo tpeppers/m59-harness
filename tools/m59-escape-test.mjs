@@ -23,6 +23,7 @@
 import { escapeUnderworld, standUp, fight } from './m59-skills.mjs';
 import { MOVEON, OF } from './m59-parse.mjs';
 import { readPortalSign, UNDERWORLD_PORTALS, nearestCity } from './m59-underworld.mjs';
+import { boundedSilentGo, retrySilentGo } from './m59-world.mjs';
 
 function underworld({ resting = false, deaf = false, portals = [], unwalkable = [] } = {}) {
   const log = [];
@@ -385,6 +386,79 @@ function safeSpot({ resting = false, deaf = false, hits = 3 } = {}) {
   ok('an ordinary fight sends no stand at all', !log.includes('stand'), JSON.stringify(log));
   ok('and takes exactly the rounds it needed', r.killed === true && r.rounds === 3, 'rounds=' + r.rounds);
   ok('and claims no stand it did not do', r.stood_up === undefined);
+}
+
+
+console.log('\na silent go request gets one bounded retry');
+{
+  ok('the first silent request is retried',
+     retrySilentGo({ attempt: 1, entered: false, messages: [] }) === true);
+  ok('silence after the second request is final',
+     retrySilentGo({ attempt: 2, entered: false, messages: [] }) === false);
+  ok('a room transition is never repeated',
+     retrySilentGo({ attempt: 1, entered: true, messages: [] }) === false);
+  ok('a spoken refusal is authoritative and is not repeated',
+     retrySilentGo({ attempt: 1, entered: false, messages: ['The door is locked.'] }) === false);
+}
+
+
+console.log('\nthe bounded go sequence preserves room and control evidence');
+{
+  const silentThenEntry = async () => {
+    let sequence = 0, sends = 0;
+    const result = await boundedSilentGo({
+      sequence: () => sequence,
+      eventsSince: () => [],
+      send: async () => { sends++; },
+      waitForEntry: async () => sends === 2
+        ? { kind: 'room-entered', roomName: 'Beyond the door' }
+        : null,
+    });
+    return { result, sends };
+  };
+  const retried = await silentThenEntry();
+  ok('one silent request is retried and the second entry is returned',
+     retried.sends === 2 && retried.result.entered?.roomName === 'Beyond the door',
+     JSON.stringify(retried));
+
+  let lateSequence = 0, lateSends = 0;
+  const lateEvents = [];
+  const late = await boundedSilentGo({
+    sequence: () => lateSequence,
+    eventsSince: since => lateEvents.filter(event => event.sequence > since),
+    send: async () => { lateSends++; },
+    waitForEntry: async () => {
+      lateEvents.push({ kind: 'room-entered', roomName: 'Late room', sequence: ++lateSequence });
+      return null; // model a packet arriving just after the wait reports timeout
+    },
+  });
+  ok('a late room entry prevents the second request',
+     lateSends === 1 && late.entered?.roomName === 'Late room', JSON.stringify(late));
+
+  let refusalSequence = 0, refusalSends = 0;
+  const refusalEvents = [];
+  const refused = await boundedSilentGo({
+    sequence: () => refusalSequence,
+    eventsSince: since => refusalEvents.filter(event => event.sequence > since),
+    send: async () => { refusalSends++; },
+    waitForEntry: async () => {
+      refusalEvents.push({ text: 'The door is locked.', sequence: ++refusalSequence });
+      return null;
+    },
+  });
+  ok('a spoken refusal prevents the second request and is returned',
+     refusalSends === 1 && refused.messages[0] === 'The door is locked.', JSON.stringify(refused));
+
+  let cancelled = false, cancelledSends = 0;
+  const stopped = await boundedSilentGo({
+    sequence: () => 0,
+    eventsSince: () => [],
+    cancelled: () => cancelled,
+    send: async () => { cancelledSends++; },
+    waitForEntry: async () => { cancelled = true; return null; },
+  });
+  ok('control cancellation between attempts prevents the retry',
+     cancelledSends === 1 && stopped.cancelled === true, JSON.stringify(stopped));
 }
 
 

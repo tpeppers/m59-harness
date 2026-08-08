@@ -35,16 +35,17 @@ import * as party from './m59-party.mjs';
 import { mayShareSpot } from './m59-party.mjs';
 import { CITY_INNS } from './m59-underworld.mjs';
 import { mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // Built by: node tools/m59-spawns.mjs
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
-  new URL('../substrate/m59-spawns.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 // Learned by standing in them. See SafeSpotBook.
 const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
-  new URL('../substrate/m59-safespots.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
 // One file per death. Gitignored, like everything a running fleet writes.
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR ||
-  new URL('../substrate/postmortems', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  fileURLToPath(new URL('../substrate/postmortems', import.meta.url));
 
 // How long a spot must go quiet, with something adjacent to us that wants to kill us,
 // before we believe it works. Two passes' worth: one quiet reading is also what you
@@ -270,6 +271,14 @@ export function bearingIn(row, col, rows, cols) {
                     : `the ${where} side${edge ? ' (hard against the edge)' : ''}`;
 }
 
+// Once a meal has lifted us above the configured fighting floor, do not spend a
+// long digestion interval chasing the strategy's ideal ceiling.  The floor is the
+// operator's statement that fighting is safe; the ceiling is only a useful top-up
+// target when the next bite is soon, or when the wait is also healing us.
+export function shouldWaitForProvision({ vigor, floor, wait, hurt }) {
+  return vigor < floor || hurt || wait <= 60;
+}
+
 // VIGOR IS NOT SHAPED LIKE THE OTHER TWO, and reading it as though it were has been
 // quietly disabling every vigor decision in this file.
 //
@@ -297,8 +306,7 @@ const REAGENT_TARGET = 20;
 // zero, which reads as "not worth a walk" and is the safe direction to fail in.
 const ITEM_VALUE = (() => {
   try {
-    const p = new URL('../substrate/m59-values.json', import.meta.url)
-                .pathname.replace(/^\/([A-Za-z]:)/, '$1');
+    const p = fileURLToPath(new URL('../substrate/m59-values.json', import.meta.url));
     return JSON.parse(readFileSync(p, 'utf8')).values ?? {};
   } catch { return {}; }
 })();
@@ -1024,6 +1032,12 @@ export class Autopilot {
     return await this.makeWeapon('about to fight with nothing in hand').catch(() => false);
   }
 
+  knowsCreateWeapon() {
+    const c = this.s?.client;
+    return !!(c?.spells || []).find(
+      sp => (c.rsc?.get?.(sp.nameRsc) || '').toLowerCase() === 'create weapon');
+  }
+
   // WEAR THE ARMOUR WE ARE CARRYING.
   //
   // Buying armour and not putting it on is the same as not buying it, and it is the
@@ -1124,8 +1138,19 @@ export class Autopilot {
           return true;
         }
         // Too full to make progress: waiting IS the strategy. Report the clock so
-        // this does not read as a stall.
+        // this does not read as a stall. Once the last meal has carried us above the
+        // fighting floor, though, a long digestion wait is no longer the strategy:
+        // set out and eat opportunistically during the hunt instead.
         const wait = this.stomach.secondsUntilRoomFor(best.filling);
+        const hurt = (v.health?.value ?? 0) < (v.health?.max ?? 0) * 0.95;
+        if (!shouldWaitForProvision({ vigor, floor, wait, hurt })) {
+          this.climbing = false;
+          this.note('setting out above the fighting floor', {
+            vigor, floor, ceiling, stomach: Math.round(this.stomach.level),
+            room_for_next_in_s: wait,
+            why: 'the configured fighting floor is satisfied and the next top-up is too far away' });
+          return false;
+        }
         this.note('waiting to get hungry', {
           vigor, ceiling, stomach: Math.round(this.stomach.level),
           room_for_next_in_s: wait, next: larder[0].name,
@@ -2975,6 +3000,7 @@ export class Autopilot {
       const info = Object.values(spawns.creatures ?? {})
         .find(x => x.name.toLowerCase() === key);
       const lvl = info?.level ?? null;
+      const politicalTroop = info?.political_troop === true;
       const count = mons.filter(m => (c.rsc.get(m.nameRsc) || '').toLowerCase() === key).length;
       const row = { name, level: lvl, karma: info?.karma ?? null, count };
       // The two exceptions, and they are genuinely different. Karma is a decision the
@@ -3004,6 +3030,10 @@ export class Autopilot {
         status.blocked.push({ ...row, rating: null,
           why: 'nothing is known about it — the spawn table has no row for this name, and ' +
                'an unrecognised creature is refused rather than assumed harmless' });
+      } else if (politicalTroop) {
+        status.blocked.push({ ...row, rating,
+          why: 'political faction troop; attackability permits an initiated swing but does not ' +
+               'prove aggression, so it is never incidental room-clearing prey' });
       } else if (rating != null && rating > GENTLE_RATING && lvl != null && lvl > ceiling) {
         status.blocked.push({ ...row, rating,
           why: `attack rating ${rating} is above the forgiving band of ${GENTLE_RATING} ` +
@@ -4940,6 +4970,25 @@ export class Autopilot {
     if (!this.armed()) {
       const ok = await this.armSelf().catch(() => false);
       if (ok && this.armed()) { this.progress('armed itself'); return; }
+      // makeWeapon refreshes the spell list before reporting failure when mana is
+      // sufficient. If Create Weapon is absent, sitting for 15 mana can never change
+      // the result. Stop cleanly in sanctuary so an external controller can provision
+      // a real weapon instead of advertising a false mana-recovery loop forever.
+      if (!this.knowsCreateWeapon() && this.sanctuary()) {
+        await s.pacer.submit('read', () => c.requestSpells()).catch(() => {});
+        await sleep(400);
+      }
+      if (!this.knowsCreateWeapon() && this.sanctuary()) {
+        const why = 'unarmed and does not know create weapon — external weapon acquisition required';
+        this.noProgress(why);
+        this.note('cannot self-arm', {
+          why,
+          mana: c.vitals?.()?.mana?.value ?? null,
+          action_needed: 'buy, recover, or receive a weapon before restarting combat',
+        });
+        this.stop(why);
+        return;
+      }
       // Not enough mana to conjure one yet. SIT DOWN — and do not let settle() decide
       // whether that happens.
       //

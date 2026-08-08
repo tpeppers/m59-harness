@@ -491,6 +491,30 @@ export function dropSpec(o, want = null) {
   return { id: o.id, amount: want == null ? (o.amount ?? 1) : want };
 }
 
+// Validate the public `act` contract before anything reaches the wire. Kept outside
+// m59-broker so the exact behavior can be exercised without starting a broker or
+// opening a game session.
+export function prepareActTarget({ verb, target, amount = null } = {}) {
+  if (!target || target.id == null) throw new Error('act requires a resolved target');
+  if (verb !== 'drop') {
+    if (amount != null) throw new Error('amount is only valid for drop');
+    return { wire_target: target.id, target: target.id, requested_amount: null };
+  }
+  if (amount != null && (!Number.isInteger(amount) || amount < 1))
+    throw new Error(`amount must be a whole number of 1 or more, got ${amount}`);
+  const wireTarget = dropSpec(target, amount);
+  if (amount != null && typeof wireTarget !== 'object')
+    throw new Error('drop amount is only valid for a stackable inventory item');
+  const have = target.amount ?? 0;
+  if (amount != null && have >= 1 && amount > have)
+    throw new Error(`asked to drop ${amount} but only ${have} in the stack`);
+  return {
+    wire_target: wireTarget,
+    target: target.id,
+    requested_amount: typeof wireTarget === 'object' ? wireTarget.amount : 1,
+  };
+}
+
 // ------------------------------------------------------------------- trading
 //
 // The offer protocol, which is the only way one player hands anything to another —

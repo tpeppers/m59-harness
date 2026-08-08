@@ -18,6 +18,22 @@
 // the class definitions), because the danger of a room is the level of the WORST
 // thing in it, not of the thing you meant to hunt.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// Class identity is inherited in KOD. Keep source-derived behavior checks on the
+// extracted parent graph instead of repeating a list of concrete subclasses in each
+// consumer. The visited set also makes malformed fixture data fail closed, not loop.
+export function inheritsClass(parentByClass, child, ancestor) {
+  const wanted = String(ancestor || '').toLowerCase();
+  let current = String(child || '').toLowerCase();
+  const visited = new Set();
+  while (current && !visited.has(current)) {
+    if (current === wanted) return true;
+    visited.add(current);
+    current = String(parentByClass.get(current) || '').toLowerCase();
+  }
+  return false;
+}
 
 // Room keys in spawns.json are kod class names — "OutdoorsF7" — and the map records
 // the same string as `cls`, so this join is exact. (The creature PAGES cite the .roo
@@ -26,6 +42,12 @@ export function buildSpawnIndex({ spawnsFile, mapFile, monstersFile, treasureFil
   const raw = JSON.parse(readFileSync(spawnsFile, 'utf8'));
   const map = JSON.parse(readFileSync(mapFile, 'utf8'));
   const mons = JSON.parse(readFileSync(monstersFile, 'utf8'));
+  const parentByClass = new Map(
+    mons.filter(monster => monster.class)
+      .map(monster => [
+        String(monster.class).toLowerCase(),
+        String(monster.parent || '').toLowerCase(),
+      ]));
 
   // WHAT A KILL LEAVES BEHIND, from compendium/data/treasure.json.
   //
@@ -84,6 +106,7 @@ export function buildSpawnIndex({ spawnsFile, mapFile, monstersFile, treasureFil
       // level-50 creature is the SAFER fight by a wide margin, and a band that sorts on
       // level will not offer it while happily offering the things that kill us.
       difficulty: m.viDifficulty != null ? Number(m.viDifficulty) : null,
+      political_troop: inheritsClass(parentByClass, m.class, 'FactionTroop'),
     });
   }
 
@@ -117,6 +140,8 @@ export function buildSpawnIndex({ spawnsFile, mapFile, monstersFile, treasureFil
                                            difficulty: meta.difficulty,
                                            attack_rating: attackRating(meta),
                                            karma: meta.karma, sites,
+                                           ...(meta.political_troop
+                                                 ? { political_troop: true } : {}),
                                            ...(loot.has(cls.toLowerCase())
                                                  ? { loot: loot.get(cls.toLowerCase()) } : {}) };
   }
@@ -791,7 +816,7 @@ export function scorePrey(spawns, character, {
 }
 
 if (process.argv[1]?.endsWith('m59-spawns.mjs')) {
-  const root = new URL('../', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const root = fileURLToPath(new URL('../', import.meta.url));
   const idx = buildSpawnIndex({
     spawnsFile: root + 'compendium/data/spawns.json',
     mapFile: root + 'substrate/m59-map.json',
