@@ -50,6 +50,8 @@ ok('a string where a boolean belongs is refused',
    tuningFor({ file: write({ defaults: { defend_chase: 'yes' } }) }).overrides.defend_chase === undefined);
 ok('a negative pull_within is refused',
    tuningFor({ file: write({ defaults: { pull_within: -5 } }) }).overrides.pull_within === undefined);
+ok('pull_within zero remains the explicit no-limit override',
+   tuningFor({ file: write({ defaults: { pull_within: 0 } }) }).overrides.pull_within === 0);
 ok('a weapon_priority holding a number is refused whole',
    tuningFor({ file: write({ defaults: { weapon_priority: ['mace', 7] } }) }).overrides.weapon_priority === undefined);
 ok('flee_below 0 is refused - a threshold of zero is never what anybody means',

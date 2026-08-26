@@ -1020,6 +1020,28 @@ function liftFunction(source, signature, deps = {}) {
     )(...Object.values(deps));
   } catch { return null; }
 }
+
+function liftClass(source, signature, name, deps = {}) {
+  const start = source.indexOf(signature);
+  if (start < 0) return null;
+  let depth = 0, end = -1;
+  for (let i = source.indexOf('{', start); i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+  if (end < 0) return null;
+  try {
+    return new Function(...Object.keys(deps),
+      source.slice(start, end) + `; return ${name};`)(...Object.values(deps));
+  } catch { return null; }
+}
+
+const DeadlinePacer = liftClass(brokerSource, 'class Pacer {', 'Pacer', {
+  PACKETS_PER_SECOND: 5,
+  DOOR_SETTLE_MS: 2000,
+  remainingDoorSettle: () => 0,
+});
+ok('the production Pacer compiled for deadline regression', typeof DeadlinePacer === 'function');
 const provedSquares = liftFunction(brokerSource, 'function provedSquares(geo, from, steps)',
   { KOD_FINENESS, protocolToClient });
 ok('the extracted provedSquares compiled', typeof provedSquares === 'function');
@@ -1041,14 +1063,19 @@ const validateFineTarget = compileSessionMethod(brokerSource,
 // not that question. The decision itself is asserted below, off `validateFineTarget`,
 // which stays pure precisely so it can be.
 const driftRecorded = [];
+let movementNow = 0;
+const movementPerformance = { now: () => movementNow };
 const queueValidatedMove = compileSessionMethod(brokerSource,
   'async queueValidatedMove(x, y, {', 'queueValidatedMove',
   { MOVE_INTERVAL_MS: 0, CLIENT_FINENESS, atEdgeOpening,
+    performance: movementPerformance,
     noteGeometryDrift: (session, drift) => driftRecorded.push(drift) });
 const confirmPosition = compileSessionMethod(brokerSource,
-  'async confirmPosition() {', 'confirmPosition', { Pacer: { note() {} } });
+  'async confirmPosition({', 'confirmPosition',
+  { Pacer: { note() {} }, performance: movementPerformance });
 const stepFine = compileSessionMethod(brokerSource,
-  'async stepFine(x, y) {', 'stepFine', { MOVE_INTERVAL_MS: 0, Pacer: { note() {} } });
+  'async stepFine(x, y, {', 'stepFine',
+  { MOVE_INTERVAL_MS: 0, Pacer: { note() {} }, performance: movementPerformance });
 const ordinaryStep = compileSessionMethod(brokerSource,
   'async step(col, row, {', 'step', {
     MOVE_INTERVAL_MS: 0, ROOM_RESYNC_MS: Number.POSITIVE_INFINITY,
@@ -1128,12 +1155,15 @@ const followRail = compileSessionMethod(brokerSource,
 const recentreInSquare = compileSessionMethod(brokerSource,
   'async recentreInSquare() {', 'recentreInSquare', {});
 let rideTrackFixture = null;
+let rideTrackNow = 0;
+let rideTrackStrikeCalls = 0;
 const rideTrack = compileSessionMethod(brokerSource,
   'async rideTrack(fromRoom, toRoom, {', 'rideTrack', {
-    KOD_FINENESS,
+    KOD_FINENESS, TRACK_RIDE_MAX_PACKETS: 8, TRACK_RIDE_MAX_MS: 12_000,
+    performance: { now: () => rideTrackNow },
     recallTrack: () => rideTrackFixture,
     clearStrikes: () => {},
-    strikeTrack: () => 1,
+    strikeTrack: () => { rideTrackStrikeCalls++; return 1; },
   });
 
 let leaveViaRoutesFixture = null;
@@ -2079,6 +2109,154 @@ if (![validateFineTarget, queueValidatedMove, confirmPosition, stepFine, ordinar
      invalidated.packets.length === 0,
      JSON.stringify({ geometryChanged, packets: invalidated.packets }));
 
+  movementNow = 0;
+  const pacedPastDeadline = fakeBrokerSession(open, {
+    beforePaced(kind) { if (kind === 'move') movementNow = 51; },
+  });
+  const lateMove = await queueValidatedMove.call(pacedPastDeadline.session,
+    clientToWire(3072), clientToWire(2048), { deadlineAt: 50 });
+  ok('a move whose paced turn starts after the operation deadline emits no packet',
+     lateMove.validation?.reason === 'effort_deadline_exhausted' &&
+       pacedPastDeadline.packets.length === 0,
+     JSON.stringify({ lateMove, packets: pacedPastDeadline.packets }));
+
+  // A learned-ride deadline is movement authority, not merely a reason for the caller to
+  // stop asking. Keeper mode has an explicitly raw escape for stale geometry, so both the
+  // deadline refusal itself and a geometry refusal returned after expiry must be unable to
+  // enter that escape.
+  const priorKeeper = process.env.M59_KEEPER;
+  try {
+    process.env.M59_KEEPER = '1';
+    const deadlineClient = {
+      room: { id: 1, objects: new Map([[7, {}]]) }, selfId: 7,
+      self: { x: 128, y: 128, col: 2, row: 2 }, moveSpeed: () => 1,
+    };
+    let rawMoves = 0;
+    deadlineClient.moveTo = () => { rawMoves++; };
+    const deadlineSession = reason => ({
+      client: deadlineClient,
+      finePositionUnknown: false,
+      need: () => deadlineClient,
+      moveSpeed: () => 1,
+      async queueValidatedMove() {
+        movementNow = 100;
+        return { sent: false, validation: { blocked: true, reason } };
+      },
+    });
+
+    movementNow = 0;
+    const directDeadline = await stepFine.call(deadlineSession('effort_deadline_exhausted'),
+                                                256, 128, { deadlineAt: 50 });
+    ok('a deadline refusal never becomes a keeper raw movement packet',
+       directDeadline.reason === 'effort_deadline_exhausted' && rawMoves === 0,
+       JSON.stringify({ directDeadline, rawMoves }));
+
+    movementNow = 0;
+    const expiredGeometry = await stepFine.call(deadlineSession('geometry_blocked'),
+                                                256, 128, { deadlineAt: 50 });
+    ok('expiry is rechecked before keeper raw fallback can send a geometry-refused move',
+       expiredGeometry.reason === 'effort_deadline_exhausted' && rawMoves === 0,
+       JSON.stringify({ expiredGeometry, rawMoves }));
+  } finally {
+    if (priorKeeper == null) delete process.env.M59_KEEPER;
+    else process.env.M59_KEEPER = priorKeeper;
+  }
+
+  movementNow = 0;
+  let confirmDeadline = null;
+  const sentClient = {
+    room: { id: 1, objects: new Map([[7, {}]]) }, selfId: 7,
+    self: { x: 128, y: 128, col: 2, row: 2 },
+  };
+  const sentSession = {
+    client: sentClient,
+    finePositionUnknown: false,
+    need: () => sentClient,
+    moveSpeed: () => 1,
+    async queueValidatedMove() {
+      return { sent: true, before: { ...sentClient.self }, target: { x: 256, y: 128 },
+               validation: {} };
+    },
+    async confirmPosition(options) { confirmDeadline = options?.deadlineAt; return null; },
+  };
+  const postSend = await stepFine.call(sentSession, 256, 128, { deadlineAt: 500 });
+  ok('the post-send position confirmation inherits the learned ride deadline',
+     confirmDeadline === 500 && postSend.reason === 'position_confirmation_timeout',
+     JSON.stringify({ confirmDeadline, postSend }));
+
+  movementNow = 0;
+  let lateReads = 0;
+  const queuedRead = fakeBrokerSession(open, {
+    beforePaced(kind) { if (kind === 'read') movementNow = 51; },
+  });
+  queuedRead.client.roomContents = () => { lateReads++; return 1; };
+  const noLateRead = await confirmPosition.call(queuedRead.session, { deadlineAt: 50 });
+  ok('a confirmation read whose paced turn starts after the deadline is never sent',
+     noLateRead === null && lateReads === 0,
+     JSON.stringify({ noLateRead, lateReads }));
+
+  movementNow = 0;
+  let postReadWaits = 0;
+  const completedRead = fakeBrokerSession(open);
+  completedRead.client.waitFor = async () => { postReadWaits++; return { timedOut: true }; };
+  completedRead.session.pacer.submit = async (_kind, invoke) => {
+    const result = await invoke();
+    movementNow = 51;
+    return result;
+  };
+  const expiredAfterRead = await confirmPosition.call(completedRead.session, { deadlineAt: 50 });
+  ok('a confirmation that reaches its deadline while awaiting the sent read opens no later wait',
+     expiredAfterRead === null && completedRead.client.roomContentsRequested === 1 &&
+       postReadWaits === 0,
+     JSON.stringify({ expiredAfterRead, requested: completedRead.client.roomContentsRequested,
+       postReadWaits }));
+
+  // HOLD THE REAL PACER BEHIND AN ALREADY-STARTED JOB. Deadline-aware callers must resolve
+  // while that job is still held, then remain inert after it is released. This is the seam a
+  // callback-time guard alone cannot cover: it prevents the packet but leaves the caller
+  // awaiting the queue indefinitely.
+  const deadlinePacer = new DeadlinePacer(1000);
+  let releasePacer = null, announceHeld = null;
+  const held = new Promise(resolve => { announceHeld = resolve; });
+  const holdingJob = deadlinePacer.submit('hold', () => new Promise(resolve => {
+    releasePacer = resolve;
+    announceHeld();
+  }));
+  await held;
+  const heldSession = fakeBrokerSession(open);
+  heldSession.session.pacer = deadlinePacer;
+  let heldReads = 0;
+  heldSession.client.roomContents = () => { heldReads++; return 1; };
+  movementNow = performance.now();
+  const heldDeadline = movementNow + 40;
+  let readSettled = false, moveSettled = false, offMapSettled = false;
+  const heldRead = confirmPosition.call(heldSession.session, { deadlineAt: heldDeadline })
+    .then(result => { readSettled = true; return result; });
+  const heldMove = queueValidatedMove.call(heldSession.session,
+    clientToWire(3072), clientToWire(2048), { deadlineAt: heldDeadline })
+    .then(result => { moveSettled = true; return result; });
+  const heldOffMap = queueValidatedMove.call(heldSession.session, 0, 128, {
+    deadlineAt: heldDeadline,
+    offMap: { opening: { x: 0, y: 0 }, direction: 'west' },
+  }).then(result => { offMapSettled = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  ok('deadline-aware paced callers resolve while an earlier callback is still held',
+     readSettled && moveSettled && offMapSettled && releasePacer != null,
+     JSON.stringify({ readSettled, moveSettled, offMapSettled }));
+  const [heldReadResult, heldMoveResult, heldOffMapResult] =
+    await Promise.all([heldRead, heldMove, heldOffMap]);
+  ok('held read and both held move branches resolve with their deadline results',
+     heldReadResult === null &&
+       heldMoveResult?.validation?.reason === 'effort_deadline_exhausted' &&
+       heldOffMapResult?.validation?.reason === 'effort_deadline_exhausted',
+     JSON.stringify({ heldReadResult, heldMoveResult, heldOffMapResult }));
+  releasePacer();
+  await holdingJob;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  ok('releasing pacing after expiry emits no late read or move callback',
+     heldReads === 0 && heldSession.packets.length === 0,
+     JSON.stringify({ heldReads, packets: heldSession.packets }));
+
   let fatalFineCalls = 0;
   const fatalClient = {
     room: { id: 1 },
@@ -2656,14 +2834,12 @@ console.log('A RAIL NEVER GIVES BACK GROUND IT HAS ALREADY MADE');
 }
 
 console.log('');
-console.log('A MISSED LEARNED STATION ENDS THE TRACK REPLAY');
+console.log('A LEARNED TRACK IS ONE BOUNDED REPLAY, NOT ANOTHER WALKER');
 {
-  // Every straightened leg is proved only from the waypoint before it. Once a station is
-  // missed, attempting later legs from the off-track body asks questions the track never
-  // answered and can amplify one refusal across the whole learned route.
+  rideTrackNow = 0;
+  rideTrackStrikeCalls = 0;
   rideTrackFixture = {
     ms: 100,
-    shelter: [],
     waypoints: [
       { x: 128, y: 128 },
       { x: 256, y: 128 },
@@ -2672,49 +2848,40 @@ console.log('A MISSED LEARNED STATION ENDS THE TRACK REPLAY');
   };
   const client = { self: { x: 128, y: 128 } };
   const stepTargets = [];
-  const fineTargets = [];
   const trackSession = {
     client,
     world: { room: { num: 576 }, geometry: { walkable: () => true } },
     movementGeneration: 0,
     need: () => client,
     movementWasCancelled: () => false,
-    async walkTo() { throw new Error('a rider already on the first station tried to board'); },
-    async stepFine(x) {
-      stepTargets.push(x);
-      return { moved: false, left_room: false,
-               reason: x === 128 ? undefined : 'geometry_blocked' };
-    },
-    async walkFine(x, y, options) {
-      fineTargets.push({ x, y, maxSteps: options?.maxSteps });
-      return { arrived: false, left_room: false, reason: 'geometry_blocked' };
+    cancelledMovement: extra => ({ cancelled: true, ...extra }),
+    async walkTo() { throw new Error('a learned ride tried to board through the ordinary walker'); },
+    async walkFine() { throw new Error('a learned ride opened a per-station fine-walk purse'); },
+    async stepFine(x, y, options) {
+      stepTargets.push({ x, deadlineAt: options?.deadlineAt });
+      return { moved: false, left_room: false, reason: 'geometry_blocked' };
     },
   };
   const ridden = await rideTrack.call(trackSession, 575, 587, {});
-  ok('a missed station stops before any later proof-dependent leg',
-     JSON.stringify(stepTargets) === JSON.stringify([128, 256]),
+  ok('the entry station costs no packet and the first missed station ends the replay',
+     JSON.stringify(stepTargets.map(x => x.x)) === JSON.stringify([256]),
      JSON.stringify(stepTargets));
-  ok('the missed station gets exactly one bounded fine fallback',
-     JSON.stringify(fineTargets) === JSON.stringify([
-       { x: 256, y: 128, maxSteps: 40 },
-     ]), JSON.stringify(fineTargets));
-  ok('the bounded miss is counted once and strikes the bad track once',
+  ok('the replay threads one monotonic whole-ride deadline into its move',
+     stepTargets[0]?.deadlineAt === 12_000, JSON.stringify(stepTargets));
+  ok('the miss is counted once and strikes the bad track once',
      ridden?.left_room === false && ridden?.reached === 1 && ridden?.blocked === 1 &&
-       ridden?.strikes === 1,
+       ridden?.strikes === 1 && rideTrackStrikeCalls === 1,
      JSON.stringify(ridden));
 }
 
 console.log('');
-console.log('A FAILED STITCH JOINS THE WALKED ROUTE AHEAD OF ITS PROGRESS');
+console.log('AN UNPROVEN STITCH RIDES ONLY THE ROUTE A BODY ACTUALLY WALKED');
 {
-  // The stitched and walked forms need not have matching waypoint counts. End the stitch
-  // inside a long walked leg, closer to the station behind than the station ahead: a nearest
-  // waypoint restart would reverse, while projecting onto the walked leg must choose its
-  // downstream endpoint and replay only the bounded suffix.
+  rideTrackNow = 0;
+  rideTrackStrikeCalls = 0;
   rideTrackFixture = {
     proven: false,
     ms: 100,
-    shelter: [],
     waypoints: [{ x: 128, y: 128 }, { x: 500, y: 128 }],
     walked: [
       { x: 128, y: 128 }, { x: 320, y: 128 },
@@ -2722,7 +2889,7 @@ console.log('A FAILED STITCH JOINS THE WALKED ROUTE AHEAD OF ITS PROGRESS');
     ],
   };
   const client = { self: { x: 128, y: 128 } };
-  const fallbackCalls = [];
+  const stepCalls = [];
   const standableCalls = [];
   const trackSession = {
     client,
@@ -2736,31 +2903,129 @@ console.log('A FAILED STITCH JOINS THE WALKED ROUTE AHEAD OF ITS PROGRESS');
     movementGeneration: 0,
     need: () => client,
     movementWasCancelled: () => false,
-    async walkTo() { throw new Error('a rider already on the first station tried to board'); },
+    cancelledMovement: extra => ({ cancelled: true, ...extra }),
+    async walkTo() { throw new Error('an unproven track tried to board'); },
+    async walkFine() { throw new Error('an unproven track tried the sewn/walked fine fallback'); },
     async stepFine(x, y) {
+      stepCalls.push(x);
       client.self = { ...client.self, x, y };
-      return { moved: true, left_room: false };
-    },
-    async walkFine(x, y, options) {
-      fallbackCalls.push({ x, y, maxSteps: options?.maxSteps });
-      client.self = { ...client.self, x, y };
-      return x === 960 ? { left_room: true } : { arrived: true, left_room: false };
+      return { moved: true, left_room: x === 960 };
     },
   };
   const ridden = await rideTrack.call(trackSession, 587, 575, {});
-  ok('the walked fallback starts at the station ahead of stitched progress',
-     JSON.stringify(fallbackCalls.map(p => p.x)) === JSON.stringify([800, 960]),
-     JSON.stringify(fallbackCalls));
-  ok('the walked fallback remains bounded to its unvisited suffix',
-     fallbackCalls.length === 2 && fallbackCalls.every(p => p.maxSteps === 60),
-     JSON.stringify(fallbackCalls));
+  ok('the unproven sewn point is never sent and the walked line is replayed directly',
+     JSON.stringify(stepCalls) === JSON.stringify([320, 800, 960]), JSON.stringify(stepCalls));
   ok('walked wire positions are checked in their actual protocol row and column',
      JSON.stringify(standableCalls) === JSON.stringify([
+       { row: 2, col: 2 }, { row: 2, col: 5 },
        { row: 2, col: 12 }, { row: 2, col: 15 },
      ]), JSON.stringify(standableCalls));
-  ok('the joined fallback can still complete the crossing',
-     ridden?.left_room === true && ridden?.fell_back_to_walked === true,
+  ok('the walked replay can complete the crossing without a second fallback purse',
+     ridden?.left_room === true && ridden?.walked_track === true && ridden?.packets === 3,
      JSON.stringify(ridden));
+
+  rideTrackFixture = {
+    proven: false,
+    ms: 100,
+    waypoints: [{ x: 128, y: 128 }, { x: 500, y: 128 }],
+  };
+  stepCalls.length = 0;
+  const noObservation = await rideTrack.call(trackSession, 587, 575, {});
+  ok('an unproven stitch with no observed walk is refused instead of riding paper',
+     noObservation?.rode === false && /no observed walked route/.test(noObservation?.why ?? '')
+       && stepCalls.length === 0,
+     JSON.stringify({ noObservation, stepCalls }));
+}
+
+console.log('');
+console.log('THE WHOLE LEARNED RIDE SHARES EIGHT PACKETS AND TWELVE MONOTONIC SECONDS');
+{
+  const points = Array.from({ length: 12 }, (_, i) => ({ x: 128 + i * 128, y: 128 }));
+  const session = (onStep, onCancel = () => false) => {
+    const client = { self: { ...points[0] } };
+    return {
+      client,
+      world: { room: { num: 576 }, geometry: { walkable: () => true } },
+      movementGeneration: 0,
+      need: () => client,
+      movementWasCancelled: onCancel,
+      cancelledMovement: extra => ({ arrived: false, cancelled: true, ...extra }),
+      async walkTo() { throw new Error('a bounded learned ride tried to board'); },
+      async walkFine() { throw new Error('a bounded learned ride opened a fine-walk purse'); },
+      async stepFine(x, y, options) {
+        const result = await onStep({ x, y, options, client });
+        return result;
+      },
+    };
+  };
+
+  rideTrackFixture = { ms: 100, waypoints: points };
+  rideTrackNow = 0;
+  rideTrackStrikeCalls = 0;
+  const packetCalls = [];
+  const packetBound = session(({ x, y, options, client }) => {
+    packetCalls.push({ x, deadlineAt: options?.deadlineAt });
+    client.self = { ...client.self, x, y };
+    return { moved: true, left_room: false };
+  });
+  const packetResult = await rideTrack.call(packetBound, 575, 587, {});
+  ok('a learned replay sends at most eight movement attempts in total',
+     packetCalls.length === 8 && packetResult?.packets === 8
+       && packetResult?.effort_exhausted === 'packets',
+     JSON.stringify({ packetCalls, packetResult }));
+  ok('every movement attempt carries the same operation-wide deadline',
+     packetCalls.every(x => x.deadlineAt === 12_000), JSON.stringify(packetCalls));
+
+  rideTrackNow = 0;
+  rideTrackStrikeCalls = 0;
+  const deadlineCalls = [];
+  const deadlineBound = session(({ x, y, client }) => {
+    deadlineCalls.push(x);
+    rideTrackNow += 4_000;
+    client.self = { ...client.self, x, y };
+    return { moved: true, left_room: false };
+  });
+  const deadlineResult = await rideTrack.call(deadlineBound, 575, 587, {});
+  ok('the monotonic deadline stops the whole replay instead of resetting per station',
+     deadlineCalls.length === 3 && deadlineResult?.effort_exhausted === 'deadline',
+     JSON.stringify({ deadlineCalls, deadlineResult }));
+
+  rideTrackFixture = { ms: 100, waypoints: points.slice(0, 3) };
+  rideTrackNow = 0;
+  rideTrackStrikeCalls = 0;
+  const objectBound = session(() => ({ moved: false, left_room: false, reason: 'object_blocked' }));
+  const objectResult = await rideTrack.call(objectBound, 575, 587, {});
+  ok('a transient body block ends the replay without striking its route',
+     objectResult?.bodies_in_the_way === 1 && rideTrackStrikeCalls === 0,
+     JSON.stringify(objectResult));
+
+  rideTrackNow = 0;
+  rideTrackStrikeCalls = 0;
+  let wasCancelled = false, cancellationCalls = 0;
+  const cancellationBound = session(({ x, y, client }) => {
+    cancellationCalls++;
+    client.self = { ...client.self, x, y };
+    wasCancelled = true;
+    return { moved: true, left_room: false };
+  }, () => wasCancelled);
+  const cancellationResult = await rideTrack.call(cancellationBound, 575, 587, {});
+  ok('cancellation returns immediately, opens no fallback, and never strikes the track',
+     cancellationResult?.cancelled === true && cancellationCalls === 1
+       && rideTrackStrikeCalls === 0,
+     JSON.stringify(cancellationResult));
+
+  const priorRideSwitch = process.env.M59_TRACK_RIDE;
+  try {
+    process.env.M59_TRACK_RIDE = '0';
+    const switchedOff = await rideTrack.call({ need() { throw new Error('kill switch read live state'); } },
+                                              575, 587, {});
+    ok('M59_TRACK_RIDE=0 disables the learned rider before it reads or moves live state',
+       switchedOff?.rode === false && /disabled/.test(switchedOff?.why ?? ''),
+       JSON.stringify(switchedOff));
+  } finally {
+    if (priorRideSwitch == null) delete process.env.M59_TRACK_RIDE;
+    else process.env.M59_TRACK_RIDE = priorRideSwitch;
+  }
 }
 
 console.log('');

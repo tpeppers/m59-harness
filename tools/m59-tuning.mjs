@@ -71,8 +71,8 @@ export const TUNABLES = {
     'there, so there is little reason to fight hurt' },
   fight_rounds: { check: posInt, why: 'rounds per engagement before it re-decides' },
   pull_within: { check: posInt, why:
-    'how far it will walk to fetch a monster back to its wall. The walk out happens before ' +
-    'the thing has noticed us, so a long pull is the same danger for longer, not more' },
+    'how far it will walk to fetch a monster back to its wall. The default is eight because ' +
+    'every extra step is more time exposed off the wall; zero explicitly removes the limit' },
   weapon_priority: { check: strList, why:
     'name fragments, best first. A PREFERENCE, not a filter - an unskilled weapon still ' +
     'beats bare hands. Rank by the character\'s own proficiency: a mace is worth far more ' +

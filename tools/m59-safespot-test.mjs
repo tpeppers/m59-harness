@@ -14,7 +14,7 @@
 // away the largest advantage in the game — a free heal to full in a monster room.
 import './m59-test-ledger.mjs';        // FIRST — the keeper records casts; see that file
 import { unlinkSync, readFileSync } from 'node:fs';
-import { Autopilot, farmRoomDenials,
+import { Autopilot, HANDLED, farmRoomDenials, releaseQuarry,
          shouldRelocateToAssignedRoom } from './m59-autopilot.mjs';
 import { SafeSpotBook , shelterAhead, gridDisagreementAt } from './m59-safespots.mjs';
 import { returnToSpot } from './m59-skills.mjs';
@@ -30,15 +30,16 @@ const ok = (label, cond, detail = '') => {
 //
 // Only as much world as observe() reads: where we are, what our health is, and what
 // is standing next to us.
-function world({ col = 5, row = 5, health = 30, max = 30, room = 999 } = {}) {
+function world({ col = 5, row = 5, health = 30, max = 30, vigor = 150, room = 999 } = {}) {
   const objects = new Map();
   const names = new Map([[1, 'giant rat'], [2, 'baby spider'], [3, 'Varuka']]);
   const c = {
     selfId: 99,
     room: { id: room, objects },
     rsc: { get: n => names.get(n) || `rsc${n}` },
-    vitals: () => ({ health: { value: c._health, max }, vigor: { value: 150, max: 200 } }),
+    vitals: () => ({ health: { value: c._health, max }, vigor: { value: c._vigor, max: 200 } }),
     _health: health,
+    _vigor: vigor,
     inventory: [],
     // The real client resolves this out of room contents on every read, which is why
     // a save-game renumber makes a live character look dead. Same shape here.
@@ -96,6 +97,58 @@ console.log('\n--- safe-spot arrival is confirmed, not predicted ---');
      JSON.stringify({ back, fineWalks }));
   ok('success means the final coarse and fine position both match the hold',
      me.col === 5 && me.row === 5 && me.x === 352 && me.y === 352 && !me.predicted);
+}
+
+console.log('\n--- one cancellation generation owns every return fallback ---');
+{
+  const me = { col: 6, row: 5, x: 416, y: 352, predicted: false };
+  const calls = [];
+  const c = { get self() { return me; } };
+  const s = {
+    movementGeneration: 7,
+    movementWasCancelled(generation) { return generation !== this.movementGeneration; },
+    need: () => c,
+    approachFine: async (_col, _row, opts) => {
+      calls.push(['fine', opts.movementGeneration]);
+      return { arrived: false, reason: 'fixture fine miss' };
+    },
+    walkTo: async (col, row, opts) => {
+      calls.push(['coarse', opts.movementGeneration]);
+      Object.assign(me, { col, row, x: col * 64 + 32, y: row * 64 + 32 });
+      return { arrived: true };
+    },
+    walkFine: async (x, y, opts) => {
+      calls.push(['exact', opts.movementGeneration]);
+      Object.assign(me, { col: (x / 64) | 0, row: (y / 64) | 0, x, y });
+      return { arrived: true };
+    },
+  };
+  const back = await returnToSpot(s, { col: 5, row: 5, x: 352, y: 352 },
+                                  { movementGeneration: 7 });
+  ok('fine, coarse fallback, and exact close all keep the operation generation',
+     back.arrived && calls.length === 3 && calls.every(([, generation]) => generation === 7),
+     JSON.stringify(calls));
+}
+{
+  const me = { col: 1, row: 1, x: 96, y: 96, predicted: false };
+  let coarse = 0, fineFallback = 0;
+  const c = { get self() { return me; } };
+  const s = {
+    movementGeneration: 3,
+    movementWasCancelled(generation) { return generation !== this.movementGeneration; },
+    need: () => c,
+    walkTo: async (_col, _row, opts) => {
+      coarse++;
+      ok('the first leaf receives the captured generation', opts.movementGeneration === 3);
+      s.movementGeneration = 4;       // the watchdog invalidates the whole operation
+      return { arrived: false, cancelled: true, reason: 'movement cancelled by a newer command' };
+    },
+    approachFine: async () => { fineFallback++; return { arrived: true }; },
+  };
+  const back = await returnToSpot(s, { col: 5, row: 5 }, { movementGeneration: 3 });
+  ok('a cancelled coarse return is terminal to the composite',
+     back.cancelled === true && coarse === 1 && fineFallback === 0,
+     JSON.stringify({ back, coarse, fineFallback }));
 }
 
 function keeper(w) {
@@ -175,6 +228,312 @@ console.log('\n--- a room does not become an unbounded wall experiment ---');
      !stopped.took && stopped.unreachable_terrain && /stopping the wall search/.test(stopped.why));
 }
 
+console.log('\n--- open-field quarry pursuit never enters the wall-only pull path ---');
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  p.hold = null;
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  const path = Array.from({ length: 9 }, (_, i) => ({ col: 6 + i, row: 5 }));
+  w.s.world.approachSquare = () => ({ col: 14, row: 5, steps: path.length, path });
+  w.s.movementGeneration = 7;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let stepCalls = 0, pulls = 0, progressed = 0;
+  const stepped = [];
+  w.s.walkTo = async () => { throw new Error('open-field pursuit must never enter walkTo'); };
+  w.s.step = async (col, row, opts) => {
+    stepCalls++;
+    opts.beforeMutation('turn');
+    opts.beforeMutation('move');
+    stepped.push({ col, row });
+    Object.assign(w.me(), { col, row });
+    return { moved: true, position: { col, row } };
+  };
+  p.pull = async () => { pulls++; return { pulled: true, back: true }; };
+  p.progress = () => { progressed++; };
+  const result = await p.handleOutOfReachQuarry({
+    out_of_reach: true, foe_id: quarry.id, target: 'giant rat',
+    nearest: { distance: 10 },
+  }, [quarry]);
+  ok('useSafeSpots=false advances toward present prey instead of calling pull',
+     result.mode === 'open-field' && result.advanced === true && stepCalls === 4 && pulls === 0 &&
+       w.me().col === 9 && w.me().row === 5 && progressed === 1,
+     JSON.stringify({ result, stepCalls, pulls, progressed, at: w.me() }));
+  ok('the open-field advance sends exactly the first four adjacent path steps and never walkTo',
+     JSON.stringify(stepped) === JSON.stringify([
+       { col: 6, row: 5 }, { col: 7, row: 5 },
+       { col: 8, row: 5 }, { col: 9, row: 5 },
+     ]), JSON.stringify(stepped));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  // A valid obstacle detour must initially walk south and west even though the quarry
+  // is due east. The first bounded prefix ends farther away in Euclidean distance.
+  const path = [
+    { col: 5, row: 6 }, { col: 5, row: 7 },
+    { col: 4, row: 7 }, { col: 3, row: 7 },
+    { col: 4, row: 8 }, { col: 5, row: 8 },
+  ];
+  w.s.world.approachSquare = () => ({ col: 14, row: 5, steps: path.length, path });
+  w.s.movementGeneration = 4;
+  w.s.movementWasCancelled = () => false;
+  let stepCalls = 0, progressed = 0, stalled = 0;
+  w.s.walkTo = async () => { throw new Error('detour must remain on bounded direct steps'); };
+  w.s.step = async (col, row, opts) => {
+    stepCalls++;
+    opts.beforeMutation('move');
+    Object.assign(w.me(), { col, row });
+    return { moved: true, position: { col, row } };
+  };
+  p.progress = () => { progressed++; };
+  p.noProgress = () => { stalled++; };
+  const result = await p.handleOutOfReachQuarry({
+    out_of_reach: true, foe_id: quarry.id, target: 'giant rat',
+  }, [quarry]);
+  const beforeDistance = Math.hypot(quarry.col - 5, quarry.row - 5);
+  const afterDistance = Math.hypot(quarry.col - w.me().col, quarry.row - w.me().row);
+  ok('a valid four-step obstacle detour is progress before Euclidean distance falls',
+     result.advanced === true && result.distance_reduced === false &&
+       result.path_steps_accepted === 4 && stepCalls === 4 && progressed === 1 && stalled === 0 &&
+       afterDistance > beforeDistance,
+     JSON.stringify({ result, stepCalls, progressed, stalled, beforeDistance, afterDistance }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  p.policy.hunt = 'fungus beast';
+  p.clearing = 'baby spider';
+  p.hold = null;
+  w.addMonster(2, 0, 10, MONSTER);
+  const blocker = w.c.room.objects.get(2);
+  const path = Array.from({ length: 9 }, (_, i) => ({ col: 5, row: 6 + i }));
+  w.s.world.approachSquare = () => ({ col: 5, row: 14, steps: path.length, path });
+  w.s.movementGeneration = 3;
+  w.s.movementWasCancelled = () => false;
+  let pulls = 0;
+  const stepped = [];
+  w.s.walkTo = async () => { throw new Error('room-clear pursuit must never enter walkTo'); };
+  w.s.step = async (col, row, opts) => {
+    opts.beforeMutation('move');
+    stepped.push({ col, row });
+    Object.assign(w.me(), { col, row });
+    return { moved: true };
+  };
+  p.pull = async () => { pulls++; return { pulled: true, back: true }; };
+  p.progress = () => {};
+  const result = await p.handleOutOfReachQuarry({
+    out_of_reach: true, foe_id: blocker.id, target: 'baby spider',
+  }, [blocker]);
+  ok('the same bounded open-field path accepts a temporary room-clear target',
+     result.advanced === true && result.target_id === blocker.id &&
+       stepped.length === 4 && stepped.at(-1)?.col === 5 && stepped.at(-1)?.row === 9 && pulls === 0,
+     JSON.stringify({ result, stepped, pulls }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  p.hold = null;
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  const path = Array.from({ length: 9 }, (_, i) => ({ col: 6 + i, row: 5 }));
+  w.s.world.approachSquare = () => ({ col: 14, row: 5, steps: path.length, path });
+  w.s.movementGeneration = 11;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  w.s.cancelledMovement = extra => ({
+    arrived: false, left: false, cancelled: true,
+    reason: 'movement cancelled by a newer command', cancelled_by: 'fixture operator', ...extra,
+  });
+  let pulls = 0, progressed = 0, stepCalls = 0, mutationChecks = 0;
+  w.s.walkTo = async () => { throw new Error('cancelled pursuit must never enter walkTo'); };
+  w.s.step = async (_col, _row, opts) => {
+    stepCalls++;
+    mutationChecks++;
+    opts.beforeMutation('turn');
+    // Simulate an operator taking movement ownership while this step is paced between
+    // its turn and move packets. The second mutation check must refuse the move.
+    w.s.movementGeneration++;
+    mutationChecks++;
+    opts.beforeMutation('move');
+    throw new Error('the cancelled move packet was allowed');
+  };
+  p.pull = async () => { pulls++; return { pulled: true, back: true }; };
+  p.progress = () => { progressed++; };
+  const result = await p.handleOutOfReachQuarry({
+    out_of_reach: true, foe_id: quarry.id, target: 'giant rat',
+  }, [quarry]);
+  ok('cancellation ends the bounded open-field approach without pull or false progress',
+     result.cancelled === true && pulls === 0 && progressed === 0 &&
+       result.reason === 'movement cancelled by a newer command' &&
+       result.cancelled_by === 'fixture operator' && result.step_count === 1 &&
+       w.s.movementGeneration === 12 && stepCalls === 1 && mutationChecks === 2,
+     JSON.stringify({ result, pulls, progressed, stepCalls, mutationChecks,
+       generation: w.s.movementGeneration }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  w.addMonster(1, 10, 0, MONSTER);
+  let stepCalls = 0;
+  w.s.step = async () => { stepCalls++; return { moved: true }; };
+  w.s.world.approachSquare = () => ({ path: [{ col: 6, row: 5 }] });
+  const result = await p.handleOutOfReachQuarry({
+    out_of_reach: true, foe_id: 9999, nearest: { distance: 10 },
+  }, [w.c.room.objects.get(1)]);
+  ok('a vanished exact foe id stops for re-observation instead of substituting found[0]',
+     result.reobserve === true && result.target_id === 9999 && stepCalls === 0,
+     JSON.stringify({ result, stepCalls }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  w.s.world.approachSquare = () => ({ path: [{ col: 6, row: 5 }, { col: 7, row: 5 }] });
+  w.s.movementGeneration = 1;
+  w.s.movementWasCancelled = () => false;
+  let stepCalls = 0, progressed = 0;
+  w.s.step = async () => {
+    stepCalls++;
+    w.c.room.id = 999;
+    return { moved: true, left_room: false };
+  };
+  p.progress = () => { progressed++; };
+  const result = await p.handleOutOfReachQuarry({ out_of_reach: true, foe_id: quarry.id }, [quarry]);
+  ok('a room identity change stops after one direct step even if the leaf missed left_room',
+     result.left_room === true && stepCalls === 1 && progressed === 0,
+     JSON.stringify({ result, stepCalls, progressed }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  w.s.world.approachSquare = () => ({ path: [{ col: 6, row: 5 }, { col: 7, row: 5 }] });
+  w.s.movementGeneration = 1;
+  w.s.movementWasCancelled = () => false;
+  let stepCalls = 0, progressed = 0;
+  w.s.step = async () => {
+    stepCalls++;
+    return { moved: false, reason: 'room_geometry_mismatch', note: 'fixture mismatch' };
+  };
+  p.progress = () => { progressed++; };
+  const result = await p.handleOutOfReachQuarry({ out_of_reach: true, foe_id: quarry.id }, [quarry]);
+  ok('a terminal collision contract refusal stops the direct loop after one step',
+     result.terminal === true && result.reason === 'room_geometry_mismatch' &&
+       stepCalls === 1 && progressed === 0,
+     JSON.stringify({ result, stepCalls, progressed }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  p.safety = () => ({ fleeAt: 0.75 });
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  w.s.world.approachSquare = () => ({ path: [
+    { col: 6, row: 5 }, { col: 7, row: 5 }, { col: 8, row: 5 },
+  ] });
+  w.s.movementGeneration = 1;
+  w.s.movementWasCancelled = () => false;
+  let stepCalls = 0, progressed = 0;
+  w.s.step = async (col, row, opts) => {
+    stepCalls++;
+    opts.beforeMutation('move');
+    Object.assign(w.me(), { col, row });
+    w.c._health = 20;
+    return { moved: true };
+  };
+  p.progress = () => { progressed++; };
+  const result = await p.handleOutOfReachQuarry({ out_of_reach: true, foe_id: quarry.id }, [quarry]);
+  ok('crossing the flee threshold stops before a second open-field step',
+     result.health_abort === true && result.health === 20 &&
+       stepCalls === 1 && progressed === 0,
+     JSON.stringify({ result, stepCalls, progressed }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = true;
+  p.hold = { room: 562, col: 5, row: 5, proven: true };
+  w.addMonster(1, 10, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  let steps = 0, pulls = 0;
+  w.s.step = async () => { steps++; return { moved: true }; };
+  p.pull = async selected => {
+    pulls++;
+    return { pulled: true, back: true, target: w.c.rsc.get(selected.nameRsc), steps: 4 };
+  };
+  const fight = {
+    out_of_reach: true, foe_id: quarry.id, nearest: { distance: 10 }, target: 'giant rat',
+  };
+  const result = await p.handleOutOfReachQuarry(fight, [quarry]);
+  const second = await p.handleOutOfReachQuarry(fight, [quarry]);
+  ok('safe-spot mode with a real hold keeps the established wall pull behavior',
+     result.mode === 'wall' && result.pulled === true && second.waiting === true &&
+       pulls === 1 && steps === 0 && p.pendingPull?.target_id === quarry.id &&
+       p.pendingPull?.steps === 4,
+     JSON.stringify({ result, second, pulls, steps, pending: p.pendingPull }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  // Simulate a policy flip between observations: the old coordinates still exist, but
+  // they must not make either fight() hold position or pull() start a wall round trip.
+  p.hold = { room: 562, col: 5, row: 5, proven: true };
+  w.addMonster(1, 1, 0, MONSTER);
+  const quarry = w.c.room.objects.get(1);
+  const refused = await p.pull(quarry);
+  ok('policy-off outranks a stale hold for both fight positioning and pull defense',
+     p.holdingForFight() === false && refused.pulled === false &&
+       /switched off/.test(refused.why || ''),
+     JSON.stringify({ holding: p.holdingForFight(), refused }));
+  const source = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the legacy empty-room vigil uses the same live tactical hold gate',
+     /const waitingInASpot = this\.holdingForFight\(\) && this\.holdWorks\(\) && !this\.sanctuary\(room\);/.test(source));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = true;
+  // The coordinates are remembered, but the body has already moved one square away.
+  p.hold = { room: 562, col: 4, row: 5, proven: true };
+  let pulls = 0, advances = 0;
+  p.pull = async () => { pulls++; return { pulled: true, back: true }; };
+  p.advanceOnOpenFieldQuarry = async () => { advances++; return { advanced: true }; };
+  const result = await p.handleOutOfReachQuarry({ out_of_reach: true }, []);
+  ok('a remembered hold is not tactical wall state after the body moved away',
+     p.holdingForFight() === false && result.mode === 'open-field' &&
+       pulls === 0 && advances === 1,
+     JSON.stringify({ holding: p.holdingForFight(), result, pulls, advances }));
+}
+{
+  const w = world({ col: 5, row: 5, room: 562, health: 38, max: 38, vigor: 180 });
+  const p = keeper(w);
+  p.policy.useSafeSpots = false;
+  p.hold = { room: 562, col: 5, row: 5, proven: false, failures: 0 };
+  p.spotTest = { at: '5,5', since: Date.now(), passes: 2 };
+  w.addMonster(1, 1, 0, MONSTER);
+  w.addMonster(2, 0, 1, MONSTER);
+  w.addMonster(3, -1, 0, MONSTER);
+  const adjacent = [1, 2, 3].map(id => w.c.room.objects.get(id));
+  const heldTheSwing = p.maybeTestSpot(adjacent);
+  ok('policy-off with a stale unproven hold does not suppress an adjacent open-field attack',
+     heldTheSwing === false && p.spotTest === null && adjacent.length === 3,
+     JSON.stringify({ heldTheSwing, spotTest: p.spotTest, adjacent: adjacent.length }));
+}
+
 console.log('\n--- unrelated combat does not erase a pending pull ---');
 {
   const w = world();
@@ -193,6 +552,763 @@ console.log('\n--- unrelated combat does not erase a pending pull ---');
   ok('contact with the actual pulled quarry converts and clears the experiment',
      p.pullConverted(10, 'groundworm larva') === true &&
        p.pendingPull === null && p.pullsWithoutContact === 0);
+}
+
+console.log('\n--- pulling cannot outlive its wall, health, or cancellation token ---');
+{
+  const w = world();
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 15, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 14, row: 5, steps: 9 });
+  w.s.need = () => w.c;
+  w.s.movementGeneration = 11;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  const movements = [];
+  w.s.walkTo = async (_col, _row, opts) => {
+    movements.push(opts.movementGeneration);
+    return { arrived: false, reason: 'fixture stopped after proving it set out' };
+  };
+
+  const bounded = await p.pull(foe);
+  ok('the safe default refuses a pull beyond eight steps',
+     p.policy.pullWithin === 8 && !bounded.pulled && movements.length === 0,
+     JSON.stringify(bounded));
+  p.policy.pullWithin = null;          // explicit operator override: no ceiling
+  await p.pull(foe);
+  ok('an explicit no-limit override still has its documented meaning',
+     movements.length === 1 && movements[0] === 11, JSON.stringify(movements));
+}
+{
+  const w = world();
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 8, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 7, row: 5, steps: 2 });
+  w.s.movementGeneration = 20;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let movements = 0, attacks = 0;
+  w.s.walkTo = async (_col, _row, opts) => {
+    movements++;
+    ok('the outbound leaf receives the pull generation', opts.movementGeneration === 20);
+    w.s.movementGeneration = 21;
+    return { arrived: false, cancelled: true, reason: 'movement cancelled by a newer command' };
+  };
+  w.s.faceToward = async () => {};
+  w.s.pacer = { submit: async (_kind, fn) => fn() };
+  w.c.attack = () => { attacks++; };
+  const pulled = await p.pull(foe);
+  ok('watchdog cancellation ends the whole pull without a newly-armed return walk',
+     pulled.cancelled === true && movements === 1 && attacks === 0,
+     JSON.stringify({ pulled, movements, attacks }));
+}
+{
+  const w = world({ health: 30, max: 30 });
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 8, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 7, row: 5, steps: 2 });
+  w.s.movementGeneration = 30;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let movements = 0, attacks = 0;
+  w.s.walkTo = async (col, row) => {
+    movements++;
+    Object.assign(w.me(), { col, row, x: col * 64 + 32, y: row * 64 + 32 });
+    w.c._health = 10;                  // below the derived two-hit flee margin
+    return { arrived: true };
+  };
+  w.s.faceToward = async () => {};
+  w.s.pacer = { submit: async (_kind, fn) => fn() };
+  w.c.attack = () => { attacks++; };
+  p.running = true;
+  const pulled = await p.pull(foe);
+  ok('crossing the flee line aborts before both the pull swing and return movement',
+     pulled.health_abort === true && movements === 1 && attacks === 0,
+     JSON.stringify({ pulled, movements, attacks }));
+  ok('while off the square, neither status nor activity claims shelter',
+     !p.holdWorks() && p.status().safe_spot.works === false &&
+       p.status().safe_spot.standing_here === false &&
+       !/fighting from/.test(p.activity()) && /pulling quarry back/.test(p.activity()),
+     p.activity());
+}
+{
+  const w = world({ health: 30, max: 30 });
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 8, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 7, row: 5, steps: 2 });
+  w.s.movementGeneration = 31;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let movements = 0, attacks = 0;
+  w.s.walkTo = async (col, row) => {
+    movements++;
+    Object.assign(w.me(), { col, row, x: col * 64 + 32, y: row * 64 + 32 });
+    return { arrived: true };
+  };
+  w.s.faceToward = async () => {};
+  w.s.pacer = { submit: async (_kind, fn) => {
+    // The per-kind attack cooldown elapses after enqueue. A hit lands in that gap.
+    w.c._health = 10;
+    return fn();
+  } };
+  w.c.attack = () => { attacks++; };
+  const pulled = await p.pull(foe);
+  ok('the health guard runs at packet time, after the attack pacer wait',
+     pulled.health_abort === true && movements === 1 && attacks === 0,
+     JSON.stringify({ pulled, movements, attacks }));
+}
+
+console.log('\n--- the live keeper watchdog escalates a same-pass re-arm ---');
+{
+  const w = world({ health: 10, max: 30 });
+  const p = keeper(w);
+  w.c.state = 'game';
+  let cancels = 0;
+  w.s.cancelMovement = () => { cancels++; return { cancelled: true, interrupted: 1 }; };
+  p.recordFrame = () => { p.lastFrameAt = Date.now(); };
+  p.passes = 4;
+  p.doing = 'pulling';
+  p.passStartedAt = Date.now() - 5_000;
+  p.watch = {
+    ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
+    lastHealth: null, blockedSince: null, interruptedPass: null,
+    lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
+    pulses: [], lastPulseAt: Date.now(), wedged: null, wedges: 0,
+  };
+  p.watchdogTick();
+  p.watchdogTick();
+  ok('the live autopilot implementation rate-limits immediate repeat ticks', cancels === 1);
+  p.watch.lastInterruptAt -= 2_000;
+  p.watch.pulses = [
+    { at: Date.now() - 1200, room: 999, col: 6, row: 5 },
+    { at: Date.now() - 600, room: 999, col: 7, row: 5 },
+    { at: Date.now(), room: 999, col: 6, row: 5 },
+  ];
+  p.watchdogTick();
+  ok('and cancels a locally bouncing fallback re-armed by the same blocked pass',
+     cancels === 2 && p.watch.repeatInterrupts === 1,
+     JSON.stringify({ cancels, watch: p.watch }));
+
+  p.doing = 'travelling';
+  p.watch.lastInterruptAt -= 2_000;
+  p.watch.pulses = [
+    { at: Date.now() - 1200, room: 999, col: 6, row: 5 },
+    { at: Date.now() - 600, room: 999, col: 6, row: 5 },
+    { at: Date.now(), room: 999, col: 6, row: 5 },
+  ];
+  p.watchdogTick();
+  ok('but does not cancel a survival retreat that replaced the interrupted pull',
+     cancels === 2 && p.watch.repeatInterrupts === 1,
+     JSON.stringify({ cancels, watch: p.watch }));
+}
+
+console.log('\n--- survival recovery keeps one refuge objective instead of bouncing rooms ---');
+{
+  // This is the exact live dead zone: 27/38 is above the farm rest line (70%) but
+  // below the survival flee line (75%). Survival now raises its recovery line; once
+  // it does, room 562 must not choose hostile room 552 merely because it is nearest.
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.mode = 'survive';
+  Object.assign(p.policy, {
+    hunt: '', restBelow: 0.95, fleeBelow: 0.75, useSafeSpots: false,
+  });
+  p.sanctuary = () => false;
+  p.hold = null;
+  w.addMonster(1, 1, 0, MONSTER);
+  w.s.world.exits = () => [{
+    to: 552, to_name: 'The Great Ocean', steps_away: 1, reachable: true,
+  }];
+  let localLeaves = 0;
+  w.s.leaveViaAny = async () => {
+    localLeaves++;
+    return { left: true, room: 552 };
+  };
+  const retreats = [];
+  p.retreatToSafety = async why => {
+    retreats.push(why);
+    return { arrived: true, room: 106, at: 'Brownestone Inn' };
+  };
+  p.progress = () => {};
+
+  const v = w.c.vitals();
+  await p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  ok('the 70-75% survival gap is treated as recovery work',
+     retreats.length === 1 && p.tally.fled_rooms === 1,
+     JSON.stringify({ retreats, tally: p.tally }));
+  ok('recovery does not take the nearest arbitrary hostile-room exit',
+     localLeaves === 0, `leaveViaAny calls=${localLeaves}`);
+}
+{
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.mode = 'survive';
+  Object.assign(p.policy, {
+    hunt: '', restBelow: 0.95, fleeBelow: 0.75, useSafeSpots: false,
+  });
+  p.sanctuary = () => false;
+  w.addMonster(1, 1, 0, MONSTER);
+  w.s.world.exits = () => [{ to: 552, reachable: true }];
+  p.retreatToSafety = async () => ({ arrived: false, fell_back: true });
+  let reconnects = 0;
+  p.breakOut = async () => { reconnects++; return { did: true }; };
+  const v = w.c.vitals();
+  await p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  ok('a local-wall fallback is kept instead of being destroyed by a reconnect',
+     reconnects === 0, `breakOut calls=${reconnects}`);
+}
+{
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.mode = 'survive';
+  Object.assign(p.policy, {
+    hunt: '', restBelow: 0.95, fleeBelow: 0.75, useSafeSpots: false,
+  });
+  p.sanctuary = () => false;
+  w.addMonster(1, 1, 0, MONSTER);
+  w.s.world.exits = () => [{ to: 552, reachable: true }];
+  p.retreatToSafety = async () => ({
+    arrived: false,
+    fell_back: false,
+    fallback_attempted: true,
+    withdrawn: false,
+    declined: 'no wall here',
+  });
+  let reconnects = 0;
+  p.breakOut = async () => { reconnects++; return { did: false }; };
+  p.provision = async () => false;
+  p.declareInterest = () => {};
+  p.noProgress = () => {};
+  const v = w.c.vitals();
+  await p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  ok('no refuge and no wall restores the bounded breakout path instead of claiming safety',
+     reconnects === 1, `breakOut calls=${reconnects}`);
+}
+{
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.mode = 'survive';
+  p.passes = 12;
+  Object.assign(p.policy, {
+    hunt: '', restBelow: 0.95, fleeBelow: 0.75, useSafeSpots: false,
+  });
+  p.sanctuary = () => false;
+  w.addMonster(1, 1, 0, MONSTER);
+  w.s.world.exits = () => [{ to: 552, reachable: true }];
+  w.s.world.route = to => {
+    if (to === 106) return { found: true, hops: [{ to: 108 }, { to: 101 }, { to: 106 }] };
+    if (to === 370) return { found: true, hops: [{ to: 1 }, { to: 2 }, { to: 370 }] };
+    return null;
+  };
+  const refugeTrips = [];
+  p.guardedRetreatTravel = async to => {
+    refugeTrips.push(to);
+    return { arrived: false, cancelled: true, reason: 'nearby player cancelled travel' };
+  };
+  let withdrawals = 0, reconnects = 0;
+  p.withdraw = async () => { withdrawals++; };
+  p.breakOut = async () => { reconnects++; return { did: true }; };
+  p.progress = () => {};
+  const v = w.c.vitals();
+  await p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  ok('player/operator cancellation ends the whole recovery decision for this pass',
+     refugeTrips.length === 1 && withdrawals === 0 && reconnects === 0 &&
+       p.retreatCancelledPass === p.passes,
+     JSON.stringify({ refugeTrips, withdrawals, reconnects,
+                      cancelledPass: p.retreatCancelledPass, pass: p.passes }));
+}
+{
+  const w = world({ room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.passes = 13;
+  p.sanctuary = () => false;
+  w.s.world.route = to => to === 106
+    ? { found: true, hops: [{ to: 108 }, { to: 101 }, { to: 106 }] }
+    : null;
+  let attempts = 0, fallbacks = 0;
+  p.guardedRetreatTravel = async () => {
+    attempts++;
+    return {
+      arrived: false,
+      cancelled: true,
+      retreat_guard: { why: 'retreat route made no room or square progress' },
+      cancellation_kind: 'player',
+      cancelled_for_player: true,
+    };
+  };
+  p.guardedRetreatFallback = async () => { fallbacks++; return {}; };
+  const result = await p.retreatToSafety();
+  ok('player cancellation outranks a simultaneous local-guard result',
+     result.cancelled === true && result.cancelled_for_player === true &&
+       attempts === 1 && fallbacks === 0,
+     JSON.stringify({ result, attempts, fallbacks }));
+}
+{
+  const w = world({ room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.sanctuary = () => false;
+  p.retreatNoProgressMs = 40;
+  p.retreatGuardMs = 5;
+  p.safety = () => ({ fleeAt: 0.75, maxHit: 12 });
+  w.s.world.route = to => to === 106
+    ? { found: true, hops: [{ to: 108 }, { to: 101 }, { to: 106 }] }
+    : null;
+  let rejectTravel, attempts = 0, fallbacks = 0;
+  p.travel = async () => {
+    attempts++;
+    return await new Promise((_resolve, reject) => { rejectTravel = reject; });
+  };
+  w.s.cancelMovement = () => {
+    rejectTravel?.(new Error('transport rejected after guard cancellation'));
+    return { cancelled: true };
+  };
+  p.guardedRetreatFallback = async () => { fallbacks++; return { withdrawn: true }; };
+  const result = await p.retreatToSafety({}, { maxHops: 6 });
+  ok('a transport rejection after the local guard cannot trigger a second refuge',
+     attempts === 1 && fallbacks === 1 && result.fell_back === true,
+     JSON.stringify({ attempts, fallbacks, result }));
+}
+{
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  w.c.state = 'game';
+  p.mode = 'survive';
+  p.passes = 14;
+  Object.assign(p.policy, {
+    hunt: '', restBelow: 0.95, fleeBelow: 0.75, useSafeSpots: false,
+  });
+  p.sanctuary = () => false;
+  w.addMonster(1, 1, 0, MONSTER);
+  w.s.world.exits = () => [{ to: 552, reachable: true }];
+  w.s.world.route = to => to === 106
+    ? { found: true, hops: [{ to: 108 }, { to: 101 }, { to: 106 }] }
+    : null;
+  let routeAttempts = 0;
+  p.guardedRetreatTravel = async () => {
+    routeAttempts++;
+    return {
+      arrived: false,
+      cancelled: true,
+      retreat_guard: { why: 'retreat route made no room or square progress' },
+      cancellation_kind: 'progress',
+    };
+  };
+  let playerNear = false, finishWall, wallAttempts = 0, cancelCalls = 0;
+  p.strangersInReach = () => playerNear ? [{ id: 7, name: 'nearby player' }] : [];
+  p.recordFrame = () => { p.lastFrameAt = Date.now(); };
+  p.watch = {
+    ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
+    lastHealth: 27, blockedSince: null, interruptedPass: null,
+    lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
+    pulses: [], lastPulseAt: Date.now(), wedged: null, wedges: 0,
+  };
+  p.withdraw = async () => {
+    wallAttempts++;
+    return await new Promise(resolve => { finishWall = resolve; });
+  };
+  w.s.cancelMovement = () => {
+    cancelCalls++;
+    // Reproduce the real composite's historical shape: the cancelled child walk is
+    // swallowed and withdraw reports only that no wall was taken.
+    finishWall?.({ withdrawn: false, declined: 'cancelled child was not taken' });
+    return { cancelled: true };
+  };
+  let reconnects = 0;
+  p.breakOut = async () => { reconnects++; return { did: true }; };
+  const v = w.c.vitals();
+  const pending = p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const markerWasActive = p.emergencyRetreat?.active === true;
+  playerNear = true;
+  p.watchdogTick();
+  const fixtureTimeout = setTimeout(() => {
+    finishWall?.({ withdrawn: false, fixture_timeout: true });
+  }, 300);
+  await pending;
+  clearTimeout(fixtureTimeout);
+  ok('player cancellation during the local fallback ends the whole recovery pass',
+     markerWasActive && cancelCalls === 1 && routeAttempts === 1 && wallAttempts === 1 &&
+       reconnects === 0 && p.retreatCancelledPass === p.passes &&
+       p.emergencyRetreat === null,
+     JSON.stringify({ markerWasActive, cancelCalls, routeAttempts, wallAttempts,
+                      reconnects, cancelledPass: p.retreatCancelledPass,
+                      pass: p.passes, marker: p.emergencyRetreat }));
+}
+{
+  const w = world({ room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.passes = 15;
+  p.sanctuary = () => false;
+  w.s.world.route = to => to === 106
+    ? { found: true, hops: [{ to: 108 }, { to: 101 }, { to: 106 }] }
+    : null;
+  p.guardedRetreatTravel = async () => ({
+    arrived: false,
+    cancelled: true,
+    retreat_guard: { why: 'retreat route made no room or square progress' },
+    cancellation_kind: 'progress',
+  });
+  w.s.movementGeneration = 4;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  p.withdraw = async () => {
+    // The operator invalidates movement while a composite wall helper is active, but
+    // the composite returns only its ordinary unsuccessful shape.
+    w.s.movementGeneration++;
+    return { withdrawn: false, declined: 'cancelled child was not taken' };
+  };
+  const result = await p.retreatToSafety();
+  ok('a swallowed operator cancellation during fallback remains terminal',
+     result.cancelled === true && result.cancelled_externally === true &&
+       result.fell_back === false && result.cancellation_kind === 'external' &&
+       p.retreatCancelledPass === p.passes,
+     JSON.stringify({ result, cancelledPass: p.retreatCancelledPass, pass: p.passes }));
+}
+{
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.mode = 'survive';
+  p.passes = 16;
+  Object.assign(p.policy, {
+    hunt: '', restBelow: 0.95, fleeBelow: 0.75, useSafeSpots: false,
+  });
+  p.sanctuary = () => false;
+  w.addMonster(1, 1, 0, MONSTER);
+  w.s.world.exits = () => [{ to: 552, reachable: true }];
+  let retreatAttempts = 0;
+  p.retreatToSafety = async () => ++retreatAttempts === 1
+    ? { arrived: false, fell_back: false, reason: 'fixture first attempt failed' }
+    : {
+        arrived: false, fell_back: false, fallback_attempted: true,
+        cancelled: true, cancelled_externally: true, cancellation_kind: 'external',
+        reason: 'operator cancelled the retry fallback',
+      };
+  let reconnects = 0, provisions = 0, declarations = 0;
+  p.breakOut = async () => { reconnects++; return { did: true }; };
+  p.provision = async () => { provisions++; return false; };
+  p.declareInterest = () => { declarations++; };
+  p.noProgress = () => {};
+  const v = w.c.vitals();
+  await p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  ok('fallback cancellation on the post-reconnect retry is terminal too',
+     retreatAttempts === 2 && reconnects === 1 && provisions === 0 &&
+       declarations === 0 && p.retreatCancelledPass === p.passes,
+     JSON.stringify({ retreatAttempts, reconnects, provisions, declarations,
+                      cancelledPass: p.retreatCancelledPass, pass: p.passes }));
+}
+
+console.log('\n--- cancelled refuge work cannot re-arm elsewhere in the same pass ---');
+{
+  const w = world({ room: 562, health: 27, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.passes = 14;
+  p.armSelf = async () => false;
+  p.knowsCreateWeapon = () => true;
+  p.sanctuary = () => false;
+  p.townTripIfCornered = async () => {
+    p.retreatCancelledPass = p.passes;
+    return false;
+  };
+  let settles = 0;
+  p.settle = async () => { settles++; return { settled: true }; };
+  await p.passArm({ s: w.s, c: w.c });
+  ok('unarmed recovery does not replace a cancelled town trip with a settle or nudge',
+     settles === 0, `settle calls=${settles}`);
+}
+{
+  const w = world({ room: 562, health: 5, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.passes = 15;
+  p.policy.useSafeSpots = true;
+  p.sanctuary = () => false;
+  w.addMonster(1, 1, 0, MONSTER);
+  p.townTripIfCornered = async () => {
+    p.retreatCancelledPass = p.passes;
+    return false;
+  };
+  let walls = 0, retreats = 0;
+  p.takeSafeSpot = async () => { walls++; return { took: true }; };
+  p.retreatToSafety = async () => { retreats++; return { arrived: true }; };
+  const v = w.c.vitals();
+  await p.passFleeAndRest({
+    s: w.s, c: w.c, room: w.s.world.room, v,
+    hp: v.health.value / v.health.max,
+  });
+  ok('doomed open-field recovery does not replace a cancelled town trip with another movement',
+     walls === 0 && retreats === 0,
+     JSON.stringify({ walls, retreats }));
+}
+
+console.log('\n--- a guarded retreat owns cancellation only while it is progressing ---');
+{
+  const w = world({ room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  w.c.state = 'game';
+  p.passes = 9;
+  p.doing = 'travelling';
+  p.passStartedAt = Date.now() - 5_000;
+  p.retreatNoProgressMs = 40;
+  p.retreatGuardMs = 5;
+  p.safety = () => ({ fleeAt: 0.75, maxHit: 12 });
+  p.strangersInReach = () => [];
+  p.recordFrame = () => { p.lastFrameAt = Date.now(); };
+  p.progress = () => {};
+  p.watch = {
+    ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
+    lastHealth: 23, blockedSince: null, interruptedPass: null,
+    lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
+    pulses: [], lastPulseAt: Date.now(), wedged: null, wedges: 0,
+  };
+
+  const cancels = [];
+  let finishTravel;
+  w.s.cancelMovement = (_generation, why) => {
+    cancels.push(why);
+    // Deliberately ignore the retreat guard's first cancel. Once its ownership token
+    // is disarmed, the ordinary watchdog must be able to take a second shot.
+    if (cancels.length === 2) finishTravel?.({ arrived: false, cancelled: true });
+    return { cancelled: true, interrupted: cancels.length };
+  };
+  let travelArgs = null;
+  p.travel = async (to, opts) => {
+    travelArgs = { to, opts };
+    return await new Promise(resolve => { finishTravel = resolve; });
+  };
+
+  const pending = p.guardedRetreatTravel(106);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  p.watchdogTick();
+  ok('the generic watchdog does not cancel a fresh guarded refuge route',
+     cancels.length === 0 && p.emergencyRetreat?.active === true,
+     JSON.stringify({ cancels, marker: p.emergencyRetreat }));
+
+  await new Promise(resolve => setTimeout(resolve, 60));
+  ok('the route guard cancels after three seconds worth of configured no-progress time',
+     cancels.length === 1 && p.emergencyRetreat?.active === false,
+     JSON.stringify({ cancels, marker: p.emergencyRetreat }));
+  p.watchdogTick();
+  const retreat = await pending;
+  ok('an ignored local cancel becomes visible to the generic watchdog again',
+     cancels.length === 2 && p.watch.interrupts === 1,
+     JSON.stringify({ cancels, watch: p.watch }));
+  ok('the scoped marker clears and the result retains the local-guard diagnosis',
+     p.emergencyRetreat === null &&
+       retreat.retreat_guard?.why === 'retreat route made no room or square progress',
+     JSON.stringify({ marker: p.emergencyRetreat, retreat }));
+  ok('the guarded route preserves the refuge destination and disables intermediate holds',
+     travelArgs?.to === 106 && travelArgs?.opts?.reason === 'retreat' &&
+       travelArgs?.opts?.holdBetweenRooms === false &&
+       travelArgs?.opts?.healBetweenRooms === false,
+     JSON.stringify(travelArgs));
+}
+
+console.log('\n--- a short retreat cycle is movement, but it is not progress ---');
+{
+  const w = world({ col: 1, row: 1, room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.retreatNoProgressMs = 40;
+  p.retreatGuardMs = 5;
+  p.safety = () => ({ fleeAt: 0.75, maxHit: 12 });
+
+  let finishTravel;
+  p.travel = async () => await new Promise(resolve => { finishTravel = resolve; });
+  let cancels = 0;
+  w.s.cancelMovement = () => {
+    cancels++;
+    finishTravel?.({ arrived: false, cancelled: true });
+    return { cancelled: true };
+  };
+
+  // Keep changing the observed position more often than the no-progress deadline. The
+  // old guard refreshed on every change and could never fire; revisiting the same two
+  // positions must now exhaust the bounded window.
+  const startedAt = Date.now();
+  const cycle = setInterval(() => {
+    const me = w.me();
+    me.col = me.col === 1 ? 2 : 1;
+  }, 4);
+  // Make a future regression fail as an assertion instead of hanging the entire suite.
+  const fixtureTimeout = setTimeout(() => {
+    finishTravel?.({ arrived: false, fixture_timeout: true });
+  }, 300);
+  let retreat;
+  try {
+    retreat = await p.guardedRetreatTravel(106);
+  } finally {
+    clearInterval(cycle);
+    clearTimeout(fixtureTimeout);
+  }
+  const elapsedMs = Date.now() - startedAt;
+  ok('an A-to-B-to-A retreat is cancelled within one bounded guard window',
+     cancels === 1 && !!retreat?.retreat_guard && elapsedMs < 500,
+     JSON.stringify({ cancels, elapsedMs, retreat }));
+}
+{
+  const w = world({ col: 1, row: 1, room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.retreatNoProgressMs = 40;
+  p.retreatGuardMs = 5;
+  p.safety = () => ({ fleeAt: 0.75, maxHit: 12 });
+
+  let finishTravel;
+  p.travel = async () => await new Promise(resolve => { finishTravel = resolve; });
+  let cancels = 0;
+  w.s.cancelMovement = () => { cancels++; return { cancelled: true }; };
+
+  // Run for several no-progress windows while continually discovering new squares.
+  // This is the shape of a real crossing and must retain ownership until it completes.
+  const advance = setInterval(() => { w.me().col++; }, 8);
+  const pending = p.guardedRetreatTravel(106);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  finishTravel?.({ arrived: true, room: 106 });
+  const retreat = await pending;
+  clearInterval(advance);
+  ok('genuine directional progress may outlive the guard window without cancellation',
+     retreat.arrived === true && !retreat.retreat_guard && cancels === 0,
+     JSON.stringify({ cancels, retreat }));
+}
+
+console.log('\n--- guarded recovery respects confinement on every route hop ---');
+{
+  const w = world({ room: 562, health: 23, max: 38 });
+  const p = keeper(w);
+  p.policy.confineRooms = [562, 106];
+  w.s.world.route = () => ({ found: true, hops: [{ to: 108 }, { to: 106 }] });
+  let travels = 0;
+  p.travel = async () => { travels++; return { arrived: true }; };
+  const refused = await p.guardedRetreatTravel(106);
+  ok('an allowed refuge reached through an excluded room is refused',
+     refused.confined === true && refused.arrived === false && travels === 0,
+     JSON.stringify({ refused, travels }));
+}
+
+console.log('\n--- the local-wall fallback keeps emergency movement ownership ---');
+{
+  const w = world({ room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  w.c.state = 'game';
+  p.passes = 10;
+  p.doing = 'travelling';
+  p.passStartedAt = Date.now() - 5_000;
+  p.retreatNoProgressMs = 1_000;
+  p.retreatGuardMs = 5;
+  p.safety = () => ({ fleeAt: 0.75, maxHit: 12 });
+  p.strangersInReach = () => [];
+  p.recordFrame = () => { p.lastFrameAt = Date.now(); };
+  p.progress = () => {};
+  p.sanctuary = () => false;
+  p.watch = {
+    ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
+    lastHealth: 23, blockedSince: null, interruptedPass: null,
+    lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
+    pulses: [], lastPulseAt: Date.now(), wedged: null, wedges: 0,
+  };
+  w.s.world.route = to => to === 106
+    ? { found: true, hops: [{ to: 108 }, { to: 101 }, { to: 106 }] }
+    : null;
+  // The route obeyed its own no-progress cancellation and unwound normally.
+  p.guardedRetreatTravel = async () => ({
+    arrived: false,
+    cancelled: true,
+    retreat_guard: { why: 'retreat route made no room or square progress' },
+  });
+  let finishWall;
+  p.withdraw = async () => await new Promise(resolve => { finishWall = resolve; });
+  let genericCancels = 0;
+  w.s.cancelMovement = () => { genericCancels++; return { cancelled: true }; };
+
+  const pending = p.retreatToSafety();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  ok('the fallback wall walk receives a fresh emergency ownership token',
+     p.emergencyRetreat?.active === true, JSON.stringify(p.emergencyRetreat));
+  p.watchdogTick();
+  ok('the generic watchdog does not cancel the fresh fallback wall movement',
+     genericCancels === 0, `generic cancels=${genericCancels}`);
+  finishWall?.();
+  await pending;
+  ok('the fallback ownership token clears when the wall attempt completes',
+     p.emergencyRetreat === null, JSON.stringify(p.emergencyRetreat));
+}
+
+console.log('\n--- low-vigor refuge travel has one bounded exposure budget ---');
+{
+  const w = world({ room: 552, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.sanctuary = () => false;
+  w.s.world.route = to => to === 106
+    ? { found: true, hops: Array.from({ length: 10 }, (_, i) => ({ to: 600 + i })) }
+    : null;
+  let travels = 0, fallbacks = 0;
+  p.guardedRetreatTravel = async () => { travels++; return { arrived: true }; };
+  p.guardedRetreatFallback = async () => { fallbacks++; return {}; };
+  const result = await p.retreatToSafety({}, { maxHops: 6 });
+  ok('a refuge beyond the low-vigor ceiling is never attempted',
+     travels === 0 && fallbacks === 1 && result.no_route === true &&
+       result.fell_back === false,
+     JSON.stringify({ travels, fallbacks, result }));
+}
+{
+  const w = world({ room: 552, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.sanctuary = () => false;
+  w.s.world.route = to => {
+    if (to === 106) return { found: true, hops: Array.from({ length: 4 }, (_, i) => ({ to: 700 + i })) };
+    if (to === 370) return { found: true, hops: Array.from({ length: 5 }, (_, i) => ({ to: 800 + i })) };
+    return null;
+  };
+  const attempts = [];
+  p.guardedRetreatTravel = async (to, opts) => {
+    attempts.push({ to, opts });
+    return { arrived: false, hops: 4, reason: 'fixture doorway failed' };
+  };
+  p.guardedRetreatFallback = async () => ({});
+  await p.retreatToSafety({}, { maxHops: 6 });
+  ok('the live four-hop class of route gets one guarded attempt with the ceiling enforced',
+     attempts.length === 1 && attempts[0].to === 106 && attempts[0].opts.maxHops === 6,
+     JSON.stringify(attempts));
+}
+
+console.log('\n--- cornered escalation forgets the incident only after arrival ---');
+{
+  const w = world({ room: 562, health: 23, max: 38, vigor: 76 });
+  const p = keeper(w);
+  p.fledInARow = 3;
+  p.larder = () => [];
+  p.sanctuary = () => false;
+  p.nearestSanctuary = () => ({
+    room: 106, hops: 3, preferred: false, safety: 'true sanctuary', playerSafe: true,
+  });
+  p.noProgress = () => {};
+  p.guardedRetreatTravel = async () => ({ arrived: false, reason: 'fixture blocked' });
+  ok('a failed refuge journey leaves the cornered counter armed',
+     await p.townTripIfCornered() === false && p.fledInARow === 3,
+     `fledInARow=${p.fledInARow}`);
+  p.guardedRetreatTravel = async () => ({ arrived: true, room: 106 });
+  p.hibernate = async () => true;
+  ok('a successful refuge arrival clears the cornered counter',
+     await p.townTripIfCornered() === true && p.fledInARow === 0,
+     `fledInARow=${p.fledInARow}`);
 }
 
 console.log('\n--- a denied assignment cannot fight its own relocation ---');
@@ -219,6 +1335,23 @@ console.log('\n--- a denied assignment cannot fight its own relocation ---');
      JSON.stringify([...denied.entries()]));
   ok('a cap-blocked assignment is deferred just like a wall-refused assignment',
      shouldRelocateToAssignedRoom({ assignedRoom: 563 }, elsewhere, denied) === false);
+
+  const openFieldDenials = farmRoomDenials(
+    new Map([[557, 'three wall samples failed']]),
+    new Map([[563, 'spawn cap 8/8 is occupied by 1x rebel soldier']]),
+    { useSafeSpots: false });
+  ok('open-field policy does not quarantine a room over failed wall searches',
+     !openFieldDenials.has(557));
+  ok('open-field policy still respects strategy-independent spawn-cap refusals',
+     openFieldDenials.has(563) && openFieldDenials.size === 1);
+
+  const w = world({ room: 566 });
+  const p = keeper(w);
+  p.policy.assignedRoom = 557;
+  p.policy.useSafeSpots = false;
+  p.noWallRooms = new Map([[557, 'three wall samples failed']]);
+  ok('status no longer reports a wall-denied open-field assignment as deferred',
+     p.status().placement?.assignment_deferred === false);
 }
 
 console.log('\n--- proving a spot that works ---');
@@ -451,6 +1584,11 @@ console.log('\n--- keeping track of where we are ---');
   p.pendingPull = { waitUntil: Date.now() + 30_000, target: 'giant rat' };
   p.pullsWithoutContact = 2;
   w.me().col = 6;                                     // something moved us
+  p.running = true;
+  p.doing = 'fighting';
+  ok('before the next observation, a stale hold is already not shelter',
+     !p.holdWorks() && p.status().safe_spot.works === false &&
+       !/fighting from/.test(p.activity()), p.activity());
   look(p);
   ok('a spot we are not standing on is released', p.hold === null,
      'holding a belief about a square we left is how a keeper walks into a swarm confident');
@@ -656,7 +1794,8 @@ console.log('\n--- a freeze that changed nothing is not repeated ---');
   // m59-playdead-test.mjs. THIS block is about something else — the livelock guard, which
   // is on the OUTCOME rather than the cause — so it has to set up the one situation where
   // a freeze can happen, or it is testing the refusal instead of the repeat.
-  p.hold = { col: w.me().col, row: w.me().row, proven: true, takenAt: Date.now() - 60_000 };
+  p.hold = { room: 999, col: w.me().col, row: w.me().row,
+             proven: true, takenAt: Date.now() - 60_000 };
   let rejoins = 0;
   p.s.rejoin = async () => { rejoins++; };
   const first = await p.playDead('test');
@@ -726,6 +1865,206 @@ console.log('\n--- no dead zone between "too hurt to fight" and "hurt enough to 
      `restAt is now ${restAt}, so 64% rests instead of waiting`);
   ok('and the two thresholds cannot cross', restAt >= engageAt,
      'whatever health it takes to be willing to fight is the health worth resting to');
+}
+
+console.log('\n--- a too-hurt farm pass re-reads the hostiles beside us ---');
+{
+  const run = async distance => {
+    const w = world({ health: 18, max: 30, vigor: 150 });
+    w.s.name = `too-hurt-${distance}`;
+    w.addMonster(11, distance, 0, MONSTER);
+    w.c.room.objects.get(11).nameRsc = 1;
+    w.s.need = () => w.c;
+    w.s.pacer = { submit: async (_kind, action) => action() };
+    w.c.requestInventory = () => {};
+    w.c.waitFor = async () => ({ events: [] });
+    w.c.spells = [];
+
+    const p = keeper(w);
+    p.policy.clearWeak = false;
+    p.policy.useSafeSpots = false;
+    p.policy.maxCarry = 50;
+    p.provision = async () => false;
+    p.sweepBroken = async () => {};
+    p.sweepGearCondition = async () => {};
+    p.armSelf = async () => false;
+    p.recordHealUse = () => {};
+    p.askForHelp = async () => {};
+    const notes = [], progress = [], stalled = [];
+    p.note = (message, data) => notes.push({ message, data });
+    p.progress = message => progress.push(message);
+    p.noProgress = message => stalled.push(message);
+
+    let result = null, error = null;
+    try {
+      result = await p.passFarm({
+        s: w.s, c: w.c, room: null, v: w.c.vitals(), hp: 18 / 30,
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      releaseQuarry(w.s.name);
+    }
+    return { p, notes, progress, stalled, result, error };
+  };
+
+  // REACH is three squares: this is the live shape that used to read an out-of-scope
+  // `near` after the heal attempt and throw before it could report the corner.
+  const cornered = await run(2);
+  const cornerNote = cornered.notes.find(n => n.message === 'cornered while too hurt to engage');
+  ok('the adjacent-hostile recovery branch executes without throwing',
+     !cornered.error && cornered.result === HANDLED,
+     cornered.error ? String(cornered.error) : String(cornered.result));
+  ok('a hurt keeper with a hostile in reach is explicitly cornered and stalled',
+     cornered.p.doing === 'recovering' && cornerNote?.data?.crowd === 1 &&
+       cornerNote?.data?.what?.[0] === 'giant rat' &&
+       cornered.stalled.includes('too hurt to fight and not safe enough to rest') &&
+       cornered.progress.length === 0,
+     JSON.stringify({ doing: cornered.p.doing, cornerNote, stalled: cornered.stalled,
+                      progress: cornered.progress }));
+
+  const recovering = await run(4);
+  ok('the same failed heal reports genuine recovery when no hostile is in reach',
+     !recovering.error && recovering.result === HANDLED &&
+       recovering.p.doing === 'recovering' && recovering.stalled.length === 0 &&
+       recovering.progress.includes('recovering to fighting strength'),
+     recovering.error ? String(recovering.error)
+       : JSON.stringify({ doing: recovering.p.doing, stalled: recovering.stalled,
+                          progress: recovering.progress }));
+}
+
+console.log('\n--- legacy farm combat uses the policy round budget ---');
+{
+  const w = world();
+  w.s.name = 'farm-round-budget';
+  w.addMonster(12, 1, 0, MONSTER);
+  w.c.room.objects.get(12).nameRsc = 1;
+  w.s.need = () => w.c;
+  w.s.pacer = { submit: async (_kind, action) => action() };
+  w.c.stats = () => {};
+  w.c.waitFor = async () => ({ events: [] });
+  w.c.face = async () => {};
+  w.c.lookup = id => w.c.room.objects.get(id);
+  let swings = 0;
+  w.s.attackRounds = async () => {
+    swings++;
+    return { messages: [], aborted: null };
+  };
+  const p = keeper(w);
+  const fight = () => p.fightFarmTarget({
+    target: 'giant rat', preferId: 12, disengageAt: 0.1,
+    loot: false, equip: false, holdPosition: true, reach: 3,
+  });
+
+  const defaultFight = await fight();
+  ok('the default policy is visible and reaches the real fight skill as 30 rounds',
+     p.status().policy.fightRounds === 30 && defaultFight.rounds === 30 && swings === 30,
+     JSON.stringify({ policy: p.status().policy.fightRounds,
+                      result: defaultFight.rounds, swings }));
+
+  p.policy.fightRounds = 7.8;
+  swings = 0;
+  const configuredFight = await fight();
+  ok('a configured farm round budget is normalized to a positive integer and used',
+     configuredFight.rounds === 7 && swings === 7,
+     JSON.stringify({ result: configuredFight.rounds, swings }));
+
+  p.policy.fightRounds = 0;
+  swings = 0;
+  const invalidFight = await fight();
+  ok('an invalid loadout round budget fails safely back to 30',
+     invalidFight.rounds === 30 && swings === 30,
+     JSON.stringify({ result: invalidFight.rounds, swings }));
+}
+
+console.log('\n--- legacy farm weapon loss leaves a live held fight before retreating ---');
+{
+  const run = async holding => {
+    const w = world({ health: 30, max: 30, vigor: 180 });
+    w.s.name = holding ? 'held-weapon-loss' : 'open-weapon-loss';
+    w.addMonster(13, 1, 0, MONSTER);
+    w.c.room.objects.get(13).nameRsc = 1;
+    w.s.need = () => w.c;
+
+    const p = keeper(w);
+    p.policy.clearWeak = false;
+    p.policy.useSafeSpots = holding;
+    p.policy.requireSafeWall = false;
+    p.policy.maxCarry = 50;
+    // Keep this fixture's tactical hold in place until the weapon-loss branch.
+    // resumeSuspendedJourney() normally releases a fully rested hold first.
+    if (holding) p.policy.holdResumeAbove = 1.1;
+    p.provision = async () => false;
+    p.sweepBroken = async () => {};
+    p.sweepGearCondition = async () => {};
+    p.armSelf = async () => true;
+    p.fightFloor = () => 0;
+    p.holdWorthwhile = () => ({ hold: false, level: 1, why: 'fixture' });
+    p.maybeTestSpot = () => false;
+    p.inReachOfUs = () => [w.c.room.objects.get(13)];
+    p.hold = holding
+      ? { col: 5, row: 5, takenAt: Date.now() - 1_000, proven: true }
+      : null;
+    p.holdingForFight = () => holding && !!p.hold;
+    p.holdWorks = () => holding && !!p.hold;
+
+    const reason = 'the weapon shattered and no verified replacement could be equipped';
+    p.fightFarmTarget = async () => ({
+      fought: true, killed: false, died: false, rounds: 1,
+      target: 'giant rat', foe_id: 13,
+      disengaged: { at_health: '88%', unarmed: true, reason },
+      note: reason,
+    });
+
+    const persisted = p.book.verify(999, {
+      col: 5, row: 5, by: 'test', note: 'known safe against added attackers',
+    });
+    p.book.save();
+    const bookBefore = JSON.stringify(persisted);
+    const order = [];
+    let leave = null, retreat = null;
+    p.leaveHold = async (why, options) => {
+      order.push('leave');
+      leave = { why, options };
+      p.hold = null;
+      return { left: true };
+    };
+    p.retreatToSafety = async args => {
+      order.push('retreat');
+      retreat = args;
+      return { left: true };
+    };
+
+    let result, error = null;
+    try {
+      result = await p.passFarm({
+        s: w.s, c: w.c, room: null, v: w.c.vitals(), hp: 1,
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      releaseQuarry(w.s.name);
+    }
+    return {
+      result, error, reason, order, leave, retreat,
+      bookUnchanged: JSON.stringify(p.book.get(999, 5, 5)) === bookBefore,
+    };
+  };
+
+  const open = await run(false);
+  ok('open-field weapon loss preserves its reason and retreats immediately',
+     !open.error && open.result === HANDLED && open.order.join(',') === 'retreat' &&
+       open.retreat?.because === open.reason && open.retreat?.unarmed === true,
+     open.error ? String(open.error) : JSON.stringify(open));
+
+  const held = await run(true);
+  ok('held weapon loss force-leaves the live pocket before retreating',
+     !held.error && held.result === HANDLED && held.order.join(',') === 'leave,retreat' &&
+       held.leave?.why === held.reason && held.leave?.options?.force === true &&
+       held.retreat?.because === held.reason && held.retreat?.unarmed === true,
+     held.error ? String(held.error) : JSON.stringify(held));
+  ok('leaving that tactical hold does not discredit the persisted safe spot',
+     held.bookUnchanged, JSON.stringify(held));
 }
 
 console.log('\n--- fleetmates are not prey ---');

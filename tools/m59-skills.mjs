@@ -58,19 +58,133 @@ export const DEFAULT_REST_UNTIL = 0.9;
 // reach. The keeper then pulls the same wounded object back and resumes it. Treating
 // every such return as "no progress" makes five useful exchanges look like a stall and
 // lets an external supervisor stop the keeper in the middle of a bounded pull cycle.
-// The server's own combat text is the affirmative evidence: "You hit ..." is emitted
-// only for a landed blow. Merely sending swings, or receiving dodge/avoid text, does not
-// qualify. Keep the parser pure so the distinction is testable without a live server.
-export function landedHitSummary(messages = []) {
+// The server's own combat text is the affirmative evidence. Generic attacks say
+// "You hit ..." or "Your <weapon> hits ...", while Battler.GotHit uses the weapon's
+// damage type and strength (for example, "Your short sword pokes the fungus beast.").
+// These are all positive-damage branches; a zero-damage blow says "fails to damage".
+// Keep the grammar anchored and the source-defined verbs explicit so misses, incoming
+// attacks, and arbitrary prose cannot manufacture progress.
+const PLAYER_DAMAGE_VERBS = [
+  'runs through',
+  'incinerates', 'electrocutes', 'brutalizes',
+  'disfigures', 'dissolves', 'corrupts', 'purifies',
+  'mortifies', 'cleanses', 'flattens', 'appalls',
+  'pollutes', 'maligns', 'devours', 'thrashes',
+  'mangles', 'pummels', 'cleaves', 'lacerates',
+  'damages', 'wounds', 'nicks', 'slays',
+  'burns', 'sears', 'scorches', 'chars', 'singes',
+  'fries', 'shocks', 'jolts', 'freezes', 'frosts',
+  'chills', 'cools', 'infuses', 'slams', 'buffets',
+  'shakes', 'gnaws', 'bites', 'nips', 'shreds',
+  'rends', 'rakes', 'claws', 'impales', 'pricks',
+  'stings', 'irritates', 'slaps', 'maims', 'slashes',
+  'cuts', 'smashes', 'crushes', 'bashes', 'stabs',
+  'pokes', 'fells', 'pierces', 'grazes', 'hits',
+];
+const PLAYER_DAMAGE_VERB_PATTERN = PLAYER_DAMAGE_VERBS.join('|').replace(/ /g, '\\s+');
+const regexpEscape = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function landedHitSummary(messages = [], target = null) {
   let hits = 0, damage = 0, damageKnown = 0;
+  // attackRounds may collect unrelated server messages during the same exchange.
+  // Bind affirmative prose to the chosen foe rather than accepting any sentence
+  // that happens to fit "Your <noun> <damage verb> <noun>.". The source inserts
+  // GetDef separately, so articles are allowed independently of the room name.
+  const targetName = combatNameKey(target);
+  if (!targetName) return { hits, damage: null, damage_known_hits: damageKnown };
+  const targetPattern = `(?:the\\s+|an\\s+|a\\s+)?${regexpEscape(targetName).replace(/ /g, '\\s+')}`;
+  const battlerDamageLine = new RegExp(
+    `^\\s*Your\\s+.+?\\s+(?:${PLAYER_DAMAGE_VERB_PATTERN})\\s+${targetPattern}\\.\\s*$`, 'i');
+  const genericDamageLine = new RegExp(
+    `^\\s*You hit\\s+${targetPattern}(?:\\s+(?:with|for)\\b.*?)?\\.\\s*$`, 'i');
   for (const value of messages || []) {
     const line = String(value ?? '');
-    if (!/\byou hit\b/i.test(line)) continue;
+    if (!genericDamageLine.test(line) && !battlerDamageLine.test(line)) continue;
     hits++;
     const amount = /\bfor\s+(\d+)(?:\s+damage)?\b/i.exec(line);
     if (amount) { damage += Number(amount[1]); damageKnown++; }
   }
   return { hits, damage: damageKnown ? damage : null, damage_known_hits: damageKnown };
+}
+
+// THE SERVER'S MONSTER HEALTH BAR IS PROSE, IN FOUR 20% BANDS.
+//
+// Monster.HitPointThreshold emits these exact lines to the character whose kill
+// target is the damaged monster. Room objects carry no hit points, and inserting a
+// paced LOOK between swings would create the very combat gaps this skill removes.
+// Keep this parser anchored so ordinary sentences containing "near death" cannot be
+// mistaken for a health observation.
+const MONSTER_CONDITION_LINES = [
+  { band: 'slightly_wounded', lower: 0.6, upper: 0.8,
+    re: /^\s*(.+?)\s+is\s+slightly wounded\.\s*$/i },
+  { band: 'clearly_injured', lower: 0.4, upper: 0.6,
+    re: /^\s*(.+?)\s+is\s+clearly injured\.\s*$/i },
+  { band: 'seriously_wounded', lower: 0.2, upper: 0.4,
+    re: /^\s*(.+?)\s+is\s+seriously wounded\.\s*$/i },
+  { band: 'near_death', lower: 0, upper: 0.2,
+    re: /^\s*(.+?)\s+is\s+weak,\s*and near death\.\s*$/i },
+];
+const MONSTER_HEALING_LINE =
+  /^\s*(.+?)\s+falls back to recover for a moment, then returns to the fight\.\s*$/i;
+
+export function monsterConditionReport(value) {
+  const line = String(value ?? '');
+  const healed = MONSTER_HEALING_LINE.exec(line);
+  if (healed) return { name: healed[1].trim(), healing: true, band: null, upper: null };
+  for (const row of MONSTER_CONDITION_LINES) {
+    const match = row.re.exec(line);
+    if (match) return { name: match[1].trim(), healing: false,
+                        band: row.band, lower: row.lower, upper: row.upper };
+  }
+  return null;
+}
+
+function combatNameKey(value) {
+  return String(value ?? '').toLowerCase().trim()
+    .replace(/^(?:the|an|a)\s+/, '').replace(/\s+/g, ' ');
+}
+
+// A CONSERVATIVE RACE TO THE WITHDRAWAL FLOOR.
+//
+// This forecast can only make combat stop EARLIER. It never authorizes a swing below
+// disengageAt; attackRounds remains the hard per-swing guard. Two monotonic server
+// bands are required so an already-wounded target or one ambiguous line cannot invent
+// a damage rate. Player loss is measured over the same interval, then one worst
+// observed exchange is held back as latency/variance margin.
+export function combatRaceProjection({ observations = [], currentHealth = null,
+                                       disengageAt = DEFAULT_DISENGAGE_AT,
+                                       worstExchangeLoss = 0, round = 0 } = {}) {
+  if (!Number.isFinite(currentHealth) || !Number.isFinite(disengageAt)) return null;
+  const usable = observations.filter(o => Number.isFinite(o?.lower) &&
+    Number.isFinite(o?.upper) && Number.isFinite(o?.health));
+  if (usable.length < 2) return null;
+  const first = usable[0], latest = usable[usable.length - 1];
+  // Bucket-to-adjacent-bucket is NOT quantitative evidence: one large hit can land
+  // at the bottom of the first bucket and the next tiny hit can merely cross its
+  // boundary. The progress we can prove is the first bucket's LOWER edge minus the
+  // latest bucket's UPPER edge. That becomes positive only after spanning a whole
+  // intervening band, and deliberately leaves adjacent observations undecided.
+  const targetProgress = first.lower - latest.upper;
+  if (!(targetProgress > 0)) return null;
+
+  const selfLoss = Math.max(0, first.health - currentHealth);
+  const projectedLoss = selfLoss * latest.upper / targetProgress;
+  const margin = Math.max(0, Number(worstExchangeLoss) || 0);
+  const projectedHealth = currentHealth - projectedLoss - margin;
+  const elapsed = Math.max(1, Number(round) - Number(first.round ?? 0));
+  const targetPerRound = targetProgress / elapsed;
+  const remainingRounds = targetPerRound > 0 ? Math.ceil(latest.upper / targetPerRound) : null;
+  return {
+    winning: projectedHealth > disengageAt,
+    projected_health: Math.max(0, projectedHealth),
+    threshold: disengageAt,
+    target_band: latest.band,
+    target_upper: latest.upper,
+    target_progress: targetProgress,
+    observed_self_loss: selfLoss,
+    margin,
+    remaining_rounds: remainingRounds,
+  };
 }
 
 const pct = v => (v && v.max ? v.value / v.max : null);
@@ -1498,9 +1612,32 @@ export async function turnInPlace(s, { degrees = null, verify = true } = {}) {
 // of the whole trip, which would move with how far away the character happened to start.
 const FINE_HANDOVER_SQUARES = Number(process.env.M59_FINE_HANDOVER_SQUARES || 3);
 
-export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = {}) {
+// Composite movement owns one cancellation generation from entry to exit. Leaf walkers
+// already honour it; these two helpers keep a composite from treating a cancelled leaf as
+// an ordinary miss and starting a fallback with the newly-current generation.
+function operationMovementCancelled(s, movementGeneration, controlToken, result = null) {
+  return !!result?.cancelled ||
+    (typeof s?.movementWasCancelled === 'function' &&
+     s.movementWasCancelled(movementGeneration, controlToken));
+}
+
+function operationCancellationResult(result = null) {
+  const reason = result?.reason || 'movement cancelled by a newer command';
+  return { arrived: false, left: false, cancelled: true, reason, why: reason,
+           ...(result?.cancelled_by ? { cancelled_by: result.cancelled_by } : {}) };
+}
+
+export async function returnToSpot(s, spot, {
+  maxSteps = 20, tolerance = 12,
+  movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
   const c = s.need();
   if (!spot) return { arrived: false, why: 'no spot given' };
+  const cancelled = result => operationMovementCancelled(
+    s, movementGeneration, controlToken, result);
+  const cancelledResult = result => operationCancellationResult(result);
+  const moveOptions = extra => ({ ...extra, movementGeneration, controlToken });
+  if (cancelled()) return cancelledResult();
   // A normal square walk is dead-reckoned for speed. That is appropriate while
   // crossing a room, but a predicted arrival is not evidence that we regained a
   // particular safe square: a delayed server position can still replace it and leave
@@ -1528,6 +1665,7 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
     return Math.hypot(me.x - spot.x, me.y - spot.y);
   };
   await confirmPrediction();
+  if (cancelled()) return cancelledResult();
   const d0 = at();
   if (d0 !== null && d0 <= tolerance) return { arrived: true, already: true, off_by: d0 };
 
@@ -1575,19 +1713,26 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
     const fineOwnsIt = away <= FINE_HANDOVER_SQUARES && typeof s.approachFine === 'function';
     let w;
     if (fineOwnsIt) {
-      w = await s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y })
+      w = await s.approachFine(spot.col, spot.row,
+        moveOptions({ toX: spot.x, toY: spot.y }))
                  .catch(e => ({ arrived: false, reason: e.message }));
+      if (cancelled(w)) return cancelledResult(w);
       if (!w.arrived) {
-        const square = await s.walkTo(spot.col, spot.row, { maxSteps })
+        const square = await s.walkTo(spot.col, spot.row, moveOptions({ maxSteps }))
                               .catch(e => ({ arrived: false, reason: e.message }));
+        if (cancelled(square)) return cancelledResult(square);
         if (square.arrived) w = square;
         else w = { ...square, fine_tried: w.reason ?? 'fine approach did not arrive' };
       }
     } else {
-      w = await s.walkTo(spot.col, spot.row, { maxSteps }).catch(e => ({ arrived: false, reason: e.message }));
+      w = await s.walkTo(spot.col, spot.row, moveOptions({ maxSteps }))
+                 .catch(e => ({ arrived: false, reason: e.message }));
+      if (cancelled(w)) return cancelledResult(w);
       if (!w.arrived && typeof s.approachFine === 'function') {
-        const fine = await s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y })
+        const fine = await s.approachFine(spot.col, spot.row,
+          moveOptions({ toX: spot.x, toY: spot.y }))
                             .catch(e => ({ arrived: false, reason: e.message }));
+        if (cancelled(fine)) return cancelledResult(fine);
         if (fine.arrived) w = fine;
         else w = { ...w, fine_tried: fine.reason ?? 'fine approach did not arrive' };
       }
@@ -1596,10 +1741,13 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
       return { arrived: false, why: w.reason || 'could not walk back to the square',
                ...(w.fine_tried ? { fine_tried: w.fine_tried } : {}) };
     await confirmPrediction();
+    if (cancelled()) return cancelledResult();
   }
   if (spot.x != null && s.walkFine) {
-    await s.walkFine(spot.x, spot.y, { maxSteps: 6, stride: 40, arriveWithin: tolerance })
-           .catch(() => null);
+    const fine = await s.walkFine(spot.x, spot.y,
+      moveOptions({ maxSteps: 6, stride: 40, arriveWithin: tolerance }))
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (cancelled(fine)) return cancelledResult(fine);
   }
   const d = at();
   return { arrived: d !== null && d <= tolerance, off_by: d,
@@ -1912,6 +2060,13 @@ export async function fight(s, {
     wielded = e.id ?? null;
     say('equipped', { wielding: e.wielding, verified: e.verified, skill: e.skill,
                       ability: e.ability, rejected: e.rejected, note: e.note });
+  } else {
+    // `equip: false` forbids a use request, not observation. Remember a currently
+    // verified weapon so a mid-fight shatter can still retire its exact id before
+    // stopping; the caller opted out of re-arming, not out of learning what broke.
+    const held = equippedNow(c);
+    wielded = weaponRanking(c, { priority: weaponPriority })
+      .find(candidate => held?.has(candidate.o.id))?.o.id ?? null;
   }
 
   // Health BEFORE, so the report can say what the fight cost.
@@ -2003,7 +2158,11 @@ export async function fight(s, {
   }
 
   let killed = false, disengaged = null, roundsFought = 0, drifted = null, stoodUp = false;
+  let weaponLoss = null;
   const combatLines = [];
+  let targetCondition = null, conditionTrend = [], projection = null;
+  let lastRoundHealth = startPct, worstExchangeLoss = 0;
+  const matchesFoe = report => combatNameKey(report?.name) === combatNameKey(foeName);
 
   // FACE THE TARGET. An attack on something behind you is refused with a
   // message about view, not range. The walk may have turned us the wrong
@@ -2041,45 +2200,43 @@ export async function fight(s, {
     roundsFought++;
     combatLines.push(...res.messages);
 
-    // WE ARE STILL SITTING DOWN, AND THE SERVER JUST SAID SO.
-    //
-    // "You find yourself unable to lift your weapon." is PFLAG_NO_FIGHT, which resting
-    // sets (player.kod:1162). Nothing clears resting but standing or logging off, so a
-    // rest that was cut short, or a safe spot the keeper sat down in and never got back
-    // up from, turns every swing from here on into that line — a fight that reads like
-    // bad luck and is actually a posture. Stand and take the round again.
-    //
-    // Standing is not a cure for the rest of that flag's causes. Hold, Dazzle, Blind and
-    // a DM freeze set it too, and for those the honest answer is to stop and name them,
-    // not to spend eleven more rounds being refused.
-    if (res.messages.some(cannotSwingText)) {
-      if (stoodUp)
-        return { fought: false, could_not_swing: true, stood_up: true,
-                 target: foeName, foe_id: foe.id, rounds: roundsFought,
-                 reason: 'every swing was refused: "unable to lift your weapon"',
-                 combat: combatLines.slice(-8), log,
-                 note: 'standing up did not clear it, so this is not resting. The same flag is set by ' +
-                       'Hold, Dazzle, Blind and a DM freeze — wait for the enchantment to lapse. More ' +
-                       'swings now cost packets and do nothing.' };
-      stoodUp = true;
-      await standUp(s);
-      say('stood up', { because: 'every swing was refused — we were sitting down', round: roundsFought });
-      continue;
+    // OUR BAR AND ITS BAR, ON THE SAME EXCHANGE CLOCK. attackRounds has already
+    // refreshed our stats. The target's four health buckets arrive as combat prose;
+    // use only lines naming this exact chosen species and reset the evidence if the
+    // server says it healed or reports a healthier bucket.
+    const roundHealth = pct(res.vitals?.health ?? c.vitals()?.health);
+    if (Number.isFinite(lastRoundHealth) && Number.isFinite(roundHealth))
+      worstExchangeLoss = Math.max(worstExchangeLoss, lastRoundHealth - roundHealth, 0);
+    if (Number.isFinite(roundHealth)) lastRoundHealth = roundHealth;
+    for (const line of res.messages) {
+      const report = monsterConditionReport(line);
+      if (!report || !matchesFoe(report)) continue;
+      if (report.healing) {
+        targetCondition = null;
+        conditionTrend = [];
+        projection = null;
+        continue;
+      }
+      targetCondition = report;
+      if (!Number.isFinite(roundHealth)) continue;
+      const observation = { ...report, health: roundHealth, round: roundsFought };
+      const previous = conditionTrend[conditionTrend.length - 1];
+      if (!previous) conditionTrend = [observation];
+      else if (observation.upper < previous.upper) conditionTrend.push(observation);
+      else if (observation.upper > previous.upper) conditionTrend = [observation];
     }
+    projection = combatRaceProjection({ observations: conditionTrend,
+      currentHealth: roundHealth, disengageAt, worstExchangeLoss, round: roundsFought });
 
     // IT BROKE MID-FIGHT, which is the ordinary way a weapon leaves service and was
-    // previously invisible. ReqWeaponAttack unequips the weapon itself (weapon.kod:513)
-    // and every later swing is a punch, so a character finished the fight, and the next
-    // twenty fights, bare-handed while the keeper reported it armed. Re-arm here rather
-    // than at the next pass: the rest of THIS fight is the part that was being lost.
-    if (res.messages.some(brokenWeaponText)) {
-      if (wielded != null) brokenSet(c).add(wielded);
-      say('weapon broke', { was: wielded, round: roundsFought });
-      if (equip) {
-        const again = await equipBest(s, { priority: weaponPriority });
-        wielded = again.id ?? null;
-        say('re-armed', { wielding: again.wielding, verified: again.verified, note: again.note });
-      }
+    // previously invisible. Record the evidence immediately, but do not mutate inventory
+    // or equipment until the terminal results of this exchange are known: a dead player
+    // cannot re-arm, and a killing shatter does not need to.
+    const weaponBroke = res.messages.some(brokenWeaponText);
+    const brokenId = weaponBroke ? wielded : null;
+    if (weaponBroke) {
+      if (brokenId != null) brokenSet(c).add(brokenId);
+      say('weapon broke', { was: brokenId, round: roundsFought });
     }
 
     // Are we dead? "Our own object is missing from the room list" is NOT the test,
@@ -2101,7 +2258,116 @@ export async function fight(s, {
                combat: combatLines.slice(-8), log, stale_identity: true,
                note: 'our own object id is not in the room contents but we are alive and not in the ' +
                      'Underworld — the server most likely renumbered ids in a save. Re-login to ' +
-                     'resolve a fresh id; do NOT treat this as death.' };
+                      'resolve a fresh id; do NOT treat this as death.' };
+    }
+
+    // Resolve the exchange before recovery policy. A low-health/aborted killing blow is
+    // still a kill, and neither it nor a lethal blow to us may send inventory/use traffic.
+    if (!c.room.objects.has(foe.id)) { killed = true; break; }
+
+    // ReqWeaponAttack unequips a shattered weapon itself (weapon.kod:513), and every
+    // later swing silently becomes a punch. Only a still-live player facing a still-live
+    // foe should attempt to re-arm for the rest of THIS fight.
+    if (weaponBroke) {
+      if (equip) {
+        const again = await equipBest(s, { priority: weaponPriority });
+        const replacementVerified = again.verified === true && again.id != null;
+        wielded = replacementVerified ? again.id : null;
+        say(replacementVerified ? 're-armed' : 're-arm failed', {
+          wielding: again.wielding, id: again.id ?? null, verified: again.verified,
+          rejected: again.rejected, note: again.note,
+        });
+        if (!replacementVerified) {
+          weaponLoss = {
+            unarmed: true,
+            weapon_id: brokenId,
+            reason: 'the weapon shattered and no verified replacement could be equipped',
+            replacement: { id: again.id ?? null, wielding: again.wielding ?? null,
+                           verified: again.verified === true },
+          };
+        }
+      } else {
+        wielded = null;
+        weaponLoss = {
+          unarmed: true,
+          weapon_id: brokenId,
+          rearm_disabled: true,
+          reason: 'the weapon shattered and automatic re-arming was disabled for this fight',
+        };
+        say('re-arm skipped', { because: 'equip=false', weapon: brokenId });
+      }
+    }
+
+    // equipBest waits for inventory and equipment events. The room can become terminal
+    // during that wait, so classify it again before an abort or recovery decision. The
+    // pre-wait check above is what prevents mutation for an already-terminal exchange;
+    // this one preserves death-over-kill and kill-over-health if state changes meanwhile.
+    if (weaponBroke && equip) {
+      const goneAfterRearm = !c.room.objects.has(c.selfId);
+      const underworldAfterRearm = /underworld/i.test(c.rsc.get(c.roomNameRsc) || '');
+      const noHealthAfterRearm = (c.vitals()?.health?.value ?? 1) <= 0;
+      if (goneAfterRearm && (underworldAfterRearm || noHealthAfterRearm)) {
+        return { fought: true, killed: false, died: true, rounds: roundsFought,
+                 combat: combatLines.slice(-8), log,
+                 note: 'we were killed. You are in the Underworld; the way out is a portal — see escape_underworld.' };
+      }
+      if (goneAfterRearm) {
+        return { fought: true, killed: false, died: false, rounds: roundsFought,
+                 combat: combatLines.slice(-8), log, stale_identity: true,
+                 note: 'our own object id is not in the room contents but we are alive and not in the ' +
+                       'Underworld — the server most likely renumbered ids in a save. Re-login to ' +
+                       'resolve a fresh id; do NOT treat this as death.' };
+      }
+      if (!c.room.objects.has(foe.id)) { killed = true; break; }
+    }
+
+    // A SHATTERED WEAPON ENDS A LIVE FIGHT UNLESS A SPARE WAS VERIFIED.
+    //
+    // UserAttack silently falls back to punching once the server removes the broken
+    // weapon from plUsing. Sending another round here therefore converts a bounded
+    // weapon fight into an unarmed one without the caller ever choosing that risk.
+    // Death still outranks this branch above, and a shattering killing blow still
+    // counts as a kill rather than asking the keeper to retreat from an absent foe.
+    if (weaponLoss) {
+      const hpAfterBreak = pct(res.vitals?.health ?? c.vitals()?.health);
+      disengaged = {
+        ...weaponLoss,
+        at_health: Number.isFinite(hpAfterBreak)
+          ? Math.round(hpAfterBreak * 100) + '%' : 'unknown',
+        ...(res.aborted ? { mid_round: true, after_swing: res.aborted.swing } : {}),
+      };
+      say('disengaged unarmed', {
+        target: foeName, at_health: disengaged.at_health,
+        reason: disengaged.reason,
+      });
+      break;
+    }
+
+    // WE ARE STILL SITTING DOWN, AND THE SERVER JUST SAID SO.
+    //
+    // "You find yourself unable to lift your weapon." is PFLAG_NO_FIGHT, which resting
+    // sets (player.kod:1162). Nothing clears resting but standing or logging off, so a
+    // rest that was cut short, or a safe spot the keeper sat down in and never got back
+    // up from, turns every swing from here on into that line — a fight that reads like
+    // bad luck and is actually a posture. Terminal exchange results and weapon loss are
+    // settled above so standing cannot mutate an already-ended fight.
+    //
+    // Standing is not a cure for the rest of that flag's causes. Hold, Dazzle, Blind and
+    // a DM freeze set it too, and for those the honest answer is to stop and name them,
+    // not to spend eleven more rounds being refused.
+    if (res.messages.some(cannotSwingText)) {
+      if (stoodUp)
+        return { fought: false, could_not_swing: true, stood_up: true,
+                 target: foeName, foe_id: foe.id, rounds: roundsFought,
+                 reason: 'every swing was refused: "unable to lift your weapon"',
+                 combat: combatLines.slice(-8), log,
+                 note: 'standing up did not clear it, so this is not resting. The same flag is set by ' +
+                       'Hold, Dazzle, Blind and a DM freeze — wait for the enchantment to lapse. More ' +
+                       'swings now cost packets and do nothing.' };
+      stoodUp = true;
+      await standUp(s);
+      say('stood up', { because: 'every swing was refused — we were sitting down', round: roundsFought });
+      continue;
     }
 
     // Mid-round abort first: attackRounds now watches health between swings, so this
@@ -2117,22 +2383,47 @@ export async function fight(s, {
       disengaged = { at_health: Math.round(hp * 100) + '%' };
       break;
     }
-    if (!c.room.objects.has(foe.id)) { killed = true; break; }
+    // The model says this exchange will spend the reserve before the target dies.
+    // Leave NOW, while still above the hard threshold. A favorable or uncertain
+    // projection changes nothing: the ordinary loop keeps swinging, and the hard
+    // per-swing guard remains the final authority.
+    if (projection && !projection.winning) {
+      disengaged = {
+        at_health: Math.round(hp * 100) + '%', early: true,
+        reason: 'projected to cross the disengage threshold before the target dies',
+        projected_at_kill: Math.round(projection.projected_health * 100) + '%',
+        target_band: projection.target_band,
+        target_at_most: Math.round(projection.target_upper * 100) + '%',
+      };
+      break;
+    }
   }
 
   await s.pacer.submit('read', () => c.stats(1));
   await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
   const after = c.vitals();
-  const landed = landedHitSummary(combatLines);
+  const landed = landedHitSummary(combatLines, foeName);
 
   const out = {
     fought: true, target: foeName, killed, rounds: roundsFought,
     landed_hits: landed.hits,
     damage_dealt: landed.damage,
     health: { before: before.health, after: after.health },
+    ...(targetCondition ? { target_condition: {
+      band: targetCondition.band,
+      at_most: Math.round(targetCondition.upper * 100) + '%',
+    } } : {}),
+    ...(projection ? { projection: {
+      winning: projection.winning,
+      projected_health: Math.round(projection.projected_health * 100) + '%',
+      threshold: Math.round(projection.threshold * 100) + '%',
+      remaining_rounds: projection.remaining_rounds,
+      margin: Math.round(projection.margin * 100) + '%',
+    } } : {}),
     // Worth saying out loud: it means a round went nowhere, and it means whatever sat
     // this character down is not doing so again by itself.
     ...(stoodUp ? { stood_up: 'the first round was refused — we were resting' } : {}),
+    ...(weaponLoss ? { weapon_loss: weaponLoss } : {}),
     combat: combatLines.slice(-10),
     // Pass this back as preferId next time. A wounded creature we walk away from is
     // both credit we have already earned and a monster that will heal if left, so
@@ -2148,7 +2439,15 @@ export async function fight(s, {
     // fatal. Out in the open, walking away is what stops the damage. In a safe spot,
     // walking away is what STARTS it: nothing can land a blow while you stand still
     // and do not swing, so the recovery move is to sit down where you are.
-    out.note = holdPosition
+    out.note = disengaged.unarmed
+      ? `${disengaged.reason}. No further attack was sent. The monster already engaged in ` +
+        'this fight is still present and hostile even at a held wall; leave its reach before ' +
+        'attempting recovery or re-arming.'
+      : disengaged.early
+      ? `broke off early at ${disengaged.at_health} health: ${disengaged.target_band} target, but ` +
+        `the observed exchange projected ${disengaged.projected_at_kill} health at the kill, below ` +
+        `the configured reserve. The hard per-swing floor was not crossed.`
+      : holdPosition
       ? `broke off at ${disengaged.at_health} health while holding a safe spot. Do NOT walk away — ` +
         `rest where you stand. Nothing can hit you here unless you swing first, so this is a ` +
         `free heal back to full and then the fight again from the top.`
@@ -2285,25 +2584,44 @@ const escapeBudget = steps => Math.max(150, (steps ?? 0) * 3 + 60);
 // exists to rescue.
 //
 // One extra attempt against a permanent trap.
-async function walkOntoSquare(s, col, row, { maxSteps = 80 } = {}) {
-  const walk = await s.walkTo(col, row, { maxSteps });
+async function walkOntoSquare(s, col, row, {
+  maxSteps = 80, movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
+  const opts = { maxSteps, movementGeneration, controlToken };
+  if (operationMovementCancelled(s, movementGeneration, controlToken))
+    return operationCancellationResult();
+  const walk = await s.walkTo(col, row, opts);
+  // Cancellation ends the WHOLE escape attempt. Treating it like an ordinary path miss
+  // used to start the fine fallback with the new generation and defeat the watchdog.
+  if (operationMovementCancelled(s, movementGeneration, controlToken, walk))
+    return operationCancellationResult(walk);
   if (walk.arrived || isTerminalMovementReason(walk.reason)) return walk;
   // A session that cannot walk in fine units simply reports what the coarse walk said —
   // this is a rescue, never a requirement.
   if (typeof s.walkFine !== 'function') return walk;
   const half = KOD_FINENESS >> 1;
   const fine = await s.walkFine(col * KOD_FINENESS + half, row * KOD_FINENESS + half,
-                                { maxSteps }).catch(() => null);
+                                opts).catch(() => null);
+  if (operationMovementCancelled(s, movementGeneration, controlToken, fine))
+    return operationCancellationResult(fine);
   if (fine?.arrived) return { ...fine, via: 'fine movement after coarse pathing failed' };
   return walk;
 }
 
-async function stepOnto(s, o) {
+async function stepOnto(s, o, {
+  movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
   const c = s.need();
   const before = c.evSeq;
   const wasIn = c.room.id;
   const walk = await walkOntoSquare(s, o.col, o.row,
-                                    { maxSteps: escapeBudget(s.world?.reach?.(o.col, o.row)?.steps) });
+    { maxSteps: escapeBudget(s.world?.reach?.(o.col, o.row)?.steps),
+      movementGeneration, controlToken });
+  if (operationMovementCancelled(s, movementGeneration, controlToken, walk)) {
+    const now = { id: c.room.id, name: c.roomNameRsc ? c.rsc.get(c.roomNameRsc) : null };
+    if (now.id !== wasIn) return { left: true, arrived_in: now.name, room: now.id };
+    return { left: false, terminal: true, ...operationCancellationResult(walk) };
+  }
   const arr = await c.waitFor({ since: before, kinds: ['room-entered'],
                                 timeoutMs: walk.arrived ? 3000 : 500 });
   const entered = arr.events.find(e => e.kind === 'room-entered');
@@ -2338,13 +2656,22 @@ async function stepOnto(s, o) {
 // below reports as "probably unlit; its brazier needs activating", a diagnosis that is
 // simply never true of this object and sends the caller hunting for a brazier that does
 // not exist.
-async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
+async function ripOut(s, rip, {
+  maxSeconds = 60, movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
   const c = s.need();
+  const cancelled = result => operationMovementCancelled(
+    s, movementGeneration, controlToken, result);
+  const cancelledResult = result => ({ left: false, terminal: true,
+    ...operationCancellationResult(result) });
+  if (cancelled()) return cancelledResult();
   // Stand next to it first. Stepping onto it IS the teleport, so the approach has to be
   // its own walk or a failure to arrive reads as a portal that did not fire.
   const spot = s.world.approachSquare(rip.col, rip.row);
   if (spot && spot.steps > 0) {
-    const walk = await walkOntoSquare(s, spot.col, spot.row, { maxSteps: escapeBudget(spot.steps) });
+    const walk = await walkOntoSquare(s, spot.col, spot.row,
+      { maxSteps: escapeBudget(spot.steps), movementGeneration, controlToken });
+    if (cancelled(walk)) return cancelledResult(walk);
     if (isTerminalMovementReason(walk.reason))
       return { left: false, terminal: true, reason: walk.reason, note: walk.note };
     if (!walk.arrived)
@@ -2354,10 +2681,19 @@ async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
   const t0 = Date.now();
   let attempts = 0;
   while (Date.now() - t0 < maxSeconds * 1000) {
+    if (cancelled()) return { ...cancelledResult(), attempts };
     attempts++;
     const before = c.evSeq;
     const wasIn = c.room.id;
     const move = await s.stepFine(rip.x, rip.y);
+    if (cancelled(move)) {
+      // The portal packet can win the race with the cancellation. Leaving is success;
+      // cancellation is terminal only while the body is still in the Underworld.
+      const now = { id: c.room.id, name: c.roomNameRsc ? c.rsc.get(c.roomNameRsc) : null };
+      if (now.id !== wasIn)
+        return { left: true, arrived_in: now.name, room: now.id, attempts };
+      return { ...cancelledResult(move), attempts };
+    }
     if (isTerminalMovementReason(move.reason))
       return { left: false, terminal: true, reason: move.reason, note: move.note, attempts };
     const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 3000 });
@@ -2371,8 +2707,30 @@ async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
            why: `stepped onto the rip ${attempts} time(s) over ${maxSeconds}s and stayed put` };
 }
 
-export async function escapeUnderworld(s, { city = null, nearestTo = null,
-                                            maxSeconds = 180, allowRip = true } = {}) {
+export async function escapeUnderworld(s, {
+  city = null, nearestTo = null, maxSeconds = 180, allowRip = true,
+  movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
+  // `maxSeconds` is an end-to-end leash, not merely the time spent polling the shifting
+  // portal. Expiry invalidates the operation's one generation; every composite helper
+  // below carries that same generation, so no coarse/fine/next-portal fallback can re-arm.
+  let deadlineExpired = false;
+  const deadlineMs = Number.isFinite(Number(maxSeconds)) && Number(maxSeconds) > 0
+    ? Number(maxSeconds) * 1000 : null;
+  const deadlineAt = deadlineMs == null ? null : Date.now() + deadlineMs;
+  const deadlineTimer = deadlineMs == null ? null : setTimeout(() => {
+    deadlineExpired = true;
+    try { s.cancelMovement?.(controlToken, 'escapeUnderworld exceeded its end-to-end deadline'); }
+    catch { /* the result still reports the expired operation when the leaf returns */ }
+  }, deadlineMs);
+  deadlineTimer?.unref?.();
+  const cancelled = result => deadlineExpired || operationMovementCancelled(
+    s, movementGeneration, controlToken, result);
+  const cancelledEscape = result => ({ left: false, stood_up: true, terminal: true,
+    ...operationCancellationResult(result),
+    ...(deadlineExpired ? { timed_out: true,
+      why: `escapeUnderworld exceeded its ${maxSeconds}s end-to-end deadline` } : {}) });
+  try {
   const c = s.need();
   const portals = () => [...c.room.objects.values()].filter(o => isTeleporter(o.flags));
   // Which room we are in, read from the client rather than from an event: c.room.id and
@@ -2384,9 +2742,11 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
   // mid-rest wakes up here still sitting, and a resting character's moves are bounced in
   // silence, so every portal in the pentagram would read as unlit. See standUp.
   await standUp(s);
+  if (cancelled()) return cancelledEscape();
 
   await s.pacer.submit('read', () => c.roomContents());
   await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
+  if (cancelled()) return cancelledEscape();
   const here = s.world?.room;
   const found = portals();
   if (!found.length)
@@ -2410,18 +2770,21 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
   const cityAttempts = [];
   if (wanted && found.length > (rip ? 1 : 0)) {
     const { rows } = await identifyPortals(s, found, { want: wanted });
+    if (cancelled()) return cancelledEscape();
     const match = rows.find(r => !r.rip && r.city
                                  && r.city.toLowerCase() === String(wanted).toLowerCase());
     if (match) {
-      const step = await stepOnto(s, match.o);
+      const step = await stepOnto(s, match.o, { movementGeneration, controlToken });
       if (step.left)
         return { left: true, stood_up: true, arrived_in: step.arrived_in, room: step.room,
                  wanted, city: wanted, chosen_because: chosenBecause,
                  via: `the fixed ${wanted} portal`,
                  ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
                  note: 'a fixed portal, so this is repeatable — no waiting and no luck involved' };
+      if (cancelled(step)) return cancelledEscape(step);
       if (step.terminal)
-        return { left: false, stood_up: true, reason: step.reason, note: step.note };
+        return { left: false, stood_up: true, reason: step.reason, note: step.note,
+                 ...(step.cancelled ? { cancelled: true, terminal: true } : {}) };
       cityAttempts.push({ portal: `fixed ${wanted}`, why: step.why });
     } else {
       cityAttempts.push({
@@ -2446,7 +2809,8 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     const spot = s.world.approachSquare(rip.col, rip.row);
     if (spot && spot.steps > 0) {
       const walk = await walkOntoSquare(s, spot.col, spot.row,
-                                        { maxSteps: escapeBudget(spot.steps) });
+        { maxSteps: escapeBudget(spot.steps), movementGeneration, controlToken });
+      if (cancelled(walk)) return cancelledEscape(walk);
       if (isTerminalMovementReason(walk.reason))
         return { left: false, stood_up: true, reason: walk.reason, note: walk.note };
       // ONE PORTAL WE CANNOT WALK TO IS NOT A ROOM WE CANNOT LEAVE.
@@ -2481,29 +2845,48 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     // exists to open — every escape attempt died "pass failed: seen is not defined"
     // instead of going on to try the fixed portals.
     while (!ripUnreachable && Date.now() - t0 < maxSeconds * 1000) {
+      if (cancelled()) return cancelledEscape();
       const b = c.evSeq;
       await s.pacer.submit('look', () => c.look(rip.id));
       const ev = await c.waitFor({ since: b, kinds: ['look'], timeoutMs: 3000 });
+      if (cancelled()) return cancelledEscape();
       const desc = ev.events.find(e => e.id === rip.id)?.description || '';
       const dest = UW.readRipDestination(desc);
       if (dest) seen.push(dest);
       if (dest && dest.toLowerCase().includes(String(wanted).toLowerCase())) {
         const before = c.evSeq;
         const wasIn = c.room.id;
+        if (cancelled()) return cancelledEscape();
         const move = await s.stepFine(rip.x, rip.y);
+        if (cancelled(move)) {
+          const now = whereAmI();
+          if (now.id !== wasIn)
+            return { left: true, stood_up: true, arrived_in: now.name, room: now.id,
+                     wanted, city: wanted, chosen_because: chosenBecause,
+                     via: 'the rip in space',
+                     ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
+                     ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}),
+                     saw: seen };
+          return cancelledEscape(move);
+        }
         if (isTerminalMovementReason(move.reason))
           return { left: false, stood_up: true, reason: move.reason, note: move.note };
         const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 5000 });
         const entered = arr.events.find(e => e.kind === 'room-entered');
         const now = whereAmI();
-        return (entered || now.id !== wasIn)
-          ? { left: true, stood_up: true, arrived_in: entered?.roomName ?? now.name,
-              wanted, city: wanted, chosen_because: chosenBecause, via: 'the rip in space',
-              ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
-              ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}), saw: seen }
-          : { left: false, stood_up: true,
-              reason: 'stepped on it as it read right, but nothing happened — it may have swapped first',
-              saw: seen, note: 'try again; the window is 5-10 seconds and unknown which' };
+        // Success wins the race with cancellation: the room packet is the objective.
+        // If the deadline fired during the wait and we are still here, however, this
+        // composite is over and must not return an ordinary miss that authorises a fresh
+        // direct-walk fallback with the new generation.
+        if (entered || now.id !== wasIn)
+          return { left: true, stood_up: true, arrived_in: entered?.roomName ?? now.name,
+                   wanted, city: wanted, chosen_because: chosenBecause, via: 'the rip in space',
+                   ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
+                   ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}), saw: seen };
+        if (cancelled()) return cancelledEscape(move);
+        return { left: false, stood_up: true,
+                 reason: 'stepped on it as it read right, but nothing happened — it may have swapped first',
+                 saw: seen, note: 'try again; the window is 5-10 seconds and unknown which' };
       }
       await sleep(1200);
     }
@@ -2537,7 +2920,14 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     // Measured: with the cap, every attempt failed that way while the router had a clean
     // route to two of them.
     const walk = await walkOntoSquare(s, o.col, o.row,
-                                      { maxSteps: escapeBudget(reach?.steps) });
+      { maxSteps: escapeBudget(reach?.steps), movementGeneration, controlToken });
+    if (cancelled(walk)) {
+      const now = whereAmI();
+      if (now.id !== wasIn)
+        return { left: true, stood_up: true, arrived_in: now.name, room: now.id,
+                 via: name, tried };
+      return cancelledEscape(walk);
+    }
     const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: walk.arrived ? 3000 : 500 });
     const entered = arr.events.find(e => e.kind === 'room-entered');
     const now = whereAmI();
@@ -2560,6 +2950,7 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
                  } : {}),
                } : {}) };
     }
+    if (cancelled()) return cancelledEscape(walk);
     if (isTerminalMovementReason(walk.reason))
       return { left: false, stood_up: true, reason: walk.reason, note: walk.note, tried };
     // Only blame the brazier if we actually got onto the square. Not arriving is a
@@ -2581,7 +2972,12 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
   // which one it got so the walk back is not a surprise. This runs LAST so it can never
   // take a character somewhere arbitrary while a portal to the right place was available.
   if (rip && allowRip) {
-    const out = await ripOut(s, rip, { maxSeconds: Math.max(20, Math.min(60, maxSeconds)) });
+    const remainingSeconds = deadlineAt == null ? maxSeconds
+      : Math.max(0, (deadlineAt - Date.now()) / 1000);
+    const out = await ripOut(s, rip, {
+      maxSeconds: Math.max(0, Math.min(60, remainingSeconds)),
+      movementGeneration, controlToken,
+    });
     if (out.left) {
       const landed = Object.entries(UW.CITY_INNS)
         .find(([, v]) => v.inn === out.room || (out.arrived_in && v.innName === out.arrived_in))?.[0] ?? null;
@@ -2592,13 +2988,17 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
                               got_what_was_wanted: landed === wanted,
                               ...(cityAttempts.length ? { could_not_use: cityAttempts } : {}) } : {}),
                note: 'the pentagram would not answer, so this took the shifting portal to ' +
-                     (landed ?? 'whichever inn it was pointing at') + '. Out is out; the corpse ' +
-                     'and everything it was carrying is still where it died.' };
+                      (landed ?? 'whichever inn it was pointing at') + '. Out is out; the corpse ' +
+                      'and everything it was carrying is still where it died.' };
     }
+    if (cancelled(out)) return cancelledEscape(out);
     if (out.terminal)
-      return { left: false, stood_up: true, reason: out.reason, note: out.note, tried };
+      return { left: false, stood_up: true, reason: out.reason, note: out.note, tried,
+               ...(out.cancelled ? { cancelled: true, terminal: true } : {}) };
     tried.push({ name: 'the rip in space', why: out.why });
   }
+
+  if (cancelled()) return cancelledEscape();
 
   return { left: false, stood_up: true, reason: 'none of the teleporters here worked', tried,
            ...(wanted ? { wanted, could_not_use: cityAttempts } : {}),
@@ -2608,6 +3008,9 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
              : 'one or two of the five pentagram portals are unlit at random and an unlit one is ' +
                'silent (uworld.kod:460). If EVERY one is dead, look for the braziers — objects ' +
                'with "activate" — or wait for the room to reset, which it does when empty.' };
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+  }
 }
 
 // ---------------------------------------------------------------- commerce

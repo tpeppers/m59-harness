@@ -107,6 +107,14 @@ function vigorOf(bb) {
   const v = vitals(bb);
   return v.vigor?.value ?? null;
 }
+// Tactical wall state is stronger than a remembered coordinate: policy must still
+// permit safe spots and the body must still be standing on that exact room/square.
+// Production Autopilot supplies the canonical helper; alternate keepers fail closed.
+function holdingForFight(keeper) {
+  if (typeof keeper.holdingForFight === 'function') return !!keeper.holdingForFight();
+  return keeper.policy?.useSafeSpots !== false &&
+    typeof keeper.atHold === 'function' && !!keeper.atHold();
+}
 
 // ---------------------------------------------------------------------------
 // Node: provision (eat food if hungry)
@@ -372,7 +380,7 @@ export function scavengeNode(keeper) {
     });
 
     // Fight it with fists.
-    const holding = !!keeper.hold;
+    const holding = holdingForFight(keeper);
     const r = await fight(keeper.s, {
       target: targetName,
       preferId: target.id,
@@ -418,7 +426,7 @@ export function noTargetFoundNode(keeper) {
     // character idles at whatever vigor a fight left it at, with no path back to
     // fighting strength. Sitting is always safe in a proven spot, and restUntil()
     // aborts the moment every vital is at its cap or something hits us.
-    const waitingInASpot = !!keeper.hold && keeper.holdWorks() && !keeper.sanctuary(room);
+    const waitingInASpot = holdingForFight(keeper) && keeper.holdWorks() && !keeper.sanctuary(room);
     if (waitingInASpot) {
       keeper.doing = 'waiting';
       const v = vitals(bb);
@@ -590,12 +598,14 @@ export function fightNode(keeper) {
 
     // Rank quarries
     const { rankQuarries, claimQuarry, releaseQuarry, party } = await import('./m59-fleet.mjs').catch(() => ({}));
+    let rankedFirst = null;
     if (rankQuarries && claimQuarry) {
       const agreed = party?.agreedTarget?.(keeper.s.name);
       const preferId = found.some(o => o.id === keeper.foeId) ? keeper.foeId
         : found.some(o => o.id === agreed?.id) ? agreed.id : null;
       const ranked = rankQuarries(keeper.s.name, room?.num, found, { preferId });
-      claimQuarry(keeper.s.name, room?.num, ranked[0]?.id);
+      rankedFirst = ranked[0] ?? null;
+      claimQuarry(keeper.s.name, room?.num, rankedFirst?.id);
     } else {
       releaseQuarry?.(keeper.s.name);
     }
@@ -611,6 +621,11 @@ export function fightNode(keeper) {
     const currentFoeAlive = keeper.foeId && found.some(o => o.id === keeper.foeId);
     const bystander = currentFoeAlive ? null : adjacent.find(o =>
       !(c.rsc.get(o.nameRsc) || '').toLowerCase().includes(want));
+    // Keep the exact object selected before fight(): fight() intentionally returns a
+    // null foe_id after a kill, but a pending pull may still need that exact contact to
+    // be marked converted. This mirrors the legacy claimedSwing ordering.
+    const claimedSwing = bystander?.id ?? (currentFoeAlive ? keeper.foeId : null) ??
+      rankedFirst?.id ?? found[0]?.id ?? null;
 
     let engageName = bystander ? c.rsc.get(bystander.nameRsc)
                                : (keeper.clearing || keeper.policy.hunt);
@@ -646,6 +661,33 @@ export function fightNode(keeper) {
     const safe = keeper.safety();
     const f = await keeper._btFarmFight(engageName, found, room, safe);
 
+    if (f.out_of_reach) {
+      // One state machine owns both answers: a held wall starts/waits/retires a pull;
+      // open field advances at most four direct steps. Reimplementing either here made
+      // BT pulls forget pendingPull and repeat on every tick. An alternate keeper that
+      // predates the shared handler fails closed rather than guessing which mode is safe.
+      if (typeof keeper.handleOutOfReachQuarry === 'function') {
+        await keeper.handleOutOfReachQuarry(f, found).catch(error => {
+          keeper.note('out-of-reach quarry handling failed', { why: error.message });
+          keeper.noProgress('the shared out-of-reach handler failed');
+        });
+      } else {
+        keeper.note('out of reach but this keeper has no shared quarry handler', {
+          target: f.target ?? null, target_id: f.foe_id ?? f.nearest?.id ?? null,
+        });
+        keeper.noProgress('out of reach and no safe shared quarry handler');
+      }
+      return SUCCESS;
+    }
+
+    // A real exchange proves contact only with the exact object selected above.
+    // Do this after excluding out_of_reach and before foeId is overwritten below;
+    // a surviving fight result's exact id is authoritative if the refreshed fight
+    // selected differently, while a kill deliberately reports null and needs the
+    // pre-fight claim. Unrelated defensive contact must leave another pull window intact.
+    if (f.rounds > 0 && typeof keeper.pullConverted === 'function')
+      keeper.pullConverted(f.foe_id ?? claimedSwing, f.target ?? engageName);
+
     // The legacy fight path (m59-autopilot.mjs:9776) does four things after fight() that
     // this node used to skip. Skipping them is why a BT character fights worse than a
     // legacy one in the same room: it never resumes the rat it was already wounding
@@ -680,40 +722,6 @@ export function fightNode(keeper) {
       keeper.note('stale object id during a fight -- reconnecting', { why: f.note });
       await keeper.reconnect('clearing a stale object id mid-fight').catch(() => {});
       keeper.noProgress('reconnected after a stale object id');
-    } else if (f.out_of_reach) {
-      // Holding position and nothing matching is within melee reach. The fight did NOT
-      // swing -- it reported the nearest quarry and walked away. Without a response the
-      // next pass re-fights the same distant quarry, reports the same out_of_reach, and
-      // the character loops "broke off, landed_hits 0" for ever while a monster sits
-      // across the room. The legacy pass does the pull here: walk to it, hit it once
-      // (which wounds and aggros it so it follows), walk back to the wall, and fight
-      // where we chose. Delegate to the same pull() the legacy uses -- it knows the
-      // safe-spot geometry and the return-to-spot step. When there is no safe spot to
-      // pull back to, just let the next pass approach it the ordinary way.
-      if (keeper.hold && typeof keeper.pull === 'function') {
-        const quarry = f.nearest ?? (found.length ? found.find(o => o.id === f.nearest?.id) || found[0] : null);
-        if (quarry) {
-          const p = await keeper.pull(quarry).catch(() => ({ pulled: false, why: 'pull failed' }));
-          if (p.pulled && p.back) {
-            keeper.note('waiting for it at the wall', {
-              target: p.target, pull_steps: p.steps,
-              why: 'hit once and walked back; the next pass fights it at the wall',
-            });
-            keeper.progress('pulled the quarry to the wall');
-          } else {
-            keeper.note('could not bring it to the wall', { why: p.why, target: p.target });
-            keeper.noProgress('the pull did not complete: ' + (p.why || 'unknown'));
-          }
-        }
-      } else if (f.nearest) {
-        // No safe spot to hold: let the ordinary (non-holding) fight approach next pass.
-        keeper.note('out of reach, no safe spot -- will approach next pass', {
-          target: f.nearest?.name, distance: f.nearest?.distance });
-        keeper.noProgress('out of reach, will approach');
-      } else {
-        keeper.noProgress('out of reach and nothing to pull');
-      }
-      return SUCCESS;
     } else if (f.disengaged) {
       // Broke off at low health mid-fight. The recovery move depends on where we stand.
       // Behind ANY wall (proven or not), rest here rather than running. An unproven
@@ -722,9 +730,22 @@ export function fightNode(keeper) {
       // corner to hit us. Running away from an unproven wall throws away the position
       // and the next pass has to re-take it from scratch. Only run when there is no
       // wall at all -- then the monster is in the open with us and resting is suicide.
-      const atWall = !!keeper.hold;
+      const atWall = holdingForFight(keeper);
       const proven = atWall && keeper.holdWorks?.();
-      if (atWall) {
+      if (f.disengaged.unarmed) {
+        const reason = f.disengaged.reason
+          ?? 'the weapon was lost and no verified replacement could be equipped';
+        // The held wall limits added attackers; it does not stop the one this fight
+        // already engaged. Leave the live pocket before retreating so the ordinary
+        // held-spot guard cannot turn weapon loss into an unsafe rest.
+        if (atWall) await keeper.leaveHold?.(reason, { force: true }).catch(() => null);
+        await keeper.retreatToSafety?.({
+          because: reason,
+          mid_round: !!f.disengaged.mid_round,
+          unarmed: true,
+        }).catch(() => {});
+        keeper.progress('retreated after losing the weapon');
+      } else if (atWall) {
         keeper.note('broke off at the wall -- resting here rather than running', {
           at_health: f.disengaged.at_health, mid_round: !!f.disengaged.mid_round,
           proven,
@@ -738,7 +759,8 @@ export function fightNode(keeper) {
         keeper.progress('rested after breaking off a fight');
       } else {
         await keeper.retreatToSafety?.({
-          because: 'broke off a fight at ' + (f.disengaged.at_health ?? '?'),
+          because: f.disengaged.reason
+            ?? ('broke off a fight at ' + (f.disengaged.at_health ?? '?')),
           mid_round: !!f.disengaged.mid_round,
         }).catch(() => {});
         keeper.progress('retreated after breaking off a fight');
