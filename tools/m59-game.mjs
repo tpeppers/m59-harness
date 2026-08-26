@@ -525,27 +525,57 @@ class Pacer {
     return times.length / 3;  // avg per second over the window
   }
 
-  submit(kind, fn, minGapForKind = 0) {
+  // A DEADLINE ONLY OWNS WORK THAT HAS NOT STARTED.
+  //
+  // Movement callers occasionally wait behind an already-running packet longer than their
+  // whole operation is allowed to live. A callback-time check prevents a late packet, but it
+  // does not release the caller: the caller remains stuck inside this queue until everything
+  // ahead of it finishes. Deadline-aware jobs therefore resolve while still queued or while
+  // sleeping for their pacing turn, and remain marked so pump can never invoke them later.
+  // Once `fn` begins, its timer is cleared and the ordinary await is retained — racing an
+  // already-sent movement would let the next owner run alongside it.
+  submit(kind, fn, minGapForKind = 0,
+         { deadlineAt = Infinity, deadlineResult = undefined } = {}) {
     this.prodTimes.push(Date.now());
     if (!this.prodByKind.has(kind)) this.prodByKind.set(kind, []);
     this.prodByKind.get(kind).push(Date.now());
-    const job = { kind, fn, minGapForKind, resolve: null, reject: null, queuedAt: Date.now() };
-    // PRIORITY: attack packets are time-critical (server cooldown = 1s). They jump
-    // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
-    // of movement packets. Without this, a busy mover (move+turn every ~270ms) pushes
-    // the swing to every 3s instead of every 1s.
-    const isUrgent = kind === 'attack' || kind === 'cast';
-    if (isUrgent) {
-      // Insert after any other urgent packets but before non-urgent ones.
-      let i = 0;
-      while (i < this.q.length && (this.q[i].kind === 'attack' || this.q[i].kind === 'cast')) i++;
-      this.q.splice(i, 0, job);
-    } else {
-      this.q.push(job);
-    }
+    const finiteDeadline = Number.isFinite(deadlineAt) ? deadlineAt : Infinity;
+    const job = { kind, fn, minGapForKind, resolve: null, reject: null, queuedAt: Date.now(),
+                  deadlineAt: finiteDeadline, deadlineResult, deadlineTimer: null,
+                  started: false, expired: false, settled: false, expire: null };
     return new Promise((resolve, reject) => {
       job.resolve = resolve;
       job.reject = reject;
+      job.expire = () => {
+        if (job.started || job.settled) return false;
+        if (job.deadlineTimer) clearTimeout(job.deadlineTimer);
+        job.deadlineTimer = null;
+        job.expired = true;
+        job.settled = true;
+        try {
+          resolve(typeof job.deadlineResult === 'function'
+            ? job.deadlineResult() : job.deadlineResult);
+        } catch (error) { reject(error); }
+        return true;
+      };
+      if (Number.isFinite(job.deadlineAt)) {
+        const remaining = job.deadlineAt - performance.now();
+        if (remaining <= 0) { job.expire(); return; }
+        job.deadlineTimer = setTimeout(job.expire, Math.ceil(remaining));
+      }
+      // PRIORITY: attack packets are time-critical (server cooldown = 1s). They jump
+      // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
+      // of movement packets. Without this, a busy mover (move+turn every ~270ms) pushes
+      // the swing to every 3s instead of every 1s.
+      const isUrgent = kind === 'attack' || kind === 'cast';
+      if (isUrgent) {
+        // Insert after any other urgent packets but before non-urgent ones.
+        let i = 0;
+        while (i < this.q.length && (this.q[i].kind === 'attack' || this.q[i].kind === 'cast')) i++;
+        this.q.splice(i, 0, job);
+      } else {
+        this.q.push(job);
+      }
       this.pump();
     });
   }
@@ -573,6 +603,7 @@ class Pacer {
     try {
       while (this.q.length) {
         const job = this.q.shift();
+        if (job.expired) continue;
         const now = Date.now();
         const waitGlobal = Math.max(0, this.lastSent + this.minGapMs - now);
         const lastKind = this.lastByKind.get(job.kind) || 0;
@@ -584,11 +615,22 @@ class Pacer {
         Pacer.note(job.kind, waitKind >= waitGlobal ? 'paced' : 'throttled', wait);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         else await new Promise(r => setTimeout(r, 0));
+        // Its deadline timer may have resolved the caller while this job was sleeping for
+        // pacing. Never account it as sent and, most importantly, never invoke its callback.
+        if (job.expired) continue;
+        if (performance.now() >= job.deadlineAt) { job.expire(); continue; }
+        job.started = true;
+        if (job.deadlineTimer) clearTimeout(job.deadlineTimer);
         this.lastSent = Date.now();
         this.lastByKind.set(job.kind, this.lastSent);
         this.sentTimes.push(this.lastSent);
         const t0 = Date.now();
-        try { job.resolve(await job.fn()); } catch (e) { job.reject(e); }
+        try {
+          const result = await job.fn();
+          if (!job.settled) { job.settled = true; job.resolve(result); }
+        } catch (e) {
+          if (!job.settled) { job.settled = true; job.reject(e); }
+        }
         Pacer.note(job.kind, 'send', Date.now() - t0);
         await new Promise(r => setImmediate(r));
       }
@@ -762,6 +804,14 @@ const RAIL_SKIP_WITHIN_SQUARES = Number(process.env.M59_RAIL_SKIP_WITHIN || 8);
 const RAIL_STALL_JUMP = Number(process.env.M59_RAIL_STALL_JUMP || 3);
 
 const RAIL_STALL_WAYPOINTS = Number(process.env.M59_RAIL_STALL_WAYPOINTS || 3);
+
+// A LEARNED TRACK IS THE LAST FALLBACK, NOT ANOTHER FULL WALKER.
+// Baked rails have their own bounded follower and take precedence in travel. When no bake
+// exists, the learned replay may spend at most eight move attempts and twelve seconds before
+// handing the room back to the ordinary exit walker. These are hard safety ceilings; the
+// operator-facing switch is M59_TRACK_RIDE=0, not a knob that can silently widen them.
+const TRACK_RIDE_MAX_PACKETS = 8;
+const TRACK_RIDE_MAX_MS = 12_000;
 
 // A DOORWAY THIS SIDE OF THE ROOM CANNOT REACH. Not a refusal by the server — the walk
 // never got there. `leaveViaAny` has already tried every square the room publishes for
@@ -1888,8 +1938,9 @@ class Session {
   // computed from where we are, so re-planning from a predicted position returns the
   // identical answer forever, which is what a character stuck in a doorway loop is
   // actually doing.
-  async confirmPosition() {
+  async confirmPosition({ deadlineAt = Infinity } = {}) {
     const c = this.need();
+    if (performance.now() >= deadlineAt) return null;
     this.lastRoomRead = Date.now();
     // There may already be a fire-and-forget room read in flight. Waiting for merely
     // "the next room-contents event" can consume that older snapshot and certify the
@@ -1903,8 +1954,20 @@ class Session {
     // Throwing here would turn a transient dropped reply into an exception out of the
     // middle of a walk, which is a worse answer than "I do not know where I am".
     const since = c.evSeq;
-    const request = await this.pacer.submit('read', () => c.roomContents());
+    // PACING CAN OUTLIVE THE CALLER'S WHOLE MOVEMENT BUDGET. Check inside the queued
+    // callback as well as before submitting it, so an expired learned ride cannot emit a
+    // late room read after travel has already decided to fall back. Once a read has gone on
+    // the wire we still await it normally — racing it would leave the loser running beside
+    // the next movement owner — but do no further waiting if its deadline expired meanwhile.
+    let requested = false;
+    const request = await this.pacer.submit('read', () => {
+      if (performance.now() >= deadlineAt) return null;
+      requested = true;
+      return c.roomContents();
+    }, 0, { deadlineAt, deadlineResult: null });
+    if (!requested || performance.now() >= deadlineAt) return null;
     const t0 = Date.now();
+    const confirmUntil = Math.min(performance.now() + 8000, deadlineAt);
     let cursor = since, fresh = true;
     // BOUNDED IN WALL CLOCK, NOT ONLY PER REPLY. The per-wait timeout below only ends this
     // loop if replies STOP; every reply that arrives for an older request advances `cursor`
@@ -1913,10 +1976,11 @@ class Session {
     // characters sat inside one keeper pass for 300-1090s and CLIMBING, completing zero
     // passes, at ~38% CPU. Low CPU is the tell: they were not computing, they were waiting
     // 2s at a time, for ever. The board said "travelling" throughout and nobody moved.
-    const CONFIRM_DEADLINE_MS = 8000;
     while ((c.roomContentsReceived ?? request) < request) {
-      if (Date.now() - t0 >= CONFIRM_DEADLINE_MS) { fresh = false; break; }
-      const reply = await c.waitFor({ since: cursor, kinds: ['room-contents'], timeoutMs: 2000 });
+      const left = confirmUntil - performance.now();
+      if (left <= 0) { fresh = false; break; }
+      const reply = await c.waitFor({ since: cursor, kinds: ['room-contents'],
+                                      timeoutMs: Math.min(2000, Math.ceil(left)) });
       if (reply.timedOut) { fresh = false; break; }
       cursor = reply.seq;
     }
@@ -2276,7 +2340,12 @@ class Session {
 
   async queueValidatedMove(x, y, { speed = 18, slide = true, fall = false, beforeMutation = null,
                                     minGap = MOVE_INTERVAL_MS, expectedRoomId = null,
-                                    offMap = false } = {}) {
+                                    offMap = false, deadlineAt = Infinity } = {}) {
+    const deadlineRefusal = () => ({ sent: false, validation: {
+      available: false, moved: false, blocked: false, reason: 'effort_deadline_exhausted',
+      note: 'the operation-wide monotonic movement deadline expired before send',
+    } });
+    if (performance.now() >= deadlineAt) return deadlineRefusal();
     const c = this.need();
     const roomId = expectedRoomId ?? c.room.id;
     if (c.room.id !== roomId) return { sent: false, validation: {
@@ -2306,6 +2375,7 @@ class Session {
     if (offMap) {
       const target = { x: Math.round(x), y: Math.round(y) };
       return this.pacer.submit('move', () => {
+        if (performance.now() >= deadlineAt) return deadlineRefusal();
         if (c.room.id !== roomId) return { sent: false, validation: {
           available: false, moved: false, blocked: true, reason: 'room_changed_before_move' } };
         const observed = c.self;
@@ -2354,7 +2424,7 @@ class Session {
         c.moveTo(target.x, target.y, speed, roomId);
         return { sent: true, roomId, eventSeq, before, target,
                  validation: sentValidation };
-      }, minGap);
+      }, minGap, { deadlineAt, deadlineResult: deadlineRefusal });
     }
 
     const initial = this.validateFineTarget(x, y, { slide, fall });
@@ -2365,6 +2435,7 @@ class Session {
     if (!initial.available || !initial.moved || !initial.target)
       return { sent: false, validation: initial };
     return this.pacer.submit('move', () => {
+      if (performance.now() >= deadlineAt) return deadlineRefusal();
       // Pacing can delay this callback while an asynchronous room entry, teleport,
       // or older room read changes the world beneath it. Bind the packet to the room
       // it was requested in and recompute from the live start immediately before send.
@@ -2436,7 +2507,7 @@ class Session {
         } else this.collisionVertical = null;
       }
       return { sent: true, roomId, eventSeq, before, target: validation.target, validation };
-    }, minGap);
+    }, minGap, { deadlineAt, deadlineResult: deadlineRefusal });
   }
 
   // ONE SQUARE, AND NOT A ROOM RE-READ TO GO WITH IT.
@@ -2932,27 +3003,34 @@ class Session {
   //    rock, not that the way is shut. Fanning the heading out to either side is
   //    what "hugging the wall" actually is, and it is how a human gets along a
   //    ledge without falling off it.
-  async stepFine(x, y) {
+  async stepFine(x, y, { deadlineAt = Infinity } = {}) {
+    if (performance.now() >= deadlineAt)
+      return { moved: false, left_room: false, reason: 'effort_deadline_exhausted' };
     const c = this.need();
     const startRoom = c.room.id;
     if (this.finePositionUnknown) {
-      const recovered = await this.confirmPosition();
+      const recovered = await this.confirmPosition({ deadlineAt });
       if (!recovered) return { moved: false, left_room: false,
-        reason: 'position_confirmation_timeout',
+        reason: performance.now() >= deadlineAt
+          ? 'effort_deadline_exhausted' : 'position_confirmation_timeout',
         note: 'no further fine packet was sent because its starting point is unknown' };
       this.finePositionUnknown = false;
     }
+    if (performance.now() >= deadlineAt)
+      return { moved: false, left_room: false, reason: 'effort_deadline_exhausted' };
     const p0 = c.self;
     const before = p0 ? { x: p0.x, y: p0.y, col: p0.col, row: p0.row } : null;
     if (!before) return { moved: false, left_room: false, reason: 'own_position_unknown' };
     const queued = await this.queueValidatedMove(x, y,
-      { speed: this.moveSpeed(), slide: true, minGap: MOVE_INTERVAL_MS });
+      { speed: this.moveSpeed(), slide: true, minGap: MOVE_INTERVAL_MS, deadlineAt });
     const validation = queued.validation ?? {};
     if (!queued.sent) {
       // In keeper mode, if the collision check rejected the move
       // due to geometry (stale .roo), send it anyway. The server
       // will accept or reject based on its own geometry.
-      if (process.env.M59_KEEPER && (validation.blocked || validation.reason) && validation.reason !== 'room_changed_before_move') {
+      if (process.env.M59_KEEPER && (validation.blocked || validation.reason)
+          && validation.reason !== 'room_changed_before_move'
+          && validation.reason !== 'effort_deadline_exhausted') {
         // DECLARED OUTSIDE THE TRY. It used to be `const c2` inside it, and the catch
         // below reads c2.room.id -- where it is out of scope. So any failure in this
         // branch made the ERROR HANDLER throw `ReferenceError: c2 is not defined`,
@@ -2962,6 +3040,11 @@ class Session {
         let c2 = null;
         try {
           c2 = this.need();
+          if (performance.now() >= deadlineAt)
+            return { moved: false, position: before,
+                     left_room: c2.room?.id !== startRoom,
+                     reason: 'effort_deadline_exhausted',
+                     note: 'the learned-ride deadline expired before the raw fallback send' };
           c2.moveTo(Math.round(x), Math.round(y), c2.moveSpeed() ?? 1, c2.room?.id ?? 0);
           await new Promise(r => setTimeout(r, 300));
           const after = c2.self;
@@ -2991,7 +3074,7 @@ class Session {
     // movement may clip or slide to a sub-square point, so prediction cannot establish
     // the exact starting point for its next local collision pass.
     const tFine = Date.now();
-    const confirmed = await this.confirmPosition();
+    const confirmed = await this.confirmPosition({ deadlineAt });
     Pacer.note('step_fine', 'blocked', Date.now() - tFine);
     if (!confirmed) {
       this.finePositionUnknown = true;
@@ -6177,194 +6260,92 @@ class Session {
    * be able to make travel worse than not having it.
    */
   async rideTrack(fromRoom, toRoom, { movementGeneration = this.movementGeneration, controlToken } = {}) {
+    if (process.env.M59_TRACK_RIDE === '0')
+      return { rode: false, why: 'learned track rides disabled by M59_TRACK_RIDE=0' };
     const c = this.need();
     const here = Number(this.world?.room?.num ?? NaN);
     if (!Number.isFinite(here) || !Number.isFinite(Number(toRoom))) return { rode: false, why: 'no room' };
     const track = recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
-    if (!track?.waypoints?.length) return { rode: false, why: 'no track' };
-    // AN UNPROVEN STITCH IS TRIED ONCE, WITH THE WALKED ROUTE STILL UNDERNEATH IT.
+    if (!track) return { rode: false, why: 'no track' };
+    // PAPER DOES NOT GET A SECOND, LARGER ATTEMPT.
     //
-    // `waypoints` may be a route sewn from several walks: every leg raycast-proved, and the
-    // whole thing never ridden. `walked` is the real crossing it was built to beat. Ride the
-    // stitch — that is how it becomes proven — but if it does not get us out of the room,
-    // fall back to the route something has actually walked rather than reporting the
-    // crossing shut.
-    const sewn = track.proven === false && Array.isArray(track.walked) && track.walked.length >= 2
-      ? track.walked : null;
+    // A stitch is shorter on the collision model and has never carried a body. The old ride
+    // tried it first, then started the walked route underneath it with a fresh 60-step fine
+    // walk at every station. A 29-second observation consequently spent eighty seconds in
+    // room 557 before the ordinary baked crossing was even allowed to run. The walked line
+    // is the only live evidence in this entry, so an unproven stitch rides that line directly
+    // and never attempts the paper one.
+    const hasWalkedTrack = Array.isArray(track.walked) && track.walked.length >= 2;
+    if (track.proven === false && !hasWalkedTrack)
+      return { rode: false, why: 'unproven track has no observed walked route' };
+    if (track.proven !== false && !track.waypoints?.length)
+      return { rode: false, why: 'no track' };
+    const walkedInstead = track.proven === false;
+    const stations = walkedInstead ? track.walked : track.waypoints;
     const geo = this.world?.geometry ?? null;
     const me0 = c.self;
     if (!me0) return { rode: false, why: 'own position unknown' };
-    const JOIN_WITHIN = Number(process.env.M59_TRACK_JOIN_WITHIN || 640);
+    // NO BOARDING WALK. The five current no-bake tracks begin at their recorded entry, and
+    // anything more than one square away is no longer a replay of that observation. Hand it
+    // to the ordinary walker without sending a packet.
+    const configuredJoin = Number(process.env.M59_TRACK_JOIN_WITHIN || KOD_FINENESS);
+    const JOIN_WITHIN = Number.isFinite(configuredJoin)
+      ? Math.min(KOD_FINENESS, Math.max(0, configuredJoin)) : KOD_FINENESS;
     let joinAt = -1, joinDist = Infinity;
-    for (let i = 0; i < track.waypoints.length; i++) {
-      const wp = track.waypoints[i];
-      const row = Math.floor(wp.y / KOD_FINENESS) + 1, col = Math.floor(wp.x / KOD_FINENESS) + 1;
-      if (geo && typeof geo.walkable === 'function' && !geo.walkable(row, col)) continue;
+    for (let i = 0; i < stations.length; i++) {
+      const wp = stations[i];
+      if (!Number.isFinite(wp?.x) || !Number.isFinite(wp?.y)) continue;
+      const row = Math.floor(wp.y / KOD_FINENESS), col = Math.floor(wp.x / KOD_FINENESS);
+      if (geo && typeof geo.standable === 'function' && !geo.standable(row, col)) continue;
+      if (geo && typeof geo.standable !== 'function'
+          && typeof geo.walkable === 'function' && !geo.walkable(row, col)) continue;
       const d = Math.hypot(wp.x - me0.x, wp.y - me0.y);
       if (d < joinDist) { joinDist = d; joinAt = i; }
     }
     if (joinAt < 0) return { rode: false, why: 'no station reachable on the coarse grid' };
     if (joinDist > JOIN_WITHIN) return { rode: false, why: 'not on this track', off_by: Math.round(joinDist) };
     const started = Date.now();
-    if (joinDist > KOD_FINENESS) {
-      const wp = track.waypoints[joinAt];
-      const board = await this.walkTo(Math.floor(wp.x / KOD_FINENESS) + 1,
-                                      Math.floor(wp.y / KOD_FINENESS) + 1,
-                                      { maxSteps: 60, movementGeneration, controlToken }).catch(() => null);
-      if (board?.left_room) return { rode: true, left_room: true, boarded: false, ms: Date.now() - started };
-      if (!board?.arrived) return { rode: false, why: 'could not reach the station', off_by: Math.round(joinDist) };
-    }
-    // MONORAIL HEALING STEPS.
-    //
-    // The tight squares that make these crossings awkward are the same squares a monster
-    // cannot reach — that IS a safe wall, measured — so a track already runs past the best
-    // shelter in the room, and `shelter` names which of its stations those are. A traveller
-    // hurt on the way does not need to reach a town; it needs the next station with a wall
-    // at its back, and it is standing on the route to one.
-    //
-    // Doctrine says a planned trip completes AS FAST AS POSSIBLE WHILE BEING ATTACKED and
-    // does not stop to fight — this does not break that. It is not a fight and it is not a
-    // detour: the shelter is a waypoint the journey was going to walk over anyway, and
-    // resting on it is strictly cheaper than arriving dead. It only fires BELOW the rest
-    // threshold, only on a station the track already contains, and it is bounded.
-    const shelter = new Set(track.shelter ?? []);
-    const restBelow = Number(process.env.M59_TRACK_REST_BELOW || 0.5);
-    const restMs = Number(process.env.M59_TRACK_REST_MS || 20000);
-    let rested = 0;
-    let reached = 0, blocked = 0, bodiesInTheWay = 0;
-    for (let i = joinAt; i < track.waypoints.length; i++) {
-      const wp = track.waypoints[i];
-      if (this.movementWasCancelled(movementGeneration, controlToken)) break;
-      // RIDE A LEG THE WAY IT WAS PROVED.
-      //
-      // A track's legs are proved by `straighten`, which asks `traceFineMoveClient` whether
-      // ONE slide from here to there lands within a body's width of the target. Riding them
-      // with `walkFine` asks a different question entirely — 48-unit steps with a fan of
-      // headings, groping toward a point — and a leg that is a single clean slide is not
-      // something that gropes well. Measured on the Tos gate track: three of four legs came
-      // back "blocked, every heading refused, at every reach tried", on a route a body had
-      // actually walked and a raycast had re-proved.
-      //
-      // So the leg is sent as the single validated move it was proved to be. walkFine stays
-      // as the fallback for the leg that really does need feeling out, which is the job it
-      // is good at.
-      let r = await this.stepFine(wp.x, wp.y).catch(() => null);
+    const deadlineAt = performance.now() + TRACK_RIDE_MAX_MS;
+    let reached = 0, blocked = 0, bodiesInTheWay = 0, packets = 0;
+    const cancelled = () => this.cancelledMovement({
+      rode: true, left_room: false, reached, blocked, rested: 0, packets,
+      ms: Date.now() - started, track_best_ms: track.ms,
+    });
+    const bodyBlocked = r => r?.reason === 'object_blocked' || (r?.monster_blocked ?? 0) > 0
+      || (Array.isArray(r?.blocked_by_bodies_at) && r.blocked_by_bodies_at.length);
+    let exhaustedBy = null;
+    for (let i = joinAt; i < stations.length; i++) {
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelled();
+      if (performance.now() >= deadlineAt) { exhaustedBy = 'deadline'; break; }
+      if (packets >= TRACK_RIDE_MAX_PACKETS) { exhaustedBy = 'packets'; break; }
+      const wp = stations[i];
       const arrivedNear = () => { const p = c.self;
         return p && Math.hypot(p.x - wp.x, p.y - wp.y) <= 48; };
-      if (!r?.left_room && !arrivedNear())
-        r = await this.walkFine(wp.x, wp.y, { maxSteps: 40, movementGeneration, controlToken })
-          .catch(() => null) ?? r;
+      // The entry sample is normally where the body is already standing. Do not spend one of
+      // the eight packets asking it to move to its current position.
+      if (arrivedNear()) { reached++; continue; }
+      const r = await this.stepFine(wp.x, wp.y, { deadlineAt }).catch(() => null);
+      packets++;
       if (r?.left_room) {
         clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
-        return { rode: true, left_room: true, reached, blocked, rested,
-                 ms: Date.now() - started };
+        return { rode: true, left_room: true, reached, blocked, rested: 0, packets,
+                 walked_track: walkedInstead, ms: Date.now() - started };
       }
-      // WAS ANYTHING ALIVE IN THE WAY? This is the whole of the strike rule: a ride that
-      // fails while a body is standing on it says nothing about the route.
-      if (r?.reason === 'object_blocked' || (r?.monster_blocked ?? 0) > 0
-          || (Array.isArray(r?.blocked_by_bodies_at) && r.blocked_by_bodies_at.length))
-        bodiesInTheWay++;
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelled();
+      if (bodyBlocked(r)) bodiesInTheWay++;
       const now = c.self;
       const near = now && Math.hypot(now.x - wp.x, now.y - wp.y) <= 48;
       if (near) reached++;
       else {
         blocked++;
-        // The next leg was proved from this waypoint, not from wherever the body stopped.
-        // End the replay at the first broken proof boundary and let the normal fallback act.
+        if (r?.reason === 'effort_deadline_exhausted' || performance.now() >= deadlineAt)
+          exhaustedBy = 'deadline';
         break;
       }
-      // Standing on shelter, and hurt: take it. Only here, because only here is the
-      // character on a square something measured as hard to reach.
-      if (near && shelter.has(i)) {
-        // SIT, WATCH, STAND. `rest` is the client verb — there is no session-level
-        // rest-until, and reaching for one that does not exist would have made this whole
-        // feature a silent no-op. Polled rather than slept through, because the reason to
-        // be here is that something may be hitting us: it stops the moment health stops
-        // climbing, and stands up before walking on so the next leg is not crawled.
-        const vit = c.vitals?.() ?? {};
-        const hp = vit.health, max = vit.maxHealth;
-        if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp / max < restBelow) {
-          const before = hp;
-          let last = hp, quiet = 0;
-          await this.pacer.submit('rest', () => c.rest()).catch(() => null);
-          const until = Date.now() + restMs;
-          while (Date.now() < until) {
-            if (this.movementWasCancelled(movementGeneration, controlToken)) break;
-            await new Promise(r => setTimeout(r, 2000));
-            const h = c.vitals?.()?.health;
-            if (!Number.isFinite(h)) break;
-            if (h / max >= restBelow) break;
-            // LOSING health means something is hitting us and this is not shelter after
-            // all; standing still to be killed is the opposite of the point.
-            if (h < last) break;
-            if (h === last && ++quiet >= 3) break;      // nothing is coming back
-            if (h > last) quiet = 0;
-            last = h;
-          }
-          await this.pacer.submit('rest', () => c.stand()).catch(() => null);
-          if ((c.vitals?.()?.health ?? before) > before) rested++;
-        }
-      }
     }
-    // The stitch did not get us out. Try the route that has actually been walked before
-    // giving the crossing back to the planner.
-    if (sewn) {
-      // JOIN THE WALKED ROUTE WHERE THE STITCH LEFT US, NOT BACK AT ITS ENTRANCE.
-      //
-      // The stitched and walked routes have different numbers of stations, so their array
-      // indices do not describe the same progress. Project the CURRENT position onto the
-      // walked polyline instead: an interior projection has already passed that leg's first
-      // station, hence the next station is the earliest non-regressive join. Among viable
-      // stations at or beyond there, take the nearest one.
-      //
-      // This is not just an optimisation. In The King's Way an unproven 587>575 stitch got
-      // most of the way north, missed its final long leg, then spent ten minutes driving
-      // south into a wall because the fallback restarted at walked[0].
-      const now = c.self;
-      const finitePoint = p => Number.isFinite(p?.x) && Number.isFinite(p?.y);
-      const viableStation = i => {
-        const wp = sewn[i];
-        if (!finitePoint(wp)) return false;
-        if (!geo || typeof geo.standable !== 'function') return true;
-        return geo.standable(Math.floor(wp.y / KOD_FINENESS),
-                             Math.floor(wp.x / KOD_FINENESS));
-      };
-      let progressAt = 0;
-      if (finitePoint(now)) {
-        let projectionDist = Infinity;
-        for (let i = 0; i + 1 < sewn.length; i++) {
-          const a = sewn[i], b = sewn[i + 1];
-          if (!finitePoint(a) || !finitePoint(b)) continue;
-          const dx = b.x - a.x, dy = b.y - a.y;
-          const length2 = dx * dx + dy * dy;
-          if (!(length2 > 0)) continue;
-          const t = Math.max(0, Math.min(1,
-            ((now.x - a.x) * dx + (now.y - a.y) * dy) / length2));
-          const d = Math.hypot(now.x - (a.x + t * dx), now.y - (a.y + t * dy));
-          const ahead = t > 0 ? i + 1 : i;
-          if (d < projectionDist || (d === projectionDist && ahead > progressAt)) {
-            projectionDist = d;
-            progressAt = ahead;
-          }
-        }
-      }
-      let fallbackAt = -1, fallbackDist = Infinity;
-      for (let i = progressAt; i < sewn.length; i++) {
-        if (!viableStation(i)) continue;
-        const d = finitePoint(now) ? Math.hypot(sewn[i].x - now.x, sewn[i].y - now.y) : i;
-        if (d < fallbackDist) { fallbackDist = d; fallbackAt = i; }
-      }
-      for (const wp of fallbackAt < 0 ? [] : sewn.slice(fallbackAt)) {
-        if (this.movementWasCancelled(movementGeneration, controlToken)) break;
-        const r = await this.walkFine(wp.x, wp.y, { maxSteps: 60, movementGeneration, controlToken })
-          .catch(() => null);
-        if (r?.left_room) {
-          clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
-          return { rode: true, left_room: true, reached, blocked, rested,
-                   fell_back_to_walked: true, ms: Date.now() - started };
-        }
-      }
-    }
+    if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelled();
+    if (!exhaustedBy && performance.now() >= deadlineAt) exhaustedBy = 'deadline';
+    if (!exhaustedBy && packets >= TRACK_RIDE_MAX_PACKETS) exhaustedBy = 'packets';
     // THE RIDE DID NOT GET US OUT. Whose fault was it?
     //
     // Nothing living in the way means the route is wrong, and three of those in a row
@@ -6374,14 +6355,17 @@ class Session {
     const struck = bodiesInTheWay === 0
       ? strikeTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom))
       : 0;
-    return { rode: true, left_room: false, reached, blocked, rested, ms: Date.now() - started,
-             waypoints: track.waypoints.length - joinAt, track_best_ms: track.ms,
-             bodies_in_the_way: bodiesInTheWay,
+    return { rode: true, left_room: false, reached, blocked, rested: 0, packets,
+             ms: Date.now() - started, waypoints: stations.length - joinAt,
+             track_best_ms: track.ms, bodies_in_the_way: bodiesInTheWay,
+             ...(exhaustedBy ? { effort_exhausted: exhaustedBy,
+                                  reason: exhaustedBy === 'deadline'
+                                    ? 'learned track exhausted its 12-second ride budget'
+                                    : 'learned track exhausted its 8-packet ride budget' } : {}),
              ...(struck ? { strikes: struck,
                             retired: struck >= 3 ? 'this track will not be offered again' : undefined }
                         : {}),
-             ...(sewn ? { stitch_unproven: true } : {}),
-             ...(shelter.size ? { shelter_stations: shelter.size } : {}) };
+             ...(walkedInstead ? { walked_track: true } : {}) };
   }
 
   async leaveViaAny(candidates, { movementGeneration = this.movementGeneration, controlToken } = {}) {
@@ -7242,16 +7226,29 @@ class Session {
       // out to be in the gap between them, the fix is in the planner, not the legs.
       const walkBegan = Date.now();
       const leavingRoom = Number(this.world?.room?.num ?? NaN);
-      // THE MONORAIL FIRST, THE PLANNER SECOND.
+      // THE BAKED RAIL OWNS EVERY CROSSING IT CAN EXPRESS.
       //
-      // This hop is exactly what a track describes — a crossing of THIS room, in by the door
-      // we came through and out by the one we want — so if somebody has already walked it,
-      // walking it again is strictly better evidence than planning it afresh. It is tried
-      // first and it is allowed to fail: `rode:false` costs nothing and falls straight
-      // through to the ordinary exit walk below, which is the whole safety argument for
-      // shipping a book whose keys mostly have one observation each.
-      const ridden = await this.rideTrack(cameFromRoom, nextHop.to, { movementGeneration, controlToken })
-        .catch(() => ({ rode: false, why: 'ride threw' }));
+      // `leaveVia` below already drives that rail, with the current geometry and its bounded
+      // follower. Running a learned track first made the same room pay for two navigation
+      // systems in series; every forest hop in the current corpus has a bake, so the stale
+      // learned replay was the whole 55-81 second prelude. Learned tracks remain useful only
+      // where the bake has no line at all.
+      let bakedRail = null;
+      try {
+        const target = anchorFor(activeRoutes(), leavingRoom, Number(nextHop.to));
+        bakedRail = target ? this.railAcross({ row: target.row, col: target.col }) : null;
+      } catch { bakedRail = null; }
+      const ridden = bakedRail
+        ? { rode: false, why: 'current baked rail takes precedence' }
+        : process.env.M59_TRACK_RIDE === '0'
+        ? { rode: false, why: 'learned track rides disabled by M59_TRACK_RIDE=0' }
+        : await this.rideTrack(cameFromRoom, nextHop.to, { movementGeneration, controlToken })
+            .catch(() => ({ rode: false, why: 'ride threw' }));
+      // A cancellation is ownership transfer, not a failed navigation strategy. Starting
+      // leaveViaAny after the learned replay noticed it would let the old journey emit new
+      // movement under the newer command's feet.
+      if (ridden.cancelled)
+        return arrivedIfHere({ ...ridden, arrived: false, log, stumbles: totalStumbles });
       if (ridden.left_room) {
         hops++; stumbles = 0;
         cameFromRoom = Number.isFinite(leavingRoom) ? leavingRoom : null;

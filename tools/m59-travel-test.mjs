@@ -75,6 +75,7 @@ function fakeSession({ rooms = [1, 2, 3, 4], script = [], startAt = 0,
     // rides nothing, which means every assertion in this file is about the planner path and
     // stays exactly as true as it was before the monorail existed.
     async rideTrack() { return { rode: false, why: 'no track in this fixture' }; },
+    railAcross() { return null; },
     // Each call consumes one scripted outcome; `true` moves us on, `false` refuses.
     async leaveViaAny(candidates) {
       // A room the server will not let this character into answers the same way every
@@ -132,8 +133,12 @@ ok('and it is a whole method', travelSrc.trim().endsWith('}'));
 const BARRED_ON_ENTRY = /guardian angel holds you back/i;
 const UNREACHABLE_EXIT =
   /every square for that exit refused|no floor anywhere on the \w+ boundary|no BSP-valid crossing/i;
+let travelRoutes = null, travelAnchor = null;
 const travel = new Function('orderExits', 'BARRED_ON_ENTRY', 'UNREACHABLE_EXIT',
-  `return ({ ${travelSrc} }).travel`)((c) => c, BARRED_ON_ENTRY, UNREACHABLE_EXIT);
+  'activeRoutes', 'anchorFor',
+  `return ({ ${travelSrc} }).travel`)(
+    (c) => c, BARRED_ON_ENTRY, UNREACHABLE_EXIT,
+    () => travelRoutes, () => travelAnchor);
 
 
 // ---------------------------------------------------------------------------
@@ -145,6 +150,75 @@ console.log('a clean journey arrives, and counts its hops');
   ok('three hops', r.hops === 3);
   ok('no stumbles', r.stumbles === 0);
   ok('already there is instant', (await travel.call(fakeSession({ startAt: 3 }), 4, {})).hops === 0);
+}
+
+// ---------------------------------------------------------------------------
+console.log('a current baked rail suppresses the learned-track prelude');
+{
+  travelRoutes = { rooms: { 1: {} } };
+  travelAnchor = { row: 1, col: 1 };
+  const s = fakeSession({ rooms: [1, 2] });
+  let learnedRides = 0, railLookups = 0;
+  s.railAcross = target => {
+    railLookups++;
+    return target?.row === 1 && target?.col === 1
+      ? { from: { row: 1, col: 1 }, squares: [{ row: 1, col: 2 }] } : null;
+  };
+  s.rideTrack = async () => { learnedRides++; return { rode: false }; };
+  const r = await travel.call(s, 2, {});
+  ok('the ordinary exit path still arrives through the baked-rail owner',
+     r.arrived === true && railLookups === 1);
+  ok('and travel never starts the learned rider for the same crossing', learnedRides === 0);
+  travelRoutes = null;
+  travelAnchor = null;
+}
+
+// ---------------------------------------------------------------------------
+console.log('a missing baked line still permits the bounded learned fallback');
+{
+  travelRoutes = { rooms: { 1: {} } };
+  travelAnchor = { row: 1, col: 1 };
+  const s = fakeSession({ rooms: [1, 2] });
+  let learnedRides = 0, railLookups = 0;
+  s.railAcross = () => { railLookups++; return null; };
+  s.rideTrack = async () => { learnedRides++; return { rode: false, why: 'fixture miss' }; };
+  const r = await travel.call(s, 2, {});
+  ok('the missing-bake journey still arrives by the ordinary exit path', r.arrived === true);
+  ok('and an anchor without a baked line consults the learned fallback exactly once',
+     railLookups === 1 && learnedRides === 1);
+  travelRoutes = null;
+  travelAnchor = null;
+}
+
+// ---------------------------------------------------------------------------
+console.log('the learned-ride kill switch is enforced by travel itself');
+{
+  const prior = process.env.M59_TRACK_RIDE;
+  try {
+    process.env.M59_TRACK_RIDE = '0';
+    const s = fakeSession({ rooms: [1, 2] });
+    let learnedRides = 0;
+    s.rideTrack = async () => { learnedRides++; return { rode: false }; };
+    const r = await travel.call(s, 2, {});
+    ok('the switched-off journey still arrives through the ordinary exit', r.arrived === true);
+    ok('and travel does not call even a stubbed learned rider', learnedRides === 0);
+  } finally {
+    if (prior == null) delete process.env.M59_TRACK_RIDE;
+    else process.env.M59_TRACK_RIDE = prior;
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log('learned-ride cancellation transfers movement ownership immediately');
+{
+  const s = fakeSession({ rooms: [1, 2] });
+  let exitWalks = 0;
+  s.rideTrack = async () => ({ rode: true, cancelled: true,
+                               reason: 'movement cancelled by a newer command' });
+  s.leaveViaAny = async () => { exitWalks++; return { left: true }; };
+  const r = await travel.call(s, 2, {});
+  ok('the cancellation is returned by travel', r.cancelled === true && r.arrived === false);
+  ok('and no ordinary fallback movement starts afterward', exitWalks === 0);
 }
 
 // ---------------------------------------------------------------------------

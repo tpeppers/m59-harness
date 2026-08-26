@@ -1498,9 +1498,32 @@ export async function turnInPlace(s, { degrees = null, verify = true } = {}) {
 // of the whole trip, which would move with how far away the character happened to start.
 const FINE_HANDOVER_SQUARES = Number(process.env.M59_FINE_HANDOVER_SQUARES || 3);
 
-export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = {}) {
+// Composite movement owns one cancellation generation from entry to exit. Leaf walkers
+// already honour it; these two helpers keep a composite from treating a cancelled leaf as
+// an ordinary miss and starting a fallback with the newly-current generation.
+function operationMovementCancelled(s, movementGeneration, controlToken, result = null) {
+  return !!result?.cancelled ||
+    (typeof s?.movementWasCancelled === 'function' &&
+     s.movementWasCancelled(movementGeneration, controlToken));
+}
+
+function operationCancellationResult(result = null) {
+  const reason = result?.reason || 'movement cancelled by a newer command';
+  return { arrived: false, left: false, cancelled: true, reason, why: reason,
+           ...(result?.cancelled_by ? { cancelled_by: result.cancelled_by } : {}) };
+}
+
+export async function returnToSpot(s, spot, {
+  maxSteps = 20, tolerance = 12,
+  movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
   const c = s.need();
   if (!spot) return { arrived: false, why: 'no spot given' };
+  const cancelled = result => operationMovementCancelled(
+    s, movementGeneration, controlToken, result);
+  const cancelledResult = result => operationCancellationResult(result);
+  const moveOptions = extra => ({ ...extra, movementGeneration, controlToken });
+  if (cancelled()) return cancelledResult();
   // A normal square walk is dead-reckoned for speed. That is appropriate while
   // crossing a room, but a predicted arrival is not evidence that we regained a
   // particular safe square: a delayed server position can still replace it and leave
@@ -1528,6 +1551,7 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
     return Math.hypot(me.x - spot.x, me.y - spot.y);
   };
   await confirmPrediction();
+  if (cancelled()) return cancelledResult();
   const d0 = at();
   if (d0 !== null && d0 <= tolerance) return { arrived: true, already: true, off_by: d0 };
 
@@ -1575,19 +1599,26 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
     const fineOwnsIt = away <= FINE_HANDOVER_SQUARES && typeof s.approachFine === 'function';
     let w;
     if (fineOwnsIt) {
-      w = await s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y })
+      w = await s.approachFine(spot.col, spot.row,
+        moveOptions({ toX: spot.x, toY: spot.y }))
                  .catch(e => ({ arrived: false, reason: e.message }));
+      if (cancelled(w)) return cancelledResult(w);
       if (!w.arrived) {
-        const square = await s.walkTo(spot.col, spot.row, { maxSteps })
+        const square = await s.walkTo(spot.col, spot.row, moveOptions({ maxSteps }))
                               .catch(e => ({ arrived: false, reason: e.message }));
+        if (cancelled(square)) return cancelledResult(square);
         if (square.arrived) w = square;
         else w = { ...square, fine_tried: w.reason ?? 'fine approach did not arrive' };
       }
     } else {
-      w = await s.walkTo(spot.col, spot.row, { maxSteps }).catch(e => ({ arrived: false, reason: e.message }));
+      w = await s.walkTo(spot.col, spot.row, moveOptions({ maxSteps }))
+                 .catch(e => ({ arrived: false, reason: e.message }));
+      if (cancelled(w)) return cancelledResult(w);
       if (!w.arrived && typeof s.approachFine === 'function') {
-        const fine = await s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y })
+        const fine = await s.approachFine(spot.col, spot.row,
+          moveOptions({ toX: spot.x, toY: spot.y }))
                             .catch(e => ({ arrived: false, reason: e.message }));
+        if (cancelled(fine)) return cancelledResult(fine);
         if (fine.arrived) w = fine;
         else w = { ...w, fine_tried: fine.reason ?? 'fine approach did not arrive' };
       }
@@ -1596,10 +1627,13 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
       return { arrived: false, why: w.reason || 'could not walk back to the square',
                ...(w.fine_tried ? { fine_tried: w.fine_tried } : {}) };
     await confirmPrediction();
+    if (cancelled()) return cancelledResult();
   }
   if (spot.x != null && s.walkFine) {
-    await s.walkFine(spot.x, spot.y, { maxSteps: 6, stride: 40, arriveWithin: tolerance })
-           .catch(() => null);
+    const fine = await s.walkFine(spot.x, spot.y,
+      moveOptions({ maxSteps: 6, stride: 40, arriveWithin: tolerance }))
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (cancelled(fine)) return cancelledResult(fine);
   }
   const d = at();
   return { arrived: d !== null && d <= tolerance, off_by: d,
@@ -2285,25 +2319,44 @@ const escapeBudget = steps => Math.max(150, (steps ?? 0) * 3 + 60);
 // exists to rescue.
 //
 // One extra attempt against a permanent trap.
-async function walkOntoSquare(s, col, row, { maxSteps = 80 } = {}) {
-  const walk = await s.walkTo(col, row, { maxSteps });
+async function walkOntoSquare(s, col, row, {
+  maxSteps = 80, movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
+  const opts = { maxSteps, movementGeneration, controlToken };
+  if (operationMovementCancelled(s, movementGeneration, controlToken))
+    return operationCancellationResult();
+  const walk = await s.walkTo(col, row, opts);
+  // Cancellation ends the WHOLE escape attempt. Treating it like an ordinary path miss
+  // used to start the fine fallback with the new generation and defeat the watchdog.
+  if (operationMovementCancelled(s, movementGeneration, controlToken, walk))
+    return operationCancellationResult(walk);
   if (walk.arrived || isTerminalMovementReason(walk.reason)) return walk;
   // A session that cannot walk in fine units simply reports what the coarse walk said —
   // this is a rescue, never a requirement.
   if (typeof s.walkFine !== 'function') return walk;
   const half = KOD_FINENESS >> 1;
   const fine = await s.walkFine(col * KOD_FINENESS + half, row * KOD_FINENESS + half,
-                                { maxSteps }).catch(() => null);
+                                opts).catch(() => null);
+  if (operationMovementCancelled(s, movementGeneration, controlToken, fine))
+    return operationCancellationResult(fine);
   if (fine?.arrived) return { ...fine, via: 'fine movement after coarse pathing failed' };
   return walk;
 }
 
-async function stepOnto(s, o) {
+async function stepOnto(s, o, {
+  movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
   const c = s.need();
   const before = c.evSeq;
   const wasIn = c.room.id;
   const walk = await walkOntoSquare(s, o.col, o.row,
-                                    { maxSteps: escapeBudget(s.world?.reach?.(o.col, o.row)?.steps) });
+    { maxSteps: escapeBudget(s.world?.reach?.(o.col, o.row)?.steps),
+      movementGeneration, controlToken });
+  if (operationMovementCancelled(s, movementGeneration, controlToken, walk)) {
+    const now = { id: c.room.id, name: c.roomNameRsc ? c.rsc.get(c.roomNameRsc) : null };
+    if (now.id !== wasIn) return { left: true, arrived_in: now.name, room: now.id };
+    return { left: false, terminal: true, ...operationCancellationResult(walk) };
+  }
   const arr = await c.waitFor({ since: before, kinds: ['room-entered'],
                                 timeoutMs: walk.arrived ? 3000 : 500 });
   const entered = arr.events.find(e => e.kind === 'room-entered');
@@ -2338,13 +2391,22 @@ async function stepOnto(s, o) {
 // below reports as "probably unlit; its brazier needs activating", a diagnosis that is
 // simply never true of this object and sends the caller hunting for a brazier that does
 // not exist.
-async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
+async function ripOut(s, rip, {
+  maxSeconds = 60, movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
   const c = s.need();
+  const cancelled = result => operationMovementCancelled(
+    s, movementGeneration, controlToken, result);
+  const cancelledResult = result => ({ left: false, terminal: true,
+    ...operationCancellationResult(result) });
+  if (cancelled()) return cancelledResult();
   // Stand next to it first. Stepping onto it IS the teleport, so the approach has to be
   // its own walk or a failure to arrive reads as a portal that did not fire.
   const spot = s.world.approachSquare(rip.col, rip.row);
   if (spot && spot.steps > 0) {
-    const walk = await walkOntoSquare(s, spot.col, spot.row, { maxSteps: escapeBudget(spot.steps) });
+    const walk = await walkOntoSquare(s, spot.col, spot.row,
+      { maxSteps: escapeBudget(spot.steps), movementGeneration, controlToken });
+    if (cancelled(walk)) return cancelledResult(walk);
     if (isTerminalMovementReason(walk.reason))
       return { left: false, terminal: true, reason: walk.reason, note: walk.note };
     if (!walk.arrived)
@@ -2354,10 +2416,19 @@ async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
   const t0 = Date.now();
   let attempts = 0;
   while (Date.now() - t0 < maxSeconds * 1000) {
+    if (cancelled()) return { ...cancelledResult(), attempts };
     attempts++;
     const before = c.evSeq;
     const wasIn = c.room.id;
     const move = await s.stepFine(rip.x, rip.y);
+    if (cancelled(move)) {
+      // The portal packet can win the race with the cancellation. Leaving is success;
+      // cancellation is terminal only while the body is still in the Underworld.
+      const now = { id: c.room.id, name: c.roomNameRsc ? c.rsc.get(c.roomNameRsc) : null };
+      if (now.id !== wasIn)
+        return { left: true, arrived_in: now.name, room: now.id, attempts };
+      return { ...cancelledResult(move), attempts };
+    }
     if (isTerminalMovementReason(move.reason))
       return { left: false, terminal: true, reason: move.reason, note: move.note, attempts };
     const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 3000 });
@@ -2371,8 +2442,30 @@ async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
            why: `stepped onto the rip ${attempts} time(s) over ${maxSeconds}s and stayed put` };
 }
 
-export async function escapeUnderworld(s, { city = null, nearestTo = null,
-                                            maxSeconds = 180, allowRip = true } = {}) {
+export async function escapeUnderworld(s, {
+  city = null, nearestTo = null, maxSeconds = 180, allowRip = true,
+  movementGeneration = s.movementGeneration, controlToken = null,
+} = {}) {
+  // `maxSeconds` is an end-to-end leash, not merely the time spent polling the shifting
+  // portal. Expiry invalidates the operation's one generation; every composite helper
+  // below carries that same generation, so no coarse/fine/next-portal fallback can re-arm.
+  let deadlineExpired = false;
+  const deadlineMs = Number.isFinite(Number(maxSeconds)) && Number(maxSeconds) > 0
+    ? Number(maxSeconds) * 1000 : null;
+  const deadlineAt = deadlineMs == null ? null : Date.now() + deadlineMs;
+  const deadlineTimer = deadlineMs == null ? null : setTimeout(() => {
+    deadlineExpired = true;
+    try { s.cancelMovement?.(controlToken, 'escapeUnderworld exceeded its end-to-end deadline'); }
+    catch { /* the result still reports the expired operation when the leaf returns */ }
+  }, deadlineMs);
+  deadlineTimer?.unref?.();
+  const cancelled = result => deadlineExpired || operationMovementCancelled(
+    s, movementGeneration, controlToken, result);
+  const cancelledEscape = result => ({ left: false, stood_up: true, terminal: true,
+    ...operationCancellationResult(result),
+    ...(deadlineExpired ? { timed_out: true,
+      why: `escapeUnderworld exceeded its ${maxSeconds}s end-to-end deadline` } : {}) });
+  try {
   const c = s.need();
   const portals = () => [...c.room.objects.values()].filter(o => isTeleporter(o.flags));
   // Which room we are in, read from the client rather than from an event: c.room.id and
@@ -2384,9 +2477,11 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
   // mid-rest wakes up here still sitting, and a resting character's moves are bounced in
   // silence, so every portal in the pentagram would read as unlit. See standUp.
   await standUp(s);
+  if (cancelled()) return cancelledEscape();
 
   await s.pacer.submit('read', () => c.roomContents());
   await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
+  if (cancelled()) return cancelledEscape();
   const here = s.world?.room;
   const found = portals();
   if (!found.length)
@@ -2410,18 +2505,21 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
   const cityAttempts = [];
   if (wanted && found.length > (rip ? 1 : 0)) {
     const { rows } = await identifyPortals(s, found, { want: wanted });
+    if (cancelled()) return cancelledEscape();
     const match = rows.find(r => !r.rip && r.city
                                  && r.city.toLowerCase() === String(wanted).toLowerCase());
     if (match) {
-      const step = await stepOnto(s, match.o);
+      const step = await stepOnto(s, match.o, { movementGeneration, controlToken });
       if (step.left)
         return { left: true, stood_up: true, arrived_in: step.arrived_in, room: step.room,
                  wanted, city: wanted, chosen_because: chosenBecause,
                  via: `the fixed ${wanted} portal`,
                  ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
                  note: 'a fixed portal, so this is repeatable — no waiting and no luck involved' };
+      if (cancelled(step)) return cancelledEscape(step);
       if (step.terminal)
-        return { left: false, stood_up: true, reason: step.reason, note: step.note };
+        return { left: false, stood_up: true, reason: step.reason, note: step.note,
+                 ...(step.cancelled ? { cancelled: true, terminal: true } : {}) };
       cityAttempts.push({ portal: `fixed ${wanted}`, why: step.why });
     } else {
       cityAttempts.push({
@@ -2446,7 +2544,8 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     const spot = s.world.approachSquare(rip.col, rip.row);
     if (spot && spot.steps > 0) {
       const walk = await walkOntoSquare(s, spot.col, spot.row,
-                                        { maxSteps: escapeBudget(spot.steps) });
+        { maxSteps: escapeBudget(spot.steps), movementGeneration, controlToken });
+      if (cancelled(walk)) return cancelledEscape(walk);
       if (isTerminalMovementReason(walk.reason))
         return { left: false, stood_up: true, reason: walk.reason, note: walk.note };
       // ONE PORTAL WE CANNOT WALK TO IS NOT A ROOM WE CANNOT LEAVE.
@@ -2481,29 +2580,48 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     // exists to open — every escape attempt died "pass failed: seen is not defined"
     // instead of going on to try the fixed portals.
     while (!ripUnreachable && Date.now() - t0 < maxSeconds * 1000) {
+      if (cancelled()) return cancelledEscape();
       const b = c.evSeq;
       await s.pacer.submit('look', () => c.look(rip.id));
       const ev = await c.waitFor({ since: b, kinds: ['look'], timeoutMs: 3000 });
+      if (cancelled()) return cancelledEscape();
       const desc = ev.events.find(e => e.id === rip.id)?.description || '';
       const dest = UW.readRipDestination(desc);
       if (dest) seen.push(dest);
       if (dest && dest.toLowerCase().includes(String(wanted).toLowerCase())) {
         const before = c.evSeq;
         const wasIn = c.room.id;
+        if (cancelled()) return cancelledEscape();
         const move = await s.stepFine(rip.x, rip.y);
+        if (cancelled(move)) {
+          const now = whereAmI();
+          if (now.id !== wasIn)
+            return { left: true, stood_up: true, arrived_in: now.name, room: now.id,
+                     wanted, city: wanted, chosen_because: chosenBecause,
+                     via: 'the rip in space',
+                     ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
+                     ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}),
+                     saw: seen };
+          return cancelledEscape(move);
+        }
         if (isTerminalMovementReason(move.reason))
           return { left: false, stood_up: true, reason: move.reason, note: move.note };
         const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 5000 });
         const entered = arr.events.find(e => e.kind === 'room-entered');
         const now = whereAmI();
-        return (entered || now.id !== wasIn)
-          ? { left: true, stood_up: true, arrived_in: entered?.roomName ?? now.name,
-              wanted, city: wanted, chosen_because: chosenBecause, via: 'the rip in space',
-              ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
-              ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}), saw: seen }
-          : { left: false, stood_up: true,
-              reason: 'stepped on it as it read right, but nothing happened — it may have swapped first',
-              saw: seen, note: 'try again; the window is 5-10 seconds and unknown which' };
+        // Success wins the race with cancellation: the room packet is the objective.
+        // If the deadline fired during the wait and we are still here, however, this
+        // composite is over and must not return an ordinary miss that authorises a fresh
+        // direct-walk fallback with the new generation.
+        if (entered || now.id !== wasIn)
+          return { left: true, stood_up: true, arrived_in: entered?.roomName ?? now.name,
+                   wanted, city: wanted, chosen_because: chosenBecause, via: 'the rip in space',
+                   ...(near ? { died_in_room: nearestTo, hops_from_death: near.hops } : {}),
+                   ...(cityAttempts.length ? { fixed_portal_first: cityAttempts } : {}), saw: seen };
+        if (cancelled()) return cancelledEscape(move);
+        return { left: false, stood_up: true,
+                 reason: 'stepped on it as it read right, but nothing happened — it may have swapped first',
+                 saw: seen, note: 'try again; the window is 5-10 seconds and unknown which' };
       }
       await sleep(1200);
     }
@@ -2537,7 +2655,14 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
     // Measured: with the cap, every attempt failed that way while the router had a clean
     // route to two of them.
     const walk = await walkOntoSquare(s, o.col, o.row,
-                                      { maxSteps: escapeBudget(reach?.steps) });
+      { maxSteps: escapeBudget(reach?.steps), movementGeneration, controlToken });
+    if (cancelled(walk)) {
+      const now = whereAmI();
+      if (now.id !== wasIn)
+        return { left: true, stood_up: true, arrived_in: now.name, room: now.id,
+                 via: name, tried };
+      return cancelledEscape(walk);
+    }
     const arr = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: walk.arrived ? 3000 : 500 });
     const entered = arr.events.find(e => e.kind === 'room-entered');
     const now = whereAmI();
@@ -2560,6 +2685,7 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
                  } : {}),
                } : {}) };
     }
+    if (cancelled()) return cancelledEscape(walk);
     if (isTerminalMovementReason(walk.reason))
       return { left: false, stood_up: true, reason: walk.reason, note: walk.note, tried };
     // Only blame the brazier if we actually got onto the square. Not arriving is a
@@ -2581,7 +2707,12 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
   // which one it got so the walk back is not a surprise. This runs LAST so it can never
   // take a character somewhere arbitrary while a portal to the right place was available.
   if (rip && allowRip) {
-    const out = await ripOut(s, rip, { maxSeconds: Math.max(20, Math.min(60, maxSeconds)) });
+    const remainingSeconds = deadlineAt == null ? maxSeconds
+      : Math.max(0, (deadlineAt - Date.now()) / 1000);
+    const out = await ripOut(s, rip, {
+      maxSeconds: Math.max(0, Math.min(60, remainingSeconds)),
+      movementGeneration, controlToken,
+    });
     if (out.left) {
       const landed = Object.entries(UW.CITY_INNS)
         .find(([, v]) => v.inn === out.room || (out.arrived_in && v.innName === out.arrived_in))?.[0] ?? null;
@@ -2592,13 +2723,17 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
                               got_what_was_wanted: landed === wanted,
                               ...(cityAttempts.length ? { could_not_use: cityAttempts } : {}) } : {}),
                note: 'the pentagram would not answer, so this took the shifting portal to ' +
-                     (landed ?? 'whichever inn it was pointing at') + '. Out is out; the corpse ' +
-                     'and everything it was carrying is still where it died.' };
+                      (landed ?? 'whichever inn it was pointing at') + '. Out is out; the corpse ' +
+                      'and everything it was carrying is still where it died.' };
     }
+    if (cancelled(out)) return cancelledEscape(out);
     if (out.terminal)
-      return { left: false, stood_up: true, reason: out.reason, note: out.note, tried };
+      return { left: false, stood_up: true, reason: out.reason, note: out.note, tried,
+               ...(out.cancelled ? { cancelled: true, terminal: true } : {}) };
     tried.push({ name: 'the rip in space', why: out.why });
   }
+
+  if (cancelled()) return cancelledEscape();
 
   return { left: false, stood_up: true, reason: 'none of the teleporters here worked', tried,
            ...(wanted ? { wanted, could_not_use: cityAttempts } : {}),
@@ -2608,6 +2743,9 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
              : 'one or two of the five pentagram portals are unlit at random and an unlit one is ' +
                'silent (uworld.kod:460). If EVERY one is dead, look for the braziers — objects ' +
                'with "activate" — or wait for the room to reset, which it does when empty.' };
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+  }
 }
 
 // ---------------------------------------------------------------- commerce
