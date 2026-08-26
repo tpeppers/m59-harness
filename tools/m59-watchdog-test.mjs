@@ -4,15 +4,18 @@
 //   node tools/m59-watchdog-test.mjs
 //
 // Offline, against a fake host. What is pinned here is the SEPARATION the guard rests
-// on: it observes on its own clock, and the only thing it ever DOES is cancel movement,
-// once, when health has crossed the withdraw line during a blocked pass. Everything
+// on: it observes on its own clock, and the only thing it ever DOES is cancel movement
+// when health has crossed the withdraw line during a blocked pass. A same-pass repeat is
+// rate-limited but deliberate: it invalidates a fallback that re-armed after the first
+// cancel. Everything
 // else is somebody else's decision.
 //
 // It exists because the guard used to be a method on the 13,000-line keeper, reachable
 // only by that keeper. Two drivers now run it, so the interface between them is a real
 // boundary and needs a test rather than a convention.
 import * as wd from './m59-watchdog.mjs';
-import { safetyFor } from './m59-skills.mjs';
+import { applyFleeBelowPolicy, safetyFor } from './m59-skills.mjs';
+import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail) => {
@@ -48,17 +51,80 @@ function host({ hp = 20, max = 20, blockedMs = 0, inert = false, doing = 'travel
 
 console.log('the handbrake — the only thing it actually does');
 {
-  const h = host({ hp: 5, blockedMs: 9000 });           // 25%, below fleeAt 0.4
+  const h = host({ hp: 5, blockedMs: 9000, doing: 'pulling' }); // 25%, below fleeAt 0.4
   wd.tick(h);
   ok('a blocked pass with health under the withdraw line is cancelled', h.cancels === 1);
   ok('and it says so in a note a person can find',
      h.notes.some(n => /WATCHDOG/.test(n.what)));
   wd.tick(h); wd.tick(h);
-  ok('ONCE per blocked pass, not once per tick', h.cancels === 1,
-     'cancelling twice does nothing and the note would repeat every 500ms');
+  ok('not once per tick', h.cancels === 1,
+     'the repeat is rate limited rather than firing every 500ms');
+  h.watch.lastInterruptAt -= wd.WATCHDOG_REPEAT_MS;
+  h.watch.pulses = [
+    { at: Date.now() - 1200, room: 587, col: 4, row: 4 },
+    { at: Date.now() - 600, room: 587, col: 5, row: 4 },
+    { at: Date.now(), room: 587, col: 4, row: 4 },
+  ];
+  wd.tick(h);
+  ok('but a same-activity local bounce is cancelled again after the grace interval',
+     h.cancels === 2 && h.watch.repeatInterrupts === 1,
+     'fresh post-interrupt pulses prove the nested movement is still penned in');
   h.passes = 2;
   wd.tick(h);
-  ok('a NEW blocked pass may be interrupted again', h.cancels === 2);
+  ok('a NEW blocked pass may be interrupted again', h.cancels === 3);
+}
+
+console.log('\na repeat cannot cancel the survival response to the first interrupt');
+{
+  const changed = host({ hp: 5, blockedMs: 9000, doing: 'pulling' });
+  wd.tick(changed);
+  changed.doing = 'travelling';
+  changed.watch.lastInterruptAt -= wd.WATCHDOG_REPEAT_MS;
+  changed.watch.pulses = [
+    { at: Date.now() - 1200, room: 587, col: 4, row: 4 },
+    { at: Date.now() - 600, room: 587, col: 4, row: 4 },
+    { at: Date.now(), room: 587, col: 4, row: 4 },
+  ];
+  wd.tick(changed);
+  ok('changing into the survival retreat is not treated as the old leaf re-arming',
+     changed.cancels === 1 && changed.watch.repeatInterrupts === 0);
+
+  const moving = host({ hp: 5, blockedMs: 9000, doing: 'pulling' });
+  wd.tick(moving);
+  moving.watch.lastInterruptAt -= wd.WATCHDOG_REPEAT_MS;
+  moving.watch.pulses = [
+    { at: Date.now() - 1200, room: 587, col: 4, row: 4 },
+    { at: Date.now() - 600, room: 587, col: 5, row: 4 },
+    { at: Date.now(), room: 587, col: 6, row: 4 },
+  ];
+  wd.tick(moving);
+  ok('a same-activity escape making real square progress is not cancelled again',
+     moving.cancels === 1 && moving.watch.repeatInterrupts === 0);
+}
+
+console.log('\na guarded emergency retreat owns its own progress cancellation');
+{
+  const guarded = host({ hp: 5, blockedMs: 9000, doing: 'travelling' });
+  guarded.emergencyRetreat = { active: true, room: 106 };
+  guarded.strangersInReach = () => [];
+  wd.tick(guarded);
+  ok('the ordinary handbrake leaves an active monster-driven refuge route alone',
+     guarded.cancels === 0);
+  guarded.emergencyRetreat.active = false;
+  wd.tick(guarded);
+  ok('once the route guard disarms itself, a still-blocked walk is interruptible again',
+     guarded.cancels === 1);
+
+  const player = host({ hp: 20, blockedMs: 100, doing: 'travelling' });
+  player.emergencyRetreat = { active: true, room: 106 };
+  player.strangersInReach = () => [{ id: 7, name: 'a nearby player' }];
+  wd.tick(player);
+  ok('a nearby player ends even a fresh, healthy guarded retreat immediately',
+     player.cancels === 1 &&
+       player.emergencyRetreat.cancellationKind === 'player');
+  wd.tick(player);
+  ok('the player cancellation is issued once rather than on every watchdog tick',
+     player.cancels === 1);
 }
 
 console.log('\nthe inert rescue — taking a character back from a driver that stopped');
@@ -168,10 +234,34 @@ console.log('\na host that cannot answer must not take the guard down');
 
 console.log('\none home for the withdraw line');
 {
-  const client = { vitals: () => ({ health: { value: 10, max: 50 } }) };
-  const a = safetyFor(client, { fleeBelow: 0.4 });
-  ok('safetyFor computes the same two-hit margin the keeper used to compute inline',
-     a.maxHit === 17 && a.fleeAt > 0.4 && a.fleeAt <= 0.7);
+  const client = { vitals: () => ({ health: { value: 17, max: 40 } }) };
+  const implicit = safetyFor(client, { fleeBelow: 0.4 });
+  ok('an implicit floor still computes the adaptive two-hit margin',
+     implicit.maxHit === 14 && implicit.fleeAt === 0.7,
+     JSON.stringify(implicit));
+
+  const policy = { fleeBelow: 0.4 };
+  applyFleeBelowPolicy(policy, 17 / 40);
+  const explicit = safetyFor(client, policy);
+  ok('an explicit broker floor is marked and used exactly instead of the adaptive margin',
+     policy.fleeBelowExplicit === true && explicit.fleeAt === 0.425,
+     JSON.stringify({ policy, explicit }));
+  ok('at exactly 17/40 the strict withdraw comparison does not fire',
+     (17 / 40) < explicit.fleeAt === false);
+  ok('at 16/40 the strict withdraw comparison fires',
+     (16 / 40) < explicit.fleeAt === true);
+
+  applyFleeBelowPolicy(policy, undefined);
+  ok('an update which omits flee_below preserves the explicit order',
+     policy.fleeBelow === 0.425 && policy.fleeBelowExplicit === true,
+     JSON.stringify(policy));
+
+  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const applyAt = broker.indexOf('skills.applyFleeBelowPolicy(p.policy, a.flee_below);');
+  const persistAt = broker.indexOf('rememberAutopilot(a.agent', applyAt);
+  ok('the broker marks an explicit flee_below before persisting the keeper policy',
+     applyAt >= 0 && persistAt > applyAt,
+     JSON.stringify({ applyAt, persistAt }));
   ok('and with no readable max it falls back to the policy floor',
      safetyFor({ vitals: () => ({}) }, { fleeBelow: 0.4 }).fleeAt === 0.4);
 }

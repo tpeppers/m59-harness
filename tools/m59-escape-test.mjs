@@ -145,6 +145,23 @@ const ok = (name, cond, extra = '') => {
   ok('and says which one did it', r.via === 'rip in space', r.via);
 }
 
+// The portal packet and a watchdog cancel can cross in flight. Once the room changed,
+// the objective succeeded; the cancellation is terminal only if the body is still below.
+{
+  const { s } = underworld({ portals: [{ name: 'portal', col: 5, row: 5, live: true }] });
+  s.movementGeneration = 7;
+  s.movementWasCancelled = generation => generation !== s.movementGeneration;
+  const walk = s.walkTo.bind(s);
+  s.walkTo = async (...args) => {
+    const result = await walk(...args);       // emits room-entered first
+    s.movementGeneration++;                   // cancellation wins the adjacent race
+    return { ...result, cancelled: true };
+  };
+  const r = await escapeUnderworld(s);
+  ok('leaving the Underworld wins a same-step cancellation race',
+     r.left === true && r.room === 20, JSON.stringify(r));
+}
+
 // A real unlit portal: we get onto its square and nothing happens. This diagnosis is
 // correct and must survive.
 {
@@ -163,6 +180,53 @@ const ok = (name, cond, extra = '') => {
   ok('an unreached portal is not reported as unlit', !/brazier/.test(r.tried[0].why), r.tried[0].why);
   ok('it says it never got onto the square', /never got onto its square/.test(r.tried[0].why));
   ok('and the note does not blame the pentagram', !/dead until their brazier/.test(r.note), r.note);
+}
+
+// A watchdog/deadline cancel belongs to the WHOLE escape operation. The lethal shape was
+// coarse walk cancelled -> fine fallback captures the new generation -> next portal walk;
+// the keeper stayed inside one blind pass while each leaf correctly believed it was new.
+{
+  const { s } = underworld({ portals: [{ name: 'portal', col: 5, row: 5, live: true }] });
+  s.movementGeneration = 41;
+  s.movementWasCancelled = generation => generation !== s.movementGeneration;
+  let cancels = 0, coarse = 0, fine = 0, captured = null;
+  s.cancelMovement = () => { cancels++; s.movementGeneration++; return { cancelled: true }; };
+  s.walkFine = async () => { fine++; return { arrived: true }; };
+  s.walkTo = async (_col, _row, opts) => {
+    coarse++;
+    captured = opts.movementGeneration;
+    await new Promise(resolve => setTimeout(resolve, 600));
+    return { arrived: false, reason: 'fixture leaf returned after the deadline' };
+  };
+  const r = await escapeUnderworld(s, { maxSeconds: 0.4 });
+  ok('the end-to-end escape deadline cancels its in-flight leaf',
+     r.cancelled === true && r.timed_out === true && cancels === 1,
+     JSON.stringify({ r, cancels }));
+  ok('the operation generation reaches the leaf and cancellation starts no fallback',
+     captured === 41 && coarse === 1 && fine === 0,
+     JSON.stringify({ captured, coarse, fine }));
+}
+
+
+// The inverse race: the deadline fires while waiting for a portal that did NOT move us.
+// That is cancellation, not an ordinary miss that may start the direct-walk fallback.
+{
+  const { s } = underworld({
+    portals: [{ name: 'rip in space', col: 5, row: 5, live: false }],
+  });
+  const c = s.need();
+  const waitFor = c.waitFor.bind(c);
+  c.waitFor = async opts => {
+    if ([].concat(opts?.kinds ?? []).includes('room-entered')) {
+      await new Promise(resolve => setTimeout(resolve, 120));
+      return { events: [], timedOut: true };
+    }
+    return waitFor(opts);
+  };
+  const r = await escapeUnderworld(s, { city: 'Tos', maxSeconds: 0.05 });
+  ok('deadline while still in the Underworld remains terminal after the portal wait',
+     r.left === false && r.cancelled === true && r.timed_out === true,
+     JSON.stringify(r));
 }
 
 // A character that cannot stand up at all — held, webbed, or a stand that went missing.

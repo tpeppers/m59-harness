@@ -113,6 +113,9 @@ function mockKeeper(overrides = {}) {
     recordHealUse: () => {},
     ...overrides,
   };
+  if (typeof k.atHold !== 'function') k.atHold = () => !!k.hold;
+  if (typeof k.holdingForFight !== 'function')
+    k.holdingForFight = () => k.policy.useSafeSpots !== false && !!k.atHold();
   return k;
 }
 
@@ -331,6 +334,88 @@ t('fightNode captures foe_id so the next fight resumes the wounded prey', async 
   if (k.foeId !== 7) throw new Error(`expected foeId=7 (resume wounded prey), got ${k.foeId}`);
 });
 
+t('fightNode converts pending pull contact with the exact pre-fight target even on kill', async () => {
+  const k = mockKeeper({ hibernation: false });
+  const quarry = { id: 7, nameRsc: 'giant rat' };
+  k.policy.hunt = 'giant rat';
+  k._btFarmFoundTargets = () => [quarry];
+  k.inReachOfUs = () => [];
+  k.foeId = quarry.id;
+  k.pendingPull = { target: 'giant rat', target_id: quarry.id, waitUntil: Date.now() + 5000 };
+  k.pullsWithoutContact = 2;
+  const contacts = [];
+  k.pullConverted = (id, name) => {
+    contacts.push({ id, name, keeperFoeAtCall: k.foeId });
+    if (k.pendingPull?.target_id !== id) return false;
+    k.pendingPull = null;
+    k.pullsWithoutContact = 0;
+    return true;
+  };
+  // fight() deliberately clears foe_id on a kill. The pre-fight claimed object is
+  // therefore the only exact identity available to close this pending pull.
+  k._btFarmFight = async () => ({ killed: true, died: false, rounds: 1,
+    target: 'giant rat', foe_id: null });
+  const r = await fightNode(k).tickAsync(bb(k));
+  if (r !== SUCCESS || contacts.length !== 1 || contacts[0].id !== quarry.id ||
+      contacts[0].keeperFoeAtCall !== quarry.id ||
+      k.pendingPull !== null || k.pullsWithoutContact !== 0) {
+    throw new Error(`exact killed quarry did not convert its pull: ${JSON.stringify({
+      r, contacts, pending: k.pendingPull, pullsWithoutContact: k.pullsWithoutContact,
+    })}`);
+  }
+});
+
+t('fightNode preserves a pending pull when combat contacts a different exact target', async () => {
+  const k = mockKeeper({ hibernation: false });
+  const defender = { id: 7, nameRsc: 'giant rat' };
+  k.policy.hunt = 'giant rat';
+  k._btFarmFoundTargets = () => [defender];
+  k.inReachOfUs = () => [];
+  const pending = { target: 'groundworm larva', target_id: 8, waitUntil: Date.now() + 5000 };
+  k.pendingPull = pending;
+  k.pullsWithoutContact = 2;
+  const contacts = [];
+  k.pullConverted = (id, name) => {
+    contacts.push({ id, name });
+    if (k.pendingPull?.target_id !== id) return false;
+    k.pendingPull = null;
+    k.pullsWithoutContact = 0;
+    return true;
+  };
+  k._btFarmFight = async () => ({ killed: false, died: false, rounds: 2,
+    target: 'giant rat', foe_id: defender.id, landed_hits: 1 });
+  const r = await fightNode(k).tickAsync(bb(k));
+  if (r !== SUCCESS || contacts.length !== 1 || contacts[0].id !== defender.id ||
+      k.pendingPull !== pending || k.pullsWithoutContact !== 2) {
+    throw new Error(`unrelated contact erased the pending pull: ${JSON.stringify({
+      r, contacts, pending: k.pendingPull, pullsWithoutContact: k.pullsWithoutContact,
+    })}`);
+  }
+});
+
+t('fightNode trusts a surviving fight result when refreshed selection differs from the claim', async () => {
+  const k = mockKeeper({ hibernation: false });
+  const firstLook = { id: 7, nameRsc: 'giant rat' };
+  k.policy.hunt = 'giant rat';
+  k._btFarmFoundTargets = () => [firstLook];
+  k.inReachOfUs = () => [];
+  k.pendingPull = { target: 'giant rat', target_id: 8, waitUntil: Date.now() + 5000 };
+  const contacts = [];
+  k.pullConverted = id => {
+    contacts.push(id);
+    if (k.pendingPull?.target_id !== id) return false;
+    k.pendingPull = null;
+    return true;
+  };
+  // The fight refresh may choose a different live object than the pre-fight snapshot.
+  // Unlike a killed result, a surviving foe_id names the actual object contacted.
+  k._btFarmFight = async () => ({ killed: false, died: false, rounds: 1,
+    target: 'giant rat', foe_id: 8, landed_hits: 1 });
+  const r = await fightNode(k).tickAsync(bb(k));
+  if (r !== SUCCESS || contacts.length !== 1 || contacts[0] !== 8 || k.pendingPull !== null)
+    throw new Error(`live fight id did not outrank stale claim: ${JSON.stringify({ r, contacts, pending: k.pendingPull })}`);
+});
+
 t('fightNode sets swungAt so the stall detector sees progress', async () => {
   const k = mockKeeper({ hibernation: false });
   k.policy.hunt = 'giant rat';
@@ -375,6 +460,24 @@ t('fightNode retreats when breaking off in the open (not holding a spot)', async
   const r = await node.tickAsync(bb(k));
   if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
   if (retreated !== 1) throw new Error(`expected a retreat in the open, got ${retreated}`);
+});
+
+t('fightNode treats a stale hold as open field when safe spots are disabled', async () => {
+  const k = mockKeeper({ hibernation: false });
+  k.policy.useSafeSpots = false;
+  k.hold = { col: 1, row: 1, proven: true };
+  k.atHold = () => true;
+  k.holdWorks = () => true;
+  k.policy.hunt = 'giant rat';
+  k._btFarmFoundTargets = () => [{ id: 1, nameRsc: 'giant rat' }];
+  k.inReachOfUs = () => [];
+  k._btFarmFight = async () => ({ killed: false, died: false, rounds: 2, target: 'giant rat',
+    disengaged: { at_health: '35%' } });
+  let retreated = 0;
+  k.retreatToSafety = async () => { retreated++; return { left: true }; };
+  const r = await fightNode(k).tickAsync(bb(k));
+  if (r !== SUCCESS || retreated !== 1)
+    throw new Error(`policy-off stale hold must retreat as open field: ${JSON.stringify({ r, retreated })}`);
 });
 
 t('fightNode reconnects on a stale object id instead of looping', async () => {
@@ -466,6 +569,25 @@ t('not-holding empty room rests when below the ceiling (Lee\u2019s stall)', asyn
   if (rested !== 1) throw new Error(`expected a rest while waiting, got ${rested}`);
 });
 
+t('policy-off stale hold uses ordinary empty-room waiting, not the wall branch', async () => {
+  const k = mockKeeper({
+    hold: { col: 5, row: 5, proven: true },
+    atHold: () => true,
+    holdWorks: () => true,
+    sanctuary: () => false,
+  });
+  k.policy.useSafeSpots = false;
+  k.s.client.vitals = () => ({ health: { value: 29, max: 29 }, vigor: { value: 60, max: 200 } });
+  let rested = 0;
+  k._btFarmRestWhileWaiting = async () => { rested++; return { rested: true }; };
+  const r = await noTargetFoundNode(k).tickAsync(bb(k));
+  const notes = k.calls.filter(call => call[0] === 'note').map(call => call[1]);
+  if (r !== SUCCESS || rested !== 1 || !notes.includes('resting while we wait for a spawn') ||
+      notes.includes('resting in a proven spot while we wait for a spawn')) {
+    throw new Error(`policy-off stale hold took the wrong wait branch: ${JSON.stringify({ r, rested, notes })}`);
+  }
+});
+
 t('not-holding empty room does not rest when already whole', async () => {
   const k = mockKeeper({ hold: null, holdWorks: () => false, sanctuary: () => false });
   k.s.client.vitals = () => ({ health: { value: 36, max: 36 }, vigor: { value: 200, max: 200 } });
@@ -490,41 +612,104 @@ t('not-holding empty room does not rest when already whole', async () => {
 // walk back -- the legacy pull), so the next pass fights it where it can land hits.
 // ---------------------------------------------------------------------------
 
-t('fightNode pulls the quarry to the wall on out_of_reach (no infinite broke-off loop)', async () => {
+t('fightNode delegates held-wall out_of_reach to the shared pending-pull state machine', async () => {
   const k = mockKeeper({ hibernation: false });
   k.hold = { col: 5, row: 5, proven: true };
   k.holdWorks = () => true;
   k.policy.hunt = 'giant rat';
   k.policy.clearing = 'centipede';
   k.clearing = 'centipede';
-  k._btFarmFoundTargets = () => [{ id: 7573, nameRsc: 'centipede' }];
+  const quarry = { id: 7573, nameRsc: 'centipede' };
+  k._btFarmFoundTargets = () => [quarry];
   k.inReachOfUs = () => [];
-  let pulled = 0;
-  k.pull = async (quarry) => { pulled++; return { pulled: true, back: true, target: quarry.nameRsc, steps: 12 }; };
+  let delegated = 0, directPulls = 0;
+  k.pull = async () => { directPulls++; return { pulled: true, back: true }; };
+  k.handleOutOfReachQuarry = async (f, found) => {
+    delegated++;
+    if (f.foe_id !== quarry.id || found[0] !== quarry)
+      throw new Error('shared handler did not receive the exact selected quarry');
+    return { handled: true, mode: 'wall', pulled: true };
+  };
   // fight() reported out_of_reach: nothing matching within melee reach while holding.
-  k._btFarmFight = async () => ({ out_of_reach: true,
-    nearest: { id: 7573, name: 'centipede', distance: 9.2, col: 9, row: 10 } });
+  k._btFarmFight = async () => ({ out_of_reach: true, foe_id: 7573,
+    nearest: { distance: 9.2 } });
   const node = fightNode(k);
   const r = await node.tickAsync(bb(k));
-  if (r !== SUCCESS) throw new Error(`expected SUCCESS (handled the pass by pulling), got ${r}`);
-  if (pulled !== 1) throw new Error(`expected exactly one pull, got ${pulled}`);
+  if (r !== SUCCESS) throw new Error(`expected SUCCESS (shared handler owns the pass), got ${r}`);
+  if (delegated !== 1 || directPulls !== 0)
+    throw new Error(`BT must delegate once and never pull directly: ${JSON.stringify({ delegated, directPulls })}`);
 });
 
-t('fightNode does not pull when out_of_reach with no safe spot (lets the next pass approach)', async () => {
+t('fightNode delegates open-field out_of_reach to the same shared handler', async () => {
   const k = mockKeeper({ hibernation: false });
   k.hold = null;
   k.holdWorks = () => false;
   k.policy.hunt = 'giant rat';
   k._btFarmFoundTargets = () => [{ id: 7573, nameRsc: 'centipede' }];
   k.inReachOfUs = () => [];
-  let pulled = 0;
-  k.pull = async () => { pulled++; return { pulled: true, back: true, target: 'x', steps: 1 }; };
-  k._btFarmFight = async () => ({ out_of_reach: true,
-    nearest: { id: 7573, name: 'centipede', distance: 6.0, col: 2, row: 2 } });
+  let delegated = 0, directPulls = 0, directAdvances = 0, args = null;
+  k.pull = async () => { directPulls++; return { pulled: true, back: true }; };
+  k.advanceOnOpenFieldQuarry = async () => { directAdvances++; return { advanced: true }; };
+  k.handleOutOfReachQuarry = async (f, found) => {
+    delegated++;
+    args = { f, found };
+    return { handled: true, mode: 'open-field', advanced: true };
+  };
+  k._btFarmFight = async () => ({ out_of_reach: true, foe_id: 7573,
+    nearest: { distance: 6.0 } });
   const node = fightNode(k);
   const r = await node.tickAsync(bb(k));
   if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
-  if (pulled !== 0) throw new Error(`no safe spot -> no pull, got ${pulled}`);
+  if (delegated !== 1 || directPulls !== 0 || directAdvances !== 0 ||
+      args?.found?.[0]?.id !== 7573 || args?.f?.foe_id !== 7573)
+    throw new Error(`open-field handling was not delegated exactly once: ${JSON.stringify({
+      delegated, directPulls, directAdvances, args,
+    })}`);
+});
+
+t('fightNode delegates policy-off stale-hold handling instead of choosing pull itself', async () => {
+  const k = mockKeeper({ hibernation: false });
+  k.policy.useSafeSpots = false;
+  k.hold = { col: 5, row: 5, proven: true };
+  k.policy.hunt = 'giant rat';
+  const quarry = { id: 7573, nameRsc: 'centipede' };
+  k._btFarmFoundTargets = () => [quarry];
+  k.inReachOfUs = () => [];
+  let pulled = 0, advanced = 0, delegated = 0;
+  k.pull = async () => { pulled++; return { pulled: true, back: true }; };
+  k.advanceOnOpenFieldQuarry = async () => { advanced++; return { advanced: true }; };
+  k.handleOutOfReachQuarry = async (f, found) => {
+    if (f.foe_id !== quarry.id || found[0] !== quarry)
+      throw new Error('wrong quarry passed to shared handler');
+    delegated++;
+    return { handled: true, mode: 'open-field', advanced: true };
+  };
+  k._btFarmFight = async () => ({ out_of_reach: true,
+    foe_id: quarry.id, nearest: { distance: 9.2 } });
+  const node = fightNode(k);
+  const r = await node.tickAsync(bb(k));
+  if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
+  if (pulled !== 0 || advanced !== 0 || delegated !== 1)
+    throw new Error(`BT must leave stale-hold mode selection to the shared handler: ${JSON.stringify({
+      pulled, advanced, delegated,
+    })}`);
+});
+
+t('fightNode fails closed when the shared out-of-reach handler is unavailable', async () => {
+  const k = mockKeeper({ hibernation: false });
+  k.policy.hunt = 'giant rat';
+  k._btFarmFoundTargets = () => [{ id: 7573, nameRsc: 'centipede' }];
+  k.inReachOfUs = () => [];
+  let pulled = 0, advanced = 0;
+  k.pull = async () => { pulled++; return { pulled: true, back: true }; };
+  k.advanceOnOpenFieldQuarry = async () => { advanced++; return { advanced: true }; };
+  k._btFarmFight = async () => ({ out_of_reach: true, foe_id: 7573,
+    nearest: { distance: 9.2 } });
+  const node = fightNode(k);
+  const r = await node.tickAsync(bb(k));
+  if (r !== SUCCESS || pulled !== 0 || advanced !== 0 ||
+      !k.calls.some(call => call[0] === 'noProgress' && /no safe shared/.test(call[1])))
+    throw new Error(`missing handler must cause no mutation: ${JSON.stringify({ r, pulled, advanced, calls: k.calls })}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -579,6 +764,25 @@ t('scavengeNode: SUCCESS when it kills a weak creature', async () => {
   const node = scavengeNode(k);
   const r = await node.tickAsync(bb(k));
   if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
+});
+
+t('scavengeNode does not hold position for a stale hold when safe spots are disabled', async () => {
+  const k = mockKeeper({ armed: () => false });
+  k.policy.useSafeSpots = false;
+  k.hold = { col: 5, row: 5, proven: true };
+  k.atHold = () => true;
+  k.holdWorks = () => true;
+  k.s.client.vitals = () => ({ health: { value: 30, max: 30 }, vigor: { value: 140 } });
+  k.s.client.rsc = { get: () => 'rat' };
+  const weakCreature = { id: 100, nameRsc: 'rat', health: { value: 5, max: 5 } };
+  let options = null;
+  k.constructor = { _combatSkills: {
+    findCreature: () => [weakCreature],
+    fight: async (_session, given) => { options = given; return { ok: true, killed: true, xp: 2 }; },
+  }};
+  const r = await scavengeNode(k).tickAsync(bb(k));
+  if (r !== SUCCESS || options?.holdPosition !== false)
+    throw new Error(`policy-off stale hold leaked into scavenge fight: ${JSON.stringify({ r, options })}`);
 });
 
 t('scavengeNode: FAILURE when creature is too strong', async () => {

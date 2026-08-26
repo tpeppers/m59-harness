@@ -62,17 +62,17 @@ export const TUNABLES = {
     'fight from a wall the monsters cannot reach through. Turning this off gives up the ' +
     'largest survival advantage in the game and is almost never right' },
   flee_below: { check: frac, why:
-    'the health fraction at which a character disengages. NOTE it is a FLOOR, not the ' +
-    'answer: safety() takes Math.max(this, 2*maxHit/max), so on a 41-health character ' +
-    'anything below about 0.68 is inert and the two-hits-of-margin rule wins' },
+    'the exact health fraction below which a character disengages. Supplying this ' +
+    'operator setting is authoritative over the adaptive two-hit default; equality does ' +
+    'not disengage, because the comparison is strictly below the configured fraction' },
   rest_below: { check: frac, why: 'the health fraction at which it breaks off and rests' },
   hold_resume_above: { check: frac, why:
     'in a safe spot, top up to this fraction before swinging again. Stopping costs nothing ' +
     'there, so there is little reason to fight hurt' },
   fight_rounds: { check: posInt, why: 'rounds per engagement before it re-decides' },
   pull_within: { check: posInt, why:
-    'how far it will walk to fetch a monster back to its wall. The walk out happens before ' +
-    'the thing has noticed us, so a long pull is the same danger for longer, not more' },
+    'how far it will walk to fetch a monster back to its wall. The default is eight because ' +
+    'every extra step is more time exposed off the wall; zero explicitly removes the limit' },
   weapon_priority: { check: strList, why:
     'name fragments, best first. A PREFERENCE, not a filter - an unskilled weapon still ' +
     'beats bare hands. Rank by the character\'s own proficiency: a mace is worth far more ' +

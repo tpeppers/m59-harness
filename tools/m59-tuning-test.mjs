@@ -50,6 +50,8 @@ ok('a string where a boolean belongs is refused',
    tuningFor({ file: write({ defaults: { defend_chase: 'yes' } }) }).overrides.defend_chase === undefined);
 ok('a negative pull_within is refused',
    tuningFor({ file: write({ defaults: { pull_within: -5 } }) }).overrides.pull_within === undefined);
+ok('pull_within zero remains the explicit no-limit override',
+   tuningFor({ file: write({ defaults: { pull_within: 0 } }) }).overrides.pull_within === 0);
 ok('a weapon_priority holding a number is refused whole',
    tuningFor({ file: write({ defaults: { weapon_priority: ['mace', 7] } }) }).overrides.weapon_priority === undefined);
 ok('flee_below 0 is refused - a threshold of zero is never what anybody means',
@@ -105,8 +107,8 @@ ok('defend_against_players is a tunable', !!TUNABLES.defend_against_players);
 ok('every tunable explains itself, for the human or agent about to flip it',
    Object.values(TUNABLES).every(s => typeof s.why === 'string' && s.why.length > 20));
 ok('every tunable can refuse a value', Object.values(TUNABLES).every(s => typeof s.check === 'function'));
-ok('flee_below warns that it is a FLOOR and can be inert',
-   /floor|inert|Math\.max/i.test(TUNABLES.flee_below.why));
+ok('flee_below says an explicit value is the exact authoritative boundary',
+   /exact/i.test(TUNABLES.flee_below.why) && /authoritative/i.test(TUNABLES.flee_below.why));
 ok('fight_above_vigor warns that below 100 reads as applied and changes nothing',
    /lowest HONOURED|changes nothing/i.test(TUNABLES.fight_above_vigor.why));
 

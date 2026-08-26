@@ -200,10 +200,17 @@ export function reachableOpenFightVigorBar(dangerBar, fightFloor) {
 // it at the decision boundary.  False wall entries mean a room was tested and accepted,
 // so only truthy reasons are denials.  Everything here is session-local: this chooses a
 // different room for the current keeper and never blocks the strategic goal.
-export function farmRoomDenials(noWallRooms = null, cappedRooms = null) {
+export function farmRoomDenials(noWallRooms = null, cappedRooms = null,
+                                { useSafeSpots = true } = {}) {
   const denied = new Map();
-  for (const [room, why] of noWallRooms?.entries?.() ?? []) {
-    if (why) denied.set(room, why);
+  // A failed wall search is evidence about the wall strategy, not the room.  When the
+  // operator explicitly chooses open-field fighting, stale session wall evidence must
+  // not defer the assignment or remove the room from prey ranking.  Spawn-cap evidence
+  // still applies because it says the prey cannot spawn, regardless of positioning.
+  if (useSafeSpots) {
+    for (const [room, why] of noWallRooms?.entries?.() ?? []) {
+      if (why) denied.set(room, why);
+    }
   }
   for (const [room, why] of cappedRooms?.entries?.() ?? []) {
     if (why) denied.set(room, why);
@@ -680,6 +687,11 @@ const WATCHDOG_MS = Number(process.env.M59_WATCHDOG_MS || 500);
 // seconds is three normal passes — long enough that an ordinary slow call is not treated
 // as a stall, short enough that a character bleeding out is not left to it.
 const WATCHDOG_BLOCKED_MS = Number(process.env.M59_WATCHDOG_BLOCKED_MS || 3_000);
+// A cancellation is a latch, not a one-shot hint. A blocked pass used to start a new
+// movement after the watchdog cancelled the first one, and the once-per-pass guard then
+// protected that replacement walk all the way to death. Give an ordinary walk a moment
+// to unwind, then keep invalidating any movement the same blind pass tries to re-arm.
+const WATCHDOG_REPEAT_MS = Number(process.env.M59_WATCHDOG_REPEAT_MS || 1_500);
 // The longest the record may go without a frame while nothing is changing. Matches the
 // keeper's own resync interval, which is the same number the deaths page uses to decide
 // whether a keeper counts as having been watching (`WATCH_MS` in m59-postmortems.mjs).
@@ -1128,6 +1140,9 @@ export class Autopilot {
       // Break off and withdraw at this. Deliberately higher than fight()'s own
       // threshold: the keeper is not watching a fight, it is watching a character.
       fleeBelow: 0.4,
+      // False keeps the adaptive two-hit margin. The broker marks this true only when
+      // its caller explicitly supplies flee_below, making that exact boundary authoritative.
+      fleeBelowExplicit: false,
       // What to hunt in `farm` mode. Never guessed — if it is empty, farm does nothing.
       hunt: null,
       // WHAT THE FARMING IS FOR — 'money' | 'items' | 'advance' | null. See scorePrey in
@@ -1304,6 +1319,10 @@ export class Autopilot {
       // Vigor to reach before picking a fight. Resting alone tops out at the rest
       // threshold (80 of 200); anything above it has to be eaten.
       fightAboveVigor: MIN_FIGHT_VIGOR,
+      // A farm pass is a sustained engagement, not the three-swing probe that the
+      // general-purpose fight skill defaults to. Kept in policy so an operator can
+      // deliberately shorten it for a fragile character.
+      fightRounds: 30,
       // Disconnect rather than die when a single exchange could finish us. Set false
       // to forbid it — but it is the most effective survival move available when we
       // have nowhere safe to stand, and the penalties the game attaches to logging
@@ -1322,12 +1341,11 @@ export class Autopilot {
       // costs a pause and nothing else — so there is no reason to ever swing at
       // anything below this. It is much higher than restBelow on purpose.
       holdResumeAbove: 0.9,
-      // How far to go to fetch a monster that will not come to us. UNSET: there is no
-      // limit, because distance was never the thing that made a pull dangerous — see
-      // pull(). It went 8, then 14 when the Tos gate turned out to be 58 by 44 and every
-      // pull in it was being refused, and each of those numbers was a room-shaped guess
-      // standing in for the reasoning. Set `pull_within` to put a ceiling back.
-      pullWithin: null,
+      // How far to go to fetch a monster that will not come to us. Pulling deliberately
+      // gives up the wall, so exposure grows with distance even though only one swing is
+      // intended. Eight keeps the default trip short; an explicit null/0 policy still
+      // means no ceiling for an operator who deliberately accepts that exposure.
+      pullWithin: 8,
       // NEVER FIGHT IN A ROOM WITH NO SAFE WALL IN IT.
       //
       // holdWorthwhile() already said a wall was wanted against anything that outlevels
@@ -2227,10 +2245,29 @@ export class Autopilot {
     };
   }
 
+  // A remembered wall is not the same thing as standing behind it. `pull()` keeps the
+  // remembered coordinates while it fetches quarry, and asynchronous status/watchdog
+  // readers run during that await. Requiring the live room and coarse square here keeps
+  // every sheltered decision false for the whole time the body is away.
+  atHold() {
+    const hold = this.hold, me = this.s?.client?.self;
+    const room = this.s?.world?.room?.num ?? this.s?.client?.room?.id ?? null;
+    return !!(hold && me && room != null && hold.room === room
+      && me.col === hold.col && me.row === hold.row);
+  }
+
   // Are we standing somewhere we have EVIDENCE about, or somewhere that merely looks
   // right? Nothing in this file may spend the safe-spot advantage on a guess: an
   // unproven spot is treated exactly like open floor, which is what it might be.
-  holdWorks() { return !!(this.hold && this.hold.proven); }
+  holdWorks() { return !!(this.atHold() && this.hold?.proven); }
+
+  // Policy-off means open-field combat even if a remembered hold has not yet been
+  // released by the next observation. A remembered square is likewise not a wall after
+  // the body moved away from it. This is the tactical gate shared by fight positioning,
+  // pull selection, spot testing, and partner healing.
+  holdingForFight() {
+    return this.policy.useSafeSpots !== false && this.atHold();
+  }
 
   // IS THERE A WEAPON IN OUR HAND — asked of the server, never of our own intentions.
   //
@@ -3071,8 +3108,36 @@ export class Autopilot {
   // blows is precisely what walking to the wall was meant to avoid.
   async pull(want) {
     const s = this.s, c = s.client;
+    if (this.policy.useSafeSpots === false)
+      return { pulled: false, why: 'safe spots are switched off; open-field combat must close forward instead' };
     if (!this.hold) return { pulled: false, why: 'not holding a spot to pull it back to' };
+    if (!this.atHold())
+      return { pulled: false, why: 'not standing on the held spot, so there is no safe pull origin' };
     const spot = { ...this.hold };
+    // ONE GENERATION OWNS THE WHOLE OUT-AND-BACK OPERATION. The watchdog invalidates
+    // this number. Every fallback on the return must keep using it; capturing the new
+    // generation after an interrupt is how the old pull re-armed movement in the same
+    // blind pass and kept walking below the flee line.
+    const movementGeneration = s.movementGeneration;
+    const abort = (phase, result = null) => {
+      const cancelled = !!result?.cancelled ||
+        (typeof s.movementWasCancelled === 'function' &&
+         s.movementWasCancelled(movementGeneration));
+      if (cancelled) {
+        return { pulled: false, aborted: true, cancelled: true,
+                 why: `${phase}: movement was cancelled; the survival pass must decide what moves next` };
+      }
+      const health = c.vitals?.()?.health;
+      const frac = pct(health), fleeAt = this.safety().fleeAt;
+      if (frac !== null && frac < fleeAt) {
+        return { pulled: false, aborted: true, health_abort: true,
+                 health: health?.value ?? null, flee_at: fleeAt,
+                 why: `${phase}: health crossed the flee line; no new pull movement is allowed` };
+      }
+      return null;
+    };
+    const beforeOut = abort('before setting out');
+    if (beforeOut) return beforeOut;
     // NEVER TRUST A CAPTURED OBJECT'S COORDINATES. BP_ROOM_CONTENTS replaces the
     // whole object map with fresh instances, so anything picked up earlier in the
     // pass — before we walked to the wall, say — still holds the position it was at
@@ -3082,35 +3147,29 @@ export class Autopilot {
     const name = c.rsc.get(foe.nameRsc);
     const approach = s.world?.approachSquare?.(foe.col, foe.row);
     if (!approach) return { pulled: false, why: 'no square beside it that we can reach' };
-    // NO DISTANCE LIMIT. IF WE CAN GET TO IT, IT IS WORTH FETCHING.
-    //
-    // This refused anything more than `pullWithin` steps away as "too far to fetch and
-    // get back", which reads as prudence and is not. The walk out is taken before the
-    // thing has noticed us and the walk back is the only part that costs anything, so a
-    // long pull is not more dangerous than a short one — it is the same danger for
-    // longer, and it ends with the fight happening at the wall instead of in the open,
-    // which is the entire point. Refusing it does not avoid the fight; it leaves the
-    // keeper standing at a good spot with nothing to kill, which is how a character
-    // spends an hour reporting itself safe and earning nothing.
-    //
-    // The step budgets below are all relative to `approach.steps`, so they scale with
-    // the trip and nothing here needs a ceiling to stay bounded. Patience is the
-    // correct behaviour: walk however far it is, hit it once, walk back.
-    //
-    // `pullWithin` survives as an explicit override for anyone who wants one — the
-    // broker still exposes it as `pull_within` — but it is unset by default.
+    // A PULL IS AN OPEN-FIELD ROUND TRIP. Distance is time without the wall, so the safe
+    // default is short. `null` remains an explicit no-limit override and finite values
+    // retain their literal meaning.
     if (approach.steps > (this.policy.pullWithin ?? Infinity))
       return { pulled: false, why: `${approach.steps} steps away — beyond the pull_within override` };
 
-    this.doing = 'fighting';
-    const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
+    this.doing = 'pulling';
+    const out = await s.walkTo(approach.col, approach.row,
+      { maxSteps: approach.steps + 8, movementGeneration })
                        .catch(e => ({ arrived: false, reason: e.message }));
     this.movedAt = Date.now();
+    const afterOut = abort('after outbound pull movement', out);
+    if (afterOut) return afterOut;
     if (!out.arrived) {
       const terminal = this.terminalMovement(out, 'pull movement');
       if (terminal) return { pulled: false, ...terminal };
-      const home = await skills.returnToSpot(s, spot, { maxSteps: 24 }).catch(() => ({ arrived: false }));
+      const beforeReturn = abort('before returning from a failed pull');
+      if (beforeReturn) return beforeReturn;
+      const home = await skills.returnToSpot(s, spot,
+        { maxSteps: 24, movementGeneration }).catch(() => ({ arrived: false }));
       this.movedAt = Date.now();
+      const afterReturn = abort('while returning from a failed pull', home);
+      if (afterReturn) return afterReturn;
       if (!home.arrived) this.releaseHold('could not get back after a failed pull');
       return { pulled: false, why: out.reason || 'could not get to it' };
     }
@@ -3118,14 +3177,30 @@ export class Autopilot {
     const it = c.room.objects.get(foe.id);
     if (it) {
       await s.faceToward(it);
-      await s.pacer.submit('attack', () => c.attack(foe.id), 1050);
+      const beforeAttack = abort('before the pull attack');
+      if (beforeAttack) return beforeAttack;
+      // Pacer.submit may wait behind the per-kind cooldown. Health can cross the flee
+      // line, or the watchdog can cancel the operation, during that wait. Check again in
+      // the callback — immediately before the packet — rather than treating enqueue time
+      // as attack time.
+      let atPacket = null;
+      await s.pacer.submit('attack', () => {
+        atPacket = abort('at the pull attack packet');
+        return atPacket ? null : c.attack(foe.id);
+      }, 1050);
+      if (atPacket) return atPacket;
       this.swungAt = Date.now();
       this.foeId = foe.id;
     }
 
-    const home = await skills.returnToSpot(s, spot, { maxSteps: approach.steps + 12 })
+    const beforeReturn = abort('before returning to the wall');
+    if (beforeReturn) return beforeReturn;
+    const home = await skills.returnToSpot(s, spot,
+      { maxSteps: approach.steps + 12, movementGeneration })
                              .catch(e => ({ arrived: false, why: e.message }));
     this.movedAt = Date.now();
+    const afterReturn = abort('while returning to the wall', home);
+    if (afterReturn) return afterReturn;
     if (!home.arrived) {
       this.releaseHold('could not get back to it after pulling');
       return { pulled: true, back: false, target: name,
@@ -3133,7 +3208,7 @@ export class Autopilot {
     }
     // We left and returned, so nothing is proved about the square any more until the
     // experiment runs again. The belief survives; the running clock does not.
-    this.hold.quietMs = 0;
+    if (this.hold) this.hold.quietMs = 0;
     this.note('pulled it to the wall', {
       target: name, went: approach.steps, back_at: { col: spot.col, row: spot.row },
       why: 'a safe spot is only worth anything if the fight happens at it' });
@@ -3552,9 +3627,19 @@ export class Autopilot {
         : 'fled more than twice with neither the vigor nor the food to fight — the ' +
           'wilderness cannot fix that, and a town can: resting is safe there and the ' +
           'counters sell bread, which is the only way past the resting cap of 80' });
-    const t = await this.travel(best.room, { maxHops: 6 }).catch(e => ({ arrived: false, reason: e.message }));
-    this.fledInARow = 0;
+    const t = await this.guardedRetreatTravel(best.room, { maxHops: 6 })
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (t.cancelled) {
+      this.retreatCancelledPass = this.passes;
+      this.note('refuge journey was cancelled — leaving the next move to a fresh pass', {
+        to_room: best.room, reason: t.reason ?? null,
+        why: 'a player or operator cancellation outranks this stale recovery call; it must ' +
+             'not arm a second journey before the ordinary ladder observes the new state',
+      });
+      return false;
+    }
     if (!t.arrived) { this.noProgress('could not reach town: ' + (t.reason || 'refused')); return false; }
+    this.fledInARow = 0;
     this.progress(best.preferred ? 'reached a monster-free retreat' : 'reached town to resupply');
     await this.hibernate(best.preferred
       ? 'resting outside Castle Victoria after being driven out'
@@ -4183,7 +4268,13 @@ export class Autopilot {
   //
   // Returns true if the caller should NOT attack this pass.
   maybeTestSpot(adjacent) {
-    if (!this.hold || this.holdWorks() || !adjacent.length) { this.spotTest = null; return false; }
+    // A remembered hold is not a tactical wall while safe spots are policy-disabled.
+    // In particular, do not spend three adjacent-monster passes silently testing stale
+    // coordinates when open-field policy says to fight them now.
+    if (!this.holdingForFight() || this.holdWorks() || !adjacent.length) {
+      this.spotTest = null;
+      return false;
+    }
     const at = `${this.hold.col},${this.hold.row}`;
     if (this.spotTest && this.spotTest.at !== at) this.spotTest = null;   // a different square
     if (!this.spotTest) {
@@ -4293,7 +4384,11 @@ export class Autopilot {
         : 'parking — getting behind a wall before the update';
     if (this.frozenUntil && Date.now() < this.frozenUntil) return 'playing dead';
     if (this.hold) {
-      const proven = this.holdWorks() ? 'proven' : 'untested';
+      const proven = this.hold.proven ? 'proven' : 'untested';
+      if (!this.atHold())
+        return this.doing === 'pulling'
+          ? `pulling quarry back to a ${proven} safe spot`
+          : `away from a ${proven} safe spot${this.doing ? ` — ${this.doing}` : ''}`;
       if (this.spotTest) return 'testing a safe spot';
       if (this.doing === 'fighting') return `fighting from a ${proven} safe spot`;
       if (this.doing === 'pulling') return `pulling quarry to a ${proven} safe spot`;
@@ -6466,6 +6561,321 @@ export class Autopilot {
     return { ...p, remaining_ms: remaining, ready: remaining === 0 };
   }
 
+  // AN OUT-OF-REACH OPEN-FIELD FIGHT CLOSES THE DISTANCE; ONLY A WALL FIGHT PULLS.
+  //
+  // `skills.fight` deliberately declines a target more than one short approach away so
+  // one farm pass cannot turn into an unbounded walk. The legacy caller treated every
+  // such result as a wall fight, even when `useSafeSpots` was false and no hold existed:
+  // it called pull(), which correctly refused with "not holding a spot to pull it back
+  // to", then repeated the same decision forever. Room 562 did this with two eligible
+  // fungus beasts standing in the room.
+  //
+  // Keep the boundedness and make the missing progress explicit. `approachSquare` gives
+  // us the proved path beside the exact eligible quarry (including a temporary room-clear
+  // target). Send at most its first four adjacent steps. Do not call walkTo here: even a
+  // small hardCap can enter its 60-step fine fallback or pivot before that cap is charged.
+  // One direct step at a time gives this stale combat decision a literal four-move ceiling.
+  async advanceOnOpenFieldQuarry(f, found = []) {
+    const s = this.s, c = s.client;
+    const reportedId = f?.foe_id ?? f?.nearest?.id ?? null;
+    const liveById = id => {
+      const objects = c.room?.objects;
+      if (id == null || !objects?.get) return null;
+      return objects.get(id) ?? (Number.isFinite(Number(id)) ? objects.get(Number(id)) : null) ?? null;
+    };
+    // An exact fight result outranks the caller's pre-fight snapshot. If that exact
+    // object vanished, re-observe; substituting found[0] can chase a different monster.
+    // Only old callers with no reported id may select the first candidate still live.
+    const quarry = reportedId != null
+      ? liveById(reportedId)
+      : found.map(o => liveById(o?.id)).find(Boolean) ?? null;
+    if (!quarry || !Number.isFinite(Number(quarry.col)) || !Number.isFinite(Number(quarry.row))) {
+      const reason = reportedId != null
+        ? 'the exact open-field quarry left before the bounded approach'
+        : 'no live open-field quarry remains to approach';
+      this.note('open-field quarry needs a fresh observation', {
+        target_id: reportedId,
+        why: reason + '; do not substitute another pre-fight candidate',
+      });
+      return { advanced: false, reobserve: true, target_id: reportedId, reason };
+    }
+
+    const approach = s.world?.approachSquare?.(quarry.col, quarry.row) ?? null;
+    const fullPath = Array.isArray(approach?.path) ? approach.path : [];
+    const before = c.self
+      ? { col: Number(c.self.col), row: Number(c.self.row) }
+      : null;
+    let start = 0;
+    while (before && start < fullPath.length &&
+           Number(fullPath[start]?.col) === before.col &&
+           Number(fullPath[start]?.row) === before.row) start++;
+    const plan = fullPath.slice(start, start + 4);
+    if (!before || !plan.length) {
+      this.noProgress('no bounded open-field route toward the quarry');
+      return { advanced: false, target_id: quarry.id, reason: 'no approach path' };
+    }
+
+    const targetAt = { col: Number(quarry.col), row: Number(quarry.row) };
+    const beforeDistance = before
+      ? Math.hypot(targetAt.col - before.col, targetAt.row - before.row) : null;
+    const movementGeneration = s.movementGeneration;
+    const roomId = c.room?.id;
+    const fleeAt = this.safety().fleeAt;
+    const cancelled = () => typeof s.movementWasCancelled === 'function'
+      ? s.movementWasCancelled(movementGeneration)
+      : s.movementGeneration !== movementGeneration;
+    const healthBelowFlee = () => {
+      const health = c.vitals?.()?.health;
+      const fraction = pct(health);
+      return fraction != null && fraction < fleeAt
+        ? { health: health?.value ?? null, fraction, flee_at: fleeAt }
+        : null;
+    };
+    const stopError = (kind, detail = {}) => Object.assign(
+      new Error(`open-field quarry approach stopped: ${kind}`),
+      { openFieldStop: kind, ...detail },
+    );
+    let expected = { ...before };
+    let last = null;
+    const steps = [];
+    let stepCalls = 0;
+    let acceptedSteps = 0;
+
+    for (const next of plan) {
+      const target = { col: Number(next?.col), row: Number(next?.row) };
+      if (!Number.isSafeInteger(target.col) || !Number.isSafeInteger(target.row) ||
+          Math.max(Math.abs(target.col - expected.col), Math.abs(target.row - expected.row)) !== 1) {
+        last = { moved: false, reason: 'open_field_path_off_plan', expected, target };
+        break;
+      }
+      const guard = () => {
+        if (cancelled()) throw stopError('cancelled');
+        if (c.room?.id !== roomId) throw stopError('left_room');
+        const me = c.self;
+        if (!me || Number(me.col) !== expected.col || Number(me.row) !== expected.row)
+          throw stopError('off_plan', { position: me ? { col: me.col, row: me.row } : null });
+        const live = liveById(quarry.id);
+        if (!live) throw stopError('target_left');
+        if (Number(live.col) !== targetAt.col || Number(live.row) !== targetAt.row)
+          throw stopError('target_moved');
+        const low = healthBelowFlee();
+        if (low) throw stopError('health_abort', low);
+      };
+
+      try {
+        guard();
+        stepCalls++;
+        last = await s.step(target.col, target.row, {
+          fall: !!next?.fall,
+          // step can wait in both its turn and move pacers. Re-check immediately before
+          // each packet so cancellation or a health drop during either wait owns the body.
+          beforeMutation: guard,
+        });
+      } catch (error) {
+        if (error?.openFieldStop) last = { moved: false, stopped: error.openFieldStop, ...error };
+        else last = { moved: false, reason: error.message };
+      }
+      steps.push({ target, result: last });
+
+      if (last?.stopped === 'left_room' || last?.left_room || c.room?.id !== roomId) {
+        const after = c.self ? { col: Number(c.self.col), row: Number(c.self.row) } : null;
+        this.note('open-field quarry approach changed rooms', {
+          target_id: quarry.id, before, after,
+          why: 'the bounded approach left the room; stop this stale combat decision and re-observe',
+        });
+        return { advanced: false, left_room: true, target_id: quarry.id, before, after,
+                 step_count: stepCalls, steps };
+      }
+      if (last?.stopped === 'cancelled' || last?.cancelled || cancelled()) {
+        const after = c.self ? { col: Number(c.self.col), row: Number(c.self.row) } : null;
+        this.note('open-field quarry approach was cancelled', {
+          target: c.rsc.get(quarry.nameRsc) || f?.target || null,
+          target_id: quarry.id, before, after,
+          why: 'movement ownership changed; this pass must not replace it with another move',
+        });
+        const standard = typeof s.cancelledMovement === 'function'
+          ? s.cancelledMovement({ step_count: stepCalls })
+          : { arrived: false, left: false, cancelled: true,
+              reason: 'movement cancelled by a newer command' };
+        return { advanced: false, target_id: quarry.id, before, after, steps, ...standard };
+      }
+      if (last?.stopped === 'health_abort') {
+        return { advanced: false, health_abort: true, target_id: quarry.id,
+                 health: last.health, flee_at: last.flee_at, before,
+                 after: c.self ? { col: Number(c.self.col), row: Number(c.self.row) } : null,
+                 step_count: stepCalls, steps };
+      }
+      const terminal = this.terminalMovement(last, 'open-field quarry approach', {
+        target_id: quarry.id,
+      });
+      if (terminal)
+        return { advanced: false, target_id: quarry.id, before,
+                 after: c.self ? { col: Number(c.self.col), row: Number(c.self.row) } : null,
+                 step_count: stepCalls, steps, ...terminal };
+
+      const now = c.self ? { col: Number(c.self.col), row: Number(c.self.row) } : null;
+      if (!last?.moved || !now || (now.col === expected.col && now.row === expected.row)) {
+        last = { ...last, reason: last?.reason ?? 'open_field_step_made_no_move' };
+        break;
+      }
+      if (now.col !== target.col || now.row !== target.row) {
+        last = { ...last, reason: 'open_field_step_landed_off_plan', position: now };
+        break;
+      }
+      const live = liveById(quarry.id);
+      if (!live || Number(live.col) !== targetAt.col || Number(live.row) !== targetAt.row) {
+        last = { ...last, reason: live ? 'open_field_target_moved' : 'open_field_target_left' };
+        break;
+      }
+      expected = now;
+      acceptedSteps++;
+    }
+
+    const after = c.self ? { col: Number(c.self.col), row: Number(c.self.row) } : null;
+    const moved = !!after && (before.col !== after.col || before.row !== after.row);
+    const afterDistance = after
+      ? Math.hypot(targetAt.col - after.col, targetAt.row - after.row) : null;
+    const closer = moved && beforeDistance != null && afterDistance != null &&
+      afterDistance < beforeDistance;
+    if (last?.stopped === 'target_left' || last?.stopped === 'target_moved' ||
+        last?.reason === 'open_field_target_left' || last?.reason === 'open_field_target_moved') {
+      return { advanced: false, reobserve: true, target_id: quarry.id, before, after,
+               reason: last.stopped ?? last.reason, step_count: stepCalls, steps };
+    }
+    // A proved shortest path may begin sideways or even away from the quarry while it
+    // clears an obstacle. Consuming one or more exact on-plan steps is genuine bounded
+    // progress even when this four-step prefix has not yet reduced straight-line distance.
+    if (acceptedSteps > 0) {
+      this.progress('advanced along the bounded route to an open-field quarry');
+      this.note(closer ? 'closing on quarry in the open field'
+                       : 'following an obstacle detour toward quarry in the open field', {
+        target: c.rsc.get(quarry.nameRsc) || f?.target || null,
+        target_id: quarry.id, before, after,
+        distance_before: +beforeDistance.toFixed(1),
+        distance_after: +afterDistance.toFixed(1),
+        step_attempts: stepCalls,
+        path_steps_accepted: acceptedSteps,
+        why: closer
+          ? 'there is no wall to preserve or pull back to; make at most four direct ' +
+            'steps and let the next fresh pass fight from the new position'
+          : 'the proved approach is routing around an obstacle; accepted on-plan path ' +
+            'consumption is progress even before straight-line distance falls',
+      });
+      return { advanced: true, target_id: quarry.id, before, after,
+               step_count: stepCalls, path_steps_accepted: acceptedSteps,
+               distance_reduced: closer, steps };
+    }
+
+    this.noProgress('could not make bounded forward progress toward the open-field quarry');
+    this.note('could not close on quarry in the open field', {
+      target: c.rsc.get(quarry.nameRsc) || f?.target || null,
+      target_id: quarry.id, before, after, why: last?.reason ?? 'position did not change',
+    });
+    return { advanced: false, target_id: quarry.id, before, after, steps,
+             step_count: stepCalls, reason: last?.reason ?? 'position did not change' };
+  }
+
+  async handleOutOfReachQuarry(f, found = []) {
+    const c = this.s.client;
+    // Policy-off is open-field even if a stale hold has not yet been observed away.
+    // Conversely, the wall state machine is valid only when a real hold exists.
+    const holdingWall = this.holdingForFight();
+    if (!holdingWall) {
+      this.doing = 'fighting';
+      this.pendingPull = null;
+      const advanced = await this.advanceOnOpenFieldQuarry(f, found);
+      return { handled: true, mode: 'open-field', ...advanced };
+    }
+
+    this.doing = 'pulling';
+    // A DISTANT QUARRY IS STILL ON THE ROAD.
+    //
+    // Decisions run every second. Counting the first decision after a pull as a miss
+    // gave a quarry one or two seconds to cross routes that took us tens of seconds,
+    // then hit it again and repeated the mistake. Wait out a distance-sized follow
+    // window before this pull is allowed to count toward the empirical cliff verdict.
+    let waiting = this.pendingPullWait();
+    // A quarry that despawned, died to somebody else, or left the room did not fail
+    // to follow. Clear the experiment without charging the square and try whatever is
+    // actually here now.
+    if (waiting?.target_id != null && !c.room.objects.get(waiting.target_id)) {
+      this.note('the pulled quarry is gone — not blaming the wall', {
+        target: waiting.target, target_id: waiting.target_id,
+        why: 'a missing quarry cannot establish that the route to this square is blocked' });
+      this.pendingPull = null;
+      releaseQuarry(this.s.name);
+      waiting = null;
+    }
+    if (waiting && !waiting.ready) {
+      if (!this.pendingPull.waitNoted) {
+        this.pendingPull.waitNoted = true;
+        this.note('giving the pulled quarry time to reach the wall', {
+          target: waiting.target, pull_steps: waiting.steps,
+          waiting_ms: waiting.remaining_ms,
+          why: 'one movement square takes about one decision interval; the next pass ' +
+               'is not evidence that a distant quarry cannot follow' });
+      }
+      this.doing = 'waiting';
+      return { handled: true, mode: 'wall', waiting: true };
+    }
+    if (waiting?.ready) {
+      this.pendingPull = null;
+      if (this.pullDidNotConvert(f.reason || 'still nothing in reach after the follow window'))
+        return { handled: true, mode: 'wall', retired: true };
+    }
+    const pullSpot = this.hold
+      ? { room: this.hold.room, col: this.hold.col, row: this.hold.row }
+      : null;
+    const reportedId = f?.foe_id ?? f?.nearest?.id ?? null;
+    const liveById = id => {
+      const objects = c.room?.objects;
+      if (id == null || !objects?.get) return null;
+      return objects.get(id) ?? (Number.isFinite(Number(id)) ? objects.get(Number(id)) : null) ?? null;
+    };
+    const quarry = reportedId != null
+      ? liveById(reportedId)
+      : found.map(o => liveById(o?.id)).find(Boolean) ?? null;
+    if (!quarry) {
+      this.note('the selected quarry left before the wall pull began', {
+        target_id: reportedId,
+        why: 're-observe instead of substituting a different pre-fight candidate or charging the wall',
+      });
+      releaseQuarry(this.s.name);
+      return { handled: true, mode: 'wall', reobserve: true, target_id: reportedId };
+    }
+    const p = await this.pull(quarry);
+    if (p.pulled && p.back) {
+      const waitMs = this.pullFollowWaitMs(p.steps);
+      this.pendingPull = {
+        at: Date.now(), waitUntil: Date.now() + waitMs,
+        target: p.target, target_id: quarry?.id ?? null, steps: p.steps, wait_ms: waitMs,
+      };
+      // DELIBERATELY NOT progress(). A pull is not an achievement, it is an attempt,
+      // and calling it progress is what kept the stall detector quiet through hours
+      // of this. Contact is the achievement, and the fight path below reports that.
+      this.note('waiting for it at the wall', {
+        target: p.target, pull_attempt: (this.pullsWithoutContact ?? 0) + 1,
+        follow_window_ms: waitMs, pull_steps: p.steps,
+        why: 'it has been hit and is following; only after its distance-sized follow ' +
+             'window expires can this pull count against the square' });
+    } else {
+      // Fetching failed before a swing. One moving target or refused step is not a
+      // property of the wall; retire it only after repeated misses from this square.
+      const failed = this.pullAttemptFailed(pullSpot, p.why || 'the pull did not complete');
+      this.note('could not bring it to the wall', {
+        why: p.why, target: p.target, attempt: failed.attempt, of: failed.limit,
+        note: failed.retired
+          ? 'repeated failures excluded this square in this room'
+          : 'keeping the wall and trying again; a single failed approach proves nothing' });
+      if (failed.retired && this.hold)
+        this.releaseHold('repeated pull attempts could not swing from here');
+      this.noProgress(failed.retired
+        ? 'holding a spot repeated pull attempts could not use'
+        : 'a pull attempt failed transiently; retrying from the same wall');
+    }
+    return { handled: true, mode: 'wall', pulled: !!(p.pulled && p.back) };
+  }
+
   // THE SPOT NOTHING CAN ACTUALLY REACH — the cliff.
   //
   // A whole band of the fleet stood on the clifftop above West Merchant Way, taking a
@@ -7208,7 +7618,8 @@ export class Autopilot {
   }
 
   status({ full = false } = {}) {
-    const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
+    const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms,
+      { useSafeSpots: this.policy.useSafeSpots });
     return {
       running: this.running, mode: this.mode, policy: this.policy,
       // Null unless a fleet update is waiting on this character. See park().
@@ -7416,6 +7827,7 @@ export class Autopilot {
       // possible in a monster room, and makes fleeing the wrong move.
       safe_spot: this.hold ? {
         at: { col: this.hold.col, row: this.hold.row },
+        standing_here: this.atHold(),
         works: this.holdWorks(),
         evidence: this.hold.proven
           ? (this.hold.inherited && !this.hold.provenAt
@@ -8350,6 +8762,7 @@ export class Autopilot {
     if (this.watchTimer) return;
     this.watch = { ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
                    lastHealth: null, blockedSince: null, interruptedPass: null,
+                   lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
                    // The position pulse — see PULSE_MS. `pulses` is the ring, `wedged` is
                    // the open episode (null when moving), `wedges` counts episodes rather
                    // than ticks so a long one is one event and not six hundred.
@@ -8505,7 +8918,7 @@ export class Autopilot {
     const excused = bleedingWhileInert ? null
       : !at ? 'no position'
       : this.inert ? 'inert — something else is driving'
-      : this.hold ? 'holding a safe spot, which is standing still on purpose'
+      : this.atHold() ? 'holding a safe spot, which is standing still on purpose'
       : !GOING.includes(doing) ? `not going anywhere — ${doing ?? 'idle'}`
       : null;
     if (excused) {
@@ -8714,6 +9127,33 @@ export class Autopilot {
     // 2. THE HANDBRAKE.
     const blockedFor = this.passStartedAt ? now - this.passStartedAt : 0;
     if (blockedFor > w.longest_block_ms) w.longest_block_ms = blockedFor;
+    // guardedRetreatTravel owns cancellation while a monster-driven refuge route is
+    // making progress. Keep recording frames/pulses above, but do not let elapsed pass
+    // time cancel the survival response itself. A nearby player remains the explicit
+    // exception: player danger is allowed to end a journey and must be reconsidered by
+    // the ordinary ladder immediately.
+    if (this.emergencyRetreat) {
+      let playerThreat = false;
+      try { playerThreat = (this.strangersInReach?.() ?? []).length > 0; } catch { /* observe only */ }
+      if (playerThreat) {
+        this.emergencyRetreat.cancellationKind = 'player';
+        this.emergencyRetreat.active = false;
+        if (!this.emergencyRetreat.playerCancelIssued) {
+          this.emergencyRetreat.playerCancelIssued = true;
+          const stopped = (() => {
+            try {
+              return s.cancelMovement(null, 'a nearby player ended the guarded retreat');
+            } catch (e) { return { cancelled: false, why: e.message }; }
+          })();
+          this.note('nearby player ended the guarded retreat', {
+            interrupted: stopped.interrupted ?? null,
+            why: 'player danger may end a journey immediately; health and elapsed pass ' +
+                 'time do not make the stale monster-recovery route authoritative',
+          });
+        }
+        return;
+      } else if (this.emergencyRetreat.active) return;
+    }
     if (blockedFor < WATCHDOG_BLOCKED_MS) return;
     w.blockedSince ??= this.passStartedAt;
 
@@ -8721,25 +9161,43 @@ export class Autopilot {
     // character deliberately, and cancelling its movement from underneath it would be
     // this keeper fighting the thing it stood down for.
     if (this.inert) return;
-    // Once per blocked pass. Cancelling twice does nothing useful and the note would
-    // repeat every tick.
-    if (w.interruptedPass === this.passes) return;
-
     const frac = pct(hp);
     if (frac === null) return;
     const fleeAt = this.safety().fleeAt;
     if (frac >= fleeAt) return;
 
+    // Usually once is enough. If the same pass is still blind after the grace interval,
+    // it may have started a nested/fallback walk with the new generation. Invalidate that
+    // too. Rate limiting keeps this an escalation rather than a 500ms log storm.
+    const repeated = w.interruptedPass === this.passes;
+    if (repeated && now - (w.lastInterruptAt ?? 0) < WATCHDOG_REPEAT_MS) return;
+    if (repeated) {
+      // The first cancel hands control back to the survival ladder, which may start a
+      // healthy retreat inside this same pass. Do not cancel that escape just because the
+      // pass is still old. Repeat only when the SAME activity still has three fresh
+      // post-interrupt pulses penned into one square of each other — the wall-bounce
+      // signature, rather than elapsed time alone.
+      if (w.interruptedDoing !== (this.doing ?? null)) return;
+      const after = (w.pulses ?? []).filter(p => p.at >= (w.lastInterruptAt ?? Infinity));
+      if (!this.pennedIn({ pulses: after })) return;
+    }
+
     w.interruptedPass = this.passes;
+    w.lastInterruptAt = now;
+    if (!repeated) w.interruptedDoing = this.doing ?? null;
     w.interrupts++;
+    if (repeated) w.repeatInterrupts = (w.repeatInterrupts ?? 0) + 1;
     this.tally.watchdog_interrupts = (this.tally.watchdog_interrupts || 0) + 1;
     const stopped = (() => {
       try { return s.cancelMovement(null, 'the watchdog pulling us out of a blind walk below the flee line'); } catch (e) { return { cancelled: false, why: e.message }; }
     })();
-    this.note('WATCHDOG — pulled the character out of a blind walk', {
+    this.note(repeated
+      ? 'WATCHDOG — blind pass re-armed movement; cancelling it again'
+      : 'WATCHDOG — pulled the character out of a blind walk', {
       health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
       flee_at: Math.round(fleeAt * 100) + '%',
       pass_blocked_for_s: Math.round(blockedFor / 1000),
+      repeated,
       interrupted: stopped.interrupted ?? null,
       why: 'the pass has been inside one await long enough to have stopped looking, and ' +
            'health crossed the withdraw threshold while it was not. The walk is cancelled ' +
@@ -9248,10 +9706,9 @@ export class Autopilot {
           // it stood down because an errand owned the character — three different faults
           // with three different fixes, all rendering identically as "died travelling".
           //
-          // `interrupted_this_pass` is the one that matters: the watchdog fires at most
-          // once per pass, so a death in a pass it already interrupted means the
-          // interrupt was not enough, while a death in a pass it never touched means it
-          // never got the chance.
+          // `interrupted_this_pass` is the one that matters: if a death happens in a pass
+          // the watchdog already interrupted (including any rate-limited repeats), the
+          // interrupt was not enough; if it never touched the pass, it never got the chance.
           // WHICH ARM OF THE TRAVEL EXPERIMENT WAS RUNNING, or null if the character was
           // not on a journey. This is the numerator: deaths are the only outcome that
           // experiment is judged on, because the mechanism it is testing is expected to
@@ -9268,6 +9725,7 @@ export class Autopilot {
             return {
               running: true,
               interrupts_total: w.interrupts ?? 0,
+              repeat_interrupts: w.repeatInterrupts ?? 0,
               interrupted_this_pass: w.interruptedPass === this.passes,
               frames_written: w.frames ?? 0,
               // How long the pass that died had been inside one await. This is the
@@ -9477,7 +9935,9 @@ export class Autopilot {
       console.error(`[autopilot] ${this.policy?.agent ?? '?'} escapeUnderworld result: left=${e.left} reason=${e.reason ?? 'none'} tried=${JSON.stringify(e.tried ?? [])}`);
       // If the legacy escape failed with a pathfinding error, try a
       // direct walk to the nearest portal, bypassing the pathfinder.
-      if (!e.left) {
+      // A cancelled composite is over. Starting the direct escape fallback here would
+      // capture the new movement generation in the same blind pass and undo the watchdog.
+      if (!e.left && !e.cancelled) {
         const pathFail = (e.tried ?? []).some(t => /kept ending up|never got onto/.test(t.why ?? ''));
         if (pathFail) {
           try {
@@ -10267,6 +10727,12 @@ export class Autopilot {
       // no meeting.
       if (!this.sanctuary()) {
         const went = await this.townTripIfCornered().catch(() => false);
+        if (this.retreatCancelledPass === this.passes) {
+          this.note('unarmed refuge movement was cancelled — waiting for a fresh pass', {
+            why: 'do not replace a player or operator cancellation with a settle, nudge or second walk',
+          });
+          return HANDLED;
+        }
         this.note('unarmed and in a room that spawns — leaving to regain mana', {
           mana: this.s.client?.vitals?.()?.mana?.value ?? null,
           needs: 15, went_to_town: !!went,
@@ -10649,7 +11115,14 @@ export class Autopilot {
           why: 'a freeze recovers no health and leaves us exactly where we were, in reach ' +
                'of everything that put us here. Only distance changes this fight' });
         this.doing = 'travelling';
-        if (await this.townTripIfCornered().catch(() => false)) return HANDLED;
+        const went = await this.townTripIfCornered().catch(() => false);
+        if (went) return HANDLED;
+        if (this.retreatCancelledPass === this.passes) {
+          this.note('open-field refuge movement was cancelled — waiting for a fresh pass', {
+            why: 'do not replace a player or operator cancellation with a wall or second walk',
+          });
+          return HANDLED;
+        }
 
         // AND WHEN THERE IS NO TOWN TO RUN TO, IT STILL DOES NOT FREEZE. REVERSED
         // 2026-08-21, by measurement, and the history is kept because it is the argument.
@@ -10937,6 +11410,12 @@ export class Autopilot {
     // exhausted characters walking instead of resting.
     const vigorNow2 = vigorOf(v);
     const restCeiling = REST_VIGOR_CAP * skills.VIGOR_MAX;      // 0.4 * 200 = 80
+    if (this.retreatCancelledPass === this.passes) {
+      this.note('recovery movement was cancelled — waiting for a fresh pass', {
+        why: 'the room, players and health must be observed again before any replacement route',
+      });
+      return HANDLED;
+    }
     if (hurt && combatZone && !sheltered && !testing && !this.hold &&
         vigorNow2 != null && vigorNow2 > restCeiling) {
       this.note('not waiting this out — moving to somewhere I can heal', {
@@ -11037,35 +11516,14 @@ export class Autopilot {
           room: s.world?.room?.num ?? null, via: 'leave-to-recover',
         });
       }
-      const out = ways.sort((a, b) => (a.steps_away ?? 999) - (b.steps_away ?? 999))[0];
-      this.note('leaving the room to recover safely', {
+      this.note('running to a refuge to recover safely', {
         health: hp === null ? null : Math.round(hp * 100) + '%', vigor: vigorNow2,
-        monsters_in_room: hostiles.length, leaving_via: out?.to_name ?? 'nothing reachable',
+        monsters_in_room: hostiles.length,
         retreat_below: Math.round(this.policy.restBelow * 100) + '%',
         why: 'health is below the configured recovery line and there is no proven wall here. ' +
-             'Resting where a monster can reach us is unsafe; vigor alone never triggers this trip',
-        then: 'recover health outside the monster room, then return' });
-      // TRY EVERY WAY OUT, AND THEN STOP BEING SURROUNDED.
-      //
-      // THIS IS WHAT IS KILLING THE FLEET. Of 37 deaths since the reach model went in,
-      // 33 decided to leave and 13 recorded "could not leave" — and every single death
-      // was slow attrition: median -0.03 health per second, nothing worse than -0.22.
-      // Nobody was killed in a fight. They chose correctly, failed to get out, and then
-      // bled to death over minutes at 10-12 attackers, standing exactly where they were.
-      //
-      // Two things were wrong here and both are one-liners:
-      //
-      //   ONE EXIT. This picked the nearest and tried it once, so the boundary-wide
-      //   candidates from world.exits() were never used. leaveViaAny walks the whole
-      //   wall and every other exit besides.
-      //
-      //   NO FALLBACK. When the walk out failed it gave up and returned, and the pass
-      //   ended with the character still standing in the room. But a walk failing while
-      //   surrounded is the EXPECTED case — that is what being surrounded does — and
-      //   there is already a tool for it: a reconnect hands back the entry grace period,
-      //   so we come back with about one of them aware of us instead of twelve. It was
-      //   only ever wired to stepping off a safe spot, which is the same problem in a
-      //   politer setting.
+             'Resting where a monster can reach us is unsafe; an arbitrary adjacent room can ' +
+             'spawn the same monsters and send us straight back here',
+        then: 'keep one guarded route aimed at a real refuge, recover there, then return' });
       // A CONFINED CHARACTER WITH NO PERMITTED EXIT TAKES A WALL, IT DOES NOT STAND THERE.
       //
       // The operator's rule, and it is a better one than "leave the room": a genuine safe
@@ -11074,11 +11532,9 @@ export class Autopilot {
       // walking is only the answer when there is no wall to be had. So when the
       // confinement closes every exit, the fallback is the spot, not the bleeding.
       //
-      // This is also where my own first patch was wrong and would have leaked: `tryOut`
-      // below falls back to `s.world.exits()` — EVERY exit — whenever `ways` is empty, so
-      // filtering the list down to nothing did not close the door, it opened all of them.
-      // Both the primary list and that fallback have to be filtered, which is why the
-      // confinement is applied inside `tryOut` rather than only to `ways`.
+      // The immediate exits are inspected only to enforce that special case. Unconfined
+      // recovery no longer chooses among them; it keeps one refuge objective across every
+      // intermediate room, and guardedRetreatTravel checks every hop when confined.
       if (confineOut?.length && !ways.length) {
         const took = await this.takeSafeSpot(
           'confined to this room and hurt — a wall is the way to rest here', null,
@@ -11095,58 +11551,82 @@ export class Autopilot {
       }
 
       const tryOut = async () => {
-        let cands = ways.length ? ways : (s.world?.exits() || []).filter(e => e.to != null);
-        // The fallback above is the whole-room exit list, so re-apply the confinement to it.
-        if (confineOut?.length)
-          cands = cands.filter(e => confineOut.map(Number).includes(Number(e.to)));
-        if (!cands.length) return { left: false, reason: 'no exit from this room at all' };
-        return await s.leaveViaAny(cands).catch(e => ({ left: false, reason: e.message }));
+        // DO NOT LET EACH HOSTILE ROOM CHOOSE THE OTHER ONE AS ITS NEAREST EXIT.
+        //
+        // That made a perfectly deterministic 562 -> 552 -> 562 loop: leaving either
+        // room succeeded, so every individual pass looked healthy, but neither landing
+        // was a place where resting was safe. Aim the first movement at the refuge and
+        // keep that destination through every intermediate room instead.
+        const retreat = await this.retreatToSafety(
+          {
+            because: 'health is below the recovery line in a room that cannot be rested in',
+            health: hp, vigor: vigorNow2, monsters_in_room: hostiles.length,
+          },
+          // Low vigor made the old one-room escape attractive for a reason. Keep the
+          // replacement bounded while admitting the 4-hop Brownestone route from 552.
+          { maxHops: 6 },
+        ).catch(e => ({ arrived: false, reason: e.message }));
+        return {
+          left: !!retreat?.arrived,
+          reason: retreat?.reason || retreat?.why ||
+                  (retreat?.fell_back ? 'the refuge route failed and recovery fell back to a local wall'
+                                          : 'could not reach a refuge'),
+          retreat,
+        };
       };
       const gotOut = async (r) => {
         this.tally.fled_rooms = (this.tally.fled_rooms || 0) + 1;
-        this.fledInARow = (this.fledInARow || 0) + 1;
-        await skills.restUntil(s, { health: 0.95, vigor: REST_VIGOR_CAP, maxSeconds: 90 })
-                    .catch(() => {});
-        await this.cookSomething('got out of a bad room and need food before going back')
-                  .catch(() => {});
-        this.progress('left a room I could neither fight nor rest in');
-        // FLEEING TWICE IS A SUPPLY PROBLEM WEARING A TACTICS PROBLEM'S CLOTHES.
-        //
-        // Leaving one bad room is a decision. Leaving three is a character that cannot
-        // fight anywhere, and walking to a fourth wilderness room will not change that.
-        // Animal proved it: 168 flees and 2 kills, because the supervisor graduates a
-        // pair with fight_above_vigor 180 and a character at the resting cap of 80 can
-        // never meet it — so it refused every fight, fled every room, earned nothing,
-        // and therefore never got the food that would have let it fight. The loop is
-        // closed and nothing inside the wilderness opens it.
-        //
-        // Town does open it: it is a sanctuary, so resting is legal and safe, and it
-        // has counters that sell bread — which is the only route past 80 vigor.
-        //
-        // The exemption is for a character that is merely having a bad room: plenty of
-        // vigor and food in the pack means the fleeing is tactical, not structural, and
-        // sending it to town would be throwing away a working session.
-        await this.townTripIfCornered().catch(() => {});
+        // retreatToSafety clears the consecutive-flee counter only after it reaches a
+        // stable refuge. Do not increment it again here, and do not start a second town
+        // journey from inside the completed one. The next ordinary pass owns resting,
+        // eating and returning, with the current room freshly observed.
+        this.progress('reached a refuge from a room I could neither fight nor rest in');
         return r;
+      };
+      const retreatEndedPass = (r) => {
+        const cancelledByOwner = r.retreat?.cancelled_for_player ||
+          r.retreat?.cancelled_externally ||
+          ['player', 'external'].includes(r.retreat?.cancellation_kind);
+        if (r.retreat?.cancelled && (!r.retreat?.retreat_guard || cancelledByOwner)) {
+          this.retreatCancelledPass = this.passes;
+          this.note('refuge movement was cancelled — not re-arming it in this pass', {
+            why: r.reason,
+            next: 'observe players, health and position again on the next pass',
+          });
+          return true;
+        }
+        // retreatToSafety already took the best local wall after its route guard failed.
+        // Reconnecting here would throw that fallback away and wake the crowd again.
+        if (r.retreat?.fell_back) {
+          this.note('the refuge route failed — keeping the local survival fallback', {
+            why: r.reason,
+            next: 'the next pass observes the wall and retries recovery with fresh state',
+          });
+          return true;
+        }
+        return false;
       };
 
       let r = await tryOut();
       if (r.left) { await gotOut(r); return HANDLED; }
-      this.note('could not leave', { why: r.reason, tried: r.tried?.length ?? 1,
-        next: 'reconnecting to shed the crowd, then trying again' });
+      if (retreatEndedPass(r)) return HANDLED;
+      this.note('could not reach a refuge', { why: r.reason,
+        next: 'reconnecting to shed the crowd, then trying the same refuge again' });
 
-      // Being unable to walk out IS the crowd. Reset it and try once more.
-      const broke = await this.breakOut('cannot walk out of a room that is killing us')
+      // Being unable to set out can still be the crowd. Reset it and retry the SAME
+      // destination; never turn the reconnect into permission to choose a local bounce.
+      const broke = await this.breakOut('cannot set out for a refuge from a room that is killing us')
                               .catch(() => ({ did: false }));
       if (broke.did) {
         r = await tryOut();
         if (r.left) {
-          this.note('got out after reconnecting', { crowd_before: broke.crowd,
+          this.note('reached a refuge after reconnecting', { crowd_before: broke.crowd,
             why: 'the walk failed because twelve things were already swinging; after a ' +
                  'reconnect only about one of them has noticed' });
           await gotOut(r);
           return HANDLED;
         }
+        if (retreatEndedPass(r)) return HANDLED;
       }
       // EAT BEFORE DECLARING YOURSELF TRAPPED — IT IS USUALLY THE WHOLE PROBLEM.
       //
@@ -11161,9 +11641,8 @@ export class Autopilot {
       // The comment above this branch already names the loop, in Animal's case: refuse
       // every fight for want of vigor, flee every room, earn nothing, and therefore never
       // get the food that would have let it fight. Eating is the one move that opens it
-      // from inside the wilderness, and the escape path already reaches for it AFTER a
-      // successful walk (`gotOut` calls cookSomething) — which is precisely the case that
-      // did not need it.
+      // from inside the wilderness. After a successful refuge walk the next ordinary
+      // pass can do that safely; this fallback is for the case where no walk succeeded.
       //
       // So try the pack first, and only then say nobody can help. If it eats, the next
       // pass re-decides with more vigor and the fight gate may simply open.
@@ -12002,6 +12481,25 @@ export class Autopilot {
     return HANDLED;
   }
 
+  // FARM COMBAT HAS A DIFFERENT CLOCK FROM THE ONE-SHOT FIGHT TOOL. Keep that policy
+  // at this one legacy call boundary so the PvP and scavenging callers retain their
+  // own round counts.
+  async fightFarmTarget(options) {
+    const requested = this.policy.fightRounds ?? 30;
+    const whole = Math.floor(Number(requested));
+    const rounds = Number.isFinite(whole) && whole >= 1 ? whole : 30;
+    // `rounds` is the ordinary exchange budget. If the server's condition reports and
+    // our health say this exact target is safely finishable, allow at most one more
+    // equal-sized window without returning through the outer keeper loop. The fight
+    // skill turns either an unsafe forecast or this hard cap into an explicit
+    // disengagement, so open-field farming retreats in the same pass.
+    return skills.fight(this.s, {
+      ...options, rounds,
+      sustainWhileSafe: true,
+      maxExtraRounds: rounds,
+    });
+  }
+
   async passFarm(ctx) {
     const { s, c, room, v, hp } = ctx;
     // Before any work is chosen: is there an unfinished journey to pick back up? Ahead of
@@ -12102,7 +12600,8 @@ export class Autopilot {
         const here = (spawns0?.rooms?.[room.num] || []).filter(x => x.huntable);
         const isPrey0 = huntMatcher(spawns0, this.policy.hunt);
         const preyHere = here.some(x => isPrey0(x.creature));
-        const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
+        const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms,
+          { useSafeSpots: this.policy.useSafeSpots });
         const assignmentDenied = this.policy.assignedRoom != null
           ? deniedFarmRooms.get(this.policy.assignedRoom) : null;
         const offAssignment = shouldRelocateToAssignedRoom(this.policy, room, deniedFarmRooms);
@@ -12267,7 +12766,8 @@ export class Autopilot {
             capped.blocked.map(b => `${b.count}x ${b.name}`).join(', ') +
             ' that this keeper will not safely fight';
           (this.cappedRooms ??= new Map()).set(room.num, reason);
-          this.tally.rooms_denied = farmRoomDenials(this.noWallRooms, this.cappedRooms).size;
+          this.tally.rooms_denied = farmRoomDenials(this.noWallRooms, this.cappedRooms,
+            { useSafeSpots: this.policy.useSafeSpots }).size;
           this.note('this room is capped by things we will not fight', {
             room: room?.name, at_cap: `${capped.present}/${capped.cap}`,
             blocked_by: capped.blocked.map(b => `${b.count}x ${b.name} — ${b.why}`),
@@ -12395,7 +12895,7 @@ export class Autopilot {
         // empty pass is not counted at all. Everything that ends a vigil for a real
         // reason still fires: being hit in the spot releases it, the room going capped is
         // handled above, hunger and health run on their own clocks.
-        const waitingInASpot = !!this.hold && this.holdWorks() && !this.sanctuary(room);
+        const waitingInASpot = this.holdingForFight() && this.holdWorks() && !this.sanctuary(room);
         if (waitingInASpot) {
           this.doing = 'waiting';
           if (!this.waitedInSpotAt || Date.now() - this.waitedInSpotAt > 60_000) {
@@ -12524,10 +13024,14 @@ export class Autopilot {
           // refusing to fight or flee is the definition of stuck. Reporting progress
           // in that state is what let the dead zone hide for so long.
           this.doing = 'recovering';
-          if (near.length) {
+          // Re-read the live room here. The similarly named `near` belongs to the
+          // earlier flee/rest pass and is not in this function's scope; more importantly,
+          // a heal attempt can itself consume time in which the room changes.
+          const adjacentHostiles = this.inReachOfUs();
+          if (adjacentHostiles.length) {
             this.note('cornered while too hurt to engage', {
-              health: Math.round(hp * 100) + '%', crowd: near.length,
-              what: near.map(o => c.rsc.get(o.nameRsc)),
+              health: Math.round(hp * 100) + '%', crowd: adjacentHostiles.length,
+              what: adjacentHostiles.map(o => c.rsc.get(o.nameRsc)),
               why: 'cannot rest with something on us and not healthy enough to start a fight' });
             this.noProgress('too hurt to fight and not safe enough to rest');
           } else {
@@ -12655,7 +13159,8 @@ export class Autopilot {
       // a room with no wall we can find is a denial of service for that area: recorded,
       // reported, and left alone until better detection earns it back. Under-using the
       // world is recoverable; the alternative is not.
-      if (this.policy.requireSafeWall !== false && !this.hold && room?.num != null) {
+      if (this.policy.useSafeSpots && this.policy.requireSafeWall !== false &&
+          !this.hold && room?.num != null) {
         // Ask once per room, not once per pass. takeSafeSpot is a scan plus pathfinds,
         // and the answer does not change while we stand here — but it DOES change when
         // the book learns something, so this is per session rather than persisted.
@@ -13096,7 +13601,7 @@ export class Autopilot {
       // to something else resets both advancement flags and throws away the credit for
       // every hit already landed. So this returns without touching foeId, and the
       // healing happens exactly where we stand — behind the wall we already hold.
-      if (this.policy.partner && this.hold) {
+      if (this.policy.partner && this.holdingForFight()) {
         const role = party.roleFor(this.s.name,
           { health: hp, floor: this.policy.partyHealBelow ?? 0.5 });
         if (role === 'heal') {
@@ -13131,7 +13636,7 @@ export class Autopilot {
         V.lowest_at_engage = V.lowest_at_engage == null ? vAt : Math.min(V.lowest_at_engage, vAt);
         if (vAt < WANT_FIGHT_VIGOR) V.below_want++;
       }
-      const holding = !!this.hold;
+      const holding = this.holdingForFight();
       // TELL THE PARTNER WHAT WE ARE ABOUT TO HIT, before hitting it. Declaring after
       // the swing means the first exchange of every fight is two characters choosing
       // independently, which is the one moment convergence is worth most — whoever
@@ -13140,87 +13645,17 @@ export class Autopilot {
       const claimedSwing = swingAt ?? found[0]?.id ?? null;
       if (claimedSwing != null) claimQuarry(this.s.name, room?.num, claimedSwing);
       if (this.policy.partner) party.declareTarget(this.s.name, claimedSwing, engageName);
-      const f = await skills.fight(s, { target: engageName,
-                                        preferId: claimedSwing,
-                                        disengageAt: safe.fleeAt, loot: true,
-                                        holdPosition: holding, reach: REACH,
-                                        weaponPriority: this.weaponPriorityNow() });
+      const f = await this.fightFarmTarget({ target: engageName,
+                                             preferId: claimedSwing,
+                                             disengageAt: safe.fleeAt, loot: true,
+                                             holdPosition: holding, reach: REACH,
+                                             weaponPriority: this.weaponPriorityNow() });
 
-      // NOTHING IN REACH, AND WE ARE NOT GOING TO CHASE IT. fight() refuses to walk
-      // while we are holding, which is correct and leaves the interesting half to us:
-      // a monster that will not come to the wall has to be fetched. Hit it once and
-      // walk back, and the fight happens where we chose.
+      // NOTHING IN REACH. At a held wall, fetch the quarry with the established
+      // hit-and-return pull. In open-field mode, close only a bounded path prefix so
+      // the next pass fights from a fresh observation without chasing indefinitely.
       if (f.out_of_reach) {
-        this.doing = 'pulling';
-        // A DISTANT QUARRY IS STILL ON THE ROAD.
-        //
-        // Decisions run every second. Counting the first decision after a pull as a miss
-        // gave a quarry one or two seconds to cross routes that took us tens of seconds,
-        // then hit it again and repeated the mistake. Wait out a distance-sized follow
-        // window before this pull is allowed to count toward the empirical cliff verdict.
-        let waiting = this.pendingPullWait();
-        // A quarry that despawned, died to somebody else, or left the room did not fail
-        // to follow. Clear the experiment without charging the square and try whatever is
-        // actually here now.
-        if (waiting?.target_id != null && !c.room.objects.get(waiting.target_id)) {
-          this.note('the pulled quarry is gone — not blaming the wall', {
-            target: waiting.target, target_id: waiting.target_id,
-            why: 'a missing quarry cannot establish that the route to this square is blocked' });
-          this.pendingPull = null;
-          releaseQuarry(this.s.name);
-          waiting = null;
-        }
-        if (waiting && !waiting.ready) {
-          if (!this.pendingPull.waitNoted) {
-            this.pendingPull.waitNoted = true;
-            this.note('giving the pulled quarry time to reach the wall', {
-              target: waiting.target, pull_steps: waiting.steps,
-              waiting_ms: waiting.remaining_ms,
-              why: 'one movement square takes about one decision interval; the next pass ' +
-                   'is not evidence that a distant quarry cannot follow' });
-          }
-          this.doing = 'waiting';
-          return HANDLED;
-        }
-        if (waiting?.ready) {
-          this.pendingPull = null;
-          if (this.pullDidNotConvert(f.reason || 'still nothing in reach after the follow window'))
-            return HANDLED;
-        }
-        const pullSpot = this.hold
-          ? { room: this.hold.room, col: this.hold.col, row: this.hold.row }
-          : null;
-        const quarry = found.find(o => o.id === f.nearest?.id) || found[0];
-        const p = quarry ? await this.pull(quarry) : { pulled: false, why: 'nothing to pull' };
-        if (p.pulled && p.back) {
-          const waitMs = this.pullFollowWaitMs(p.steps);
-          this.pendingPull = {
-            at: Date.now(), waitUntil: Date.now() + waitMs,
-            target: p.target, target_id: quarry?.id ?? null, steps: p.steps, wait_ms: waitMs,
-          };
-          // DELIBERATELY NOT progress(). A pull is not an achievement, it is an attempt,
-          // and calling it progress is what kept the stall detector quiet through hours
-          // of this. Contact is the achievement, and the fight path below reports that.
-          this.note('waiting for it at the wall', {
-            target: p.target, pull_attempt: (this.pullsWithoutContact ?? 0) + 1,
-            follow_window_ms: waitMs, pull_steps: p.steps,
-            why: 'it has been hit and is following; only after its distance-sized follow ' +
-                 'window expires can this pull count against the square' });
-        } else {
-          // Fetching failed before a swing. One moving target or refused step is not a
-          // property of the wall; retire it only after repeated misses from this square.
-          const failed = this.pullAttemptFailed(pullSpot, p.why || 'the pull did not complete');
-          this.note('could not bring it to the wall', {
-            why: p.why, target: p.target, attempt: failed.attempt, of: failed.limit,
-            note: failed.retired
-              ? 'repeated failures excluded this square in this room'
-              : 'keeping the wall and trying again; a single failed approach proves nothing' });
-          if (failed.retired && this.hold)
-            this.releaseHold('repeated pull attempts could not swing from here');
-          this.noProgress(failed.retired
-            ? 'holding a spot repeated pull attempts could not use'
-            : 'a pull attempt failed transiently; retrying from the same wall');
-        }
+        await this.handleOutOfReachQuarry(f, found);
         return HANDLED;
       }
       // We got a fight. Whatever we are standing on can be fought from, so the cliff
@@ -16150,7 +16585,8 @@ export class Autopilot {
     const spawns = loadSpawns(SPAWN_FILE);
     if (!spawns) return [];
     const ceiling = this.threatCeiling();
-    const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
+    const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms,
+      { useSafeSpots: this.policy.useSafeSpots });
     // Do not truncate before looking for the assignment.  Ranking is global, whereas
     // assignedRoom is an operator/fleet decision and must be allowed to outrank it.
     const rooms = huntingGrounds(spawns, want,
@@ -16382,13 +16818,17 @@ export class Autopilot {
   // A configured quiet retreat wins for its own rooms, then the nearest CITY_INNS entry
   // the router will accept. If travel cannot get us there we fall back to the local
   // withdraw, because a wall we can reach beats a refuge we cannot.
-  async guardedRetreatTravel(room) {
-    // A route that has stopped changing room or square is not an escape. The ordinary
-    // pass watchdog cannot safely solve this by firing repeatedly: the first interrupt
-    // is what gets us INTO the retreat branch, and cancelling every walk merely because
-    // health is already below fleeAt would also cancel a healthy escape. Guard this
-    // specific journey on actual movement progress instead.
+  async guardedEmergencyMovement(work, {
+    room = null,
+    why = 'emergency movement made no room or square progress',
+    cancelWhy = why,
+  } = {}) {
     const s = this.s;
+    // Composite movement helpers do not all preserve a cancelled leaf result. Capture
+    // the Session generation as well, so an operator/newer owner remains terminal even
+    // when (for example) takeSafeSpot turns the cancelled walk into `took:false` and
+    // withdraw consequently returns only `withdrawn:false`.
+    const movementGeneration = s.movementGeneration;
     const noProgressMs = this.retreatNoProgressMs ?? 3_000;
     const guardMs = this.retreatGuardMs ?? 250;
     const position = () => {
@@ -16396,24 +16836,46 @@ export class Autopilot {
       return `${s.world?.room?.num ?? '?'}:${me?.col ?? '?'}:${me?.row ?? '?'}`;
     };
     let lastPosition = position();
+    // "Moving" and "making progress" are not the same thing. A two-square bounce
+    // changes position on every sample and therefore kept the old clock fresh for ever,
+    // even though the retreat was no closer to leaving the room. A genuinely advancing
+    // route keeps discovering new room/square positions; a short cycle only revisits
+    // positions it has already spent. Count only the former as progress for this scoped
+    // guard. The set lives for one bounded emergency operation and is discarded with it.
+    const visitedPositions = new Set([lastPosition]);
     let lastProgressAt = Date.now();
     let guard = null;
+    // Scoped ownership token: the ordinary low-health watchdog must not cancel the
+    // escape it just handed control to. The token is disarmed before the local guard
+    // cancels, so a mover that ignores that cancellation becomes watchdog-visible again.
+    const marker = {
+      active: true,
+      room: room == null ? null : Number(room),
+      since: Date.now(),
+      cancellationKind: null,
+    };
+    this.emergencyRetreat = marker;
     const timer = setInterval(() => {
       const now = Date.now();
       const currentPosition = position();
       if (currentPosition !== lastPosition) {
         lastPosition = currentPosition;
-        lastProgressAt = now;
-        return;
+        if (!visitedPositions.has(currentPosition)) {
+          visitedPositions.add(currentPosition);
+          lastProgressAt = now;
+          return;
+        }
+        // A revisited position may be one side of A<->B. Do not return here: once the
+        // novel-progress window has elapsed, this very sample should trip the guard.
       }
       if (now - lastProgressAt < noProgressMs || guard) return;
       const hp = s.client?.vitals?.()?.health;
       // This guard is itself the last-resort escape path, so diagnostic
-      // enrichment must never prevent it from cancelling a stuck route.
+      // enrichment must never prevent it from cancelling a stuck movement.
       let maxHit = null;
       try { maxHit = this.safety()?.maxHit ?? null; } catch { /* optional telemetry */ }
       guard = {
-        why: 'retreat route made no room or square progress',
+        why,
         stalled_ms: now - lastProgressAt,
         room: s.world?.room?.num ?? null,
         col: s.client?.self?.col ?? null,
@@ -16423,25 +16885,158 @@ export class Autopilot {
         one_hit_reserve: maxHit != null && hp?.value != null
           ? hp.value <= maxHit : null,
       };
-      try { s.cancelMovement?.(); } catch { /* the failed result below is enough */ }
+      marker.cancellationKind ??= 'progress';
+      marker.active = false;
+      try { s.cancelMovement?.(null, cancelWhy); } catch { /* the result below is enough */ }
     }, guardMs);
     try {
-      // An emergency retreat must keep moving toward the sanctuary. Ordinary journeys
-      // may deliberately hold an intermediate wall for up to 90 seconds, but the retreat
-      // guard would correctly see that as no route progress and cancel it. Keep those
-      // experimental holds out of this last-resort path rather than teaching the guard
-      // to ignore a long period in which a genuinely blocked exit could kill us.
-      const result = await this.travel(room, { reason: 'retreat', holdBetweenRooms: false });
-      return { ...(result ?? {}), retreat_guard: guard };
+      let result;
+      try {
+        result = await work();
+      } catch (error) {
+        result = {
+          arrived: false,
+          error: String(error),
+          reason: error?.message ?? String(error),
+        };
+      }
+      // A cancellation not issued by our position guard or player watchdog came from
+      // the operator/a newer movement owner. It is terminal to this stale decision.
+      // Check both the leaf result and the generation: nested fallback helpers may have
+      // already translated `{cancelled:true}` into an ordinary unsuccessful result.
+      let generationCancelled = false;
+      if (movementGeneration != null) {
+        try {
+          generationCancelled = typeof s.movementWasCancelled === 'function'
+            ? !!s.movementWasCancelled(movementGeneration)
+            : s.movementGeneration !== movementGeneration;
+        } catch { /* the explicit result below is still usable */ }
+      }
+      if ((result?.cancelled || generationCancelled) && marker.cancellationKind == null)
+        marker.cancellationKind = 'external';
+      return {
+        result,
+        retreat_guard: guard,
+        cancellation_kind: marker.cancellationKind,
+      };
     } finally {
       clearInterval(timer);
+      if (this.emergencyRetreat === marker) this.emergencyRetreat = null;
     }
   }
 
-  async retreatToSafety(why = {}) {
+  async guardedRetreatTravel(room, opts = {}) {
+    // A route that has stopped changing room or square is not an escape. The ordinary
+    // pass watchdog cannot safely solve this by firing repeatedly: the first interrupt
+    // is what gets us INTO the retreat branch, and cancelling every walk merely because
+    // health is already below fleeAt would also cancel a healthy escape. Guard this
+    // specific journey on actual movement progress instead.
+    const s = this.s;
+    // A permitted destination is not enough: a route can leave the confinement and
+    // re-enter it. Emergency travel gets the same operator boundary on every hop.
+    const confine = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms : null;
+    if (confine?.length) {
+      const allowed = new Set(confine.map(Number));
+      let route = null;
+      try { route = s.world?.route?.(room) ?? null; } catch { route = null; }
+      const outside = (route?.hops ?? [])
+        .map(h => Number(h?.to ?? h))
+        .filter(to => Number.isFinite(to) && !allowed.has(to));
+      if (outside.length) {
+        this.note('retreat route refused by the confinement', {
+          wanted: Number(room), confined_to: [...allowed], outside,
+          why: 'the refuge is permitted but reaching it would cross rooms the operator excluded',
+        });
+        recordEvent(this.who(), 'confinement_refused_travel', {
+          wanted: Number(room), confined_to: [...allowed], outside,
+          room: s.world?.room?.num ?? null, via: 'guarded-retreat',
+        });
+        return { arrived: false, refused: true, confined: true,
+                 reason: `retreat route crosses room ${outside[0]} outside the confinement` };
+      }
+    }
+    // An emergency retreat must keep moving toward the sanctuary. Ordinary journeys
+    // may deliberately hold an intermediate wall for up to 90 seconds, but the retreat
+    // guard would correctly see that as no route progress and cancel it. Keep those
+    // experimental holds out of this last-resort path rather than teaching the guard
+    // to ignore a long period in which a genuinely blocked exit could kill us.
+    const guarded = await this.guardedEmergencyMovement(
+      () => this.travel(room, {
+        ...opts,
+        reason: opts.reason ?? 'retreat',
+        holdBetweenRooms: false,
+        // Session.travel has a separate unconditional wall-heal after each hop.
+        // At low health that can sit for 90 seconds, which the three-second escape
+        // guard correctly reads as no route progress and cancels. Recovery belongs
+        // at the destination; do not create an intentional stall inside the route.
+        healBetweenRooms: false,
+        ...(confine?.length ? { allowedRooms: confine.map(Number) } : {}),
+      }),
+      {
+        room,
+        why: 'retreat route made no room or square progress',
+        cancelWhy: 'the guarded retreat route made no room or square progress',
+      },
+    );
+    return {
+      ...(guarded.result ?? {}),
+      retreat_guard: guarded.retreat_guard,
+      cancellation_kind: guarded.cancellation_kind,
+      cancelled_for_player: guarded.cancellation_kind === 'player',
+      cancelled_externally: guarded.cancellation_kind === 'external',
+    };
+  }
+
+  async guardedRetreatFallback(threats) {
+    const guarded = await this.guardedEmergencyMovement(
+      () => this.withdraw(threats),
+      {
+        room: this.s.world?.room?.num ?? null,
+        why: 'retreat fallback made no room or square progress',
+        cancelWhy: 'the guarded retreat fallback made no room or square progress',
+      },
+    );
+    const terminalKind = ['player', 'external'].includes(guarded.cancellation_kind);
+    return {
+      ...(guarded.result ?? {}),
+      retreat_guard: guarded.retreat_guard,
+      cancellation_kind: guarded.cancellation_kind,
+      // takeSafeSpot historically turns a cancelled child walk into `took:false`, and
+      // withdraw then returns `withdrawn:false`. The scoped marker is therefore the
+      // authoritative evidence that a player/operator took ownership, even when the
+      // nested helper no longer carries its original `cancelled` bit.
+      ...(terminalKind ? {
+        cancelled: true,
+        cancelled_for_player: guarded.cancellation_kind === 'player',
+        cancelled_externally: guarded.cancellation_kind === 'external',
+      } : {}),
+    };
+  }
+
+  async retreatToSafety(why = {}, { maxHops = null } = {}) {
     const s = this.s, c = s.client;
     const here = s.world?.room?.num ?? null;
     const inns = Object.entries(CITY_INNS).map(([city, v]) => ({ city, ...v }));
+    const finishFallback = (fallback = {}, extra = {}) => {
+      const kind = fallback?.cancellation_kind ?? null;
+      const terminalCancellation = ['player', 'external'].includes(kind) ||
+        (!!fallback?.cancelled && !fallback?.retreat_guard);
+      if (terminalCancellation) this.retreatCancelledPass = this.passes;
+      return {
+        arrived: false,
+        fell_back: !terminalCancellation && fallback?.withdrawn === true,
+        fallback_attempted: true,
+        ...extra,
+        ...fallback,
+        ...(terminalCancellation ? {
+          arrived: false,
+          fell_back: false,
+          cancelled: true,
+          cancelled_for_player: kind === 'player' || !!fallback?.cancelled_for_player,
+          cancelled_externally: kind === 'external' || !!fallback?.cancelled_externally,
+        } : {}),
+      };
+    };
 
     // A WORKING SAFE SPOT IS ALREADY SAFETY, AND RUNNING FROM ONE IS THE WORST MOVE
     // AVAILABLE. This guard lived inside withdraw(), and swapping callers over to this
@@ -16490,7 +17085,8 @@ export class Autopilot {
     // last and is skipped.
     const rankedInns = inns
       .map(i => ({ ...i, hops: s.world?.route?.(i.inn)?.hops?.length ?? Infinity }))
-      .filter(i => Number.isFinite(i.hops))
+      .filter(i => Number.isFinite(i.hops) &&
+        (maxHops == null || i.hops <= maxHops))
       .sort((a, b) => a.hops - b.hops)
       .map(i => ({ ...i, preferred: false, safety: 'true sanctuary', playerSafe: true }));
     // This explicit exception wins over a farther inn. From upstairs the route is
@@ -16534,12 +17130,15 @@ export class Autopilot {
 
     if (!ranked.length) {
       this.note('no refuge is routable from here — falling back to a local wall', why);
-      await this.withdraw(this.inReachOfUs() ?? []).catch(() => {});
-      return { arrived: false, fell_back: true, no_route: true };
+      const fallback = await this.guardedRetreatFallback(this.inReachOfUs() ?? [])
+        .catch(e => ({ error: String(e) }));
+      return finishFallback(fallback, { no_route: true });
     }
-    // Two attempts, not six. A retreat that keeps trying is a character walking while
-    // being hit; if the two nearest both refuse, the wall here is the better bet.
-    for (const dest of ranked.slice(0, 2)) {
+    // Two attempts for an ordinary fit retreat, but only one for a low-vigor caller
+    // carrying a hop budget. Giving each destination a fresh budget would turn a
+    // six-hop ceiling into twelve exposed hops in one stale pass.
+    const attempts = maxHops == null ? ranked.slice(0, 2) : ranked.slice(0, 1);
+    for (const dest of attempts) {
       this.note('running all the way to safety', {
         to: dest.innName, room: dest.inn, hops: dest.hops, ...why,
         safety: dest.safety,
@@ -16553,13 +17152,34 @@ export class Autopilot {
                          ? 'crossing the Castle Victoria door leaves every monster behind'
                          : 'an inn is a sanctuary and ends the fight'),
       });
-      const r = await this.guardedRetreatTravel(dest.inn)
+      const r = await this.guardedRetreatTravel(dest.inn,
+        maxHops == null ? {} : { maxHops })
         .catch(e => ({ arrived: false, error: String(e) }));
       if (r?.arrived) {
         this.progress(`reached ${dest.preferred ? 'monster-free retreat' : 'safety'} at ${dest.innName}`);
         this.fledInARow = 0;
         return { arrived: true, at: dest.innName, room: dest.inn, hops: dest.hops,
                  preferred: dest.preferred, player_safe: dest.playerSafe };
+      }
+      const terminalCancellation = r?.cancelled && (
+        r.cancelled_for_player || r.cancelled_externally ||
+        ['player', 'external'].includes(r.cancellation_kind) || !r.retreat_guard
+      );
+      if (terminalCancellation) {
+        this.retreatCancelledPass = this.passes;
+        this.note('retreat was cancelled — not choosing another refuge in this pass', {
+          to: dest.innName, room: dest.inn, reason: r.reason ?? null,
+          cancellation_kind: r.cancellation_kind ?? null,
+          why: 'a player, operator or newer movement owner is a decision boundary, not ' +
+               'a failed route to work around with another movement command',
+        });
+        return {
+          arrived: false, cancelled: true,
+          cancelled_for_player: !!r.cancelled_for_player,
+          cancelled_externally: !!r.cancelled_externally,
+          cancellation_kind: r.cancellation_kind ?? null,
+          reason: r.reason ?? 'movement cancelled',
+        };
       }
       if (r?.retreat_guard) {
         this.note('aborted a retreat route that was not moving', {
@@ -16569,18 +17189,30 @@ export class Autopilot {
         });
         break;
       }
+      if (r?.confined) {
+        this.note('retreat replan was refused by the confinement', {
+          to: dest.innName, room: dest.inn,
+          outside: r.outside_rooms ?? null, reason: r.reason ?? null,
+          consequence: 'fall back to a local wall without trying another multihop journey',
+        });
+        break;
+      }
     }
     // Nothing reachable. A wall here is better than nothing, so fall through to the
     // behaviour that at least gets our back covered.
     this.note('could not reach any refuge — falling back to a local wall', why);
-    await this.withdraw(this.inReachOfUs() ?? []).catch(() => {});
-    return { arrived: false, fell_back: true };
+    const fallback = await this.guardedRetreatFallback(this.inReachOfUs() ?? [])
+      .catch(e => ({ error: String(e) }));
+    return finishFallback(fallback);
   }
 
   async withdraw(threats) {
     const s = this.s, c = s.client;
     const me0 = c.self, geo0 = s.world?.geometry;
-    if (!me0 || !geo0) { this.note('cannot withdraw', { why: 'no geometry' }); return; }
+    if (!me0 || !geo0) {
+      this.note('cannot withdraw', { why: 'no geometry' });
+      return { withdrawn: false, declined: 'no geometry' };
+    }
 
     // A WALL WE ALREADY HOLD IS NOT SOMETHING TO RUN FROM. We normally reach here
     // because the spot stopped working, but the rest of the loop can send us here
@@ -16591,7 +17223,7 @@ export class Autopilot {
         spot: { col: this.hold.col, row: this.hold.row }, threats: threats.length,
         why: 'this square has held under attack, so nothing here can land a blow — walking ' +
              'off it to gain distance would trade the one thing keeping us alive for space' });
-      return;
+      return { withdrawn: true, held: true };
     }
 
     // Somewhere defensible to run TO. Aim it at whatever is hitting us so the square
@@ -16606,7 +17238,7 @@ export class Autopilot {
         to: { col: this.hold?.col, row: this.hold?.row }, threats: threats.length,
         why: 'a spot that holds ends the fight on our terms and makes the logoff-and-turn ' +
              'heal available, which open ground does not' });
-      return;
+      return { withdrawn: true, spot: true };
     }
 
     // NO CORNER, AND NO PERSON — SO THERE IS NOTHING HERE WORTH WALKING AWAY FOR.
