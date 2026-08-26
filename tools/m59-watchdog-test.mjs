@@ -4,8 +4,10 @@
 //   node tools/m59-watchdog-test.mjs
 //
 // Offline, against a fake host. What is pinned here is the SEPARATION the guard rests
-// on: it observes on its own clock, and the only thing it ever DOES is cancel movement,
-// once, when health has crossed the withdraw line during a blocked pass. Everything
+// on: it observes on its own clock, and the only thing it ever DOES is cancel movement
+// when health has crossed the withdraw line during a blocked pass. A same-pass repeat is
+// rate-limited but deliberate: it invalidates a fallback that re-armed after the first
+// cancel. Everything
 // else is somebody else's decision.
 //
 // It exists because the guard used to be a method on the 13,000-line keeper, reachable
@@ -48,17 +50,80 @@ function host({ hp = 20, max = 20, blockedMs = 0, inert = false, doing = 'travel
 
 console.log('the handbrake — the only thing it actually does');
 {
-  const h = host({ hp: 5, blockedMs: 9000 });           // 25%, below fleeAt 0.4
+  const h = host({ hp: 5, blockedMs: 9000, doing: 'pulling' }); // 25%, below fleeAt 0.4
   wd.tick(h);
   ok('a blocked pass with health under the withdraw line is cancelled', h.cancels === 1);
   ok('and it says so in a note a person can find',
      h.notes.some(n => /WATCHDOG/.test(n.what)));
   wd.tick(h); wd.tick(h);
-  ok('ONCE per blocked pass, not once per tick', h.cancels === 1,
-     'cancelling twice does nothing and the note would repeat every 500ms');
+  ok('not once per tick', h.cancels === 1,
+     'the repeat is rate limited rather than firing every 500ms');
+  h.watch.lastInterruptAt -= wd.WATCHDOG_REPEAT_MS;
+  h.watch.pulses = [
+    { at: Date.now() - 1200, room: 587, col: 4, row: 4 },
+    { at: Date.now() - 600, room: 587, col: 5, row: 4 },
+    { at: Date.now(), room: 587, col: 4, row: 4 },
+  ];
+  wd.tick(h);
+  ok('but a same-activity local bounce is cancelled again after the grace interval',
+     h.cancels === 2 && h.watch.repeatInterrupts === 1,
+     'fresh post-interrupt pulses prove the nested movement is still penned in');
   h.passes = 2;
   wd.tick(h);
-  ok('a NEW blocked pass may be interrupted again', h.cancels === 2);
+  ok('a NEW blocked pass may be interrupted again', h.cancels === 3);
+}
+
+console.log('\na repeat cannot cancel the survival response to the first interrupt');
+{
+  const changed = host({ hp: 5, blockedMs: 9000, doing: 'pulling' });
+  wd.tick(changed);
+  changed.doing = 'travelling';
+  changed.watch.lastInterruptAt -= wd.WATCHDOG_REPEAT_MS;
+  changed.watch.pulses = [
+    { at: Date.now() - 1200, room: 587, col: 4, row: 4 },
+    { at: Date.now() - 600, room: 587, col: 4, row: 4 },
+    { at: Date.now(), room: 587, col: 4, row: 4 },
+  ];
+  wd.tick(changed);
+  ok('changing into the survival retreat is not treated as the old leaf re-arming',
+     changed.cancels === 1 && changed.watch.repeatInterrupts === 0);
+
+  const moving = host({ hp: 5, blockedMs: 9000, doing: 'pulling' });
+  wd.tick(moving);
+  moving.watch.lastInterruptAt -= wd.WATCHDOG_REPEAT_MS;
+  moving.watch.pulses = [
+    { at: Date.now() - 1200, room: 587, col: 4, row: 4 },
+    { at: Date.now() - 600, room: 587, col: 5, row: 4 },
+    { at: Date.now(), room: 587, col: 6, row: 4 },
+  ];
+  wd.tick(moving);
+  ok('a same-activity escape making real square progress is not cancelled again',
+     moving.cancels === 1 && moving.watch.repeatInterrupts === 0);
+}
+
+console.log('\na guarded emergency retreat owns its own progress cancellation');
+{
+  const guarded = host({ hp: 5, blockedMs: 9000, doing: 'travelling' });
+  guarded.emergencyRetreat = { active: true, room: 106 };
+  guarded.strangersInReach = () => [];
+  wd.tick(guarded);
+  ok('the ordinary handbrake leaves an active monster-driven refuge route alone',
+     guarded.cancels === 0);
+  guarded.emergencyRetreat.active = false;
+  wd.tick(guarded);
+  ok('once the route guard disarms itself, a still-blocked walk is interruptible again',
+     guarded.cancels === 1);
+
+  const player = host({ hp: 20, blockedMs: 100, doing: 'travelling' });
+  player.emergencyRetreat = { active: true, room: 106 };
+  player.strangersInReach = () => [{ id: 7, name: 'a nearby player' }];
+  wd.tick(player);
+  ok('a nearby player ends even a fresh, healthy guarded retreat immediately',
+     player.cancels === 1 &&
+       player.emergencyRetreat.cancellationKind === 'player');
+  wd.tick(player);
+  ok('the player cancellation is issued once rather than on every watchdog tick',
+     player.cancels === 1);
 }
 
 console.log('\nthe inert rescue — taking a character back from a driver that stopped');
