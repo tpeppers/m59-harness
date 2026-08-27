@@ -153,9 +153,9 @@ export const PROFILES = {
       rest_below: 0.9,
       flee_below: 0.6,
       hold_resume_above: 0.9,
-      // 100 is the lowest HONOURED value - fightFloor() is Math.max(MIN_FIGHT_VIGOR, ...), so
-      // anything below is silently raised and reads as applied while changing nothing. With
-      // an empty larder the keeper falls back to 70 on its own and counts it as supply.
+      // This profile deliberately chooses the keeper's food-backed default. A direct
+      // operator/controller floor can be lower (80 is the reachable no-food cap), but this
+      // confined undead farm keeps the extra opening margin.
       fight_above_vigor: 100,
       // The resting cap. Above it a mid-journey heal can never fire for an unfed fleet.
       travel_hold_vigor: 80,

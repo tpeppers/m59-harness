@@ -14,7 +14,8 @@
 // away the largest advantage in the game — a free heal to full in a monster room.
 import './m59-test-ledger.mjs';        // FIRST — the keeper records casts; see that file
 import { unlinkSync, readFileSync } from 'node:fs';
-import { Autopilot, farmRoomDenials,
+import { Autopilot, HANDLED, effectiveFightVigorFloor,
+         farmRoomDenials, releaseQuarry,
          shouldRelocateToAssignedRoom } from './m59-autopilot.mjs';
 import { SafeSpotBook , shelterAhead, gridDisagreementAt } from './m59-safespots.mjs';
 import { returnToSpot } from './m59-skills.mjs';
@@ -30,15 +31,16 @@ const ok = (label, cond, detail = '') => {
 //
 // Only as much world as observe() reads: where we are, what our health is, and what
 // is standing next to us.
-function world({ col = 5, row = 5, health = 30, max = 30, room = 999 } = {}) {
+function world({ col = 5, row = 5, health = 30, max = 30, vigor = 150, room = 999 } = {}) {
   const objects = new Map();
   const names = new Map([[1, 'giant rat'], [2, 'baby spider'], [3, 'Varuka']]);
   const c = {
     selfId: 99,
     room: { id: room, objects },
     rsc: { get: n => names.get(n) || `rsc${n}` },
-    vitals: () => ({ health: { value: c._health, max }, vigor: { value: 150, max: 200 } }),
+    vitals: () => ({ health: { value: c._health, max }, vigor: { value: c._vigor, max: 200 } }),
     _health: health,
+    _vigor: vigor,
     inventory: [],
     // The real client resolves this out of room contents on every read, which is why
     // a save-game renumber makes a live character look dead. Same shape here.
@@ -63,6 +65,86 @@ function world({ col = 5, row = 5, health = 30, max = 30, room = 999 } = {}) {
 
 const { OF } = await import('./m59-parse.mjs');
 const MONSTER = OF.ATTACKABLE;
+
+console.log('\n--- hostile-room provisioning refusal reads initialized vigor ---');
+{
+  const w = world();
+  w.addMonster(1, 2, 0, MONSTER);
+  const notes = [];
+  const p = Object.create(Autopilot.prototype);
+  p.policy = { vigorCeiling: 200 };
+  p.hold = null;
+  p.s = w.s;
+  p.sanctuary = () => false;
+  p.fightFloor = () => 80;
+  p.notedNoEatingHere = false;
+  p.note = (message, data) => notes.push({ message, data });
+  let result, error = null;
+  try {
+    result = await p.provision(
+      { vigorCeiling: 200 },
+      { vigor: { value: 77, max: 200, scale_max: 200 } },
+    );
+  } catch (caught) {
+    error = caught;
+  }
+  ok('a fresh field keeper refuses to provision near hostiles without throwing',
+     !error && result === false, error ? String(error) : `result=${result}`);
+  ok('the refusal diagnostic reports current vigor and hostile count',
+     notes.length === 1 && notes[0].data?.vigor === 77 &&
+       notes[0].data?.monsters_in_room === 1,
+     JSON.stringify(notes));
+}
+
+console.log('\n--- an empty larder creates food only below the effective fight floor ---');
+{
+  const run = async vigor => {
+    const w = world();
+    const p = Object.create(Autopilot.prototype);
+    p.policy = { vigorCeiling: 200 };
+    p.hold = null;
+    p.s = w.s;
+    p.sanctuary = () => true;
+    p.fightFloor = () => 80;
+    p.larder = () => [];
+    p.notedNoEatingHere = false;
+    p.warnedNoFood = true;
+    p.climbing = true;
+    p.note = () => {};
+    let cooks = 0, reagentReads = 0;
+    p.cookSomething = async () => { cooks++; return true; };
+    p.reagentCount = () => { reagentReads++; return { elderberry: 99, herbs: 99 }; };
+    const vitals = vigor === undefined
+      ? { health: { value: 30, max: 30 } }
+      : { health: { value: 30, max: 30 }, vigor: { value: vigor, max: 200 } };
+    const result = await p.provision({ vigorCeiling: 200 }, vitals);
+    return { result, cooks, reagentReads, climbing: p.climbing,
+             warnedNoFood: p.warnedNoFood };
+  };
+
+  const atFloor = await run(80);
+  ok('empty at 80 with floor 80 and ceiling 200 does not create food',
+     atFloor.result === false && atFloor.cooks === 0 && atFloor.reagentReads === 0 &&
+       atFloor.climbing === false && atFloor.warnedNoFood === false,
+     JSON.stringify(atFloor));
+
+  const belowFloor = await run(79);
+  ok('empty at 79 with floor 80 creates exactly once and handles the pass',
+     belowFloor.result === 'ate' && belowFloor.cooks === 1,
+     JSON.stringify(belowFloor));
+
+  const aboveFloor = await run(110);
+  ok('empty at 110 with floor 80 does not chase the ceiling by creating food',
+     aboveFloor.result === false && aboveFloor.cooks === 0 &&
+       aboveFloor.reagentReads === 0 && aboveFloor.climbing === false,
+     JSON.stringify(aboveFloor));
+
+  const unknown = await run(undefined);
+  ok('unknown vigor fails closed without creating food',
+     unknown.result === false && unknown.cooks === 0 && unknown.reagentReads === 0 &&
+       unknown.climbing === false,
+     JSON.stringify(unknown));
+}
 
 console.log('\n--- safe-spot arrival is confirmed, not predicted ---');
 {
@@ -102,6 +184,67 @@ function keeper(w) {
   const p = new Autopilot(w.s, { mode: 'farm', policy: { hunt: 'giant rat' } });
   p.book = new SafeSpotBook(BOOK);      // never touch the real substrate
   return p;
+}
+
+console.log('\n--- the resting-cap floor allows only measured approach vigor ---');
+{
+  ok('an 80-vigor resting-cap order allows the measured two vigor spent approaching',
+     effectiveFightVigorFloor(80) === 78);
+  ok('food-backed floors and lower deliberate floors remain exact',
+     effectiveFightVigorFloor(100) === 100 && effectiveFightVigorFloor(70) === 70);
+}
+{
+  // Exercise the real farm gate. A unit test of only the threshold helper would miss
+  // passFarm continuing to compare against the unadjusted floor.
+  const w = world({ room: 575, health: 40, max: 40, vigor: 78 });
+  w.s.name = 'approach-vigor-ladder';
+  w.s.need = () => w.c;
+  w.s.pacer = { submit: async (_kind, action) => action() };
+  w.c.requestInventory = () => {};
+  w.c.waitFor = async () => ({ events: [] });
+  w.c.spells = [];
+  w.addMonster(31, 4, 0, MONSTER);
+  w.c.room.objects.get(31).nameRsc = 1;
+
+  const p = keeper(w);
+  Object.assign(p.policy, {
+    hunt: 'giant rat', vigorFloor: 80, clearWeak: false, maxCarry: 50,
+    restBelow: 0.7, fleeBelow: 0.425,
+    useSafeSpots: true, requireSafeWall: false,
+  });
+  p.resumeSuspendedJourney = async () => null;
+  p.provision = async () => false;
+  p.sweepBroken = async () => {};
+  p.sweepGearCondition = async () => {};
+  p.armSelf = async () => true;
+  p.holdWorthwhile = () => ({ hold: false, level: 30, my_level: 40 });
+  p.hold = { room: 575, col: 5, row: 5 };
+  p.maybeTestSpot = () => false;
+  let pulls = 0;
+  p.pull = async () => { pulls++; return { pulled: false, why: 'fixture ends after the farm gate' }; };
+  const wallReasons = [];
+  p.takeSafeSpot = async reason => {
+    wallReasons.push(reason);
+    return { took: false, why: 'fixture does not need a wall' };
+  };
+
+  const ctx = { s: w.s, c: w.c, room: w.s.world.room,
+                v: w.c.vitals(), hp: 1 };
+  const restsBefore = p.tally.rests;
+  let result = null, error = null;
+  try {
+    result = await p.passFarm(ctx);
+  } catch (caught) {
+    error = caught;
+  } finally {
+    releaseQuarry(w.s.name);
+  }
+  ok('the real farm gate does not turn the measured 80-to-78 approach into another rest trip',
+     !error && result === HANDLED && p.tally.rests === restsBefore && pulls === 1 &&
+       wallReasons.length === 0,
+     error ? (error.stack || String(error)) : JSON.stringify({ handled: result === HANDLED,
+                                              restsBefore, restsAfter: p.tally.rests,
+                                              pulls, wallReasons }));
 }
 
 // A pass of time in which we did nothing: the keeper looks, and looks again later.
@@ -806,16 +949,24 @@ console.log('\n--- pairing loot runs ---');
 
 console.log('\n--- nobody starts a fight tired ---');
 {
-  const { STRATEGIES } = await import('./m59-autopilot.mjs');
-  // The floor has to be REACHABLE BY RESTING or it strands everyone without food, and
-  // twenty of twenty-five have none. Resting stops at the rest threshold of 80.
+  const { Autopilot, STRATEGIES } = await import('./m59-autopilot.mjs');
+  // The effective floor has to be REACHABLE BY RESTING or it strands everyone without
+  // food. Resting stops at the rest threshold of 80.
   const REST_STOPS_AT = 80;
   const floors = Object.entries(STRATEGIES)
     .map(([k, v]) => [k, v.vigorFloor ?? v.fightAboveVigor ?? 0]);
   ok('no strategy still permits fighting at any vigor',
-     floors.every(([, f]) => f >= 70), JSON.stringify(floors));
-  ok('the baseline floor is reachable without food', 70 < REST_STOPS_AT,
-     'resting alone stops at 80, so a floor of 70 can always be met by sitting down');
+     floors.every(([, f]) => f >= REST_STOPS_AT), JSON.stringify(floors));
+  const starved = {
+    policy: { strategy: 'baseline' },
+    s: { client: {} },
+    larder: () => [],
+    vigor: { starved_passes: 0 },
+  };
+  const starvedFloor = Autopilot.prototype.fightFloor.call(starved);
+  ok('the empty-larder baseline floor is exactly reachable by resting',
+     starvedFloor === REST_STOPS_AT,
+     `resting stops at ${REST_STOPS_AT}; effective floor is ${starvedFloor}`);
 
   // And the reader that all of this depends on: vigor is {value, scale_max}, not
   // {value, max}, so the old pct() silently returned null and every vigor decision in

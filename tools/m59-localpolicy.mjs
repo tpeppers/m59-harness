@@ -48,11 +48,10 @@ export const VIGOR_MAX = 200;
 // the same number `REST_VIGOR_CAP` (0.4) expresses as a fraction in m59-autopilot.mjs.
 export const REST_VIGOR_CAP = 80;
 
-// Below this a character is fighting exhausted: swinging costs about thirty vigor a
-// minute and vigor sets how fast health comes back between fights, so a character that
-// engages under it breaks off part-way and then recovers slower than if it had waited.
-// m59-autopilot.mjs enforces it as MIN_FIGHT_VIGOR and this file will not let a local
-// override pretend otherwise.
+// The keeper's default when no tactical floor is supplied. Swinging costs about thirty
+// vigor a minute and vigor sets how fast health comes back between fights, so the default
+// is deliberately above the resting cap. An explicit `fight_above_vigor` is nevertheless
+// authoritative: a bounded no-food farm may deliberately choose the reachable cap of 80.
 export const MIN_FIGHT_VIGOR = 100;
 
 // ---------------------------------------------------------------------------
@@ -69,21 +68,12 @@ const KEYS = {
       `${REST_VIGOR_CAP} has to be eaten — a floor over the cap is a claim about the ` +
       `food supply, and with an empty larder the keeper falls back to what resting can ` +
       `deliver and counts it as a supply failure rather than idling for ever`,
-    // TWO INDEPENDENT REMARKS, AND THEY OVERLAP. The keeper's own floor (100) sits ABOVE
-    // the resting cap (80), so the two thresholds are not the ends of a quiet middle band
-    // — there is no value that clears both. Writing this as an either/or made every
-    // setting warn about something, which is the same as warning about nothing. Each
-    // remark is now made on its own terms and a value can collect both.
-    //
-    // Neither is a refusal. Eating past the cap is the entire point of the `wellfed`
-    // strategy and this fleet's best hunters sit between 105 and 148.
+    // This is not a refusal. Eating past the cap is the entire point of the `wellfed`
+    // strategy, but an operator choosing a lower reachable floor is also a real order.
     warn: (v) => [
       v > REST_VIGOR_CAP &&
         `above the resting cap of ${REST_VIGOR_CAP}: reachable only by eating, so this ` +
         `is a bet on the food chain (create food costs 2 elderberry AND 2 herbs)`,
-      v < MIN_FIGHT_VIGOR &&
-        `below MIN_FIGHT_VIGOR (${MIN_FIGHT_VIGOR}); the keeper holds its own floor ` +
-        `while there is food in the larder, so this will not lower it`,
     ].filter(Boolean),
   },
   rest_below: {

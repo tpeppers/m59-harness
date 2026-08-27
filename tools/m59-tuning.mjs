@@ -90,8 +90,8 @@ export const TUNABLES = {
     'the vigor needed before it will stop mid-journey to heal at a wall. Default 80, the ' +
     'resting cap; at 100 it never fires for a fleet that cannot cook' },
   fight_above_vigor: { check: posInt, why:
-    'the vigor floor for STARTING a fight. 100 is the lowest HONOURED value - fightFloor() ' +
-    'is Math.max(MIN_FIGHT_VIGOR, ...), so anything lower reads as applied and changes nothing' },
+    'the explicit vigor floor for STARTING a fight. It overrides the keeper default and strategy ' +
+    'floor; values above the resting cap of 80 require enough food to become reachable' },
   max_carry: { check: posInt, why: 'stacks before it wants a town trip' },
   bank_above: { check: posInt, why: 'purse before it walks to a bank. High means never' },
 };

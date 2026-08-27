@@ -178,7 +178,7 @@ export function openFightReadiness({ healthValue, healthMax, vigor, vigorBar, pr
 
 // An empty larder makes the ordinary fighting floor deliberately fall back to the
 // strongest value rest alone can reach. The open-room gate used its independent 130
-// bar instead, so a starved character was allowed to fight by the general gate at 70
+// bar instead, so a starved character was allowed to fight by the general gate at 80
 // but denied its assigned room by this one at 129 — and answered the supply shortage
 // with a trip across the world. The danger-specific bar can make a fight cheaper; it
 // must not make the already-adjusted, reachable fighting floor impossible again.
@@ -279,6 +279,20 @@ const CROWD_RADIUS = 4;
 // out of 200, so 0.4 is the ceiling of what sitting down can ever buy — asking for
 // more is asking to sit until the timeout expires. The rest comes from food.
 const REST_VIGOR_CAP = 0.4;
+// A bounded four-square open-field approach costs two vigor in the live client. When the
+// operator deliberately sets the fight floor to the exact 80-vigor resting cap, requiring
+// 80 again after those steps makes the order impossible: rest to 80, walk to 78, seek a
+// wall to rest to 80, repeat. This allowance applies only to that exact cap. Lower floors
+// already have transit margin; higher floors are food-backed and stay exact.
+const REST_CAP_APPROACH_VIGOR = 2;
+export function effectiveFightVigorFloor(floor, {
+  restCeiling = REST_VIGOR_CAP * skills.VIGOR_MAX,
+  approachCost = REST_CAP_APPROACH_VIGOR,
+} = {}) {
+  const requested = Number(floor);
+  if (!Number.isFinite(requested)) return floor;
+  return requested === restCeiling ? Math.max(0, requested - approachCost) : requested;
+}
 // A TRAVELLER IS NOT MADE TO SIT FOR VIGOR IT CANNOT AFFORD TO EARN.
 //
 // Resting recovers vigor towards REST_VIGOR_CAP (80 of 200) and everything above that has to
@@ -901,15 +915,19 @@ const vigorPct = v => {
 // So the floor is now set by what a character needs to FIGHT WELL, and the food supply
 // is expected to meet it. That is not a free choice — everything above 80 has to be
 // eaten — which is exactly why the larder and the vigor floor are one problem.
-const MIN_FIGHT_VIGOR = 100;      // never start a fight below this while there is food
+// The keeper's DEFAULT safety floor when nobody has supplied a tactical floor. It must
+// not override `fight_above_vigor`: that broker argument is an explicit operator/controller
+// decision, and values at the resting cap are useful for bounded farms that deliberately
+// do not have a food loop.
+const MIN_FIGHT_VIGOR = 100;
 const WANT_FIGHT_VIGOR = 140;     // what every pattern aims to set out at
+// The game's own ceiling: `eat` refuses anything that would carry vigor past it.
+const VIGOR_CAP = 200;
 // THE ESCAPE HATCH, and the reason a hard floor of 100 does not deadlock the fleet.
 // With an empty larder the floor is unreachable by any action the keeper can take, and
 // holding out for it idles the character for ever — so an empty larder drops it to what
 // resting alone can actually deliver. This is a SUPPLY failure and is counted as one.
-const STARVED_FIGHT_VIGOR = 70;
-// The game's own ceiling: `eat` refuses anything that would carry vigor past it.
-const VIGOR_CAP = 200;
+const STARVED_FIGHT_VIGOR = REST_VIGOR_CAP * VIGOR_CAP;
 
 // WHERE THE MONEY GOES. Jasper and Tos share one banking system, so either counter
 // pays into the same balance and the only question is which is nearer — which really
@@ -1024,9 +1042,10 @@ export const STRATEGIES = {
   // between fights, and a character that engages below the floor breaks off part-way
   // and then recovers slower than if it had simply waited.
   //
-  // So every pattern now starts from MIN_FIGHT_VIGOR and the strategies differ only in
-  // what they do about FOOD, which is the part still worth measuring: the floor is
-  // reachable by resting, everything above it has to be eaten.
+  // So every pattern now starts from a food-backed floor and the strategies differ only
+  // in what they do about FOOD, which is the part still worth measuring. fightFloor()
+  // caps that request to rest plus carried nutrition, and an empty larder falls back to
+  // the exact resting ceiling.
 
   // Control. Rest when hurt, fight from whatever vigor resting gives you.
   baseline: {
@@ -1617,23 +1636,39 @@ export class Autopilot {
   // engaged at 70 anyway, and the whole strategy comparison was measuring nothing.
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
     const p = this.policy;
-    // fightAboveVigor was the old single knob; it still works, as the floor.
-    const want = Math.max(MIN_FIGHT_VIGOR,
-      p.vigorFloor ?? plan.vigorFloor ?? p.fightAboveVigor ?? plan.fightAboveVigor ?? 0);
+    // `vigorFloor` is written only by an explicit broker/loadout override. Once present,
+    // it is the decision -- silently clamping `fight_above_vigor: 80` to the internal 100
+    // left a no-food keeper at the 80 resting cap forever: it selected a quarry, refused
+    // to swing, rested back to the same 80, and repeated. The internal minimum remains the
+    // safe default when no explicit floor exists.
+    const want = p.vigorFloor != null
+      ? p.vigorFloor
+      : Math.max(MIN_FIGHT_VIGOR,
+          plan.vigorFloor ?? p.fightAboveVigor ?? plan.fightAboveVigor ?? 0);
     // An empty larder puts the floor out of reach — resting stops at 80 — so holding
     // out for it would idle the character for ever. Fall back to what resting can
     // deliver, and COUNT it: this is the food supply failing, not a fighting decision,
     // and it should show up as a supply number rather than as a quiet slowdown.
     const larder = this.larder(this.s.client);
     if (!larder.length) {
-      this.vigor.starved_passes++;
-      return Math.min(want, STARVED_FIGHT_VIGOR);
+      const reachable = Math.min(want, STARVED_FIGHT_VIGOR);
+      // An explicit floor at or below the resting cap needs no food. Calling that a
+      // starved pass made the status claim a supply failure while the keeper was doing
+      // exactly what its order asked.
+      if (reachable < want) this.vigor.starved_passes++;
+      return reachable;
     }
     // A LARDER THAT IS NOT EMPTY CAN STILL BE TOO SMALL. See reachableFightFloor: resting
     // stops at 80 and the rest has to be eaten, so one mushroom against a floor of 140 is
     // still a floor nothing can reach. Counted the same way, because it is the same fact
     // about supply rather than a fighting decision.
-    const carried = larder.reduce((n, item) => n + (Number(item?.nutrition) || 0), 0);
+    const carried = larder.reduce((total, item) => {
+      const rawNutrition = Number(item?.food?.nutrition);
+      const nutrition = Number.isFinite(rawNutrition) && rawNutrition > 0 ? rawNutrition : 0;
+      const rawAmount = Number(item?.o?.amount);
+      const amount = Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 1;
+      return total + nutrition * amount;
+    }, 0);
     const reachable = reachableFightFloor(want, VIGOR_CAP, carried);
     if (reachable < want) this.vigor.starved_passes++;
     return reachable;
@@ -1964,7 +1999,11 @@ export class Autopilot {
     // It fires on a NARROW path — hungry, something hostile in the room, and the note not
     // yet made — but `notedNoEatingHere` is cleared the moment the room is clear again, so
     // it rearms every time. For a character that fights, that is most passes.
-    const vigor = v.vigor?.value ?? 0;
+    const vigorValue = v?.vigor?.value;
+    const vigorKnown = Number.isFinite(vigorValue);
+    // Keep the historical zero fallback for carried-food behavior below. Creation is
+    // resource-spending and therefore uses vigorKnown explicitly in the empty branch.
+    const vigor = vigorKnown ? vigorValue : 0;
     // EATING IS NOT A STRATEGY OPTION.
     //
     // This returned before it ever looked at the larder unless the policy named a fight
@@ -2041,22 +2080,26 @@ export class Autopilot {
     const smallest = larder.reduce((m, x) => (!m || x.food.filling < m.filling ? x.food : m), null);
 
     if (!best) {
-      // MAKE SOME, IF WE CAN. Out of food used to be treated as purely a supply
-      // problem, which was true of a fleet that could not cast — and false of this
-      // one, where every character knows `create food` and spends all day picking up
-      // the two things it consumes. A cast is cheaper than a merchant, cheaper than
-      // asking another character, and available in the field where the alternative
-      // is a walk back through the rooms that keep killing them.
-      if (await this.cookSomething()) return 'ate';  // spend this pass eating instead
-      // Genuinely nothing to eat and nothing to make it from. Say it once and carry
-      // on fighting at whatever vigor resting gives — refusing to fight would idle
-      // the character for ever. fightFloor() has already dropped to the starved floor.
-      if (!this.warnedNoFood) {
-        this.warnedNoFood = true;
-        this.note('no food to raise vigor with', {
-          vigor, floor, ceiling, reagents: this.reagentCount(),
-          why: 'the larder is empty and there are not 2 elderberry + 2 herbs to cast with',
-          hint: 'inky cap mushrooms give the most vigor per unit of stomach (50/25)' });
+      // MAKE SOME ONLY TO REACH THE EFFECTIVE FIGHTING FLOOR. The ceiling controls how
+      // far carried food may top us up; it is not a manufacturing target. In particular,
+      // an empty larder at the rest-reachable floor of 80 must not spend reagents trying
+      // to climb toward 200 on every pass. Unknown vigor also fails closed: do not spend
+      // resources until the client has supplied the value that proves they are needed.
+      const needsCreation = vigorKnown && Number.isFinite(floor) && vigor < floor;
+      if (needsCreation) {
+        if (await this.cookSomething()) return 'ate';  // spend this pass eating instead
+        // Genuinely nothing to eat and nothing to make it from. Say it once and carry
+        // on fighting at whatever vigor resting gives — refusing to fight would idle
+        // the character for ever. fightFloor() has already dropped to the starved floor.
+        if (!this.warnedNoFood) {
+          this.warnedNoFood = true;
+          this.note('no food to raise vigor with', {
+            vigor, floor, ceiling, reagents: this.reagentCount(),
+            why: 'the larder is empty and there are not 2 elderberry + 2 herbs to cast with',
+            hint: 'inky cap mushrooms give the most vigor per unit of stomach (50/25)' });
+        }
+      } else {
+        this.warnedNoFood = false;
       }
       this.climbing = false;
       return false;
@@ -12546,7 +12589,8 @@ export class Autopilot {
       // character that has to leave the room to recover has to walk back afterwards
       // through everything it just walked past.
       const vigorNow = vigorOf(v);
-      const vigorFloor = this.fightFloor();
+      const requestedVigorFloor = this.fightFloor();
+      const vigorFloor = effectiveFightVigorFloor(requestedVigorFloor);
       // THE INKY RESERVE. A character can be BELOW the floor and unable to do anything
       // about it, because the food that would fix it is too big to fit.
       //
@@ -12585,7 +12629,9 @@ export class Autopilot {
           health: 0.98, vigor: REST_VIGOR_CAP, maxSeconds: 120 }).catch(() => null);
         this.tally.rests++;
         this.note('too tired to start a fight', {
-          vigor: vigorNow, need: vigorFloor, after_resting: r?.vitals?.vigor?.value,
+          vigor: vigorNow, need: vigorFloor,
+          requested_floor: requestedVigorFloor === vigorFloor ? undefined : requestedVigorFloor,
+          after_resting: r?.vitals?.vigor?.value,
           behind_a_wall: !!this.hold,
           why: 'attacking costs about thirty vigor a minute and vigor also sets how fast health ' +
                'comes back, so starting a fight below ' + vigorFloor + ' means breaking off ' +

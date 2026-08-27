@@ -7724,10 +7724,12 @@ const TOOLS = [
           'per hour by strategy rather than anyone having to argue about which ought to work. ' +
           'baseline is the control' },
       fight_above_vigor: { type: 'number', minimum: 0, maximum: 200,
-        description: 'eat until vigor reaches this before picking a fight. Resting alone tops out at ' +
-          'the rest threshold of 80 out of 200; above that only food will do it, and vigor is what ' +
-          'sets the health regeneration rate. An explicit value overrides both the selected ' +
-          'strategy floor and its provisioning ceiling' },
+        description: 'configured minimum vigor for picking a fight; an exact match satisfies it. ' +
+          'Resting alone tops out at 80 of 200, and above that only food will do it. The keeper ' +
+          'uses its higher internal food-backed minimum only when this argument is omitted, and ' +
+          'caps any requested floor to what resting plus carried food can actually reach. An ' +
+          'explicit value overrides both the internal minimum and the selected strategy floor ' +
+          'and deliberately leaves its provisioning ceiling separate' },
       inky_reserve: { type: 'boolean',
         description: 'FIGHT BELOW THE VIGOR FLOOR WHILE HOLDING FOOD TOO BIG TO EAT. `eat` refuses ' +
           'anything that would carry vigor past 200 and an inky cap is fifty, so a character at 177 ' +

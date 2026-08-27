@@ -215,23 +215,19 @@ console.log('the mechanics are not overridable, and a bet against them is flagge
   const g = write('warn-low.json', { blocks: { valley_orders: { fight_above_vigor: 50 } } });
   const r2 = localise('valley_orders', COMMITTED, { file: g });
   ok('a floor below MIN_FIGHT_VIGOR is applied', r2.orders.fight_above_vigor === 50);
-  ok('but is flagged as one the keeper will not honour while fed',
-     r2.warnings.some((w) => /MIN_FIGHT_VIGOR/.test(w.why)));
+  ok('and is not falsely warned that the keeper will raise an explicit floor',
+     !r2.warnings.some((w) => w.key === 'fight_above_vigor'));
 }
 
 {
-  // THERE IS NO QUIET MIDDLE BAND, and the first version of this file assumed there was.
-  // MIN_FIGHT_VIGOR (100) is ABOVE the resting cap (80), so no setting clears both
-  // remarks: everything over 80 needs food, everything under 100 is under the keeper's
-  // own floor. Written as an either/or, every value warned about something — which reads
-  // the same as nothing. The two are independent and a value may collect both.
-  ok('the keeper floor sits above the resting cap', MIN_FIGHT_VIGOR > REST_VIGOR_CAP);
+  // Only the game mechanic needs a warning: a requested floor over 80 requires food.
+  // The keeper's 100 is a default, not a second hard gate over explicit orders.
+  ok('the keeper default sits above the resting cap', MIN_FIGHT_VIGOR > REST_VIGOR_CAP);
 
   const mid = write('warn-mid.json', { blocks: { valley_orders: { fight_above_vigor: 90 } } });
   const r = localise('valley_orders', COMMITTED, { file: mid });
-  ok('90 collects both remarks', r.warnings.length === 2);
+  ok('90 receives only the food-reachability warning', r.warnings.length === 1);
   ok('90 needs food', r.warnings.some((w) => /resting cap/.test(w.why)));
-  ok('90 is under the keeper floor', r.warnings.some((w) => /MIN_FIGHT_VIGOR/.test(w.why)));
 
   const high = write('warn-only-food.json',
     { blocks: { valley_orders: { fight_above_vigor: 180 } } });
@@ -242,8 +238,7 @@ console.log('the mechanics are not overridable, and a bet against them is flagge
   const low = write('warn-only-floor.json',
     { blocks: { valley_orders: { fight_above_vigor: 60 } } });
   const r3 = localise('valley_orders', COMMITTED, { file: low });
-  ok('60 is a keeper-floor remark only', r3.warnings.length === 1 &&
-     /MIN_FIGHT_VIGOR/.test(r3.warnings[0].why));
+  ok('60 is a valid explicit reachable floor with no warning', r3.warnings.length === 0);
 }
 
 // ---------------------------------------------------------------------------

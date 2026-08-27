@@ -273,7 +273,7 @@ t('tooTiredNode: rests (SUCCESS) when vigor is below floor', async () => {
   // the rest path (SUCCESS, doing='recovering', tally.rests bumped, resting noted).
   const k = mockKeeper();
   k.s.client.vitals = () => ({ health: { value: 36, max: 36 }, vigor: { value: 60, max: 200 } });
-  k.fightFloor = () => 70;          // starved floor; 60 < 70 -> must rest
+  k.fightFloor = () => 80;          // starved floor; 60 < 80 -> must rest
   k.hold = null; k.policy.useSafeSpots = false;   // skip takeSafeSpot
   const node = tooTiredNode(k);
   const r = await node.tickAsync(bb(k));

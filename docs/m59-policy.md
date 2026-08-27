@@ -53,18 +53,19 @@ Four properties, each of which is the cheap mistake:
   silently does nothing is how `purpose` stayed out of a schema for a year while every
   keeper in the fleet ran with an audit switched off that everyone believed was on.
 
-And the **mechanics are not overridable**. `VIGOR_MAX`, `REST_VIGOR_CAP` and
-`MIN_FIGHT_VIGOR` are exported for citation and a local file naming one is refused —
-but a floor **above** the cap is *allowed* and **warned about**, naming the recipe,
+And the **mechanics and defaults are not rewritten**. `VIGOR_MAX`, `REST_VIGOR_CAP` and
+`MIN_FIGHT_VIGOR` are exported for citation and a local file naming one is refused.
+`MIN_FIGHT_VIGOR` is the keeper default when no tactical floor was supplied; an explicit
+`fight_above_vigor` remains authoritative. A floor **above** the cap is *allowed* and
+**warned about**, naming the recipe,
 because a fleet holding out for a vigor no amount of resting can deliver looks on the
 board exactly like a fleet that is working. That warning is the whole reason the module
 exists: it is the sentence that would have been printed on the round the fleet sat at
 exactly 80 vigor with an empty larder, reading as twenty-one healthy characters.
 
-`MIN_FIGHT_VIGOR` (100) sits **above** `REST_VIGOR_CAP` (80), so the two are not the ends
-of a quiet middle band — there is no setting that clears both. Written as an either/or,
-every value warned about something, which reads the same as nothing. They are independent
-remarks and a value may collect both.
+`MIN_FIGHT_VIGOR` (100) deliberately sits above `REST_VIGOR_CAP` (80), because the default
+assumes a food-backed farm. A bounded no-food farm may explicitly choose 80; the keeper
+must not silently raise that order back to its default and wait forever for unreachable vigor.
 
 ## A PROFILE IS THE OTHER HALF: NOT A NUMBER, BUT WHERE THE FLEET IS ALLOWED TO BE
 

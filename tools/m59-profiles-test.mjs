@@ -89,7 +89,7 @@ ok('safe spots - the only survival advantage a bare character has', p.use_safe_s
 ok('player self-defence - standing still is not a defence', p.defend_against_players === true);
 ok('the assigned room is the farm', p.assigned_room === 70);
 ok('the hunt is the room\'s own prey, not a guess', p.hunt === 'zombie');
-ok('fight_above_vigor is 100, the lowest HONOURED value', p.fight_above_vigor === 100);
+ok('fight_above_vigor is the profile\'s deliberate food-backed 100', p.fight_above_vigor === 100);
 ok('travel_hold_vigor is 80, the resting cap an unfed fleet can actually reach',
    p.travel_hold_vigor === 80);
 
