@@ -680,6 +680,11 @@ const WATCHDOG_MS = Number(process.env.M59_WATCHDOG_MS || 500);
 // seconds is three normal passes — long enough that an ordinary slow call is not treated
 // as a stall, short enough that a character bleeding out is not left to it.
 const WATCHDOG_BLOCKED_MS = Number(process.env.M59_WATCHDOG_BLOCKED_MS || 3_000);
+// A cancellation is a latch, not a one-shot hint. A blocked pass used to start a new
+// movement after the watchdog cancelled the first one, and the once-per-pass guard then
+// protected that replacement walk all the way to death. Give an ordinary walk a moment
+// to unwind, then keep invalidating any movement the same blind pass tries to re-arm.
+const WATCHDOG_REPEAT_MS = Number(process.env.M59_WATCHDOG_REPEAT_MS || 1_500);
 // The longest the record may go without a frame while nothing is changing. Matches the
 // keeper's own resync interval, which is the same number the deaths page uses to decide
 // whether a keeper counts as having been watching (`WATCH_MS` in m59-postmortems.mjs).
@@ -1322,12 +1327,11 @@ export class Autopilot {
       // costs a pause and nothing else — so there is no reason to ever swing at
       // anything below this. It is much higher than restBelow on purpose.
       holdResumeAbove: 0.9,
-      // How far to go to fetch a monster that will not come to us. UNSET: there is no
-      // limit, because distance was never the thing that made a pull dangerous — see
-      // pull(). It went 8, then 14 when the Tos gate turned out to be 58 by 44 and every
-      // pull in it was being refused, and each of those numbers was a room-shaped guess
-      // standing in for the reasoning. Set `pull_within` to put a ceiling back.
-      pullWithin: null,
+      // How far to go to fetch a monster that will not come to us. Pulling deliberately
+      // gives up the wall, so exposure grows with distance even though only one swing is
+      // intended. Eight keeps the default trip short; an explicit null/0 policy still
+      // means no ceiling for an operator who deliberately accepts that exposure.
+      pullWithin: 8,
       // NEVER FIGHT IN A ROOM WITH NO SAFE WALL IN IT.
       //
       // holdWorthwhile() already said a wall was wanted against anything that outlevels
@@ -2227,10 +2231,21 @@ export class Autopilot {
     };
   }
 
+  // A remembered wall is not the same thing as standing behind it. `pull()` keeps the
+  // remembered coordinates while it fetches quarry, and asynchronous status/watchdog
+  // readers run during that await. Requiring the live room and coarse square here keeps
+  // every sheltered decision false for the whole time the body is away.
+  atHold() {
+    const hold = this.hold, me = this.s?.client?.self;
+    const room = this.s?.world?.room?.num ?? this.s?.client?.room?.id ?? null;
+    return !!(hold && me && room != null && hold.room === room
+      && me.col === hold.col && me.row === hold.row);
+  }
+
   // Are we standing somewhere we have EVIDENCE about, or somewhere that merely looks
   // right? Nothing in this file may spend the safe-spot advantage on a guess: an
   // unproven spot is treated exactly like open floor, which is what it might be.
-  holdWorks() { return !!(this.hold && this.hold.proven); }
+  holdWorks() { return !!(this.atHold() && this.hold?.proven); }
 
   // IS THERE A WEAPON IN OUR HAND — asked of the server, never of our own intentions.
   //
@@ -3072,7 +3087,33 @@ export class Autopilot {
   async pull(want) {
     const s = this.s, c = s.client;
     if (!this.hold) return { pulled: false, why: 'not holding a spot to pull it back to' };
+    if (!this.atHold())
+      return { pulled: false, why: 'not standing on the held spot, so there is no safe pull origin' };
     const spot = { ...this.hold };
+    // ONE GENERATION OWNS THE WHOLE OUT-AND-BACK OPERATION. The watchdog invalidates
+    // this number. Every fallback on the return must keep using it; capturing the new
+    // generation after an interrupt is how the old pull re-armed movement in the same
+    // blind pass and kept walking below the flee line.
+    const movementGeneration = s.movementGeneration;
+    const abort = (phase, result = null) => {
+      const cancelled = !!result?.cancelled ||
+        (typeof s.movementWasCancelled === 'function' &&
+         s.movementWasCancelled(movementGeneration));
+      if (cancelled) {
+        return { pulled: false, aborted: true, cancelled: true,
+                 why: `${phase}: movement was cancelled; the survival pass must decide what moves next` };
+      }
+      const health = c.vitals?.()?.health;
+      const frac = pct(health), fleeAt = this.safety().fleeAt;
+      if (frac !== null && frac < fleeAt) {
+        return { pulled: false, aborted: true, health_abort: true,
+                 health: health?.value ?? null, flee_at: fleeAt,
+                 why: `${phase}: health crossed the flee line; no new pull movement is allowed` };
+      }
+      return null;
+    };
+    const beforeOut = abort('before setting out');
+    if (beforeOut) return beforeOut;
     // NEVER TRUST A CAPTURED OBJECT'S COORDINATES. BP_ROOM_CONTENTS replaces the
     // whole object map with fresh instances, so anything picked up earlier in the
     // pass — before we walked to the wall, say — still holds the position it was at
@@ -3082,35 +3123,29 @@ export class Autopilot {
     const name = c.rsc.get(foe.nameRsc);
     const approach = s.world?.approachSquare?.(foe.col, foe.row);
     if (!approach) return { pulled: false, why: 'no square beside it that we can reach' };
-    // NO DISTANCE LIMIT. IF WE CAN GET TO IT, IT IS WORTH FETCHING.
-    //
-    // This refused anything more than `pullWithin` steps away as "too far to fetch and
-    // get back", which reads as prudence and is not. The walk out is taken before the
-    // thing has noticed us and the walk back is the only part that costs anything, so a
-    // long pull is not more dangerous than a short one — it is the same danger for
-    // longer, and it ends with the fight happening at the wall instead of in the open,
-    // which is the entire point. Refusing it does not avoid the fight; it leaves the
-    // keeper standing at a good spot with nothing to kill, which is how a character
-    // spends an hour reporting itself safe and earning nothing.
-    //
-    // The step budgets below are all relative to `approach.steps`, so they scale with
-    // the trip and nothing here needs a ceiling to stay bounded. Patience is the
-    // correct behaviour: walk however far it is, hit it once, walk back.
-    //
-    // `pullWithin` survives as an explicit override for anyone who wants one — the
-    // broker still exposes it as `pull_within` — but it is unset by default.
+    // A PULL IS AN OPEN-FIELD ROUND TRIP. Distance is time without the wall, so the safe
+    // default is short. `null` remains an explicit no-limit override and finite values
+    // retain their literal meaning.
     if (approach.steps > (this.policy.pullWithin ?? Infinity))
       return { pulled: false, why: `${approach.steps} steps away — beyond the pull_within override` };
 
-    this.doing = 'fighting';
-    const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
+    this.doing = 'pulling';
+    const out = await s.walkTo(approach.col, approach.row,
+      { maxSteps: approach.steps + 8, movementGeneration })
                        .catch(e => ({ arrived: false, reason: e.message }));
     this.movedAt = Date.now();
+    const afterOut = abort('after outbound pull movement', out);
+    if (afterOut) return afterOut;
     if (!out.arrived) {
       const terminal = this.terminalMovement(out, 'pull movement');
       if (terminal) return { pulled: false, ...terminal };
-      const home = await skills.returnToSpot(s, spot, { maxSteps: 24 }).catch(() => ({ arrived: false }));
+      const beforeReturn = abort('before returning from a failed pull');
+      if (beforeReturn) return beforeReturn;
+      const home = await skills.returnToSpot(s, spot,
+        { maxSteps: 24, movementGeneration }).catch(() => ({ arrived: false }));
       this.movedAt = Date.now();
+      const afterReturn = abort('while returning from a failed pull', home);
+      if (afterReturn) return afterReturn;
       if (!home.arrived) this.releaseHold('could not get back after a failed pull');
       return { pulled: false, why: out.reason || 'could not get to it' };
     }
@@ -3118,14 +3153,30 @@ export class Autopilot {
     const it = c.room.objects.get(foe.id);
     if (it) {
       await s.faceToward(it);
-      await s.pacer.submit('attack', () => c.attack(foe.id), 1050);
+      const beforeAttack = abort('before the pull attack');
+      if (beforeAttack) return beforeAttack;
+      // Pacer.submit may wait behind the per-kind cooldown. Health can cross the flee
+      // line, or the watchdog can cancel the operation, during that wait. Check again in
+      // the callback — immediately before the packet — rather than treating enqueue time
+      // as attack time.
+      let atPacket = null;
+      await s.pacer.submit('attack', () => {
+        atPacket = abort('at the pull attack packet');
+        return atPacket ? null : c.attack(foe.id);
+      }, 1050);
+      if (atPacket) return atPacket;
       this.swungAt = Date.now();
       this.foeId = foe.id;
     }
 
-    const home = await skills.returnToSpot(s, spot, { maxSteps: approach.steps + 12 })
+    const beforeReturn = abort('before returning to the wall');
+    if (beforeReturn) return beforeReturn;
+    const home = await skills.returnToSpot(s, spot,
+      { maxSteps: approach.steps + 12, movementGeneration })
                              .catch(e => ({ arrived: false, why: e.message }));
     this.movedAt = Date.now();
+    const afterReturn = abort('while returning to the wall', home);
+    if (afterReturn) return afterReturn;
     if (!home.arrived) {
       this.releaseHold('could not get back to it after pulling');
       return { pulled: true, back: false, target: name,
@@ -3133,7 +3184,7 @@ export class Autopilot {
     }
     // We left and returned, so nothing is proved about the square any more until the
     // experiment runs again. The belief survives; the running clock does not.
-    this.hold.quietMs = 0;
+    if (this.hold) this.hold.quietMs = 0;
     this.note('pulled it to the wall', {
       target: name, went: approach.steps, back_at: { col: spot.col, row: spot.row },
       why: 'a safe spot is only worth anything if the fight happens at it' });
@@ -4293,7 +4344,11 @@ export class Autopilot {
         : 'parking — getting behind a wall before the update';
     if (this.frozenUntil && Date.now() < this.frozenUntil) return 'playing dead';
     if (this.hold) {
-      const proven = this.holdWorks() ? 'proven' : 'untested';
+      const proven = this.hold.proven ? 'proven' : 'untested';
+      if (!this.atHold())
+        return this.doing === 'pulling'
+          ? `pulling quarry back to a ${proven} safe spot`
+          : `away from a ${proven} safe spot${this.doing ? ` — ${this.doing}` : ''}`;
       if (this.spotTest) return 'testing a safe spot';
       if (this.doing === 'fighting') return `fighting from a ${proven} safe spot`;
       if (this.doing === 'pulling') return `pulling quarry to a ${proven} safe spot`;
@@ -7416,6 +7471,7 @@ export class Autopilot {
       // possible in a monster room, and makes fleeing the wrong move.
       safe_spot: this.hold ? {
         at: { col: this.hold.col, row: this.hold.row },
+        standing_here: this.atHold(),
         works: this.holdWorks(),
         evidence: this.hold.proven
           ? (this.hold.inherited && !this.hold.provenAt
@@ -8350,6 +8406,7 @@ export class Autopilot {
     if (this.watchTimer) return;
     this.watch = { ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
                    lastHealth: null, blockedSince: null, interruptedPass: null,
+                   lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
                    // The position pulse — see PULSE_MS. `pulses` is the ring, `wedged` is
                    // the open episode (null when moving), `wedges` counts episodes rather
                    // than ticks so a long one is one event and not six hundred.
@@ -8505,7 +8562,7 @@ export class Autopilot {
     const excused = bleedingWhileInert ? null
       : !at ? 'no position'
       : this.inert ? 'inert — something else is driving'
-      : this.hold ? 'holding a safe spot, which is standing still on purpose'
+      : this.atHold() ? 'holding a safe spot, which is standing still on purpose'
       : !GOING.includes(doing) ? `not going anywhere — ${doing ?? 'idle'}`
       : null;
     if (excused) {
@@ -8721,25 +8778,43 @@ export class Autopilot {
     // character deliberately, and cancelling its movement from underneath it would be
     // this keeper fighting the thing it stood down for.
     if (this.inert) return;
-    // Once per blocked pass. Cancelling twice does nothing useful and the note would
-    // repeat every tick.
-    if (w.interruptedPass === this.passes) return;
-
     const frac = pct(hp);
     if (frac === null) return;
     const fleeAt = this.safety().fleeAt;
     if (frac >= fleeAt) return;
 
+    // Usually once is enough. If the same pass is still blind after the grace interval,
+    // it may have started a nested/fallback walk with the new generation. Invalidate that
+    // too. Rate limiting keeps this an escalation rather than a 500ms log storm.
+    const repeated = w.interruptedPass === this.passes;
+    if (repeated && now - (w.lastInterruptAt ?? 0) < WATCHDOG_REPEAT_MS) return;
+    if (repeated) {
+      // The first cancel hands control back to the survival ladder, which may start a
+      // healthy retreat inside this same pass. Do not cancel that escape just because the
+      // pass is still old. Repeat only when the SAME activity still has three fresh
+      // post-interrupt pulses penned into one square of each other — the wall-bounce
+      // signature, rather than elapsed time alone.
+      if (w.interruptedDoing !== (this.doing ?? null)) return;
+      const after = (w.pulses ?? []).filter(p => p.at >= (w.lastInterruptAt ?? Infinity));
+      if (!this.pennedIn({ pulses: after })) return;
+    }
+
     w.interruptedPass = this.passes;
+    w.lastInterruptAt = now;
+    if (!repeated) w.interruptedDoing = this.doing ?? null;
     w.interrupts++;
+    if (repeated) w.repeatInterrupts = (w.repeatInterrupts ?? 0) + 1;
     this.tally.watchdog_interrupts = (this.tally.watchdog_interrupts || 0) + 1;
     const stopped = (() => {
       try { return s.cancelMovement(null, 'the watchdog pulling us out of a blind walk below the flee line'); } catch (e) { return { cancelled: false, why: e.message }; }
     })();
-    this.note('WATCHDOG — pulled the character out of a blind walk', {
+    this.note(repeated
+      ? 'WATCHDOG — blind pass re-armed movement; cancelling it again'
+      : 'WATCHDOG — pulled the character out of a blind walk', {
       health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
       flee_at: Math.round(fleeAt * 100) + '%',
       pass_blocked_for_s: Math.round(blockedFor / 1000),
+      repeated,
       interrupted: stopped.interrupted ?? null,
       why: 'the pass has been inside one await long enough to have stopped looking, and ' +
            'health crossed the withdraw threshold while it was not. The walk is cancelled ' +
@@ -9248,10 +9323,9 @@ export class Autopilot {
           // it stood down because an errand owned the character — three different faults
           // with three different fixes, all rendering identically as "died travelling".
           //
-          // `interrupted_this_pass` is the one that matters: the watchdog fires at most
-          // once per pass, so a death in a pass it already interrupted means the
-          // interrupt was not enough, while a death in a pass it never touched means it
-          // never got the chance.
+          // `interrupted_this_pass` is the one that matters: if a death happens in a pass
+          // the watchdog already interrupted (including any rate-limited repeats), the
+          // interrupt was not enough; if it never touched the pass, it never got the chance.
           // WHICH ARM OF THE TRAVEL EXPERIMENT WAS RUNNING, or null if the character was
           // not on a journey. This is the numerator: deaths are the only outcome that
           // experiment is judged on, because the mechanism it is testing is expected to
@@ -9268,6 +9342,7 @@ export class Autopilot {
             return {
               running: true,
               interrupts_total: w.interrupts ?? 0,
+              repeat_interrupts: w.repeatInterrupts ?? 0,
               interrupted_this_pass: w.interruptedPass === this.passes,
               frames_written: w.frames ?? 0,
               // How long the pass that died had been inside one await. This is the
@@ -9477,7 +9552,9 @@ export class Autopilot {
       console.error(`[autopilot] ${this.policy?.agent ?? '?'} escapeUnderworld result: left=${e.left} reason=${e.reason ?? 'none'} tried=${JSON.stringify(e.tried ?? [])}`);
       // If the legacy escape failed with a pathfinding error, try a
       // direct walk to the nearest portal, bypassing the pathfinder.
-      if (!e.left) {
+      // A cancelled composite is over. Starting the direct escape fallback here would
+      // capture the new movement generation in the same blind pass and undo the watchdog.
+      if (!e.left && !e.cancelled) {
         const pathFail = (e.tried ?? []).some(t => /kept ending up|never got onto/.test(t.why ?? ''));
         if (pathFail) {
           try {

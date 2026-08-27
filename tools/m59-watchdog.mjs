@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // m59-watchdog.mjs -- THE OUT-OF-BAND LIVENESS GUARD.
 //
-// Lifted verbatim out of m59-autopilot.mjs. BEHAVIOUR IS BYTE-FOR-BYTE WHAT IT WAS --
-// this is a move, not a fix, the same way skills.isArmed was a move -- because the one
-// thing worse than a guard in the wrong file is a guard whose behaviour quietly changed
-// while it was being tidied.
+// Lifted out of m59-autopilot.mjs so both keepers share the same guard. Behaviour changes
+// here therefore need matching coverage in the Autopilot copy; a guard with two subtly
+// different definitions is worse than a guard in the wrong file.
 //
 // WHY IT EXISTS AT ALL. Everything else in both keepers is IN-BAND: it assumes pass()
 // returns promptly and that the next pass will re-read the world. The watchdog is the
@@ -19,11 +18,12 @@
 // somebody. That is the shape of a control that looks like dead weight right up until
 // the incident.
 //
-// IT DECIDES NOTHING. Its only action is cancelMovement(), once per blocked pass, and
-// only when health has crossed the withdraw line. The ordinary pass -- which already
-// knows how to flee and rest -- then decides with fresh numbers. A guard that started
-// making policy would be a second opinion about survival, and this repository has paid
-// for every quantity that grew a second home.
+// IT DECIDES NOTHING. Its only action is cancelMovement(): once normally, then at a
+// bounded interval while the same blocked pass keeps re-arming movement, and only when
+// health has crossed the withdraw line. The ordinary pass -- which already knows how to
+// flee and rest -- then decides with fresh numbers. A guard that started making policy
+// would be a second opinion about survival, and this repository has paid for every
+// quantity that grew a second home.
 //
 // ---------------------------------------------------------------------------
 // THE HOST INTERFACE
@@ -37,7 +37,7 @@
 //   host.inert          something else is driving -- do not cancel under it
 //   host.hold           holding a safe spot: standing still ON PURPOSE
 //   host.doing          'travelling' | 'pulling' | 'converging' | 'zoning' | ...
-//   host.passes         pass counter, so an interrupt fires once per pass
+//   host.passes         pass counter, so repeats can be identified and rate-limited
 //   host.passStartedAt  when the current pass began -- how blindness is measured
 //   host.lastFrameAt    when the record last got a frame
 //   host.tally          counters
@@ -56,6 +56,10 @@
 export const WATCHDOG_MS = Number(process.env.M59_WATCHDOG_MS || 500);
 // How long a pass may be inside one await before the watchdog will interrupt it.
 export const WATCHDOG_BLOCKED_MS = Number(process.env.M59_WATCHDOG_BLOCKED_MS || 3_000);
+// If a composite starts a fresh leaf after the first cancel, keep the same blind pass
+// from owning movement. Long enough for the original leaf to unwind; short enough to
+// invalidate a re-armed fallback before another few hits land.
+export const WATCHDOG_REPEAT_MS = Number(process.env.M59_WATCHDOG_REPEAT_MS || 1_500);
 // The longest the record may go without a frame while nothing is changing. Matches
 // WATCH_MS in m59-postmortems.mjs deliberately: the thing that reports blindness and
 // the thing that prevents it must not disagree about what it is.
@@ -77,6 +81,20 @@ export const PULSE_MOVEMENT_SAMPLES = 3;
 export const INERT_RESCUE_MS = Number(process.env.M59_INERT_RESCUE_MS || 4_000);
 
 const pct = v => (v && v.max ? v.value / v.max : null);
+
+// A hold object is remembered while some composite movements deliberately step away
+// from it. Only the live room and square make standing still intentional. Older/generic
+// hosts that expose only a boolean hold retain their previous behaviour.
+function standingOnHeldSquare(host) {
+  if (!host?.hold) return false;
+  if (typeof host.atHold === 'function') return !!host.atHold();
+  const hold = host.hold;
+  if (hold.col == null || hold.row == null) return true;
+  const me = host.s?.client?.self;
+  if (!me || me.col !== hold.col || me.row !== hold.row) return false;
+  const room = host.s?.world?.room?.num ?? host.s?.client?.room?.id ?? null;
+  return hold.room == null || room == null || hold.room === room;
+}
 
 // PENNED IN: the newest three samples, in one room, within a square of each other.
 // Explicitly the newest three and NOT the whole ring -- the ring widened so a damage rate
@@ -105,7 +123,23 @@ export function freshState() {
   return { ticks: 0, frames: 0, interrupts: 0, rescues: 0, rescuedPass: null,
            longest_block_ms: 0,
            lastHealth: null, blockedSince: null, interruptedPass: null,
+           lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
            pulses: [], lastPulseAt: 0, wedged: null, wedges: 0 };
+}
+
+// A repeat interrupt is much stronger than the first one. The first invalidates the
+// blind leaf and lets the ordinary survival ladder decide. That ladder may start a
+// perfectly healthy retreat in the SAME pass; cancelling it merely because the pass is
+// still old is how a handbrake becomes the thing preventing escape.
+//
+// Require fresh body evidence after the first interrupt: the activity has not changed,
+// and the newest three one-second pulses are still penned into one square of each other.
+// A real retreat leaves that neighbourhood; the wall bounce this exists for does not.
+function repeatStillWedged(host, w) {
+  if (w.interruptedDoing !== (host.doing ?? null)) return false;
+  const since = w.lastInterruptAt ?? Infinity;
+  const after = (w.pulses ?? []).filter(p => p.at >= since);
+  return pennedIn({ pulses: after });
 }
 
 // start/stop own the timer. `unref` so a watchdog never holds a process open.
@@ -176,7 +210,7 @@ export function pulse(host, now, hp) {
   const excused = bleedingWhileInert ? null
     : !at ? 'no position'
     : host.inert ? 'inert — something else is driving'
-    : host.hold ? 'holding a safe spot, which is standing still on purpose'
+    : standingOnHeldSquare(host) ? 'holding a safe spot, which is standing still on purpose'
     : !GOING.includes(doing) ? `not going anywhere — ${doing ?? 'idle'}`
     : null;
   if (excused) {
@@ -304,25 +338,37 @@ export function tick(host) {
   // character deliberately, and cancelling its movement from underneath it would be
   // this keeper fighting the thing it stood down for.
   if (host.inert) return;
-  // Once per blocked pass. Cancelling twice does nothing useful and the note would
-  // repeat every tick.
-  if (w.interruptedPass === host.passes) return;
-
   const frac = pct(hp);
   if (frac === null) return;
   const fleeAt = host.safety().fleeAt;
   if (frac >= fleeAt) return;
 
+  // One interrupt normally ends the leaf. If the SAME pass is still blocked after the
+  // grace interval, it may have re-armed a nested/fallback movement with the new
+  // generation. Invalidate that too, rate limited so this cannot become a tick storm.
+  const repeated = w.interruptedPass === host.passes;
+  if (repeated && now - (w.lastInterruptAt ?? 0) < WATCHDOG_REPEAT_MS) return;
+  if (repeated && !repeatStillWedged(host, w)) return;
+
   w.interruptedPass = host.passes;
+  w.lastInterruptAt = now;
+  if (!repeated) w.interruptedDoing = host.doing ?? null;
   w.interrupts++;
+  if (repeated) w.repeatInterrupts = (w.repeatInterrupts ?? 0) + 1;
   host.tally.watchdog_interrupts = (host.tally.watchdog_interrupts || 0) + 1;
   const stopped = (() => {
-    try { return s.cancelMovement(); } catch (e) { return { cancelled: false, why: e.message }; }
+    try { return s.cancelMovement(null, repeated
+      ? 'the watchdog cancelling movement re-armed by the same blind pass'
+      : 'the watchdog pulling us out of a blind walk below the flee line'); }
+    catch (e) { return { cancelled: false, why: e.message }; }
   })();
-  host.note('WATCHDOG — pulled the character out of a blind walk', {
+  host.note(repeated
+    ? 'WATCHDOG — blind pass re-armed movement; cancelling it again'
+    : 'WATCHDOG — pulled the character out of a blind walk', {
     health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
     flee_at: Math.round(fleeAt * 100) + '%',
     pass_blocked_for_s: Math.round(blockedFor / 1000),
+    repeated,
     interrupted: stopped.interrupted ?? null,
     why: 'the pass has been inside one await long enough to have stopped looking, and ' +
          'health crossed the withdraw threshold while it was not. The walk is cancelled ' +

@@ -98,6 +98,58 @@ console.log('\n--- safe-spot arrival is confirmed, not predicted ---');
      me.col === 5 && me.row === 5 && me.x === 352 && me.y === 352 && !me.predicted);
 }
 
+console.log('\n--- one cancellation generation owns every return fallback ---');
+{
+  const me = { col: 6, row: 5, x: 416, y: 352, predicted: false };
+  const calls = [];
+  const c = { get self() { return me; } };
+  const s = {
+    movementGeneration: 7,
+    movementWasCancelled(generation) { return generation !== this.movementGeneration; },
+    need: () => c,
+    approachFine: async (_col, _row, opts) => {
+      calls.push(['fine', opts.movementGeneration]);
+      return { arrived: false, reason: 'fixture fine miss' };
+    },
+    walkTo: async (col, row, opts) => {
+      calls.push(['coarse', opts.movementGeneration]);
+      Object.assign(me, { col, row, x: col * 64 + 32, y: row * 64 + 32 });
+      return { arrived: true };
+    },
+    walkFine: async (x, y, opts) => {
+      calls.push(['exact', opts.movementGeneration]);
+      Object.assign(me, { col: (x / 64) | 0, row: (y / 64) | 0, x, y });
+      return { arrived: true };
+    },
+  };
+  const back = await returnToSpot(s, { col: 5, row: 5, x: 352, y: 352 },
+                                  { movementGeneration: 7 });
+  ok('fine, coarse fallback, and exact close all keep the operation generation',
+     back.arrived && calls.length === 3 && calls.every(([, generation]) => generation === 7),
+     JSON.stringify(calls));
+}
+{
+  const me = { col: 1, row: 1, x: 96, y: 96, predicted: false };
+  let coarse = 0, fineFallback = 0;
+  const c = { get self() { return me; } };
+  const s = {
+    movementGeneration: 3,
+    movementWasCancelled(generation) { return generation !== this.movementGeneration; },
+    need: () => c,
+    walkTo: async (_col, _row, opts) => {
+      coarse++;
+      ok('the first leaf receives the captured generation', opts.movementGeneration === 3);
+      s.movementGeneration = 4;       // the watchdog invalidates the whole operation
+      return { arrived: false, cancelled: true, reason: 'movement cancelled by a newer command' };
+    },
+    approachFine: async () => { fineFallback++; return { arrived: true }; },
+  };
+  const back = await returnToSpot(s, { col: 5, row: 5 }, { movementGeneration: 3 });
+  ok('a cancelled coarse return is terminal to the composite',
+     back.cancelled === true && coarse === 1 && fineFallback === 0,
+     JSON.stringify({ back, coarse, fineFallback }));
+}
+
 function keeper(w) {
   const p = new Autopilot(w.s, { mode: 'farm', policy: { hunt: 'giant rat' } });
   p.book = new SafeSpotBook(BOOK);      // never touch the real substrate
@@ -193,6 +245,158 @@ console.log('\n--- unrelated combat does not erase a pending pull ---');
   ok('contact with the actual pulled quarry converts and clears the experiment',
      p.pullConverted(10, 'groundworm larva') === true &&
        p.pendingPull === null && p.pullsWithoutContact === 0);
+}
+
+console.log('\n--- pulling cannot outlive its wall, health, or cancellation token ---');
+{
+  const w = world();
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 15, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 14, row: 5, steps: 9 });
+  w.s.need = () => w.c;
+  w.s.movementGeneration = 11;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  const movements = [];
+  w.s.walkTo = async (_col, _row, opts) => {
+    movements.push(opts.movementGeneration);
+    return { arrived: false, reason: 'fixture stopped after proving it set out' };
+  };
+
+  const bounded = await p.pull(foe);
+  ok('the safe default refuses a pull beyond eight steps',
+     p.policy.pullWithin === 8 && !bounded.pulled && movements.length === 0,
+     JSON.stringify(bounded));
+  p.policy.pullWithin = null;          // explicit operator override: no ceiling
+  await p.pull(foe);
+  ok('an explicit no-limit override still has its documented meaning',
+     movements.length === 1 && movements[0] === 11, JSON.stringify(movements));
+}
+{
+  const w = world();
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 8, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 7, row: 5, steps: 2 });
+  w.s.movementGeneration = 20;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let movements = 0, attacks = 0;
+  w.s.walkTo = async (_col, _row, opts) => {
+    movements++;
+    ok('the outbound leaf receives the pull generation', opts.movementGeneration === 20);
+    w.s.movementGeneration = 21;
+    return { arrived: false, cancelled: true, reason: 'movement cancelled by a newer command' };
+  };
+  w.s.faceToward = async () => {};
+  w.s.pacer = { submit: async (_kind, fn) => fn() };
+  w.c.attack = () => { attacks++; };
+  const pulled = await p.pull(foe);
+  ok('watchdog cancellation ends the whole pull without a newly-armed return walk',
+     pulled.cancelled === true && movements === 1 && attacks === 0,
+     JSON.stringify({ pulled, movements, attacks }));
+}
+{
+  const w = world({ health: 30, max: 30 });
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 8, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 7, row: 5, steps: 2 });
+  w.s.movementGeneration = 30;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let movements = 0, attacks = 0;
+  w.s.walkTo = async (col, row) => {
+    movements++;
+    Object.assign(w.me(), { col, row, x: col * 64 + 32, y: row * 64 + 32 });
+    w.c._health = 10;                  // below the derived two-hit flee margin
+    return { arrived: true };
+  };
+  w.s.faceToward = async () => {};
+  w.s.pacer = { submit: async (_kind, fn) => fn() };
+  w.c.attack = () => { attacks++; };
+  p.running = true;
+  const pulled = await p.pull(foe);
+  ok('crossing the flee line aborts before both the pull swing and return movement',
+     pulled.health_abort === true && movements === 1 && attacks === 0,
+     JSON.stringify({ pulled, movements, attacks }));
+  ok('while off the square, neither status nor activity claims shelter',
+     !p.holdWorks() && p.status().safe_spot.works === false &&
+       p.status().safe_spot.standing_here === false &&
+       !/fighting from/.test(p.activity()) && /pulling quarry back/.test(p.activity()),
+     p.activity());
+}
+{
+  const w = world({ health: 30, max: 30 });
+  const p = keeper(w);
+  holdAt(p, 5, 5, { proven: true });
+  const foe = { id: 1, col: 8, row: 5, nameRsc: 1, flags: MONSTER };
+  w.c.room.objects.set(foe.id, foe);
+  w.s.world.approachSquare = () => ({ col: 7, row: 5, steps: 2 });
+  w.s.movementGeneration = 31;
+  w.s.movementWasCancelled = generation => generation !== w.s.movementGeneration;
+  let movements = 0, attacks = 0;
+  w.s.walkTo = async (col, row) => {
+    movements++;
+    Object.assign(w.me(), { col, row, x: col * 64 + 32, y: row * 64 + 32 });
+    return { arrived: true };
+  };
+  w.s.faceToward = async () => {};
+  w.s.pacer = { submit: async (_kind, fn) => {
+    // The per-kind attack cooldown elapses after enqueue. A hit lands in that gap.
+    w.c._health = 10;
+    return fn();
+  } };
+  w.c.attack = () => { attacks++; };
+  const pulled = await p.pull(foe);
+  ok('the health guard runs at packet time, after the attack pacer wait',
+     pulled.health_abort === true && movements === 1 && attacks === 0,
+     JSON.stringify({ pulled, movements, attacks }));
+}
+
+console.log('\n--- the live keeper watchdog escalates a same-pass re-arm ---');
+{
+  const w = world({ health: 10, max: 30 });
+  const p = keeper(w);
+  w.c.state = 'game';
+  let cancels = 0;
+  w.s.cancelMovement = () => { cancels++; return { cancelled: true, interrupted: 1 }; };
+  p.recordFrame = () => { p.lastFrameAt = Date.now(); };
+  p.passes = 4;
+  p.doing = 'pulling';
+  p.passStartedAt = Date.now() - 5_000;
+  p.watch = {
+    ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
+    lastHealth: null, blockedSince: null, interruptedPass: null,
+    lastInterruptAt: null, interruptedDoing: null, repeatInterrupts: 0,
+    pulses: [], lastPulseAt: Date.now(), wedged: null, wedges: 0,
+  };
+  p.watchdogTick();
+  p.watchdogTick();
+  ok('the live autopilot implementation rate-limits immediate repeat ticks', cancels === 1);
+  p.watch.lastInterruptAt -= 2_000;
+  p.watch.pulses = [
+    { at: Date.now() - 1200, room: 999, col: 6, row: 5 },
+    { at: Date.now() - 600, room: 999, col: 7, row: 5 },
+    { at: Date.now(), room: 999, col: 6, row: 5 },
+  ];
+  p.watchdogTick();
+  ok('and cancels a locally bouncing fallback re-armed by the same blocked pass',
+     cancels === 2 && p.watch.repeatInterrupts === 1,
+     JSON.stringify({ cancels, watch: p.watch }));
+
+  p.doing = 'travelling';
+  p.watch.lastInterruptAt -= 2_000;
+  p.watch.pulses = [
+    { at: Date.now() - 1200, room: 999, col: 6, row: 5 },
+    { at: Date.now() - 600, room: 999, col: 6, row: 5 },
+    { at: Date.now(), room: 999, col: 6, row: 5 },
+  ];
+  p.watchdogTick();
+  ok('but does not cancel a survival retreat that replaced the interrupted pull',
+     cancels === 2 && p.watch.repeatInterrupts === 1,
+     JSON.stringify({ cancels, watch: p.watch }));
 }
 
 console.log('\n--- a denied assignment cannot fight its own relocation ---');
@@ -451,6 +655,11 @@ console.log('\n--- keeping track of where we are ---');
   p.pendingPull = { waitUntil: Date.now() + 30_000, target: 'giant rat' };
   p.pullsWithoutContact = 2;
   w.me().col = 6;                                     // something moved us
+  p.running = true;
+  p.doing = 'fighting';
+  ok('before the next observation, a stale hold is already not shelter',
+     !p.holdWorks() && p.status().safe_spot.works === false &&
+       !/fighting from/.test(p.activity()), p.activity());
   look(p);
   ok('a spot we are not standing on is released', p.hold === null,
      'holding a belief about a square we left is how a keeper walks into a swarm confident');
@@ -656,7 +865,8 @@ console.log('\n--- a freeze that changed nothing is not repeated ---');
   // m59-playdead-test.mjs. THIS block is about something else — the livelock guard, which
   // is on the OUTCOME rather than the cause — so it has to set up the one situation where
   // a freeze can happen, or it is testing the refusal instead of the repeat.
-  p.hold = { col: w.me().col, row: w.me().row, proven: true, takenAt: Date.now() - 60_000 };
+  p.hold = { room: 999, col: w.me().col, row: w.me().row,
+             proven: true, takenAt: Date.now() - 60_000 };
   let rejoins = 0;
   p.s.rejoin = async () => { rejoins++; };
   const first = await p.playDead('test');

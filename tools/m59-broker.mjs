@@ -8254,11 +8254,10 @@ const TOOLS = [
         p.policy.inkyReserveFloor = Math.max(0, Number(a.inky_reserve_floor) || 0);
       if (a.use_safe_spots !== undefined) p.policy.useSafeSpots = !!a.use_safe_spots;
       if (a.hold_resume_above !== undefined) p.policy.holdResumeAbove = Number(a.hold_resume_above);
-      // 0 or null means NO LIMIT, not "never pull anything". There is no sensible reading
-      // of "fetch things within zero steps", and the default is unlimited — see pull() —
-      // so this is the only way to express "put the ceiling back where it was" and then
-      // take it off again. Number(null) is 0, which without this line silently froze a
-      // keeper out of every fight it could otherwise have had.
+      // 0 or null means NO LIMIT, not "never pull anything". The safe default is eight;
+      // this preserves an explicit operator override that removes the ceiling. Number(null)
+      // is 0, which without this line silently froze a keeper out of every fight it could
+      // otherwise have had.
       if (a.pull_within !== undefined)
         p.policy.pullWithin = (a.pull_within === null || Number(a.pull_within) <= 0)
           ? null : Number(a.pull_within);

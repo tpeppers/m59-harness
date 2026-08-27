@@ -94,6 +94,16 @@ console.log('\nstanding still on purpose is not a stall');
   const wall = keeper({ doing: 'travelling', hold: { col: 10, row: 10 } });
   for (let t = 1000; t <= 60000; t += 1000) wall.tick(t);
   ok('a wall held for a full minute raises nothing at all', wall.watch.wedges === 0);
+
+  // A remembered wall is not under the body during an outbound pull. This was the
+  // exclusion that hid the fatal 17<->18 wall bounce: `hold` stayed truthy while the
+  // character was seventy rows away from it.
+  const away = keeper({ doing: 'pulling', hold: { room: 587, col: 5, row: 5 },
+                        room: 587, col: 10, row: 10 });
+  away.tick(1000, { health: 50 });
+  const wedged = away.tick(2000, { health: 45 });
+  ok('a remembered safe spot does not excuse a body physically off its square',
+     !!wedged && wedged.taking_hits === true, JSON.stringify(wedged));
 }
 
 // ---------------------------------------------------------------------------
