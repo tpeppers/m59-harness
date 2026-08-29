@@ -99,7 +99,8 @@ async function sample(tick) {
       else {
         row.watchdog = st?.watchdog ?? null;
         Object.assign(row, pick(st, ['running', 'inert', 'passes', 'running_for_seconds',
-                                     'last_error', 'stalled', 'yield_check', 'waiting_on',
+                                     'last_error', 'last_error_age_s', 'last_error_live',
+                                     'failing_passes', 'stalled', 'yield_check', 'waiting_on',
                                      'refusals', 'denied_rooms', 'safe_spot', 'threat']));
         if (DEPTH === 'full') Object.assign(row, pick(st, ['did', 'recent', 'trials',
                                                           'coordination', 'placement', 'policy']));

@@ -1611,7 +1611,35 @@ export class Autopilot {
     this.journal = [];
     this.passes = 0;
     this.startedAt = null;
+    // THE MOST RECENT ERROR THAT HAS NOT SINCE BEEN RECOVERED FROM — not "the most recent
+    // error ever", which is what this field used to mean and not what anything reads it as.
+    //
+    // The status snapshot calls it "the one field worth reading before anything else", and
+    // the operator, the hourly strategy review and the ten-minute play tick all read it as
+    // a statement about NOW. It was set in two places and cleared in one: here. So the
+    // first transient blip of a process populated it for the life of that process.
+    //
+    // The blip is not rare — it is a FEATURE firing. With `breakOutViaLogoff`, leaving a
+    // crowded spot calls reconnect() → rejoin(), which nulls `client` for ~800ms; `live`
+    // goes false and any action the in-flight pass still attempts throws. Measured on
+    // JohnsSlave 2026-08-29: 16 deliberate breakouts in 58 minutes of healthy farming, and
+    // a status snapshot showing 4 kills, 0 deaths, "fighting from a proven safe spot" —
+    // beside `last_error: agent "psycho" is not in game — call join first`, six minutes
+    // stale and unclearable. A reader could not tell a healed blip from a dead session,
+    // and a second poll did not help, because healing did not clear it.
+    //
+    // So: cleared by a completed pass on a live session (see loop()), and stamped, so a
+    // reader that wants the history can still tell a four-minute-old scar from a live
+    // wound without a second poll.
     this.lastError = null;
+    this.lastErrorAt = null;
+    // Was the session live when it threw? `false` during a breakout window is the
+    // self-inflicted, self-healing kind; `true` is a real one. One boolean in the journal
+    // is the difference between a five-second check and an afternoon's investigation.
+    this.lastErrorLive = null;
+    // How many consecutive passes have now failed. 1 is a blip; a climbing number is the
+    // genuinely dangerous case and is the thing an alert should fire on.
+    this.consecutivePassFailures = 0;
     // What actually happened, so a returning model gets a summary rather than a tail.
     this.tally = { kills: 0, deaths: 0, rests: 0, withdrawals: 0, rooms_moved: 0, looted: {} };
     this.coordination = {
@@ -7846,7 +7874,22 @@ export class Autopilot {
           } : null },
       },
       last_error: this.lastError,
-      // The one field worth reading before anything else. Everything this keeper got
+      // WHEN, AND WHETHER THE SESSION WAS AWAKE FOR IT. Without these the field could not
+      // distinguish a healed reconnect blip from a session that is actually dead, and
+      // polling again did not help because nothing ever cleared it. Null whenever
+      // `last_error` is null, so the three always tell one story.
+      last_error_age_s: this.lastErrorAt
+        ? Math.round((Date.now() - this.lastErrorAt) / 1000) : null,
+      // false = it threw while the client was gone, which is what a deliberate breakout
+      // looks like and what heals itself. true = it threw with the session live, which is
+      // the kind worth acting on.
+      last_error_live: this.lastError ? this.lastErrorLive : null,
+      // How many passes in a row have failed. 1 is a blip; a climbing number is a keeper
+      // that is not going to get out of it on its own.
+      failing_passes: this.consecutivePassFailures || 0,
+      // The one field worth reading before anything else, and it now means what it says:
+      // the most recent error THAT HAS NOT SINCE BEEN RECOVERED FROM. A completed pass on
+      // a live session clears it (see loop()). Everything this keeper got
       // wrong in practice was invisible: it kept running, kept journalling, and did
       // no work. If this is set, it has been going through the motions.
       // The second invisible failure, alongside `stalled`: working perfectly and earning
@@ -8860,7 +8903,9 @@ export class Autopilot {
     this.progress('started');
     this.note('started', { mode: this.mode, hunt: this.policy.hunt });
     // Deliberately not awaited: the loop outlives the call that started it.
-    this.loop().catch(e => { this.lastError = e.message; this.running = false; this.note('crashed', { why: e.message }); });
+    this.loop().catch(e => { this.lastError = e.message; this.lastErrorAt = Date.now();
+                             this.lastErrorLive = !!this.s?.live; this.running = false;
+                             this.note('crashed', { why: e.message }); });
     return this.status();
   }
 
@@ -9571,6 +9616,47 @@ export class Autopilot {
     this.progress('watchdog interrupted a blind walk');
   }
 
+  // THE TWO HALVES OF `last_error`'s LIFECYCLE, NAMED, so that the rule can be driven
+  // without standing up a keeper. The bug they fix is entirely one of bookkeeping — the
+  // recovery path was always correct — and the only way to pin bookkeeping is to be able
+  // to ask it a question, which a five-second sleep inside `loop()` made impossible.
+
+  // A COMPLETED PASS ON A LIVE SESSION IS THE RECOVERY, AND IT HAS TO SAY SO.
+  //
+  // Both halves are required. "Completed" alone is not enough — a pass can finish without
+  // touching the wire — so `live` is asked too, because the error class this clears is
+  // precisely a session that had gone away. Recorded as a journal line rather than cleared
+  // silently: the complaint was that a recovery left no trace, and a field that empties
+  // itself with no entry beside it swaps one invisible transition for another.
+  notePassSucceeded() {
+    if (this.lastError && this.s?.live) {
+      this.note('recovered', { after: this.lastError,
+                               unwell_for_s: this.lastErrorAt
+                                 ? Math.round((Date.now() - this.lastErrorAt) / 1000) : null,
+                               failed_passes: this.consecutivePassFailures });
+      this.lastError = null;
+      this.lastErrorAt = null;
+      this.lastErrorLive = null;
+    }
+    this.consecutivePassFailures = 0;
+    return this.lastError;
+  }
+
+  // AND THE SET SIDE, STAMPED AND ATTRIBUTED. `live` at the moment of the throw is the
+  // whole difference between a self-inflicted reconnect window — `breakOutViaLogoff` nulls
+  // the client on purpose and heals on the next pass — and a fault the session was awake
+  // for. One boolean in the journal, and the two stop looking identical.
+  notePassFailed(e) {
+    const live = !!this.s?.live;
+    this.lastError = e?.message ?? String(e);
+    this.lastErrorAt = Date.now();
+    this.lastErrorLive = live;
+    this.consecutivePassFailures++;
+    this.note('pass failed', { why: this.lastError, live,
+                               consecutive: this.consecutivePassFailures });
+    return this.lastError;
+  }
+
   async loop() {
     // The outer loop is the other half of start()'s cancellation. Between leaving the
     // inner loop and admitting we have stopped there is no await, so a start() can
@@ -9590,12 +9676,12 @@ export class Autopilot {
         try {
           await this.pass();
           this.spend(Date.now() - began);
+          this.notePassSucceeded();
         } catch (e) {
           this.spend(Date.now() - began);
           // A pass that throws must not kill the keeper — the session may simply have
           // gone away underneath it, and the next pass will find out properly.
-          this.lastError = e.message;
-          this.note('pass failed', { why: e.message });
+          this.notePassFailed(e);
           await sleep(5000);
         }
         this.passStartedAt = null;

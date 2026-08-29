@@ -2038,8 +2038,28 @@ class Session {
     return this.join(this.credentials);
   }
 
+  // "NOT IN GAME" IS TRUE OF TWO DIFFERENT FAULTS AND ONLY ONE OF THEM IS A CONNECTION.
+  //
+  // A session that HAS joined and dropped is the case this sentence was written for, and
+  // "call join first" is the right advice for it. A session that has NEVER joined — no
+  // client, no join in flight, no credentials — is a session nobody ever tried to log in,
+  // and on this broker that has one overwhelmingly common cause: the name is wrong. A
+  // character name where an agent name goes used to mint exactly such a session, and then
+  // every call against it reported a connection problem for a naming one, which sends the
+  // reader (or a monitoring layer, which is the point of this harness) to restart and
+  // rejoin a character that was never unwell. session() in m59-broker.mjs now refuses that
+  // name outright; this stays because it is the guard that was LYING, and a session can
+  // still reach here unjoined by other routes.
   need() {
-    if (!this.live) throw new Error(`agent "${this.name}" is not in game — call join first`);
+    if (!this.live) {
+      if (!this.client && !this.joining && !this.credentials)
+        throw new Error(`agent "${this.name}" was never joined — this session holds no ` +
+                        `credentials and no connection was ever attempted for it. If the ` +
+                        `character is in game, the agent name is probably wrong (an agent ` +
+                        `name is not the character's name); otherwise join it with an ` +
+                        `account and password.`);
+      throw new Error(`agent "${this.name}" is not in game — call join first`);
+    }
     return this.client;
   }
 

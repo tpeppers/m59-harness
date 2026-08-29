@@ -544,7 +544,7 @@ async function cmdStatus() {
     return 1;
   }
   // How many are actually playing, which is the question status is really asked for.
-  let inGame = null, stalled = 0, agents = h.sessions?.length ?? 0;
+  let inGame = null, stalled = 0, agents = h.sessions?.length ?? 0, orphans = [];
   try {
     const j = await fetchJson(`http://127.0.0.1:${HTTP_PORT}/`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, timeoutMs: 20000,
@@ -563,7 +563,21 @@ async function cmdStatus() {
     // and three hunting. A number under a wrong name sends you looking for a fault that
     // is not there, which is expensive at exactly the moment status is being read.
     stalled = f.stalled_count ?? 0;
-    inGame = (f.fleet ?? []).filter(r => r.in_game !== false).length || null;
+    // ONLY ROSTER ROWS ARE COUNTED, BECAUSE ONLY ROSTER ROWS CAN BE REJOINED.
+    //
+    // The remediation printed below — "the broker rejoins them on its own" — is a claim
+    // about the 45s sweep, and that sweep iterates the ROSTER. A session with no roster
+    // entry is outside its jurisdiction by construction, so counting it as a dropped
+    // character told the operator to wait for a recovery that cannot happen. One mistyped
+    // agent name used to produce exactly that, for the life of the broker process.
+    //
+    // `in_roster` is undefined on a broker predating it: fail OPEN and count the row, so
+    // an older broker reads exactly as it did before rather than reporting an empty fleet.
+    const rows = f.fleet ?? [];
+    orphans = rows.filter(r => r.in_roster === false).map(r => r.agent);
+    const mine = rows.filter(r => r.in_roster !== false);
+    agents = mine.length || agents;
+    inGame = mine.filter(r => r.in_game !== false).length || null;
   } catch { /* the broker is up; the fleet call is a nicety */ }
   console.log(c.ok(`broker "${LABEL}"  UP`) + `  pid ${h.pid}`);
   console.log(`  rpc        http://127.0.0.1:${HTTP_PORT}`);
@@ -593,6 +607,13 @@ async function cmdStatus() {
   if (inGame != null && agents && inGame < agents)
     console.log(c.bad(`  ${agents - inGame} character(s) are not in game`) +
                 c.dim(' — the broker rejoins them on its own; watch the log'));
+  // A DIFFERENT FAULT WITH A DIFFERENT REMEDY, so it gets its own line rather than being
+  // folded into the count above. Nothing will rejoin these; they go away on a restart.
+  if (orphans.length)
+    console.log(c.bad(`  ${orphans.length} session(s) are not roster characters`) +
+                c.dim(` — ${orphans.slice(0, 6).join(', ')}${orphans.length > 6 ? ' …' : ''};` +
+                      ' the rejoin sweep iterates the roster and cannot see these.' +
+                      ' Usually a mistyped agent name; they clear on a broker restart.'));
   return 0;
 }
 

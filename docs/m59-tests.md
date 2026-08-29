@@ -193,6 +193,41 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
   recycled pid rather than a holder — the process start time is 1ms from the pid file's own
   timestamp, because `m59-service.mjs` writes it as it spawns — and that nothing listening
   anywhere is still exit 0, or `./m59.sh up` could never start a fleet) and
+  `node tools/m59-phantom-test.mjs` (40 — **one mistyped agent name used to degrade every
+  health check for the life of the broker process**. `session()` minted a bare `Session` for
+  any non-empty string, and a bare session can never be in game, because nothing ever tries
+  to join a name the roster does not know. So naming the CHARACTER (`JohnsSlave`) where the
+  AGENT (`psycho`) goes — the fleet page prints both — got `agent "JohnsSlave" is not in
+  game — call join first`, which is a sentence about a CONNECTION for a fault that is a
+  NAME, and sends a monitoring layer to rejoin a character that was never unwell. Two calls
+  one second apart, same broker, same character, answered "fine" and "call join first". The
+  phantom then outlived every 45s sweep — the sweep iterates the ROSTER — while
+  `m59-service.mjs status` printed "the broker rejoins them on its own; watch the log" about
+  a row it could never reach. Pins that an unknown name is refused before any session
+  exists and that the refusal NAMES the agent whose character that is, that `join` and
+  `create_character` keep the exemption because introducing a new name is their job and
+  nothing else claims it, that a never-joined session stops blaming the connection, and that
+  `status` counts and rejoin-promises only rows the sweep can actually see — failing OPEN on
+  a broker too old to send `in_roster`, because reading undefined as "not mine" would report
+  an empty fleet, which is the louder bug. The rule itself is in `m59-agent-name.mjs`
+  precisely so it can be asked a question without starting a broker) and
+  `node tools/m59-lasterror-test.mjs` (28 — **`last_error` is the field the status snapshot
+  calls "the one field worth reading before anything else", and it was write-once for the
+  life of the process**. Set in two places, cleared in one: the constructor. So it meant
+  "the most recent error ever" while every reader — operator, hourly strategy review,
+  ten-minute play tick — read it in the present tense. And the error it holds is usually a
+  survival FEATURE firing: `breakOutViaLogoff` leaves a crowded spot via reconnect(), which
+  nulls the client for ~800ms, so the in-flight pass throws. Sixteen of those in 58 minutes
+  of healthy farming; six minutes after one, the same process reported "fighting from a
+  proven safe spot", 4 kills, 0 deaths — and the identical stale error. Pins that a
+  completed pass on a LIVE session clears it and leaves a `recovered` journal line, that a
+  completed pass on a session that is NOT live does not (a pass can finish without touching
+  the wire, and the class being cleared is exactly "the session went away"), and that the
+  error is stamped and attributed — `last_error_live: false` is the self-healing reconnect
+  window, `true` is a fault the session was awake for, and a climbing `failing_passes` is
+  the genuinely dangerous case that used to look identical to the blip. It drives the real
+  `notePassSucceeded`/`notePassFailed`, which were named for this: the catch arm sleeps five
+  seconds, so a test going through `loop()` could ask one question a working day) and
   `node tools/m59-unattended-test.mjs` (44 — **the contract test for the carve-out**: with
   no bot attached every faculty answers `keeper`, a bot asking for all eight gets only the
   directional four, an expired lease is the keeper's again, and the override takes a
@@ -288,13 +323,17 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
   is its own module for the reason this document exists: `m59-broker.mjs` cannot be imported
   without taking the fleet lock and starting rejoin timers) and
   `node tools/m59-describe-test.mjs` (52) and
-  `node tools/m59-recordjam-test.mjs` (36 — **turning a live traffic jam into a fixture**:
+  `node tools/m59-recordjam-test.mjs` (43 — **turning a live traffic jam into a fixture**:
   that `m59-recordjam.mjs` reads a region col,row like every square here, collapses a run of
   samples to what stood still and what wiggled (a trace of position CHANGES with when each
   was first seen), counts a player once however many observers saw it while keeping two
   same-named rats apart by id, redacts our names to `player A…` and other people's to
   `stranger A…` unless `--names`, and measures the floor under the region off the real BSP —
-  against the Sewers of Barloque, the rat picket line it was written for) and
+  against the Sewers of Barloque, the rat picket line it was written for; and that **every
+  jam fixture on disk stays redacted**: each player in `tools/fixtures/*.json` is a role and
+  never a name, because a file that was clean when written is the one nobody re-checks —
+  `spidertrap1.json` is pinned with its subject's square, vitals and load and the black
+  spider three squares west of it) and
   `node tools/m59-fightback-test.mjs` (36 — **the fight-back edict**, an operator's order
   that is off by default: that the watchdog half counts blows only with something in reach,
   asks for a fight at ten seconds and not nine, pulls the handbrake once per pass, and stays

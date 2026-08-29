@@ -71,6 +71,7 @@ import * as transits from './m59-transits.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits } from './m59-session.mjs';
 import { resolveFleet, rosterGameEndpoint } from './m59-fleetpath.mjs';
+import { resolveAgentName } from './m59-agent-name.mjs';
 import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
 import { resolveItemNames, weighItem } from './m59-items.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
@@ -3417,21 +3418,37 @@ function startAbilitySweep() {
 // Of several exits that all lead to the same place, try the reachable ones first
 // and the nearest of those first. `reachable` is undefined for kinds the geometry
 
-const session = name => {
+const session = (name, { create = false } = {}) => {
   // A MISSING AGENT IS NOT AN AGENT. This created a Session for whatever it was handed,
   // so any tool called without one registered a phantom keyed `undefined` — never in
   // game, never doing anything, and counted. The fleet board then reported 22 agents
   // against a roster of 21 and "19/22 keepers running", which is exactly the kind of
   // quiet miscount that makes a healthy fleet look broken and a broken one look fine.
   // JSON.stringify drops the undefined agent field, so the row arrives headless too.
-  if (name == null || name === '') throw new Error('no agent named — every fleet tool takes an `agent`');
-  if (!sessions.has(name)) {
-    if (agentIndices.has(name)) {
-      sessions.set(name, makeKeeperProxy(name, agentIndices.get(name)));
-    } else {
-      sessions.set(name, new Session(name));
-    }
-  }
+  //
+  // AND A NAME THAT IS PRESENT BUT WRONG IS THE SAME BUG WITH A LOUDER SYMPTOM. That
+  // guard only ever covered "no name"; a name nobody answers to — a CHARACTER name where
+  // an agent name goes is the usual one, because the fleet page prints both — fell
+  // straight through it and minted a bare Session that can never be in game, because
+  // nothing will ever try to join a name the roster does not know. Every later call
+  // against it threw "not in game — call join first", which sends the reader to the
+  // connection and the fault was the name; the phantom then outlived every 45s sweep
+  // (the sweep iterates the ROSTER) and shifted `sessions.size` and every in-game tally
+  // for the life of the process. One typo, one degraded fleet board, until a restart.
+  //
+  // `create` is the narrow exception: `join` and `create_character` exist to introduce a
+  // name this broker has never seen. The decision itself is in m59-agent-name.mjs so it
+  // can be asked a question without starting a broker.
+  const r = resolveAgentName(name, {
+    held: sessions.has(name),
+    keeperBacked: agentIndices.has(name),
+    inRoster: fleetState.has(name),
+    create,
+    roster: fleetState,
+  });
+  if (r.action === 'refuse') throw new Error(r.error);
+  if (r.action === 'keeper') sessions.set(name, makeKeeperProxy(name, agentIndices.get(name)));
+  else if (r.action === 'bare') sessions.set(name, new Session(name));
   return sessions.get(name);
 };
 
@@ -4110,7 +4127,9 @@ const TOOLS = [
       required: ['agent'],
     },
     run: async (a) => {
-      const s = session(a.agent);
+      // `create: true` — this is one of the two tools whose JOB is to introduce a name the
+      // broker has never seen, so it is exempt from the unknown-agent refusal in session().
+      const s = session(a.agent, { create: true });
       // A CHARACTER EXISTS ON ONE SERVER, SO REJOINING IT MUST GO BACK TO THAT SERVER.
       //
       // Session.join defaults host/port to M59_HOST/M59_PORT, which for this checkout is
@@ -11082,7 +11101,9 @@ const TOOLS = [
       if (a.action === 'plan') return plan;
       if (!plan.ok) return { done: false, plan, note: 'the plan is invalid; nothing was sent' };
 
-      const s = session(a.agent);
+      // The other half of session()'s `create` exemption: making a character is exactly
+      // the case where the agent name is supposed to be new.
+      const s = session(a.agent, { create: true });
 
       // CREDENTIALS-FIRST PATH: caller already arranged first-time state via the
       // admin socket (zeroing piLastLoginTime and piLast_Restart_time). Set credentials
@@ -12303,8 +12324,17 @@ const TOOLS = [
         const ap = autopilotIfAny(name);
         const st = (s instanceof KeeperProxy) ? s.status() : (ap ? ap.status() : null);
         if (!c || s.client?.state !== 'game') {
+          // `in_roster` IS THE DIFFERENCE BETWEEN A DROPPED CHARACTER AND A NAME NOBODY
+          // OWNS, and every reader of this board was told they were the same thing. The
+          // 45s rejoin sweep iterates the ROSTER, so it can only ever bring back a row
+          // that has one — and `m59-service.mjs status` printed "the broker rejoins them
+          // on its own; watch the log" over rows it could never reach. session() no
+          // longer mints those, but a broker started before that fix still holds them,
+          // and a row should say which kind it is rather than leaving it to be inferred.
           rows.push({ agent: name, character: c?.me?.name ?? null, in_game: false,
-                      stalled: 'not in game' });
+                      in_roster: fleetState.has(name),
+                      stalled: fleetState.has(name) ? 'not in game'
+                        : 'not in game, and not in the roster either — nothing will rejoin this' });
           continue;
         }
         const v = c.vitals();
@@ -12312,6 +12342,8 @@ const TOOLS = [
         rows.push({
           agent: name,
           character: c.me?.name ?? null,
+          // See the not-in-game row above: whether the rejoin sweep can see this one.
+          in_roster: fleetState.has(name),
           room: c.rsc.get(c.roomNameRsc) ?? null,
           // The NUMBER as well as the name, because names are not unique — twenty-two
           // of them name more than one room, so anything that wants to look a room up
