@@ -1,0 +1,933 @@
+{
+ "format": "m59-jam/1",
+ "captured_at": "2026-08-29T16:45:15.000Z",
+ "fleet": "prod",
+ "room": {
+  "num": 578,
+  "name": "The Cragged Mountains",
+  "roo": "g8.roo",
+  "cols": 50,
+  "rows": 49
+ },
+ "region": {
+  "c1": 0,
+  "r1": 0,
+  "c2": 49,
+  "r2": 48
+ },
+ "units_note": "fine coordinates are kod units, 64 per coarse square; col = floor(x/64), row = floor(y/64). A body blocks a move that would END within 16 units of its centre (MIN_NOMOVEON) — see m59-needle-test.mjs",
+ "seconds": 0,
+ "interval_ms": 0,
+ "samples": 1,
+ "observers": [
+  "player A"
+ ],
+ "static": [
+  {
+   "name": "black spider",
+   "kind": "monster",
+   "col": 8,
+   "row": 12,
+   "x": 544,
+   "y": 800,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 31,
+   "row": 13,
+   "x": 2016,
+   "y": 864,
+   "seen": 1
+  },
+  {
+   "name": "black spider",
+   "kind": "monster",
+   "col": 47,
+   "row": 14,
+   "x": 3040,
+   "y": 928,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 16,
+   "row": 16,
+   "x": 1056,
+   "y": 1056,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 15,
+   "row": 26,
+   "x": 992,
+   "y": 1696,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 15,
+   "row": 27,
+   "x": 992,
+   "y": 1760,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 41,
+   "row": 27,
+   "x": 2656,
+   "y": 1760,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 37,
+   "row": 30,
+   "x": 2400,
+   "y": 1952,
+   "seen": 1
+  },
+  {
+   "name": "troll",
+   "kind": "monster",
+   "col": 27,
+   "row": 33,
+   "x": 1760,
+   "y": 2144,
+   "seen": 1
+  },
+  {
+   "name": "black spider",
+   "kind": "monster",
+   "col": 14,
+   "row": 35,
+   "x": 929,
+   "y": 2280,
+   "seen": 1
+  },
+  {
+   "name": "black spider",
+   "kind": "monster",
+   "col": 28,
+   "row": 39,
+   "x": 1824,
+   "y": 2528,
+   "seen": 1
+  },
+  {
+   "name": "black spider",
+   "kind": "monster",
+   "col": 35,
+   "row": 43,
+   "x": 2272,
+   "y": 2784,
+   "seen": 1
+  },
+  {
+   "name": "black spider",
+   "kind": "monster",
+   "col": 13,
+   "row": 44,
+   "x": 853,
+   "y": 2835,
+   "seen": 1
+  },
+  {
+   "name": "player A",
+   "kind": "player",
+   "col": 16,
+   "row": 45,
+   "x": 1072,
+   "y": 2928,
+   "seen": 1
+  }
+ ],
+ "moving": [],
+ "geometry": {
+  "floor_y_by_col": {
+   "0": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "1": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "2": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "3": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "4": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "5": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "6": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "7": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "8": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "9": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "10": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "11": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "12": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "13": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "14": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "15": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "16": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "17": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "18": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "19": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "20": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "21": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "22": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "23": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "24": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "25": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "26": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "27": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "28": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "29": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "30": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "31": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "32": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "33": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "34": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "35": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "36": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "37": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "38": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "39": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "40": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "41": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "42": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "43": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "44": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "45": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "46": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "47": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "48": {
+    "lo": 0,
+    "hi": 3134
+   },
+   "49": {
+    "lo": 0,
+    "hi": 3134
+   }
+  },
+  "floor_x_by_row": {
+   "0": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "1": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "2": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "3": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "4": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "5": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "6": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "7": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "8": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "9": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "10": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "11": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "12": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "13": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "14": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "15": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "16": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "17": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "18": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "19": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "20": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "21": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "22": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "23": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "24": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "25": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "26": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "27": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "28": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "29": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "30": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "31": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "32": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "33": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "34": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "35": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "36": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "37": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "38": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "39": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "40": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "41": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "42": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "43": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "44": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "45": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "46": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "47": {
+    "lo": 0,
+    "hi": 3198
+   },
+   "48": {
+    "lo": 0,
+    "hi": 3198
+   }
+  },
+  "note": "fine kod units, 64 per square; null means no floor found in that column/row of the region"
+ },
+ "why": "spidertrap1 — a journey Castle Victoria -> the Royal Blacksmith of Barloque crossing the Cragged Mountains (578) south-to-north. The character arrived at 16:30:45Z from 579 and never left under its own power: every ~70s it boarded the baked line from the west anchor toward the north door and slipped at the same index, then aimed an undeclared fall two rows north with a black spider on the line and did not take it. Vigor fell 4/min the whole time. The journey timed out at 900s, the keeper revived, the journey was issued again five seconds later, and the loop resumed. Pulled out by the operator at ~16:47Z.",
+ "coordinate_note": "unit positions are col,row (x,y fine). The tactics ledger notes quoted under `trap` are ROW,COL — m59-game.mjs writes `${row},${col}` there. 45,16 in a note is the subject's square, col 16 row 45.",
+ "geometry_note": "an outdoor room: floor exists in every column, so `geometry` says 0..3134 everywhere and tells you nothing. The trap is a HEIGHT edge — the aims are undeclared FALLS with a linegap of 18..284 — and floor extents do not carry height. A test must read the BSP heights along the fall line (row 45..46 -> row 43..44, cols 13..16) at fine resolution; see docs/m59-routing.md on 40,33.",
+ "subject": {
+  "name": "player A",
+  "position": {
+   "col": 16,
+   "row": 45,
+   "x": 1072,
+   "y": 2928,
+   "facing": null
+  },
+  "health": {
+   "value": 56,
+   "max": 56
+  },
+  "mana": {
+   "value": 23,
+   "max": 23
+  },
+  "vigor_at_capture": 10,
+  "vigor_series_in_room": [
+   70,
+   70,
+   66,
+   66,
+   62,
+   60,
+   58,
+   58,
+   58,
+   44,
+   42,
+   40,
+   38,
+   34,
+   32,
+   28,
+   26,
+   22,
+   22,
+   18,
+   12
+  ],
+  "vigor_note": "read off the declared_jump rows, one per evaluation, 16:30:45Z..16:44:45Z — about 4 a minute, running",
+  "might": 50,
+  "carry": {
+   "items": 27,
+   "weight": 2418,
+   "weight_max": 2700,
+   "bulk": 1830,
+   "bulk_max": 2700,
+   "note": "20 long swords, 2 gold round shields and a knight's shield in the pack; formula 1700 + might*20"
+  },
+  "equipment": [
+   "knight's shield",
+   "long sword"
+  ],
+  "pack": [
+   "water skin (x17)",
+   "gold round shield",
+   "knight's shield",
+   "emerald (x6)",
+   "purple mushroom (x16)",
+   "scroll",
+   "long sword (x20)",
+   "blue mushroom (x6)",
+   "diamond (x4)",
+   "gold round shield",
+   "mushroom (x4)",
+   "sapphire (x10)",
+   "red mushroom (x4)"
+  ],
+  "skills": [
+   "short sword fighting",
+   "dodge",
+   "brawling",
+   "block",
+   "slash",
+   "mace fighting"
+  ],
+  "spells": [
+   "relay",
+   "zap",
+   "create food",
+   "create weapon",
+   "blink"
+  ],
+  "policy": {
+   "fightAboveVigor": 80,
+   "fleeBelow": 0.4,
+   "restBelow": 0.7,
+   "requireSafeWall": true,
+   "useSafeSpots": true,
+   "hunt": "battered skeleton",
+   "bannedDestinations": [
+    110
+   ],
+   "threatCeiling": {
+    "mode": "percent",
+    "value": 150
+   },
+   "travel_guard": {
+    "flee": true,
+    "fight_back": true,
+    "arm": false,
+    "rest": true,
+    "safe_spot": true
+   }
+  }
+ },
+ "journey": {
+  "to": 113,
+  "to_name": "The Royal Blacksmith of Barloque",
+  "from": 39,
+  "from_name": "Upstairs in Castle Victoria",
+  "route_walked": [
+   39,
+   38,
+   2,
+   599,
+   589,
+   579,
+   578
+  ],
+  "next_hop": 576,
+  "next_hop_name": "The King's Way",
+  "issued_at": [
+   "2026-08-29T16:27:37Z",
+   "2026-08-29T16:42:43Z"
+  ],
+  "inert_timeout_s": 900,
+  "arrived_in_578_at": "2026-08-29T16:30:45Z",
+  "issuer": "not recorded — the keeper log has no line for an /action travel, and neither the broker log nor the tactics ledger names the caller. Not the keeper's own resume path, which labels itself \"(resumed)\"."
+ },
+ "trap": {
+  "exits": {
+   "east": 826,
+   "south": 579,
+   "north": 576,
+   "west": 568
+  },
+  "door": {
+   "row": 1,
+   "col": 13,
+   "to": 576
+  },
+  "rail": {
+   "from_anchor": {
+    "row": 35,
+    "col": 1,
+    "dir": "west",
+    "to": 568
+   },
+   "to_door": {
+    "row": 1,
+    "col": 13,
+    "dir": "north",
+    "to": 576
+   },
+   "squares": [
+    {
+     "row": 35,
+     "col": 1
+    },
+    {
+     "row": 36,
+     "col": 2
+    },
+    {
+     "row": 33,
+     "col": 7
+    },
+    {
+     "row": 35,
+     "col": 12
+    },
+    {
+     "row": 36,
+     "col": 13
+    },
+    {
+     "row": 34,
+     "col": 15
+    },
+    {
+     "row": 32,
+     "col": 15
+    },
+    {
+     "row": 29,
+     "col": 14
+    },
+    {
+     "row": 26,
+     "col": 15
+    },
+    {
+     "row": 25,
+     "col": 14
+    },
+    {
+     "row": 25,
+     "col": 13
+    },
+    {
+     "row": 23,
+     "col": 9
+    },
+    {
+     "row": 24,
+     "col": 8
+    },
+    {
+     "row": 24,
+     "col": 7
+    },
+    {
+     "row": 22,
+     "col": 5
+    },
+    {
+     "row": 19,
+     "col": 6
+    },
+    {
+     "row": 15,
+     "col": 5
+    },
+    {
+     "row": 12,
+     "col": 3
+    },
+    {
+     "row": 9,
+     "col": 2
+    },
+    {
+     "row": 7,
+     "col": 3
+    },
+    {
+     "row": 6,
+     "col": 4
+    },
+    {
+     "row": 8,
+     "col": 6
+    },
+    {
+     "row": 8,
+     "col": 7
+    },
+    {
+     "row": 8,
+     "col": 9
+    },
+    {
+     "row": 3,
+     "col": 13
+    },
+    {
+     "row": 2,
+     "col": 14
+    },
+    {
+     "row": 1,
+     "col": 13
+    }
+   ],
+   "length": 27,
+   "slipped_at_index": 12,
+   "slipped_on": {
+    "row": 24,
+    "col": 8
+   },
+   "note": "the raw baked line anchor-to-door. The keeper boarded it one square inland and reported 30 squares (\"rejoined at 1 of 30 — slipped at 12\"), so `slipped_on` is index 12 of THIS list and may be off by up to three squares from the square it actually slipped on; replay railAcross() in a test for the exact one"
+  },
+  "ledger_rows_in_room": 43,
+  "ledger_window": [
+   "2026-08-29T16:30:45.284Z",
+   "2026-08-29T16:49:02.818Z"
+  ],
+  "epoch": "5222825178bd",
+  "notes": [
+   {
+    "count": 13,
+    "note": "baked_rail/exit_crossing attempted=true worked=false :: rejoined at 1 of 30 — slipped at 12"
+   },
+   {
+    "count": 12,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 45,16 -> 43,16 vigor N linegap 209.31 (black spider)"
+   },
+   {
+    "count": 2,
+    "note": "baked_rail/exit_crossing attempted=true worked=true :: rejoined at 1 of 11 — followed 6 of 9 remaining"
+   },
+   {
+    "count": 1,
+    "note": "baked_rail/exit_crossing attempted=true worked=false :: slipped at 13 of 29: slipped_off_rail"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/lane attempted=true worked=true :: line to 44,13 was 6.1 (black spider); took the lane -14 for 18.4 of clearance"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 44,13 vigor N linegap 18.36"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 43,16 vigor N linegap 280.63 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "baked_rail/exit_crossing attempted=true worked=false :: rejoined at 0 of 30 — slipped at 13"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 44,13 vigor N linegap 126.57 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 43,16 vigor N linegap 283.65 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 44,13 vigor N linegap 140.71 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 43,16 vigor N linegap 225.93 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,13 -> 44,13 vigor N linegap 61.00 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,14 -> 44,13 vigor N linegap 143.56 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "declared_jump/undeclared_fall attempted=false worked=false :: line as measured, before the jump: 46,15 -> 43,16 vigor N linegap 178.22 (black spider)"
+   },
+   {
+    "count": 1,
+    "note": "baked_rail/exit_crossing attempted=true worked=true :: rejoined at 0 of 11 — followed 7 of 10 remaining"
+   },
+   {
+    "count": 1,
+    "note": "baked_rail/exit_crossing attempted=false worked=false :: no rail needed — the door at 1,13 is 8 step(s) away (route 8, crow 8.6) and the line starts at 36,2"
+   },
+   {
+    "count": 1,
+    "note": "baked_rail/exit_crossing attempted=false worked=false :: no rail needed — the door at 1,13 is 7 step(s) away (route 7, crow 8.1) and the line starts at 36,2"
+   },
+   {
+    "count": 1,
+    "note": "baked_rail/exit_crossing attempted=false worked=false :: no rail needed — the door at 1,13 is 7 step(s) away (route 7, crow 6.4) and the line starts at 36,2"
+   }
+  ],
+  "reading": [
+   "baked_rail rows with attempted:true are the real attempts; \"rejoined at 1 of 30 — slipped at 12\" is the loop.",
+   "declared_jump rows with attempted:false are AIMS CONSIDERED, one per candidate landing per evaluation, not attempts (see the comment above that recordTactic in m59-game.mjs). Their value here is the vigor and the linegap.",
+   "the last three rows (\"no rail needed — the door at 1,13 is 7-8 steps away\") are from the minutes the operator was driving the character by hand."
+  ],
+  "roomview": {
+   "baked_routes": 12,
+   "declared_fall_jumps": 0,
+   "rail_crossings": "64 worked / 482 tried",
+   "walkable_squares": 1033,
+   "squares_with_refused_approaches": 838,
+   "note": "node tools/m59-roomview.mjs 578 at the time of capture"
+  }
+ }
+}

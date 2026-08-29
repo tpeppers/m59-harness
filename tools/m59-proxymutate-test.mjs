@@ -64,7 +64,7 @@ console.log('\nevery verb a tool calls on `c` now exists on the picture client')
   // The name on the left is what the broker or m59-skills.mjs calls; the name on the right
   // is the `/action` verb the keeper answers to.
   const wired = {
-    attack: 'attack', cast: 'cast', buy: 'shop', buyItems: 'buyitem',
+    attack: 'attack', cast: 'cast',
     apply: 'apply', use: 'use', unuse: 'unuse', get: 'pickup', drop: 'drop',
     activate: 'activate', stand: 'stand', rest: 'rest', look: 'look',
     face: 'face', roomContents: 'room_contents',
@@ -86,27 +86,37 @@ console.log('\nevery verb a tool calls on `c` now exists on the picture client')
   }
 }
 
+console.log('\nexcept shopping, which stays on the session on purpose');
+{
+  // THE ONE VERB WHERE FORWARDING THE PACKET IS NOT ENOUGH. A merchant that refuses says so
+  // in a SENTENCE TO THE ROOM and the packet succeeds either way, so a client-shaped `buy`
+  // invites a caller to report a purchase that never happened — measured, a buy of 4 herbs
+  // by a character with no shillings answered `bought: [{id:521, amount:4}]` and moved
+  // nothing. It goes through `shopList`/`shopBuy` on the PROXY, which report `got`.
+  ok('the snapshot has no buy()', !/^\s+buy\(/m.test(EMULATED) && !/\bbuy: /.test(EMULATED));
+  ok('and no buyItems()', !/buyItems\s*[:(]/.test(EMULATED));
+  ok('the proxy has them instead', /async shopList\(sellerId/.test(PROXY) &&
+                                   /async shopBuy\(sellerId/.test(PROXY));
+  ok('and the tools branch onto the proxy rather than the picture',
+     /const r = await proxied\.shopList\(t\.id\);/.test(BROKER) &&
+     /const r = await proxied\.shopBuy\(shop\.sellerId, \[line\]\);/.test(BROKER));
+  ok('which is pinned from the other side too', /no buyItems\(\) on the snapshot/.test(
+     readFileSync(new URL('./m59-shop-test.mjs', import.meta.url), 'utf8')));
+}
+
 console.log('\nand the argument names match on both sides of the wire');
 {
   // A NAME MISMATCH HERE IS INVISIBLE. The keeper's own `travel` case records what that
   // costs: the proxy sent `toRoomNum`, the keeper read `to`, and every journey answered
   // "no route from 586 to undefined" — which reads as bad terrain, not as bad wiring, and
   // was blamed on the terrain.
-  // NAMED EVERY WAY THE KEEPER HAS EVER READ IT. These verbs have gone through more than
-  // one spelling; a keeper takes the names it knows and ignores the rest, so sending all of
-  // them costs nothing and cannot be silently wrong.
-  ok('opening a shop names the seller by every id key in use',
-     /act\('shop', \{ op: 'list', id: sellerId, seller_id: sellerId \}\)/.test(EMULATED));
-  ok('and the keeper reads one of them', /args\.id \?\? args\.object/.test(KEEPER));
-  // A BARE ID BUYS NOTHING AND SAYS NOTHING. encodeIdList writes it as four plain bytes
-  // with no tag nibble, so the server's number_list arrives empty and UserBuyItems has no
-  // quantity to pair with the item.
-  ok('a buy carries {id, amount} specs, passed through rather than re-derived',
-     /act\('buyitem', \{ seller: sellerId, seller_id: sellerId, items: list,/.test(EMULATED));
-  ok('and the keeper takes the list rather than exactly one id',
-     /const wanted = \[\]\.concat\(args\.items \?\? args\.itemId \?\? args\.item \?\? \[\]\)/.test(KEEPER));
-  ok('and hands the specs to the client untouched',
-     /c\.buyItems\(sellerId, wanted\)/.test(KEEPER));
+  // A BARE ID BUYS NOTHING AND SAYS NOTHING, wherever the purchase is issued from.
+  // `encodeIdList` writes a bare id as four plain bytes with no tag nibble, so the server's
+  // number_list arrives empty and `UserBuyItems` has no quantity to pair with the item.
+  ok('the keeper takes a list of specs rather than exactly one bare id',
+     /\{ id: Number\(i\.id\), amount: Number\(i\.amount\) \}/.test(KEEPER));
+  ok('and hands them to the client untouched',
+     /c\.buyItems\(seller, wanted\)/.test(KEEPER) || /c\.buyItems\(sellerId, wanted\)/.test(KEEPER));
   ok('attack sends `target`, which is the first thing the keeper looks for',
      /attack: \(id\) => act\('attack', \{ target: id \}\)/.test(EMULATED) &&
      /const targetId = args\.target \?\? args\.id;/.test(KEEPER));

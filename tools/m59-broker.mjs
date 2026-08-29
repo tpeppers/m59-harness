@@ -542,6 +542,12 @@ const RAIL_STALL_JUMP = Number(process.env.M59_RAIL_STALL_JUMP || 3);
 
 const LEAVE_VIA_CLEARANCE = Number(process.env.M59_LEAVE_VIA_CLEARANCE ?? 0);
 const EDGE_NUDGE_WITHIN = Number(process.env.M59_EDGE_NUDGE_WITHIN || 16);
+// THE MOST A SINGLE PURCHASE MAY ASK FOR. The shelf is not the limit — an offer's `amount`
+// is the quantity the counter suggests, not stock, and the apothecaries do not run out —
+// but one exchange carries at most this many, so a bigger order is split into chunks.
+// Sending one oversized line does not error; it goes out and buys nothing, which is the
+// same silence a malformed id list produces and just as hard to read from outside.
+const SHOP_MAX_PER_BUY = Number(process.env.M59_SHOP_MAX_PER_BUY || 50);
 const EDGE_NUDGE_MAX_STEPS = Number(process.env.M59_EDGE_NUDGE_MAX_STEPS || 6);
 
 // ---------------------------------------------------------------- pacing
@@ -1402,25 +1408,18 @@ class KeeperProxy {
         return act('cast', { spell: sp?.name ?? String(spellId), spell_id: spellId,
                              targets: Array.isArray(targets) ? targets : [targets] });
       },
-      // EVERY NAME THE KEEPER HAS READ FOR THIS, WHICH IS NOT PEDANTRY. The keeper's own
-      // `travel` case records the cost of guessing wrong: the proxy sent `toRoomNum`, the
-      // keeper read `to`, and every journey answered "no route from 586 to undefined" — a
-      // sentence that reads as bad terrain and was blamed on the terrain. The shop verbs
-      // have gone through more than one spelling; a keeper reads the names it knows and
-      // ignores the rest, so naming all of them costs nothing and cannot be silently wrong.
-      buy: (sellerId) => act('shop', { op: 'list', id: sellerId, seller_id: sellerId }),
-      // {id, amount} SURVIVES THE TRIP, AND A BARE ID DOES NOT. `encodeIdList` writes a
-      // bare id as four plain bytes with no tag nibble, so the server's number_list arrives
-      // empty, `UserBuyItems` has no quantity to pair with the item, and nothing is bought
-      // and nothing is said. The specs go through verbatim for that reason — see the
-      // keeper's `buyitem`, which now takes the list rather than one id.
-      buyItems: (sellerId, items) => {
-        const list = [].concat(items ?? []);
-        return act('buyitem', { seller: sellerId, seller_id: sellerId, items: list,
-                                // For a keeper that still takes exactly one.
-                                itemId: (list[0] && typeof list[0] === 'object')
-                                  ? list[0].id : list[0] });
-      },
+      // AND NO `buy`/`buyItems` HERE, DELIBERATELY — THAT ONE STAYS ON THE SESSION.
+      //
+      // Everything above forwards a packet and reports what the keeper said, which is
+      // honest. A purchase is the one verb where that is not enough, because the answer is
+      // not on the wire at all: a merchant that refuses says so in a SENTENCE TO THE ROOM
+      // and the packet succeeds either way. Measured — a buy of 4 herbs by a character with
+      // no shillings came back `bought: [{id:521, amount:4}]` and moved nothing. A
+      // client-shaped `buy` invites exactly that reading, so shopping goes through
+      // `shopList`/`shopBuy` on the PROXY instead, which reports `got` — what the server
+      // actually handed over — and the `shop` and `buy` tools branch on `proxied` to reach
+      // them. `m59-shop-test.mjs` pins the absence; this comment is why it is an absence
+      // and not an oversight.
       // EAT IS NOT USE. Food is APPLIED to the eater (food.kod:56), so routing this
       // through `use` would send a packet that does nothing and reports no error.
       apply: (id, onto) => act('apply', { id, on: onto }),
@@ -1543,6 +1542,22 @@ class KeeperProxy {
       // Twenty-one characters failed to resume. A half-built emulation is worse than an
       // obviously empty one, because the empty one fails at the first read and this failed
       // at the second.
+      // TURNING A WORD INTO AN ID, which is how every tool that takes a name gets to one.
+      //
+      // `resolveTarget` calls `c.find(name)` and this had no `find` at all, so `shop`,
+      // and anything else naming its target, died with `c.find is not a function` on every
+      // keeper-backed character — which is all of them. Measured 2026-08-29: two characters
+      // were walked across the map to a shop that could not be opened when they got there.
+      //
+      // Safe to answer from the picture: this is a pure read over the room objects the
+      // keeper already publishes, and it matches the real client's version exactly —
+      // substring, case-insensitive, over the room's own names. The WIRE half of shopping
+      // is not here; see shopList/shopBuy below.
+      find(needle) {
+        const n = String(needle).toLowerCase();
+        return [...this.room.objects.values()]
+          .filter(o => String(o.nameRsc ?? o.name ?? '').toLowerCase().includes(n));
+      },
       room: {
         // Never substitute the save-stable RID for Meridian's live room object id.
         // They are different namespaces and the latter changes across server saves.
@@ -1769,6 +1784,51 @@ class KeeperProxy {
   }
   async cancelMovement(token) {
     return keeperAction(this.name, this._index, 'cancel', {});
+  }
+  // THE TWO HALVES OF SHOPPING THAT MUST TOUCH THE WIRE, forwarded to the process that owns
+  // it. `buy` and `buyItems` are mutations and the emulated client is a snapshot, so faking
+  // them here would be inventing a purchase that never left the building. See the `shop`
+  // case in m59-keeper-process.mjs; the purse/weight/bulk arithmetic stays in the tool.
+  async shopList(sellerId, opts = {}) {
+    return keeperAction(this.name, this._index, 'shop',
+      { op: 'list', seller_id: Number(sellerId), ...opts });
+  }
+  async shopBuy(sellerId, items, opts = {}) {
+    return keeperAction(this.name, this._index, 'shop',
+      { op: 'buy', seller_id: Number(sellerId), items, ...opts });
+  }
+  // The bank counter, same seam and same reason: balance/deposit/withdraw are wire calls.
+  async bankOp(op, amount, opts = {}) {
+    return keeperAction(this.name, this._index, 'bank', { op, amount, ...opts });
+  }
+  // THE BOOKKEEPING HALF, WHICH IS NOT A WIRE CALL AND SO BELONGS HERE. Session has both of
+  // these and the proxy had neither, so `bank` would have thrown `s.bankKnown is not a
+  // function` one line past the `c.balance` failure. They read and write the shared bank
+  // book on disk, keyed by character — no socket, nothing to proxy.
+  //
+  // The withdrawal is why the record matters at all: the server answers one with the AMOUNT
+  // HANDED OVER and never states the new balance (Lm_bnkr_did_withdraw, monster.kod:144),
+  // so the only way to know what is left is to subtract and say that it was arithmetic.
+  noteBanker(ev) {
+    const who = this._state?.character ?? null;
+    if (!who || !ev?.text) return;
+    try {
+      bankbook.record(who, ev.text, { at: ev.at ?? Date.now(),
+                                      room: this._state?.room?.name ?? null });
+    } catch { /* a bank book that will not write must not break a withdrawal */ }
+  }
+  bankKnown() {
+    const who = this._state?.character ?? null;
+    if (!who) return null;
+    try {
+      const rows = bankbook.balancesFor(who);
+      if (!rows.length) return null;
+      const latest = rows[0];
+      return { balance: latest.balance, account: latest.account, at: latest.at,
+               observed: latest.observed,
+               ...(rows.length > 1
+                 ? { accounts: Object.fromEntries(rows.map(r => [r.account, r.balance])) } : {}) };
+    } catch { return null; }
   }
 
   // RTS orders are jobs in the process that owns the Meridian socket. A JavaScript
@@ -4225,22 +4285,26 @@ async function readFactionStatus(s, { refresh = false } = {}) {
   const stale = FACTION_MAX_AGE_MS > 0 && (age === null || age > FACTION_MAX_AGE_MS);
   if (cached && cached.faction !== 'unknown' && !refresh && !stale) return { ...cached, cached: true,
     age_ms: age, max_health: c.vitals().health?.max ?? null };
-  // A SELF-LOOK NEEDS THE CHARACTER'S OWN OBJECT ID, AND NOT EVERY SESSION HAS ONE.
-  //
-  // On a keeper-backed character `c` is the emulated client, whose `selfId` was the
-  // placeholder -1 until /state began publishing the real one — and -1 is a number the
-  // server has never heard of, so this would send a look nothing can answer and then read
-  // an empty reply as "the self-profile did not answer". The pack read above is the honest
-  // fallback: signets are pack items, so a settled membership is still reported; what is
-  // lost is only the live refresh, and saying so is better than a look aimed at nothing.
-  if (!(c.selfId > 0) || typeof c.look !== 'function') {
-    const note = 'no self object id on this session, so no live self-look refresh — ' +
-                 'membership is read from the pack (a keeper too old to publish the id)';
+  // A KEEPER-BACKED CHARACTER'S CLIENT CANNOT SELF-LOOK. `KeeperProxy.need()` returns a mock
+  // client with no `look` and no `selfId`, so the `c.look(c.selfId)` refresh below threw
+  // "c.look is not a function" on every read whose faction was not already settled from the
+  // pack — which DUM's per-tick fleet faction scan turned into a flood of caught errors, one
+  // per character per tick, each collapsing to "faction unknown". The inventory reconciliation
+  // above still works (signets are pack items), so fall back to it rather than the look the
+  // proxy cannot do. A live self-look refresh for keeper-backed characters would need a keeper
+  // action that returns the player look event; this degrades quietly until there is one.
+  // THE GUARD IS ABOUT THE ID NOW, NOT ABOUT THE METHOD. `c.look` exists on a keeper-backed
+  // client since the mutation half landed, so testing for the function would send a look and
+  // read an empty answer; what actually decides whether a self-look can work is whether we
+  // know the character's own object id. A keeper too old to publish it still degrades to the
+  // pack read, exactly as this has always done.
+  if (typeof c.look !== 'function' || !(c.selfId > 0)) {
     return cached
-      ? { ...cached, cached: true, stale, age_ms: age,
-          max_health: c.vitals().health?.max ?? null, note }
+      ? { ...cached, cached: true, stale, age_ms: age, max_health: c.vitals().health?.max ?? null,
+          note: 'keeper-backed: faction read from the pack; no live self-look refresh here' }
       : { character, faction: 'unknown', soldier: false, observed_at: null, source: null,
-          cached: false, max_health: c.vitals().health?.max ?? null, note };
+          cached: false, max_health: c.vitals().health?.max ?? null,
+          note: 'keeper-backed with no faction items in the pack; no live self-look refresh here' };
   }
   const before = c.evSeq;
   await s.pacer.submit('look', () => c.look(c.selfId));
@@ -7142,11 +7206,30 @@ const TOOLS = [
     run: async (a) => {
       const s = session(a.agent), c = s.need();
       const t = resolveTarget(s, a.seller);
-      await s.pacer.submit('buy', () => c.buy(t.id));
-      const { events, timedOut } = await c.waitFor({ kinds: ['shop', 'message'], timeoutMs: 4000 });
-      const shop = events.find(e => e.kind === 'shop');
+      // OPENING THE SHOP IS A WIRE EXCHANGE, AND ON A KEEPER-BACKED CHARACTER THE WIRE IS
+      // NOT HERE. `c` is then a snapshot rebuilt from /state, so `c.buy` does not exist and
+      // faking it would invent a purchase that never left the building. The keeper runs the
+      // exchange and hands back the same {sellerId, items}; everything below — the purse,
+      // weight and bulk arithmetic — is unchanged and stays in this process.
+      const proxied = s instanceof KeeperProxy ? s : null;
+      let shop, timedOut = false, said = '';
+      if (proxied) {
+        const r = await proxied.shopList(t.id);
+        if (r?.error) return { seller: t.id, items: [], note: `keeper refused: ${r.error}` };
+        timedOut = !!r?.timed_out; said = r?.said ?? '';
+        // The keeper answers {seller_id, items} when the shop opened and an empty `items`
+        // when it did not. An empty shop and an unopened one are the same thing to a buyer.
+        shop = Array.isArray(r?.items) && r.items.length
+          ? { sellerId: r.seller_id, items: r.items } : null;
+      } else {
+        await s.pacer.submit('buy', () => c.buy(t.id));
+        const w = await c.waitFor({ kinds: ['shop', 'message'], timeoutMs: 4000 });
+        timedOut = !!w.timedOut;
+        said = (w.events ?? []).map(e => e.text).filter(Boolean).join('; ');
+        shop = (w.events ?? []).find(e => e.kind === 'shop');
+      }
       if (!shop) return { seller: t.id, items: [],
-                          note: timedOut ? 'no reply' : events.map(e => e.text).filter(Boolean).join('; ') };
+                          note: timedOut ? 'no reply' : said };
       if (!a.buy_ids?.length) return { seller: shop.sellerId, items: shop.items };
       // A BUY NEEDS A QUANTITY, AND A BARE ID DOES NOT CARRY ONE.
       //
@@ -7183,6 +7266,17 @@ const TOOLS = [
         const amt = Math.max(1, Number(typeof e === 'object' && e ? e.amount : 1) || 1);
         if (Number.isFinite(id)) merged.set(id, (merged.get(id) || 0) + amt);
       }
+      // `amount` ON AN OFFER IS A SUGGESTED QUANTITY, NOT STOCK. Every apothecary in the
+      // world lists "Herbs x4" and none of them runs out: 4 is the quantity the counter
+      // offers by default, and the shelf behind it is effectively bottomless. Read as stock
+      // it says the fleet can never buy more than four herbs from anyone, which is how a
+      // resupply run was called impossible on 2026-08-29 — the number was believed over the
+      // fleet's own loot log, which showed characters carrying seventy at a time.
+      //
+      // What IS real is a per-transaction ceiling: the server takes at most
+      // SHOP_MAX_PER_BUY in one exchange, so a larger order is split into chunks rather
+      // than sent as one oversized line that goes out and quietly does nothing. Same shape
+      // as `max_stack` on the sell side, and for the same reason.
       const offer = new Map((shop.items || []).map(i => [Number(i.id), i]));
       const cap = skills.carryCapacity(c);
       // THE PURSE IS A STACK IN THE PACK, NOT A FIELD ON THE CLIENT. `c.money` does not
@@ -7233,13 +7327,51 @@ const TOOLS = [
       if (!wanted.length)
         return { seller: shop.sellerId, bought: [], clamped, purse: purseKnown ? purse : null,
                  note: 'nothing was bought — every line was cut to zero by purse, weight or bulk' };
-      const before = c.evSeq;
-      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, wanted));
-      const after = await c.waitFor({ since: before, timeoutMs: 4000 });
-      return { seller: shop.sellerId, bought: wanted,
+      // ONE EXCHANGE CARRIES AT MOST SHOP_MAX_PER_BUY. Split every line that asks for more
+      // and send the chunks in order, because an oversized line is not refused — it goes out
+      // and buys nothing, silently, exactly like a malformed id list.
+      const rounds = [];
+      for (const line of wanted) {
+        let left = line.amount;
+        while (left > 0) {
+          const take = Math.min(left, SHOP_MAX_PER_BUY);
+          rounds.push({ id: line.id, amount: take });
+          left -= take;
+        }
+      }
+      const got = [], messages = [];
+      let refusedAfter = null;
+      for (const [n, line] of rounds.entries()) {
+        let arrived = [], said = '';
+        if (proxied) {
+          const r = await proxied.shopBuy(shop.sellerId, [line]);
+          if (r?.error) { refusedAfter = `keeper refused: ${r.error}`; break; }
+          arrived = r.got ?? []; said = r.said ?? '';
+        } else {
+          const before = c.evSeq;
+          await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
+          const after = await c.waitFor({ since: before, timeoutMs: 4000 });
+          arrived = (after.events ?? []).filter(e => e.kind === 'got').flatMap(e => e.items ?? []);
+          said = (after.events ?? []).map(e => e.text).filter(Boolean).join('; ');
+        }
+        if (said) messages.push(said);
+        got.push(...arrived);
+        // STOP ON THE FIRST CHUNK THAT BRINGS NOTHING. Whatever ended it — the purse, a
+        // full pack, a merchant that has stopped answering — will end the next one too, and
+        // hammering a counter that has already said no is how a town trip runs for ever.
+        if (!arrived.length) {
+          refusedAfter = `chunk ${n + 1} of ${rounds.length} brought nothing`;
+          break;
+        }
+      }
+      return { seller: shop.sellerId, asked: wanted, got, bought: got,
+               chunks: rounds.length,
                ...(clamped.length ? { clamped } : {}),
-               messages: after.events.filter(e => e.text).map(e => e.text),
-               got: after.events.filter(e => e.kind === 'got').flatMap(e => e.items) };
+               ...(messages.length ? { messages } : {}),
+               ...(got.length ? {} : { note: messages.length
+                 ? 'nothing arrived — the merchant said so'
+                 : 'nothing arrived and nothing was said; check the purse first' }),
+               ...(refusedAfter && got.length ? { stopped_early: refusedAfter } : {}) };
     },
   },
   {
@@ -7737,9 +7869,18 @@ const TOOLS = [
         description: 'name fragments best first when choosing which weapons fit under max_weapons' },
       ignore_loadout: { type: 'boolean',
         description: 'sell against the generic rules, ignoring this character\'s own list' },
+      max_stack: { type: ['number', 'null'],
+        description: 'largest count a single offer may contain; a bigger stack is sold in chunks. ' +
+          'The Barloque jeweler refuses a stack over 25 (bqmerch.kod). null means no cap.' },
     }, required: ['agent', 'merchant'] },
     run: async (a) => {
       const s = session(a.agent);
+      // keeper-backed: sell runs in the keeper process (its client has the trade packets; the
+      // broker's Session-only sellOne is not on the proxy). Merchant is resolved in the keeper's room.
+      if (s instanceof KeeperProxy)
+        return keeperAction(a.agent, s._index, 'sell_all', { merchant: a.merchant, keep: a.keep || [],
+          min_price: num(a.min_price, 1), max_stack: a.max_stack == null ? null : Number(a.max_stack),
+          max_weapons: a.max_weapons == null ? null : Number(a.max_weapons) });
       const t = resolveTarget(s, a.merchant);
       // BY CHARACTER NAME. `t1` is this checkout's word for a roster slot; the loadout
       // belongs to the character and follows it across rosters.
@@ -10009,14 +10150,31 @@ const TOOLS = [
       const s = session(a.agent), c = s.need();
       if (a.action !== 'balance' && !(num(a.amount, 0) > 0))
         throw new Error(`${a.action} needs a positive amount`);
-      const before = c.evSeq;
       const amount = Math.floor(num(a.amount, 0));
-      const fn = { balance: () => c.balance(),
-                   deposit: () => c.deposit(amount),
-                   withdraw: () => c.withdraw(amount) }[a.action];
-      await s.pacer.submit('bank', fn);
-      const { events } = await c.waitFor({ since: before, timeoutMs: 4000 });
-      const said = events.filter(e => e.text).map(e => String(e.text));
+      // THE COUNTER IS A WIRE EXCHANGE, AND ON A KEEPER-BACKED CHARACTER THE WIRE IS NOT
+      // HERE. `c` is a /state snapshot with no balance/deposit/withdraw, so this threw
+      // `c.balance is not a function` for every character in the fleet — discovered at the
+      // First Royal Bank of Tos after walking one across the map to reach it. The keeper
+      // runs the exchange; the bookkeeping below is unchanged.
+      const proxied = s instanceof KeeperProxy ? s : null;
+      let said;
+      if (proxied) {
+        const r = await proxied.bankOp(a.action, amount);
+        if (r?.error) throw new Error(`keeper refused: ${r.error}`);
+        said = (r.said ?? []).map(String);
+        // The keeper reads the same event stream Session.noteBanker writes from, so the
+        // stored record still has to see these sentences to keep its arithmetic honest.
+        // noteBanker reads ev.text and ev.at — a bare string silently records nothing.
+        for (const line of said) s.noteBanker?.({ kind: 'message', text: line, at: Date.now() });
+      } else {
+        const before = c.evSeq;
+        const fn = { balance: () => c.balance(),
+                     deposit: () => c.deposit(amount),
+                     withdraw: () => c.withdraw(amount) }[a.action];
+        await s.pacer.submit('bank', fn);
+        const { events } = await c.waitFor({ since: before, timeoutMs: 4000 });
+        said = events.filter(e => e.text).map(e => String(e.text));
+      }
       // WHAT THE BANKER SAID IS ALREADY BEING WRITTEN DOWN by Session.noteBanker, off
       // the same event stream, so this does not parse it a second time — it reads back
       // what was stored. That matters for the withdrawal: the server answers a

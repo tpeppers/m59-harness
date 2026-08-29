@@ -480,3 +480,13 @@ _verify2.mjs
 # strangers. So it lives per fleet, on the machine that owns the roster, and git carries the
 # shape in chatter.example.json instead. m59-shadow.mjs writes the shadow one on `create`.
 /substrate/chatter-*.json
+
+# The Barloque sell circuit is an ORDER to this fleet, like tuning.json and guild-plan.json.
+# The committed shape is substrate/sellrun.example.json.
+/substrate/sellrun.json
+/substrate/merchants/
+/substrate/preferences.json
+
+# Per-NPC merchant selling rules (stack caps, money caps) and fleet preferences are
+# operating choices, gitignored. Committed shapes: substrate/merchants.example.json,
+# substrate/preferences.example.json.

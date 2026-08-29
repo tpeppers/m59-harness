@@ -279,7 +279,15 @@ anything that stood still and a trace for anything that wiggled, redacts every p
 the region off the BSP so a needle test has the corridor and not just the bodies.
 `tools/fixtures/sewers-108-row27.json` is the first: six giant rats one per square centre
 on row 27 of the Sewers of Barloque, columns 39–41 exactly one square wide, and two
-characters oscillating in the gaps for seventy seconds.
+characters oscillating in the gaps for seventy seconds. `tools/fixtures/spidertrap1.json`
+is the second, built from a single snapshot rather than a run: a character crossing the
+Cragged Mountains (578) south to north on a journey to Barloque, held for twenty minutes
+at 16,45 by a black spider at 13,44 — boarding the baked line from the west anchor and
+slipping at the same index every seventy seconds, aiming an undeclared fall two rows north
+with the spider on the line and never taking it, vigor falling four a minute — with its
+vitals, load and policy under `subject` and the ledger's own rows under `trap`. A jam
+fixture records the bodies; `m59-recordjam-test.mjs` checks every one on disk is still
+roles and not names.
 
 "Ukgoth crossed 7 times out of 190" is true and tells you nothing about where. This draws
 the room the way the mover sees it — the coarse grid, the BSP floor, the step degree, the

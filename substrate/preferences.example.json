@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "FLEET PREFERENCES — selectively enable/disable priorities and behaviours. The SHAPE (committed).",
+    "Live copy is substrate/preferences.json (gitignored: it is this fleet's operating choices, not a fact",
+    "about the game). Every strategy switch this repo grows should land here as a named toggle rather than",
+    "as a hardcoded constant, so it can be turned on or off without a code change or a restart of judgement.",
+    "",
+    "THE CONTRACT (same as the other local files, docs/m59-policy.md): a missing file or a missing key means",
+    "the committed default, never 'off'. An unrecognised key is reported, never silently dropped. `enabled:",
+    "false` disables a preference; removing it reverts to the default. Tools read this; where a preference",
+    "must reach a keeper (a movement ban), the order scripts resolve it into per-character policy and push it.",
+    "",
+    "Each entry is { enabled, ...params }. Add new ones freely — the reader ignores shapes it does not know",
+    "and says so."
+  ],
+
+  "avoid_locations": {
+    "enabled": true,
+    "why": "Places the fleet must not route into — a movement ban, resolved into each character's banned_destinations.",
+    "rules": [
+      { "enabled": true, "rooms": [110], "reason": "Roq's tunnel (A shadowy corner) — rats and lupoggs block pathing; sellers die there. Temporary while the tunnel is unsafe." },
+      { "enabled": false, "towns": ["Marion"], "reason": "EXAMPLE: a PVP flashpoint — flip enabled:true to keep the fleet out of a town while flagged players are active there." },
+      { "enabled": false, "maps": ["Underworld"], "reason": "EXAMPLE: avoid a whole map. Toggle per event." }
+    ]
+  },
+
+  "sell_circuit": {
+    "enabled": true,
+    "spec": "sellrun.json",
+    "why": "The Barloque multi-stop sell run (equipment->smith, gems->jeweler, reagents->herbalist). Disable to fall back to the single-shop sell (Roq) — which is currently also banned, so disabling both means carry-and-hold."
+  },
+
+  "advancement_split": {
+    "enabled": true,
+    "under_hp": { "hunt": "fungus beast", "where": "Valley of Ileria (544)" },
+    "at_or_over_hp": { "hunt": "battered skeleton", "where": "Upstairs Castle Victoria (39)" },
+    "threshold": 50,
+    "why": "Route by max HP: below the threshold to prey that still advances you, at/over it to tougher prey. Disable to leave characters wherever they are."
+  },
+
+  "roam": {
+    "enabled": true,
+    "why": "Let characters move between rooms for their prey rather than being pinned. Disable to re-pin with assigned_room."
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "_comment": [
+    "THE BARLOQUE SELL CIRCUIT — a multi-stop alternative to selling everything to Roq (room 110).",
+    "This is the SHAPE (committed). The live copy is substrate/sellrun.json, which is gitignored",
+    "because it is an ORDER to this machine's fleet, not a description of the game.",
+    "",
+    "WHY IT EXISTS. townDestinations() picks ONE shop, and for a mixed pack that shop is Roq — the",
+    "one NPC that buys every category. The Barloque specialists each buy only their own lane, so no",
+    "single one clears a pack. This spec routes the pack ACROSS them: equipment to the smith, gems to",
+    "the jeweler, reagents to the herbalist, the rare keepers into the vault, then reagents bought and",
+    "the surplus banked. Roq is never visited, which is the point while room 110's tunnel is unsafe.",
+    "",
+    "SELLING IS AN ALLOWLIST AND MERCHANTS ARE PICKY (docs/m59-economy.md): a smith handed a mushroom",
+    "answers with silence, and a banker-robber (Skivlat) takes it and gives nothing. So each stop names",
+    "the exact merchant and the exact item CLASSES it accepts, derived from what it SELLS in",
+    "substrate/m59-merchants.json — a merchant buys the lane it sells. m59-sellrun.mjs verifies every",
+    "sale by the purse delta and never trusts the handshake."
+  ],
+  "stops": [
+    {
+      "merchant": "Fehr'loi Qan",
+      "room": 113,
+      "buys": "equipment",
+      "note": "Barloque armourer/smith: body armour, shields, weapons. NOT on the trusted allowlist yet — dry-run and verify a purse delta before trusting live."
+    },
+    {
+      "merchant": "Herbutte",
+      "room": 109,
+      "buys": "gems",
+      "note": "Sparkling Stone Shop. Verified buyer (paid 856). SELL_TO /herbutte/i."
+    },
+    {
+      "merchant": "Joguer",
+      "room": 104,
+      "buys": "reagents",
+      "note": "Herbs and Roots. Verified buyer. Sells reagents too — could double as the reagent BUY stop if you skip Tos."
+    }
+  ],
+  "vault": {
+    "room": 114,
+    "merchant": "Obert Cair'bre",
+    "keep": [
+      "inky",
+      "dragon scale",
+      "angel feather",
+      "wand",
+      "scroll",
+      "signet",
+      "orb of",
+      "potion"
+    ],
+    "note": "Deposit — never sell — anything worth keeping for later: the vigor mushrooms, the rare drops, unidentified wands/scrolls. Storage survives death, which selling does not."
+  },
+  "buy_reagents": {
+    "at_room": 54,
+    "town": "Tos",
+    "merchant": "apothecary",
+    "targets": {
+      "herb": 100,
+      "elderberry": 100
+    },
+    "note": "User's route buys 100 each at Tos. Barloque's own Joguer (104) sells them too, on-route — set at_room:104 to skip the Tos leg. create food costs 2 herb + 2 elderberry per cast."
+  },
+  "bank": {
+    "room": 54,
+    "town": "Tos",
+    "keep_walking_money": 400,
+    "note": "Deposit the sale proceeds above walking money. Bank 1 is Tos AND Jasper (blakston.khd:1275). Everything carried is lost on death; a balance is not."
+  },
+  "route_order": [
+    "stops",
+    "vault",
+    "buy_reagents",
+    "bank"
+  ],
+  "keep_always": {
+    "note": "Never sold or vaulted regardless of lane: money, the wielded weapon, worn armour, and whatever this character's loadout marks keep. m59-sellrun reads the loadout and the worn/wielded lists.",
+    "reagent_floor": {
+      "herb": 8,
+      "elderberry": 8
+    }
+  }
+}

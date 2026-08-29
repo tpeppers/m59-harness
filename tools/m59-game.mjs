@@ -9120,7 +9120,7 @@ class Session {
     // "out of the first room" is time in the room exactly like any other.
     const journeyId = `${this.name}-${Date.now().toString(36)}`;
     let enteredAt = Date.now();
-    let hops = 0, stumbles = 0, totalStumbles = 0;
+    let hops = 0, stumbles = 0, totalStumbles = 0, pocketEscaped = false;
     // WHICH DOOR WE CAME IN BY, because that is half of a track's identity. A crossing of a
     // room is not one route, it is one per entrance — Western border of the Twisted Wood is
     // entered from three different rooms and leaves by three more — so a book keyed only on
@@ -9316,6 +9316,37 @@ class Session {
           : null,
       });
       if (!route.found) {
+        // SAFE-WALL POCKET ESCAPE, FOR THE FIRST HOP. A character parked on a safe wall is
+        // standing in one of the 17,402 collision pockets the router cannot plan out of to its
+        // own room's exits — a safe wall IS the coarse grid and the BSP disagreeing (see the
+        // breadcrumb note above and docs/m59-routing.md). `walkTo` already retreats along the
+        // breadcrumbs when a FINE target is cut off, but travel's ROOM-level route fails here,
+        // before any walkTo runs — so without this a character that hunted on a safe wall can
+        // never set off for town: travel acks `started:true`, stumbles six times against the
+        // pocket, and hands the body back to the keeper, which reads as "started then never
+        // moved". Undo the moves that walked it onto the wall until the route reappears, then
+        // re-plan from where that lands. Once per journey — undoing the trail twice unwinds the
+        // journey rather than the pocket, the same bound `walkTo`'s own escape keeps.
+        // `typeof` guard because `travel` is lifted out of this file by text and evaluated
+        // against a minimal fake session in m59-travel-test; the fake has no breadcrumb retreat,
+        // and in that case this must fall through to the ordinary stumble exactly as before.
+        if (!pocketEscaped && typeof this.retreatAlongBreadcrumbs === 'function') {
+          pocketEscaped = true;
+          const escaped = await this.retreatAlongBreadcrumbs({
+            movementGeneration, controlToken,
+            until: () => this.world.route(toRoomNum, {
+              avoid: avoidThisJourney.size || this.barredRooms?.size
+                ? new Set([...(this.barredRooms ?? []), ...avoidThisJourney]) : null,
+            }).found,
+          }).catch(() => null);
+          if (escaped?.cancelled) return this.cancelledMovement({ log });
+          if (escaped?.moved) {
+            log.push({ pocket_escape: true, steps: escaped.steps,
+                       note: 'retreated off a safe wall into the room\'s main region so the first hop could plan' });
+            stumbles = 0;
+            continue;   // re-plan from where the retreat landed
+          }
+        }
         // A route failure right after an arrival is the transient one. A route failure
         // that survives re-reading the room is real, and is reported as it always was.
         if (await stumble(route.reason || 'no route')) continue;

@@ -1,0 +1,9 @@
+{
+  "room": 109, "name": "Herbutte", "shop": "Sparkling Stone Shop, Barloque",
+  "enabled": true,
+  "buys": "gems and sundries",
+  "max_stack": 25,
+  "money_cap": null,
+  "kod": "bqmerch.kod:113 ObjectDesired — isClass(what,&NumberItem) and GetNumber(what) > 25 -> return FALSE",
+  "note": "A gem stack OVER 25 is refused wholesale, not partly bought. Split into offers of <=25 (sell 25, then the remainder). This is the merchant the stack-limit rule was written for."
+}

@@ -1723,6 +1723,110 @@ const server = createServer(async (req, res) => {
           // Each waiting step takes an explicit `since` for a reason: the reply can arrive
           // before the broker gets round to asking about it, and `waitFor`'s default `since`
           // is "now", which steps straight over the event being waited for.
+          // THE SHOP, WHICH A KEEPER-BACKED CHARACTER COULD NOT OPEN AT ALL.
+          //
+          // The broker's `shop` tool calls `c.find(name)`, `c.buy(id)`, `c.waitFor(...)` and
+          // `c.buyItems(...)`. On a keeper-backed session `c` is KeeperProxy's emulated
+          // client, which is REBUILT FROM A /state SNAPSHOT — a picture, not a wire — so the
+          // tool died on the first of them with `c.find is not a function` and no character
+          // in this fleet could buy anything. Measured 2026-08-29: a resupply run walked two
+          // characters across the map to a shop that could not be opened when they arrived.
+          //
+          // The fix is NOT to fake `buy` on the picture. KeeperProxy's own note says it:
+          // mutations go over /action, and "the wire is still only ever touched by the
+          // process that owns it". So the two round trips that must touch the wire live
+          // here, and the broker keeps the arithmetic — purse, weight and bulk clamping —
+          // where it already is.
+          //
+          // Two ops rather than one: reading a shop and buying from it are separate wire
+          // exchanges, and the clamping in between needs the item list and its prices before
+          // it can decide what actually fits.
+          case 'shop': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const op = String(args.op ?? 'list');
+            if (op === 'list') {
+              const seller = Number(args.seller_id);
+              if (!Number.isFinite(seller)) { json({ error: 'shop list needs seller_id' }, 400); return; }
+              await session.pacer.submit('buy', () => c.buy(seller)).catch(() => {});
+              const { events, timedOut } = await c.waitFor({
+                kinds: ['shop', 'message'], timeoutMs: Number(args.timeout_ms) || 4000 });
+              const shop = (events ?? []).find(e => e.kind === 'shop');
+              json(shop
+                ? { seller_id: shop.sellerId, items: shop.items, seq: c.evSeq }
+                : { seller_id: seller, items: [], timed_out: !!timedOut,
+                    // The refusal is a SENTENCE SPOKEN TO THE ROOM here, never an error on
+                    // the wire, so the messages are the whole diagnosis.
+                    said: (events ?? []).map(e => e.text).filter(Boolean).join('; ') });
+              return;
+            }
+            if (op === 'buy') {
+              const seller = Number(args.seller_id);
+              if (!Number.isFinite(seller)) { json({ error: 'shop buy needs seller_id' }, 400); return; }
+              // {id, amount} SURVIVES THE TRIP. encodeIdList writes a BARE id as four plain
+              // bytes with no tag nibble, so the server's number_list arrives empty and
+              // UserBuyItems has no quantity to pair with the item — nothing is bought and
+              // nothing is said. That is why this fleet has zero successful purchases in its
+              // recorded history while selling always worked.
+              const wanted = [].concat(args.items ?? []).map(i =>
+                (i && typeof i === 'object')
+                  ? { id: Number(i.id), amount: Number(i.amount) }
+                  : Number(i));
+              if (!wanted.length) { json({ error: 'shop buy needs items' }, 400); return; }
+              const before = c.evSeq;
+              await session.pacer.submit('buy', () => c.buyItems(seller, wanted));
+              const after = await c.waitFor({ since: before,
+                timeoutMs: Number(args.timeout_ms) || 4000 });
+              // WHAT ARRIVED, NOT WHAT WAS ASKED FOR. Reporting the request back as
+              // `bought` is a claim the wire never made: a merchant that refuses says so in
+              // a SENTENCE to the room, or says nothing at all, and either way the packet
+              // succeeded. Measured 2026-08-29: a buy of 4 herbs by a character with no
+              // shillings returned `bought: [{id:521, amount:4}]` and moved nothing.
+              // `got` is the only half of this answer that is evidence.
+              const evs = after?.events ?? [];
+              json({ asked: wanted, seq: c.evSeq,
+                     got: evs.filter(e => e.kind === 'got').flatMap(e => e.items ?? []),
+                     said: evs.map(e => e.text).filter(Boolean).join('; ') });
+              return;
+            }
+            json({ error: `shop op must be list or buy, not "${op}"` }, 400);
+            return;
+          }
+          // THE BANK, FOR THE SAME REASON AS THE SHOP ABOVE.
+          //
+          // `c.balance()`, `c.deposit()` and `c.withdraw()` are wire calls, and on a
+          // keeper-backed character `c` in the broker is a /state snapshot with none of
+          // them. Measured 2026-08-29 at the First Royal Bank of Tos, after walking a
+          // character across the map to reach it:
+          //
+          //     balance  -> error: c.balance is not a function
+          //     withdraw -> error: c.withdraw is not a function
+          //
+          // Same split as `shop`: the exchange happens here, and the broker keeps the
+          // bookkeeping — the balance record, the arithmetic, the ledger line.
+          case 'bank': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const op = String(args.op ?? '');
+            const amount = Math.floor(Number(args.amount) || 0);
+            if (op !== 'balance' && !(amount > 0)) {
+              json({ error: `${op || 'bank'} needs a positive amount` }, 400); return;
+            }
+            const fn = { balance: () => c.balance(),
+                         deposit: () => c.deposit(amount),
+                         withdraw: () => c.withdraw(amount) }[op];
+            if (!fn) { json({ error: `bank op must be balance, deposit or withdraw, not "${op}"` }, 400); return; }
+            const before = c.evSeq;
+            await session.pacer.submit('bank', fn);
+            const after = await c.waitFor({ since: before,
+              timeoutMs: Number(args.timeout_ms) || 4000 });
+            // A BALANCE IS PROSE, SENT ONCE, and a withdrawal states the amount HANDED OVER
+            // rather than the new balance. So the sentences are the answer and the broker
+            // parses them; this hands them over untouched rather than guessing here.
+            json({ op, amount: op === 'balance' ? undefined : amount, seq: c.evSeq,
+                   said: (after?.events ?? []).map(e => e.text).filter(Boolean) });
+            return;
+          }
           case 'trade': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }

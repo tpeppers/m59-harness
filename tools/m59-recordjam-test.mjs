@@ -9,7 +9,7 @@
 // that names come out as roles unless asked otherwise, and that the ground under the region
 // is measured off the real BSP — against the Sewers of Barloque, which is the jam this was
 // written for.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { parseRegion, regionAround, inRegion, makeRedactor, compress, unitKey, kindOf,
          floorExtents, buildJam, summarise, FORMAT } from './m59-recordjam.mjs';
 import { sharedRoomGeometry, KOD_FINENESS } from './m59-roo.mjs';
@@ -129,6 +129,33 @@ console.log('\nthe ground under the region, off the real BSP');
   const text = summarise(jam);
   ok('the summary names the room, lists the static units and the floor extents',
      text[0].includes('Sewers') && text.some(l => /giant rat/.test(l)) && text.some(l => /floor y-extent/.test(l)));
+}
+
+console.log('\nthe fixtures on disk stay redacted and well-formed');
+{
+  // Every committed jam is a picture of a real room with real people in it, and the rule
+  // that nothing naming a character is committed has no exception for a file that was
+  // correct when it was written. So: every unit is a monster, an item, or a role.
+  const dir = new URL('./fixtures/', import.meta.url);
+  const jams = readdirSync(dir).filter(f => f.endsWith('.json'))
+    .map(f => ({ f, j: JSON.parse(readFileSync(new URL(f, dir), 'utf8')) }))
+    .filter(({ j }) => j.format === FORMAT);
+  ok('there is at least one jam fixture (the sewer picket line)', jams.some(({ f }) => f === 'sewers-108-row27.json'));
+  ok('and the spider trap is the second', jams.some(({ f }) => f === 'spidertrap1.json'));
+  const role = /^(player|stranger) [A-Z]+$/;
+  const units = jams.flatMap(({ f, j }) => [...(j.static ?? []), ...(j.moving ?? [])].map(u => ({ f, u })));
+  ok('every player in every fixture is a role, never a name',
+     units.filter(({ u }) => u.kind === 'player').every(({ u }) => role.test(u.name)) && units.some(({ u }) => u.kind === 'player'),
+     JSON.stringify(units.filter(({ u }) => u.kind === 'player' && !role.test(u.name)).map(({ f, u }) => f + ':' + u.name)));
+  ok('every observer too', jams.every(({ j }) => (j.observers ?? []).every(o => role.test(o))));
+  ok('and every fixture carries the floor under its region, measured, not the coarse grid',
+     jams.every(({ j }) => Object.keys(j.geometry?.floor_y_by_col ?? {}).length > 0));
+  const trap = jams.find(({ f }) => f === 'spidertrap1.json')?.j;
+  ok('the spider trap records the subject as a role with its vitals, load and vigor, on its square',
+     !!trap && role.test(trap.subject?.name) && trap.subject.position?.col === 16 && trap.subject.position?.row === 45
+     && trap.subject.vigor_at_capture === 10 && trap.subject.carry?.weight_max === 2700);
+  ok('with the black spider that sat on the line three squares west of it',
+     !!trap && trap.static.some(u => u.name === 'black spider' && u.col === 13 && u.row === 44));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
