@@ -69,10 +69,19 @@ ok('and refuses BEFORE applying anything',
 // policy would leave a `policy.mode` that looks authoritative and is read by nothing —
 // which is exactly how `purpose` sat outside a schema for a year with every keeper's audit
 // switched off. `agent` is the envelope and is not a setting either.
-ok('strips the two reserved keys out of the body before applying',
-   /const\s*\{\s*agent:\s*\w+,\s*mode:\s*\w+,\s*\.\.\.\s*\w+\s*\}\s*=\s*body/.test(policyHandler));
-ok('so neither `mode` nor `agent` can land in policy',
+//
+// THERE ARE THREE OF THEM NOW. `by` names the writer, and it is there because the one log
+// line a policy change produced named nobody: twenty-one `policy updated` lines in a single
+// keeper process could not answer "who reverted my spot policy", which was the whole
+// question after three deaths were root-caused to that pair. It is subject to the same rule
+// as the other two — stripped, never applied, because a `policy.by` that looks
+// authoritative and is read by nothing is the `purpose` bug wearing a different hat.
+ok('strips the reserved keys out of the body before applying',
+   /const\s*\{\s*agent:\s*\w+,\s*mode:\s*\w+,\s*by:\s*\w+,\s*\.\.\.\s*\w+\s*\}\s*=\s*body/.test(policyHandler));
+ok('so none of `mode`, `agent` or `by` can land in policy',
    !/Object\.assign\(autopilot\.policy,\s*body\)/.test(policyHandler));
+ok('and the writer is what the log line reports, or naming it bought nothing',
+   /by \$\{writtenBy \?\? 'unattributed/.test(policyHandler));
 
 // THE DURABILITY HALF. join() re-imposes the boot orders on every reconnect.
 ok('the boot orders are mutable, so a push can move them',

@@ -193,6 +193,48 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
   recycled pid rather than a holder — the process start time is 1ms from the pid file's own
   timestamp, because `m59-service.mjs` writes it as it spawns — and that nothing listening
   anywhere is still exit 0, or `./m59.sh up` could never start a fleet) and
+  `node tools/m59-proxymutate-test.mjs` (59 — **the emulated client could not ACT, and eight
+  MCP tools died on that**. `KeeperProxy.need()` hands its picture client to every tool that
+  acts on something, and it implemented the reading side only — so `fight`, `attack`,
+  `rest`, `escape_underworld`, `cast`, `shop`, `act` and `faction_status` threw a TypeError
+  in the broker before a byte reached the wire: `c.roomContents is not a function`,
+  `c.attack is not a function`, `c.apply is not a function`, and four more. Measured over
+  ~4 hours of supervised play: no usable mutation path at all, on the only kind of
+  character a running fleet has. Three things had to exist for the fix, and this pins all
+  three. THE METHODS, each forwarding to `/action` — the same route the movement tools have
+  used since the keeper split, so the broker still never touches the wire — with the
+  argument names checked on BOTH sides, because a mismatch there is invisible (the keeper's
+  own `travel` case records `toRoomNum` against `to` sending every journey nowhere while
+  the fleet blamed the terrain). THE EVENT WINDOW, because sending the packet is never the
+  whole of a tool here — a merchant refusal is a sentence spoken to the room — and
+  `waitFor` used to answer "there is no event stream here", which eighty-odd call sites
+  read as "nothing happened"; it now asks the process that owns the socket, and keeps the
+  empty shape with `no_event_stream` as the fallback so an older keeper still reads as
+  "nobody could hear" rather than "nothing was said". AND THE REAL SELF OBJECT ID, which is
+  the half that would have gone wrong quietly: `selfId` was the placeholder `-1`, harmless
+  only while this client could not act, and `apply(food, selfId)` is how EATING works
+  (food.kod:56) — the only way past the vigor-80 rest cap. Both ends now refuse to forward
+  a negative target) and
+  `node tools/m59-policyrevert-test.mjs` (42 — **a spot policy that reverts has to leave a
+  line, and for the two flags that have killed people it has to name the writer**. The
+  persistence layer logged exactly one transition, `autopilot.mode`, and the comment beside
+  it says why: a silent revert "was the undiagnosable part". That argument was never
+  carried to the rest of the policy, so `useSafeSpots`/`requireSafeWall` going `true/true`
+  -> `false/false` between two writes left NO line anywhere in the broker log, by
+  construction — and those are the flags deaths #24, #25 and #26 were root-caused to.
+  Death #26: room 586, centipede, `in_safe_spot: false`, every trial reading "not holding a
+  spot — nothing to test", pinned in the open ~18 minutes, after a re-arm 19 minutes
+  earlier had VERIFIED both flags true. Pins that the diff covers EVERY field rather than a
+  watchlist — a watchlist is how `purpose` stayed out of a schema for a year with every
+  keeper's audit switched off — while sorting the survival pair to the front and reading it
+  in the order the policy is reasoned in rather than alphabetically; that a key appearing
+  or disappearing is a change and not a silence, which is what a revert actually looks like
+  on disk; that `requireSafeWall` without `useSafeSpots` is coerced UP rather than down,
+  because a caller that asked for a wall asked for MORE caution and clearing the stricter
+  flag would answer that by removing it, while the other three combinations are all
+  meaningful and are left alone; and that the keeper's one `policy updated` line now
+  carries before -> after and names the writer, which is the third reserved key on the
+  wire beside `agent` and `mode`) and
   `node tools/m59-phantom-test.mjs` (40 — **one mistyped agent name used to degrade every
   health check for the life of the broker process**. `session()` minted a bare `Session` for
   any non-empty string, and a bare session can never be in game, because nothing ever tries

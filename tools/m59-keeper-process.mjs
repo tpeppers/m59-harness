@@ -25,6 +25,7 @@ import { makeDecider, DEFAULT_GOALS, intend, INTENTS } from './m59-decide.mjs';
 import { Router, routeIntent } from './m59-route.mjs';
 import { protocolToClient, clientToProtocol, buildAllRoomGeometry } from './m59-roo.mjs';
 import { loadMap, buildReverseEdges, resolveRoom } from './m59-map.mjs';
+import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.mjs';
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
@@ -611,7 +612,18 @@ function state() {
     // where we are, what is here and what it can do — and nothing else.
     you: (() => {
       const me = c?.self;
-      return me ? { col: me.col, row: me.row, x: me.x, y: me.y, facing: me.facing ?? null } : null;
+      // THE OBJECT ID, WITHOUT WHICH THE BROKER'S SELF IS A PLACEHOLDER.
+      //
+      // The emulated client filled `selfId` with -1 because this did not carry one, and -1
+      // is a number the server has never heard of. Everything that acts ON the character
+      // therefore aimed at nothing: `apply(food, selfId)` is how eating works (food.kod:56)
+      // and `look(selfId)` is how the faction read refreshes. Both are packets that would
+      // have been sent to object -1 the moment the broker gained a mutation path.
+      //
+      // `objects` below already filters self out by the same id, so nothing that reads the
+      // room changes shape because this is now real.
+      return me ? { id: c.selfId ?? null, col: me.col, row: me.row,
+                    x: me.x, y: me.y, facing: me.facing ?? null } : null;
     })(),
     objects: (() => {
       try {
@@ -711,6 +723,17 @@ function state() {
     // arrived on a fleet that was still walking, and its own comment describes being
     // caught by exactly this once before with a different cause. The job slot lives here,
     // with the body; the broker holds a snapshot and cannot see it.
+    // WHERE THE EVENT STREAM HAD GOT TO WHEN THIS SNAPSHOT WAS TAKEN.
+    //
+    // The broker's emulated client answered `waitFor` with "there is no event stream here",
+    // which was true and cost eight MCP tools: everything that sends a packet and then
+    // reads what the server said — attack, cast, shop, act, look — either threw or reported
+    // that it had seen nothing. The stream is on this process's socket and stays here; what
+    // crosses is a WINDOW into it (`/action {name:"events"}`), and a window needs a mark to
+    // start from. This is that mark. It is as old as the snapshot carrying it, so a wait
+    // anchored on it reaches slightly further back than the caller meant — which errs
+    // toward returning the reply rather than missing it, and every caller filters by kind.
+    ev_seq: session.client?.evSeq ?? null,
     job: rtsJobReport(session.job) ?? null,
     // AND WHETHER SOMEBODY ELSE IS HOLDING IT STILL. `KeeperProxy.status()` reported
     // `inert: null` unconditionally, so a character standing still because a supply
@@ -1634,6 +1657,36 @@ const server = createServer(async (req, res) => {
           // at the moment of the offer, and "X is not in the room with Y" while the two are
           // standing together is what comes of reading a stale snapshot. This puts
           // BP_SEND_ROOM_CONTENTS on the wire and waits for the reply.
+          // A WINDOW ONTO THE EVENT STREAM, WHICH IS THE OTHER HALF OF EVERY MUTATION.
+          //
+          // This game answers almost nothing with an error: a merchant refusal is a
+          // sentence spoken to the room, a skill you cannot learn is simply absent, a
+          // malformed drop moves nothing and says so in prose. So "send the packet" is
+          // never the whole of a tool — reading what the server said back is — and on a
+          // keeper-backed broker the reading half did not exist. The broker's emulated
+          // client said so honestly (`no_event_stream: true`) and eighty-odd call sites
+          // treated that as "nothing happened".
+          //
+          // The socket stays here; only the window crosses. `since` comes from the
+          // snapshot's `ev_seq` and may be a second or two old, which is the safe
+          // direction: a caller that filters by kind would rather see one stale event than
+          // miss the reply it is waiting for.
+          case 'events': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const since = Number.isFinite(Number(args.since)) ? Number(args.since) : c.evSeq;
+            const kinds = args.kinds ?? null;
+            const w = await c.waitFor({
+              since,
+              kinds,
+              // Bounded on this side too. A caller that asks for thirty seconds holds a
+              // keeper's HTTP handler for thirty seconds, and the keeper has a body to
+              // drive; the broker's own fetch timeout is the other half of this.
+              timeoutMs: Math.min(20000, Math.max(0, Number(args.timeout_ms) || 4000)),
+            });
+            json({ events: w.events, seq: c.evSeq, since, timedOut: !!w.timedOut });
+            return;
+          }
           case 'room_contents': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }
@@ -2357,18 +2410,32 @@ const server = createServer(async (req, res) => {
       // no logout, no server line, just somebody else's fleet quietly hunting the wrong
       // creature in the wrong room. Fails OPEN on an unaddressed body, as everywhere else.
       if (!addressedToUs(body?.agent)) { refuseMisaddressed(body.agent); return; }
-      // TWO RESERVED KEYS, NEITHER OF WHICH IS A POLICY FIELD. `agent` is the envelope.
+      // THREE RESERVED KEYS, NONE OF WHICH IS A POLICY FIELD. `agent` is the envelope.
       // `mode` lives on the Autopilot object, not in `policy` — assigning it into the
       // policy would leave a `policy.mode` that looks authoritative and is read by nothing,
       // which is the `purpose`-shaped bug this repository has already paid for once.
-      const { agent: _addressed, mode: wantMode, ...fields } = body;
+      // `by` IS THE THIRD RESERVED KEY, and it is what the one existing log line lacked.
+      // Twenty-one `policy updated` lines in a single process, none of them naming a
+      // writer, could not answer "who reverted my spot policy" — which was the entire
+      // question after deaths #24, #25 and #26. Stripped here rather than applied, for
+      // exactly the reason the two keys above it are: a `policy.by` that looks
+      // authoritative and is read by nothing is the `purpose`-shaped bug again.
+      const { agent: _addressed, mode: wantMode, by: writtenBy, ...fields } = body;
       const applied = [];
       let modeChange = null;
+      // THE PAIRING INVARIANT, ON THE RECEIVING SIDE TOO. The broker coerces before it
+      // pushes, but a push can arrive from anything holding this port, and `Object.assign`
+      // below will merge whatever it is handed. `requireSafeWall` without `useSafeSpots`
+      // asks this keeper to refuse a fight for the want of a wall it is not looking for.
+      const coercedSpots = coerceSpotPair(fields);
       // The boot orders move with the live ones. See the `let policy` / `let mode`
       // declarations: without this the push survives only until the next rejoin.
       Object.assign(policy, fields);
       if (wantMode) mode = wantMode;
       if (autopilot) {
+        // Captured before the merge — a diff needs both sides and `Object.assign` destroys
+        // the first one. Shallow is right: policy fields are compared by value below.
+        const before = { ...autopilot.policy };
         Object.assign(autopilot.policy, fields);
         applied.push(...Object.keys(fields));
         if (Object.hasOwn(fields, 'partner'))
@@ -2381,8 +2448,23 @@ const server = createServer(async (req, res) => {
           modeChange = { from: autopilot.mode ?? null, to: wantMode };
           autopilot.mode = wantMode;
         }
-        log(`[keeper] ${agent} policy updated: ${JSON.stringify(fields)}` +
-            (modeChange ? ` | mode ${modeChange.from} -> ${modeChange.to}` : ''));
+        // WHAT IT WAS, NOT ONLY WHAT IT NOW IS.
+        //
+        // This line used to print the incoming fields flat, so a push and a revert of the
+        // same flag looked identical — both just show the new value — and nothing said who
+        // sent either. `before` is captured above the merge; the diff is the pair of
+        // values, and `by` is the writer the broker now names on the wire. An older broker
+        // sends no `by`, which reads as "unattributed" rather than as a lie.
+        const rows = policyDiff(before, autopilot.policy)
+          .filter(r => Object.hasOwn(fields, r.key));
+        log(`[keeper] ${agent} policy updated: ` +
+            (rows.length ? formatPolicyDiff(rows) : 'no field changed value') +
+            ` | asked: ${JSON.stringify(fields)}` +
+            ` | by ${writtenBy ?? 'unattributed (a keeper-policy push that named no writer)'}` +
+            (modeChange ? ` | mode ${modeChange.from} -> ${modeChange.to}` : '') +
+            (coercedSpots.length
+              ? ` | coerced ${coercedSpots.map(c => `${c.key} ${c.from} -> ${c.to}`).join(', ')}`
+              : ''));
       }
       // REPORT WHAT LANDED, NOT `ok: true`. This endpoint exists because a policy change
       // that silently did nothing is indistinguishable from one that worked, so a bare
@@ -2391,6 +2473,9 @@ const server = createServer(async (req, res) => {
       // older keeper's reflexive ok.
       json({ ok: true, agent, applied, mode: autopilot?.mode ?? null,
              mode_changed: modeChange, running: !!autopilot?.running,
+             // Same argument as `applied`: a field that was accepted and then changed must
+             // ride back, or the pusher believes it got what it asked for.
+             ...(coercedSpots.length ? { coerced: coercedSpots } : {}),
              no_autopilot: !autopilot });
       return;
     }
@@ -2673,8 +2758,22 @@ const server = createServer(async (req, res) => {
             // activate the seller), then sends the real purchase packet (buyItems).
             const c = session.client;
             if (!c) { result = { error: 'no client' }; break; }
-            const sellerId = Number(args.seller ?? args.id);
-            const itemId = Number(args.itemId ?? args.item);
+            const sellerId = Number(args.seller ?? args.seller_id ?? args.id);
+            // A LIST, AND {id, amount} SPECS RATHER THAN BARE NUMBERS.
+            //
+            // This took exactly one bare item id, and `encodeIdList` writes a bare id as
+            // four plain bytes with NO TAG NIBBLE — so the server's number_list arrives
+            // empty, `UserBuyItems` has no quantity to pair with the item, and nothing is
+            // bought and nothing is said. The broker's `shop` tool has always built
+            // {id, amount} specs; there was no way to get one down here. Passed through
+            // verbatim, because the tagging is `encodeIdList`'s job and re-deriving it here
+            // is how the tag gets lost.
+            const wanted = [].concat(args.items ?? args.itemId ?? args.item ?? [])
+              .filter(i => i != null)
+              .map(i => (i && typeof i === 'object')
+                ? { id: Number(i.id), amount: Number(i.amount) }
+                : Number(i));
+            const itemId = wanted.length ? wanted : null;
             if (!sellerId || !itemId) { result = { error: 'need seller and itemId' }; break; }
             const loop = session._tickLoop;
             if (loop) loop._frozen = true;
@@ -2685,10 +2784,17 @@ const server = createServer(async (req, res) => {
               await new Promise(r => setTimeout(r, 600));
               const before = c.evSeq ?? 0;
               // The real purchase packet.
-              await session.pacer.submit('buy', () => c.buyItems(sellerId, [itemId]), 300).catch(() => {});
+              await session.pacer.submit('buy', () => c.buyItems(sellerId, wanted), 300).catch(() => {});
               const ev = await c.waitFor({ since: before, kinds: ['message', 'inventory', 'shop'], timeoutMs: 2500 }).catch(() => null);
               const msgs = (ev?.events ?? []).filter(e => e.text).map(e => e.text);
-              result = { sent: true, sellerId, itemId, msgs, allEvents: (ev?.events ?? []).map(e => e.kind) };
+              // WHAT ARRIVED, NOT WHAT WAS ASKED FOR. A merchant that refuses says so in a
+              // SENTENCE to the room, or says nothing at all, and either way the packet
+              // succeeded — so echoing the request back as if it were the outcome is a
+              // claim the wire never made. `got` is the only half of this that is evidence.
+              result = { sent: true, sellerId, asked: wanted, msgs,
+                         got: (ev?.events ?? []).filter(e => e.kind === 'got')
+                                .flatMap(e => e.items ?? []),
+                         allEvents: (ev?.events ?? []).map(e => e.kind) };
             } catch (e) { result = { error: e.message }; }
             if (loop) loop._frozen = false;
             break;
@@ -2751,6 +2857,72 @@ const server = createServer(async (req, res) => {
             } catch (e) { refused.push('loop error: ' + e.message); }
             if (loop) loop._frozen = false;
             result = { sold, refused, total_received: sold.reduce((n, s) => n + (s.price || 0), 0), count: sold.length };
+            break;
+          }
+          // APPLY IS NOT USE, AND THE DIFFERENCE IS EATING.
+          //
+          // Food sends ReqEatSomething to the APPLY TARGET (food.kod:56), so `use` on a
+          // loaf does nothing at all — no message, no error, no vigor. That matters more
+          // here than anywhere: resting stops awarding vigor at 80 of 200, everything above
+          // it has to be eaten, and a character sitting at 80 with bread in its pack is far
+          // more likely to die than one above 85. The broker's `act` tool has an `eat` verb
+          // for exactly this and it threw `c.apply is not a function` on every
+          // keeper-backed character, which is every character in a running fleet.
+          //
+          // Defaults to applying to SELF, because that is what eating is and what every
+          // caller here wants; an explicit `on` covers applying one thing to another.
+          case 'apply': {
+            const id = args.id ?? args.item;
+            // A BROKER OLD ENOUGH TO STILL BELIEVE IN -1 MUST NOT SEND IT. That was the
+            // emulated client's placeholder for "self" before /state carried the real id,
+            // and forwarding it would apply the food to an object that does not exist —
+            // which, this being Meridian, would report no error whatsoever.
+            const asked = args.on ?? args.target;
+            const onto = (asked == null || Number(asked) < 0) ? session.client?.selfId : asked;
+            if (!id) { result = { error: 'no item id' }; break; }
+            if (onto == null) { result = { error: 'apply: no target, and self is unknown' }; break; }
+            const sinceEv = session.client?.evSeq ?? 0;
+            await session.pacer.submit('act', () => session.client?.apply?.(id, onto))
+              .catch(e => { result = { error: e.message }; });
+            result = result ?? { sent: true, id, on: onto, since: sinceEv };
+            break;
+          }
+          // THE REST OF THE `act` VERB SET, WHICH HAD NOWHERE TO LAND.
+          //
+          // The broker's `act` tool offers use, unuse, get, drop, activate, eat and go;
+          // only `use` had a keeper equivalent, so on a keeper-backed character — every
+          // character in a running fleet — the other five threw `c.<verb> is not a
+          // function` in the broker before anything reached the wire.
+          //
+          // Each is one packet and the client already has it. They send and report the
+          // send; what the server SAID about it is read separately through `events`,
+          // because in this game the answer to a refused drop is a sentence to the room
+          // and never an error on the socket.
+          case 'unuse':
+          case 'pickup':
+          case 'activate': {
+            const id = args.id ?? args.item;
+            if (!id) { result = { error: `${name}: no item id` }; break; }
+            const verb = name === 'pickup' ? 'get' : name;
+            const sinceEv = session.client?.evSeq ?? 0;
+            await session.pacer.submit('act', () => session.client?.[verb]?.(id))
+              .catch(e => { result = { error: e.message }; });
+            result = result ?? { sent: true, id, verb, since: sinceEv };
+            break;
+          }
+          // DROP TAKES A LIST, AND A STACK IS NOT AN ITEM. Money, arrows, mushrooms and
+          // herbs are one object carrying a count, and the server reads that count from a
+          // separate list (UserDropItems, user.kod:3775) — so the id list has to arrive in
+          // the tagged form. The broker builds those specs; this hands them straight to
+          // `encodeIdList` rather than coercing them to bare numbers, which is the
+          // malformed-id-list failure that completes the handshake and moves nothing.
+          case 'drop': {
+            const items = [].concat(args.items ?? args.id ?? []);
+            if (!items.length) { result = { error: 'drop: no items' }; break; }
+            const sinceEv = session.client?.evSeq ?? 0;
+            await session.pacer.submit('drop', () => session.client?.drop?.(items))
+              .catch(e => { result = { error: e.message }; });
+            result = result ?? { sent: true, items, since: sinceEv };
             break;
           }
           case 'use':

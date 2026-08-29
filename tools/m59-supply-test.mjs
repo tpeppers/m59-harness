@@ -670,8 +670,19 @@ section('AND THE BROKER SIDE OF THE PROXY ANSWERS IN THE SHAPE THE CALLERS READ'
      /async travelExclusive/.test(proxy) && proxy.includes('arrived: true'));
   ok('`waitFor` does not resolve null any more',
      !/waitFor: async \(\) => null,/.test(proxy));
-  ok('it answers "nothing was seen", in the shape every caller destructures',
-     /waitFor: async \(\) => \(\{ events: \[\]/.test(proxy));
+  // IT NO LONGER ANSWERS "NOTHING WAS SEEN" EITHER, AND THAT IS THE POINT.
+  //
+  // Resolving `{events: []}` was honest and cost eight MCP tools: this game answers almost
+  // nothing with an error — a merchant refusal is a sentence spoken to the room — so a
+  // caller that cannot read the reply concludes that nothing happened. The stream is still
+  // the keeper's; what crosses is a window onto it, anchored on the `ev_seq` the snapshot
+  // carries. The empty shape survives as the FALLBACK, for a keeper too old to serve one,
+  // and it keeps `no_event_stream` so a caller can still tell "nothing was said" from
+  // "nobody could hear".
+  ok('it asks the process that owns the socket rather than reporting that it cannot',
+     /keeperAction\(proxy\.name, proxy\._index, 'events'/.test(proxy));
+  ok('and still answers in the shape every caller destructures when it gets no window',
+     /return \{ events: \[\], seq: null, timedOut: true, no_event_stream: true,/.test(proxy));
   ok('the proxy hands the amount and the tag straight through',
      /amount: o\.amount \?\? 0,/.test(proxy) && /tag: o\.tag \?\? null,/.test(proxy));
   ok('the trade steps and the room read are on the session, not the emulated client',
