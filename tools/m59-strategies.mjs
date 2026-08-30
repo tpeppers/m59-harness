@@ -42,17 +42,33 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //
 //   export default {
 //     name: 'blink-escape',           // required, unique; how it appears in the ledger
-//     kind: 'travel',                 // required; only 'travel' is consumed today
+//     kind: 'travel',                 // required; 'travel', 'town' or 'convoy'
 //     enabled: false,                 // required, and FALSE is the honest default
+//     // TRAVEL hooks --------------------------------------------------------------
 //     // Asked when a walk has run out of ordinary answers. Return null to decline —
 //     // declining is the common case and must stay cheap.
 //     async whenStuck(ctx) { return null; },
 //     // Asked before a crossing starts, for strategies that do not wait for trouble.
 //     async beforeCrossing(ctx) { return null; },
+//     // TOWN hooks ----------------------------------------------------------------
+//     // Asked when a character is standing at a counter and something has to decide what
+//     // to hand over. Return null to decline; return a plan to have it obeyed.
+//     //   ctx = { loadout, items, equipped, room, merchant, purse }
+//     // The answer is m59-townstop.planTownStop's shape: { sell, buy, keep_fragments, ... }.
+//     async atTownStop(ctx) { return null; },
+//     // CONVOY strategies use beforeCrossing too, but are asked a group question — "should
+//     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
-export const HOOKS = ['whenStuck', 'beforeCrossing'];
-export const KINDS = ['travel'];
+export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop'];
+// 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
+// A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
+// asked, and keeping them separate is what lets a town strategy be listed, enabled and
+// audited by the same loader without the travel path ever calling it.
+// 'convoy' is travel too, but it is about a GROUP and it is asked on a different question:
+// not 'how do I get through' but 'should we all go now'. Keeping it a separate kind is what
+// lets a convoy strategy be listed, enabled and audited without the solo mover consulting it.
+export const KINDS = ['travel', 'town', 'convoy'];
 const KNOWN = new Set([...REQUIRED, ...HOOKS, 'describe', 'settings']);
 
 /**

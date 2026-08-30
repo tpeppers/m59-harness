@@ -11703,9 +11703,28 @@ export class Autopilot {
       // WHICH PRECONDITION IS ACTUALLY MISSING. The two have different remedies and only
       // one returns on its own: mana regenerates while we wait, vigor needs a rest or a
       // meal. Reporting mana while vigor was the blocker is the whole bug.
+      // THE THIRD BLOCKER, AND IT IS THE ONE ACTUALLY BITING. Measured on prod 2026-08-30:
+      // Gonzo, Rowlf and Janice were all unarmed with vigor and mana well over the bar and
+      // 40-60 bulk free against a scimitar's 70, so makeWeapon declined 3762, 3183 and 1020
+      // times with `no room for the weapon` — correctly, spending nothing — while THIS line
+      // still reported "unarmed — 33 mana, needs 15 to make one". Right refusal, wrong
+      // reason, which sends an operator after mana that was never short. The remedy for this
+      // one is not waiting at all: nothing regenerates pack space.
+      const bulkFreeNow = skills.carryCapacity(c)?.room_for?.bulk ?? null;
       const blocker = vigorLeft < SPELL_EXERTION_VIGOR ? 'vigor'
-                    : manaNow < 15 ? 'mana' : 'neither';
-      if (blocker === 'vigor') {
+                    : manaNow < 15 ? 'mana'
+                    : (bulkFreeNow != null && bulkFreeNow < CONJURED_WEAPON_BULK) ? 'room'
+                    : 'neither';
+      if (blocker === 'room') {
+        // NOT A WAIT. Vigor and mana come back on their own; pack space does not, so a
+        // `waitFor` here would be a promise nothing intends to keep. Say what has to happen.
+        this.doneWaiting?.();
+        this.note('unarmed and cannot hold what the spell would make', {
+          bulk_free: bulkFreeNow, needs: CONJURED_WEAPON_BULK,
+          why: 'ReqNewHold refuses on bulk and creaweap.kod deletes the weapon after the ' +
+               'mana is spent, so the cast is declined rather than thrown away',
+          doing: 'nothing regenerates pack space — this needs a sale, a drop or a hand-over' });
+      } else if (blocker === 'vigor') {
         this.waitFor('VIGOR_FOR_CREATE_WEAPON', {
           expectedMs: Math.max(0, SPELL_EXERTION_VIGOR - vigorLeft) * 10_000,
           why: `unarmed and too tired to cast; ${vigorLeft} of the ` +
@@ -11719,14 +11738,21 @@ export class Autopilot {
       }
       this.refuse('UNARMED_NO_DONOR', {
         faculty: 'work', blocking: true,
-        why: blocker === 'vigor'
+        why: blocker === 'room'
+          ? `unarmed — no room to hold one: ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK}`
+          : blocker === 'vigor'
           ? `unarmed — too tired to cast: ${vigorLeft} vigor, needs ${SPELL_EXERTION_VIGOR}`
           : `unarmed — ${manaNow} mana, needs 15 to make one`,
-        remedy: blocker === 'vigor'
+        remedy: blocker === 'room'
+          ? 'sell, drop or hand over something — waiting does not make pack space, and the ' +
+            'weapon is deleted on hand-over rather than refused before the mana is spent'
+          : blocker === 'vigor'
           ? 'let it rest or feed it — casting spends vigor, and vigor is what it is short of'
           : 'hand it a weapon, or leave it alone until it can cast one',
         retryAfterMs: 60_000 });
-      this.noProgress(blocker === 'vigor'
+      this.noProgress(blocker === 'room'
+        ? `unarmed -- ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK} to hold one`
+        : blocker === 'vigor'
         ? `unarmed -- ${vigorLeft} vigor, needs ${SPELL_EXERTION_VIGOR} to cast one`
         : `unarmed -- ${manaNow} mana, needs 15 to make one`);
       return HANDLED;

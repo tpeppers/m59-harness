@@ -106,7 +106,7 @@ console.log('\nthe unarmed branch names the blocker it is actually waiting on');
 {
   const branch = (() => {
     const i = auto.indexOf("this.refuse('UNARMED_NO_DONOR'");
-    return i === -1 ? '' : auto.slice(Math.max(0, i - 3000), i + 1200);
+    return i === -1 ? '' : auto.slice(Math.max(0, i - 9000), i + 2500);
   })();
   ok('the unarmed branch was found', branch.length > 0);
   // The whole failure was a character waiting for a resource it already had a maximum of.
@@ -119,6 +119,36 @@ console.log('\nthe unarmed branch names the blocker it is actually waiting on');
      !/needs 15 to make one`/.test(branch) || /blocker/.test(branch));
 }
 
+console.log('');
+console.log('and the blocker that is actually biting is named, not guessed');
+{
+  const branch = (() => {
+    const j = auto.indexOf("this.refuse('UNARMED_NO_DONOR'");
+    return j === -1 ? '' : auto.slice(Math.max(0, j - 4000), j + 2000);
+  })();
+  // Measured on prod 2026-08-30: Gonzo, Rowlf and Janice were unarmed with vigor and mana
+  // well over the bar and 40-60 bulk free against a scimitar's 70. makeWeapon declined
+  // 3762/3183/1020 times with 'no room for the weapon' — correctly, spending nothing —
+  // while the refusal still read 'unarmed — 33 mana, needs 15 to make one'. Right refusal,
+  // wrong reason, which sends an operator after mana that was never short.
+  ok('there is a third blocker for pack room', branch.includes("? 'room'"));
+  ok('it is measured against the same constant the cast uses',
+     branch.includes('bulkFreeNow < CONJURED_WEAPON_BULK'));
+  ok('the refusal names bulk when bulk is what is missing',
+     branch.includes('no room to hold one'));
+  // Vigor and mana return on their own; pack space does not. A waitFor here would promise
+  // something nothing intends to deliver.
+  ok('and it does NOT register a wait, because pack space never arrives on its own',
+     (() => {
+       const at = branch.indexOf("blocker === 'room'");
+       if (at < 0) return false;
+       const next = branch.indexOf('} else if', at);
+       const body = branch.slice(at, next < 0 ? at + 600 : next);
+       return !body.includes('waitFor(');
+     })());
+  ok('the remedy says what a human has to do', branch.includes('sell, drop or hand over'));
+}
+
 console.log('\nand a character blocked on vigor actually rests');
 {
   // THE DEADLOCK IS NOT THE MESSAGE, IT IS THE INACTION. `rests: 0` while vigor sat at 1
@@ -128,7 +158,7 @@ console.log('\nand a character blocked on vigor actually rests');
   // pass having tried to recover some.
   const branch = (() => {
     const i = auto.indexOf("this.refuse('UNARMED_NO_DONOR'");
-    return i === -1 ? '' : auto.slice(Math.max(0, i - 3000), i + 1200);
+    return i === -1 ? '' : auto.slice(Math.max(0, i - 9000), i + 2500);
   })();
   // Assert the CONDITION, not the prose: the guard must fire on vigor and must not
   // require sanctuary(), and it must actually submit a rest. Matching comment wording

@@ -523,3 +523,7 @@ _verify2.mjs
 # Per-NPC merchant selling rules (stack caps, money caps) and fleet preferences are
 # operating choices, gitignored. Committed shapes: substrate/merchants.example.json,
 # substrate/preferences.example.json.
+
+# One scout board per machine: what our characters saw in which room, and when. Fleet
+# state, not a fact about Meridian 59 — and it names rooms our convoy is moving through.
+/substrate/scout-board.json

@@ -24,6 +24,10 @@
 // The lane a merchant BUYS is derived from what it SELLS in substrate/m59-merchants.json — a
 // merchant buys the lane it stocks. Nothing about the categories is hardcoded here.
 import { readFileSync, readdirSync } from 'node:fs';
+// THE PROTECTED LIST IS NOT THIS FILE'S TO INVENT. See protectFor() below.
+import { planTownStop } from './m59-townstop.mjs';
+import { loadoutFor } from './m59-loadout.mjs';
+import { resolveFleet } from './m59-fleetpath.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -83,7 +87,26 @@ const LANE = {
 const KEEP_REAGENT = /\bherb\b|elderberry/i;
 const VAULT = new RegExp('(' + (spec.vault?.keep || []).map(s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i');
 // the exact fragments handed to sell_all's `keep` so it never offers a protected item.
+//
+// THE HARDCODED PAIR IS A FALLBACK NOW, NOT THE ANSWER. 'herb' and 'elderberry' are the two
+// reagents somebody thought of; a character told to carry a THIRD had it fenced at the first
+// stop and bought back at the last, paying the merchant spread twice for a pack that ended
+// the same. The loadout already knows what each character is meant to hold, so ask it — and
+// keep this list only for a character that has no loadout yet.
 const PROTECT = [...new Set([...(spec.vault?.keep || []), 'herb', 'elderberry'])];
+
+/**
+ * Everything this character must not be offered, from its own loadout where it has one.
+ * Falls back to PROTECT, because an absent loadout means "the behaviour that was already
+ * there" and never "protect nothing".
+ */
+function protectFor(character, items = []) {
+  if (!character) return PROTECT;
+  let plan = null;
+  try { plan = planTownStop(loadoutFor(character), { items }); } catch { plan = null; }
+  if (!plan) return PROTECT;
+  return [...new Set([...PROTECT, ...plan.keep_fragments])];
+}
 
 // ---- read a character's pack (live from the broker, or --pack for offline) ----
 async function livePack(agent) {
@@ -102,8 +125,31 @@ async function livePack(agent) {
 const qtyOf = (s) => { const m = String(s).match(/\(x(\d+)\)/); return m ? +m[1] : 1; };
 const bare = (s) => String(s).replace(/\s*\(x\d+\)\s*$/, '').trim();
 
+// A LOADOUT IS FILED UNDER THE CHARACTER, NOT THE AGENT HANDLE. The roster is the only
+// thing that knows which is which, and WHICH roster is itself a question — same resolution
+// order every other tool here uses, most explicit first.
+// resolveFleet() is the ONE resolver, and using it rather than reading the file is the whole
+// lesson of this change: substrate/fleet-default carries four lines of comment above the
+// name, so a bare readFileSync().trim() returns the comments and every lookup silently
+// misses. Written by hand here first, and it did exactly that.
+const ROSTER_PATH = resolveFleet().stateFile;
+const characterOf = (agent) => {
+  try { return readJSON(ROSTER_PATH)?.[agent]?.credentials?.character ?? null; } catch { return null; }
+};
+// The pack in the shape planTownStop reads. A failure here must not stop the circuit — it
+// only means we fall back to PROTECT, which is the behaviour that was already there.
+async function packItemsOf(agent) {
+  try { return (await livePack(agent)).map(s => ({ name: bare(s), amount: qtyOf(s) })); }
+  catch { return []; }
+}
+
 const laneMerchant = { gems: 'Herbutte', equipment: "Fehr'loi Qan", reagents: 'Joguer' };
-function planFor(pack) {
+// A PLAN THAT ADVERTISES A SALE EXECUTION WILL REFUSE IS A THIRD ANSWER TO THE SAME
+// QUESTION. `protect` is the list executeCircuit() hands sell_all, so passing it here is
+// what keeps the printed circuit and the actual one the same document. Omitted, it falls
+// back to the module PROTECT and behaves as it always did.
+function planFor(pack, protect = PROTECT) {
+  const guarded = (name) => (protect || []).some(p => name.includes(String(p).toLowerCase()));
   const plan = { stops: {}, vault: [], keep: [], reagentsHeld: {} };
   for (const st of stops) plan.stops[st.merchant] = [];
   for (const it of pack) {
@@ -114,6 +160,7 @@ function planFor(pack) {
     if (/\bshilling|\bcoins?\b/i.test(lname)) { plan.keep.push(it); continue; }
     if (VAULT.test(lname)) { plan.vault.push(it); continue; }          // rare keepers (incl. inky-cap)
     if (KEEP_REAGENT.test(lname)) { plan.keep.push(`${it}  [create-food reagent — keep]`); continue; }
+    if (guarded(lname)) { plan.keep.push(`${it}  [this character's loadout protects it]`); continue; }
     const lane = LANE.gems.test(lname) ? 'gems' : LANE.equipment.test(lname) ? 'equipment' : LANE.reagents.test(lname) ? 'reagents' : null;
     if (lane) plan.stops[laneMerchant[lane]].push(it);
     else plan.keep.push(`${it}  (no lane — carried, never fenced blind)`);
@@ -188,7 +235,9 @@ async function executeCircuit(agent) {
   // there is nothing to restore because its orders were never changed. If this crashes mid-run the
   // last travel job simply completes and the keeper resumes farming a cleared pack.
   log.push(`${agent}: purse ${before} — running the sell circuit (keeper stays live)`);
-  const protect = PROTECT;   // vault keepers + create-food reagents; sell_all also keeps money and worn gear
+  // vault keepers + whatever THIS character's loadout protects; sell_all also keeps money
+  // and worn gear on its own. Read from the live pack so a floor can be counted against it.
+  const protect = protectFor(characterOf(agent), await packItemsOf(agent));
   {
     for (const st of stops) {
       if (ruleFor(st.room).enabled === false) { log.push(`  -> ${st.merchant} (${st.room}) — DISABLED, skipped`); continue; }
@@ -230,7 +279,10 @@ if (rawPack) {
   }
 } else if (agents.length) {
   for (const a of agents) {
-    try { const pack = await livePack(a); render(a, pack, planFor(pack)); }
+    try {
+      const pack = await livePack(a);
+      render(a, pack, planFor(pack, protectFor(characterOf(a), await packItemsOf(a))));
+    }
     catch (e) { console.log(`\n=== ${a} — could not read pack: ${e.message}`); }
   }
 } else {

@@ -116,3 +116,96 @@ export default {
 // whose blink point is 87,59 (576) and 35,34 (575). When the exit you want is near the
 // teleport point, blink crosses most of the map for ten seconds and 15 mana. When it is not,
 // this must decline — which is why the timing is measured per EXIT and not per map.
+
+// ---------------------------------------------------------------------------------------
+// THE THIRD SHAPE, AND THE SECOND KIND: `kind: 'town'`, answering `atTownStop`.
+//
+// A travel strategy decides where a character GOES. A town strategy decides only what it
+// HANDS OVER once it is already standing at a counter it chose for its own reasons — which
+// is why it can be on by default while the blink pair are off: it changes no route.
+//
+// The arithmetic is NOT here and must not be copied here. `tools/m59-townstop.mjs` turns a
+// pack plus a loadout into {sell, keep, buy, keep_fragments}, and it is committed because it
+// is general — every clone of this map has packs and loadouts. What belongs in YOUR copy of
+// this file is only the stance: which kinds this fleet refuses to fence, what it protects on
+// top of the loadout, and when a stop is not worth making.
+//
+// THE INVARIANT THE MODULE EXISTS FOR: an item is never in both `sell` and `buy`. That is
+// money, not tidiness — a merchant buys below what it sells, so selling something the same
+// trip buys back pays the spread twice for a pack that ends identical. `neverSellsWhatItBuys`
+// asserts it, and a caller should refuse a plan that fails it rather than execute half.
+//
+// WHAT `never_sell_kinds` MEANS, because it was got wrong once already: it protects a KIND
+// outright and is NOT conditional on that item having a floor. Gating it on `min > 0` looks
+// reasonable and, on a fleet whose reagent floors are all 0 — as prod's are, zeroed on
+// 2026-08-27 because unsatisfiable floors re-opened a town trip for ever — it protects
+// nothing at all. A setting that silently does nothing is this repository's oldest failure.
+//
+// export default {
+//   name: 'townstop-sell-buy',
+//   kind: 'town',
+//   enabled: false,
+//   describe: 'sell the loot, keep every reagent with a floor, buy back what is short',
+//   settings: {
+//     never_sell_kinds: ['reagent'],     // a KIND, never a list of names — see above
+//     protect: ['inky cap', 'guild'],    // substrings, on top of the loadout
+//     sell_unknown: true,                // the "everything else" half of the sentence
+//     min_stack: 2,
+//     min_bulk_freed: 100,               // a stop that cannot pay for itself is declined
+//   },
+//   async atTownStop(ctx) {
+//     // ctx = { loadout, items, equipped, room, merchant, purse, bulkFree }
+//     const plan = planTownStop(ctx.loadout, {
+//       items: ctx.items, equipped: ctx.equipped, settings: this.settings });
+//     // null means "no opinion — do what you did before", and must never be read as
+//     // "sell nothing" or "sell everything". An absent loadout answers null.
+//     return plan && (plan.sell.length || plan.buy.length) ? plan : null;
+//   },
+// };
+
+// ---------------------------------------------------------------------------------------
+// THE THIRD KIND: `kind: 'convoy'` — a GROUP question, asked on beforeCrossing.
+//
+// A travel strategy asks "how do I get through". A convoy strategy asks "should we all go
+// now", and the difference is why it is a separate kind rather than another travel one: the
+// solo mover must never consult it, and an operator must be able to see at a glance whether
+// the fleet is currently moving as a group.
+//
+// The observing half is committed in tools/m59-vanguard.mjs — assessRoom() turns a keeper's
+// /state into what a convoy behind it would want to know, and postScout()/readScout() carry
+// it between characters. What belongs in YOUR copy is the nerve: how far ahead, how many
+// creatures is too many, who is expendable, how long a report stays believed.
+//
+// TWO THINGS THAT LOOK LIKE THE RIGHT ANSWER AND ARE NOT:
+//
+//   * m59-party.report() for the channel. Every keeper is its own PROCESS, so that roster
+//     Map is per-process memory and a scout would report into a void.
+//   * an in-game tell for the channel. It does cross processes — the server carries it — but
+//     prod is a SHARED server, and "hold, eight trolls at 578, convoy behind me" is an
+//     announcement to precisely the murderers a vanguard exists to detect.
+//
+// AND ONE RULE: NO REPORT IS NOT "CLEAR". readScout() answers null when nobody has looked,
+// and a convoy that reads that as safety has replaced a vanguard with a delay.
+//
+// export default {
+//   name: 'convoy-vanguard',
+//   kind: 'convoy',
+//   enabled: false,
+//   describe: 'send one character a hop ahead; the convoy crosses on its report',
+//   settings: {
+//     lead_hops: 1,
+//     scout_by: ['mule', 'lightest', 'strongest'],   // never the most valuable character
+//     trust_ms: 90_000,
+//     hold_if: { capped: true, creatures_over: 6, any_flagged_aggressor: true },
+//     // Hazard classes we know about and CANNOT yet see. Named so the gap is visible in the
+//     // strategy that would act on them: fire/lightning/illusionary walls, webs, and the
+//     // room-wide effects (heat, sandstorm, winds, jig) are not in the snapshot today.
+//     unseen_hazards: ['fire wall', 'lightning wall', 'illusionary wall', 'web'],
+//   },
+//   async beforeCrossing(ctx) {
+//     if (ctx.role === 'scout') { postScout(ctx.self, assessRoom(ctx, {...})); return null; }
+//     const word = readScout(ctx.nextRoom, { staleMs: this.settings.trust_ms });
+//     if (!word || word.stale) return null;            // silence is not clearance
+//     return word.stuck_why ? { do: 'hold', why: word.stuck_why } : null;
+//   },
+// };
