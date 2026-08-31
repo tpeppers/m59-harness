@@ -74,7 +74,7 @@ import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monster
 import { resolveFleet, rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { resolveAgentName } from './m59-agent-name.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
-import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
+import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities, writeLoadout, POLICY_KEYS } from './m59-loadout.mjs';
 import { resolveItemNames, weighItem } from './m59-items.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
          factionOfferAllowed, FACTION_SOLDIER, factionFromProfile,
@@ -2460,6 +2460,43 @@ function rememberAutopilot(agent, config) {
 // now carries forward anything it did not expect to be missing — without this, `forget`
 // would write the entry straight back.
 function forgetAgent(agent) { forgotten.add(agent); fleetState.delete(agent); saveFleetState(); }
+
+// WRITE THE POLICY KEYS A LOADOUT MAY HOLD BACK TO THE LOADOUT FILE, so the loadout is
+// the source of truth for POLICY_KEYS and a restart re-applies the latest values (the
+// overlay wins, and the loadout has the latest). Ported from gryxitl/m59-harness — the
+// unification: `autopilot set` writes the loadout (for the keys it can hold) AND the
+// roster (for everything else), so the two do not drift. Only keys in POLICY_KEYS are
+// written — the closed set of per-character standing preferences. The protected faculties
+// (restBelow, fleeBelow, maxCarry, etc.) are NOT in POLICY_KEYS and stay in the roster
+// only; the loadout overlay does not touch them, so they do not get "lost on restart"
+// (the loadout does not have them to override).
+//
+// Read-modify-write: read the existing loadout, merge in the changed POLICY_KEYS, write
+// it back. Preserves the gear/plan/carry/sell sections untouched. If the loadout does
+// not exist, it is created with just the policy section (the rest defaults).
+//
+// Best-effort: a failure here must not fail the tool call that carried the setting. The
+// roster write (rememberAutopilot) already happened, so the setting is persisted; the
+// loadout write is the unification step, and if it fails the character still gets the
+// new policy from the roster on restart (the old behaviour).
+function writeLoadoutPolicy(character, policy) {
+  try {
+    const existing = loadoutFor(character) ?? { character, format: 'm59-loadout/1', policy: {} };
+    const lp = existing.policy ?? {};
+    let changed = false;
+    for (const [snake, spec] of Object.entries(POLICY_KEYS)) {
+      const camel = spec.as;
+      if (policy[camel] === undefined || policy[camel] === null) continue;
+      if (lp[snake] !== policy[camel]) { lp[snake] = policy[camel]; changed = true; }
+    }
+    if (!changed) return { written: false, why: 'no POLICY_KEYS changed' };
+    existing.policy = lp;
+    const out = writeLoadout(character, existing, { force: true });
+    return { written: true, path: out.path };
+  } catch (e) {
+    return { written: false, why: e.message };
+  }
+}
 
 // WHICH CHARACTERS ARE THIS FLEET'S, for anything that reads a directory keyed by
 // character name — `substrate/postmortems/`, `substrate/abilities/`, `substrate/hits/`.
@@ -8982,6 +9019,15 @@ const TOOLS = [
       // Persist the instruction, not the running object: on the far side of a
       // restart the keeper is rebuilt from these fields alone.
       rememberAutopilot(a.agent, { mode: p.mode, policy: { ...p.policy } });
+      // AND WRITE THE LOADOUT, for the keys it can hold (POLICY_KEYS). Ported from
+      // gryxitl/m59-harness — the unification: the loadout is the source of truth for
+      // per-character standing preferences, so a restart re-applies the latest values
+      // (the overlay wins, and the loadout has the latest). The roster write above
+      // covers the rest (the protected faculties the loadout does not hold).
+      // Best-effort: a failure here must not fail the tool call; the roster write
+      // already happened.
+      const character = fleetState.get(a.agent)?.credentials?.character ?? null;
+      const loadoutWrite = character ? writeLoadoutPolicy(character, { ...p.policy }) : { written: false, why: 'no character name' };
       // A KEEPER-BACKED CHARACTER MUST NOT GET A SECOND BRAIN IN THIS PROCESS.
       //
       // `p` here is an Autopilot built on whatever `session(agent)` returned, and for every
@@ -9036,6 +9082,8 @@ const TOOLS = [
       // of the bug this block exists to close; a caller that asked for `require_safe_wall`
       // without spots has to be told what it actually got.
       if (coerced.length) out.coerced = coerced;
+      if (loadoutWrite.written === false && loadoutWrite.why && !/no POLICY_KEYS|no character/.test(loadoutWrite.why))
+        out.loadout_write = loadoutWrite;   // visible when the loadout was NOT updated
       return keeper_push ? { ...out, keeper_push } : out;
     },
   },
