@@ -169,9 +169,10 @@ const sameFleet = (h) => (h?.fleet || 'default') === LABEL;
 //
 // `health()` asks one port -- 8901 unless told otherwise -- and a broker started by hand on
 // any other port is invisible to it. `start` then concludes nothing is running and starts a
-// SECOND broker on the fleet, which is the failure CLAUDE.md is most emphatic about: the
-// second is refused the lock, comes up healthy and EMPTY, and answers every question about a
-// fleet of nobody while the real one plays on. Measured here, and not hypothetically:
+// SECOND broker on the fleet. Before atomic startup ownership, that second process could
+// open a healthy-looking empty API after its resume was refused. Current brokers refuse the
+// ownership conflict before opening a listener and exit with status 3, but that still leaves
+// the caller pointed at no broker instead of the real one. The original failure was measured:
 //
 //     no broker for "shadow" on 8901
 //     starting broker for "shadow" .up   pid 28792   rpc http://127.0.0.1:8901
@@ -181,8 +182,10 @@ const sameFleet = (h) => (h?.fleet || 'default') === LABEL;
 // The answer was on disk the whole time. `m59-broker.mjs` writes the pid that owns a fleet
 // into a lock named after the roster it guards, so this reads that first and only then goes
 // looking for a port to talk to it on -- the default, then every port a broker pid file
-// names, the way m59-fleets.mjs and m59-which.mjs do. A lock whose pid is dead is a stale
-// lock and means nothing, which is what `alive` is for.
+// names, the way m59-fleets.mjs and m59-which.mjs do. This helper locates a LIVE broker;
+// a dead broker pid does not make its ownership record meaningless, because guarded keeper
+// children may survive. Broker startup is the authority that adopts an exact-roster guarded
+// predecessor or refuses an alias/unguarded claim.
 function lockHolder() {
   try {
     const rec = JSON.parse(readFileSync(lockFileFor(FLEET), 'utf8'));
@@ -222,12 +225,13 @@ async function findBroker() {
         if (other && Number(other.pid) === held)
           return { running: true, pid: held, port, health: other, elsewhere: true };
       }
-      // Held by a live pid we cannot reach. Refusing is still right: starting a second
-      // broker would take no sessions and answer for a fleet of nobody.
+      // Held by a live pid we cannot reach. Refusing is still right: a current second
+      // broker would exit before opening a listener, and an old one could expose an empty
+      // fleet. Neither outcome reaches the process that owns these characters.
       return { running: true, foreign: true, pid: held,
                why: `the roster lock for "${LABEL}" is held by live pid ${held}, which is not `
-                  + `answering on ${candidatePorts().join(', ')}. Stop that broker before `
-                  + `starting another, or delete the lock only if that pid is genuinely gone.` };
+                  + `answering on ${candidatePorts().join(', ')}. Find or stop that broker before `
+                  + `starting another; do not delete its ownership record.` };
     }
     return { running: false };
   }
@@ -248,8 +252,9 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
 // the replacement, and the fleet stayed down. The button reported success on its way
 // out, because the broker answered before dying.
 //
-// The broker spawns nothing it needs to take with it, so there is no tree worth
-// killing: just the one pid, which is the one identified by /health.
+// Keeper children deliberately survive this broker-only kill. The exact-roster successor
+// atomically adopts their guarded fleet/account claims and then verifies each keeper before
+// adopting it; a lab or alias roster cannot. Kill just the broker pid identified by /health.
 function killPid(pid) {
   if (process.platform === 'win32') {
     const r = spawnSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' });
@@ -480,10 +485,40 @@ async function cmdStop({ quiet = false, force = false } = {}) {
   // signature of a crash. Thirteen "crashes" were recorded in five hours on that basis
   // and every one of them was a restart somebody asked for, three of them mine.
   //
-  // The outage itself is real and stays in the ledger: the keepers genuinely are down
-  // between the kill and the resume, which is what death attribution needs. What was
-  // wrong was the cause, and a cause of "crashed" sends the next person hunting a
-  // stability bug that does not exist.
+  // The broker outage itself is real and stays in the ledger. Guarded keeper children may
+  // remain logged in and are adopted by an exact-roster restart, so do not describe this as
+  // proof every session went down. What was wrong was the cause: "crashed" sends the next
+  // person hunting a stability bug that does not exist.
+  // NEW BROKERS CAN DRAIN THEMSELVES. A forced Windows process kill never runs Node's
+  // asynchronous cleanup, so it bypasses the broker's spawn gate, authenticated child
+  // stops and conditional ownership release. Ask the already identity-verified broker's
+  // loopback-only dashboard to quiesce first. A null result is a rolling-old broker and
+  // keeps the historical fallback; an accepted quiesce gets a full minute to settle.
+  const graceful = await fetchJson(
+    `http://127.0.0.1:${DASH_PORT}/control/quiesce`,
+    { method: 'POST', timeoutMs: 3000 },
+  );
+  const checks = graceful?.ok ? 120 : 0;
+  for (let i = 0; i < checks; i++) {
+    if (!alive(found.pid) && !(await health())) {
+      if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
+      if (!quiet) console.log(c.ok('stopped'));
+      return 0;
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  if (graceful?.ok && !force) {
+    console.error(c.bad(`pid ${found.pid} accepted orderly shutdown but did not stop within 60s`));
+    console.error('  ownership was left fail-closed; inspect the broker log, or pass --force');
+    return 1;
+  }
+  if (graceful?.ok && !quiet)
+    console.error(c.dim('  orderly shutdown did not settle; --force permits the verified PID fallback'));
+  // A current broker removes its own heartbeat only after children/reconcile are settled
+  // and ownership is released.  Reaching this fallback means either a rolling-old broker
+  // has no orderly endpoint or the operator explicitly chose --force, so preserve the old
+  // deliberate-stop marker immediately before the unavoidable hard kill—not during the
+  // potentially minute-long graceful wait, where a real crash must remain observable.
   uptime.markStopped();
   killPid(found.pid);
   for (let i = 0; i < 20; i++) {

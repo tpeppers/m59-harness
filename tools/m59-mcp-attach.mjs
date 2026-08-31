@@ -4,11 +4,11 @@
 // `m59-broker.mjs` with no arguments serves MCP over stdio AND calls resumeFleet(),
 // which tries to take substrate/fleet-state.json.lock. That is right when the stdio
 // broker IS the fleet. It is wrong when one is already running: an MCP client
-// configured to spawn the broker gets a SECOND process, the lock is refused, and the
-// new process comes up healthy and completely empty. Every tool then answers about a
-// fleet of nobody — `fleet` returns "no sessions — join some characters first" while
-// twenty-five characters are playing in the other process. Nothing errors. The whole
-// session reads as "the fleet is gone".
+// configured to spawn the broker gets a SECOND process. Older brokers discovered the
+// lock conflict after opening their transport and could serve a healthy-looking empty
+// fleet. Current brokers atomically claim fleet and account ownership first, so the
+// second process exits with status 3 before its listener opens. Either way, spawning a
+// broker is not attaching to the process that owns the characters.
 //
 // This is the transport for that case: line-delimited MCP on stdio, forwarded to the
 // broker's HTTP JSON-RPC port. It holds no sessions, resumes nothing and takes no

@@ -46,6 +46,7 @@ export const STOREBOX_BULK_MAX = 4000;   // storebox.kod:33
 export const GUILD_CHEST_SLOTS = 4;
 export const BOOKMAKERS_HALL_ROOM = 714;
 export const BOOKMAKERS_CHESTS = 3;
+export const STORAGE_DIR = process.env.M59_STORAGE_DIR || 'substrate/storage';
 
 const pct = (used, max) => (max > 0 ? Math.min(999, Math.round((used / max) * 100)) : null);
 
@@ -114,7 +115,7 @@ const writeJson = (path, value) => {
  * be told from a fresh one. Nothing here is ever presented as current.
  */
 export class StorageCache {
-  constructor({ dir = 'substrate/storage', now = () => Date.now() } = {}) {
+  constructor({ dir = STORAGE_DIR, now = () => Date.now() } = {}) {
     this.dir = resolve(dir);
     this.now = now;
   }

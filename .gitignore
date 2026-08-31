@@ -527,3 +527,6 @@ _verify2.mjs
 # One scout board per machine: what our characters saw in which room, and when. Fleet
 # state, not a fact about Meridian 59 — and it names rooms our convoy is moving through.
 /substrate/scout-board.json
+
+# Atomic endpoint/account ownership records for broker and lab runtimes.
+/substrate/runtime-account-leases/

@@ -22,8 +22,9 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ROUTES_FILE, replay } from './m59-routebake.mjs';
-import { sharedRoomGeometry, STEP_MASK_VERSION } from './m59-roo.mjs';
+import { ROUTES_FILE, replay, BAKE_VERSION } from './m59-routebake.mjs';
+import { sharedRoomGeometry, peekSharedRoomGeometry, STEP_MASK_VERSION } from './m59-roo.mjs';
+import { registerLazyRoomArtifacts } from './m59-room-artifacts.mjs';
 
 let cache = { mtime: -1, value: null };
 
@@ -74,6 +75,12 @@ export function stepMaskCurrent(table) {
   return (table?.stepMaskVersion ?? 1) === STEP_MASK_VERSION;
 }
 
+/** May a lazy process trust this bake for compact topology and deferred masks? */
+export function lazyRoomArtifactsCurrent(table) {
+  return !!table && stepMaskCurrent(table) && table.complete === true &&
+         Number(table.bakeVersion) === BAKE_VERSION;
+}
+
 /**
  * Hand every baked step mask to the geometry that will be planning on it.
  *
@@ -106,7 +113,7 @@ export function stepMaskCurrent(table) {
 let attachedTable = null;
 export const activeRoutes = () => attachedTable;
 
-export function attachStepMasks(map, { geometryOf } = {}) {
+export function attachStepMasks(map, { geometryOf, lazy = false } = {}) {
   const table = routesFor(map?.geometryManifestSha256 ?? null);
   if (!table) return { attached: 0, rooms: 0, ok: false,
                        why: load() ? 'the routing table was baked from different geometry'
@@ -127,6 +134,47 @@ export function attachStepMasks(map, { geometryOf } = {}) {
   // empty cache and a TypeError. Refusing to attach is the decision; not visiting the
   // rooms was an accident of where the decision was made.
   const stale = !stepMaskCurrent(table);
+  // LAB-ONLY OPT-IN. A partial/old bake is not an authority for topology, and a custom
+  // geometryOf callback is documented construction work whose eager visits must be kept.
+  // When any gate fails we deliberately fall through to the old eager loop below.
+  const lazyEligible = lazy === true && !geometryOf && lazyRoomArtifactsCurrent(table);
+  if (lazyEligible) {
+    let attached = 0, deferred = 0, refused = 0, masked = 0;
+    let topologyRooms = 0, topologyAnchors = 0;
+    const rooms = Object.keys(table.rooms).length;
+    for (const [num, baked] of Object.entries(table.rooms)) {
+      if (typeof baked?.stepMask === 'string') masked++;
+      const room = map?.rooms?.[num] ?? map?.rooms?.[Number(num)];
+      if (!room?.roo) continue;
+      const registration = registerLazyRoomArtifacts(room, baked);
+      if (!registration.registered) {
+        if (registration.refused) refused++;
+        continue;
+      }
+      topologyRooms++;
+      topologyAnchors += registration.topology;
+      if (registration.refused) refused++;
+      if (!registration.deferred) continue;
+      // Preserve correctness when a room was decoded before this opt-in call: attaching
+      // must still happen now, but peeking prevents this branch from constructing it.
+      if (peekSharedRoomGeometry(room)) {
+        const geometry = sharedRoomGeometry(room);
+        if (geometry?.hasStepMask) attached++;
+        else refused++;
+      } else deferred++;
+    }
+    return {
+      attached, deferred, rooms, masked, refused, ok: attached + deferred > 0,
+      view: table.view ?? 'grid', lazy: true,
+      topology_rooms: topologyRooms, topology_anchors: topologyAnchors,
+      ...(attached + deferred ? {} : { why: !rooms
+        ? 'the routing table has no rooms in it'
+        : !masked
+          ? `the routing table has ${rooms} room(s) and no step masks — it predates them; ` +
+            'rerun node tools/m59-routebake.mjs'
+          : `${masked} step mask(s) on disk and none of them fit the map in play` }),
+    };
+  }
   let attached = 0, refused = 0, masked = 0;
   const rooms = Object.keys(table.rooms).length;
   for (const [num, baked] of Object.entries(table.rooms)) {
@@ -148,10 +196,12 @@ export function attachStepMasks(map, { geometryOf } = {}) {
   // a file that is sitting right there.
   if (stale)
     return { attached: 0, rooms, masked, refused: 0, ok: false, view: table.view ?? 'grid',
+             lazy: false,
              why: `the routing table's step masks were baked by an older predicate ` +
                   `(v${table.stepMaskVersion ?? 1}, this build reads v${STEP_MASK_VERSION}) — ` +
                   `rerun node tools/m59-routebake.mjs` };
   return { attached, rooms, masked, refused, ok: attached > 0, view: table.view ?? 'grid',
+           lazy: false,
            ...(attached ? {} : { why: !rooms
              ? 'the routing table has no rooms in it'
              : !masked

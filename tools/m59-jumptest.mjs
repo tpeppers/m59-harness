@@ -32,6 +32,11 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { fleetName, stateFileFor, rosterGameEndpoint } from './m59-fleetpath.mjs';
+import {
+  discoverKeeperStates,
+  readVerifiedKeeperState,
+  resolveKeeperBand,
+} from './runtime/keeper-discovery.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -115,50 +120,37 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // classifies as "floor unknown" — which is the instrument failing, not the jump. The keeper
 // that owns the body answers `/state?fresh=1` with `you` every time, and it is one hop
 // closer as well. Discovered once by probing, because the port is assigned at spawn.
-let KEEPER_PORT = null;
+let KEEPER_IDENTITY = null;
 // THE BAND IS RECORDED, NOT GUESSED. This scanned 8911-8950, which is where keepers used to
 // live; they are on `substrate/keeper-bands.json` now -- prod 9011, shadow 9111 -- so the
 // sweep found nothing and the tool reported "could not find a keeper for shadow01" about a
 // keeper that was up and healthy on 9111. A hard-coded port range is a copy of a fact that
 // moved, and this one moved without it.
 //
-// The file is consulted first and the old range still swept after, so a checkout without the
-// file keeps working rather than losing the tool.
-function keeperBandFor(fleet) {
-  try {
-    const bands = JSON.parse(readFileSync(join(REPO, 'substrate', 'keeper-bands.json'), 'utf8'));
-    const base = Number(bands?.[String(fleet)]);
-    if (Number.isFinite(base)) return [base, base + 63];
-  } catch { /* no file: fall through to the sweep */ }
-  return null;
-}
+// There is deliberately no old-range fallback: on a multi-fleet host that range belongs
+// to somebody else. A missing named assignment is an explicit failure, not permission to
+// probe a neighbour's keepers.
 async function findKeeper() {
-  const band = keeperBandFor(FLEET);
-  if (band) {
-    for (let p = band[0]; p <= band[1]; p++) {
-      try {
-        const r = await fetch(`http://127.0.0.1:${p}/health`, { signal: AbortSignal.timeout(700) });
-        if (!r.ok) continue;
-        const j = await r.json();
-        if (j?.agent === AGENT) return p;
-      } catch {}
-    }
-  }
-  for (let p = 8911; p <= 8950; p++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${p}/health`, { signal: AbortSignal.timeout(700) });
-      if (!r.ok) continue;
-      const j = await r.json();
-      if (j?.agent === AGENT) return p;
-    } catch {}
-  }
-  return null;
+  const band = resolveKeeperBand(FLEET, {
+    ...(Object.hasOwn(process.env, 'M59_KEEPER_PORT_BASE')
+      ? { override: process.env.M59_KEEPER_PORT_BASE }
+      : {}),
+  });
+  const found = await discoverKeeperStates({
+    band,
+    expectedAgents: [AGENT],
+    liveTimeoutMs: 1500,
+    stateTimeoutMs: 8000,
+  });
+  return found.states.get(AGENT)?.__identity ?? null;
 }
 async function where() {
-  if (KEEPER_PORT == null) return { room: null, pos: null, vigor: null };
+  if (KEEPER_IDENTITY == null) return { room: null, pos: null, vigor: null };
   try {
-    const s = await fetch(`http://127.0.0.1:${KEEPER_PORT}/state?fresh=1`,
-                          { signal: AbortSignal.timeout(8000) }).then(r => r.json());
+    const s = await readVerifiedKeeperState(KEEPER_IDENTITY, {
+      fresh: true,
+      timeoutMs: 8000,
+    });
     return { room: s?.room?.num ?? null,
              pos: Number.isFinite(s?.you?.row) ? { row: s.you.row, col: s.you.col } : null,
              vigor: s?.vigor?.value ?? s?.vigor ?? null };
@@ -213,9 +205,12 @@ async function setUp(character) {
 const s0 = await call('status', { agent: AGENT });
 if (s0?._error) { console.error(`cannot read ${AGENT}: ${s0._error}`); process.exit(2); }
 const character = s0.character ?? AGENT;
-KEEPER_PORT = await findKeeper();
-if (KEEPER_PORT == null) { console.error(`could not find a keeper for ${AGENT}`); process.exit(2); }
-console.log(`(reading position straight from keeper ${KEEPER_PORT})`);
+KEEPER_IDENTITY = await findKeeper();
+if (KEEPER_IDENTITY == null) {
+  console.error(`could not find a verified keeper for ${AGENT} in fleet ${FLEET || 'default'}`);
+  process.exit(2);
+}
+console.log(`(reading position straight from keeper ${KEEPER_IDENTITY.port})`);
 
 console.log(`jump trials: ${character} (${AGENT}) in room ${ROOM}, from ${FROM.join(',')} -> room ${DEST}`);
 console.log(`${TRIALS} trial(s), vigor ${VIGOR == null ? 'left as found' : 'set to ' + VIGOR}, ` +

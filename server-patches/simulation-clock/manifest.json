@@ -1,0 +1,16 @@
+{
+  "schema": "m59-simulation-clock-patch/v1",
+  "source": {
+    "repository": "https://github.com/tpeppers/Meridian59-deck.git",
+    "commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44"
+  },
+  "clock_schema": "m59-server-clock/v1",
+  "guard_text": "m59-lab-simulation-clock/v1",
+  "scale": {
+    "minimum": 1,
+    "maximum": 100,
+    "integer_only": true
+  },
+  "patch": "0001-simulation-clock.patch",
+  "source_hashes": "source.sha256"
+}

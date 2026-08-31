@@ -19,8 +19,8 @@
 //
 // So: a fleet-driving tool takes this lock, and a second one is refused rather than allowed
 // to quietly halve everybody's throughput. This is the same argument the broker's own roster
-// lock makes — "a second broker comes up healthy and EMPTY and answers every question about a
-// fleet of nobody" — one layer up, for the things that drive the fleet through it.
+// lock makes — a second owner is refused before it can serve — one layer up, for the things
+// that drive the fleet through it.
 //
 // A LOCK IS A CLAIM, NOT A FACT. The holder may be gone; a pid may have been recycled onto
 // something else entirely. So the pid is corroborated against the process's own START TIME,

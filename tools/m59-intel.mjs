@@ -37,9 +37,10 @@ import { fleetName } from './m59-fleetpath.mjs';
 
 const HERE      = dirname(fileURLToPath(import.meta.url));
 const SUBSTRATE = join(HERE, '..', 'substrate');
+export const INTEL_DIR = process.env.M59_INTEL_DIR || SUBSTRATE;
 
-const SEEN_PATH       = join(SUBSTRATE, 'players-seen.json');
-const TARGETS_PATH    = join(SUBSTRATE, 'targets.json');
+const SEEN_PATH       = join(INTEL_DIR, 'players-seen.json');
+const TARGETS_PATH    = join(INTEL_DIR, 'targets.json');
 // A CONFLICT BOOK IS PER FLEET, BECAUSE A CALL FOR HELP IS AN ORDER TO MOVE.
 //
 // This was one file for the whole machine, and two fleets run here. Measured 2026-08-27:
@@ -61,9 +62,9 @@ const TARGETS_PATH    = join(SUBSTRATE, 'targets.json');
 // reader left pointing at the old fixed path does not error — it finds no file and shows an
 // empty board, which is the quietest possible way for a rename to go wrong.
 export const conflictsPath = () =>
-  join(SUBSTRATE, `active-conflicts-${String(fleetName() || 'default').replace(/[^\w.-]/g, '_')}.json`);
+  join(INTEL_DIR, `active-conflicts-${String(fleetName() || 'default').replace(/[^\w.-]/g, '_')}.json`);
 const CONFLICTS_PATH = conflictsPath;
-const HISTORY_DIR     = join(SUBSTRATE, 'player-history');
+const HISTORY_DIR     = join(INTEL_DIR, 'player-history');
 const MAP_PATH        = join(SUBSTRATE, 'm59-map.json');
 
 // A conflict expires after this long with no updates.
@@ -91,6 +92,7 @@ function readJSON(path) {
 }
 
 function writeJSON(path, data) {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(data, null, 2), 'utf8');
 }
 
@@ -142,20 +144,42 @@ export function roomHeatmap(name) {
 
 // ------------------------------------------------------------------ sighting API
 
+// Runtime edge detector, shared by every actor in one lab shard. The durable book is an
+// encounter log, not a frame log: an unchanged stranger standing in an unchanged room
+// must not synchronously parse and rewrite the whole index on every policy pass. Each
+// observer retains only its current stranger set, so leave/re-enter and room transitions
+// remain observable without an unbounded history cache.
+const liveSightingsByObserver = new Map();
+
 // WHO WAS STANDING THERE. `isFleetmate` is REQUIRED and is the caller's to supply —
 // there is deliberately no default, because the default this function used to have was
 // wrong on this machine and silently so. A caller that cannot answer should pass
 // `() => false` on purpose and know that it is filing its own fleet as strangers.
 export function recordSightings(observer, players, room, isFleetmate) {
-  if (!players || players.length === 0) return;
   if (typeof isFleetmate !== 'function')
     throw new TypeError('recordSightings needs an isFleetmate predicate — see m59-party.mjs');
+  // Filter before touching disk. In a fleet room the common answer is "everybody here is
+  // ours"; reading and rewriting the full global book for that non-event was synchronous
+  // work on every keeper pass, plus a cross-process lost-update race.
+  const strangers = (players ?? []).filter(p =>
+    p?.name && p.name !== observer && !isFleetmate(p.name));
+  const observerKey = String(observer ?? '');
+  const previous = liveSightingsByObserver.get(observerKey) ?? new Map();
+  const current = new Map(strangers.map(player => [player.name, {
+    room,
+    object_id: player.id ?? null,
+  }]));
+  liveSightingsByObserver.set(observerKey, current);
+  const changed = strangers.filter(player => {
+    const before = previous.get(player.name);
+    return !before || before.room !== room || before.object_id !== (player.id ?? null);
+  });
+  if (!changed.length) return;
   const now     = Date.now();
   const seen    = readSeen();
   const rname   = roomName(room);
 
-  for (const p of players) {
-    if (!p.name || p.name === observer || isFleetmate(p.name)) continue;
+  for (const p of changed) {
 
     // --- update the index entry ---
     const entry = seen[p.name] ?? {

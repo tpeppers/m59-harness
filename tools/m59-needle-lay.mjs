@@ -24,6 +24,14 @@
 // So: keep it, use it, and prefer it to an argument. Anything here that reports a corridor
 // impassable is a hypothesis until somebody walks it.
 import { relocate } from './m59-dm.mjs';
+import {
+  discoverKeeperStates,
+  keeperIdentityHeaders,
+  probeKeeperLive,
+  readVerifiedKeeperState,
+  resolveKeeperBand,
+} from './runtime/keeper-discovery.mjs';
+import { normalizeKeeperCharacter } from './runtime/keeper-liveness.mjs';
 
 const ROOM = 587, ROW = 29, START_COL = 40;
 const CONFIGS = {
@@ -52,15 +60,6 @@ const CONFIGS = {
 const AGENTS = ['shadow01','shadow02','shadow03','shadow04','shadow05','shadow06','shadow07','shadow08'];
 const NAME = { shadow01:'Aaaa', shadow02:'Bbbb', shadow03:'Cccc', shadow04:'Dddd',
                shadow05:'Eeee', shadow06:'Ffff', shadow07:'Gggg', shadow08:'Hhhh' };
-const KEEPER = a => 9111 + (Number(a.replace('shadow','')) - 1);
-
-const post = async (a, path, body, ms = 60000) =>
-  (await fetch(`http://127.0.0.1:${KEEPER(a)}${path}`, { method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: a, ...body }), signal: AbortSignal.timeout(ms) })).json();
-const state = async a =>
-  (await (await fetch(`http://127.0.0.1:${KEEPER(a)}/state`,
-    { signal: AbortSignal.timeout(15000) })).json());
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const which = process.argv[2];
@@ -80,6 +79,57 @@ if (!which || !CONFIGS[which]) {
 }
 
 const CONFIG = CONFIGS[which].map(([col, x, y]) => ({ col, x, y }));
+
+// This is intentionally and exclusively a shadow-fleet tool. Resolve that fleet's complete
+// band from the shared registry (or an explicit, validated service override); never assume
+// that today's 9111 assignment is permanent and never search a neighbouring fleet.
+const KEEPER_BAND = resolveKeeperBand('shadow', {
+  ...(Object.hasOwn(process.env, 'M59_KEEPER_PORT_BASE')
+    ? { override: process.env.M59_KEEPER_PORT_BASE }
+    : {}),
+});
+const discovery = await discoverKeeperStates({
+  band: KEEPER_BAND,
+  expectedAgents: AGENTS,
+  liveTimeoutMs: 1500,
+  stateTimeoutMs: 15000,
+});
+const KEEPERS = new Map([...discovery.states].map(([agent, state]) =>
+  [agent, state.__identity]));
+
+async function currentIdentity(agent) {
+  const expected = KEEPERS.get(agent);
+  if (!expected) throw new Error(`${agent}: no verified keeper in the shadow fleet's band`);
+  const live = await probeKeeperLive(expected.port, {
+    expectedAgents: [agent],
+    timeoutMs: 5000,
+  });
+  if (!live || live.pid !== expected.pid ||
+      normalizeKeeperCharacter(live.character) !==
+        normalizeKeeperCharacter(expected.character)) {
+    throw new Error(`${agent}: keeper identity changed; refusing the write`);
+  }
+  return live;
+}
+
+const post = async (agent, path, body, ms = 60000) => {
+  const identity = await currentIdentity(agent);
+  return (await fetch(`http://127.0.0.1:${identity.port}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...keeperIdentityHeaders(identity) },
+    body: JSON.stringify({
+      ...body,
+      agent: identity.agent,
+      character: identity.character,
+      keeper_pid: identity.pid,
+    }),
+    signal: AbortSignal.timeout(ms),
+  })).json();
+};
+const state = async agent => {
+  const identity = await currentIdentity(agent);
+  return readVerifiedKeeperState(identity, { fresh: true, timeoutMs: 15000 });
+};
 
 // HOLD FIRST, ALWAYS. A blocker whose keeper is still deciding things walks off the mark between
 // being placed and being looked at, and then the configuration on the screen is not the one under

@@ -5079,16 +5079,16 @@ export class Autopilot {
       const myName = c.me?.name ?? this.s?.name ?? this.who();
       const strangerObjs = [...c.room.objects.values()]
         .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
-      if (strangerObjs.length) {
-        try {
-          recordSightings(
-            myName,
-            strangerObjs.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) })),
-            this.s.world?.room?.num ?? null,
-            party.isFleetmate,
-          );
-        } catch { /* a record is never worth a pass */ }
-      }
+      try {
+        // Empty frames are meaningful to the runtime edge detector: they retire the
+        // current encounter so a later re-entry is recorded once. They perform no I/O.
+        recordSightings(
+          myName,
+          strangerObjs.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) })),
+          this.s.world?.room?.num ?? null,
+          party.isFleetmate,
+        );
+      } catch { /* a record is never worth a pass */ }
     }
 
     this.recent5 = (this.recent5 || []);

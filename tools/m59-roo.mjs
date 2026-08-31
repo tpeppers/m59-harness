@@ -62,6 +62,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { movementMapFile } from './m59-map-path.mjs';
+import { attachDeferredStepMask } from './m59-room-artifacts.mjs';
 
 const ROO_MAGIC = Buffer.from([0x52, 0x4f, 0x4f, 0xb1]);
 const ROO_MIN_VERSION = 4;
@@ -3368,6 +3369,10 @@ export function sharedRoomGeometry(roomOrRoo) {
   if (!roo || typeof roo !== 'object') return null;
   if (!SHARED_ROOM_GEOMETRY.has(roo)) SHARED_ROOM_GEOMETRY.set(roo, RoomGeometry.fromJSON(roo));
   const g = SHARED_ROOM_GEOMETRY.get(roo);
+  // A lab may adopt the current routing bake without decoding every room at startup.
+  // Attach its mask on first real geometry access; ordinary/eager processes register
+  // nothing here and retain exactly their previous path.
+  attachDeferredStepMask(roomOrRoo, g);
   // WHICH ROOM THIS IS, when the caller happened to know. The geometry is built from a
   // `.roo` and a `.roo` does not carry its own room number — but `declaredFallJumps` has
   // to match a table keyed by room, and a table entry applied to the wrong room would be
@@ -3376,6 +3381,13 @@ export function sharedRoomGeometry(roomOrRoo) {
   // declares nothing, which is the safe direction.
   if (g && g.roomNum == null && Number.isFinite(Number(roomOrRoo?.num))) g.roomNum = Number(roomOrRoo.num);
   return g;
+}
+
+// Read-only cache visibility for startup tests and for lazy attachment to geometry that a
+// caller happened to construct before attachStepMasks(). It never creates a geometry.
+export function peekSharedRoomGeometry(roomOrRoo) {
+  const roo = roomOrRoo?.roo ?? roomOrRoo;
+  return roo && typeof roo === 'object' ? (SHARED_ROOM_GEOMETRY.get(roo) ?? null) : null;
 }
 
 // EAGERLY PARSE EVERY ROOM'S GEOMETRY. sharedRoomGeometry is lazy — the first access to a

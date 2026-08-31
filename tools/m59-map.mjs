@@ -45,6 +45,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { loadRoo, RoomGeometry, sharedRoomGeometry, DEFAULT_ROO_DIRS } from './m59-roo.mjs';
+import { lazyRoomTopology } from './m59-room-artifacts.mjs';
+import { attachLabExitAtlas, labExitApproaches } from './m59-exit-atlas.mjs';
 import { loadCodeExits } from './m59-codeexits.mjs';
 import {
   CHECKED_MAP_FILE, LOCAL_MAP_FILE, movementMapFile,
@@ -509,13 +511,19 @@ export function loadMap(file = MAP_FILE) {
   if (st) {
     const key = `${resolved}\0${st.mtimeMs}\0${st.size}`;
     const hit = _loadMapCache.get(key);
-    if (hit) return hit;
+    if (hit) {
+      attachLabExitAtlas(hit);
+      return hit;
+    }
     const map = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+    attachLabExitAtlas(map);
     if (_loadMapCache.size > 8) _loadMapCache.clear();  // a handful of fixtures is the real ceiling
     _loadMapCache.set(key, map);
     return map;
   }
-  return JSON.parse(fs.readFileSync(resolved, 'utf8'));
+  const map = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+  attachLabExitAtlas(map);
+  return map;
 }
 
 export function writeMapAtomic(file, map) {
@@ -571,9 +579,14 @@ export function edgeCandidatesOf(room, edgeOrDirection, condition = null, { live
     ? edgeOrDirection : edgeOrDirection?.leaveName ?? LEAVE_NAME[edgeOrDirection?.leave];
   const edgeCondition = typeof edgeOrDirection === 'object'
     ? edgeOrDirection.condition : condition;
-  const geo = sharedRoomGeometry(room);
-  if (!geo?.collisionReady) return [];
-  const approaches = geo.edgeApproachCandidates(direction)
+  // The optional lab atlas is a precomputed answer to this exact immutable geometry
+  // question. It is registered only after format/predicate/manifest/security/dimension
+  // validation; null means any one of those gates failed and preserves the authoritative
+  // live path below. Production never registers it.
+  const atlasApproaches = labExitApproaches(room, direction);
+  const geo = atlasApproaches ? null : sharedRoomGeometry(room);
+  if (!atlasApproaches && !geo?.collisionReady) return [];
+  const approaches = (atlasApproaches ?? geo.edgeApproachCandidates(direction))
     .filter(candidate => live || candidate.graph_routable !== false);
   if (typeof edgeOrDirection !== 'object' || edgeOrDirection.synthetic)
     return approaches.filter(candidate => edgeConditionAllows(edgeCondition, candidate));
@@ -590,7 +603,8 @@ export function exitsOf(room) {
     // Hand-authored/diagnostic graph fixtures without any geometry remain useful for
     // abstract route search. Once a room carries a .roo payload, however, a declared
     // edge with no validated approach is physically non-routable and must disappear.
-    if (room?.roo && !edgeCandidatesOf(room, e).length) continue;
+    if (room?.roo && !topologyProvesEdgeCandidate(room, e) &&
+        !edgeCandidatesOf(room, e).length) continue;
     out.push({
       kind: 'edge', to: e.to, direction: e.leaveName,
       how: `walk ${e.leaveName} past the room edge` +
@@ -663,6 +677,36 @@ const BAD_EXITS_FILE = process.env.M59_BAD_EXITS ||
             '..', 'substrate', 'm59-badexits.json');
 
 const badInferred = new Set(readBadExits());
+// Every cache below describes the effective static routing graph. A refused inferred
+// reverse edge changes that graph for every loaded map variant, so one monotonic revision
+// is the invalidation token shared with higher-level projections such as World.exits().
+// The WeakMaps keep separately loaded/test maps isolated without making the cache own them.
+export let routingRevision = 0;
+let passableExitCacheByMap = new WeakMap();
+let bfsPathCacheByMap = new WeakMap();
+
+const weakKey = value => (typeof value === 'object' && value !== null) ||
+  typeof value === 'function';
+
+// Cached exits cross caller boundaries. Clone before freezing so nested condition/region
+// records from the source map remain ordinary mutable fixture data while the shared cache
+// itself cannot be poisoned by a caller changing an exit in place.
+function immutableRouteCopy(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableRouteCopy));
+  if (value && typeof value === 'object') {
+    const copy = {};
+    for (const [key, child] of Object.entries(value)) copy[key] = immutableRouteCopy(child);
+    return Object.freeze(copy);
+  }
+  return value;
+}
+
+function invalidateStaticRoutingCaches() {
+  routingRevision++;
+  passableExitCacheByMap = new WeakMap();
+  bfsPathCacheByMap = new WeakMap();
+}
+
 function readBadExits() {
   try { return JSON.parse(fs.readFileSync(BAD_EXITS_FILE, 'utf8')).refused ?? []; } catch { return []; }
 }
@@ -670,6 +714,9 @@ export function forgetInferredExit(from, to) {
   const key = from + '->' + to;
   if (badInferred.has(key)) return;
   badInferred.add(key);
+  // `passableExits` contains the inferred edge itself, while bfsPath contains whole
+  // answers chosen through it. Both must disappear before the next route query.
+  invalidateStaticRoutingCaches();
   try {
     fs.writeFileSync(BAD_EXITS_FILE, JSON.stringify({
       note: 'Inferred reverse edges the server has refused. Written by forgetInferredExit ' +
@@ -739,8 +786,21 @@ export function isOneWayBlocked(from, to, ex = null) {
 export function passableExits(map, at) {
   const room = map.rooms[at];
   if (!room) return [];
-  return [...exitsOf(room), ...inferredExits(map, at), ...codeExits(at)]
-    .filter(ex => ex.to != null && !isOneWayBlocked(Number(at), Number(ex.to), ex));
+  let rooms = null;
+  const key = String(at);
+  if (weakKey(map)) {
+    rooms = passableExitCacheByMap.get(map);
+    if (!rooms) {
+      rooms = new Map();
+      passableExitCacheByMap.set(map, rooms);
+    }
+    if (rooms.has(key)) return rooms.get(key);
+  }
+  const result = immutableRouteCopy(
+    [...exitsOf(room), ...inferredExits(map, at), ...codeExits(at)]
+      .filter(ex => ex.to != null && !isOneWayBlocked(Number(at), Number(ex.to), ex)));
+  rooms?.set(key, result);
+  return result;
 }
 
 // THE MAP-GLOBAL TABLE OF INFERRED REVERSE-EDGES. Built once, then read forever. The
@@ -754,13 +814,34 @@ export function passableExits(map, at) {
 // computation, just scheduled earlier. inferredExits() still calls it lazily as a fallback
 // for any path that reads inferred exits before startup builds them, so nothing depends on
 // the call being made.
+function topologyProvesEdgeCandidate(room, edgeOrDirection) {
+  if (!room?.roo || room.rooDimensionMismatch) return false;
+  const topology = lazyRoomTopology(room);
+  if (!topology?.length) return false;
+  const direction = typeof edgeOrDirection === 'string'
+    ? edgeOrDirection : edgeOrDirection?.leaveName ?? LEAVE_NAME[edgeOrDirection?.leave];
+  for (const anchor of topology) {
+    if (anchor.dir !== direction) continue;
+    if (typeof edgeOrDirection === 'object' && Number(anchor.to) !== Number(edgeOrDirection.to))
+      continue;
+    // Re-run today's ordered edge selection against the baked coordinate. This makes an
+    // anchor positive evidence only when it still selects a current declaration; any map
+    // graph change therefore falls back to full geometry rather than trusting stale shape.
+    const selected = selectedEdgeAt(room, direction, anchor);
+    if (typeof edgeOrDirection === 'object') {
+      if (selected === edgeOrDirection) return true;
+    } else if (selected) return true;
+  }
+  return false;
+}
+
 export function buildReverseEdges(map) {
   if (map.__reverse) return map.__reverse;
   const rev = new Map();
   for (const r of Object.values(map.rooms)) {
     for (const e of r.edgeExits || []) {
       if (e.to == null || e.condition) continue;   // conditional exits are not symmetric
-      if (r.roo && !edgeCandidatesOf(r, e).length) continue;
+      if (r.roo && !topologyProvesEdgeCandidate(r, e) && !edgeCandidatesOf(r, e).length) continue;
       const back = OPPOSITE[e.leave];
       if (!back) continue;
       // NEVER infer an edge OUT of a room that declares no edge exits at all.
@@ -779,8 +860,9 @@ export function buildReverseEdges(map) {
       // A reverse is only actionable where the destination room's own BSP has a
       // real crossing in that direction. This excludes sealed authored bounds
       // before route search can repeatedly choose them.
-      if (map.rooms[e.to]?.roo
-          && !edgeCandidatesOf(map.rooms[e.to], LEAVE_NAME[back]).length) continue;
+      if (map.rooms[e.to]?.roo &&
+          !topologyProvesEdgeCandidate(map.rooms[e.to], LEAVE_NAME[back]) &&
+          !edgeCandidatesOf(map.rooms[e.to], LEAVE_NAME[back]).length) continue;
       if (!rev.has(e.to)) rev.set(e.to, []);
       if (!rev.get(e.to).some(x => x.to === r.num))
         rev.get(e.to).push({ kind: 'edge', to: r.num, direction: LEAVE_NAME[back],
@@ -918,8 +1000,16 @@ export function roomsWithin(map, fromNum, radius = 2, { avoid = AVOID_IN_TRANSIT
 // never mutated), so the cache is safe for the life of the process. Bounded: the number
 // of distinct (from, to, avoid) pairs the fleet actually routes is small (a few hundred),
 // well under the cap.
-const _bfsPathCache = new Map();
 const _bfsPathCacheCap = 2000;
+function _bfsPathCacheFor(map) {
+  if (!weakKey(map)) return null;
+  let cache = bfsPathCacheByMap.get(map);
+  if (!cache) {
+    cache = new Map();
+    bfsPathCacheByMap.set(map, cache);
+  }
+  return cache;
+}
 function _bfsCacheKey(fromNum, toNum, avoid) {
   // The default avoid set (AVOID_IN_TRANSIT) and "no avoid" are the only ones the router
   // uses in practice. Encode the avoid set as a sorted join of its room numbers so any
@@ -935,7 +1025,8 @@ function bfsPath(map, fromNum, toNum, avoid, transitOk = null, blockedHops = nul
   // caller had just forbidden. Those calls skip the cache entirely.
   const _cacheable = !transitOk && !crossCost && !blockedHops && !availableFirstHops;
   const _key = _cacheable ? _bfsCacheKey(fromNum, toNum, avoid) : null;
-  if (_key) { const hit = _bfsPathCache.get(_key); if (hit) return hit; }
+  const _cache = _key ? _bfsPathCacheFor(map) : null;
+  if (_cache) { const hit = _cache.get(_key); if (hit) return hit; }
   // WITH A TRANSIT PREDICATE THE STATE IS (ROOM, DOOR YOU CAME IN BY), NOT THE ROOM.
   //
   // Whether you can cross a room depends on which side you entered it from, so keying
@@ -1031,14 +1122,16 @@ function bfsPath(map, fromNum, toNum, avoid, transitOk = null, blockedHops = nul
   // graph, and not caching it was how a repeated impossible query re-paid the whole
   // search every time it was asked.
   if (best) {
-    const _hit = { found: true, hops: best, walk_cost: routeCost(best) };
-    if (_key) { if (_bfsPathCache.size >= _bfsPathCacheCap) _bfsPathCache.clear();
-                _bfsPathCache.set(_key, _hit); }
+    const _hit = immutableRouteCopy({ found: true, hops: best, walk_cost: routeCost(best) });
+    if (_cache) { if (_cache.size >= _bfsPathCacheCap) _cache.clear();
+                  _cache.set(_key, _hit); }
     return _hit;
   }
-  const _miss = { found: false, hops: [], reason: `no route from ${fromNum} to ${toNum} in the graph` };
-  if (_key) { if (_bfsPathCache.size >= _bfsPathCacheCap) _bfsPathCache.clear();
-              _bfsPathCache.set(_key, _miss); }
+  const _miss = immutableRouteCopy({
+    found: false, hops: [], reason: `no route from ${fromNum} to ${toNum} in the graph`,
+  });
+  if (_cache) { if (_cache.size >= _bfsPathCacheCap) _cache.clear();
+                _cache.set(_key, _miss); }
   return _miss;
 }
 

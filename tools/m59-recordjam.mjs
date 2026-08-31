@@ -15,12 +15,15 @@
 // exact positions to write the same test for the sewers, and by the time they had been
 // copied down by hand once, the next jam would have to be copied down by hand again.
 //
-// WHAT IT READS. The fleet's own keepers, over loopback: every keeper of the resolved fleet
-// that is standing in the room is an observer, and their `/health` object lists are
-// unioned per sample. Nothing is sent to the game server — a keeper's room contents are
-// already in memory — so sampling once a second costs the wire nothing. It never starts a
-// broker and never logs anybody in; if no keeper of this fleet is in the room it says so
-// and exits 2, because a recording of an empty room is not a recording.
+// WHAT IT READS. The fleet's own keepers, over loopback: `/live` discovers process/session
+// identity cheaply, then every keeper of the resolved fleet that is standing in the room is
+// an observer and their demand-built `/state` object lists are unioned per sample. Nothing
+// is sent to the game server — a keeper's room contents are already in memory — so sampling
+// once a second costs the wire nothing. An older keeper with no `/live` may be discovered
+// through its legacy `/health`, but ONLY after a definite 404/405; a timeout is silence, not
+// permission to make the same busy event loop build an enriched health snapshot. It never
+// starts a broker and never logs anybody in; if no keeper of this fleet is in the room it
+// says so and exits 2, because a recording of an empty room is not a recording.
 //
 // WHAT IT WRITES. `m59-jam/1`: the room and its .roo, the region, then `static` (units seen
 // at one position for the whole recording — one line each, with how many samples saw them)
@@ -44,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { sharedRoomGeometry, protocolToClient, KOD_FINENESS } from './m59-roo.mjs';
 import { OF } from './m59-parse.mjs';
+import { KEEPER_BAND_WIDTH, lookupKeeperBand } from './runtime/keeper-bands.mjs';
 
 // WHAT A UNIT IS, from the flag word the server sent and not from its name: a player, a
 // monster (attackable and not a player), or an item lying on the floor — an emerald on
@@ -217,23 +221,111 @@ export function summarise(jam) {
 // The keepers of this fleet, by asking every port in the fleet's band who they are. The
 // band comes from substrate/keeper-bands.json exactly as the broker allocates it; a keeper
 // can be re-allocated off its default port, which is why this scans rather than computes.
-export async function findKeepers({ fleet, base = null, span = 60, timeoutMs = 4000 } = {}) {
+//
+// IDENTITY FIRST, ENRICHMENT SECOND. `/live` is intentionally too small to name a room;
+// discovery asks `/state` once only after a live keeper has identified itself. The same
+// endpoint supplies the recording frames below, so `/health` is no longer a hidden full-
+// snapshot API contract.
+const identityFold = value => String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase('en-US');
+const explicitlyNotLive = value => value?.in_game === false || value?.connected === false || value?.ok === false;
+export const RECORDING_STATE_MAX_AGE_MS = 2500;
+
+const recordingStateAgeIsBounded = value =>
+  typeof value?.as_of_ms === 'number' && Number.isFinite(value.as_of_ms) &&
+  value.as_of_ms >= 0 && value.as_of_ms <= RECORDING_STATE_MAX_AGE_MS;
+
+async function cancelResponseBody(response) {
+  try { await response?.body?.cancel?.(); } catch { /* best-effort connection reuse */ }
+}
+
+async function readKeeperJson(url, { timeoutMs, fetchImpl }) {
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    return { response, value: null };
+  }
+  return { response, value: await response.json() };
+}
+
+export async function discoverKeeperAtPort(port, { timeoutMs = 4000, fetchImpl = globalThis.fetch } = {}) {
+  let identity = null;
+  try {
+    const live = await readKeeperJson(`http://127.0.0.1:${port}/live`, { timeoutMs, fetchImpl });
+    if (live.response.ok) {
+      identity = live.value;
+    } else if (live.response.status === 404 || live.response.status === 405) {
+      // ROLLING-UPGRADE COMPATIBILITY, NOT A SECOND CHANCE AFTER SILENCE. An old keeper
+      // predates /live and says so synchronously. A timeout or 5xx can be a keeper busy in
+      // one long pass; immediately asking it for the expensive legacy projection doubles
+      // the load precisely when it is least able to answer.
+      const old = await readKeeperJson(`http://127.0.0.1:${port}/health`, { timeoutMs, fetchImpl });
+      if (!old.response.ok) return null;
+      identity = old.value;
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const identityAgent = String(identity?.agent ?? '');
+  if (!identityAgent || explicitlyNotLive(identity)) return null;
+  const identityPid = Number(identity.pid);
+  const identityCharacter = identityFold(identity.character);
+  // PID is the process generation. Agent aliases and character names can be reused on a
+  // newly bound port; without a positive PID there is no fact a later /state frame can be
+  // matched against, so this port is not safe to record through.
+  if (!Number.isSafeInteger(identityPid) || identityPid <= 0 || !identityCharacter) return null;
+
+  // `/health` is identity-only compatibility. Room selection and every recording frame
+  // must come from `/state`, with explicit generation evidence and bounded staleness.
+  let state = null;
+  try {
+    const q = new URLSearchParams({
+      agent: identityAgent,
+      character: String(identity.character),
+      keeper_pid: String(identityPid),
+    });
+    const current = await readKeeperJson(`http://127.0.0.1:${port}/state?${q}`, { timeoutMs, fetchImpl });
+    if (!current.response.ok) return null;
+    state = current.value;
+  } catch {
+    return null;
+  }
+
+  // A port can be rebound between the two reads. Never attach another process's room to
+  // the identity that answered first, and never record a snapshot too old to bound.
+  if (!state || String(state.agent ?? '') !== identityAgent) return null;
+  if (explicitlyNotLive(state)) return null;
+  const statePid = Number(state.pid);
+  if (!Number.isSafeInteger(statePid) || statePid <= 0 || identityPid !== statePid) return null;
+  const stateCharacter = identityFold(state.character);
+  if (!stateCharacter || stateCharacter !== identityCharacter) return null;
+  if (!recordingStateAgeIsBounded(state)) return null;
+  return {
+    port,
+    agent: identityAgent,
+    character: state.character,
+    pid: identityPid,
+    room: state.room ?? null,
+  };
+}
+
+export async function findKeepers({ fleet, base = null, span = null, timeoutMs = 4000,
+                                    fetchImpl = globalThis.fetch } = {}) {
   let start = base;
   if (start == null) {
-    let bands = {};
-    try { bands = JSON.parse(readFileSync(join(HERE, 'substrate', 'keeper-bands.json'), 'utf8')); } catch { /* none */ }
-    start = fleet && Number.isFinite(bands[fleet]) ? bands[fleet] : 8911;
+    const band = lookupKeeperBand(fleet ?? null);
+    if (!band) return [];
+    start = band.base;
+    span ??= band.width;
   }
+  span ??= KEEPER_BAND_WIDTH;
+  if (!Number.isSafeInteger(start) || start < 1 ||
+      !Number.isSafeInteger(span) || span < 1 || start + span - 1 > 65535)
+    throw new RangeError('keeper scan must be a bounded positive port range');
   const ports = Array.from({ length: span }, (_, i) => start + i);
-  const found = await Promise.all(ports.map(async port => {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!r.ok) return null;
-      const h = await r.json();
-      if (!h?.agent || !h.in_game) return null;
-      return { port, agent: h.agent, character: h.character ?? null, room: h.room ?? null };
-    } catch { return null; }
-  }));
+  const found = await Promise.all(ports.map(port =>
+    discoverKeeperAtPort(port, { timeoutMs, fetchImpl })));
   return found.filter(Boolean);
 }
 
@@ -243,12 +335,35 @@ const roomMatches = (room, want) => {
   return new RegExp(String(want), 'i').test(room.name ?? '');
 };
 
-async function sampleOnce(observers, region, t0) {
-  const at = Date.now();
+export async function sampleOnce(observers, region, t0,
+                                 { timeoutMs = 8000, fetchImpl = globalThis.fetch,
+                                   now = Date.now } = {}) {
+  const at = now();
   const views = await Promise.all(observers.map(async o => {
     try {
-      const r = await fetch(`http://127.0.0.1:${o.port}/health`, { signal: AbortSignal.timeout(8000) });
-      return await r.json();
+      const q = new URLSearchParams({
+        agent: String(o.agent),
+        character: String(o.character),
+        keeper_pid: String(o.pid),
+      });
+      const read = await readKeeperJson(`http://127.0.0.1:${o.port}/state?${q}`,
+                                       { timeoutMs, fetchImpl });
+      if (!read.response.ok) return null;
+      const state = read.value;
+      // The direct endpoint names itself. A port reallocated between discovery and a
+      // sample is a missing observer for this frame, never somebody else's bodies filed
+      // under the selected keeper.
+      if (String(state?.agent ?? '') !== String(o.agent)) return null;
+      const expectedCharacter = identityFold(o.character);
+      const observedCharacter = identityFold(state?.character);
+      const expectedPid = Number(o.pid);
+      const observedPid = Number(state?.pid);
+      if (!expectedCharacter || observedCharacter !== expectedCharacter) return null;
+      if (!Number.isSafeInteger(expectedPid) || expectedPid <= 0 ||
+          !Number.isSafeInteger(observedPid) || observedPid <= 0 || observedPid !== expectedPid) return null;
+      if (explicitlyNotLive(state)) return null;
+      if (!recordingStateAgeIsBounded(state)) return null;
+      return state;
     } catch { return null; }
   }));
   const units = new Map();

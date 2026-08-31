@@ -11,8 +11,7 @@
 // The broker imports Session from here:
 //   import { Session, Recorder } from './m59-game.mjs';
 
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
@@ -41,6 +40,7 @@ import * as bankbook from './m59-bank.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
+import { Recorder } from './m59-recorder.mjs';
 
 // ── IMPORTS THE PORTED SESSION NEEDS ────────────────────────────────────────────
 //
@@ -89,10 +89,6 @@ import * as skills from './m59-skills.mjs';
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
-const RECORD_DIR = process.env.M59_RECORD_DIR ||
-  fileURLToPath(new URL('../substrate/recordings/', import.meta.url));
-const RECORD_WINDOW_MS = Number(process.env.M59_RECORD_WINDOW_MS || 120_000);
-const RECORD_KEEP = Number(process.env.M59_RECORD_KEEP || 15);
 // Facing coalescing tolerance (degrees) for the turn-before-move in walkTo. A player only
 // turns when the heading changes; we suppress the per-step re-face that pushed us over the
 // server's 5-packet/s throttle. See docs/packet-throttle.md.
@@ -346,10 +342,16 @@ let worldMap = loadMap();
 // Attach baked step masks so pathfinding uses the mover's own geometry
 // (fine BSP) instead of the coarse grid (monster perspective).
 import { attachStepMasks } from './m59-routes.mjs';
+let geometryStartupMode = 'eager';
 try {
-  const masks = attachStepMasks(worldMap);
-  if (masks.attached > 0) {
-    console.error(`[routes] ${masks.attached} room(s) planning on the mover's own geometry` +
+  const masks = attachStepMasks(worldMap, {
+    lazy: process.env.M59_RUNTIME_PROFILE === 'lab',
+  });
+  geometryStartupMode = masks.lazy ? 'lazy' : 'eager';
+  const usableMasks = (masks.attached ?? 0) + (masks.deferred ?? 0);
+  if (usableMasks > 0) {
+    console.error(`[routes] ${usableMasks} room(s) planning on the mover's own geometry` +
+      (masks.deferred ? ` (${masks.deferred} deferred until first room use)` : '') +
       (masks.refused ? `, ${masks.refused} mask(s) refused as the wrong size` : ''));
   }
 } catch (e) {
@@ -371,6 +373,7 @@ try {
                 `, ${worldMap.__reverse?.size ?? 0} rooms (off the first tick)`);
 } catch (e) {
   // A failure here means the lazy build will just happen on first use, as before.
+  geometryStartupMode = 'eager';
   console.error(`[routes] startup reverse-edge build failed (${e.message}); will build lazily on first use`);
 }
 
@@ -379,84 +382,16 @@ try {
 // fromJSON (~tens of ms each) — the ~12s half of the cold-start stall. Building them all
 // at startup means the first tick does no geometry parsing. Same rationale as the
 // reverse-edge build above: a pure, idempotent, complete build scheduled off the tick.
-try {
-  const t0 = Date.now();
-  const n = buildAllRoomGeometry(worldMap);
-  console.error(`[routes] ${n} room geometries parsed at startup in ${Date.now() - t0}ms` +
-                ` (off the first tick)`);
-} catch (e) {
-  console.error(`[routes] startup geometry build failed (${e.message}); will parse lazily on first use`);
-}
-
-// ---------------------------------------------------------------- recorder
-class Recorder {
-  constructor(name) {
-    this.name = String(name).replace(/[^A-Za-z0-9_-]/g, '_');
-    this.enabled = true;
-    this.buf = [];
-    this.window = null;
-    this.file = null;
-    this.written = 0;
-    this.dropped = 0;
-    try { mkdirSync(RECORD_DIR, { recursive: true }); } catch { this.enabled = false; }
-    this.timer = setInterval(() => this.flush(), 2000);
-    this.timer.unref?.();
-  }
-
-  line(kind, data) {
-    if (!this.enabled) return;
-    // Bound the in-memory buffer: a fight produces a burst, and a stalled disk
-    // must never become a memory leak.
-    if (this.buf.length > 5000) { this.dropped++; return; }
-    this.buf.push(JSON.stringify({ at: Date.now(), kind, ...data }));
-  }
-
-  currentFile() {
-    const w = Math.floor(Date.now() / RECORD_WINDOW_MS);
-    if (w !== this.window) {
-      this.window = w;
-      this.file = join(RECORD_DIR, `${this.name}-${w}.jsonl`);
-      this.prune();
-    }
-    return this.file;
-  }
-
-  // Keep only the most recent RECORD_KEEP windows for this character.
-  prune() {
-    try {
-      const mine = readdirSync(RECORD_DIR)
-        .filter(f => f.startsWith(this.name + '-') && f.endsWith('.jsonl'))
-        .sort();
-      for (const f of mine.slice(0, Math.max(0, mine.length - RECORD_KEEP)))
-        try { unlinkSync(join(RECORD_DIR, f)); } catch { /* raced with another prune */ }
-    } catch { /* directory vanished; next write recreates it */ }
-  }
-
-  flush() {
-    if (!this.enabled || !this.buf.length) return;
-    const lines = this.buf.splice(0, this.buf.length).join('\n') + '\n';
-    try { appendFileSync(this.currentFile(), lines); this.written += lines.length; }
-    catch { this.enabled = false; }
-  }
-
-  stop() { this.flush(); if (this.timer) clearInterval(this.timer); }
-
-  // The tail, for debugging. Reads back across windows, newest last.
-  tail(limit = 200, kinds = null) {
-    this.flush();
-    const want = kinds?.length ? new Set(kinds) : null;
-    let out = [];
-    try {
-      const mine = readdirSync(RECORD_DIR)
-        .filter(f => f.startsWith(this.name + '-') && f.endsWith('.jsonl')).sort();
-      for (const f of mine.slice(-4)) {
-        for (const l of readFileSync(join(RECORD_DIR, f), 'utf8').split('\n')) {
-          if (!l) continue;
-          try { const e = JSON.parse(l); if (!want || want.has(e.kind)) out.push(e); } catch { /* torn line */ }
-        }
-      }
-    } catch { /* nothing recorded yet */ }
-    return out.slice(-limit);
+if (geometryStartupMode === 'lazy') {
+  console.error('[routes] lab room geometry will decode lazily on first room use');
+} else {
+  try {
+    const t0 = Date.now();
+    const n = buildAllRoomGeometry(worldMap);
+    console.error(`[routes] ${n} room geometries parsed at startup in ${Date.now() - t0}ms` +
+                  ` (off the first tick)`);
+  } catch (e) {
+    console.error(`[routes] startup geometry build failed (${e.message}); will parse lazily on first use`);
   }
 }
 
@@ -1860,7 +1795,15 @@ class Session {
       if (ev.kind === 'stat' && ev.name === 'health') this.noteHealth(ev);
     };
     if (character) c.wantName = character;
-    await c.login(account, password);
+    try {
+      await c.login(account, password);
+    } catch (error) {
+      // A failed login never becomes this.client, so nobody else can close its socket.
+      // Reconnect backoff would otherwise leak one connected/stalled socket per attempt.
+      try { c.stopKeepalive?.(); } catch {}
+      try { c.sock?.destroy?.(); } catch {}
+      throw error;
+    }
     this.client = c;
     this.world = new World(c, worldMap);
 
@@ -10377,4 +10320,4 @@ class Session {
   }
 }
 
-export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits };
+export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode };

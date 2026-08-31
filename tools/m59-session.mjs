@@ -7,4 +7,4 @@
 //
 // Both classes are defined in m59-game.mjs and re-exported here.
 
-export { Session, Pacer, Recorder, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits } from './m59-game.mjs';
+export { Session, Pacer, Recorder, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode } from './m59-game.mjs';

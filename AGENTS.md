@@ -59,8 +59,13 @@ and a stop that finds it by `/health` rather than by process name.
 It does **not** survive a reboot. `start` is one command; a Windows service would have
 meant a third-party binary in a repository where every other tool is dependency-free.
 
-**Every keeper runs inside the broker.** Stopping it logs out every character; there is
-no separate keeper process to survive it.
+**Every keeper is a child process of the broker** — `m59-keeper-process.mjs`, one per
+character, each holding its own socket. A broker death can leave those children alive.
+New broker fleet/account claims guard the exact keeper PIDs before login; a restart of the
+exact same roster may atomically adopt verified guarded survivors, while a lab or copied
+roster is refused. Pre-guard broker claims fail closed and use the one-time migration in
+[`docs/INSTALL.md`](docs/INSTALL.md#when-it-does-not-work). Never delete a live or guarded
+lock.
 
 ### The page has buttons, on the broker machine only
 
@@ -143,9 +148,9 @@ the checkpoints went; do not delete old ones unasked.
   silently replaced with `3/1/4/1/5/9`. Never report a character as created
   without checking `stats_as_asked` in the `reroll` result.
 - **Attach to the broker, never spawn a second.** `m59-broker.mjs` with no
-  arguments serves stdio MCP *and* resumes a fleet; a second one is refused the
-  lock, comes up healthy and **empty**, and answers about a fleet of nobody while
-  the real one plays on. Use `tools/m59-mcp-attach.mjs`, which holds no state.
+  arguments serves stdio MCP *and* resumes a fleet; a second owner is refused
+  before its listener opens and exits with status 3. It does not attach to the
+  running broker. Use `tools/m59-mcp-attach.mjs`, which holds no state.
 - **Never call the `leave` tool** on a fleet anyone cares about — it drops the
   roster, and the roster is the only record of the passwords.
 - **`substrate/fleet-accounts.json` is the only copy of the account passwords.**

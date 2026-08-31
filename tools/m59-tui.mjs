@@ -40,19 +40,32 @@ import * as webui from './m59-webui.mjs';
 import { commitmentOf, stepSelection, firstSelectable, allCommitted } from './m59-commitment.mjs';
 import { mergeTuiRow, fleetFreshness } from './m59-tui-state.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
+import {
+  KEEPER_BAND_WIDTH,
+  discoverKeeperStates,
+  keeperBandPorts,
+  resolveKeeperBand,
+} from './runtime/keeper-discovery.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WIN = process.platform === 'win32';
 // Which roster this TUI is looking at. Must match the broker it is talking to —
 // pass --fleet <name> to both, or neither.
-const { label: FLEET_LABEL, stateFile: STATE_FILE } = resolveFleet();
+const { fleet: FLEET, label: FLEET_LABEL, stateFile: STATE_FILE } = resolveFleet();
 
 const PORT = env.M59_BROKER_PORT || '8901';
 const URL_ = `http://127.0.0.1:${PORT}/`;
-// Each keeper is its own process with its own HTTP port. This is only where the SEARCH
-// starts — the actual port is whatever that keeper answers on, which the broker may have
-// moved to dodge another fleet. See keeperStates().
-const KEEPER_PORT_BASE = Number(env.M59_KEEPER_PORT_BASE || 8911);
+// Each keeper is its own process with its own HTTP port. The band is an ownership boundary;
+// the actual agent on each slot is still proved by the keeper itself. See keeperStates().
+const KEEPER_BAND_OPTIONS = {
+  ...(Object.hasOwn(env, 'M59_KEEPER_PORT_BASE')
+    ? { override: env.M59_KEEPER_PORT_BASE }
+    : {}),
+  missing: 'null',
+};
+// A TUI may start just before a named broker allocates its first band. Keep "not assigned"
+// as no data and retry the registry on refresh; never substitute the unnamed/prod range.
+let KEEPER_BAND = resolveKeeperBand(FLEET, KEEPER_BAND_OPTIONS);
 const REFRESH_MS = Number(env.M59_TUI_REFRESH_MS || 5000);
 
 // ------------------------------------------------------------------ broker
@@ -136,51 +149,60 @@ const S = {
 
 // WHICH PORT IS WHOSE KEEPER — ASKED, NEVER COMPUTED.
 //
-// A keeper's port is NOT `KEEPER_PORT_BASE + index`. Every broker on this machine starts
-// from the same base, so two fleets contend for one range, and `allocateKeeperPort` in
-// m59-broker.mjs walks forward past any port another fleet already holds — on this
-// machine prod's t21 ended up on 8940 because shadow21 had 8931. Computing the port
-// therefore reads a STRANGER'S keeper and believes it: port 8923 answers as `shadow13`,
-// and a board that trusted the arithmetic showed ten shadow characters as prod ones.
+// A keeper's port is not treated as an agent name. Historical brokers shared one range
+// and walked forward around collisions, so arithmetic once read a stranger's keeper and
+// put shadow vitals on prod rows. Current brokers own disjoint fixed bands, but discovery
+// still proves the process identity because a stale process or explicit override can make
+// a port number alone lie.
 //
-// So sweep the range, ask each port `/state` — which names its own agent and carries the
-// complete current operational projection — and keep only
-// the answers. Same doctrine as m59-which.mjs one layer down: two fleets on one machine
-// are not the same fleet, and identity is checked rather than inferred from a number.
-const KEEPER_SCAN = Number(env.M59_TUI_KEEPER_SCAN || 60);
-let _ports = null;                       // agent -> port, learned by asking
-async function keeperState(port) {
-  if (port == null) return null;
-  try {
-    // Generous: these processes are also playing the game, and a keeper mid-pass will
-    // sit on a request long enough that a tight timeout reads as "no keeper".
-    // `/state` answers from the keeper's own at-most-two-second cache and sends no game
-    // packet. `/mode` used to be requested here; it proved identity but none of the data
-    // the hero sheet rendered (deaths, walls, threats, trials) existed in that response.
-    const r = await fetch(`http://127.0.0.1:${port}/state`, { signal: AbortSignal.timeout(6000) });
-    return await r.json();
-  } catch { return null; }
+// So sweep this fleet's complete band with cheap `/live` requests. Only an expected agent
+// with a complete agent/character/PID tuple earns the richer `/state` request, and that
+// reply must repeat the tuple. Same doctrine as m59-which.mjs one layer down: two fleets
+// on one machine are not the same fleet, and identity is checked rather than inferred.
+// The old scan-width escape hatch could truncate a fleet or run into the adjacent fleet's
+// band. It remains accepted only at the one safe value so stale service configuration fails
+// loudly rather than changing the ownership boundary.
+if (Object.hasOwn(env, 'M59_TUI_KEEPER_SCAN') &&
+    Number(env.M59_TUI_KEEPER_SCAN) !== KEEPER_BAND_WIDTH) {
+  throw new RangeError(`M59_TUI_KEEPER_SCAN must be exactly ${KEEPER_BAND_WIDTH}`);
 }
+let _ports = null;                       // agent -> port, learned by asking
 // `mine` is this fleet's agent names. Anything else answering is another fleet's keeper
 // and is dropped here rather than carried around — a map that holds `shadow13` is one
 // stray lookup away from putting a stranger's vitals on a prod row.
-async function sweep(ports, mine) {
-  const seen = new Map();
-  await Promise.all(ports.map(async (p) => {
-    const m = await keeperState(p);
-    if (m?.agent && (!mine || mine.has(m.agent))) seen.set(m.agent, { ...m, __port: p });
-  }));
-  return seen;
+async function sweep(band, ports, mine) {
+  const { states } = await discoverKeeperStates({
+    band,
+    expectedAgents: mine,
+    ports,
+    liveTimeoutMs: 1500,
+    stateTimeoutMs: 6000,
+  });
+  return states;
 }
 // Fast path is the ports we already know. A keeper that respawns can land somewhere else
 // entirely now that allocation is dynamic, so any agent we expected and did not hear from
 // triggers ONE full re-scan — otherwise a moved keeper silently drops off the board for
 // as long as the process lives, which is the failure this whole comment block is about.
 async function keeperStates(expected = []) {
-  const mine = new Set(expected);
-  const full = () => Array.from({ length: KEEPER_SCAN }, (_, k) => KEEPER_PORT_BASE + k);
-  let seen = await sweep(_ports ? [..._ports.values()] : full(), mine);
-  if (_ports && expected.some(a => !seen.has(a))) seen = await sweep(full(), mine);
+  const mine = new Set(expected.filter(Boolean).map(String));
+  KEEPER_BAND ??= resolveKeeperBand(FLEET, KEEPER_BAND_OPTIONS);
+  if (!KEEPER_BAND) {
+    _ports = null;
+    return new Map();
+  }
+  const full = () => keeperBandPorts(KEEPER_BAND);
+  let seen = await sweep(KEEPER_BAND,
+                         _ports ? [...new Set(_ports.values())] : full(), mine);
+  if (_ports) {
+    const missing = new Set([...mine].filter(agent => !seen.has(agent)));
+    if (missing.size) {
+      // The complete re-scan still uses cheap liveness for all 100 ports, but only missing
+      // expected agents receive a rich state request. Keep good fast-path states already read.
+      const recovered = await sweep(KEEPER_BAND, full(), missing);
+      for (const [agent, state] of recovered) seen.set(agent, state);
+    }
+  }
   _ports = new Map([...seen].map(([a, m]) => [a, m.__port]));
   return seen;
 }

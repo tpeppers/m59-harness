@@ -272,21 +272,13 @@ async function stopBroker(port) {
     await nap(250);
   }
 
-  // On Windows SIGTERM does not run the broker's exit handler, so the lock it
-  // took over this checkout's fleet is never released. We know we killed it.
-  //
-  // WHICH lock comes from the broker's own /health, not from what this process
-  // resolved: the broker is the only thing that knows which roster it actually took,
-  // and a fleet-blind guess at fleet-state.json.lock left every named fleet's lock
-  // behind — the next start then refuses itself over a claim from a dead pid.
-  const lock = (who.state ? who.state : join(REPO, 'substrate', 'fleet-state.json')) + '.lock';
   let gone = false;
   try { process.kill(pid, 0); } catch { gone = true; }
-  if (gone && existsSync(lock)) {
-    try {
-      if (JSON.parse(readFileSync(lock, 'utf8')).pid === pid) unlinkSync(lock);
-    } catch { /* leave anything we cannot read */ }
-  }
+  // Never unlink the roster claim here. On Windows the broker can die while its keeper
+  // children and account sockets survive; their PIDs are the guards that let an exact
+  // successor adopt safely and make every alias fail closed. If every child is dead the
+  // shared lock code will reclaim the claim after positive liveness checks. Deleting it
+  // here would erase both the evidence and the safe restart lineage.
   return gone ? `stopped broker (pid ${pid})` : `broker ${pid} did not exit`;
 }
 
