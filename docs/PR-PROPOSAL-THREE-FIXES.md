@@ -61,3 +61,12 @@ We're happy to port them into your tree if you want. The airlock is
 the most self-contained (a new file + a ~30-line block). The
 room-stamp and policy unification require adapting to your existing
 code.
+
+## Reference implementations
+
+- **Airlock + room-stamp:** see `docs/PR-REFERENCE-AIRLOCK-ROOMSTAMP.md`
+  (deeply integrated into our `ControllerMover` and `Client` classes;
+  reference implementation with integration notes).
+- **Policy unification:** already ported into this branch (see the
+  `writeLoadoutPolicy` helper + the call in the `autopilot set`
+  handler in `m59-broker.mjs`).
