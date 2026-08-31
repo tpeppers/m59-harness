@@ -19,6 +19,6 @@
     "which": "node tools/m59-which.mjs",
     "field": "node tools/m59-webui.mjs start",
     "postinstall": "node tools/m59-webui.mjs install || true",
-    "test": "node tools/m59-safespot-test.mjs && node tools/m59-chat-test.mjs && node tools/m59-grudge-test.mjs && node tools/m59-playbook-test.mjs && node tools/m59-townrun-test.mjs && node tools/m59-commitment-test.mjs && node tools/m59-unattended-test.mjs"
+    "test": "node tools/m59-safespot-test.mjs && node tools/m59-chat-test.mjs && node tools/m59-grudge-test.mjs && node tools/m59-playbook-test.mjs && node tools/m59-townrun-test.mjs && node tools/m59-commitment-test.mjs && node tools/m59-unattended-test.mjs && node tools/m59-pilgrimage-test.mjs"
   }
 }
