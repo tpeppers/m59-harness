@@ -1428,12 +1428,13 @@ const followRail = compileSessionMethod(brokerSource,
 const recentreInSquare = compileSessionMethod(brokerSource,
   'async recentreInSquare() {', 'recentreInSquare', {});
 let rideTrackFixture = null;
+let rideTrackClears = 0, rideTrackStrikes = 0;
 const rideTrack = compileSessionMethod(brokerSource,
   'async rideTrack(fromRoom, toRoom, {', 'rideTrack', {
     KOD_FINENESS,
     recallTrack: () => rideTrackFixture,
-    clearStrikes: () => {},
-    strikeTrack: () => 1,
+    clearStrikes: () => { rideTrackClears++; },
+    strikeTrack: () => { rideTrackStrikes++; return 1; },
   });
 
 let leaveViaRoutesFixture = null;
@@ -2486,8 +2487,10 @@ console.log('\nterminal movement propagation and edge packet authority');
       [{ kind: 'edge', to: 101, stand_on: { col: 5, row: 2 }, fine_stand_on: { x: 96, y: 335 } },
        { kind: 'edge', to: 101, stand_on: { col: 5, row: 2 }, fine_stand_on: { x: 96, y: 352 } }], {});
     ok('a crossing that reported failure but changed the room is not recovered from',
-       result.left === true && result.late === true && retreats === 0 && attempts === 1,
-       JSON.stringify({ left: result.left, late: result.late, retreats, attempts }));
+       result.left === true && result.confirmed_room_change === true && result.late === true
+         && retreats === 0 && attempts === 1,
+       JSON.stringify({ left: result.left, confirmed_room_change: result.confirmed_room_change,
+                        late: result.late, retreats, attempts }));
   }
 
   // A ONE-SQUARE DOORWAY GETS PATIENCE, NOT BREADTH.
@@ -3500,6 +3503,167 @@ console.log('A RAIL NEVER GIVES BACK GROUND IT HAS ALREADY MADE');
      out?.railed === false, JSON.stringify(out));
   ok('and it says the body never got further along', /no forward progress|slipped_off_rail/.test(out?.reason ?? ''),
      JSON.stringify(out?.reason));
+}
+
+console.log('');
+console.log('A ROOM CHANGE OBSERVED DURING THE FINAL STEP ENDS THE TRACK REPLAY');
+{
+  // Fine movement can return a stale left_room:false even though the protocol room changed
+  // while that await was outstanding. The live room identity outranks the move snapshot and
+  // the working track must not be struck or handed back as a failure.
+  rideTrackFixture = {
+    ms: 100,
+    shelter: [],
+    waypoints: [{ x: 128, y: 128 }, { x: 63, y: 128 }],
+  };
+  const world = { room: { num: 593 }, geometry: { walkable: () => true } };
+  const client = {
+    self: { x: 128, y: 128 }, room: { id: 1586 },
+  };
+  const steps = [];
+  rideTrackClears = 0;
+  rideTrackStrikes = 0;
+  const trackSession = {
+    client, world, movementGeneration: 0,
+    need: () => client,
+    movementWasCancelled: () => false,
+    async walkTo() { throw new Error('a rider already on the first station tried to board'); },
+    async stepFine(x, y) {
+      steps.push({ x, y });
+      client.self = { ...client.self, x, y };
+      if (x === 63) {
+        world.room = { num: 583 };
+        client.room = { id: 1578 };
+      }
+      return { moved: true, left_room: false, predicted: true };
+    },
+    async walkFine() { throw new Error('a reached learned station fell back to fine walking'); },
+  };
+  const ridden = await rideTrack.call(trackSession, 102, 583, {});
+  ok('the live room change stops replay without yet claiming a completed crossing',
+     ridden?.left_room === false && ridden?.room_changed === true
+       && ridden?.late_room_change === true,
+     JSON.stringify(ridden));
+  ok('no source-room fallback move runs after the delayed transition',
+     JSON.stringify(steps) === JSON.stringify([{ x: 128, y: 128 }, { x: 63, y: 128 }]),
+     JSON.stringify(steps));
+  ok('an unconfirmed room publication neither strikes nor clears the learned track',
+     rideTrackStrikes === 0 && rideTrackClears === 0,
+     JSON.stringify({ rideTrackStrikes, rideTrackClears }));
+}
+
+console.log('');
+console.log('AN EXIT SELECTED BEFORE A ROOM CHANGE NEVER MOVES IN THE NEW ROOM');
+{
+  const client = { room: { id: 1586 } };
+  let walks = 0;
+  const session = {
+    client, world: {},
+    need: () => client,
+    movementWasCancelled: () => false,
+    cancelledMovement: () => ({ cancelled: true }),
+    async standBeforeGo() { client.room = { id: 1578 }; },
+    async walkTo() { walks++; return { arrived: true }; },
+  };
+  const result = await leaveVia.call(session,
+    { kind: 'edge', to: 583, direction: 'west' }, { expectedRoomId: 1586 });
+  ok('the old-room exit is acknowledged as stale after the first await',
+     result?.left === false && result?.room_changed === true && result?.late === true,
+     JSON.stringify(result));
+  ok('none of its coordinates are executed in the newly published room', walks === 0,
+     String(walks));
+}
+
+{
+  const client = { room: { id: 1586 } };
+  let walks = 0, fineWalks = 0;
+  const session = {
+    client, world: {},
+    need: () => client,
+    movementWasCancelled: () => false,
+    cancelledMovement: () => ({ cancelled: true }),
+    async standBeforeGo() {},
+    async walkTo() {
+      walks++;
+      client.room = { id: 1578 };
+      return { arrived: false, left_room: false };
+    },
+    async walkFine() { fineWalks++; return { arrived: true }; },
+  };
+  const result = await leaveVia.call(session,
+    { kind: 'go', to: 583, stand_on: { col: 2, row: 5 }, steps_away: 1 },
+    { expectedRoomId: 1586 });
+  ok('a stale false result from the approach still stops the old doorway sequence',
+     result?.left === false && result?.room_changed === true, JSON.stringify(result));
+  ok('the stale go coordinates are not handed to the fine fallback',
+     walks === 1 && fineWalks === 0, JSON.stringify({ walks, fineWalks }));
+}
+
+{
+  let goPackets = 0;
+  const client = {
+    room: { id: 1586 }, self: { col: 2, row: 5 }, evSeq: 0,
+    eventsSince: () => [],
+    waitFor: async () => ({ events: [] }),
+    go: () => { goPackets++; },
+  };
+  const session = {
+    client, world: { room: { num: 593, name: 'source' } },
+    need: () => client,
+    movementWasCancelled: () => false,
+    cancelledMovement: () => ({ cancelled: true }),
+    async standBeforeGo() {},
+    async walkTo() { return { arrived: true, left_room: false }; },
+    async confirmPosition() { return { col: 2, row: 5 }; },
+    pacer: {
+      async submit(_label, fn) {
+        client.room = { id: 1578 };
+        return fn();
+      },
+    },
+  };
+  const result = await leaveVia.call(session,
+    { kind: 'go', to: 583, stand_on: { col: 2, row: 5 }, steps_away: 0 },
+    { expectedRoomId: 1586 });
+  ok('the paced go callback rechecks the room at the instant it would emit',
+     goPackets === 0 && result?.room_changed === true,
+     JSON.stringify({ goPackets, result }));
+}
+
+{
+  const client = {
+    room: { id: 1586 }, self: { col: 10, row: 10 }, evSeq: 0,
+    eventsSince: () => [],
+    waitFor: async () => ({ events: [] }),
+  };
+  let walks = 0, fineWalks = 0;
+  const session = {
+    client,
+    world: {
+      room: { num: 593, name: 'source' },
+      approachSquare: () => null,
+    },
+    need: () => client,
+    movementWasCancelled: () => false,
+    cancelledMovement: () => ({ cancelled: true }),
+    async standBeforeGo() {},
+    async walkTo(col, row) {
+      walks++;
+      if (walks === 1) return { arrived: false, left_room: false, reason: 'coarse grid refused' };
+      client.self = { col, row };
+      client.room = { id: 1578 };
+      return { arrived: true, left_room: false };
+    },
+    async walkFine() { fineWalks++; return { arrived: true }; },
+    pacer: { async submit(_label, fn) { return fn(); } },
+  };
+  const result = await leaveVia.call(session, {
+    kind: 'region', to: 583, trigger: 'test region',
+    trigger_targets: [{ stand_on: { col: 2, row: 5 }, approach_on: { col: 3, row: 5 } }],
+  }, { expectedRoomId: 1586 });
+  ok('a region staging handoff cannot run the old target fine walk',
+     result?.room_changed === true && walks === 2 && fineWalks === 0,
+     JSON.stringify({ result, walks, fineWalks }));
 }
 
 console.log('');

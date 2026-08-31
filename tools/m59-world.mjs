@@ -1416,10 +1416,15 @@ export async function boundedSilentGo({
   send,
   waitForEntry,
   cancelled = () => false,
+  // Optional because this helper predates source-room pinning. A caller that can observe
+  // the live room should supply a predicate captured against the room that chose the door.
+  stillCurrent = () => true,
   maxAttempts = 2,
 } = {}) {
-  if (![sequence, eventsSince, send, waitForEntry, cancelled].every(fn => typeof fn === 'function'))
-    throw new TypeError('boundedSilentGo requires sequence, eventsSince, send, waitForEntry, and cancelled functions');
+  if (![sequence, eventsSince, send, waitForEntry, cancelled, stillCurrent]
+      .every(fn => typeof fn === 'function'))
+    throw new TypeError('boundedSilentGo requires sequence, eventsSince, send, waitForEntry, ' +
+                        'cancelled, and stillCurrent functions');
   const before = sequence();
   let attempts = 0, entered = null;
   const messages = [];
@@ -1430,6 +1435,12 @@ export async function boundedSilentGo({
     // the whole request window here; never send a second go after a late success.
     const lateEntry = eventsSince(before).find(event => event.kind === 'room-entered');
     if (lateEntry) { entered = lateEntry; break; }
+    // A room transition whose event was missed is still authoritative. In particular, do
+    // not send the bounded retry in the destination room merely because the event ring is
+    // silent. The caller will re-read and re-plan from the newly published room.
+    if (!stillCurrent())
+      return { cancelled: false, entered: null, messages, attempts,
+               unconfirmed_transition: true };
 
     const attemptBefore = sequence();
     await send();
@@ -1441,6 +1452,9 @@ export async function boundedSilentGo({
       .filter(event => event.text)
       .map(event => event.text);
     messages.push(...attemptMessages);
+    if (!entered && !stillCurrent())
+      return { cancelled: false, entered: null, messages, attempts,
+               unconfirmed_transition: true };
     if (!retrySilentGo({
       attempt: attempts,
       maxAttempts,
@@ -1465,11 +1479,14 @@ export async function boundedRegionEntry({
   waitForEntry,
   askGo,
   cancelled = () => false,
+  // See boundedSilentGo. Region candidates are coordinates in the source room, so a
+  // missed room-entered event must stop the sequence before another candidate is touched.
+  stillCurrent = () => true,
 } = {}) {
-  if (![sequence, eventsSince, walk, fineWalk, waitForEntry, askGo, cancelled]
+  if (![sequence, eventsSince, walk, fineWalk, waitForEntry, askGo, cancelled, stillCurrent]
       .every(fn => typeof fn === 'function'))
     throw new TypeError('boundedRegionEntry requires sequence, eventsSince, walk, fineWalk, ' +
-                        'waitForEntry, askGo, and cancelled functions');
+                        'waitForEntry, askGo, cancelled, and stillCurrent functions');
 
   const targets = (Array.isArray(candidates) ? candidates : []).filter(candidate =>
     candidate?.stand_on && Number.isFinite(candidate.stand_on.col) && Number.isFinite(candidate.stand_on.row));
@@ -1478,12 +1495,17 @@ export async function boundedRegionEntry({
 
   for (const candidate of targets) {
     if (cancelled()) return { cancelled: true, entered: null, tried };
+    if (!stillCurrent())
+      return { cancelled: false, entered: null, unconfirmed_transition: true, tried };
     const before = sequence();
     const coarse = await walk(candidate);
     let entered = enteredSince(before);
     if (!entered && (coarse?.arrived || coarse?.left_room)) entered = await waitForEntry(before);
     if (entered) return { cancelled: false, entered, tried: [...tried, { candidate, coarse }] };
     if (coarse?.left_room)
+      return { cancelled: false, entered: null, unconfirmed_transition: true,
+               tried: [...tried, { candidate, coarse }] };
+    if (!stillCurrent())
       return { cancelled: false, entered: null, unconfirmed_transition: true,
                tried: [...tried, { candidate, coarse }] };
     if (isTerminalMovementReason(coarse?.reason))
@@ -1501,6 +1523,9 @@ export async function boundedRegionEntry({
       if (fine?.left_room)
         return { cancelled: false, entered: null, unconfirmed_transition: true,
                  tried: [...tried, { candidate, coarse, fine }] };
+      if (!stillCurrent())
+        return { cancelled: false, entered: null, unconfirmed_transition: true,
+                 tried: [...tried, { candidate, coarse, fine }] };
       if (isTerminalMovementReason(fine?.reason))
         return { cancelled: false, entered: null, terminal: fine,
                  tried: [...tried, { candidate, coarse, fine }] };
@@ -1510,12 +1535,18 @@ export async function boundedRegionEntry({
     let askedGo = false;
     if (reached) {
       if (cancelled()) return { cancelled: true, entered: null, tried };
+      if (!stillCurrent())
+        return { cancelled: false, entered: null, unconfirmed_transition: true,
+                 tried: [...tried, { candidate, coarse, fine }] };
       const beforeGo = sequence();
       await askGo(candidate);
       askedGo = true;
       entered = enteredSince(before) ?? await waitForEntry(beforeGo);
       if (entered)
         return { cancelled: false, entered,
+                 tried: [...tried, { candidate, coarse, fine, asked_go: true }] };
+      if (!stillCurrent())
+        return { cancelled: false, entered: null, unconfirmed_transition: true,
                  tried: [...tried, { candidate, coarse, fine, asked_go: true }] };
     }
     tried.push({ candidate, coarse, fine, ...(askedGo ? { asked_go: true } : {}) });

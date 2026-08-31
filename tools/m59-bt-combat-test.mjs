@@ -381,6 +381,23 @@ section('FleeRoomAction — prefers exits away from foe mass');
   assert('first exit tried is the away-exit', usedExits[0] === 3, `first tried: ${usedExits[0]}`);
 }
 
+section('FleeRoomAction — a room handoff invalidates the remaining exits');
+{
+  const exits = [
+    { to: 2, stand_on: { col: 1, row: 1 }, steps_away: 1 },
+    { to: 3, stand_on: { col: 2, row: 2 }, steps_away: 2 },
+  ];
+  let attempts = 0;
+  const s = {
+    ...makeSession({ exits }),
+    leaveVia: async () => { attempts++; return { left: false, room_changed: true }; },
+  };
+  const bb = { _bt: {}, ws: {}, session: { s }, client: makeClient() };
+  const result = await tickUntilDone(FleeRoomAction(), bb, 30);
+  ok('an unconfirmed handoff ends this pass without claiming success', result, FAILURE);
+  assert('no second source-room exit is executed', attempts === 1, `attempts: ${attempts}`);
+}
+
 section('FleeRoomAction — first tick returns RUNNING');
 {
   const exits = [{ to: 2, stand_on: { col: 1, row: 1 }, steps_away: 1 }];

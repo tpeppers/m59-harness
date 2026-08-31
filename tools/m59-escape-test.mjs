@@ -460,6 +460,21 @@ console.log('\nthe bounded go sequence preserves room and control evidence');
   ok('a late room entry prevents the second request',
      lateSends === 1 && late.entered?.roomName === 'Late room', JSON.stringify(late));
 
+  // The event ring is evidence, not the room itself. A transition can publish the new room
+  // after the first request while its room-entered event is missed; silence must not turn
+  // that successful crossing into a second `go` issued inside the destination room.
+  let current = true, missedSends = 0;
+  const missed = await boundedSilentGo({
+    sequence: () => 0,
+    eventsSince: () => [],
+    stillCurrent: () => current,
+    send: async () => { missedSends++; },
+    waitForEntry: async () => { current = false; return null; },
+  });
+  ok('a live room change without an event prevents the second request',
+     missedSends === 1 && missed.unconfirmed_transition === true,
+     JSON.stringify({ missedSends, missed }));
+
   let refusalSequence = 0, refusalSends = 0;
   const refusalEvents = [];
   const refused = await boundedSilentGo({

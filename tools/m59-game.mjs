@@ -2174,7 +2174,11 @@ class Session {
     const c = this.need();
     const before = c.evSeq;
     await this.pacer.submit('read', () => c.requestPlayer());
-    await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 2500 });
+    const observed = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 2500 });
+    const entered = observed.events?.find(event => event.kind === 'room-entered') ?? null;
+    return { confirmed: !!entered, entered, timedOut: !!observed.timedOut,
+             room_id: c.room?.id ?? null,
+             room_num: Number(this.world?.room?.num ?? NaN) };
   }
 
   // Turn to face a target. Skipping this is the single most common way for an agent's
@@ -5107,6 +5111,12 @@ class Session {
       }
       const back = await this.queueValidatedMove(crumb.from.x, crumb.from.y,
         { slide: true, expectedRoomId: roomId });
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ steps });
+      if (roomId != null && c.room?.id !== roomId)
+        return { moved: steps > 0, steps, crumbs_left: crumbs.length,
+                 room_changed: true,
+                 reason: 'room identity changed during breadcrumb retreat' };
       if (!back.sent) { blocked = back.validation?.reason ?? 'geometry_blocked'; break; }
       // The crumb this move just recorded is the retreat itself; drop both, or the trail
       // grows a there-and-back pair and the next retreat undoes the undo.
@@ -7350,7 +7360,8 @@ class Session {
   // the raw-grid fallback, which was a beeline in a 50-second loop around an await.
   // COORDINATE CONTRACT: exit squares are named `{col,row}`; `fine_stand_on`,
   // `edge_target`, and fine-path points are named `{x,y}` in kod wire units.
-  async leaveVia(exit, { movementGeneration = this.movementGeneration, controlToken } = {}) {
+  async leaveVia(exit, { movementGeneration = this.movementGeneration, controlToken,
+                         expectedRoomId = null } = {}) {
     // ROUTE AROUND THE PART OF THIS BOUNDARY THAT LEADS SOMEWHERE ELSE.
     //
     // Computed once, here, because BOTH movers need it and they are used in different
@@ -7364,7 +7375,58 @@ class Session {
     const wrongDoor = typeof this.world?.wrongExitSquares === 'function'
       ? this.world.wrongExitSquares(exit) : null;
     const c = this.need();
-    if (this.movementWasCancelled(movementGeneration, controlToken)) return this.cancelledMovement();
+    // A caller may have selected this exit before another movement finished changing rooms.
+    // Pin that caller's protocol room, or the room visible on entry for direct callers:
+    // applying source-room coordinates after any await in the new room is movement with the
+    // wrong map, not another attempt at the same door.
+    const selectedRoomId = expectedRoomId ?? c.room?.id ?? null;
+    const selectedRoomNum = Number(this.world?.room?.num ?? NaN);
+    const leftExpectedRoom = () => selectedRoomId != null && c.room?.id !== selectedRoomId;
+    const staleExit = async () => {
+      // The protocol identity is the immediate stop signal. Ask the server for BP_PLAYER
+      // before calling it a successful crossing; that packet is the authoritative source of
+      // both the room object and the logical room resources. Extracted/offline fixtures do
+      // not expose refreshRoomIdentity, so they use a bounded stable-read fallback.
+      let confirmed = false;
+      if (typeof this.refreshRoomIdentity === 'function') {
+        const refreshed = await this.refreshRoomIdentity().catch(() => null);
+        confirmed = refreshed?.confirmed === true;
+      } else {
+        let room0 = Number(this.world?.room?.num ?? NaN);
+        let roomId0 = c.room?.id ?? null;
+        let stable = 0;
+        for (let sample = 0; sample < 3 && stable < 2; sample++) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+          const nextRoom = Number(this.world?.room?.num ?? NaN);
+          const nextRoomId = c.room?.id ?? null;
+          if (nextRoom === room0 && nextRoomId === roomId0) stable++;
+          else { room0 = nextRoom; roomId0 = nextRoomId; stable = 0; }
+        }
+        confirmed = stable >= 2;
+      }
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement();
+      const room = Number(this.world?.room?.num ?? NaN);
+      if (confirmed && Number.isFinite(selectedRoomNum) && Number.isFinite(room)
+          && room !== selectedRoomNum)
+        return { left: true, late: true, confirmed_room_change: true,
+                 arrived_in: this.world?.room?.name ?? String(room),
+                 note: 'the source-room exit stopped when the room identity changed; ' +
+                       'the logical room then confirmed the crossing' };
+      return { left: false, room_changed: true, late: true,
+        reason: 'room identity changed after this exit was selected',
+        note: 'the source-room exit is stale, so none of its remaining coordinates were used' };
+    };
+    // A newer control order outranks evidence from the stale one, even when that order also
+    // changed rooms (survival movement is the ordinary example).
+    const stopAfterAwait = () => {
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement();
+      if (leftExpectedRoom()) return staleExit();
+      return null;
+    };
+    const stoppedBeforeStart = await stopAfterAwait();
+    if (stoppedBeforeStart) return stoppedBeforeStart;
 
     // RESTING IS A MOVEMENT LOCK, SO CLEAR IT BEFORE THE APPROACH, NOT AT THE DOOR.
     //
@@ -7375,7 +7437,8 @@ class Session {
     // and deliberately unconditional (see standBeforeGo), and the shared pacer/socket keeps
     // it ordered ahead of every movement branch below.
     await this.standBeforeGo();
-    if (this.movementWasCancelled(movementGeneration, controlToken)) return this.cancelledMovement();
+    const stoppedAfterStand = await stopAfterAwait();
+    if (stoppedAfterStand) return stoppedAfterStand;
 
     // Budget every walk by the ROUTE length, never by a fixed cap. Outdoor rooms here
     // are up to 80x80, so a boundary square can be well over a hundred steps away —
@@ -7577,6 +7640,8 @@ class Session {
                                  (ran?.railed ? `followed ${ran.walked} of ${ahead.length} remaining`
                                               : `${ran?.cancelled ? 'cancelled' : 'slipped'} at ${ran?.at}` +
                                                 (ran?.cancelled_by ? ` by ${ran.cancelled_by}` : '')) });
+            const stoppedAfterRailRejoin = await stopAfterAwait();
+            if (stoppedAfterRailRejoin) return stoppedAfterRailRejoin;
             if (ran?.left_room)
               return { left: true, via: 'rail', rail: { steps: ran.walked, rejoined: joinAt } };
           }
@@ -7688,6 +7753,10 @@ class Session {
           const got = onIt ? { arrived: true } : await this.walkTo(board.col, board.row,
             { maxSteps: budget({ steps_away: boardAway }) })
             .catch(e => ({ arrived: false, reason: e.message }));
+          const stoppedAfterRailBoard = await stopAfterAwait();
+          if (stoppedAfterRailBoard) return stoppedAfterRailBoard;
+          if (got?.left_room)
+            return { left: true, via: 'rail', rail: { boarded: boardAt } };
           if (!got?.arrived) {
             recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: Number(this.world?.room?.num ?? 0),
                            tactic: 'baked_rail', trigger: 'exit_crossing', worked: false, ms: 0, hp_lost: 0,
@@ -7716,7 +7785,10 @@ class Session {
             const ran = await this.followRail(ahead, { movementGeneration, controlToken,
                                         avoidSquares: wrongDoor?.size ? wrongDoor : null })
               .catch(e => ({ railed: false, reason: e.message }));
-            if (ran?.left_room) return { left: true, via: 'rail', rail: { steps: ran.walked, boarded: boardAt } };
+            const stoppedAfterRail = await stopAfterAwait();
+            if (stoppedAfterRail) return stoppedAfterRail;
+            if (ran?.left_room)
+              return { left: true, via: 'rail', rail: { steps: ran.walked, boarded: boardAt } };
             // 3. COME OFF â€” at the far anchor, so the ordinary crossing below is a step, not
             //    a room-crossing. A rail that slipped leaves the body somewhere real and the
             //    walk below simply carries on from there.
@@ -7733,6 +7805,8 @@ class Session {
       }
     }
 
+    const stoppedAfterRailAttempt = await stopAfterAwait();
+    if (stoppedAfterRailAttempt) return stoppedAfterRailAttempt;
     if (exit.kind === 'go') {
       // CLEARANCE ON, because this is the long routing: crossing a whole room to a
       // boundary square is exactly where hugging the wall makes a step slide, the mover
@@ -7740,6 +7814,10 @@ class Session {
       let walk = await this.walkTo(exit.stand_on.col, exit.stand_on.row,
                                    { maxSteps: budget(exit), movementGeneration, controlToken,
                                      clearance: LEAVE_VIA_CLEARANCE });
+      const stoppedAfterWalk = await stopAfterAwait();
+      if (stoppedAfterWalk) return stoppedAfterWalk;
+      if (walk?.left_room)
+        return { left: true, note: 'the room changed while approaching the doorway' };
       if (isTerminalMovementReason(walk.reason))
         return { left: false, stage: 'walk', ...walk };
 
@@ -7766,6 +7844,10 @@ class Session {
                                          exit.stand_on.row * KOD_FINENESS + half,
                                          { maxSteps: budget(exit), movementGeneration, controlToken,
                                            avoidSquares: wrongDoor?.size ? wrongDoor : null }).catch(() => null);
+        const stoppedAfterFineApproach = await stopAfterAwait();
+        if (stoppedAfterFineApproach) return stoppedAfterFineApproach;
+        if (fine?.left_room)
+          return { left: true, note: 'the room changed during the fine doorway approach' };
         if (isTerminalMovementReason(fine?.reason))
           return { left: false, stage: 'walk', ...fine };
         if (fine?.arrived) walk = { ...fine, via: 'fine movement after coarse pathing failed' };
@@ -7813,6 +7895,10 @@ class Session {
             const step = await this.walkTo(c2, r2, { maxSteps: 30, movementGeneration, controlToken,
                                                      clearance: LEAVE_VIA_CLEARANCE })
                                    .catch(() => ({ arrived: false }));
+            const stoppedAfterRecoveryStep = await stopAfterAwait();
+            if (stoppedAfterRecoveryStep) return stoppedAfterRecoveryStep;
+            if (step?.left_room)
+              return { left: true, note: 'the room changed during doorway recovery' };
             if (isTerminalMovementReason(step.reason))
               return { left: false, stage: 'walk', ...step };
             if (!step.arrived) continue;
@@ -7831,12 +7917,20 @@ class Session {
           const near = await this.walkTo(spot.col, spot.row,
                                          { maxSteps: Math.max(40, spot.steps + 20), movementGeneration, controlToken,
                                            clearance: LEAVE_VIA_CLEARANCE });
+          const stoppedAfterNearWalk = await stopAfterAwait();
+          if (stoppedAfterNearWalk) return stoppedAfterNearWalk;
+          if (near?.left_room)
+            return { left: true, note: 'the room changed during doorway recovery' };
           if (!near.arrived) return { left: false, stage: 'walk', ...near };
         }
         if (this.movementWasCancelled(movementGeneration, controlToken)) return this.cancelledMovement();
         const half = KOD_FINENESS >> 1;
         const lean = await this.stepFine(exit.stand_on.col * KOD_FINENESS + half,
                                          exit.stand_on.row * KOD_FINENESS + half);
+        const stoppedAfterLean = await stopAfterAwait();
+        if (stoppedAfterLean) return stoppedAfterLean;
+        if (lean?.left_room)
+          return { left: true, note: 'the room changed while leaning into the doorway' };
         if (isTerminalMovementReason(lean.reason))
           return { left: false, stage: 'walk', reason: lean.reason, note: lean.note };
         leaned = true;
@@ -7847,6 +7941,8 @@ class Session {
       // drifted, lean again from the position we are ACTUALLY on — the first lean was
       // aimed from a square we may never have reached.
       let at = await this.confirmPosition();
+      const stoppedAfterConfirm = await stopAfterAwait();
+      if (stoppedAfterConfirm) return stoppedAfterConfirm;
       if (!at) {
         this.finePositionUnknown = true;
         return { left: false, stage: 'walk', reason: 'position_confirmation_timeout',
@@ -7856,10 +7952,16 @@ class Session {
         const half = KOD_FINENESS >> 1;
         const lean = await this.stepFine(exit.stand_on.col * KOD_FINENESS + half,
                                          exit.stand_on.row * KOD_FINENESS + half);
+        const stoppedAfterCorrectionLean = await stopAfterAwait();
+        if (stoppedAfterCorrectionLean) return stoppedAfterCorrectionLean;
+        if (lean?.left_room)
+          return { left: true, note: 'the room changed while correcting the doorway approach' };
         if (isTerminalMovementReason(lean.reason))
           return { left: false, stage: 'walk', reason: lean.reason, note: lean.note };
         leaned = true;
         at = await this.confirmPosition();
+        const stoppedAfterCorrectionConfirm = await stopAfterAwait();
+        if (stoppedAfterCorrectionConfirm) return stoppedAfterCorrectionConfirm;
         if (!at) {
           this.finePositionUnknown = true;
           return { left: false, stage: 'walk', reason: 'position_confirmation_timeout',
@@ -7894,6 +7996,10 @@ class Session {
         const correction = await this.stepFine(exit.stand_on.col * KOD_FINENESS + half,
                                                 exit.stand_on.row * KOD_FINENESS + half)
                                      .catch(error => ({ moved: false, reason: error.message }));
+        const stoppedAfterDoorCorrection = await stopAfterAwait();
+        if (stoppedAfterDoorCorrection) return stoppedAfterDoorCorrection;
+        if (correction?.left_room)
+          return { left: true, note: 'the room changed on the doorway correction step' };
         if (isTerminalMovementReason(correction.reason))
           return { left: false, stage: 'walk', reason: correction.reason, note: correction.note };
         const corrected = correction.position;
@@ -7911,7 +8017,12 @@ class Session {
         sequence: () => c.evSeq,
         eventsSince: since => c.eventsSince(since),
         cancelled: () => this.movementWasCancelled(movementGeneration, controlToken),
-        send: () => this.pacer.submit('move', () => c.go(), DOOR_SETTLE_MS),
+        stillCurrent: () => !leftExpectedRoom(),
+        // The pacer may wait before invoking its callback. Re-check at emission time too,
+        // otherwise a room handoff during that wait sends `go` inside the destination room.
+        send: () => this.pacer.submit('move', () =>
+          (this.movementWasCancelled(movementGeneration, controlToken) || leftExpectedRoom())
+            ? false : c.go(), DOOR_SETTLE_MS),
         waitForEntry: async since => {
           const started = Date.now();
           const observed = await c.waitFor({ since, kinds: ['room-entered'], timeoutMs: 4000 });
@@ -7919,8 +8030,11 @@ class Session {
           return observed.events.find(event => event.kind === 'room-entered') ?? null;
         },
       });
-      if (go.cancelled)
-        return this.cancelledMovement({ go_attempts: go.attempts });
+      const stoppedAfterGo = await stopAfterAwait();
+      if (stoppedAfterGo)
+        return { ...stoppedAfterGo, go_attempts: go.attempts };
+      if (go.cancelled) return this.cancelledMovement({ go_attempts: go.attempts });
+      if (go.unconfirmed_transition) return staleExit();
       const entered = go.entered, messages = go.messages, goAttempts = go.attempts;
       return { left: !!entered, arrived_in: entered ? entered.roomName : null,
                go_attempts: goAttempts,
@@ -7956,7 +8070,9 @@ class Session {
                                      { maxSteps: budget(exit), movementGeneration, controlToken,
                                        clearance: LEAVE_VIA_CLEARANCE,
                                        avoidSquares: wrongDoor?.size ? wrongDoor : null });
-      if (walk.left_room || c.room.id !== edgeStartRoom)
+      const stoppedAfterEdgeWalk = await stopAfterAwait();
+      if (stoppedAfterEdgeWalk) return stoppedAfterEdgeWalk;
+      if (walk.left_room)
         return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
                  note: 'the room changed while approaching the boundary' };
       if (isTerminalMovementReason(walk.reason))
@@ -8109,7 +8225,9 @@ class Session {
             const r = await this.step(doorSquare.col, doorSquare.row,
                                       { movementGeneration, controlToken })
               .catch(() => null);
-            if (r?.left_room || c.room.id !== edgeStartRoom)
+            const stoppedAfterEdgeStep = await stopAfterAwait();
+            if (stoppedAfterEdgeStep) return stoppedAfterEdgeStep;
+            if (r?.left_room)
               return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
                        note: 'stepped straight out of the room while closing on the opening' };
             const now = c.self;
@@ -8146,7 +8264,9 @@ class Session {
           // refuse a fine point that is already over the wrong door.
           avoidSquares: wrongDoor?.size ? wrongDoor : null,
         });
-        if (fine.left_room || c.room.id !== edgeStartRoom)
+        const stoppedAfterEdgeNudge = await stopAfterAwait();
+        if (stoppedAfterEdgeNudge) return stoppedAfterEdgeNudge;
+        if (fine.left_room)
           return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
                    note: 'crossed the boundary while fine-positioning at its opening' };
         if (isTerminalMovementReason(fine.reason))
@@ -8176,9 +8296,8 @@ class Session {
       // authorizing the edge; the paced callback below still re-proves whatever live position
       // exists at the exact instant of send.
       const confirmedEdge = await this.confirmPosition().catch(() => null);
-      if (c.room.id !== edgeStartRoom)
-        return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
-                 note: 'the room changed while confirming the edge position' };
+      const stoppedAfterEdgeConfirm = await stopAfterAwait();
+      if (stoppedAfterEdgeConfirm) return stoppedAfterEdgeConfirm;
       if (!confirmedEdge) {
         this.finePositionUnknown = true;
         return { left: false, stage: 'walk', reason: 'position_confirmation_timeout',
@@ -8222,9 +8341,8 @@ class Session {
         { speed: 0, slide: false, minGap: MOVE_INTERVAL_MS,
           expectedRoomId: edgeStartRoom,
           offMap: { opening: exit.fine_stand_on, direction: exit.direction } });
-      if (!edgeMove.sent && c.room.id !== edgeStartRoom)
-        return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
-                 note: 'the room changed before the final edge packet was needed' };
+      const stoppedAfterEdgePacket = await stopAfterAwait();
+      if (stoppedAfterEdgePacket) return stoppedAfterEdgePacket;
       if (!edgeMove.sent) return {
         left: false, stage: 'edge',
         crossing_packet_sent: false,
@@ -8243,6 +8361,8 @@ class Session {
       // working exit look like a phantom.
       const ev = await c.waitFor({ since: edgeMove.eventSeq, kinds: ['room-entered'],
                                    timeoutMs: EDGE_CROSSING_WAIT_MS });
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement();
       Pacer.note('go', 'blocked', Date.now() - tGo);
       let entered = ev.events.find(e => e.kind === 'room-entered');
       // ASK THE WORLD, NOT ONLY THE EVENT RING. The event can be missed — evicted, or
@@ -8269,11 +8389,11 @@ class Session {
           if (this.movementWasCancelled(movementGeneration, controlToken))
             return this.cancelledMovement();
           await new Promise(r => setTimeout(r, 400));
+          const stoppedDuringEdgeConfirm = await stopAfterAwait();
+          if (stoppedDuringEdgeConfirm) return stoppedDuringEdgeConfirm;
         }
       }
-      if (!entered && c.room.id !== edgeStartRoom)
-        return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
-                 note: 'the room changed but no room-entered event was seen' };
+      if (!entered && leftExpectedRoom()) return staleExit();
       if (!entered) {
         // If this was an edge we INFERRED rather than one the room declared, the
         // inference was simply wrong — drop it so neither the planner nor anything
@@ -8309,6 +8429,7 @@ class Session {
         sequence: () => c.evSeq,
         eventsSince: since => c.eventsSince(since),
         cancelled: () => this.movementWasCancelled(movementGeneration, controlToken),
+        stillCurrent: () => !leftExpectedRoom(),
         walk: candidate => this.walkTo(candidate.stand_on.col, candidate.stand_on.row,
           { maxSteps: budget(candidate), movementGeneration, controlToken, clearance: LEAVE_VIA_CLEARANCE }),
         fineWalk: async candidate => {
@@ -8330,6 +8451,11 @@ class Session {
                 !(c.self && c.self.col === approach.col && c.self.row === approach.row)))
               return { arrived: false, ...(staged.left_room ? { left_room: true } : {}),
                        reason: staged.reason ?? 'could not reach the square beside the trigger', staged };
+            if (this.movementWasCancelled(movementGeneration, controlToken))
+              return { arrived: false, cancelled: true, reason: 'movement cancelled during staging' };
+            if (leftExpectedRoom())
+              return { arrived: false, room_changed: true,
+                       reason: 'room identity changed during region staging' };
           }
           const half = KOD_FINENESS >> 1;
           const fine = await this.walkFine(target.col * KOD_FINENESS + half,
@@ -8347,17 +8473,19 @@ class Session {
         // A genuine region fires merely by arriving. Asking to go is retained as one
         // bounded compatibility probe for map entries that are really doors in disguise.
         askGo: async () => {
-          await this.pacer.submit('move', () => c.go(), DOOR_SETTLE_MS);
+          await this.pacer.submit('move', () =>
+            (this.movementWasCancelled(movementGeneration, controlToken) || leftExpectedRoom())
+              ? false : c.go(), DOOR_SETTLE_MS);
         },
       });
+      const stoppedAfterRegion = await stopAfterAwait();
+      if (stoppedAfterRegion) return { ...stoppedAfterRegion, tried: result.tried.length };
       if (result.cancelled) return this.cancelledMovement({ tried: result.tried.length });
       if (result.terminal)
         return { left: false, stage: 'walk', ...result.terminal,
                  tried: result.tried.length };
       if (result.unconfirmed_transition)
-        return { left: false, reason: 'left the source room but could not confirm the destination',
-                 tried: result.tried.length,
-                 note: 'movement stopped immediately rather than issuing a blind request in the new room' };
+        return { ...(await staleExit()), tried: result.tried.length };
       if (result.entered) {
         const successful = result.tried[result.tried.length - 1] ?? {};
         return { left: true, arrived_in: result.entered.roomName,
@@ -8395,12 +8523,19 @@ class Session {
       const walk = await this.walkTo(exit.stand_on.col, exit.stand_on.row,
                                      { maxSteps: budget(exit), movementGeneration, controlToken,
                                        clearance: LEAVE_VIA_CLEARANCE });
+      const stoppedAfterPortalWalk = await stopAfterAwait();
+      if (stoppedAfterPortalWalk) return stoppedAfterPortalWalk;
+      if (walk?.left_room)
+        return { left: true, arrived_in: c.rsc.get(c.roomNameRsc), via: 'portal' };
       if (isTerminalMovementReason(walk.reason) && c.room.id === portalStartRoom)
         return { left: false, stage: 'walk', ...walk };
       const tGo = Date.now();
       const ev = await c.waitFor({ since: before, kinds: ['room-entered'], timeoutMs: 4000 });
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement();
       Pacer.note('go', 'blocked', Date.now() - tGo);
       const entered = ev.events.find(e => e.kind === 'room-entered');
+      if (!entered && leftExpectedRoom()) return staleExit();
       if (!entered)
         return { left: false, stage: walk.arrived ? 'stood on it' : 'walk', ...walk,
                  reason: walk.arrived ? 'standing on it did nothing — it may not be a portal after all' : undefined };
@@ -8431,12 +8566,14 @@ class Session {
    * This deliberately relaxes collision and is OFF by default. `M59_EXIT_FALLBACK=1`
    * enables it explicitly for diagnosing a known model gap; normal travel fails closed.
    */
-  async leaveViaUnvalidated(exit, { movementGeneration = this.movementGeneration } = {}) {
+  async leaveViaUnvalidated(exit, { movementGeneration = this.movementGeneration,
+                                    controlToken } = {}) {
     const c = this.need();
     const target = exit?.stand_on;
     if (!target || !Number.isInteger(target.col) || !Number.isInteger(target.row))
       return { left: false, reason: 'no square to fall back to' };
-    if (this.movementWasCancelled(movementGeneration)) return this.cancelledMovement({});
+    if (this.movementWasCancelled(movementGeneration, controlToken))
+      return this.cancelledMovement({});
     const before = c.evSeq, startRoom = c.room.id;
     const half = KOD_FINENESS >> 1;
     const x = target.col * KOD_FINENESS + half, y = target.row * KOD_FINENESS + half;
@@ -8503,6 +8640,8 @@ class Session {
     const ev = await c.waitFor({ since: before, kinds: ['room-entered'],
                                  timeoutMs: EDGE_CROSSING_WAIT_MS })
                       .catch(() => ({ events: [] }));
+    if (this.movementWasCancelled(movementGeneration, controlToken))
+      return this.cancelledMovement({});
     const entered = ev.events?.find(e => e.kind === 'room-entered');
     if (entered) return { left: true, arrived_in: entered.roomName, via: 'exit-fallback',
                           stood_on: { col: target.col, row: target.row } };
@@ -8541,6 +8680,14 @@ class Session {
     const c = this.need();
     const here = Number(this.world?.room?.num ?? NaN);
     if (!Number.isFinite(here) || !Number.isFinite(Number(toRoom))) return { rode: false, why: 'no room' };
+    if (this.movementWasCancelled(movementGeneration, controlToken))
+      return { rode: false, left_room: false, cancelled: true, why: 'movement cancelled' };
+    // Pin the protocol room as well as the graph room. `stepFine` deliberately predicts a
+    // locally-proved move instead of waiting for every server acknowledgement; on the final
+    // track station that move can be the boundary packet itself. The room-entered event may
+    // therefore arrive just after stepFine reports `left_room:false`.
+    const roomId = c.room?.id;
+    const leftTheRoom = () => roomId != null && c.room?.id !== roomId;
     const track = recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
     if (!track?.waypoints?.length) return { rode: false, why: 'no track' };
     // AN UNPROVEN STITCH IS TRIED ONCE, WITH THE WALKED ROUTE STILL UNDERNEATH IT.
@@ -8572,7 +8719,16 @@ class Session {
       const board = await this.walkTo(Math.floor(wp.x / KOD_FINENESS) + 1,
                                       Math.floor(wp.y / KOD_FINENESS) + 1,
                                       { maxSteps: 60, movementGeneration, controlToken }).catch(() => null);
-      if (board?.left_room) return { rode: true, left_room: true, boarded: false, ms: Date.now() - started };
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return { rode: false, left_room: false, cancelled: true, boarded: false,
+                 why: 'movement cancelled', ms: Date.now() - started };
+      if (board?.left_room) {
+        clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
+        return { rode: true, left_room: true, boarded: false, ms: Date.now() - started };
+      }
+      if (leftTheRoom())
+        return { rode: true, left_room: false, room_changed: true, boarded: false,
+                 ms: Date.now() - started };
       if (!board?.arrived) return { rode: false, why: 'could not reach the station', off_by: Math.round(joinDist) };
     }
     // MONORAIL HEALING STEPS.
@@ -8593,9 +8749,23 @@ class Session {
     const restMs = Number(process.env.M59_TRACK_REST_MS || 20000);
     let rested = 0;
     let reached = 0, blocked = 0, bodiesInTheWay = 0;
+    const crossed = (extra = {}) => {
+      clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
+      return { rode: true, left_room: true, reached, blocked, rested,
+               ms: Date.now() - started, ...extra };
+    };
+    const roomChanged = (extra = {}) => ({
+      rode: true, left_room: false, room_changed: true, reached, blocked, rested,
+      ms: Date.now() - started, ...extra,
+    });
+    const cancelledRide = (extra = {}) => ({
+      rode: false, left_room: false, cancelled: true, reached, blocked, rested,
+      why: 'movement cancelled', ms: Date.now() - started, ...extra,
+    });
     for (let i = joinAt; i < track.waypoints.length; i++) {
       const wp = track.waypoints[i];
-      if (this.movementWasCancelled(movementGeneration, controlToken)) break;
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+      if (leftTheRoom()) return roomChanged({ late_room_change: true });
       // RIDE A LEG THE WAY IT WAS PROVED.
       //
       // A track's legs are proved by `straighten`, which asks `traceFineMoveClient` whether
@@ -8610,16 +8780,17 @@ class Session {
       // as the fallback for the leg that really does need feeling out, which is the job it
       // is good at.
       let r = await this.stepFine(wp.x, wp.y).catch(() => null);
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+      if (r?.left_room) return crossed();
+      if (leftTheRoom()) return roomChanged({ late_room_change: true });
       const arrivedNear = () => { const p = c.self;
         return p && Math.hypot(p.x - wp.x, p.y - wp.y) <= 48; };
       if (!r?.left_room && !arrivedNear())
         r = await this.walkFine(wp.x, wp.y, { maxSteps: 40, movementGeneration, controlToken })
           .catch(() => null) ?? r;
-      if (r?.left_room) {
-        clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
-        return { rode: true, left_room: true, reached, blocked, rested,
-                 ms: Date.now() - started };
-      }
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+      if (r?.left_room) return crossed();
+      if (leftTheRoom()) return roomChanged({ late_room_change: true });
       // WAS ANYTHING ALIVE IN THE WAY? This is the whole of the strike rule: a ride that
       // fails while a body is standing on it says nothing about the route.
       if (r?.reason === 'object_blocked' || (r?.monster_blocked ?? 0) > 0
@@ -8647,11 +8818,17 @@ class Session {
         if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp / max < restBelow) {
           const before = hp;
           let last = hp, quiet = 0;
-          await this.pacer.submit('rest', () => c.rest()).catch(() => null);
+          await this.pacer.submit('rest', () =>
+            (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom())
+              ? false : c.rest()).catch(() => null);
+          if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+          if (leftTheRoom()) return roomChanged({ late_room_change: true });
           const until = Date.now() + restMs;
           while (Date.now() < until) {
-            if (this.movementWasCancelled(movementGeneration, controlToken)) break;
+            if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
             await new Promise(r => setTimeout(r, 2000));
+            if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+            if (leftTheRoom()) return roomChanged({ late_room_change: true });
             const h = c.vitals?.()?.health;
             if (!Number.isFinite(h)) break;
             if (h / max >= restBelow) break;
@@ -8662,7 +8839,11 @@ class Session {
             if (h > last) quiet = 0;
             last = h;
           }
-          await this.pacer.submit('rest', () => c.stand()).catch(() => null);
+          await this.pacer.submit('rest', () =>
+            (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom())
+              ? false : c.stand()).catch(() => null);
+          if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+          if (leftTheRoom()) return roomChanged({ late_room_change: true });
           if ((c.vitals?.()?.health ?? before) > before) rested++;
         }
       }
@@ -8716,14 +8897,17 @@ class Session {
         if (d < fallbackDist) { fallbackDist = d; fallbackAt = i; }
       }
       for (const wp of fallbackAt < 0 ? [] : sewn.slice(fallbackAt)) {
-        if (this.movementWasCancelled(movementGeneration, controlToken)) break;
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return cancelledRide({ fell_back_to_walked: true });
+        if (leftTheRoom())
+          return roomChanged({ fell_back_to_walked: true, late_room_change: true });
         const r = await this.walkFine(wp.x, wp.y, { maxSteps: 60, movementGeneration, controlToken })
           .catch(() => null);
-        if (r?.left_room) {
-          clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
-          return { rode: true, left_room: true, reached, blocked, rested,
-                   fell_back_to_walked: true, ms: Date.now() - started };
-        }
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return cancelledRide({ fell_back_to_walked: true });
+        if (r?.left_room) return crossed({ fell_back_to_walked: true });
+        if (leftTheRoom())
+          return roomChanged({ fell_back_to_walked: true, late_room_change: true });
       }
     }
     // THE RIDE DID NOT GET US OUT. Whose fault was it?
@@ -8732,6 +8916,8 @@ class Session {
     // retires it. A body in the way means traffic, which is exactly what a monorail is for
     // and says nothing about the line — so it is not counted, or every busy corridor would
     // strike out its own best route.
+    if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+    if (leftTheRoom()) return roomChanged({ late_room_change: true });
     const struck = bodiesInTheWay === 0
       ? strikeTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom))
       : 0;
@@ -8898,6 +9084,52 @@ class Session {
     // Captured before the first attempt, because a successful crossing changes the room out
     // from under us and the book has to be told which room the door was IN.
     const roomBefore = Number(this.world?.room?.num ?? this.client?.room?.id ?? NaN);
+    const roomBeforeId = this.client?.room?.id ?? null;
+    const roomStillCurrent = () => {
+      if (roomBeforeId != null) return this.client?.room?.id === roomBeforeId;
+      const roomNow = Number(this.world?.room?.num ?? NaN);
+      if (Number.isFinite(roomBefore)) return Number.isFinite(roomNow) && roomNow === roomBefore;
+      // Legacy/direct harness callers that never expose a room identity cannot be pinned;
+      // preserve their old behavior. Once an identity was captured, unknown is not same.
+      return true;
+    };
+    // A changed live identity is enough to stop old coordinates, but not enough to call a
+    // hop successful: the room resource can blink for one observation. `travel` settles and
+    // confirms the logical room before counting this as a crossing.
+    const staleBatch = async (exit = null) => {
+      let confirmed = false;
+      if (typeof this.refreshRoomIdentity === 'function') {
+        const refreshed = await this.refreshRoomIdentity().catch(() => null);
+        confirmed = refreshed?.confirmed === true;
+      } else {
+        let room0 = Number(this.world?.room?.num ?? NaN);
+        let roomId0 = this.client?.room?.id ?? null;
+        let stable = 0;
+        for (let sample = 0; sample < 3 && stable < 2; sample++) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+          const nextRoom = Number(this.world?.room?.num ?? NaN);
+          const nextRoomId = this.client?.room?.id ?? null;
+          if (nextRoom === room0 && nextRoomId === roomId0) stable++;
+          else { room0 = nextRoom; roomId0 = nextRoomId; stable = 0; }
+        }
+        confirmed = stable >= 2;
+      }
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return finish(this.cancelledMovement({ tried }));
+      const room = Number(this.world?.room?.num ?? NaN);
+      const common = {
+        late: true,
+        ...(exit ? { used_exit: exit } : {}),
+        ...(tried.length ? { tried } : {}),
+      };
+      if (confirmed && Number.isFinite(roomBefore) && Number.isFinite(room) && room !== roomBefore)
+        return finish({ ...common, left: true, confirmed_room_change: true,
+          arrived_in: this.world?.room?.name ?? String(room),
+          note: 'stopped before source-room recovery, then confirmed the logical crossing' });
+      return finish({ ...common, left: false, room_changed: true,
+        reason: 'room identity changed while source-room exit candidates were active',
+        note: 'stopped before any further source-room recovery or exit coordinates were used' });
+    };
     // HOW MANY FULL ROOM-WALKS ONE DOORWAY IS WORTH.
     //
     // Every candidate after the first is another walk across the room to another square on
@@ -9046,9 +9278,13 @@ class Session {
       spent++;
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));
+      if (!roomStillCurrent()) return staleBatch(exit);
       const askedAt = Date.now();
       attempts++;
-      const r = await this.leaveVia(exit, { movementGeneration, controlToken });
+      const r = await this.leaveVia(exit, { movementGeneration, controlToken,
+                                            expectedRoomId: roomBeforeId });
+      if (r?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
+        return finish(this.cancelledMovement({ tried }));
 
       // WE ARE THROUGH. STOP. DO NOT RUN A RECOVERY.
       //
@@ -9065,18 +9301,13 @@ class Session {
       // which room it is in cannot be late in that way, because the server pushed it. So
       // the check is against the room we started in, and it runs before anything else can
       // move the character.
-      const roomNow = Number(this.world?.room?.num ?? this.client?.room?.id ?? NaN);
-      const crossed = Number.isFinite(roomBefore) && Number.isFinite(roomNow)
-                   && roomNow !== roomBefore;
-      if (crossed && !r.left) {
+      if (!r.left && (r.room_changed || !roomStillCurrent())) {
         recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: roomBefore,
-                       tactic: 'needle_backoff', trigger: 'door_refused', worked: true,
+                       tactic: 'needle_backoff', trigger: 'door_refused', worked: false,
                        ms: Date.now() - askedAt,
-                       note: 'the room changed while the crossing reported failure — ' +
-                             'stopped rather than recovering back through the door' });
-        return finish({ left: true, late: true, used_exit: exit,
-                        stood_on: this.lastExitStand ?? null,
-                        ...(tried.length ? { tried } : {}) });
+                       note: 'the room identity changed while the crossing reported failure — ' +
+                             'stopped; the caller must confirm where it landed' });
+        return staleBatch(exit);
       }
       if (r.left) {
         // THE DOOR HAS NOT MOVED, SO IT SHOULD BE WRITTEN DOWN — AND THIS IS NOT YET THE
@@ -9142,6 +9373,9 @@ class Session {
                        ms: gap, note: r.animation?.sector != null
                          ? `sector ${r.animation.sector}` : 'whole room refused' });
         await new Promise(resolve => setTimeout(resolve, gap));
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return finish(this.cancelledMovement({ tried }));
+        if (!roomStillCurrent()) return staleBatch(exit);
         index--;                        // the same door, one cycle later
         continue;
       }
@@ -9192,8 +9426,12 @@ class Session {
           bodyRefusal.note = 'one-square doorway, and we are being hit in it — not waiting';
         } else {
           waited++; spent--;
+          if (!roomStillCurrent()) return staleBatch(exit);
           const backed = await this.retreatAlongBreadcrumbs(
             { maxCrumbs: narrowBackoffCrumbs, movementGeneration, controlToken }).catch(() => null);
+          if (this.movementWasCancelled(movementGeneration, controlToken))
+            return finish(this.cancelledMovement({ tried }));
+          if (backed?.room_changed || !roomStillCurrent()) return staleBatch(exit);
           bodyRefusal.backed_off = backed?.steps ?? 0;
           recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: roomBefore,
                          tactic: 'needle_backoff', trigger: 'body_blocked',
@@ -9204,6 +9442,9 @@ class Session {
                          hp_lost: r.damage_while_blocked ?? 0,
                          note: `backed off ${backed?.steps ?? 0} crumb(s)` });
           await new Promise(resolve => setTimeout(resolve, narrowWaitMs));
+          if (this.movementWasCancelled(movementGeneration, controlToken))
+            return finish(this.cancelledMovement({ tried }));
+          if (!roomStillCurrent()) return staleBatch(exit);
           index--;                      // the same square, later — that is the whole point
           continue;
         }
@@ -9244,8 +9485,12 @@ class Session {
     if (tried.length && process.env.M59_EXIT_FALLBACK === '1') {
       const best = ordered[0] ?? null;
       if (best) {
+        if (!roomStillCurrent()) return staleBatch(best);
         attempts++;
-        const forced = await this.leaveViaUnvalidated(best, { movementGeneration });
+        const forced = await this.leaveViaUnvalidated(best, { movementGeneration, controlToken });
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return finish(this.cancelledMovement({ tried }));
+        if (!forced.left && !roomStillCurrent()) return staleBatch(best);
         if (forced.left) return finish({ ...forced, used_exit: best, fallback: true, tried });
         tried.push(refusal(best, forced, { fallback: true }));
       }
@@ -9277,8 +9522,14 @@ class Session {
       underFire: !!this._underFireDuringCrossing,
       agent: this.name ?? this.client?.me?.name ?? null,
     }).catch(() => null);
+    if (this.movementWasCancelled(movementGeneration, controlToken))
+      return finish(this.cancelledMovement({ tried }));
+    if (!roomStillCurrent()) return staleBatch(bestExit);
     if (stuckAnswer?.answer?.do === 'blink') {
       const out = await this.blinkOut({ expect: stuckAnswer.answer.expect }).catch(() => null);
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return finish(this.cancelledMovement({ tried }));
+      if (!roomStillCurrent()) return staleBatch(bestExit);
       recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
                      room: Number(this.world?.room?.num ?? 0),
                      tactic: 'blink_escape', trigger: stuckAnswer.strategy,
@@ -9294,8 +9545,13 @@ class Session {
         // leaveViaAny -- that would re-ask the strategy from the new position and could
         // blink twice -- just the best candidate, once.
         if (bestExit) attempts++;
-        const again = bestExit ? await this.leaveVia(bestExit, { movementGeneration, controlToken })
+        const again = bestExit ? await this.leaveVia(bestExit, { movementGeneration, controlToken,
+                                                                  expectedRoomId: roomBeforeId })
                                : null;
+        if (again?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
+          return finish(this.cancelledMovement({ tried }));
+        if (again && !again.left && (again.room_changed || !roomStillCurrent()))
+          return staleBatch(bestExit);
         if (again?.left)
           return finish({ ...again, used_exit: bestExit, after_blink: true, tried });
         if (again) tried.push(refusal(bestExit, again, { after_blink: true }));
@@ -9967,6 +10223,33 @@ class Session {
       // out to be in the gap between them, the fix is in the planner, not the legs.
       const walkBegan = Date.now();
       const leavingRoom = Number(this.world?.room?.num ?? NaN);
+      const leavingRoomId = this.client?.room?.id ?? null;
+      // A published room can blink for one observation. Stop source-room movement on the
+      // first identity change, but count a hop only after an authoritative BP_PLAYER refresh
+      // (or the stable-read fallback used by the lifted offline fixture) confirms it.
+      const settlePublishedRoom = async () => {
+        let confirmed = false;
+        if (typeof this.refreshRoomIdentity === 'function') {
+          const refreshed = await this.refreshRoomIdentity().catch(() => null);
+          confirmed = refreshed?.confirmed === true;
+        } else {
+          let room0 = Number(this.world?.room?.num ?? NaN);
+          let roomId0 = this.client?.room?.id ?? null;
+          let stable = 0;
+          for (let sample = 0; sample < 3 && stable < 2; sample++) {
+            await new Promise(resolve => setTimeout(resolve, 25));
+            const nextRoom = Number(this.world?.room?.num ?? NaN);
+            const nextRoomId = this.client?.room?.id ?? null;
+            if (nextRoom === room0 && nextRoomId === roomId0) stable++;
+            else { room0 = nextRoom; roomId0 = nextRoomId; stable = 0; }
+          }
+          confirmed = stable >= 2;
+        }
+        return { confirmed,
+                 cancelled: this.movementWasCancelled(movementGeneration, controlToken),
+                 room: Number(this.world?.room?.num ?? NaN),
+                 roomId: this.client?.room?.id ?? null };
+      };
       // THE MONORAIL FIRST, THE PLANNER SECOND.
       //
       // This hop is exactly what a track describes — a crossing of THIS room, in by the door
@@ -9977,16 +10260,76 @@ class Session {
       // shipping a book whose keys mostly have one observation each.
       const ridden = await this.rideTrack(cameFromRoom, nextHop.to, { movementGeneration, controlToken })
         .catch(() => ({ rode: false, why: 'ride threw' }));
-      if (ridden.left_room) {
-        hops++; stumbles = 0;
-        cameFromRoom = Number.isFinite(leavingRoom) ? leavingRoom : null;
-        log.push({ from: this.world?.room?.name ?? String(nextHop.from), to: nextHop.to_name,
-                   via: 'track', ok: true, ms: ridden.ms,
+      if (ridden.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ log });
+      const afterRideRoom = Number(this.world?.room?.num ?? NaN);
+      const afterRideRoomId = this.client?.room?.id ?? null;
+      const roomChangedDuringRide = leavingRoomId != null && afterRideRoomId != null
+        && afterRideRoomId !== leavingRoomId;
+      if (ridden.left_room || ridden.room_changed || roomChangedDuringRide) {
+        const settled = await settlePublishedRoom();
+        if (settled.cancelled) return this.cancelledMovement({ log });
+        const changedLogically = settled.confirmed
+          && Number.isFinite(leavingRoom) && Number.isFinite(settled.room)
+          && settled.room !== leavingRoom;
+        if (changedLogically) {
+          const reachedExpectedRoom = settled.room === Number(nextHop.to);
+          cameFromRoom = Number.isFinite(leavingRoom) ? leavingRoom : null;
+          log.push({ from: String(nextHop.from), to: nextHop.to_name,
+                     via: 'track', ok: reachedExpectedRoom, ms: ridden.ms,
+                     ...(reachedExpectedRoom ? {} : {
+                       landed_in: settled.room,
+                       reason: `track crossing landed in ${settled.room} instead of ${nextHop.to}`,
+                     }),
+                     ...((ridden.room_changed || roomChangedDuringRide) && !ridden.left_room
+                       ? { late_room_change: true } : {}),
+                     rode: { reached: ridden.reached ?? 0, blocked: ridden.blocked ?? 0 } });
+          if (!reachedExpectedRoom) {
+            const why = `track crossing landed in ${settled.room} instead of ${nextHop.to}`;
+            if (await stumble(why)) continue;
+            return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
+          }
+          hops++; stumbles = 0;
+          continue;
+        }
+        const why = 'room identity changed during track replay, but the settled logical room did not';
+        log.push({ from: String(nextHop.from), to: nextHop.to_name, via: 'track', ok: false,
+                   reason: why, late_room_change: true,
                    rode: { reached: ridden.reached ?? 0, blocked: ridden.blocked ?? 0 } });
-        await this.settleAfterRoomChange?.().catch?.(() => {});
-        continue;
+        if (await stumble(why)) continue;
+        return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
       }
-      const r = await this.leaveViaAny(candidates, { movementGeneration, controlToken });
+      // EXIT CANDIDATES BELONG TO THE ROOM THAT PUBLISHED THEM.
+      //
+      // Even a track implementation that misses a late transition must not make those
+      // coordinates executable in another room. Require both the graph room and, when it is
+      // available, the protocol room object to still be the identities captured before the
+      // await. Unknown is not "same": re-read and re-plan instead of guessing with stale
+      // geometry.
+      const candidatesStillCurrent = Number.isFinite(leavingRoom)
+        && Number.isFinite(afterRideRoom) && afterRideRoom === leavingRoom
+        && (leavingRoomId == null || afterRideRoomId === leavingRoomId);
+      if (!candidatesStillCurrent) {
+        const why = 'room identity changed while track replay reported no crossing';
+        if (await stumble(why)) continue;
+        return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
+      }
+      let r = await this.leaveViaAny(candidates, { movementGeneration, controlToken });
+      if (!r.left && r.room_changed) {
+        const settled = await settlePublishedRoom();
+        if (settled.cancelled) return this.cancelledMovement({ log });
+        const changedLogically = settled.confirmed
+          && Number.isFinite(leavingRoom) && Number.isFinite(settled.room)
+          && settled.room !== leavingRoom;
+        if (changedLogically) {
+          r = { ...r, left: true, confirmed_room_change: true,
+                arrived_in: this.world?.room?.name ?? String(settled.room) };
+        } else {
+          const why = 'room identity changed during exit execution, but the settled logical room did not';
+          if (await stumble(why)) continue;
+          return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
+        }
+      }
       // QUEUE THE GAP ON `this`, AND LET SOMETHING ELSE FILE IT.
       //
       // Three methods in this chain are lifted out of this file by text and evaluated —

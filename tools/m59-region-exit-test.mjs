@@ -150,6 +150,52 @@ function harness() {
   ok('no old-room coordinates are sent after that transition', secondTried === false);
 }
 
+// A mover can publish the new room a beat after returning left_room:false. The live room
+// identity closes that gap: no fine fallback and no second source-room candidate may run.
+{
+  const h = harness();
+  let current = true;
+  const calls = [];
+  const result = await boundedRegionEntry({
+    candidates: [{ stand_on: { col: 1, row: 1 } }, { stand_on: { col: 2, row: 2 } }],
+    sequence: h.sequence,
+    eventsSince: h.eventsSince,
+    waitForEntry: h.waitForEntry,
+    stillCurrent: () => current,
+    walk: async candidate => {
+      calls.push(`coarse:${candidate.stand_on.col}`);
+      current = false;
+      return { arrived: false, left_room: false };
+    },
+    fineWalk: async candidate => { calls.push(`fine:${candidate.stand_on.col}`); return { arrived: false }; },
+    askGo: async () => { calls.push('go'); },
+  });
+  ok('a delayed live room change is an unconfirmed transition',
+     result.unconfirmed_transition === true, JSON.stringify(result));
+  ok('no fine or later candidate coordinates run after that change',
+     JSON.stringify(calls) === JSON.stringify(['coarse:1']), JSON.stringify(calls));
+}
+
+// Reaching a trigger normally earns one compatibility `go`. If the room changed while its
+// entry wait was outstanding, that probe belongs to the old room and must not be sent.
+{
+  const h = harness();
+  let current = true, askedGo = 0;
+  const result = await boundedRegionEntry({
+    candidates: [{ stand_on: { col: 8, row: 9 } }],
+    sequence: h.sequence,
+    eventsSince: h.eventsSince,
+    waitForEntry: async () => { current = false; return null; },
+    stillCurrent: () => current,
+    walk: async () => ({ arrived: true, left_room: false }),
+    fineWalk: async () => { throw new Error('fine movement should not run after arrival'); },
+    askGo: async () => { askedGo++; },
+  });
+  ok('a room change during the entry wait suppresses the compatibility go',
+     result.unconfirmed_transition === true && askedGo === 0,
+     JSON.stringify({ result, askedGo }));
+}
+
 // The exits() cache: repeated calls from the same origin return the cached result
 // (the flood fills are the expensive part and were the cold-start stall); a different
 // origin recomputes; and the cached result is correct (matches an uncached compute).
