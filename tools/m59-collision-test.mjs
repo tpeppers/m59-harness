@@ -3667,6 +3667,74 @@ console.log('AN EXIT SELECTED BEFORE A ROOM CHANGE NEVER MOVES IN THE NEW ROOM')
 }
 
 console.log('');
+console.log('A CONFIRMED REGION EXIT KEEPS ITS COUNT OUT OF THE TRIED ARRAY CONTRACT');
+{
+  // Marion -> Cibilo Creek Inn is a code-defined trigger region, and is the live route
+  // that exposed a successful crossing returning `tried: 1`. `travel` serializes `tried`
+  // as candidate evidence, so an attempt COUNT belongs on the explicitly numeric field.
+  const exit = {
+    kind: 'region', to: 535, trigger: 'row > 83 and col > 48',
+    trigger_targets: [{ stand_on: { col: 49, row: 84 }, reachable: true }],
+  };
+  const fixture = () => {
+    const entered = { kind: 'room-entered', roomName: 'Cibilo Creek Inn' };
+    const client = {
+      room: { id: 1200 }, self: { col: 48, row: 83 }, evSeq: 0,
+      eventsSince: () => [entered],
+      waitFor: async () => ({ events: [entered] }),
+    };
+    const world = {
+      room: { num: 200, name: 'Marion' },
+      approachSquare: () => null,
+    };
+    let walks = 0, fineWalks = 0;
+    const session = {
+      client, world, movementGeneration: 0,
+      need: () => client,
+      movementWasCancelled: () => false,
+      cancelledMovement: () => ({ cancelled: true }),
+      async standBeforeGo() {},
+      async walkTo(col, row) {
+        walks++;
+        client.self = { col, row };
+        client.room = { id: 1535 };
+        world.room = { num: 535, name: 'Cibilo Creek Inn' };
+        return { arrived: true, left_room: false };
+      },
+      async walkFine() { fineWalks++; return { arrived: true }; },
+      pacer: { async submit(_label, fn) { return fn(); } },
+      async _askStrategies() { return null; },
+      _blockingBodies() { return []; },
+      _blinkPointHere() { return null; },
+    };
+    return { session, calls: () => ({ walks, fineWalks }) };
+  };
+
+  const directFixture = fixture();
+  const direct = await leaveVia.call(directFixture.session, exit,
+    { expectedRoomId: directFixture.session.client.room.id });
+  ok('leaveVia reports the confirmed code-defined region crossing as successful',
+     direct?.left === true && direct?.arrived_in === 'Cibilo Creek Inn' &&
+       directFixture.calls().walks === 1 && directFixture.calls().fineWalks === 0,
+     JSON.stringify({ direct, calls: directFixture.calls() }));
+  ok('leaveVia puts the numeric count on region_attempts, never numeric tried',
+     direct?.region_attempts === 1 &&
+       (direct.tried == null || Array.isArray(direct.tried)) && typeof direct.tried !== 'number',
+     JSON.stringify(direct));
+
+  const anyFixture = fixture();
+  anyFixture.session.leaveVia = (candidate, options) =>
+    leaveVia.call(anyFixture.session, candidate, options);
+  const aggregate = await leaveViaAny.call(anyFixture.session, [exit], { exact: true });
+  ok('leaveViaAny preserves a confirmed region crossing and its attempt count',
+     aggregate?.left === true && aggregate?.attempts === 1 && aggregate?.region_attempts === 1,
+     JSON.stringify(aggregate));
+  ok('leaveViaAny also never exposes a numeric tried field',
+     (aggregate.tried == null || Array.isArray(aggregate.tried)) &&
+       typeof aggregate.tried !== 'number', JSON.stringify(aggregate));
+}
+
+console.log('');
 console.log('A MISSED LEARNED STATION ENDS THE TRACK REPLAY');
 {
   // Every straightened leg is proved only from the waypoint before it. Once a station is

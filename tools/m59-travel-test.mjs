@@ -157,6 +157,28 @@ console.log('a clean journey arrives, and counts its hops');
 }
 
 // ---------------------------------------------------------------------------
+console.log('legacy numeric region attempts cannot break travel evidence serialization');
+{
+  // Old region successes returned `tried: 1`, while the shared exit contract defines
+  // `tried` as an array of candidate evidence. Keep travel tolerant of an in-flight old
+  // keeper/result during rolling activation, and preserve the count under its numeric name.
+  const s = fakeSession({ rooms: [1, 2] });
+  s.leaveViaAny = async candidates => {
+    s.at = 1;
+    return { left: true, tried: 1, used_exit: candidates[0], via: 'region trigger' };
+  };
+  let result = null, thrown = null;
+  try { result = await travel.call(s, 2, {}); }
+  catch (error) { thrown = error; }
+  ok('a legacy numeric tried value does not throw', thrown == null);
+  ok('the crossing still completes its journey', result?.arrived === true);
+  const evidence = s.pendingExitGaps?.[0];
+  ok('the queued evidence is array-safe and retains the numeric region attempt count',
+     Array.isArray(evidence?.tried) && evidence.tried.length === 0 &&
+       evidence.region_attempts === 1);
+}
+
+// ---------------------------------------------------------------------------
 console.log('a track room change never executes source-room exit candidates in the new room');
 {
   // The exact live route that exposed the race: the track crosses Outskirts of Barloque

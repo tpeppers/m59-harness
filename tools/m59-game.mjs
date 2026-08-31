@@ -8478,21 +8478,28 @@ class Session {
               ? false : c.go(), DOOR_SETTLE_MS);
         },
       });
-      const stoppedAfterRegion = await stopAfterAwait();
-      if (stoppedAfterRegion) return { ...stoppedAfterRegion, tried: result.tried.length };
-      if (result.cancelled) return this.cancelledMovement({ tried: result.tried.length });
-      if (result.terminal)
-        return { left: false, stage: 'walk', ...result.terminal,
-                 tried: result.tried.length };
-      if (result.unconfirmed_transition)
-        return { ...(await staleExit()), tried: result.tried.length };
+      const regionAttempts = result.tried.length;
+      if (result.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ region_attempts: regionAttempts });
+      // A room-entered event is authoritative evidence that this source-room region
+      // succeeded. Checking leftExpectedRoom() first mistakes that success for a stale
+      // exit and used to leak the numeric attempt count through array-valued `tried`.
       if (result.entered) {
         const successful = result.tried[result.tried.length - 1] ?? {};
         return { left: true, arrived_in: result.entered.roomName,
                  via: successful.asked_go ? 'region trigger, after asking to go'
                       : successful.fine ? 'region trigger via fine movement' : 'region trigger',
-                 trigger_target: successful.candidate?.stand_on ?? null };
+                 trigger_target: successful.candidate?.stand_on ?? null,
+                 region_attempts: regionAttempts };
       }
+      const stoppedAfterRegion = await stopAfterAwait();
+      if (stoppedAfterRegion)
+        return { ...stoppedAfterRegion, region_attempts: regionAttempts };
+      if (result.terminal)
+        return { left: false, stage: 'walk', ...result.terminal,
+                 region_attempts: regionAttempts };
+      if (result.unconfirmed_transition)
+        return { ...(await staleExit()), region_attempts: regionAttempts };
 
       const tried = result.tried.map(attempt => ({
         stand_on: attempt.candidate.stand_on,
@@ -8506,7 +8513,8 @@ class Session {
                reason: reached
                  ? 'reached the trigger region but neither automatic entry nor `go` changed rooms'
                  : `could not reach any of ${candidates.length} bounded trigger-region target(s)`,
-               tried, note: 'the trigger is ' + exit.trigger };
+               tried, region_attempts: regionAttempts,
+               note: 'the trigger is ' + exit.trigger };
     }
 
     // THE SQUARE WE ACTUALLY STOOD ON. Recorded on `this` rather than written anywhere,
@@ -10330,6 +10338,17 @@ class Session {
           return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
         }
       }
+      // `tried` is exit-candidate evidence everywhere else in this pipeline. Older
+      // region results used it for a numeric count; tolerate that legacy contract at
+      // this boundary so evidence collection cannot turn a completed crossing into a
+      // failed travel job.
+      if (r?.tried != null && !Array.isArray(r.tried)) {
+        const legacyRegionAttempts = Number(r.tried);
+        r = { ...r,
+              ...(r.region_attempts == null && Number.isFinite(legacyRegionAttempts)
+                ? { region_attempts: legacyRegionAttempts } : {}),
+              tried: [] };
+      }
       // QUEUE THE GAP ON `this`, AND LET SOMETHING ELSE FILE IT.
       //
       // Three methods in this chain are lifted out of this file by text and evaluated —
@@ -10343,6 +10362,7 @@ class Session {
         direction: r?.gap?.direction ?? r?.used_exit?.direction ?? null,
         left: !!r.left, reason: r.reason ?? null, outcome: r.outcome ?? null,
         attempts: r.attempts ?? null,
+        region_attempts: r.region_attempts ?? null,
         believed: r?.gap?.believed ?? null,
         stood_on: r.stood_on ?? null,
         tried: (r.tried ?? []).slice(0, 8).map(t => ({ ...(t.stand_on ?? {}),
@@ -10368,6 +10388,7 @@ class Session {
                  // On the hop log too, so a caller reading a travel result sees where the
                  // time went without having to go to the transit book for it.
                  ms: inRoomMs,
+                 ...(r.region_attempts != null ? { region_attempts: r.region_attempts } : {}),
                  ...(r.tried?.length ? { also_tried: r.tried } : {}),
                  ...(r.left ? {} : { reason: why }) });
       // RECORDED WHETHER OR NOT IT WORKED, and the failures are the ones worth having:
