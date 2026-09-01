@@ -766,7 +766,17 @@ export function fightNode(keeper) {
       // wall at all -- then the monster is in the open with us and resting is suicide.
       const atWall = !!keeper.hold;
       const proven = atWall && keeper.holdWorks?.();
-      if (atWall) {
+      if (f.disengaged.unarmed) {
+        const reason = f.disengaged.reason
+          ?? 'the weapon was lost and no verified replacement could be equipped';
+        if (atWall) await keeper.leaveHold?.(reason, { force: true }).catch(() => null);
+        await keeper.retreatToSafety?.({
+          because: reason,
+          mid_round: !!f.disengaged.mid_round,
+          unarmed: true,
+        }).catch(() => {});
+        keeper.progress('retreated after losing the weapon');
+      } else if (atWall) {
         keeper.note('broke off at the wall -- resting here rather than running', {
           at_health: f.disengaged.at_health, mid_round: !!f.disengaged.mid_round,
           proven,
@@ -780,7 +790,8 @@ export function fightNode(keeper) {
         keeper.progress('rested after breaking off a fight');
       } else {
         await keeper.retreatToSafety?.({
-          because: 'broke off a fight at ' + (f.disengaged.at_health ?? '?'),
+          because: f.disengaged.reason
+            ?? ('broke off a fight at ' + (f.disengaged.at_health ?? '?')),
           mid_round: !!f.disengaged.mid_round,
         }).catch(() => {});
         keeper.progress('retreated after breaking off a fight');

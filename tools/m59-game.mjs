@@ -9628,8 +9628,13 @@ class Session {
       await this.faceToward(o);
       const before = c.evSeq;
       await this.pacer.submit('attack', () => c.attack(targetId), ATTACK_INTERVAL_MS);
-      const ev = await c.waitFor({ since: before, timeoutMs: 2500 });
-      messages.push(...ev.events.filter(e => e.text).map(e => e.text));
+      // Combat results and disappearance are server messages.  Do not admit chat
+      // (`said`) into the evidence window: another player can quote hit prose while
+      // this swing is outstanding, and that must not turn a miss into progress.
+      const ev = await c.waitFor({
+        since: before, kinds: ['message', 'vanished'], timeoutMs: 2500,
+      });
+      messages.push(...ev.events.filter(e => e.kind === 'message' && e.text).map(e => e.text));
       if (ev.events.some(e => e.kind === 'vanished' && e.id === targetId)) break;
       if (!c.room.objects.has(c.selfId)) break;      // we died
       if (abortBelow != null) {

@@ -1894,7 +1894,9 @@ export class Autopilot {
     // stops at 80 and the rest has to be eaten, so one mushroom against a floor of 140 is
     // still a floor nothing can reach. Counted the same way, because it is the same fact
     // about supply rather than a fighting decision.
-    const carried = larder.reduce((n, item) => n + (Number(item?.nutrition) || 0), 0);
+    const carried = larder.reduce((n, item) =>
+      n + (Number(item?.food?.nutrition ?? item?.nutrition) || 0) *
+          (Number(item?.o?.amount ?? item?.amount ?? 1) || 1), 0);
     const reachable = reachableFightFloor(want, VIGOR_CAP, carried);
     if (reachable < want) this.vigor.starved_passes++;
     return reachable;
@@ -15152,14 +15154,29 @@ export class Autopilot {
       // held safe spot rests where it stands; everything else leaves the room.
       if (f.disengaged) {
         const hp = v.health?.max ? Math.round(100 * v.health.value / v.health.max) + '%' : null;
-        if (holding && this.holdWorks?.()) {
+        if (f.disengaged.unarmed) {
+          const reason = f.disengaged.reason
+            ?? 'the weapon was lost and no verified replacement could be equipped';
+          // A wall limits added attackers; it does not make the one already engaged
+          // harmless. Leave the live pocket before ordinary recovery can choose to rest.
+          if (holding) await this.leaveHold(reason, { force: true }).catch(() => null);
+          await this.retreatToSafety({
+            because: reason,
+            mid_round: !!f.disengaged.mid_round,
+            unarmed: true,
+            still_here: (this.inReachOfUs() ?? []).length,
+          });
+          this.progress('retreated after losing the weapon');
+          return HANDLED;
+        } else if (holding && this.holdWorks?.()) {
           this.note('broke off behind the wall — resting here rather than running', {
             at_health: f.disengaged.at_health, mid_round: !!f.disengaged.mid_round,
             why: 'nothing can hit us on this square unless we swing first, so standing still ' +
                  'is a free heal and walking off it would start the damage' });
         } else {
           await this.retreatToSafety({
-            because: 'broke off a fight at ' + (f.disengaged.at_health ?? hp),
+            because: f.disengaged.reason
+              ?? ('broke off a fight at ' + (f.disengaged.at_health ?? hp)),
             mid_round: !!f.disengaged.mid_round,
             still_here: (this.inReachOfUs() ?? []).length,
           });

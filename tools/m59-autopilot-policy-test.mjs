@@ -9,7 +9,9 @@
 // floor collapses provisioning's band into a threshold and gives up the health
 // regeneration the food was bought for. shouldWaitForProvision is what stops a fed
 // character idling in an inn, and it is pinned in m59-combat-test.mjs.
-import { applyFightAboveVigor, STRATEGIES, reachableFightFloor, reagentShopFor } from './m59-autopilot.mjs';
+import {
+  Autopilot, applyFightAboveVigor, STRATEGIES, reachableFightFloor, reagentShopFor,
+} from './m59-autopilot.mjs';
 
 let failed = 0;
 const ok = (label, condition, detail = '') => {
@@ -65,6 +67,19 @@ ok('the resting cap scales with the vigor bar, not a hard-coded 200',
    reachableFightFloor(140, 100, 50) === 90,   // 0.4*100=40 + 50 = 90 -> min(140,90)=90
    `got ${reachableFightFloor(140, 100, 50)}`);
 
+{
+  const ap = Object.create(Autopilot.prototype);
+  ap.policy = { strategy: 'baseline', vigorFloor: 140 };
+  ap.s = { client: {} };
+  ap.vigor = { starved_passes: 0 };
+  ap.larder = () => [{ food: { nutrition: 50 }, o: { amount: 1 } }];
+  ok('fightFloor reads nutrition from larderOf food metadata',
+     ap.fightFloor() === 130, `got ${ap.fightFloor()}`);
+  ap.larder = () => [{ food: { nutrition: 30 }, o: { amount: 2 } }];
+  ok('fightFloor counts every item in a food stack',
+     ap.fightFloor() === 140, `got ${ap.fightFloor()}`);
+}
+
 // THE REAGENT SHOP IS ONE TOWN'S ANSWER. Unset keeps Joguer in Barloque; a positive room
 // number in the keeper env moves the herb run, and a name is only for the journal.
 ok('with nothing in the env the reagent shop is Joguer in 104',
@@ -85,4 +100,4 @@ if (failed) {
   console.error(`\n${failed} failed`);
   process.exit(1);
 }
-console.log('\n17 passed');
+console.log('\n19 passed');
