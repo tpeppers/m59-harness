@@ -8107,6 +8107,11 @@ const TOOLS = [
                      'the character\'s proficiency in each weapon\'s own skill, which only ever ' +
                      'rewards what it is already best at; set this to train a weak weapon skill. ' +
                      'Pass [] to go back to proficiency ranking.' },
+      training_style: { type: 'string',
+        enum: ['normal', 'short_sword', 'unarmed', 'alternate'],
+        description: 'combat practice style for farm prey. alternate keeps one style for a whole ' +
+          'quarry, then flips between an exact short sword and bare hands. Outside the assigned ' +
+          'farm room the keeper still arms for travel and survival.' },
       drop_junk: { type: 'boolean',
         description: 'drop junk and weapons the server has refused as broken, default true. A ' +
                      'broken weapon is NOT renamed, so it otherwise outranks the working one for ever' },
@@ -8495,6 +8500,15 @@ const TOOLS = [
       const s = session(a.agent);
       s.need();
       const p = autopilotFor(s);
+      // A keeper-backed shell is only an assembly point for an order; it does not run
+      // and may have been created after resumeFleet dropped the boot-time shell. Seed it
+      // from the roster before applying an incremental change, or setting one field such
+      // as training_style rewrites every omitted policy value to constructor defaults.
+      // Do not do this to an in-process autopilot: loadout overlays may have legitimately
+      // changed its live policy since the roster was written.
+      const savedAutopilot = fleetState.get(a.agent)?.autopilot;
+      if (s instanceof KeeperProxy && savedAutopilot?.policy)
+        Object.assign(p.policy, savedAutopilot.policy);
       // The running stub's mode defaults to 'survive' (Autopilot constructor), but the
       // ROSTER may have a different mode (e.g. 'tick') that the keeper is actually using.
       // When a caller does NOT explicitly set the mode, we must preserve the roster's
@@ -8729,6 +8743,12 @@ const TOOLS = [
       if (a.weapon_priority !== undefined)
         p.policy.weaponPriority = Array.isArray(a.weapon_priority) && a.weapon_priority.length
           ? a.weapon_priority.map(String) : null;
+      if (a.training_style !== undefined) {
+        const style = String(a.training_style);
+        if (!['normal', 'short_sword', 'unarmed', 'alternate'].includes(style))
+          throw new Error(`training_style must be normal, short_sword, unarmed or alternate — got ${style}`);
+        p.policy.trainingStyle = style;
+      }
       // NORMALISED AT THE DOOR. `half` and `ab` were two names for the same retired
       // experiment and they are stored as `on`, because storing them as themselves means
       // every reader downstream has to remember the retirement — which is how `on` spent an

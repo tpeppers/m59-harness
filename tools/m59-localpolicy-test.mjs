@@ -191,7 +191,7 @@ console.log('the mechanics are not overridable, and a bet against them is flagge
 {
   ok('the vigor ceiling is 200', VIGOR_MAX === 200);
   ok('resting stops at 80', REST_VIGOR_CAP === 80);
-  ok('the fighting floor is 100', MIN_FIGHT_VIGOR === 100);
+  ok('the fighting floor is 80', MIN_FIGHT_VIGOR === 80);
 
   const f = write('mech.json', { blocks: { valley_orders: { REST_VIGOR_CAP: 200 } } });
   const r = localise('valley_orders', COMMITTED, { file: f });
@@ -220,18 +220,16 @@ console.log('the mechanics are not overridable, and a bet against them is flagge
 }
 
 {
-  // THERE IS NO QUIET MIDDLE BAND, and the first version of this file assumed there was.
-  // MIN_FIGHT_VIGOR (100) is ABOVE the resting cap (80), so no setting clears both
-  // remarks: everything over 80 needs food, everything under 100 is under the keeper's
-  // own floor. Written as an either/or, every value warned about something — which reads
-  // the same as nothing. The two are independent and a value may collect both.
-  ok('the keeper floor sits above the resting cap', MIN_FIGHT_VIGOR > REST_VIGOR_CAP);
+  // The keeper floor moved from 100 to the resting cap of 80. A setting above 80 now
+  // makes only the food-supply claim; it is no longer also below the keeper's own floor.
+  // Keep this contract beside the constant so the warning prose cannot drift again.
+  ok('the keeper floor matches the resting cap', MIN_FIGHT_VIGOR === REST_VIGOR_CAP);
 
   const mid = write('warn-mid.json', { blocks: { valley_orders: { fight_above_vigor: 90 } } });
   const r = localise('valley_orders', COMMITTED, { file: mid });
-  ok('90 collects both remarks', r.warnings.length === 2);
+  ok('90 collects only the food-supply remark', r.warnings.length === 1);
   ok('90 needs food', r.warnings.some((w) => /resting cap/.test(w.why)));
-  ok('90 is under the keeper floor', r.warnings.some((w) => /MIN_FIGHT_VIGOR/.test(w.why)));
+  ok('90 is not under the keeper floor', !r.warnings.some((w) => /MIN_FIGHT_VIGOR/.test(w.why)));
 
   const high = write('warn-only-food.json',
     { blocks: { valley_orders: { fight_above_vigor: 180 } } });

@@ -1397,6 +1397,10 @@ export class Autopilot {
       // its 90% sword for ever, because ranking by proficiency is a feedback loop that
       // only ever rewards what you are already good at.
       weaponPriority: null,
+      // Optional practice regimen. `alternate` keeps one style for the lifetime of a
+      // quarry, then flips for the next one; changing hands while a creature is still
+      // alive would reset the target/advancement flags the regimen is meant to train.
+      trainingStyle: 'normal',
       // KILL WHAT WE DO NOT WANT, TO KEEP THE ROOM PRODUCING WHAT WE DO. The spawn cap
       // is a room-wide total, so a creature we step over is a slot our prey cannot use.
       // Off makes the keeper ignore weak creatures and slowly suffocate its own hunting
@@ -1980,6 +1984,106 @@ export class Autopilot {
     if (this.policy.weaponPriority) return this.policy.weaponPriority;
     const l = this.loadout();
     return l && l.gear.weapon.length ? l.gear.weapon : null;
+  }
+
+  // A training bout belongs to one quarry. `skills.fight` deliberately resumes a
+  // damaged target over a fresh one because changing targets discards advancement
+  // credit; weapon style has to be just as sticky or an interrupted fight can count
+  // once with each hand. The next style flips when a new quarry is selected.
+  trainingStyleFor(targetId = null) {
+    const configured = this.policy.trainingStyle ?? 'normal';
+    if (configured !== 'alternate') return configured;
+    if (targetId == null)
+      return this._trainingBout?.style ?? this._trainingNextStyle ?? 'short_sword';
+    if (this._trainingBout?.target_id === targetId) return this._trainingBout.style;
+    const style = this._trainingNextStyle ?? 'short_sword';
+    this._trainingBout = { target_id: targetId, style };
+    this._trainingNextStyle = style === 'short_sword' ? 'unarmed' : 'short_sword';
+    return style;
+  }
+
+  isTrainingPrey(name) {
+    const want = this.policy.hunt;
+    return !!want && this.huntMatch(want)(String(name || ''));
+  }
+
+  finishTrainingBout(targetId) {
+    if (targetId == null || this._trainingBout?.target_id === targetId)
+      this._trainingBout = null;
+  }
+
+  async unuseTrainingWeapon() {
+    const s = this.s, c = s.client;
+    let using = skills.equippedNow(c);
+    if (!using) {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
+      using = skills.equippedNow(c);
+    }
+    if (!using) return { ready: false, why: 'the server use list is not known' };
+    const held = (c.inventory || []).find(o => using.has(o.id) &&
+      skills.weaponScore(c.rsc.get(o.nameRsc) || '') > 0);
+    if (!held) return { ready: true, already: true };
+    const name = c.rsc.get(held.nameRsc) || 'weapon';
+    const before = c.evSeq;
+    await s.pacer.submit('use', () => c.unuse(held.id)).catch(() => {});
+    await c.waitFor({ since: before, kinds: ['equipment', 'message'], timeoutMs: 3000 })
+      .catch(() => ({ events: [] }));
+    const ready = !skills.isArmed(c);
+    return { ready, removed: name,
+             ...(ready ? {} : { why: `the server did not take off ${name}` }) };
+  }
+
+  // Prepare one exact, observable combat style. `equip:false` is passed to fight()
+  // after this succeeds so its ordinary best-weapon convenience cannot silently undo
+  // an unarmed bout or replace a missing short sword with a different weapon.
+  async prepareTrainingStyle(style, targetId) {
+    if (style === 'normal') return { ready: true, equip: true };
+    const s = this.s, c = s.client;
+    if (style === 'unarmed') {
+      const bare = await this.unuseTrainingWeapon();
+      if (bare.ready && bare.removed)
+        this.note('training bout: fighting unarmed', { target_id: targetId, removed: bare.removed });
+      return { ...bare, equip: false, style, rounds: 1 };
+    }
+    if (style !== 'short_sword')
+      return { ready: false, equip: false, style, why: `unknown training style ${style}` };
+
+    const equippedShort = () => {
+      const using = skills.equippedNow(c);
+      if (!using) return null;
+      return (c.inventory || []).find(o => using.has(o.id) &&
+        !skills.brokenSet(c).has(o.id) &&
+        /short\s?sword/i.test(c.rsc.get(o.nameRsc) || '')) || null;
+    };
+    let short = equippedShort();
+    if (short)
+      return { ready: true, equip: false, style, already: true, weapon_id: short.id, rounds: 1 };
+
+    const off = await this.unuseTrainingWeapon();
+    if (!off.ready) return { ...off, equip: false, style };
+    let hasShort = (c.inventory || []).some(o =>
+      !skills.brokenSet(c).has(o.id) &&
+      /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
+    if (!hasShort) {
+      await this.makeWeapon('this training bout requires a short sword').catch(() => false);
+      hasShort = (c.inventory || []).some(o =>
+        !skills.brokenSet(c).has(o.id) &&
+        /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
+    }
+    if (hasShort && !equippedShort())
+      await skills.equipBest(s, { priority: ['short sword'] }).catch(() => null);
+    short = equippedShort();
+    if (short) {
+      this.note('training bout: fighting with a short sword', { target_id: targetId });
+      return { ready: true, equip: false, style, weapon_id: short.id, rounds: 1 };
+    }
+
+    // Do not leave a failed experiment empty-handed. Re-arm normally for survival,
+    // but refuse this bout: fighting with a fallback weapon would corrupt the split.
+    await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => null);
+    return { ready: false, equip: false, style,
+             why: 'no usable short sword could be made or equipped' };
   }
 
   // What `create food` eats: 2 ElderBerry and 2 Herbs, from OUR pack, and it refuses
@@ -11574,7 +11678,14 @@ export class Autopilot {
 
   // ── passArm: extracted from pass() ────────────────────────────────
   async passArm(ctx) {
-    const { s, c } = ctx;
+    const { s, c, room } = ctx;
+    // Deliberate bare-hand practice is not a broken loadout. It is allowed only on
+    // the assigned farm ground; after a death or during travel the ordinary arm-first
+    // survival rule remains in force.
+    const practice = this.trainingStyleFor();
+    if (practice === 'unarmed' && this.mode === 'farm' &&
+        room?.num === this.policy.assignedRoom)
+      return CONTINUE;
     // NO WEAPON: FIX IT BEFORE ANYTHING ELSE, and never walk out to hunt without one.
     //
     // armSelf() already wields from the pack and falls back to conjuring, and makeWeapon
@@ -14883,6 +14994,21 @@ export class Autopilot {
       const plannedQuarryId = this.pendingPull?.target_id ?? selectedQuarry?.id ?? null;
       const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : plannedQuarryId);
       const claimedSwing = swingAt ?? null;
+      // The experiment is about the configured farm prey, not weak-room cleanup or a
+      // defensive contact. Use the same canonical matcher as every other hunt decision,
+      // so class and alias orders (for example `soldier`) train their actual prey too.
+      const trainingPrey = this.isTrainingPrey(engageName);
+      const trainingStyle = trainingPrey ? this.trainingStyleFor(claimedSwing) : 'normal';
+      const training = await this.prepareTrainingStyle(trainingStyle, claimedSwing)
+        .catch(e => ({ ready: false, why: e.message, style: trainingStyle }));
+      if (!training.ready) {
+        this.note('training bout could not start', {
+          target_id: claimedSwing, style: trainingStyle, why: training.why,
+          note: 'the keeper refused a fallback weapon so the 50/50 measurement stays honest',
+        });
+        this.noProgress(`training ${trainingStyle} unavailable: ${training.why}`);
+        return HANDLED;
+      }
       // Defensive contact must not release the claim on a pulled quarry whose progress
       // is still being watched. Once that experiment ends, normal claim convergence resumes.
       if (!this.pendingPull && claimedSwing != null)
@@ -14894,7 +15020,16 @@ export class Autopilot {
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,
                                         holdPosition: holding, reach: PLAYER_REACH,
+                                        equip: training.equip,
+                                        rounds: training.rounds,
                                         weaponPriority: this.weaponPriorityNow() });
+
+      // With equip:false fight() cannot know which prepared weapon shattered. Remember
+      // the exact short-sword id here so the next pass makes a replacement instead of
+      // repeatedly offering the same server-refused item.
+      if (training.weapon_id != null && (f.combat || []).some(skills.brokenWeaponText))
+        skills.brokenSet(c).add(training.weapon_id);
+      if (trainingPrey && (f.killed || f.died)) this.finishTrainingBout(claimedSwing);
 
       // NOTHING IN REACH, AND WE ARE NOT GOING TO CHASE IT. fight() refuses to walk
       // while we are holding, which is correct and leaves the interesting half to us:
