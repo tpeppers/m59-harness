@@ -9,12 +9,21 @@ import {
   keeperStatusVerificationFailure,
   newPendingDispatch,
   noteDispatchResult,
+  pilgrimageCycles,
 } from './m59-pilgrimage-cycle.mjs';
 
 let passed = 0, failed = 0;
 function ok(label, condition, detail = '') {
   if (condition) { passed++; console.log(`  ok   ${label}`); }
   else { failed++; console.log(`  FAIL ${label}${detail ? '  ' + detail : ''}`); }
+}
+
+console.log('pilgrimage mode defaults to continuous checkpoint travel');
+{
+  ok('an unadorned run cycles', pilgrimageCycles([]));
+  ok('the historical --cycle spelling still cycles', pilgrimageCycles(['--cycle']));
+  ok('--one-pass explicitly restores scatter-and-converge',
+     !pilgrimageCycles(['--one-pass']));
 }
 
 console.log('a checkpoint handoff waits for the previous keeper job');

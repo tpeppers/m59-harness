@@ -6,6 +6,14 @@ export const DISPATCH_CONFIRM_MS = 15_000;
 export const DISPATCH_RETRY_MS = 5_000;
 export const DISPATCH_MAX_ATTEMPTS = 3;
 
+// Sustained checkpoint-to-checkpoint travel is the useful default for a timed fleet run:
+// characters that arrive keep contributing evidence instead of parking for the rest of the
+// window. `--cycle` remains an accepted, explicit spelling for old runbooks; `--one-pass`
+// preserves the scatter-and-converge experiment when that is what the operator wants.
+export function pilgrimageCycles(argv = []) {
+  return !argv.includes('--one-pass');
+}
+
 const ACTIVE = /travell?ing|\bwalk to\b|recovering|resting/i;
 
 export function keeperOwnsMovement(row = {}) {

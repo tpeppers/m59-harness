@@ -1,14 +1,18 @@
 #!/usr/bin/env node
-// SCATTER THE FLEET ACROSS THE MAINLAND AND ASK HOW MANY GET HOME.
+// SCATTER THE FLEET ACROSS THE MAINLAND AND KEEP IT WALKING A CHECKPOINT RING.
 //
-//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2
+//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2             # continuous ring (default)
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --seed 7 --timeout 600
+//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --one-pass  # one crossing, then stop
+//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --cycle     # accepted compatibility spelling
 //   node tools/m59-pilgrimage.mjs --dry-run
 //
 // `m59-solo-run.mjs` answers "can ONE character walk THIS road", one at a time, from one
 // square, because twenty-one characters crossing together measure contention as much as
 // they measure the road. This asks the other question, which is the one the fleet actually
-// lives: everybody starts somewhere different and everybody goes to the same place.
+// lives: everybody starts somewhere different and keeps walking checkpoint-to-checkpoint.
+// `--one-pass` retains the older scatter-and-converge test when one shared destination is
+// the question being asked.
 //
 // WHY THE FIVE INNS. They are the mainland's fixed points — the rooms the Underworld's
 // portals land in (CITY_INNS in m59-underworld.mjs, RIDs from blakston.khd), so they are
@@ -37,6 +41,7 @@ import {
   keeperStatusVerificationFailure,
   newPendingDispatch,
   noteDispatchResult,
+  pilgrimageCycles,
 } from './m59-pilgrimage-cycle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -52,7 +57,7 @@ const flag = (name, fallback = null) => {
 const has = name => argv.includes('--' + name);
 
 const KNOWN = new Set(['fleet', 'to', 'port', 'timeout', 'seed', 'agents', 'inns', 'no-retry',
-                       'dry-run', 'help', 'h', 'cycle', 'reverse']);
+                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse']);
 for (const a of argv) {
   if (!a.startsWith('--')) continue;
   if (!KNOWN.has(a.slice(2))) {
@@ -82,21 +87,14 @@ const ONLY = flag('agents') ? String(flag('agents')).split(',').map(s => s.trim(
 
 // The mainland five, in the canonical table's own order. Ko'catan is across the sea and is
 // not a mainland road, so it is left out unless somebody names it.
-// SCATTER-AND-CONVERGE, OR KEEP GOING. Two different questions, and conflating them cost a
-// day of reading one as the other.
+// KEEP GOING BY DEFAULT. A timed run is most useful when every arrival immediately becomes
+// the next checkpoint leg: early arrivals keep testing, and a longer window buys more evidence
+// instead of a larger parked crowd. `--cycle` remains accepted for existing runbooks.
 //
-// Without `--cycle` this measures ONE crossing per character: everybody starts somewhere
-// different, everybody walks to one room, and a character that gets there is finished. That is
-// the right shape for "can the fleet cross the map", and every earlier run used it, so it stays
-// the default and stays comparable.
-//
-// It is NOT a loop, and it was being read as one. Characters that arrived stood at the
-// destination for the rest of the window with no objective, which looks exactly like being
-// stuck — thirteen of them at once — and it means a longer timeout buys nothing for anyone who
-// arrives early. `--cycle` is the loop that reading assumed: arrive, then set off for the next
-// place, until the clock stops. It measures sustained travel rather than one crossing, so the
-// headline number becomes LEGS COMPLETED rather than characters arrived.
-const CYCLE = has('cycle');
+// `--one-pass` asks the older scatter-and-converge question instead: everybody starts
+// somewhere different, everybody walks to one room, and a character that gets there is done.
+// Its report remains available for comparisons with historical one-crossing runs.
+const CYCLE = pilgrimageCycles(argv);
 const MAINLAND = ['Tos', 'Barloque', 'Cornoth', 'Marion', 'Jasper'];
 const CITIES = flag('inns') ? String(flag('inns')).split(',').map(s => s.trim()) : MAINLAND;
 for (const c of CITIES) if (!CITY_INNS[c]) {

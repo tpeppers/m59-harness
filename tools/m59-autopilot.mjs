@@ -47,6 +47,7 @@ import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
 import { detailSettings, recordStrategyStat, saveVaultSnapshot }
   from './m59-strategy-stats.mjs';
 import { routeTravelKind } from './m59-travel-kind.mjs';
+import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
@@ -5192,6 +5193,27 @@ export class Autopilot {
     return 'on';
   }
 
+  // ONE JOURNEY-SCOPED COUNTER, WITH THE KIND KEPT BESIDE THE TOTAL. A hop-wall
+  // hold, sanctuary pause, route-adjacent refuge and baked-track station are all
+  // shelter, but only the first is literally a wall taken at a hop boundary.
+  recordTravelShelterStop(kind, { count = 1, heldMs = 0 } = {}) {
+    const n = Number.isFinite(Number(count)) ? Math.max(0, Math.trunc(Number(count))) : 0;
+    const ms = Number.isFinite(Number(heldMs)) ? Math.max(0, Math.trunc(Number(heldMs))) : 0;
+    if (!n) return;
+    this.travelSafeStops = (this.travelSafeStops ?? 0) + n;
+    // `travelHeldMs` is also the hop-wall budget clock. Preserve that control meaning:
+    // route/track rests are telemetry, and must not spend the budget that decides whether a
+    // later boundary hold is allowed. The inclusive clock is separate.
+    if (kind === 'hop_wall' || kind === 'sanctuary')
+      this.travelHeldMs = (this.travelHeldMs ?? 0) + ms;
+    this.travelShelterHeldMs = (this.travelShelterHeldMs ?? 0) + ms;
+    const field = {
+      hop_wall: 'travelHopWallStops', sanctuary: 'travelSanctuaryStops',
+      route: 'travelRouteStops', track: 'travelTrackStops',
+    }[kind];
+    if (field) this[field] = (this[field] ?? 0) + n;
+  }
+
   // Is this a moment where a hold is even the question? Cheap, and asked at every hop
   // boundary in BOTH arms — the control has to log the counterfactual or the comparison is
   // between "journeys where we held" and "all journeys", which is not a comparison.
@@ -5458,8 +5480,7 @@ export class Autopilot {
       maxSeconds: Math.round(Math.min(90_000, budget - this.travelHeldMs) / 1000),
     }).catch(e => ({ error: e.message }));
     const heldMs = Date.now() - t0;
-    this.travelHeldMs += heldMs;
-    this.travelSafeStops = (this.travelSafeStops ?? 0) + 1;
+    this.recordTravelShelterStop('hop_wall', { heldMs });
     const hpAfter = this.s.client?.vitals?.()?.health?.value ?? null;
 
     // LEAVING IS FORCED, and it has to be. `leaveHold` refuses a DISCRETIONARY departure
@@ -5581,8 +5602,7 @@ export class Autopilot {
       }).catch(e => ({ error: e.message }));
       const after = this.s.client?.vitals?.();
       const heldMs = Date.now() - t0;
-      this.travelHeldMs = (this.travelHeldMs ?? 0) + heldMs;
-      this.travelSafeStops = (this.travelSafeStops ?? 0) + 1;
+      this.recordTravelShelterStop('sanctuary', { heldMs });
       this.ledgerEvent('travel_hold', {
         journey: at.journey, arm, room: room?.num ?? null, room_name: room?.name ?? null,
         hops_done: at.hops_done, remaining: at.remaining,
@@ -5758,7 +5778,12 @@ export class Autopilot {
     const holdMode = this.travelHoldMode();
     const arm = holdMode === 'off' ? 'walk' : TRAVEL_HOLD_ARM;
     this.travelHeldMs = 0;
+    this.travelShelterHeldMs = 0;
     this.travelSafeStops = 0;
+    this.travelHopWallStops = 0;
+    this.travelSanctuaryStops = 0;
+    this.travelRouteStops = 0;
+    this.travelTrackStops = 0;
     const startedAt = Date.now();
     const v0 = this.s.client?.vitals?.()?.health;
     const hpStart = v0?.value ?? null, hpMax = v0?.max ?? null;
@@ -5849,12 +5874,35 @@ export class Autopilot {
             await this.travelHold(at, arm).catch(e => this.note('travel hold failed', { why: e.message }));
           if (onHop) await onHop(at);
         },
+        // `rideTrack` heals at stations below the room-boundary hook. Session surfaces each
+        // actual rest here so it cannot disappear on the track fast-path's early return.
+        onTrackRest: async ({ stops, held_ms }) => {
+          this.recordTravelShelterStop('track', { count: stops, heldMs: held_ms });
+        },
       });
-      return outcome;
     } finally {
       if (detailed) closeMap();
       this.recordFrame('arrived');
       const v1 = this.s.client?.vitals?.()?.health;
+      // THESE COUNTERS BELONG TO THIS JOURNEY, BUT THE KEEPER FIELDS DO NOT. They are
+      // cleared below so the next journey starts clean. Snapshot them first and attach the
+      // immutable value to the returned outcome, which is the only record travelJob can
+      // use after this finally has run. Without this, arrival broadcasts read tally.rests
+      // instead and report zero while the travel hook may have sheltered several times.
+      const journeyMetrics = travelJourneyMetrics({
+        shelterStops: this.travelSafeStops, heldMs: this.travelShelterHeldMs,
+        hopWallStops: this.travelHopWallStops,
+        sanctuaryStops: this.travelSanctuaryStops,
+        routeStops: this.travelRouteStops,
+        trackStops: this.travelTrackStops,
+      });
+      outcome = withTravelJourneyMetrics(outcome, {
+        shelterStops: journeyMetrics.shelter_stops, heldMs: journeyMetrics.held_ms,
+        hopWallStops: journeyMetrics.hop_wall_stops,
+        sanctuaryStops: journeyMetrics.sanctuary_stops,
+        routeStops: journeyMetrics.route_stops,
+        trackStops: journeyMetrics.track_stops,
+      });
       // ONE ROW PER JOURNEY — the denominator. Deaths per journey is the measurement, and
       // without the journeys written down there is nothing to divide by.
       //
@@ -5867,7 +5915,15 @@ export class Autopilot {
         ...(travelKind === 'travel' && holdBetweenRooms ? { arm } : {}),
         to: room, legs, planned_legs: plannedLegs,
         ms: Date.now() - startedAt,
+        // The A/B field retains its old budget-clock meaning. The inclusive recovery time
+        // is separate so observing route/track stops cannot change the experiment's units.
         held_ms: this.travelHeldMs ?? 0,
+        shelter_held_ms: journeyMetrics.held_ms,
+        shelter_stops: journeyMetrics.shelter_stops,
+        hop_wall_stops: journeyMetrics.hop_wall_stops,
+        sanctuary_stops: journeyMetrics.sanctuary_stops,
+        route_stops: journeyMetrics.route_stops,
+        track_stops: journeyMetrics.track_stops,
         hp_start: hpStart, hp_end: v1?.value ?? null, hp_max: hpMax ?? v1?.max ?? null,
         // Whether this journey ended in a death is not knowable here — the keeper is still
         // alive to write this line. It is joined afterwards, from the postmortem's own
@@ -5878,15 +5934,21 @@ export class Autopilot {
           to: room, arrived: outcome?.arrived ?? false, reason: outcome?.reason ?? null,
           duration_ms: Date.now() - startedAt, legs, planned_legs: plannedLegs,
           damage: Math.max(0, this.hitDamageTotal() - journeyDamageStart),
-          safe_spot_stops: this.travelSafeStops ?? 0, safe_spot_ms: this.travelHeldMs ?? 0,
+          safe_spot_stops: journeyMetrics.shelter_stops, safe_spot_ms: journeyMetrics.held_ms,
           health_start: hpStart, health_end: v1?.value ?? null,
           health_max: hpMax ?? v1?.max ?? null, maps,
         });
       }
       this.travelArm = null;
       this.travelHeldMs = 0;
+      this.travelShelterHeldMs = 0;
       this.travelSafeStops = 0;
+      this.travelHopWallStops = 0;
+      this.travelSanctuaryStops = 0;
+      this.travelRouteStops = 0;
+      this.travelTrackStops = 0;
     }
+    return outcome;
   }
 
   // WHAT IS ACTUALLY IN REACH OF US RIGHT NOW.
@@ -8440,10 +8502,12 @@ export class Autopilot {
           // BOUNDED, because a refuge that cannot heal must not hold a crossing for ever —
           // and `abortOnDamage` defaults on, so a wall that turns out to be wrong costs one
           // interrupted rest rather than a death.
+          const restStarted = Date.now();
           const done = await skills.restUntil(this.s, {
             health: 1, vigor: REST_VIGOR_CAP,
             maxSeconds: this.policy.refugeRestSeconds ?? 90,
           }).catch(e => ({ ok: false, why: e.message }));
+          this.recordTravelShelterStop('route', { heldMs: Date.now() - restStarted });
           this.note('leaving the refuge', { where, ...(done?.ok === false ? { cut_short: done.why } : {}) });
           const after = this.s.client?.vitals?.();
           settle({

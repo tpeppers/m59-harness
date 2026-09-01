@@ -212,6 +212,20 @@ console.log('a track room change never executes source-room exit candidates in t
 
 {
   const s = fakeSession({ rooms: [1, 2] });
+  s.rideTrack = async () => {
+    s.at = 1;
+    return { rode: true, left_room: true, reached: 4, blocked: 0,
+             rested: 2, rested_ms: 6400 };
+  };
+  const seen = [];
+  const r = await travel.call(s, 2, { onTrackRest: stop => seen.push(stop) });
+  ok('track healing stations are surfaced before the fast path returns',
+     r.arrived === true && seen.length === 1 && seen[0].stops === 2 && seen[0].held_ms === 6400,
+     JSON.stringify({ result: r, seen }));
+}
+
+{
+  const s = fakeSession({ rooms: [1, 2] });
   let rides = 0;
   s.rideTrack = async () => rides++ === 0
     ? { rode: true, left_room: false, room_changed: true,

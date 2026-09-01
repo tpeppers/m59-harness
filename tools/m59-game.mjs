@@ -65,6 +65,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // there is no cycle here. Checked rather than assumed -- a cycle would leave this in the
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
+import { tripStopPhrase } from './m59-trip-telemetry.mjs';
 // Session.join() calls joinSessionOnce and the Phase 3 extraction left it behind: the
 // BROKER imports it, and ESM modules do not share scope, so the reference here was free
 // and `join()` threw ReferenceError wherever it was called. Nothing called it -- the
@@ -1676,6 +1677,7 @@ class Session {
           const kind = { say: 1, yell: 2, broadcast: 3 }[channel];
           if (arrived && kind && this.client?.say) {
             const rests = Math.max(0, Number(keeper?.tally?.rests ?? 0) - restsAtStart);
+            const stops = tripStopPhrase(outcome, rests);
             const pct = (lowHealth !== null && lowMax) ? Math.round(100 * lowHealth / lowMax) : null;
             const toName = String(this.world?.room?.name ?? where);
             const line =
@@ -1686,9 +1688,7 @@ class Session {
               (pct === null ? ''
                : pct >= 100 ? ', untouched'
                : `, health down to ${pct}% (${lowHealth}/${lowMax})`) +
-              (rests === 0 ? ', no rest stops.' :
-               rests === 1 ? ', 1 rest stop at a safe wall.'
-                           : `, ${rests} rest stops at safe walls.`);
+              `, ${stops}.`;
             // Never let the announcement be the thing that fails a journey that arrived.
             // THE PACER FIRST, THE CLIENT IF IT REFUSES. In the broker's proxy Session
             // `pacer.submit` throws on purpose — "the pacer is in the keeper process" —
@@ -8755,19 +8755,19 @@ class Session {
     const shelter = new Set(track.shelter ?? []);
     const restBelow = Number(process.env.M59_TRACK_REST_BELOW || 0.5);
     const restMs = Number(process.env.M59_TRACK_REST_MS || 20000);
-    let rested = 0;
+    let rested = 0, restedMs = 0;
     let reached = 0, blocked = 0, bodiesInTheWay = 0;
     const crossed = (extra = {}) => {
       clearStrikes(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
-      return { rode: true, left_room: true, reached, blocked, rested,
+      return { rode: true, left_room: true, reached, blocked, rested, rested_ms: restedMs,
                ms: Date.now() - started, ...extra };
     };
     const roomChanged = (extra = {}) => ({
-      rode: true, left_room: false, room_changed: true, reached, blocked, rested,
+      rode: true, left_room: false, room_changed: true, reached, blocked, rested, rested_ms: restedMs,
       ms: Date.now() - started, ...extra,
     });
     const cancelledRide = (extra = {}) => ({
-      rode: false, left_room: false, cancelled: true, reached, blocked, rested,
+      rode: false, left_room: false, cancelled: true, reached, blocked, rested, rested_ms: restedMs,
       why: 'movement cancelled', ms: Date.now() - started, ...extra,
     });
     for (let i = joinAt; i < track.waypoints.length; i++) {
@@ -8825,6 +8825,7 @@ class Session {
         const hp = vit.health, max = vit.maxHealth;
         if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp / max < restBelow) {
           const before = hp;
+          const restStarted = Date.now();
           let last = hp, quiet = 0;
           await this.pacer.submit('rest', () =>
             (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom())
@@ -8852,7 +8853,10 @@ class Session {
               ? false : c.stand()).catch(() => null);
           if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
           if (leftTheRoom()) return roomChanged({ late_room_change: true });
-          if ((c.vitals?.()?.health ?? before) > before) rested++;
+          if ((c.vitals?.()?.health ?? before) > before) {
+            rested++;
+            restedMs += Date.now() - restStarted;
+          }
         }
       }
     }
@@ -8929,7 +8933,8 @@ class Session {
     const struck = bodiesInTheWay === 0
       ? strikeTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom))
       : 0;
-    return { rode: true, left_room: false, reached, blocked, rested, ms: Date.now() - started,
+    return { rode: true, left_room: false, reached, blocked, rested, rested_ms: restedMs,
+             ms: Date.now() - started,
              waypoints: track.waypoints.length - joinAt, track_best_ms: track.ms,
              bodies_in_the_way: bodiesInTheWay,
              ...(struck ? { strikes: struck,
@@ -9863,6 +9868,10 @@ class Session {
     movementGeneration = this.movementGeneration,
     controlToken,
     onHop = null,
+    // Baked-track stations rest inside rideTrack, below the room-boundary hook. Surface
+    // those stops separately instead of turning them into another onHop, which would also
+    // run boundary behaviour and change the journey merely to count it.
+    onTrackRest = null,
     // WHICH SIDE OF THE DESTINATION, when the destination has sides. A square in the
     // destination room that the arrival must be able to walk to. Omit it and travel
     // behaves exactly as it always did. See doorsLandingNear.
@@ -10268,6 +10277,16 @@ class Session {
       // shipping a book whose keys mostly have one observation each.
       const ridden = await this.rideTrack(cameFromRoom, nextHop.to, { movementGeneration, controlToken })
         .catch(() => ({ rode: false, why: 'ride threw' }));
+      if ((ridden.rested ?? 0) > 0 && onTrackRest) {
+        try {
+          await onTrackRest({ stops: ridden.rested, held_ms: ridden.rested_ms ?? 0,
+                              from: leavingRoom, to: nextHop.to });
+        } catch (e) {
+          log.push({ from: String(nextHop.from), to: nextHop.to_name,
+                     track_rest_hook_failed: e.message,
+                     note: 'the track rest happened; only its journey counter failed' });
+        }
+      }
       if (ridden.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
         return this.cancelledMovement({ log });
       const afterRideRoom = Number(this.world?.room?.num ?? NaN);
@@ -10291,7 +10310,8 @@ class Session {
                      }),
                      ...((ridden.room_changed || roomChangedDuringRide) && !ridden.left_room
                        ? { late_room_change: true } : {}),
-                     rode: { reached: ridden.reached ?? 0, blocked: ridden.blocked ?? 0 } });
+                     rode: { reached: ridden.reached ?? 0, blocked: ridden.blocked ?? 0,
+                             rested: ridden.rested ?? 0 } });
           if (!reachedExpectedRoom) {
             const why = `track crossing landed in ${settled.room} instead of ${nextHop.to}`;
             if (await stumble(why)) continue;
@@ -10303,7 +10323,8 @@ class Session {
         const why = 'room identity changed during track replay, but the settled logical room did not';
         log.push({ from: String(nextHop.from), to: nextHop.to_name, via: 'track', ok: false,
                    reason: why, late_room_change: true,
-                   rode: { reached: ridden.reached ?? 0, blocked: ridden.blocked ?? 0 } });
+                   rode: { reached: ridden.reached ?? 0, blocked: ridden.blocked ?? 0,
+                           rested: ridden.rested ?? 0 } });
         if (await stumble(why)) continue;
         return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
       }
