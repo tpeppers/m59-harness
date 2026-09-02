@@ -1879,6 +1879,12 @@ export async function fight(s, {
   // prevents a name match from drifting to a different player after verification.
   includePlayers = false,
   exactTargetId = null,
+  // AN ORDER MAY NAME SEVERAL CREATURES, and then `target` is not a string to substring
+  // against. The caller passes the same predicate it used to choose the quarry, and this
+  // uses it instead of the name. Without it a list order stringifies to
+  // "battered skeleton,zombie", matches nothing in the room, and the whole fleet reports
+  // "nothing here matches" while standing in a room full of both.
+  match = null,
 } = {}) {
   const c = s.need();
   const log = [];
@@ -1895,14 +1901,17 @@ export async function fight(s, {
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
   }
 
-  let candidates = findCreature(s, target, { includePlayers });
+  let candidates = findCreature(s, target, { includePlayers, match });
   if (exactTargetId != null) candidates = candidates.filter(object => object.id === Number(exactTargetId));
   if (!candidates.length) {
     const present = [...c.room.objects.values()]
       .filter(o => o.id !== c.selfId && (o.flags & OF.ATTACKABLE))
       .map(o => c.rsc.get(o.nameRsc));
     return {
-      fought: false, reason: target ? `nothing here matches "${target}"` : 'nothing here can be attacked',
+      fought: false,
+      reason: target
+        ? `nothing here matches "${Array.isArray(target) ? target.join('" or "') : target}"`
+        : 'nothing here can be attacked',
       attackable_here: [...new Set(present)],
       note: present.length ? 'try one of the names above' : 'this room has nothing to fight — travel somewhere else',
     };

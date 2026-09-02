@@ -445,15 +445,50 @@ export function creatureMatchesHunt(creature, want) {
     .some(value => creatureIdentity(value) === needle);
 }
 
+// AN ORDER MAY NAME SEVERAL CREATURES, AND "FIGHT BOTH" IS ONE ORDER, NOT TWO POLICIES.
+// A room with two generators — Upstairs Castle Victoria makes battered skeletons AND
+// zombies — used to be worked by splitting the cohort, one quarry each, because `hunt`
+// held a single name. That leaves half the room standing next to something it is allowed
+// to kill and declining to, and the room's spawn CAP is what pays for it: the cap is a
+// room-wide total (monsroom.kod:242), so what nobody kills is what stops anything else
+// appearing.
+//
+// THE LIST IS A SET OF ACCEPTABLE ANSWERS, NOT A PREFERENCE ORDER. Nothing here ranks
+// them and no caller should: the keeper takes whichever is actually in front of it, which
+// is what makes a two-generator room pay at the rate it spawns rather than at the rate of
+// its rarer half.
+export function huntNames(want) {
+  return (Array.isArray(want) ? want : [want]).filter(w => creatureIdentity(w));
+}
+
+// How to say the order out loud. Every journal line, board column and refusal reads this,
+// and a bare array renders as "zombie,battered skeleton" — which looks like a typo in a
+// postmortem, at the exact moment somebody is trying to read one.
+export function huntLabel(want) {
+  const names = huntNames(want).map(n => String(n).trim());
+  if (!names.length) return null;
+  return names.length === 1 ? names[0]
+    : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+}
+
 // Which catalogue rows an order names. Exact answers win outright; the substring family
-// is reached only when there are none.
+// is reached only when there are none — and that resolution is PER NAME, so one name
+// resolving exactly does not suppress another name's family.
 export function huntedCreatures(spawns, want) {
-  if (!creatureIdentity(want) || !spawns?.creatures) return [];
+  const names = huntNames(want);
+  if (!names.length || !spawns?.creatures) return [];
   const all = Object.values(spawns.creatures);
-  const exact = all.filter(c => creatureMatchesHunt(c, want));
-  if (exact.length) return exact;
-  const loose = String(want).toLowerCase();
-  return all.filter(c => String(c.name).toLowerCase().includes(loose));
+  const found = new Map();
+  for (const name of names) {
+    const exact = all.filter(c => creatureMatchesHunt(c, name));
+    const loose = String(name).toLowerCase();
+    const hits = exact.length ? exact
+      : all.filter(c => String(c.name).toLowerCase().includes(loose));
+    // Keyed, so two names resolving to the same row yield one row rather than a duplicate
+    // that would double that creature's weight in every caller that counts these.
+    for (const c of hits) found.set(c.cls ?? c.name, c);
+  }
+  return [...found.values()];
 }
 
 // The same question asked of a name off the wire. A live room object carries a display
@@ -467,18 +502,25 @@ export function huntedCreatures(spawns, want) {
 // With no catalogue it degrades to substring, which is what the order meant before any
 // of this existed — a missing spawn table must not silently stop a keeper recognising
 // its own prey.
+// Resolution is PER NAME here too, and that is the whole reason this is not simply
+// `huntedCreatures(...).some(...)`: exact-vs-substring is decided for each name on its
+// own, so `["skeleton", "zombie"]` matches the level-75 skeleton exactly WITHOUT the
+// substring branch quietly dragging in the battered skeleton alongside it.
 export function huntMatcher(spawns, want) {
-  const needle = creatureIdentity(want);
-  if (!needle) return () => false;
-  const hits = huntedCreatures(spawns, want);
-  const identity = hits.some(c => creatureMatchesHunt(c, want));
-  if (identity) {
-    const names = new Set([needle,
-      ...hits.flatMap(c => [c.name, c.cls].map(creatureIdentity))].filter(Boolean));
-    return name => names.has(creatureIdentity(name));
-  }
-  const loose = String(want).toLowerCase();
-  return name => String(name ?? '').toLowerCase().includes(loose);
+  const names = huntNames(want);
+  if (!names.length) return () => false;
+  const each = names.map(name => {
+    const needle = creatureIdentity(name);
+    const hits = huntedCreatures(spawns, name);
+    if (hits.some(c => creatureMatchesHunt(c, name))) {
+      const identities = new Set([needle,
+        ...hits.flatMap(c => [c.name, c.cls].map(creatureIdentity))].filter(Boolean));
+      return live => identities.has(creatureIdentity(live));
+    }
+    const loose = String(name).toLowerCase();
+    return live => String(live ?? '').toLowerCase().includes(loose);
+  });
+  return each.length === 1 ? each[0] : live => each.some(m => m(live));
 }
 
 export function huntingGrounds(spawns, want, { maxDanger = null, limit = 12 } = {}) {

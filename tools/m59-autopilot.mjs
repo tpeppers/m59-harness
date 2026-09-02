@@ -26,7 +26,7 @@ import { OF, affordances, dropSpec as dropSpecFor,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem } from './m59-items.mjs';
-import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures,
+import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
@@ -4869,15 +4869,15 @@ export class Autopilot {
       // This string is what the fleet board renders, and it is where the afternoon of
       // worthless grinding would have been visible had there been anything to see.
       const y = this.yieldCheck();
-      if (!y || y.paying) return `hunting: ${this.policy.hunt}`;
+      if (!y || y.paying) return `hunting: ${huntLabel(this.policy.hunt)}`;
       // FINISHED IS NOT THE SAME FAILURE AS FUTILE, and rendering them with one string
       // would undo the point of the check. A character whose list is complete has done
       // what it was sent to do and wants re-tasking; one grinding prey that can never
       // drop what it needs is burning an afternoon. Both are "not paying"; only the
       // second is bad news.
       return y.done
-        ? `hunting: ${this.policy.hunt} — list complete, nothing left to fetch`
-        : `hunting: ${this.policy.hunt} — PAYS NOTHING for ${this.policy.purpose}`;
+        ? `hunting: ${huntLabel(this.policy.hunt)} — list complete, nothing left to fetch`
+        : `hunting: ${huntLabel(this.policy.hunt)} — PAYS NOTHING for ${this.policy.purpose}`;
     }
     return this.stalledSince ? `stuck: ${this.stalledWhy}` : 'waiting';
   }
@@ -12483,6 +12483,24 @@ export class Autopilot {
         // So the answer to "no wall and no town" is the thing below that MOVES. playDead()
         // now refuses off a proven spot on its own account, so this is belt and braces:
         // the call is gone AND the verb would have said no.
+        // NOT A LOGOFF HERE, AND THE REASON IS WHAT A LOGOFF IS FOR. Considered and
+        // rejected 2026-09-02, written down because it is an attractive wrong answer.
+        //
+        // Floyd died wedged in this exact state — 113 seconds on one square, `gross_squares:
+        // 0`, ten monsters in the room — and a reconnect looks like the escape that is not
+        // movement-shaped, since logging off takes the body out of the world entirely.
+        //
+        // It is not an escape, because a logoff trick only pays when the character comes
+        // BACK somewhere it can heal: return to a safe spot, rotate, recover. That is the
+        // whole point of the manoeuvre and it is what `breakOut` is doing when it reconnects
+        // before stepping off a wall it already holds. Logging off from a wedge returns the
+        // character to the SAME square, at the same health, with the same crowd — it buys
+        // the entry grace period and spends it standing in the place that was killing it.
+        // Doing that on a timer, or immediately, is the manoeuvre's shape without its
+        // substance.
+        //
+        // The wedge is the bug. It is fixed by not packing the room onto one wall
+        // (max_bots_per_safe_spot) rather than by a cleverer way to die there.
         this.note('no wall and no town — withdrawing rather than freezing', {
           health: v.health.value, adjacent: near.length,
           why: 'freezing off a proven spot recovers vigor and never health; it spends the ' +
@@ -14046,7 +14064,7 @@ export class Autopilot {
               const n = (this.relocFails.get(target.room) ?? 0) + 1;
               this.relocFails.set(target.room, n);
               if (n >= 3) this.unreachable.add(target.room);
-              this.noProgress('cannot reach anywhere that generates ' + this.policy.hunt);
+              this.noProgress('cannot reach anywhere that generates ' + huntLabel(this.policy.hunt));
             }
             return HANDLED;
           }
@@ -15147,6 +15165,11 @@ export class Autopilot {
       if (this.policy.partner && !this.pendingPull)
         party.declareTarget(this.s.name, claimedSwing, engageName);
       const f = await skills.fight(s, { target: engageName,
+                                        // The same predicate that chose the quarry. An order naming
+                                        // several creatures is not a string, and fight() would
+                                        // otherwise substring against "battered skeleton,zombie"
+                                        // and find nothing in a room full of both.
+                                        match: this.huntMatch(engageName),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,
@@ -15446,7 +15469,7 @@ export class Autopilot {
     const v = c.vitals();
     const hp = v.health ? `${v.health.value}/${v.health.max}` : '?';
     const wielding = (c.inventory || []).length ? '' : ' I have nothing on me.';
-    const what = this.policy.hunt ? `hunting ${this.policy.hunt}` : 'not hunting anything';
+    const what = this.policy.hunt ? `hunting ${huntLabel(this.policy.hunt)}` : 'not hunting anything';
     const stalled = this.stalledSince ? ` I am stuck: ${this.stalledWhy}.` : '';
     const reply = `${c.me.name}: ${what}, ${hp} health.${wielding}${stalled} ` +
                   (this.needsRecovery || !(c.inventory || []).length
@@ -18404,7 +18427,7 @@ export class Autopilot {
       this.note('every way out of here is a dead end', {
         room: room?.name,
         rejected: all.map(e => `${e.to_name} (${e.to})`),
-        why: 'none of these can route back to a room that generates ' + this.policy.hunt });
+        why: 'none of these can route back to a room that generates ' + huntLabel(this.policy.hunt) });
       this.noProgress('surrounded by rooms with no way back to the hunting grounds');
       this.emptyPasses = 0;
       return;
