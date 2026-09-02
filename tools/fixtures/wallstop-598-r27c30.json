@@ -1,0 +1,287 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 598,
+  "name": "The Cragged Mountains"
+ },
+ "stop": {
+  "row": 27,
+  "col": 30
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "shadow",
+   "at": "2026-09-02T04:19:31.267Z",
+   "room": {
+    "num": 598,
+    "name": "The Cragged Mountains"
+   },
+   "stop": {
+    "row": 27,
+    "col": 30
+   },
+   "wall": {
+    "row": 27,
+    "col": 30,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 45416
+   },
+   "wall_distance": 0,
+   "stood_ms": 711256,
+   "subject": {
+    "level": 33,
+    "max_health": 33,
+    "health_trail": [
+     2,
+     2,
+     2,
+     3,
+     3,
+     3,
+     1,
+     1,
+     1,
+     1,
+     1,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2,
+     2
+    ],
+    "health_per_second": 0,
+    "flee_threshold": 0.6666666666666666,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 14,
+    "present_at_the_end": [
+     "troll",
+     "black spider",
+     "black spider",
+     "troll",
+     "black spider",
+     "troll"
+    ],
+    "players_present": []
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 557,
+     "row": 11,
+     "col": 30,
+     "doing": "recovering",
+     "hits": 3,
+     "lost": 27,
+     "health_after": 6,
+     "by": [
+      "groundworm"
+     ]
+    },
+    {
+     "s_before_death": 554,
+     "row": 13,
+     "col": 30,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 7,
+     "health_after": 0,
+     "by": []
+    },
+    {
+     "s_before_death": 148,
+     "row": 23,
+     "col": 19,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 9,
+     "health_after": 24,
+     "by": []
+    },
+    {
+     "s_before_death": 138,
+     "row": 28,
+     "col": 29,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 5,
+     "health_after": 20,
+     "by": []
+    },
+    {
+     "s_before_death": 128,
+     "row": 27,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 5,
+     "health_after": 16,
+     "by": []
+    },
+    {
+     "s_before_death": 47,
+     "row": 26,
+     "col": 29,
+     "doing": "stalled",
+     "hits": 8,
+     "lost": 27,
+     "health_after": 1,
+     "by": []
+    },
+    {
+     "s_before_death": 8,
+     "row": 27,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 4,
+     "lost": 6,
+     "health_after": 1,
+     "by": []
+    },
+    {
+     "s_before_death": 1,
+     "row": 28,
+     "col": 29,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 0,
+     "by": []
+    }
+   ],
+   "hits_on_the_stop_square": 5,
+   "lost_on_the_stop_square": 11,
+   "decisions": [
+    {
+     "s_before_death": 123,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 26,
+      "col": 29
+     },
+     "health": "52%"
+    },
+    {
+     "s_before_death": 123,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger A crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 26,
+      "col": 29
+     },
+     "health": "52%"
+    },
+    {
+     "s_before_death": 117,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger B other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "12/33"
+    },
+    {
+     "s_before_death": 52,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 26,
+      "col": 29
+     }
+    },
+    {
+     "s_before_death": 47,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 27,
+      "col": 30
+     },
+     "health": "6%"
+    },
+    {
+     "s_before_death": 45,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger A crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 27,
+      "col": 30
+     },
+     "health": "3%"
+    },
+    {
+     "s_before_death": 2,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 27,
+      "col": 30
+     }
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 271,
+     "text": "stranger C is saving; please wait."
+    },
+    {
+     "s_before_death": 271,
+     "text": "stranger C save completed; resume play."
+    },
+    {
+     "s_before_death": 264,
+     "text": "stranger D open the door and walk through."
+    },
+    {
+     "s_before_death": 178,
+     "text": "### player A was just killed by a troll."
+    },
+    {
+     "s_before_death": 148,
+     "text": "stranger A black spider bites you with its attack."
+    },
+    {
+     "s_before_death": 148,
+     "text": "stranger E poison courses through your veins like fire."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger A black spider bites you several times, leaving you bloody."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger A black spider devours you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger D are dead, poor soul.  Go now, and take revenge on the black spider!"
+    },
+    {
+     "s_before_death": 1,
+     "text": "### player B was just killed by a black spider."
+    }
+   ]
+  }
+ ]
+}

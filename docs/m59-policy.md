@@ -298,3 +298,29 @@ remapped. It was not closed by reaching significance: it compared two ways of tr
 *well*, and what kills this fleet is getting stuck, lost or unresponsive and being eaten
 where it stands, which neither arm addressed while the control arm paid for the asking by
 walking hurt characters straight past the only free healing on the road.
+
+## In a crowd, the only wall is the exit
+
+Read off 89 road deaths across both fleets on 2026-09-02 (10 on prod, 79 on shadow, farming
+rooms excluded): 57 of them had STOPPED — "taking a wall on the way past", "resting at a
+refuge on the way", a hop-boundary hold below `travelHoldBelow`, or "wedged and hurt with
+something in reach — trading in place" — in a room holding 9 to 18 monsters, and stood
+there a median of two to three minutes before dying. 23 were wedged. 9 were moving. The
+"set out at one health" bug the operator fixed the same day explains almost none of them:
+the road dead entered their last ninety seconds at or near full health.
+
+The mechanism is the divert rule: in a room that outranks the character
+`travelDivertBelowOutranked` is 1, so the first scratch sends it to the nearest wall the
+geometry calls unreachable — and in a room of thirteen trolls and spiders that wall is
+reached, and the character dies on it without moving. The same squares recur on both
+servers: the Cragged Mountains' r18c16/r19c16 and r45c16/r46c16, the Twisted Wood
+border's r29c43/44, Ukgoth's r48c9/r50c10 and its row-24 road, the Badlands' column 9–12.
+
+So: `travelStopMaxThreats` (autopilot tool `travel_stop_max_threats`, env
+`M59_TRAVEL_STOP_MAX_THREATS`, default 6, 0 disables). At or above that many live
+threats in the room, a journey makes no stops of any kind — no wall on the way past, no
+hop-boundary hold, no trading in place — and a retreat withholds every wall
+(`wallsAllowed: false` in `nearestSafeSpot`) so the exit is the only candidate, which is
+the one square that actually breaks every attack. Each refusal writes one `crowd_no_stop`
+row per room per minute. Silence keeps the old behaviour: the rule is a number this
+machine can change live, and `m59-forward-shelter-test.mjs` pins the search half.

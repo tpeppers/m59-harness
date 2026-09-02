@@ -1,0 +1,397 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 584,
+  "name": "The Flatlands"
+ },
+ "stop": {
+  "row": 35,
+  "col": 34
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "shadow",
+   "at": "2026-09-02T02:03:54.288Z",
+   "room": {
+    "num": 584,
+    "name": "The Flatlands"
+   },
+   "stop": {
+    "row": 35,
+    "col": 34
+   },
+   "wall": {
+    "row": 38,
+    "col": 35,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 47433
+   },
+   "wall_distance": 3,
+   "stood_ms": 3865396,
+   "subject": {
+    "level": 53,
+    "max_health": 53,
+    "health_trail": [
+     43,
+     44,
+     41,
+     42,
+     42,
+     39,
+     36,
+     37,
+     33,
+     29,
+     25,
+     26,
+     23,
+     20,
+     20,
+     21,
+     17,
+     17,
+     14,
+     10,
+     11,
+     7,
+     8,
+     2
+    ],
+    "health_per_second": -1.83,
+    "flee_threshold": 0.6792452830188679,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 4,
+    "present_at_the_end": [
+     "spider",
+     "spider",
+     "ant",
+     "spider"
+    ],
+    "players_present": [
+     "player A"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 3149,
+     "row": 21,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 1,
+     "health_after": 43,
+     "by": []
+    },
+    {
+     "s_before_death": 3148,
+     "row": 22,
+     "col": 31,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 42,
+     "by": [
+      "baby spider"
+     ]
+    },
+    {
+     "s_before_death": 3144,
+     "row": 21,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 40,
+     "by": []
+    },
+    {
+     "s_before_death": 3140,
+     "row": 22,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 1,
+     "health_after": 41,
+     "by": []
+    },
+    {
+     "s_before_death": 3136,
+     "row": 23,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 39,
+     "by": []
+    },
+    {
+     "s_before_death": 3070,
+     "row": 24,
+     "col": 30,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 51,
+     "by": []
+    },
+    {
+     "s_before_death": 3003,
+     "row": 31,
+     "col": 12,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 51,
+     "by": []
+    },
+    {
+     "s_before_death": 2987,
+     "row": 34,
+     "col": 33,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 51,
+     "by": []
+    },
+    {
+     "s_before_death": 2876,
+     "row": 29,
+     "col": 36,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 1,
+     "health_after": 52,
+     "by": []
+    },
+    {
+     "s_before_death": 2873,
+     "row": 30,
+     "col": 36,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 1,
+     "health_after": 52,
+     "by": []
+    },
+    {
+     "s_before_death": 2777,
+     "row": 30,
+     "col": 45,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 1,
+     "health_after": 52,
+     "by": []
+    },
+    {
+     "s_before_death": 2749,
+     "row": 28,
+     "col": 45,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 51,
+     "by": []
+    },
+    {
+     "s_before_death": 2691,
+     "row": 28,
+     "col": 71,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 50,
+     "by": []
+    },
+    {
+     "s_before_death": 2656,
+     "row": 23,
+     "col": 11,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 9,
+     "health_after": 44,
+     "by": []
+    },
+    {
+     "s_before_death": 2640,
+     "row": 11,
+     "col": 18,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 45,
+     "by": []
+    },
+    {
+     "s_before_death": 2364,
+     "row": 32,
+     "col": 26,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 6,
+     "health_after": 47,
+     "by": []
+    },
+    {
+     "s_before_death": 60,
+     "row": 29,
+     "col": 11,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 9,
+     "health_after": 44,
+     "by": []
+    },
+    {
+     "s_before_death": 56,
+     "row": 17,
+     "col": 6,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 9,
+     "health_after": 38,
+     "by": []
+    },
+    {
+     "s_before_death": 48,
+     "row": 37,
+     "col": 36,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 40,
+     "by": []
+    },
+    {
+     "s_before_death": 4,
+     "row": 35,
+     "col": 34,
+     "doing": "stalled",
+     "hits": 19,
+     "lost": 73,
+     "health_after": 0,
+     "by": [
+      "spider",
+      "ant"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 19,
+   "lost_on_the_stop_square": 73,
+   "decisions": [
+    {
+     "s_before_death": 104,
+     "what": "carrying, but under the banking threshold",
+     "why": ""
+    },
+    {
+     "s_before_death": 88,
+     "what": "travelling — standing down from choosing, not from surviving",
+     "why": "travelling to stranger A stranger B"
+    },
+    {
+     "s_before_death": 50,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 38,
+      "col": 35
+     },
+     "health": "79%"
+    },
+    {
+     "s_before_death": 47,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger C crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 38,
+      "col": 35
+     },
+     "health": "77%"
+    },
+    {
+     "s_before_death": 47,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "41/53"
+    },
+    {
+     "s_before_death": 31,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 38,
+      "col": 35
+     }
+    },
+    {
+     "s_before_death": 25,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "46/53"
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 8,
+     "text": "stranger C spider nips you with its attack."
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger E avoid the ant's attack."
+    },
+    {
+     "s_before_death": 6,
+     "text": "stranger C spider nips you with its attack."
+    },
+    {
+     "s_before_death": 6,
+     "text": "stranger F poison courses through your veins like fire."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger C spider bites you with its attack."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger F poison courses through your veins like fire."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger C ant bites you several times, leaving you bloody."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger C ant devours you with its attack."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger E are dead, poor soul.  Go now, and take revenge on the ant!"
+    },
+    {
+     "s_before_death": 4,
+     "text": "### player B was just killed by an ant."
+    }
+   ]
+  }
+ ]
+}

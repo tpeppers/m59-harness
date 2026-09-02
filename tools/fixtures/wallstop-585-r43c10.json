@@ -1,0 +1,336 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 585,
+  "name": "The border of the Badlands"
+ },
+ "stop": {
+  "row": 43,
+  "col": 10
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "shadow",
+   "at": "2026-09-01T00:07:12.495Z",
+   "room": {
+    "num": 585,
+    "name": "The border of the Badlands"
+   },
+   "stop": {
+    "row": 43,
+    "col": 10
+   },
+   "wall": {
+    "row": 44,
+    "col": 10,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 12773
+   },
+   "wall_distance": 1,
+   "stood_ms": 259544,
+   "subject": {
+    "level": 53,
+    "max_health": 53,
+    "health_trail": [
+     33,
+     33,
+     33,
+     33,
+     33,
+     33,
+     34,
+     34,
+     34,
+     34,
+     35,
+     35,
+     22,
+     22,
+     22,
+     22,
+     13,
+     13,
+     13,
+     13,
+     14,
+     14,
+     14,
+     6
+    ],
+    "health_per_second": -0.56,
+    "flee_threshold": 0.6792452830188679,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 10,
+    "present_at_the_end": [
+     "groundworm",
+     "groundworm",
+     "groundworm",
+     "groundworm",
+     "soldier of the Duke's army",
+     "groundworm"
+    ],
+    "players_present": [
+     "player A",
+     "player B",
+     "player C",
+     "stranger A",
+     "stranger B",
+     "stranger C"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 119,
+     "row": 17,
+     "col": 28,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 49,
+     "by": []
+    },
+    {
+     "s_before_death": 105,
+     "row": 18,
+     "col": 26,
+     "doing": "recovering",
+     "hits": 4,
+     "lost": 9,
+     "health_after": 42,
+     "by": [
+      "ant"
+     ]
+    },
+    {
+     "s_before_death": 104,
+     "row": 18,
+     "col": 27,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 41,
+     "by": [
+      "ant"
+     ]
+    },
+    {
+     "s_before_death": 100,
+     "row": 18,
+     "col": 26,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 38,
+     "by": []
+    },
+    {
+     "s_before_death": 94,
+     "row": 18,
+     "col": 27,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 37,
+     "by": []
+    },
+    {
+     "s_before_death": 91,
+     "row": 18,
+     "col": 26,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 33,
+     "by": []
+    },
+    {
+     "s_before_death": 89,
+     "row": 18,
+     "col": 27,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 31,
+     "by": []
+    },
+    {
+     "s_before_death": 85,
+     "row": 18,
+     "col": 26,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 30,
+     "by": []
+    },
+    {
+     "s_before_death": 81,
+     "row": 17,
+     "col": 27,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 26,
+     "by": []
+    },
+    {
+     "s_before_death": 74,
+     "row": 16,
+     "col": 27,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 6,
+     "health_after": 22,
+     "by": []
+    },
+    {
+     "s_before_death": 12,
+     "row": 40,
+     "col": 9,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 13,
+     "health_after": 22,
+     "by": []
+    },
+    {
+     "s_before_death": 4,
+     "row": 43,
+     "col": 10,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 17,
+     "health_after": 6,
+     "by": []
+    },
+    {
+     "s_before_death": 1,
+     "row": 43,
+     "col": 11,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 7,
+     "health_after": 0,
+     "by": []
+    }
+   ],
+   "hits_on_the_stop_square": 2,
+   "lost_on_the_stop_square": 17,
+   "decisions": [
+    {
+     "s_before_death": 104,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "41/53"
+    },
+    {
+     "s_before_death": 86,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 26,
+      "col": 36
+     },
+     "health": "58%"
+    },
+    {
+     "s_before_death": 73,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "22/53"
+    },
+    {
+     "s_before_death": 16,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 44,
+      "col": 10
+     },
+     "health": "64%"
+    },
+    {
+     "s_before_death": 13,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 44,
+      "col": 10
+     },
+     "health": "64%"
+    },
+    {
+     "s_before_death": 11,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "22/53"
+    },
+    {
+     "s_before_death": 8,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "13/53"
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 25,
+     "text": "player D broadcasts, \"stranger E: stranger F stranger G to stranger H in 14 hop(s), health down to 2% (1/55), 1 rest stop at a safe wall.\""
+    },
+    {
+     "s_before_death": 18,
+     "text": "stranger I avoid the groundworm's attack."
+    },
+    {
+     "s_before_death": 12,
+     "text": "stranger J groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger J groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 6,
+     "text": "stranger I avoid the groundworm's attack."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger J groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger J groundworm hits you."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger J groundworm dissolves you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger I are dead, poor soul.  Go now, and take revenge on the groundworm!"
+    },
+    {
+     "s_before_death": 1,
+     "text": "### player E was just killed by a groundworm."
+    }
+   ]
+  }
+ ]
+}

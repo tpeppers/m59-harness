@@ -657,3 +657,16 @@ the records it describes.
   `resource/rooms`). The rest need a live server —
   `m59-autopilot-test`, `m59-skills-test` and `m59-coop-test` all want a broker on
   8899 and fail with `ECONNREFUSED` without one, which is not a regression.
+
+## m59-wallstop-test.mjs (142, 1 skipped)
+
+The wall stops that killed, pinned on the real geometry. Each `tools/fixtures/wallstop-<room>-r<r>c<c>.json`
+is a spot where a traveller took "a wall on the way past", stood on it in a room of nine to eighteen monsters,
+was reached anyway, and died without moving — thirteen spots from 2026-09-02, both fleets, built by
+`m59-recordwallstop.mjs` from the postmortems and redacted like the jam fixtures. For every spot it pins
+that the wall search WITH walls allowed offers a wall from the stop square and that the wall the keeper chose
+is one the geometry calls safe (the old behaviour, and what killed); that with walls withheld (the crowd rule,
+`Autopilot.crowded`) the search offers nothing without a journey; that the crowd was at or above the rule's
+default (skipped with a note where it was not — the Flatlands pipe spot is the wedge class); that blows landed
+on the stop square; and that no fixture names a character. **It should fail the day a wall in a crowd becomes
+a candidate again.**

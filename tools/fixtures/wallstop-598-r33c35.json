@@ -1,0 +1,266 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 598,
+  "name": "The Cragged Mountains"
+ },
+ "stop": {
+  "row": 33,
+  "col": 35
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "shadow",
+   "at": "2026-09-02T02:09:08.727Z",
+   "room": {
+    "num": 598,
+    "name": "The Cragged Mountains"
+   },
+   "stop": {
+    "row": 33,
+    "col": 35
+   },
+   "wall": {
+    "row": 34,
+    "col": 34,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 18868
+   },
+   "wall_distance": 1,
+   "stood_ms": 191930,
+   "subject": {
+    "level": 58,
+    "max_health": 58,
+    "health_trail": [
+     15,
+     16,
+     16,
+     17,
+     17,
+     17,
+     18,
+     18,
+     19,
+     13,
+     13,
+     14,
+     14,
+     15,
+     15,
+     11,
+     12,
+     13,
+     13,
+     3,
+     4,
+     4,
+     5,
+     5
+    ],
+    "health_per_second": -1.03,
+    "flee_threshold": 0.6896551724137931,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 12,
+    "present_at_the_end": [
+     "black spider",
+     "black spider",
+     "black spider",
+     "black spider",
+     "troll",
+     "troll"
+    ],
+    "players_present": []
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 123,
+     "row": 22,
+     "col": 18,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 5,
+     "health_after": 53,
+     "by": []
+    },
+    {
+     "s_before_death": 116,
+     "row": 26,
+     "col": 21,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 8,
+     "health_after": 50,
+     "by": []
+    },
+    {
+     "s_before_death": 114,
+     "row": 27,
+     "col": 22,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 6,
+     "health_after": 45,
+     "by": [
+      "troll"
+     ]
+    },
+    {
+     "s_before_death": 109,
+     "row": 26,
+     "col": 24,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 19,
+     "health_after": 31,
+     "by": [
+      "troll"
+     ]
+    },
+    {
+     "s_before_death": 70,
+     "row": 33,
+     "col": 34,
+     "doing": "stalled",
+     "hits": 5,
+     "lost": 37,
+     "health_after": 29,
+     "by": [
+      "troll"
+     ]
+    },
+    {
+     "s_before_death": 1,
+     "row": 33,
+     "col": 34,
+     "doing": "stalled",
+     "hits": 13,
+     "lost": 90,
+     "health_after": 0,
+     "by": [
+      "troll"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 0,
+   "lost_on_the_stop_square": 0,
+   "decisions": [
+    {
+     "s_before_death": 113,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger A other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "46/58"
+    },
+    {
+     "s_before_death": 110,
+     "what": "wedged mid-journey, and the journey stands",
+     "why": "only a death or a player ends a trip. stranger B this is what put a character in stranger C that walked zero squares in fifteen seconds and died — the mover is left to unstick itself, which is now a planned route rather than a bearing",
+     "health": "41/58"
+    },
+    {
+     "s_before_death": 85,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger A other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "46/58"
+    },
+    {
+     "s_before_death": 70,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 33,
+      "col": 35
+     },
+     "health": "50%"
+    },
+    {
+     "s_before_death": 70,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger D crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 33,
+      "col": 35
+     },
+     "health": "52%"
+    },
+    {
+     "s_before_death": 38,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 33,
+      "col": 35
+     }
+    },
+    {
+     "s_before_death": 19,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 34,
+      "col": 34
+     },
+     "health": "48%"
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 18,
+     "text": "stranger D troll nicks you with its attack."
+    },
+    {
+     "s_before_death": 16,
+     "text": "stranger D troll nicks you with its attack."
+    },
+    {
+     "s_before_death": 13,
+     "text": "stranger D troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger D troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 6,
+     "text": "stranger D troll nicks you with its attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "stranger D troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger D troll hits you."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger D troll slays you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger E are dead, poor soul.  Go now, and take revenge on the troll!"
+    },
+    {
+     "s_before_death": 1,
+     "text": "### player A was just killed by a troll."
+    }
+   ]
+  }
+ ]
+}

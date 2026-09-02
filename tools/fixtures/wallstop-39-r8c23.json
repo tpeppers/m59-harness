@@ -1,0 +1,289 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 39,
+  "name": "Upstairs in Castle Victoria"
+ },
+ "stop": {
+  "row": 8,
+  "col": 23
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "prod",
+   "at": "2026-09-02T19:07:55.258Z",
+   "room": {
+    "num": 39,
+    "name": "Upstairs in Castle Victoria"
+   },
+   "stop": {
+    "row": 8,
+    "col": 23
+   },
+   "wall": {
+    "row": 7,
+    "col": 24,
+    "claims": {
+     "can_reach_you": 0,
+     "free_shots": 8,
+     "back_cover": 3,
+     "proven_before": "DISCREDITED — failed 309 time(s) here",
+     "proven": true
+    },
+    "decided_ms_before_death": 91567
+   },
+   "wall_distance": 1,
+   "stood_ms": 75873,
+   "subject": {
+    "level": 49,
+    "max_health": 49,
+    "health_trail": [
+     41,
+     42,
+     43,
+     44,
+     39,
+     40,
+     37,
+     38,
+     34,
+     28,
+     29,
+     25,
+     26,
+     22,
+     23,
+     19,
+     20,
+     15,
+     16,
+     12,
+     13,
+     10,
+     4,
+     1
+    ],
+    "health_per_second": -0.31,
+    "flee_threshold": 0.6938775510204082,
+    "doing_at_death": "fighting",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 11,
+    "present_at_the_end": [
+     "battered skeleton",
+     "battered skeleton",
+     "battered skeleton",
+     "zombie",
+     "battered skeleton",
+     "zombie"
+    ],
+    "players_present": [
+     "player A",
+     "player B",
+     "player C",
+     "player D",
+     "player E",
+     "player F"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 50,
+     "row": 8,
+     "col": 23,
+     "doing": "fighting",
+     "hits": 5,
+     "lost": 20,
+     "health_after": 34,
+     "by": [
+      "zombie"
+     ]
+    },
+    {
+     "s_before_death": 46,
+     "row": 8,
+     "col": 24,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 6,
+     "health_after": 28,
+     "by": []
+    },
+    {
+     "s_before_death": 42,
+     "row": 8,
+     "col": 23,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 25,
+     "by": []
+    },
+    {
+     "s_before_death": 39,
+     "row": 8,
+     "col": 24,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 22,
+     "by": []
+    },
+    {
+     "s_before_death": 27,
+     "row": 8,
+     "col": 23,
+     "doing": "fighting",
+     "hits": 2,
+     "lost": 9,
+     "health_after": 15,
+     "by": []
+    },
+    {
+     "s_before_death": 23,
+     "row": 8,
+     "col": 24,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 12,
+     "by": []
+    },
+    {
+     "s_before_death": 18,
+     "row": 8,
+     "col": 23,
+     "doing": "fighting",
+     "hits": 2,
+     "lost": 9,
+     "health_after": 4,
+     "by": [
+      "battered skeleton"
+     ]
+    },
+    {
+     "s_before_death": 14,
+     "row": 8,
+     "col": 24,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 1,
+     "by": []
+    },
+    {
+     "s_before_death": 9,
+     "row": 8,
+     "col": 23,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 1,
+     "health_after": 0,
+     "by": []
+    }
+   ],
+   "hits_on_the_stop_square": 11,
+   "lost_on_the_stop_square": 43,
+   "decisions": [
+    {
+     "s_before_death": 98,
+     "what": "pass failed",
+     "why": "agent \"t5\" is not in game — call join first"
+    },
+    {
+     "s_before_death": 95,
+     "what": "gave up the safe spot",
+     "why": "rested to the ceiling — back on the road",
+     "where": {
+      "row": 7,
+      "col": 24
+     }
+    },
+    {
+     "s_before_death": 92,
+     "what": "not eating here — something in this room can reach us",
+     "why": "raising vigor is standing still and not looking, which is the same act as resting and costs the same. stranger A ladder refuses a rest in a room that can reach us; this is that rule, applied to the larder — and to the cooking pot."
+    },
+    {
+     "s_before_death": 92,
+     "what": "took a safe spot",
+     "why": "a level 60 kill can raise our maximum health of 49. stranger B that pays is by definition at or above our level, and anything at our level can take a third of the bar in one blow — so fight it from a wall",
+     "where": {
+      "row": 7,
+      "col": 24
+     }
+    },
+    {
+     "s_before_death": 1,
+     "what": "pulled it to the wall",
+     "why": "a safe spot is only worth anything if the fight happens at it"
+    },
+    {
+     "s_before_death": 1,
+     "what": "waiting for it at the wall",
+     "why": "it has been hit and is following; only after its distance-sized follow window expires can this pull count against the square"
+    },
+    {
+     "s_before_death": 1,
+     "what": "recovered",
+     "why": ""
+    },
+    {
+     "s_before_death": 0,
+     "what": "gave up the safe spot",
+     "why": "we are not in that room any more",
+     "where": {
+      "row": 7,
+      "col": 24
+     }
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 23,
+     "text": "stranger A zombie cuts you with its attack."
+    },
+    {
+     "s_before_death": 18,
+     "text": "stranger A battered skeleton pokes you with its attack."
+    },
+    {
+     "s_before_death": 18,
+     "text": "stranger A zombie slashes you with its attack."
+    },
+    {
+     "s_before_death": 14,
+     "text": "stranger A battered skeleton pokes you with its attack."
+    },
+    {
+     "s_before_death": 13,
+     "text": "stranger C avoid the zombie's attack."
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger C avoid the zombie's attack."
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger A battered skeleton skewers you with a deft thrust.  stranger D!"
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger A battered skeleton runs through you with its attack."
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger C are dead, poor soul.  Go now, and take revenge on the battered skeleton!"
+    },
+    {
+     "s_before_death": 9,
+     "text": "### player G was just killed by a battered skeleton."
+    }
+   ]
+  }
+ ]
+}

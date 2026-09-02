@@ -1,0 +1,223 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 587,
+  "name": "Western border of the Twisted Wood"
+ },
+ "stop": {
+  "row": 9,
+  "col": 9
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "shadow",
+   "at": "2026-09-02T08:09:05.971Z",
+   "room": {
+    "num": 587,
+    "name": "Western border of the Twisted Wood"
+   },
+   "stop": {
+    "row": 9,
+    "col": 9
+   },
+   "wall": {
+    "row": 7,
+    "col": 7,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 32650
+   },
+   "wall_distance": 2,
+   "stood_ms": 64983,
+   "subject": {
+    "level": 33,
+    "max_health": 33,
+    "health_trail": [
+     29,
+     26,
+     26,
+     27,
+     28,
+     27,
+     28,
+     29,
+     30,
+     28,
+     28,
+     29,
+     30,
+     27,
+     26,
+     22,
+     18,
+     19,
+     14,
+     12,
+     11,
+     5,
+     2,
+     3
+    ],
+    "health_per_second": -0.37,
+    "flee_threshold": 0.6666666666666666,
+    "doing_at_death": "recovering",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 10,
+    "present_at_the_end": [
+     "centipede",
+     "spider",
+     "spider",
+     "centipede",
+     "centipede",
+     "spider"
+    ],
+    "players_present": [
+     "player A"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 44,
+     "row": 11,
+     "col": 28,
+     "doing": "recovering",
+     "hits": 2,
+     "lost": 8,
+     "health_after": 26,
+     "by": []
+    },
+    {
+     "s_before_death": 37,
+     "row": 10,
+     "col": 12,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 26,
+     "by": []
+    },
+    {
+     "s_before_death": 4,
+     "row": 9,
+     "col": 9,
+     "doing": "recovering",
+     "hits": 13,
+     "lost": 38,
+     "health_after": 0,
+     "by": [
+      "centipede",
+      "spider"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 13,
+   "lost_on_the_stop_square": 38,
+   "decisions": [
+    {
+     "s_before_death": 73,
+     "what": "carrying, but under the banking threshold",
+     "why": ""
+    },
+    {
+     "s_before_death": 71,
+     "what": "could not reach the quiet corner",
+     "why": "idle: no job to do"
+    },
+    {
+     "s_before_death": 70,
+     "what": "travelling — standing down from choosing, not from surviving",
+     "why": "travelling to stranger A stranger B"
+    },
+    {
+     "s_before_death": 44,
+     "what": "! NOT MOVING — recovering, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger C other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "26/33"
+    },
+    {
+     "s_before_death": 33,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 7,
+      "col": 7
+     },
+     "health": "85%"
+    },
+    {
+     "s_before_death": 26,
+     "what": "! NOT MOVING — recovering, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger C other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "28/33"
+    },
+    {
+     "s_before_death": 2,
+     "what": "resting up",
+     "why": "idle: no job to do",
+     "health": {
+      "value": 2,
+      "max": 33,
+      "pct": 6
+     }
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 13,
+     "text": "stranger D spider nips you with its attack."
+    },
+    {
+     "s_before_death": 12,
+     "text": "stranger D centipede nips you with its attack."
+    },
+    {
+     "s_before_death": 11,
+     "text": "stranger E avoid the spider's attack."
+    },
+    {
+     "s_before_death": 8,
+     "text": "stranger D centipede nips you with its attack."
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger D spider nips you with its attack."
+    },
+    {
+     "s_before_death": 6,
+     "text": "stranger D centipede nips you with its attack."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger D spider bites you several times, leaving you bloody."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger D spider devours you with its attack."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger E are dead, poor soul.  Go now, and take revenge on the spider!"
+    },
+    {
+     "s_before_death": 4,
+     "text": "### player B was just killed by a spider."
+    }
+   ]
+  }
+ ]
+}

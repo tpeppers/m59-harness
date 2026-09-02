@@ -1,0 +1,218 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 39,
+  "name": "Upstairs in Castle Victoria"
+ },
+ "stop": {
+  "row": 14,
+  "col": 35
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "prod",
+   "at": "2026-09-02T12:56:12.184Z",
+   "room": {
+    "num": 39,
+    "name": "Upstairs in Castle Victoria"
+   },
+   "stop": {
+    "row": 14,
+    "col": 35
+   },
+   "wall": {
+    "row": 15,
+    "col": 33,
+    "claims": {
+     "can_reach_you": 0,
+     "free_shots": 8,
+     "back_cover": 3,
+     "proven_before": "DISCREDITED — failed 31 time(s) here",
+     "proven": true
+    },
+    "decided_ms_before_death": 96811
+   },
+   "wall_distance": 2,
+   "stood_ms": 81660,
+   "subject": {
+    "level": 42,
+    "max_health": 42,
+    "health_trail": [
+     42,
+     42,
+     42,
+     42,
+     37,
+     31,
+     32,
+     27,
+     28,
+     25,
+     26,
+     20,
+     16,
+     12,
+     13,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     7,
+     8,
+     4
+    ],
+    "health_per_second": -0.15,
+    "flee_threshold": 0.6666666666666666,
+    "doing_at_death": "fighting",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 9,
+    "present_at_the_end": [
+     "zombie",
+     "battered skeleton",
+     "battered skeleton",
+     "battered skeleton",
+     "battered skeleton",
+     "battered skeleton"
+    ],
+    "players_present": [
+     "player A",
+     "player B",
+     "player C",
+     "player D",
+     "player E",
+     "player F"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 59,
+     "row": 14,
+     "col": 35,
+     "doing": "fighting",
+     "hits": 7,
+     "lost": 34,
+     "health_after": 12,
+     "by": []
+    },
+    {
+     "s_before_death": 51,
+     "row": 15,
+     "col": 35,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 5,
+     "health_after": 8,
+     "by": []
+    },
+    {
+     "s_before_death": 7,
+     "row": 14,
+     "col": 35,
+     "doing": "fighting",
+     "hits": 3,
+     "lost": 15,
+     "health_after": 0,
+     "by": []
+    }
+   ],
+   "hits_on_the_stop_square": 10,
+   "lost_on_the_stop_square": 49,
+   "decisions": [
+    {
+     "s_before_death": 106,
+     "what": "waiting for it at the wall",
+     "why": "it has been hit and is following; only after its distance-sized follow window expires can this pull count against the square"
+    },
+    {
+     "s_before_death": 98,
+     "what": "rested",
+     "why": ""
+    },
+    {
+     "s_before_death": 97,
+     "what": "carrying, but under the banking threshold",
+     "why": ""
+    },
+    {
+     "s_before_death": 97,
+     "what": "leaving the wall — full health and all the vigor resting can give",
+     "why": "a rest stop is for getting well, and this character is as well as sitting down can make it. stranger A is how a journey times out without ever being in danger.",
+     "health": "42/42"
+    },
+    {
+     "s_before_death": 97,
+     "what": "gave up the safe spot",
+     "why": "rested to the ceiling — back on the road",
+     "where": {
+      "row": 15,
+      "col": 33
+     }
+    },
+    {
+     "s_before_death": 97,
+     "what": "took a safe spot",
+     "why": "a level 60 kill can raise our maximum health of 42. stranger B that pays is by definition at or above our level, and anything at our level can take a third of the bar in one blow — so fight it from a wall",
+     "where": {
+      "row": 15,
+      "col": 33
+     }
+    },
+    {
+     "s_before_death": 1,
+     "what": "gave up the safe spot",
+     "why": "could not get back to it after pulling",
+     "where": {
+      "row": 15,
+      "col": 33
+     }
+    },
+    {
+     "s_before_death": 1,
+     "what": "could not bring it to the wall",
+     "why": "start is outside the room grid"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 21,
+     "text": "stranger C avoid the battered skeleton's attack."
+    },
+    {
+     "s_before_death": 18,
+     "text": "stranger D battered skeleton stabs you with its attack."
+    },
+    {
+     "s_before_death": 15,
+     "text": "stranger D battered skeleton falls back to recover for a moment, then returns to the fight."
+    },
+    {
+     "s_before_death": 11,
+     "text": "stranger D battered skeleton pokes you with its attack."
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger D battered skeleton skewers you with a deft thrust.  stranger E!"
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger D battered skeleton runs through you with its attack."
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger C are dead, poor soul.  Go now, and take revenge on the battered skeleton!"
+    },
+    {
+     "s_before_death": 7,
+     "text": "### player G was just killed by a battered skeleton."
+    }
+   ]
+  }
+ ]
+}

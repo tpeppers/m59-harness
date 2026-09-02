@@ -1,0 +1,239 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 599,
+  "name": "Ukgoth, Holy Land of Trolls"
+ },
+ "stop": {
+  "row": 24,
+  "col": 29
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "prod",
+   "at": "2026-09-02T22:08:53.235Z",
+   "room": {
+    "num": 599,
+    "name": "Ukgoth, Holy Land of Trolls"
+   },
+   "stop": {
+    "row": 24,
+    "col": 29
+   },
+   "wall": {
+    "row": 22,
+    "col": 28,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 15196
+   },
+   "wall_distance": 2,
+   "stood_ms": 619626,
+   "subject": {
+    "level": 52,
+    "max_health": 52,
+    "health_trail": [
+     52,
+     52,
+     52,
+     52,
+     52,
+     52,
+     52,
+     52,
+     52,
+     52,
+     52,
+     47,
+     47,
+     48,
+     42,
+     43,
+     36,
+     30,
+     30,
+     15,
+     16,
+     17,
+     5,
+     5
+    ],
+    "health_per_second": -0.55,
+    "flee_threshold": 0.6923076923076923,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 14,
+    "present_at_the_end": [
+     "troll",
+     "troll",
+     "troll",
+     "troll",
+     "Guardian of Zjiria",
+     "Guardian of Zjiria"
+    ],
+    "players_present": [
+     "stranger A"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 582,
+     "row": 7,
+     "col": 22,
+     "doing": "travelling",
+     "hits": 1,
+     "lost": 10,
+     "health_after": 42,
+     "by": []
+    },
+    {
+     "s_before_death": 160,
+     "row": 10,
+     "col": 6,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 6,
+     "health_after": 46,
+     "by": []
+    },
+    {
+     "s_before_death": 29,
+     "row": 26,
+     "col": 21,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 11,
+     "health_after": 42,
+     "by": []
+    },
+    {
+     "s_before_death": 15,
+     "row": 24,
+     "col": 22,
+     "doing": "stalled",
+     "hits": 4,
+     "lost": 30,
+     "health_after": 15,
+     "by": [
+      "troll"
+     ]
+    },
+    {
+     "s_before_death": 5,
+     "row": 24,
+     "col": 29,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 17,
+     "health_after": 0,
+     "by": []
+    }
+   ],
+   "hits_on_the_stop_square": 2,
+   "lost_on_the_stop_square": 17,
+   "decisions": [
+    {
+     "s_before_death": 31,
+     "what": "wedged mid-journey, and the journey stands",
+     "why": "only a death or a player ends a trip. stranger B this is what put a character in stranger C that walked zero squares in fifteen seconds and died — the mover is left to unstick itself, which is now a planned route rather than a bearing",
+     "health": "47/52"
+    },
+    {
+     "s_before_death": 18,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "30/52"
+    },
+    {
+     "s_before_death": 15,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 22,
+      "col": 28
+     },
+     "health": "58%"
+    },
+    {
+     "s_before_death": 5,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger D other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "5/52"
+    },
+    {
+     "s_before_death": 5,
+     "what": "no longer travelling",
+     "why": "resumed journey ended"
+    },
+    {
+     "s_before_death": 5,
+     "what": "did the errands before setting off",
+     "why": "a character sent across the world should bank and stock up first rather than discover halfway through that it wants to. run_errands:false skips this"
+    },
+    {
+     "s_before_death": 5,
+     "what": "travelling — standing down from choosing, not from surviving",
+     "why": "travelling to stranger E in stranger F stranger G"
+    },
+    {
+     "s_before_death": 5,
+     "what": "resting before setting out",
+     "why": "this is the one place healing is free — nothing spawns here and nothing can reach us, so the points that would cost exposure on the road cost nothing at all",
+     "health": "1/52"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 21,
+     "text": "stranger H troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 19,
+     "text": "stranger H troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 15,
+     "text": "stranger H troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 15,
+     "text": "stranger H troll wounds you with its attack."
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger I block the troll's attack."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger J stranger K shocks you with his lightning bolt."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger H troll hits you."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger H troll slays you with its attack."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger I are dead, poor soul.  Go now, and take revenge on the troll!"
+    },
+    {
+     "s_before_death": 5,
+     "text": "### player A was just killed by a troll."
+    }
+   ]
+  }
+ ]
+}
