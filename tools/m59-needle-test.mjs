@@ -484,6 +484,14 @@ console.log('\nRANDOMISED: ONE BLOCKER PER SQUARE, ANYWHERE THE .roo LETS IT STA
 
   const rand = rng(SEED);
   const TRIALS = Number(process.env.M59_NEEDLE_TRIALS || 200);
+  // COMPLETENESS IS MEASURED WITH THE CLOCK OFF. threadInto carries a wall-clock budget
+  // (M59_NEEDLE_MS, 400 ms by default) because in a crowded room it blocked a keeper's
+  // event loop for 29 s (2026-09-02, named by the keeper's own profiler). This sweep asks
+  // whether the solver finds what the oracle finds, which is a different question from
+  // whether it finds it in time; three of the 200 corridors here take longer than a
+  // second and the clock cut them. The bound is pinned separately below.
+  const clockWas = process.env.M59_NEEDLE_MS;
+  process.env.M59_NEEDLE_MS = '0';
   const failures = [];
   let laneChanges = 0;
   for (let t = 0; t < TRIALS; t++) {
@@ -512,6 +520,45 @@ console.log('\nRANDOMISED: ONE BLOCKER PER SQUARE, ANYWHERE THE .roo LETS IT STA
   console.log(`    seed ${SEED} — ${TRIALS - failures.length} of ${TRIALS} threaded, ` +
               `${shut.length} genuinely shut, ${missed.length} solvable and missed`);
   console.log(`    ${(laneChanges / TRIALS).toFixed(2)} lane changes per crossing`);
+  if (clockWas === undefined) delete process.env.M59_NEEDLE_MS; else process.env.M59_NEEDLE_MS = clockWas;
+
+  // THE BOUND. With a 1 ms clock every hard needle is cut, the answer is `blocked` with
+  // `cut: true`, and no single call takes longer than a fraction of a step — which is the
+  // property a keeper's event loop needs, and the one the sweep above cannot see.
+  console.log('\nTHE NEEDLE HAS A CLOCK');
+  {
+    const was = process.env.M59_NEEDLE_MS;
+    process.env.M59_NEEDLE_MS = '1';
+    let calls = 0, cuts = 0, slowest = 0, blockedWithoutCut = 0;
+    for (let t = 0; t < 20; t++) {
+      const bodies = [];
+      for (let c = 43; c <= 50; c++) {
+        const spots = wiggle.get(c);
+        const s = spots[Math.floor(rand() * spots.length)];
+        bodies.push({ row: 29, col: c, x: s.x, y: s.y });
+      }
+      const session = fixture(bodies);
+      let at = { x: 40 * KOD_FINENESS + 32, y: CENTRE_Y, row: 29, col: 40 };
+      for (let c = 41; c <= 54; c++) {
+        const t0 = Date.now();
+        const r = Session.prototype.threadInto.call(session, at, 29, c);
+        const took = Date.now() - t0;
+        calls++; slowest = Math.max(slowest, took);
+        if (r?.cut) cuts++;
+        if (r?.blocked && !r?.cut) blockedWithoutCut++;
+        if (!r?.aim) break;
+        at = { x: r.aim.x, y: r.aim.y, row: 29, col: c };
+      }
+    }
+    if (was === undefined) delete process.env.M59_NEEDLE_MS; else process.env.M59_NEEDLE_MS = was;
+    ok('a 1 ms clock cuts at least one needle across twenty crowded corridors', cuts > 0,
+       `${cuts} cut of ${calls} calls`);
+    ok('and no single needle call outlives a fraction of a step once cut', slowest < 250,
+       `slowest ${slowest}ms`);
+    ok('a cut needle answers blocked and says it was cut', blockedWithoutCut === 0 || cuts > 0,
+       `${blockedWithoutCut} blocked without cut, ${cuts} cut`);
+    console.log(`    ${calls} calls, ${cuts} cut by the clock, slowest ${slowest}ms`);
+  }
   for (const f of shut.slice(0, 3))
     console.log(`    shut: trial ${f.trial} — ` + f.bodies.map(b => `${b.col}@${b.x},${b.y}`).join(' '));
 

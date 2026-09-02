@@ -938,3 +938,29 @@ always eligible; reaching the exit is an ADDITION, and only that kind earns the 
 bonus. The refusal carries its counters (considered, reachable, one-way, eligible) so the
 ledger cannot say "no walls" when it means "no walls from this pocket".
 `m59-forward-shelter-test.mjs` pins both.
+
+## The needle has a clock
+
+`threadInto` is the solver `step` runs on top of `aimInto` whenever the next square holds a
+body: goal points on a fine lattice, each proven by a fine-move trace and a body walk, then a
+multi-leg search through staging points with a work budget of 8000 legs. The budget never
+covered the direct phase — up to 256 goals, each with an entry check of up to 64 more legs —
+and in a crowded room that was thousands of traces per step. Measured 2026-09-02 by the
+keeper's own profiler ([`docs/m59-keeper.md`](m59-keeper.md#a-stall-names-its-own-cause)):
+29 seconds in one call, and the whole of every event-loop stall that remained once the aim
+search was bounded.
+
+So the needle has a wall clock: `M59_NEEDLE_MS` (400 ms; 0 removes it) across the whole
+call, honoured by the entry check through `_needleDeadline` on the session so the signature
+the fixtures lift is unchanged. A needle that has not threaded in that long is a jam, and a
+jam is what the walker's other tactics — lane, perp walk, kill-and-continue, the blink ask,
+the retreat — are for. It answers `blocked` honestly, and a throttled `needle_budget` row
+says the clock cut it.
+
+Two smaller bounds landed with it. `aimInto`'s body-aware search orders its 225 candidates
+by drift once, so the first that arrives and holds is the best and the loop stops there, and
+no candidate is traced twice across its two passes; a cap on traced candidates
+(`M59_AIM_TRACE_CAP`) exists but is OFF by default, because tours 9 and 10 died more with one
+on and the fleet's max health was decaying at the same time, which is not a measurement.
+And `World.room`, which rebuilt and scanned the rooms array on every access, is memoised on
+the client's room identity.

@@ -33,6 +33,7 @@ import { findPath, roomsWithin } from './m59-map.mjs';
 import { sameRoomIslandBridgePlan } from './m59-world.mjs';
 import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
+import { recordTactic } from './m59-tactics.mjs';
 import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
@@ -3359,6 +3360,13 @@ export class Autopilot {
       this.movedAt = Date.now();
       releaseSpot(this.s.name);
       const roomAfter = this.s.world?.room?.num ?? null;
+      try {
+        recordTactic({ character: this.s.client?.me?.name ?? this.s.name ?? null, room: Number(roomBefore),
+                       tactic: 'exit_as_wall', trigger: source, worked: roomAfter != null && Number(roomAfter) !== Number(roomBefore),
+                       ms: 0, hp_lost: 0, attempted: true,
+                       note: `the exit toward ${hop.to} ranked as the nearest wall (${spot.steps_away ?? '?'} squares); ` +
+                             (roomAfter != null && Number(roomAfter) !== Number(roomBefore) ? `crossed into ${roomAfter}` : `did not cross: ${crossed?.why ?? crossed?.reason ?? '?'}`) });
+      } catch { /* evidence, not a dependency */ }
       if (roomAfter == null || Number(roomAfter) === Number(roomBefore)) {
         return { took: false, exit_refused: true,
                  why: `could not take the exit toward ${hop.to}: ${crossed?.why ?? crossed?.reason ?? 'the crossing did not happen'}` };

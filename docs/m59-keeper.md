@@ -436,3 +436,36 @@ Three rules in that, each of which had to be argued:
 `node tools/m59-supply-test.mjs` pins all of it. **The underlying limit is not fixed**: a
 displaced fleet still spins rather than re-allocating, and it still reports itself UP. What
 is fixed is that it no longer drives somebody else while it does.
+
+## A stall names its own cause
+
+blakserv logs a session out after 30 seconds of silence (`INACTIVE_GAME`), and on
+2026-09-01 the shadow fleet lost about five keepers a tour that way while their own logs said
+nothing: the broker's `/live` probe went unanswered, then "joined as" twice. A keeper whose
+event loop is blocked cannot report it while it is blocked, so two things were added to
+`m59-keeper-process.mjs`:
+
+- **The stall monitor.** A 500 ms timer measures how late it fired; anything over
+  `M59_LOOP_STALL_MS` (1500) is written to the keeper log WITH A CLOCK (`[loop] … blocked
+  ~Nms, resumed <ISO>`) and to the tactics ledger as a `loop_stall` row.
+- **The self-profiler.** V8's sampling profiler runs on its own thread and keeps sampling
+  while the loop is blocked, and `node:inspector` lets the process drive it on itself with
+  no flags and no port (an outside attach failed here because the strategy-game server holds
+  9229). It runs continuously at 5 ms, restarts every two minutes to bound memory, and when
+  the monitor fires the row carries the hottest self frames of the blocked window (`hot:`)
+  and the hottest inclusive frames from our own files (`callers:`). `M59_KEEPER_PROFILE=0`
+  switches it off.
+
+What it found on 2026-09-02, in one tour of the shadow fleet: 313 stalls, the worst 158 s,
+concentrated in the Sewers of Barloque and North Barloque, and every one of them was the
+fine-move tracer (`_blockingWall`, `intersectNode` under `_resolveClientMicrostep`) called
+from `step -> threadInto -> _legIsLegal -> bodyWalkArrives`: the needle, the solver that runs
+whenever the next square holds a body, with an unbounded direct phase (see
+[`docs/m59-routing.md`](m59-routing.md#the-needle-has-a-clock)). Every offline reproduction
+of the earlier suspects — route planning, the exits flood, step masks, wall reservations —
+had come back in milliseconds; the profiler took one tour. **Read the `callers:` half**: the
+self frames say "the tracer" for every stall, and that is not a cause.
+
+The cross-epoch measure of liveness is the server's own log: `grep "hasn't been heard from"`
+on `log-<date>.txt`, counted per tour hour. The tactics ledger prunes rows from superseded
+movement epochs, so a comparison across a code change cannot be made from it.

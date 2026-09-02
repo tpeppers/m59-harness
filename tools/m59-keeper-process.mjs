@@ -3463,6 +3463,10 @@ server.listen(port, '127.0.0.1', () => {
           start();
           if (!profile?.samples?.length) return null;
           const byId = new Map(profile.nodes.map(n => [n.id, n]));
+          const parentOf = new Map();
+          for (const n of profile.nodes) for (const c of (n.children || [])) parentOf.set(c, n.id);
+          const incl = new Map();                       // inclusive time by frame, our files only
+          const OURS = /m59-(game|autopilot|world|safespots|skills|movement|supervise|keeper-process)\.mjs$/;
           // profile.startTime is µs on the profiler's monotonic clock; map it to wall time
           // by pinning the profile's end to now.
           const totalUs = profile.timeDeltas.reduce((a, b) => a + b, 0);
@@ -3479,10 +3483,23 @@ server.listen(port, '127.0.0.1', () => {
             if (!f) continue;
             const k = `${f.functionName || '(anon)'} ${(f.url || '').split('/').pop()}:${f.lineNumber + 1}`;
             self.set(k, (self.get(k) || 0) + (profile.timeDeltas[i] || 0));
+            // and every ancestor from our own files, once per sample
+            const seen = new Set();
+            for (let cur = profile.samples[i]; cur != null; cur = parentOf.get(cur)) {
+              const a = byId.get(cur)?.callFrame;
+              if (!a || !OURS.test(a.url || '')) continue;
+              const ak = `${a.functionName || '(anon)'} ${(a.url || '').split('/').pop()}:${a.lineNumber + 1}`;
+              if (seen.has(ak)) continue;
+              seen.add(ak);
+              incl.set(ak, (incl.get(ak) || 0) + (profile.timeDeltas[i] || 0));
+            }
           }
           if (!inWindow) return null;
-          return [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
+          const selfLine = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
             .map(([k, us]) => `${k} ${Math.round(us / 1000)}ms`).join(', ');
+          const callers = [...incl.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)
+            .map(([k, us]) => `${k} ${Math.round(us / 1000)}ms`).join(', ');
+          return selfLine + (callers ? ` | callers: ${callers}` : '');
         };
         // Bound memory: restart the profile every two minutes when nothing is being asked.
         const cycle = setInterval(() => { if (Date.now() - startedAt > 120_000) post('Profiler.stop').then(start).catch(() => {}); }, 30_000);
