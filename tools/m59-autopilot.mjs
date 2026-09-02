@@ -3578,7 +3578,12 @@ export class Autopilot {
     // something lands a blow while we sit. The PROOF_MS timer also still runs and still
     // settles, so the ledger keeps collecting evidence about the law; it simply no longer
     // gates the shelter on having collected it first.
-    const trusted = !this.book.discredited(known);
+    // Geometry decides whether this is a wall; the ledger only records what happened
+    // while we stood on it. A square nothing can reach is not made reachable by a bad
+    // afternoon on it, so `can_reach_you === 0` outranks the failure row for the
+    // question this line asks, which is 'may I shelter here'.
+    const trusted = !this.book.discredited(known,
+      { reachable: Number.isInteger(spot?.can_reach_you) ? spot.can_reach_you : null });
     this.hold = {
       source,
       room: room.num, col: spot.col, row: spot.row,
@@ -14416,8 +14421,27 @@ export class Autopilot {
         // answer is no, leaving is not roaming — it is going to work — so it does not
         // wait on the roam permission, which exists to stop characters wandering off
         // productive ground.
+        // A ROOM THAT CANNOT PRODUCE OUR QUARRY IS AS USELESS AS ONE THAT SPAWNS NOTHING.
+        //
+        // The branch below was gated on sanctuary() alone — "does anything huntable spawn
+        // here" — which catches the tavern and misses the wilderness. A character that dies
+        // on the road, or finishes a shop trip, lands in a forest that spawns plenty and
+        // none of it is a battered skeleton; sanctuary() is false, so it stands there
+        // logging "nothing to hunt here", perfectly accurately, for the rest of the session
+        // with roam:false meaning it never leaves. Statler did minutes of it at Off the
+        // beaten path and the Lake of Jala's Song, hunting quarry that spawns in neither.
+        //
+        // The distinction the branch actually wants is not "is anything here" but "is
+        // anything here that I AM ALLOWED TO KILL". Both answers mean the same thing about
+        // waiting: a respawn cannot fix it, because what respawns is not what we are for.
+        //
+        // Only when an order names a quarry — with policy.hunt unset every room fails this
+        // test and the fleet would walk home from everywhere.
+        const spawnHere = loadSpawns(SPAWN_FILE)?.rooms?.[room?.num] || [];
+        const producesQuarry = !this.policy.hunt ? true
+          : spawnHere.some(x => x.huntable && this.huntMatch()(x.creature));
         const inSanctuary = this.sanctuary(room);
-        if (inSanctuary && this.emptyPasses >= 2) {
+        if ((inSanctuary || !producesQuarry) && this.emptyPasses >= 2) {
           // policy.assignedRoom is where `spread` put us; homeRoom is where we last
           // settled. `this.assignedRoom` does not exist — reading it would have made this
           // whole branch quietly do nothing, which is the failure mode this fix is about.
@@ -14429,8 +14453,10 @@ export class Autopilot {
             // they were already walking. Going back to work is right; going back to work
             // hurt and bare-handed is what the last twenty minutes of records are.
             if (!await this.readyToLeaveSanctuary(home)) return HANDLED;
-            this.note('this room spawns nothing at all — going back to work', {
+            this.note(inSanctuary ? 'this room spawns nothing at all — going back to work'
+                                  : 'this room cannot produce our quarry — going back to work', {
               room: room?.name, room_num: room?.num, going_to: home,
+              hunting: this.policy.hunt, produces_quarry: producesQuarry,
               why: 'a tavern has no spawn table, so waiting for a respawn here waits for ' +
                    'something that cannot happen. This is not roaming; roam guards against ' +
                    'leaving GOOD ground, and this is not that.' });

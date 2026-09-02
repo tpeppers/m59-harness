@@ -27,6 +27,7 @@
 // The keeper already banks above its threshold, so money flows one way; this spends what
 // is IN HAND, which is what selling just produced.
 import { readFileSync } from 'node:fs';
+import { findPath, loadMap } from './m59-map.mjs';
 import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
@@ -173,16 +174,32 @@ const purseOf = items => countOf(items, /shilling/);
 // elderberry, so asking for herb sellers is exactly "counters that stock both halves", and
 // 151 — the one that can only ever supply half a casting — stays correctly excluded. Do
 // not re-pool the two lists to "widen" the search; that is the bug described above.
-async function reagentShopsFor(agent) {
+async function reagentShopsFor(agent, fromRoom = null) {
   const seen = new Map();
   {
     const m = await call('merchants', { agent, sells: 'herb' }, 60_000).catch(() => ({ matches: [] }));
     for (const x of m.matches || []) if (x.room != null) seen.set(x.room, x);
   }
   const priced = [];
+  // ASK THE BROKER FIRST, THEN THE MAP ON DISK.
+  //
+  // `map` cannot answer for a character a keeper PROCESS is driving: it replies "the
+  // broker holds a snapshot, not a World" and no route at all. Every row then priced out
+  // as unroutable and the whole fleet reported NO REACHABLE APOTHECARY while standing five
+  // hops from Frisconar's counter — a refusal that reads exactly like "there is nowhere to
+  // buy" and is really "I asked the wrong process".
+  //
+  // The offline routing table answers the same question without a session, which is what
+  // m59-almoner.mjs already does for its delivery hops. It is a fallback rather than a
+  // replacement: the broker knows about doors this table does not.
+  let offline = null;
   for (const room of seen.keys()) {
     const rt = await call('map', { agent, to: room }, 60_000).catch(() => null);
-    if (rt?.route?.found) priced.push({ room, hops: rt.route.hops.length });
+    if (rt?.route?.found) { priced.push({ room, hops: rt.route.hops.length }); continue; }
+    if (!Number.isInteger(fromRoom)) continue;
+    offline ??= loadMap();
+    const path = findPath(offline, fromRoom, room);
+    if (path?.found) priced.push({ room, hops: path.hops.length, via: 'offline map' });
   }
   return priced.sort((a, b) => a.hops - b.hops).map(p => p.room);
 }
@@ -191,19 +208,67 @@ async function reagentShopsFor(agent) {
 // shop loop below and for the same reason: travel is resumable and a failed hop is normal,
 // so judge it on whether the room CHANGED, never on whether the call claimed it arrived.
 async function goTo(agent, room, where) {
-  let at = await where(), stuck = 0;
-  for (let i = 0; i < 8 && at !== room && stuck < 2; i++) {
-    await call('travel', { agent, to: room, max_hops: 20 }).catch(() => ({}));
-    const now = await where();
-    if (now === room) return now;
-    if (now === at) stuck++; else { stuck = 0; at = now; }
-    await sleep(1200);
+  // WAIT THE JOURNEY'S OWN LENGTH, BUT WATCH WHILE WAITING. Three things had to be true
+  // at once and each one on its own made this report "could not reach any of 373, 53, 104"
+  // about a walk that was going perfectly well:
+  //
+  //   * `map` cannot route for a keeper-driven character (fixed above, offline fallback);
+  //   * keeper-backed `travel` is ASYNCHRONOUS - it returns `started: true` at once and
+  //     says "do not re-issue while busy", so every re-issue lands on a walking character
+  //     and fails;
+  //   * and the wait was a fixed handful of seconds. These journeys are not short: p90
+  //     from Castle Victoria is 319s to Jasper (373), 593s to Barloque (104) and 740s to
+  //     Tos (53). Ten seconds of patience calls every one of them a failure.
+  //
+  // So the budget comes from the fleet's own transit history - `travel_estimate` is a pure
+  // local computation over recorded per-edge times, free to call - on the p90 basis,
+  // because a journey slower than typical is normal rather than broken.
+  //
+  // BUT A BUDGET IS A CEILING, NEVER A SLEEP. Waiting out the full p90 on a character that
+  // arrived in ninety seconds throws away four minutes of farming, and waiting it out on a
+  // character that DIED at the second hop is four minutes of watching a corpse and then
+  // re-issuing travel at it. So the wait polls and leaves the moment either is true.
+  const look = async () => {
+    const st = await call('status', { agent, brief: true }, 30_000).catch(() => null);
+    return { room: st?.where?.num ?? st?.room?.num ?? null,
+             dead: st?.hp?.value === 0 || /underworld/i.test(st?.where?.name ?? st?.room?.name ?? '') };
+  };
+
+  let at = await where();
+  if (at === room) return at;
+  for (let attempt = 0; attempt < 3 && at !== room; attempt++) {
+    const est = await call('travel_estimate', { from: at, to: room, basis: 'p90' }, 30_000)
+      .catch(() => null);
+    // Floor and ceiling so a missing estimate cannot make this either hasty or immortal.
+    const budget = Math.min(900_000, Math.max(150_000, (Number(est?.ms) || 300_000) + 60_000));
+    await call('travel', { agent, to: room, max_hops: 20 }, 300_000).catch(() => ({}));
+
+    const until = Date.now() + budget;
+    let died = false;
+    while (Date.now() < until) {
+      await sleep(5000);
+      const seen = await look();
+      if (seen.dead) { died = true; break; }
+      if (seen.room === room) return room;
+      if (seen.room != null) at = seen.room;
+    }
+    // A death ends the errand outright: the character is in the Underworld with an empty
+    // pack, so there is nothing to sell and nothing to buy with, and the keeper owns
+    // getting it out. Re-issuing travel at it would fight the recovery.
+    if (died) return await where();
   }
   return at;
 }
 
 async function stockUp(row) {
   const who = row.character || row.agent;
+  // CLAIM THE BODY FOR THE WHOLE ERRAND. Anything else steering this fleet - the DUM
+  // patrol above all - re-asserts an assigned room every pass and will walk the character
+  // back to it in the middle of a shop trip. `busy` is the flag that makes everything
+  // step over it; `claim` would leave it takeable, which is not the same thing.
+  if (!DRY) await call('autopilot', { agent: row.agent, action: 'busy',
+    kind: 'reagent-run', label: 'buying reagents' }, 30_000).catch(() => {});
+  try {
   const purchaseStatus = await call('autopilot', { agent: row.agent, action: 'status' }, 60_000)
     .catch(() => null);
   if (purchaseStatus?.policy?.buyReagents === false)
@@ -216,13 +281,13 @@ async function stockUp(row) {
     .filter(i => !KEEP.some(k => norm(i.name).includes(k)));
 
   if (DRY) {
-    const shops = await reagentShopsFor(row.agent);
+    const shops = await reagentShopsFor(row.agent, row.room_num ?? row.room ?? null);
     return `${who}: ${eb0} elderberry, ${purse0}sh, ${sellable.length} sellable ` +
            `(${sellable.slice(0, 4).map(i => i.name + (i.amount > 1 ? ` x${i.amount}` : '')).join(', ')})` +
            ` -> ${shops.length ? `room ${shops[0]}` : 'NO REACHABLE APOTHECARY'}`;
   }
 
-  const shops = await reagentShopsFor(row.agent);
+  const shops = await reagentShopsFor(row.agent, row.room_num ?? row.room ?? null);
   if (!shops.length) return `${who}: no reachable shop that sells reagents`;
 
   // The keeper is stopped for the errand and restored on EVERY path out, including a
@@ -274,19 +339,14 @@ async function stockUp(row) {
       const st = await call('status', { agent: row.agent, brief: true }, 60_000).catch(() => null);
       return st?.where?.num ?? st?.room?.id ?? null;
     };
+    // ONE WALKER, NOT TWO. This used to carry its own copy of the travel loop, and that
+    // copy is the one that actually ran — `goTo` above was fixed three times over while
+    // this duplicate kept the original eight-tries-at-1.2s behaviour and kept reporting
+    // "could not reach any of 373, 53, 202" after about three seconds of trying. Two
+    // implementations of the same walk is how a fix lands everywhere except the code path.
     let arrived = null;
     for (const room of shops.slice(0, 3)) {
-      let at = await where(), stuck = 0;
-      // Travel is resumable and a failed hop is normal here — judge it on whether the
-      // room CHANGED, not on whether the call said it arrived.
-      for (let i = 0; i < 8 && at !== room && stuck < 2; i++) {
-        await call('travel', { agent: row.agent, to: room, max_hops: 20 }).catch(() => ({}));
-        const now = await where();
-        if (now === room) { at = now; break; }
-        if (now === at) stuck++; else { stuck = 0; at = now; }
-        await sleep(1200);
-      }
-      if (at === room) { arrived = room; break; }
+      if (await goTo(row.agent, room, where) === room) { arrived = room; break; }
     }
     if (arrived == null) return `${who}: could not reach any of ${shops.slice(0, 3).join(', ')}`;
 
@@ -609,6 +669,9 @@ async function stockUp(row) {
                      .then(() => true).catch(() => false);
     if (ok) madeInert.delete(row.agent);
     else console.log(`  ${who}: COULD NOT REVIVE ITS KEEPER after the reagent trip`);
+  }
+  } finally {
+    if (!DRY) await call('autopilot', { agent: row.agent, action: 'free' }, 30_000).catch(() => {});
   }
 }
 
