@@ -1,0 +1,362 @@
+{
+ "format": "m59-safewall-case/1",
+ "case": "SAFEWALL-E1",
+ "status": "to do soon",
+ "captured_at": "2026-09-02T04:40:29.890Z",
+ "room": 585,
+ "room_name": "The border of the Badlands",
+ "character": "player A (redacted)",
+ "level": 29,
+ "died_at": {
+  "col": 9,
+  "row": 33,
+  "note": "row,col in human text: r33c9"
+ },
+ "killer": [
+  "groundworm"
+ ],
+ "threats_present_at_end": [
+  "groundworm",
+  "groundworm",
+  "groundworm",
+  "groundworm",
+  "soldier of the Duke's army",
+  "groundworm"
+ ],
+ "most_at_once": 10,
+ "health_trail": [
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  29,
+  2
+ ],
+ "ms_since_moved": 86005,
+ "doing": "recovering",
+ "in_safe_spot": false,
+ "at_a_safe_wall": null,
+ "frames_before_death": [
+  {
+   "t_ms": -90576,
+   "room": 101,
+   "col": 36,
+   "row": 59,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "holding": false
+  },
+  {
+   "t_ms": -89360,
+   "room": 101,
+   "col": 36,
+   "row": 59,
+   "health": 29,
+   "max": 29,
+   "doing": "stalled",
+   "holding": false
+  },
+  {
+   "t_ms": -87664,
+   "room": 101,
+   "col": 36,
+   "row": 59,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "setting off",
+   "holding": false
+  },
+  {
+   "t_ms": -86412,
+   "room": 102,
+   "col": 28,
+   "row": 23,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "travelling — 2 room(s) in, 11 to go",
+   "holding": false
+  },
+  {
+   "t_ms": -78344,
+   "room": 593,
+   "col": 12,
+   "row": 7,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "travelling — 3 room(s) in, 10 to go",
+   "holding": false
+  },
+  {
+   "t_ms": -69864,
+   "room": 583,
+   "col": 29,
+   "row": 25,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "watchdog",
+   "holding": false
+  },
+  {
+   "t_ms": -61757,
+   "room": 583,
+   "col": 4,
+   "row": 25,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "watchdog",
+   "holding": false
+  },
+  {
+   "t_ms": -53619,
+   "room": 583,
+   "col": 2,
+   "row": 25,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "watchdog",
+   "holding": false
+  },
+  {
+   "t_ms": -49724,
+   "room": 583,
+   "col": 3,
+   "row": 25,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "travelling — 4 room(s) in, 9 to go",
+   "holding": false
+  },
+  {
+   "t_ms": -41474,
+   "room": 583,
+   "col": 33,
+   "row": 47,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "watchdog",
+   "holding": false
+  },
+  {
+   "t_ms": -41024,
+   "room": 584,
+   "col": 35,
+   "row": 2,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "travelling — 5 room(s) in, 8 to go",
+   "holding": false
+  },
+  {
+   "t_ms": -32846,
+   "room": 584,
+   "col": 26,
+   "row": 32,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "watchdog",
+   "holding": false
+  },
+  {
+   "t_ms": -26062,
+   "room": 585,
+   "col": 3,
+   "row": 4,
+   "health": 29,
+   "max": 29,
+   "doing": "recovering",
+   "why": "travelling — 6 room(s) in, 7 to go",
+   "holding": false
+  },
+  {
+   "t_ms": -5585,
+   "room": 585,
+   "col": 9,
+   "row": 33,
+   "health": 2,
+   "max": 29,
+   "doing": "recovering",
+   "why": "watchdog: health moved",
+   "holding": false
+  }
+ ],
+ "hits_in_room": [
+  {
+   "col": 8,
+   "row": 37,
+   "lost": 5,
+   "hits": 1,
+   "doing": "stalled",
+   "t_ms": -6195967
+  },
+  {
+   "col": 8,
+   "row": 11,
+   "lost": 7,
+   "hits": 1,
+   "doing": "recovering",
+   "t_ms": -2792649
+  },
+  {
+   "col": 8,
+   "row": 12,
+   "lost": 10,
+   "hits": 1,
+   "doing": "recovering",
+   "t_ms": -2790340
+  },
+  {
+   "col": 11,
+   "row": 44,
+   "lost": 9,
+   "hits": 1,
+   "doing": "stalled",
+   "t_ms": -149755
+  },
+  {
+   "col": 9,
+   "row": 33,
+   "lost": 32,
+   "hits": 4,
+   "doing": "recovering",
+   "t_ms": -5586
+  },
+  {
+   "col": 8,
+   "row": 35,
+   "lost": 3,
+   "hits": 1,
+   "doing": "recovering",
+   "t_ms": -638
+  }
+ ],
+ "decisions": [
+  {
+   "what": "resting at a refuge on the way",
+   "why": "a refuge passed at less than full is a square rather than a refuge. The crossing is not cancelled — the mover keeps the body and the route behind this waypoint "
+  },
+  {
+   "what": "leaving the refuge",
+   "why": ""
+  },
+  {
+   "what": "no longer travelling",
+   "why": "travel finished"
+  },
+  {
+   "what": "found a quiet corner to rest in",
+   "to": {
+    "col": 36,
+    "row": 59
+   },
+   "why": "idle: no job to do"
+  },
+  {
+   "what": "travelling — standing down from choosing, not from surviving",
+   "why": "travelling to Castle Victoria"
+  },
+  {
+   "what": "taking a wall on the way past",
+   "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago"
+  },
+  {
+   "what": "resting up",
+   "why": "idle: no job to do"
+  },
+  {
+   "what": "died carrying money",
+   "why": "under the banking threshold, so this was the float we accept losing"
+  }
+ ],
+ "book_entries_585": {
+  "9,50": {
+   "col": 9,
+   "row": 50,
+   "held": 0,
+   "failed": 1,
+   "failed_via": "fight",
+   "failed_by": {
+    "fight": 1
+   },
+   "damage_taken": 1,
+   "most_attackers": 1,
+   "at": 1786400146520
+  },
+  "11,52": {
+   "col": 11,
+   "row": 52,
+   "held": 0,
+   "failed": 1,
+   "failed_via": "fight",
+   "failed_by": {
+    "fight": 1
+   },
+   "damage_taken": 1,
+   "most_attackers": 0,
+   "at": 1787054847059
+  }
+ },
+ "what_happened": "Corrected from the frames: the character crossed 101 -> 102 -> 593 -> 583 -> 584 into 585 at full health (29/29) in travel-hold recovery mode, entered 585 by the north door at r4c3, ran south, and about 20 seconds later at r33c9 read 2/29 — six groundworms plus a soldier present, most-at-once 10 — and died. It was NOT resting at a wall in 585; the \"resting at a refuge\" decision belongs to an earlier room. r33c9 is plain floor to the wall scan. The open question for SAFEWALL-E1 is why the travel guard let a 29-HP character run 29 rows into a groundworm cluster without a shelter stop, and where the cluster stands; capture it live with: node tools/m59-recordjam.mjs --fleet shadow --room 585 --around 9,33 --radius 8 --seconds 8",
+ "to_do": [
+  "record the groundworm cluster positions in 585 rows 25-40 with m59-recordjam when it recurs",
+  "check the travel guard: travel_wall_below / divert never fired between r4c3 and r33c9 while health went 29 -> 2 in one 5s sample (a burst, not a trickle) — the 500ms watchdog should have seen the first hit",
+  "decide whether 585 needs a mid-room wall candidate (the scan offers only the two doorway ends) or a route that hugs the west wall"
+ ],
+ "geometry_of_death_square": {
+  "walkable": true,
+  "mover_steps_out": 6,
+  "scan_candidate": false,
+  "note": "r33c9 is plain floor to the wall scan; the refuge it rested at was elsewhere and is not in the book"
+ }
+}

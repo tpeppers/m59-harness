@@ -233,9 +233,11 @@ approach-predicate version, the complete map geometry manifest, and each room's 
 resource security, rows, and columns must agree. Candidate coordinates and staging squares
 are schema- and bounds-checked before they enter a room-keyed `WeakMap`. A missing, stale,
 or invalid atlas/direction falls through to `RoomGeometry.edgeApproachCandidates()` and the
-ordinary live collision derivation. The default/production profile never registers the
-atlas; `M59_EXIT_ATLAS=0` also disables it explicitly, while a path value selects another
-atlas for an isolated experiment.
+ordinary live collision derivation. **Corrected 2026-09-01:** the atlas is no longer lab-only. The standard keeper attaches it
+whenever the artifact is present and matches the map in play, because every hop of a journey
+ran the live boundary derivation through `World.route()` and blocked the keeper for up to
+ten seconds; `M59_EXIT_ATLAS=0` is the only way to refuse it, and a path value selects
+another atlas for an isolated experiment.
 
 Rebuild the checked artifact after an edge-approach predicate or checked geometry change:
 

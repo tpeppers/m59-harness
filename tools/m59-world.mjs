@@ -48,7 +48,11 @@ const MARK = {
 // A legacy keeper process has one actor and keeps its historical 24-origin memory bound.
 // The lab runtime amortizes one atlas across a fleet, so its shared LRU is sized for many
 // actors by default. Either profile can override the bound explicitly.
-const defaultSharedExitCap = process.env.M59_RUNTIME_PROFILE === 'lab' ? 512 : 24;
+// 512 ORIGINS FOR EVERYONE. The 24-origin default meant a touring keeper missed this cache
+// on nearly every room and re-ran the flood; the cost of 512 cached floods is small against
+// the seconds each miss spends with the event loop blocked. M59_WORLD_EXIT_CACHE_CAP still
+// overrides, and the route/exit cache suite pins the behaviour at 24 explicitly.
+const defaultSharedExitCap = 512;
 const configuredSharedExitCap = Number(
   process.env.M59_WORLD_EXIT_CACHE_CAP ?? defaultSharedExitCap);
 const SHARED_EXIT_CACHE_CAP = Number.isSafeInteger(configuredSharedExitCap) && configuredSharedExitCap > 0

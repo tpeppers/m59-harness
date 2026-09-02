@@ -29,6 +29,7 @@ import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.m
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
+import { recordTactic } from './m59-tactics.mjs';
 import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { resolveFleet } from './m59-fleetpath.mjs';
@@ -3424,6 +3425,44 @@ process.on('exit', () => {
 
 server.listen(port, '127.0.0.1', () => {
   log(`[keeper] ${agent} HTTP API on port ${port}`);
+  // THE EVENT-LOOP STALL MONITOR. blakserv logs a session out after 30 seconds of silence
+  // (INACTIVE_GAME), and on 2026-09-01 the shadow fleet lost about five keepers a tour that
+  // way while their own logs said nothing at all: the broker's /live probe went unanswered,
+  // then "joined as" twice. A blocked loop cannot report itself while it is blocked, but it
+  // can the moment it resumes: this timer measures how late it fired, and anything over the
+  // threshold is written to this log WITH A CLOCK (the keeper log has none) and to the
+  // tactics ledger as a `loop_stall` row carrying what the keeper was doing, so the next
+  // stall names its own cause instead of leaving four hypotheses standing.
+  {
+    const EVERY_MS = 500;
+    const REPORT_OVER_MS = Number(process.env.M59_LOOP_STALL_MS || 1500);
+    let lastTick = Date.now();
+    const tick = () => {
+      const now = Date.now();
+      const late = now - lastTick - EVERY_MS;
+      lastTick = now;
+      if (late >= REPORT_OVER_MS) {
+        let doing = null, to = null, roomNum = null, who = null;
+        try {
+          doing = autopilot?.doing ?? null;
+          to = autopilot?.inert?.to ?? autopilot?.suspendedJourney?.to ?? null;
+          roomNum = autopilot?.s?.world?.room?.num ?? session?.world?.room?.num ?? null;
+          who = autopilot?.s?.client?.me?.name ?? session?.client?.me?.name ?? null;
+        } catch { /* a stall report must not throw */ }
+        log(`[loop] ${agent} event loop was blocked ~${late}ms, resumed ${new Date(now).toISOString()} ` +
+            `(room ${roomNum ?? '?'}, doing ${doing ?? '?'}${to != null ? ', travelling to ' + to : ''})`);
+        try {
+          recordTactic({ character: who ?? agent, room: Number(roomNum ?? 0), tactic: 'loop_stall',
+                         trigger: 'event_loop', worked: false, ms: late, hp_lost: 0, attempted: false,
+                         note: `blocked ~${late}ms; doing ${doing ?? '?'}${to != null ? '; travelling to ' + to : ''}; resumed ${new Date(now).toISOString()}` });
+        } catch { /* evidence, not a dependency */ }
+      }
+      const t = setTimeout(tick, EVERY_MS);
+      if (typeof t.unref === 'function') t.unref();
+    };
+    const t0 = setTimeout(tick, EVERY_MS);
+    if (typeof t0.unref === 'function') t0.unref();
+  }
   join().catch(e => {
     log(`[keeper] ${agent} initial join failed: ${e.message}`);
     // Stay alive so a transient startup failure can recover. A recursive one-shot owns no

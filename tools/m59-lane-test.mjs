@@ -19,7 +19,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lanePastBodies, gapAlongLine, MIN_NOMOVEON, PLAYER_RADIUS,
+import { keepRightAim } from './m59-roo.mjs';
+import { lanePastBodies, perpWalkPastBodies, gapAlongLine, MIN_NOMOVEON, PLAYER_RADIUS,
          CLIENT_FINENESS, KOD_FINENESS, sharedRoomGeometry } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
@@ -143,6 +144,102 @@ if (!existsSync(FIX)) {
 // what gets tested -- that every verdict is observable (not only the interesting one), that
 // the sighting carries what a reproduction needs, and that a recorder which throws cannot
 // turn a movement decision into an exception on an already-stuck walk.
+// tools/fixtures/flatlands-584-row35.json — eight seconds of two keepers watching row 35 of
+// The Flatlands on 2026-09-01, recorded while the fleet was dying in it. Same pipe as the
+// sewers, one square tall for columns 29-32, and the same picket: an ant at column 27, a
+// spider on the centre line at column 32, two of ours between them, a second ant walking the
+// pipe. Three characters were eaten here that afternoon and the tactics ledger recorded
+// twenty-one `body_lane` failures on these squares, every one "no side to step to".
+//
+// THE FINDING. The lane finder DID propose a lane — starting at y 2249. The floor starts at
+// 2240 and a body needs PLAYER_RADIUS (15.5) from it, so that start is nine units into the
+// wall, and the mover refused it. `lanePastBodies` tested floor under the lane's centre
+// line and never under the body's edge. The arithmetic below says where the lane really is.
+console.log('\nthe recorded jam — The Flatlands, row 35');
+{
+  const FIX2 = join(HERE, 'fixtures', 'flatlands-584-row35.json');
+  if (!existsSync(FIX2)) {
+    skip('the Flatlands jam fixture is on disk', 'tools/fixtures/flatlands-584-row35.json is missing');
+  } else {
+    const jam = JSON.parse(readFileSync(FIX2, 'utf8'));
+    const monsters = (jam.static ?? []).filter(o => o.kind === 'monster');
+    const ours = (jam.static ?? []).filter(o => o.kind === 'player');
+    ok('an ant and a spider stood still on row 35 with two of ours between them',
+       monsters.length === 2 && ours.length === 2 && [...monsters, ...ours].every(o => o.row === 35),
+       JSON.stringify([...monsters, ...ours].map(o => `${o.name}@${o.col}`)));
+    const f = jam.geometry.floor_y_by_col;
+    const wallLo = f['32'].lo, wallHi = f['32'].hi;
+    ok('columns 29-32 are one square tall — a pipe',
+       [29, 30, 31, 32].every(c => f[String(c)].hi - f[String(c)].lo === KOD_FINENESS),
+       JSON.stringify([29, 30, 31, 32].map(c => f[String(c)])));
+    const spider = monsters.find(o => o.name === 'spider');
+    ok('and the spider is on its centre line', Math.abs(spider.y - (wallLo + KOD_FINENESS / 2)) <= 2, String(spider.y));
+    const standLo = wallLo + RADIUS, standHi = wallHi - RADIUS;
+    const feasible = [];
+    for (let y = Math.ceil(standLo); y <= Math.floor(standHi); y++)
+      if (Math.abs(y - spider.y) >= NOMOVEON) feasible.push(y);
+    ok('so there is exactly one integer aim point on each side of it, as in the sewers',
+       feasible.length === 2, JSON.stringify({ standLo, standHi, feasible }));
+    const hasFloor = (x, y) => { const b = f[String(Math.floor(x / KOD_FINENESS))]; return !!b && y >= b.lo && y <= b.hi; };
+    const A = ours.find(o => o.name === 'player A');
+    const bodies = [...monsters, ...ours.filter(o => o !== A), ...(jam.moving ?? []).map(m => m.points.at(-1))]
+      .map(o => ({ x: o.x, y: o.y, name: o.name ?? 'ant' }));
+    const lane = lanePastBodies({ fromX: A.x, fromY: A.y, toX: 35 * KOD_FINENESS + 32, toY: wallLo + KOD_FINENESS / 2,
+                                  bodies, hasFloor });
+    ok('the lane finder still finds a way east past the spider', !!lane, JSON.stringify(lane));
+    // Each end is judged in ITS column: the pipe is one square tall at 29-32 and opens out
+    // again at 34-35, so the far end may legitimately sit lower or higher than the pipe's band.
+    const bandAt = x => { const b = f[String(Math.floor(x / KOD_FINENESS))]; return b && { lo: b.lo + RADIUS, hi: b.hi - RADIUS }; };
+    const startBand = lane && bandAt(lane.fromX), endBand = lane && bandAt(lane.x);
+    ok('and the lane it proposes is one the body can STAND in — both ends clear of their wall by a radius',
+       !!lane && startBand && endBand && lane.fromY >= startBand.lo && lane.fromY <= startBand.hi
+       && lane.y >= endBand.lo && lane.y <= endBand.hi,
+       JSON.stringify(lane && { fromY: lane.fromY, startBand, y: lane.y, endBand }));
+    ok('starting inside the pipe’s own half-unit band, which the point test used to miss by nine units',
+       !!lane && lane.fromY >= standLo && lane.fromY <= standHi, JSON.stringify({ fromY: lane?.fromY, standLo, standHi }));
+    ok('with the blocking rule\'s clearance from the spider', !!lane && lane.gap >= NOMOVEON, JSON.stringify(lane?.gap));
+
+    // THE PERP WALK, on the same jam. Measured from the bodies and the walls rather than from
+    // the walker's line: the spider sits 32 from each wall of a 64-tall pipe, so on either
+    // side the window between "16 from the spider" and "15.5 from the wall" is half a unit,
+    // and the hug line has to land in it and stay out of every disc all the way past.
+    console.log('\nthe perp walk past the same picket');
+    const perp = perpWalkPastBodies({ fromX: A.x, fromY: A.y, toX: 35 * KOD_FINENESS + 32, toY: wallLo + KOD_FINENESS / 2,
+                                      bodies, hasFloor });
+    ok('it finds a side with room for a body between the blockers and the wall',
+       !!perp?.points, JSON.stringify(perp && { side: perp.side, offset: perp.offset, slack: perp.slack, why: perp.why }));
+    ok('the window it found is the half-unit one the arithmetic predicts',
+       !!perp?.points && perp.slack >= 0 && perp.slack <= 1.5, JSON.stringify(perp?.slack));
+    const clear = p => bodies.every(b => Math.hypot(b.x - p.x, b.y - p.y) >= NOMOVEON - 1e-6);
+    ok('every point on the hug line is on the floor and outside every blocker\'s disc',
+       !!perp?.waypoints && perp.waypoints.every(p => hasFloor(p.x, p.y) && clear(p)),
+       JSON.stringify(perp?.waypoints?.map(p => `${p.x},${p.y}`)));
+    const spider2 = bodies.find(b => b.name === 'spider');
+    ok('and its far point is past the spider, not beside it',
+       !!perp?.points && perp.points[1].x > spider2.x + NOMOVEON, JSON.stringify(perp?.points?.[1]));
+    const back = perpWalkPastBodies({ fromX: A.x, fromY: A.y, toX: 26 * KOD_FINENESS + 32, toY: wallLo + KOD_FINENESS / 2,
+                                      bodies, hasFloor });
+    ok('westward past the two ants it answers the same way',
+       !!back?.points && back.points[1].x < Math.min(...bodies.filter(b => b.name === 'ant').map(b => b.x)) - NOMOVEON,
+       JSON.stringify(back && { side: back.side, past: back.points?.[1], why: back.why }));
+    const open = perpWalkPastBodies({ fromX: A.x, fromY: A.y, toX: A.x + 200, toY: A.y, bodies: [], hasFloor });
+    ok('and with nothing in the way it has nothing to say', open === null, JSON.stringify(open));
+    // THE PRECHECK. Handed a tracer that refuses the first leg, the walk is refused BEFORE
+    // it is walked, with the leg and the reason on the row, and never returns points.
+    const refused = perpWalkPastBodies({ fromX: A.x, fromY: A.y, toX: 35 * KOD_FINENESS + 32, toY: wallLo + KOD_FINENESS / 2,
+                                         bodies, hasFloor, segmentClear: () => ({ ok: false, reason: 'fine_wall_edge' }) });
+    ok('a line the tracer refuses is refused before it is walked', !!refused && !refused.points && refused.precheck === 'geometry',
+       JSON.stringify(refused && { precheck: refused.precheck, why: refused.why }));
+    const passed = perpWalkPastBodies({ fromX: A.x, fromY: A.y, toX: 35 * KOD_FINENESS + 32, toY: wallLo + KOD_FINENESS / 2,
+                                        bodies, hasFloor, segmentClear: () => ({ ok: true }) });
+    ok('and a line the tracer accepts still comes back with its points', !!passed?.points, JSON.stringify(passed?.why));
+    const bodyRefused = perpWalkPastBodies({ fromX: A.x, fromY: A.y, toX: 35 * KOD_FINENESS + 32, toY: wallLo + KOD_FINENESS / 2,
+                                             bodies, hasFloor, segmentClear: () => ({ ok: false, reason: 'object_blocked' }) });
+    ok('and a tracer refusal on a body is reported as a body precheck, not a geometry one',
+       !!bodyRefused && !bodyRefused.points && bodyRefused.precheck === 'body', JSON.stringify(bodyRefused && { precheck: bodyRefused.precheck, why: bodyRefused.why }));
+  }
+}
+
 console.log('\nthe canBlinkOut observation seam');
 {
   const { canBlinkOut } = await import('./m59-blink.mjs');
@@ -174,6 +271,76 @@ console.log('\nthe canBlinkOut observation seam');
   ok('and with no recorder at all it answers exactly the same',
      noObserver.can === declined.can && noObserver.why === declined.why,
      JSON.stringify({ noObserver, declined }));
+}
+
+// ---------------------------------------------------------------- keep right in a corridor
+console.log('\nkeep right — two lanes in a one-square pipe');
+{
+  // A horizontal pipe one coarse square tall: floor for y in [2240, 2304), everywhere in x.
+  const pipe = (_x, y) => y >= 2240 && y < 2304;
+  const K = 16;                                        // MIN_NOMOVEON in kod units (256 / 16)
+  const east = keepRightAim({ fromX: 2100, fromY: 2272, toX: 2272, toY: 2272, hasFloor: pipe });
+  const west = keepRightAim({ fromX: 2400, fromY: 2272, toX: 2272, toY: 2272, hasFloor: pipe });
+  ok('the pipe is a corridor', east?.corridor === true && west?.corridor === true,
+     JSON.stringify({ east, west }));
+  ok('eastbound keeps right: south of the centre line (y down)', east && east.y > 2272 && east.x === 2272,
+     JSON.stringify(east));
+  ok('westbound keeps right: north of the centre line', west && west.y < 2272 && west.x === 2272,
+     JSON.stringify(west));
+  ok('each lane keeps the body radius off its wall', east && west &&
+     2304 - east.y >= 15.5 && west.y - 2240 >= 15.5, JSON.stringify({ east, west }));
+  ok('the two lanes are further apart than the blocking distance, so they pass',
+     east && west && Math.abs(east.y - west.y) >= K, JSON.stringify({ gap: east && west && east.y - west.y, K }));
+  ok('a lane point has floor', east && west && pipe(east.x, east.y) && pipe(west.x, west.y));
+
+  // A vertical pipe: southbound keeps to the west wall, northbound to the east wall.
+  const shaft = (x, _y) => x >= 2240 && x < 2304;
+  const south = keepRightAim({ fromX: 2272, fromY: 2100, toX: 2272, toY: 2272, hasFloor: shaft });
+  const north = keepRightAim({ fromX: 2272, fromY: 2400, toX: 2272, toY: 2272, hasFloor: shaft });
+  ok('southbound keeps right: west of the centre line', south?.corridor && south.x < 2272 && south.y === 2272,
+     JSON.stringify(south));
+  ok('northbound keeps right: east of the centre line', north?.corridor && north.x > 2272 && north.y === 2272,
+     JSON.stringify(north));
+  ok('the vertical lanes pass too', south && north && Math.abs(north.x - south.x) >= K);
+
+  // Wide floor is not a corridor and gets no lane.
+  const hall = () => true;
+  const open = keepRightAim({ fromX: 2100, fromY: 2272, toX: 2272, toY: 2272, hasFloor: hall });
+  ok('wide floor gets no lane', open && open.corridor === false && open.offset === 0 && open.x === 2272 && open.y === 2272,
+     JSON.stringify(open));
+
+  // A slot too narrow to shift in keeps the stand point rather than aiming into the wall.
+  const slot = (_x, y) => y >= 2260 && y < 2284;       // 24 wide
+  const tight = keepRightAim({ fromX: 2100, fromY: 2272, toX: 2272, toY: 2272, hasFloor: slot });
+  ok('a slot narrower than a body plus margin keeps the stand point', tight?.corridor && tight.offset === 0 && tight.y === 2272,
+     JSON.stringify(tight));
+
+  // No direction, no lane.
+  ok('standing still has no right-hand side', keepRightAim({ fromX: 2272, fromY: 2272, toX: 2272, toY: 2272, hasFloor: pipe }) === null);
+}
+
+// The recorded Flatlands pipe (row 35): the lane rule answers on the real floor too.
+{
+  const file = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'flatlands-584-row35.json');
+  if (!existsSync(file)) skip('flatlands fixture: keep right', 'fixture missing');
+  else {
+    const fx = JSON.parse(readFileSync(file, 'utf8'));
+    const f = fx.geometry?.floor_y_by_col ?? null;
+    const cols = f && typeof f === 'object' ? Object.keys(f).map(Number).filter(Number.isFinite).sort((a, b) => a - b) : [];
+    if (!cols.length) skip('flatlands fixture: keep right', 'fixture carries no per-column floor');
+    else {
+      const hasFloor = (x, y) => { const b = f[String(Math.floor(x / KOD_FINENESS))]; return !!b && y >= b.lo && y <= b.hi; };
+      const c = cols[Math.floor(cols.length / 2)];
+      const b = f[String(c)];
+      const cy = Math.round((b.lo + b.hi) / 2), cx = c * KOD_FINENESS + 32;
+      const e = keepRightAim({ fromX: cx - 64, fromY: cy, toX: cx, toY: cy, hasFloor });
+      const w = keepRightAim({ fromX: cx + 64, fromY: cy, toX: cx, toY: cy, hasFloor });
+      ok('the Flatlands pipe is a corridor with a lane each way', e?.corridor && w?.corridor && e.offset > 0 && w.offset > 0,
+         JSON.stringify({ col: c, floor: b, e, w }));
+      ok('the two lanes pass on the real floor', e && w && Math.abs(e.y - w.y) >= 16 && hasFloor(e.x, e.y) && hasFloor(w.x, w.y),
+         JSON.stringify({ e, w }));
+    }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed` + (skipped ? `, ${skipped} skipped` : ''));

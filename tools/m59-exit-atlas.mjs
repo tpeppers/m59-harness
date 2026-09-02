@@ -140,10 +140,19 @@ function detachMap(map) {
  * production/default imports remain inert.
  */
 export function attachLabExitAtlas(map, { file = exitAtlasFile(), force = false } = {}) {
-  if (!force && (process.env.M59_RUNTIME_PROFILE !== 'lab' ||
-      process.env.M59_EXIT_ATLAS === '0')) {
+  // NOT LAB-ONLY ANY MORE. Measured on the shadow fleet, 2026-09-01: every hop of a journey
+  // calls `World.route()`, which calls `exits()`, which without this artifact derives the
+  // fine-boundary approaches live — 2,281 route searches over one second in a day's keeper
+  // logs, 595 over five, 52 over eight, 10.5 s at worst — and a keeper blocked that long is
+  // silent, which at blakserv's INACTIVE_GAME of 30 seconds is a logout. The atlas removes
+  // that derivation and is proven equal to it by m59-world-exit-atlas-test's exact comparison
+  // of all 3,346 approaches. The operator's rule: nothing production relies on may sit behind
+  // the lab profile, so the artifact is used whenever it is present and matches the map in
+  // play; `M59_EXIT_ATLAS=0` is the only way to refuse it. A missing or stale artifact still
+  // falls through to the live derivation exactly as before.
+  if (!force && process.env.M59_EXIT_ATLAS === '0') {
     detachMap(map);
-    return { ok: false, attached: 0, why: 'the exit atlas is lab-only' };
+    return { ok: false, attached: 0, why: 'the exit atlas is switched off (M59_EXIT_ATLAS=0)' };
   }
   if (!map || typeof map !== 'object') return { ok: false, attached: 0, why: 'no map' };
   const atlas = loadAtlas(file);

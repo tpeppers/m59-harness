@@ -49,11 +49,11 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RoomGeometry, protocolToward, STEP_MASK_DIRS, KOD_FINENESS, CLIENT_FINENESS,
          sharedRoomGeometry, STEP_MASK_VERSION, elideLoops } from './m59-roo.mjs';
-import { components, exitAnchors } from './m59-routebake.mjs';
+import { bakeRoom, components, compositionRisk, exitAnchors, replay } from './m59-routebake.mjs';
 import { loadMap, selectedEdgeAt, findPath } from './m59-map.mjs';
 import { World } from './m59-world.mjs';
 import { crossingBook, WALKS_DIR } from './m59-crossings.mjs';
-import { stepMaskCurrent, attachStepMasks } from './m59-routes.mjs';
+import { attachStepMasks, bakedPath, stepMaskCurrent } from './m59-routes.mjs';
 
 // WHERE THE MAP IS, RESOLVED FROM THIS FILE AND NOT FROM THE SHELL'S CURRENT DIRECTORY.
 //
@@ -955,6 +955,143 @@ console.log('\none-way transits, and the jumps the square walk cannot express');
        `${uphill} uphill`);
     ok('and not one of them is ground the walk could already cover', alreadyWalkable === 0,
        `${alreadyWalkable} already walkable`);
+  }
+}
+
+// -------------------------------------------------- proof-first rails in west Cragged
+// ONE SLID STEP DOES NOT COMPOSE WITH THE NEXT ONE. `moverStepLands` quite correctly says
+// r47c14 can reach square r46c15 by sliding along wall 679, but the next baked edge starts
+// again from the IDEAL centre of r46c15. The old west and north rails therefore shared the
+// fictional prefix r47c14 -> r46c15 -> r45c16 through that wall. Reversing the inbound
+// rail wholesale is not safe either: two of its diagonals genuinely refuse in reverse.
+//
+// The bake now asks for a proof-first alternative only after stringPull reports evidence of
+// an unverified leg, and adopts it only when that measured count improves. Pin both sides of
+// the contract here: the westbound rail follows the real bidirectional corridor without a
+// jump, while the northbound rail may retain a declared directed fall away from this wall.
+console.log('\nroom 578 proof-first rails — symmetric corridor, no wall jump');
+{
+  const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
+  const raw = realMap?.rooms?.['578'] ?? realMap?.rooms?.[578];
+  const geometry = raw ? sharedRoomGeometry(raw) : null;
+  if (!geometry?.collisionReady) {
+    skip('room 578 proof-first rails are baked from real collision geometry', 'no geometry');
+  } else {
+    const baked = bakeRoom(raw);
+    const evidence = (fromRow, fromCol, path) => {
+      const steps = replay(fromRow, fromCol, path);
+      const pts = [{ row: fromRow, col: fromCol }, ...steps]
+        .map(s => ({ x: (s.col - 0.5) * CLIENT_FINENESS,
+                     y: (s.row - 0.5) * CLIENT_FINENESS }));
+      const pulled = geometry.stringPull(pts, { onWalkable: true });
+      const squares2 = pulled.points.map(pt =>
+        [Math.round(pt.y / CLIENT_FINENESS - 0.5) + 1,
+         Math.round(pt.x / CLIENT_FINENESS - 0.5) + 1]);
+      const fallEdges = new Set();
+      let prev = { row: fromRow, col: fromCol };
+      for (const step of steps) {
+        if (Math.abs(step.row - prev.row) > 1 || Math.abs(step.col - prev.col) > 1)
+          fallEdges.add(`${prev.row},${prev.col}>${step.row},${step.col}`);
+        prev = step;
+      }
+      return { steps: steps.length, pivots: squares2.length, unverified: pulled.unverified,
+               risk: compositionRisk(pulled.proved, squares2), fallEdges };
+    };
+    const squares = (fromRow, fromCol, key) => {
+      const p = baked.routes[key];
+      return p == null ? null : [{ row: fromRow, col: fromCol }, ...replay(fromRow, fromCol, p)];
+    };
+    const west = squares(49, 12, '49,12>35,1');
+    const east = squares(35, 1, '35,1>49,12');
+    const north = squares(49, 12, '49,12>1,13');
+    const materializedWest = bakedPath({ rooms: { 578: baked } }, 578,
+      { row: 49, col: 12 }, { row: 35, col: 1 });
+    const materializedNorth = bakedPath({ rooms: { 578: baked } }, 578,
+      { row: 49, col: 12 }, { row: 1, col: 13 });
+    const oldWest = evidence(49, 12, 'aaaaddadddaddwd(-2,-2)cccdcd');
+    const oldNorth = evidence(49, 12,
+      'aaaaddadddadaaaaddnnadadwddwwcwddaadndadddndadanabbebaaaaanad');
+    const westEvidence = evidence(49, 12, baked.routes['49,12>35,1']);
+    const northEvidence = evidence(49, 12, baked.routes['49,12>1,13']);
+    const name = q => `r${q.row}c${q.col}`;
+    const edge = (a, b) => `${name(a)}>${name(b)}`;
+    const falls = route => route ? route.slice(1).filter((q, i) =>
+      Math.abs(q.row - route[i].row) > 1 || Math.abs(q.col - route[i].col) > 1) : [];
+    const invalid = route => route ? route.slice(1).filter((q, i) =>
+      !geometry.neighbors(route[i].row, route[i].col, { collision: true })
+        .some(n => n.row === q.row && n.col === q.col)) : [];
+    const unproved = route => route ? route.slice(1).flatMap((q, i) => {
+      const from = route[i];
+      if (Math.abs(q.row - from.row) > 1 || Math.abs(q.col - from.col) > 1) return [];
+      return geometry.stepAllowedByCollision(from.row, from.col, q.row, q.col) === true
+        ? [] : [edge(from, q)];
+    }) : [];
+    const keys = route => new Set((route ?? []).map(q => `${q.row},${q.col}`));
+
+    ok('both routes out of southwest Cragged are present', !!west && !!north);
+    ok('the west rail begins along the safe reverse corridor',
+       west?.slice(0, 4).map(name).join(',') === 'r49c12,r48c13,r47c14,r47c15'
+         && west.some(q => q.row === 45 && q.col === 18),
+       west?.slice(0, 8).map(name).join(','));
+    ok('the west rail stays on ordinary ground and every step is a mover edge',
+       falls(west).length === 0 && invalid(west).length === 0,
+       JSON.stringify({ falls: falls(west).map(name), invalid: invalid(west).map(name) }));
+    const eastSet = keys(east), shared = (west ?? []).filter(q => eastSet.has(`${q.row},${q.col}`)).length;
+    ok('the two west-corridor directions substantially share the same ground',
+       !!west && !!east && shared >= Math.floor(Math.min(west.length, east.length) * 0.7),
+       JSON.stringify({ shared, west: west?.length, east: east?.length }));
+    ok('neither southwest route uses the fictional wall squares',
+       [west, north].every(route => route && !route.some(q =>
+         (q.row === 46 && q.col === 15) || (q.row === 45 && q.col === 16))));
+    const avoidsWall = route => Array.isArray(route) && !route.some(q =>
+      (q.row === 46 && q.col === 15) || (q.row === 45 && q.col === 16));
+    ok('the serialized pivot rails also exclude the fictional wall squares',
+       ['49,12>35,1', '49,12>1,13'].every(key =>
+         avoidsWall(baked.pivots[key]?.squares?.map(([row, col]) => ({ row, col })) ?? null)));
+    ok('bakedPath materializes both repaired rails without reintroducing the wall',
+       avoidsWall(materializedWest) && avoidsWall(materializedNorth),
+       JSON.stringify({ west: materializedWest?.slice(0, 8).map(name),
+                        north: materializedNorth?.slice(0, 8).map(name) }));
+    ok('only non-terminal ordinary unproved pivots count as composition risk',
+       compositionRisk([false], [[1, 1], [1, 2]]) === 0
+         && compositionRisk([false, true], [[1, 1], [1, 2], [1, 3]]) === 1
+         && compositionRisk([false, true], [[1, 1], [3, 3], [3, 4]]) === 0);
+    ok('both repaired rails strictly lower the old composition risk',
+       oldWest.risk === 2 && westEvidence.risk === 0
+         && oldNorth.risk === 4 && northEvidence.risk < oldNorth.risk,
+       JSON.stringify({ west: [oldWest.risk, westEvidence.risk],
+                        north: [oldNorth.risk, northEvidence.risk] }));
+    ok('the repaired rails introduce no new directed fall',
+       [...westEvidence.fallEdges].every(e => oldWest.fallEdges.has(e))
+         && [...northEvidence.fallEdges].every(e => oldNorth.fallEdges.has(e)),
+       JSON.stringify({ west: [...westEvidence.fallEdges], north: [...northEvidence.fallEdges] }));
+    const diameter = Math.max(geometry.rows, geometry.cols);
+    ok('the global detour guard admits both repairs within one room diameter per risk removed',
+       westEvidence.steps <= oldWest.steps + (oldWest.risk - westEvidence.risk) * diameter
+         && westEvidence.pivots <= oldWest.pivots + (oldWest.risk - westEvidence.risk) * diameter
+         && northEvidence.steps <= oldNorth.steps + (oldNorth.risk - northEvidence.risk) * diameter
+         && northEvidence.pivots <= oldNorth.pivots + (oldNorth.risk - northEvidence.risk) * diameter);
+    ok('the north rail does not turn that southern wall into a fall',
+       !!north && invalid(north).length === 0 && north.slice(1).every((q, i) => {
+         const from = north[i];
+         return Math.min(from.row, q.row) < 40
+           || (Math.abs(q.row - from.row) <= 1 && Math.abs(q.col - from.col) <= 1);
+       }), JSON.stringify({ invalid: invalid(north).map(name), falls: falls(north).map(name) }));
+    ok('proof-first materially lowers the remaining unverified evidence',
+       baked.pivots['49,12>35,1']?.unverified <= 1
+         && baked.pivots['49,12>1,13']?.unverified <= 2
+         && unproved(west).length <= 1 && unproved(north).length <= 2,
+       JSON.stringify({ westPivot: baked.pivots['49,12>35,1']?.unverified,
+                        northPivot: baked.pivots['49,12>1,13']?.unverified,
+                        westEdges: unproved(west), northEdges: unproved(north) }));
+
+    const room38 = realMap?.rooms?.['38'] ?? realMap?.rooms?.[38];
+    const control = room38 ? bakeRoom(room38) : null;
+    ok('a one-edge terminal slide remains byte-for-byte instead of becoming a detour',
+       control?.routes?.['6,19>6,18'] === 'w'
+         && control?.pivots?.['6,19>6,18']?.unverified === 1,
+       JSON.stringify({ route: control?.routes?.['6,19>6,18'],
+                        pivot: control?.pivots?.['6,19>6,18'] }));
   }
 }
 

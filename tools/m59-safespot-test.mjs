@@ -1414,6 +1414,11 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
      !/sort\(\(a, b\) => b\.score - a\.score/.test(src));
   ok('the ranking is distance, negated, and nothing else',
      /const value = -\(p\.steps \?\? d\);/.test(src));
+  // THE ONE EXCEPTION, 2026-09-01: a journey may prefer a wall on the road ahead. It is an
+  // adjustment on top of the distance ranking, gated on the exit being named, so a fight
+  // or a rest still sorts on distance alone — pinned here so the gate cannot quietly go.
+  ok('...except that a journey which names its exit adds progress toward it, and only then',
+     /const ranked = onwardSquare && towardExit \? value \+ forwardBias \* progress : value;/.test(src));
   ok('so a wall that held is no longer worth points',
      !/const proof = \(seen\?\.verified \? 60 : 0\)/.test(src));
   ok('safeSpots orders by steps, with row/col only to keep the answer stable',
@@ -1425,7 +1430,11 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
      /export function returnReachableTo/.test(src));
   ok('and it follows edges BACKWARDS, which is what makes it the other question',
      /geo\.moverStepLands\(nr, nc, r, c\)/.test(src));
-  ok('every candidate is gated on it', /canComeBack && !canComeBack\.has/.test(src));
+  ok('a wall we can walk back from is always eligible; reaching the exit is the addition',
+     /const returnsToUs = !canComeBack \|\| canComeBack\.has\(/.test(src)
+     && /if \(!returnsToUs && !towardExit\) \{ oneWay\+\+; continue; \}/.test(src));
+  ok('and the journey\'s exit joins the candidates as a wall of kind exit',
+     /kind: 'exit'/.test(src) && /allowExit = true,/.test(src));
   ok('it fails open like the rest — no opinion means carry on',
      /catch \{ ok = true; \}/.test(src));
   ok('and the refusal is counted so an empty answer can be explained',

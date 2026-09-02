@@ -109,7 +109,7 @@ The opt-in lab runner shares one lazy atlas and scheduler across all actors by d
 `--shards N` trades additional heaps/atlases for smaller GC, synchronous-stall, and crash
 domains. The offline 100-actor lower-bound smoke measured about 14 KiB of used heap per
 unstarted actor shell after one shared import, whose repeated forced-GC floor was about
-138 MiB RSS. This is not a connected-fleet memory promise. A checked, lab-only exit atlas
+138 MiB RSS. This is not a connected-fleet memory promise. A checked exit atlas (used by every keeper since 2026-09-01, not only the lab runner)
 removes the former multi-second fine-boundary derivation while exact tests compare every
 projected approach. See [the lab runtime guide](docs/m59-lab-runtime.md) for the safety
 boundary, measurements, fallbacks, and shard accounting.

@@ -104,7 +104,14 @@ import { sharedRoomGeometry, CLIENT_FINENESS, STEP_MASK_VERSION,
 //     runners ground along the corner at 29,50 in Ukgoth and took hits for as long as they
 //     were stuck on it. Measured: 599 went from 80% of route squares touching a wall to
 //     21%, and 586 from 58% to 5%, for 3% more length.
-export const BAKE_VERSION = 4;
+// 5 — a route with an unproved NON-TERMINAL ordinary pivot leg gets one proof-first
+//     alternative. A final slide is harmless and stays byte-for-byte unchanged; a declared
+//     fall is validated in fall mode and is not this signal. The alternative is adopted only
+//     when stringPull proves strictly less composition risk, without adding a new fall or a
+//     detour longer than one room diameter per risk removed. This keeps the mover's permissive
+//     graph authoritative while preventing a slid landing from composing into a wall-crossing
+//     rail on the next ideal-centre leg.
+export const BAKE_VERSION = 5;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -147,6 +154,22 @@ export function replay(fromRow, fromCol, path) {
     out.push({ row: r, col: c });
   }
   return out;
+}
+
+/** Number of unproved ordinary pivot legs whose landing starts another leg. */
+export function compositionRisk(proved, squares) {
+  if (!Array.isArray(proved) || !Array.isArray(squares) || proved.length < 2
+      || squares.length !== proved.length + 1) return 0;
+  let risk = 0;
+  for (let i = 0; i < proved.length - 1; i++) {
+    if (proved[i] !== false) continue;
+    const a = squares[i], b = squares[i + 1];
+    // A declared directed fall is validated in fall mode, so its ordinary no-slide result
+    // is neither evidence of a bad jump nor the slid-square composition fault measured here.
+    if (Math.abs(b[0] - a[0]) > 1 || Math.abs(b[1] - a[1]) > 1) continue;
+    risk++;
+  }
+  return risk;
 }
 
 // ============ CONSERVATIVE REACHABILITY: WHERE A BODY CAN GET TO ON ITS OWN ============
@@ -638,14 +661,16 @@ function coarseSpanClear(geometry, r, c, nr, nc) {
 // that path when one exists, and falls back to the permissive plan when it does not. 587
 // keeps its corridor, because there the strict plan simply has no path and the fallback runs.
 function bfs(geometry, fromRow, fromCol,
-             { collision = true, coarseFloor = false, clearance = 0 } = {}) {
+             { collision = true, coarseFloor = false, clearance = 0,
+               preferProved = false, terminalKeys = null,
+               allowedFallEdges = null } = {}) {
   const { cols } = geometry;
   const came = new Map();
   const key = (r, c) => r * (cols + 2) + c;
   const start = key(fromRow, fromCol);
   came.set(start, null);
 
-  if (!clearance) {
+  if (!clearance && !preferProved) {
     let frontier = [[fromRow, fromCol]];
     while (frontier.length) {
       const nextFrontier = [];
@@ -680,7 +705,24 @@ function bfs(geometry, fromRow, fromCol,
   // Costs are small integers, so this is a bucket queue rather than a heap: no comparator,
   // no library, and it stays O(edges) the way the BFS it replaces was.
   const dist = new Map([[start, 0]]);
-  const buckets = [[[fromRow, fromCol]]];
+  // A NO-SLIDE TRACE IS A PREFERENCE, NEVER AN AUTHORITY OVER REACHABILITY.
+  //
+  // `moverStepLands` deliberately accepts a slid endpoint anywhere inside the requested
+  // square. That is the right answer for one move and it does not compose: the next baked
+  // edge is tested from that square's ideal stand point, not from the off-centre point the
+  // previous edge actually reached. In room 578 this made r47c14 -> r46c15 -> r45c16 look
+  // like an ordinary route through a wall even though the first direct trace hits wall 679.
+  //
+  // This pass asks the stricter question only to order routes. The penalty is larger than
+  // the maximum base cost of a simple path through the room, so unproved ordinary edges are
+  // minimized first and clearance/length break ties. The caller still compares the finished
+  // candidate with stringPull and keeps it only when measured non-terminal, non-fall risk is
+  // strictly lower, total unverified evidence does not rise, exact fall identities are not
+  // expanded, and the detour stays bounded. Falls are already proved by
+  // `fallTargets(..., { fall:true })`; they are neither penalized nor reversed here.
+  const proofPenalty = preferProved
+    ? geometry.rows * geometry.cols * (1 + Math.max(0, clearance)) + 1
+    : 0;
   const roomy = (r, c) => {
     for (let dr = -1; dr <= 1; dr++)
       for (let dc = -1; dc <= 1; dc++) {
@@ -689,22 +731,72 @@ function bfs(geometry, fromRow, fromCol,
       }
     return true;
   };
-  for (let d = 0; d < buckets.length; d++) {
-    const bucket = buckets[d];
-    if (!bucket) continue;
-    while (bucket.length) {
-      const [r, c] = bucket.pop();
-      if (dist.get(key(r, c)) !== d) continue;      // superseded by a cheaper way here
-      for (const n of geometry.neighbors(r, c, { collision })) {
-        if (coarseFloor && !coarseSpanClear(geometry, r, c, n.row, n.col)) continue;
-        const cost = d + 1 + (roomy(n.row, n.col) ? 0 : clearance);
-        const k = key(n.row, n.col);
-        const seen = dist.get(k);
-        if (seen !== undefined && seen <= cost) continue;
-        dist.set(k, cost);
-        came.set(k, { row: r, col: c, dir: n.dir });
-        (buckets[cost] ??= []).push([n.row, n.col]);
+  const visit = (d, r, c, enqueue) => {
+    if (dist.get(key(r, c)) !== d) return;          // superseded by a cheaper way here
+    for (const n of geometry.neighbors(r, c, { collision })) {
+      if (n.fall && allowedFallEdges
+          && !allowedFallEdges.has(`${r},${c}>${n.row},${n.col}`)) continue;
+      if (coarseFloor && !coarseSpanClear(geometry, r, c, n.row, n.col)) continue;
+      const k = key(n.row, n.col);
+      // A refusal on the LAST leg has no later ideal-centre assumption to invalidate. All
+      // anchor destinations are exempt here so one one-to-many search can honour that
+      // target-specific fact; the finished candidate's exact stringPull evidence remains
+      // the adoption authority if a path happens to pass through another anchor en route.
+      const unproved = preferProved && !n.fall && !terminalKeys?.has(k)
+        && geometry.stepAllowedByCollision(r, c, n.row, n.col) !== true;
+      const cost = d + 1 + (roomy(n.row, n.col) ? 0 : clearance)
+        + (unproved ? proofPenalty : 0);
+      const seen = dist.get(k);
+      if (seen !== undefined && seen <= cost) continue;
+      dist.set(k, cost);
+      came.set(k, { row: r, col: c, dir: n.dir });
+      enqueue(cost, n.row, n.col);
+    }
+  };
+
+  if (!preferProved) {
+    const buckets = [[[fromRow, fromCol]]];
+    for (let d = 0; d < buckets.length; d++) {
+      const bucket = buckets[d];
+      if (!bucket) continue;
+      while (bucket.length) {
+        const [r, c] = bucket.pop();
+        visit(d, r, c, (cost, nr, nc) => (buckets[cost] ??= []).push([nr, nc]));
       }
+    }
+  } else {
+    // The proof penalty is intentionally much larger than the ordinary bucket costs. A
+    // sparse bucket array would therefore make its highest INDEX proportional to the
+    // number of unproved edges, even though only O(squares) entries exist. Keep the same
+    // numeric ordering in a tiny binary heap instead.
+    const heap = [[0, fromRow, fromCol]];
+    const push = item => {
+      let i = heap.push(item) - 1;
+      while (i) {
+        const p = (i - 1) >> 1;
+        if (heap[p][0] <= item[0]) break;
+        heap[i] = heap[p]; i = p;
+      }
+      heap[i] = item;
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        let i = 0;
+        while (true) {
+          let child = i * 2 + 1;
+          if (child >= heap.length) break;
+          if (child + 1 < heap.length && heap[child + 1][0] < heap[child][0]) child++;
+          if (heap[child][0] >= last[0]) break;
+          heap[i] = heap[child]; i = child;
+        }
+        heap[i] = last;
+      }
+      return top;
+    };
+    while (heap.length) {
+      const [d, r, c] = pop();
+      visit(d, r, c, (cost, nr, nc) => push([cost, nr, nc]));
     }
   }
   return { came, key };
@@ -941,6 +1033,39 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
   // because a bake that quietly omits a thing is how this went unnoticed.
   const reach = {};
   let unspellable = 0;
+  const pulledRoute = (from, p) => {
+    try {
+      const steps = replay(from.row, from.col, p);
+      const pts = [{ row: from.row, col: from.col }, ...steps]
+        .map(s => ({ x: (s.col - 0.5) * CLIENT_FINENESS,
+                     y: (s.row - 0.5) * CLIENT_FINENESS }));
+      // ON THE COARSE GRID TOO. The trace alone proves nothing in a room whose BSP
+      // calls every square standable, and those are exactly the rooms this fleet dies
+      // in. See RoomGeometry.stringPull for the measurement.
+      const pulled = geometry.stringPull(pts, { onWalkable: true });
+      const fallEdges = new Set();
+      let prev = from;
+      for (const step of steps) {
+        if (Math.abs(step.row - prev.row) > 1 || Math.abs(step.col - prev.col) > 1)
+          fallEdges.add(`${prev.row},${prev.col}>${step.row},${step.col}`);
+        prev = step;
+      }
+      // SERIALIZED CONTRACT: route-table pivot arrays are `[row,col]`.
+      const squares = pulled.points.map(pt =>
+        [Math.round(pt.y / CLIENT_FINENESS - 0.5) + 1,
+         Math.round(pt.x / CLIENT_FINENESS - 0.5) + 1]);
+      return {
+        pivot: {
+          squares,
+          unverified: pulled.unverified,
+        },
+        proved: pulled.proved ?? [],
+        risk: compositionRisk(pulled.proved, squares),
+        steps: steps.length,
+        fallEdges,
+      };
+    } catch { return null; }
+  };
   for (const from of squares) {
     const targets = squares.filter(t => t.row !== from.row || t.col !== from.col);
     if (!targets.length) continue;
@@ -952,17 +1077,22 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
       ? bfs(geometry, from.row, from.col,
             { collision, coarseFloor: true, clearance: CLEARANCE_PENALTY })
       : null;
+    // One search per exact set of directed falls the established routes already use. A
+    // candidate never earns permission to introduce a different jump merely because falls
+    // carry no no-slide penalty.
+    const proofFirst = new Map();                  // expensive and needed only after evidence
+    const terminalKeys = new Set(targets.map(t => key(t.row, t.col)));
     for (const to of targets) {
       const pair = `${from.row},${from.col}>${to.row},${to.col}`;
       if (came.has(key(to.row, to.col))) reach[pair] = 1;
       let p = null;
+      let usedStrict = false;
       if (strict && strict.came.has(strict.key(to.row, to.col))) {
         p = pathString(strict.came, strict.key, from.row, from.col, to.row, to.col);
-        if (p != null) strictRoutes++;
+        usedStrict = p != null;
       }
       if (p == null) p = pathString(came, key, from.row, from.col, to.row, to.col);
       if (p == null) { if (reach[pair]) unspellable++; continue; }
-      routes[pair] = p;
 
       // AND THE PIVOTS, WHICH ARE WHAT A WALKER SHOULD ACTUALLY BE GIVEN.
       //
@@ -978,21 +1108,50 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
       // `unverified` counts the legs it could not prove — a route that is mostly those is
       // one the walker will still struggle with, and the table should say so rather than
       // let it be inferred.
-      try {
-        const steps = replay(from.row, from.col, p);
-        const pts = [{ row: from.row, col: from.col }, ...steps]
-          .map(s => ({ x: (s.col - 0.5) * CLIENT_FINENESS, y: (s.row - 0.5) * CLIENT_FINENESS }));
-        // ON THE COARSE GRID TOO. The trace alone proves nothing in a room whose BSP
-        // calls every square standable, and those are exactly the rooms this fleet dies
-        // in. See RoomGeometry.stringPull for the measurement.
-        const pulled = geometry.stringPull(pts, { onWalkable: true });
-        // SERIALIZED CONTRACT: route-table pivot arrays are `[row,col]`.
-        pivots[pair] = {
-          squares: pulled.points.map(pt => [Math.round(pt.y / CLIENT_FINENESS - 0.5) + 1,
-                                            Math.round(pt.x / CLIENT_FINENESS - 0.5) + 1]),
-          unverified: pulled.unverified,
-        };
-      } catch { /* a route we cannot pull is still a route; the step string stands */ }
+      let evidence = pulledRoute(from, p);
+
+      // A slid unit edge is valid on its own but its off-centre landing does not compose
+      // with the next edge, which starts at the ideal centre again. Only pay for a second
+      // search once the final string-pull evidence says the preferred route has such a
+      // gap. A final unproved leg is harmless: there is no following leg that assumes its
+      // slid landing was the ideal square centre. `compositionRisk` therefore ignores it,
+      // and a route with no non-terminal risk is left byte-for-byte alone.
+      //
+      // The candidate keeps the coarse-floor preference and no more directed falls than
+      // the established route. Evidence, not the search's proxy, decides. A global detour
+      // bound permits at most one room diameter of extra raw steps and pivots for each risky
+      // leg removed; that admits 578's real reverse corridor without turning a one-square
+      // terminal slide into a room-scale tour.
+      if (preferCoarseFloor && evidence?.risk > 0) {
+        const searchKey = [...evidence.fallEdges].sort().join('|');
+        if (!proofFirst.has(searchKey)) {
+          proofFirst.set(searchKey, bfs(geometry, from.row, from.col, {
+            collision, coarseFloor: true, clearance: CLEARANCE_PENALTY, preferProved: true,
+            terminalKeys, allowedFallEdges: evidence.fallEdges,
+          }));
+        }
+        const proof = proofFirst.get(searchKey);
+        if (proof.came.has(proof.key(to.row, to.col))) {
+          const candidate = pathString(proof.came, proof.key,
+                                       from.row, from.col, to.row, to.col);
+          const candidateEvidence = candidate == null ? null : pulledRoute(from, candidate);
+          const saved = candidateEvidence ? evidence.risk - candidateEvidence.risk : 0;
+          const detour = saved * Math.max(geometry.rows, geometry.cols);
+          if (candidateEvidence && saved > 0
+              && candidateEvidence.pivot.unverified <= evidence.pivot.unverified
+              && [...candidateEvidence.fallEdges].every(edge => evidence.fallEdges.has(edge))
+              && candidateEvidence.steps <= evidence.steps + detour
+              && candidateEvidence.pivot.squares.length <= evidence.pivot.squares.length + detour) {
+            p = candidate;
+            evidence = candidateEvidence;
+            usedStrict = true;
+          }
+        }
+      }
+
+      routes[pair] = p;
+      if (usedStrict) strictRoutes++;
+      if (evidence) pivots[pair] = evidence.pivot;
     }
   }
 
