@@ -3184,23 +3184,42 @@ class Session {
       // it is available — it is what makes the next square's approach clear, and it is what the
       // operator walks. Sharing a lane is the answer only when there is no lane to be had, so
       // it is asked for second and never preferred.
+      // THE SEARCH IS BOUNDED, because it runs on every step. Measured 2026-09-02 by the
+      // keeper's own profiler: in a crowded room this loop, in grid order with no cap and run
+      // twice, was thousands of traces per aim and the whole of every event-loop stall. The
+      // candidates are ordered once by drift (then by clearance, widest first), so the first
+      // one that arrives and holds IS the best and the loop stops there; a candidate is
+      // traced at most once across both passes; and a square where the nearest-to-line
+      // candidates all fail is a jam, not a search problem — a cap (M59_AIM_TRACE_CAP, off by
+      // default: tours 9 and 10 died more with one on) would say so, and the callers
+      // below handle "no aim" as they always did.
+      const TRACE_CAP = Number(process.env.M59_AIM_TRACE_CAP || Infinity);
+      const ordered = fine
+        .map(([dx, dy]) => ({ wx: centre.x + dx, wy: centre.y + dy }))
+        .filter(({ wx, wy }) => Math.floor(wx / KOD_FINENESS) === col && Math.floor(wy / KOD_FINENESS) === row)
+        .map(p => ({ ...p, gap: clearOf(p.wx, p.wy), d: drift(p.wx, p.wy) }))
+        .filter(p => p.gap >= BODY_CLEARANCE_KOD)        // must clear; below the bar is a collision
+        .sort((a, b) => a.d - b.d || b.gap - a.gap);
+      const verdicts = new Map();                         // "x,y" -> arrives && holds
+      let traced = 0;
+      const arrivesAndHolds = (wx, wy) => {
+        const k = `${wx},${wy}`;
+        if (verdicts.has(k)) return verdicts.get(k);
+        traced++;
+        const ok = reaches(wx, wy) && holdsAhead(wx, wy);
+        verdicts.set(k, ok);
+        return ok;
+      };
       const search = (requireLane) => {
-        let best = null, bestDrift = Infinity, bestClear = -1;
-        for (const [dx, dy] of fine) {
-          const wx = centre.x + dx, wy = centre.y + dy;
-          if (Math.floor(wx / KOD_FINENESS) !== col || Math.floor(wy / KOD_FINENESS) !== row) continue;
-          if (requireLane && inLaneOf(wx, wy)) continue;  // same lane as something: not past it
-          const gap = clearOf(wx, wy);
-          if (gap < BODY_CLEARANCE_KOD) continue;        // must clear; below the bar is a collision
-          const d = drift(wx, wy);
-          if (d > bestDrift || (d === bestDrift && gap <= bestClear)) continue;
-          if (!reaches(wx, wy)) continue;                // the line has to actually arrive
-          if (!holdsAhead(wx, wy)) continue;
-          best = { x: wx, y: wy, aimed_into: true, squeezed_past: bodies.length,
-                   clearance: Math.round(gap), shared_lane: !requireLane || undefined };
-          bestDrift = d; bestClear = gap;
+        for (const p of ordered) {
+          if (traced >= TRACE_CAP) break;
+          if (requireLane && inLaneOf(p.wx, p.wy)) continue;  // same lane as something: not past it
+          if (!arrivesAndHolds(p.wx, p.wy)) continue;          // the line has to arrive, and hold
+          return { best: { x: p.wx, y: p.wy, aimed_into: true, squeezed_past: bodies.length,
+                           clearance: Math.round(p.gap), shared_lane: !requireLane || undefined },
+                   bestClear: p.gap };
         }
-        return { best, bestClear };
+        return { best: null, bestClear: -1 };
       };
       let { best, bestClear } = search(true);
       if (!best) ({ best, bestClear } = search(false));
@@ -3360,7 +3379,10 @@ class Session {
   // this is a yes/no about a pocket, not a request for the best point, and asking it as a
   // request is how a lookahead becomes too expensive to keep.
   // COORDINATE CONTRACT: the square is `(row,col)`; fine points and `step` use kod units.
+  // The needle's clock reaches this through `_needleDeadline` on the instance, set by
+  // threadInto around each entry check, so the signature the fixtures lift stays the same.
   _canEnter(from, row, col, step) {
+    const deadline = Number.isFinite(this._needleDeadline) ? this._needleDeadline : Infinity;
     const geo = this.world?.geometry;
     if (!geo) return true;                              // no geometry is not a refusal
     if (typeof geo.inBounds === 'function' && !geo.inBounds(row, col)) return true;
@@ -3368,6 +3390,7 @@ class Session {
     catch { /* a square we cannot ask about is not a pocket */ }
     const bodies = this.bodiesInSquare(row, col, 1);
     for (const p of this._fineLattice(row, col, step)) {
+      if (Date.now() > deadline) return false;          // out of time is not an entry
       if (bodies.length
           && Math.min(...bodies.map(b => Math.hypot(p.x - b.x, p.y - b.y))) < BODY_CLEARANCE_KOD)
         continue;
@@ -3384,6 +3407,20 @@ class Session {
    */
   // COORDINATE CONTRACT: the square is `(row,col)`; `from`, `aim`, and `vias`
   // use named `{x,y}` points in kod wire units.
+  // The clock cut a needle: one ledger row per session per 30 s, because a jam asks every step.
+  _noteNeedleCut(row, col, bodyCount, tookMs, budgetMs) {
+    const now = Date.now();
+    if (this._needleCutAt > now - 30_000) return;
+    this._needleCutAt = now;
+    try {
+      recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
+                     room: Number(this.world?.room?.num ?? 0),
+                     tactic: 'needle_budget', trigger: 'clock', worked: false, ms: tookMs,
+                     hp_lost: 0, attempted: true,
+                     note: `needle into ${row},${col} cut at ${tookMs}ms (budget ${budgetMs}ms) with ` +
+                           `${bodyCount} bodies in the square; answered blocked` });
+    } catch { /* evidence, not a dependency */ }
+  }
   threadInto(from, row, col) {
     const aim = this.aimInto(from, row, col);
     if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.row)) return { aim };
@@ -3417,13 +3454,32 @@ class Session {
     // longer describing "get past this spider" — it is finding a route, which is somebody else's
     // job and a different budget.
     const MAX_LEGS = Number(process.env.M59_NEEDLE_LEGS || 3);
+    // THE CLOCK. Every leg below is a fine-move trace and a body walk, and the direct phase
+    // alone can be 256 goals x 65 legs before the work budget applies. Measured 2026-09-02
+    // by the keeper's own profiler: 29 s in one call, the whole of every stall that was
+    // left. A needle that has not threaded in this long is a jam, and a jam is what the
+    // walker's other tactics are for; the answer is the honest "blocked" below, and a
+    // ledger row says the clock cut it. M59_NEEDLE_MS=0 removes the clock.
+    const BUDGET_MS = Number(process.env.M59_NEEDLE_MS ?? 400);
+    const startedAt = Date.now();
+    const deadline = BUDGET_MS > 0 ? startedAt + BUDGET_MS : Infinity;
+    let cut = false;
+    const legal = (a, b, bs) => {
+      if (Date.now() > deadline) { cut = true; return false; }
+      return this._legIsLegal(a, b, bs);
+    };
 
     // THE SQUARE AFTER THIS ONE, carried on in the same direction. Nothing here knows the route
     // — `step` is called one square at a time — so the continuation is inferred, which is enough
     // for the only question being asked of it: is the place we are about to stand a dead end.
     const ar = Math.sign(row - from.row), ac = Math.sign(col - from.col);
     const beyond = (ar || ac) ? { row: row + ar, col: col + ac } : null;
-    const opensOn = (p) => !beyond || this._canEnter(p, beyond.row, beyond.col, VIA_STEP);
+    const opensOn = (p) => {
+      if (!beyond) return true;
+      this._needleDeadline = deadline;
+      try { return this._canEnter(p, beyond.row, beyond.col, VIA_STEP); }
+      finally { this._needleDeadline = null; }
+    };
 
     // AND THE POCKET TEST APPLIES TO THE CHOICE, NOT ONLY TO THE RESCUE.
     //
@@ -3470,7 +3526,7 @@ class Session {
 
     // ONE LEG. The overwhelmingly common repair, and it costs nothing extra to send.
     for (const g of goals)
-      if (this._legIsLegal(from, g, bodies) && isOpen(g))
+      if (legal(from, g, bodies) && isOpen(g))
         return { aim: { x: g.x, y: g.y, aimed_into: true, squeezed_past: bodies.length,
                         clearance: Math.round(g.gap) } };
 
@@ -3529,7 +3585,7 @@ class Session {
         // first that answers is the one that holds the lane.
         for (const g of goals) {
           if (--work <= 0) break;
-          if (!this._legIsLegal(p, g, bodies)) continue;
+          if (!legal(p, g, bodies)) continue;
           if (!isOpen(g)) continue;
           const vias = [];
           for (let at = p; at !== from; at = cameFrom.get(key(at)))
@@ -3546,7 +3602,7 @@ class Session {
         for (const v of staging) {
           const k = key(v);
           if (seen.has(k) || (--work <= 0)) continue;
-          if (!this._legIsLegal(p, v, here)) continue;
+          if (!legal(p, v, here)) continue;
           seen.add(k); cameFrom.set(k, p); next.push(v);
         }
       }
@@ -3556,7 +3612,9 @@ class Session {
     // NOTHING OPENS IT. Say so rather than passing off a line that goes through somebody: the
     // aim is still returned, so the step is still attempted, but it is labelled — and a caller
     // that wants to replan rather than bounce now has something to test.
-    return { aim: { ...aim, unproved: true }, blocked: true };
+    if ((cut || Date.now() > deadline) && typeof this._noteNeedleCut === 'function')
+      this._noteNeedleCut(row, col, bodies.length, Date.now() - startedAt, BUDGET_MS);
+    return { aim: { ...aim, unproved: true }, blocked: true, cut: cut || undefined };
   }
 
   // WALK THE ROUTE THAT WAS PROVED, NOT THE LATTICE IT WAS DERIVED FROM.

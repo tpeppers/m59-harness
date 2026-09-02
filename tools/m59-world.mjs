@@ -306,20 +306,20 @@ export class World {
   get room() {
     if (!this.map) return null;
     const c = this.c;
+    // MEMOISED on the client's room identity. This getter rebuilt the rooms array and scanned
+    // it on every access, and it is on the walker's hot path: the keeper's own profiler put
+    // it in every event-loop stall of 2026-09-02. The map object is part of the key, so a
+    // reloaded map never serves a stale room.
+    const key = `${c.roomNameRsc ?? ''}|${c.roomRsc ?? ''}|${c.room?.id ?? ''}`;
+    const memo = this._roomMemo;
+    if (memo && memo.map === this.map && memo.key === key) return memo.room;
     const rooms = Object.values(this.map.rooms);
-    if (c.roomNameRsc) {
-      const hit = rooms.find(r => r.nameRsc === c.roomNameRsc);
-      if (hit) return hit;
-    }
-    if (c.roomRsc) {
-      const hit = rooms.find(r => r.roomRsc === c.roomRsc);
-      if (hit) return hit;
-    }
-    if (c.room?.id != null) {
-      const hit = rooms.find(r => r.objId === c.room.id);
-      if (hit) return hit;
-    }
-    return null;
+    let hit = null;
+    if (c.roomNameRsc) hit = rooms.find(r => r.nameRsc === c.roomNameRsc) ?? null;
+    if (!hit && c.roomRsc) hit = rooms.find(r => r.roomRsc === c.roomRsc) ?? null;
+    if (!hit && c.room?.id != null) hit = rooms.find(r => r.objId === c.room.id) ?? null;
+    this._roomMemo = { map: this.map, key, room: hit };
+    return hit;
   }
 
   // Bound provenance is deliberately stricter than the legacy room lookup above.

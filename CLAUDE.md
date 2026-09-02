@@ -463,6 +463,7 @@ Movement — [`docs/m59-routing.md`](docs/m59-routing.md):
 - A planned trip accepts the risk of a FIGHT — but no longer of a death. **Corrected 2026-08-21:** this line used to read "the way out of an attack during travel is always THROUGH", and a journey held the keeper inert to enforce it. That is how Cccc was walked out of a sanctuary at 27% health and eaten in twenty-two seconds. Walking through is still the answer to being *hit*; it is not the answer to being below the flee line, or to losing health faster than the road ends. See `travel_guard`.
 - `ms_since_moved` is about the KEEPER, not the character, and reads as a stall during every errand.
 - A stall detector that requires STILLNESS misses the commonest way to stand still: a two-square shuffle against a wall resets it on every sample. Ask the damage rate instead.
+- A keeper whose event loop is BLOCKED is silent, and the server logs it out at 30 s. The keeper profiles itself: a `loop_stall` row carries `hot:` and `callers:`, and the callers half is the cause. The needle solver is on a 400 ms clock (`M59_NEEDLE_MS`) because it was 29 s in a crowded room.
 - `start_has_no_floor` usually means the position and the geometry are from DIFFERENT ROOMS, not that the map has a hole — 1,535 of 2,361 hop failures in one window, mostly leaving a 10x13 room with every square walkable. It is `position_outside_room_geometry` when the coordinates are off the map.
 
 Boards, the compendium and the planner — [`docs/m59-boards.md`](docs/m59-boards.md):
