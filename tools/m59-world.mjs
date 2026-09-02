@@ -418,6 +418,22 @@ export class World {
   approachSquare(toCol, toRow) {
     const me = this.origin(), geo = this.geometry;
     if (!me || !geo) return null;
+    // MEMOISED FOR 750 ms FROM WHERE WE STAND. Up to eight A* searches per object, and the
+    // snapshot asks for every object on every walker iteration: the keeper's own profiler
+    // put it in every stall left once the needle had its clock (2026-09-02). Keyed on our
+    // square and the room, so a step or a crossing empties it.
+    const now = Date.now();
+    const originKey = `${this.room?.num ?? '?'}|${me.row},${me.col}`;
+    const memo = this._approachMemo;
+    if (!memo || memo.originKey !== originKey || now - memo.at > 750)
+      this._approachMemo = { originKey, at: now, by: new Map() };
+    const targetKey = `${toRow},${toCol}`;
+    if (this._approachMemo.by.has(targetKey)) return this._approachMemo.by.get(targetKey);
+    const answer = this._approachSquareUncached(me, geo, toCol, toRow);
+    this._approachMemo.by.set(targetKey, answer);
+    return answer;
+  }
+  _approachSquareUncached(me, geo, toCol, toRow) {
     let best = null;
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
       if (!dr && !dc) continue;
