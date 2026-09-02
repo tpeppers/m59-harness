@@ -30,6 +30,7 @@ import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.m
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { recordTactic } from './m59-tactics.mjs';
+import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { resolveFleet } from './m59-fleetpath.mjs';
@@ -3436,6 +3437,59 @@ server.listen(port, '127.0.0.1', () => {
   {
     const EVERY_MS = 500;
     const REPORT_OVER_MS = Number(process.env.M59_LOOP_STALL_MS || 1500);
+    // THE SELF-PROFILER. A blocked loop cannot say what blocked it — but V8's sampling
+    // profiler runs on its own thread and keeps sampling the stack while the loop is
+    // blocked, and `node:inspector` lets this process drive that profiler on itself with
+    // no flags and no port. So it runs continuously at a 5 ms interval (about one percent
+    // of a core), is restarted every two minutes to bound memory, and when the stall
+    // monitor fires it takes the samples that fall inside the blocked window and names the
+    // frames that owned them. On 2026-09-02 sixty-one stalls in one tour, thirty-five of
+    // them in the Sewers of Barloque and the worst 70 seconds, carried `doing ?` and
+    // nothing else; every offline reproduction of the suspects came back in milliseconds.
+    // M59_KEEPER_PROFILE=0 switches it off.
+    const profiler = (() => {
+      if (process.env.M59_KEEPER_PROFILE === '0') return null;
+      try {
+        const session = new inspector.Session();
+        session.connect();
+        const post = (m, p = {}) => new Promise((res, rej) => session.post(m, p, (e, r) => e ? rej(e) : res(r)));
+        let startedAt = 0;
+        const start = () => post('Profiler.start').then(() => { startedAt = Date.now(); }).catch(() => {});
+        post('Profiler.enable').then(() => post('Profiler.setSamplingInterval', { interval: 5000 })).then(start).catch(() => {});
+        // Summarise the samples inside [fromMs, toMs] (wall clock) by self frame, top N.
+        const hotDuring = async (fromMs, toMs, top = 5) => {
+          let profile = null;
+          try { ({ profile } = await post('Profiler.stop')); } catch { return null; }
+          start();
+          if (!profile?.samples?.length) return null;
+          const byId = new Map(profile.nodes.map(n => [n.id, n]));
+          // profile.startTime is µs on the profiler's monotonic clock; map it to wall time
+          // by pinning the profile's end to now.
+          const totalUs = profile.timeDeltas.reduce((a, b) => a + b, 0);
+          const endWall = Date.now();
+          let tUs = 0;
+          const self = new Map();
+          let inWindow = 0;
+          for (let i = 0; i < profile.samples.length; i++) {
+            tUs += profile.timeDeltas[i] || 0;
+            const wall = endWall - (totalUs - tUs) / 1000;
+            if (wall < fromMs || wall > toMs) continue;
+            inWindow++;
+            const f = byId.get(profile.samples[i])?.callFrame;
+            if (!f) continue;
+            const k = `${f.functionName || '(anon)'} ${(f.url || '').split('/').pop()}:${f.lineNumber + 1}`;
+            self.set(k, (self.get(k) || 0) + (profile.timeDeltas[i] || 0));
+          }
+          if (!inWindow) return null;
+          return [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
+            .map(([k, us]) => `${k} ${Math.round(us / 1000)}ms`).join(', ');
+        };
+        // Bound memory: restart the profile every two minutes when nothing is being asked.
+        const cycle = setInterval(() => { if (Date.now() - startedAt > 120_000) post('Profiler.stop').then(start).catch(() => {}); }, 30_000);
+        if (typeof cycle.unref === 'function') cycle.unref();
+        return { hotDuring };
+      } catch { return null; }
+    })();
     let lastTick = Date.now();
     const tick = () => {
       const now = Date.now();
@@ -3449,13 +3503,19 @@ server.listen(port, '127.0.0.1', () => {
           roomNum = autopilot?.s?.world?.room?.num ?? session?.world?.room?.num ?? null;
           who = autopilot?.s?.client?.me?.name ?? session?.client?.me?.name ?? null;
         } catch { /* a stall report must not throw */ }
-        log(`[loop] ${agent} event loop was blocked ~${late}ms, resumed ${new Date(now).toISOString()} ` +
-            `(room ${roomNum ?? '?'}, doing ${doing ?? '?'}${to != null ? ', travelling to ' + to : ''})`);
-        try {
-          recordTactic({ character: who ?? agent, room: Number(roomNum ?? 0), tactic: 'loop_stall',
-                         trigger: 'event_loop', worked: false, ms: late, hp_lost: 0, attempted: false,
-                         note: `blocked ~${late}ms; doing ${doing ?? '?'}${to != null ? '; travelling to ' + to : ''}; resumed ${new Date(now).toISOString()}` });
-        } catch { /* evidence, not a dependency */ }
+        const write = hot => {
+          log(`[loop] ${agent} event loop was blocked ~${late}ms, resumed ${new Date(now).toISOString()} ` +
+              `(room ${roomNum ?? '?'}, doing ${doing ?? '?'}${to != null ? ', travelling to ' + to : ''})` +
+              (hot ? ` hot: ${hot}` : ''));
+          try {
+            recordTactic({ character: who ?? agent, room: Number(roomNum ?? 0), tactic: 'loop_stall',
+                           trigger: 'event_loop', worked: false, ms: late, hp_lost: 0, attempted: false,
+                           note: `blocked ~${late}ms; doing ${doing ?? '?'}${to != null ? '; travelling to ' + to : ''}; ` +
+                                 `resumed ${new Date(now).toISOString()}` + (hot ? `; hot: ${hot}` : '') });
+          } catch { /* evidence, not a dependency */ }
+        };
+        if (profiler) profiler.hotDuring(now - late - EVERY_MS, now).then(write, () => write(null));
+        else write(null);
       }
       const t = setTimeout(tick, EVERY_MS);
       if (typeof t.unref === 'function') t.unref();
