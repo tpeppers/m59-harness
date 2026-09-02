@@ -9720,6 +9720,11 @@ const TOOLS = [
       };
       if (a.travel_hold_below !== undefined)
         p.policy.travelHoldBelow = holdFraction('travel_hold_below', a.travel_hold_below);
+      if (a.travel_stop_max_threats !== undefined) {
+        // In a crowd the only wall is the exit — see Autopilot.travelStopMaxThreats. 0 disables.
+        const n = Number(a.travel_stop_max_threats);
+        if (Number.isFinite(n) && n >= 0) p.policy.travelStopMaxThreats = n;
+      }
       if (a.travel_hold_to !== undefined)
         p.policy.travelHoldTo = holdFraction('travel_hold_to', a.travel_hold_to);
       // Zero is allowed here and means OFF, which is why it does not go through

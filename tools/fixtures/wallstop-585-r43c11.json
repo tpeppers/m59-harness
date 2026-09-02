@@ -1,0 +1,486 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 585,
+  "name": "The border of the Badlands"
+ },
+ "stop": {
+  "row": 43,
+  "col": 11
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "prod",
+   "at": "2026-09-02T07:40:37.931Z",
+   "room": {
+    "num": 585,
+    "name": "The border of the Badlands"
+   },
+   "stop": {
+    "row": 43,
+    "col": 11
+   },
+   "wall": {
+    "row": 44,
+    "col": 10,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 19944
+   },
+   "wall_distance": 1,
+   "stood_ms": 120600,
+   "subject": {
+    "level": 49,
+    "max_health": 49,
+    "health_trail": [
+     47,
+     47,
+     47,
+     48,
+     48,
+     48,
+     38,
+     38,
+     41,
+     33,
+     33,
+     34,
+     34,
+     34,
+     35,
+     35,
+     35,
+     25,
+     25,
+     25,
+     25,
+     26,
+     8,
+     8
+    ],
+    "health_per_second": -0.7,
+    "flee_threshold": 0.6938775510204082,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 9,
+    "present_at_the_end": [
+     "groundworm",
+     "soldier of the Duke's army",
+     "troll",
+     "groundworm",
+     "groundworm",
+     "troll"
+    ],
+    "players_present": [
+     "player A",
+     "player B"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 60,
+     "row": 37,
+     "col": 33,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 46,
+     "by": []
+    },
+    {
+     "s_before_death": 50,
+     "row": 23,
+     "col": 29,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 45,
+     "by": []
+    },
+    {
+     "s_before_death": 35,
+     "row": 28,
+     "col": 11,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 10,
+     "health_after": 38,
+     "by": []
+    },
+    {
+     "s_before_death": 20,
+     "row": 33,
+     "col": 9,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 8,
+     "health_after": 33,
+     "by": []
+    },
+    {
+     "s_before_death": 11,
+     "row": 43,
+     "col": 10,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 10,
+     "health_after": 25,
+     "by": []
+    },
+    {
+     "s_before_death": 3,
+     "row": 43,
+     "col": 11,
+     "doing": "stalled",
+     "hits": 3,
+     "lost": 19,
+     "health_after": 8,
+     "by": [
+      "groundworm"
+     ]
+    },
+    {
+     "s_before_death": 1,
+     "row": 43,
+     "col": 10,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 8,
+     "health_after": 0,
+     "by": [
+      "groundworm"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 3,
+   "lost_on_the_stop_square": 19,
+   "decisions": [
+    {
+     "s_before_death": 123,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger A crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 3,
+      "col": 104
+     },
+     "health": "90%"
+    },
+    {
+     "s_before_death": 122,
+     "what": "pulled it to the wall",
+     "why": "a safe spot is only worth anything if the fight happens at it"
+    },
+    {
+     "s_before_death": 122,
+     "what": "waiting for it at the wall",
+     "why": "it has been hit and is following; only after its distance-sized follow window expires can this pull count against the square"
+    },
+    {
+     "s_before_death": 104,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 3,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 102,
+     "what": "gave up the safe spot",
+     "why": "we are not standing on it any more",
+     "where": {
+      "row": 3,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 49,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger B other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "45/49"
+    },
+    {
+     "s_before_death": 20,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 44,
+      "col": 10
+     },
+     "health": "78%"
+    },
+    {
+     "s_before_death": 10,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger B other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "25/49"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 3,
+     "text": "stranger A groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "stranger C block the groundworm's attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "stranger A groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "stranger C avoid the groundworm's attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "stranger A groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 2,
+     "text": "stranger C avoid the groundworm's attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger A groundworm hits you."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger A groundworm dissolves you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger C are dead, poor soul.  Go now, and take revenge on the groundworm!"
+    },
+    {
+     "s_before_death": 1,
+     "text": "### player C was just killed by a groundworm."
+    }
+   ]
+  },
+  {
+   "fleet_role": "shadow",
+   "at": "2026-08-31T23:59:18.692Z",
+   "room": {
+    "num": 585,
+    "name": "The border of the Badlands"
+   },
+   "stop": {
+    "row": 43,
+    "col": 11
+   },
+   "wall": {
+    "row": 44,
+    "col": 10,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 1680
+   },
+   "wall_distance": 1,
+   "stood_ms": 77888,
+   "subject": {
+    "level": 40,
+    "max_health": 40,
+    "health_trail": [
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     40,
+     31,
+     22,
+     22,
+     23,
+     23,
+     23,
+     13,
+     13
+    ],
+    "health_per_second": -0.25,
+    "flee_threshold": 0.7,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 10,
+    "present_at_the_end": [
+     "groundworm",
+     "groundworm",
+     "groundworm",
+     "groundworm",
+     "soldier of the Duke's army",
+     "groundworm"
+    ],
+    "players_present": [
+     "player A",
+     "stranger A",
+     "stranger B",
+     "stranger C"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 14,
+     "row": 21,
+     "col": 11,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 9,
+     "health_after": 31,
+     "by": []
+    },
+    {
+     "s_before_death": 9,
+     "row": 33,
+     "col": 8,
+     "doing": "recovering",
+     "hits": 1,
+     "lost": 9,
+     "health_after": 22,
+     "by": []
+    },
+    {
+     "s_before_death": 1,
+     "row": 40,
+     "col": 9,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 23,
+     "health_after": 0,
+     "by": [
+      "groundworm"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 0,
+   "lost_on_the_stop_square": 0,
+   "decisions": [
+    {
+     "s_before_death": 90,
+     "what": "rested in a sanctuary mid-journey",
+     "why": "",
+     "health": "40 -> 40/40"
+    },
+    {
+     "s_before_death": 83,
+     "what": "no longer travelling",
+     "why": "travel finished"
+    },
+    {
+     "s_before_death": 81,
+     "what": "found a quiet corner to rest in",
+     "why": "idle: no job to do"
+    },
+    {
+     "s_before_death": 77,
+     "what": "travelling — standing down from choosing, not from surviving",
+     "why": "travelling to stranger D"
+    },
+    {
+     "s_before_death": 10,
+     "what": "resting up",
+     "why": "idle: no job to do",
+     "health": {
+      "value": 31,
+      "max": 40,
+      "pct": 78
+     }
+    },
+    {
+     "s_before_death": 7,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 44,
+      "col": 10
+     },
+     "health": "55%"
+    },
+    {
+     "s_before_death": 2,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 44,
+      "col": 10
+     },
+     "health": "33%"
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 37,
+     "text": "player B broadcasts, \"stranger E: stranger F stranger G stranger H stranger I and stranger J to stranger K stranger L stranger I in 8 hop(s), health down to 41% (16/39), 1 rest stop at a safe wall.\""
+    },
+    {
+     "s_before_death": 30,
+     "text": "stranger M avoid the spider's attack."
+    },
+    {
+     "s_before_death": 21,
+     "text": "player C broadcasts, \"stranger E: stranger N stranger I to stranger D in 9 hop(s), untouched, no rest stops.\""
+    },
+    {
+     "s_before_death": 14,
+     "text": "stranger F groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 9,
+     "text": "stranger F groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "stranger F groundworm sears you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger F groundworm hits you."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger F groundworm dissolves you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger M are dead, poor soul.  Go now, and take revenge on the groundworm!"
+    },
+    {
+     "s_before_death": 1,
+     "text": "### player D was just killed by a groundworm."
+    }
+   ]
+  }
+ ]
+}

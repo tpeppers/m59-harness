@@ -1,0 +1,292 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 578,
+  "name": "The Cragged Mountains"
+ },
+ "stop": {
+  "row": 7,
+  "col": 7
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "shadow",
+   "at": "2026-09-02T05:19:35.190Z",
+   "room": {
+    "num": 578,
+    "name": "The Cragged Mountains"
+   },
+   "stop": {
+    "row": 7,
+    "col": 7
+   },
+   "wall": {
+    "row": 8,
+    "col": 7,
+    "claims": {
+     "can_reach_you": null,
+     "free_shots": null,
+     "back_cover": null,
+     "proven_before": null,
+     "proven": null
+    },
+    "decided_ms_before_death": 100466
+   },
+   "wall_distance": 1,
+   "stood_ms": 627397,
+   "subject": {
+    "level": 53,
+    "max_health": 53,
+    "health_trail": [
+     16,
+     17,
+     17,
+     17,
+     12,
+     12,
+     12,
+     13,
+     13,
+     13,
+     13,
+     14,
+     14,
+     14,
+     14,
+     15,
+     15,
+     10,
+     10,
+     10,
+     11,
+     11,
+     5,
+     5
+    ],
+    "health_per_second": -0.33,
+    "flee_threshold": 0.6792452830188679,
+    "doing_at_death": "stalled",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 13,
+    "present_at_the_end": [
+     "black spider",
+     "troll",
+     "black spider",
+     "black spider",
+     "black spider",
+     "troll"
+    ],
+    "players_present": [
+     "player A",
+     "player B"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 391,
+     "row": 23,
+     "col": 17,
+     "doing": "stalled",
+     "hits": 8,
+     "lost": 33,
+     "health_after": 31,
+     "by": []
+    },
+    {
+     "s_before_death": 329,
+     "row": 47,
+     "col": 25,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 7,
+     "health_after": 46,
+     "by": []
+    },
+    {
+     "s_before_death": 212,
+     "row": 28,
+     "col": 38,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 50,
+     "by": []
+    },
+    {
+     "s_before_death": 186,
+     "row": 36,
+     "col": 22,
+     "doing": "stalled",
+     "hits": 5,
+     "lost": 19,
+     "health_after": 36,
+     "by": [
+      "orc"
+     ]
+    },
+    {
+     "s_before_death": 175,
+     "row": 43,
+     "col": 55,
+     "doing": "stalled",
+     "hits": 1,
+     "lost": 6,
+     "health_after": 35,
+     "by": []
+    },
+    {
+     "s_before_death": 101,
+     "row": 8,
+     "col": 8,
+     "doing": "stalled",
+     "hits": 5,
+     "lost": 25,
+     "health_after": 30,
+     "by": [
+      "black spider"
+     ]
+    },
+    {
+     "s_before_death": 7,
+     "row": 8,
+     "col": 7,
+     "doing": "stalled",
+     "hits": 10,
+     "lost": 50,
+     "health_after": 10,
+     "by": []
+    },
+    {
+     "s_before_death": 1,
+     "row": 7,
+     "col": 6,
+     "doing": "stalled",
+     "hits": 2,
+     "lost": 12,
+     "health_after": 0,
+     "by": []
+    }
+   ],
+   "hits_on_the_stop_square": 0,
+   "lost_on_the_stop_square": 0,
+   "decisions": [
+    {
+     "s_before_death": 140,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 45,
+      "col": 20
+     },
+     "health": "94%"
+    },
+    {
+     "s_before_death": 139,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger A crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 45,
+      "col": 20
+     },
+     "health": "94%"
+    },
+    {
+     "s_before_death": 132,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 45,
+      "col": 20
+     }
+    },
+    {
+     "s_before_death": 105,
+     "what": "! NOT MOVING — null, same square two pulses apart",
+     "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. stranger B other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wed",
+     "health": "43/53"
+    },
+    {
+     "s_before_death": 101,
+     "what": "taking a wall on the way past",
+     "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago",
+     "where": {
+      "row": 8,
+      "col": 7
+     },
+     "health": "66%"
+    },
+    {
+     "s_before_death": 100,
+     "what": "resting at a refuge on the way",
+     "why": "a refuge passed at less than full is a square rather than a refuge. stranger A crossing is not cancelled — the mover keeps the body and the route behind this waypoint is untouched",
+     "where": {
+      "row": 8,
+      "col": 7
+     },
+     "health": "58%"
+    },
+    {
+     "s_before_death": 7,
+     "what": "leaving the refuge",
+     "why": "",
+     "where": {
+      "row": 8,
+      "col": 7
+     }
+    },
+    {
+     "s_before_death": 0,
+     "what": "died carrying money",
+     "why": "under the banking threshold, so this was the float we accept losing"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 52,
+     "text": "player C broadcasts, \"I'm on my 1st lap since dying, I've just reached the checkpoint stranger C stranger D. stranger E travel time since last leg: 318 seconds. stranger F stop: stranger G stranger H.\""
+    },
+    {
+     "s_before_death": 40,
+     "text": "player D broadcasts, \"I'm on my 1st lap since dying, I've just reached the checkpoint stranger I stranger J. stranger E travel time since last leg: 292 seconds. stranger F stop: stranger G stranger H.\""
+    },
+    {
+     "s_before_death": 35,
+     "text": "player E broadcasts, \"I'm on my 1st lap since dying, I've just reached the checkpoint stranger G stranger H. stranger E travel time since last leg: 85 seconds. stranger F stop: stranger K stranger L.\""
+    },
+    {
+     "s_before_death": 16,
+     "text": "player F broadcasts, \"I'm on my 1st lap since dying, I've just reached the checkpoint stranger I stranger J. stranger E travel time since last leg: 316 seconds. stranger F stop: A shadowy corner.\""
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger A black spider bites you with its attack."
+    },
+    {
+     "s_before_death": 3,
+     "text": "player G broadcasts, \"I'm on my 1st lap since dying, I've just reached the checkpoint stranger C stranger D. stranger E travel time since last leg: 314 seconds. stranger F stop: stranger G stranger H.\""
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger A black spider bites you several times, leaving you bloody."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger A black spider devours you with its attack."
+    },
+    {
+     "s_before_death": 1,
+     "text": "stranger M are dead, poor soul.  Go now, and take revenge on the black spider!"
+    },
+    {
+     "s_before_death": 1,
+     "text": "### player H was just killed by a black spider."
+    }
+   ]
+  }
+ ]
+}

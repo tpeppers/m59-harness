@@ -821,6 +821,9 @@ export function nearestSafeSpot(geo, from, {
   rule = 'wall', minBackCover = 1, fromFightWeight = 0.3,
   closestToToward = false,
   allowExit = true,
+  // false withholds every wall and leaves the exit (when a journey names one): the crowd
+  // rule — see Autopilot.crowded — because a wall in a room of thirteen trolls is not one.
+  wallsAllowed = true,
   // SQUARES WE COULD NOT GET TO. A different fact from a square that failed to HOLD, which
   // is what `discredited` records — this one is about the walk, not about the wall.
   // See `unreachableSpots` on the keeper for why it is session-scoped and expires.
@@ -923,7 +926,7 @@ export function nearestSafeSpot(geo, from, {
   let reachesOnwardCount = 0;
   let exitConsidered = false;
   let partitionRejected = 0;
-  for (const s of all) {
+  for (const s of (wallsAllowed ? all : [])) {
     const seen = known?.get(key(s.col, s.row)) || null;
     // Never send a character back to a square that has already been disproved.
     if (seen && book.discredited(seen)) continue;
@@ -1108,6 +1111,7 @@ export function nearestSafeSpot(geo, from, {
     stats.considered = all.length;
     stats.eligible = eligible;
     stats.exit_considered = exitConsidered;
+    stats.walls_withheld = !wallsAllowed;
     // Reported rather than silent: "there were walls but every one of them was a one-way
     // trip" is a different room from "there were no walls", and a keeper that cannot tell
     // them apart writes the wrong thing in the ledger.

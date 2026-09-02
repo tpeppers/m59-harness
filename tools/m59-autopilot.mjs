@@ -3274,10 +3274,12 @@ export class Autopilot {
       // adversarial claim store from turning one decision into an unbounded loop.
       for (let attempt = 0; attempt < 32; attempt++) {
         for (const k of Object.keys(spotStats)) delete spotStats[k]; // stats describe LAST attempt
+        const wallsAllowed = !(source === 'travel' && this.crowded());
+        if (!wallsAllowed && attempt === 0) this.noteCrowdRefusal('a wall to retreat to');
         spot = this.searchSafeSpot(geo, me, room, {
           within, quarryReach, strictQuarryReach, los, quarry,
           stats: spotStats, shareCap, nearQuarry, exclusiveClaim,
-          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1 });
+          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1, wallsAllowed });
         if (!spot) break;
         const claimed = exclusiveClaim
           ? claimExclusiveSpot(this.s.name, room.num, spot.col, spot.row)
@@ -4924,7 +4926,8 @@ export class Autopilot {
   // how the two would come to disagree about `los` or the book.
   searchSafeSpot(geo, me, room, { within, quarryReach, strictQuarryReach = false,
                                   los, quarry, stats, shareCap = 1, nearQuarry = false,
-                                  exclusiveClaim = false, onward = null, forwardBias = 1 }) {
+                                  exclusiveClaim = false, onward = null, forwardBias = 1,
+                                  wallsAllowed = true }) {
     const s = this.s;
     // One room search can inspect hundreds of candidate squares. Reading the shared
     // claim directory for every candidate would turn that into hundreds of lock/file
@@ -4932,6 +4935,7 @@ export class Autopilot {
     // selection catches the only race a snapshot can leave, and its retry takes a fresh one.
     const spotClaims = snapshotSpotClaims();
     return nearestSafeSpot(geo, me, {
+      wallsAllowed,
       // WHAT MAKES A SQUARE A CANDIDATE. `wall` asks for a wall to stand against and
       // ranks by how much of it there is; `disc` is the old attackers_avoided >= 20
       // gate, kept so the two can be compared rather than swapped on faith. See
@@ -5440,7 +5444,9 @@ export class Autopilot {
       // journey and drown the ones that matter. So the ones recorded are exactly the ones
       // where the character WANTED to stop and something else refused it: hurt, mid-journey,
       // and turned away by vigor, by a fight, or by people about.
-      if (look.frac != null && look.frac < (this.policy.travelHoldBelow ?? 0.75) && at.remaining > 0)
+      if (this.crowded()) this.noteCrowdRefusal('hop-boundary hold');
+      if (look.frac != null && look.frac < (this.policy.travelHoldBelow ?? 0.75) && at.remaining > 0
+          && !this.crowded())
         this.ledgerEvent('travel_pause', {
           journey: at.journey, arm, room: at.room?.num ?? null, room_name: at.room?.name ?? null,
           hops_done: at.hops_done, remaining: at.remaining,
@@ -6677,6 +6683,43 @@ export class Autopilot {
   // pair `travelShelterBelow` above has, and deliberately the same shape: in a zone the
   // character would happily fight in, an ordinary threshold; in a zone it would refuse to
   // engage anything in, the first scratch is the warning it gets.
+  // IN A CROWD, THE ONLY WALL IS THE EXIT. 89 road deaths across both fleets on 2026-09-02:
+  // 57 had stopped — a wall on the way past, a refuge on the way, a hop-boundary hold, or
+  // trading in place when wedged — in a room of 9 to 18 monsters, and stood a median of two
+  // to three minutes before dying. A wall the geometry calls unreachable is reached by a
+  // troll in a room of thirteen. So at or above this many live threats in the room a
+  // journey makes no stops of any kind and a retreat considers only the exit, which is
+  // what actually breaks every attack. Policy `travelStopMaxThreats` (autopilot tool
+  // `travel_stop_max_threats`), env M59_TRAVEL_STOP_MAX_THREATS, default 6; 0 disables.
+  travelStopMaxThreats() {
+    const p = Number(this.policy?.travelStopMaxThreats);
+    if (Number.isFinite(p)) return p;
+    const e = Number(process.env.M59_TRAVEL_STOP_MAX_THREATS);
+    return Number.isFinite(e) ? e : 6;
+  }
+  crowded() {
+    const cap = this.travelStopMaxThreats();
+    if (!(cap > 0)) return false;
+    let n = 0;
+    try { n = this.namedThreatsHere().length; } catch { return false; }
+    return n >= cap;
+  }
+  // One ledger row per room per minute when the crowd rule refuses a stop, so a tour says
+  // where the rule fired and what it refused.
+  noteCrowdRefusal(what) {
+    const room = Number(this.s?.world?.room?.num ?? 0);
+    const now = Date.now();
+    const key = `${room}:${what}`;
+    this._crowdNoted ??= new Map();
+    if ((this._crowdNoted.get(key) ?? 0) > now - 60_000) return;
+    this._crowdNoted.set(key, now);
+    let n = 0; try { n = this.namedThreatsHere().length; } catch { /* counted as unknown */ }
+    try {
+      recordTactic({ character: this.s?.client?.me?.name ?? this.s?.name ?? null, room,
+                     tactic: 'crowd_no_stop', trigger: what, worked: true, ms: 0, hp_lost: 0, attempted: true,
+                     note: `${n} threats in the room (cap ${this.travelStopMaxThreats()}): refused ${what}; the exit is the only wall here` });
+    } catch { /* evidence, not a dependency */ }
+  }
   travelDivertAt() {
     return this.roomOutranksUs()
       ? (this.policy.travelDivertBelowOutranked ?? 1)
@@ -8483,6 +8526,7 @@ export class Autopilot {
           // ANY DAMAGE AT ALL — WHERE THE MAP OUTRANKS US, AND AN ORDINARY THRESHOLD ELSEWHERE.
           // See travelDivertAt: the condition is what makes the sensitive half affordable, and
           // I shipped it unconditional for one run and watched arrivals fall from 43% to 10%.
+          if (this.crowded()) { this.noteCrowdRefusal('wall on the way past'); return false; }
           return hp < this.travelDivertAt();
         },
         // AND SIT DOWN WHEN WE GET THERE, IF WE ARE NOT WHOLE.
@@ -10010,6 +10054,7 @@ export class Autopilot {
   // rung is. `trade_in_place_when_wedged: false` switches it off per character.
   async tradeInPlaceIfWedged({ near = [], v = null } = {}) {
     if (this.policy?.tradeInPlaceWhenWedged === false) return false;
+    if (this.crowded()) { this.noteCrowdRefusal('trading in place'); return false; }
     if (!near.length || this.hold || this.holdWorks()) return false;
     const frac = pct(v?.health);
     if (frac === null || frac >= this.safety().fleeAt) return false;

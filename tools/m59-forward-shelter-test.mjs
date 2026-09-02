@@ -113,5 +113,15 @@ console.log('\nthe exit is a wall: on a journey the onward square joins the cand
   ok('a rest or a fight names no exit and never gets one', !!rest && rest.kind !== 'exit', at(rest));
 }
 
+console.log('\nin a crowd the only wall is the exit: wallsAllowed false');
+{
+  const stats = {};
+  const s = nearestSafeSpot(geo, MID, { onward: SOUTH_DOOR, forwardBias: 8, wallsAllowed: false, stats });
+  ok('with walls withheld and a journey named, the exit is the only answer', s?.kind === 'exit', at(s));
+  ok('and the search says the walls were withheld', stats.walls_withheld === true, JSON.stringify(stats));
+  const none = nearestSafeSpot(geo, MID, { wallsAllowed: false });
+  ok('with walls withheld and no journey, there is no spot at all — the ladder moves on', none === null, at(none));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

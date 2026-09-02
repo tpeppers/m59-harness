@@ -1,0 +1,443 @@
+{
+ "format": "m59-wallstop/1",
+ "captured_at": "2026-09-02T23:00:06.309Z",
+ "room": {
+  "num": 562,
+  "name": "The sandy shores of the Great Ocean"
+ },
+ "stop": {
+  "row": 1,
+  "col": 101
+ },
+ "why": "A traveller took \"a wall on the way past\" here, stood on it, was reached anyway, and died without moving. The geometry offered the square; the crowd rule now offers no wall in a room this full. m59-wallstop-test.mjs pins both.",
+ "coordinate_note": "row/col are coarse grid squares (rNcM); hits carry the square the blow landed on",
+ "occurrences": [
+  {
+   "fleet_role": "prod",
+   "at": "2026-09-01T04:53:02.451Z",
+   "room": {
+    "num": 562,
+    "name": "The sandy shores of the Great Ocean"
+   },
+   "stop": {
+    "row": 1,
+    "col": 101
+   },
+   "wall": {
+    "row": 1,
+    "col": 104,
+    "claims": {
+     "can_reach_you": 0,
+     "free_shots": 7,
+     "back_cover": 3,
+     "proven_before": "never tested",
+     "proven": true
+    },
+    "decided_ms_before_death": 338204
+   },
+   "wall_distance": 3,
+   "stood_ms": 321762,
+   "subject": {
+    "level": 45,
+    "max_health": 45,
+    "health_trail": [
+     28,
+     29,
+     30,
+     31,
+     32,
+     31,
+     32,
+     33,
+     31,
+     32,
+     25,
+     23,
+     24,
+     22,
+     17,
+     11,
+     12,
+     7,
+     8,
+     5,
+     6,
+     3,
+     4,
+     1
+    ],
+    "health_per_second": -0.19,
+    "flee_threshold": 0.6666666666666666,
+    "doing_at_death": "fighting",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 6,
+    "present_at_the_end": [
+     "fungus beast",
+     "slime",
+     "slime",
+     "fungus beast",
+     "slime",
+     "fungus beast"
+    ],
+    "players_present": [
+     "player A"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 164,
+     "row": 1,
+     "col": 101,
+     "doing": "fighting",
+     "hits": 11,
+     "lost": 38,
+     "health_after": 24,
+     "by": []
+    },
+    {
+     "s_before_death": 128,
+     "row": 1,
+     "col": 101,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 4,
+     "health_after": 27,
+     "by": []
+    },
+    {
+     "s_before_death": 4,
+     "row": 1,
+     "col": 101,
+     "doing": "fighting",
+     "hits": 16,
+     "lost": 47,
+     "health_after": 0,
+     "by": [
+      "slime",
+      "fungus beast"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 28,
+   "lost_on_the_stop_square": 89,
+   "decisions": [
+    {
+     "s_before_death": 351,
+     "what": "reconnecting before stepping out",
+     "why": "rested to the ceiling — back on the road"
+    },
+    {
+     "s_before_death": 351,
+     "what": "pass failed",
+     "why": "agent \"t12\" is not in game — call join first"
+    },
+    {
+     "s_before_death": 341,
+     "what": "gave up the safe spot",
+     "why": "rested to the ceiling — back on the road",
+     "where": {
+      "row": 1,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 338,
+     "what": "not eating here — something in this room can reach us",
+     "why": "raising vigor is standing still and not looking, which is the same act as resting and costs the same. stranger A ladder refuses a rest in a room that can reach us; this is that rule, applied to the larder — and to the cooking pot."
+    },
+    {
+     "s_before_death": 338,
+     "what": "took a safe spot",
+     "why": "a level 50 kill can raise our maximum health of 45. stranger B that pays is by definition at or above our level, and anything at our level can take a third of the bar in one blow — so fight it from a wall",
+     "where": {
+      "row": 1,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 3,
+     "what": "gave up the safe spot",
+     "why": "could not get back to it after pulling",
+     "where": {
+      "row": 1,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 3,
+     "what": "could not bring it to the wall",
+     "why": "could not walk back to the square"
+    },
+    {
+     "s_before_death": 3,
+     "what": "recovered",
+     "why": ""
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 18,
+     "text": "stranger C avoid the slime's attack."
+    },
+    {
+     "s_before_death": 16,
+     "text": "stranger A slime burns you with its attack."
+    },
+    {
+     "s_before_death": 14,
+     "text": "stranger C dodge the fungus beast's attack."
+    },
+    {
+     "s_before_death": 11,
+     "text": "stranger C dodge the slime's attack."
+    },
+    {
+     "s_before_death": 11,
+     "text": "stranger C dodge the fungus beast's attack."
+    },
+    {
+     "s_before_death": 7,
+     "text": "stranger A slime burns you with its attack."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger A fungus beast hits you."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger A fungus beast slays you with its attack."
+    },
+    {
+     "s_before_death": 4,
+     "text": "stranger C are dead, poor soul.  Go now, and take revenge on the fungus beast!"
+    },
+    {
+     "s_before_death": 4,
+     "text": "### player B was just killed by a fungus beast."
+    }
+   ]
+  },
+  {
+   "fleet_role": "prod",
+   "at": "2026-09-01T05:31:15.398Z",
+   "room": {
+    "num": 562,
+    "name": "The sandy shores of the Great Ocean"
+   },
+   "stop": {
+    "row": 1,
+    "col": 101
+   },
+   "wall": {
+    "row": 2,
+    "col": 104,
+    "claims": {
+     "can_reach_you": 0,
+     "free_shots": 10,
+     "back_cover": 0,
+     "proven_before": "never tested",
+     "proven": true
+    },
+    "decided_ms_before_death": 225752
+   },
+   "wall_distance": 3,
+   "stood_ms": 219758,
+   "subject": {
+    "level": 44,
+    "max_health": 44,
+    "health_trail": [
+     37,
+     38,
+     35,
+     36,
+     32,
+     33,
+     30,
+     27,
+     23,
+     24,
+     21,
+     22,
+     19,
+     16,
+     17,
+     18,
+     16,
+     17,
+     12,
+     8,
+     9,
+     10,
+     7,
+     3
+    ],
+    "health_per_second": -0.2,
+    "flee_threshold": 0.6818181818181818,
+    "doing_at_death": "fighting",
+    "moving_at_death": false
+   },
+   "threats": {
+    "most_at_once": 6,
+    "present_at_the_end": [
+     "slime",
+     "slime",
+     "fungus beast",
+     "fungus beast",
+     "fungus beast",
+     "slime"
+    ],
+    "players_present": [
+     "player A"
+    ]
+   },
+   "hits_while_standing": [
+    {
+     "s_before_death": 194,
+     "row": 1,
+     "col": 102,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 3,
+     "health_after": 41,
+     "by": []
+    },
+    {
+     "s_before_death": 125,
+     "row": 1,
+     "col": 101,
+     "doing": "fighting",
+     "hits": 5,
+     "lost": 15,
+     "health_after": 37,
+     "by": [
+      "fungus beast"
+     ]
+    },
+    {
+     "s_before_death": 120,
+     "row": 1,
+     "col": 102,
+     "doing": "fighting",
+     "hits": 1,
+     "lost": 2,
+     "health_after": 36,
+     "by": []
+    },
+    {
+     "s_before_death": 2,
+     "row": 1,
+     "col": 101,
+     "doing": "fighting",
+     "hits": 16,
+     "lost": 56,
+     "health_after": 0,
+     "by": [
+      "slime",
+      "fungus beast"
+     ]
+    }
+   ],
+   "hits_on_the_stop_square": 21,
+   "lost_on_the_stop_square": 71,
+   "decisions": [
+    {
+     "s_before_death": 227,
+     "what": "pulled it to the wall",
+     "why": "a safe spot is only worth anything if the fight happens at it"
+    },
+    {
+     "s_before_death": 227,
+     "what": "waiting for it at the wall",
+     "why": "it has been hit and is following; only after its distance-sized follow window expires can this pull count against the square"
+    },
+    {
+     "s_before_death": 227,
+     "what": "recovered",
+     "why": ""
+    },
+    {
+     "s_before_death": 226,
+     "what": "leaving the wall — full health and all the vigor resting can give",
+     "why": "a rest stop is for getting well, and this character is as well as sitting down can make it. stranger A is how a journey times out without ever being in danger.",
+     "health": "44/44"
+    },
+    {
+     "s_before_death": 226,
+     "what": "gave up the safe spot",
+     "why": "rested to the ceiling — back on the road",
+     "where": {
+      "row": 2,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 226,
+     "what": "took a safe spot",
+     "why": "a level 50 kill can raise our maximum health of 44. stranger B that pays is by definition at or above our level, and anything at our level can take a third of the bar in one blow — so fight it from a wall",
+     "where": {
+      "row": 2,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 2,
+     "what": "gave up the safe spot",
+     "why": "could not get back to it after pulling",
+     "where": {
+      "row": 2,
+      "col": 104
+     }
+    },
+    {
+     "s_before_death": 2,
+     "what": "could not bring it to the wall",
+     "why": "could not walk back to the square"
+    }
+   ],
+   "last_words": [
+    {
+     "s_before_death": 14,
+     "text": "stranger C avoid the slime's attack."
+    },
+    {
+     "s_before_death": 10,
+     "text": "stranger C avoid the slime's attack."
+    },
+    {
+     "s_before_death": 10,
+     "text": "stranger C dodge the fungus beast's attack."
+    },
+    {
+     "s_before_death": 8,
+     "text": "stranger C dodge the slime's attack."
+    },
+    {
+     "s_before_death": 6,
+     "text": "stranger D fungus beast nicks you with its attack."
+    },
+    {
+     "s_before_death": 5,
+     "text": "stranger D slime burns you with its attack."
+    },
+    {
+     "s_before_death": 2,
+     "text": "stranger D slime hits you."
+    },
+    {
+     "s_before_death": 2,
+     "text": "stranger D slime dissolves you with its attack."
+    },
+    {
+     "s_before_death": 2,
+     "text": "stranger C are dead, poor soul.  Go now, and take revenge on the slime!"
+    },
+    {
+     "s_before_death": 2,
+     "text": "### player B was just killed by a slime."
+    }
+   ]
+  }
+ ]
+}
