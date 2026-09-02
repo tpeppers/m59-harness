@@ -469,3 +469,20 @@ self frames say "the tracer" for every stall, and that is not a cause.
 The cross-epoch measure of liveness is the server's own log: `grep "hasn't been heard from"`
 on `log-<date>.txt`, counted per tour hour. The tactics ledger prunes rows from superseded
 movement epochs, so a comparison across a code change cannot be made from it.
+
+### The clock was not enough: a refused step must yield
+
+With the needle clocked at 400 ms, tour 11 still had one 45 s stall, and the `callers:` half
+said why: `walkPivots -> step -> threadInto`, a hundred times over. No single needle ran long;
+they ran back to back, because a step refused locally without a packet returns through an
+already-settled `await`, which is a MICROTASK and not a turn of the event loop. A loop of them
+starves the keepalive timer, the HTTP server and the stall monitor for as long as it runs.
+`walkTo` had a spin guard that yielded every twenty-fifth packetless iteration, tuned for
+refusals of a tenth of a millisecond; with a clocked needle inside each one, twenty-five is ten
+seconds. `Session._yieldIfPacketless` is one 25 ms macrotask yield per step result that moved
+nothing and sent nothing, called after every step loop, and `walkTo` calls it on every
+iteration. Two memos landed with it — `World.approachSquare` for 750 ms from the square we
+stand in, `provedSquares` for two seconds per geometry — because both were being recomputed on
+every walker iteration and had become the whole of the 2–5 s stalls that remained. Tour 12:
+two stalls in twenty minutes, both in the loop the last yield now covers; prod: 9 stalls in a
+quarter hour with the worst 3.3 s, against 313 and 158 s in the tour that found them.
