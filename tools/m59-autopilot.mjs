@@ -1982,10 +1982,18 @@ export class Autopilot {
   // loadout's own preference order, which is the standing answer. Null falls through to
   // ranking by proficiency, which is a feedback loop that only ever rewards what the
   // character is already good at.
-  weaponPriorityNow() {
-    if (this.policy.weaponPriority) return this.policy.weaponPriority;
-    const l = this.loadout();
-    return l && l.gear.weapon.length ? l.gear.weapon : null;
+  weaponPriorityNow(targetName = null) {
+    // Undead override, above even the operator's list: blunt for a skeleton, a short
+    // sword for a zombie (operator order, 2026-09-01). Only these two prey — every
+    // other target keeps whatever answer the rungs below give. The fragments PREPEND
+    // rather than replace, so a character carrying neither still reaches for its own
+    // best weapon instead of standing unarmed on a technicality.
+    const t = String(targetName ?? '').toLowerCase();
+    const base = this.policy.weaponPriority
+      ?? (() => { const l = this.loadout(); return l && l.gear.weapon.length ? l.gear.weapon : null; })();
+    if (t.includes('skeleton')) return ['hammer', 'mace', ...(base ?? [])];
+    if (t.includes('zombie')) return ['short sword', ...(base ?? [])];
+    return base;
   }
 
   // A training bout belongs to one quarry. `skills.fight` deliberately resumes a
@@ -15024,7 +15032,7 @@ export class Autopilot {
                                         holdPosition: holding, reach: PLAYER_REACH,
                                         equip: training.equip,
                                         rounds: training.rounds,
-                                        weaponPriority: this.weaponPriorityNow() });
+                                        weaponPriority: this.weaponPriorityNow(engageName) });
 
       // With equip:false fight() cannot know which prepared weapon shattered. Remember
       // the exact short-sword id here so the next pass makes a replacement instead of
