@@ -707,9 +707,27 @@ class Pacer {
 //
 // A room with no collision model, a pull that throws, or a route of one step all return
 // null, and null means "walk exactly as before".
+// MEMOISED, two seconds, per geometry: the walker asks the same (from, steps) on consecutive
+// iterations while the body has not moved, and each answer is a string pull with a trace
+// per pivot — the keeper's own profiler put it in every stall left once the needle had its
+// clock (2026-09-02). The call site is unchanged, so the fixtures that lift walkTo see the
+// same free symbols.
+const PROVED_MEMO = new WeakMap();
 function provedSquares(geo, from, steps) {
   if (!geo?.collisionReady || typeof geo.stringPull !== 'function') return null;
   if (!Array.isArray(steps) || steps.length < 2 || !from) return null;
+  const memoKey = `${from.row},${from.col}|${steps.length}|${steps.map(s => s.row + ',' + s.col).join('>')}`;
+  const now = Date.now();
+  let perGeo = PROVED_MEMO.get(geo);
+  if (!perGeo) { perGeo = new Map(); PROVED_MEMO.set(geo, perGeo); }
+  const hit = perGeo.get(memoKey);
+  if (hit && now - hit.at < 2000) return hit.value;
+  const value = provedSquaresUncached(geo, from, steps);
+  if (perGeo.size > 64) perGeo.clear();
+  perGeo.set(memoKey, { at: now, value });
+  return value;
+}
+function provedSquaresUncached(geo, from, steps) {
   const half = KOD_FINENESS >> 1;
   const pointOf = s => geo.standPoint?.(s.row, s.col)
     ?? { x: protocolToClient(s.col * KOD_FINENESS + half),
@@ -3780,6 +3798,7 @@ class Session {
         // which is precisely the predicate that refuses a fall. So it lands here, and here
         // is where the flag has to be passed on.
         const r = await this.step(target.col, target.row, { fall: !!target.fall });
+        if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
         legsSinceShelter++;   // progress since the last refuge — see the live-lock guard
         if (r.left_room) return { done: false, legs, singles, left_room: true };
@@ -3834,6 +3853,7 @@ class Session {
           && remaining.length > 1) {
         const one = remaining[0];
         const r = await this.step(one.col, one.row, { fall: !!one.fall });
+        if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
         legsSinceShelter++;   // progress since the last refuge — see the live-lock guard
         if (r.left_room) return { done: false, legs, singles, left_room: true };
@@ -3884,6 +3904,7 @@ class Session {
         const nextSq = remaining[0];
         if (nextSq) {
           const r = await this.step(nextSq.col, nextSq.row, { fall: !!nextSq.fall });
+          if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
           if (r?.left_room || c.room.id !== roomId)
             return { done: false, legs, singles, left_room: true };
           singles++;
@@ -4089,6 +4110,16 @@ class Session {
 
   // COORDINATE CONTRACT: this movement API is `(col,row)`; geometry calls inside
   // it deliberately adapt to `(row,col)`.
+  // A STEP THAT SENT NOTHING MUST NOT CHAIN INTO THE NEXT ONE WITHOUT A REAL YIELD. A refused
+  // step returns through a settled await, which is a microtask and not a turn of the event
+  // loop; a loop of them starves the keepalive, the HTTP server and the stall monitor for as
+  // long as the loop runs (45 s measured on 2026-09-02 with every needle inside it clocked
+  // at 400 ms). One macrotask yield per packetless result is the difference. Guarded by
+  // `typeof` at every call site, because the fixtures lift those loops by text.
+  async _yieldIfPacketless(r) {
+    if (r?.moved || r?.left_room || (r?.travelled ?? 0) > 0 || r?.reason === 'raw_move_rejected') return;
+    await new Promise(res => setTimeout(res, 25));
+  }
   async step(col, row, { confirm = false, beforeMutation = null, fall = false } = {}) {
     const c = this.need();
     const roomId = c.room.id;
@@ -6202,6 +6233,10 @@ class Session {
       // The re-aim used to be duplicated here. `step` owns it now — it is the primitive every
       // fall passes through, and two homes for one heuristic is how they drift apart.
       const r = await this.step(next.col, next.row, { beforeMutation, fall: !!next.fall });
+      // Every packetless result yields (see _yieldIfPacketless): the guard below yields every
+      // twenty-fifth, which was tuned for refusals of a tenth of a millisecond — with a clocked
+      // needle in each one, twenty-five is ten seconds without a turn of the event loop.
+      if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
       if (r?.moved || r?.reason === 'raw_move_rejected' || (r?.travelled ?? 0) > 0) packetless = 0;
       else {
         packetless++;
@@ -7186,6 +7221,7 @@ class Session {
         if (typeof geo.standable === 'function' && !geo.standable(r, c)) continue;
         if (typeof geo.moverStepLands === 'function' && !geo.moverStepLands(me.row, me.col, r, c)) continue;
         const out = await this.step(c, r).catch(() => null);
+        if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(out);
         if (out?.left_room) return moved;             // it went out anyway; nothing to add
         const now = this.client?.self;
         if (now && now.row === r && now.col === c) { stepped = true; moved = true; break; }
@@ -7576,6 +7612,7 @@ class Session {
               .then(w => ({ ...w, moved: w?.arrived ?? w?.moved }))
               .catch(e => ({ moved: false, reason: e.message }))
           : await this.step(target.col, target.row);
+          if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         if (r.left_room) return { railed: true, left_room: true, at: i, walked };
         if (isTerminalMovementReason(r.reason))
           return { railed: false, reason: r.reason, at: i, walked };
@@ -8442,6 +8479,7 @@ class Session {
             const r = await this.step(doorSquare.col, doorSquare.row,
                                       { movementGeneration, controlToken })
               .catch(() => null);
+            if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
             if (r?.left_room || c.room.id !== edgeStartRoom)
               return { left: true, arrived_in: c.rsc.get(c.roomNameRsc),
                        note: 'stepped straight out of the room while closing on the opening' };
