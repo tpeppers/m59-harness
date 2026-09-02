@@ -313,16 +313,17 @@ m59-keeper-process.mjs
 
 ### State persistence
 
-The keeper saves its state to `substrate/keeper-t1.json` on:
-- Every 30 seconds
-- On graceful stop
-- On crash (via `process.on('exit')`)
+The keeper writes its latest observed state to `substrate/keeper-t1.json` after a real
+HTTP reader refreshes the snapshot. Refreshed values coalesce behind one trailing timeout,
+at most once per 30 seconds. A graceful stop or ordinary process exit performs one final
+flush. An unobserved keeper owns no persistence timer and does not build state for disk.
 
 State includes: current room, position, health, pack, equipment, GOAP state
 (goal, target, persisted target ID), safe spot book entries.
 
-On restart, the keeper loads its state file and resumes where it left off.
-The credentials come from `fleet-state.json` (owned by the broker).
+The file is an operator/debugging snapshot, not a recovery source; current code does not
+load it on restart. Credentials and durable orders come from `fleet-state.json` (owned by
+the broker), while the restarted keeper reconstructs live state from the server.
 
 ---
 
@@ -551,7 +552,7 @@ the broker disables keeper process spawning.
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Session extraction breaks movement | Medium | High | Phase 3a is a pure refactor. Test with live fleet before moving on. Keep `--in-process` fallback. |
-| Keeper process crashes take character out | Low | Medium | State file on every 30s. Broker restarts keeper on crash. Character re-joins and resumes. |
+| Keeper process crashes take character out | Low | Medium | Broker restarts the keeper from the durable fleet roster; the character re-joins and reconstructs live state. |
 | Two brokers start, both spawn keepers | Low | High | Lock file. Keeper process checks if its port is already in use. |
 | Keeper process leaks (doesn't die on stop) | Low | Medium | `POST /stop` sends SIGTERM to self. Broker sends SIGKILL after 5s timeout. |
 | MCP tool proxy adds latency | Low | Low | Localhost HTTP is ~1ms. The tool was already taking 100ms+ for the game action. |

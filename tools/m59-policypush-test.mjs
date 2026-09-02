@@ -60,8 +60,8 @@ ok('the handler exists at all', policyHandler.length > 0);
 // process is listening there. A policy is the least visible thing you can change on a
 // stranger's character: no logout, no server log line, just somebody else's fleet quietly
 // hunting the wrong creature in the wrong room.
-ok('refuses an order addressed to another agent',
-   /addressedToUs\(body\?\.agent\)\s*\)\s*\{\s*refuseMisaddressed/.test(policyHandler));
+ok('refuses an order addressed to another keeper identity',
+   /!requireAddressedWrite\(req, body\)/.test(policyHandler));
 ok('and refuses BEFORE applying anything',
    policyHandler.indexOf('refuseMisaddressed') < policyHandler.indexOf('Object.assign'));
 
@@ -77,8 +77,8 @@ ok('and refuses BEFORE applying anything',
 // as the other two — stripped, never applied, because a `policy.by` that looks
 // authoritative and is read by nothing is the `purpose` bug wearing a different hat.
 ok('strips the reserved keys out of the body before applying',
-   /const\s*\{\s*agent:\s*\w+,\s*mode:\s*\w+,\s*by:\s*\w+,\s*\.\.\.\s*\w+\s*\}\s*=\s*body/.test(policyHandler));
-ok('so none of `mode`, `agent` or `by` can land in policy',
+   /const\s*\{\s*agent:\s*\w+,\s*character:\s*\w+,\s*keeper_pid:\s*\w+,\s*mode:\s*\w+,\s*by:\s*\w+,\s*\.\.\.\s*\w+\s*\}\s*=\s*body/.test(policyHandler));
+ok('so no mode, identity, or writer envelope key can land in policy',
    !/Object\.assign\(autopilot\.policy,\s*body\)/.test(policyHandler));
 ok('and the writer is what the log line reports, or naming it bought nothing',
    /by \$\{writtenBy \?\? 'unattributed/.test(policyHandler));
@@ -104,8 +104,12 @@ const keeperPolicy = (() => {
   return i === -1 ? '' : broker.slice(i, i + 1400);
 })();
 ok('keeperPolicy exists', keeperPolicy.length > 0);
-ok('it posts to the keeper\'s /policy', /fetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/policy`/.test(keeperPolicy));
-ok('identity-stamped like every other write path', /keeperEnvelope\(agent, body\)/.test(keeperPolicy));
+ok('it posts to the keeper\'s /policy', /fetch\(`http:\/\/127\.0\.0\.1:\$\{target\.port\}\/policy`/.test(keeperPolicy));
+ok('identity-stamped like every other write path',
+   /keeperIdentityHeaders\(target\.identity\)/.test(keeperPolicy) &&
+   /keeperEnvelope\(target\.identity, body\)/.test(keeperPolicy));
+ok('rolling old keepers receive no character/PID policy fields',
+   /const keeperEnvelope = \(identity, body\) => JSON\.stringify\(\{ \.\.\.body, agent: identity\.agent \}\)/.test(broker));
 
 // THE WIRE FORMAT IS FLAT, AND THAT IS A COMPATIBILITY DECISION, NOT A STYLE ONE. A keeper
 // predating this change handles the body as `Object.assign(autopilot.policy, body)`. A flat

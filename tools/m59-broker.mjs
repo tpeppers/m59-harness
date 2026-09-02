@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// The MCP broker: one process, N player characters, arbitrary agents driving them.
+// The MCP broker supervisor/API: one broker plus N keeper child processes, with
+// arbitrary agents driving their player characters. The optional lab runtime is the
+// separate one-process/shared-atlas entry point.
 //
 //   node tools/m59-broker.mjs                    MCP over stdio
 //   node tools/m59-broker.mjs --http 8899        MCP over HTTP, many clients
@@ -34,7 +36,7 @@ import http from 'node:http';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME } from './m59-client.mjs';
@@ -72,6 +74,21 @@ import * as transits from './m59-transits.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits } from './m59-session.mjs';
 import { resolveFleet, rosterGameEndpoint } from './m59-fleetpath.mjs';
+import {
+  BROKER_FLEET_LOCK_KIND,
+  addFleetLockGuard,
+  claimFleetLock,
+  finalizeFleetLockAdoption,
+  inspectFleetLock,
+  isProcessLive,
+  verifyFleetLockGuard,
+} from './runtime/fleet-lock.mjs';
+import {
+  AccountLeaseRegistry,
+  assertCanonicalAccountLeaseNamespace,
+} from './runtime/account-leases.mjs';
+import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
+import { allocateKeeperBand, KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
 import { resolveAgentName } from './m59-agent-name.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
@@ -780,7 +797,7 @@ const keeperProcesses = new Map();     // agent name -> { pid, port, startedAt }
 // zombie holding a game socket, and the character it is holding cannot be logged in by
 // anybody. Membership here means "somebody is already bringing this one up"; the sweep
 // steps over it and tries again next lap.
-const keeperSpawning = new Set();
+const keeperSpawning = new Map();      // agent -> the one in-flight spawn/adoption promise
 // EACH FLEET GETS ITS OWN BAND, BECAUSE SHARING ONE BASE PUT TWO FLEETS IN ONE RANGE.
 //
 // This was a flat 8911 for everybody, and the scan-forward allocator then interleaved two
@@ -804,34 +821,27 @@ const keeperSpawning = new Set();
 // A registry cannot collide: the first broker to claim a band keeps it, and the answer is
 // stable across restarts because it is on disk rather than recomputed.
 //
-// M59_KEEPER_PORT_BASE overrides it, because a machine with an unusual firewall or a fleet
-// this scheme has never seen is exactly what a derived number cannot anticipate.
-function keeperPortBaseFor(fleet) {
-  if (!fleet) return 8911;                       // the unnamed fleet, unchanged
-  const file = fileURLToPath(new URL('../substrate/keeper-bands.json', import.meta.url));
-  let bands = {};
-  try { bands = JSON.parse(readFileSync(file, 'utf8')); } catch { bands = {}; }
-  if (Number.isFinite(bands[fleet])) return bands[fleet];
-  const used = new Set(Object.values(bands).filter(Number.isFinite));
-  let band = 9011;
-  while (used.has(band)) band += 100;
-  bands[fleet] = band;
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(bands, null, 1));
-  } catch { /* an unwritable registry still gives this run a usable band */ }
-  return band;
-}
+// M59_KEEPER_PORT_BASE overrides it, because a machine with an unusual firewall may need
+// an explicitly reserved range. The normal registry assignment is serialized across
+// brokers and atomically persisted; every range is exactly wide enough for 100 actors.
 // LAZY, because `FLEET` is declared further down this file and reading it here at module
 // load is a TDZ ReferenceError that takes the whole broker with it — which is exactly what
 // it did on the first deploy of this change. Resolved once, on first use, and cached.
-let _keeperPortBase = null;
-function keeperPortBase() {
-  if (_keeperPortBase == null)
-    _keeperPortBase = Number(process.env.M59_KEEPER_PORT_BASE || keeperPortBaseFor(FLEET));
-  return _keeperPortBase;
+let _keeperPortBand = null;
+function keeperPortBand() {
+  if (_keeperPortBand) return _keeperPortBand;
+  if (process.env.M59_KEEPER_PORT_BASE != null) {
+    const base = Number(process.env.M59_KEEPER_PORT_BASE);
+    if (!Number.isSafeInteger(base) || base < 1 || base + KEEPER_BAND_WIDTH - 1 > 65535)
+      throw new Error(`M59_KEEPER_PORT_BASE must begin a complete ${KEEPER_BAND_WIDTH}-port range`);
+    _keeperPortBand = Object.freeze({
+      base, end: base + KEEPER_BAND_WIDTH - 1, width: KEEPER_BAND_WIDTH,
+    });
+  } else {
+    _keeperPortBand = allocateKeeperBand(FLEET);
+  }
+  return _keeperPortBand;
 }
-
 // A PORT IS NOT A NAME, AND TWO FLEETS ON ONE MACHINE WANTED THE SAME PORTS.
 //
 // This was `KEEPER_PORT_BASE + index` and nothing else, so `prod`'s t10 and `shadow`'s
@@ -863,7 +873,12 @@ const portsLostToOthers = new Set();
 function keeperPort(agent, index) {
   const known = keeperProcesses.get(agent)?.port ?? keeperPorts.get(agent);
   if (known) return known;
-  return keeperPortBase() + (index ?? 0);
+  const slot = index ?? 0;
+  const portBand = keeperPortBand();
+  if (!Number.isSafeInteger(slot) || slot < 0 || slot >= portBand.width)
+    throw new Error(`${agent}: keeper slot ${slot} is outside fleet band ` +
+                    `${portBand.base}-${portBand.end}`);
+  return portBand.base + slot;
 }
 
 // CAN THE KEEPER ACTUALLY BIND IT? That is the only question that matters, and asking it by
@@ -885,23 +900,88 @@ async function canBind(port) {
   });
 }
 
-// Ours already, or nobody's. `/state` names its own agent, so a keeper of ours that survived
-// a broker restart is reused rather than displaced; anything else has to leave the port
-// bindable to count as free.
-async function portIsOursOrFree(port, agent) {
+// Additive rolling-upgrade seam. New keepers answer the projection-free `/live`; an old
+// keeper is allowed to fall back to its historical rich `/health` only when it positively
+// says the new endpoint does not exist. A timeout is silence, not permission to make an
+// expensive second request or to infer death.
+async function keeperLiveAt(port, { timeoutMs = 3000 } = {}) {
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  const remaining = () => Math.max(1, deadline - Date.now());
+  let res = await fetch(`http://127.0.0.1:${port}/live`, {
+    signal: AbortSignal.timeout(remaining()),
+  });
+  let legacy = false;
+  if (res.status === 404 || res.status === 405) {
+    legacy = true;
+    try { await res.body?.cancel(); } catch {}
+    res = await fetch(`http://127.0.0.1:${port}/health`, {
+      // Rolling fallback shares the original deadline. Two serial endpoints must not turn
+      // one advertised three-second proof into six seconds of blocking.
+      signal: AbortSignal.timeout(remaining()),
+    });
+  }
+  if (!res.ok) {
+    const status = res.status;
+    try { await res.body?.cancel(); } catch {}
+    return { ok: false, status, legacy };
+  }
+  const value = await res.json();
+  return { ok: true, value, legacy };
+}
+
+function spawnedChildExited(child) {
+  return !child || child.exitCode !== null || child.signalCode !== null;
+}
+
+function recordedKeeperAlive(record) {
+  if (!record) return false;
+  // A ChildProcess handle is stronger than a numeric PID and cannot silently bless a later
+  // process that reused the number. Adopted survivors have no handle and retain the guarded
+  // PID fallback until their next exact HTTP identity proof.
+  return record.child ? !spawnedChildExited(record.child) : isProcessLive(record.pid);
+}
+
+async function waitForSpawnedChildExit(child, timeoutMs = 5000) {
+  if (spawnedChildExited(child)) return true;
+  return await new Promise(resolveWait => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolveWait(true);
+    };
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      resolveWait(spawnedChildExited(child));
+    }, timeoutMs);
+    child.once('exit', onExit);
+  });
+}
+
+// Ours already, or nobody's. `/live` names its own agent without constructing a rich state
+// projection, so a keeper of ours that survived a broker restart is reused rather than
+// displaced; anything else has to leave the port bindable to count as free.
+async function portIsOursOrFree(port, agent, character = null) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/state`, { signal: AbortSignal.timeout(2000) });
-    if (res.ok) {
-      const s = await res.json();
-      if (s?.agent && String(s.agent) === String(agent)) return true;   // our own, still up
+    const reply = await keeperLiveAt(port, { timeoutMs: 2000 });
+    if (reply.ok) {
+      const s = reply.value;
+      const sameAgent = s?.agent && String(s.agent) === String(agent);
+      const expectedCharacter = keeperCharacterIdentity(character);
+      const sameCharacter = !expectedCharacter ||
+        keeperCharacterIdentity(s?.character) === expectedCharacter;
+      if (sameAgent && sameCharacter) return true;                     // our own, still up
       return false;                                                     // somebody else's
     }
   } catch { /* no answer proves nothing — fall through to the bind test */ }
   return canBind(port);
 }
 
-async function allocateKeeperPort(agent, index) {
-  const start = keeperPortBase() + (index ?? 0);
+async function allocateKeeperPort(agent, index, credentials = null) {
+  const slot = index ?? 0;
+  const portBand = keeperPortBand();
+  if (!Number.isSafeInteger(slot) || slot < 0 || slot >= portBand.width)
+    throw new Error(`${agent}: keeper slot ${slot} is outside fleet band ` +
+                    `${portBand.base}-${portBand.end} (maximum ${portBand.width} actors)`);
+  const start = portBand.base + slot;
   // A PORT THIS BROKER HAS ALREADY PROMISED TO SOMEBODY ELSE IS NOT FREE, even though
   // nothing answers on it yet. Probing alone has a race the width of a process start: two
   // agents allocating at once both find the same silent port and both take it. Seen in the
@@ -922,29 +1002,74 @@ async function allocateKeeperPort(agent, index) {
     for (const [who, rec] of keeperProcesses) if (who !== agent && rec?.port) taken.add(rec.port);
     return taken;
   };
-  for (let port = start; port < start + 200; port++) {
+  for (let port = start; port <= portBand.end; port++) {
     if (held().has(port)) continue;
     if (portsLostToOthers.has(port)) continue;   // we spawned here once and never heard back
     keeperPorts.set(agent, port);            // claim first — no await between here and the read
-    if (await portIsOursOrFree(port, agent)) {
+    if (await portIsOursOrFree(port, agent, credentials?.character ?? null)) {
       if (port !== start)
         console.error(`[keeper] ${agent}: ${start} is held by another fleet's keeper — using ${port}`);
       return port;
     }
     if (keeperPorts.get(agent) === port) keeperPorts.delete(agent);
   }
-  keeperPorts.set(agent, start);
-  return start;
+  if (keeperPorts.get(agent) != null) keeperPorts.delete(agent);
+  throw new Error(`${agent}: no free keeper port remains in its assigned fleet band ` +
+                  `${portBand.base}-${portBand.end}; refusing to borrow another fleet's range`);
 }
 
-async function spawnKeeper(agent, index, credentials) {
-  keeperSpawning.add(agent);
-  try { return await spawnKeeperInner(agent, index, credentials); }
-  finally { keeperSpawning.delete(agent); }
+function spawnKeeper(agent, index, credentials) {
+  if (brokerStopping) return Promise.resolve(false);
+  const existing = keeperSpawning.get(agent);
+  if (existing) return existing;
+  // Publish one promise before the implementation gets its first microtask. Resume and
+  // reconciliation can converge on the same actor during a long 100-keeper startup; both
+  // must await one spawn, and only that promise may clear its slot.
+  let task;
+  task = Promise.resolve()
+    .then(() => brokerStopping ? false : spawnKeeperInner(agent, index, credentials))
+    .finally(() => {
+      if (keeperSpawning.get(agent) === task) keeperSpawning.delete(agent);
+    });
+  keeperSpawning.set(agent, task);
+  return task;
+}
+
+function keeperCharacterIdentity(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.normalize('NFKC').trim().toLocaleLowerCase('en-US');
+  return normalized || null;
 }
 
 async function spawnKeeperInner(agent, index, credentials) {
-  const port = await allocateKeeperPort(agent, index);
+  if (brokerStopping) return false;
+  // A child recorded here but not yet serving HTTP is still a child with this account's
+  // ownership guards. Never overlap it with a replacement merely because an earlier
+  // readiness deadline expired. If it has since become ready, adopt that exact PID; if it
+  // is still silent, leave it tracked and let a later sweep try again.
+  const previous = keeperProcesses.get(agent);
+  if (previous) {
+    if (recordedKeeperAlive(previous)) {
+      try {
+        const reply = await keeperLiveAt(previous.port, { timeoutMs: 3000 });
+        const identity = reply.ok && validateKeeperSample(reply.value, {
+          agent, character: credentials?.character ?? null, pid: previous.pid,
+        });
+        if (identity?.ok && keeperOwnershipIsGuarded(agent, previous.pid)) {
+          keeperPorts.set(agent, previous.port);
+          console.error(`[keeper] adopted tracked ${agent} on port=${previous.port} ` +
+                        `pid=${previous.pid}`);
+          return true;
+        }
+      } catch { /* a silent exact child remains protected below */ }
+      console.error(`[keeper] ${agent}: tracked pid ${previous.pid} is still alive but not ` +
+                    'ready with the exact guarded identity; refusing an overlapping spawn');
+      return false;
+    }
+    if (keeperProcesses.get(agent) === previous) keeperProcesses.delete(agent);
+  }
+  const port = await allocateKeeperPort(agent, index, credentials);
+  if (brokerStopping) return false;
   // WINDOWS SERVICE RESTARTS STOP ONLY THE BROKER PID. Its keeper children survive,
   // and allocateKeeperPort deliberately recognizes a matching /state as ours. The old
   // code then spawned another process anyway; that child lost EADDRINUSE, while the
@@ -952,59 +1077,173 @@ async function spawnKeeperInner(agent, index, credentials) {
   // dead PID. Adopt the verified survivor instead. Identity is mandatory; a keeper from
   // another fleet on the same numeric port is never adopted.
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (res.ok) {
-      const live = await res.json();
+    const reply = await keeperLiveAt(port, { timeoutMs: 3000 });
+    if (reply.ok) {
+      const live = reply.value;
       if (String(live?.agent ?? '') === String(agent)) {
+        const expectedCharacter = keeperCharacterIdentity(credentials?.character);
+        const observedCharacter = keeperCharacterIdentity(live?.character);
+        if (expectedCharacter && observedCharacter !== expectedCharacter) {
+          console.error(`[keeper] refusing surviving ${agent} on port=${port}: character identity ` +
+            'does not match the selected roster');
+          portsLostToOthers.add(port);
+          if (keeperPorts.get(agent) === port) keeperPorts.delete(agent);
+          return false;
+        }
         const pid = Number(live.pid);
-        keeperProcesses.set(agent, {
-          pid: Number.isInteger(pid) && pid > 0 ? pid : null,
-          port,
-          startedAt: Date.now(),
-          adopted: true,
-        });
-        console.error(`[keeper] adopted surviving ${agent} on port=${port}` +
-          (Number.isInteger(pid) && pid > 0 ? ` pid=${pid}` : ' (keeper predates PID telemetry)'));
-        return true;
+        if (!Number.isInteger(pid) || pid <= 0) {
+          console.error(`[keeper] refusing surviving ${agent} on port=${port}: it reports no valid PID`);
+          portsLostToOthers.add(port);
+          if (keeperPorts.get(agent) === port) keeperPorts.delete(agent);
+          return false;
+        }
+        const survivorGuarded = keeperOwnershipIsGuarded(agent, pid);
+        if (!survivorGuarded && !ALLOW_UNGUARDED_BROKER_TAKEOVER) {
+          console.error(`[keeper] refusing unguarded surviving ${agent} on port=${port}; ` +
+            'use the one-time migration override only after confirming this exact fleet');
+          return false;
+        }
+        if (!survivorGuarded) {
+          // ONE-TIME MIGRATION FROM PRE-GUARD BROKERS. The explicit override authorizes
+          // terminating the exact PID just returned by this expected agent's /health.
+          // Install both claims first when possible, so a hard broker death during this
+          // migration cannot leave the verified legacy socket outside the new authority
+          // records. Never adopt it: stop it, wait for positive death, then start a child
+          // that must pass the new guard gate.
+          const migrationGuard = installKeeperOwnershipGuards(agent, pid);
+          console.error(`[keeper] migration override: ` +
+            (migrationGuard.ok ? 'temporarily guarded; ' :
+              `guard install failed (${migrationGuard.reason}); `) +
+            `asking unguarded legacy ${agent} pid=${pid} on port=${port} to stop before replacement`);
+          // We did not spawn this survivor and have no ChildProcess handle. Never signal a
+          // bare numeric PID: it can exit and be reused between the identity read and kill.
+          // The addressed loopback endpoint is the generation-bearing control surface.
+          let stopAccepted = false;
+          try {
+            const identity = { agent, character: live.character, pid };
+            const stopped = await fetch(`http://127.0.0.1:${port}/stop`, {
+              method: 'POST',
+              headers: keeperIdentityHeaders(identity),
+              body: keeperEnvelope(identity, {}),
+              signal: AbortSignal.timeout(5000),
+            });
+            stopAccepted = stopped.ok;
+          } catch {}
+          if (!stopAccepted) {
+            console.error(`[keeper] ${agent}: legacy keeper did not accept addressed stop; ` +
+                          'refusing replacement login');
+            return false;
+          }
+          for (let attempt = 0; attempt < 50 && isProcessLive(pid); attempt++)
+            await new Promise(resolveWait => setTimeout(resolveWait, 100));
+          if (isProcessLive(pid)) {
+            console.error(`[keeper] ${agent}: legacy pid ${pid} did not stop; refusing replacement login`);
+            return false;
+          }
+          console.error(`[keeper] ${agent}: legacy pid ${pid} stopped; replacement will be guarded`);
+        } else {
+          keeperProcesses.set(agent, {
+            pid,
+            port,
+            startedAt: Date.now(),
+            adopted: true,
+          });
+          console.error(`[keeper] adopted guarded surviving ${agent} on port=${port} pid=${pid}`);
+          return true;
+        }
       }
     }
   } catch { /* nobody verified on the port — start a keeper below */ }
+  if (brokerStopping) return false;
   const { spawn } = await import('node:child_process');
   const { join } = await import('path');
   const HERE = dirname(fileURLToPath(import.meta.url));
+  let ownershipPermit;
+  try { ownershipPermit = keeperOwnershipPermit(agent); }
+  catch (error) {
+    console.error(`[keeper] ${agent} has no login ownership permit: ${error.message}`);
+    return false;
+  }
   const logFd = openSync(`substrate/keeper-${agent}.log`, 'a');
-  const child = spawn(process.execPath,
-    [join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port), // `-` IS HOW YOU ASK FOR THE UNNAMED FLEET, and 'default' is how you ask for a file
-     // called default.json that has never existed. resolveFleet reads this argv, and it
-     // treats any other word as a roster NAME under substrate/fleets/.
-     '--fleet', FLEET ?? '-'],
-    { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
-      // HIDDEN, BECAUSE TWENTY-ONE OF THESE IS TWENTY-ONE CONSOLE WINDOWS.
-      //
-      // On Windows a spawned console application gets its own window unless told otherwise,
-      // and a full fleet therefore buried the operator's desktop the first time this ran.
-      // Everything the window would show is already in substrate/keeper-<agent>.log, which
-      // is where the two stdio slots above point.
-      //
-      // `M59_KEEPER_WINDOWS=1` brings them back, and that is worth having rather than
-      // hard-coding the hide: watching one keeper's log scroll live in its own window is a
-      // genuinely good way to debug it. It is the DEFAULT that was wrong, not the option.
-      windowsHide: process.env.M59_KEEPER_WINDOWS !== '1' });
-  // NOT detached: keepers die when the broker exits.
-  keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now() });
+  let child;
+  let childSpawnError = null;
+  try {
+    child = spawn(process.execPath,
+      [join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port), // `-` IS HOW YOU ASK FOR THE UNNAMED FLEET, and 'default' is how you ask for a file
+       // called default.json that has never existed. resolveFleet reads this argv, and it
+       // treats any other word as a roster NAME under substrate/fleets/.
+       '--fleet', FLEET ?? '-'],
+      { stdio: ['ignore', logFd, logFd], cwd: process.cwd(),
+        env: {
+          ...process.env,
+          M59_KEEPER_OWNERSHIP: Buffer.from(JSON.stringify(ownershipPermit), 'utf8').toString('base64url'),
+        },
+        // HIDDEN, BECAUSE TWENTY-ONE OF THESE IS TWENTY-ONE CONSOLE WINDOWS.
+        //
+        // On Windows a spawned console application gets its own window unless told otherwise,
+        // and a full fleet therefore buried the operator's desktop the first time this ran.
+        // Everything the window would show is already in substrate/keeper-<agent>.log, which
+        // is where the two stdio slots above point.
+        //
+        // `M59_KEEPER_WINDOWS=1` brings them back, and that is worth having rather than
+        // hard-coding the hide: watching one keeper's log scroll live in its own window is a
+        // genuinely good way to debug it. It is the DEFAULT that was wrong, not the option.
+        windowsHide: process.env.M59_KEEPER_WINDOWS !== '1' });
+    // Spawn failures are EventEmitter errors, not necessarily thrown exceptions. Attach the
+    // listener before yielding so a bad executable/stdio setup cannot crash the broker.
+    child.once('error', error => {
+      childSpawnError = error;
+      console.error(`[keeper] ${agent} child spawn failed: ${error.message}`);
+    });
+  } catch (error) {
+    console.error(`[keeper] ${agent} child spawn threw: ${error.message}`);
+    return false;
+  } finally {
+    // The child inherited/duplicated the descriptor. Keeping the parent's copy open leaked
+    // one handle per spawn (and per failed retry) for the broker's entire lifetime.
+    try { closeSync(logFd); } catch {}
+  }
+  if (!Number.isInteger(child?.pid) || child.pid <= 0) {
+    await new Promise(resolveWait => setImmediate(resolveWait));
+    if (!childSpawnError)
+      console.error(`[keeper] ${agent} child spawn returned no valid PID`);
+    return false;
+  }
+  const guarded = installKeeperOwnershipGuards(agent, child.pid);
+  if (!guarded.ok) {
+    console.error(`[keeper] ${agent} ownership guard failed (${guarded.reason}); ` +
+      'terminating child before login');
+    try { child.kill('SIGTERM'); } catch {}
+    const exited = await waitForSpawnedChildExit(child);
+    if (!exited) {
+      // Even a partially guarded child is retained as an overlap barrier. Its own startup
+      // gate requires both guards before constructing Session, so it cannot log in.
+      keeperProcesses.set(agent, {
+        pid: child.pid, port, startedAt: Date.now(), child, failedGuard: true,
+      });
+      keeperPorts.set(agent, port);
+    }
+    return false;
+  }
+  // Not explicitly detached, but a Windows broker-only taskkill can still leave child
+  // keepers alive. Their dual ownership guards are what makes that survivor case safe.
+  keeperProcesses.set(agent, { pid: child.pid, port, startedAt: Date.now(), child });
   console.error(`[keeper] spawned ${agent} pid=${child.pid} port=${port}`);
   // Wait for the keeper to be ready. POLLED FOUR TIMES A SECOND, not once: the old loop
   // slept a full second BEFORE its first check, so a keeper that was ready in 300ms was
   // still reported at 1s and every keeper paid up to a second of pure measurement error.
   // Twenty-one of those was most of a lap of the fleet. Same thirty-second ceiling.
   const began = Date.now();
-  for (let i = 0; i < 120; i++) {
-    await new Promise(r => setTimeout(r, 250));
+  const readinessDeadline = began + 30_000;
+  while (!brokerStopping && Date.now() < readinessDeadline) {
+    if (childSpawnError || child.exitCode !== null || child.signalCode !== null) break;
+    const pauseMs = Math.min(250, readinessDeadline - Date.now());
+    if (pauseMs > 0) await new Promise(r => setTimeout(r, pauseMs));
+    const proofBudgetMs = readinessDeadline - Date.now();
+    if (proofBudgetMs <= 0) break;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
-      if (res.ok) {
+      const reply = await keeperLiveAt(port, { timeoutMs: Math.min(2000, proofBudgetMs) });
+      if (reply.ok) {
         // AND IT HAS TO BE OURS. This accepted any healthy reply, so a broker that lost the
         // bind race concluded a STRANGER'S keeper was the one it had just spawned, recorded
         // that port in `keeperProcesses`, and from then on addressed it with total
@@ -1012,10 +1251,30 @@ async function spawnKeeperInner(agent, index, credentials) {
         // root of the whole misaddressing family: `stopKeeper` posts `/stop` to
         // `kp.port` without further question, so a mis-recorded port is a licence to kill
         // another fleet's keeper. `/health` names its own agent; ask.
-        const who = await res.json().catch(() => null);
-        if (who?.agent && String(who.agent) !== String(agent)) {
-          console.error(`[keeper] ${agent}: port ${port} came up as "${who.agent}" — ` +
-                        `not the keeper we spawned; not adopting it`);
+        const who = reply.value;
+        const identity = validateKeeperSample(who, {
+          agent,
+          character: credentials?.character ?? null,
+          pid: child.pid,
+        });
+        if (!identity.ok) {
+          console.error(`[keeper] ${agent}: port ${port} failed readiness identity — ` +
+                        `${identity.reason}; not the keeper we spawned; not adopting it`);
+          portsLostToOthers.add(port);
+          if (keeperPorts.get(agent) === port) keeperPorts.delete(agent);
+          // This is still the exact child we spawned and guarded. Leaving it alive after
+          // rejecting its identity can leave a different roster account logged in under
+          // this broker's claims, then make the next sweep start a second keeper. Stop the
+          // exact PID and retain the guarded record if death cannot be proved.
+          try { child.kill('SIGTERM'); } catch {}
+          const exited = await waitForSpawnedChildExit(child);
+          const recorded = keeperProcesses.get(agent);
+          if (recorded?.pid === child.pid && exited) {
+            keeperProcesses.delete(agent);
+          } else if (!exited) {
+            console.error(`[keeper] ${agent}: rejected child pid ${child.pid} did not stop; ` +
+                          'retaining its guarded record and refusing replacement');
+          }
           return false;
         }
         console.error(`[keeper] ${agent} ready after ${((Date.now() - began) / 1000).toFixed(1)}s`);
@@ -1035,34 +1294,99 @@ async function spawnKeeperInner(agent, index, credentials) {
   //
   // Nothing here can win a race against another process, so stop trying to: record the
   // number and never offer it again this session. There are two hundred to walk through.
-  const lost = keeperPorts.get(agent);
-  if (lost != null) {
-    portsLostToOthers.add(lost);
-    keeperPorts.delete(agent);
-    console.error(`[keeper] ${agent} did not become ready in 30s on ${lost} — ` +
-                  `retiring that port for this session`);
+  // Resolve the failed start before releasing its reservation. A silent-but-live guarded
+  // child is not permission to log the same account in again. Ask it to stop, prove death,
+  // and only then make a later spawn possible; otherwise retain both process and port maps.
+  if (!spawnedChildExited(child)) {
+    try { child.kill('SIGTERM'); } catch {}
+    await waitForSpawnedChildExit(child);
+  }
+  const stillAlive = !spawnedChildExited(child);
+  const recorded = keeperProcesses.get(agent);
+  if (stillAlive) {
+    keeperPorts.set(agent, port);
+    console.error(`[keeper] ${agent} did not become ready on ${port}; pid ${child.pid} ` +
+                  'did not stop, so its guarded record is retained and no replacement may start');
   } else {
-    console.error(`[keeper] ${agent} did not become ready in 30s`);
+    if (recorded?.pid === child.pid) keeperProcesses.delete(agent);
+    portsLostToOthers.add(port);
+    if (keeperPorts.get(agent) === port) keeperPorts.delete(agent);
+    console.error(`[keeper] ${agent} did not become ready on ${port}; exact child pid ` +
+                  `${child.pid} is stopped and that port is retired for this session`);
   }
   return false;
 }
 
-function killAllKeepers() {
-  for (const [agent, kp] of keeperProcesses) {
-    try { process.kill(kp.pid, 'SIGTERM'); } catch {}
+async function stopRecordedKeeper(agent, record, { reason = 'shutdown' } = {}) {
+  if (!record) return { agent, stopped: true, reason: 'not-recorded' };
+  if (!recordedKeeperAlive(record)) {
+    if (keeperProcesses.get(agent) === record) keeperProcesses.delete(agent);
+    return { agent, stopped: true, reason: 'already-exited' };
   }
-  keeperProcesses.clear();
+
+  let graceful = false;
+  let note = null;
+  try {
+    const target = await verifiedKeeperWriteTarget(agent, agentIndices.get(agent));
+    if (target.record !== record) throw new Error('keeper allocation changed before stop');
+    const response = await fetch(`http://127.0.0.1:${target.port}/stop`, {
+      method: 'POST',
+      headers: keeperIdentityHeaders(target.identity),
+      body: keeperEnvelope(target.identity, {}),
+      signal: AbortSignal.timeout(5000),
+    });
+    graceful = response.ok;
+    if (!response.ok) note = `keeper stop HTTP ${response.status}`;
+  } catch (error) {
+    note = error.message;
+  }
+
+  if (record.child) {
+    // The ChildProcess handle is an exact process generation on Windows. Give an accepted
+    // `/stop` a short chance to deliver its reply and exit, then signal that handle only.
+    if (!spawnedChildExited(record.child))
+      await waitForSpawnedChildExit(record.child, graceful ? 2000 : 250);
+    if (!spawnedChildExited(record.child)) {
+      try { record.child.kill('SIGTERM'); } catch {}
+      await waitForSpawnedChildExit(record.child, 5000);
+    }
+  } else if (graceful) {
+    // An adopted survivor has no process handle. Its authenticated endpoint may stop it,
+    // but a numeric PID is never killed: that number may already name an unrelated process.
+    for (let attempt = 0; attempt < 50 && recordedKeeperAlive(record); attempt++)
+      await new Promise(resolveWait => setTimeout(resolveWait, 100));
+  }
+
+  const stopped = !recordedKeeperAlive(record);
+  if (stopped && keeperProcesses.get(agent) === record) keeperProcesses.delete(agent);
+  if (!stopped)
+    console.error(`[keeper] ${agent} remains guarded after ${reason}; ` +
+                  `pid=${record.pid}${note ? ` (${note})` : ''}`);
+  return { agent, stopped, graceful, ...(note ? { note } : {}) };
+}
+
+async function killAllKeepers(reason = 'broker shutdown') {
+  const snapshot = [...keeperProcesses.entries()];
+  const results = await Promise.all(snapshot.map(([agent, record]) =>
+    stopRecordedKeeper(agent, record, { reason })));
+  return { ok: results.every(result => result.stopped), results };
+}
+
+function signalOwnedKeeperChildrenAtExit() {
+  // `exit` cannot await. Nudge only the exact handles this process created and leave every
+  // ownership claim in place; a successor will reclaim/adopt after guard liveness settles.
+  for (const record of keeperProcesses.values()) {
+    if (!record.child || spawnedChildExited(record.child)) continue;
+    try { record.child.kill('SIGTERM'); } catch {}
+  }
 }
 
 async function stopKeeper(agent) {
   const kp = keeperProcesses.get(agent);
   if (!kp) return;
-  try {
-    await fetch(`http://127.0.0.1:${kp.port}/stop`, { method: 'POST', signal: AbortSignal.timeout(5000) });
-  } catch {}
-  try { process.kill(kp.pid, 'SIGTERM'); } catch {}
-  keeperProcesses.delete(agent);
-  console.error(`[keeper] stopped ${agent} (pid=${kp.pid})`);
+  const result = await stopRecordedKeeper(agent, kp, { reason: 'explicit keeper stop' });
+  if (result.stopped) console.error(`[keeper] stopped ${agent} (pid=${kp.pid})`);
+  return result;
 }
 
 async function keeperState(agent, index, { fresh = false } = {}) {
@@ -1092,6 +1416,22 @@ async function keeperState(agent, index, { fresh = false } = {}) {
         if (rec && rec.port === port) keeperProcesses.delete(agent);
         return null;
       }
+      const expectedCharacter = keeperCharacterIdentity(
+        fleetState.get(agent)?.credentials?.character);
+      const observedCharacter = keeperCharacterIdentity(j?.character);
+      if (expectedCharacter && observedCharacter !== expectedCharacter) {
+        console.error(`[keeper] ${agent}: port ${port} reports character ` +
+                      `"${j?.character ?? '?'}" — not the selected roster character`);
+        return null;
+      }
+      const expectedPid = Number(keeperProcesses.get(agent)?.pid);
+      const observedPid = Number(j?.pid);
+      if (Number.isInteger(expectedPid) && expectedPid > 0 &&
+          Number.isInteger(observedPid) && observedPid > 0 && observedPid !== expectedPid) {
+        console.error(`[keeper] ${agent}: port ${port} reports pid ${observedPid}, expected ` +
+                      `${expectedPid} — refusing the snapshot`);
+        return null;
+      }
       return j;
     }
   } catch {}
@@ -1111,7 +1451,9 @@ async function keeperState(agent, index, { fresh = false } = {}) {
 // because these are GETs; the keeper answers 409 when it is somebody else.
 async function keeperGet(agent, index, path, params = {}) {
   const port = keeperPort(agent, index);
-  const q = new URLSearchParams(Object.entries({ ...params, agent })
+  const q = new URLSearchParams(Object.entries({ ...params, agent,
+    character: fleetState.get(agent)?.credentials?.character ?? null,
+    keeper_pid: keeperProcesses.get(agent)?.pid ?? null })
     .filter(([, v]) => v !== undefined && v !== null && v !== ''));
   try {
     const res = await fetch(`http://127.0.0.1:${port}/${path}${q.toString() ? '?' + q : ''}`,
@@ -1146,21 +1488,115 @@ async function keeperGet(agent, index, path, params = {}) {
 // The fix belongs on the receiving end, because the keeper is the only one that knows who it
 // is. Stamping the intended agent costs no round trip, and a keeper on older code that
 // ignores the field is no worse off than before.
-const keeperEnvelope = (agent, body) => JSON.stringify({ ...body, agent });
+// Keep the JSON body compatible with a rolling old keeper. In particular, its `/policy`
+// handler strips `agent` but would copy unknown `character`/`keeper_pid` keys into the live
+// policy. The exact tuple travels in headers understood by new keepers; `agent` remains in
+// the body so an old keeper can still reject a plainly misaddressed request.
+const keeperEnvelope = (identity, body) => JSON.stringify({ ...body, agent: identity.agent });
+const keeperIdentityHeaders = (identity, { json = true } = {}) => ({
+  ...(json ? { 'content-type': 'application/json' } : {}),
+  'x-m59-agent': String(identity.agent),
+  'x-m59-character': String(identity.character),
+  'x-m59-keeper-pid': String(identity.pid),
+});
+
+const keeperGuardCache = new Map();
+// Only collapse a synchronous burst of commands. A ten-second positive cache kept write
+// authority alive for ten seconds after a fleet/account claim was replaced.
+const KEEPER_GUARD_CACHE_MS = 250;
+
+function cachedKeeperOwnershipGuard(agent, pid) {
+  const fleetToken = brokerFleetClaim?.lock?.token ?? null;
+  const account = brokerAccountLeases?.permitForAgent?.(agent) ?? null;
+  if (!fleetToken || !account) return false;
+  const now = Date.now();
+  const cached = keeperGuardCache.get(agent);
+  if (cached && cached.pid === pid && cached.fleetToken === fleetToken &&
+      cached.accountPath === account.path && cached.accountToken === account.token &&
+      cached.accountSubject === account.subject &&
+      now - cached.at < KEEPER_GUARD_CACHE_MS)
+    return true;
+  const ok = keeperOwnershipIsGuarded(agent, pid);
+  if (ok) keeperGuardCache.set(agent, {
+    pid, fleetToken, accountPath: account.path, accountToken: account.token,
+    accountSubject: account.subject, at: now,
+  });
+  else keeperGuardCache.delete(agent);
+  return ok;
+}
+
+async function verifiedKeeperWriteTarget(agent, index) {
+  const rec = keeperProcesses.get(agent);
+  const pid = Number(rec?.pid);
+  const port = Number(rec?.port ?? keeperPort(agent, index));
+  if (!Number.isInteger(pid) || pid <= 0)
+    throw new Error(`${agent}: no recorded keeper PID; refusing an unverified write`);
+  if (!recordedKeeperAlive(rec))
+    throw new Error(`${agent}: recorded keeper PID ${pid} is dead; refusing an unverified write`);
+  if (!cachedKeeperOwnershipGuard(agent, pid))
+    throw new Error(`${agent}: keeper PID ${pid} is not guarded by this broker; refusing write`);
+
+  const expected = {
+    agent,
+    character: fleetState.get(agent)?.credentials?.character ?? null,
+    pid,
+  };
+  const proxy = sessions.get(agent);
+  if (proxy instanceof KeeperProxy) {
+    if (proxy._identityConflict)
+      throw new Error(`${agent}: keeper identity conflict (${proxy._identityConflict}); refusing write`);
+    const proof = await proxy.refreshLiveness({ force: true });
+    if (!proof.accepted)
+      throw new Error(`${agent}: keeper identity could not be verified; refusing write`);
+    const valid = validateKeeperSample(proxy._liveness.sample, expected);
+    if (!valid.ok) throw new Error(`${agent}: ${valid.reason}; refusing write`);
+  } else {
+    const reply = await keeperLiveAt(port, { timeoutMs: 3000 });
+    if (!reply.ok) throw new Error(`${agent}: keeper identity endpoint returned ${reply.status}`);
+    const valid = validateKeeperSample(reply.value, expected);
+    if (!valid.ok) throw new Error(`${agent}: ${valid.reason}; refusing write`);
+  }
+  // The proof belongs to one exact process allocation. A respawn or port reassignment
+  // while the loopback request was in flight invalidates it before any write is sent.
+  const current = keeperProcesses.get(agent);
+  if (current !== rec || Number(current?.pid) !== pid ||
+      Number(current?.port ?? keeperPort(agent, index)) !== port ||
+      !recordedKeeperAlive(current) || !cachedKeeperOwnershipGuard(agent, pid))
+    throw new Error(`${agent}: keeper allocation changed during identity proof; refusing write`);
+  return Object.freeze({ port, identity: Object.freeze(expected), record: rec });
+}
 
 async function keeperAction(agent, index, name, args) {
-  const port = keeperPort(agent, index);
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/action`, {
+    const target = await verifiedKeeperWriteTarget(agent, index);
+    const res = await fetch(`http://127.0.0.1:${target.port}/action`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: keeperEnvelope(agent, { name, args }),
+      headers: keeperIdentityHeaders(target.identity),
+      body: keeperEnvelope(target.identity, { name, args }),
       signal: AbortSignal.timeout(60000),
     });
     return await res.json();
   } catch (e) {
     return { error: e.message };
   }
+}
+
+async function keeperLeaveAndStop(agent, index) {
+  const target = await verifiedKeeperWriteTarget(agent, index);
+  const recorded = target.record;
+  const left = await fetch(`http://127.0.0.1:${target.port}/leave`, {
+    method: 'POST',
+    headers: keeperIdentityHeaders(target.identity),
+    body: keeperEnvelope(target.identity, {}),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!left.ok) throw new Error(`keeper leave HTTP ${left.status}`);
+
+  // The character is now intentionally logged out. Shut down the otherwise-idle child as
+  // well so `leave` cannot turn a managed keeper into an untracked RAM-resident process.
+  const stopped = await stopRecordedKeeper(agent, recorded, { reason: 'deliberate leave' });
+  return { left: true, stopped: stopped.stopped,
+           ...(stopped.note ? { stop_note: stopped.note } : {}) };
 }
 
 // PUSH AN ORDER TO THE PROCESS THAT WILL ACTUALLY OBEY IT.
@@ -1188,7 +1624,6 @@ async function keeperAction(agent, index, name, args) {
 // pass; assigning it into `policy` would leave a `policy.mode` that looks authoritative and
 // is read by nothing.
 async function keeperPolicy(agent, index, { policy, mode } = {}) {
-  const port = keeperPort(agent, index);
   const body = { ...(policy || {}) };
   if (mode) body.mode = mode;
   // WHO WROTE IT. The keeper's `policy updated` line was the only observability a spot
@@ -1197,10 +1632,11 @@ async function keeperPolicy(agent, index, { policy, mode } = {}) {
   // reserved key beside `agent` and `mode`; the keeper strips it rather than applying it.
   body.by = `broker pid ${process.pid} fleet ${FLEET ?? 'default'}`;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/policy`, {
+    const target = await verifiedKeeperWriteTarget(agent, index);
+    const res = await fetch(`http://127.0.0.1:${target.port}/policy`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: keeperEnvelope(agent, body),
+      headers: keeperIdentityHeaders(target.identity),
+      body: keeperEnvelope(target.identity, body),
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return { pushed: false, error: `keeper ${res.status}` };
@@ -1232,6 +1668,9 @@ async function pushPolicyToKeeper(agent, p) {
 // on demand. Read-only tools use the cached state. Mutation tools proxy to
 // the keeper's /action endpoint.
 
+const KEEPER_LIVENESS_SWEEP_MS = Math.max(1000,
+  Number(process.env.M59_KEEPER_LIVENESS_MS || 10_000) || 10_000);
+
 class KeeperProxy {
   constructor(agent, index) {
     this.name = agent;
@@ -1239,8 +1678,20 @@ class KeeperProxy {
     this._state = null;
     this._stateAt = 0;
     this._stateTtl = 2000;
-    // When `connected` first went false, for the hysteresis in `phantom`. 0 = not now.
-    this._notConnectedSince = 0;
+    // New keepers report the age of their demand-built projection. Normal cached reads are
+    // strictly under two seconds; the small margin covers response scheduling without
+    // turning a failed projection into an indefinitely renewed broker cache entry.
+    this._stateMaxReportedAge = 2500;
+    this._stateInFlight = null;
+    this._liveness = new KeeperLiveness({
+      agent,
+      character: fleetState.get(agent)?.credentials?.character ?? null,
+      phantomAfterMs: KeeperProxy.PHANTOM_AFTER_MS,
+      probeEveryMs: KEEPER_LIVENESS_SWEEP_MS,
+    });
+    this._initializing = null;
+    this._livenessInFlight = null;
+    this._acceptedLivenessProof = null;
     this._world = null;
     // One frame of the keeper's room view. See `_roomViewCached`.
     this._roomView = null;
@@ -1265,22 +1716,20 @@ class KeeperProxy {
     // this staying read-only is deliberate rather than incidental.
     this.pacer = {
       submit: async (kind, fn) => {
-        await this._refreshState({ fresh: true }).catch(() => null);
+        const snapshot = await this._refreshState({ fresh: true });
+        if (!snapshot) throw new Error(`${this.name}: keeper did not provide a fresh state snapshot`);
         return typeof fn === 'function' ? fn() : null;
       },
     };
     this.movementGeneration = 0;
     this._client = null;
-    this._pollTimer = null;
-    this._pollStopped = false;
-    this._startPoller();
   }
 
   get live() {
-    if (!this._state?.in_game) return false;
-    // If the state is stale (older than 30s), the keeper process is likely dead
-    if (Date.now() - this._stateAt >= 30000) return false;
-    // A PHANTOM IS NOT LIVE, AND IT USED TO BE.
+    return this._liveness.status({ processAlive: this._processAlive() }).live;
+  }
+
+  // A PHANTOM IS NOT LIVE, AND IT USED TO BE.
     //
     // `in_game` is the keeper's BELIEF, and nothing clears it when the server drops the
     // socket — which is what happens every time a person logs in on the character. The
@@ -1293,20 +1742,14 @@ class KeeperProxy {
     // `connected` is the socket's own answer. It is only believed after PHANTOM_AFTER_MS
     // of continuously saying no, because client.state lags after a rejoin and one false
     // sample would rejoin a healthy character — the opposite bug, and a noisier one.
-    return !this.phantom;
-  }
-
   // How long `connected:false` must persist before we call it a dead connection rather
-  // than the state field lagging. Two poll cycles is enough to clear the lag.
+  // than the state field lagging. Two cheap liveness samples are enough to clear the lag.
   static PHANTOM_AFTER_MS = 20000;
 
   // in_game true, socket says otherwise, and it has said so long enough to be believed.
   // Undefined `connected` means a keeper older than this field: fail OPEN, behave as before.
   get phantom() {
-    const s = this._state;
-    if (!s?.in_game || s.connected !== false) { this._notConnectedSince = 0; return false; }
-    if (!this._notConnectedSince) this._notConnectedSince = Date.now();
-    return (Date.now() - this._notConnectedSince) >= KeeperProxy.PHANTOM_AFTER_MS;
+    return this._liveness.status({ processAlive: this._processAlive() }).phantom;
   }
 
   // Emulated client object that mimics the real Session client interface.
@@ -1319,8 +1762,8 @@ class KeeperProxy {
     const proxy = this;
     const act = (name, args) => keeperAction(proxy.name, proxy._index, name, args);
     const client = {
-      get state() { return s.in_game ? 'game' : 'none'; },
-      get me() { return s.character ? { name: s.character } : null; },
+      get state() { return proxy.inGame ? 'game' : 'none'; },
+      get me() { return proxy.character ? { name: proxy.character } : null; },
       get roomNameRsc() { return s.room ? s.room.name : null; },
       vitals() {
         return {
@@ -1661,15 +2104,145 @@ class KeeperProxy {
   }
 
   async _refreshState({ fresh = false, force = false } = {}) {
+    if (this._liveness.disposed) return null;
     const now = Date.now();
     if (!fresh && !force && this._state && now - this._stateAt < this._stateTtl) return this._state;
-    const s = await keeperState(this.name, this._index, { fresh });
-    if (s) {
-      this._state = s;
-      this._stateAt = now;
-      this._client = null;
+    // Coalesce callers onto one loopback projection. A fresh=true request is stronger
+    // because it asks the keeper to touch Meridian; it may reuse another fresh request but
+    // waits out a cache-only request before starting its own.
+    while (this._stateInFlight) {
+      if (!fresh || this._stateInFlight.fresh) return this._stateInFlight.promise;
+      await this._stateInFlight.promise.catch(() => null);
+      if (this._liveness.disposed) return null;
     }
-    return this._state;
+    const request = (async () => {
+      const s = await keeperState(this.name, this._index, { fresh });
+      const observedAt = Date.now();
+      if (!s) {
+        this._liveness.unavailable('state endpoint did not answer', { at: observedAt });
+        return null;
+      }
+      if (this._liveness.disposed) return null;
+
+      // `keeperState` completing is not proof that its value is current: a keeper may have
+      // retained a last-good projection after a build failure. Honor the age it publishes
+      // before resetting the broker-side receipt clock. Missing age remains a rolling-old-
+      // keeper compatibility case; a present age must be finite, non-negative and bounded.
+      if (s.as_of_ms !== undefined &&
+          (!Number.isFinite(Number(s.as_of_ms)) || Number(s.as_of_ms) < 0 ||
+           Number(s.as_of_ms) > this._stateMaxReportedAge)) {
+        this._liveness.unavailable(`state snapshot age ${s.as_of_ms}ms exceeds ` +
+                                   `${this._stateMaxReportedAge}ms`, { at: observedAt });
+        return null;
+      }
+
+      // New keepers stamp /state with their PID. During a rolling broker-only restart an
+      // older guarded keeper may not; its independently validated /health sample supplies
+      // the PID until that process is rolled. Agent and character are still checked here.
+      const expected = this._expectedIdentity();
+      const legacyPid = !s.pid && this._liveness.sample?.pid === expected.pid
+        ? expected.pid : null;
+      const candidate = legacyPid ? { ...s, pid: legacyPid } : s;
+      const accepted = this._liveness.observe(candidate, { pid: expected.pid, at: observedAt });
+      if (!accepted.ok) {
+        this._identityConflict = accepted.reason;
+        console.error(`[keeper] ${this.name}: rejected /state identity — ${accepted.reason}`);
+        return null;
+      }
+      this._identityConflict = null;
+      this._state = candidate;
+      this._stateAt = observedAt;
+      this._client = null;
+      return this._state;
+    })();
+    const record = { fresh, promise: request };
+    this._stateInFlight = record;
+    try { return await request; }
+    finally { if (this._stateInFlight === record) this._stateInFlight = null; }
+  }
+
+  _expectedIdentity() {
+    return {
+      agent: this.name,
+      character: fleetState.get(this.name)?.credentials?.character ?? null,
+      pid: keeperProcesses.get(this.name)?.pid ?? null,
+    };
+  }
+
+  _processAlive() {
+    const record = keeperProcesses.get(this.name);
+    const pid = Number(record?.pid);
+    return Number.isInteger(pid) && pid > 0 ? recordedKeeperAlive(record) : null;
+  }
+
+  async refreshLiveness({ force = false } = {}) {
+    if (this._liveness.disposed) return { accepted: false, disposed: true };
+    const now = Date.now();
+    const recent = this._acceptedLivenessProof;
+    if (force && recent && now - recent.at <= 250 &&
+        recent.pid === Number(this._expectedIdentity().pid))
+      return { ...recent.result, cached: true };
+    if (!force && !this._liveness.due())
+      return { accepted: true, cached: true,
+               status: this._liveness.status({ processAlive: this._processAlive() }) };
+    if (this._livenessInFlight) return this._livenessInFlight;
+    const request = (async () => {
+      try {
+        const reply = await keeperLiveAt(keeperPort(this.name, this._index), { timeoutMs: 3000 });
+        if (this._liveness.disposed) return { accepted: false, stale: true };
+        if (!reply.ok) throw new Error(`keeper liveness HTTP ${reply.status}`);
+        // Validate against the identity current AFTER the reply arrives. A state refresh
+        // may legitimately update the same liveness object concurrently; that is not a
+        // reason to discard this proof, while a PID replacement is.
+        const expected = this._expectedIdentity();
+        const accepted = this._liveness.observe(reply.value, { pid: expected.pid });
+        if (!accepted.ok) {
+          this._identityConflict = accepted.reason;
+          console.error(`[keeper] ${this.name}: rejected /live identity — ${accepted.reason}`);
+          return { accepted: false, identityMismatch: true, reason: accepted.reason,
+                   processAlive: this._processAlive() };
+        }
+        this._identityConflict = null;
+        const result = { accepted: true, legacy: reply.legacy,
+          status: this._liveness.status({ processAlive: this._processAlive() }) };
+        this._acceptedLivenessProof = {
+          at: Date.now(), pid: Number(expected.pid), result,
+        };
+        return result;
+      } catch (error) {
+        if (this._liveness.disposed) return { accepted: false, stale: true };
+        this._liveness.unavailable(error);
+        return { accepted: false, unavailable: true, error,
+                 processAlive: this._processAlive(),
+                 status: this._liveness.status({ processAlive: this._processAlive() }) };
+      }
+    })();
+    this._livenessInFlight = request;
+    try { return await request; }
+    finally { if (this._livenessInFlight === request) this._livenessInFlight = null; }
+  }
+
+  async initialize() {
+    if (this._initializing) return this._initializing;
+    this._initializing = (async () => {
+      const proof = await this.refreshLiveness({ force: true });
+      if (!this._state && proof.accepted === true && !this._liveness.disposed)
+        await this._refreshState({ force: true }).catch(() => null);
+      return this;
+    })().finally(() => { this._initializing = null; });
+    return this._initializing;
+  }
+
+  resetConnectionEvidence() { this._liveness.resetConnectionEvidence(); }
+
+  dispose() {
+    this._liveness.dispose();
+    this._initializing = null;
+    this._stateInFlight = null;
+    this._livenessInFlight = null;
+    this._acceptedLivenessProof = null;
+    this._client = null;
+    this._roomView = null;
   }
 
   // Refresh only the loopback process snapshot, never the game wire.  `fresh:true` has a
@@ -1677,6 +2250,22 @@ class KeeperProxy {
   // and equipment from Meridian.  A fleet board needs the newest snapshot the keeper can
   // already see, not 84 packets every five seconds, so the TUI/fleet path uses this method.
   async refreshSnapshot() { return this._refreshState({ force: true, fresh: false }); }
+  async ensureSnapshot({ force = false } = {}) {
+    if (!this._state) {
+      await this.initialize();
+      if (!this._state)
+        throw new Error(`${this.name}: keeper state is unavailable; refusing to use an absent snapshot`);
+      // initialize just obtained this state. It satisfies force too; do not immediately
+      // rebuild the same rich projection a second time.
+      return this._state;
+    }
+    const snapshot = await this._refreshState({ force, fresh: false });
+    if (!snapshot) {
+      const age = Date.now() - this._stateAt;
+      throw new Error(`${this.name}: keeper state refresh failed; cached snapshot is ${age}ms old`);
+    }
+    return snapshot;
+  }
 
   snapshotAgeMs() {
     if (!this._state || !this._stateAt) return null;
@@ -1685,8 +2274,10 @@ class KeeperProxy {
       (Number.isFinite(keeperAge) && keeperAge >= 0 ? keeperAge : 0);
   }
 
-  get inGame() { return this._state?.in_game ?? false; }
-  get character() { return this._state?.character ?? null; }
+  get inGame() {
+    return this._liveness.status({ processAlive: this._processAlive() }).inGame;
+  }
+  get character() { return this._liveness.sample?.character ?? this._state?.character ?? null; }
 
   need() {
     if (!this.inGame) throw new Error(`${this.name}: not in game (keeper-backed)`);
@@ -2041,22 +2632,6 @@ class KeeperProxy {
   async lootFloor(opts = {}) { return keeperAction(this.name, this._index, 'loot', opts); }
   async standBeforeGo(opts = {}) { return keeperAction(this.name, this._index, 'stand', opts); }
 
-  // Start a background poller that keeps state fresh
-  _startPoller() {
-    const poll = async () => {
-      try { await this._refreshState(); } catch {}
-    };
-    poll();
-    const t = setInterval(poll, this._stateTtl);
-    t.unref?.();
-    this._pollTimer = t;
-  }
-
-  _stopPoller() {
-    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
-    this._pollStopped = true;
-  }
-
   // Autopilot-like methods so the fleet tool and dashboard can read
   // GOAP state from the keeper process without an in-process Autopilot.
   get running() { return this.live; }
@@ -2128,24 +2703,14 @@ class KeeperProxy {
 
   // Live room view for the 3D map. Fetches from the keeper's /room-view endpoint.
   async roomView() {
-    const port = keeperPort(this.name, this._index);
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/room-view?agent=${encodeURIComponent(this.name)}`,
-                              { signal: AbortSignal.timeout(5000) });
-      if (res.ok) return await res.json();
-    } catch {}
-    return null;
+    const result = await keeperGet(this.name, this._index, 'room-view');
+    return result?.error ? null : result;
   }
 
   // Debug: the fine path self->target + the direct-line raycast, for the 3D viewer.
   async path3d() {
-    const port = keeperPort(this.name, this._index);
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/path3d?agent=${encodeURIComponent(this.name)}`,
-                              { signal: AbortSignal.timeout(8000) });
-      if (res.ok) return await res.json();
-    } catch {}
-    return null;
+    const result = await keeperGet(this.name, this._index, 'path3d');
+    return result?.error ? null : result;
   }
 
   // Fallback for any method not explicitly defined: return null or empty.
@@ -2229,6 +2794,48 @@ function makeKeeperProxy(agent, index) {
       return undefined;
     }
   });
+}
+
+// One deadline-driven liveness sweep for the whole broker, rather than one aligned timer
+// per keeper. A rich `/state` read advances the same deadline, so actors already being
+// observed pay no extra probe; idle actors answer only the tiny `/live` projection.
+let keeperLivenessTimer = null;
+let keeperLivenessSweepRunning = false;
+
+function ensureKeeperLivenessSweep(delayMs = 0) {
+  if (brokerStopping) return;
+  if (keeperLivenessTimer !== null || keeperLivenessSweepRunning) return;
+  keeperLivenessTimer = setTimeout(runKeeperLivenessSweep, Math.max(0, delayMs));
+  keeperLivenessTimer.unref?.();
+}
+
+async function runKeeperLivenessSweep() {
+  keeperLivenessTimer = null;
+  if (keeperLivenessSweepRunning) return;
+  keeperLivenessSweepRunning = true;
+  try {
+    const proxies = [...sessions.values()]
+      .filter(s => s instanceof KeeperProxy && !s._liveness.disposed);
+    if (!proxies.length) return;
+    const now = Date.now();
+    await Promise.all(proxies.filter(s => s._liveness.due(now))
+      .map(s => s.refreshLiveness().catch(() => null)));
+  } finally {
+    keeperLivenessSweepRunning = false;
+    if (!brokerStopping &&
+        [...sessions.values()].some(s => s instanceof KeeperProxy && !s._liveness.disposed))
+      ensureKeeperLivenessSweep(KEEPER_LIVENESS_SWEEP_MS);
+  }
+}
+
+function suspendKeeperLivenessSweep() {
+  if (keeperLivenessTimer !== null) clearTimeout(keeperLivenessTimer);
+  keeperLivenessTimer = null;
+}
+
+function stopKeeperLivenessSweep() {
+  suspendKeeperLivenessSweep();
+  for (const s of sessions.values()) if (s instanceof KeeperProxy) s.dispose();
 }
 
 // Agent index for port allocation — set during resumeFleet
@@ -2577,51 +3184,275 @@ function startLedger() {
 // accumulate deaths nobody caused. This fleet ran at 273 deaths against 8 kills with
 // four brokers up, which read as "the survival logic is broken" for hours.
 //
-// A pid in a file is enough to stop it. Not a real lock — a real lock would have to
-// survive a kill -9, and this does not need to: if the pid is gone the fleet is
-// unowned and the next broker takes it.
+// The broker and FleetRuntime use the SAME atomic token claim. A check followed by an
+// ordinary write is not a lock: two starters can both see "free" and both overwrite it.
+// The shared helper uses exclusive create, quarantines only a positively dead claim, and
+// releases only when both pid and the unguessable ownership token still match.
 const LOCK_FILE = STATE_FILE + '.lock';
+const ALLOW_UNGUARDED_BROKER_TAKEOVER = process.env.M59_ALLOW_UNGUARDED_TAKEOVER === '1';
+let brokerFleetClaim = null;
+let brokerUptimeStarted = false;
+let brokerOwnershipDropped = false;
+let brokerOwnershipHandlersInstalled = false;
+let brokerStopping = false;
+let brokerShutdownPromise = null;
+const brokerAccountLeases = new AccountLeaseRegistry({
+  kind: BROKER_FLEET_LOCK_KIND,
+  defaultHost: HOST,
+  defaultPort: PORT,
+});
 
-function fleetOwnedByAnotherProcess() {
-  let held;
-  try { held = JSON.parse(readFileSync(LOCK_FILE, 'utf8')); } catch { return null; }
-  if (!held?.pid || held.pid === process.pid) return null;
-  try { process.kill(held.pid, 0); } catch { return null; }   // stale: owner is gone
-  return held;
+const rosterAccountEntries = saved => Object.entries(saved ?? {})
+  .filter(([, entry]) => entry?.credentials)
+  .map(([agent, entry]) => ({ agent, credentials: entry.credentials }));
+
+function accountConflictMessage(result) {
+  const identity = result?.conflict;
+  const holder = result?.found?.lock;
+  if (!identity) return 'an account lease could not be acquired';
+  if (result?.code === 'UNGUARDED_STALE_BROKER' || result?.found?.unguarded_broker)
+    return `${identity.agent} at ${identity.endpoint.key} is protected by an unguarded stale ` +
+      `broker record (pid ${holder?.pid ?? 'unknown'}); rule out orphan keepers before recovery`;
+  return `${identity.agent} at ${identity.endpoint.key}` +
+    (holder?.pid ? `, already leased by pid ${holder.pid} (${holder.kind})` : ', whose lease is unavailable');
 }
 
-function claimFleet() {
+function releaseBrokerOwnership() {
+  if (brokerOwnershipDropped) return;
+  brokerOwnershipDropped = true;
+  brokerAccountLeases.releaseAll();
+  brokerFleetClaim?.release();
+  brokerFleetClaim = null;
+  // The liveness file is the OTHER half, and it must go on every orderly path. Do not
+  // remove a predecessor's crash evidence when startup failed before markRunning().
+  if (brokerUptimeStarted) uptime.markStopped();
+}
+
+function installBrokerOwnershipHandlers() {
+  if (brokerOwnershipHandlersInstalled) return;
+  brokerOwnershipHandlersInstalled = true;
+  process.on('exit', () => {
+    suspendKeeperLivenessSweep();
+    for (const [agent, record] of keeperProcesses) {
+      if (!recordedKeeperAlive(record) && keeperProcesses.get(agent) === record)
+        keeperProcesses.delete(agent);
+    }
+    // `exit` cannot await final snapshots or an in-flight spawn that has installed a guard
+    // but not yet published its map record. It therefore never releases ownership. The
+    // async shutdown path does so after proving every lane settled; all other exits leave a
+    // stale/guarded claim for the exact successor to reclaim safely.
+    signalOwnedKeeperChildrenAtExit();
+  });
+  process.on('SIGINT', () => { void beginBrokerShutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void beginBrokerShutdown('SIGTERM'); });
+}
+
+async function beginBrokerShutdown(reason = 'shutdown', exitCode = 0) {
+  if (brokerShutdownPromise) return brokerShutdownPromise;
+  // This gate is set before the first await. Timers, reconciliation and every spawn lane
+  // observe it, so no keeper can appear after the stop snapshot and ownership release.
+  brokerStopping = true;
+  suspendKeeperLivenessSweep();
+  if (reconcileTimer !== null) clearTimeout(reconcileTimer);
+  reconcileTimer = null;
+
+  brokerShutdownPromise = (async () => {
+    let reconcileSettled = true;
+    if (reconcileInFlight) {
+      reconcileSettled = await Promise.race([
+        reconcileInFlight.then(() => true, () => true),
+        new Promise(resolveWait => setTimeout(() => resolveWait(false), 15_000)),
+      ]);
+    }
+    const spawnDeadline = Date.now() + 15_000;
+    while (keeperSpawning.size && Date.now() < spawnDeadline)
+      await new Promise(resolveWait => setTimeout(resolveWait, 50));
+
+    // Keep proxy liveness objects usable until every authenticated /stop has been sent.
+    const stopped = await killAllKeepers(`broker ${reason}`);
+    stopKeeperLivenessSweep();
+    if (stopped.ok && keeperSpawning.size === 0 && reconcileSettled) {
+      releaseBrokerOwnership();
+    } else {
+      console.error(`[broker] ${reason}: keeper/reconcile shutdown remains live or uncertain; ` +
+                    'fleet/account ownership claims are intentionally retained');
+      exitCode = Math.max(exitCode, 1);
+    }
+    return stopped;
+  })().catch(error => {
+    console.error(`[broker] ${reason} shutdown failed: ${error.message}; ownership retained`);
+    exitCode = Math.max(exitCode, 1);
+    return { ok: false, error };
+  }).finally(() => {
+    process.exit(exitCode);
+  });
+  return brokerShutdownPromise;
+}
+
+function acquireBrokerOwnership() {
+  if (brokerFleetClaim) return { ok: true, claim: brokerFleetClaim };
+  try { assertCanonicalAccountLeaseNamespace(); }
+  catch (error) { return { ok: false, why: error.message }; }
+  mkdirSync(dirname(LOCK_FILE), { recursive: true });
+  const claim = claimFleetLock(LOCK_FILE, {
+    kind: BROKER_FLEET_LOCK_KIND,
+    guards: [],
+    allowUnguardedBrokerTakeover: ALLOW_UNGUARDED_BROKER_TAKEOVER,
+    adoptGuardedBroker: true,
+  });
+  if (!claim.ok) {
+    const holder = claim.found?.lock;
+    return { ok: false,
+      why: claim.found?.unguarded_broker
+        ? `${claim.found.why}; after stopping every orphan keeper, retry once with ` +
+          'M59_ALLOW_UNGUARDED_TAKEOVER=1'
+        : holder?.pid
+        ? `fleet is already owned by pid ${holder.pid} (${holder.kind})`
+        : claim.found?.why ?? 'fleet lock is unavailable',
+      found: claim.found };
+  }
+
+  if (claim.adopted_guarded) {
+    const predecessor = claim.took_over_from.lock;
+    brokerAccountLeases.setGuardedAdoptionContext({
+      previousPids: [predecessor.pid, ...(predecessor.predecessors ?? [])],
+      guardPids: predecessor.guards,
+    });
+  } else if (ALLOW_UNGUARDED_BROKER_TAKEOVER && claim.took_over_from?.lock &&
+      claim.took_over_from.lock.kind === BROKER_FLEET_LOCK_KIND &&
+      !Object.hasOwn(claim.took_over_from.lock, 'guards')) {
+    // The migration override is authority for this selected roster and predecessor only.
+    // A different stale alias roster remains a hard account-audit conflict because its
+    // legacy keeper children may still own the same endpoint/account.
+    brokerAccountLeases.setUnguardedRecoveryContext({
+      previousPid: claim.took_over_from.lock.pid,
+      rosterPaths: [STATE_FILE],
+    });
+  }
+
+  let rosterSource = null;
+  try { rosterSource = readFileSync(STATE_FILE, 'utf8'); }
+  catch (error) {
+    if (error?.code !== 'ENOENT') {
+      claim.release();
+      return { ok: false,
+        why: `roster cannot be read before login: ${STATE_FILE} (${error.code ?? 'read failed'})` };
+    }
+  }
+  let saved = {};
+  if (rosterSource !== null) {
+    try { saved = JSON.parse(rosterSource); }
+    catch {
+      claim.release();
+      return { ok: false, why: `roster is not valid JSON: ${STATE_FILE}` };
+    }
+  }
   try {
-    mkdirSync(dirname(LOCK_FILE), { recursive: true });
-    writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() }));
-    const drop = () => {
-      try { unlinkSync(LOCK_FILE); } catch { /* already gone */ }
-      // The liveness file is the OTHER half, and it must go on every orderly path: its
-      // absence is precisely the signal that the last shutdown was clean. Left behind,
-      // the next start reads it as a crash and invents an outage.
-      uptime.markStopped();
-    };
-    process.on('exit', () => { killAllKeepers(); drop(); });
-    process.on('SIGINT', () => { killAllKeepers(); drop(); process.exit(0); });
-    process.on('SIGTERM', () => { killAllKeepers(); drop(); process.exit(0); });
-  } catch (e) { console.error(`[state] could not claim the fleet: ${e.message}`); }
+    const accounts = brokerAccountLeases.acquireAll(rosterAccountEntries(saved));
+    if (!accounts.ok) {
+      claim.release();
+      return { ok: false, why: accountConflictMessage(accounts), found: accounts.found };
+    }
+    const finalizedAccounts = brokerAccountLeases.finalizeAdoptions();
+    if (!finalizedAccounts.ok) {
+      brokerAccountLeases.releaseAll();
+      claim.release();
+      return { ok: false,
+        why: `account takeover finalization failed for ${finalizedAccounts.agent} ` +
+          `(${finalizedAccounts.reason})` };
+    }
+    const finalizedFleet = finalizeFleetLockAdoption(LOCK_FILE, {
+      pid: claim.lock.pid,
+      token: claim.lock.token,
+      kind: claim.lock.kind,
+    });
+    if (!finalizedFleet.ok) {
+      brokerAccountLeases.releaseAll();
+      claim.release();
+      return { ok: false,
+        why: `fleet takeover finalization failed (${finalizedFleet.reason})` };
+    }
+  } catch (error) {
+    brokerAccountLeases.releaseAll();
+    claim.release();
+    return { ok: false, why: `roster account ownership is invalid: ${error.message}` };
+  }
+  brokerFleetClaim = claim;
+  brokerOwnershipDropped = false;
+  installBrokerOwnershipHandlers();
+  return { ok: true, claim };
+}
+
+function fleetClaimStillOurs() {
+  if (!brokerFleetClaim) return false;
+  const found = inspectFleetLock(LOCK_FILE);
+  return found.state === 'live' && found.lock?.pid === brokerFleetClaim.lock.pid &&
+    found.lock?.token === brokerFleetClaim.lock.token &&
+    found.lock?.kind === BROKER_FLEET_LOCK_KIND;
+}
+
+function requireBrokerAccountLease(agent, credentials) {
+  if (!fleetClaimStillOurs())
+    throw new Error(`cannot log in ${agent}: this broker no longer owns ${LOCK_FILE}`);
+  const result = brokerAccountLeases.acquire(agent, credentials);
+  if (!result.ok) throw new Error(`cannot log in ${agent}: ${accountConflictMessage(result)}`);
+  return result;
+}
+
+function keeperOwnershipPermit(agent) {
+  if (!fleetClaimStillOurs()) throw new Error('broker no longer owns the fleet claim');
+  const account = brokerAccountLeases.permitForAgent(agent);
+  if (!account) throw new Error('broker has no account claim for this actor');
+  const fleet = brokerFleetClaim.lock;
+  return Object.freeze({
+    version: 1,
+    agent,
+    fleet: Object.freeze({
+      path: LOCK_FILE, pid: fleet.pid, token: fleet.token, kind: fleet.kind,
+    }),
+    account,
+  });
+}
+
+function installKeeperOwnershipGuards(agent, guardPid) {
+  // Account first is the fail-closed order. If the broker dies between the two writes,
+  // an alias roster still cannot take the endpoint/account and kick this socket. The
+  // exact fleet successor will then encounter that guarded account and refuse without
+  // the fleet takeover context.
+  const account = brokerAccountLeases.addGuard(agent, guardPid);
+  if (!account.ok) return { ok: false, reason: `account-${account.reason}` };
+  const fleet = brokerFleetClaim && addFleetLockGuard(LOCK_FILE, {
+    pid: brokerFleetClaim.lock.pid,
+    token: brokerFleetClaim.lock.token,
+    kind: brokerFleetClaim.lock.kind,
+    guardPid,
+  });
+  if (!fleet?.ok) return { ok: false, reason: `fleet-${fleet?.reason ?? 'not-owned'}` };
+  return { ok: true };
+}
+
+function keeperOwnershipIsGuarded(agent, guardPid) {
+  if (!brokerFleetClaim) return false;
+  const fleet = verifyFleetLockGuard(LOCK_FILE, {
+    pid: brokerFleetClaim.lock.pid,
+    token: brokerFleetClaim.lock.token,
+    kind: brokerFleetClaim.lock.kind,
+    guardPid,
+  });
+  return fleet.ok && brokerAccountLeases.verifyGuard(agent, guardPid).ok;
 }
 
 async function resumeFleet() {
-  const owner = fleetOwnedByAnotherProcess();
-  if (owner) {
-    console.error(
-      `[state] NOT resuming: process ${owner.pid} already has the fleet logged in ` +
-      `(claimed ${Math.round((Date.now() - owner.at) / 1000)}s ago).\n` +
-      `[state] Two brokers sharing one fleet log each other out repeatedly and the ` +
-      `damage shows up as unexplained deaths. This broker will serve tools against ` +
-      `whatever you join by hand.\n` +
-      `[state] If ${owner.pid} is not really running the fleet, delete ${LOCK_FILE}.`);
-    return;
-  }
+  if (!fleetClaimStillOurs())
+    throw new Error(`refusing fleet resume: this broker does not own ${LOCK_FILE}`);
   let saved;
   try { saved = JSON.parse(readFileSync(STATE_FILE, 'utf8')); }
   catch { return; }
+  // The file may have changed between process startup and this async resume. Re-validate
+  // aliases and acquire every newly introduced endpoint/account before the first await or
+  // login. acquireAll is transactional, so one conflict leaves none of the additions held.
+  const accounts = brokerAccountLeases.acquireAll(rosterAccountEntries(saved));
+  if (!accounts.ok) throw new Error(`refusing fleet resume: ${accountConflictMessage(accounts)}`);
   const names = Object.keys(saved);
   if (!names.length) return;
 
@@ -2636,9 +3467,9 @@ async function resumeFleet() {
       `${crashed.agents.length} keeper(s) unattended from ${new Date(crashed.last_beat).toISOString()} ` +
       `(${Math.round(crashed.silent_for_ms / 1000)}s of silence). Recorded as an outage.`);
 
-  claimFleet();
   // Alive from here, touched every BEAT_MS. See m59-uptime.mjs.
   uptime.markRunning(names, { fleet: FLEET ?? null, startedAt: Date.now() });
+  brokerUptimeStarted = true;
 
   // LOOK BEFORE LOGGING ANYBODY IN. A resume logs in every character in the roster, and
   // Meridian allows one connection each — so if a person is sitting in the world as one
@@ -2681,19 +3512,24 @@ async function resumeFleet() {
 
   const resumeOne = async (agent, credentials, autopilot, index) => {
     try {
+      if (brokerStopping) return;
+      requireBrokerAccountLease(agent, credentials);
       if (useKeepers) {
         // SPAWN A KEEPER PROCESS. The GOAP loop runs in its own process, isolated
         // from the broker's HTTP event loop. The broker gets a KeeperProxy that
         // reads state from and proxies mutations to the keeper.
         const ok = await spawnKeeper(agent, index, credentials);
-        const proxy = makeKeeperProxy(agent, index);
-        sessions.set(agent, proxy);
-        if (ok) {
+        if (ok && !brokerStopping) {
+          const proxy = makeKeeperProxy(agent, index);
+          await proxy.initialize();
+          sessions.set(agent, proxy);
+          ensureKeeperLivenessSweep();
           console.error(`[state] resumed ${agent} (${credentials.character || '?'}) keeper=process(port=${keeperPort(agent, index)})`);
         } else {
           console.error(`[state] ${agent} keeper process did not become ready`);
         }
       } else {
+        if (brokerStopping) return;
         // IN-PROCESS SESSION (fallback mode)
         const s = session(agent);
         await s.join(credentials);
@@ -2717,10 +3553,15 @@ async function resumeFleet() {
   for (const agent of names) {
     const { credentials, autopilot } = saved[agent] || {};
     if (!credentials) continue;
-    if (held.has(agent)) { fleetState.set(agent, { credentials, autopilot }); continue; }
     fleetState.set(agent, { credentials, autopilot });
+    // A locally-held character still owns its stable keeper slot.  We skip only the
+    // spawn while the human client has it; once that claim is released, reconciliation
+    // must take the keeper-backed branch rather than quietly creating an in-process
+    // Session on the broker's event loop.  Incrementing before the continue also keeps
+    // every later roster member on the same port whether or not somebody was held at boot.
     const index = useKeepers ? keeperIndex++ : null;
     if (useKeepers) agentIndices.set(agent, index);
+    if (held.has(agent)) continue;
     work.push({ agent, credentials, autopilot, index });
   }
 
@@ -2846,6 +3687,7 @@ async function confirmHeldOnline(held) {
     const { credentials, autopilot } = fleetState.get(agent) || {};
     if (!credentials) continue;
     try {
+      requireBrokerAccountLease(agent, credentials);
       const s = session(agent);
       await s.join(credentials);
       listen(agent, s);
@@ -2904,11 +3746,28 @@ function backoffFor(failures) {
 
 
 async function reconcileFleet() {
-  // Someone else owns this roster. Rejoining its characters would be the two-brokers
-  // failure the lock exists to prevent, arriving one character at a time.
-  if (fleetOwnedByAnotherProcess()) return;
+  if (brokerStopping) return;
+  // Losing the exact token claim is losing authority. Never turn a missing/replaced lock
+  // into one re-login per sweep while another runtime owns the fleet.
+  if (!fleetClaimStillOurs()) return;
+
+  // Probe every eligible keeper concurrently. A hundred silent loopback servers cost one
+  // bounded 3s window, not 100 windows in series. Gates are checked both here and again
+  // after the await; a leave or pilot claim that arrives while probes are in flight wins.
+  const livenessProofs = new Map();
+  await Promise.all([...sessions.entries()]
+    .filter(([agent, s]) => s instanceof KeeperProxy &&
+      fleetState.has(agent) && !leftOnPurpose.has(agent) &&
+      !keeperSpawning.has(agent) && !pilotOf(agent))
+    .map(async ([agent, proxy]) => {
+      const proof = await proxy.refreshLiveness({ force: true });
+      livenessProofs.set(agent, { proxy, proof });
+    }));
+  if (brokerStopping) return;
+  if (!fleetClaimStillOurs()) return;
 
   for (const [agent, entry] of [...fleetState]) {
+    if (brokerStopping) return;
     const credentials = entry?.credentials;
     if (!credentials) continue;
     if (leftOnPurpose.has(agent)) continue;
@@ -2923,7 +3782,46 @@ async function reconcileFleet() {
     // them straight out of the world.
     if (pilotOf(agent)) continue;
 
-    const existing = sessions.get(agent);
+    let existing = sessions.get(agent);
+    if (existing instanceof KeeperProxy) {
+      // A reconnect decision gets a current cheap proof, not whatever the last dashboard
+      // happened to observe. Silence plus a recorded live PID is UNKNOWN: skip this lap.
+      // Only an accepted not-in-game/phantom sample, or a positively dead PID, may fall
+      // through to the recovery path below.
+      const observed = livenessProofs.get(agent);
+      // It was gated, replaced, or created while the parallel preflight ran. Defer rather
+      // than making a recovery decision without a proof tied to this exact proxy.
+      if (!observed || observed.proxy !== existing) continue;
+      const { proof } = observed;
+      if (leftOnPurpose.has(agent) || keeperSpawning.has(agent) || pilotOf(agent) ||
+          sessions.get(agent) !== existing || existing._liveness.disposed)
+        continue;
+      if (proof.identityMismatch) {
+        if (proof.processAlive === true) {
+          console.error(`[rejoin] ${agent} liveness identity conflict while its recorded PID ` +
+                        'is alive — not sending anything to that port');
+          continue;
+        }
+        // The expected process is positively dead (or no PID was ever recorded) and a
+        // stranger answers this numeric port. Retire the port and spawn elsewhere; never
+        // POST rejoin/stop to the mismatched endpoint.
+        const wrongPort = keeperPort(agent, existing._index);
+        portsLostToOthers.add(wrongPort);
+        if (keeperPorts.get(agent) === wrongPort) keeperPorts.delete(agent);
+        const rec = keeperProcesses.get(agent);
+        if (!rec?.pid || !recordedKeeperAlive(rec)) keeperProcesses.delete(agent);
+        existing.dispose();
+        if (sessions.get(agent) === existing) sessions.delete(agent);
+        existing = null;
+        console.error(`[rejoin] ${agent} retired mismatched keeper port ${wrongPort}; ` +
+                      'a fresh guarded keeper will use another port');
+      }
+      if (proof.unavailable && proof.processAlive === true) {
+        console.error(`[rejoin] ${agent} keeper liveness is unavailable but its recorded PID ` +
+                      'is alive — leaving it alone');
+        continue;
+      }
+    }
     if (existing?.live) {
       // Healthy. Clear the backoff, remember WHEN it came back so a drop shortly after
       // a rejoin can be told apart from a drop out of the blue, and — the important
@@ -3021,18 +3919,41 @@ async function reconcileFleet() {
     }
 
     try {
+      requireBrokerAccountLease(agent, credentials);
       if (agentIndices.has(agent)) {
         // KEEPER-BACKED AGENT: rejoin through the keeper process
         const index = agentIndices.get(agent);
-        const port = keeperPort(agent, index);
+        if (!(existing instanceof KeeperProxy)) {
+          // No attested proxy means there is no safe endpoint to rejoin. In particular,
+          // never guess `base + index`: another fleet commonly has the same `t1` handle
+          // there. Allocate, guard and spawn a fresh keeper on a verified free port.
+          const ok = await spawnKeeper(agent, index, credentials);
+          if (!ok) throw new Error('keeper spawn failed without a verified existing proxy');
+          const proxy = makeKeeperProxy(agent, index);
+          await proxy.initialize();
+          sessions.set(agent, proxy);
+          ensureKeeperLivenessSweep();
+          rejoinState.set(agent, { failures: 0, nextTryAt: 0, lastJoinAt: Date.now(),
+                                   keeperWasRunning: st.keeperWasRunning });
+          console.error(`[rejoin] ${agent} (${credentials.character || '?'}) is back ` +
+                        `keeper=process(port=${keeperPort(agent, index)})`);
+          continue;
+        }
         try {
-          // NAMED, so a keeper that is not ours refuses instead of logging its own
-          // character out. This sweep is the loudest of the unaddressed writes — it fires
-          // every 45s for the life of the broker. See `keeperEnvelope`.
+          // Re-prove the exact process immediately before this write. The fleet-wide
+          // liveness fan-out happened before we entered the per-agent loop and may be many
+          // seconds old by now; a rolling keeper can change generations in between.
+          const target = await verifiedKeeperWriteTarget(agent, index);
+          const port = target.port;
+          if (brokerStopping || leftOnPurpose.has(agent) || keeperSpawning.has(agent) || pilotOf(agent) ||
+              sessions.get(agent) !== existing || existing._liveness.disposed)
+            continue;
           const r = await fetch(`http://127.0.0.1:${port}/rejoin`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: keeperEnvelope(agent, credentials),
+            headers: keeperIdentityHeaders(target.identity),
+            // The keeper owns its credentials. Sending a password back over its control
+            // socket bought nothing; agent remains for compatibility with an old keeper.
+            body: keeperEnvelope(target.identity, {}),
             signal: AbortSignal.timeout(30000),
           });
           if (r.status === 409) {
@@ -3042,12 +3963,20 @@ async function reconcileFleet() {
             const who = await r.json().catch(() => ({}));
             console.error(`[rejoin] ${agent}: port ${port} belongs to "${who.agent ?? '?'}" — ` +
                           `not ours, dropping that allocation and respawning`);
+            portsLostToOthers.add(port);
             keeperPorts.delete(agent);
             const rec = keeperProcesses.get(agent);
+            if (rec?.pid && recordedKeeperAlive(rec)) {
+              console.error(`[rejoin] ${agent}: expected pid ${rec.pid} is still alive; ` +
+                            'not spawning a second keeper after the identity conflict');
+              continue;
+            }
             if (rec && rec.port === port) keeperProcesses.delete(agent);
             const ok = await spawnKeeper(agent, index, credentials);
             if (!ok) throw new Error('keeper respawn failed');
-          }
+          } else if (r.ok) {
+            sessions.get(agent)?.resetConnectionEvidence?.();
+          } else throw new Error(`keeper rejoin HTTP ${r.status}`);
         } catch (e) {
           // A KEEPER THAT DID NOT ANSWER IS A QUESTION, NOT A CORPSE.
           //
@@ -3074,11 +4003,11 @@ async function reconcileFleet() {
           // that process is still alive, the keeper is busy and the next sweep will find it in
           // 45 seconds. Only a pid that is genuinely gone earns a respawn.
           const rec = keeperProcesses.get(agent);
-          let alive = false;
-          if (rec?.pid) { try { process.kill(rec.pid, 0); alive = true; } catch { alive = false; } }
+          const alive = rec?.pid ? recordedKeeperAlive(rec) : false;
           if (alive) {
             console.error(`[rejoin] ${agent} keeper did not answer in time but pid ${rec.pid} is ` +
                           `alive — leaving it alone (${e?.name ?? 'error'})`);
+            continue;
           } else {
             console.error(`[rejoin] ${agent} keeper not reachable and pid ` +
                           `${rec?.pid ?? 'unknown'} is gone, respawning`);
@@ -3087,11 +4016,15 @@ async function reconcileFleet() {
           }
         }
         const proxy = sessions.get(agent) || makeKeeperProxy(agent, index);
+        await proxy.initialize();
         sessions.set(agent, proxy);
+        ensureKeeperLivenessSweep();
         rejoinState.set(agent, { failures: 0, nextTryAt: 0, lastJoinAt: Date.now(),
                                  keeperWasRunning: st.keeperWasRunning });
-        console.error(`[rejoin] ${agent} (${credentials.character || '?'}) is back keeper=process(port=${port})`);
+        console.error(`[rejoin] ${agent} (${credentials.character || '?'}) is back ` +
+                      `keeper=process(port=${keeperPort(agent, index)})`);
       } else {
+        if (brokerStopping) return;
         // IN-PROCESS SESSION (fallback)
         const s = session(agent);
         await s.join(credentials);
@@ -3485,13 +4418,36 @@ function startPilotWatch() {
   t.unref?.();
 }
 
+let reconcileTimer = null;
+let reconcileInFlight = null;
+
+function runReconcile() {
+  if (brokerStopping) return Promise.resolve();
+  if (reconcileInFlight) return reconcileInFlight;
+  reconcileInFlight = reconcileFleet().finally(() => { reconcileInFlight = null; });
+  return reconcileInFlight;
+}
+
+function scheduleReconcile(delayMs) {
+  if (brokerStopping) return;
+  if (reconcileTimer !== null) return;
+  reconcileTimer = setTimeout(async () => {
+    reconcileTimer = null;
+    try { await runReconcile(); }
+    catch (error) { console.error(`[rejoin] sweep failed: ${error.message}`); }
+    finally {
+      if (REJOIN && !brokerStopping) scheduleReconcile(RECONCILE_MS);
+    }
+  }, Math.max(0, delayMs));
+  reconcileTimer.unref?.();
+}
+
 function startReconciling() {
   if (!REJOIN) {
     console.error('[rejoin] disabled — characters that drop will stay out until something joins them');
     return;
   }
-  const t = setInterval(() => { reconcileFleet().catch(() => {}); }, RECONCILE_MS);
-  t.unref?.();
+  scheduleReconcile(RECONCILE_MS);
   console.error(`[rejoin] watching every ${Math.round(RECONCILE_MS / 1000)}s`);
 }
 
@@ -3675,7 +4631,10 @@ const session = (name, { create = false } = {}) => {
     roster: fleetState,
   });
   if (r.action === 'refuse') throw new Error(r.error);
-  if (r.action === 'keeper') sessions.set(name, makeKeeperProxy(name, agentIndices.get(name)));
+  if (r.action === 'keeper') {
+    sessions.set(name, makeKeeperProxy(name, agentIndices.get(name)));
+    ensureKeeperLivenessSweep();
+  }
   else if (r.action === 'bare') sessions.set(name, new Session(name));
   return sessions.get(name);
 };
@@ -4408,6 +5367,10 @@ const TOOLS = [
             host:     a.host     ?? known.host,
             port:     a.port     ?? known.port }
         : a;
+      // Endpoint + normalized account is the login authority, not this roster's filename
+      // or its agent alias. A copied roster therefore collides here before Session.join can
+      // send even the first login packet.
+      requireBrokerAccountLease(a.agent, args);
       const r = await s.join(args);
       // Recorded only after the login actually succeeded, so a bad password never
       // ends up in the resume file to be retried on every future boot.
@@ -11507,6 +12470,11 @@ const TOOLS = [
         return { done: false, plan, before,
                  note: 'this deletes the existing character and cannot be undone — pass confirm:true' };
 
+      // joinAsNewCharacter opens the same account socket as an ordinary join. The lease
+      // must therefore exist before suicide/creation starts, including the credentials-first
+      // path that has never passed through the join tool.
+      requireBrokerAccountLease(a.agent, s.credentials);
+
       // THE SUICIDE IS PART OF THE PATH, so `verify` has to do it too or it is not
       // verifying anything. The server only accepts BP_NEW_CHARINFO when IsFirstTime()
       // holds, and PerformSuicide (user.kod:1447) setting piLastLoginTime = 0 is what
@@ -11548,6 +12516,18 @@ const TOOLS = [
       const matched = !!asked && haveReadings && STAT_ORDER.every(k => Number(got[k]) === asked[k]);
       const junk = haveReadings &&
         STAT_ORDER.map(k => Number(got[k])).join('/') === '3/1/4/1/5/9';
+
+      // A credentials-first creation is already a successful login, so it must enter
+      // the same durable roster and event-listener path as `join`.  Previously reroll
+      // left a live, unnamed in-process session that vanished on broker restart: the
+      // separate account ledger retained the password, but the selected fleet had no
+      // roster entry and therefore no keeper could ever resume it.  Persist only after
+      // the server has proved that the replacement exists, exactly like `join` does
+      // after a successful login.
+      if (made.created) {
+        rememberJoin(a.agent, s.credentials);
+        listen(a.agent, s);
+      }
 
       return {
         done: !!made.created, ...made, plan_summary: {
@@ -12681,15 +13661,13 @@ const TOOLS = [
     } },
     run: async (a) => {
       const rows = [];
-      // ASK THE PROCESS THAT OWNS EACH SOCKET BEFORE DRAWING THE BOARD.  The ordinary
-      // two-second poller is enough for background consumers; an explicit refresh (used by
-      // the TUI's five-second repaint and its `r` key) eliminates another cache layer while
-      // remaining packet-free with respect to the game server.
-      if (a.refresh === true) {
-        await Promise.all([...sessions.values()]
-          .filter(s => s instanceof KeeperProxy)
-          .map(s => s.refreshSnapshot().catch(() => null)));
-      }
+      // ASK THE PROCESS THAT OWNS EACH SOCKET WHEN SOMEBODY ACTUALLY DRAWS THE BOARD.
+      // Ordinary reads coalesce inside the two-second snapshot TTL; refresh:true bypasses
+      // it. Neither path sends a Meridian packet. There is deliberately no background rich
+      // state poller any more.
+      await Promise.all([...sessions.values()]
+        .filter(s => s instanceof KeeperProxy)
+        .map(s => s.ensureSnapshot({ force: a.refresh === true }).catch(() => null)));
       // Once for the whole fleet, not once per row, and from the ledger rather than from
       // each keeper — see killsIn(). A keeper's own kills_30m is wiped every time the
       // supervisor restarts it, which is about once a minute.
@@ -13321,7 +14299,22 @@ const TOOLS = [
     }, required: ['agent'] },
     run: async (a) => {
       const s = sessions.get(a.agent);
-      if (!s?.client) return { left: false, note: 'no such session' };
+      if (!s || (!(s instanceof KeeperProxy) && !s.client))
+        return { left: false, note: 'no such session' };
+      const alreadyLeft = leftOnPurpose.has(a.agent);
+      let keeperResult = null;
+      if (s instanceof KeeperProxy) {
+        // Publish intent before awaiting the identity proof so an overlapping reconcile
+        // cannot rejoin between the proof and /leave. Roll it back if no leave reached the
+        // keeper; after a confirmed leave it stays set even if child shutdown is delayed.
+        leftOnPurpose.add(a.agent);
+        try { keeperResult = await keeperLeaveAndStop(a.agent, s._index); }
+        catch (error) {
+          if (!alreadyLeft) leftOnPurpose.delete(a.agent);
+          return { left: false, error: error.message,
+                   note: 'the keeper was not verified and left; reconciliation remains enabled' };
+        }
+      }
       // Stop the keeper first: a background loop still driving a socket we are about
       // to destroy produces a stream of confusing failures.
       dropAutopilot(a.agent);
@@ -13331,15 +14324,22 @@ const TOOLS = [
       // taken out, and without `forget` it stays out until a restart or an explicit
       // join — which is what this tool has always promised.
       leftOnPurpose.add(a.agent);
-      try { s.client.send(20 /* BP_LOGOFF */); } catch {}
-      s.client.sock?.destroy();
+      if (!(s instanceof KeeperProxy)) {
+        try { s.client.send(20 /* BP_LOGOFF */); } catch {}
+        s.client.sock?.destroy();
+      }
       // Flush the recorder before dropping the session, or the last few seconds —
       // usually the interesting ones — never reach disk.
       try { s.recorder?.stop(); } catch {}
-      sessions.delete(a.agent);
+      if (!(s instanceof KeeperProxy) || keeperResult?.stopped) {
+        if (s instanceof KeeperProxy) s.dispose();
+        sessions.delete(a.agent);
+      }
       // The inbox deliberately outlives the session: what somebody said is still worth
       // reading after the character it was said to has logged out.
       return { left: true, forgotten: !!a.forget,
+               ...(keeperResult ? { keeper_stopped: keeperResult.stopped,
+                 ...(keeperResult.stop_note ? { keeper_stop_note: keeperResult.stop_note } : {}) } : {}),
                note: a.forget
                  ? 'autopilot and conversation stopped, and this character is out of the roster — ' +
                    'a restart will NOT log it back in. The inbox is kept.'
@@ -13363,9 +14363,30 @@ const byName = new Map(TOOLS.map(t => [t.name, t]));
 const CALLER_STDIO = Object.freeze({ transport: 'stdio', local: true });
 const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 
+// These tools consume an event/chat/inbox window or broker metadata, not the world/routing
+// projection. Long-polling them is the normal idle state for an interrupt-driven bot, so
+// turning each wait into a rich `/state` rebuild would simply recreate the loud waiting the
+// demand split removes. Mutating keeper calls still perform their own cheap exact-identity
+// `/live` proof before writing.
+const SNAPSHOT_OPTIONAL_TOOLS = new Set([
+  'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave',
+]);
+
 async function callTool(name, args, caller) {
   const t = byName.get(name);
   if (!t) throw new Error(`unknown tool "${name}"`);
+  // Rich keeper state is now demand-driven. Resolve the target before the tool reads any
+  // object id, position, inventory or vital, and coalesce bursts through the proxy's 2s
+  // TTL. Join/reroll are the two tools allowed to introduce a name and therefore cannot
+  // require a pre-existing keeper snapshot.
+  if (args?.agent && name !== 'join' && name !== 'reroll' &&
+      !SNAPSHOT_OPTIONAL_TOOLS.has(name)) {
+    let targeted = sessions.get(args.agent);
+    if (!targeted && agentIndices.has(args.agent) && fleetState.has(args.agent))
+      targeted = session(args.agent);
+    if (targeted instanceof KeeperProxy)
+      await targeted.ensureSnapshot();
+  }
   // Record the call against the character it was for, with how long it took and
   // whether it threw. Reconstructing "what did this agent actually do" from the
   // event stream alone is guesswork; the call order is the other half.
@@ -13479,7 +14500,7 @@ function serveStdio() {
       if (out) process.stdout.write(JSON.stringify(out) + '\n');
     }
   });
-  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('end', () => { void beginBrokerShutdown('stdio end'); });
   // Logging goes to stderr forever: stdout is the protocol channel, and one
   // stray console.log there corrupts the stream.
   console.error(`m59 broker on stdio — ${TOOLS.length} tools, ${resources.size} resources loaded`);
@@ -14385,9 +15406,23 @@ function handleControl(action, res) {
     if (!REJOIN) return reply(409, { ok: false, note: 'rejoining is disabled on this broker (--no-rejoin)' });
     // Kick it off and answer immediately: joining twenty characters takes longer than
     // any browser is willing to wait, and the page polls anyway.
-    reconcileFleet().catch(e => console.error(`[rejoin] sweep failed: ${e.message}`));
+    runReconcile().catch(e => console.error(`[rejoin] sweep failed: ${e.message}`));
     const out = [...fleetState].filter(([a]) => !sessions.get(a)?.live && !leftOnPurpose.has(a)).length;
     return reply(200, { ok: true, note: out ? `rejoining ${out} character(s) — watch the log` : 'everyone is already in game' });
+  }
+  // THE SERVICE'S PRIVATE, ORDERLY STOP. `m59-service.mjs` has already proved this
+  // broker's checkout/fleet/PID through /health, and the dashboard socket admits control
+  // writes only from loopback. Reply first so the short-lived service request is not cut
+  // off, then enter the same gated shutdown used by SIGINT/stdio EOF: stop new spawns,
+  // settle reconciliation, authenticate each child /stop, and release ownership only
+  // after those lanes are known closed.
+  //
+  // This is deliberately a new action rather than changing `stop`: an older service may
+  // still ask that endpoint to spawn its external stopper during a rolling deployment.
+  if (action === 'quiesce') {
+    reply(200, { ok: true, note: 'orderly broker shutdown accepted' });
+    setImmediate(() => { void beginBrokerShutdown('service stop'); });
+    return;
   }
   if (action === 'restart' || action === 'stop') {
     const svc = fileURLToPath(new URL('./m59-service.mjs', import.meta.url));
@@ -14932,6 +15967,15 @@ async function selftest(account, password) {
   const list = await handleRpc({ jsonrpc: '2.0', id: 0, method: 'tools/list' });
   console.log(`tools: ${list.result.tools.map(t => t.name).join(', ')}`);
 
+  // Selftest enters through the normal guarded join tool too, but reserve its explicit
+  // account here so the ownership invariant is visible and cannot be bypassed by a future
+  // selftest refactor. Match join's remembered-endpoint fallback exactly.
+  const known = fleetState.get('test')?.credentials;
+  requireBrokerAccountLease('test', {
+    account,
+    host: known?.host ?? HOST,
+    port: known?.port ?? PORT,
+  });
   await call('join', { agent: 'test', account, password });
   const view = await call('look', { agent: 'test' });
   await call('status', { agent: 'test' });
@@ -15001,17 +16045,38 @@ const isMainModule = process.argv[1] &&
 
 const argv = process.argv.slice(2);
 if (argv.includes('--selftest')) {
+  const ownership = acquireBrokerOwnership();
+  if (!ownership.ok) {
+    console.error(`[state] broker ownership refused before selftest login: ${ownership.why}`);
+    process.exit(3);
+  }
   const i = argv.indexOf('--selftest');
   const [acct, pw] = argv.slice(i + 1);
   if (!acct || !pw) { console.error('usage: m59-broker.mjs --selftest <account> <password>'); process.exit(1); }
   try { await selftest(acct, pw); process.exit(0); }
   catch (e) { console.error(`selftest failed: ${e.message}`); process.exit(1); }
 } else if (isMainModule) {
+  // OWNERSHIP PRECEDES THE LISTENER. Starting an empty-looking broker and discovering the
+  // collision only when resume runs leaves a live API that can still accept a manual join.
+  // Claim the roster and every endpoint/account synchronously before either HTTP or stdio
+  // can receive a request; a held claim is a failed process, not a degraded broker.
+  const ownership = acquireBrokerOwnership();
+  if (!ownership.ok) {
+    console.error(`[state] broker ownership refused before startup: ${ownership.why}`);
+    process.exit(3);
+  }
+  const resumeOwnedFleet = () => {
+    if (argv.includes('--no-resume')) return;
+    resumeFleet().catch(error => {
+      console.error(`[state] fleet resume aborted before further login: ${error.message}`);
+      process.exit(3);
+    });
+  };
   if (argv.includes('--http')) {
     const di = argv.indexOf('--dashboard');
     const dashboardPort = di >= 0 ? Number(argv[di + 1] || 8902) : null;
     serveHttp(Number(argv[argv.indexOf('--http') + 1] || 8899), dashboardPort);
-    if (!argv.includes('--no-resume')) resumeFleet();
+    resumeOwnedFleet();
     startLedger();
     startReconciling();
     startPilotWatch();
@@ -15020,7 +16085,7 @@ if (argv.includes('--selftest')) {
     if (dashboardPort != null) serveDashboard(dashboardPort);
   } else {
     serveStdio();
-    if (!argv.includes('--no-resume')) resumeFleet();
+    resumeOwnedFleet();
     startLedger();
     startReconciling();
     startPilotWatch();

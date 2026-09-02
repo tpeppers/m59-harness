@@ -73,7 +73,13 @@ Both select maps in the same order: explicit `M59_MAP`, then
 `substrate/m59-map.local.json` when setup generated one, then the checked reference.
 The selected map is fully decoded and validated before the broker reports healthy.
 
-One process, N characters, 47 MCP tools. Point a client at it:
+One broker endpoint, N characters. The production default keeps each
+character's keeper in a child process for fault isolation; the optional
+[`m59-lab-runtime`](docs/m59-lab-runtime.md) gives an explicitly marked test fleet
+event-driven scheduling and a lazy atlas. It defaults to a lowest-memory single process;
+`--shards N` optionally isolates partner-preserving actor groups into hidden child
+processes, each with its own V8 heap and one atlas, while a Meridian-free parent owns the
+leases and aggregate control surface. Point a client at the broker:
 
 ```json
 { "mcpServers": { "meridian59": {
@@ -84,10 +90,55 @@ One process, N characters, 47 MCP tools. Point a client at it:
 
 `.mcp.json` in this repo does exactly that — fix the path for your checkout.
 **Attach, do not spawn.** `m59-broker.mjs` with no arguments serves stdio MCP
-*and* resumes a fleet; with one broker already running, a second is refused the
-lock, comes up healthy and empty, and answers every question about a fleet of
-nobody while the real one plays on. `m59-mcp-attach.mjs` forwards stdio MCP to
-an existing broker and holds no state.
+*and* resumes a fleet. With one broker already owning that fleet, a second is
+refused before its HTTP or stdio listener opens and exits with status 3; it does
+not attach to the existing process. `m59-mcp-attach.mjs` forwards stdio MCP to
+the broker that already owns the fleet and holds no state itself.
+
+### Resource-efficiency modes
+
+The production entry point and isolation model are unchanged: `m59-service.mjs` still
+runs the standard broker and one keeper child per character. Its idle work is now
+demand-driven. Rich keeper state is projected only when an MCP/dashboard reader needs it,
+bursts reuse a two-second snapshot, and one broker deadline checks all keepers through the
+small projection-free `/live` identity/connection reply. State-file persistence, the
+flight recorder, failed-start retry, and client keepalive use bounded one-shot deadlines
+instead of permanent polling intervals.
+
+The opt-in lab runner shares one lazy atlas and scheduler across all actors by default;
+`--shards N` trades additional heaps/atlases for smaller GC, synchronous-stall, and crash
+domains. The offline 100-actor lower-bound smoke measured about 14 KiB of used heap per
+unstarted actor shell after one shared import, whose repeated forced-GC floor was about
+138 MiB RSS. This is not a connected-fleet memory promise. A checked exit atlas (used by every keeper since 2026-09-01, not only the lab runner)
+removes the former multi-second fine-boundary derivation while exact tests compare every
+projected approach. See [the lab runtime guide](docs/m59-lab-runtime.md) for the safety
+boundary, measurements, fallbacks, and shard accounting.
+
+An isolated one-character live canary measured 122–129 MiB working set for the shared
+runtime versus 727 MiB for the ordinary broker plus one keeper on the same machine—about
+82–83% less RAM—and replaced the standard broker's observed 8.5–8.7-second eager routing
+startup with 0–1 ms lazy graph registration. The canary also passed authenticated control
+shutdown, stale-lock reclaim, standard keeper resume in a dedicated 100-port band, and
+orderly service shutdown. These are test-server measurements, not a promise that connected
+actors remain constant-cost; the full setup and caveats are in the lab runtime guide.
+
+A separate **experimental** image can scale only Blakod timers and the world-hour event;
+anti-abuse timing (`GetTime()`), sockets, sessions, protocol pacing, logs, and save cadence
+remain on wall time. It is never selected by the normal Dockerfile or production service:
+
+```powershell
+node tools/m59-sim-server-build.mjs --check --scale 10
+node tools/m59-sim-server-build.mjs --build --scale 10 --tag m59-blakserv-sim:lab-10x
+```
+
+The wrapper requires the manifest's exact pinned source checkout through `M59_ROOT` or
+`--source PATH`; it verifies preimage hashes and patch applicability without modifying that
+checkout.
+The pinned patch contract and a native Windows RELEASE/Werror build pass, but the Docker
+daemon was unavailable: the Linux image build, container attestation, save/restart smoke,
+and a live canary have not been run. Treat it as an isolated test-first artifact, not a
+production option; the exact guarded run/stop commands and save boundary are in the lab
+runtime guide.
 
 Then read [`docs/m59-agent-primer.md`](docs/m59-agent-primer.md) — the rules of
 the world, written for something that is about to play it.
@@ -100,6 +151,8 @@ tools/m59-makefleet.mjs             make N characters that are worth growing
 tools/m59-shortcuts.mjs             a click-to-play client shortcut per character
 tools/pull-client-assets.py         decode the client's sprites into the compendium
 docker/Dockerfile                   builds blakserv from either source tree, on any platform
+docker/Dockerfile.sim-clock         separate source-pinned experimental lab-clock image
+server-patches/simulation-clock/    immutable manifest, hashes, and isolated server patch
 
 docs/INSTALL.md                     the manual: both platforms, both build paths, traps
 docs/m59-agent-primer.md            the rules of the world, for an agent that will play it
@@ -110,8 +163,15 @@ docs/m59-coordination-research.md   cited findings on trading, loot, PvP, kill c
 docs/m59-conversation.md            the chat bridge: hearing players, answering them
 docs/m59-proxy-handoff.md           sitting between a human client and the server
 docs/meridian59-bridge.md           the admin-socket control plane, runbook, and traps
+docs/m59-lab-runtime.md             optional one- or multi-process event-driven test-fleet runtime
 
-tools/m59-broker.mjs        the MCP server — 47 tools, N characters, one process
+tools/m59-broker.mjs        the MCP control plane over N keeper-backed characters
+tools/m59-lab-runner.mjs    opt-in event-driven runtime and shard supervisor for a dedicated test fleet
+tools/m59-lab-roster.mjs    safely marks an existing local named roster for the lab runtime
+tools/m59-lab-shard-child.mjs  minimal guarded child for optional process-sharded labs
+tools/m59-sim-server-build.mjs  verifies/builds the isolated simulation-clock image
+tools/m59-sim-server.mjs     guarded loopback lifecycle and clock attestation for that image
+tools/runtime/shards/       ownership permits, IPC state/ACK control, aggregation, and exact stop
 tools/m59-client.mjs        a protocol client that logs in as a real player
 tools/m59-parse.mjs         the server→client parsers: perception and trading
 tools/m59-world.mjs         the joined world model: perception + graph + geometry
@@ -167,6 +227,13 @@ node tools/m59-collision-test.mjs     # fine BSP collision, cliffs, walls, slope
 node tools/m59-fleets-test.mjs        # the roster inventory, against a fixture broker
 node tools/m59-loadout-test.mjs       # 109 tests — loadouts, and what reaches the counter
 node tools/m59-stats-test.mjs         # 60 tests — the builds board, and the pane it shares
+node tools/m59-broker-demand-test.mjs # demand state and projection-free keeper /live seam
+node tools/m59-keeper-idle-test.mjs   # event-driven keeper persistence and join retry
+node tools/m59-client-keepalive-test.mjs # one-shot idle/proof-of-life wire keepalive
+node tools/m59-recorder-test.mjs      # lazy event-driven flight recorder
+node tools/m59-world-exit-atlas-test.mjs # exact lab atlas parity and cold-origin bound
+node tools/runtime/server-clock-contract-test.mjs # isolated patch/image contract
+node tools/m59-sim-server-test.mjs    # offline simulation-server controller contract
 ```
 
 Against a live server, with test accounts:

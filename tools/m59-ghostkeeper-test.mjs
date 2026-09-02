@@ -46,6 +46,7 @@ const ok = (what, cond, extra = '') => {
 
 const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
 const AUTOPILOT = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+const FLEET_LOCK = readFileSync(new URL('./runtime/fleet-lock.mjs', import.meta.url), 'utf8');
 
 console.log('\nA KEEPER-BACKED CHARACTER GETS NO SECOND BRAIN IN THE BROKER');
 {
@@ -126,15 +127,21 @@ console.log('\nA KEEPER THAT DID NOT ANSWER IS A QUESTION, NOT A CORPSE');
   // Nobody carried it across to keepers. One postmortem here shows a pass blocked in a single
   // await for 15,856ms, which is a keeper worth NOT killing.
   ok('the sweep asks whether the pid is alive before condemning a keeper',
-     /const rec = keeperProcesses\.get\(agent\);[\s\S]{0,200}process\.kill\(rec\.pid, 0\)/.test(BROKER));
+     /const rec = keeperProcesses\.get\(agent\);[\s\S]{0,200}recordedKeeperAlive\(rec\)/.test(BROKER));
   ok('and a busy keeper is left alone rather than respawned',
      /keeper did not answer in time but pid \$\{rec\.pid\} is /.test(BROKER));
   ok('and only a pid that is genuinely gone earns a respawn',
      /is gone, respawning[\s\S]{0,120}await spawnKeeper\(agent, index, credentials\)/.test(BROKER));
-  // THE SIGNAL-0 PROBE IS THE WHOLE POINT, and it must not be swapped for something weaker: a
-  // /health round trip would reintroduce exactly the timeout this exists to survive.
-  ok('the liveness probe is a signal, not another request',
-     /process\.kill\(rec\.pid, 0\); alive = true; \} catch \{ alive = false; \}/.test(BROKER));
+  // An exact ChildProcess handle is stronger than a numeric signal probe. Adopted survivors
+  // do not have one, so their fallback is still signal 0; only ESRCH proves death, while
+  // EPERM and unexpected errors fail closed as live. A /health round trip here would
+  // reintroduce exactly the timeout this exists to survive.
+  ok('spawned keepers use their exact child handle before the numeric fallback',
+     /return record\.child \? !spawnedChildExited\(record\.child\) : isProcessLive\(record\.pid\)/
+       .test(BROKER));
+  ok('the adopted-keeper liveness fallback is a signal, not another request',
+     /kill\(pid, 0\);[\s\S]{0,120}error\?\.code === 'ESRCH'[\s\S]{0,120}error\?\.code === 'EPERM'/
+       .test(FLEET_LOCK));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -4,6 +4,10 @@
 //   node tools/m59-solo-run.mjs
 //   node tools/m59-solo-run.mjs --wall-below 0.9 --hold-below 0.85
 //   node tools/m59-solo-run.mjs --agents shadow01,shadow02 --timeout 240
+//   node tools/m59-solo-run.mjs --tour 50,38,593,50 --stagger 30
+//   node tools/m59-solo-run.mjs --random --legs 7 --stagger 30      a world tour, next stop drawn by lot
+//   node tools/m59-solo-run.mjs --random --seed 1234 --dry-run      the itinerary that seed would walk
+//   node tools/m59-solo-run.mjs --no-broadcast                      checkpoints not announced in game
 //   node tools/m59-solo-run.mjs --dry-run
 //
 // WHY ONE AT A TIME. Twenty-one characters crossing together is a different experiment from
@@ -58,6 +62,61 @@ const TO      = Number(flag('to', 38));       // Castle Victoria
 // Each leg is timed separately and the arrival room of one is the departure room of the
 // next, so a leg that ends short is REPORTED short rather than papered over by a relocate.
 const TOUR = (flag('tour', '') || '').split(',').map(n => Number(n.trim())).filter(Number.isFinite);
+
+// A WORLD TOUR WITH NO FIXED ORDER. `--random` is `--tour` with the next checkpoint drawn by
+// lot: the character sets off from `--from`, and on reaching each checkpoint the next one is
+// chosen from WORLD_TOUR — any of the seven but the room it is standing in — for `--legs`
+// legs. A fixed circuit asks the same doorways in the same order every lap, so a boundary
+// that only breaks when approached from the other side, or with a crowd already through it,
+// is never asked about. A drawn itinerary asks every pair eventually, and twenty-one
+// characters drawing separately spread across the world instead of arriving at one gate as
+// a queue.
+//
+// THE DRAW IS SEEDED, PER CHARACTER, SO IT CAN BE WALKED AGAIN. `--seed` fixes every
+// character's itinerary regardless of who set off first or how long a leg took — a random
+// tour nobody can repeat is an anecdote, not a measurement. The seed in force is printed on
+// every run, and `--dry-run` prints the itinerary each character would draw from it.
+const WORLD_TOUR = [
+  { room: 38,  name: 'Castle Victoria' },
+  { room: 200, name: 'Marion' },
+  { room: 350, name: 'East Jasper' },
+  { room: 150, name: 'Cor Noth' },
+  { room: 50,  name: 'The Streets of Tos' },
+  { room: 101, name: 'North Barloque' },
+  { room: 110, name: 'A shadowy corner' },
+];
+const RANDOM = has('random');
+const LEGS   = Number(flag('legs', 7));
+const SEED   = Number(flag('seed', Date.now() % 1000000));
+// mulberry32, seeded from the run's seed and the character's name, so two characters on the
+// same seed walk different roads and the same character on the same seed walks the same one.
+function rngFor(name) {
+  let h = SEED >>> 0;
+  for (const ch of String(name)) h = Math.imul(h ^ ch.charCodeAt(0), 2654435761) >>> 0;
+  return () => {
+    h = (h + 0x6D2B79F5) >>> 0;
+    let t = h;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function nextStop(rng, current) {
+  const choices = WORLD_TOUR.filter(s => s.room !== Number(current));
+  return choices[Math.floor(rng() * choices.length)].room;
+}
+function drawItinerary(name) {
+  const rng = rngFor(name), legs = [FROM];
+  for (let i = 0; i < LEGS; i++) legs.push(nextStop(rng, legs[legs.length - 1]));
+  return legs;
+}
+const stopName = n => WORLD_TOUR.find(s => s.room === Number(n))?.name ?? ('room ' + n);
+
+// ANNOUNCED AT EVERY CHECKPOINT UNLESS TOLD NOT TO. The broadcast is how somebody standing
+// in the world knows the tour is running and how far round each character is, so it is on
+// by default; `--no-broadcast` is for a run where twenty-one lap reports an hour would be
+// noise for everybody else in the game.
+const BROADCAST = !has('no-broadcast');
 
 // How long to wait for a leftover recovery hold before timing a leg anyway. Generous,
 // because vigor is the slowest of the three bars to come back and the alternative is a leg
@@ -124,7 +183,8 @@ const REST_CREDIT_MS = Number(flag('rest-credit', 180)) * 1000;
 //   repository already documents everywhere else: no error has never meant success here.
 const KNOWN = new Set(['port', 'fleet', 'from', 'to', 'tour', 'recovery-wait', 'timeout',
                        'wall-below', 'hold-below', 'agents', 'dry-run', 'rest-credit',
-                       'stagger', 'stop', 'force', 'help', 'on-shared-server']);
+                       'stagger', 'stop', 'force', 'help', 'on-shared-server',
+                       'random', 'legs', 'seed', 'broadcast', 'no-broadcast']);
 if (has('help') || argv.includes('-h')) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -141,6 +201,23 @@ if (has('help') || argv.includes('-h')) {
     console.error('          the one that was asked for. `--help` lists what it takes.');
     process.exit(2);
   }
+}
+if (RANDOM && has('tour')) {
+  console.error('solo-run: --random and --tour are two different itineraries; pick one.');
+  process.exit(2);
+}
+if (RANDOM && !(Number.isInteger(LEGS) && LEGS > 0)) {
+  console.error('solo-run: --legs must be a whole number of legs greater than zero.');
+  process.exit(2);
+}
+if (RANDOM && !Number.isInteger(SEED)) {
+  console.error('solo-run: --seed must be an integer.');
+  process.exit(2);
+}
+if (RANDOM && !WORLD_TOUR.some(s => s.room === FROM)) {
+  console.error(`solo-run: --from ${FROM} is not one of the world tour's stops: ` +
+                WORLD_TOUR.map(s => s.room).join(', '));
+  process.exit(2);
 }
 
 exitWhenOutputIsGone();
@@ -207,7 +284,11 @@ if (has('stop')) {
   process.exit(0);
 }
 
-const claim = takeRunLock(FLEET, { label: `solo-run ${FROM}->${TO}`, force: has('force') });
+const claim = takeRunLock(FLEET, {
+  label: RANDOM ? `solo-run random x${LEGS} seed ${SEED}`
+       : TOUR.length >= 2 ? `solo-run tour ${TOUR.join('>')}`
+       : `solo-run ${FROM}->${TO}`,
+  force: has('force') });
 if (!claim.ok) {
   const h = claim.holder ?? {};
   console.error(`solo-run: REFUSING — fleet "${FLEET}" is already being driven.`);
@@ -269,9 +350,24 @@ rows.sort((a, b) => a.agent.localeCompare(b.agent, 'en', { numeric: true }));
 if (!rows.length) { console.error('solo-run: no characters matched.'); process.exit(1); }
 
 console.log(`fleet "${FLEET}" -> ${rostered.host}:${rostered.port}`);
-console.log(`${rows.length} character(s), one at a time, ${FROM} -> ${TO}, ${TIMEOUT / 1000}s each`);
-console.log(`shelter: travel_wall_below ${WALL ?? '(unchanged)'}, travel_hold_below ${HOLD ?? '(unchanged)'}\n`);
-if (DRY) { rows.forEach(r => console.log(`  ${r.character} (${r.agent})`)); process.exit(0); }
+if (RANDOM)
+  console.log(`${rows.length} character(s), a world tour of ${LEGS} leg(s) each from ${FROM}, ` +
+              `next stop drawn by lot (seed ${SEED}), ${TIMEOUT / 1000}s per leg`);
+else if (TOUR.length >= 2)
+  console.log(`${rows.length} character(s), tour ${TOUR.join(' -> ')}, ${TIMEOUT / 1000}s per leg`);
+else
+  console.log(`${rows.length} character(s), one at a time, ${FROM} -> ${TO}, ${TIMEOUT / 1000}s each`);
+if (RANDOM) console.log('stops: ' + WORLD_TOUR.map(s => `${s.room} ${s.name}`).join(', '));
+console.log(`shelter: travel_wall_below ${WALL ?? '(unchanged)'}, travel_hold_below ${HOLD ?? '(unchanged)'}`);
+console.log(BROADCAST ? 'checkpoints are broadcast to the whole server on arrival'
+                      : 'checkpoints are NOT announced in game (--no-broadcast)');
+console.log('');
+if (DRY) {
+  for (const r of rows)
+    console.log(`  ${String(r.character).padEnd(12)} (${r.agent})` +
+                (RANDOM ? '  ' + drawItinerary(r.character).join(' -> ') : ''));
+  process.exit(0);
+}
 
 const dm = await import('./m59-dm.mjs');
 const snap = JSON.parse(readFileSync(join(REPO, 'substrate', 'shadow-snapshot.json'), 'utf8'));
@@ -322,7 +418,7 @@ const results = [];
 // an operator actually has: if I send everybody, how many arrive. `--stagger <seconds>` sets
 // them off that far apart and polls them all, which keeps them from leaving as one crowd
 // without pretending they are alone.
-async function runLeg(r, { from = FROM, to = TO, place = true, heal = true, leg = null } = {}) {
+async function runLeg(r, { from = FROM, to = TO, place = true, heal = true, leg = null, next = null } = {}) {
   // Same starting conditions for every one of them, or the run measures who went first.
   await call('autopilot', { agent: r.agent, mode: 'idle', roam: false, confine_rooms: [] });
   await call('autopilot', { agent: r.agent, action: 'unpark' });
@@ -502,12 +598,17 @@ async function runLeg(r, { from = FROM, to = TO, place = true, heal = true, leg 
   // ANNOUNCED ON ARRIVAL, AND A DEATH RESETS THE COUNT RATHER THAN INTERRUPTING IT.
   // `say` is best-effort on purpose: a broadcast that fails must not turn an arrival into
   // a failed leg, because the leg is the measurement and this is only the commentary.
+  // AND ONLY WHEN ASKED TO BE — on by default, off with `--no-broadcast`. The reply is kept
+  // so a broadcast the server swallowed (a refusal is prose, and `echoed` is null) shows on
+  // the leg's line rather than looking like a checkpoint nobody reached.
+  let said = null;
   if (died) setLaps(r.character, 0);
-  else if (ended === 'arrived') {
+  else if (ended === 'arrived' && BROADCAST) {
     const lap = lapsOf(r.character) + 1;
     const text = `I'm on my ${ordinal(lap)} lap since dying, I've just reached the checkpoint ` +
-                 `${roomName(TO)}. Total travel time since last leg: ${secs} seconds.`;
-    await call('say', { agent: r.agent, text, type: 'broadcast' }, 20000).catch(() => null);
+                 `${roomName(TO)}. Total travel time since last leg: ${secs} seconds.` +
+                 (next != null ? ` Next stop: ${roomName(next)}.` : '');
+    said = await call('say', { agent: r.agent, text, type: 'broadcast' }, 20000).catch(() => null);
   }
   const at = await call('status', { agent: r.agent }, 30000);
   results.push({ character: r.character, ended, secs, restSecs, died, low,
@@ -521,6 +622,9 @@ async function runLeg(r, { from = FROM, to = TO, place = true, heal = true, leg 
   // SAID ON THE LEG'S OWN LINE, because a timing without it is a number nobody can trust.
   if (refusedWhy)
     console.log('               REFUSED: ' + refusedWhy);
+  if (ended === 'arrived' && BROADCAST && !said?.echoed)
+    console.log('               (checkpoint broadcast may not have gone out: ' +
+                String(said?._error ?? JSON.stringify(said?.messages ?? said ?? null)).slice(0, 160) + ')');
   if (ailments.size)
     console.log('               AILING: ' + [...ailments].join(', ') +
                 " — this leg's time is not a measurement of the road");
@@ -564,8 +668,40 @@ async function runTour(r) {
   return legs;
 }
 
+// A RANDOM TOUR IS A TOUR WHOSE NEXT CHECKPOINT IS DRAWN ON ARRIVAL. Same rules as a fixed
+// one — first leg placed and healed, later legs from wherever the last one ended, stop at
+// the first leg that does not arrive, a lap only when every leg did. The stop AFTER the one
+// being walked to is drawn before the leg starts, so the arrival broadcast can say where the
+// character is going next; the draw comes off the character's own seeded stream either way,
+// so the road walked is exactly the one `--dry-run` printed for that seed.
+async function runRandomTour(r) {
+  const rng = rngFor(r.character);
+  const legs = [];
+  let at = FROM;
+  let to = nextStop(rng, at);
+  for (let i = 0; i < LEGS; i++) {
+    const after = i + 1 < LEGS ? nextStop(rng, to) : null;
+    const out = await runLeg(r, { from: at, to, place: i === 0, heal: i === 0, leg: i + 1, next: after });
+    legs.push(out);
+    if (out.ended !== 'arrived') break;
+    at = to; to = after;
+  }
+  const done = legs.filter(l => l.ended === 'arrived').length;
+  if (done === LEGS) setLaps(r.character, lapsOf(r.character) + 1);
+  console.log(`  ${String(r.character).padEnd(12)} completed ${done} of ${LEGS} leg(s) ` +
+              `— ${FROM} -> ${legs.map(l => `${l.ended}@${l.endedIn ?? '?'}`).join(' -> ')}`);
+  return legs;
+}
+
 const STAGGER = Number(flag('stagger', 0));
-if (TOUR.length >= 2) {
+if (RANDOM) {
+  if (STAGGER > 0) {
+    await Promise.all(rows.map((r, i) =>
+      new Promise(done => setTimeout(done, i * STAGGER * 1000)).then(() => runRandomTour(r))));
+  } else {
+    for (const r of rows) await runRandomTour(r);
+  }
+} else if (TOUR.length >= 2) {
   if (STAGGER > 0) {
     await Promise.all(rows.map((r, i) =>
       new Promise(done => setTimeout(done, i * STAGGER * 1000)).then(() => runTour(r))));

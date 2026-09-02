@@ -19,15 +19,17 @@
 //
 // The keeper is read directly rather than through the broker because the broker's in-process
 // Autopilot is a shell on a keeper-backed fleet: `inventory` there answers about nobody.
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { planTownStop, neverSellsWhatItBuys } from './m59-townstop.mjs';
 import { loadoutFor } from './m59-loadout.mjs';
 import { load as loadStrategies, activeFor } from './m59-strategies.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
+import {
+  discoverKeeperStates,
+  keeperIdentityHeaders,
+  readVerifiedKeeperState,
+  resolveKeeperBand,
+} from './runtime/keeper-discovery.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 const arg = (n, d = null) => { const i = process.argv.indexOf('--' + n); return i < 0 ? d : process.argv[i + 1]; };
 const has = (n) => process.argv.includes('--' + n);
 const COMMIT = has('commit');
@@ -36,47 +38,49 @@ const COMMIT = has('commit');
 // file directly returns four lines of prose along with the name.
 const FLEET_INFO = resolveFleet();
 const FLEET = FLEET_INFO.fleet;
-const ROSTER = FLEET_INFO.stateFile;
 
 const agents = (arg('agents') || arg('agent') || '').split(',').map(s => s.trim()).filter(Boolean);
 if (!agents.length) { console.error('need --agent t6 or --agents t6,t7'); process.exit(2); }
 
-// A keeper owns its own port and answers /state with the pack. Scanning is how every other
-// tool here finds one; the band is per fleet (substrate/keeper-bands.json).
-const jget = async (url, ms = 8000) => {
-  try { const r = await fetch(url, { signal: AbortSignal.timeout(ms) }); return await r.json(); }
-  catch { return null; }
-};
-const jpost = async (url, body, ms = 120000) => {
+// Discovery scans only this fleet's fixed band. `/live` proves the cheap identity first;
+// rich state is then requested only for the named agents below.
+const KEEPER_BAND = resolveKeeperBand(FLEET, {
+  ...(Object.hasOwn(process.env, 'M59_KEEPER_PORT_BASE')
+    ? { override: process.env.M59_KEEPER_PORT_BASE }
+    : {}),
+});
+const jpost = async (identity, path, body, ms = 120000) => {
   try {
-    const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
-                                 body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
+    const r = await fetch(`http://127.0.0.1:${identity.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...keeperIdentityHeaders(identity) },
+      body: JSON.stringify({
+        ...body,
+        agent: identity.agent,
+        character: identity.character,
+        keeper_pid: identity.pid,
+      }),
+      signal: AbortSignal.timeout(ms),
+    });
     return await r.json();
   } catch (e) { return { error: String(e.message || e) }; }
 };
 
-async function findKeeper(agent) {
-  const band = (() => {
-    try { const b = JSON.parse(readFileSync(join(HERE, '..', 'substrate', 'keeper-bands.json'), 'utf8'));
-          const f = b[FLEET] ?? b.default; return [f?.from ?? 9011, f?.to ?? 9050]; }
-    catch { return [8900, 9199]; }
-  })();
-  for (let p = band[0]; p <= band[1]; p++) {
-    const h = await jget(`http://127.0.0.1:${p}/health`, 5000);
-    if (h?.agent === agent) return p;
-  }
-  return null;
-}
+const discovered = await discoverKeeperStates({
+  band: KEEPER_BAND,
+  expectedAgents: agents,
+  liveTimeoutMs: 1500,
+  stateTimeoutMs: 8000,
+});
 
 const strategies = await loadStrategies();
 for (const p of strategies.problems) console.error(`  (strategy problem) ${p.file}: ${p.why}`);
 const townHooks = activeFor(strategies, 'atTownStop');
 
 for (const agent of agents) {
-  const port = await findKeeper(agent);
-  if (!port) { console.log(`\n${agent}: no keeper answering`); continue; }
-  const st = await jget(`http://127.0.0.1:${port}/state`);
-  if (!st) { console.log(`\n${agent}: keeper did not answer /state`); continue; }
+  const st = discovered.states.get(agent);
+  const identity = st?.__identity ?? null;
+  if (!identity) { console.log(`\n${agent}: no verified keeper answering in this fleet's band`); continue; }
 
   const character = st.character;
   const items = (st.items || []).map(i => ({ name: i.name, amount: i.amount ?? 1 }));
@@ -124,14 +128,14 @@ for (const agent of agents) {
   // SELL. `keep` is handed straight from the plan, which is the entire point of the exercise:
   // nobody types the protected list a second time and nobody forgets the third reagent.
   const before = { ...Object.fromEntries(items.map(i => [i.name.toLowerCase(), i.amount])) };
-  const sold = await jpost(`http://127.0.0.1:${port}/action`, {
-    agent, name: 'sell_all',
+  const sold = await jpost(identity, '/action', {
+    name: 'sell_all',
     args: { merchant, keep: plan.keep_fragments, min_price: 1, max_stack: 50 },
   });
   console.log(`      sold: ${JSON.stringify(sold).slice(0, 260)}`);
 
   // READ THE PACK BACK. A completed handshake that moved nothing is the normal failure here.
-  const after = await jget(`http://127.0.0.1:${port}/state`);
+  const after = await readVerifiedKeeperState(identity, { fresh: true, timeoutMs: 12000 });
   const now = Object.fromEntries((after?.items || []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]));
   const kept = plan.keep_fragments.filter(f => {
     const hitBefore = Object.keys(before).some(k => k.includes(f));

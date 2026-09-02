@@ -1,0 +1,147 @@
+{
+ "format": "m59-jam/1",
+ "captured_at": "2026-09-02T02:22:59.612Z",
+ "fleet": "shadow",
+ "room": {
+  "num": 584,
+  "name": "The Flatlands",
+  "roo": "h4.roo",
+  "cols": 39,
+  "rows": 43
+ },
+ "region": {
+  "c1": 26,
+  "r1": 34,
+  "c2": 35,
+  "r2": 36
+ },
+ "units_note": "fine coordinates are kod units, 64 per coarse square; col = floor(x/64), row = floor(y/64). A body blocks a move that would END within 16 units of its centre (MIN_NOMOVEON) — see m59-needle-test.mjs",
+ "seconds": 8,
+ "interval_ms": 1000,
+ "samples": 9,
+ "observers": [
+  "player A",
+  "player B"
+ ],
+ "static": [
+  {
+   "name": "ant",
+   "kind": "monster",
+   "col": 27,
+   "row": 35,
+   "x": 1760,
+   "y": 2272,
+   "seen": 9
+  },
+  {
+   "name": "player A",
+   "kind": "player",
+   "col": 30,
+   "row": 35,
+   "x": 1976,
+   "y": 2263,
+   "seen": 9
+  },
+  {
+   "name": "spider",
+   "kind": "monster",
+   "col": 32,
+   "row": 35,
+   "x": 2080,
+   "y": 2272,
+   "seen": 9
+  },
+  {
+   "name": "player B",
+   "kind": "player",
+   "col": 33,
+   "row": 35,
+   "x": 2160,
+   "y": 2271,
+   "seen": 9
+  }
+ ],
+ "moving": [
+  {
+   "name": "ant",
+   "kind": "monster",
+   "seen": 9,
+   "points": [
+    {
+     "t_ms": 0,
+     "col": 29,
+     "row": 35,
+     "x": 1888,
+     "y": 2272
+    },
+    {
+     "t_ms": 8012,
+     "col": 28,
+     "row": 35,
+     "x": 1824,
+     "y": 2272
+    }
+   ]
+  }
+ ],
+ "geometry": {
+  "floor_y_by_col": {
+   "26": {
+    "lo": 2176,
+    "hi": 2366
+   },
+   "27": {
+    "lo": 2212,
+    "hi": 2318
+   },
+   "28": {
+    "lo": 2226,
+    "hi": 2318
+   },
+   "29": {
+    "lo": 2240,
+    "hi": 2304
+   },
+   "30": {
+    "lo": 2240,
+    "hi": 2304
+   },
+   "31": {
+    "lo": 2240,
+    "hi": 2304
+   },
+   "32": {
+    "lo": 2240,
+    "hi": 2304
+   },
+   "33": {
+    "lo": 2226,
+    "hi": 2318
+   },
+   "34": {
+    "lo": 2226,
+    "hi": 2318
+   },
+   "35": {
+    "lo": 2208,
+    "hi": 2366
+   }
+  },
+  "floor_x_by_row": {
+   "34": {
+    "lo": 1664,
+    "hi": 2302
+   },
+   "35": {
+    "lo": 1664,
+    "hi": 2302
+   },
+   "36": {
+    "lo": 1664,
+    "hi": 2302
+   }
+  },
+  "note": "fine kod units, 64 per square; null means no floor found in that column/row of the region"
+ },
+ "redaction": "player names replaced by roles in order of appearance; --names keeps them (local files only)"
+}

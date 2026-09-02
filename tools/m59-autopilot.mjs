@@ -35,6 +35,7 @@ import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH }
   from './m59-safespots.mjs';
+import { activeRoutes, anchorFor } from './m59-routes.mjs';
 import { beginPullProgress, samplePullProgress } from './m59-pull-progress.mjs';
 import { heardOrder, dropCrumb, nextStep, behindBy, exitTakenFrom } from './m59-follow.mjs';
 import { inboxIfAny, unwrapSpeech } from './m59-inbox.mjs';
@@ -624,6 +625,12 @@ const TRAVEL_RESCUE_TTL_MS = Number(process.env.M59_TRAVEL_RESCUE_TTL_MS || 10_0
 // (`travel_hold`) — no restart, and a restart is the one thing that costs a fleet more
 // deaths.
 const TRAVEL_HOLD_MODE = process.env.M59_TRAVEL_HOLD || 'on';
+// HOW MUCH A WALL ON THE ROAD AHEAD IS WORTH, against one behind. See nearestSafeSpot's
+// `forwardBias`: squares of progress toward the exit, multiplied by this, against the walk
+// to the wall. Eight, per the operator (2026-09-01): "5:1 or 10:1 on forward progress over a
+// small backtrack". Distance to the wall stops being a cap at the same time — see
+// `onwardExit` — so a reachable wall far up the road is preferred to a near one behind.
+const TRAVEL_FORWARD_BIAS = Number(process.env.M59_TRAVEL_FORWARD_BIAS || 8);
 // The one arm that is left. Written down rather than inlined, so the ledger rows, the
 // keeper's `travelArm` and anything joining the two cannot drift apart.
 const TRAVEL_HOLD_ARM = 'hold';
@@ -3208,10 +3215,46 @@ export class Autopilot {
   // a journey. A failure still discredits the square permanently either way: a blow that
   // got through is a bad square however we came to be standing on it. The tag is so the
   // travel-only rejections can be told apart afterwards without reconstructing anything.
-  async takeSafeSpot(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false } = {}) {
+  /**
+   * THE SQUARE THIS JOURNEY LEAVES THE ROOM BY, or null when there is no journey to speak
+   * of. Read from the route the world would take to the destination — its first hop names
+   * the next room and the bake names that door's anchor — so it is answerable at a hop
+   * boundary, before any plan for the crossing exists. Mid-crossing the plan's own last
+   * step is the same square and `activeShelter.onward` carries it.
+   */
+  onwardExit(roomNum, destination) {
+    try {
+      const planned = this.s.activeShelter?.onward;
+      if (planned && Number.isFinite(planned.row) && Number.isFinite(planned.col)) return planned;
+      if (roomNum == null || destination == null || Number(roomNum) === Number(destination)) return null;
+      // MEMOISED, because `world.route()` runs the room's exits flood and can block the loop
+      // for seconds (see m59-exit-atlas.mjs); the survival ladder must not add such calls.
+      // One answer per room and destination, kept for a minute.
+      const memoKey = `${roomNum}:${destination}`;
+      const memo = (this._onwardMemo ??= new Map()).get(memoKey);
+      if (memo && Date.now() - memo.at < 60_000) return memo.value;
+      const route = this.s.world?.route?.(destination);
+      const hop = route?.found ? route.hops?.[0] : null;
+      if (!hop) return null;
+      const answer = hop.stand_on && Number.isFinite(hop.stand_on.row)
+        ? { row: hop.stand_on.row, col: hop.stand_on.col }
+        : (() => { const a = anchorFor(activeRoutes(), roomNum, hop.to); return a && Number.isFinite(a.row) ? { row: a.row, col: a.col } : null; })();
+      this._onwardMemo.set(memoKey, { at: Date.now(), value: answer });
+      return answer;
+    } catch { return null; }
+  }
+
+  async takeSafeSpot(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
+                                           nearestOnly = false, afterExit = false } = {}) {
     const s = this.s, c = s.client;
     const room = s.world?.room, geo = s.world?.geometry, me = c?.self;
     if (!geo || !me || !room) return { took: false, why: 'no geometry for this room' };
+    // A journey's refuge is judged against the door it is heading for. `onward` is null for
+    // a fight or a rest, and then nothing below changes.
+    // `nearestOnly` is the search on the far side of a crossing: the first available wall,
+    // ranked by distance alone, and never the next exit — a stopover, not the destination.
+    const onward = source === 'travel' && !nearestOnly
+      ? this.onwardExit(room.num, this.inert?.to ?? this.suspendedJourney?.to ?? null) : null;
     // Once several independently tested walls have all failed, continuing to scan the
     // room is research, not survival. `noWallRooms` feeds the already-bounded choice
     // below between a safe open fight and relocating; it does not block the strategic
@@ -3347,7 +3390,8 @@ export class Autopilot {
         for (const k of Object.keys(spotStats)) delete spotStats[k]; // stats describe LAST attempt
         spot = this.searchSafeSpot(geo, me, room, {
           within, quarryReach, strictQuarryReach, los, quarry,
-          stats: spotStats, shareCap, nearQuarry, exclusiveClaim });
+          stats: spotStats, shareCap, nearQuarry, exclusiveClaim,
+          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1 });
         if (!spot) break;
         const claimed = exclusiveClaim
           ? claimExclusiveSpot(this.s.name, room.num, spot.col, spot.row)
@@ -3382,7 +3426,12 @@ export class Autopilot {
       // about this room every time: a wall is a wall, and a pull that does not convert is a
       // fact about the pull — about where the quarry was and what lay between — not a verdict
       // on the square somebody was standing on.
-      return { took: false, why: 'nothing in this room is more defensible than open floor' };
+      const c = spotStats;
+      const counted = Number.isFinite(c.considered)
+        ? ` (walls considered ${c.considered}, reachable from here ${Math.max(0, (c.considered ?? 0) - (c.unreachable_to_us ?? 0))}, ` +
+          `one-way ${c.one_way ?? 0}, eligible ${c.eligible ?? 0})`
+        : '';
+      return { took: false, why: 'nothing in this room is more defensible than open floor' + counted };
     }
 
     if (spot.predicted_unreachable_by_quarry)
@@ -3401,6 +3450,41 @@ export class Autopilot {
              'refreshes the room and takes another square instead of walking into the winner',
       });
 
+    // THE EXIT AS A WALL. The search ranked the journey's own exit above every wall here
+    // (see nearestSafeSpot): crossing breaks every attack, so take it — one hop on the
+    // journey's own machinery — and then mend at the FIRST AVAILABLE wall on the far side,
+    // nearest by distance, no forward bias, no exit (the far-side search withholds it, so a
+    // retreat cannot chain room to room). Operator, 2026-09-01. If the crossing does not
+    // happen the answer is a refusal that says so, never a hold on a square in another room.
+    if (spot.kind === 'exit') {
+      const roomBefore = room.num;
+      const destination = this.inert?.to ?? this.suspendedJourney?.to ?? null;
+      const route = destination != null ? this.s.world?.route?.(destination) : null;
+      const hop = route?.found ? route.hops?.[0] : null;
+      if (!hop) {
+        releaseSpot(this.s.name);
+        return { took: false, why: 'the exit ranked as the nearest wall, but no hop toward the destination could be planned from here' };
+      }
+      this.doing = 'travelling';
+      this.note('taking the exit as the nearest wall', {
+        at: { col: spot.col, row: spot.row }, to: hop.to, steps_away: spot.steps_away ?? null,
+        why: 'crossing breaks every attack; the first wall in the next room is where the mending happens' });
+      const crossed = await this.s.travel(hop.to, { maxHops: 1 })
+                                .catch(e => ({ arrived: false, why: e.message }));
+      this.movedAt = Date.now();
+      releaseSpot(this.s.name);
+      const roomAfter = this.s.world?.room?.num ?? null;
+      if (roomAfter == null || Number(roomAfter) === Number(roomBefore)) {
+        return { took: false, exit_refused: true,
+                 why: `could not take the exit toward ${hop.to}: ${crossed?.why ?? crossed?.reason ?? 'the crossing did not happen'}` };
+      }
+      const far = await this.takeSafeSpot(`${why} — the first wall after the exit`, null,
+                                          { source, nearestOnly: true, afterExit: true })
+                            .catch(e => ({ took: false, why: e.message }));
+      if (far?.took) return { ...far, via: 'exit', crossed_from: roomBefore };
+      return { took: false, crossed: true, via: 'exit', room: roomAfter,
+               why: `crossed into room ${roomAfter}, which broke every attack; ${far?.why ?? 'no wall from here'}` };
+    }
     if ((spot.steps_away ?? 99) > 0) {
       this.doing = 'travelling';
       // THE SQUARE IS THE WHOLE MECHANIC. THERE IS NOTHING FINER TO STAND ON.
@@ -3433,14 +3517,18 @@ export class Autopilot {
       // stood, it costs nothing to reuse, and returning to it is free of the above
       // because we were demonstrably able to stand there. Only the synthesis is gone.
       const fine = spot.fine;
+      // BUDGETED BY THE ROUTE, NOT BY A FLAT NUMBER. A wall thirty squares up the road is
+      // now a legitimate choice, and `walkTo` only raises a caller's cap to the plan's own
+      // length once it has planned — so hand it a cap that already fits the walk asked for.
+      const walkBudget = Math.max(24, Math.ceil((spot.steps_away ?? 0) * 2) + 12);
       const arrival = fine
-        ? await skills.returnToSpot(s, { col: spot.col, row: spot.row, ...fine }, { maxSteps: 24 })
+        ? await skills.returnToSpot(s, { col: spot.col, row: spot.row, ...fine }, { maxSteps: walkBudget })
                       .catch(e => ({ arrived: false, why: e.message }))
         // Claiming a safe square is a correctness boundary, just like returning to one
         // after a pull. A plain walk can finish on a predicted position which a delayed
         // server update revokes on the next pass; use the shared confirmed arrival
         // contract for both remembered and newly-derived spots.
-        : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, { maxSteps: 24 })
+        : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, { maxSteps: walkBudget })
                       .catch(e => ({ arrived: false, why: e.message }));
       this.movedAt = Date.now();
       if (!arrival.arrived) {
@@ -4943,7 +5031,7 @@ export class Autopilot {
   // how the two would come to disagree about `los` or the book.
   searchSafeSpot(geo, me, room, { within, quarryReach, strictQuarryReach = false,
                                   los, quarry, stats, shareCap = 1, nearQuarry = false,
-                                  exclusiveClaim = false }) {
+                                  exclusiveClaim = false, onward = null, forwardBias = 1 }) {
     const s = this.s;
     // One room search can inspect hundreds of candidate squares. Reading the shared
     // claim directory for every candidate would turn that into hundreds of lock/file
@@ -4967,6 +5055,7 @@ export class Autopilot {
       // Combat chooses the quarry first. Once eligibility is established, its distance
       // is the primary order; proof and defensibility only break equal-distance ties.
       closestToToward: !!quarry,
+      onward, forwardBias,
       // Only offer walls the router agrees we can walk to — see reachTest.
       reach: this.reachTest(),
       // The same exclusion the other three selectors apply — a wall we have just failed
@@ -5194,16 +5283,16 @@ export class Autopilot {
       const myName = c.me?.name ?? this.s?.name ?? this.who();
       const strangerObjs = [...c.room.objects.values()]
         .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
-      if (strangerObjs.length) {
-        try {
-          recordSightings(
-            myName,
-            strangerObjs.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) })),
-            this.s.world?.room?.num ?? null,
-            party.isFleetmate,
-          );
-        } catch { /* a record is never worth a pass */ }
-      }
+      try {
+        // Empty frames are meaningful to the runtime edge detector: they retire the
+        // current encounter so a later re-entry is recorded once. They perform no I/O.
+        recordSightings(
+          myName,
+          strangerObjs.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) })),
+          this.s.world?.room?.num ?? null,
+          party.isFleetmate,
+        );
+      } catch { /* a record is never worth a pass */ }
     }
 
     this.recent5 = (this.recent5 || []);
@@ -5508,10 +5597,15 @@ export class Autopilot {
         // square costs a character while being wrong about a good one costs a walk to the
         // next corner. The verdict is tagged `failed_by.travel` so the travel-only
         // rejections can be fished back out. See docs/m59-safe-travel-plan.md.
+        const onward = this.onwardExit(at.room?.num ?? null, at.destination ?? null);
         spot = nearestSafeSpot(geo, me, { book: this.book, room: at.room?.num ?? null,
                                           unreachable: this.unreachableIn(at.room?.num ?? null),
                                           reach: this.reachTest(),
-                                          within: this.policy.travelHoldWithin ?? 10 });
+                                          // The cap is the operator's if set; otherwise the
+                                          // room, and with an exit named it is not applied.
+                                          within: this.policy.travelHoldWithin
+                                            ?? (Math.max(geo.rows ?? 0, geo.cols ?? 0) || 64),
+                                          onward, forwardBias: TRAVEL_FORWARD_BIAS });
       } catch { spot = null; }
     }
 
@@ -8491,7 +8585,9 @@ export class Autopilot {
     if (allow.safe_spot) {
       this.s.shelterPolicy = {
         book: this.book,
-        within: this.policy.travelHoldWithin ?? 10,
+        // NO DISTANCE CAP BY DEFAULT (operator, 2026-09-01): a wall along the route that the
+        // body can reach and leave for the door is shelter however far off the line it sits.
+        within: this.policy.travelHoldWithin ?? Infinity,
         // ROUTE-ADJACENT, AND THAT IS THE WHOLE DEFINITION OF WHICH SPOT TO USE.
         //
         // Five squares off the planned path — the operator's number, 2026-08-27, and the
@@ -8499,7 +8595,7 @@ export class Autopilot {
         // shelter when a full bar is nine and a half seconds, it is a longer way to die.
         // The spots themselves were worked out by `sheltersAlong` when the crossing was
         // planned, so this is a filter on a list rather than a search.
-        maxDetour: this.policy.travelShelterDetour ?? 5,
+        maxDetour: this.policy.travelShelterDetour ?? Infinity,
         // A TRIP IS REFUGE TO REFUGE, AND A REST STOP IS SKIPPED WHEN IT IS NOT NEEDED.
         //
         // The operator's framing, and it is the right way round: the journey is not a
@@ -13726,8 +13822,33 @@ export class Autopilot {
                                  { health: Math.round(hp * 100) + '%', ask: asks + 1 });
     }
     if (resting || hp === null || hp >= floor) this.resumeWallAsks = 0;
+    // A PLATEAU WAIT IN THE OPEN IS A COFFIN.
+    //
+    // The trend gate below waits for health to stop climbing. Regeneration in a room that
+    // spawns is a climb of a few points a minute, so `better` kept resetting the flat count
+    // and the gate never opened. Measured in The border of the Badlands (585), 2026-09-01:
+    // Bbbb, journey cancelled by the guard at 7 of 20, the only wall the selector offered
+    // 31 squares away behind a 24-step walk, rest refused because worms could reach it, inn
+    // retreat off by policy — and then thirty-nine seconds standing on one square while
+    // health read 4, 5, 6, 7 and the resume rung said "still mending" on every pass. Six
+    // groundworms and a soldier were present at the end.
+    //
+    // ONE BAR, like the coffin rule in the safe-spot scan: once the wall asks are spent, the
+    // room is not a sanctuary, and something is already in swing range, there is nothing
+    // here to wait FOR. The ladder's own last rung already says it — "there is no wall to
+    // be had here, so the way out is ON" — this makes the resume agree with it instead of
+    // standing on the opposite answer. Everything else about the gate is unchanged: a
+    // character that is resting, or in a sanctuary, or not being reached, still waits.
+    const hunted = (() => { try { return (this.inReachOfUs?.() ?? []).length > 0; } catch { return false; } })();
+    const noCoverHere = (this.resumeWallAsks ?? 0) >= (this.policy.resumeWallAsks ?? 3)
+      && !resting && !this.sanctuary();
+    const nothingToWaitFor = noCoverHere && hunted;
+    if (nothingToWaitFor)
+      this.note('not waiting to mend — no wall within reach and something is in swing range', {
+        health: hp === null ? null : Math.round(hp * 100) + '%', in_reach: (this.inReachOfUs?.() ?? []).length,
+        why: 'regeneration cannot outrun what is already hitting us; the road is the wall' });
     // The wall is still working: let it.
-    const stillMending = (this.resumeFlat ?? 0) < RESUME_FLAT_SAMPLES;
+    const stillMending = !nothingToWaitFor && (this.resumeFlat ?? 0) < RESUME_FLAT_SAMPLES;
     if (hp !== null && hp < floor && stillMending)
       return this.resumeDeclined('still mending — health is below the start floor and climbing',
                                  { health: Math.round(hp * 100) + '%', floor, flat: this.resumeFlat ?? 0 });

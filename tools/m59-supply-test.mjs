@@ -622,17 +622,19 @@ section('AN ORDER ADDRESSED TO ANOTHER FLEET IS REFUSED BY THE PROCESS THAT KNOW
   const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
   const broker = readFileSync(join(HERE, 'm59-broker.mjs'), 'utf8');
 
-  ok('every order carries the agent it is addressed to',
-     /const keeperEnvelope = \(agent, body\)/.test(broker) &&
-     /body: keeperEnvelope\(agent, \{ name, args \}\)/.test(broker));
+  ok('every order carries one immutable keeper identity',
+     /const keeperIdentityHeaders = \(identity/.test(broker) &&
+     /headers: keeperIdentityHeaders\(target\.identity\)/.test(broker) &&
+     /body: keeperEnvelope\(target\.identity, \{ name, args \}\)/.test(broker));
   ok('so does the rejoin sweep, which is the one that did the damage',
-     /body: keeperEnvelope\(agent, credentials\)/.test(broker));
+     /headers: keeperIdentityHeaders\(target\.identity\)[\s\S]{0,240}body: keeperEnvelope\(target\.identity, \{\}\)/.test(broker));
   ok('and a read, because a chat ring and a room view are a character\'s too',
-     /new URLSearchParams\(Object\.entries\(\{ \.\.\.params, agent \}\)/.test(broker));
+     /new URLSearchParams\(Object\.entries\(\{ \.\.\.params, agent,[\s\S]{0,180}character:[\s\S]{0,180}keeper_pid:/.test(broker));
 
   ok('the keeper refuses an order that names somebody else',
-     keeper.includes('if (!addressedToUs(ask?.agent)) { refuseMisaddressed(ask.agent); return; }'));
-  ok('and a rejoin that does', keeper.includes('if (!addressedToUs(asked?.agent))'));
+     /if \(!requireAddressedWrite\(req, ask\)\) return/.test(keeper));
+  ok('and a rejoin that does',
+     /path === '\/rejoin'[\s\S]{0,900}!requireAddressedWrite\(req, asked\)/.test(keeper));
   ok('and a read that does', /!addressedToUsQuery\(url\)/.test(keeper));
   // A conflict about identity, not a malformed request — and the broker turns 409 into
   // "drop the allocation and respawn" rather than retrying into the same stranger.
@@ -641,11 +643,12 @@ section('AN ORDER ADDRESSED TO ANOTHER FLEET IS REFUSED BY THE PROCESS THAT KNOW
   ok('and the broker drops the allocation rather than hammering it',
      /if \(r\.status === 409\)/.test(broker) && /keeperPorts\.delete\(agent\)/.test(broker));
 
-  // FAILS OPEN ON AN UNADDRESSED REQUEST. An older broker sends no `agent` field, and
-  // refusing those would strand every character the moment the two halves disagreed about
-  // versions. Naming the wrong agent is a mistake; naming nobody is merely old.
-  ok('an unaddressed order is still answered, because an older broker sends none',
-     /if \(claimed === undefined \|\| claimed === null \|\| claimed === ''\) return true;/.test(keeper));
+  ok('an unaddressed write fails closed',
+     /if \(!supplied\) return !required/.test(keeper) &&
+     /const requireAddressedWrite/.test(keeper));
+  ok('every mutating keeper endpoint applies the same strict receiver guard',
+     ['join', 'leave', 'rejoin', 'pass', 'policy', 'pause', 'resume', 'stop', 'cancel', 'reroll']
+       .every(path => new RegExp(`path === '\\/${path}'[\\s\\S]{0,900}!requireAddressedWrite\\(req, `).test(keeper)));
   // `/health` and `/state` NAME their own agent in the reply and the broker checks it —
   // they are how a caller discovers whose port this is. Refusing them would remove the only
   // tool that resolves the confusion.

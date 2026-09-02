@@ -62,6 +62,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { movementMapFile } from './m59-map-path.mjs';
+import { attachDeferredStepMask } from './m59-room-artifacts.mjs';
 
 const ROO_MAGIC = Buffer.from([0x52, 0x4f, 0x4f, 0xb1]);
 const ROO_MIN_VERSION = 4;
@@ -670,7 +671,8 @@ export function gapAlongLine(ax, ay, bx, by, bodies) {
  */
 export function lanePastBodies({ fromX, fromY, toX, toY, bodies, hasFloor,
                                  minGap = MIN_NOMOVEON / (CLIENT_FINENESS / KOD_FINENESS),
-                                 minOffset = 4, maxOffset = 28, step = 1 }) {
+                                 minOffset = 4, maxOffset = 28, step = 1,
+                                 bodyRadius = PLAYER_RADIUS / (CLIENT_FINENESS / KOD_FINENESS) }) {
   if (!bodies?.length || typeof hasFloor !== 'function') return null;
   const dx = toX - fromX, dy = toY - fromY;
   const len = Math.hypot(dx, dy) || 1;
@@ -682,6 +684,21 @@ export function lanePastBodies({ fromX, fromY, toX, toY, bodies, hasFloor,
       const ax = Math.round(fromX + ox), ay = Math.round(fromY + oy);
       const bx = Math.round(toX + ox), by = Math.round(toY + oy);
       if (!hasFloor(ax, ay) || !hasFloor(bx, by)) continue;
+      // A LANE THE BODY CANNOT STAND IN IS NOT A LANE.
+      //
+      // `hasFloor` answers for a POINT, and a body is PLAYER_RADIUS wide. Shifting the line
+      // sideways moves it toward one wall of the corridor, so the floor test that matters is
+      // at the body's outer edge on that side, not at its centre. Measured on
+      // tools/fixtures/flatlands-584-row35.json: a corridor 64 tall (y 2240..2304), a
+      // spider on its centre line, and this proposed a lane starting at y 2249 — nine units
+      // inside the 15.5 the mover keeps from a wall — which the mover then refused as
+      // `body_lane` "no side to step to", twenty-one times in one afternoon, while three
+      // characters were eaten in the pipe. The sewers arithmetic in m59-lane-test.mjs says
+      // where the real lane is: exactly one integer per side of a centred body, half a unit
+      // of margin, and the lane finder was aiming past it.
+      const wx = px * sign * bodyRadius, wy = py * sign * bodyRadius;
+      if (!hasFloor(Math.round(ax + wx), Math.round(ay + wy))
+          || !hasFloor(Math.round(bx + wx), Math.round(by + wy))) continue;
       const m = gapAlongLine(ax, ay, bx, by, bodies);
       if (!(m.gap >= minGap)) continue;
       if (!best || m.gap > best.gap)
@@ -690,6 +707,170 @@ export function lanePastBodies({ fromX, fromY, toX, toY, bodies, hasFloor,
     if (best) break;
   }
   return best;
+}
+
+/**
+ * THE PERP WALK — past a line of blockers by hugging the wall side that has room.
+ *
+ * The operator's description, 2026-09-01: measure each blocker's distance to the nearby
+ * .roo edges, pick the side with sufficient clearance, draw the line perpendicular to the
+ * blocker-to-wall line — that is, a line parallel to the wall at the clearance point —
+ * and walk it past the blocker. It differs from `lanePastBodies` in what it measures: that
+ * shifts the walker's OWN line sideways and asks whether the shifted line clears; this
+ * starts from the BODIES and the WALLS and derives the one line a person would actually
+ * walk, whichever way the walker happened to be facing.
+ *
+ * The arithmetic is the sewers' (m59-lane-test.mjs): a body needs `radius` (15.5) from a
+ * wall and `clearance` (16) from a blocker's centre, and the client sweeps walls but not
+ * bodies, so a step whose ENDPOINT is outside every blocker's disc is legal however close
+ * the line passed. So the hug line is a straight line parallel to the walk axis at an
+ * across-offset `h` with, for every blocker: h at least `clearance` from the blocker on the
+ * chosen side, and h at most (floor extent - radius) toward the wall. The window between
+ * those is often under a unit wide — in a 64-tall pipe with a centred body it is half a
+ * unit — and the wire carries integers, so the points are rounded and re-checked.
+ *
+ * Returns null when nothing obstructs the stretch; otherwise the side, the offset, the
+ * slack in the window, and two points: get on the hug line here, and the point past the
+ * last blocker. A caller walks those with the fine mover and lets the ordinary walker
+ * take over from the far point. The whole thing is pure, so the recorded Flatlands jam
+ * pins it offline.
+ */
+// KEEP TO THE RIGHT WALL IN A CORRIDOR. A sewer pipe is one COARSE square wide — 64 fine
+// units — and a character is a disc of radius 15.5 (PLAYER_RADIUS, 248 client units) that
+// blocks another at MIN_NOMOVEON (16) between centres. So a pipe fits two lanes: a body
+// hugging each wall leaves 64 - 2 * (15.5 + 2) = 29 between centres, nearly twice the
+// blocking distance. The rule of the road is the operator's, 2026-09-01: BOTH directions
+// keep to the right wall for THEIR direction of travel, so two characters meeting in a pipe
+// pass like ships in the night instead of each aiming at the centre line and stalling nose
+// to nose, which is what the recorded jams show (the sewers' row 27, the Flatlands' row 35).
+// It applies always, not only when a body is in sight, because the character coming the
+// other way is usually not visible yet when the lane is chosen — and the same rule has to
+// be in every keeper for it to work at all. "Right" is the right-hand normal of the
+// direction of travel in the game's y-down coordinates: (-uy, ux). A floor wider than
+// `maxWidth` (a square and a half) is not a corridor and gets no lane; a corridor too
+// narrow to shift in keeps the stand point (offset 0). Coordinates are wire (kod) units.
+export function keepRightAim({ fromX, fromY, toX, toY, hasFloor,
+                               radius = 15.5, margin = 2, probe = 4, maxWidth = 96 }) {
+  const dx = toX - fromX, dy = toY - fromY;
+  const len = Math.hypot(dx, dy);
+  if (!(len > 0.5) || typeof hasFloor !== 'function') return null;
+  const ux = dx / len, uy = dy / len;
+  const nx = -uy, ny = ux;                              // right of travel, y down
+  const extent = (sx, sy) => {
+    let d = 0;
+    while (d < maxWidth && hasFloor(toX + sx * (d + probe), toY + sy * (d + probe))) d += probe;
+    return d;
+  };
+  const right = extent(nx, ny), left = extent(-nx, -ny);
+  const width = right + left;
+  if (width > maxWidth) return { corridor: false, width, right, left, offset: 0, x: toX, y: toY };
+  const offset = Math.max(0, right - radius - margin);
+  return { corridor: true, width, right, left, offset,
+           x: toX + nx * offset, y: toY + ny * offset };
+}
+
+export function perpWalkPastBodies({ fromX, fromY, toX, toY, bodies, hasFloor,
+                                     radius = PLAYER_RADIUS / (CLIENT_FINENESS / KOD_FINENESS),
+                                     clearance = MIN_NOMOVEON / (CLIENT_FINENESS / KOD_FINENESS),
+                                     probe = 96, stride = 32,
+                                     // PRECHECK THE LINE BEFORE WALKING IT. `segmentClear(ax, ay,
+                                     // bx, by)` answers { ok, reason } for one straight fine move
+                                     // — the caller hands in the room's own tracer with every
+                                     // body as an obstacle — and a line that fails it is returned
+                                     // as a refusal with `precheck` set, never walked. Measured
+                                     // in tour 5: 13 of 20 failures were the first sidestep being
+                                     // refused by geometry or by a body beside the walk, each one
+                                     // a wasted packet at a square something was already hitting.
+                                     segmentClear = null }) {
+  if (!bodies?.length || typeof hasFloor !== 'function') return null;
+  const dx = toX - fromX, dy = toY - fromY;
+  const len = Math.hypot(dx, dy);
+  if (!(len > 0)) return null;
+  const ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+  const along = p => (p.x - fromX) * ux + (p.y - fromY) * uy;
+  const across = p => (p.x - fromX) * nx + (p.y - fromY) * ny;
+  const inWay = bodies.filter(b => Number.isFinite(b?.x) && Number.isFinite(b?.y))
+    .map(b => ({ ...b, a: along(b), c: across(b) }))
+    .filter(b => b.a > -clearance && b.a < len + clearance && Math.abs(b.c) < clearance + radius)
+    .sort((p, q) => p.a - q.a);
+  if (!inWay.length) return null;
+  // How far the floor runs from a blocker's centre toward each wall, in units.
+  const extent = (b, sign) => {
+    let t = 0;
+    for (; t <= probe; t += 1)
+      if (!hasFloor(Math.round(b.x + nx * sign * t), Math.round(b.y + ny * sign * t))) break;
+    return Math.max(0, t - 1);
+  };
+  const sides = [];
+  for (const sign of [1, -1]) {
+    let nearWall = sign > 0 ? Infinity : -Infinity;      // the tightest wall limit on this side
+    let offBody = sign > 0 ? -Infinity : Infinity;       // the tightest body limit on this side
+    for (const b of inWay) {
+      const d = extent(b, sign);
+      const wallLimit = b.c + sign * (d - radius);
+      const bodyLimit = b.c + sign * clearance;
+      if (sign > 0) { nearWall = Math.min(nearWall, wallLimit); offBody = Math.max(offBody, bodyLimit); }
+      else { nearWall = Math.max(nearWall, wallLimit); offBody = Math.min(offBody, bodyLimit); }
+    }
+    const lo = sign > 0 ? offBody : nearWall, hi = sign > 0 ? nearWall : offBody;
+    const slack = hi - lo;
+    if (!(slack >= 0)) { sides.push({ sign, slack, feasible: false }); continue; }
+    // NEAREST LEGAL LINE PAST THE BODY, NOT THE MIDDLE OF THE WINDOW. Measured in the wild
+    // (tour 5, 2026-09-01): in a tight pipe the window is half a unit and the middle is the
+    // only choice; in open ground the window was 64 wide, the middle put the first sidestep
+    // 48 units out, and ten of twenty-one attempts were refused by geometry on that step. A
+    // line a few units clear of the blocker is legal on both sides and a short sidestep.
+    const lean = Math.min(slack / 2, 4);
+    sides.push({ sign, slack, feasible: true, h: sign > 0 ? lo + lean : hi - lean, lo, hi });
+  }
+  const feasible = sides.filter(s => s.feasible).sort((p, q) => q.slack - p.slack);
+  if (!feasible.length)
+    return { side: null, bodies: inWay.length, sides,
+             why: 'neither side has room for a body between the blockers and the wall' };
+  const best = feasible[0];
+  const last = inWay[inWay.length - 1].a;
+  const past = last + clearance + stride;
+  const P = a => ({ x: Math.round(fromX + ux * a + nx * best.h), y: Math.round(fromY + uy * a + ny * best.h) });
+  const points = [];
+  for (let a = 0; a < past; a += stride) points.push(P(a));
+  points.push(P(past));
+  // Every body in the room, not only the ones on the axis: a sidestep that lands inside
+  // somebody standing beside the walk is refused just the same (object_blocked, tour 5).
+  const everyBody = bodies.filter(b => Number.isFinite(b?.x) && Number.isFinite(b?.y));
+  const clearOf = p => everyBody.every(b => {
+    const ddx = b.x - p.x, ddy = b.y - p.y;
+    return ddx * ddx + ddy * ddy >= clearance * clearance - 1e-6;
+  });
+  const bad = points.find(p => !hasFloor(p.x, p.y) || !clearOf(p));
+  if (bad)
+    return { side: best.sign, offset: best.h, slack: best.slack, bodies: inWay.length, sides,
+             why: `the hug line ${hasFloor(bad.x, bad.y) ? 'enters a blocker\'s disc' : 'leaves the floor'} at ${bad.x},${bad.y}` };
+  // The sidestep onto the line, sampled against every body: a body beside the walk is not
+  // on the axis and `inWay` never saw it, but the step lands in its disc all the same.
+  const start = { x: Math.round(fromX), y: Math.round(fromY) };
+  const sidestep = points[0];
+  const steps = Math.max(1, Math.ceil(Math.hypot(sidestep.x - start.x, sidestep.y - start.y) / 4));
+  for (let i = 1; i <= steps; i++) {
+    const p = { x: Math.round(start.x + (sidestep.x - start.x) * i / steps),
+                y: Math.round(start.y + (sidestep.y - start.y) * i / steps) };
+    const hit = everyBody.find(b => { const ddx = b.x - p.x, ddy = b.y - p.y; return ddx * ddx + ddy * ddy < clearance * clearance - 1e-6; });
+    if (hit)
+      return { side: best.sign, offset: best.h, slack: best.slack, bodies: inWay.length, sides,
+               precheck: 'body', why: `precheck: the sidestep to the line passes through ${hit.name ?? 'a body'} at ${p.x},${p.y}` };
+  }
+  if (typeof segmentClear === 'function') {
+    const legs = [[start, sidestep], ...points.slice(1).map((p, i) => [points[i], p])];
+    for (const [a, b] of legs) {
+      let verdict = null;
+      try { verdict = segmentClear(a.x, a.y, b.x, b.y); } catch (e) { verdict = { ok: false, reason: 'precheck threw: ' + e.message }; }
+      if (verdict && verdict.ok === false)
+        return { side: best.sign, offset: best.h, slack: best.slack, bodies: inWay.length, sides,
+                 precheck: verdict.reason === 'object_blocked' ? 'body' : 'geometry',
+                 why: `precheck: ${verdict.reason ?? 'refused'} on ${a.x},${a.y} -> ${b.x},${b.y}` };
+    }
+  }
+  return { side: best.sign, offset: best.h, slack: best.slack, bodies: inWay.length, sides,
+           axis: { ux, uy }, points: [points[0], points[points.length - 1]], waypoints: points, past };
 }
 
 const STEP_MASK_BIT = new Map(DIRS.map((d, i) => [`${d.dr},${d.dc}`, 1 << i]));
@@ -3368,6 +3549,10 @@ export function sharedRoomGeometry(roomOrRoo) {
   if (!roo || typeof roo !== 'object') return null;
   if (!SHARED_ROOM_GEOMETRY.has(roo)) SHARED_ROOM_GEOMETRY.set(roo, RoomGeometry.fromJSON(roo));
   const g = SHARED_ROOM_GEOMETRY.get(roo);
+  // A lab may adopt the current routing bake without decoding every room at startup.
+  // Attach its mask on first real geometry access; ordinary/eager processes register
+  // nothing here and retain exactly their previous path.
+  attachDeferredStepMask(roomOrRoo, g);
   // WHICH ROOM THIS IS, when the caller happened to know. The geometry is built from a
   // `.roo` and a `.roo` does not carry its own room number — but `declaredFallJumps` has
   // to match a table keyed by room, and a table entry applied to the wrong room would be
@@ -3376,6 +3561,13 @@ export function sharedRoomGeometry(roomOrRoo) {
   // declares nothing, which is the safe direction.
   if (g && g.roomNum == null && Number.isFinite(Number(roomOrRoo?.num))) g.roomNum = Number(roomOrRoo.num);
   return g;
+}
+
+// Read-only cache visibility for startup tests and for lazy attachment to geometry that a
+// caller happened to construct before attachStepMasks(). It never creates a geometry.
+export function peekSharedRoomGeometry(roomOrRoo) {
+  const roo = roomOrRoo?.roo ?? roomOrRoo;
+  return roo && typeof roo === 'object' ? (SHARED_ROOM_GEOMETRY.get(roo) ?? null) : null;
 }
 
 // EAGERLY PARSE EVERY ROOM'S GEOMETRY. sharedRoomGeometry is lazy — the first access to a

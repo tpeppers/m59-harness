@@ -1,0 +1,144 @@
+# syntax=docker/dockerfile:1.7
+# Meridian 59 lab-only simulation-clock image.
+#
+# This file is intentionally separate from docker/Dockerfile. Build it only via
+# tools/m59-sim-server-build.mjs, which checks the source checkout, patch preimages,
+# patch applicability, and the labels read back from the resulting image.
+
+ARG SOURCE_COMMIT
+ARG PATCH_SHA256
+ARG SIMULATION_SCALE=10
+
+# ---------------------------------------------------------------- build
+
+FROM debian:bookworm-slim AS build
+
+ARG SOURCE_COMMIT
+ARG PATCH_SHA256
+ARG SIMULATION_SCALE
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential flex bison make ca-certificates curl patch jq \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src
+COPY --from=m59_harness /server-patches/simulation-clock/ /tmp/simulation-clock/
+
+# The container independently checks the same contract the wrapper checked. The
+# source commit is supplied by the wrapper because the pinned source .dockerignore
+# intentionally excludes .git; every C preimage touched by the patch is content-hashed.
+RUN set -eux; \
+    test "$(jq -er '.schema' /tmp/simulation-clock/manifest.json)" = 'm59-simulation-clock-patch/v1'; \
+    test "$(jq -er '.clock_schema' /tmp/simulation-clock/manifest.json)" = 'm59-server-clock/v1'; \
+    test "$(jq -er '.guard_text' /tmp/simulation-clock/manifest.json)" = 'm59-lab-simulation-clock/v1'; \
+    test "$(jq -er '.source.repository' /tmp/simulation-clock/manifest.json)" = 'https://github.com/tpeppers/Meridian59-deck.git'; \
+    test "$(jq -er '.source.commit' /tmp/simulation-clock/manifest.json)" = "$SOURCE_COMMIT"; \
+    test "$(jq -er '.patch' /tmp/simulation-clock/manifest.json)" = '0001-simulation-clock.patch'; \
+    test "$(jq -er '.source_hashes' /tmp/simulation-clock/manifest.json)" = 'source.sha256'; \
+    test "$(jq -er '.scale.minimum' /tmp/simulation-clock/manifest.json)" = '1'; \
+    test "$(jq -er '.scale.maximum' /tmp/simulation-clock/manifest.json)" = '100'; \
+    test "$(jq -er '.scale.integer_only' /tmp/simulation-clock/manifest.json)" = 'true'; \
+    case "$SIMULATION_SCALE" in ''|*[!0-9]*) exit 64;; esac; \
+    test "$SIMULATION_SCALE" -ge 1; \
+    test "$SIMULATION_SCALE" -le 100; \
+    echo "$PATCH_SHA256  /tmp/simulation-clock/0001-simulation-clock.patch" | sha256sum -c -; \
+    sha256sum -c /tmp/simulation-clock/source.sha256; \
+    while read -r digest path; do sed -i 's/\r$//' "$path"; done \
+      < /tmp/simulation-clock/source.sha256; \
+    patch --batch --forward --strip=1 --input=/tmp/simulation-clock/0001-simulation-clock.patch
+
+# fmtlib is absent from a plain source clone. This is identical to the ordinary
+# server image build and remains the only network input after the Debian packages.
+RUN if [ ! -f external/fmtlib/fmt/format.h ]; then \
+      mkdir -p external/fmtlib && \
+      curl -fsSL https://github.com/fmtlib/fmt/archive/refs/tags/10.2.1.tar.gz \
+        | tar -xz --strip-components=1 -C external/fmtlib fmt-10.2.1/include/fmt; \
+      mv external/fmtlib/include/fmt external/fmtlib/fmt && \
+      rm -rf external/fmtlib/include; \
+    fi
+
+RUN sed -i 's/ -Werror//' common.mak.linux
+
+RUN make -C blakcomp -f makefile.linux RELEASE=1 makedirs \
+ && make -C blakcomp -f makefile.linux RELEASE=1 -j"$(nproc)"
+
+RUN rm -f run/server/loadkod && mkdir -p run/server/loadkod && \
+    make -C kod -f makefile.linux RELEASE=1 && \
+    find kod -name '*.bof' -exec cp {} run/server/loadkod/ \;
+
+RUN make -C blakserv -f makefile.linux RELEASE=1 makedirs \
+ && make -C blakserv -f makefile.linux RELEASE=1 -j"$(nproc)"
+
+RUN find . -name blakserv -type f -perm -u+x -newer common.mak.linux \
+      -exec cp {} /tmp/blakserv \; -quit && test -x /tmp/blakserv
+
+# -------------------------------------------------------------- runtime
+
+FROM debian:bookworm-slim AS runtime
+
+ARG SOURCE_COMMIT
+ARG PATCH_SHA256
+ARG SIMULATION_SCALE
+
+LABEL org.openai.m59.sim-clock.schema="m59-server-clock/v1" \
+      org.openai.m59.sim-clock.source-commit="$SOURCE_COMMIT" \
+      org.openai.m59.sim-clock.patch-sha256="$PATCH_SHA256" \
+      org.openai.m59.sim-clock.scale="$SIMULATION_SCALE" \
+      org.openai.m59.sim-clock.lab-only="true"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libstdc++6 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 blak
+
+WORKDIR /m59
+COPY --from=build /tmp/blakserv            /m59/blakserv
+COPY --from=build /src/run/server/         /m59/
+COPY --from=build /src/resource/rooms/     /m59/rooms/
+COPY --from=build /src/kod/kodbase.txt     /m59/kod/kodbase.txt
+
+# Never bake a source checkout's world or channel history into the lab image.
+RUN rm -rf /m59/savegame/* /m59/memmap/* /m59/channel/*.txt /m59/blakserv.cfg.bak
+
+RUN set -eux; \
+    sed -i 's/\r$//' blakserv.cfg; \
+    sed -i \
+      -e 's#^Bof .*#Bof                  /m59/loadkod/#' \
+      -e 's#^Memmap .*#Memmap               /m59/memmap/#' \
+      -e 's#^Rsc .*#Rsc                  /m59/rsc/#' \
+      -e 's#^Rooms .*#Rooms                /m59/rooms/#' \
+      -e 's#^Motd .*#Motd                 /m59/#' \
+      -e 's#^Channel .*#Channel              /m59/channel/#' \
+      -e 's#^LoadSave .*#LoadSave             /m59/savegame/#' \
+      -e 's#^Forms .*#Forms                /m59/#' \
+      -e 's#^Kodbase .*#Kodbase              /m59/kod#' \
+      -e 's#^PackageFile .*#PackageFile          /m59/#' \
+      -e 's#^Filename .*blakston.*#Filename             /m59/blakston.khd#' \
+      blakserv.cfg; \
+    setkey() { \
+      sed -i "/^$2 /d" blakserv.cfg; \
+      sed -i "/^\[$1\]/a $2                $3" blakserv.cfg; \
+    }; \
+    setkey Socket MaintenancePort 9998; \
+    setkey Socket MaintenanceMask '127.0.0.1;172.0.0.0;192.168.0.0;10.0.0.0;0.0.0.0'; \
+    setkey Channel Flush Yes; \
+    setkey Channel DebugDisk Yes; \
+    setkey Channel ErrorDisk Yes; \
+    setkey Channel LogDisk Yes; \
+    test -z "$(grep '^\[Simulation\]$' blakserv.cfg || true)"; \
+    printf '\n[Simulation]\nEnabled              Yes\nScale                %s\nGuardFile            /m59/savegame/.m59-simulation-clock.guard\n' \
+      "$SIMULATION_SCALE" >> blakserv.cfg; \
+    grep -q '^MaintenancePort' blakserv.cfg; \
+    grep -q '^\[Simulation\]$' blakserv.cfg; \
+    mkdir -p /m59/channel /m59/savegame /m59/memmap; \
+    chown -R blak:blak /m59
+
+USER blak
+EXPOSE 5959 9998
+
+VOLUME ["/m59/channel", "/m59/savegame"]
+
+# The guard file is intentionally absent. A raw `docker run` fails closed; the
+# lab controller creates the exact guard bytes only in its private save mount.
+CMD ["/m59/blakserv"]

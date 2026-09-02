@@ -864,3 +864,77 @@ answer there is still to move, not to thread.
   What actually happened is what the doctrine describes: an errand walked a character at 1
   of 49 health through rooms holding six to nine things, and it died going through. That is
   an accepted outcome of a planned trip, not a defect to engineer around.
+
+## Two rules of the road in a one-square pipe
+
+Both from the operator, 2026-09-01, after tour 6 of the shadow fleet timed out seven legs in
+the Sewers of Barloque and wrote 200 of its 321 perp-walk rows there.
+
+**A logoff ghost has no collision, and neither does an item on the ground.** In the kod a
+`LogoffGhost` is a plain `ActiveObject`, and `Object` sets `viObject_flags = 0`, which is
+`MOVEON_YES`; only `NoMoveOn` and its descendants (monsters, players) set `MOVEON_NO`. The
+client walks straight through both. So every body list the walker builds goes through
+`blocksMovement(flags)`, which reads exactly that bit — `bodiesInSquare`, the lane and perp
+finders, the tracer's obstacles, the kill-and-continue blocker. The one place that did not was
+the "is the next square still occupied" test that gates the breadcrumb retreat: it counted
+ANY object, so a mushroom on the next square read as a crowd that never left, and the walker
+backed off three crumbs for it on every attempt. It now asks `blocksMovement` like the rest.
+If a ghost ever does block a step, the test is its flags on the wire, not its class.
+
+**Keep to the right wall for your own direction of travel.** A sewer pipe is one COARSE
+square wide — 64 fine units — and a character is a disc of radius 15.5 that blocks another
+at 16 between centres (`MIN_NOMOVEON`). So a pipe fits two lanes: a body two units off each
+wall leaves 29 between centres, nearly twice the blocking distance. Two characters that both
+aim at the square's centre line meet nose to nose and stall, which is what both recorded jams
+show; two that each keep right pass like ships in the night. `keepRightAim` in
+`m59-roo.mjs` is the pure rule: probe the floor along the right-hand normal of the direction
+of travel — `(-uy, ux)` in the game's y-down coordinates — and its opposite, and if the floor
+is no wider than a square and a half, aim `right - 15.5 - 2` along the normal from the stand
+point. `aimInto` in `m59-game.mjs` takes that lane as its FIRST choice, bodies in the square
+or not, whenever the tracer says the lane point is reachable and (with a body present) it
+clears the body; wide floor gets no lane and the stand point is what it always was. It is
+always on, because the character coming the other way is usually not visible yet when the
+lane is chosen, and because a rule of the road only works when every keeper follows it;
+`M59_KEEP_RIGHT=0` is the only way off. Measured on the real BSP: the sewers' row 27 and
+`r59c35`, and the Flatlands' row 35 up to `c33`, are 64-wide corridors with lanes 29 apart
+each way; room 537, which had 95 perp-walk rows in the same tour, has 2,450 floor squares and
+no corridor at all, so its jams are bodies on open floor and this rule does not touch them.
+One `keep_right` row per room per session goes to the tactics ledger, with the corridor's
+width and the offset taken, so a tour says which corridors were laned without a row per step.
+`m59-lane-test.mjs` pins the geometry: east keeps south, west keeps north, south keeps west,
+north keeps east, the lanes clear the walls and pass each other, wide floor and a slot too
+narrow to shift in both keep the stand point, and the Flatlands fixture's own floor gives a
+lane each way.
+
+What it does NOT solve: a convoy of fleet-mates all going the same way down the pipe still
+queues behind its own head, and a pipe full of rats is still a pipe full of rats. Those are
+the perp walk, the walker's blink ask and kill-and-continue, above.
+
+## The exit is a wall
+
+Operator, 2026-09-01. A retreat on a journey looks for the nearest safe wall; **the room's
+onward exit is one of them**. Crossing a room boundary breaks every attack on you, which is
+the property a wall is chosen for. What the exit lacks is a place to heal, and the **first
+available wall in the next room** supplies that — nearest by distance, no forward bias, and
+never the next exit, so a retreat cannot chain room to room. It is a stopover, not the
+destination; the journey resumes from it.
+
+`nearestSafeSpot` adds the onward square to its candidates with `kind: 'exit'` whenever a
+journey names one (`allowExit: false` withholds it, which is what the far-side search
+passes), ranked like any wall: its walk counts against it and its progress — of which it
+has the most — counts for it. `takeSafeSpot` sees the kind and crosses instead of standing:
+one hop on the journey's own `travel` machinery, then `takeSafeSpot` again on the far side
+with `nearestOnly`. A crossing that does not happen is a refusal that says so, never a hold
+on a square in another room. The walker's wall-then-blink branch checks for it too: a wall
+that turned out to be the exit means the walk ends with `left_room` and nothing is cast.
+
+**And a correction from the same day.** When the forward preference was added, "can come
+back" was redefined as "can reach the exit". From a pocket that cannot reach the exit at all
+that rejects every wall as one-way — reproduced offline in the Cragged Mountains from
+`r30c25`: 185 of 196 walls unreachable, two eligible without an exit named, **none** with one
+— and a character under attack was told "nothing in this room is more defensible than open
+floor" in a room with sixteen walls on file. The rule now: a wall we can walk back from is
+always eligible; reaching the exit is an ADDITION, and only that kind earns the forward
+bonus. The refusal carries its counters (considered, reachable, one-way, eligible) so the
+ledger cannot say "no walls" when it means "no walls from this pocket".
+`m59-forward-shelter-test.mjs` pins both.

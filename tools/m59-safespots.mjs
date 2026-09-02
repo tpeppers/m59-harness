@@ -820,6 +820,7 @@ export function nearestSafeSpot(geo, from, {
   quarryReach = null, strictQuarryReach = false, stats = null, los = 0,
   rule = 'wall', minBackCover = 1, fromFightWeight = 0.3,
   closestToToward = false,
+  allowExit = true,
   // SQUARES WE COULD NOT GET TO. A different fact from a square that failed to HOLD, which
   // is what `discredited` records — this one is about the walk, not about the wall.
   // See `unreachableSpots` on the keeper for why it is session-scoped and expires.
@@ -827,8 +828,31 @@ export function nearestSafeSpot(geo, from, {
   // THE REACHABLE SET, WHEN THE CALLER ALREADY HAS ONE — because computing it is expensive
   // and a whole path shares one answer. See `canWalkThere` below.
   reachable = null,
+  // A JOURNEY HAS A DIRECTION, AND A WALL ON THE ROAD AHEAD IS WORTH MORE THAN ONE BEHIND.
+  //
+  // `onward` is the square the character is trying to leave the room by. When it is given
+  // the bar changes in two ways the operator asked for on 2026-09-01, after Bbbb died in
+  // The border of the Badlands with the only offered wall 31 squares back down a road it
+  // had already been bitten on:
+  //
+  //   - DISTANCE STOPS BEING A REASON. `within` is not applied. What is asked instead is
+  //     that the wall be reachable from here AND that the exit be reachable from the wall
+  //     — bidirectional in the direction that matters, not "can I get back to where I am
+  //     standing", which is the question `canComeBack` asks when there is no journey.
+  //   - FORWARD IS PREFERRED, HARD. `forwardBias` multiplies the progress a wall makes
+  //     toward the exit (squares closer than we are now), and a backtrack is charged at the
+  //     same rate. At eight, a wall twenty squares on that brings the exit fifteen closer
+  //     scores +100 and a wall three squares behind scores -27: the road ahead wins whenever
+  //     it offers anything at all, and only a road with nothing ahead falls back to the
+  //     nearest refuge behind. Without `onward` nothing here changes.
+  onward = null,
+  forwardBias = 1,
 } = {}) {
   if (!geo || !from) return null;
+  const onwardSquare = onward && Number.isFinite(onward.row) && Number.isFinite(onward.col) ? onward : null;
+  const distanceMatters = !onwardSquare;
+  const cheb = (a, b) => Math.max(Math.abs(a.col - b.col), Math.abs(a.row - b.row));
+  const hereToExit = onwardSquare ? cheb(from, onwardSquare) : 0;
   // EVERY QUALIFYING SQUARE, NOT THE TOP FEW HUNDRED BY SCORE.
   //
   // This asked for the 400 best-scoring squares in the room and then filtered THOSE by
@@ -880,7 +904,14 @@ export function nearestSafeSpot(geo, from, {
   // this is "could we get back", and they are different sets wherever the world has a
   // one-way step in it — a drop, a ledge, a grid edge that ejects you. One BFS, shared by
   // every candidate. See returnReachableTo.
+  // With a journey a wall that can reach ITS DOOR is wanted too — that is what lets the
+  // forward preference reach past the distance cap — but it is an ADDITION to the walls we
+  // can walk back from, never a replacement. Corrected 2026-09-01: for a day this asked only
+  // "can it reach the exit", and from a pocket that cannot reach the exit at all (the Cragged
+  // Mountains from r30c25: 185 of 196 walls unreachable, two eligible) every wall was then
+  // "one-way" and a character under attack was told there was nothing to take.
   const canComeBack = returnReachableTo(geo, from);
+  const reachesOnward = onwardSquare ? returnReachableTo(geo, onwardSquare) : null;
   const known = book && room != null ? book.recall(room) : null;
   let best = null;
   let bestPredictedUnreachable = null;
@@ -889,6 +920,8 @@ export function nearestSafeSpot(geo, from, {
   let eligible = 0;
   let unreachableToUs = 0;
   let oneWay = 0;
+  let reachesOnwardCount = 0;
+  let exitConsidered = false;
   let partitionRejected = 0;
   for (const s of all) {
     const seen = known?.get(key(s.col, s.row)) || null;
@@ -908,14 +941,17 @@ export function nearestSafeSpot(geo, from, {
     // nearest wall is sometimes over a one-way drop — the mover walks a character off a
     // ledge it cannot climb, the character rests, and the journey that diverted has no
     // route onward. Getting there was never the hard half of a rest stop.
-    if (canComeBack && !canComeBack.has(`${s.row},${s.col}`)) { oneWay++; continue; }
+    const returnsToUs = !canComeBack || canComeBack.has(`${s.row},${s.col}`);
+    const towardExit = !!reachesOnward?.has(`${s.row},${s.col}`);
+    if (!returnsToUs && !towardExit) { oneWay++; continue; }
+    if (towardExit) reachesOnwardCount++;
     // CHEAP TESTS FIRST. Distance and the defensibility cutoff are arithmetic on two
     // integers; quarryReach and reach are pathfinds. With the candidate list no longer
     // capped this ordering is the difference between one pass over the room and a
     // pathfind per square in it — the far corners of a 58x44 room were being routed to
     // and then discarded for being out of range.
     const d = Math.max(Math.abs(s.col - from.col), Math.abs(s.row - from.row));
-    if (d > within) continue;
+    if (distanceMatters && d > within) continue;
     // A proven square is allowed to be less defensible on paper than the cutoff: it
     // has passed the only test that counts.
     //
@@ -1000,9 +1036,19 @@ export function nearestSafeSpot(geo, from, {
     // worth up to 90 points. Against that, half a point per square meant distance could
     // not win: a wall 30 squares away with 20 points of back cover beat a plain edge two
     // squares away, every time, and the character walked it while bleeding.
+    // Progress is measured to the EXIT, in squares, and weighted by the bias; the walk's
+    // own length still counts against a wall, so between two walls equally far forward
+    // the nearer one wins, as it always did.
+    const progress = onwardSquare ? hereToExit - cheb(s, onwardSquare) : 0;
     const value = -(p.steps ?? d);
+    // ...AND NOTHING ELSE, UNLESS A JOURNEY NAMES ITS EXIT. The distance-only ranking above
+    // is pinned by m59-safespot-test because a composite score once sent hurt characters
+    // across rooms; the one adjustment allowed is progress toward a named exit, and it is
+    // gated on `onwardSquare` so a fight or a rest still ranks on distance alone.
+    const ranked = onwardSquare && towardExit ? value + forwardBias * progress : value;
     const candidate = {
-      ...s, steps_away: p.steps ?? d, value, from_fight: toward ? fromFight : null,
+      ...s, steps_away: p.steps ?? d, value: ranked, from_fight: toward ? fromFight : null,
+      progress: onwardSquare ? progress : null,
       target_distance: toward ? targetDistance : null,
       quarry_steps: quarryPrediction?.reachable && Number.isFinite(quarryPrediction.steps)
         ? quarryPrediction.steps : null,
@@ -1032,13 +1078,41 @@ export function nearestSafeSpot(geo, from, {
   best ??= bestPredictedUnreachable;
   // Keep the map prediction and the live verdict separate in the diagnostics. A doubtful
   // square is not dropped merely for being doubtful — it is offered, and tried.
+  // THE EXIT IS A WALL. Operator, 2026-09-01: crossing a room boundary breaks every attack
+  // on you, which is the property a safe wall is chosen for; what it lacks is a place to
+  // heal, and the first wall in the next room supplies that. So on a journey the onward
+  // exit joins the candidates on the same terms as a wall — reachable from here, ranked by
+  // its walk and by progress, of which it has the most — and `kind: 'exit'` tells the taker
+  // to cross rather than to stand. It never joins a fight's or a rest's search: no onward,
+  // no exit. `allowExit: false` withholds it, which is what the search on the far side of a
+  // crossing uses so a retreat cannot chain room to room.
+  if (onwardSquare && allowExit) {
+    const exitKey = `${onwardSquare.row},${onwardSquare.col}`;
+    if (!canWalkThere || canWalkThere.has(exitKey)) {
+      const d = cheb(from, onwardSquare);
+      const p = reach ? reach(onwardSquare.col, onwardSquare.row) : { reachable: true, steps: d };
+      if (p?.reachable !== false) {
+        exitConsidered = true;
+        const exitCandidate = {
+          row: onwardSquare.row, col: onwardSquare.col, kind: 'exit',
+          steps_away: p.steps ?? d, value: -(p.steps ?? d) + forwardBias * hereToExit,
+          progress: hereToExit, from_fight: null, target_distance: null,
+          quarry_steps: null, quarry_attack_position: null,
+          proven: false, held_before: 0, fine: null,
+        };
+        if (preferSafeSpotCandidate(exitCandidate, best, { closestToToward })) best = exitCandidate;
+      }
+    }
+  }
   if (stats) {
     stats.considered = all.length;
     stats.eligible = eligible;
+    stats.exit_considered = exitConsidered;
     // Reported rather than silent: "there were walls but every one of them was a one-way
     // trip" is a different room from "there were no walls", and a keeper that cannot tell
     // them apart writes the wrong thing in the ledger.
     stats.one_way = oneWay;
+    stats.reaches_onward = reachesOnwardCount;
     stats.unreachable_by_quarry = unreachableByQuarry;
     stats.reachable_by_quarry = reachableByQuarry;
     stats.unreachable_to_us = unreachableToUs;

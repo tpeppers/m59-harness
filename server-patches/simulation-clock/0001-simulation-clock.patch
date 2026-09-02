@@ -1,0 +1,875 @@
+diff --git a/blakserv/adminfn.c b/blakserv/adminfn.c
+index 60713031506e82424c3a0aa3c576101f918f6569..11b27e0c2f60b414487aaec4c617df35c2f13fdf 100644
+--- a/blakserv/adminfn.c
++++ b/blakserv/adminfn.c
+@@ -133,6 +133,8 @@ void AdminShowTimer(int session_id,admin_parm_type parms[],
+                     int num_blak_parm,parm_node blak_parm[]);
+ void AdminShowTime(int session_id,admin_parm_type parms[],
+                    int num_blak_parm,parm_node blak_parm[]);
++void AdminShowSimulationClock(int session_id,admin_parm_type parms[],
++                              int num_blak_parm,parm_node blak_parm[]);
+ void AdminShowOneTimer(timer_node *t);
+ void AdminShowConfiguration(int session_id,admin_parm_type parms[],
+                             int num_blak_parm,parm_node blak_parm[]);
+@@ -327,6 +329,8 @@ admin_table_type admin_show_table[] =
+ 	{ AdminShowResource,      {S,N}, false, A|M, NULL, 0, "resource",
+ 	"Show a resource by resource name" },
+ 	{ AdminShowStatus,        {N},   false, A|M, NULL, 0, "status",        "Show system status" },
++	{ AdminShowSimulationClock,{N},  false, A|M, NULL, 0, "simclock",
++	"Show the lab simulation clock attestation" },
+ 	{ AdminShowString,        {I,N}, false, A|M, NULL, 0, "string",        "Show one string by string id" },
+ 	{ AdminShowSysTimers,     {N},   false, A, NULL, 0, "systimers",     "Show system timers" },
+ 	{ AdminShowTable,         {I,N}, false, A|M, NULL, 0, "table",         "Show a hash table" },
+@@ -1021,6 +1025,8 @@ void AdminTerminateSave(int session_id,admin_parm_type parms[],
+                         int num_blak_parm,parm_node blak_parm[])
+ {
+ 	lprintf("AdminTerminateSave saving\n");
++	if (SimulationClockEnabled())
++		PauseTimers();
+ 
+ 	aprintf("Garbage collecting and saving game... ");
+ 
+@@ -1899,7 +1905,7 @@ void AdminShowOneTimer(timer_node *t)
+ 		return;
+ 	}
+ 
+-	expire_time = (int)(t->time - GetMilliCount());
++	expire_time = (int)(t->time - GetSimulationMilliCount());
+ 
+ 	aprintf("%5i  %-14u%-8i%-20s\n",t->timer_id,expire_time,
+ 		t->object_id,GetNameByID(t->message_id));
+@@ -1913,6 +1919,18 @@ void AdminShowTime(int session_id,admin_parm_type parms[],
+ 	aprintf("Current server clock reads %" PRId64 " (%s).\n", now, TimeStr(now).c_str());
+ }
+ 
++void AdminShowSimulationClock(int session_id,admin_parm_type parms[],
++                              int num_blak_parm,parm_node blak_parm[])
++{
++	aprintf("M59_SIM_CLOCK schema=%s enabled=%i scale=%i paused=%i "
++            "sim_ms=%" PRIu64 " wall_s=%" PRId64 " timer_late_ms=%" PRId64 "\n",
++            M59_SIMULATION_CLOCK_SCHEMA,
++            SimulationClockEnabled() ? 1 : 0,
++            GetSimulationScale(),
++            SimulationClockPaused() ? 1 : 0,
++            GetSimulationMilliCount(),(INT64)GetTime(),GetTimerLateness());
++}
++
+ void AdminShowConfiguration(int session_id,admin_parm_type parms[],
+                             int num_blak_parm,parm_node blak_parm[])
+ {
+@@ -4389,6 +4407,11 @@ void AdminReloadGame(int session_id,admin_parm_type parms[],
+                      int num_blak_parm,parm_node blak_parm[])
+ {
+ 	int save_time;
++	if (SimulationClockEnabled())
++	{
++		aprintf("Reload game is disabled for a simulation-clock server; restart the lab container instead.\n");
++		return;
++	}
+ 
+ 	lprintf("AdminReloadGame\n");
+ 
+diff --git a/blakserv/btime.h b/blakserv/btime.h
+index 30f7068545539bb8ab5ebd99efd368137ad422ab..083b021fd9f1d96eaf453a614314599734905cf4 100644
+--- a/blakserv/btime.h
++++ b/blakserv/btime.h
+@@ -13,6 +13,10 @@
+ #ifndef _BTIME_H
+ #define _BTIME_H
+ 
++#define M59_SIMULATION_CLOCK_SCHEMA "m59-server-clock/v1"
++#define M59_SIMULATION_GUARD_TEXT "m59-lab-simulation-clock/v1"
++#define M59_SIMULATION_GUARD_PATH "/m59/savegame/.m59-simulation-clock.guard"
++
+ void InitTime();
+ time_t GetTime();
+ std::string TimeStr(time_t time);
+@@ -20,6 +24,17 @@ std::string ShortTimeStr(time_t time);
+ std::string FileTimeStr(time_t time);
+ std::string RelativeTimeStr(time_t time);
+ UINT64 GetMilliCount();
++UINT64 GetMonotonicMilliCount();
++
++bool SimulationClockEnabled();
++bool SimulationClockPaused();
++int GetSimulationScale();
++time_t GetSimulationTime();
++UINT64 GetSimulationMilliCount();
++INT64 GetSimulationWallWait(UINT64 simulation_deadline);
++void PauseSimulationClock();
++void UnpauseSimulationClock();
++bool RestoreSimulationClock(UINT64 simulation_time);
+ 
+ #endif
+ 
+diff --git a/blakserv/ccode.c b/blakserv/ccode.c
+index ee2d7d3714cf8f844f49877913ba37fcd6f1c9a9..658c4a070326cf02e1f70a1946c5cd628ad569dd 100644
+--- a/blakserv/ccode.c
++++ b/blakserv/ccode.c
+@@ -1371,7 +1371,7 @@ blak_int C_GetTimeRemaining(int object_id,local_var_type *local_vars,
+ 	}
+ 	
+ 	ret_val.v.tag = TAG_INT;
+-	ret_val.v.data = (int)(t->time - GetMilliCount());
++	ret_val.v.data = (int)(t->time - GetSimulationMilliCount());
+ 	if (ret_val.v.data < 0)
+ 		ret_val.v.data = 0;
+ 	
+@@ -2676,4 +2676,4 @@ blak_int C_SendWebhook(int object_id, local_var_type *local_vars,
+     // Send the webhook message
+     SendWebhookMessage(json.c_str(), (int)json.length());
+     return NIL;
+-}
+\ No newline at end of file
++}
+diff --git a/blakserv/config.c b/blakserv/config.c
+index e5f56bac26b7154c774ed8bc94ee7c09114f4928..c0f58b1c8e6601c9e43f21941e2292c377b9c1e3 100644
+--- a/blakserv/config.c
++++ b/blakserv/config.c
+@@ -210,6 +210,11 @@ config_table_type config_table[] =
+ { WEBHOOK_ENABLED,        false, "Enabled",       CONFIG_BOOL,  "No" },
+ { WEBHOOK_PREFIX,         false, "Prefix",        CONFIG_STR,   "" },
+ 
++{ SIMULATION_GROUP,       false, "[Simulation]",  CONFIG_GROUP, "" },
++{ SIMULATION_ENABLED,     false, "Enabled",       CONFIG_BOOL,  "No" },
++{ SIMULATION_SCALE,       false, "Scale",         CONFIG_INT,   "1" },
++{ SIMULATION_GUARD_FILE,  false, "GuardFile",     CONFIG_STR,   "" },
++
+ };
+ 
+ enum
+diff --git a/blakserv/config.h b/blakserv/config.h
+index 58fb2942b4892b5c0a7e36c9c49fef906d644895..d43b9f90006ef8a4c9d8f6a8e3f60e0d49bca4a8 100644
+--- a/blakserv/config.h
++++ b/blakserv/config.h
+@@ -107,6 +107,9 @@ enum
+    WEBHOOK_GROUP,
+    WEBHOOK_ENABLED, WEBHOOK_PREFIX,
+ 
++   SIMULATION_GROUP,
++   SIMULATION_ENABLED, SIMULATION_SCALE, SIMULATION_GUARD_FILE,
++
+    NUM_CONFIG_VALUES
+ };
+ 
+diff --git a/blakserv/loadall.c b/blakserv/loadall.c
+index 1303977fedce2f63094fd7458cc03ad6bf27711e..b77518c56330dd71bf9d6268e53f47903b0bfdd2 100644
+--- a/blakserv/loadall.c
++++ b/blakserv/loadall.c
+@@ -98,6 +98,11 @@ bool LoadAllButAccountAtTime(char *time_str)
+ 	snprintf(load_name, sizeof(load_name), "%s%s%s",ConfigStr(PATH_LOADSAVE),GAME_FILE_SAVE,time_str);
+ 	if (!LoadGame(load_name)) 
+ 	{
++		if (SimulationClockEnabled() || LoadGameRefusesWorldFallback())
++		{
++			FatalError("Simulation or incompatible save failed validation; refusing to replace it with a new world");
++			return false;
++		}
+ 	/* If loadgame failed, create a system object which basically starts
+ 	a new game.  This is good when you want to use an old account file
+ 		and start a new game. */
+diff --git a/blakserv/loadgame.c b/blakserv/loadgame.c
+index d7963fe89efd038388ccc2ad74181f86cb2e728d..fe14cbc40b39806523a6870adf568aead671bcab 100644
+--- a/blakserv/loadgame.c
++++ b/blakserv/loadgame.c
+@@ -46,6 +46,7 @@ typedef struct loaded_file_struct
+    FILE *file;
+ } loaded_file_node;
+ loaded_file_node loadfile;
++static bool load_game_refuses_world_fallback;
+ 
+ int current_object_id;
+ int current_object_class_id;
+@@ -100,6 +101,7 @@ bool LoadGameParse(char *filename);
+ void LoadGameClose(void);
+ 
+ bool LoadGameSystem(void);
++bool LoadGameSimulationClock(void);
+ bool LoadGameObject(int file_version);
+ bool LoadGameListNodes(int file_version);
+ bool LoadGameTimer(int file_version);
+@@ -121,10 +123,13 @@ void LoadGameTranslateVal(val_type *pval);
+ bool LoadGame(char *filename)
+ {
+ 	bool ret_val;
++	bool rollback_simulation_clock;
+ 	load_game_class_node *lgc,*tempc;
+ 	int i,j;
+ 	UINT64 start_time;
+ 	UINT64 end_time;
++	UINT64 simulation_time_before_load = 0;
++	load_game_refuses_world_fallback = false;
+ 	
+ 	start_time = GetMilliCount();
+ 	dprintf("LoadGame starting\n");
+@@ -145,8 +150,22 @@ bool LoadGame(char *filename)
+ 			filename);
+ 		return false;
+ 	}
++
++	rollback_simulation_clock = SimulationClockEnabled();
++	if (rollback_simulation_clock)
++	{
++		if (!SimulationClockPaused())
++			FatalError("Simulation save loading requires paused timers");
++		simulation_time_before_load = GetSimulationMilliCount();
++	}
+ 	
+ 	ret_val = LoadGameParse(filename);
++	if (!ret_val && rollback_simulation_clock)
++	{
++		if (!RestoreSimulationClock(simulation_time_before_load))
++			FatalError("Simulation clock rollback failed after a rejected save");
++		RebaseSimulationSysTimers();
++	}
+ 	
+ 	LoadGameClose();
+ 	
+@@ -186,6 +205,11 @@ bool LoadGame(char *filename)
+ 	return ret_val;
+ }
+ 
++bool LoadGameRefusesWorldFallback(void)
++{
++	return load_game_refuses_world_fallback;
++}
++
+ bool LoadGameOpen(char *fname)
+ {
+    loadfile.file = fopen(fname, "rb");
+@@ -200,20 +224,29 @@ void LoadGameClose(void)
+ bool LoadGameParse(char *filename)
+ {
+ 	char cmd;
++   bool loaded_simulation_clock = false;
++   bool loaded_system = false;
+ 
+   // File versions:
+   // 0 - original save game, everything is 32 bits
+   // 1 - object properties are 64 bits
++  // 2 - simulation clock record precedes version 1 records
+   int file_version = 0;
+ 
+   char sentinel;
+   LoadGameReadChar(&sentinel);
+   if (sentinel == 'V') {
+     LoadGameReadInt(&file_version);
+-    if (file_version < 0 || file_version > 1) {
++    if (file_version < 0 || file_version >= 2)
++      load_game_refuses_world_fallback = true;
++    if (file_version < 0 || file_version > 2) {
+       eprintf("LoadGameParse got unknown save game version %i\n", file_version);
+       return false;
+     }
++    if (file_version == 2 && !SimulationClockEnabled()) {
++      eprintf("LoadGameParse refuses a simulation save while simulation is disabled\n");
++      return false;
++    }
+   } else {
+     rewind(loadfile.file);
+   }
+@@ -223,7 +256,13 @@ bool LoadGameParse(char *filename)
+       if (fread(&cmd, 1, 1, loadfile.file) != 1)
+       {
+          if (feof(loadfile.file))
++         {
++            if (file_version == 2) {
++               eprintf("LoadGameParse simulation save lacks its end record\n");
++               return false;
++            }
+             return true;
++         }
+ 
+          eprintf("File %s Line %i couldn't read type\n",
+                  __FILE__,__LINE__);
+@@ -231,8 +270,31 @@ bool LoadGameParse(char *filename)
+       }
+ 
+       //      dprintf("load game %i\n",cmd);
++		if (file_version == 2 && !loaded_simulation_clock &&
++		    cmd != SAVE_GAME_SIMULATION_CLOCK) {
++			eprintf("LoadGameParse simulation clock must be the first record\n");
++			return false;
++		}
+ 		switch (cmd)
+ 		{
++		case SAVE_GAME_SIMULATION_END :
++         if (file_version != 2 || !loaded_simulation_clock || !loaded_system) {
++            eprintf("LoadGameParse got an invalid simulation end record\n");
++            return false;
++         }
++         if (fread(&cmd,1,1,loadfile.file) == 1 || !feof(loadfile.file)) {
++            eprintf("LoadGameParse got data after the simulation end record\n");
++            return false;
++         }
++         return true;
++		case SAVE_GAME_SIMULATION_CLOCK :
++         if (file_version != 2 || loaded_simulation_clock) {
++            eprintf("LoadGameParse got an invalid or duplicate simulation clock\n");
++            return false;
++         }
++         if (!LoadGameSimulationClock()) return false;
++         loaded_simulation_clock = true;
++         break;
+ 		case SAVE_GAME_CLASS :
+ 			if (!LoadGameClass())
+ 				return false;
+@@ -242,8 +304,14 @@ bool LoadGameParse(char *filename)
+ 				return false;
+ 			break;
+ 		case SAVE_GAME_SYSTEM :
++			if (file_version == 2 && loaded_system) {
++				eprintf("LoadGameParse got a duplicate simulation system record\n");
++				return false;
++			}
+ 			if (!LoadGameSystem())
+ 				return false;
++			if (file_version == 2)
++				loaded_system = true;
+ 			break;
+ 		case SAVE_GAME_OBJECT :
+ 			if (!LoadGameObject(file_version))
+@@ -271,6 +339,19 @@ bool LoadGameParse(char *filename)
+ 	return true;
+ }
+ 
++bool LoadGameSimulationClock(void)
++{
++   INT64 simulation_time;
++   LoadGameReadInt64(&simulation_time);
++   if (simulation_time < 0 || !RestoreSimulationClock((UINT64)simulation_time))
++   {
++      eprintf("LoadGameSimulationClock cannot restore the saved clock\n");
++      return false;
++   }
++   RebaseSimulationSysTimers();
++   return true;
++}
++
+ bool LoadGameSystem(void)
+ {
+ 	int system_id;
+diff --git a/blakserv/loadgame.h b/blakserv/loadgame.h
+index f3734d821d9fabba2f5e8b0794f598eff222c133..cbc5d9ad922d4548aab4932ed5112d6ebe22370d 100644
+--- a/blakserv/loadgame.h
++++ b/blakserv/loadgame.h
+@@ -14,5 +14,6 @@
+ #define _LOADGAME_H
+ 
+ bool LoadGame(char *filename);
++bool LoadGameRefusesWorldFallback(void);
+ 
+ #endif
+diff --git a/blakserv/main.c b/blakserv/main.c
+index 969dbf0e92b294cadd06a8d21d6dbd8d490364ec..3cf116b95c10aec765c9757dea8eeb21194be082 100644
+--- a/blakserv/main.c
++++ b/blakserv/main.c
+@@ -73,6 +73,7 @@ void MainServer()
+ 	InitChannelBuffer();
+ 	
+ 	OpenDefaultChannels();
++	InitTime();
+ 	
+ 	lprintf("Starting %s\n",BlakServLongVersionString());
+ 	
+@@ -92,7 +93,6 @@ void MainServer()
+ 	InitSysTimer();
+ 	InitMotd();
+ 	InitLoadBof();
+-	InitTime();
+ 	InitGameLock();
+ 	InitBkodInterpret();
+ 	InitBufferPool();
+diff --git a/blakserv/osd_linux.c b/blakserv/osd_linux.c
+index 4f15c141a6a4181eac30ff461d9ea568d8a44324..a96bca59ac2bf16b79357659d60dcc1f5357b1a9 100644
+--- a/blakserv/osd_linux.c
++++ b/blakserv/osd_linux.c
+@@ -141,9 +141,8 @@ HANDLE StartAsyncNameLookup(char *peer_addr,char *buf)
+ 
+ void FatalErrorShow(const char *filename,int line,const char *str)
+ {
+-	char s[5000];
+-
+-	printf(s,"Fatal Error File %s line %i\r\n\r\n%s",filename,line,str);
++	fprintf(stderr,"Fatal Error File %s line %i\n\n%s\n",filename,line,str);
++	fflush(stderr);
+ 
+ 	exit(1);
+ }
+diff --git a/blakserv/savegame.c b/blakserv/savegame.c
+index 0c7ebdb86e279eb2b6e66e8e517801a135c0aea5..2d136ed3d71ca5d586575431788d03c0dceb3399 100644
+--- a/blakserv/savegame.c
++++ b/blakserv/savegame.c
+@@ -77,6 +77,8 @@ bool is_save_successful;
+ 
+ /* local function prototypes */
+ 
++void SaveSimulationClock(void);
++void SaveSimulationEnd(void);
+ void SaveClasses(void);
+ void SaveEachClass(class_node *c);
+ void SaveResources(void);
+@@ -106,8 +108,10 @@ bool SaveGame(char *filename)
+ 
+ 	// Version number
+ 	SaveGameWriteByte('V');
+-	SaveGameWriteInt(1);
++	SaveGameWriteInt(SimulationClockEnabled() ? 2 : 1);
+ 
++	if (SimulationClockEnabled())
++		SaveSimulationClock();
+ 	SaveClasses();
+ 	SaveResources();
+ 	SaveSystem();
+@@ -115,12 +119,25 @@ bool SaveGame(char *filename)
+ 	SaveListNodes();
+ 	SaveTimers();
+ 	SaveUsers();
++	if (SimulationClockEnabled())
++		SaveSimulationEnd();
+ 
+ 	fclose(savefile);
+ 
+ 	return is_save_successful;
+ }
+ 
++void SaveSimulationClock(void)
++{
++	SaveGameWriteByte(SAVE_GAME_SIMULATION_CLOCK);
++	SaveGameWriteInt64(GetSimulationMilliCount());
++}
++
++void SaveSimulationEnd(void)
++{
++	SaveGameWriteByte(SAVE_GAME_SIMULATION_END);
++}
++
+ void SaveClasses(void)
+ {
+ 	ForEachClass(SaveEachClass);
+@@ -252,7 +269,7 @@ void SaveEachTimer(timer_node *t)
+ 	SaveGameWriteInt(t->object_id);
+ 	SaveGameWriteString(GetNameByID(t->message_id));
+ 
+-	save_time = (INT64)(t->time - GetMilliCount());
++	save_time = (INT64)(t->time - GetSimulationMilliCount());
+ 	if (save_time < 0)
+ 		save_time = 0;
+ 	SaveGameWriteInt64(save_time);
+diff --git a/blakserv/savegame.h b/blakserv/savegame.h
+index f2765b051bdb508ec8188f414d4209ff2c7b1d68..5572689768de0e28d5f29b766babd61290afaaac 100644
+--- a/blakserv/savegame.h
++++ b/blakserv/savegame.h
+@@ -21,7 +21,9 @@ enum
+    SAVE_GAME_OBJECT = 4,
+    SAVE_GAME_LIST_NODES = 5,
+    SAVE_GAME_TIMER = 6,
+-   SAVE_GAME_USER = 7
++   SAVE_GAME_USER = 7,
++   SAVE_GAME_SIMULATION_CLOCK = 8,
++   SAVE_GAME_SIMULATION_END = 9
+ };
+ 
+ bool SaveGame(char *filename);
+diff --git a/blakserv/systimer.c b/blakserv/systimer.c
+index a6e87db70fad50debfb6d93f3e811f932a782b26..21f38b0deb8b469b2a932e49c9aa73d8c87d3e57 100644
+--- a/blakserv/systimer.c
++++ b/blakserv/systimer.c
+@@ -51,7 +51,7 @@ void ResetSysTimer()
+    }
+ }
+ 
+-void CreateSysTimer(int type,int time,int period)
++void CreateSysTimer(int type,int time,int period,bool simulation_clock)
+ {
+    systimer_node *st;
+    INT64 now,next_time;
+@@ -69,9 +69,10 @@ void CreateSysTimer(int type,int time,int period)
+    st->time = time;
+    st->period = period;
+    st->enabled = true;
++   st->simulation_clock = simulation_clock;
+    st->next = NULL;
+ 
+-   now = GetTime();
++   now = simulation_clock ? GetSimulationTime() : GetTime();
+    next_time = now - (now % period) + time;
+    if (now > next_time)
+       next_time += period;
+@@ -86,22 +87,60 @@ void CreateSysTimer(int type,int time,int period)
+ void CreateInitialSysTimers()
+ {
+    CreateSysTimer(SYST_RESET_POOL,60*ConfigInt(AUTO_RESET_POOL_TIME),
+-		  60*ConfigInt(AUTO_RESET_POOL_PERIOD));
++		  60*ConfigInt(AUTO_RESET_POOL_PERIOD),false);
+    CreateSysTimer(SYST_RESET_TRANSMITTED,ConfigInt(AUTO_TRANSMITTED_TIME),
+-		  ConfigInt(AUTO_TRANSMITTED_PERIOD));/* reset transmitted bytes every minute */
+-   CreateSysTimer(SYST_INTERFACE_UPDATE,0,ConfigInt(AUTO_INTERFACE_UPDATE));
++		  ConfigInt(AUTO_TRANSMITTED_PERIOD),false);/* reset transmitted bytes every minute */
++   CreateSysTimer(SYST_INTERFACE_UPDATE,0,ConfigInt(AUTO_INTERFACE_UPDATE),false);
+    CreateSysTimer(SYST_BLAKOD_HOUR,60*ConfigInt(AUTO_KOD_TIME),
+-		  60*ConfigInt(AUTO_KOD_PERIOD));
++		  60*ConfigInt(AUTO_KOD_PERIOD),true);
+    CreateSysTimer(SYST_SAVE,60*ConfigInt(AUTO_SAVE_TIME),
+-		  60*ConfigInt(AUTO_SAVE_PERIOD));
+-   CreateSysTimer(SYST_REOPEN_CHANNELS,ConfigInt(AUTO_REOPEN_CHANNELS_TIME), ConfigInt(AUTO_REOPEN_CHANNELS_PERIOD));
++		  60*ConfigInt(AUTO_SAVE_PERIOD),false);
++   CreateSysTimer(SYST_REOPEN_CHANNELS,ConfigInt(AUTO_REOPEN_CHANNELS_TIME), ConfigInt(AUTO_REOPEN_CHANNELS_PERIOD),false);
+ 	/*
+ 	  no garbage collection now
+    CreateSysTimer(SYST_GARBAGE,60*ConfigInt(AUTO_GARBAGE_TIME),
+-		  60*ConfigInt(AUTO_GARBAGE_PERIOD));
++		  60*ConfigInt(AUTO_GARBAGE_PERIOD),false);
+ 	*/
+ }
+ 
++void RebaseSimulationSysTimers()
++{
++   systimer_node *st = systimers;
++   INT64 now = GetSimulationTime();
++
++   while (st != NULL)
++   {
++      if (st->simulation_clock)
++      {
++         st->next_time_activate = now - (now % st->period) + st->time;
++         if (now > st->next_time_activate)
++            st->next_time_activate += st->period;
++      }
++      st = st->next;
++   }
++}
++
++INT64 GetSimulationSysTimerWallWait()
++{
++   INT64 wait = INT64_MAX;
++   systimer_node *st = systimers;
++
++   if (!SimulationClockEnabled())
++      return wait;
++   while (st != NULL)
++   {
++      if (st->simulation_clock)
++      {
++         INT64 candidate = GetSimulationWallWait(
++            ((UINT64)st->next_time_activate) * 1000);
++         if (candidate < wait)
++            wait = candidate;
++      }
++      st = st->next;
++   }
++   return wait;
++}
++
+ void ProcessSysTimer(INT64 time)
+ {
+    systimer_node *st;
+@@ -110,7 +149,9 @@ void ProcessSysTimer(INT64 time)
+ 
+    while (st != NULL)
+    {
+-      if (time >= st->next_time_activate)
++      INT64 now = st->simulation_clock && SimulationClockEnabled()
++                    ? GetSimulationTime() : time;
++      if (now >= st->next_time_activate)
+       {
+ 	 st->next_time_activate += st->period;
+ 	 if (st->enabled)
+diff --git a/blakserv/systimer.h b/blakserv/systimer.h
+index 4f7f2098ebfacc4ab1b77add3d40c46a732dbe12..080549aa67989757d81506a09a356bbe82e894ce 100644
+--- a/blakserv/systimer.h
++++ b/blakserv/systimer.h
+@@ -26,12 +26,15 @@ typedef struct systimer_struct
+    int period;
+    INT64 next_time_activate;
+    bool enabled;
++   bool simulation_clock;
+    struct systimer_struct *next;
+ } systimer_node;
+ 
+ void InitSysTimer();
+ void ResetSysTimer();
+-void CreateSysTimer(int type,int time,int period);
++void CreateSysTimer(int type,int time,int period,bool simulation_clock);
++void RebaseSimulationSysTimers();
++INT64 GetSimulationSysTimerWallWait();
+ void ProcessSysTimer(INT64 time);
+ void ForEachSysTimer(void (*callback_func)(systimer_node *st));
+ bool DisableSysTimer(int systimer_type);
+diff --git a/blakserv/time.c b/blakserv/time.c
+index 8cfaf3d92ea5bfc08cee80a7a6c878f9447f318b..c69fc7608f9c9a47fa0c51d95ce69163e2b3d3b5 100644
+--- a/blakserv/time.c
++++ b/blakserv/time.c
+@@ -19,8 +19,73 @@
+ 
+ #include "blakserv.h"
+ 
++static bool simulation_enabled = false;
++static bool simulation_paused = false;
++static int simulation_scale = 1;
++static UINT64 simulation_anchor = 0;
++static UINT64 monotonic_anchor = 0;
++
++static bool SimulationGuardValid()
++{
++   char value[128];
++   const char *expected = M59_SIMULATION_GUARD_TEXT;
++   const char *filename = ConfigStr(SIMULATION_GUARD_FILE);
++   if (filename == NULL || strcmp(filename,M59_SIMULATION_GUARD_PATH) != 0)
++      return false;
++
++#ifdef BLAK_PLATFORM_LINUX
++   int descriptor = open(filename,O_RDONLY | O_NOFOLLOW);
++   if (descriptor < 0)
++      return false;
++   struct stat info;
++   if (fstat(descriptor,&info) != 0 || !S_ISREG(info.st_mode) ||
++       info.st_size != (off_t)strlen(expected))
++   {
++      close(descriptor);
++      return false;
++   }
++   FILE *guard = fdopen(descriptor,"rb");
++   if (guard == NULL)
++   {
++      close(descriptor);
++      return false;
++   }
++#else
++   FILE *guard = fopen(filename,"rb");
++   if (guard == NULL)
++      return false;
++#endif
++
++   size_t length = fread(value,1,sizeof(value),guard);
++   bool ok = !ferror(guard);
++   fclose(guard);
++   return ok && length == strlen(expected) &&
++          memcmp(value,expected,length) == 0;
++}
++
+ void InitTime()
+ {
++   simulation_enabled = ConfigBool(SIMULATION_ENABLED);
++   simulation_scale = ConfigInt(SIMULATION_SCALE);
++   simulation_paused = false;
++
++   if (!simulation_enabled)
++   {
++      if (simulation_scale != 1)
++         FatalError("Simulation Scale must be 1 when Simulation Enabled is No");
++      return;
++   }
++
++   if (simulation_scale < 1 || simulation_scale > 100)
++      FatalError("Simulation Scale must be an integer from 1 through 100");
++   if (!SimulationGuardValid())
++      FatalError("Simulation Enabled requires the exact lab simulation guard file");
++
++   monotonic_anchor = GetMonotonicMilliCount();
++   simulation_anchor = ((UINT64)GetTime()) * 1000;
++
++   lprintf("Lab simulation clock enabled at %ix (%s)\n",
++           simulation_scale,M59_SIMULATION_CLOCK_SCHEMA);
+ }
+ 
+ time_t GetTime()
+@@ -146,3 +211,90 @@ UINT64 GetMilliCount()
+ #endif
+ }
+ 
++UINT64 GetMonotonicMilliCount()
++{
++#ifdef BLAK_PLATFORM_WINDOWS
++   return GetMilliCount();
++#else
++   struct timespec now;
++   if (clock_gettime(CLOCK_MONOTONIC,&now) != 0)
++   {
++      FatalError("Simulation clock cannot read CLOCK_MONOTONIC");
++      return 0;
++   }
++   return ((UINT64)now.tv_sec) * 1000 + ((UINT64)now.tv_nsec) / 1000000;
++#endif
++}
++
++bool SimulationClockEnabled()
++{
++   return simulation_enabled;
++}
++
++bool SimulationClockPaused()
++{
++   return simulation_enabled && simulation_paused;
++}
++
++int GetSimulationScale()
++{
++   return simulation_enabled ? simulation_scale : 1;
++}
++
++UINT64 GetSimulationMilliCount()
++{
++   if (!simulation_enabled)
++      return GetMilliCount();
++   if (simulation_paused)
++      return simulation_anchor;
++
++   UINT64 now = GetMonotonicMilliCount();
++   return simulation_anchor + (now - monotonic_anchor) * (UINT64)simulation_scale;
++}
++
++time_t GetSimulationTime()
++{
++   if (!simulation_enabled)
++      return GetTime();
++   return (time_t)(GetSimulationMilliCount()/1000);
++}
++
++INT64 GetSimulationWallWait(UINT64 simulation_deadline)
++{
++   UINT64 now = GetSimulationMilliCount();
++   if (simulation_deadline <= now)
++      return 0;
++
++   UINT64 remaining = simulation_deadline - now;
++   UINT64 scale = (UINT64)GetSimulationScale();
++   UINT64 wait = (remaining + scale - 1) / scale;
++   if (wait > (UINT64)INT64_MAX)
++      return INT64_MAX;
++   return (INT64)wait;
++}
++
++void PauseSimulationClock()
++{
++   if (!simulation_enabled || simulation_paused)
++      return;
++   simulation_anchor = GetSimulationMilliCount();
++   monotonic_anchor = GetMonotonicMilliCount();
++   simulation_paused = true;
++}
++
++void UnpauseSimulationClock()
++{
++   if (!simulation_enabled || !simulation_paused)
++      return;
++   monotonic_anchor = GetMonotonicMilliCount();
++   simulation_paused = false;
++}
++
++bool RestoreSimulationClock(UINT64 simulation_time)
++{
++   if (!simulation_enabled || !simulation_paused)
++      return false;
++   simulation_anchor = simulation_time;
++   monotonic_anchor = GetMonotonicMilliCount();
++   return true;
++}
+diff --git a/blakserv/timer.c b/blakserv/timer.c
+index abeccedef108f93d6ea671fdd726216bfee6f378..123fd5e358f8a35f7a75b2221d7576b3c89528e8 100644
+--- a/blakserv/timer.c
++++ b/blakserv/timer.c
+@@ -83,6 +83,11 @@ void PauseTimers(void)
+       return;
+    }
+    pause_time = GetTime();
++   if (SimulationClockEnabled())
++   {
++      PauseSimulationClock();
++      return;
++   }
+ }
+ 
+ void UnpauseTimers(void)
+@@ -95,6 +100,15 @@ void UnpauseTimers(void)
+       eprintf("UnpauseTimers called when they were not paused\n");
+       return;
+    }
++
++   if (SimulationClockEnabled())
++   {
++      UnpauseSimulationClock();
++      pause_time = 0;
++      ForEachSession(ResetLastMessageTimes);
++      return;
++   }
++
+    add_time = 1000*(GetTime() - pause_time);
+ 
+    t = timers;
+@@ -168,7 +182,7 @@ int CreateTimer(int object_id,int message_id,int milliseconds)
+    t->timer_id = next_timer_num++;
+    t->object_id = object_id;
+    t->message_id = message_id;
+-   t->time = GetMilliCount() + milliseconds;
++   t->time = GetSimulationMilliCount() + milliseconds;
+ 
+    AddTimerNode(t);
+    numActiveTimers++;
+@@ -200,7 +214,7 @@ bool LoadTimer(int timer_id,int object_id,char *message_name,INT64 milliseconds)
+    t->timer_id = timer_id;
+    t->object_id = object_id;
+    t->message_id = m->message_id;
+-   t->time = GetMilliCount() + milliseconds;
++   t->time = GetSimulationMilliCount() + milliseconds;
+ 
+    AddTimerNode(t);
+    numActiveTimers++;
+@@ -284,7 +298,7 @@ void TimerActivate()
+    if (timers == NULL)
+       return;
+    
+-   now = GetMilliCount();
++   now = GetSimulationMilliCount();
+    if (now > timers->time)
+    {
+ 	/*
+@@ -316,19 +330,32 @@ void TimerActivate()
+ INT64 GetMainLoopWaitTime()
+ {
+ 	INT64 ms;
++	INT64 systimer_ms;
+ 	if (timers == NULL)
+ 		ms = 500;
+ 	else
+ 	{
+-		ms = timers->time - GetMilliCount();
+-		if (ms <= 0)
+-			ms = 0;
++		ms = GetSimulationWallWait(timers->time);
+ 		
+ 		if (ms > 500)
+ 			ms = 500;
+-	}	 
++	}
++	systimer_ms = GetSimulationSysTimerWallWait();
++	if (systimer_ms < ms)
++		ms = systimer_ms;
+ 	return ms;
+ }
++
++INT64 GetTimerLateness()
++{
++   if (timers == NULL)
++      return 0;
++   UINT64 now = GetSimulationMilliCount();
++   if (now <= timers->time)
++      return 0;
++   UINT64 late = now - timers->time;
++   return late > (UINT64)INT64_MAX ? INT64_MAX : (INT64)late;
++}
+ 	
+ timer_node * GetTimerByID(int timer_id)
+ {
+diff --git a/blakserv/timer.h b/blakserv/timer.h
+index 63de8c2252e7ec67e2c0cb553b896709067806f0..1e5234ec200b14d309288bc3a777c0266419a2fa 100644
+--- a/blakserv/timer.h
++++ b/blakserv/timer.h
+@@ -33,6 +33,7 @@ bool LoadTimer(int timer_id,int object_id,char *message_name,INT64 milliseconds)
+ bool DeleteTimer(int timer_id);
+ void TimerActivate();
+ INT64 GetMainLoopWaitTime();
++INT64 GetTimerLateness();
+ timer_node * GetTimerByID(int timer_id);
+ void ForEachTimer(void (*callback_func)(timer_node *t));
+ void SetNumTimers(int new_next_timer_num);

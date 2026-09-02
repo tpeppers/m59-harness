@@ -50,10 +50,12 @@ const ok = (label, cond, detail = '') => {
 
 // ------------------------------------------------------------------ the fake checkout
 
-mkdirSync(join(ROOT, 'tools'), { recursive: true });
+mkdirSync(join(ROOT, 'tools', 'runtime'), { recursive: true });
 mkdirSync(FLEETS, { recursive: true });
 for (const f of ['m59-which.mjs', 'm59-fleetpath.mjs'])
   copyFileSync(join(HERE, f), join(ROOT, 'tools', f));
+copyFileSync(join(HERE, 'runtime', 'fleet-lock.mjs'),
+  join(ROOT, 'tools', 'runtime', 'fleet-lock.mjs'));
 
 // Two rosters that exist on disk. Content only has to parse and have keys — this tool
 // counts characters and never logs in.
@@ -147,7 +149,8 @@ DEAD_PORT = await closedPort();
   lockFile('prod', { pid: process.pid, at: now });
   const r = await which(['--fleet', 'prod']);
   ok('a broker serving our roster is reported, exit 0', r.code === 0 && /holding prod/.test(r.out), `exit ${r.code}`);
-  ok('and the pid is corroborated against the fleet\'s own record', /corroborated: pid/.test(r.out));
+  ok('and pid/start-time corroboration is either performed or explicitly unavailable',
+     /corroborated: pid|process start time unavailable/.test(r.out));
 }
 
 // 2. THE REGRESSION. Our broker is up but too slow to answer; an unrelated broker is fast.
@@ -213,22 +216,36 @@ DEAD_PORT = await closedPort();
   ok('nothing listening anywhere is an all-clear, exit 0', r.code === 0 && /nothing is holding a fleet/.test(r.out), `exit ${r.code}`);
 }
 
-// 7. A RECYCLED PID. The lock names a pid that IS alive but started long before the lock was
-//    written — so it is some unrelated process wearing a reused number, not our broker. This
-//    is the checksum: without it, a stale lock blocks the fleet for ever with a false
-//    "something live is holding it".
+// 7. A DEAD PRE-GUARD BROKER. Its pid being gone cannot prove that Windows also killed the
+//    child keepers, so the read-only gate must agree with startup's explicit migration rule.
 {
   clearRecords();
   const gone = await closedPort();
   pidFile('prod', gone, now);
-  lockFile('prod', { pid: process.pid, at: now - 400 * 24 * 3600 * 1000 });   // "taken" a year ago
+  lockFile('prod', { pid: 999001, at: now - 400 * 24 * 3600 * 1000 });
   const r = await which(['--fleet', 'prod']);
-  ok('a live pid that started long after the lock is treated as stale, not as a holder',
-     r.code === 0, `exit ${r.code}`);
-  ok('and the reason is stated rather than silently dropped', /recycled pid/.test(r.out));
+  ok('a pre-guard lock never becomes an all-clear merely because its broker pid is dead',
+     r.code === 1 && /pre-guard|keeper children/.test(r.out), `exit ${r.code}`);
+  ok('and the reason is stated rather than silently dropped', /cannot prove|cannot be ruled out/.test(r.out));
 }
 
-// 8. THE RECORDS DISAGREE WITH THE SOCKET. A broker is serving our roster, but the lock names
+// 8. A DEAD GUARDED BROKER WITH A LIVE KEEPER. The broker endpoint is down, but the
+//    character socket can still be alive on Windows. That is ownership, not a stale lock.
+{
+  clearRecords();
+  const gone = await closedPort();
+  pidFile('prod', gone, now, 999001);
+  lockFile('prod', {
+    pid: 999001, at: now, kind: 'broker-runtime', token: 'guarded-owner-token',
+    guards: [process.pid],
+  });
+  const r = await which(['--fleet', 'prod']);
+  ok('a live keeper guard prevents the read-only fleet gate from issuing an all-clear',
+     r.code === 1 && /keeper pid/.test(r.out), `exit ${r.code}`);
+  ok('and lock deletion is not offered as a remedy', !/delete the lock only/.test(r.out));
+}
+
+// 9. THE RECORDS DISAGREE WITH THE SOCKET. A broker is serving our roster, but the lock names
 //    a different pid — the shape of a second broker on one fleet, which reads healthy line by
 //    line and is the failure CLAUDE.md is most emphatic about.
 {

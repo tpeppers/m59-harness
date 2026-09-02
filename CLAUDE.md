@@ -198,9 +198,13 @@ character, each holding its own socket, on this fleet's port band (`substrate/ke
 was written against that claim — the fleet-mate check's roster fallback was installed only in
 the broker process, so inside every keeper it called the whole fleet strangers
 (see [`docs/m59-keeper.md`](docs/m59-keeper.md#a-keeper-process-called-its-own-fleet-strangers)).
-Two consequences: stopping the broker does **not** stop them, and a restarted broker
-**adopts** survivors — so a keeper picks up new code only when it is itself restarted
-(`POST /stop` on its port; the 45s sweep respawns it from the roster on disk).
+Two consequences: stopping the broker does **not** necessarily stop them, and a keeper
+picks up new code only when it is itself restarted (`POST /stop` on its port; the 45s sweep
+respawns it from the roster on disk). New fleet/account claims guard each exact keeper PID
+before login. A broker restarting the exact same roster may atomically adopt verified
+guarded survivors; a lab or copied/alias roster cannot. Claims predating keeper guards fail
+closed and use the one-time `M59_ALLOW_UNGUARDED_TAKEOVER=1` migration in
+[`docs/INSTALL.md`](docs/INSTALL.md#when-it-does-not-work), never lock deletion.
 
 Everything else about running it — the loopback-only buttons on the fleet page, the
 piloted-client check it does before logging anybody in, why the roster never shrinks by
@@ -452,6 +456,9 @@ Movement — [`docs/m59-routing.md`](docs/m59-routing.md):
 - A body in the way is not a wall and not a clearance — the client tests the move's ENDPOINT, lets you end inside the zone while moving away, and SLIDES. Two spiders 25 apart are passable; a clearance model says they are not.
 - "One square wide" is a fact about the coarse grid. The .roo under Twisted Wood's one-wide corridor is 82–110 fine units, not 64.
 - Melee reach is a disc of radius 2–3 SQUARES, and fine coordinates do not exist to it.
+- A logoff ghost and an item on the ground have NO collision — `MOVEON_YES` on the wire — and a body list that counts any object reads a mushroom as a crowd that never leaves.
+- A one-square pipe is TWO lanes: keep to the right wall for your own direction of travel and two characters pass; both aim at the centre line and they stall nose to nose. `keepRightAim`, always on.
+- A journey's retreat may be the EXIT: crossing breaks every attack, so the onward square is a wall of `kind: 'exit'`, and the mending happens at the first wall on the far side. And a wall we can walk back from is always eligible — "reaches the exit" is an addition, never the gate; redefining it as the gate told a character in the Cragged Mountains there were no walls.
 - A safe wall is the two grids disagreeing — measurable, dose-responsive, and the same fact that fragments the routing view.
 - A planned trip accepts the risk of a FIGHT — but no longer of a death. **Corrected 2026-08-21:** this line used to read "the way out of an attack during travel is always THROUGH", and a journey held the keeper inert to enforce it. That is how Cccc was walked out of a sanctuary at 27% health and eaten in twenty-two seconds. Walking through is still the answer to being *hit*; it is not the answer to being below the flee line, or to losing health faster than the road ends. See `travel_guard`.
 - `ms_since_moved` is about the KEEPER, not the character, and reads as a stall during every errand.
@@ -474,10 +481,10 @@ Guilds — [`docs/m59-guilds.md`](docs/m59-guilds.md):
 
 - **Attach to the broker, do not spawn a second one.** `m59-broker.mjs` with no
   arguments serves stdio MCP *and* resumes a fleet. With one already running,
-  the second is refused the lock, comes up healthy and **empty**, and answers
-  every question about a fleet of nobody while the real one plays on. `.mcp.json`
-  points at `m59-mcp-attach.mjs`, which forwards to an existing broker and holds
-  no state. Keep it that way.
+  the second owner is refused before its listener opens and exits with status 3;
+  it does not attach to the running process. `.mcp.json` points at
+  `m59-mcp-attach.mjs`, which forwards to an existing broker and holds no state.
+  Keep it that way.
 
 - **Never call the `leave` tool** on a fleet anyone cares about. It drops the
   roster, and the roster is the only record of the account passwords.

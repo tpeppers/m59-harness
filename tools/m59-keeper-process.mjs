@@ -12,7 +12,7 @@ process.env.M59_KEEPER = '1';
 //   4. Joins the game
 //   5. Starts the GOAP autopilot
 //   6. Serves a small HTTP API on its port
-//   7. Saves state periodically
+//   7. Coalesces reader-refreshed state to disk and flushes once on shutdown
 //   8. Handles SIGTERM gracefully
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
@@ -29,6 +29,7 @@ import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.m
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
+import { recordTactic } from './m59-tactics.mjs';
 import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { resolveFleet } from './m59-fleetpath.mjs';
@@ -41,6 +42,10 @@ import { chatterFor, fleetChatter } from './m59-chatter.mjs';
 import {
   configureSpotClaimStore, rememberFileSpotPartner, spotClaimNamespace,
 } from './m59-spotclaims.mjs';
+import { verifyFleetLockGuard } from './runtime/fleet-lock.mjs';
+import { planAccountLeases } from './runtime/account-leases.mjs';
+import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
+import { DeferredLatest } from './runtime/deferred-latest.mjs';
 
 // ---------------------------------------------------------------- args
 
@@ -75,7 +80,8 @@ console.error(`[keeper] ${agent} starting on port ${port} (fleet: ${fleetName})`
 // A second copy of a path convention is how that happens, so there is no second copy now.
 // `resolveFleet` reads the same argv this process was given and honours M59_STATE_FILE and
 // M59_FLEET exactly as every other tool does.
-const fleetPath = resolveFleet(process.argv.slice(2)).stateFile;
+const resolvedFleet = resolveFleet(process.argv.slice(2));
+const fleetPath = resolvedFleet.stateFile;
 
 let fleet;
 try {
@@ -144,6 +150,51 @@ try {
 // /mode endpoint's file_now field will differ from this.
 console.error(`[keeper] ${agent} mode from file at startup: ${JSON.stringify(mode)} (entry.autopilot.mode=${JSON.stringify(entry.autopilot?.mode ?? 'MISSING')})`);
 
+// A KEEPER MAY OUTLIVE ITS BROKER ON WINDOWS. Before constructing a Session or opening a
+// game socket, prove that this exact child PID has been installed into both the broker's
+// fleet claim and this account's endpoint-normalized claim. The parent passes tokens but
+// not credentials in one base64url envelope, then writes our PID immediately after spawn.
+// If the parent dies or loses either claim first, verification never succeeds and this
+// process exits without logging in.
+async function requireKeeperOwnership() {
+  const encoded = process.env.M59_KEEPER_OWNERSHIP;
+  let permit;
+  try {
+    permit = JSON.parse(Buffer.from(String(encoded ?? ''), 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('ownership permit is missing or malformed');
+  }
+  if (permit?.version !== 1 || permit?.agent !== agent || !permit?.fleet || !permit?.account)
+    throw new Error('ownership permit does not name this keeper');
+  const expectedAccount = planAccountLeases([{ agent, credentials: {
+    account, character, host: credHost, port: credPort,
+  } }])[0];
+  if (resolve(permit.fleet.path) !== resolve(resolvedFleet.lockFile))
+    throw new Error('ownership permit names a different fleet roster lock');
+  if (resolve(permit.account.path) !== resolve(expectedAccount.path) ||
+      permit.account.subject !== expectedAccount.subject)
+    throw new Error('ownership permit does not match the roster credentials read by this keeper');
+  const checks = [permit.fleet, permit.account];
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const held = checks.every(claim => verifyFleetLockGuard(claim.path, {
+      pid: claim.pid,
+      token: claim.token,
+      kind: claim.kind,
+      subject: claim === permit.account ? expectedAccount.subject : null,
+      guardPid: process.pid,
+    }).ok);
+    if (held) return;
+    await new Promise(resolveWait => setTimeout(resolveWait, 100));
+  }
+  throw new Error('broker did not install both ownership guards before login');
+}
+
+try { await requireKeeperOwnership(); }
+catch (error) {
+  console.error(`[keeper] ${agent} refused before Session/login: ${error.message}`);
+  process.exit(3);
+}
+
 // ---------------------------------------------------------------- session
 
 const session = new Session(agent);
@@ -156,6 +207,51 @@ let autopilot = null;
 let chatter = null;
 let inGame = false;
 let startedAt = Date.now();
+// Every successful login starts a new connection epoch. The broker uses this to discard
+// `connected:false` evidence gathered against the previous socket instead of immediately
+// declaring a freshly rejoined character phantom.
+let connectionRevision = 0;
+let initialJoinRetryTimer = null;
+let joinWanted = true;
+let joinGeneration = 0;
+let keeperJoinInFlight = null;
+
+function cancelInitialJoinRetry() {
+  if (initialJoinRetryTimer !== null) clearTimeout(initialJoinRetryTimer);
+  initialJoinRetryTimer = null;
+}
+
+function scheduleInitialJoinRetry() {
+  if (!joinWanted) return false;
+  if (initialJoinRetryTimer !== null) return false;
+  let handle = null;
+  const retry = async () => {
+    if (initialJoinRetryTimer !== handle) return;
+    initialJoinRetryTimer = null;
+    if (!joinWanted) return;
+    if (inGame && session.live) return;
+    try { await join(); }
+    catch { if (joinWanted) scheduleInitialJoinRetry(); }
+  };
+  handle = setTimeout(retry, 30_000);
+  initialJoinRetryTimer = handle;
+  handle.unref?.();
+  return true;
+}
+
+function changeJoinIntent(wanted) {
+  joinWanted = wanted;
+  joinGeneration++;
+  cancelInitialJoinRetry();
+  return joinGeneration;
+}
+
+function assertJoinIntent(generation) {
+  if (joinWanted && generation === joinGeneration) return;
+  if (session.client) { try { session.client.close(); } catch {} }
+  inGame = false;
+  throw new Error('keeper join was superseded by a newer leave/rejoin intent');
+}
 
 // ------------------------------------------------------- the errand hold
 //
@@ -284,13 +380,16 @@ function releaseKeeper(why, token) {
 
 // ---------------------------------------------------------------- join
 
-async function join() {
+async function joinGenerationOnce(generation) {
   try {
-    await session.joinOnce({
+    await session.join({
       account, password, character,
       host: credHost, port: credPort,
     });
+    assertJoinIntent(generation);
     inGame = true;
+    connectionRevision++;
+    cancelInitialJoinRetry();
     console.error(`[keeper] ${agent} joined as ${session.client?.me?.name ?? character}`);
 
     // LISTEN. THIS IS WHERE THE SOCKET IS, AND FOR A YEAR IT WAS NOWHERE.
@@ -413,6 +512,7 @@ async function join() {
     try { attachStepMasks(loadMap()); }
     catch (e) { console.error(`[keeper] ${agent} could not attach step masks: ${e.message}`); }
 
+    assertJoinIntent(generation);
     if (mode === 'tick') {
       // WARM THE MAP THIS KEEPER'S ROUTER WILL USE, before the Router loads it.
       // loadMap() is cached per process, so calling it here (and building on the SAME map
@@ -493,7 +593,6 @@ async function join() {
           setTimeout(() => process.exit(42), 500);
         },
       });
-      loop.start();
       // Expose the loop on the session so the /action cast override can freeze it
       // (hold the character still) while a spell is casting — movement breaks
       // concentration and fails the cast.
@@ -509,14 +608,19 @@ async function join() {
         note: (what, d) => console.error(`[keeper] ${agent} ! ${what}${d?.why ? ' — ' + d.why : ''}`),
         progress: () => {},
       };
-      watchdog.start(wdHost);
+      // The dynamic import above yields. A leave/rejoin may have invalidated this attempt
+      // while it loaded, so check again before either driver is allowed to start.
+      assertJoinIntent(generation);
       autopilot = { start: () => {}, stop: () => { loop.stop(); watchdog.stop(wdHost); }, mode, policy,
                     _tickLoop: loop, _router: router, _wdHost: wdHost };
+      loop.start();
+      watchdog.start(wdHost);
       console.error(`[keeper] ${agent} tick driver started (10hz, watchdog on)`);
     } else {
       autopilot = autopilotFor(session);
       autopilot.mode = mode;
       Object.assign(autopilot.policy, policy);
+      assertJoinIntent(generation);
       autopilot.start();
       console.error(`[keeper] ${agent} autopilot started (mode=${mode}, hunt=${policy.hunt ?? 'none'})`);
     }
@@ -524,6 +628,28 @@ async function join() {
     console.error(`[keeper] ${agent} join failed: ${e.message}`);
     throw e;
   }
+}
+
+// One keeper-level join at a time. Session.join coalesces the socket login itself; this
+// wrapper also coalesces all of the post-login chatter/autopilot setup and serializes a new
+// rejoin intent behind an older attempt. A leave increments joinGeneration and waits for
+// the old attempt to observe that invalidation before it can report the character out.
+async function join() {
+  if (!joinWanted) throw new Error('keeper is intentionally left out of game');
+  const generation = joinGeneration;
+  const current = keeperJoinInFlight;
+  if (current) {
+    if (current.generation === generation) return current.promise;
+    await current.promise.catch(() => null);
+    assertJoinIntent(generation);
+    if (inGame && session.live) return session.snapshot('already in game');
+  }
+  if (inGame && session.live) return session.snapshot('already in game');
+  const promise = joinGenerationOnce(generation);
+  const record = { generation, promise };
+  keeperJoinInFlight = record;
+  try { return await promise; }
+  finally { if (keeperJoinInFlight === record) keeperJoinInFlight = null; }
 }
 
 // ---------------------------------------------------------------- state
@@ -554,7 +680,9 @@ function state() {
   return {
     agent,
     character: me?.name ?? character,
+    pid: process.pid,
     in_game: inGame,
+    connection_revision: connectionRevision,
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //
     // `inGame` is set true on a successful join and cleared ONLY by /leave and /rejoin —
@@ -910,15 +1038,36 @@ const server = createServer(async (req, res) => {
   // definition already lost track of who is on it. 409 rather than 400: it is a conflict
   // about identity, and the broker turns that into "drop the allocation and respawn".
   //
-  // FAILS OPEN ON AN UNADDRESSED REQUEST. An older broker sends no `agent` field, and
-  // refusing those would strand every character the moment the two halves disagreed about
-  // versions. An order that names the wrong agent is a mistake; one that names nobody is
-  // merely old.
-  const addressedToUs = (claimed) => {
-    if (claimed === undefined || claimed === null || claimed === '') return true;
-    return String(claimed) === String(agent);
+  // Writes fail closed on a complete agent/character/PID tuple. New brokers carry it in
+  // headers so the flat JSON body remains compatible with an old keeper's policy schema;
+  // direct diagnostic tools may carry the same fields in JSON. Unaddressed GET diagnostics
+  // remain available on loopback, while a GET that claims an identity must claim all of it.
+  const normalizedKeeperCharacter = value => typeof value === 'string'
+    ? value.normalize('NFKC').trim().toLocaleLowerCase('en-US') : null;
+  const presentIdentityPart = value => value !== undefined && value !== null && value !== '';
+  const addressedToUs = (claimed, claimedCharacter, claimedPid, { required = true } = {}) => {
+    const supplied = [claimed, claimedCharacter, claimedPid].some(presentIdentityPart);
+    if (!supplied) return !required;
+    if (![claimed, claimedCharacter, claimedPid].every(presentIdentityPart)) return false;
+    if (String(claimed) !== String(agent)) return false;
+    if (normalizedKeeperCharacter(claimedCharacter) !== normalizedKeeperCharacter(character))
+      return false;
+    return Number(claimedPid) === process.pid;
   };
-  const addressedToUsQuery = (u) => addressedToUs(u.searchParams.get('agent'));
+  const addressedToUsQuery = (u) => addressedToUs(
+    u.searchParams.get('agent'), u.searchParams.get('character'), u.searchParams.get('keeper_pid'),
+    { required: false });
+  const requestIdentity = (req, body = {}) => ({
+    agent: req.headers['x-m59-agent'] ?? body?.agent,
+    character: req.headers['x-m59-character'] ?? body?.character,
+    keeperPid: req.headers['x-m59-keeper-pid'] ?? body?.keeper_pid,
+  });
+  const requireAddressedWrite = (req, body = {}) => {
+    const identity = requestIdentity(req, body);
+    if (addressedToUs(identity.agent, identity.character, identity.keeperPid)) return true;
+    refuseMisaddressed(identity.agent);
+    return false;
+  };
   const refuseMisaddressed = (claimed) => {
     console.error(`[keeper] ${agent} refused an order addressed to "${claimed}" — ` +
                   `another broker is guessing this port`);
@@ -930,21 +1079,44 @@ const server = createServer(async (req, res) => {
   // this port, both come back looking exactly like answers about ITS character. `/health`
   // and `/state` are deliberately exempt — they NAME their own agent in the reply and the
   // broker checks it, and they are how a caller discovers whose port this is in the first
-  // place. Refusing those would take away the tool that resolves the confusion.
-  if (req.method === 'GET' && path !== '/health' && path !== '/state' &&
+  // place. `/live` carries the same exact identity tuple without constructing state.
+  // Refusing those would take away the tool that resolves the confusion.
+  if (req.method === 'GET' && path !== '/health' && path !== '/state' && path !== '/live' &&
       !addressedToUsQuery(url)) {
     refuseMisaddressed(url.searchParams.get('agent'));
     return;
   }
 
   try {
+    if (req.method === 'GET' && path === '/live') {
+      // Cheap process/session proof for the supervisor. This MUST NOT call stateSnapshot:
+      // the enriched projection below includes routing, world objects, inventory and GOAP
+      // status, and rebuilding it just to prove a PID still owns a socket was the broker's
+      // dominant idle hot loop. Legacy `/health` remains rich for rolling compatibility.
+      json({
+        schema: 'm59-keeper-live/v1',
+        ok: !!(inGame && session.live),
+        agent,
+        character: session.client?.me?.name ?? character,
+        pid: process.pid,
+        in_game: inGame,
+        connected: !!session.live,
+        connection_revision: connectionRevision,
+        uptime_s: Math.floor((Date.now() - startedAt) / 1000),
+      });
+      return;
+    }
+
     if (req.method === 'GET' && path === '/health') {
-      // Use cached state to avoid blocking on the live session
-      const s = cachedState || state();
+      // A bounded-staleness snapshot avoids rebuilding the expensive status projection
+      // until somebody actually asks for it. Bursts share one value; an unobserved keeper
+      // owns no cache timer and does no routing work.
+      const snapshot = stateSnapshot();
+      const s = snapshot.value;
       // The broker may survive-reuse this process across a Windows service restart.
       // Publishing the exact PID lets it adopt the existing keeper instead of spawning
       // a doomed duplicate on the occupied port and recording that dead child's PID.
-      json({ ok: inGame, agent, pid: process.pid, ...s });
+      json({ ok: inGame, agent, pid: process.pid, ...s, as_of_ms: snapshot.ageMs });
       return;
     }
 
@@ -968,13 +1140,12 @@ const server = createServer(async (req, res) => {
           await session.client.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 })
                      .catch(() => null);
         } catch { /* a refused read still answers from the cache below */ }
-        const fresh = state();
-        json({ ...fresh, as_of_ms: 0, fresh: true });
+        const fresh = stateSnapshot({ fresh: true });
+        json({ ...fresh.value, as_of_ms: fresh.ageMs, fresh: fresh.refreshed });
         return;
       }
-      const snap = cachedState || state();
-      json({ ...snap, as_of_ms: cachedStateAt ? Date.now() - cachedStateAt : 0,
-             fresh: !cachedState });
+      const snapshot = stateSnapshot();
+      json({ ...snapshot.value, as_of_ms: snapshot.ageMs, fresh: snapshot.refreshed });
       return;
     }
 
@@ -1003,7 +1174,7 @@ const server = createServer(async (req, res) => {
       catch (e) { json({ error: `unparseable action: ${e.message}` }, 400); return; }
       // Before anything is executed, and before `inGame` — a stranger's order must not even
       // learn whether this character is logged in.
-      if (!addressedToUs(ask?.agent)) { refuseMisaddressed(ask.agent); return; }
+      if (!requireAddressedWrite(req, ask)) return;
       const name = String(ask?.name ?? '');
       const args = ask?.args ?? {};
       if (!inGame) { json({ error: `${agent}: not in game` }, 409); return; }
@@ -2467,16 +2638,26 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/join') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
+      if (!joinWanted) changeJoinIntent(true);
       await join();
       json({ ok: true });
       return;
     }
 
     if (req.method === 'POST' && path === '/leave') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
+      changeJoinIntent(false);
       if (autopilot) autopilot.stop('keeper leave');
       if (session.client) {
         try { session.client.close(); } catch {}
       }
+      // A retry may already be inside login. It must see the invalidated generation and
+      // settle before this endpoint can truthfully report that the character stayed out.
+      await keeperJoinInFlight?.promise?.catch(() => null);
+      if (session.client) { try { session.client.close(); } catch {} }
       inGame = false;
       json({ ok: true });
       return;
@@ -2490,7 +2671,8 @@ const server = createServer(async (req, res) => {
       // as long as the guessing broker was up. That is the `ACCOUNT ... in use; new
       // connection overrides old one` line in the server log.
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
-      if (!addressedToUs(asked?.agent)) { refuseMisaddressed(asked.agent); return; }
+      if (!requireAddressedWrite(req, asked)) return;
+      changeJoinIntent(true);
       if (autopilot) autopilot.stop('rejoin');
       if (session.client) {
         try { session.client.close(); } catch {}
@@ -2503,6 +2685,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/pass') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
       if (autopilot?.running) {
         log(`[keeper] ${agent} forced pass`);
         // Force a pass by stopping and restarting
@@ -2521,18 +2705,20 @@ const server = createServer(async (req, res) => {
       // stranger's character, and a policy is the least visible thing you can change —
       // no logout, no server line, just somebody else's fleet quietly hunting the wrong
       // creature in the wrong room. Fails OPEN on an unaddressed body, as everywhere else.
-      if (!addressedToUs(body?.agent)) { refuseMisaddressed(body.agent); return; }
-      // THREE RESERVED KEYS, NONE OF WHICH IS A POLICY FIELD. `agent` is the envelope.
+      if (!requireAddressedWrite(req, body)) return;
+      // FIVE RESERVED KEYS, NONE OF WHICH IS A POLICY FIELD. `agent`, `character`, and
+      // `keeper_pid` are the exact process identity envelope.
       // `mode` lives on the Autopilot object, not in `policy` — assigning it into the
       // policy would leave a `policy.mode` that looks authoritative and is read by nothing,
       // which is the `purpose`-shaped bug this repository has already paid for once.
-      // `by` IS THE THIRD RESERVED KEY, and it is what the one existing log line lacked.
+      // `by` IS THE FIFTH RESERVED KEY, and it is what the one existing log line lacked.
       // Twenty-one `policy updated` lines in a single process, none of them naming a
       // writer, could not answer "who reverted my spot policy" — which was the entire
       // question after deaths #24, #25 and #26. Stripped here rather than applied, for
       // exactly the reason the two keys above it are: a `policy.by` that looks
       // authoritative and is read by nothing is the `purpose`-shaped bug again.
-      const { agent: _addressed, mode: wantMode, by: writtenBy, ...fields } = body;
+      const { agent: _addressed, character: _character, keeper_pid: _keeperPid,
+              mode: wantMode, by: writtenBy, ...fields } = body;
       const applied = [];
       let modeChange = null;
       // THE PAIRING INVARIANT, ON THE RECEIVING SIDE TOO. The broker coerces before it
@@ -2593,6 +2779,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/pause') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
       log(`[keeper] ${agent} pause requested`);
       if (autopilot) autopilot.stop('paused for testing');
       json({ ok: true, paused: true });
@@ -2600,6 +2788,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/resume') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
       log(`[keeper] ${agent} resume requested`);
       if (autopilot && !autopilot.running) {
         autopilot.start();
@@ -2611,17 +2801,24 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/stop') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
       log(`[keeper] ${agent} stop requested`);
+      changeJoinIntent(false);
       if (autopilot) autopilot.stop('keeper stop');
       if (session.client) {
         try { session.client.close(); } catch {}
       }
-      saveState();
-      process.exit(0);
+      saveFinalState();
+      // Let the acknowledgement reach the verified caller before ending the process.
+      json({ ok: true });
+      setImmediate(() => process.exit(0));
       return;
     }
 
     if (req.method === 'POST' && path === '/cancel') {
+      const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      if (!requireAddressedWrite(req, asked)) return;
       session.movementGeneration++;
       json({ ok: true });
       return;
@@ -3090,6 +3287,7 @@ const server = createServer(async (req, res) => {
     // --- reroll: replace the character with a new one ---
     if (req.method === 'POST' && path === '/reroll') {
       const body = JSON.parse(await readBody(req));
+      if (!requireAddressedWrite(req, body)) return;
       const { planCharacter } = await import('./m59-newchar.mjs');
       const plan = planCharacter({
         name: body.name || 'JayB',
@@ -3164,48 +3362,51 @@ function readBody(req) {
 
 // ---------------------------------------------------------------- state caching
 //
-// The HTTP server shares the event loop with the GOAP loop. When the GOAP
-// loop is doing a long walk (paced I/O), the HTTP server can't respond.
-// So we cache the state after each GOAP pass and serve the cache from
-// the HTTP endpoints. The cache is at most one pass stale.
+// State projection includes route exits and the full operational status. Building that
+// every two seconds in the background made an unobserved keeper spend CPU indefinitely.
+// Readers now share a projection for two seconds; after that, the next reader rebuilds it.
+// There is no cache timer and therefore no work when nobody is observing this keeper.
 
-let cachedState = null;
-let cachedStateAt = 0;
-
-function refreshCache() {
-  try {
-    cachedState = state();
-    cachedStateAt = Date.now();
-  } catch { /* never fatal */ }
-}
-
-// Refresh the cache every 2 seconds (independent of GOAP pass timing)
-const cacheTimer = setInterval(refreshCache, 2000);
-cacheTimer.unref();
-
-// ---------------------------------------------------------------- state persistence
-
+const stateCache = new DemandSnapshot(state, { maxAgeMs: 2_000, maxStaleMs: 2_000 });
 const statePath = `substrate/keeper-${agent}.json`;
 
-function saveState() {
+function writeStateSnapshot(value) {
   try {
-    const s = cachedState || state();
     mkdirSync('substrate', { recursive: true });
-    writeFileSync(statePath, JSON.stringify(s, null, 2));
+    writeFileSync(statePath, JSON.stringify(value, null, 2));
   } catch (e) {
     console.error(`[keeper] ${agent} state save failed: ${e.message}`);
   }
 }
 
-const saveTimer = setInterval(saveState, 30000);
-saveTimer.unref();
+// This file is an operator/debugging snapshot; the keeper does not read it on restart.
+// Only a real HTTP reader pays for the enriched projection. Refreshed snapshots within a
+// 30s window collapse to the newest value and the persistence path never rebuilds state.
+const statePersistence = new DeferredLatest(writeStateSnapshot, { delayMs: 30_000 });
+
+function stateSnapshot(options) {
+  const snapshot = stateCache.read(options);
+  if (snapshot.refreshed) statePersistence.push(snapshot.value);
+  return snapshot;
+}
+
+let finalStateSaved = false;
+function saveFinalState() {
+  if (finalStateSaved) return false;
+  finalStateSaved = true;
+  // A graceful stop keeps the historical final snapshot contract. This is the only
+  // unobserved path which constructs enriched state, and it happens once, not twice.
+  statePersistence.flush(state());
+  return true;
+}
 
 // ---------------------------------------------------------------- signal handling
 
 process.on('SIGTERM', () => {
   log(`[keeper] ${agent} SIGTERM received`);
+  changeJoinIntent(false);
   if (autopilot) autopilot.stop('SIGTERM');
-  saveState();
+  saveFinalState();
   if (session.client) {
     try { session.client.close(); } catch {}
   }
@@ -3217,18 +3418,55 @@ process.on('SIGINT', () => process.kill(process.pid, 'SIGTERM'));
 
 process.on('exit', () => {
   releaseSpot(agent);
-  saveState();
+  saveFinalState();
 });
 
 // ---------------------------------------------------------------- start
 
 server.listen(port, '127.0.0.1', () => {
   log(`[keeper] ${agent} HTTP API on port ${port}`);
+  // THE EVENT-LOOP STALL MONITOR. blakserv logs a session out after 30 seconds of silence
+  // (INACTIVE_GAME), and on 2026-09-01 the shadow fleet lost about five keepers a tour that
+  // way while their own logs said nothing at all: the broker's /live probe went unanswered,
+  // then "joined as" twice. A blocked loop cannot report itself while it is blocked, but it
+  // can the moment it resumes: this timer measures how late it fired, and anything over the
+  // threshold is written to this log WITH A CLOCK (the keeper log has none) and to the
+  // tactics ledger as a `loop_stall` row carrying what the keeper was doing, so the next
+  // stall names its own cause instead of leaving four hypotheses standing.
+  {
+    const EVERY_MS = 500;
+    const REPORT_OVER_MS = Number(process.env.M59_LOOP_STALL_MS || 1500);
+    let lastTick = Date.now();
+    const tick = () => {
+      const now = Date.now();
+      const late = now - lastTick - EVERY_MS;
+      lastTick = now;
+      if (late >= REPORT_OVER_MS) {
+        let doing = null, to = null, roomNum = null, who = null;
+        try {
+          doing = autopilot?.doing ?? null;
+          to = autopilot?.inert?.to ?? autopilot?.suspendedJourney?.to ?? null;
+          roomNum = autopilot?.s?.world?.room?.num ?? session?.world?.room?.num ?? null;
+          who = autopilot?.s?.client?.me?.name ?? session?.client?.me?.name ?? null;
+        } catch { /* a stall report must not throw */ }
+        log(`[loop] ${agent} event loop was blocked ~${late}ms, resumed ${new Date(now).toISOString()} ` +
+            `(room ${roomNum ?? '?'}, doing ${doing ?? '?'}${to != null ? ', travelling to ' + to : ''})`);
+        try {
+          recordTactic({ character: who ?? agent, room: Number(roomNum ?? 0), tactic: 'loop_stall',
+                         trigger: 'event_loop', worked: false, ms: late, hp_lost: 0, attempted: false,
+                         note: `blocked ~${late}ms; doing ${doing ?? '?'}${to != null ? '; travelling to ' + to : ''}; resumed ${new Date(now).toISOString()}` });
+        } catch { /* evidence, not a dependency */ }
+      }
+      const t = setTimeout(tick, EVERY_MS);
+      if (typeof t.unref === 'function') t.unref();
+    };
+    const t0 = setTimeout(tick, EVERY_MS);
+    if (typeof t0.unref === 'function') t0.unref();
+  }
   join().catch(e => {
     log(`[keeper] ${agent} initial join failed: ${e.message}`);
-    // Stay alive so the broker can retry
-    setInterval(() => {
-      join().catch(() => {});
-    }, 30000);
+    // Stay alive so a transient startup failure can recover. A recursive one-shot owns no
+    // timer after success (the previous fixed interval kept waking for the process lifetime).
+    scheduleInitialJoinRetry();
   });
 });

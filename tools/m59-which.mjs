@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import http from 'node:http';
 import { resolveFleet } from './m59-fleetpath.mjs';
+import { BROKER_FLEET_LOCK_KIND, inspectFleetLock } from './runtime/fleet-lock.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (flag, dflt) => {
@@ -150,8 +151,6 @@ const samePath = (a, b) => !!a && !!b &&
   resolve(String(a)).replace(/\\/g, '/').toLowerCase() ===
   resolve(String(b)).replace(/\\/g, '/').toLowerCase();
 
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-
 // WHEN DID THAT PROCESS ACTUALLY START? A pid on its own is not an identity either: pids
 // are recycled, and a stale lock naming a recycled pid looks exactly like a live claim.
 // Both records this tool reads carry the wall-clock moment they were written, so the
@@ -227,14 +226,19 @@ if (!existsSync(fleet.stateFile)) {
 // ports — the same conclusion m59-service.mjs reached after starting a second broker on a
 // fleet that was already held. `m59-broker.mjs` writes the owning pid into a lock named
 // after the roster it guards, so read that before believing any port.
-const lockRec = readRecord(fleet.lockFile);
-const lock = { pid: null, at: null, stale: '' };
-if (lockRec && Number.isInteger(Number(lockRec.pid))) {
-  const pid = Number(lockRec.pid);
-  lock.at = Number(lockRec.at) || null;
-  if (!alive(pid)) {
-    lock.stale = `lock names pid ${pid}, which is gone`;
-  } else {
+const lock = {
+  pid: null, at: null, stale: '', held: false, heldWhy: '', guardPid: null,
+  unguardedBroker: false, unverifiable: false,
+};
+const lockFound = inspectFleetLock(fleet.lockFile);
+if (lockFound.lock) lock.at = Number(lockFound.lock.at) || null;
+if (lockFound.state === 'live') {
+  lock.held = true;
+  lock.heldWhy = lockFound.why ?? '';
+  lock.unverifiable = lockFound.unverifiable === true;
+  lock.guardPid = Number(lockFound.guard_pid) || null;
+  if (!lockFound.owner_dead && Number.isInteger(Number(lockFound.lock?.pid))) {
+    const pid = Number(lockFound.lock.pid);
     // Alive is not enough. A recycled pid is alive and is not our broker; the start-time
     // checksum is what separates them, and without it we keep the claim rather than
     // inventing a reason to drop it.
@@ -243,9 +247,24 @@ if (lockRec && Number.isInteger(Number(lockRec.pid))) {
       lock.stale = `lock names pid ${pid}, but that process started ` +
                    `${new Date(started).toISOString()} and the lock was taken ` +
                    `${new Date(lock.at).toISOString()} — a recycled pid, not our broker`;
+      lock.held = false;
     } else {
       lock.pid = pid;
     }
+  }
+} else if (lockFound.state === 'stale') {
+  const unguardedBroker = lockFound.lock?.kind === BROKER_FLEET_LOCK_KIND &&
+    !Object.hasOwn(lockFound.lock, 'guards');
+  if (unguardedBroker) {
+    // A dead pre-guard broker is not an all-clear on Windows: its keeper children may
+    // still own live game sockets. Standard startup requires the explicit migration path,
+    // and this read-only gate must agree rather than advising lock deletion.
+    lock.held = true;
+    lock.unguardedBroker = true;
+    lock.heldWhy = `broker pid ${lockFound.lock.pid} is gone, but this pre-guard record ` +
+      'cannot prove that its keeper children are gone';
+  } else {
+    lock.stale = lockFound.why ?? 'the fleet claim and all keeper guards are dead';
   }
 }
 
@@ -277,7 +296,7 @@ let ours = findOurs();
 // this roster but no answering broker claims it. The overwhelmingly likely cause is that
 // the busiest broker on the machine — ours — was slow, not that it vanished between two
 // lines of this file. Asking twice is cheap; being wrong here is not.
-if (!ours && lock.pid) {
+if (!ours && lock.held) {
   asked = await probeAll();
   live = asked.filter(a => a.ok);
   ours = findOurs();
@@ -316,6 +335,8 @@ if (ours) {
   const bpid = Number(ours.health.pid);
   if (lock.pid && bpid && lock.pid !== bpid)
     notes.push(`the roster lock names pid ${lock.pid}, but the broker answering for this roster is pid ${bpid}`);
+  if (lock.held && !lock.pid)
+    notes.push(lock.heldWhy || 'the roster lock is protected but has no reachable broker owner');
   if (pidRec && Number(pidRec.pid) && bpid && Number(pidRec.pid) !== bpid)
     notes.push(`${short(join(SUBSTRATE, `broker-${fleet.label}.pid`))} names pid ${pidRec.pid}, but pid ${bpid} is answering`);
   if (pidRec && Number(pidRec.http) && Number(pidRec.http) !== ours.port)
@@ -345,17 +366,24 @@ if (ours) {
     console.log(c.warn(`note: that broker's checkout is ${ours.health.root}`));
   }
 
-} else if (lock.pid) {
+} else if (lock.held) {
   // Held by a live pid we cannot reach. Refusing is the right direction to fail in — the
   // same call m59-service.mjs makes — because acting now would target a broker we could
   // not find, and starting one would make a second on the same fleet.
-  console.log(`broker   ${c.warn('UNKNOWN')} — the roster lock for "${fleet.label}" is held by live pid ${lock.pid}, ` +
-              `which did not answer on ${ports.join(', ')}`);
+  const holder = lock.pid
+    ? `live broker pid ${lock.pid}`
+    : lock.guardPid
+      ? `a dead broker whose keeper pid ${lock.guardPid} is still live`
+      : lock.unguardedBroker
+        ? 'a dead pre-guard broker whose keeper children cannot be ruled out'
+        : 'an unverifiable ownership record';
+  console.log(`broker   ${c.warn('UNKNOWN')} — the roster lock for "${fleet.label}" is protected by ${holder}`);
+  if (lock.heldWhy) console.log(c.dim(`         ${lock.heldWhy}`));
   listOthers();
   console.log('');
-  console.log(c.bad(`INDETERMINATE: something live is holding "${fleet.label}" and it is not answering.`));
-  console.log(c.bad(`Do not act on this fleet until you know what pid ${lock.pid} is. Stop that broker,`));
-  console.log(c.bad(`or delete the lock only if that pid is genuinely gone.`));
+  console.log(c.bad(`INDETERMINATE: "${fleet.label}" may still have live account sessions.`));
+  console.log(c.bad(`Do not act on this fleet or delete its ownership record. Use the exact-roster`));
+  console.log(c.bad(`broker restart/adoption path; pre-guard records require the documented one-time migration.`));
   process.exitCode = 1;
 
 } else if (unknown.length) {

@@ -12,6 +12,7 @@ const agent = process.argv[2] ?? 't1';
 const num = parseInt(agent.replace(/\D/g, ''));
 const port = 8910 + num;
 const BURL = `http://127.0.0.1:${port}`;
+let keeperIdentity = null;
 
 let passed = 0, failed = 0, skipped = 0;
 
@@ -34,7 +35,7 @@ async function act(name, args = {}, timeout = 30_000) {
   const res = await fetch(BURL + '/action', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, args }),
+    body: JSON.stringify({ ...keeperIdentity, name, args }),
     signal: AbortSignal.timeout(timeout),
   });
   const text = await res.text();
@@ -43,10 +44,25 @@ async function act(name, args = {}, timeout = 30_000) {
   return { ...data, ms: Date.now() - t0 };
 }
 
+async function post(path, body = {}, timeout = 5000) {
+  return fetch(BURL + path, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...keeperIdentity, ...body }),
+    signal: AbortSignal.timeout(timeout),
+  });
+}
+
 console.log(`\n=== CORE TEST: ${agent} (${BURL}) ===\n`);
 
+const live = await get('/live');
+if (!live?.ok || !Number.isInteger(Number(live.pid))) {
+  console.log(`  FATAL: keeper identity endpoint not responding at ${BURL}`);
+  process.exit(1);
+}
+keeperIdentity = { agent: live.agent, character: live.character, keeper_pid: live.pid };
+
 // Pause GOAP so it doesn't fight with the test
-await fetch(BURL + '/pause', { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
+await post('/pause').catch(() => {});
 await new Promise(r => setTimeout(r, 1000));
 console.log(`  GOAP paused`);
 
@@ -218,7 +234,7 @@ if (!me4 || mobs4.length === 0) {
 // RESUME GOAP
 // =====================================================================
 console.log(`\n--- RESUME GOAP ---`);
-await fetch(BURL + '/resume', { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
+await post('/resume').catch(() => {});
 console.log(`  GOAP resumed`);
 
 // =====================================================================

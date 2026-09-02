@@ -43,15 +43,17 @@ compendium displays.
 ## The three pieces
 
 ```
-   your agent  ──MCP──▶  broker :8901  ──protocol──▶  server :5959
-                              │                            │
-                              │                       admin :9998
-                         dashboard :8902           (loopback only)
+   your agent  ──MCP──▶  broker :8901  ──IPC──▶ keeper children ──protocol──▶ server :5959
+                              │                                             │
+                              │                                        admin :9998
+                         dashboard :8902                            (loopback only)
 ```
 
-The **server** is `blakserv`, built from the Meridian 59 source. The **broker** is
-this repository: one process holding N characters, exposing 47 tools over stdio
-MCP or HTTP. Your **agent** is whatever drives it.
+The **server** is `blakserv`, built from the Meridian 59 source. The standard
+**broker** is this repository's supervisor/API process; it exposes 47 tools over
+stdio MCP or HTTP and normally owns one keeper child process per character. The
+optional lab runtime described later can instead hold a dedicated test fleet in
+one shared process. Your **agent** is whatever drives either entry point.
 
 ## 1. The server
 
@@ -424,9 +426,9 @@ first, so there is a cost to making it very frequent.
 
 Fix the path for your checkout. **Attach, do not spawn.** `m59-broker.mjs` with
 no arguments serves stdio MCP *and* resumes a fleet; with one broker already
-running, a second is refused the lock, comes up healthy and empty, and answers
-every question about a fleet of nobody while the real one plays on.
-`m59-mcp-attach.mjs` forwards to an existing broker and holds no state.
+owning that fleet, a second is refused before its listener opens and exits with
+status 3. It does not attach to the running process. `m59-mcp-attach.mjs`
+forwards to the broker that already owns the fleet and holds no state.
 
 Claude Code needs a restart to pick up a changed `.mcp.json`.
 
@@ -445,7 +447,7 @@ and the fleet page at **http://127.0.0.1:8902/fleet**.
 |---|---|
 | `no maintenance socket on 127.0.0.1:9998` | server not running, or 9998 not published. `docker ps --filter name=m59` |
 | image build fails on `-Werror` | the container strips it from `common.mak.linux`; if you build natively you may hit it. |
-| broker starts but every character is empty | a second broker took the stdio path and was refused the lock. Use `m59-mcp-attach.mjs`. |
+| broker exits with `broker ownership refused before startup` | the roster or one of its accounts is already claimed. Run `node tools/m59-which.mjs`; if that is the broker you meant to use, attach with `m59-mcp-attach.mjs`. |
 | `reroll` says "no character came back" | `IsFirstTime()` returned false. The broker zeros both `piLastLoginTime` and `piLast_Restart_time` via the admin socket before connecting — if that step fails, reroll will fail silently. Check the admin socket is reachable. |
 | `reroll` says the server substituted junk | the request was rejected silently. Do not re-roll anything real until it passes on a spare. |
 | channel logs are 0 bytes for ever | `[Channel] Flush` is `No`. See above. |
@@ -453,7 +455,34 @@ and the fleet page at **http://127.0.0.1:8902/fleet**.
 | a shortcut opens the client at the login dialog | its account and password are stale — re-run `node tools/setup.mjs shortcuts` after any re-roll. |
 | a shortcut logs in and the broker stops driving | expected: one connection per character. Regenerate with `--proxy`. |
 | a `.desktop` will not start from the file manager | it is not marked trusted. `--desktop` does that on copy; otherwise right-click → Allow Launching. |
-| `Only one broker may hold the fleet` | delete `substrate/fleet-state.json.lock` **only** if the pid it names is genuinely gone. |
+| broker reports a fleet/account lock conflict | use `m59-which.mjs` to find the owner. An exact-roster restart can adopt guarded keepers; a lab or alias roster cannot. A stale pre-guard claim needs the one-time migration below. |
+
+A dead broker PID does not prove that its keeper children or account sessions are gone.
+New claims record each keeper PID in both the exact fleet and account locks, so an
+exact-roster broker restart can atomically adopt verified survivors while lab and copied
+rosters remain refused. Never delete a live or guarded lock.
+
+Claims from brokers predating keeper guards fail closed. For the first restart after this
+upgrade, verify the selected fleet and exact roster, then give that standard broker the
+one-time migration override:
+
+```powershell
+$env:M59_ALLOW_UNGUARDED_TAKEOVER = '1'
+node tools/m59-service.mjs start --fleet 'your-fleet-name'
+Remove-Item Env:M59_ALLOW_UNGUARDED_TAKEOVER
+```
+
+On Linux, scope it to the one command:
+
+```bash
+M59_ALLOW_UNGUARDED_TAKEOVER=1 node tools/m59-service.mjs start --fleet 'your-fleet-name'
+```
+
+The override is broker-only. For each expected agent, the broker reads `/health`, stops
+the exact legacy keeper PID it reports, waits for positive death, and only then starts a
+replacement whose PID must be installed in both guarded claims before login. If that PID
+does not stop, the replacement is refused. Remove the override after the migration; never
+use it for a lab or copied/alias roster.
 
 Never call the broker's `leave` tool on a fleet you care about: it drops the
 roster, and the roster is the only record of the passwords.

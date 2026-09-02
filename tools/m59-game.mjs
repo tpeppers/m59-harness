@@ -11,8 +11,7 @@
 // The broker imports Session from here:
 //   import { Session, Recorder } from './m59-game.mjs';
 
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
@@ -24,7 +23,7 @@ import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPat
          from './m59-map.mjs';
 import { CLIENT_FINENESS, elideLoops, protocolToClient, loadRoo, buildAllRoomGeometry, sharedRoomGeometry,
          MAX_STEP_HEIGHT, MIN_NOMOVEON, PLAYER_HEIGHT,
-         lanePastBodies } from './m59-roo.mjs';
+         lanePastBodies, perpWalkPastBodies, keepRightAim } from './m59-roo.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 // THE GATE THAT WAS NEVER WIRED IN. `traversable()` is the only thing that honours a
 // declaration's `requires: {running: true}`, and until now this module was imported by
@@ -41,6 +40,7 @@ import * as bankbook from './m59-bank.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
+import { Recorder } from './m59-recorder.mjs';
 
 // ── IMPORTS THE PORTED SESSION NEEDS ────────────────────────────────────────────
 //
@@ -90,10 +90,6 @@ import * as skills from './m59-skills.mjs';
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
-const RECORD_DIR = process.env.M59_RECORD_DIR ||
-  fileURLToPath(new URL('../substrate/recordings/', import.meta.url));
-const RECORD_WINDOW_MS = Number(process.env.M59_RECORD_WINDOW_MS || 120_000);
-const RECORD_KEEP = Number(process.env.M59_RECORD_KEEP || 15);
 // Facing coalescing tolerance (degrees) for the turn-before-move in walkTo. A player only
 // turns when the heading changes; we suppress the per-step re-face that pushed us over the
 // server's 5-packet/s throttle. See docs/packet-throttle.md.
@@ -347,10 +343,16 @@ let worldMap = loadMap();
 // Attach baked step masks so pathfinding uses the mover's own geometry
 // (fine BSP) instead of the coarse grid (monster perspective).
 import { attachStepMasks } from './m59-routes.mjs';
+let geometryStartupMode = 'eager';
 try {
-  const masks = attachStepMasks(worldMap);
-  if (masks.attached > 0) {
-    console.error(`[routes] ${masks.attached} room(s) planning on the mover's own geometry` +
+  const masks = attachStepMasks(worldMap, {
+    lazy: process.env.M59_RUNTIME_PROFILE === 'lab',
+  });
+  geometryStartupMode = masks.lazy ? 'lazy' : 'eager';
+  const usableMasks = (masks.attached ?? 0) + (masks.deferred ?? 0);
+  if (usableMasks > 0) {
+    console.error(`[routes] ${usableMasks} room(s) planning on the mover's own geometry` +
+      (masks.deferred ? ` (${masks.deferred} deferred until first room use)` : '') +
       (masks.refused ? `, ${masks.refused} mask(s) refused as the wrong size` : ''));
   }
 } catch (e) {
@@ -372,6 +374,7 @@ try {
                 `, ${worldMap.__reverse?.size ?? 0} rooms (off the first tick)`);
 } catch (e) {
   // A failure here means the lazy build will just happen on first use, as before.
+  geometryStartupMode = 'eager';
   console.error(`[routes] startup reverse-edge build failed (${e.message}); will build lazily on first use`);
 }
 
@@ -380,84 +383,16 @@ try {
 // fromJSON (~tens of ms each) — the ~12s half of the cold-start stall. Building them all
 // at startup means the first tick does no geometry parsing. Same rationale as the
 // reverse-edge build above: a pure, idempotent, complete build scheduled off the tick.
-try {
-  const t0 = Date.now();
-  const n = buildAllRoomGeometry(worldMap);
-  console.error(`[routes] ${n} room geometries parsed at startup in ${Date.now() - t0}ms` +
-                ` (off the first tick)`);
-} catch (e) {
-  console.error(`[routes] startup geometry build failed (${e.message}); will parse lazily on first use`);
-}
-
-// ---------------------------------------------------------------- recorder
-class Recorder {
-  constructor(name) {
-    this.name = String(name).replace(/[^A-Za-z0-9_-]/g, '_');
-    this.enabled = true;
-    this.buf = [];
-    this.window = null;
-    this.file = null;
-    this.written = 0;
-    this.dropped = 0;
-    try { mkdirSync(RECORD_DIR, { recursive: true }); } catch { this.enabled = false; }
-    this.timer = setInterval(() => this.flush(), 2000);
-    this.timer.unref?.();
-  }
-
-  line(kind, data) {
-    if (!this.enabled) return;
-    // Bound the in-memory buffer: a fight produces a burst, and a stalled disk
-    // must never become a memory leak.
-    if (this.buf.length > 5000) { this.dropped++; return; }
-    this.buf.push(JSON.stringify({ at: Date.now(), kind, ...data }));
-  }
-
-  currentFile() {
-    const w = Math.floor(Date.now() / RECORD_WINDOW_MS);
-    if (w !== this.window) {
-      this.window = w;
-      this.file = join(RECORD_DIR, `${this.name}-${w}.jsonl`);
-      this.prune();
-    }
-    return this.file;
-  }
-
-  // Keep only the most recent RECORD_KEEP windows for this character.
-  prune() {
-    try {
-      const mine = readdirSync(RECORD_DIR)
-        .filter(f => f.startsWith(this.name + '-') && f.endsWith('.jsonl'))
-        .sort();
-      for (const f of mine.slice(0, Math.max(0, mine.length - RECORD_KEEP)))
-        try { unlinkSync(join(RECORD_DIR, f)); } catch { /* raced with another prune */ }
-    } catch { /* directory vanished; next write recreates it */ }
-  }
-
-  flush() {
-    if (!this.enabled || !this.buf.length) return;
-    const lines = this.buf.splice(0, this.buf.length).join('\n') + '\n';
-    try { appendFileSync(this.currentFile(), lines); this.written += lines.length; }
-    catch { this.enabled = false; }
-  }
-
-  stop() { this.flush(); if (this.timer) clearInterval(this.timer); }
-
-  // The tail, for debugging. Reads back across windows, newest last.
-  tail(limit = 200, kinds = null) {
-    this.flush();
-    const want = kinds?.length ? new Set(kinds) : null;
-    let out = [];
-    try {
-      const mine = readdirSync(RECORD_DIR)
-        .filter(f => f.startsWith(this.name + '-') && f.endsWith('.jsonl')).sort();
-      for (const f of mine.slice(-4)) {
-        for (const l of readFileSync(join(RECORD_DIR, f), 'utf8').split('\n')) {
-          if (!l) continue;
-          try { const e = JSON.parse(l); if (!want || want.has(e.kind)) out.push(e); } catch { /* torn line */ }
-        }
-      }
-    } catch { /* nothing recorded yet */ }
-    return out.slice(-limit);
+if (geometryStartupMode === 'lazy') {
+  console.error('[routes] lab room geometry will decode lazily on first room use');
+} else {
+  try {
+    const t0 = Date.now();
+    const n = buildAllRoomGeometry(worldMap);
+    console.error(`[routes] ${n} room geometries parsed at startup in ${Date.now() - t0}ms` +
+                  ` (off the first tick)`);
+  } catch (e) {
+    console.error(`[routes] startup geometry build failed (${e.message}); will parse lazily on first use`);
   }
 }
 
@@ -898,6 +833,10 @@ const PROVED_HOP_MAX_SQUARES = Number(process.env.M59_PROVED_HOP_MAX || 13);
 // No safety margin on purpose. With a body dead centre in a one-square corridor the passable
 // band is y 1871.5..1872 — half a unit wide — and any margin at all closes it. Aiming exactly
 // at the limit and letting the mover's own collision resolve the rest is what a person does.
+// Keep-right lanes in corridors (see keepRightAim in m59-roo.mjs). On by default for every
+// fleet; M59_KEEP_RIGHT=0 is the only way off, because a rule of the road only works when
+// every keeper follows it.
+const KEEP_RIGHT_OFF = process.env.M59_KEEP_RIGHT === '0';
 const BODY_CLEARANCE_KOD =
   Number(process.env.M59_BODY_CLEARANCE ?? (MIN_NOMOVEON * KOD_FINENESS / CLIENT_FINENESS));
 // HOW FINELY A LEG IS RESOLVED AGAINST BODIES, and how near counts as arriving. Both are
@@ -1860,7 +1799,15 @@ class Session {
       if (ev.kind === 'stat' && ev.name === 'health') this.noteHealth(ev);
     };
     if (character) c.wantName = character;
-    await c.login(account, password);
+    try {
+      await c.login(account, password);
+    } catch (error) {
+      // A failed login never becomes this.client, so nobody else can close its socket.
+      // Reconnect backoff would otherwise leak one connected/stalled socket per attempt.
+      try { c.stopKeepalive?.(); } catch {}
+      try { c.sock?.destroy?.(); } catch {}
+      throw error;
+    }
     this.client = c;
     this.world = new World(c, worldMap);
 
@@ -3020,6 +2967,41 @@ class Session {
 
   // COORDINATE CONTRACT: the square is `(row,col)`; `from` and the returned aim
   // carry named `{x,y}` values in kod wire units.
+  // THE LANE, in wire units: where `aimInto` should aim inside a square when the floor there
+  // is a corridor — see keepRightAim. Null on wide floor, when the geometry cannot be asked,
+  // or when the corridor is too narrow to shift in (the stand point is then the only lane).
+  keepRightLane(from, home) {
+    if (KEEP_RIGHT_OFF) return null;
+    const geo = this.world?.geometry;
+    if (!geo?.floorBaseAtClient || !from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) return null;
+    const hasFloor = (x, y) => { try {
+      return Number.isFinite(geo.floorBaseAtClient(protocolToClient(x), protocolToClient(y)));
+    } catch { return false; } };
+    try {
+      const lane = keepRightAim({ fromX: from.x, fromY: from.y, toX: home.x, toY: home.y, hasFloor });
+      if (!lane?.corridor || !(lane.offset > 0)) return null;
+      return { x: Math.round(lane.x), y: Math.round(lane.y), lane: 'right',
+               width: lane.width, offset: lane.offset };
+    } catch { return null; }
+  }
+  // Counted per session and written to the tactics ledger ONCE PER ROOM, so a tour says which
+  // corridors were laned without a row per step.
+  noteLane(aim, row, col) {
+    const room = Number(this.world?.room?.num ?? 0);
+    this.laneStats ??= { aims: 0, rooms: new Set() };
+    this.laneStats.aims++;
+    if (!this.laneStats.rooms.has(room)) {
+      this.laneStats.rooms.add(room);
+      try {
+        recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room,
+                       tactic: 'keep_right', trigger: 'corridor', worked: true, ms: 0, hp_lost: 0,
+                       attempted: true,
+                       note: `first lane in this room at ${row},${col}: corridor ${aim.width} wide, ` +
+                             `aiming ${aim.offset.toFixed(1)} right of the stand point` });
+      } catch { /* evidence, not a dependency */ }
+    }
+    return aim;
+  }
   aimInto(from, row, col) {
     const geo = this.world?.geometry;
     const half = KOD_FINENESS >> 1;
@@ -3075,7 +3057,14 @@ class Session {
     // lifted out of this file by text and evaluated against fixtures that have only what they
     // inject, and a bare call is a TypeError rather than a falsy answer.
     const bodies = typeof this.bodiesInSquare === 'function' ? this.bodiesInSquare(row, col) : [];
-    if (!bodies.length && reaches(home.x, home.y)) return home;
+    // KEEP RIGHT IN A CORRIDOR, bodies or not. Guarded like the rest of this method: it is
+    // lifted by text into fixtures that inject only what they have.
+    const lane = typeof this.keepRightLane === 'function' ? this.keepRightLane(from, home) : null;
+    const laned = aim => typeof this.noteLane === 'function' ? this.noteLane(aim, row, col) : aim;
+    if (!bodies.length) {
+      if (lane && reaches(lane.x, lane.y)) return laned(lane);
+      if (reaches(home.x, home.y)) return home;
+    }
 
     // A quarter square in each direction, ordered by how far they move the aim — the
     // nearest usable point to the one the router priced is the one that keeps the plan
@@ -3120,6 +3109,9 @@ class Session {
       for (let dx = -reach; dx <= reach; dx += e)
         for (let dy = -reach; dy <= reach; dy += e) fine.push([dx, dy]);
       const clearOf = (wx, wy) => Math.min(...bodies.map(b => Math.hypot(wx - b.x, wy - b.y)));
+      // With a body in the square the lane is still the first choice when it clears the body:
+      // the body is usually the oncoming character, and the lane is how we pass it.
+      if (lane && clearOf(lane.x, lane.y) >= BODY_CLEARANCE_KOD && reaches(lane.x, lane.y)) return laned(lane);
       // HOLD A LINE RATHER THAN RE-MAXIMISING EVERY SQUARE.
       //
       // Taking the furthest point from the body in each square independently produces a
@@ -3657,9 +3649,13 @@ class Session {
     // the braking version this whole mechanism exists to replace, and it was still running
     // one layer up. `atStep` is kept current per leg so `shelterAhead` can refuse anything
     // already passed; behind is where the character has already been bitten.
+    // `onward` is the last planned step — the square this crossing leaves by — so the
+    // survival ladder can judge a refuge against the door rather than against where the body
+    // happens to be standing. Kept even when the route offers no shelter of its own.
+    const onward = planSteps.length ? { row: planSteps[planSteps.length - 1].row, col: planSteps[planSteps.length - 1].col } : null;
     this.activeShelter = shelter?.spots?.length
-      ? { spots: shelter.spots, maxDetour: shelter.maxDetour ?? 5, atStep: 0 }
-      : null;
+      ? { spots: shelter.spots, maxDetour: shelter.maxDetour ?? 5, atStep: 0, onward }
+      : (onward ? { spots: [], maxDetour: shelter?.maxDetour ?? 5, atStep: 0, onward } : null);
 
     while (remaining.length && legs + singles < budget) {
       if (this.activeShelter) this.activeShelter.atStep = planSteps.length - remaining.length;
@@ -5008,6 +5004,8 @@ class Session {
 
       if (!progressed) {
         stalls++;
+        // Nine headings refused in a row sent nothing; let the timers and the HTTP server run.
+        await new Promise(res => setTimeout(res, 40));
         // Halve the reach and try again: a tight gap may only admit a short step.
         // Floor at 24 (37% of a cell) — below that the walk burns steps
         // without meaningful progress, and the budget was calculated for
@@ -5237,6 +5235,53 @@ class Session {
     } catch { return null; }
   }
 
+
+  /**
+   * THE PERP WALK, FOR THE SAME BLOCKED STEP — see perpWalkPastBodies. The axis is the
+   * direction of the blocked step, extended three squares so a picket just beyond the
+   * blocked square is measured with it; the bodies are everything in the room that blocks
+   * movement; the floor test is the room's own BSP at a point.
+   */
+  perpWalkAroundBodies(was, blocked, geo, c) {
+    try {
+      if (typeof geo?.floorBaseAtClient !== 'function') return null;
+      const me = c?.self;
+      if (!me) return null;
+      const to = geo.standPointWire?.(blocked.row, blocked.col);
+      if (!to) return null;
+      const fromX = me.x ?? (me.col * KOD_FINENESS + 32), fromY = me.y ?? (me.row * KOD_FINENESS + 32);
+      const dx = to.x - fromX, dy = to.y - fromY, len = Math.hypot(dx, dy) || 1;
+      const reach = Math.max(len, 3 * KOD_FINENESS);
+      const toX = fromX + dx / len * reach, toY = fromY + dy / len * reach;
+      const bodies = [...(c.room?.objects?.values?.() ?? [])]
+        .filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0)
+                     && (Number.isFinite(o.x) || Number.isFinite(o.col)))
+        .map(o => ({ x: o.x ?? (o.col * KOD_FINENESS + 32),
+                     y: o.y ?? (o.row * KOD_FINENESS + 32),
+                     name: c.rsc?.get?.(o.nameRsc) ?? o.nameRsc ?? '?' }));
+      if (!bodies.length) return null;
+      const hasFloor = (x, y) => { try {
+        return Number.isFinite(geo.floorBaseAtClient(protocolToClient(x), protocolToClient(y)));
+      } catch { return false; } };
+      // THE PRECHECK IS THE MOVER'S OWN TRACER, walls and bodies both, in client units. A
+      // line it refuses here would have been refused on the wire; asking first costs nothing
+      // and saves the packet — and the ledger still records the refusal as a perp_walk row.
+      const obstacles = [...(c.room?.objects?.values?.() ?? [])]
+        .filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0) && Number.isFinite(o.x) && Number.isFinite(o.y))
+        .map(o => ({ id: o.id, x: protocolToClient(o.x), y: protocolToClient(o.y) }));
+      const segmentClear = typeof geo.traceFineMoveClient === 'function'
+        ? (ax, ay, bx, by) => {
+            const r = geo.traceFineMoveClient(protocolToClient(ax), protocolToClient(ay),
+                                              protocolToClient(bx), protocolToClient(by),
+                                              { slide: false, obstacles, roomFlags: c.room?.flags ?? 0,
+                                                overrideDepths: c.room?.overrideDepths ?? null });
+            if (!r || r.available === false) return null;          // no opinion: carry on
+            return { ok: !!r.arrived && !r.blocked, reason: r.reason ?? null };
+          }
+        : null;
+      return perpWalkPastBodies({ fromX, fromY, toX, toY, bodies, hasFloor, segmentClear });
+    } catch { return null; }
+  }
 
   sidestepAround(was, blocked, { blockedEdges, occupied, geo, prefer = 0,
                                  blockerIsPlayer = false }) {
@@ -5765,6 +5810,17 @@ class Session {
 
     let queue = plan.steps.slice();
     let taken = pivotLegs, replans = 0;
+    // ITERATIONS THAT SENT NOTHING. A step the validator refuses returns in a tenth of a
+    // millisecond with no packet; a replan costs a few; and `learned` — a newly blamed edge
+    // — exempts the iteration from the replan budget. In a room with thousands of edges that
+    // is a loop that runs at hundreds of iterations a second, sends nothing, and never
+    // yields, so the keepalive timer and the HTTP server starve, the server logs the session
+    // out at 30 s of silence, and the journey is lost. Measured on 2026-09-01 in the Sewers
+    // of Barloque: four keepers at r59c35, 99% of a core each, sent_per_sec 0, and no
+    // ledger rows because none of these branches writes one. Two bars: yield to the event
+    // loop every few packetless iterations so the timers run, and give up out loud after a
+    // few hundred, because a walk that has not sent a packet in that long is not walking.
+    let packetless = 0;
     // A STEP A MONSTER REFUSED IS NOT A STEP THE ROUTE SPENT.
     //
     // `maxSteps` exists to stop a walk that is going nowhere. A body in the way is going
@@ -5883,7 +5939,11 @@ class Session {
     let retreatedFromBodies = false, bodyRetreats = 0;
     const blockedBy = new Set();       // squares a body was standing on
     const sidestepped = new Set();     // squares we have already tried to go round, once each
-    const lanedPast = new Set();      // squares we have already tried to thread past, once each
+    const lanedPast = new Set();
+    const perpWalked = new Set();
+    const blinkAsked = new Set();
+    const killTried = new Set();
+    const blockedSince = new Map();      // squares we have already tried to thread past, once each
     // HOW OFTEN THE MOVER PUT US SOMEWHERE THE PLAN DID NOT ASK FOR. See the note where
     // this is incremented; past a handful it means the square-by-square plan is not the
     // thing being walked, and continuing to replan it is how a room takes three minutes.
@@ -6094,6 +6154,25 @@ class Session {
       // The re-aim used to be duplicated here. `step` owns it now — it is the primitive every
       // fall passes through, and two homes for one heuristic is how they drift apart.
       const r = await this.step(next.col, next.row, { beforeMutation, fall: !!next.fall });
+      if (r?.moved || r?.reason === 'raw_move_rejected' || (r?.travelled ?? 0) > 0) packetless = 0;
+      else {
+        packetless++;
+        if (packetless % 25 === 0) await new Promise(res => setTimeout(res, 60));
+        if (packetless >= 400) {
+          try {
+            recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
+                           room: Number(this.world?.room?.num ?? 0),
+                           tactic: 'walk_spin', trigger: 'no_packets', worked: false, ms: 0, hp_lost: 0,
+                           attempted: false,
+                           note: `${packetless} consecutive step attempts refused locally without a packet at ` +
+                                 `${next.row},${next.col} (last reason ${r?.reason ?? '?'}); walk abandoned` });
+          } catch { /* evidence, not a dependency */ }
+          return { arrived: false, reason: 'spinning_without_packets',
+                   blocked_at: { col: next.col, row: next.row }, steps: taken, replans,
+                   note: `${packetless} consecutive step attempts refused locally without a packet — ` +
+                         'the room refuses every move from here; let the caller re-plan from a different square' };
+        }
+      }
       taken += hop;
       if (r.left_room)
         return { arrived: false, left_room: true, steps: taken, note: 'a step crossed the room edge' };
@@ -6480,11 +6559,14 @@ class Session {
           // one-square corridor the pass is a different fine y inside the SAME square, which
           // nothing above can express. Tried once per blocked square, before the square is
           // written off, and a refusal simply falls through to the recovery below.
+          let laneTried = false, laneMoved = false;
           if (!lanedPast.has(`${next.row},${next.col}`)) {
             lanedPast.add(`${next.row},${next.col}`);
             const lane = this.laneAroundBody(was, next, geo, c);
             if (lane) {
+              laneTried = true;
               const moved = await this.stepFine(lane.x, lane.y).catch(() => null);
+              laneMoved = !!moved?.moved;
               recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
                              room: Number(this.world?.room?.num ?? 0),
                              tactic: 'body_lane', trigger: 'no_side_to_step_to',
@@ -6495,6 +6577,177 @@ class Session {
                 pulled = null; stalledOn = null; stalledTimes = 0;
                 queue.unshift(next);
                 continue;
+              }
+            }
+          }
+          // THE PERP WALK, when the lane found nothing or its one step was refused. Tried once
+          // per blocked square, like the lane, and every attempt is a `perp_walk` row in the
+          // tactics ledger — side, offset, slack, how far it got — because the operator asked
+          // for this as an experiment with telemetry, and an experiment that cannot be read
+          // back is an opinion. See perpWalkPastBodies for the geometry.
+          if (!laneMoved && !perpWalked.has(`${next.row},${next.col}`)) {
+            perpWalked.add(`${next.row},${next.col}`);
+            const perp = this.perpWalkAroundBodies(was, next, geo, c);
+            const who = this.client?.me?.name ?? this.name ?? null;
+            const roomNum = Number(this.world?.room?.num ?? 0);
+            if (perp?.points?.length === 2) {
+              const t0 = Date.now();
+              const hpNow = () => { try { return c.vitals?.()?.health?.value ?? null; } catch { return null; } };
+              const hp0 = hpNow();
+              const [p0, p1] = perp.points;
+              const on = await this.stepFine(p0.x, p0.y).catch(e => ({ moved: false, reason: e.message }));
+              const ran = on?.moved
+                ? await this.walkFine(p1.x, p1.y, { maxSteps: 16, stride: 32, arriveWithin: 12,
+                                                    movementGeneration, controlToken })
+                        .catch(e => ({ arrived: false, reason: e.message }))
+                : null;
+              const worked = !!ran?.arrived;
+              const hp1 = hpNow();
+              recordTactic({ character: who, room: roomNum,
+                             tactic: 'perp_walk', trigger: laneTried ? 'lane_refused' : 'no_lane',
+                             worked, ms: Date.now() - t0, attempted: true,
+                             hp_lost: (hp0 != null && hp1 != null) ? Math.max(0, hp0 - hp1) : 0,
+                             note: `side ${perp.side > 0 ? '+' : '-'} offset ${perp.offset.toFixed(1)} ` +
+                                   `slack ${perp.slack.toFixed(2)} past ${perp.bodies} body(ies) ` +
+                                   `${p0.x},${p0.y} -> ${p1.x},${p1.y}: ` +
+                                   (worked ? `arrived in ${ran.steps ?? '?'} step(s)`
+                                           : on?.moved ? `walk stopped: ${ran?.reason ?? ran?.note ?? 'did not arrive'}`
+                                                       : `sidestep refused: ${on?.reason ?? 'no reason'}`) });
+              if (worked) {
+                // Squares the walk has already passed are not aimed at again: anything whose
+                // centre projects behind the body along the walk axis is dropped, and the
+                // ordinary walker carries on from the far point toward what is left.
+                const meNow = c.self;
+                const ahead = sq => meNow
+                  ? ((sq.col * KOD_FINENESS + 32) - meNow.x) * perp.axis.ux
+                    + ((sq.row * KOD_FINENESS + 32) - meNow.y) * perp.axis.uy
+                  : 0;
+                pulled = null; stalledOn = null; stalledTimes = 0;
+                if (ahead(next) > -(KOD_FINENESS >> 1)) queue.unshift(next);
+                while (queue.length > 1 && ahead(queue[0]) < -(KOD_FINENESS >> 1)) queue.shift();
+                continue;
+              }
+            } else if (perp?.why) {
+              recordTactic({ character: who, room: roomNum, tactic: 'perp_walk',
+                             trigger: laneTried ? 'lane_refused' : 'no_lane',
+                             worked: false, ms: 0, hp_lost: 0, attempted: false,
+                             note: `${perp.bodies} body(ies) in the way; ${perp.why}` });
+            }
+          }
+          // BLINK, FROM THE BLOCKED STEP. The strategies were only ever asked from the
+          // room-crossing give-up, which a jam in the middle of a route never reaches — tour 5
+          // walked through the 584 pipe with blink enabled for everyone and produced no
+          // blink_escape row at all. So the same question is put here, once per blocked
+          // square, after the sidestep, the lane and the perp walk have all had their turn and
+          // the square has held us for the strategy's own patience. The answer's need_safe_spot
+          // is honoured (a wall first, via the keeper's ladder), and a teleport that lands is
+          // followed by a REPLAN from where the body now is, not by the old queue.
+          const stuckKey = `${next.row},${next.col}`;
+          if (!blockedSince.has(stuckKey)) blockedSince.set(stuckKey, Date.now());
+          if (!blinkAsked.has(stuckKey) && typeof this._askStrategies === 'function') {
+            const stuckMs = Date.now() - blockedSince.get(stuckKey);
+            const answer = await this._askStrategies('whenStuck', {
+              room: this.world?.room ?? null, geo, self: c.self ?? null,
+              goal: { row, col },
+              route: [next, ...queue].filter(Boolean).map(sq => ({ row: sq.row, col: sq.col })),
+              bodies: typeof this._blockingBodies === 'function' ? this._blockingBodies() : [],
+              blink: typeof this._blinkPointHere === 'function' ? this._blinkPointHere() : null,
+              vitals: c.vitals?.() ?? null, stuck_ms: stuckMs, underFire: !!underFire,
+              agent: this.name ?? this.client?.me?.name ?? null, from: 'walker',
+            }).catch(() => null);
+            if (answer?.answer?.do === 'blink') {
+              blinkAsked.add(stuckKey);
+              const who2 = this.client?.me?.name ?? this.name ?? null;
+              let wall = null;
+              if (answer.answer.need_safe_spot) {
+                const pilot = autopilotIfAny(this.name);
+                wall = pilot && typeof pilot.takeSafeSpot === 'function'
+                  ? await pilot.takeSafeSpot('a wall to blink from', null, { source: 'travel' })
+                               .catch(e => ({ took: false, why: e.message }))
+                  : { took: false, why: 'no autopilot to take a wall with' };
+              }
+              // The nearest wall may have been the exit (see takeSafeSpot): then we are in
+              // another room, every attacker is behind us, and there is nothing to cast for.
+              if (wall?.via === 'exit' || wall?.crossed) {
+                recordTactic({ character: who2, room: Number(this.world?.room?.num ?? 0),
+                               tactic: 'blink_escape', trigger: `${answer.strategy} (walker)`,
+                               worked: true, ms: 0, hp_lost: 0, attempted: false,
+                               note: `blocked at ${next.row},${next.col} for ${Math.round(stuckMs / 1000)}s; ` +
+                                     `the nearest wall was the exit and it was taken; no cast needed` });
+                try { answer.answer.settled?.(true, 'took the exit instead', null); } catch { /* evidence, not a dependency */ }
+                return { arrived: false, left_room: true, reason: 'took_the_exit',
+                         blocked_at: { col: next.col, row: next.row }, steps: taken, replans };
+              }
+              const castable = !answer.answer.need_safe_spot || !!wall?.took;
+              const out = castable
+                ? await this.blinkOut({ expect: answer.answer.expect }).catch(() => null)
+                : { cast: false, arrived: false, why: `did not cast: no wall to cast from (${wall?.why ?? 'unknown'})` };
+              recordTactic({ character: who2, room: Number(this.world?.room?.num ?? 0),
+                             tactic: 'blink_escape', trigger: `${answer.strategy} (walker)`,
+                             worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: castable,
+                             note: `blocked at ${next.row},${next.col} for ${Math.round(stuckMs / 1000)}s; ${answer.answer.why}; ` +
+                                   (answer.answer.need_safe_spot ? (wall?.took ? 'took a wall first; ' : `no wall (${wall?.why ?? '?'}); `) : '') +
+                                   `${out?.why ?? 'no result'}` });
+              try { answer.answer.settled?.(!!out?.arrived, out?.why ?? null, out?.at ?? null); } catch { /* evidence, not a dependency */ }
+              if (out?.arrived) {
+                const here = c.self;
+                const re = here ? geo.path(here.row, here.col, row, col,
+                                           { blockedEdges, threats: this.threatsHere(), clearance }) : null;
+                if (re?.found) {
+                  queue = re.steps.slice();
+                  pulled = undefined; stalledOn = null; stalledTimes = 0;
+                  continue;
+                }
+              }
+            }
+          }
+          // KILL AND CONTINUE, THE LAST RESORT. A monster standing on the next square that the
+          // character outranks — the same engagement rule the hunt uses, `refuseEngagement`
+          // answering null — is fought from here, in the keeper's own bounded rounds, and the
+          // square is tried again when it falls or moves. Never a player, never above the
+          // flee line, never twice for the same square, and every attempt is a
+          // kill_and_continue row: what stood there, how many rounds, whether it cleared.
+          if (!killTried.has(stuckKey)) {
+            const blocker = [...(c.room?.objects?.values?.() ?? [])].find(o =>
+              o.id !== c.selfId && o.col === next.col && o.row === next.row
+              && blocksMovement(o.flags ?? 0) && !(o.flags & OF.PLAYER));
+            const pilot = blocker ? autopilotIfAny(this.name) : null;
+            if (blocker && pilot && typeof pilot.fightInPlace === 'function') {
+              killTried.add(stuckKey);
+              const name = c.rsc?.get?.(blocker.nameRsc) ?? blocker.name ?? null;
+              const who3 = this.client?.me?.name ?? this.name ?? null;
+              const roomNum3 = Number(this.world?.room?.num ?? 0);
+              const refusal = typeof pilot.refuseEngagement === 'function' ? pilot.refuseEngagement(name) : { why: 'no engagement rule' };
+              const hpFrac = () => { const v = c.vitals?.(); return v?.health?.max ? v.health.value / v.health.max : null; };
+              const fleeAt = (() => { try { return pilot.safety?.().fleeAt ?? 0.4; } catch { return 0.4; } })();
+              if (refusal || (hpFrac() ?? 0) < fleeAt) {
+                recordTactic({ character: who3, room: roomNum3, tactic: 'kill_and_continue', trigger: 'blocked_by_monster',
+                               worked: false, ms: 0, hp_lost: 0, attempted: false,
+                               note: `${name ?? 'a monster'} on ${next.row},${next.col}: ` +
+                                     (refusal ? `not fightable — ${refusal.why}` : `health ${Math.round((hpFrac() ?? 0) * 100)}% is under the flee line`) });
+              } else {
+                const t0 = Date.now(), hp0 = c.vitals?.()?.health?.value ?? null;
+                let rounds = 0, killed = false, cleared = false;
+                for (let bout = 0; bout < 3; bout++) {
+                  if (this.movementWasCancelled(movementGeneration, controlToken)) break;
+                  const f = await pilot.fightInPlace(blocker, name).catch(e => ({ killed: false, note: e.message }));
+                  rounds += 3;
+                  killed = !!f?.killed;
+                  const still = [...(c.room?.objects?.values?.() ?? [])].some(o => o.id === blocker.id && o.col === next.col && o.row === next.row);
+                  cleared = killed || !still;
+                  if (cleared || (hpFrac() ?? 0) < fleeAt) break;
+                }
+                const hp1 = c.vitals?.()?.health?.value ?? null;
+                recordTactic({ character: who3, room: roomNum3, tactic: 'kill_and_continue', trigger: 'blocked_by_monster',
+                               worked: cleared, ms: Date.now() - t0, attempted: true,
+                               hp_lost: (hp0 != null && hp1 != null) ? Math.max(0, hp0 - hp1) : 0,
+                               note: `${name ?? 'a monster'} on ${next.row},${next.col}: ${rounds} round(s), ` +
+                                     (killed ? 'killed it' : cleared ? 'it moved off the square' : 'still standing there') });
+                if (cleared) {
+                  pulled = null; stalledOn = null; stalledTimes = 0;
+                  queue.unshift(next);
+                  continue;
+                }
               }
             }
           }
@@ -6519,8 +6772,12 @@ class Session {
           // thing move, not to undo the journey.
           if (underFire && !retreatedFromBodies && typeof this.retreatAlongBreadcrumbs === 'function') {
             retreatedFromBodies = true;
+            // A BODY, not any object: a logoff ghost is an ActiveObject with the kod's default
+            // flags (MOVEON_YES — no collision in the client), and so is an item on the ground.
+            // Counting them here made a mushroom on the next square look like a crowd that
+            // never left, and the walker backed off three crumbs for it every time.
             const stillThere = () => !!(c.room?.objects && [...c.room.objects.values()].some(o =>
-              o.id !== c.selfId && o.col === next.col && o.row === next.row));
+              o.id !== c.selfId && o.col === next.col && o.row === next.row && blocksMovement(o.flags ?? 0)));
             const back = await this.retreatAlongBreadcrumbs({
               maxCrumbs: Number(process.env.M59_BODY_RETREAT_CRUMBS || 3),
               until: () => !stillThere(),
@@ -7301,6 +7558,8 @@ class Session {
           recentred = true;
           if (await this.recentreInSquare()) continue;
         }
+        // A refused step costs no packet and no time; without this the slip loop is a spin.
+        if (!r?.moved && !r?.left_room) await new Promise(res => setTimeout(res, 30));
         if (++slips > maxSlips) {
           skipped++; missed++;
           // CONSECUTIVE, WHICH IS WHAT THE PARAGRAPH ABOVE ALWAYS CLAIMED IT WAS.
@@ -7343,6 +7602,22 @@ class Session {
         i += RAIL_STALL_JUMP;
       }
     }
+    // A LINE THE BODY NEVER ADVANCED ON WAS NOT RIDDEN.
+    //
+    // The stall-jump above moves the CURSOR three waypoints at a time so a rail that cannot
+    // be walked from here can be rejoined further on. On a short rail that runs the cursor
+    // off the end in four jumps with the body still standing at the boarding square — and
+    // this returned `railed: true`. The ledger then read "boarded at 1 of 11, followed 6 of
+    // 10, skipped 12 ... ok" forty-six times in room 585 and five times in 578 on the day
+    // the 578 line went straight over a ridge and killed everyone who boarded it; the
+    // evidence said the rail worked and the wall face said otherwise. `furthest` is the
+    // highest waypoint the body actually stood on: index 0 is where it got on, so anything
+    // above that is progress and nothing above it is a slip, whatever the cursor did. The
+    // caller's behaviour is unchanged either way — the ordinary crossing walk still follows —
+    // only the verdict is now the body's rather than the cursor's.
+    if (furthest <= 0 && squares.length > 1)
+      return { railed: false, reason: 'slipped_off_rail', at: Math.min(furthest + 1, squares.length - 1),
+               walked, skipped, missed, note: `the body never stood on a waypoint past the boarding square (cursor skipped ${skipped})` };
     return { railed: true, walked, skipped, missed };
   }
 
@@ -9539,15 +9814,37 @@ class Session {
       return finish(this.cancelledMovement({ tried }));
     if (!roomStillCurrent()) return staleBatch(bestExit);
     if (stuckAnswer?.answer?.do === 'blink') {
-      const out = await this.blinkOut({ expect: stuckAnswer.answer.expect }).catch(() => null);
+      // A WALL BEFORE THE CAST, WHEN THE ANSWER ASKS FOR ONE. `need_safe_spot` was in every
+      // strategy's answer and nothing ever read it, so a character being hit was either
+      // refused outright or asked to stand still for ten seconds in the open. A safe wall is
+      // a square nothing attacks until you attack first: take one, then cast from it. If no
+      // wall can be taken, there is no cast — the ledger says so rather than the Underworld.
+      let wall = null;
+      if (stuckAnswer.answer.need_safe_spot) {
+        const pilot = autopilotIfAny(this.name);
+        wall = pilot && typeof pilot.takeSafeSpot === 'function'
+          ? await pilot.takeSafeSpot('a wall to blink from', null, { source: 'travel' })
+                       .catch(e => ({ took: false, why: e.message }))
+          : { took: false, why: 'no autopilot to take a wall with' };
+      }
+      // The wall may have been the EXIT (see takeSafeSpot): then we are in another room and
+      // there is nothing to cast for; the room-changed guard below reports it.
+      const tookTheExit = !!(wall?.via === 'exit' || wall?.crossed);
+      const castable = (!stuckAnswer.answer.need_safe_spot || !!wall?.took) && !tookTheExit;
+      const out = castable
+        ? await this.blinkOut({ expect: stuckAnswer.answer.expect }).catch(() => null)
+        : { cast: false, arrived: false, why: tookTheExit ? 'did not cast: the nearest wall was the exit and it was taken' : `did not cast: no wall to cast from (${wall?.why ?? 'unknown'})` };
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));
       if (!roomStillCurrent()) return staleBatch(bestExit);
       recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
                      room: Number(this.world?.room?.num ?? 0),
                      tactic: 'blink_escape', trigger: stuckAnswer.strategy,
-                     worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: true,
-                     note: `${stuckAnswer.answer.why}; ${out?.why ?? 'no result'}` });
+                     worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: castable,
+                     note: `${stuckAnswer.answer.why}; ` +
+                           (stuckAnswer.answer.need_safe_spot
+                              ? (wall?.took ? 'took a wall first; ' : `no wall (${wall?.why ?? '?'}); `) : '') +
+                           `${out?.why ?? 'no result'}` });
       // E, AND IT IS THE STRATEGY'S OWN CALLBACK. The predicate recorded what it saw; only
       // the caller knows what happened next, and 'the spell never fizzles' is not the same
       // claim as 'the character is now unstuck'.
@@ -10767,4 +11064,4 @@ class Session {
   }
 }
 
-export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits };
+export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode };

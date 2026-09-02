@@ -19,6 +19,7 @@
 //   blakserv/session.c    GetCRC16BufferList: CRC32, truncated to 16 bits
 
 import net from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { recordSeen } from './m59-trails.mjs';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
@@ -214,8 +215,35 @@ function sysinfo() {
 // characters were caught in one within ten minutes of it shipping.
 const COLLISION_ANIMATION_MS = Number(process.env.M59_COLLISION_ANIMATION_MS || 8000);
 
+// The tick loop declares an in-game session stale after 45s without a byte from
+// the server. Even a continuously transmitting client therefore needs a bounded
+// request which a live server will answer, leaving 15s for that reply to arrive.
+const KEEPALIVE_REPLY_BOUND_MS = 30_000;
+
+const SYSTEM_KEEPALIVE_CLOCK = Object.freeze({
+  now: () => performance.now(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: handle => clearTimeout(handle),
+});
+
+function keepaliveClock(source = SYSTEM_KEEPALIVE_CLOCK) {
+  for (const method of ['now', 'setTimeout', 'clearTimeout']) {
+    if (typeof source?.[method] !== 'function')
+      throw new TypeError(`keepaliveClock.${method} must be a function`);
+  }
+  // Keep method receivers intact so deterministic test clocks can use ordinary methods.
+  return Object.freeze({
+    now: () => source.now(),
+    setTimeout: (callback, delayMs) => source.setTimeout(callback, delayMs),
+    clearTimeout: handle => source.clearTimeout(handle),
+  });
+}
+
 export class M59Client {
-  constructor({ host = '127.0.0.1', port = 5959, verbose = true, resources = null } = {}) {
+  constructor({
+    host = '127.0.0.1', port = 5959, verbose = true, resources = null,
+    keepaliveClock: keepaliveClockSource = null,
+  } = {}) {
     Object.assign(this, { host, port, verbose });
     this.state = 'connecting';      // connecting -> handshake -> login -> game
     // Whether the SERVER's plain `char` is signed -- see gameSecurity(). x86 (the
@@ -237,15 +265,20 @@ export class M59Client {
     this.lookup = id => (this.rsc.has(id) ? this.rsc.get(id) : undefined);
     this.name = id => this.rsc.get(id);
 
-    this.keepaliveTimer = null;      // see startKeepalive — the session dies without it
+    this.keepaliveClock = keepaliveClock(keepaliveClockSource ?? SYSTEM_KEEPALIVE_CLOCK);
+    this.keepaliveTimer = null;      // one idle deadline; see startKeepalive
+    this.keepaliveEveryMs = null;
+    this.keepaliveStartedAt = null;
+    this.keepaliveLastProbeAt = null;
+    this.keepaliveLastRxAt = null;   // monotonic clock domain, unlike public lastRxAt
     this.keepalivePending = 0;       // heartbeat inventory replies still owed to us
+    this.lastTxAt = null;            // monotonic successful-write time, including login
     // Wall-clock (ms) of the last byte received from the server. A live in-game
-    // session receives data continuously — the keepalive's inventory reply alone
-    // guarantees at least one reply per 20s, and a busy room pushes far more. If
-    // this stops advancing while we still believe we are in game, the connection
-    // has gone stale (a "ghost": the client replays its last copy of the world
-    // while the server has moved on, or dropped us). The tick loop's liveness guard
-    // reads this to detect the ghost and force a rejoin. See m59-tick.mjs.
+    // session receives data continuously. Outbound activity defers the 20s idle
+    // heartbeat, but a 30s reply-probe ceiling retains the evidence needed by the
+    // tick loop's 45s ghost guard. If this stops advancing while we still believe
+    // we are in game, the connection has gone stale (a "ghost": the client replays
+    // its last copy of the world while the server has moved on, or dropped us).
     this.lastRxAt = 0;
 
     this.room = { id: null, security: null, flags: 0, overrideDepths: [0, 0, 0, 0],
@@ -698,14 +731,19 @@ export class M59Client {
       });
       this.sock.on('data', d => this.onData(d));
       this.sock.on('error', reject);
-      this.sock.on('close', () => {
-        this.log('connection closed'); this.state = 'closed'; this.stopKeepalive();
-      });
+      this.sock.on('close', () => this._connectionClosed());
     });
+  }
+
+  _connectionClosed() {
+    this.log('connection closed');
+    this.state = 'closed';
+    this.stopKeepalive();
   }
 
   onData(chunk) {
     this.lastRxAt = Date.now();
+    this.keepaliveLastRxAt = Number(this.keepaliveClock.now());
     this.rxBytes = (this.rxBytes ?? 0) + chunk.length;
     this.rxPackets = (this.rxPackets ?? 0) + 1;
     this.buf = Buffer.concat([this.buf, chunk]);
@@ -801,6 +839,10 @@ export class M59Client {
       case AP.GAME:
         this.state = 'game';
         this.log('IN GAME');
+        // startKeepalive() is public and historically worked even when called before
+        // this transition: its interval stayed dormant until game mode. Arm the
+        // one-shot now if a caller installed the policy early.
+        this._armKeepalive();
         break;
     }
   }
@@ -2172,9 +2214,11 @@ export class M59Client {
       out.writeUInt8(this.epoch & 0xff, 6);
       payload.copy(out, HEADER);
       this.sock.write(out);
+      this._outboundActivity();
       return;
     }
     this.sock.write(frame(payload, 0));
+    this._outboundActivity();
   }
 
   sendLogin() {
@@ -2227,21 +2271,101 @@ export class M59Client {
   // this client can read the wire at all. So the heartbeat is BP_REQ_INVENTORY:
   // no parameters (sprocket.c:34), no side effects, and its reply is a free
   // refresh of the inventory we keep anyway.
+  _outboundActivity() {
+    this.lastTxAt = Number(this.keepaliveClock.now());
+    // Outbound and inbound activity only move their deadlines later. Keep an
+    // already-earlier one-shot: when it wakes it will recompute once, avoiding a
+    // clear/allocate pair for every movement packet.
+    if (this.keepaliveEveryMs !== null && this.state === 'game' && this.keepaliveTimer === null)
+      this._armKeepalive();
+  }
+
+  _keepaliveDeadline(now) {
+    const started = Number.isFinite(this.keepaliveStartedAt) ? this.keepaliveStartedAt : now;
+    const lastTx = Number.isFinite(this.lastTxAt) ? this.lastTxAt : started;
+    const lastRx = Number.isFinite(this.keepaliveLastRxAt)
+      ? this.keepaliveLastRxAt
+      : started;
+    // A sent probe temporarily advances this bound so a missing reply cannot create
+    // a zero-delay loop. The 45s liveness guard will close a genuinely dead session.
+    const probeBasis = Number.isFinite(this.keepaliveLastProbeAt)
+      ? Math.max(lastRx, this.keepaliveLastProbeAt)
+      : lastRx;
+    return Math.min(
+      lastTx + this.keepaliveEveryMs,
+      probeBasis + KEEPALIVE_REPLY_BOUND_MS,
+    );
+  }
+
+  _scheduleKeepalive(delayMs) {
+    if (this.keepaliveTimer !== null) {
+      this.keepaliveClock.clearTimeout(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+    if (this.keepaliveEveryMs === null || this.state !== 'game') return;
+
+    let handle = null;
+    const fire = () => {
+      // A cleared timeout may already be queued. Only the currently armed handle owns
+      // the deadline, so stale callbacks cannot create a second heartbeat or timer.
+      if (this.keepaliveTimer !== handle) return;
+      this.keepaliveTimer = null;
+      this._keepaliveDue();
+    };
+    handle = this.keepaliveClock.setTimeout(fire, Math.max(0, delayMs));
+    this.keepaliveTimer = handle;
+    handle?.unref?.();
+  }
+
+  _armKeepalive() {
+    if (this.keepaliveEveryMs === null || this.state !== 'game') return;
+    const now = Number(this.keepaliveClock.now());
+    this._scheduleKeepalive(Math.max(0, this._keepaliveDeadline(now) - now));
+  }
+
+  _keepaliveDue() {
+    if (this.keepaliveEveryMs === null || this.state !== 'game') return;
+    const now = Number(this.keepaliveClock.now());
+    const remainingMs = this._keepaliveDeadline(now) - now;
+    if (remainingMs > 0) {
+      this._scheduleKeepalive(remainingMs);
+      return;
+    }
+    this.keepaliveLastProbeAt = now;
+    try {
+      this.keepalivePending++;
+      this.send(BP.REQ_INVENTORY);
+      // send() records the successful write and arms the next idle deadline.
+    } catch (error) {
+      this.keepalivePending = Math.max(0, this.keepalivePending - 1);
+      // gameSecurity() advances the stream before socket.write(). A synchronous write
+      // failure therefore cannot be retried safely: another frame would use seeds the
+      // server never saw. Retire the scheduler and let normal connection recovery win.
+      this.log(`keepalive write failed: ${error?.message || error}`);
+      this.state = 'closed';
+      this.stopKeepalive();
+      try { this.sock?.destroy?.(); } catch { /* already terminal */ }
+    }
+  }
+
   startKeepalive(everyMs = 20000) {
+    const interval = Number(everyMs);
+    if (!Number.isFinite(interval) || interval <= 0)
+      throw new RangeError('keepalive interval must be a positive finite number');
     this.stopKeepalive();
-    this.keepalivePending = 0;
-    this.keepaliveTimer = setInterval(() => {
-      if (this.state !== 'game') return;
-      try { this.keepalivePending++; this.send(BP.REQ_INVENTORY); }
-      catch { this.keepalivePending = Math.max(0, this.keepalivePending - 1); }
-    }, everyMs);
-    this.keepaliveTimer.unref?.();
+    this.keepaliveEveryMs = interval;
+    this.keepaliveStartedAt = Number(this.keepaliveClock.now());
+    if (!Number.isFinite(this.lastTxAt)) this.lastTxAt = this.keepaliveStartedAt;
+    this._armKeepalive();
     return this;
   }
 
   stopKeepalive() {
-    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    if (this.keepaliveTimer !== null) this.keepaliveClock.clearTimeout(this.keepaliveTimer);
     this.keepaliveTimer = null;
+    this.keepaliveEveryMs = null;
+    this.keepaliveStartedAt = null;
+    this.keepaliveLastProbeAt = null;
     this.keepalivePending = 0;
   }
 

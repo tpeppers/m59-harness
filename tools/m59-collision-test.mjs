@@ -1374,6 +1374,10 @@ const walkTo = compileSessionMethod(brokerSource,
     // Stubbing it would test a queue nobody stands in, and the behaviour it guards is that a
     // one-square corridor is not poisoned by a body merely passing through it.
     QUEUE_PATIENCE: 6,
+    blocksMovement,     // the kill-and-continue rung asks what stands on the next square
+    // The keeper's ladder, for the wall a blink is cast from and the kill-and-continue rounds
+    // (2026-09-01). Absent here: a stub that answers null is the same as no keeper.
+    autopilotIfAny: () => null,
     // THE REAL FLAGS, not a stub. `walkTo` asks whether the body in its way is a PLAYER —
     // a player is also dodging and needs the object-id tie-break, a monster gets the fixed
     // clockwise-first order — and a fixture that invented its own bit would build a room
@@ -1504,6 +1508,9 @@ const leaveViaAny = compileSessionMethod(brokerSource,
     // ones are used rather than stubs, and a fixture with no table simply gets null and falls
     // back to the scan, which is the degradation the change is designed around.
     activeRoutes, anchorFor,
+    // THE AUTOPILOT, FOR THE WALL A BLINK IS CAST FROM (2026-09-01). Absent here: the suite
+    // never reaches the blink branch, and a stub that answers null is the same as no keeper.
+    autopilotIfAny: () => null,
   });
 
 function fakeBrokerSession(geometry, {
@@ -1785,6 +1792,7 @@ console.log('\nterminal movement propagation and edge packet authority');
         // The fine lane is the tier BELOW the sidestep and these fixtures are about the walk,
         // not the threading; the lane has its own suite in m59-lane-test.mjs.
         laneAroundBody() { return null; },
+        perpWalkAroundBodies() { return null; },
         async step() {
           if (falling) hp -= 3;                       // it is hitting us every lap
           return { moved: false, left_room: false, reason: 'object_blocked' };
@@ -2373,6 +2381,7 @@ console.log('\nterminal movement propagation and edge packet authority');
       // The fine lane is the tier BELOW the sidestep and these fixtures are about the walk,
       // not the threading; the lane has its own suite in m59-lane-test.mjs.
       laneAroundBody() { return null; },
+        perpWalkAroundBodies() { return null; },
       async step() { asks++; return { moved: false, left_room: false, reason: 'object_blocked' }; },
     };
     const out = await walkTo.call(session, 12, 12, { maxSteps: 6 });
@@ -3437,6 +3446,7 @@ if (typeof walkTo !== 'function' || typeof realSidestepAround !== 'function') {
     // The fine lane is the tier BELOW the sidestep and these fixtures are about the walk,
     // not the threading; the lane has its own suite in m59-lane-test.mjs.
     laneAroundBody() { return null; },
+        perpWalkAroundBodies() { return null; },
     async retreatAlongBreadcrumbs() { return { steps: 0 }; },
     async step(col, row) {
       // The mover's own answer, and the only one it can give: something is standing there.
@@ -3943,6 +3953,7 @@ console.log('AN EDGE THE MOVER CANNOT WALK IS REMEMBERED PAST THE WALK THAT FOUN
     // The fine lane is the tier BELOW the sidestep and these fixtures are about the walk,
     // not the threading; the lane has its own suite in m59-lane-test.mjs.
     laneAroundBody() { return null; },
+        perpWalkAroundBodies() { return null; },
     threatsHere() { return []; },
     async selfOrResync() { return this.client.self; },
     async step() { return { moved: false, left_room: false, reason }; },

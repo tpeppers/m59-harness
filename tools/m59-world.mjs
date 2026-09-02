@@ -24,7 +24,7 @@
 
 import { sharedRoomGeometry, roomHasDeclaredFallJump } from './m59-roo.mjs';
 import { exitsOf, findPath, inferredExits, codeExits, edgeExitsOf, edgeCandidatesOf, LEAVE,
-         AVOID_IN_TRANSIT, selectedEdgeAt } from './m59-map.mjs';
+         AVOID_IN_TRANSIT, selectedEdgeAt, routingRevision } from './m59-map.mjs';
 import { inRegion } from './m59-codeexits.mjs';
 import { affordances, OF, isTeleporter, KOD_FINENESS } from './m59-parse.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
@@ -41,6 +41,49 @@ const MARK = {
   exit: 'X',
   locked: 'x',
 };
+// The flood-priced portion of exits() is identical for every World using the same shared
+// map, room geometry, and origin square. Keep it at module scope so a fleet pays once, but
+// let the map remain the owner: a test/alternate map gets its own LRU and can be collected.
+// Dynamic portal objects are deliberately appended outside this cache below.
+// A legacy keeper process has one actor and keeps its historical 24-origin memory bound.
+// The lab runtime amortizes one atlas across a fleet, so its shared LRU is sized for many
+// actors by default. Either profile can override the bound explicitly.
+// 512 ORIGINS FOR EVERYONE. The 24-origin default meant a touring keeper missed this cache
+// on nearly every room and re-ran the flood; the cost of 512 cached floods is small against
+// the seconds each miss spends with the event loop blocked. M59_WORLD_EXIT_CACHE_CAP still
+// overrides, and the route/exit cache suite pins the behaviour at 24 explicitly.
+const defaultSharedExitCap = 512;
+const configuredSharedExitCap = Number(
+  process.env.M59_WORLD_EXIT_CACHE_CAP ?? defaultSharedExitCap);
+const SHARED_EXIT_CACHE_CAP = Number.isSafeInteger(configuredSharedExitCap) && configuredSharedExitCap > 0
+  ? configuredSharedExitCap : defaultSharedExitCap;
+// Keep at most the current static result on a World for compatibility with diagnostics
+// that inspect/clear `_exitCache`; the fleet-sized history lives only in the shared LRU.
+const LOCAL_EXIT_CACHE_CAP = 1;
+const sharedExitCacheByMap = new WeakMap();
+function sharedExitCache(map) {
+  if (!map || (typeof map !== 'object' && typeof map !== 'function')) return null;
+  let state = sharedExitCacheByMap.get(map);
+  if (!state || state.revision !== routingRevision) {
+    state = { revision: routingRevision, entries: new Map() };
+    sharedExitCacheByMap.set(map, state);
+  }
+  return state.entries;
+}
+function touchCache(cache, key, value, cap) {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > cap) cache.delete(cache.keys().next().value);
+}
+function immutableExitCopy(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableExitCopy));
+  if (value && typeof value === 'object') {
+    const copy = {};
+    for (const [key, child] of Object.entries(value)) copy[key] = immutableExitCopy(child);
+    return Object.freeze(copy);
+  }
+  return value;
+}
 // Everything else gets a letter, and the legend says what each one is.
 const OBJECT_MARKS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -410,33 +453,110 @@ export class World {
     // a new square changes the key and recomputes, which is correct. Bounded LRU because the
     // origin changes as the character walks, so only the recent squares are worth keeping.
     //
-    // The cache lives on the World instance, which is rebuilt on a room change (a new
-    // World per room, or the geometry is swapped), so a stale room's cache cannot leak into
-    // the next room. The key still carries room.num + room.roo as a belt-and-braces guard
-    // against a World being reused across rooms.
+    // The cache lives once per shared map, rather than once per World/character. Its routing
+    // revision changes when an inferred edge is retired, and the key still carries room.num
+    // + room.roo as a guard against a World being reused across rooms. Portal objects are
+    // per-client observations and are appended after the cached static result.
     if (origin && Number.isFinite(origin.row) && Number.isFinite(origin.col)) {
       const key = `${room.num}|${room.roo ?? ''}|${origin.row},${origin.col}`;
-      const cache = (this._exitCache ??= new Map());
-      const hit = cache.get(key);
-      if (hit !== undefined) {
-        // Refresh recency: re-insert so the LRU evicts the oldest first.
-        cache.delete(key); cache.set(key, hit);
-        return hit;
+      const shared = sharedExitCache(this.map);
+      // Existing offline fixtures clear `_exitCache` explicitly to force one fresh compute.
+      // Preserve that hook without clearing the fleet-wide cache for every other World.
+      const force = Object.hasOwn(this, '_exitCache') && this._exitCache === null;
+      if (!(this._exitCache instanceof Map) || this._exitCacheRevision !== routingRevision) {
+        this._exitCache = new Map();
+        this._exitCacheRevision = routingRevision;
       }
-      const result = this._computeExits(room, geo, me, origin);
-      cache.set(key, result);
-      if (cache.size > 24) {  // ~24 origins; a walk visits far fewer between recomputes
-        const oldest = cache.keys().next().value;
-        cache.delete(oldest);
+      const localHit = force ? undefined : this._exitCache.get(key);
+      if (localHit !== undefined) {
+        touchCache(this._exitCache, key, localHit, LOCAL_EXIT_CACHE_CAP);
+        if (shared?.has(key)) touchCache(shared, key, localHit, SHARED_EXIT_CACHE_CAP);
+        const portals = this._dynamicPortalExits(geo, me);
+        return portals.length ? [...localHit, ...portals] : localHit;
       }
-      return result;
+      const sharedHit = force ? undefined : shared?.get(key);
+      if (sharedHit !== undefined) {
+        touchCache(shared, key, sharedHit, SHARED_EXIT_CACHE_CAP);
+        touchCache(this._exitCache, key, sharedHit, LOCAL_EXIT_CACHE_CAP);
+        const portals = this._dynamicPortalExits(geo, me);
+        return portals.length ? [...sharedHit, ...portals] : sharedHit;
+      }
+      const result = immutableExitCopy(this._computeExits(room, geo, me, origin));
+      if (shared) touchCache(shared, key, result, SHARED_EXIT_CACHE_CAP);
+      touchCache(this._exitCache, key, result, LOCAL_EXIT_CACHE_CAP);
+      const portals = this._dynamicPortalExits(geo, me);
+      return portals.length ? [...result, ...portals] : result;
     }
-    return this._computeExits(room, geo, me, origin);
+    const result = immutableExitCopy(this._computeExits(room, geo, me, origin));
+    const portals = this._dynamicPortalExits(geo, me);
+    return portals.length ? [...result, ...portals] : result;
   }
 
-  // The real work, unchanged from the old exits() body. `exits()` is the caching wrapper.
+  // The static work from the old exits() body. `exits()` is the caching wrapper and appends
+  // client-local portal observations after this shared projection.
   _computeExits(room, geo, me, origin) {
     const out = [];
+
+    // PRICE THIS ORIGIN ONCE, NOT ONCE PER EDGE EXIT.  The distance to a square is a
+    // property of (geometry, origin, collision mode); the destination selected by a room
+    // edge has no bearing on the flood.  Keeping the pair lazy preserves the old cheap path
+    // for rooms with no edge exits, while a room with seven declarations now walks its grid
+    // twice rather than fourteen times.  The maps intentionally retain the old string keys
+    // and breadth-first ordering so this is a scheduling change only: every exit sees the
+    // exact same stages and distances it did when it owned an identical private flood.
+    let originFloods = null;
+    const exitFloods = () => {
+      if (originFloods) return originFloods;
+      const flood = collision => {
+        const reachable = [{ row: origin.row, col: origin.col, steps: 0 }];
+        const seen = new Set([`${origin.row},${origin.col}`]);
+        for (let index = 0; index < reachable.length; index++) {
+          const at = reachable[index];
+          // NO FINE WIDENING HERE. This flood decides which exits are OFFERED, and
+          // widening it into fine-open cells is how room 27 came to offer the stranded
+          // 2500 boundary and then plan an eight-hop route through it. The fine view is
+          // the MOVER's (roo's `fineNav`), asked for where a body is actually walked;
+          // asking for it while deciding what is reachable invents roads.
+          for (const next of geo.neighbors(at.row, at.col, { collision })) {
+            // OFFERING A DOOR IS NOT CROSSING ONE, AND CLIP STEPS BELONG TO THE SECOND.
+            //
+            // `moverStepLands` allows a destination the coarse grid calls SOLID whenever
+            // fine floor exists there (see CLIP_STEPS). That permission is deliberate and
+            // stays: turning it off globally cut the Cragged Mountains' walkable body from
+            // 2450 squares to 672, because that room is largely ground the coarse grid
+            // cannot express. The mover keeps it.
+            //
+            // But this flood is not walking anywhere. It decides which exits are OFFERED,
+            // and an optimistic answer here does not cost a step, it costs a journey: in
+            // Ukgoth from the gutter at 61,27 the clip-allowed flood reaches 4,237 squares
+            // and the Castle Victoria door at 1,27; refuse the clips and it reaches 338 and
+            // does not. So the router planned a single hop 599 -> 2 at a door on top of a
+            // cliff, sent the body to walk at it, and seven of thirteen deaths in one run
+            // were in that room. The way out is a ROUTE, through 589 and round.
+            //
+            // Only the destination is filtered, and only on the strict pass -- the coarse
+            // pass below is already the permissive one and is what still offers a door when
+            // this refuses everything.
+            if (collision && !geo.walkable(next.row, next.col)) continue;
+            const key = `${next.row},${next.col}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            reachable.push({ row: next.row, col: next.col, steps: at.steps + 1 });
+          }
+        }
+        return new Map(reachable.map(stage => [`${stage.col},${stage.row}`, stage]));
+      };
+      const coarseBySquare = flood(false);
+      originFloods = {
+        coarseBySquare,
+        moverBySquare: geo.hasStepMask ? flood(true) : coarseBySquare,
+      };
+      return originFloods;
+    };
+    const nearestIn = (by, stages) => stages
+      .map(stage => by.get(`${stage.col},${stage.row}`))
+      .filter(Boolean)
+      .sort((a, b) => a.steps - b.steps)[0] ?? null;
 
     // Include the reverse of edge exits that only the other side declares. The
     // planner already routes through these (see inferredExits); without them here
@@ -472,51 +592,7 @@ export class World {
         // with no mover-reachable stage falls back to a coarse-reachable one and is
         // flagged rather than dropped. Being wrong about a wall costs a walk; refusing
         // costs the errand, and does it silently.
-        const flood = collision => {
-          const reachable = [{ row: origin.row, col: origin.col, steps: 0 }];
-          const seen = new Set([`${origin.row},${origin.col}`]);
-          for (let index = 0; index < reachable.length; index++) {
-            const at = reachable[index];
-            // NO FINE WIDENING HERE. This flood decides which exits are OFFERED, and
-            // widening it into fine-open cells is how room 27 came to offer the stranded
-            // 2500 boundary and then plan an eight-hop route through it. The fine view is
-            // the MOVER's (roo's `fineNav`), asked for where a body is actually walked;
-            // asking for it while deciding what is reachable invents roads.
-            for (const next of geo.neighbors(at.row, at.col, { collision })) {
-              // OFFERING A DOOR IS NOT CROSSING ONE, AND CLIP STEPS BELONG TO THE SECOND.
-              //
-              // `moverStepLands` allows a destination the coarse grid calls SOLID whenever
-              // fine floor exists there (see CLIP_STEPS). That permission is deliberate and
-              // stays: turning it off globally cut the Cragged Mountains' walkable body from
-              // 2450 squares to 672, because that room is largely ground the coarse grid
-              // cannot express. The mover keeps it.
-              //
-              // But this flood is not walking anywhere. It decides which exits are OFFERED,
-              // and an optimistic answer here does not cost a step, it costs a journey: in
-              // Ukgoth from the gutter at 61,27 the clip-allowed flood reaches 4,237 squares
-              // and the Castle Victoria door at 1,27; refuse the clips and it reaches 338 and
-              // does not. So the router planned a single hop 599 -> 2 at a door on top of a
-              // cliff, sent the body to walk at it, and seven of thirteen deaths in one run
-              // were in that room. The way out is a ROUTE, through 589 and round.
-              //
-              // Only the destination is filtered, and only on the strict pass -- the coarse
-              // pass below is already the permissive one and is what still offers a door when
-              // this refuses everything.
-              if (collision && !geo.walkable(next.row, next.col)) continue;
-              const key = `${next.row},${next.col}`;
-              if (seen.has(key)) continue;
-              seen.add(key);
-              reachable.push({ row: next.row, col: next.col, steps: at.steps + 1 });
-            }
-          }
-          return new Map(reachable.map(stage => [`${stage.col},${stage.row}`, stage]));
-        };
-        const coarseBySquare = flood(false);
-        const moverBySquare = geo.hasStepMask ? flood(true) : coarseBySquare;
-        const nearestIn = (by, stages) => stages
-          .map(stage => by.get(`${stage.col},${stage.row}`))
-          .filter(Boolean)
-          .sort((a, b) => a.steps - b.steps)[0] ?? null;
+        const { coarseBySquare, moverBySquare } = exitFloods();
         // AND THE COARSE FALLBACK IS OFF WHERE THE ROOM HAS A ONE-WAY DROP IN IT.
         //
         // The same argument the `from_body` fallback below already makes, arriving by a
@@ -839,11 +915,15 @@ export class World {
           : `walk_to EXACTLY {"col":${g.col},"row":${g.row}} (r${g.row}c${g.col}), then act go — the match is on that one square`,
       });
     }
-    // Portal objects, which are neither an edge exit nor a `go` exit. The room graph
-    // cannot know about them — they are runtime objects, and rooms like the
-    // Underworld have NO graph exits at all and are reachable only by dying, so an
-    // agent that ignores these is stuck there permanently.
-    for (const o of this.c.room.objects.values()) {
+    return out;
+  }
+
+  // Portal objects are runtime perception, not a property of the shared static map. They
+  // must be re-read for each client even when the expensive room flood is shared: otherwise
+  // one actor could inherit another actor's stale object id or resource-table label.
+  _dynamicPortalExits(geo, me) {
+    const out = [];
+    for (const o of this.c.room?.objects?.values?.() ?? []) {
       if (o.id === this.c.selfId) continue;
       const name = this.c.rsc.get(o.nameRsc);
       if (!isTeleporter(o.flags)) continue;
@@ -866,7 +946,6 @@ export class World {
              `Use look_at first: a shifting portal describes where it currently leads.`,
       });
     }
-
     return out;
   }
 
