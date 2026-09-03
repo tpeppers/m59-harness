@@ -1075,6 +1075,11 @@ const CROSSING_WINDOW = Number(process.env.M59_CROSSING_WINDOW || 24);
 const CROSSING_DISTINCT = Number(process.env.M59_CROSSING_DISTINCT || 6);
 // Do not ask the strategies about the same loop every tick; one ask per this many ms.
 const CROSSING_ASK_EVERY_MS = Number(process.env.M59_CROSSING_ASK_EVERY_MS || 20_000);
+// HOW LONG TO SPEND BREAKING CONTACT BEFORE CASTING WITHOUT A WALL. The operator's number,
+// 2026-09-03: five seconds. Long enough to back off a few proven crumbs and short enough
+// that it cannot become a second way of standing still — which is the condition it is being
+// asked to end. It bounds an attempt, never the cast: the cast follows either way.
+const BLINK_EVADE_MS = Number(process.env.M59_BLINK_EVADE_MS || 5_000);
 
 // THERE WAS A SECOND GUTTER THRESHOLD HERE AND IT WAS WRONG. Written down in case anybody
 // reaches for it again: `RAIL_GUTTER_MIN_DOOR`, which declined a gutter rail whenever the
@@ -6823,7 +6828,41 @@ class Session {
                 return { arrived: false, left_room: true, reason: 'took_the_exit',
                          blocked_at: { col: next.col, row: next.row }, steps: taken, replans };
               }
-              const castable = !answer.answer.need_safe_spot || !!wall?.took;
+              // NO WALL IS NOT A REASON TO STAY STUCK. THE OPERATOR, 2026-09-03.
+              //
+              // This refused the cast whenever `takeSafeSpot` came back empty, and on the
+              // day the stall fix shipped that is what it did to Kermit — twice in two
+              // minutes in room 567, on the GENUINE blocked verdict: "blocked from here (24
+              // squares) and clear from the blink point (826 squares); no wall (nothing in
+              // this room is more defensible)". Twenty-four squares against eight hundred
+              // and twenty-six, the one spell that crosses that gap known and afforded, and
+              // the answer was to stand there because the room had nowhere tidy to sit.
+              //
+              // A wall is preparation, not permission. Where there is none the cast still
+              // happens; what changes is only what we do first:
+              //
+              //   not under fire   cast now — nothing is swinging, the wall bought nothing
+              //   under fire       back off along proven crumbs for up to five seconds to
+              //                    break contact, then cast anyway
+              //
+              // Breadcrumbs rather than any free square, for the reason the body-retreat a
+              // few lines down gives: every crumb is a move the validator already accepted,
+              // so backing up cannot open a hole the collision rules would refuse. Bounded
+              // by a deadline AND by crumbs, and it stops early the moment nothing that
+              // blocks movement is adjacent — the goal is to break contact, not to undo the
+              // journey.
+              let evaded = null;
+              if (!wall?.took && underFire && typeof this.retreatAlongBreadcrumbs === 'function') {
+                const deadline = Date.now() + BLINK_EVADE_MS;
+                const adjacent = () => !!(c.room?.objects && [...c.room.objects.values()].some(o =>
+                  o.id !== c.selfId && blocksMovement(o.flags ?? 0) && c.self &&
+                  Math.max(Math.abs(o.row - c.self.row), Math.abs(o.col - c.self.col)) <= 1));
+                evaded = await this.retreatAlongBreadcrumbs({
+                  maxCrumbs: Number(process.env.M59_BLINK_EVADE_CRUMBS || 4),
+                  until: () => Date.now() >= deadline || !adjacent(),
+                  movementGeneration, controlToken,
+                }).catch(() => null);
+              }
               // GET THE LEGS BACK BEFORE THE CAST, NOT AFTER. Blink lands the body on a
               // fixed square the room's kod declares and promises nothing about what is
               // standing on it; running needs at least 10 vigor, and the shuffle that
@@ -6831,22 +6870,27 @@ class Session {
               // took is sat on first. Advisory in every direction: no autopilot, no rest,
               // and a rest that is interrupted by damage still casts — tired is worse than
               // still going round in circles.
+              //
+              // ONLY ON A WALL. The rest was asked for as "rest to vigor IN A SAFE SPOT";
+              // sitting down in the open next to whatever we just failed to get away from
+              // is not the same thing and is not what it is for. With no wall we cast tired.
               let rested = null;
-              if (castable && answer.answer.rest_to_vigor) {
+              if (wall?.took && answer.answer.rest_to_vigor) {
                 const pilot = autopilotIfAny(this.name);
                 rested = pilot && typeof pilot.restBeforeBlink === 'function'
                   ? await pilot.restBeforeBlink('vigor before a blink out of a stalled crossing')
                                .catch(e => ({ rested: false, why: e.message }))
                   : { rested: false, why: 'no autopilot to rest with' };
               }
-              const out = castable
-                ? await this.blinkOut({ expect: answer.answer.expect }).catch(() => null)
-                : { cast: false, arrived: false, why: `did not cast: no wall to cast from (${wall?.why ?? 'unknown'})` };
+              const out = await this.blinkOut({ expect: answer.answer.expect }).catch(() => null);
               recordTactic({ character: who2, room: Number(this.world?.room?.num ?? 0),
                              tactic: 'blink_escape', trigger: `${answer.strategy} (walker)`,
                              worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: castable,
                              note: `blocked at ${next.row},${next.col} for ${Math.round(stuckMs / 1000)}s; ${answer.answer.why}; ` +
-                                   (answer.answer.need_safe_spot ? (wall?.took ? 'took a wall first; ' : `no wall (${wall?.why ?? '?'}); `) : '') +
+                                   (answer.answer.need_safe_spot
+                                     ? (wall?.took ? 'took a wall first; '
+                                        : `no wall (${wall?.why ?? '?'}) — casting anyway; `) : '') +
+                                   (evaded ? `backed off ${evaded.steps ?? 0} crumb(s) to break contact first; ` : '') +
                                    (rested ? (rested.rested
                                      ? `rested vigor ${Math.round((rested.before ?? 0) * 100)}% -> ${Math.round((rested.vigor_pct ?? 0) * 100)}%` +
                                        `${rested.interrupted ? ' (cut short by damage)' : ''}; `
