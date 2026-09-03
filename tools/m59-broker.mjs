@@ -869,6 +869,25 @@ const keeperPorts = new Map();
 // fleet's broker in the gap between our bind test and our child's bind. Never offered
 // again this session; see the readiness timeout for the argument.
 const portsLostToOthers = new Set();
+// A PID THAT ANSWERS NOTHING FOR THIS LONG IS NOT ALIVE, WHATEVER kill(pid, 0) SAYS. Prod's
+// t4 on 2026-09-02: its keeper took a stop, finished its JavaScript, and exited as far as
+// Windows is concerned (HasExited true) — but one suspended thread and 222 handles remained,
+// because a filter driver never completed the pending I/O on its listening socket. The port
+// stayed bound, every connection was refused, kill returned without effect, and kill(pid, 0)
+// kept succeeding; the sweep read that as "leaving it alone", for ever. Three sweeps of
+// silence, or Windows saying the process has exited, retire the port and respawn elsewhere.
+const DEAD_KEEPER_MS = Number(process.env.M59_DEAD_KEEPER_MS || 150_000);
+// Windows can say whether a process has exited even when its object lingers (a zombie
+// holding handles); nothing in Node can. Best effort, bounded, null when unknown.
+function processHasExited(pid) {
+  if (process.platform !== 'win32' || !Number.isSafeInteger(pid)) return null;
+  try {
+    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).HasExited`],
+      { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out === 'True' ? true : out === 'False' ? false : null;
+  } catch { return null; }
+}
 
 function keeperPort(agent, index) {
   const known = keeperProcesses.get(agent)?.port ?? keeperPorts.get(agent);
@@ -3817,9 +3836,29 @@ async function reconcileFleet() {
                       'a fresh guarded keeper will use another port');
       }
       if (proof.unavailable && proof.processAlive === true) {
-        console.error(`[rejoin] ${agent} keeper liveness is unavailable but its recorded PID ` +
-                      'is alive — leaving it alone');
-        continue;
+        const silentSince = existing._liveness?.unknownSince || 0;
+        const silentMs = silentSince ? Date.now() - silentSince : 0;
+        const pid = keeperProcesses.get(agent)?.pid ?? null;
+        const exited = silentMs >= DEAD_KEEPER_MS / 2 ? processHasExited(pid) : null;
+        if (exited !== true && silentMs < DEAD_KEEPER_MS) {
+          console.error(`[rejoin] ${agent} keeper liveness is unavailable but its recorded PID ` +
+                        `is alive — leaving it alone (silent ${Math.round(silentMs / 1000)}s; ` +
+                        `retires at ${Math.round(DEAD_KEEPER_MS / 1000)}s${exited === false ? ', process not exited' : ''})`);
+          continue;
+        }
+        // A pid that has answered nothing for this long is a zombie or a hang, and either way
+        // the character is off. Retire the port — it may stay bound to the corpse until a
+        // reboot — and let a fresh guarded keeper come up on another one.
+        const deadPort = keeperPort(agent, existing._index);
+        portsLostToOthers.add(deadPort);
+        if (keeperPorts.get(agent) === deadPort) keeperPorts.delete(agent);
+        keeperProcesses.delete(agent);
+        existing.dispose();
+        if (sessions.get(agent) === existing) sessions.delete(agent);
+        existing = null;
+        console.error(`[rejoin] ${agent} answered nothing for ${Math.round(silentMs / 1000)}s ` +
+                      `(pid ${pid ?? '?'}, exited=${exited === null ? 'unknown' : exited}) — retiring keeper port ${deadPort}; ` +
+                      'a fresh guarded keeper will use another port');
       }
     }
     if (existing?.live) {

@@ -144,5 +144,24 @@ console.log('\nA KEEPER THAT DID NOT ANSWER IS A QUESTION, NOT A CORPSE');
        .test(FLEET_LOCK));
 }
 
+// A KEEPER THAT ANSWERS NOTHING IS NOT ALIVE. Prod's t4, 2026-09-02: the process had exited
+// (Windows HasExited true) but lingered as a zombie holding its listening socket, kill(pid, 0)
+// kept succeeding, and the sweep left it alone for ever. Pinned: the sweep retires such a
+// keeper's port after DEAD_KEEPER_MS of silence or when Windows says the process has exited,
+// and it no longer `continue`s unconditionally on "recorded PID is alive".
+console.log('\na keeper that answers nothing is not alive');
+{
+  ok('the sweep has a silence deadline for a keeper whose pid still opens',
+     /const DEAD_KEEPER_MS = Number\(process\.env\.M59_DEAD_KEEPER_MS \|\| 150_000\);/.test(BROKER));
+  ok('it asks Windows whether the process has exited, which kill(pid, 0) cannot tell',
+     /function processHasExited\(pid\)/.test(BROKER) && /\.HasExited/.test(BROKER));
+  ok('silence is measured from the liveness record, not guessed',
+     /existing\._liveness\?\.unknownSince/.test(BROKER));
+  ok('a silent keeper is retired by port and respawned elsewhere',
+     /answered nothing for [\s\S]{0,200}? — retiring keeper port/.test(BROKER) && /portsLostToOthers\.add\(deadPort\)/.test(BROKER));
+  ok('and "recorded PID is alive — leaving it alone" is no longer unconditional',
+     !/is alive — leaving it alone'\);\n\s*continue;/.test(BROKER));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
