@@ -2347,7 +2347,8 @@ console.log('\nterminal movement propagation and edge packet authority');
                                             '_noteCrossingSquare', { CROSSING_WINDOW: 24 });
     const oscillation = compileSessionMethod(brokerSource, '_crossingOscillation() {',
                                              '_crossingOscillation',
-                                             { CROSSING_WINDOW: 24, CROSSING_DISTINCT: 6 });
+                                             { CROSSING_WINDOW: 24, CROSSING_DISTINCT: 6,
+                                               CROSSING_PINNED_MS: 60_000 });
     if (noteSquare && oscillation) {
       const walk = (squares) => {
         const s = { _noteCrossingSquare: noteSquare, _crossingOscillation: oscillation };
@@ -2367,13 +2368,28 @@ console.log('\nterminal movement propagation and edge packet authority');
       // Not enough history is "do not know", never "fine".
       ok('and a crossing too short to judge answers null rather than guessing',
          walk([[1, 1], [1, 2], [1, 3]]) === null, JSON.stringify(walk([[1, 1], [1, 2], [1, 3]])));
-      // STANDING STILL IS THE OTHER DETECTOR'S JOB — repeats of the same square are not
-      // moves, or a body pinned on one square would read as a 24-move loop.
+      // A REPEAT IS NOT A MOVE, so a body pinned on one square records ONE footprint entry
+      // rather than reading as a 24-move loop.
       const pinned = { _noteCrossingSquare: noteSquare, _crossingOscillation: oscillation };
       for (let i = 0; i < 40; i++) pinned._noteCrossingSquare(7, 7);
-      ok('a body pinned on ONE square is left to the stillness detector, not called a loop',
-         pinned._crossingOscillation() === null && pinned._crossingFootprint.length === 1,
-         JSON.stringify(pinned._crossingFootprint));
+      ok('a body pinned on ONE square records one square, not a forty-move loop',
+         pinned._crossingFootprint.length === 1, JSON.stringify(pinned._crossingFootprint));
+      // AND IT IS STILL STALLED. Leaving this to "the stillness detector" was a guess the
+      // evidence refuted: Floyd sat on r9c14 in room 567 for five minutes without moving,
+      // mana to spare, a blink point opening 835 squares — and got no `stalled` signal and
+      // so was never offered the spell, while Janice and Piggy, who happened to shuffle,
+      // both got out. Not moving at all is not less stuck than bouncing between four.
+      ok('a pin that has only just started does not fire instantly',
+         pinned._crossingOscillation() === null, 'a fresh pin must not fire');
+      pinned._crossingLastAt = Date.now() - 61_000;
+      ok('but a minute later it is stalled, and says which square it is pinned on',
+         /pinned on 7,7 for 6[01]s/.test(pinned._crossingOscillation() ?? ''),
+         JSON.stringify(pinned._crossingOscillation()));
+      // A healthy walk must never trip it: the clock resets on every change of square.
+      const walking = { _noteCrossingSquare: noteSquare, _crossingOscillation: oscillation };
+      for (let i = 0; i < 10; i++) walking._noteCrossingSquare(10, 10 + i);
+      ok('and a body still covering ground is not pinned however long the walk',
+         walking._crossingOscillation() === null, JSON.stringify(walking._crossingOscillation()));
       // A wandering loop still counts — six squares is wide enough for a shuffle that drifts.
       const wander = [];
       for (let i = 0; i < 30; i++) wander.push([[15, 29], [15, 30], [14, 30], [15, 30]][i % 4]);
