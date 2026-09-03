@@ -49,8 +49,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RoomGeometry, protocolToward, STEP_MASK_DIRS, KOD_FINENESS, CLIENT_FINENESS,
          sharedRoomGeometry, STEP_MASK_VERSION, elideLoops } from './m59-roo.mjs';
-import { bakeRoom, components, compositionRisk, exitAnchors, replay } from './m59-routebake.mjs';
-import { loadMap, selectedEdgeAt, findPath } from './m59-map.mjs';
+import { bakeRoom, components, compositionRisk, exitAnchors, replay,
+         ROUTES_FILE } from './m59-routebake.mjs';
+import { loadMap, selectedEdgeAt, findPath, edgeExitsOf, edgeCandidatesOf } from './m59-map.mjs';
+import { anchorFor } from './m59-routes.mjs';
 import { World } from './m59-world.mjs';
 import { crossingBook, WALKS_DIR } from './m59-crossings.mjs';
 import { attachStepMasks, bakedPath, stepMaskCurrent } from './m59-routes.mjs';
@@ -1291,6 +1293,52 @@ console.log('\nthe executable first hop — hard through fallbacks, local to exp
        JSON.stringify(offered));
     ok('room 27 therefore refuses the raw-graph route to 2001',
        route.found === false, JSON.stringify(route));
+  }
+
+  // ONE BOUNDARY, TWO POCKETS — THE SHAPE THAT SENT FOUR CHARACTERS NOWHERE.
+  //
+  // Room 567's north wall is standable at cols 10-17 AND at cols 44-47, and those are two
+  // DISJOINT groups: 45-47 is the room's body (835 squares) and 10-17 is an island of 81.
+  // 536 of the 707 blink asks recorded in that room name r1c16 or r1c13 as the goal, both
+  // on the island, and none of the four characters stuck there could reach either square.
+  //
+  // These pin the geometry and the answer `exits()` gives, which is the RIGHT one: from a
+  // pocket that reaches neither group, the crossing offered is the anchor the bake proved.
+  // That matters as a regression guard rather than as a fix — the island squares reach
+  // `leaveViaAny`'s `tried` list by some other path, which is still open. Written against
+  // the real map because the thing being pinned is which of a real wall's real openings a
+  // real body is offered.
+  const routeTable = (() => { try { return JSON.parse(readFileSync(ROUTES_FILE(), 'utf8')); }
+                              catch { return null; } })();
+  if (!realMap?.rooms?.['567'] || !routeTable) {
+    skip('567 offers its north door at the anchor, not on the island',
+         'no room 567 geometry or no baked table on disk');
+  } else {
+    const anchor = anchorFor(routeTable, 567, 566);
+    const north = edgeExitsOf(realMap.rooms['567']).find(e => Number(e.to) === 566);
+    ok('the bake anchors 567 north at 1,45 and says it reached it from the body',
+       anchor?.row === 1 && anchor?.col === 45 && anchor.from_body === true,
+       JSON.stringify(anchor));
+    const cands = north ? edgeCandidatesOf(realMap.rooms['567'], north, null, { live: true }) : [];
+    const cols = [...new Set(cands.map(c => Math.floor(c.fine_stand_on.x / 64)))].sort((a, b) => a - b);
+    ok('and that one boundary really does publish openings in two far-apart groups',
+       cols.some(c => c <= 17) && cols.some(c => c >= 44) &&
+       Math.max(...cols) - Math.min(...cols) > 20, JSON.stringify(cols));
+    // r7c21 is where Kermit was found: a 17-square pocket that reaches NEITHER group.
+    attachStepMasks(realMap);
+    const stuck = { id: 1, row: 7, col: 21 };
+    const pocketWorld = new World({
+      roomNameRsc: realMap.rooms['567'].nameRsc,
+      roomRsc: realMap.rooms['567'].roomRsc,
+      room: { id: realMap.rooms['567'].objId, objects: new Map([[stuck.id, stuck]]) },
+      selfId: stuck.id, self: stuck, rsc: { get: () => '' },
+    }, realMap);
+    const northOffers = pocketWorld.exits().filter(x => Number(x.to) === 566);
+    const at = x => x.stand_on ?? {};
+    ok('and from that pocket exits() offers the anchor, never an island opening',
+       northOffers.length > 0 &&
+       northOffers.every(x => Math.abs(Number(at(x).col) - anchor.col) <= 2),
+       JSON.stringify(northOffers.map(x => `r${at(x).row}c${at(x).col}`)));
   }
 }
 
