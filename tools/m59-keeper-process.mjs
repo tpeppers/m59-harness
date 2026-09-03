@@ -3392,18 +3392,28 @@ function stateSnapshot(options) {
   return snapshot;
 }
 
-// EXIT EVEN IF THE TIDY-UP HANGS.
+// EXIT EVEN IF THE TIDY-UP HANGS ON SOMETHING ASYNCHRONOUS.
 //
-// Every shutdown path here ends in `process.exit(0)` and everything before it is
-// SYNCHRONOUS — changeJoinIntent, autopilot.stop, client.close, and saveFinalState, which
-// builds the enriched projection and writeFileSync's it. Any one of those blocking means
-// the exit line is never reached, and the process sits there having logged "stop
-// requested", answering nothing.
+// WHAT THIS DOES AND DOES NOT COVER, because the first version of this comment claimed more
+// than a timer can deliver. A `setTimeout` fires from the event loop, so it catches a
+// shutdown that is WAITING — an await that never resolves, a socket close that never calls
+// back. It cannot fire while the loop is blocked, so a synchronous wedge inside
+// `writeFileSync` would starve this watchdog exactly as it starves the exit line. Anything
+// stronger than this needs a supervisor outside the process.
 //
-// That is not hypothetical: t4's keeper (pid 44176) took an addressed POST /stop on
-// 2026-09-02, logged the line, and never exited or answered again. The broker's sweep then
-// correctly refuses to replace it — "keeper liveness is unavailable but its recorded PID is
-// alive" — so the character is stranded until somebody kills the process by hand.
+// The shutdown path is still worth insuring: everything before `process.exit(0)` —
+// changeJoinIntent, autopilot.stop, client.close, saveFinalState — can wait on something,
+// and a keeper that logged "stop requested" and never exited is a stranded character.
+//
+// AND IT IS NOT WHAT HAPPENED TO t4, which is worth writing down because the wrong
+// diagnosis was mine. Pid 44176 on 2026-09-02 was not a JavaScript hang at all: Windows
+// reported `HasExited` TRUE with one suspended thread, no CPU, and its listening port still
+// bound. The JS had already finished; a filter driver never completed the pending I/O on the
+// socket, so the process object could not be released. Nothing can kill that — there is
+// nothing left to kill — and `process.kill(pid, 0)` keeps succeeding on it, which is why the
+// broker's sweep read "recorded PID is alive" and left it alone for ever. The fix for THAT
+// is in the sweep (retire the port and respawn elsewhere once HasExited reads true), not
+// here. A watchdog inside the process cannot outlive the process.
 //
 // The SIGTERM handler already carried the right idea and could never run it:
 //
