@@ -2805,6 +2805,7 @@ const server = createServer(async (req, res) => {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
       log(`[keeper] ${agent} stop requested`);
+      armShutdownWatchdog('POST /stop');
       changeJoinIntent(false);
       if (autopilot) autopilot.stop('keeper stop');
       if (session.client) {
@@ -3391,6 +3392,36 @@ function stateSnapshot(options) {
   return snapshot;
 }
 
+// EXIT EVEN IF THE TIDY-UP HANGS.
+//
+// Every shutdown path here ends in `process.exit(0)` and everything before it is
+// SYNCHRONOUS — changeJoinIntent, autopilot.stop, client.close, and saveFinalState, which
+// builds the enriched projection and writeFileSync's it. Any one of those blocking means
+// the exit line is never reached, and the process sits there having logged "stop
+// requested", answering nothing.
+//
+// That is not hypothetical: t4's keeper (pid 44176) took an addressed POST /stop on
+// 2026-09-02, logged the line, and never exited or answered again. The broker's sweep then
+// correctly refuses to replace it — "keeper liveness is unavailable but its recorded PID is
+// alive" — so the character is stranded until somebody kills the process by hand.
+//
+// The SIGTERM handler already carried the right idea and could never run it:
+//
+//     process.exit(0);
+//     setTimeout(() => process.exit(1), 5000);   // unreachable — exit(0) does not return
+//
+// So the timer is armed FIRST, before any of the work it is insuring. `unref()` so it
+// cannot itself hold the process open when the ordinary path succeeds.
+function armShutdownWatchdog(why, ms = 5000) {
+  const t = setTimeout(() => {
+    try { log(`[keeper] ${agent} shutdown watchdog fired after ${ms}ms (${why}) — exiting hard`); }
+    catch { /* logging is part of what may be wedged */ }
+    process.exit(1);
+  }, ms);
+  if (typeof t.unref === 'function') t.unref();
+  return t;
+}
+
 let finalStateSaved = false;
 function saveFinalState() {
   if (finalStateSaved) return false;
@@ -3405,6 +3436,7 @@ function saveFinalState() {
 
 process.on('SIGTERM', () => {
   log(`[keeper] ${agent} SIGTERM received`);
+  armShutdownWatchdog('SIGTERM');
   changeJoinIntent(false);
   if (autopilot) autopilot.stop('SIGTERM');
   saveFinalState();
@@ -3412,7 +3444,6 @@ process.on('SIGTERM', () => {
     try { session.client.close(); } catch {}
   }
   process.exit(0);
-  setTimeout(() => process.exit(1), 5000);
 });
 
 process.on('SIGINT', () => process.kill(process.pid, 'SIGTERM'));
