@@ -2431,7 +2431,14 @@ console.log('\nterminal movement propagation and edge packet authority');
       // The rest was asked for as "rest to vigor IN A SAFE SPOT". Sitting down in the open
       // next to whatever we just failed to get away from is not that.
       ok('the pre-blink rest happens only when a wall was actually taken',
-         /if \(wall\?\.took && answer\.answer\.rest_to_vigor\)/.test(walkToSrc), block.slice(0, 400));
+         /if \(wall\?\.took && \(answer\.answer\.rest_to_vigor \|\| answer\.answer\.rest_to_mana\)\)/.test(walkToSrc),
+         block.slice(0, 400));
+      // MANA IS THE ONE THAT DECIDES WHETHER THE SPELL HAPPENS AT ALL, and unlike vigor it
+      // refills by sitting. Animal was found in room 567 with NINE mana against a
+      // fifteen-mana blink: the strategy asked, the predicate said yes, and nothing cast.
+      ok('and it waits for MANA as well as vigor, because that is what the spell costs',
+         /restBeforeBlink\([^)]*,\s*\{ mana:/.test(walkToSrc.replace(/\n\s*/g, ' ')),
+         'the rest does not carry a mana target');
       ok('and the ledger says the cast went ahead without one rather than hiding it',
          /casting anyway/.test(walkToSrc), 'note does not record the wall-less cast');
     }
