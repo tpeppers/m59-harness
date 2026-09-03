@@ -1373,6 +1373,11 @@ const walkTo = compileSessionMethod(brokerSource,
     CROSSING_WINDOW: 24,
     CROSSING_DISTINCT: 6,
     CROSSING_ASK_EVERY_MS: 20_000,
+    // THE REAL 5s. With no wall to cast from the blink happens anyway; under fire it first
+    // backs off along proven crumbs for this long to break contact. It bounds an ATTEMPT,
+    // never the cast — so a fixture must not be able to make it into a second way of
+    // standing still, which is the condition it exists to end.
+    BLINK_EVADE_MS: 5_000,
     // THE REAL NUMBER, because the branch it guards is a behaviour: a walk that takes this
     // many steps without ever getting closer is a dither and is handed back to the caller.
     // Fourteen is generous enough to go round a building and far short of the sixty-odd
@@ -2374,6 +2379,42 @@ console.log('\nterminal movement propagation and edge packet authority');
       ok('a loop that wanders over four squares is still a loop',
          /24 moves over 3 square\(s\)/.test(wander.length ? walk(wander) ?? '' : ''),
          JSON.stringify(walk(wander)));
+    }
+
+    // ============ NO WALL IS NOT A REASON TO STAY STUCK ============
+    //
+    // The cast used to be refused whenever `takeSafeSpot` came back empty, and on the day
+    // the stall fix shipped that is what it did to Kermit — twice in two minutes in room
+    // 567, on the genuine blocked verdict: "blocked from here (24 squares) and clear from
+    // the blink point (826 squares); no wall (nothing in this room is more defensible)".
+    // A wall is preparation, not permission. The operator, 2026-09-03.
+    //
+    // Asserted against the source rather than by driving `walkTo` to its blocked-step
+    // branch: the block lives inside the walker's loop and is not separately extractable,
+    // and a test that reimplements the caller would be testing the reimplementation. What
+    // is checked here is that the refusal is gone, that the two preparations are ordered
+    // and conditional in the documented way, and that the evade is bounded.
+    {
+      const walkToSrc = sessionMethod(brokerSource, 'async walkTo(col, row, {', 'walkTo') ?? '';
+      const at = walkToSrc.indexOf('NO WALL IS NOT A REASON TO STAY STUCK');
+      const block = at >= 0 ? walkToSrc.slice(at, at + 4200) : '';
+      ok('the walker no longer has a `castable` gate that can refuse the cast',
+         !/const castable\s*=/.test(walkToSrc), 'castable gate still present');
+      ok('and blinkOut is called unconditionally once the strategy has said blink',
+         /const out = await this\.blinkOut\(/.test(walkToSrc), block.slice(0, 200));
+      ok('under fire and with no wall it backs off along PROVEN crumbs first',
+         /!wall\?\.took && underFire/.test(block) && /retreatAlongBreadcrumbs/.test(block),
+         block.slice(0, 300));
+      ok('and that back-off is bounded by both a deadline and a crumb budget',
+         /BLINK_EVADE_MS/.test(block) && /maxCrumbs/.test(block), block.slice(0, 300));
+      ok('and it stops early the moment nothing that blocks movement is adjacent',
+         /blocksMovement\(o\.flags \?\? 0\)/.test(block) && /<= 1/.test(block), block.slice(0, 400));
+      // The rest was asked for as "rest to vigor IN A SAFE SPOT". Sitting down in the open
+      // next to whatever we just failed to get away from is not that.
+      ok('the pre-blink rest happens only when a wall was actually taken',
+         /if \(wall\?\.took && answer\.answer\.rest_to_vigor\)/.test(walkToSrc), block.slice(0, 400));
+      ok('and the ledger says the cast went ahead without one rather than hiding it',
+         /casting anyway/.test(walkToSrc), 'note does not record the wall-less cast');
     }
 
     // ============ AND NEVER WALK FURTHER TO GET ON THAN TO ARRIVE ============
