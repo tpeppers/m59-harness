@@ -6895,7 +6895,11 @@ class Session {
               const out = await this.blinkOut({ expect: answer.answer.expect }).catch(() => null);
               recordTactic({ character: who2, room: Number(this.world?.room?.num ?? 0),
                              tactic: 'blink_escape', trigger: `${answer.strategy} (walker)`,
-                             worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: castable,
+                             // ALWAYS TRUE NOW: nothing left can turn this into a decision
+                             // rather than an attempt. This read `castable` until that
+                             // variable was deleted, leaving a ReferenceError AFTER the
+                             // await — the spell went off and the walk then threw.
+                             worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: true,
                              note: `blocked at ${next.row},${next.col} for ${Math.round(stuckMs / 1000)}s; ${answer.answer.why}; ` +
                                    (answer.answer.need_safe_spot
                                      ? (wall?.took ? 'took a wall first; '
@@ -10166,20 +10170,50 @@ class Session {
       // The wall may have been the EXIT (see takeSafeSpot): then we are in another room and
       // there is nothing to cast for; the room-changed guard below reports it.
       const tookTheExit = !!(wall?.via === 'exit' || wall?.crossed);
-      const castable = (!stuckAnswer.answer.need_safe_spot || !!wall?.took) && !tookTheExit;
-      const out = castable
+      // THE SAME RULE AS THE WALKER'S SITE, AND IT HAD TO BE SAID TWICE BECAUSE THERE ARE
+      // TWO OF THEM. This give-up fires when every candidate on a boundary has been refused,
+      // and on the day the wall-less cast shipped it was still gating on a wall — so Animal
+      // sat in room 567's 17-square pocket writing `no wall (nothing in this room is more
+      // defensible)` every forty seconds, while Kermit, whose walk went through the walker's
+      // site, blinked out and reached Castle Victoria. A wall is preparation, not permission.
+      //
+      // TAKING THE EXIT IS STILL A REASON NOT TO CAST, and the only one left: we are in
+      // another room and there is nothing to cast for.
+      let evaded = null;
+      if (!tookTheExit && !wall?.took && this._underFireDuringCrossing &&
+          typeof this.retreatAlongBreadcrumbs === 'function') {
+        const deadline = Date.now() + BLINK_EVADE_MS;
+        evaded = await this.retreatAlongBreadcrumbs({
+          maxCrumbs: Number(process.env.M59_BLINK_EVADE_CRUMBS || 4),
+          until: () => Date.now() >= deadline,
+          movementGeneration, controlToken,
+        }).catch(() => null);
+      }
+      let rested = null;
+      if (!tookTheExit && wall?.took && stuckAnswer.answer.rest_to_vigor) {
+        const pilot = autopilotIfAny(this.name);
+        rested = pilot && typeof pilot.restBeforeBlink === 'function'
+          ? await pilot.restBeforeBlink('vigor before a blink out of a stalled crossing')
+                       .catch(e => ({ rested: false, why: e.message }))
+          : { rested: false, why: 'no autopilot to rest with' };
+      }
+      const out = !tookTheExit
         ? await this.blinkOut({ expect: stuckAnswer.answer.expect }).catch(() => null)
-        : { cast: false, arrived: false, why: tookTheExit ? 'did not cast: the nearest wall was the exit and it was taken' : `did not cast: no wall to cast from (${wall?.why ?? 'unknown'})` };
+        : { cast: false, arrived: false, why: 'did not cast: the nearest wall was the exit and it was taken' };
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));
       if (!roomStillCurrent()) return staleBatch(bestExit);
       recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
                      room: Number(this.world?.room?.num ?? 0),
                      tactic: 'blink_escape', trigger: stuckAnswer.strategy,
-                     worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: castable,
+                     worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: !tookTheExit,
                      note: `${stuckAnswer.answer.why}; ` +
                            (stuckAnswer.answer.need_safe_spot
-                              ? (wall?.took ? 'took a wall first; ' : `no wall (${wall?.why ?? '?'}); `) : '') +
+                              ? (wall?.took ? 'took a wall first; '
+                                 : `no wall (${wall?.why ?? '?'}) — casting anyway; `) : '') +
+                           (evaded ? `backed off ${evaded.steps ?? 0} crumb(s) first; ` : '') +
+                           (rested ? (rested.rested ? 'rested to the cap first; '
+                                                    : `did not rest (${rested.why ?? '?'}); `) : '') +
                            `${out?.why ?? 'no result'}` });
       // E, AND IT IS THE STRATEGY'S OWN CALLBACK. The predicate recorded what it saw; only
       // the caller knows what happened next, and 'the spell never fizzles' is not the same

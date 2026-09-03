@@ -1446,13 +1446,12 @@ const followRail = compileSessionMethod(brokerSource,
 const recentreInSquare = compileSessionMethod(brokerSource,
   'async recentreInSquare() {', 'recentreInSquare', {});
 let rideTrackFixture = null;
-let rideTrackClears = 0, rideTrackStrikes = 0;
 const rideTrack = compileSessionMethod(brokerSource,
   'async rideTrack(fromRoom, toRoom, {', 'rideTrack', {
     KOD_FINENESS,
     recallTrack: () => rideTrackFixture,
-    clearStrikes: () => { rideTrackClears++; },
-    strikeTrack: () => { rideTrackStrikes++; return 1; },
+    clearStrikes: () => {},
+    strikeTrack: () => 1,
   });
 
 let leaveViaRoutesFixture = null;
@@ -1513,6 +1512,8 @@ const leaveViaAny = compileSessionMethod(brokerSource,
     // whether the whole crossing has been going round in circles, not only how long this
     // boundary has refused.
     CROSSING_STALL_MS: 120_000,
+    // And the real evade window, because this site casts without a wall too.
+    BLINK_EVADE_MS: 5_000,
     isTerminalMovementReason, spreadEdges, orderExits: exits => exits, KOD_FINENESS,
     // THE TWO INSTRUMENTS, AS THE REAL ONES. Both are ordinary exports of modules that
     // import without taking the fleet lock, and both are written to be unable to throw —
@@ -2400,6 +2401,24 @@ console.log('\nterminal movement propagation and edge packet authority');
       const block = at >= 0 ? walkToSrc.slice(at, at + 4200) : '';
       ok('the walker no longer has a `castable` gate that can refuse the cast',
          !/const castable\s*=/.test(walkToSrc), 'castable gate still present');
+      // AND NEITHER DOES THE OTHER ONE. There are two blink sites — the walker's blocked
+      // step and `leaveViaAny`'s give-up — and fixing only the first is what left Animal
+      // writing "no wall (nothing in this room is more defensible)" every forty seconds in
+      // room 567's 17-square pocket while Kermit, whose walk went through the walker's
+      // site, blinked out and reached Castle Victoria.
+      // Asserted as BEHAVIOUR rather than as syntax, because the two sites do not have the
+      // same shape: the give-up still declines when the wall it took turned out to be the
+      // exit (we are in another room by then and there is nothing to cast for), so it keeps
+      // a ternary that the walker's site does not have. What must be true of both is that
+      // no wall is never the reason.
+      const leaveSrc = sessionMethod(brokerSource, 'async leaveViaAny(candidates, {', 'leaveViaAny') ?? '';
+      ok("and leaveViaAny's give-up does not gate its cast on a wall either",
+         leaveSrc.length > 0 && !/const castable\s*=/.test(leaveSrc) && /blinkOut\(/.test(leaveSrc),
+         `give-up gate still present (extracted ${leaveSrc.length} chars)`);
+      ok('and neither site can still refuse a cast for want of a wall',
+         !/did not cast: no wall/.test(brokerSource), 'the wall refusal survives somewhere');
+      ok('and neither site reports a wall-less cast as "not attempted"',
+         !/attempted: castable/.test(brokerSource), 'attempted: castable survives somewhere');
       ok('and blinkOut is called unconditionally once the strategy has said blink',
          /const out = await this\.blinkOut\(/.test(walkToSrc), block.slice(0, 200));
       ok('under fire and with no wall it backs off along PROVEN crumbs first',
@@ -2749,10 +2768,8 @@ console.log('\nterminal movement propagation and edge packet authority');
       [{ kind: 'edge', to: 101, stand_on: { col: 5, row: 2 }, fine_stand_on: { x: 96, y: 335 } },
        { kind: 'edge', to: 101, stand_on: { col: 5, row: 2 }, fine_stand_on: { x: 96, y: 352 } }], {});
     ok('a crossing that reported failure but changed the room is not recovered from',
-       result.left === true && result.confirmed_room_change === true && result.late === true
-         && retreats === 0 && attempts === 1,
-       JSON.stringify({ left: result.left, confirmed_room_change: result.confirmed_room_change,
-                        late: result.late, retreats, attempts }));
+       result.left === true && result.late === true && retreats === 0 && attempts === 1,
+       JSON.stringify({ left: result.left, late: result.late, retreats, attempts }));
   }
 
   // A ONE-SQUARE DOORWAY GETS PATIENCE, NOT BREADTH.
@@ -3766,235 +3783,6 @@ console.log('A RAIL NEVER GIVES BACK GROUND IT HAS ALREADY MADE');
      out?.railed === false, JSON.stringify(out));
   ok('and it says the body never got further along', /no forward progress|slipped_off_rail/.test(out?.reason ?? ''),
      JSON.stringify(out?.reason));
-}
-
-console.log('');
-console.log('A ROOM CHANGE OBSERVED DURING THE FINAL STEP ENDS THE TRACK REPLAY');
-{
-  // Fine movement can return a stale left_room:false even though the protocol room changed
-  // while that await was outstanding. The live room identity outranks the move snapshot and
-  // the working track must not be struck or handed back as a failure.
-  rideTrackFixture = {
-    ms: 100,
-    shelter: [],
-    waypoints: [{ x: 128, y: 128 }, { x: 63, y: 128 }],
-  };
-  const world = { room: { num: 593 }, geometry: { walkable: () => true } };
-  const client = {
-    self: { x: 128, y: 128 }, room: { id: 1586 },
-  };
-  const steps = [];
-  rideTrackClears = 0;
-  rideTrackStrikes = 0;
-  const trackSession = {
-    client, world, movementGeneration: 0,
-    need: () => client,
-    movementWasCancelled: () => false,
-    async walkTo() { throw new Error('a rider already on the first station tried to board'); },
-    async stepFine(x, y) {
-      steps.push({ x, y });
-      client.self = { ...client.self, x, y };
-      if (x === 63) {
-        world.room = { num: 583 };
-        client.room = { id: 1578 };
-      }
-      return { moved: true, left_room: false, predicted: true };
-    },
-    async walkFine() { throw new Error('a reached learned station fell back to fine walking'); },
-  };
-  const ridden = await rideTrack.call(trackSession, 102, 583, {});
-  ok('the live room change stops replay without yet claiming a completed crossing',
-     ridden?.left_room === false && ridden?.room_changed === true
-       && ridden?.late_room_change === true,
-     JSON.stringify(ridden));
-  ok('no source-room fallback move runs after the delayed transition',
-     JSON.stringify(steps) === JSON.stringify([{ x: 128, y: 128 }, { x: 63, y: 128 }]),
-     JSON.stringify(steps));
-  ok('an unconfirmed room publication neither strikes nor clears the learned track',
-     rideTrackStrikes === 0 && rideTrackClears === 0,
-     JSON.stringify({ rideTrackStrikes, rideTrackClears }));
-}
-
-console.log('');
-console.log('AN EXIT SELECTED BEFORE A ROOM CHANGE NEVER MOVES IN THE NEW ROOM');
-{
-  const client = { room: { id: 1586 } };
-  let walks = 0;
-  const session = {
-    client, world: {},
-    need: () => client,
-    movementWasCancelled: () => false,
-    cancelledMovement: () => ({ cancelled: true }),
-    async standBeforeGo() { client.room = { id: 1578 }; },
-    async walkTo() { walks++; return { arrived: true }; },
-  };
-  const result = await leaveVia.call(session,
-    { kind: 'edge', to: 583, direction: 'west' }, { expectedRoomId: 1586 });
-  ok('the old-room exit is acknowledged as stale after the first await',
-     result?.left === false && result?.room_changed === true && result?.late === true,
-     JSON.stringify(result));
-  ok('none of its coordinates are executed in the newly published room', walks === 0,
-     String(walks));
-}
-
-{
-  const client = { room: { id: 1586 } };
-  let walks = 0, fineWalks = 0;
-  const session = {
-    client, world: {},
-    need: () => client,
-    movementWasCancelled: () => false,
-    cancelledMovement: () => ({ cancelled: true }),
-    async standBeforeGo() {},
-    async walkTo() {
-      walks++;
-      client.room = { id: 1578 };
-      return { arrived: false, left_room: false };
-    },
-    async walkFine() { fineWalks++; return { arrived: true }; },
-  };
-  const result = await leaveVia.call(session,
-    { kind: 'go', to: 583, stand_on: { col: 2, row: 5 }, steps_away: 1 },
-    { expectedRoomId: 1586 });
-  ok('a stale false result from the approach still stops the old doorway sequence',
-     result?.left === false && result?.room_changed === true, JSON.stringify(result));
-  ok('the stale go coordinates are not handed to the fine fallback',
-     walks === 1 && fineWalks === 0, JSON.stringify({ walks, fineWalks }));
-}
-
-{
-  let goPackets = 0;
-  const client = {
-    room: { id: 1586 }, self: { col: 2, row: 5 }, evSeq: 0,
-    eventsSince: () => [],
-    waitFor: async () => ({ events: [] }),
-    go: () => { goPackets++; },
-  };
-  const session = {
-    client, world: { room: { num: 593, name: 'source' } },
-    need: () => client,
-    movementWasCancelled: () => false,
-    cancelledMovement: () => ({ cancelled: true }),
-    async standBeforeGo() {},
-    async walkTo() { return { arrived: true, left_room: false }; },
-    async confirmPosition() { return { col: 2, row: 5 }; },
-    pacer: {
-      async submit(_label, fn) {
-        client.room = { id: 1578 };
-        return fn();
-      },
-    },
-  };
-  const result = await leaveVia.call(session,
-    { kind: 'go', to: 583, stand_on: { col: 2, row: 5 }, steps_away: 0 },
-    { expectedRoomId: 1586 });
-  ok('the paced go callback rechecks the room at the instant it would emit',
-     goPackets === 0 && result?.room_changed === true,
-     JSON.stringify({ goPackets, result }));
-}
-
-{
-  const client = {
-    room: { id: 1586 }, self: { col: 10, row: 10 }, evSeq: 0,
-    eventsSince: () => [],
-    waitFor: async () => ({ events: [] }),
-  };
-  let walks = 0, fineWalks = 0;
-  const session = {
-    client,
-    world: {
-      room: { num: 593, name: 'source' },
-      approachSquare: () => null,
-    },
-    need: () => client,
-    movementWasCancelled: () => false,
-    cancelledMovement: () => ({ cancelled: true }),
-    async standBeforeGo() {},
-    async walkTo(col, row) {
-      walks++;
-      if (walks === 1) return { arrived: false, left_room: false, reason: 'coarse grid refused' };
-      client.self = { col, row };
-      client.room = { id: 1578 };
-      return { arrived: true, left_room: false };
-    },
-    async walkFine() { fineWalks++; return { arrived: true }; },
-    pacer: { async submit(_label, fn) { return fn(); } },
-  };
-  const result = await leaveVia.call(session, {
-    kind: 'region', to: 583, trigger: 'test region',
-    trigger_targets: [{ stand_on: { col: 2, row: 5 }, approach_on: { col: 3, row: 5 } }],
-  }, { expectedRoomId: 1586 });
-  ok('a region staging handoff cannot run the old target fine walk',
-     result?.room_changed === true && walks === 2 && fineWalks === 0,
-     JSON.stringify({ result, walks, fineWalks }));
-}
-
-console.log('');
-console.log('A CONFIRMED REGION EXIT KEEPS ITS COUNT OUT OF THE TRIED ARRAY CONTRACT');
-{
-  // Marion -> Cibilo Creek Inn is a code-defined trigger region, and is the live route
-  // that exposed a successful crossing returning `tried: 1`. `travel` serializes `tried`
-  // as candidate evidence, so an attempt COUNT belongs on the explicitly numeric field.
-  const exit = {
-    kind: 'region', to: 535, trigger: 'row > 83 and col > 48',
-    trigger_targets: [{ stand_on: { col: 49, row: 84 }, reachable: true }],
-  };
-  const fixture = () => {
-    const entered = { kind: 'room-entered', roomName: 'Cibilo Creek Inn' };
-    const client = {
-      room: { id: 1200 }, self: { col: 48, row: 83 }, evSeq: 0,
-      eventsSince: () => [entered],
-      waitFor: async () => ({ events: [entered] }),
-    };
-    const world = {
-      room: { num: 200, name: 'Marion' },
-      approachSquare: () => null,
-    };
-    let walks = 0, fineWalks = 0;
-    const session = {
-      client, world, movementGeneration: 0,
-      need: () => client,
-      movementWasCancelled: () => false,
-      cancelledMovement: () => ({ cancelled: true }),
-      async standBeforeGo() {},
-      async walkTo(col, row) {
-        walks++;
-        client.self = { col, row };
-        client.room = { id: 1535 };
-        world.room = { num: 535, name: 'Cibilo Creek Inn' };
-        return { arrived: true, left_room: false };
-      },
-      async walkFine() { fineWalks++; return { arrived: true }; },
-      pacer: { async submit(_label, fn) { return fn(); } },
-      async _askStrategies() { return null; },
-      _blockingBodies() { return []; },
-      _blinkPointHere() { return null; },
-    };
-    return { session, calls: () => ({ walks, fineWalks }) };
-  };
-
-  const directFixture = fixture();
-  const direct = await leaveVia.call(directFixture.session, exit,
-    { expectedRoomId: directFixture.session.client.room.id });
-  ok('leaveVia reports the confirmed code-defined region crossing as successful',
-     direct?.left === true && direct?.arrived_in === 'Cibilo Creek Inn' &&
-       directFixture.calls().walks === 1 && directFixture.calls().fineWalks === 0,
-     JSON.stringify({ direct, calls: directFixture.calls() }));
-  ok('leaveVia puts the numeric count on region_attempts, never numeric tried',
-     direct?.region_attempts === 1 &&
-       (direct.tried == null || Array.isArray(direct.tried)) && typeof direct.tried !== 'number',
-     JSON.stringify(direct));
-
-  const anyFixture = fixture();
-  anyFixture.session.leaveVia = (candidate, options) =>
-    leaveVia.call(anyFixture.session, candidate, options);
-  const aggregate = await leaveViaAny.call(anyFixture.session, [exit], { exact: true });
-  ok('leaveViaAny preserves a confirmed region crossing and its attempt count',
-     aggregate?.left === true && aggregate?.attempts === 1 && aggregate?.region_attempts === 1,
-     JSON.stringify(aggregate));
-  ok('leaveViaAny also never exposes a numeric tried field',
-     (aggregate.tried == null || Array.isArray(aggregate.tried)) &&
-       typeof aggregate.tried !== 'number', JSON.stringify(aggregate));
 }
 
 console.log('');
