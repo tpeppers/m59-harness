@@ -3104,25 +3104,34 @@ export class Autopilot {
    * `abortOnDamage` is left on. A wall that is being hit is not a wall, and the caller is
    * better off told that than sat out — it can still cast, it simply casts tired.
    */
-  async restBeforeBlink(why, { maxSeconds = 90 } = {}) {
+  async restBeforeBlink(why, { maxSeconds = 90, mana = 0 } = {}) {
     const before = vigorPct(this.s.client?.vitals?.());
-    if ((before ?? 1) >= REST_VIGOR_CAP)
-      return { rested: false, note: 'already at the resting cap', vigor_pct: before };
+    const manaBefore = pct(this.s.client?.vitals?.()?.mana);
+    // MANA IS THE ONE THAT DECIDES WHETHER THE SPELL HAPPENS AT ALL, and unlike vigor it
+    // genuinely refills by sitting. Animal was found in room 567 with NINE mana against a
+    // fifteen-mana blink — the strategy asked, the predicate said yes, and the cast could
+    // not happen. Waiting for mana is a wait that ends; waiting for vigor above the resting
+    // cap is not, which is why the two are asked for differently.
+    if ((before ?? 1) >= REST_VIGOR_CAP && (manaBefore ?? 1) >= mana)
+      return { rested: false, note: 'already at the resting cap', vigor_pct: before, mana_pct: manaBefore };
     this.doing = 'recovering';
     const r = await skills.restUntil(this.s, {
       // HEALTH IS NOT THE POINT HERE AND MUST NOT HOLD THE CAST UP. A stalled crossing is
       // usually at full health — being hurt is what the survival ladder is for, and it runs
       // on its own clock. Asking for health too would sit a healthy character down for
       // nothing and a hurt one down for the wrong reason.
-      health: 0, vigor: REST_VIGOR_CAP, maxSeconds, abortOnDamage: true,
+      health: 0, vigor: REST_VIGOR_CAP, mana, maxSeconds, abortOnDamage: true,
     }).catch(e => ({ error: e.message }));
     const after = vigorPct(this.s.client?.vitals?.());
+    const manaAfter = pct(this.s.client?.vitals?.()?.mana);
     this.ledgerEvent('blink_rest', {
       why, vigor_before: before, vigor_after: after,
+      mana_before: manaBefore, mana_after: manaAfter, mana_wanted: mana,
       hit_while_resting: r?.interrupted_by_damage ?? null,
       note: r?.error ?? r?.note ?? null,
     });
-    return { rested: !r?.error, vigor_pct: after, before, interrupted: r?.interrupted_by_damage ?? false,
+    return { rested: !r?.error, vigor_pct: after, before, mana_pct: manaAfter,
+             interrupted: r?.interrupted_by_damage ?? false,
              ...(r?.error ? { why: r.error } : {}) };
   }
 

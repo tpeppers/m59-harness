@@ -6875,10 +6875,11 @@ class Session {
               // sitting down in the open next to whatever we just failed to get away from
               // is not the same thing and is not what it is for. With no wall we cast tired.
               let rested = null;
-              if (wall?.took && answer.answer.rest_to_vigor) {
+              if (wall?.took && (answer.answer.rest_to_vigor || answer.answer.rest_to_mana)) {
                 const pilot = autopilotIfAny(this.name);
                 rested = pilot && typeof pilot.restBeforeBlink === 'function'
-                  ? await pilot.restBeforeBlink('vigor before a blink out of a stalled crossing')
+                  ? await pilot.restBeforeBlink('vigor and mana before a blink out of a stalled crossing',
+                                                { mana: Number(answer.answer.rest_to_mana ?? 0) })
                                .catch(e => ({ rested: false, why: e.message }))
                   : { rested: false, why: 'no autopilot to rest with' };
               }
@@ -9926,10 +9927,11 @@ class Session {
         }).catch(() => null);
       }
       let rested = null;
-      if (wall?.took && stuckAnswer.answer.rest_to_vigor) {
+      if (wall?.took && (stuckAnswer.answer.rest_to_vigor || stuckAnswer.answer.rest_to_mana)) {
         const pilot = autopilotIfAny(this.name);
         rested = pilot && typeof pilot.restBeforeBlink === 'function'
-          ? await pilot.restBeforeBlink('vigor before a blink out of a stalled crossing')
+          ? await pilot.restBeforeBlink('vigor and mana before a blink out of a stalled crossing',
+                                        { mana: Number(stuckAnswer.answer.rest_to_mana ?? 0) })
                        .catch(e => ({ rested: false, why: e.message }))
           : { rested: false, why: 'no autopilot to rest with' };
       }
