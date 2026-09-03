@@ -164,6 +164,13 @@ export function reachableAround(geo, from, bodies, { rows, cols }) {
  * reason this predicate exists: fifteen mana and ten seconds to arrive somewhere just as
  * stuck. `stalled` says "walking is not working here"; it does not say "anywhere is better".
  */
+// How much more of the room the blink point must open before "I cannot reach my goal from
+// either end" counts as being STRANDED rather than merely badly aimed. Four: measured on
+// room 567, where the sealed characters reached 17, 26 and 55 squares against the blink
+// point's 835 (15x to 49x), and a body standing in the main region with a bad goal reaches
+// several hundred and does not come close.
+const UNSTRAND_FACTOR = Number(process.env.M59_BLINK_UNSTRAND_FACTOR || 4);
+
 export function canBlinkOut({ geo, blink, from, goal, bodies, rows, cols,
                               room = null, route = null, observe = null, stalled = false }) {
   const key = (r, c) => r * 1000 + c;
@@ -207,9 +214,35 @@ export function canBlinkOut({ geo, blink, from, goal, bodies, rows, cols,
     return say({ can: false, why: 'the goal is already reachable on foot; blink would gain nothing' },
                 { from_here: here.size });
   const there = reachableAround(geo, blink, bodies, { rows, cols });
-  if (!there.has(key(goal.row, goal.col)))
+  if (!there.has(key(goal.row, goal.col))) {
+    // A GOAL NOBODY CAN REACH IS NOT EVIDENCE THAT BLINKING IS POINTLESS.
+    //
+    // This check is right when it means "the blink point is on our side of the jam". It is
+    // wrong when the GOAL is the unreachable thing, and in a fragmented room that is the
+    // commoner case: 567 has 59 regions, its north boundary is standable at cols 10-17 and
+    // 44-47, and those are two DIFFERENT pockets — cols 45-47 are the room's body and cols
+    // 10-17 are an 81-square island. The fleet spent 536 of 707 asks there aiming at r1c16
+    // and r1c13, both on the island, so the goal was unreachable from the blink point too
+    // and every ask died on this line.
+    //
+    // Meanwhile Kermit could reach 17 squares, Animal 26 and Scooter 55, none of them able
+    // to reach ANY exit of that room, while the blink point reaches 835. Blinking does not
+    // complete their journey and it is still the whole answer: it puts a stranded body back
+    // in the room's body, where the ordinary router has something to work with. The operator
+    // was about to rescue those three by hand, 2026-09-03.
+    //
+    // Gated on being genuinely sealed in — the blink point must reach at least four times
+    // what we can — so this cannot fire for a body that merely has a bad goal while standing
+    // in the main region. 55 against 835 passes it; 400 against 835 does not.
+    if (here.size * UNSTRAND_FACTOR <= there.size)
+      return say({ can: true, unstrands: true,
+                   why: `stranded: ${here.size} square(s) from here and the goal is reachable from ` +
+                        `neither, but the blink point opens ${there.size} — blinking to get unstuck ` +
+                        `rather than to arrive` },
+                 { from_here: here.size, from_blink: there.size, ...(stalled ? { stalled } : {}) });
     return say({ can: false, why: 'the blink point is on the same side of the traffic as we are' },
                 { from_here: here.size, from_blink: there.size, stalled });
+  }
   return say({ can: true,
                why: walkable
                  ? `the goal is reachable on foot (${here.size} squares) and we are not reaching ` +
