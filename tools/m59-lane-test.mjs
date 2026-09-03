@@ -317,6 +317,49 @@ console.log('\na stalled crossing outranks "the goal is already reachable on foo
      JSON.stringify(canBlinkOut({ ...base, stalled: null })));
 }
 
+// ------------------------------------------- blinking to get UNSTUCK, not to arrive
+//
+// "The blink point is on the same side of the traffic as we are" is right when the BLINK
+// POINT is the unreachable thing and wrong when the GOAL is — and in a fragmented room the
+// second is commoner. Room 567 has 59 regions; its north boundary is standable at cols
+// 10-17 and 44-47 and those are two different pockets. The fleet spent 536 of 707 asks
+// aiming at r1c16 and r1c13, both on the 81-square island, so the goal was unreachable from
+// the blink point too and every ask died on that line — while Kermit could reach 17 squares,
+// Animal 26 and Scooter 55, none of them able to reach any exit, and the blink point reached
+// 835.
+console.log('\nblinking to get unstuck when the goal is unreachable from either end');
+{
+  const { canBlinkOut } = await import('./m59-blink.mjs');
+  // A room split by a wall at col 4: a narrow western pocket against a wide open east.
+  // The blink point sits east; the goal is a square nothing can reach at all. The pocket is
+  // deliberately far smaller than the body — the gate wants FOUR times, and a 400-vs-1199
+  // split (which an earlier version of this fixture had) is correctly refused.
+  const split = {
+    standPoint: () => ({ x: 0, y: 0 }),
+    moverStepLands: (r, c, r2, c2) => {
+      if (r2 < 1 || c2 < 1 || r2 > 40 || c2 > 40) return false;
+      if (r2 === 20 && c2 === 40) return false;          // the goal: an island nothing enters
+      return (c <= 4) === (c2 <= 4);                     // no crossing the col-4 wall
+    },
+  };
+  const stranded = { geo: split, blink: { row: 20, col: 25 }, from: { row: 20, col: 3 },
+                     goal: { row: 20, col: 40 }, bodies: [], rows: 40, cols: 40 };
+  const v = canBlinkOut(stranded);
+  ok('a sealed body whose goal nobody can reach still gets the cast',
+     v.can === true && v.unstrands === true, JSON.stringify(v));
+  ok('and the verdict says it is blinking to get unstuck rather than to arrive',
+     /blinking to get unstuck rather than to arrive/.test(v.why), JSON.stringify(v.why));
+  ok('and it carries both counts, so the ledger shows what the cast bought',
+     v.from_here > 0 && v.from_blink >= v.from_here * 4, JSON.stringify(v));
+
+  // NOT for a body that is merely badly aimed. Standing in the big side with the same
+  // unreachable goal, the blink point opens nothing extra and the cast is refused.
+  const badlyAimed = canBlinkOut({ ...stranded, from: { row: 20, col: 25 } });
+  ok('but a body already in the main region with a bad goal is still refused',
+     badlyAimed.can === false && /same side of the traffic/.test(badlyAimed.why),
+     JSON.stringify(badlyAimed));
+}
+
 // ---------------------------------------------------------------- keep right in a corridor
 console.log('\nkeep right — two lanes in a one-square pipe');
 {
