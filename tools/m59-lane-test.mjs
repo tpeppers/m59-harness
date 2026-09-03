@@ -273,6 +273,50 @@ console.log('\nthe canBlinkOut observation seam');
      JSON.stringify({ noObserver, declined }));
 }
 
+// -------------------------------------------- a stalled crossing overrides "you could walk it"
+//
+// "The goal is already reachable on foot" is 1,349 of ~2,300 recorded declines and 226 of the
+// 233 in the Cragged Mountains. It is a true statement about the MAP and it was being read as
+// one about whether the body is getting there. The operator's rule, 2026-09-03: past two
+// minutes in a room and oscillating, open blink up regardless. Only that check is dropped —
+// the blink point must still reach the goal, or a stalled body pays fifteen mana to arrive
+// somewhere just as stuck.
+console.log('\na stalled crossing outranks "the goal is already reachable on foot"');
+{
+  const { canBlinkOut } = await import('./m59-blink.mjs');
+  const open = { standPoint: () => ({ x: 0, y: 0 }), moverStepLands: () => true };
+  const base = { geo: open, blink: { row: 1, col: 1 }, from: { row: 5, col: 5 },
+                 goal: { row: 9, col: 9 }, bodies: [], rows: 12, cols: 12 };
+
+  const walkable = canBlinkOut(base);
+  ok('an open room declines, because walking really would do',
+     walkable.can === false && /already reachable on foot/.test(walkable.why),
+     JSON.stringify(walkable));
+
+  const stalled = canBlinkOut({ ...base, stalled: '131s in this room, 24 moves over 3 square(s)' });
+  ok('the same room with a stalled crossing allows the cast',
+     stalled.can === true, JSON.stringify(stalled));
+  ok('and the verdict says it fired DESPITE the goal being walkable, so the ledger cannot lie about why',
+     stalled.despite_walkable === true && /24 moves over 3 square\(s\)/.test(stalled.why),
+     JSON.stringify(stalled));
+
+  // The second half is not negotiable: a blink point that cannot reach the goal is a wasted
+  // cast whatever the crossing has been doing.
+  const sealed = { standPoint: () => ({ x: 0, y: 0 }),
+                   // Nothing may step out of the blink point's corner.
+                   moverStepLands: (r, c) => !(r <= 2 && c <= 2) };
+  const useless = canBlinkOut({ ...base, geo: sealed, from: { row: 9, col: 8 },
+                                stalled: '200s in this room, 24 moves over 2 square(s)' });
+  ok('but a stall does not buy a blink point that cannot reach the goal either',
+     useless.can === false && /same side of the traffic/.test(useless.why),
+     JSON.stringify(useless));
+
+  // And the flag is inert when the crossing is going normally.
+  ok('a crossing that is not stalled is unaffected by the option existing',
+     canBlinkOut({ ...base, stalled: null }).can === false,
+     JSON.stringify(canBlinkOut({ ...base, stalled: null })));
+}
+
 // ---------------------------------------------------------------- keep right in a corridor
 console.log('\nkeep right — two lanes in a one-square pipe');
 {

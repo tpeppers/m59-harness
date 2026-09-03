@@ -3085,6 +3085,47 @@ export class Autopilot {
     } catch { return null; }
   }
 
+  /**
+   * SIT DOWN AND GET YOUR LEGS BACK BEFORE DOING SOMETHING THAT MOVES YOU.
+   *
+   * The caller has already taken a safe spot; this is the rest that belongs on it. It exists
+   * for the blink escape and the rule it enforces is a MECHANIC rather than a preference:
+   * RUNNING NEEDS AT LEAST 10 VIGOR, and blink drops the body on a fixed square the room's
+   * kod declares, with no promise about what is standing there. Arriving unable to run is
+   * arriving with the only thing that makes a bad landing survivable already spent — and the
+   * stall that prompted the blink is itself what spends it. Beaker, 2026-09-03: found
+   * oscillating in the Cragged Mountains at vigor ONE and full health, in a room holding
+   * sixty bodies.
+   *
+   * `REST_VIGOR_CAP` and not more: RestTimer stops awarding vigor at 80 of 200, so a request
+   * above the cap is a request to sit until the timeout. Everything above it has to be eaten,
+   * which is a supply problem and not something to wait out here.
+   *
+   * `abortOnDamage` is left on. A wall that is being hit is not a wall, and the caller is
+   * better off told that than sat out — it can still cast, it simply casts tired.
+   */
+  async restBeforeBlink(why, { maxSeconds = 90 } = {}) {
+    const before = vigorPct(this.s.client?.vitals?.());
+    if ((before ?? 1) >= REST_VIGOR_CAP)
+      return { rested: false, note: 'already at the resting cap', vigor_pct: before };
+    this.doing = 'recovering';
+    const r = await skills.restUntil(this.s, {
+      // HEALTH IS NOT THE POINT HERE AND MUST NOT HOLD THE CAST UP. A stalled crossing is
+      // usually at full health — being hurt is what the survival ladder is for, and it runs
+      // on its own clock. Asking for health too would sit a healthy character down for
+      // nothing and a hurt one down for the wrong reason.
+      health: 0, vigor: REST_VIGOR_CAP, maxSeconds, abortOnDamage: true,
+    }).catch(e => ({ error: e.message }));
+    const after = vigorPct(this.s.client?.vitals?.());
+    this.ledgerEvent('blink_rest', {
+      why, vigor_before: before, vigor_after: after,
+      hit_while_resting: r?.interrupted_by_damage ?? null,
+      note: r?.error ?? r?.note ?? null,
+    });
+    return { rested: !r?.error, vigor_pct: after, before, interrupted: r?.interrupted_by_damage ?? false,
+             ...(r?.error ? { why: r.error } : {}) };
+  }
+
   async takeSafeSpot(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
