@@ -1253,11 +1253,30 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
   }
   // The operator's rails, added to whatever the detector found. A declared head that the
   // detector also found is kept once -- the declaration carries the `why`, so it wins.
+  //
+  // TWO RAILS OUT OF ONE HEAD IS TWO DESTINATIONS, NOT A CORRECTION.
+  //
+  // `declaredGutters` returns one record per DECLARED RAIL, each carrying a single-element
+  // `reaches`, and this merged them by spreading the later record over the earlier one. So
+  // a head with three rails kept only the LAST -- silently, with the file's own `_shape`
+  // line promising that "each entry bakes one route from `from` to `to`". Declaring
+  // 8,33 -> 1,13 / 49,12 / 35,1 for the Cragged Mountains produced exactly one route,
+  // `8,33>35,1`, and the northbound line the head was added for was simply absent from the
+  // table. Ukgoth never showed it because its four rails happen to have four distinct
+  // heads; a second rail off 67,15 would have vanished the same way.
+  //
+  // `reaches` is a SET of destinations, so it is unioned. Everything else about the record
+  // -- `why`, `declared` -- is still last-wins, which is what a later line in a hand-edited
+  // file should mean, and `squares` stays the detector's count because a declaration says
+  // where the head is and not how big the pocket is.
+  const sameSquare = (a, b) => a.row === b.row && a.col === b.col;
   for (const d of declaredGutters(room.num)) {
-    const at = `${d.row},${d.col}`;
-    const i = gutters.findIndex(g => `${g.row},${g.col}` === at);
-    if (i >= 0) gutters[i] = { ...gutters[i], ...d, squares: gutters[i].squares };
-    else gutters.push({ ...d, squares: null });
+    const i = gutters.findIndex(g => `${g.row},${g.col}` === `${d.row},${d.col}`);
+    if (i < 0) { gutters.push({ ...d, squares: null }); continue; }
+    const merged = [...(gutters[i].reaches ?? [])];
+    for (const to of d.reaches ?? [])
+      if (!merged.some(x => sameSquare(x, to))) merged.push(to);
+    gutters[i] = { ...gutters[i], ...d, reaches: merged, squares: gutters[i].squares };
   }
   for (const g of gutters) {
     const { came, key } = bfs(geometry, g.row, g.col, { collision });

@@ -23,7 +23,7 @@ import {
   sharedRoomGeometry,
 } from './m59-roo.mjs';
 import { recordTactic } from './m59-tactics.mjs';
-import { anchorFor, activeRoutes } from './m59-routes.mjs';
+import { anchorFor, activeRoutes, bakedPath } from './m59-routes.mjs';
 import { recordCrossing } from './m59-crossings.mjs';
 import { finePath, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
@@ -1364,6 +1364,15 @@ const approachFine = compileSessionMethod(brokerSource,
 const walkTo = compileSessionMethod(brokerSource,
   'async walkTo(col, row, {', 'walkTo', {
     provedSquares,
+    // THE REAL VALUES, because what they gate is a behaviour rather than a stub point: past
+    // two minutes in a room AND going round in circles, the walker asks the strategies again
+    // even though every square in the loop has already had its one ask. The operator's rule,
+    // 2026-09-03. A fixture that walks a few steps never reaches the clock, which is the
+    // point — these must not fire on an ordinary crossing.
+    CROSSING_STALL_MS: 120_000,
+    CROSSING_WINDOW: 24,
+    CROSSING_DISTINCT: 6,
+    CROSSING_ASK_EVERY_MS: 20_000,
     // THE REAL NUMBER, because the branch it guards is a behaviour: a walk that takes this
     // many steps without ever getting closer is a dither and is handed back to the caller.
     // Fourteen is generous enough to go round a building and far short of the sixty-odd
@@ -1495,6 +1504,10 @@ const realSidestepAround = compileSessionMethod(brokerSource,
 
 const leaveViaAny = compileSessionMethod(brokerSource,
   'async leaveViaAny(candidates, {', 'leaveViaAny', {
+    // The real stall clock, for the same reason walkTo gets it: the give-up ask now carries
+    // whether the whole crossing has been going round in circles, not only how long this
+    // boundary has refused.
+    CROSSING_STALL_MS: 120_000,
     isTerminalMovementReason, spreadEdges, orderExits: exits => exits, KOD_FINENESS,
     // THE TWO INSTRUMENTS, AS THE REAL ONES. Both are ordinary exports of modules that
     // import without taking the fleet lock, and both are written to be unable to throw —
@@ -2238,6 +2251,205 @@ console.log('\nterminal movement propagation and edge packet authority');
     const longRouteCrow = await railSkipRun(126, 'crow');
     ok('M59_RAIL_MEASURE=crow restores the old straight-line judgement exactly',
        longRouteCrow.rail.length === 0, JSON.stringify(longRouteCrow));
+
+    // ================= A GUTTER HEAD IS A BOARDABLE START =================
+    //
+    // The bake writes two kinds of line into `routes`: anchor-to-anchor, and one per GUTTER
+    // — the places a room drops you into and does not walk you out of. `railAcross` built
+    // its candidate list from `r.anchors` alone, so every gutter rail ever baked was written
+    // to disk, passed `--verify`, and was never offered to anybody.
+    //
+    // The fixture is UKGOTH, because that is the case with something real at stake: four
+    // heads the operator declared by hand in substrate/m59-gutters.json after seven of
+    // thirteen deaths in one thirty-minute run happened in the lower basin, every health
+    // trail the same shape — a body pinned at a low number that stops changing. Those four
+    // rails have been on disk, and passing `--verify`, since 2026-08-29, and until this
+    // change nothing could board one. `67,15 -> 71,2` is the basin's only way out.
+    const railAcross = compileSessionMethod(brokerSource, 'railAcross(toSquare) {', 'railAcross',
+                                            { activeRoutes: () => leaveViaRoutesFixture, bakedPath });
+    if (railAcross) {
+      const ukgoth599 = {
+        rooms: { 599: {
+          rows: 72, cols: 72,
+          anchors: [
+            { to: 589, row: 71, col: 2 }, { to: 598, row: 1, col: 66 }, { to: 2, row: 1, col: 27 },
+          ],
+          // The four the operator declared, exactly as the bake writes them back out.
+          gutters: [
+            { row: 49, col: 45, squares: null, reaches: ['67,15'] },
+            { row: 39, col: 16, squares: null, reaches: ['67,15'] },
+            { row: 60, col: 41, squares: null, reaches: ['67,15'] },
+            { row: 67, col: 15, squares: null, reaches: ['71,2'] },
+          ],
+          // One letter a step; only the starts and the fact a line EXISTS matter here.
+          routes: {
+            '1,66>71,2': 'n', '1,27>71,2': 'n',
+            '49,45>67,15': 'n', '39,16>67,15': 'n', '60,41>67,15': 'n', '67,15>71,2': 'n',
+          },
+        } },
+      };
+      const railFromUk = (row, col, to, table) => {
+        const prior = leaveViaRoutesFixture;
+        leaveViaRoutesFixture = table;
+        try {
+          return railAcross.call(
+            { world: { room: { num: 599 }, geometry: { rows: 72, cols: 72 } },
+              client: { self: { row, col } } },
+            to);
+        } finally { leaveViaRoutesFixture = prior; }
+      };
+      // A body under the missed jump, on the west side of the basin. Its declared head is
+      // 39,16 and the only thing it can reach from there is 67,15, the basin's staging
+      // square — which then has its own rail out through the 589 door.
+      const underJump = railFromUk(40, 17, { row: 67, col: 15 }, ukgoth599);
+      ok('a body in the Ukgoth basin boards at the head the operator declared for it',
+         underJump?.from?.row === 39 && underJump?.from?.col === 16,
+         JSON.stringify(underJump?.from ?? underJump));
+      ok('and the rail it gets is marked as a gutter line, not an anchor line',
+         underJump?.gutter === true, JSON.stringify(underJump));
+      // The staging square's own rail is the one that leaves the room.
+      const outOfBasin = railFromUk(66, 16, { row: 71, col: 2 }, ukgoth599);
+      ok('and from the basin floor the line out through 589 is offered at 67,15',
+         outOfBasin?.from?.row === 67 && outOfBasin?.from?.col === 15,
+         JSON.stringify(outOfBasin?.from ?? outOfBasin));
+      // Without the gutters the same body is offered an ANCHOR, which is what it got for as
+      // long as the candidate list read `r.anchors` alone — and the two anchors it can be
+      // sent to are the doors it cannot reach without a relic and a spoken phrase.
+      const noGutters = { rooms: { 599: { ...ukgoth599.rooms[599], gutters: undefined } } };
+      const before = railFromUk(40, 17, { row: 67, col: 15 }, noGutters);
+      ok('and with no gutters in the table there is no line for it at all',
+         before === null, JSON.stringify(before));
+      // A head is not an exit, so the doorway rule must leave an interior one alone.
+      ok('an interior gutter head is boarded where it stands, not stepped off a boundary',
+         underJump?.steppedOffBoundary !== true, JSON.stringify(underJump));
+      const edgeTable = { rooms: { 599: { ...ukgoth599.rooms[599],
+        gutters: [{ row: 1, col: 40, squares: null, reaches: ['71,2'] }],
+        routes: { '1,40>71,2': 'sw' } } } };
+      const edgeHead = railFromUk(3, 41, { row: 71, col: 2 }, edgeTable);
+      ok('but a gutter head on the boundary is still stepped inland before boarding',
+         edgeHead?.steppedOffBoundary === true, JSON.stringify(edgeHead));
+    }
+
+    // ============ GOING ROUND IN CIRCLES IS NOT STANDING STILL ============
+    //
+    // The commonest way to get nowhere in this game is a two-square shuffle, and it resets
+    // every stillness timer it meets — already written down for `ms_since_moved`, and the
+    // reason a crossing could sit in one room for minutes with nothing calling it stuck.
+    // `_crossingOscillation` counts GROUND COVERED instead: the last 24 squares the body
+    // occupied, and how many of them are distinct.
+    const noteSquare = compileSessionMethod(brokerSource, '_noteCrossingSquare(row, col) {',
+                                            '_noteCrossingSquare', { CROSSING_WINDOW: 24 });
+    const oscillation = compileSessionMethod(brokerSource, '_crossingOscillation() {',
+                                             '_crossingOscillation',
+                                             { CROSSING_WINDOW: 24, CROSSING_DISTINCT: 6 });
+    if (noteSquare && oscillation) {
+      const walk = (squares) => {
+        const s = { _noteCrossingSquare: noteSquare, _crossingOscillation: oscillation };
+        for (const [r, c] of squares) s._noteCrossingSquare(r, c);
+        return s._crossingOscillation();
+      };
+      // The measured Cragged shuffle: two squares, back and forth, for as long as you like.
+      const shuffle = [];
+      for (let i = 0; i < 30; i++) shuffle.push(i % 2 ? [15, 30] : [15, 29]);
+      ok('a two-square shuffle is reported as an oscillation, which no stillness timer can see',
+         /24 moves over 2 square\(s\)/.test(walk(shuffle) ?? ''), JSON.stringify(walk(shuffle)));
+      // An honest corridor walk covers ground and must never be called a loop.
+      const corridor = [];
+      for (let i = 0; i < 30; i++) corridor.push([10, 10 + i]);
+      ok('but a walk down a corridor is not, however long it goes on',
+         walk(corridor) === null, JSON.stringify(walk(corridor)));
+      // Not enough history is "do not know", never "fine".
+      ok('and a crossing too short to judge answers null rather than guessing',
+         walk([[1, 1], [1, 2], [1, 3]]) === null, JSON.stringify(walk([[1, 1], [1, 2], [1, 3]])));
+      // STANDING STILL IS THE OTHER DETECTOR'S JOB — repeats of the same square are not
+      // moves, or a body pinned on one square would read as a 24-move loop.
+      const pinned = { _noteCrossingSquare: noteSquare, _crossingOscillation: oscillation };
+      for (let i = 0; i < 40; i++) pinned._noteCrossingSquare(7, 7);
+      ok('a body pinned on ONE square is left to the stillness detector, not called a loop',
+         pinned._crossingOscillation() === null && pinned._crossingFootprint.length === 1,
+         JSON.stringify(pinned._crossingFootprint));
+      // A wandering loop still counts — six squares is wide enough for a shuffle that drifts.
+      const wander = [];
+      for (let i = 0; i < 30; i++) wander.push([[15, 29], [15, 30], [14, 30], [15, 30]][i % 4]);
+      ok('a loop that wanders over four squares is still a loop',
+         /24 moves over 3 square\(s\)/.test(wander.length ? walk(wander) ?? '' : ''),
+         JSON.stringify(walk(wander)));
+    }
+
+    // ============ AND NEVER WALK FURTHER TO GET ON THAN TO ARRIVE ============
+    //
+    // Candidate starts are ranked by the CROW line, and a gutter head is deliberately placed
+    // in the worst-served pocket of a room — which puts it close, as the crow flies, to
+    // squares on the FAR side of the wall that are a few steps from the exit. Measured for
+    // the new head at 8,33: r6c24 is 9.2 away by crow, forty-six steps to walk to, and its
+    // own door is thirteen. The guard compares the two walks actually on offer.
+    const declineRun = async ({ toDoor, toHead, gutter = false }) => {
+      const calls = { rail: [], walks: [] };
+      const session = {
+        ...terminalSession,
+        client: { room: { id: 578 }, self: { col: 24, row: 6, x: 1568, y: 416 },
+                  roomNameRsc: 1, rsc: { get: () => 'The Cragged Mountains' } },
+        world: { room: { num: 578 }, exits: () => [],
+                 // KEYED ON THE DESTINATION, because this guard asks two different questions
+                 // and a stub with one answer cannot tell them apart.
+                 geometry: { path: (fr, fc, tr, tc) => ({
+                   found: true,
+                   steps: new Array(tr === 1 && tc === 13 ? toDoor : toHead).fill(0) }) } },
+        railAcross() { return { from: { row: 8, col: 33 }, gutter,
+                                squares: [{ row: 8, col: 33 }, { row: 1, col: 13 }] }; },
+        async followRail(squares) { calls.rail.push(squares.length); return { railed: true, walked: squares.length }; },
+        async walkTo(col, row) { calls.walks.push(`${row},${col}`); return { arrived: true }; },
+        async walkFine() { return { arrived: false, reason: 'stalled' }; },
+      };
+      const priorRail = process.env.M59_RAIL, priorMeasure = process.env.M59_RAIL_MEASURE;
+      leaveViaRoutesFixture = { rooms: { 578: { anchors: [{ to: 576, row: 1, col: 13, from_body: true }] } } };
+      process.env.M59_RAIL = '1'; process.env.M59_RAIL_MEASURE = 'route';
+      try {
+        await leaveVia.call(session, {
+          kind: 'edge', direction: 'north', to: 576, steps_away: 20,
+          stand_on: { row: 1, col: 13 }, fine_stand_on: { x: 850, y: 96 },
+          edge_target: { x: 850, y: 63 }, fine_path: [{ x: 850, y: 96 }],
+        }, {});
+      } finally {
+        leaveViaRoutesFixture = null;
+        if (priorRail == null) delete process.env.M59_RAIL; else process.env.M59_RAIL = priorRail;
+        if (priorMeasure == null) delete process.env.M59_RAIL_MEASURE;
+        else process.env.M59_RAIL_MEASURE = priorMeasure;
+      }
+      return calls;
+    };
+    // r6c24: its door is thirteen steps and the head is forty-six. Boarding is an eightfold
+    // detour to reach a line whose whole purpose is to be quicker.
+    const lured = await declineRun({ toDoor: 13, toHead: 46 });
+    ok('a rail whose head is further off than the door itself is declined',
+       lured.rail.length === 0, JSON.stringify(lured));
+    // r10c33, the square the gutter was added for: the head is two steps and the door sixty.
+    const stuck = await declineRun({ toDoor: 60, toHead: 2 });
+    ok('but the gutter it was added for still boards — head 2 away, door 60',
+       stuck.rail.length === 1, JSON.stringify(stuck));
+    // NOT A COMPARISON OF TOTAL LENGTH. `board + ride` against `route` would decline the
+    // corner too, and be wrong: a rail is not bought for being shorter, it is bought because
+    // the ordinary walk slides and replans and does not arrive.
+    const evenlyMatched = await declineRun({ toDoor: 60, toHead: 59 });
+    ok('and a head no further than the door boards even when the ride is longer than both',
+       evenlyMatched.rail.length === 1, JSON.stringify(evenlyMatched));
+
+    // A SHORT DOOR IS NOT A REASON TO REFUSE A GUTTER RAIL, and this pins the case that
+    // proved it. A threshold ("decline a gutter line when the door is already within 25")
+    // was added here and then withdrawn: Ukgoth's `67,15 -> 71,2` is the operator's terminal
+    // rail out of the lower basin — the one written after seven of thirteen deaths in a
+    // thirty-minute run happened down there — and on the masked graph that door is FIFTEEN
+    // steps away. The rule would have declined the basin's only declared way out, quietly
+    // re-breaking the exact case that reading `r.gutters` exists to fix.
+    //
+    // A gutter head is a hand-placed claim that the ordinary walk does not work from there.
+    // Distance is not what decides that, so distance must not veto it.
+    const ukgothBasin = await declineRun({ toDoor: 15, toHead: 0, gutter: true });
+    ok('a gutter rail to a door only 15 steps off is still boarded — Ukgoth 67,15 -> 71,2',
+       ukgothBasin.rail.length === 1, JSON.stringify(ukgothBasin));
+    const shortGutter = await declineRun({ toDoor: 17, toHead: 4, gutter: true });
+    ok('and a gutter head 4 steps away with a 17-step door is not vetoed for being close',
+       shortGutter.rail.length === 1, JSON.stringify(shortGutter));
 
     let fineCorrections = 0, goPackets = 0;
     const unknownDoorSession = {

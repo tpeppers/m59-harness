@@ -1061,6 +1061,38 @@ export function bodyWalkArrives(ax, ay, bx, by, bodies, {
 // line's start is itself a doorway to somewhere we do not want to go.
 const RAIL_SKIP_WITHIN_SQUARES = Number(process.env.M59_RAIL_SKIP_WITHIN || 8);
 
+// WHEN A CROSSING HAS GONE ON LONG ENOUGH THAT "YOU COULD WALK IT" STOPS BEING AN ANSWER.
+//
+// The operator's rule, 2026-09-03: past two minutes in a room, oscillating, offer blink
+// whatever the reachability predicate thinks. Two minutes is his number and it is a long
+// way above the honest crossings — 578 measured 20-22s over seven consecutive trials, and
+// the rooms this repository complains about most are 88-208s at their worst. So this fires
+// on a genuine outlier rather than on a slow room.
+const CROSSING_STALL_MS = Number(process.env.M59_CROSSING_STALL_MS || 120_000);
+// The footprint window, and how few distinct squares in it count as going round in circles.
+// Twenty-four moves is long enough that an honest walk through a corridor cannot be mistaken
+// for a loop, and six squares is wide enough to catch a shuffle that wanders a little.
+const CROSSING_WINDOW = Number(process.env.M59_CROSSING_WINDOW || 24);
+const CROSSING_DISTINCT = Number(process.env.M59_CROSSING_DISTINCT || 6);
+// Do not ask the strategies about the same loop every tick; one ask per this many ms.
+const CROSSING_ASK_EVERY_MS = Number(process.env.M59_CROSSING_ASK_EVERY_MS || 20_000);
+
+// THERE WAS A SECOND GUTTER THRESHOLD HERE AND IT WAS WRONG. Written down in case anybody
+// reaches for it again: `RAIL_GUTTER_MIN_DOOR`, which declined a gutter rail whenever the
+// door was already within 25 steps, on the argument that a gutter line is the long way
+// round and cannot pay for itself over a short walk. The argument sounds right and the
+// number came off a map the fleet does not walk — an unmasked `neighbors()` reading, which
+// is the server's coarse grid (see the gutter head that used to be declared for 578).
+//
+// What kills it is Ukgoth. `67,15 -> 71,2` is the operator's terminal rail out of the lower
+// basin, the one written after seven of thirteen deaths in one thirty-minute run happened
+// down there, and on the masked graph that door is FIFTEEN steps away. The threshold would
+// have declined the basin's only declared way out — re-breaking, quietly, the exact case
+// that `railAcross` reading `r.gutters` was added to fix.
+//
+// A gutter head is not a hint that the walk is long. It is a hand-placed claim that the
+// ordinary walk does not work from there, and distance is not what decides that.
+
 const RAIL_STALL_JUMP = Number(process.env.M59_RAIL_STALL_JUMP || 3);
 
 const RAIL_STALL_WAYPOINTS = Number(process.env.M59_RAIL_STALL_WAYPOINTS || 3);
@@ -6275,6 +6307,15 @@ class Session {
       // the step landed, the room was rebuilt, our own object had not come back yet, and
       // the walk was abandoned rather than waiting for a read already on its way.
       const now = c.self ?? await this.selfOrResync();
+      // EVERY SQUARE THIS BODY LANDS ON, whether the plan asked for it or not. Recorded here
+      // rather than where a step is REQUESTED, because the off-plan slide is the thing worth
+      // counting: a loop made of steps the mover kept redirecting looks like progress at the
+      // request site and like a shuffle here. See `_crossingOscillation`.
+      // Guarded the way `_blockingBodies` and `_blinkPointHere` are guarded a few lines
+      // below: `walkTo` is lifted out of this class and run against hand-built sessions by
+      // m59-collision-test.mjs, and a fixture is not obliged to carry the whole Session.
+      if (now && typeof this._noteCrossingSquare === 'function')
+        this._noteCrossingSquare(now.row, now.col);
         if (!now)
           return { arrived: false, reason: 'own_position_unknown',
                    note: 'lost authoritative own-position state while walking, and a ' +
@@ -6737,7 +6778,22 @@ class Session {
           // followed by a REPLAN from where the body now is, not by the old queue.
           const stuckKey = `${next.row},${next.col}`;
           if (!blockedSince.has(stuckKey)) blockedSince.set(stuckKey, Date.now());
-          if (!blinkAsked.has(stuckKey) && typeof this._askStrategies === 'function') {
+          // ONCE PER SQUARE IS THE WRONG BUDGET FOR A LOOP, and it is why a shuffle could
+          // never get an answer out of this site. `blinkAsked` stops us re-asking about the
+          // same blocked square, which is right for a body pushing at one obstacle. A body
+          // going round in circles visits four or five squares in turn, banks an ask against
+          // each of them within the first few seconds, and is then silent for the rest of the
+          // crossing — the longer it goes on, the more certainly every square in the loop is
+          // already in the set. So a crossing that is past the stall clock AND oscillating
+          // asks again regardless, on its own cooldown rather than per square.
+          const oscillating = typeof this._crossingOscillation === 'function'
+            ? this._crossingOscillation() : null;
+          const crossingMs = typeof this._crossingMs === 'function' ? this._crossingMs() : 0;
+          const stalledCrossing = crossingMs >= CROSSING_STALL_MS && !!oscillating;
+          const askAgain = stalledCrossing &&
+                           Date.now() - (this._lastBlinkAskAt ?? 0) >= CROSSING_ASK_EVERY_MS;
+          if ((!blinkAsked.has(stuckKey) || askAgain) && typeof this._askStrategies === 'function') {
+            if (askAgain) this._lastBlinkAskAt = Date.now();
             const stuckMs = Date.now() - blockedSince.get(stuckKey);
             const answer = await this._askStrategies('whenStuck', {
               room: this.world?.room ?? null, geo, self: c.self ?? null,
@@ -6747,6 +6803,12 @@ class Session {
               blink: typeof this._blinkPointHere === 'function' ? this._blinkPointHere() : null,
               vitals: c.vitals?.() ?? null, stuck_ms: stuckMs, underFire: !!underFire,
               agent: this.name ?? this.client?.me?.name ?? null, from: 'walker',
+              // THE CROSSING'S OWN HISTORY, which is the only thing that can contradict a
+              // reachability flood. `stalled` carries the evidence sentence, not a boolean,
+              // so the observation store says WHY the usual decline was overridden.
+              crossing_ms: crossingMs, oscillating,
+              stalled: stalledCrossing
+                ? `${Math.round(crossingMs / 1000)}s in this room, ${oscillating}` : null,
             }).catch(() => null);
             if (answer?.answer?.do === 'blink') {
               blinkAsked.add(stuckKey);
@@ -6772,6 +6834,21 @@ class Session {
                          blocked_at: { col: next.col, row: next.row }, steps: taken, replans };
               }
               const castable = !answer.answer.need_safe_spot || !!wall?.took;
+              // GET THE LEGS BACK BEFORE THE CAST, NOT AFTER. Blink lands the body on a
+              // fixed square the room's kod declares and promises nothing about what is
+              // standing on it; running needs at least 10 vigor, and the shuffle that
+              // prompted the blink is exactly what grinds vigor away. So the wall we just
+              // took is sat on first. Advisory in every direction: no autopilot, no rest,
+              // and a rest that is interrupted by damage still casts — tired is worse than
+              // still going round in circles.
+              let rested = null;
+              if (castable && answer.answer.rest_to_vigor) {
+                const pilot = autopilotIfAny(this.name);
+                rested = pilot && typeof pilot.restBeforeBlink === 'function'
+                  ? await pilot.restBeforeBlink('vigor before a blink out of a stalled crossing')
+                               .catch(e => ({ rested: false, why: e.message }))
+                  : { rested: false, why: 'no autopilot to rest with' };
+              }
               const out = castable
                 ? await this.blinkOut({ expect: answer.answer.expect }).catch(() => null)
                 : { cast: false, arrived: false, why: `did not cast: no wall to cast from (${wall?.why ?? 'unknown'})` };
@@ -6780,6 +6857,10 @@ class Session {
                              worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: castable,
                              note: `blocked at ${next.row},${next.col} for ${Math.round(stuckMs / 1000)}s; ${answer.answer.why}; ` +
                                    (answer.answer.need_safe_spot ? (wall?.took ? 'took a wall first; ' : `no wall (${wall?.why ?? '?'}); `) : '') +
+                                   (rested ? (rested.rested
+                                     ? `rested vigor ${Math.round((rested.before ?? 0) * 100)}% -> ${Math.round((rested.vigor_pct ?? 0) * 100)}%` +
+                                       `${rested.interrupted ? ' (cut short by damage)' : ''}; `
+                                     : `did not rest (${rested.why ?? '?'}); `) : '') +
                                    `${out?.why ?? 'no result'}` });
               try { answer.answer.settled?.(!!out?.arrived, out?.why ?? null, out?.at ?? null); } catch { /* evidence, not a dependency */ }
               if (out?.arrived) {
@@ -7144,9 +7225,35 @@ class Session {
     if (!r?.anchors?.length || !toSquare) return null;
     const me = this.client?.self;
     if (!me) return null;
+    // A GUTTER HEAD IS A BOARDABLE START, AND FOR A YEAR IT WAS NOT.
+    //
+    // The bake writes two kinds of line into `routes`: anchor-to-anchor, and one per GUTTER
+    // — a place the room drops you into and does not walk you out of. The gutter half was
+    // built for exactly the character this function serves, is keyed into `routes` the same
+    // way, and `bakedPath` looks a line up BY KEY and never asks whether its start is an
+    // exit. Only this candidate list did, and it read `r.anchors` alone. So every gutter
+    // rail ever baked — 578's two, and the four the operator DECLARED in
+    // substrate/m59-gutters.json after Ukgoth killed seven characters in thirty minutes —
+    // was written to disk, verified by `--verify`, and never once offered to anybody.
+    //
+    // Measured in the Cragged Mountains, which is what sent me here. 217 of its squares
+    // need 45+ steps to reach ANY exit; the worst needs 64. The north-east lobe of that
+    // pocket (rows 2-18, cols 30-37) contains r10c33, where the operator reports characters
+    // piling up, and it had no head at all: the detector's one head for the whole 776-square
+    // group went to 20,48, in the EASTERN lobe. From r10c33 the north exit is 21.9 away by
+    // crow and 60 steps by mover, and the nearest waypoint of the line that actually leaves
+    // — 12,29 on the column-29 leg — is 4.5 by crow and FORTY-ONE steps to walk to, because
+    // a cliff runs between them. One column west, r10c32 is nineteen steps from the same
+    // exit. That is the whole shape of the trap, and a rail is the mechanism for it.
+    //
+    // Additive and inert where the bake found none: a room with no `gutters` gets exactly
+    // the candidate list it got before. A head is not an exit, so `onBoundary` below leaves
+    // interior heads alone and still steps the one boundary gutter (9,50) inland.
+    const heads = [...r.anchors.map(a => ({ ...a, gutter: false })),
+                   ...(Array.isArray(r.gutters) ? r.gutters : []).map(a => ({ ...a, gutter: true }))];
     // The entry anchor is whichever baked start actually has a line to where we are going.
     // Nearest first, because getting on is an ordinary walk and a shorter one is cheaper.
-    const starts = r.anchors
+    const starts = heads
       .filter(a => !(a.row === toSquare.row && a.col === toSquare.col))
       .sort((a, b) => (Math.hypot(a.col - me.col, a.row - me.row))
                     - (Math.hypot(b.col - me.col, b.row - me.row)));
@@ -7185,9 +7292,10 @@ class Session {
           let n = 0;
           while (n < squares.length - 1 && onBoundary(squares[n])) n++;
           if (n < squares.length - 1)
-            return { from: squares[n], squares: squares.slice(n + 1), steppedOffBoundary: true };
+            return { from: squares[n], squares: squares.slice(n + 1), steppedOffBoundary: true,
+                     gutter: a.gutter === true };
         }
-        return { from: a, squares };
+        return { from: a, squares, gutter: a.gutter === true };
       }
     }
     return null;
@@ -7940,6 +8048,44 @@ class Session {
                                `and the line starts at ${rail.from.row},${rail.from.col}` });
           rail = null;
           railSkipped = true;
+        } else {
+          // AND NEVER WALK FURTHER TO GET ON A LINE THAN TO REACH THE DOOR ITSELF.
+          //
+          // The candidate starts are ranked by the CROW line (see `railAcross`), in rooms
+          // whose entire character is that the crow line is a cliff — the same mistake this
+          // block was written to fix for the skip decision, still uncorrected one function
+          // away. Adding gutter heads makes it bite: a head is deliberately placed in the
+          // worst-served pocket of a room, so it is close to the squares nobody can leave
+          // AND close, as the crow flies, to squares on the other side of the wall that are
+          // a few steps from the exit.
+          //
+          // Measured in the Cragged Mountains for the new head at 8,33: of the 29 cheap
+          // squares that would rank it their nearest start, r6c24 is 9.2 away by crow and
+          // FORTY-SIX steps to walk to, while its own door is thirteen. Boarding there is an
+          // eightfold detour to reach a line whose whole purpose is to be quicker.
+          //
+          // So: compare the two walks that are actually on offer. If getting ON costs more
+          // than getting THERE, the rail cannot pay for itself whatever it does afterwards,
+          // and this declines it — leaving exactly the ordinary walk that runs today.
+          // Twenty-four of those 29 squares are cut by this and every square the gutter was
+          // added for is kept, because in a gutter the head is a handful of steps away and
+          // the door is fifty: r10c33 boards at 2 against a door 60 away.
+          //
+          // NOT A COMPARISON OF TOTAL LENGTH. `board + ride` against `route` would decline
+          // the corner too — 2 + 63 against 60 — and be wrong, because a rail is not bought
+          // for being shorter. It is bought because the ordinary walk SLIDES and replans and
+          // does not arrive, which is the premise this whole mechanism rests on.
+          const board = rail.from ? routeSteps(me0.row, me0.col, rail.from.row, rail.from.col) : null;
+          if (board != null && Number.isFinite(route) && board > route) {
+            recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: Number(this.world?.room?.num ?? 0),
+                           tactic: 'baked_rail', trigger: 'exit_crossing',
+                           worked: false, attempted: false, ms: 0, hp_lost: 0,
+                           note: `rail declined — getting on at ${rail.from.row},${rail.from.col} is ` +
+                                 `${board === Infinity ? 'unreachable' : `${board} step(s)`} away and the door at ` +
+                                 `${target.row},${target.col} is only ${route}` });
+            rail = null;
+            railSkipped = true;
+          }
         }
       }
       // LOGGED EVEN WHEN NOTHING HAPPENS. The first two attempts at this wrote a ledger row
@@ -9441,6 +9587,43 @@ class Session {
   }
 
 
+  // WHERE THIS BODY HAS ACTUALLY BEEN DURING THIS CROSSING, and whether that is a walk.
+  //
+  // A STALL DETECTOR THAT ASKS "HAVE YOU STOPPED" CANNOT SEE THIS ONE. The commonest way to
+  // get nowhere here is a two-square shuffle, which resets every stillness timer it meets
+  // and keeps `ms_since_moved` honest and useless — the same trap already written down for
+  // the keeper's own clock. So this counts GROUND COVERED instead: the last `WINDOW` squares
+  // the body has occupied, and how many of them are distinct. Twenty-four moves that visited
+  // four squares is an oscillation whatever the timers say, and it is exactly what the
+  // Cragged Mountains produced (r15c29 <-> r15c30 for two minutes).
+  //
+  // Bounded, cheap, and reset per crossing in `leaveViaAny`.
+  _noteCrossingSquare(row, col) {
+    if (!Number.isFinite(row) || !Number.isFinite(col)) return;
+    const fp = (this._crossingFootprint ??= []);
+    const key = `${row},${col}`;
+    if (fp[fp.length - 1] === key) return;          // standing still is the other detector's job
+    fp.push(key);
+    if (fp.length > CROSSING_WINDOW) fp.shift();
+  }
+
+  /**
+   * Is this crossing going round in circles? `null` when there is not enough history to say.
+   *
+   * Returns the sentence that goes in the ledger, because "oscillating: true" is not
+   * something an operator can check afterwards and "24 moves over 4 squares" is.
+   */
+  _crossingOscillation() {
+    const fp = this._crossingFootprint ?? [];
+    if (fp.length < CROSSING_WINDOW) return null;
+    const distinct = new Set(fp).size;
+    if (distinct > CROSSING_DISTINCT) return null;
+    return `${fp.length} moves over ${distinct} square(s)`;
+  }
+
+  /** How long this room crossing has been going, in ms. */
+  _crossingMs() { return Date.now() - (this._crossingStartedAt ?? Date.now()); }
+
   // COORDINATE CONTRACT: every candidate follows leaveVia's named square/fine schema.
   async leaveViaAny(candidates, { movementGeneration = this.movementGeneration, controlToken,
                                   exact = false } = {}) {
@@ -9450,6 +9633,8 @@ class Session {
     // switched on, loaded, asked, and silently never firing, which is the failure mode this
     // repository has paid for before (`purpose` missing from a schema, every audit off).
     this._crossingStartedAt = Date.now();
+    this._crossingFootprint = [];
+    this._lastBlinkAskAt = 0;
     const tried = [];
     const skipped = [];
     let attempts = 0;
@@ -9893,6 +10078,11 @@ class Session {
     // initialization` -- the same shape as the `laneAim` crash that killed a character in
     // prod, caught this time by the dependency suite rather than by a death.
     const bestExit = ordered[0] ?? null;
+    // Guarded like `_blockingBodies` below: `leaveViaAny` is lifted out of this class and run
+    // against hand-built sessions by m59-collision-test.mjs.
+    const crossingMs = typeof this._crossingMs === 'function' ? this._crossingMs() : 0;
+    const crossingLoop = typeof this._crossingOscillation === 'function'
+      ? this._crossingOscillation() : null;
     const stuckAnswer = await this._askStrategies('whenStuck', {
       room: this.world?.room ?? null,
       geo: this.world?.geometry ?? null,
@@ -9902,9 +10092,15 @@ class Session {
       bodies: this._blockingBodies(),
       blink: this._blinkPointHere(),
       vitals: this.client?.vitals?.() ?? null,
-      stuck_ms: Date.now() - (this._crossingStartedAt ?? Date.now()),
+      stuck_ms: crossingMs,
       underFire: !!this._underFireDuringCrossing,
       agent: this.name ?? this.client?.me?.name ?? null,
+      // The same two signals the walker's ask carries. Reaching the give-up at all means the
+      // boundary refused every candidate, so this is usually already past the stall clock —
+      // but it is passed rather than assumed, because a first-try refusal reaches here too.
+      crossing_ms: crossingMs, oscillating: crossingLoop,
+      stalled: crossingMs >= CROSSING_STALL_MS && crossingLoop
+        ? `${Math.round(crossingMs / 1000)}s in this room, ${crossingLoop}` : null,
     }).catch(() => null);
     if (this.movementWasCancelled(movementGeneration, controlToken))
       return finish(this.cancelledMovement({ tried }));

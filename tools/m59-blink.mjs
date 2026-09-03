@@ -144,8 +144,28 @@ export function reachableAround(geo, from, bodies, { rows, cols }) {
  * IT ANSWERS FOR THIS INSTANT ONLY. Bodies move; a `true` here is a fact about the room as
  * it was sampled and nothing more, which is why the caller re-reads rather than caching.
  */
+/**
+ * `stalled` — WHEN "YOU COULD WALK IT" HAS STOPPED BEING A REASON.
+ *
+ * The third check below is the one that declines almost everything: 1,349 of ~2,300 recorded
+ * asks, and 226 of the 233 in the Cragged Mountains, are "the goal is already reachable on
+ * foot; blink would gain nothing". As a predicate about the MAP that is correct — the flood
+ * counts the bodies where they are and the goal really is on our side of them.
+ *
+ * It is not a claim about whether we are getting there, and it was being read as one. A body
+ * that has been in a room for two minutes shuffling between the same few squares is refuted
+ * by its own history: whatever the reachability flood says, walking is not working, and the
+ * ledger cannot tell that from a room being crossed in twenty seconds. The operator's rule,
+ * 2026-09-03: past two minutes and oscillating, open blink up regardless of what the body
+ * thinks it can reach.
+ *
+ * ONLY THE THIRD CHECK IS DROPPED. The fourth — the goal must be reachable FROM the blink
+ * point, with those same bodies — still stands, because the failure it prevents is the whole
+ * reason this predicate exists: fifteen mana and ten seconds to arrive somewhere just as
+ * stuck. `stalled` says "walking is not working here"; it does not say "anywhere is better".
+ */
 export function canBlinkOut({ geo, blink, from, goal, bodies, rows, cols,
-                              room = null, route = null, observe = null }) {
+                              room = null, route = null, observe = null, stalled = false }) {
   const key = (r, c) => r * 1000 + c;
   // ONE EXIT, SO EVERY VERDICT IS OBSERVABLE. Written this way rather than as four returns
   // because a record that only covers the interesting branch cannot answer "how often did it
@@ -182,16 +202,22 @@ export function canBlinkOut({ geo, blink, from, goal, bodies, rows, cols,
   if (!geo.standPoint?.(blink.row, blink.col))
     return say({ can: false, why: 'the blink point is not standable' });
   const here = reachableAround(geo, from, bodies, { rows, cols });
-  if (here.has(key(goal.row, goal.col)))
+  const walkable = here.has(key(goal.row, goal.col));
+  if (walkable && !stalled)
     return say({ can: false, why: 'the goal is already reachable on foot; blink would gain nothing' },
                 { from_here: here.size });
   const there = reachableAround(geo, blink, bodies, { rows, cols });
   if (!there.has(key(goal.row, goal.col)))
     return say({ can: false, why: 'the blink point is on the same side of the traffic as we are' },
-                { from_here: here.size, from_blink: there.size });
-  return say({ can: true, why: `blocked from here (${here.size} squares) and clear from the blink ` +
-                               `point (${there.size} squares)` },
-             { from_here: here.size, from_blink: there.size });
+                { from_here: here.size, from_blink: there.size, stalled });
+  return say({ can: true,
+               why: walkable
+                 ? `the goal is reachable on foot (${here.size} squares) and we are not reaching ` +
+                   `it — ${stalled}; the blink point is clear (${there.size} squares)`
+                 : `blocked from here (${here.size} squares) and clear from the blink ` +
+                   `point (${there.size} squares)`,
+               ...(walkable ? { despite_walkable: true } : {}) },
+             { from_here: here.size, from_blink: there.size, ...(stalled ? { stalled } : {}) });
 }
 
 export function collectBlinks(root = kodRoot()) {

@@ -16,6 +16,7 @@
 
 import { readFileSync } from 'node:fs';
 import { restUntil, isArmed } from './m59-skills.mjs';
+import { Autopilot } from './m59-autopilot.mjs';
 
 // A session whose stats reads walk down a scripted list of health values.
 function fakeSession(seq) {
@@ -373,6 +374,70 @@ console.log('poison is not something hitting us');
   // note, so the assertion is about that field rather than the file.
   ok('and the live caveat no longer claims the reading might be poison',
      !/caveat: 'poison and archers look the same/.test(AP));
+}
+
+// ---------------------------------------------- vigor before a blink, not after
+//
+// Blink drops the body on a fixed square the room's kod declares and promises nothing about
+// what is standing on it, and RUNNING NEEDS AT LEAST 10 VIGOR. The oscillation that prompts
+// the blink is itself what grinds vigor away: Beaker was found looping in the Cragged
+// Mountains at vigor ONE, full health, with sixty bodies in the room. So the wall taken to
+// cast from gets sat on first.
+console.log('\nresting before a blink out of a stalled crossing');
+{
+  // A session whose vigor climbs towards the resting cap, health left alone throughout —
+  // the point of this rest is the legs, and asking for health too would sit a healthy
+  // character down for nothing and a hurt one down for the wrong reason.
+  const pilotOn = (vigorSeq, healthValue = 52) => {
+    let i = 0;
+    const rested = { rest: 0, stand: 0 };
+    const c = {
+      vitals: () => ({ health: { value: healthValue, max: 52 },
+                       vigor: { value: vigorSeq[Math.min(i, vigorSeq.length - 1)], scale_max: 200 } }),
+      stats: async () => { i++; },
+      waitFor: async () => {},
+      rest: async () => { rested.rest++; },
+      stand: async () => { rested.stand++; },
+    };
+    const s = { need: () => c, client: c, pacer: { submit: async (_k, f) => f() } };
+    const pilot = Object.create(Autopilot.prototype);
+    pilot.s = s;
+    pilot.ledgerEvent = () => {};
+    return { pilot, rested, c };
+  };
+
+  // Already rested: no sitting down, and it says so rather than pretending it worked.
+  {
+    const { pilot, rested } = pilotOn([200]);
+    const r = await pilot.restBeforeBlink('test');
+    ok('a character already at the resting cap does not sit down again',
+       r.rested === false && /already at the resting cap/.test(r.note ?? '') && rested.rest === 0,
+       JSON.stringify(r));
+  }
+  // Beaker's case: vigor 1, full health. It rests, and it reports the climb.
+  {
+    const { pilot, rested } = pilotOn([1, 20, 45, 70, 80, 80], 52);
+    const r = await pilot.restBeforeBlink('test');
+    ok('vigor 1 at full health DOES sit down — health is not the gate here',
+       rested.rest === 1 && r.rested === true, JSON.stringify({ r, rested }));
+    ok('and it stops at the resting cap rather than sitting out the timeout',
+       (r.vigor_pct ?? 0) >= 0.4, JSON.stringify(r));
+    ok('and it reports the climb, so the ledger can show what the wall bought',
+       (r.before ?? 1) < 0.05, JSON.stringify(r));
+  }
+  // The mechanic that sets the target, asserted against the source so a future edit that
+  // asks for full vigor is caught: resting stops at 80 of 200 and the rest has to be eaten.
+  {
+    const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+    const at = AP.indexOf('async restBeforeBlink(');
+    const body = AP.slice(at, at + 1400);
+    ok('restBeforeBlink asks for REST_VIGOR_CAP, not for full vigor',
+       /vigor:\s*REST_VIGOR_CAP/.test(body) && !/vigor:\s*1\b/.test(body), body.slice(0, 200));
+    ok('and it does not hold the cast up for health',
+       /health:\s*0\b/.test(body), body.slice(0, 200));
+    ok('and it still aborts if the wall turns out to be one that is being hit',
+       /abortOnDamage:\s*true/.test(body), body.slice(0, 200));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
