@@ -49,6 +49,8 @@
 // ended up with the goods. A half-finished trade is silent, which is exactly why that
 // tool exists and why this one calls it rather than reimplementing it.
 import { findPath, loadMap } from './m59-map.mjs';
+import { takeRunLock } from './m59-runlock.mjs';
+import { fleetName } from './m59-fleetpath.mjs';
 
 const arg = (n, d = null) => {
   const i = process.argv.indexOf('--' + n);
@@ -98,6 +100,43 @@ const countOf = (items, re) => (items || []).filter(i => re.test(i.name || ''))
 // whole call down with it, so a run that happens to start during one gets nothing.
 // (It also killed a supervisor round. Worth fixing in the fleet tool itself; retried
 // here so this errand does not depend on that.)
+const LOCK_FLEET = fleetName();
+const FORCE = process.argv.includes('--force');
+
+// ONE THING DRIVING THE FLEET AT A TIME, AND SAY WHO HAS IT.
+//
+// The almoner walks givers to receivers, so it collides with anything else moving the same
+// characters. Two runs do not halve the work, they fight for the bodies: each re-issues
+// travel at a character the other is already walking, and every collision lands in the
+// transit book as "movement cancelled by a newer command" - the same sentence a genuine
+// survival interrupt produces, which is what makes it expensive to diagnose.
+//
+// Measured here 2026-09-02: a supply run covering t17,t12,t8 was still alive ninety minutes
+// after it started, having delivered nothing, when a second run covering t3,t17,t6 was
+// launched over the top of it. Zoot was in both. Earlier the same day three runs were live
+// at once because a kill had silently failed and nobody checked.
+//
+// FLEET-WIDE RATHER THAN PER-AGENT, deliberately: this tool is fleet-scoped by nature, and
+// 'these two name different characters' is not 'these two cannot collide' - the roads and
+// the counters are shared. m59-runlock already makes exactly this argument and corroborates
+// a pid against its start time, so a dead holder is taken over rather than refused forever.
+const runClaim = takeRunLock(LOCK_FLEET, {
+  label: `almoner, amount ${AMOUNT} keep ${KEEP_BACK} floor ${FLOOR}`, force: FORCE });
+if (!runClaim.ok) {
+  const h = runClaim.holder ?? {};
+  console.error(`REFUSING - fleet "${LOCK_FLEET}" is already being driven by another run.`);
+  console.error(`  pid    ${h.pid ?? '?'}`);
+  console.error(`  what   ${h.label ?? '?'}`);
+  console.error(`  since  ${h.at ? new Date(h.at).toISOString() : '?'}` +
+                (h.at ? `  (${Math.round((Date.now() - h.at) / 1000)}s ago)` : ''));
+  console.error(`  argv   ${h.argv ?? '?'}`);
+  console.error('');
+  console.error('Wait for it, stop that pid, or re-run with --force if you know it is dead.');
+  process.exit(3);
+}
+if (runClaim.tookOverFrom)
+  console.error(`note: took over a stale lock - ${runClaim.tookOverFrom.why}`);
+
 let f = null;
 for (let i = 0; i < 4 && !f; i++) {
   f = await call('fleet', {}).catch(async (e) => {
