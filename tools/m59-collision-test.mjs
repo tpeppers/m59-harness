@@ -1512,6 +1512,8 @@ const leaveViaAny = compileSessionMethod(brokerSource,
     // whether the whole crossing has been going round in circles, not only how long this
     // boundary has refused.
     CROSSING_STALL_MS: 120_000,
+    // And the real evade window, because this site casts without a wall too.
+    BLINK_EVADE_MS: 5_000,
     isTerminalMovementReason, spreadEdges, orderExits: exits => exits, KOD_FINENESS,
     // THE TWO INSTRUMENTS, AS THE REAL ONES. Both are ordinary exports of modules that
     // import without taking the fleet lock, and both are written to be unable to throw —
@@ -2399,6 +2401,24 @@ console.log('\nterminal movement propagation and edge packet authority');
       const block = at >= 0 ? walkToSrc.slice(at, at + 4200) : '';
       ok('the walker no longer has a `castable` gate that can refuse the cast',
          !/const castable\s*=/.test(walkToSrc), 'castable gate still present');
+      // AND NEITHER DOES THE OTHER ONE. There are two blink sites — the walker's blocked
+      // step and `leaveViaAny`'s give-up — and fixing only the first is what left Animal
+      // writing "no wall (nothing in this room is more defensible)" every forty seconds in
+      // room 567's 17-square pocket while Kermit, whose walk went through the walker's
+      // site, blinked out and reached Castle Victoria.
+      // Asserted as BEHAVIOUR rather than as syntax, because the two sites do not have the
+      // same shape: the give-up still declines when the wall it took turned out to be the
+      // exit (we are in another room by then and there is nothing to cast for), so it keeps
+      // a ternary that the walker's site does not have. What must be true of both is that
+      // no wall is never the reason.
+      const leaveSrc = sessionMethod(brokerSource, 'async leaveViaAny(candidates, {', 'leaveViaAny') ?? '';
+      ok("and leaveViaAny's give-up does not gate its cast on a wall either",
+         leaveSrc.length > 0 && !/const castable\s*=/.test(leaveSrc) && /blinkOut\(/.test(leaveSrc),
+         `give-up gate still present (extracted ${leaveSrc.length} chars)`);
+      ok('and neither site can still refuse a cast for want of a wall',
+         !/did not cast: no wall/.test(brokerSource), 'the wall refusal survives somewhere');
+      ok('and neither site reports a wall-less cast as "not attempted"',
+         !/attempted: castable/.test(brokerSource), 'attempted: castable survives somewhere');
       ok('and blinkOut is called unconditionally once the strategy has said blink',
          /const out = await this\.blinkOut\(/.test(walkToSrc), block.slice(0, 200));
       ok('under fire and with no wall it backs off along PROVEN crumbs first',
