@@ -1076,6 +1076,10 @@ const CROSSING_WINDOW = Number(process.env.M59_CROSSING_WINDOW || 24);
 const CROSSING_DISTINCT = Number(process.env.M59_CROSSING_DISTINCT || 6);
 // Do not ask the strategies about the same loop every tick; one ask per this many ms.
 const CROSSING_ASK_EVERY_MS = Number(process.env.M59_CROSSING_ASK_EVERY_MS || 20_000);
+// AND HOW LONG ON ONE SQUARE COUNTS AS COVERING NO GROUND. Sixty seconds: a body that has
+// not changed square in a minute, inside a crossing already past its two-minute clock, is
+// not walking anywhere. Deliberately far longer than any ordinary pause at a door.
+const CROSSING_PINNED_MS = Number(process.env.M59_CROSSING_PINNED_MS || 60_000);
 // HOW LONG TO SPEND BREAKING CONTACT BEFORE CASTING WITHOUT A WALL. The operator's number,
 // 2026-09-03: five seconds. Long enough to back off a few proven crumbs and short enough
 // that it cannot become a second way of standing still — which is the condition it is being
@@ -9651,8 +9655,10 @@ class Session {
     if (!Number.isFinite(row) || !Number.isFinite(col)) return;
     const fp = (this._crossingFootprint ??= []);
     const key = `${row},${col}`;
-    if (fp[fp.length - 1] === key) return;          // standing still is the other detector's job
+    this._crossingLastAt ??= Date.now();
+    if (fp[fp.length - 1] === key) return;          // a repeat is not a move
     fp.push(key);
+    this._crossingLastAt = Date.now();
     if (fp.length > CROSSING_WINDOW) fp.shift();
   }
 
@@ -9664,6 +9670,17 @@ class Session {
    */
   _crossingOscillation() {
     const fp = this._crossingFootprint ?? [];
+    // PINNED IS THE OTHER WAY OF COVERING NO GROUND, and leaving it to "the stillness
+    // detector" was a guess that the evidence did not support. Floyd sat on r9c14 in room
+    // 567 for five minutes without moving one square, with mana to spare and a blink point
+    // that opens 835 squares; Scooter did the same on r8c14 while firing 102 rail attempts
+    // in six minutes. Neither is an oscillation, so neither got a `stalled` signal, so
+    // neither was ever offered the spell — while Janice and Piggy, who happened to shuffle,
+    // both got out. A body that has not changed square in a minute is not less stuck than
+    // one bouncing between four; it is more.
+    if (this._crossingLastAt && Date.now() - this._crossingLastAt >= CROSSING_PINNED_MS)
+      return `pinned on ${fp[fp.length - 1] ?? 'one square'} for ` +
+             `${Math.round((Date.now() - this._crossingLastAt) / 1000)}s`;
     if (fp.length < CROSSING_WINDOW) return null;
     const distinct = new Set(fp).size;
     if (distinct > CROSSING_DISTINCT) return null;
