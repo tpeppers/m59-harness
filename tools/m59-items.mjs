@@ -63,9 +63,24 @@ function inherited(classes, chain, name) {
 // dropped every one of those from the table, and the fleet noticed: Statler's six signet
 // rings came back "unweighed" and withheld its room_for, which is the honest failure but
 // still a hole. SignetRing declares viWeight 2 perfectly plainly (ringsignet, :36-37).
+//
+// AND KOD IS CASE-INSENSITIVE, WHICH THE JOIN WAS NOT. `Rose` declares `rose_name_rsc`
+// in its resources and refers to it as `Rose_name_rsc` in its classvars (rose.kod:20, :25);
+// Stew and SwordShard do the same the other way round. The extractor matched the two
+// case-sensitively, left `rsc` unset, and this function then dropped the class as
+// "abstract" — so the rose, the bowl of stew and the sword shard were not in the table,
+// `resolve_item_names` refused every one of them, and a vault list could not name a rose
+// at all. When the join is missing, the class's own resources are searched by
+// case-folded name before giving up.
 function displayName(cls) {
   for (const key of ['vrName', 'vrRealName']) {
-    const rsc = cls?.classvars?.[key]?.rsc;
+    const cv = cls?.classvars?.[key];
+    let rsc = cv?.rsc;
+    if (!rsc && typeof cv?.expr === 'string' && cls?.resources) {
+      const want = cv.expr.trim().toLowerCase();
+      const hit = Object.keys(cls.resources).find(k => k.toLowerCase() === want);
+      if (hit) rsc = cls.resources[hit];
+    }
     if (rsc?.kind === 'string' && typeof rsc.value === 'string') return rsc.value.trim();
   }
   return null;

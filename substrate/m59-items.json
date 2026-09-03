@@ -1,5 +1,5 @@
 {
- "builtAt": "2026-08-27T06:11:02.752Z",
+ "builtAt": "2026-09-03T18:40:26.425Z",
  "source": "compendium/data/koddb.json",
  "defaults": {
   "weight": 10,
@@ -8,10 +8,10 @@
  },
  "capacity_formula": "1700 + might * 20, for weight AND bulk (player.kod:10456, :10461)",
  "counts": {
-  "item_classes": 251,
-  "distinct_names": 246,
+  "item_classes": 254,
+  "distinct_names": 249,
   "used_defaults": 0,
-  "foods": 21,
+  "foods": 22,
   "weapons": 21
  },
  "items": {
@@ -254,6 +254,17 @@
    "declared_by": {
     "weight": "Soup",
     "bulk": "Soup"
+   },
+   "also": []
+  },
+  "bowl of stew": {
+   "name": "bowl of stew",
+   "weight": 15,
+   "bulk": 20,
+   "cls": "Stew",
+   "declared_by": {
+    "weight": "Stew",
+    "bulk": "Stew"
    },
    "also": []
   },
@@ -1768,6 +1779,17 @@
    },
    "also": []
   },
+  "rose": {
+   "name": "rose",
+   "weight": 10,
+   "bulk": 10,
+   "cls": "Rose",
+   "declared_by": {
+    "weight": "Rose",
+    "bulk": "Rose"
+   },
+   "also": []
+  },
   "royal ballot": {
    "name": "Royal Ballot",
    "weight": 2,
@@ -2045,6 +2067,17 @@
    "declared_by": {
     "weight": "ShamanBlood",
     "bulk": "ShamanBlood"
+   },
+   "also": []
+  },
+  "shard of a sword": {
+   "name": "shard of a sword",
+   "weight": 25,
+   "bulk": 25,
+   "cls": "SwordShard",
+   "declared_by": {
+    "weight": "SwordShard",
+    "bulk": "SwordShard"
    },
    "also": []
   },
@@ -2899,6 +2932,12 @@
    "cls": "Spideye",
    "nutrition": 9,
    "filling": 20
+  },
+  "bowl of stew": {
+   "name": "bowl of stew",
+   "cls": "Stew",
+   "nutrition": 15,
+   "filling": 25
   },
   "turkey leg": {
    "name": "turkey leg",
