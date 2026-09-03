@@ -2230,24 +2230,10 @@ export class Autopilot {
   async provision(plan, v) {
     const p = this.policy;
     const floor = this.fightFloor(plan);
-    // READ BEFORE THE FIRST THING THAT REPORTS IT, WHICH IS NOT WHERE IT WAS DECLARED.
-    //
-    // `vigor` used to be declared thirty lines below, next to the larder — and the
-    // "not eating here" note above that point reads it. Same function, same scope, so the
-    // read landed in the temporal dead zone and threw `Cannot access 'vigor' before
-    // initialization`, which aborts the keeper pass. The keeper reports it as `last_error`
-    // and otherwise says nothing, so the character simply does not act:
-    //
-    //     mode: "farm"   activity: "fighting from a proven safe spot"
-    //     last_error: "Cannot access 'vigor' before initialization"
-    //     rooms_moved: 0   withdrawals: 0   kills: 0
-    //
-    // Ten minutes of a character standing in Castle Victoria with 400 shillings, a loadout
-    // asking for twenty elderberry, and one in its pack.
-    //
-    // It fires on a NARROW path — hungry, something hostile in the room, and the note not
-    // yet made — but `notedNoEatingHere` is cleared the moment the room is clear again, so
-    // it rearms every time. For a character that fights, that is most passes.
+    // Declared here, at the top, on purpose: it used to sit thirty lines down and a note
+    // above it read it inside the temporal dead zone, which aborted the keeper pass with
+    // `Cannot access 'vigor' before initialization` and left a character idle for ten
+    // minutes. Anything added to this method above this line must not touch `vigor`.
     const vigor = v.vigor?.value ?? 0;
     // EATING IS NOT A STRATEGY OPTION.
     //
@@ -2269,44 +2255,13 @@ export class Autopilot {
                  ?? (floor ? 0 : (p.eatToAtLeast ?? EAT_TO_AT_LEAST));
     if (!floor && !ceiling) return false;              // only if someone set it to zero on purpose
 
-    // RECOVERING IN THE OPEN IS NOT AN OPTION, AND EATING IS RECOVERING.
-    //
-    // Raising vigor means standing still and not looking, exactly as resting does — the
-    // ladder has always refused a REST in a room that can reach us, and this path walked
-    // straight past that rule because it is filed under provisioning rather than survival.
-    // It is the same act with the same cost.
-    //
-    // AT THE TOP OF THE METHOD, because the first version of this guard sat lower down, just
-    // before the climb, and `provision` can return 'ate' before it ever gets there: an empty
-    // larder falls into `cookSomething()`, and cooking is standing still too. Bbbb's last two
-    // decisions, one second before a troll killed it in a room holding SIXTEEN monsters, were
-    // "ate while stocking up" and "ate rather than reporting myself trapped". The guard was
-    // live; it was simply downstream of the branch that fired.
-    //
-    // Deferred rather than abandoned: nothing here is unset, so the moment the character is
-    // somewhere it can afford to stand still — behind a wall, in a sanctuary, or one room on
-    // — it eats.
-    if (!this.hold && !this.sanctuary?.()) {
-      const cc = this.s?.client;
-      const hostiles = cc?.room?.objects
-        ? [...cc.room.objects.values()].filter(o =>
-            o.id !== cc.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER))
-        : [];
-      if (hostiles.length) {
-        if (!this.notedNoEatingHere) {
-          this.notedNoEatingHere = true;
-          this.note('not eating here — something in this room can reach us', {
-            vigor, floor, ceiling, monsters_in_room: hostiles.length,
-            why: 'raising vigor is standing still and not looking, which is the same act as ' +
-                 'resting and costs the same. The ladder refuses a rest in a room that can ' +
-                 'reach us; this is that rule, applied to the larder — and to the cooking pot.',
-            next: 'still hungry — it will eat behind a wall, in a sanctuary, or one room on',
-          });
-        }
-        return false;
-      }
-    }
-    this.notedNoEatingHere = false;
+    // EATING IS NOT RESTING. A guard here once refused to eat, or to cook, while anything
+    // attackable stood in the room, on the argument that raising vigor meant standing still
+    // and not looking, the same act as a rest. It is not: a meal is one `use` on an item
+    // already in the pack, it lands in the same second, and it goes down mid-fight. The
+    // guard was deleted on 2026-09-02 at the operator's instruction. Two recorded fixtures,
+    // `wallstop-39-r8c23` and `wallstop-562-r1c101`, still carry its "not eating here"
+    // note; that is evidence of what the keeper said at the time, not a rule that is live.
 
     const s = this.s;
     const larder = this.larder(s.client);
