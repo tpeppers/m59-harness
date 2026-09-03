@@ -324,3 +324,23 @@ hop-boundary hold, no trading in place — and a retreat withholds every wall
 the one square that actually breaks every attack. Each refusal writes one `crowd_no_stop`
 row per room per minute. Silence keeps the old behaviour: the rule is a number this
 machine can change live, and `m59-forward-shelter-test.mjs` pins the search half.
+
+**A wedge in a crowd is left by the door.** With the crowd rule on, tour 14 (2026-09-02) had no wall-stop deaths and two
+wedges: the wedge arm had given up ("N walks from this square went nowhere") and the journey attempt
+returned refused, which means the body STANDS for the hold — one stood 160 s in Ukgoth before the first
+blow. So when the arm gives up in a crowd the attempt calls `takeSafeSpot` with the journey's onward
+exit and destination; with walls withheld its only candidate is the exit, the wedge becomes one hop out,
+and the journey re-plans from the far side (`left_by_exit` in the attempt's answer, "left a wedge by the
+exit" in the notes, a `crowd_no_stop` row with trigger "standing in a wedge").
+
+**Three corrections from tour 15** (2026-09-03). A crowd is counted by BODIES (`threatCountHere`: attackable,
+not a player), not by names — `namedThreatsHere()` drops any object whose name resource is unresolved,
+and in the Sewers of Barloque that left a room of 25 rats and lupoggs counting as empty while a traveller
+took a wall there. The exit crossing refreshes the journey's control lease (`inert.at`) on both sides of
+its one-hop travel, because the lease is never otherwise touched and "reviving myself — nobody came back"
+was cancelling crossings mid-hop. A fourth was tried and withdrawn on tour 16: letting the
+watchdog's four-second "wedged, travelling, taking hits" cancel the walk in a crowd so the next pass could
+leave by the exit. Cancelling ENDS a runner-driven journey ("no longer travelling"), and the body was left
+standing in the crowd with nothing to do — the death it was meant to prevent (5 in the first 25 legs). The
+wedge-exit stays on the arm's give-up, where the retreat and the re-plan belong to one pass; the arm's
+slowness in a crowd is the open item.

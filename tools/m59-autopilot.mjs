@@ -3131,7 +3131,8 @@ export class Autopilot {
   }
 
   async takeSafeSpot(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
-                                           nearestOnly = false, afterExit = false } = {}) {
+                                           nearestOnly = false, afterExit = false,
+                                           onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
     const s = this.s, c = s.client;
     const room = s.world?.room, geo = s.world?.geometry, me = c?.self;
     if (!geo || !me || !room) return { took: false, why: 'no geometry for this room' };
@@ -3140,7 +3141,7 @@ export class Autopilot {
     // `nearestOnly` is the search on the far side of a crossing: the first available wall,
     // ranked by distance alone, and never the next exit — a stopover, not the destination.
     const onward = source === 'travel' && !nearestOnly
-      ? this.onwardExit(room.num, this.inert?.to ?? this.suspendedJourney?.to ?? null) : null;
+      ? (onwardGiven ?? this.onwardExit(room.num, destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to ?? null)) : null;
     // Once several independently tested walls have all failed, continuing to scan the
     // room is research, not survival. `noWallRooms` feeds the already-bounded choice
     // below between a safe open fight and relocating; it does not block the strategic
@@ -3346,7 +3347,7 @@ export class Autopilot {
     // happen the answer is a refusal that says so, never a hold on a square in another room.
     if (spot.kind === 'exit') {
       const roomBefore = room.num;
-      const destination = this.inert?.to ?? this.suspendedJourney?.to ?? null;
+      const destination = destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to ?? null;
       const route = destination != null ? this.s.world?.route?.(destination) : null;
       const hop = route?.found ? route.hops?.[0] : null;
       if (!hop) {
@@ -3357,8 +3358,14 @@ export class Autopilot {
       this.note('taking the exit as the nearest wall', {
         at: { col: spot.col, row: spot.row }, to: hop.to, steps_away: spot.steps_away ?? null,
         why: 'crossing breaks every attack; the first wall in the next room is where the mending happens' });
+      // THE LEASE IS REFRESHED AROUND THE CROSSING. The journey's control lease
+      // (inert.at + maxMs) is never touched while it runs; a one-hop crossing inside the
+      // ladder can push it past its deadline, and then "reviving myself — nobody came back"
+      // takes the controls back mid-hop (tour 15, the sewers). The ladder IS the keeper.
+      if (this.inert) this.inert.at = Date.now();
       const crossed = await this.s.travel(hop.to, { maxHops: 1 })
                                 .catch(e => ({ arrived: false, why: e.message }));
+      if (this.inert) this.inert.at = Date.now();
       this.movedAt = Date.now();
       releaseSpot(this.s.name);
       const roomAfter = this.s.world?.room?.num ?? null;
@@ -5819,8 +5826,31 @@ export class Autopilot {
     const wedge = await this.answerWedge(Number(room)).catch(e => {
       this.note('wedge check failed', { why: e.message }); return null;
     });
-    if (wedge?.refused) {
-      return { arrived: false, refused: true, wedged: true, gave_up: true, why: wedge.why };
+    const askedByWatchdog = !!(this.crowdExit && Date.now() - this.crowdExit.at < 60_000
+                               && Number(this.crowdExit.room) === Number(this.s.world?.room?.num));
+    if (askedByWatchdog) this.crowdExit = null;
+    if (wedge?.refused || askedByWatchdog) {
+      // A WEDGE IN A CROWD IS LEFT BY THE DOOR. Refusing here means standing for the hold,
+      // and tour 14 (2026-09-02) showed what standing in a room of thirteen trolls costs:
+      // both remaining road deaths were exactly this, one of them 160 s on one square
+      // before the first blow. With walls withheld in a crowd the retreat's only candidate
+      // is the exit, so the wedge becomes one hop out and a re-plan from the far side.
+      if (this.crowded()) {
+        const here = this.s.world?.room?.num ?? null;
+        const onward = here != null ? this.onwardExit(here, Number(room)) : null;
+        this.noteCrowdRefusal('standing in a wedge');
+        const left = await this.takeSafeSpot('wedged in a crowd — leaving by the exit', null,
+                                             { source: 'travel', onward, destination: Number(room) })
+                               .catch(e => ({ took: false, why: e.message }));
+        if (left?.via === 'exit' || left?.crossed) {
+          this.wedgeHold = null;
+          this.note('left a wedge by the exit', { from: here, to: this.s.world?.room?.num ?? null, why: wedge?.why ?? 'the watchdog asked: wedged and taking hits in a crowd' });
+          return { arrived: false, refused: false, wedged: true, left_by_exit: true,
+                   why: `left the wedge in room ${here} by the exit; the journey re-plans from room ${this.s.world?.room?.num ?? '?'}` };
+        }
+        this.note('could not leave the wedge by the exit', { why: left?.why ?? 'no answer' });
+      }
+      if (wedge?.refused) return { arrived: false, refused: true, wedged: true, gave_up: true, why: wedge.why };
     }
 
     // AND SET OUT FIT, IF THIS IS SOMEWHERE FIT CAN BE HAD FOR FREE. Above the journey
@@ -6697,11 +6727,25 @@ export class Autopilot {
     const e = Number(process.env.M59_TRAVEL_STOP_MAX_THREATS);
     return Number.isFinite(e) ? e : 6;
   }
+  // A CROWD IS COUNTED BY BODIES, NOT BY NAMES. namedThreatsHere() drops any object whose
+  // name resource the client has not resolved; in the Sewers of Barloque that left a room of
+  // 25 rats and lupoggs counting as empty, and a traveller took a wall there (tour 15).
+  threatCountHere() {
+    const c = this.s?.client;
+    if (!c?.room?.objects) return 0;
+    let n = 0;
+    for (const o of c.room.objects.values()) {
+      if (o.id === c.selfId) continue;
+      if (!(o.flags & OF.ATTACKABLE) || (o.flags & OF.PLAYER)) continue;
+      n++;
+    }
+    return n;
+  }
   crowded() {
     const cap = this.travelStopMaxThreats();
     if (!(cap > 0)) return false;
     let n = 0;
-    try { n = this.namedThreatsHere().length; } catch { return false; }
+    try { n = this.threatCountHere(); } catch { return false; }
     return n >= cap;
   }
   // One ledger row per room per minute when the crowd rule refuses a stop, so a tour says
@@ -6713,7 +6757,7 @@ export class Autopilot {
     this._crowdNoted ??= new Map();
     if ((this._crowdNoted.get(key) ?? 0) > now - 60_000) return;
     this._crowdNoted.set(key, now);
-    let n = 0; try { n = this.namedThreatsHere().length; } catch { /* counted as unknown */ }
+    let n = 0; try { n = this.threatCountHere(); } catch { /* counted as unknown */ }
     try {
       recordTactic({ character: this.s?.client?.me?.name ?? this.s?.name ?? null, room,
                      tactic: 'crowd_no_stop', trigger: what, worked: true, ms: 0, hp_lost: 0, attempted: true,
@@ -9665,6 +9709,11 @@ export class Autopilot {
         && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes
         && !w.saidTravelWedge) {
       w.saidTravelWedge = true;
+      // NOT the moment to cancel the walk, even in a crowd. Tried on tour 16 (2026-09-03):
+      // cancelling here ENDS a runner-driven journey ("no longer travelling"), and the body
+      // was left standing in the crowd with nothing to do, which is the death it was meant
+      // to prevent. A wedge in a crowd is left by the exit from the journey ATTEMPT — when
+      // the arm gives up — where the retreat and the re-plan belong to the same pass.
       this.note('wedged mid-journey, and the journey stands', {
         wedged_for_s: Math.round((now - wedge.since) / 1000),
         health: hp?.value == null ? null : `${hp.value}/${hp.max}`,
