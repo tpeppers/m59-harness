@@ -2772,6 +2772,21 @@ class KeeperProxy {
   // this with null, because a caller then believes the character tried to leave and did
   // not. Refusing out loud is the honest answer and points at the verb that does work.
   leaveViaAny() { throw new Error(`${this.name}: leaveViaAny is the keeper's; travel through /action`); }
+  // FORWARDED FOR THE SAME REASON AS `walkFine`: the body, its socket and its pacer are all
+  // in the keeper. `attackRounds` was simply absent, so `fight` died with
+  // "s.attackRounds is not a function" on every keeper-backed character — which is all of
+  // them on this architecture — and `sellOne` was absent the same way, which is why
+  // `sell_all` already forwards and the single sale did not.
+  async attackRounds(targetId, swings = 4, { abortBelow = null } = {}) {
+    return keeperAction(this.name, this._index, 'attack_rounds',
+                        { target_id: targetId, swings, abort_below: abortBelow });
+  }
+  async sellOne(merchantRef, item, confirm) {
+    return keeperAction(this.name, this._index, 'sell_one',
+                        { merchant: typeof merchantRef === 'object' && merchantRef !== null
+                            ? merchantRef.id : merchantRef,
+                          item, confirm: confirm === true });
+  }
   async rest(opts = {}) { return keeperAction(this.name, this._index, 'rest', opts); }
   setPolicy() { return null; }
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units.
@@ -6885,6 +6900,20 @@ const TOOLS = [
           requestedStop < 0.05 || requestedStop > 0.95))
         throw new Error('stop_below must be a health fraction from 0.05 through 0.95');
       const stopBelow = requestedStop;
+      // KEEPER-BACKED: THE SWINGING RUNS IN THE KEEPER, because that is where the socket is.
+      //
+      // Everything below reaches `c.attack()`, `c.waitFor()` and `s.pacer` — and on a
+      // KeeperProxy `c` is a two-second-old snapshot with no wire. The target is resolved
+      // HERE, against that snapshot, because the caller's `target` may be a name and the
+      // broker is where names get resolved; only the id crosses.
+      //
+      // Same treatment `sell_all` already gets, and for the same reason. Without it `attack`
+      // came back with an error on every character this architecture runs.
+      if (s instanceof KeeperProxy)
+        return keeperAction(a.agent, s._index, 'attack_rounds',
+          { target_id: t.id, swings: rounds,
+            abort_below: stopBelow });
+
       const healthFraction = () => {
         const health = c.vitals()?.health;
         const maximum = health?.max ?? health?.scale_max;

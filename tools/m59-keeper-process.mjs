@@ -1835,6 +1835,42 @@ const server = createServer(async (req, res) => {
                    mover: r ?? null });
             return;
           }
+          // SWING AT SOMETHING. The broker's `fight` calls `Session.attackRounds`, and a
+          // keeper-backed session is a KeeperProxy which did not have it — so `fight` died
+          // with `s.attackRounds is not a function` and `attack`, which drives the wire
+          // through `c.attack()`, was talking to a proxy client with no socket. Both are the
+          // same shape as `sell_all`: the CLIENT is here, so the swinging is here.
+          //
+          // Measured 2026-09-04: a character that had climbed the whole Ancient Place spiral
+          // could not clear the orc standing on the stairs, because neither combat verb
+          // reached the body. A climb that cannot defend its own route is not an unattended
+          // climb.
+          case 'attack_rounds': {
+            const targetId = Number(args.target_id ?? args.targetId);
+            if (!Number.isFinite(targetId)) { json({ error: 'attack_rounds needs a target_id' }, 400); return; }
+            const swings = Math.max(1, Math.min(Number(args.swings ?? 4), 20));
+            // `abort_below` is a health FRACTION and it is the whole safety of this verb:
+            // one more swing at 15% is how a character dies mid-round.
+            const abortBelow = args.abort_below == null ? null : Number(args.abort_below);
+            try {
+              const r = await session.attackRounds(targetId, swings, { abortBelow });
+              json(r ?? { swings: 0 });
+            } catch (e) { json({ error: e.message }, 500); }
+            return;
+          }
+          // SELL ONE THING. `sell_all` already runs here for exactly this reason; the single
+          // sale was left behind on the proxy and threw the same way.
+          case 'sell_one': {
+            const item = args.item && typeof args.item === 'object'
+              ? { id: Number(args.item.id), amount: args.item.amount }
+              : { id: Number(args.item) };
+            if (!Number.isFinite(item.id)) { json({ error: 'sell_one needs an item id' }, 400); return; }
+            try {
+              const r = await session.sellOne(args.merchant, item, args.confirm === true);
+              json(r ?? { sold: false });
+            } catch (e) { json({ error: e.message }, 500); }
+            return;
+          }
           case 'confirm_position': {
             const r = await session.confirmPosition?.();
             json({ confirmed: r ?? false });
