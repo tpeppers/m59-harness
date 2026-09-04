@@ -317,11 +317,16 @@ export function FleeRoomAction(opts = {}) {
           for (const { exit } of scored) {
             const r = await s.leaveVia(exit).catch(() => null);
             if (r?.left) return true;
+            // The live room identity changed but has not been confirmed as a crossing yet.
+            // End this flee pass so it is rebuilt from the published room; every remaining
+            // `exit` in this array belongs to the old room.
+            if (r?.room_changed) return false;
           }
           // No exit succeeded — try any exit without stand_on as last resort.
           for (const exit of exits.filter(e => !e.stand_on)) {
             const r = await s.leaveVia(exit).catch(() => null);
             if (r?.left) return true;
+            if (r?.room_changed) return false;
           }
           return false;
         })

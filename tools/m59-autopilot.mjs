@@ -26,7 +26,7 @@ import { OF, affordances, dropSpec as dropSpecFor,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem } from './m59-items.mjs';
-import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures,
+import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
@@ -49,6 +49,7 @@ import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
 import { detailSettings, recordStrategyStat, saveVaultSnapshot }
   from './m59-strategy-stats.mjs';
 import { routeTravelKind } from './m59-travel-kind.mjs';
+import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
@@ -1901,7 +1902,9 @@ export class Autopilot {
     // stops at 80 and the rest has to be eaten, so one mushroom against a floor of 140 is
     // still a floor nothing can reach. Counted the same way, because it is the same fact
     // about supply rather than a fighting decision.
-    const carried = larder.reduce((n, item) => n + (Number(item?.nutrition) || 0), 0);
+    const carried = larder.reduce((n, item) =>
+      n + (Number(item?.food?.nutrition ?? item?.nutrition) || 0) *
+          (Number(item?.o?.amount ?? item?.amount ?? 1) || 1), 0);
     const reachable = reachableFightFloor(want, VIGOR_CAP, carried);
     if (reachable < want) this.vigor.starved_passes++;
     return reachable;
@@ -1987,10 +1990,18 @@ export class Autopilot {
   // loadout's own preference order, which is the standing answer. Null falls through to
   // ranking by proficiency, which is a feedback loop that only ever rewards what the
   // character is already good at.
-  weaponPriorityNow() {
-    if (this.policy.weaponPriority) return this.policy.weaponPriority;
-    const l = this.loadout();
-    return l && l.gear.weapon.length ? l.gear.weapon : null;
+  weaponPriorityNow(targetName = null) {
+    // Undead override, above even the operator's list: blunt for a skeleton, a short
+    // sword for a zombie (operator order, 2026-09-01). Only these two prey — every
+    // other target keeps whatever answer the rungs below give. The fragments PREPEND
+    // rather than replace, so a character carrying neither still reaches for its own
+    // best weapon instead of standing unarmed on a technicality.
+    const t = String(targetName ?? '').toLowerCase();
+    const base = this.policy.weaponPriority
+      ?? (() => { const l = this.loadout(); return l && l.gear.weapon.length ? l.gear.weapon : null; })();
+    if (t.includes('skeleton')) return ['hammer', 'mace', ...(base ?? [])];
+    if (t.includes('zombie')) return ['short sword', ...(base ?? [])];
+    return base;
   }
 
   // A training bout belongs to one quarry. `skills.fight` deliberately resumes a
@@ -2007,6 +2018,11 @@ export class Autopilot {
     this._trainingBout = { target_id: targetId, style };
     this._trainingNextStyle = style === 'short_sword' ? 'unarmed' : 'short_sword';
     return style;
+  }
+
+  isTrainingPrey(name) {
+    const want = this.policy.hunt;
+    return !!want && this.huntMatch(want)(String(name || ''));
   }
 
   finishTrainingBout(targetId) {
@@ -2046,33 +2062,39 @@ export class Autopilot {
       const bare = await this.unuseTrainingWeapon();
       if (bare.ready && bare.removed)
         this.note('training bout: fighting unarmed', { target_id: targetId, removed: bare.removed });
-      return { ...bare, equip: false, style };
+      return { ...bare, equip: false, style, rounds: 1 };
     }
     if (style !== 'short_sword')
       return { ready: false, equip: false, style, why: `unknown training style ${style}` };
 
     const equippedShort = () => {
       const using = skills.equippedNow(c);
-      if (!using) return false;
-      return (c.inventory || []).some(o => using.has(o.id) &&
-        /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
+      if (!using) return null;
+      return (c.inventory || []).find(o => using.has(o.id) &&
+        !skills.brokenSet(c).has(o.id) &&
+        /short\s?sword/i.test(c.rsc.get(o.nameRsc) || '')) || null;
     };
-    if (equippedShort()) return { ready: true, equip: false, style, already: true };
+    let short = equippedShort();
+    if (short)
+      return { ready: true, equip: false, style, already: true, weapon_id: short.id, rounds: 1 };
 
     const off = await this.unuseTrainingWeapon();
     if (!off.ready) return { ...off, equip: false, style };
     let hasShort = (c.inventory || []).some(o =>
+      !skills.brokenSet(c).has(o.id) &&
       /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
     if (!hasShort) {
       await this.makeWeapon('this training bout requires a short sword').catch(() => false);
       hasShort = (c.inventory || []).some(o =>
+        !skills.brokenSet(c).has(o.id) &&
         /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
     }
     if (hasShort && !equippedShort())
       await skills.equipBest(s, { priority: ['short sword'] }).catch(() => null);
-    if (equippedShort()) {
+    short = equippedShort();
+    if (short) {
       this.note('training bout: fighting with a short sword', { target_id: targetId });
-      return { ready: true, equip: false, style };
+      return { ready: true, equip: false, style, weapon_id: short.id, rounds: 1 };
     }
 
     // Do not leave a failed experiment empty-handed. Re-arm normally for survival,
@@ -2082,6 +2104,10 @@ export class Autopilot {
              why: 'no usable short sword could be made or equipped' };
   }
 
+  // A training bout belongs to one quarry. `skills.fight` deliberately resumes a
+  // damaged target over a fresh one because changing targets discards advancement
+  // credit; weapon style has to be just as sticky or an interrupted fight can count
+  // once with each hand. The next style flips when a new quarry is selected.
   // What `create food` eats: 2 ElderBerry and 2 Herbs, from OUR pack, and it refuses
   // SILENTLY without them — so the count has to be checked before casting rather than
   // inferred from a failure.
@@ -3570,7 +3596,12 @@ export class Autopilot {
     // something lands a blow while we sit. The PROOF_MS timer also still runs and still
     // settles, so the ledger keeps collecting evidence about the law; it simply no longer
     // gates the shelter on having collected it first.
-    const trusted = !this.book.discredited(known);
+    // Geometry decides whether this is a wall; the ledger only records what happened
+    // while we stood on it. A square nothing can reach is not made reachable by a bad
+    // afternoon on it, so `can_reach_you === 0` outranks the failure row for the
+    // question this line asks, which is 'may I shelter here'.
+    const trusted = !this.book.discredited(known,
+      { reachable: Number.isInteger(spot?.can_reach_you) ? spot.can_reach_you : null });
     this.hold = {
       source,
       room: room.num, col: spot.col, row: spot.row,
@@ -4909,15 +4940,15 @@ export class Autopilot {
       // This string is what the fleet board renders, and it is where the afternoon of
       // worthless grinding would have been visible had there been anything to see.
       const y = this.yieldCheck();
-      if (!y || y.paying) return `hunting: ${this.policy.hunt}`;
+      if (!y || y.paying) return `hunting: ${huntLabel(this.policy.hunt)}`;
       // FINISHED IS NOT THE SAME FAILURE AS FUTILE, and rendering them with one string
       // would undo the point of the check. A character whose list is complete has done
       // what it was sent to do and wants re-tasking; one grinding prey that can never
       // drop what it needs is burning an afternoon. Both are "not paying"; only the
       // second is bad news.
       return y.done
-        ? `hunting: ${this.policy.hunt} — list complete, nothing left to fetch`
-        : `hunting: ${this.policy.hunt} — PAYS NOTHING for ${this.policy.purpose}`;
+        ? `hunting: ${huntLabel(this.policy.hunt)} — list complete, nothing left to fetch`
+        : `hunting: ${huntLabel(this.policy.hunt)} — PAYS NOTHING for ${this.policy.purpose}`;
     }
     return this.stalledSince ? `stuck: ${this.stalledWhy}` : 'waiting';
   }
@@ -5438,6 +5469,27 @@ export class Autopilot {
     return 'on';
   }
 
+  // ONE JOURNEY-SCOPED COUNTER, WITH THE KIND KEPT BESIDE THE TOTAL. A hop-wall
+  // hold, sanctuary pause, route-adjacent refuge and baked-track station are all
+  // shelter, but only the first is literally a wall taken at a hop boundary.
+  recordTravelShelterStop(kind, { count = 1, heldMs = 0 } = {}) {
+    const n = Number.isFinite(Number(count)) ? Math.max(0, Math.trunc(Number(count))) : 0;
+    const ms = Number.isFinite(Number(heldMs)) ? Math.max(0, Math.trunc(Number(heldMs))) : 0;
+    if (!n) return;
+    this.travelSafeStops = (this.travelSafeStops ?? 0) + n;
+    // `travelHeldMs` is also the hop-wall budget clock. Preserve that control meaning:
+    // route/track rests are telemetry, and must not spend the budget that decides whether a
+    // later boundary hold is allowed. The inclusive clock is separate.
+    if (kind === 'hop_wall' || kind === 'sanctuary')
+      this.travelHeldMs = (this.travelHeldMs ?? 0) + ms;
+    this.travelShelterHeldMs = (this.travelShelterHeldMs ?? 0) + ms;
+    const field = {
+      hop_wall: 'travelHopWallStops', sanctuary: 'travelSanctuaryStops',
+      route: 'travelRouteStops', track: 'travelTrackStops',
+    }[kind];
+    if (field) this[field] = (this[field] ?? 0) + n;
+  }
+
   // Is this a moment where a hold is even the question? Cheap, and asked at every hop
   // boundary in BOTH arms — the control has to log the counterfactual or the comparison is
   // between "journeys where we held" and "all journeys", which is not a comparison.
@@ -5711,8 +5763,7 @@ export class Autopilot {
       maxSeconds: Math.round(Math.min(90_000, budget - this.travelHeldMs) / 1000),
     }).catch(e => ({ error: e.message }));
     const heldMs = Date.now() - t0;
-    this.travelHeldMs += heldMs;
-    this.travelSafeStops = (this.travelSafeStops ?? 0) + 1;
+    this.recordTravelShelterStop('hop_wall', { heldMs });
     const hpAfter = this.s.client?.vitals?.()?.health?.value ?? null;
 
     // LEAVING IS FORCED, and it has to be. `leaveHold` refuses a DISCRETIONARY departure
@@ -5834,8 +5885,7 @@ export class Autopilot {
       }).catch(e => ({ error: e.message }));
       const after = this.s.client?.vitals?.();
       const heldMs = Date.now() - t0;
-      this.travelHeldMs = (this.travelHeldMs ?? 0) + heldMs;
-      this.travelSafeStops = (this.travelSafeStops ?? 0) + 1;
+      this.recordTravelShelterStop('sanctuary', { heldMs });
       this.ledgerEvent('travel_hold', {
         journey: at.journey, arm, room: room?.num ?? null, room_name: room?.name ?? null,
         hops_done: at.hops_done, remaining: at.remaining,
@@ -6034,7 +6084,12 @@ export class Autopilot {
     const holdMode = this.travelHoldMode();
     const arm = holdMode === 'off' ? 'walk' : TRAVEL_HOLD_ARM;
     this.travelHeldMs = 0;
+    this.travelShelterHeldMs = 0;
     this.travelSafeStops = 0;
+    this.travelHopWallStops = 0;
+    this.travelSanctuaryStops = 0;
+    this.travelRouteStops = 0;
+    this.travelTrackStops = 0;
     const startedAt = Date.now();
     const v0 = this.s.client?.vitals?.()?.health;
     const hpStart = v0?.value ?? null, hpMax = v0?.max ?? null;
@@ -6125,12 +6180,35 @@ export class Autopilot {
             await this.travelHold(at, arm).catch(e => this.note('travel hold failed', { why: e.message }));
           if (onHop) await onHop(at);
         },
+        // `rideTrack` heals at stations below the room-boundary hook. Session surfaces each
+        // actual rest here so it cannot disappear on the track fast-path's early return.
+        onTrackRest: async ({ stops, held_ms }) => {
+          this.recordTravelShelterStop('track', { count: stops, heldMs: held_ms });
+        },
       });
-      return outcome;
     } finally {
       if (detailed) closeMap();
       this.recordFrame('arrived');
       const v1 = this.s.client?.vitals?.()?.health;
+      // THESE COUNTERS BELONG TO THIS JOURNEY, BUT THE KEEPER FIELDS DO NOT. They are
+      // cleared below so the next journey starts clean. Snapshot them first and attach the
+      // immutable value to the returned outcome, which is the only record travelJob can
+      // use after this finally has run. Without this, arrival broadcasts read tally.rests
+      // instead and report zero while the travel hook may have sheltered several times.
+      const journeyMetrics = travelJourneyMetrics({
+        shelterStops: this.travelSafeStops, heldMs: this.travelShelterHeldMs,
+        hopWallStops: this.travelHopWallStops,
+        sanctuaryStops: this.travelSanctuaryStops,
+        routeStops: this.travelRouteStops,
+        trackStops: this.travelTrackStops,
+      });
+      outcome = withTravelJourneyMetrics(outcome, {
+        shelterStops: journeyMetrics.shelter_stops, heldMs: journeyMetrics.held_ms,
+        hopWallStops: journeyMetrics.hop_wall_stops,
+        sanctuaryStops: journeyMetrics.sanctuary_stops,
+        routeStops: journeyMetrics.route_stops,
+        trackStops: journeyMetrics.track_stops,
+      });
       // ONE ROW PER JOURNEY — the denominator. Deaths per journey is the measurement, and
       // without the journeys written down there is nothing to divide by.
       //
@@ -6143,7 +6221,15 @@ export class Autopilot {
         ...(travelKind === 'travel' && holdBetweenRooms ? { arm } : {}),
         to: room, legs, planned_legs: plannedLegs,
         ms: Date.now() - startedAt,
+        // The A/B field retains its old budget-clock meaning. The inclusive recovery time
+        // is separate so observing route/track stops cannot change the experiment's units.
         held_ms: this.travelHeldMs ?? 0,
+        shelter_held_ms: journeyMetrics.held_ms,
+        shelter_stops: journeyMetrics.shelter_stops,
+        hop_wall_stops: journeyMetrics.hop_wall_stops,
+        sanctuary_stops: journeyMetrics.sanctuary_stops,
+        route_stops: journeyMetrics.route_stops,
+        track_stops: journeyMetrics.track_stops,
         hp_start: hpStart, hp_end: v1?.value ?? null, hp_max: hpMax ?? v1?.max ?? null,
         // Whether this journey ended in a death is not knowable here — the keeper is still
         // alive to write this line. It is joined afterwards, from the postmortem's own
@@ -6154,15 +6240,21 @@ export class Autopilot {
           to: room, arrived: outcome?.arrived ?? false, reason: outcome?.reason ?? null,
           duration_ms: Date.now() - startedAt, legs, planned_legs: plannedLegs,
           damage: Math.max(0, this.hitDamageTotal() - journeyDamageStart),
-          safe_spot_stops: this.travelSafeStops ?? 0, safe_spot_ms: this.travelHeldMs ?? 0,
+          safe_spot_stops: journeyMetrics.shelter_stops, safe_spot_ms: journeyMetrics.held_ms,
           health_start: hpStart, health_end: v1?.value ?? null,
           health_max: hpMax ?? v1?.max ?? null, maps,
         });
       }
       this.travelArm = null;
       this.travelHeldMs = 0;
+      this.travelShelterHeldMs = 0;
       this.travelSafeStops = 0;
+      this.travelHopWallStops = 0;
+      this.travelSanctuaryStops = 0;
+      this.travelRouteStops = 0;
+      this.travelTrackStops = 0;
     }
+    return outcome;
   }
 
   // WHAT IS ACTUALLY IN REACH OF US RIGHT NOW.
@@ -8788,10 +8880,12 @@ export class Autopilot {
           // BOUNDED, because a refuge that cannot heal must not hold a crossing for ever —
           // and `abortOnDamage` defaults on, so a wall that turns out to be wrong costs one
           // interrupted rest rather than a death.
+          const restStarted = Date.now();
           const done = await skills.restUntil(this.s, {
             health: 1, vigor: REST_VIGOR_CAP,
             maxSeconds: this.policy.refugeRestSeconds ?? 90,
           }).catch(e => ({ ok: false, why: e.message }));
+          this.recordTravelShelterStop('route', { heldMs: Date.now() - restStarted });
           this.note('leaving the refuge', { where, ...(done?.ok === false ? { cut_short: done.why } : {}) });
           const after = this.s.client?.vitals?.();
           settle({
@@ -12650,6 +12744,24 @@ export class Autopilot {
         // So the answer to "no wall and no town" is the thing below that MOVES. playDead()
         // now refuses off a proven spot on its own account, so this is belt and braces:
         // the call is gone AND the verb would have said no.
+        // NOT A LOGOFF HERE, AND THE REASON IS WHAT A LOGOFF IS FOR. Considered and
+        // rejected 2026-09-02, written down because it is an attractive wrong answer.
+        //
+        // Floyd died wedged in this exact state — 113 seconds on one square, `gross_squares:
+        // 0`, ten monsters in the room — and a reconnect looks like the escape that is not
+        // movement-shaped, since logging off takes the body out of the world entirely.
+        //
+        // It is not an escape, because a logoff trick only pays when the character comes
+        // BACK somewhere it can heal: return to a safe spot, rotate, recover. That is the
+        // whole point of the manoeuvre and it is what `breakOut` is doing when it reconnects
+        // before stepping off a wall it already holds. Logging off from a wedge returns the
+        // character to the SAME square, at the same health, with the same crowd — it buys
+        // the entry grace period and spends it standing in the place that was killing it.
+        // Doing that on a timer, or immediately, is the manoeuvre's shape without its
+        // substance.
+        //
+        // The wedge is the bug. It is fixed by not packing the room onto one wall
+        // (max_bots_per_safe_spot) rather than by a cleverer way to die there.
         this.note('no wall and no town — withdrawing rather than freezing', {
           health: v.health.value, adjacent: near.length,
           why: 'freezing off a proven spot recovers vigor and never health; it spends the ' +
@@ -14213,7 +14325,7 @@ export class Autopilot {
               const n = (this.relocFails.get(target.room) ?? 0) + 1;
               this.relocFails.set(target.room, n);
               if (n >= 3) this.unreachable.add(target.room);
-              this.noProgress('cannot reach anywhere that generates ' + this.policy.hunt);
+              this.noProgress('cannot reach anywhere that generates ' + huntLabel(this.policy.hunt));
             }
             return HANDLED;
           }
@@ -14557,8 +14669,27 @@ export class Autopilot {
         // answer is no, leaving is not roaming — it is going to work — so it does not
         // wait on the roam permission, which exists to stop characters wandering off
         // productive ground.
+        // A ROOM THAT CANNOT PRODUCE OUR QUARRY IS AS USELESS AS ONE THAT SPAWNS NOTHING.
+        //
+        // The branch below was gated on sanctuary() alone — "does anything huntable spawn
+        // here" — which catches the tavern and misses the wilderness. A character that dies
+        // on the road, or finishes a shop trip, lands in a forest that spawns plenty and
+        // none of it is a battered skeleton; sanctuary() is false, so it stands there
+        // logging "nothing to hunt here", perfectly accurately, for the rest of the session
+        // with roam:false meaning it never leaves. Statler did minutes of it at Off the
+        // beaten path and the Lake of Jala's Song, hunting quarry that spawns in neither.
+        //
+        // The distinction the branch actually wants is not "is anything here" but "is
+        // anything here that I AM ALLOWED TO KILL". Both answers mean the same thing about
+        // waiting: a respawn cannot fix it, because what respawns is not what we are for.
+        //
+        // Only when an order names a quarry — with policy.hunt unset every room fails this
+        // test and the fleet would walk home from everywhere.
+        const spawnHere = loadSpawns(SPAWN_FILE)?.rooms?.[room?.num] || [];
+        const producesQuarry = !this.policy.hunt ? true
+          : spawnHere.some(x => x.huntable && this.huntMatch()(x.creature));
         const inSanctuary = this.sanctuary(room);
-        if (inSanctuary && this.emptyPasses >= 2) {
+        if ((inSanctuary || !producesQuarry) && this.emptyPasses >= 2) {
           // policy.assignedRoom is where `spread` put us; homeRoom is where we last
           // settled. `this.assignedRoom` does not exist — reading it would have made this
           // whole branch quietly do nothing, which is the failure mode this fix is about.
@@ -14570,8 +14701,10 @@ export class Autopilot {
             // they were already walking. Going back to work is right; going back to work
             // hurt and bare-handed is what the last twenty minutes of records are.
             if (!await this.readyToLeaveSanctuary(home)) return HANDLED;
-            this.note('this room spawns nothing at all — going back to work', {
+            this.note(inSanctuary ? 'this room spawns nothing at all — going back to work'
+                                  : 'this room cannot produce our quarry — going back to work', {
               room: room?.name, room_num: room?.num, going_to: home,
+              hunting: this.policy.hunt, produces_quarry: producesQuarry,
               why: 'a tavern has no spawn table, so waiting for a respawn here waits for ' +
                    'something that cannot happen. This is not roaming; roam guards against ' +
                    'leaving GOOD ground, and this is not that.' });
@@ -15292,10 +15425,10 @@ export class Autopilot {
       const plannedQuarryId = this.pendingPull?.target_id ?? selectedQuarry?.id ?? null;
       const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : plannedQuarryId);
       const claimedSwing = swingAt ?? null;
-      // The experiment is about the named farm prey, not weak-room cleanup or a
-      // defensive contact that happened to reach the wall first.
-      const trainingPrey = String(engageName || '').toLowerCase() ===
-                           String(this.policy.hunt || '').toLowerCase();
+      // The experiment is about the configured farm prey, not weak-room cleanup or a
+      // defensive contact. Use the same canonical matcher as every other hunt decision,
+      // so class and alias orders (for example `soldier`) train their actual prey too.
+      const trainingPrey = this.isTrainingPrey(engageName);
       const trainingStyle = trainingPrey ? this.trainingStyleFor(claimedSwing) : 'normal';
       const training = await this.prepareTrainingStyle(trainingStyle, claimedSwing)
         .catch(e => ({ ready: false, why: e.message, style: trainingStyle }));
@@ -15314,12 +15447,25 @@ export class Autopilot {
       if (this.policy.partner && !this.pendingPull)
         party.declareTarget(this.s.name, claimedSwing, engageName);
       const f = await skills.fight(s, { target: engageName,
+                                        // The same predicate that chose the quarry. An order naming
+                                        // several creatures is not a string, and fight() would
+                                        // otherwise substring against "battered skeleton,zombie"
+                                        // and find nothing in a room full of both.
+                                        match: this.huntMatch(engageName),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,
                                         holdPosition: holding, reach: PLAYER_REACH,
                                         equip: training.equip,
-                                        weaponPriority: this.weaponPriorityNow() });
+                                        rounds: training.rounds,
+                                        weaponPriority: this.weaponPriorityNow(engageName) });
+
+      // With equip:false fight() cannot know which prepared weapon shattered. Remember
+      // the exact short-sword id here so the next pass makes a replacement instead of
+      // repeatedly offering the same server-refused item.
+      if (training.weapon_id != null && (f.combat || []).some(skills.brokenWeaponText))
+        skills.brokenSet(c).add(training.weapon_id);
+      if (trainingPrey && (f.killed || f.died)) this.finishTrainingBout(claimedSwing);
 
       if (trainingPrey && (f.killed || f.died)) this.finishTrainingBout(claimedSwing);
 
@@ -15468,14 +15614,29 @@ export class Autopilot {
       // held safe spot rests where it stands; everything else leaves the room.
       if (f.disengaged) {
         const hp = v.health?.max ? Math.round(100 * v.health.value / v.health.max) + '%' : null;
-        if (holding && this.holdWorks?.()) {
+        if (f.disengaged.unarmed) {
+          const reason = f.disengaged.reason
+            ?? 'the weapon was lost and no verified replacement could be equipped';
+          // A wall limits added attackers; it does not make the one already engaged
+          // harmless. Leave the live pocket before ordinary recovery can choose to rest.
+          if (holding) await this.leaveHold(reason, { force: true }).catch(() => null);
+          await this.retreatToSafety({
+            because: reason,
+            mid_round: !!f.disengaged.mid_round,
+            unarmed: true,
+            still_here: (this.inReachOfUs() ?? []).length,
+          });
+          this.progress('retreated after losing the weapon');
+          return HANDLED;
+        } else if (holding && this.holdWorks?.()) {
           this.note('broke off behind the wall — resting here rather than running', {
             at_health: f.disengaged.at_health, mid_round: !!f.disengaged.mid_round,
             why: 'nothing can hit us on this square unless we swing first, so standing still ' +
                  'is a free heal and walking off it would start the damage' });
         } else {
           await this.retreatToSafety({
-            because: 'broke off a fight at ' + (f.disengaged.at_health ?? hp),
+            because: f.disengaged.reason
+              ?? ('broke off a fight at ' + (f.disengaged.at_health ?? hp)),
             mid_round: !!f.disengaged.mid_round,
             still_here: (this.inReachOfUs() ?? []).length,
           });
@@ -15616,7 +15777,7 @@ export class Autopilot {
     const v = c.vitals();
     const hp = v.health ? `${v.health.value}/${v.health.max}` : '?';
     const wielding = (c.inventory || []).length ? '' : ' I have nothing on me.';
-    const what = this.policy.hunt ? `hunting ${this.policy.hunt}` : 'not hunting anything';
+    const what = this.policy.hunt ? `hunting ${huntLabel(this.policy.hunt)}` : 'not hunting anything';
     const stalled = this.stalledSince ? ` I am stuck: ${this.stalledWhy}.` : '';
     const reply = `${c.me.name}: ${what}, ${hp} health.${wielding}${stalled} ` +
                   (this.needsRecovery || !(c.inventory || []).length
@@ -18574,7 +18735,7 @@ export class Autopilot {
       this.note('every way out of here is a dead end', {
         room: room?.name,
         rejected: all.map(e => `${e.to_name} (${e.to})`),
-        why: 'none of these can route back to a room that generates ' + this.policy.hunt });
+        why: 'none of these can route back to a room that generates ' + huntLabel(this.policy.hunt) });
       this.noProgress('surrounded by rooms with no way back to the hunting grounds');
       this.emptyPasses = 0;
       return;

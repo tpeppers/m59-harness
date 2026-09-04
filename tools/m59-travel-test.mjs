@@ -40,6 +40,10 @@ function fakeSession({ rooms = [1, 2, 3, 4], script = [], startAt = 0,
     noteTransit: () => {},
     pacer: { submit: async (_k, fn) => fn() },
     client: {
+      get room() {
+        const n = rooms[s.at];
+        return n == null ? null : { id: 1000 + n };
+      },
       roomContents: async () => { s.reads++; },
       waitFor: async () => {},
     },
@@ -150,6 +154,100 @@ console.log('a clean journey arrives, and counts its hops');
   ok('three hops', r.hops === 3);
   ok('no stumbles', r.stumbles === 0);
   ok('already there is instant', (await travel.call(fakeSession({ startAt: 3 }), 4, {})).hops === 0);
+}
+
+// ---------------------------------------------------------------------------
+console.log('legacy numeric region attempts cannot break travel evidence serialization');
+{
+  // Old region successes returned `tried: 1`, while the shared exit contract defines
+  // `tried` as an array of candidate evidence. Keep travel tolerant of an in-flight old
+  // keeper/result during rolling activation, and preserve the count under its numeric name.
+  const s = fakeSession({ rooms: [1, 2] });
+  s.leaveViaAny = async candidates => {
+    s.at = 1;
+    return { left: true, tried: 1, used_exit: candidates[0], via: 'region trigger' };
+  };
+  let result = null, thrown = null;
+  try { result = await travel.call(s, 2, {}); }
+  catch (error) { thrown = error; }
+  ok('a legacy numeric tried value does not throw', thrown == null);
+  ok('the crossing still completes its journey', result?.arrived === true);
+  const evidence = s.pendingExitGaps?.[0];
+  ok('the queued evidence is array-safe and retains the numeric region attempt count',
+     Array.isArray(evidence?.tried) && evidence.tried.length === 0 &&
+       evidence.region_attempts === 1);
+}
+
+// ---------------------------------------------------------------------------
+console.log('a track room change never executes source-room exit candidates in the new room');
+{
+  // The exact live route that exposed the race: the track crosses Outskirts of Barloque
+  // (593) into the Valley of Illeria (583), then travel must rebuild and use only the
+  // valley's west exit to 563.
+  const s = fakeSession({ rooms: [593, 583, 563] });
+  let rides = 0;
+  s.rideTrack = async () => {
+    if (rides++ === 0) {
+      // Reproduce the bad handoff: the room publication wins the race, while the fine move
+      // that caused it still reports left_room:false.
+      s.at = 1;
+      return { rode: true, left_room: false, why: 'late room acknowledgement' };
+    }
+    return { rode: false, why: 'no track for the next room' };
+  };
+  const used = [];
+  const ordinaryExit = s.leaveViaAny.bind(s);
+  s.leaveViaAny = async candidates => {
+    used.push({ at: s.world.room?.num ?? null, to: candidates?.[0]?.to ?? null });
+    return ordinaryExit(candidates);
+  };
+  const r = await travel.call(s, 563, {});
+  ok('the journey still arrives after re-planning from the published room', r.arrived === true,
+     JSON.stringify(r));
+  ok('only the Valley of Illeria candidate to 563 is executed after the handoff',
+     JSON.stringify(used) === JSON.stringify([{ at: 583, to: 563 }]), JSON.stringify(used));
+  ok('the missed acknowledgement is visible in the journey log',
+     r.log?.some(e => e.late_room_change === true), JSON.stringify(r.log));
+}
+
+{
+  const s = fakeSession({ rooms: [1, 2] });
+  s.rideTrack = async () => {
+    s.at = 1;
+    return { rode: true, left_room: true, reached: 4, blocked: 0,
+             rested: 2, rested_ms: 6400 };
+  };
+  const seen = [];
+  const r = await travel.call(s, 2, { onTrackRest: stop => seen.push(stop) });
+  ok('track healing stations are surfaced before the fast path returns',
+     r.arrived === true && seen.length === 1 && seen[0].stops === 2 && seen[0].held_ms === 6400,
+     JSON.stringify({ result: r, seen }));
+}
+
+{
+  const s = fakeSession({ rooms: [1, 2] });
+  let rides = 0;
+  s.rideTrack = async () => rides++ === 0
+    ? { rode: true, left_room: false, room_changed: true,
+        why: 'one published identity disagreed' }
+    : { rode: false, why: 'no track after the re-plan' };
+  const r = await travel.call(s, 2, {});
+  ok('an identity blink is a re-plan, not a completed hop',
+     r.arrived === true && r.hops === 1 && r.stumbles >= 1, JSON.stringify(r));
+  ok('the ordinary source-room exit runs only after that re-plan', rides >= 2,
+     JSON.stringify({ rides, log: r.log }));
+}
+
+{
+  const s = fakeSession({ rooms: [1, 2, 3] });
+  s.rideTrack = async () => {
+    s.at = 2; // published room 3 while this hop asked for room 2
+    return { rode: true, left_room: true };
+  };
+  const r = await travel.call(s, 3, {});
+  ok('a confirmed wrong-room track landing is a stumble, not the requested hop',
+     r.arrived === true && r.hops === 0 && r.stumbles === 1,
+     JSON.stringify(r));
 }
 
 // ---------------------------------------------------------------------------

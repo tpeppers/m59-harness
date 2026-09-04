@@ -1,14 +1,18 @@
 #!/usr/bin/env node
-// SCATTER THE FLEET ACROSS THE MAINLAND AND ASK HOW MANY GET HOME.
+// SCATTER THE FLEET ACROSS THE MAINLAND AND KEEP IT WALKING A CHECKPOINT RING.
 //
-//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2
+//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2             # continuous ring (default)
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --seed 7 --timeout 600
+//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --one-pass  # one crossing, then stop
+//   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --cycle     # accepted compatibility spelling
 //   node tools/m59-pilgrimage.mjs --dry-run
 //
 // `m59-solo-run.mjs` answers "can ONE character walk THIS road", one at a time, from one
 // square, because twenty-one characters crossing together measure contention as much as
 // they measure the road. This asks the other question, which is the one the fleet actually
-// lives: everybody starts somewhere different and everybody goes to the same place.
+// lives: everybody starts somewhere different and keeps walking checkpoint-to-checkpoint.
+// `--one-pass` retains the older scatter-and-converge test when one shared destination is
+// the question being asked.
 //
 // WHY THE FIVE INNS. They are the mainland's fixed points — the rooms the Underworld's
 // portals land in (CITY_INNS in m59-underworld.mjs, RIDs from blakston.khd), so they are
@@ -24,11 +28,21 @@
 // means the room read back as the destination. See docs/m59-operations.md.
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { CITY_INNS } from './m59-underworld.mjs';
+import {
+  DISPATCH_MAX_ATTEMPTS,
+  completeCycleArrival,
+  dispatchDecision,
+  keeperStatusOwnsMovement,
+  keeperStatusVerificationFailure,
+  newPendingDispatch,
+  noteDispatchResult,
+  pilgrimageCycles,
+} from './m59-pilgrimage-cycle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -43,7 +57,7 @@ const flag = (name, fallback = null) => {
 const has = name => argv.includes('--' + name);
 
 const KNOWN = new Set(['fleet', 'to', 'port', 'timeout', 'seed', 'agents', 'inns', 'no-retry',
-                       'dry-run', 'help', 'h', 'cycle', 'reverse']);
+                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse']);
 for (const a of argv) {
   if (!a.startsWith('--')) continue;
   if (!KNOWN.has(a.slice(2))) {
@@ -73,21 +87,14 @@ const ONLY = flag('agents') ? String(flag('agents')).split(',').map(s => s.trim(
 
 // The mainland five, in the canonical table's own order. Ko'catan is across the sea and is
 // not a mainland road, so it is left out unless somebody names it.
-// SCATTER-AND-CONVERGE, OR KEEP GOING. Two different questions, and conflating them cost a
-// day of reading one as the other.
+// KEEP GOING BY DEFAULT. A timed run is most useful when every arrival immediately becomes
+// the next checkpoint leg: early arrivals keep testing, and a longer window buys more evidence
+// instead of a larger parked crowd. `--cycle` remains accepted for existing runbooks.
 //
-// Without `--cycle` this measures ONE crossing per character: everybody starts somewhere
-// different, everybody walks to one room, and a character that gets there is finished. That is
-// the right shape for "can the fleet cross the map", and every earlier run used it, so it stays
-// the default and stays comparable.
-//
-// It is NOT a loop, and it was being read as one. Characters that arrived stood at the
-// destination for the rest of the window with no objective, which looks exactly like being
-// stuck — thirteen of them at once — and it means a longer timeout buys nothing for anyone who
-// arrives early. `--cycle` is the loop that reading assumed: arrive, then set off for the next
-// place, until the clock stops. It measures sustained travel rather than one crossing, so the
-// headline number becomes LEGS COMPLETED rather than characters arrived.
-const CYCLE = has('cycle');
+// `--one-pass` asks the older scatter-and-converge question instead: everybody starts
+// somewhere different, everybody walks to one room, and a character that gets there is done.
+// Its report remains available for comparisons with historical one-crossing runs.
+const CYCLE = pilgrimageCycles(argv);
 const MAINLAND = ['Tos', 'Barloque', 'Cornoth', 'Marion', 'Jasper'];
 const CITIES = flag('inns') ? String(flag('inns')).split(',').map(s => s.trim()) : MAINLAND;
 for (const c of CITIES) if (!CITY_INNS[c]) {
@@ -132,8 +139,13 @@ function call(name, args, ms = 90000) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const rosterFile = FLEET === '-' ? join(REPO, 'substrate', 'fleet-state.json')
-                                 : join(REPO, 'substrate', 'fleets', `${FLEET}.json`);
+// A detached deployment checkout deliberately does not carry the gitignored roster. Honour
+// the same explicit state-file override as the service tools so an operator can run this
+// exact committed harness against the canonical roster without copying account state.
+const configuredStateFile = String(process.env.M59_STATE_FILE ?? '').trim();
+const rosterFile = configuredStateFile ? resolve(configuredStateFile)
+  : FLEET === '-' ? join(REPO, 'substrate', 'fleet-state.json')
+                  : join(REPO, 'substrate', 'fleets', `${FLEET}.json`);
 const rostered = rosterGameEndpoint(rosterFile);
 if (!rostered) {
   console.error(`m59-pilgrimage: ${rosterFile} does not name one game server.`);
@@ -224,7 +236,8 @@ async function launch(r) {
   const out = { character: r.character, agent: r.agent, city, inn,
                 began: Date.now(), rooms: new Set(), low: null, outcome: 'running',
                 ring: at, to: CYCLE ? RING[(at + 1) % RING.length].room : TO,
-                legBegan: Date.now(), legs: [] };
+                legBegan: Date.now(), legs: [], pendingDispatch: null,
+                dispatchRetries: 0 };
   // Idle, unparked and NOT roaming: a character that wanders off to hunt is not measuring
   // the road, and `roam` is the one setting that quietly reintroduces that.
   await call('autopilot', { agent: r.agent, mode: 'idle', roam: false, confine_rooms: [] });
@@ -255,12 +268,43 @@ async function launch(r) {
 
   const sent = await call('travel', { agent: r.agent, to: out.to, max_hops: 30, background: true,
                                       run_errands: false });
-  if (sent?._error || sent?.ok === false) {
-    out.outcome = 'refused';
-    out.why = sent?.why ?? sent?.error ?? sent?._error ?? 'travel refused';
-    out.ms = Date.now() - out.began;
-  }
+  out.pendingDispatch = noteDispatchResult(
+    newPendingDispatch(out.to, 'initial', out.legBegan), sent, Date.now());
   return out;
+}
+
+async function submitPendingDispatch(o) {
+  const pending = o.pendingDispatch;
+  if (!pending) return;
+
+  // The fleet row is the cheap first gate. A detailed status read happens only when a
+  // handoff is otherwise ready to send, and catches a dormant suspended journey that the
+  // compact fleet row intentionally does not publish. Failure to verify defers movement;
+  // uncertainty is not permission to put a second driver on the character.
+  const status = await call('autopilot', { agent: o.agent, action: 'status' }, 15000);
+  const verificationFailure = keeperStatusVerificationFailure(status);
+  if (verificationFailure) {
+    const failures = Number(pending.verification_failures ?? 0) + 1;
+    o.pendingDispatch = {
+      ...pending,
+      verification_failures: failures,
+      retry_at: Date.now() + 5000,
+      ...(failures >= DISPATCH_MAX_ATTEMPTS
+        ? { attempts: DISPATCH_MAX_ATTEMPTS,
+            last_refusal: `could not verify keeper state: ${verificationFailure}` } : {}),
+    };
+    return;
+  }
+  if (keeperStatusOwnsMovement(status)) {
+    o.pendingDispatch = { ...pending, retry_at: Date.now() + 5000 };
+    return;
+  }
+
+  const sent = await call('travel', { agent: o.agent, to: pending.to, max_hops: 30,
+                                      background: true, run_errands: false });
+  const next = noteDispatchResult(pending, sent, Date.now());
+  if (next.attempts > 1) o.dispatchRetries++;
+  o.pendingDispatch = next;
 }
 
 // ONE POLL FOR THE WHOLE FLEET, NOT ONE PER CHARACTER.
@@ -298,27 +342,6 @@ async function watchAll(outs) {
       const max = Number(row.max_health ?? row.health_max ?? maxRaw);
       if (Number.isFinite(hp)) o.low = o.low === null ? hp : Math.min(o.low, hp);
       if (Number.isFinite(max)) o.max = max;
-      if (room === o.to) {
-        // ONE LEG DONE. Recorded either way — in cycle mode it is a row in a series, and
-        // without it, it is the whole measurement.
-        o.legs.push({ from: o.legFrom ?? o.inn, to: o.to, ms: Date.now() - o.legBegan,
-                      deaths: (o.deaths ?? 0) - (o.deathsAtLegStart ?? 0) });
-        if (!CYCLE) {
-          o.outcome = 'arrived'; o.ms = Date.now() - o.began; live.delete(row.agent); continue;
-        }
-        // AND STRAIGHT ON TO THE NEXT. No pause, no heal, no relocate — the point of a cycle
-        // is that the fleet keeps travelling, and a leg that starts from wherever the last one
-        // ended at whatever health it ended with is the honest one. The death retry below is
-        // still the only thing that intervenes.
-        o.ring = (o.ring + 1) % RING.length;
-        o.legFrom = o.to;
-        o.to = RING[(o.ring + 1) % RING.length].room;
-        o.legBegan = Date.now();
-        o.deathsAtLegStart = o.deaths ?? 0;
-        await call('travel', { agent: o.agent, to: o.to, max_hops: 30, background: true,
-                               run_errands: false });
-        continue;
-      }
       // THE UNDERWORLD IS A DEATH, and it is the only honest way to see one from here: the
       // journey does not report it, the room read does.
       //
@@ -337,6 +360,7 @@ async function watchAll(outs) {
       if (room === UNDERWORLD) {
         if (o.state !== 'dead') {
           o.state = 'dead';
+          o.pendingDispatch = null;
           o.deaths = (o.deaths ?? 0) + 1;
           o.diedAt = (o.diedAt ?? []); o.diedAt.push(Math.round((Date.now() - o.began) / 1000));
           if (!RETRY) { o.outcome = 'died'; o.ms = Date.now() - o.began; live.delete(row.agent); }
@@ -352,10 +376,68 @@ async function watchAll(outs) {
       if (o.state === 'dead' && room !== UNDERWORLD) {
         const whole = Number.isFinite(hp) && Number.isFinite(max) ? hp / max >= 0.95 : false;
         if (!whole) continue;
-        o.state = 'running';
+        o.state = 'dispatching';
         o.retries = (o.retries ?? 0) + 1;
-        await call('travel', { agent: o.agent, to: o.to, max_hops: 30, background: true,
-                               run_errands: false });
+        o.pendingDispatch = newPendingDispatch(o.to, 'death', Date.now());
+        if (dispatchDecision(o.pendingDispatch, row, Date.now(), {
+          underworld: UNDERWORLD, maxAttempts: DISPATCH_MAX_ATTEMPTS,
+        }).action === 'send') await submitPendingDispatch(o);
+        continue;
+      }
+
+      // A BACKGROUND ACKNOWLEDGEMENT IS NOT PROOF OF A JOB. The keeper can still be winding
+      // down the leg that just arrived; it refuses the next one as busy, while the broker's
+      // proxy has historically answered {started:true} before seeing that refusal. Four
+      // characters accumulated in room 110 in one run through exactly that race.
+      //
+      // A pending handoff therefore advances only on a later fleet snapshot: the exact new
+      // busy label (or a target-specific resumed journey) confirms it. Broad recovery and an
+      // unrelated job merely keep the handoff waiting. A masked no-start gets three bounded
+      // attempts and then becomes an explicit result instead of silent parking.
+      if (o.pendingDispatch) {
+        const decision = dispatchDecision(o.pendingDispatch, row, Date.now(), {
+          underworld: UNDERWORLD, maxAttempts: DISPATCH_MAX_ATTEMPTS,
+        });
+        if (decision.action === 'arrived') {
+          o.pendingDispatch = null;
+          o.state = 'running';
+          // Fall through: this is a very short leg that arrived before a busy snapshot.
+        } else if (decision.action === 'confirmed') {
+          o.pendingDispatch = null;
+          o.state = 'running';
+          continue;
+        } else if (decision.action === 'send') {
+          await submitPendingDispatch(o);
+          continue;
+        } else if (decision.action === 'exhausted') {
+          o.pendingDispatch = null;
+          o.outcome = 'refused';
+          o.why = decision.why;
+          o.ms = Date.now() - o.began;
+          live.delete(row.agent);
+          continue;
+        } else {
+          continue;
+        }
+      }
+
+      if (room === o.to) {
+        // ONE LEG DONE. Recorded either way — in cycle mode it is a row in a series, and
+        // without it, it is the whole measurement. Death recovery is handled above so an
+        // Underworld portal landing at the target inn cannot masquerade as a completed road.
+        if (!CYCLE) {
+          o.legs.push({ from: o.legFrom ?? o.inn, to: o.to, ms: Date.now() - o.legBegan,
+                        deaths: (o.deaths ?? 0) - (o.deathsAtLegStart ?? 0) });
+          o.outcome = 'arrived'; o.ms = Date.now() - o.began; live.delete(row.agent); continue;
+        }
+        // RECORD NOW, DISPATCH ONLY WHEN CLEAR. `o.to` advances exactly once, so another
+        // poll cannot double-count the arrival. The pending state asks a detailed keeper
+        // status before sending, or waits for the old job to unwind when this row says busy.
+        completeCycleArrival(o, RING, Date.now());
+        if (dispatchDecision(o.pendingDispatch, row, Date.now(), {
+          underworld: UNDERWORLD, maxAttempts: DISPATCH_MAX_ATTEMPTS,
+        }).action === 'send') await submitPendingDispatch(o);
+        continue;
       }
     }
   }
@@ -387,10 +469,14 @@ const pad = (s, n) => String(s ?? '').padEnd(n);
 if (CYCLE) {
   const legs = results.flatMap(o => o.legs.map(l => ({ ...l, who: o.character })));
   const deaths = results.reduce((a, o) => a + (o.deaths ?? 0), 0);
+  const dispatchRetries = results.reduce((a, o) => a + (o.dispatchRetries ?? 0), 0);
+  const dispatchFailures = results.filter(o => o.outcome === 'refused');
   const mins = TIMEOUT / 60000;
   console.log(`\nTHE CYCLE`);
   console.log(`  legs completed  ${legs.length}   by ${results.filter(o => o.legs.length).length} of ${results.length} characters`);
   console.log(`  deaths          ${deaths}`);
+  console.log(`  handoff retries ${dispatchRetries}`);
+  console.log(`  handoff failures ${dispatchFailures.length}`);
   console.log(`  legs per character  min ${Math.min(...results.map(o => o.legs.length))}, ` +
               `max ${Math.max(...results.map(o => o.legs.length))}, ` +
               `avg ${(legs.length / results.length).toFixed(1)} over ${mins.toFixed(0)} minutes`);
@@ -412,7 +498,7 @@ if (CYCLE) {
   // it is invisible in a table of completions, which is how "Marion 0/4" nearly got averaged
   // away the first time.
   const attempted = new Map();
-  for (const o of results) if (o.outcome === 'cycling') {
+  for (const o of results) if (o.outcome === 'cycling' || o.outcome === 'refused') {
     const k = `${o.legFrom ?? o.inn} -> ${o.to}`;
     attempted.set(k, (attempted.get(k) ?? 0) + 1);
   }
@@ -429,9 +515,10 @@ if (CYCLE) {
     console.log('    ' + pad(o.character, 9) + String(o.legs.length).padStart(3) + ' leg(s)'
       + String(o.deaths ?? 0).padStart(4) + ' death(s)   '
       + pad(String(o.ended ?? '?') + (o.endedName ? ' ' + o.endedName : ''), 26)
-      + (o.low === null ? '' : `  low ${o.low}${o.max ? '/' + o.max : ''}`));
+      + (o.low === null ? '' : `  low ${o.low}${o.max ? '/' + o.max : ''}`)
+      + (o.why ? `  — ${o.why}` : ''));
   console.log('');
-  process.exit(0);
+  process.exit(dispatchFailures.length ? 1 : 0);
 }
 console.log('\n  character  from        outcome      s  died  ended            low');
 for (const o of results.sort((a, b) => a.city.localeCompare(b.city) || a.character.localeCompare(b.character)))

@@ -9204,7 +9204,12 @@ const TOOLS = [
                                             'Use hard:true only when the keeper must not outlive ' +
                                             'this call, e.g. code is being reloaded under it.' },
       mode: { type: 'string', enum: ['survive', 'farm', 'idle', 'tick'] },
-      hunt: { type: 'string', description: 'creature name for farm mode — required, never guessed' },
+      hunt: { type: ['string', 'array'], items: { type: 'string' },
+        description: 'creature name for farm mode — required, never guessed. Several names ' +
+          'may be given ("fight both"): they are a SET of acceptable quarry, not a ' +
+          'preference order, and the keeper takes whichever is in front of it. That is what ' +
+          'lets a two-generator room be worked at the rate it spawns — and the room spawn ' +
+          'cap is a room-wide total, so quarry nobody kills is what stops the rest appearing.' },
       rest_below: { type: 'number', description: 'rest when a vital drops under this fraction, default 0.7' },
       flee_below: { type: 'number', description: 'withdraw under this fraction, default 0.4' },
       max_carry: { type: 'number', description: 'stop farming at this many items, default 14' },
@@ -9682,8 +9687,11 @@ const TOOLS = [
       // and may have been created after resumeFleet dropped the boot-time shell. Seed it
       // from the roster before applying an incremental change, or setting one field such
       // as training_style rewrites every omitted policy value to constructor defaults.
+      // Do not do this to an in-process autopilot: loadout overlays may have legitimately
+      // changed its live policy since the roster was written.
       const savedAutopilot = fleetState.get(a.agent)?.autopilot;
-      if (savedAutopilot?.policy) Object.assign(p.policy, savedAutopilot.policy);
+      if (s instanceof KeeperProxy && savedAutopilot?.policy)
+        Object.assign(p.policy, savedAutopilot.policy);
       // The running stub's mode defaults to 'survive' (Autopilot constructor), but the
       // ROSTER may have a different mode (e.g. 'tick') that the keeper is actually using.
       // When a caller does NOT explicitly set the mode, we must preserve the roster's
@@ -9782,7 +9790,15 @@ const TOOLS = [
         // would clobber a roster that says 'tick').
         p.mode = rosterMode;
       }
-      if (a.hunt !== undefined) p.policy.hunt = a.hunt;
+      // Normalised on the way IN so everything downstream — the board, the ledgers, the
+      // keeper's own equality checks — sees one shape. A single name stays a string so
+      // every existing roster, artifact and comparison keeps working unchanged.
+      if (a.hunt !== undefined) {
+        const named = (Array.isArray(a.hunt) ? a.hunt : [a.hunt])
+          .map(h => (typeof h === 'string' ? h.trim() : h))
+          .filter(h => typeof h === 'string' && h.length);
+        p.policy.hunt = !named.length ? null : named.length === 1 ? named[0] : named;
+      }
       if (a.rest_below !== undefined) p.policy.restBelow = Number(a.rest_below);
       if (a.flee_below !== undefined) p.policy.fleeBelow = Number(a.flee_below);
       if (a.max_carry !== undefined) p.policy.maxCarry = Number(a.max_carry);
@@ -13304,7 +13320,11 @@ const TOOLS = [
           const k = book.get(room?.num, x.col, x.row);
           return { ...x,
             distance: me ? Math.max(Math.abs(x.col - me.col), Math.abs(x.row - me.row)) : null,
-            tested: k ? (k.held > 0 ? 'holds' : book.discredited(k) ? 'does not work' : 'inconclusive') : 'untested',
+            // Reported against the same rule the keeper acts on: a square the geometry
+            // says nothing can reach is never 'does not work', whatever the ledger holds.
+            tested: k ? (k.held > 0 ? 'holds'
+              : book.discredited(k, { reachable: Number.isInteger(x.can_reach_you) ? x.can_reach_you : null })
+                ? 'does not work' : 'inconclusive') : 'untested',
             ...(k?.x != null ? { exact: { x: k.x, y: k.y },
                                  note: 'stand HERE, not at the middle of the square — walk_to aims at ' +
                                        'the centre and this spot works from a specific place in it' } : {}) };
@@ -13484,8 +13504,17 @@ const TOOLS = [
       // The cap is about how many bodies are competing for one spawn table, and the
       // table does not care what each of them came for.
       const taken = {};
-      for (const hunt of [...new Set(crew.map(c => c.hunt))]) {
-        const group = crew.filter(c => c.hunt === hunt);
+      // An order may name several creatures, so the group key is the ORDER rather than a
+      // creature: `===` on a list compares references and would put every multi-quarry
+      // character in a group of one, defeating the shared occupancy count above.
+      const huntKey = h => JSON.stringify(Array.isArray(h) ? [...h].sort() : h ?? null);
+      const byOrder = new Map();
+      for (const c of crew) {
+        const k = huntKey(c.hunt);
+        if (!byOrder.has(k)) byOrder.set(k, { hunt: c.hunt, group: [] });
+        byOrder.get(k).group.push(c);
+      }
+      for (const { hunt, group } of byOrder.values()) {
         // A CEILING PER CHARACTER, NOT ONE FOR THE GROUP.
         //
         // This took the strictest ceiling across everyone hunting the same thing, on the

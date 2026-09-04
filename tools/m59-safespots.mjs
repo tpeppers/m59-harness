@@ -1248,9 +1248,53 @@ export class SafeSpotBook {
   // never been stood on. So the provenance is written down: `failed_via` is the most recent
   // judge and `failed_by` counts them, which is enough to fish the travel-only rejections
   // back out later without having to reconstruct anything.
-  discredited(rec) {
+  // GEOMETRY OUTRANKS THE LEDGER, AND A FAILURE IS ABOUT THE FIGHT RATHER THAN THE WALL.
+  //
+  // The comment above is the reasoning from when this book existed to DISCOVER what a safe
+  // wall is. That question is settled: a safe wall is a square where nothing can stand
+  // within melee reach — `can_reach_you === 0`, off the .roo, against the server's own
+  // reach test (SquaredDistanceTo <= range^2, range 2-3, monster.kod:1682). Once geometry
+  // can answer, a failure row cannot overrule it, because a failure records only that
+  // something went wrong WHILE WE STOOD THERE. A crowd on the square, a swing we took
+  // first, an archer, a poison tick, a blow resolved before we arrived — none of those are
+  // facts about the wall, and none of them make an unreachable square reachable.
+  //
+  // What that mistake cost, measured on prod 2026-09-02: room 39 had 185 squares with
+  // can_reach_you === 0 and 142 of them were discredited, including r3c17 with 431
+  // failures and r3c27 with 410 — squares nothing can physically reach, recorded as having
+  // failed hundreds of times. Nearly all of it accrued while max_bots_per_safe_spot was 21
+  // and the whole fleet was entitled to one square, which is a crowd standing on the wall
+  // rather than a wall that leaks. With the south row believed again, fleet kills went from
+  // 20 per 30 minutes to 48 and deaths from about 4 an hour to 0.6.
+  //
+  // SO THERE ARE TWO VERDICTS, AND ONLY ONE OF THEM IS PERMANENT.
+  //
+  //   * as a place to HEAL — to stop swinging, sit, and let the room mill about outside
+  //     reach — a square is condemned only by geometry. This is the one that must never be
+  //     revoked by a failure: it is the whole mechanism by which a losing fight becomes a
+  //     draw, and taking it away is what leaves a character dying in the open.
+  //   * as a place to FIGHT FROM against a particular area, a failure is still decisive.
+  //     `discreditedForPull` keeps the old strict rule, unchanged and still permanent,
+  //     because "I could not hold this while swinging at that" is a real observation about
+  //     the pull even when the wall is sound.
+  //
+  // `reachable` is the geometric verdict when the caller has it and null when it does not.
+  // Absent it, the old behaviour stands — this must not quietly believe squares nobody has
+  // any evidence about.
+  discredited(rec, { reachable = null } = {}) {
     if (!rec) return false;
     if (rec.verified) return false;             // a person's word beats our arithmetic
+    // Nothing can reach this square, so nothing that happened here was the wall's doing.
+    if (reachable === 0) return false;
+    return (rec.failed || 0) >= 1;
+  }
+
+  // The strict, permanent rule, for choosing somewhere to fight FROM. Unchanged: being
+  // wrong about a bad pull spot costs a character and being wrong about a good one costs
+  // a walk to the next corner, and that asymmetry still holds for the fighting question.
+  discreditedForPull(rec) {
+    if (!rec) return false;
+    if (rec.verified) return false;
     return (rec.failed || 0) >= 1;
   }
 

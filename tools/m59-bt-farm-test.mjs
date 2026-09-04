@@ -377,6 +377,42 @@ t('fightNode retreats when breaking off in the open (not holding a spot)', async
   if (retreated !== 1) throw new Error(`expected a retreat in the open, got ${retreated}`);
 });
 
+t('fightNode leaves a held wall and retreats after losing its weapon', async () => {
+  const k = mockKeeper({ hibernation: false });
+  k.hold = { col: 1, row: 1, proven: true };
+  k.holdWorks = () => true;
+  k.policy.hunt = 'giant rat';
+  k._btFarmFoundTargets = () => [{ id: 1, nameRsc: 'giant rat' }];
+  k.inReachOfUs = () => [];
+  k._btFarmFight = async () => ({
+    killed: false, died: false, rounds: 1, target: 'giant rat',
+    disengaged: {
+      unarmed: true,
+      at_health: '70%',
+      reason: 'the weapon shattered and no verified replacement could be equipped',
+    },
+  });
+  let left = 0, retreated = 0, retreatReason = null;
+  k.leaveHold = async (_reason, options) => {
+    left++;
+    if (options?.force !== true) throw new Error('weapon loss must force-release the hold');
+    k.hold = null;
+    return { refused: false };
+  };
+  k.retreatToSafety = async options => {
+    retreated++;
+    retreatReason = options?.because;
+    return { left: true };
+  };
+  const node = fightNode(k);
+  const r = await node.tickAsync(bb(k));
+  if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
+  if (left !== 1 || retreated !== 1)
+    throw new Error(`expected one hold release and one retreat, got ${left}/${retreated}`);
+  if (!/weapon shattered/i.test(retreatReason ?? ''))
+    throw new Error(`expected the weapon-loss reason to survive, got ${retreatReason}`);
+});
+
 t('fightNode reconnects on a stale object id instead of looping', async () => {
   const k = mockKeeper({ hibernation: false });
   k.policy.hunt = 'giant rat';

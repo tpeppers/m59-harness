@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 
 import { goalYield, scorePrey, healthCeiling, PURPOSES, huntingGrounds,
-         creatureMatchesHunt, huntedCreatures, huntMatcher,
+         creatureMatchesHunt, huntedCreatures, huntMatcher, huntLabel, huntNames,
          whoDrops, suggestDrops, moneyPerKill } from './m59-spawns.mjs';
 
 let pass = 0, fail = 0;
@@ -360,6 +360,53 @@ console.log('\nguards');
      /unknown purpose/.test(scorePrey(SPAWNS, CH, { purpose: 'xp' }).note ?? ''));
   ok('an unknown max health is refused — every rule keys on it',
      /max health unknown/.test(scorePrey(SPAWNS, { maxHealth: 0 }, {}).note ?? ''));
+}
+
+console.log('\nan order that names several creatures');
+{
+  // THE POINT OF A LIST IS A ROOM WITH TWO GENERATORS. Room 566 here makes giant rats
+  // AND centipedes, the way Upstairs Castle Victoria makes battered skeletons and
+  // zombies. The spawn cap is a room-wide total, so a character that declines half the
+  // room is what stops the half it wants from appearing.
+  const both = huntMatcher(SPAWNS, ['giant rat', 'centipede']);
+  ok('a list matches every creature it names',
+     both('giant rat') && both('centipede'));
+  ok('and nothing it does not name',
+     !both('ant') && !both('giant spider'));
+
+  // THE TRAP THIS GUARDS. Exact-vs-substring is resolved PER NAME, and 'ant' is both an
+  // exact creature here and a substring of 'giant rat'. Resolving the list as one
+  // substring pass would quietly enlist a level-30 rat into an order for a level-40 ant.
+  const exact = huntMatcher(SPAWNS, ['ant', 'centipede']);
+  ok('an exact name in a list stays exact rather than widening to its family',
+     exact('ant') && exact('centipede') && !exact('giant rat'));
+
+  ok('one name still behaves exactly as it always did',
+     huntMatcher(SPAWNS, 'giant rat')('giant rat') &&
+     !huntMatcher(SPAWNS, 'giant rat')('centipede'));
+  ok('an empty order matches nothing rather than everything',
+     !huntMatcher(SPAWNS, [])('giant rat') && !huntMatcher(SPAWNS, null)('giant rat'));
+
+  const rows = huntedCreatures(SPAWNS, ['giant rat', 'centipede']);
+  ok('the catalogue resolves both rows, once each',
+     rows.length === 2 && new Set(rows.map(c => c.name)).size === 2,
+     JSON.stringify(rows.map(c => c.name)));
+  ok('a name repeated does not double its row',
+     huntedCreatures(SPAWNS, ['ant', 'ant']).length === 1);
+
+  // Every journal line and postmortem reads this. A raw array renders as
+  // 'giant rat,centipede', which looks like a typo at the worst possible moment.
+  ok('a list is spoken as prose, not as an array',
+     huntLabel(['giant rat', 'centipede']) === 'giant rat or centipede' &&
+     huntLabel('ant') === 'ant' && huntLabel([]) === null);
+  ok('blank and null entries are dropped rather than matched',
+     huntNames(['ant', null, '', 'centipede']).length === 2);
+
+  // A list has to be usable as an ORDER, not merely as a matcher: the rooms it can be
+  // worked in are the union of its names' rooms.
+  const rooms = huntingGrounds(SPAWNS, ['giant rat', 'ant']).map(g => g.room);
+  ok('hunting grounds are the union of the named creatures rooms',
+     rooms.includes(566) && rooms.includes(563), JSON.stringify(rooms));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

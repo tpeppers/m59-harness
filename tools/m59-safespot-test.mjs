@@ -1532,5 +1532,48 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
      returnReachableTo({ rows: 1, cols: 1 }, { row: 1, col: 1 }) === null);
 }
 
+
+// GEOMETRY OUTRANKS THE LEDGER FOR SHELTER, AND ONLY FOR SHELTER.
+//
+// Measured on prod 2026-09-02: room 39 held 185 squares with can_reach_you === 0 and 142
+// of them were discredited, r3c17 at 431 failures and r3c27 at 410 - squares nothing can
+// physically reach, recorded as failing hundreds of times, almost all of it accrued while
+// twenty-one characters were entitled to the same wall. Believing the south row again took
+// fleet kills from 20 per 30 minutes to 48 and deaths from ~4 an hour to 0.6.
+{
+  const b = new SafeSpotBook(null);
+  b.failed(999, { col: 5, row: 5, damage: 9, attackers: 6 });
+  const rec = b.get(999, 5, 5);
+
+  ok('a failed square is still discredited when nothing vouches for the geometry',
+     b.discredited(rec));
+  ok('and when the geometry says something CAN reach it, the failure still stands',
+     b.discredited(rec, { reachable: 3 }));
+
+  // The load-bearing one: a square nothing can reach is not made reachable by a bad
+  // afternoon spent on it. Healing there is the mechanism that turns a losing fight into
+  // a draw, and a failure row must never take it away.
+  ok('but a square nothing can reach is never condemned as shelter',
+     !b.discredited(rec, { reachable: 0 }));
+
+  // The fighting question is a different question and keeps the old permanent rule:
+  // 'I could not hold this while swinging at that' is a real observation about the pull.
+  ok('while the pull verdict stays strict and permanent',
+     b.discreditedForPull(rec));
+
+  // A human's mark still beats everything, unchanged.
+  b.verify(999, { col: 5, row: 5, by: 'operator' });
+  ok('a verified square is undiscredited by every route',
+     !b.discredited(b.get(999, 5, 5)) &&
+     !b.discredited(b.get(999, 5, 5), { reachable: 3 }) &&
+     !b.discreditedForPull(b.get(999, 5, 5)));
+
+  // Absent geometry nothing changes - this must not quietly believe untested squares.
+  const c = new SafeSpotBook(null);
+  c.failed(999, { col: 6, row: 6, damage: 1, attackers: 1 });
+  ok('with no geometric opinion the old behaviour is exactly preserved',
+     c.discredited(c.get(999, 6, 6)) &&
+     c.discredited(c.get(999, 6, 6), { reachable: null }));
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

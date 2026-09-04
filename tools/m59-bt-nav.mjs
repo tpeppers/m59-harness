@@ -66,6 +66,9 @@ export function MoveToRoomAction(toRoom) {
               // Confirm we landed in the right room.
               return s.world?.room?.num === toRoom;
             }
+            // Do not execute another candidate captured from the source room. A later tree
+            // pass will rebuild the action from whichever logical room is now stable.
+            if (r?.room_changed) return false;
           }
           return false;
         })

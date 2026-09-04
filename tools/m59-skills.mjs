@@ -58,14 +58,50 @@ export const DEFAULT_REST_UNTIL = 0.9;
 // reach. The keeper then pulls the same wounded object back and resumes it. Treating
 // every such return as "no progress" makes five useful exchanges look like a stall and
 // lets an external supervisor stop the keeper in the middle of a bounded pull cycle.
-// The server's own combat text is the affirmative evidence: "You hit ..." is emitted
-// only for a landed blow. Merely sending swings, or receiving dodge/avoid text, does not
-// qualify. Keep the parser pure so the distinction is testable without a live server.
-export function landedHitSummary(messages = []) {
+// The server's own combat text is the affirmative evidence. Generic attacks say
+// "You hit ..." or "Your <weapon> hits ...", while Battler.GotHit uses the weapon's
+// damage type and strength (for example, "Your short sword pokes the fungus beast.").
+// These are all positive-damage branches; a zero-damage blow says "fails to damage".
+// Keep the grammar anchored and the source-defined verbs explicit so misses, incoming
+// attacks, and arbitrary prose cannot manufacture progress.
+const PLAYER_DAMAGE_VERBS = [
+  'runs through',
+  'incinerates', 'electrocutes', 'brutalizes',
+  'disfigures', 'dissolves', 'corrupts', 'purifies',
+  'mortifies', 'cleanses', 'flattens', 'appalls',
+  'pollutes', 'maligns', 'devours', 'thrashes',
+  'mangles', 'pummels', 'cleaves', 'lacerates',
+  'damages', 'wounds', 'nicks', 'slays',
+  'burns', 'sears', 'scorches', 'chars', 'singes',
+  'fries', 'shocks', 'jolts', 'freezes', 'frosts',
+  'chills', 'cools', 'infuses', 'slams', 'buffets',
+  'shakes', 'gnaws', 'bites', 'nips', 'shreds',
+  'rends', 'rakes', 'claws', 'impales', 'pricks',
+  'stings', 'irritates', 'slaps', 'maims', 'slashes',
+  'cuts', 'smashes', 'crushes', 'bashes', 'stabs',
+  'pokes', 'fells', 'pierces', 'grazes', 'hits',
+];
+const PLAYER_DAMAGE_VERB_PATTERN = PLAYER_DAMAGE_VERBS.join('|').replace(/ /g, '\\s+');
+const regexpEscape = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const combatNameKey = value => String(value ?? '').toLowerCase().trim()
+  .replace(/^(?:the|an|a)\s+/, '').replace(/\s+/g, ' ');
+
+export function landedHitSummary(messages = [], target = null) {
   let hits = 0, damage = 0, damageKnown = 0;
+  // attackRounds may collect unrelated server messages during the same exchange.
+  // Bind affirmative prose to the chosen foe rather than accepting any sentence
+  // that happens to fit "Your <noun> <damage verb> <noun>." The source inserts
+  // GetDef separately, so articles are allowed independently of the room name.
+  const targetName = combatNameKey(target);
+  if (!targetName) return { hits, damage: null, damage_known_hits: damageKnown };
+  const targetPattern = `(?:the\\s+|an\\s+|a\\s+)?${regexpEscape(targetName).replace(/ /g, '\\s+')}`;
+  const battlerDamageLine = new RegExp(
+    `^\\s*Your\\s+.+?\\s+(?:${PLAYER_DAMAGE_VERB_PATTERN})\\s+${targetPattern}\\.\\s*$`, 'i');
+  const genericDamageLine = new RegExp(
+    `^\\s*You hit\\s+${targetPattern}(?:\\s+(?:with|for)\\b.*?)?\\.\\s*$`, 'i');
   for (const value of messages || []) {
     const line = String(value ?? '');
-    if (!/\byou hit\b/i.test(line)) continue;
+    if (!genericDamageLine.test(line) && !battlerDamageLine.test(line)) continue;
     hits++;
     const amount = /\bfor\s+(\d+)(?:\s+damage)?\b/i.exec(line);
     if (amount) { damage += Number(amount[1]); damageKnown++; }
@@ -1843,6 +1879,12 @@ export async function fight(s, {
   // prevents a name match from drifting to a different player after verification.
   includePlayers = false,
   exactTargetId = null,
+  // AN ORDER MAY NAME SEVERAL CREATURES, and then `target` is not a string to substring
+  // against. The caller passes the same predicate it used to choose the quarry, and this
+  // uses it instead of the name. Without it a list order stringifies to
+  // "battered skeleton,zombie", matches nothing in the room, and the whole fleet reports
+  // "nothing here matches" while standing in a room full of both.
+  match = null,
 } = {}) {
   const c = s.need();
   const log = [];
@@ -1859,14 +1901,17 @@ export async function fight(s, {
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
   }
 
-  let candidates = findCreature(s, target, { includePlayers });
+  let candidates = findCreature(s, target, { includePlayers, match });
   if (exactTargetId != null) candidates = candidates.filter(object => object.id === Number(exactTargetId));
   if (!candidates.length) {
     const present = [...c.room.objects.values()]
       .filter(o => o.id !== c.selfId && (o.flags & OF.ATTACKABLE))
       .map(o => c.rsc.get(o.nameRsc));
     return {
-      fought: false, reason: target ? `nothing here matches "${target}"` : 'nothing here can be attacked',
+      fought: false,
+      reason: target
+        ? `nothing here matches "${Array.isArray(target) ? target.join('" or "') : target}"`
+        : 'nothing here can be attacked',
       attackable_here: [...new Set(present)],
       note: present.length ? 'try one of the names above' : 'this room has nothing to fight — travel somewhere else',
     };
@@ -1915,6 +1960,13 @@ export async function fight(s, {
     wielded = e.id ?? null;
     say('equipped', { wielding: e.wielding, verified: e.verified, skill: e.skill,
                       ability: e.ability, rejected: e.rejected, note: e.note });
+  } else {
+    // `equip: false` forbids a use request, not observation. Remember a currently
+    // verified weapon so a mid-fight shatter can retire its exact id before stopping;
+    // deliberate bare-hand training simply leaves this null.
+    const held = equippedNow(c);
+    wielded = weaponRanking(c, { priority: weaponPriority })
+      .find(candidate => held?.has(candidate.o.id))?.o.id ?? null;
   }
 
   // Health BEFORE, so the report can say what the fight cost.
@@ -2004,6 +2056,7 @@ export async function fight(s, {
   }
 
   let killed = false, disengaged = null, roundsFought = 0, drifted = null, stoodUp = false;
+  let weaponLoss = null;
   const combatLines = [];
 
   // FACE THE TARGET. An attack on something behind you is refused with a
@@ -2068,19 +2121,14 @@ export async function fight(s, {
       continue;
     }
 
-    // IT BROKE MID-FIGHT, which is the ordinary way a weapon leaves service and was
-    // previously invisible. ReqWeaponAttack unequips the weapon itself (weapon.kod:513)
-    // and every later swing is a punch, so a character finished the fight, and the next
-    // twenty fights, bare-handed while the keeper reported it armed. Re-arm here rather
-    // than at the next pass: the rest of THIS fight is the part that was being lost.
-    if (res.messages.some(brokenWeaponText)) {
-      if (wielded != null) brokenSet(c).add(wielded);
-      say('weapon broke', { was: wielded, round: roundsFought });
-      if (equip) {
-        const again = await equipBest(s, { priority: weaponPriority });
-        wielded = again.id ?? null;
-        say('re-armed', { wielding: again.wielding, verified: again.verified, note: again.note });
-      }
+    // Record a shatter immediately, but do not mutate equipment until the exchange's
+    // terminal results are known: a dead player cannot re-arm, and a killing shatter
+    // does not need to. ReqWeaponAttack has already removed the broken item from use.
+    const weaponBroke = res.messages.some(brokenWeaponText);
+    const brokenId = weaponBroke ? wielded : null;
+    if (weaponBroke) {
+      if (brokenId != null) brokenSet(c).add(brokenId);
+      say('weapon broke', { was: brokenId, round: roundsFought });
     }
 
     // Are we dead? "Our own object is missing from the room list" is NOT the test,
@@ -2102,7 +2150,78 @@ export async function fight(s, {
                combat: combatLines.slice(-8), log, stale_identity: true,
                note: 'our own object id is not in the room contents but we are alive and not in the ' +
                      'Underworld — the server most likely renumbered ids in a save. Re-login to ' +
-                     'resolve a fresh id; do NOT treat this as death.' };
+                      'resolve a fresh id; do NOT treat this as death.' };
+    }
+
+    // Resolve the exchange before recovery policy. A low-health killing blow is still
+    // a kill, and neither it nor a lethal blow to us may send inventory/use traffic.
+    if (!c.room.objects.has(foe.id)) { killed = true; break; }
+
+    // A live fight may continue after a shatter only with a replacement the server's
+    // use list verifies. Otherwise stop before another attack silently becomes a punch.
+    if (weaponBroke) {
+      if (equip) {
+        const again = await equipBest(s, { priority: weaponPriority });
+        const replacementVerified = again.verified === true && again.id != null;
+        wielded = replacementVerified ? again.id : null;
+        say(replacementVerified ? 're-armed' : 're-arm failed', {
+          wielding: again.wielding, id: again.id ?? null, verified: again.verified,
+          rejected: again.rejected, note: again.note,
+        });
+        if (!replacementVerified) {
+          weaponLoss = {
+            unarmed: true,
+            weapon_id: brokenId,
+            reason: 'the weapon shattered and no verified replacement could be equipped',
+            replacement: { id: again.id ?? null, wielding: again.wielding ?? null,
+                           verified: again.verified === true },
+          };
+        }
+      } else {
+        wielded = null;
+        weaponLoss = {
+          unarmed: true,
+          weapon_id: brokenId,
+          rearm_disabled: true,
+          reason: 'the weapon shattered and automatic re-arming was disabled for this fight',
+        };
+        say('re-arm skipped', { because: 'equip=false', weapon: brokenId });
+      }
+    }
+
+    // Equipping waits for server events; terminal state can change during that wait.
+    // Reclassify before sending another attack or applying an ordinary health abort.
+    if (weaponBroke && equip) {
+      const goneAfterRearm = !c.room.objects.has(c.selfId);
+      const underworldAfterRearm = /underworld/i.test(c.rsc.get(c.roomNameRsc) || '');
+      const noHealthAfterRearm = (c.vitals()?.health?.value ?? 1) <= 0;
+      if (goneAfterRearm && (underworldAfterRearm || noHealthAfterRearm)) {
+        return { fought: true, killed: false, died: true, rounds: roundsFought,
+                 combat: combatLines.slice(-8), log,
+                 note: 'we were killed. You are in the Underworld; the way out is a portal — see escape_underworld.' };
+      }
+      if (goneAfterRearm) {
+        return { fought: true, killed: false, died: false, rounds: roundsFought,
+                 combat: combatLines.slice(-8), log, stale_identity: true,
+                 note: 'our own object id is not in the room contents but we are alive and not in the ' +
+                       'Underworld — the server most likely renumbered ids in a save. Re-login to ' +
+                       'resolve a fresh id; do NOT treat this as death.' };
+      }
+      if (!c.room.objects.has(foe.id)) { killed = true; break; }
+    }
+
+    if (weaponLoss) {
+      const hpAfterBreak = pct(res.vitals?.health ?? c.vitals()?.health);
+      disengaged = {
+        ...weaponLoss,
+        at_health: Number.isFinite(hpAfterBreak)
+          ? Math.round(hpAfterBreak * 100) + '%' : 'unknown',
+        ...(res.aborted ? { mid_round: true, after_swing: res.aborted.swing } : {}),
+      };
+      say('disengaged unarmed', {
+        target: foeName, at_health: disengaged.at_health, reason: disengaged.reason,
+      });
+      break;
     }
 
     // Mid-round abort first: attackRounds now watches health between swings, so this
@@ -2118,13 +2237,12 @@ export async function fight(s, {
       disengaged = { at_health: Math.round(hp * 100) + '%' };
       break;
     }
-    if (!c.room.objects.has(foe.id)) { killed = true; break; }
   }
 
   await s.pacer.submit('read', () => c.stats(1));
   await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
   const after = c.vitals();
-  const landed = landedHitSummary(combatLines);
+  const landed = landedHitSummary(combatLines, foeName);
 
   const out = {
     fought: true, target: foeName, killed, rounds: roundsFought,
@@ -2137,6 +2255,7 @@ export async function fight(s, {
     // Worth saying out loud: it means a round went nowhere, and it means whatever sat
     // this character down is not doing so again by itself.
     ...(stoodUp ? { stood_up: 'the first round was refused — we were resting' } : {}),
+    ...(weaponLoss ? { weapon_loss: weaponLoss } : {}),
     combat: combatLines.slice(-10),
     // Pass this back as preferId next time. A wounded creature we walk away from is
     // both credit we have already earned and a monster that will heal if left, so
@@ -2152,7 +2271,11 @@ export async function fight(s, {
     // fatal. Out in the open, walking away is what stops the damage. In a safe spot,
     // walking away is what STARTS it: nothing can land a blow while you stand still
     // and do not swing, so the recovery move is to sit down where you are.
-    out.note = holdPosition
+    out.note = disengaged.unarmed
+      ? `${disengaged.reason}. No further attack was sent. The monster already engaged in ` +
+        'this fight is still present and hostile even at a held wall; leave its reach before ' +
+        'attempting recovery or re-arming.'
+      : holdPosition
       ? `broke off at ${disengaged.at_health} health while holding a safe spot. Do NOT walk away — ` +
         `rest where you stand. Nothing can hit you here unless you swing first, so this is a ` +
         `free heal back to full and then the fight again from the top.`
