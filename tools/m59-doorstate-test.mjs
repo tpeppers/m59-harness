@@ -34,7 +34,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { attachStepMasks, applyDoorState, doorVariants, doorStateKey,
          reachableExits, roomRegions, anchorReach, activeRoutes,
-         resetDoorStates } from './m59-routes.mjs';
+         exitIsImpassable, resetDoorStates } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -257,6 +257,27 @@ console.log('\nthe ROUTER has to change its mind too, or none of this reaches th
   ok('a room with no door state still reads the baked table',
      anchorReach(table, 599, { row: 71, col: 2 }, { row: 1, col: 66 }) ===
      !!table.rooms['599'].reach['71,2>1,66']);
+}
+
+console.log('\na boundary the game refuses is refused by the router, whatever the geometry says');
+{
+  resetDoorStates();
+  const table = activeRoutes();
+  ok('Ukgoth\'s north edge to Castle Victoria is on the list',
+     exitIsImpassable(599, 2) === true);
+  ok('and its other two exits are not', !exitIsImpassable(599, 589) && !exitIsImpassable(599, 598));
+  ok('a room with nothing banned is unaffected', exitIsImpassable(951, 953) === false);
+
+  // r1c27 is the anchor for 599's north exit. Refusing every pair that ENDS there is what
+  // stops `transitOk` planning a hop out through it — which is how three characters were
+  // fed into that room on the castle patrol's route and could not leave.
+  ok('no route may be planned out through the north anchor',
+     anchorReach(table, 599, { row: 71, col: 2 }, { row: 1, col: 27 }) === false);
+  // AND THE WAY OUT MUST STILL BE OPEN, or banning the boundary would seal the room
+  // instead of un-baiting it. South to 589 is what every stranded keeper's own exits()
+  // reported, and it is how all three were eventually walked out.
+  ok('but the south exit they actually leave by is untouched',
+     anchorReach(table, 599, { row: 1, col: 27 }, { row: 71, col: 2 }) === true);
 }
 
 console.log('\nthe region filter is honest about what it cannot see');

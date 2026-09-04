@@ -626,9 +626,42 @@ export function anchorFor(table, roomNum, toRoom) {
  * than false — "the table cannot say" and "the table says no" are different, and only the
  * first is safe to fall back from.
  */
+// BOUNDARIES THE GAME REFUSES AND THE MAP CANNOT SEE.
+//
+// `room -> [destination rooms it cannot actually reach]`. A collision map answers geometry,
+// and geometry is not the only thing that shuts a door: an exit can need an item, a spoken
+// word, a quest bit. Nothing in the bake can express that, so the route keeps being planned,
+// the walk never completes, and the character shuffles two squares until somebody notices.
+//
+// This is the router's half of `KNOWN_TRAPS` in m59-fleetscript.mjs — that one refuses to
+// send an ERRAND into such a room, this one stops any route being planned THROUGH the
+// boundary in the first place.
+export const IMPASSABLE_EXITS = Object.freeze({
+  // Ukgoth's north edge to Outside Castle Victoria. Leaving that way needs a Relic of Qor
+  // and a spoken phrase; the floor genuinely reaches the edge, so every geometric test
+  // passes it. 2026-09-04: three characters were fed in on the castle patrol's route and
+  // spent hours shuffling between r50c17 and r51c20, and two more were back inside within
+  // an hour of being walked out. Their own keepers reported the truth all along —
+  // `exits: [{to: 589, direction: "south"}]`, one way out and it is not this one.
+  599: [2],
+});
+
+/** Is this an exit the game refuses, whatever the geometry says? */
+export function exitIsImpassable(roomNum, toRoomNum) {
+  const banned = IMPASSABLE_EXITS[Number(roomNum)];
+  return Array.isArray(banned) && banned.includes(Number(toRoomNum));
+}
+
 export function anchorReach(table, roomNum, from, to) {
   const r = table?.rooms?.[roomNum] ?? table?.rooms?.[String(roomNum)];
   if (!r) return null;
+
+  // REFUSED BEFORE ANY GEOMETRY IS CONSULTED, because the geometry says yes. `to` is an
+  // anchor square, so this asks which exit that anchor serves and refuses the pair when it
+  // is one of the banned ones — which stops `transitOk` planning a hop out through it.
+  const target = (r.anchors ?? []).find(a =>
+    Number(a.row) === Number(to.row) && Number(a.col) === Number(to.col));
+  if (target && exitIsImpassable(roomNum, target.to)) return false;
 
   // A DOOR THAT HAS MOVED MAKES THIS TABLE A MAP OF A DIFFERENT ROOM, and the stale answer
   // is a confident NO — which is worse than no answer, because `transitOk` refuses the hop
