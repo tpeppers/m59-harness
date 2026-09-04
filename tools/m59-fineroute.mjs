@@ -130,13 +130,19 @@ export function fineRouter(roomNum, {
   // A BODY HAS WIDTH: what it stands on is the HIGHEST floor under its footprint, not the one
   // sample at its centre. One thin sample at a ledge edge is how a height profile swings seven
   // thousand units between two packets a second apart.
+  // Memoised on the same grid as `floorAt`: nine lookups a call, and the flood asks for it on
+  // every candidate of every direction. Uncached it was most of the search.
+  const sCache = new Map();
   const standAt = (x, y) => {
+    const k = (x >> 5) * 100000 + (y >> 5);
+    if (sCache.has(k)) return sCache.get(k);
     let best = null;
     for (let dx = -160; dx <= 160; dx += 160)
       for (let dy = -160; dy <= 160; dy += 160) {
         const h = floorAt(x + dx, y + dy);
         if (h != null && (best == null || h > best)) best = h;
       }
+    sCache.set(k, best);
     return best;
   };
   // `standAt` will happily name a point with no floor under it — the centre of a footprint can
@@ -166,8 +172,23 @@ export function fineRouter(roomNum, {
     return best;
   };
 
+  // MEMOISED, BECAUSE THE SEARCH ASKS FOR THE SAME FLOOD SEVERAL TIMES OVER. Every frontier
+  // node floods, and then `plan` floods again to rebuild each leg's waypoints — so the winning
+  // route's closures were being computed twice each. With the perpendicular offsets a flood is
+  // no longer cheap (19,000 points, up to five traces a direction at the edges), and the
+  // Ancient Place climb went from 8s to 384s before this. Keyed on the quantised start, which
+  // is the same key the flood itself uses: two starts in one cell have the same closure.
+  const closureCache = new Map();
   /** Everywhere reachable from here WITHOUT EVER STEPPING DOWN — and how we got to each. */
   function closure(start) {
+    const ck0 = key(start.x, start.y);
+    const hit = closureCache.get(ck0);
+    if (hit) return hit;
+    const built = closureUncached(start);
+    closureCache.set(ck0, built);
+    return built;
+  }
+  function closureUncached(start) {
     const seen = new Map([[key(start.x, start.y), { x: start.x, y: start.y, from: null }]]);
     // BREADTH-FIRST, AND THE DIFFERENCE IS THE WHOLE OUTPUT. Depth-first reaches exactly the
     // same points — the closure is the closure — but the parent chain it leaves behind is a
@@ -179,58 +200,73 @@ export function fineRouter(roomNum, {
     let head = 0;                        // an index, not shift(): shift() is O(n) per step
     const dirs = [];
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (dx || dy) dirs.push([dx * step, dy * step]);
+    // Straight on first, then nudged either way across the direction of travel. Thirds of
+    // a step resolves a band of ~290 units against a step of 256.
+    const PERP = [0, step / 3, -step / 3, (2 * step) / 3, -(2 * step) / 3];
     while (head < q.length) {
       const cur = q[head++];
       const hc = standAt(cur.x, cur.y);
       if (hc == null) continue;
       const ck = key(cur.x, cur.y);
       for (const [dx, dy] of dirs) {
-        const nx = cur.x + dx, ny = cur.y + dy;
-        if (nx < 0 || ny < 0 || nx > room.cols * F || ny > room.rows * F) continue;
-        const k = key(nx, ny);
-        if (seen.has(k)) continue;
-        const hn = standAt(nx, ny);
-        if (hn == null) continue;
-        if (hn < hc - maxDescend) continue;        // past this it is a fall, not a step
-        if (hn > hc + MAX_STEP_HEIGHT) continue;   // and a cliff is a cliff
-        // AND THE MOVER'S OWN ANSWER, WHICH IS THE ONLY ONE THAT DECIDES.
+        // A LATTICE CANNOT FIND A BAND NARROWER THAN ITS OWN PHASE, AND THE LAST STRIP OF THE
+        // ANCIENT PLACE IS EXACTLY THAT.
         //
-        // Comparing two floor heights says the step is not a cliff. It does not say there is
-        // no WALL between them, and on this ground there routinely is: the follower came off
-        // the Ancient Place spiral at r37c34 asking for r35c35, and the mover's log read
-        // `slid: 0.75` — a body scraping along a wall the planner did not know about, because
-        // the planner had only ever asked how high the two ends were.
+        // The operator's re-recorded crossing r37c33 -> r36c34 runs at CONSTANT y = 37638,
+        // x 32200 -> 35055, hugging the south wall. The shelf is floor 7040 and about 290
+        // units wide, with the valley at 3392 immediately north — against a body 496 wide
+        // (2 * PLAYER_RADIUS). Only a narrow band of y is walkable at all.
         //
-        // `traceFineMoveClient` is the predicate the mover enforces, which is the one this
-        // repository says to plan on. It costs 0.03ms, so the whole flood is a few seconds —
-        // and this is the opt-in planner, so a few seconds is the cheapest thing here.
-        // AND SLIDING IS NOT CHEATING, IT IS HOW YOU HUG A WALL.
+        // This flood steps a fixed `step` from wherever the last jump landed, so WHICH y it
+        // samples inside that band is an accident of the landing. From the jump-1 landing it
+        // sampled 37520 and 37776 — either side of the band — topped out at 8640 and never
+        // found the spiral. Seeded by hand at the operator's own point, the SAME flood
+        // reached 10880 and everything past it. Steps of 256, 128 and 64 all failed
+        // identically, because the problem is PHASE, NOT STEP SIZE: a finer lattice with the
+        // wrong offset misses a narrow band just as reliably.
         //
-        // Asked with `slide:false` this refused so much that the Ancient Place chain broke at
-        // jump 2 — and it was refusing the very move the operator describes as "hug the
-        // eastern wall and follow it round". The client slides; a model that does not is
-        // stricter than the game.
-        //
-        // So the trace runs WITH slide and the neighbour is wherever the body actually ended
-        // up, not where it was aimed. That is the mover's own reachability rather than a grid
-        // laid over it, and it is why the flood is keyed on quantised position: two different
-        // aims that slide to the same place are the same place.
-        let px = nx, py = ny;
-        if (strict) {
-          const t = geo.traceFineMoveClient(cur.x, cur.y, nx, ny, { slide: true });
-          if (!t || !t.moved) continue;
-          px = Math.round(t.x); py = Math.round(t.y);
-          if (Math.hypot(px - cur.x, py - cur.y) < step / 4) continue;   // went nowhere
-          const hs = standAt(px, py);
-          if (hs == null || hs < hc - maxDescend || hs > hc + MAX_STEP_HEIGHT) continue;
+        // So each direction is also tried at a few offsets PERPENDICULAR to it, and the first
+        // the mover accepts wins. Straight on is tried first and almost always succeeds, so
+        // the extra traces are paid only at the edges — which is where the room is.
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = -dy / len, uy = dx / len;          // unit perpendicular to this direction
+        for (const off of PERP) {
+          const nx = Math.round(cur.x + dx + ux * off);
+          const ny = Math.round(cur.y + dy + uy * off);
+          if (nx < 0 || ny < 0 || nx > room.cols * F || ny > room.rows * F) continue;
+          // NOT `seen.has(aimedKey)`, which was its own bug: a cell already reached by some
+          // other aim says nothing about whether THIS aim lands somewhere new, and skipping
+          // here threw away legitimate approaches before they were ever traced. Only the
+          // position actually REACHED is checked against `seen`, below.
+          const hn = standAt(nx, ny);
+          if (hn == null) continue;
+          if (hn < hc - maxDescend) continue;        // past this it is a fall, not a step
+          if (hn > hc + MAX_STEP_HEIGHT) continue;   // and a cliff is a cliff
+          // AND THE MOVER'S OWN ANSWER, WHICH IS THE ONLY ONE THAT DECIDES. Two floors being
+          // level says the step is not a cliff; it says nothing about a WALL between them,
+          // and the follower came off this very spiral scraping one (`slid: 0.75`).
+          //
+          // SLIDING IS NOT CHEATING, IT IS HOW YOU HUG A WALL. With `slide:false` this refused
+          // so much that the chain broke at jump 2 — refusing the exact move the operator
+          // describes as "hug the eastern wall and follow it round". The client slides; a
+          // model that does not is stricter than the game. So the neighbour is wherever the
+          // body actually ended up, not where it was aimed, which is also why the flood is
+          // keyed on quantised position: two aims that slide to the same place are one place.
+          let px = nx, py = ny;
+          if (strict) {
+            const t = geo.traceFineMoveClient(cur.x, cur.y, nx, ny, { slide: true });
+            if (!t || !t.moved) continue;
+            px = Math.round(t.x); py = Math.round(t.y);
+            if (Math.hypot(px - cur.x, py - cur.y) < step / 4) continue;   // went nowhere
+            const hs = standAt(px, py);
+            if (hs == null || hs < hc - maxDescend || hs > hc + MAX_STEP_HEIGHT) continue;
+          }
+          const pk = key(px, py);
+          if (seen.has(pk)) continue;
+          seen.set(pk, { x: px, y: py, from: ck });
+          q.push({ x: px, y: py });
+          break;            // this direction is served; do not also take its nudges
         }
-        const pk = key(px, py);
-        if (seen.has(pk)) continue;
-        seen.set(pk, { x: px, y: py, from: ck });
-        q.push({ x: px, y: py });
-        continue;
-        seen.set(k, { x: nx, y: ny, from: ck });
-        q.push({ x: nx, y: ny });
       }
     }
     return seen;

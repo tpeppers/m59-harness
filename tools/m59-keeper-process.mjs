@@ -47,6 +47,7 @@ import { verifyFleetLockGuard } from './runtime/fleet-lock.mjs';
 import { planAccountLeases } from './runtime/account-leases.mjs';
 import { DemandSnapshot } from './runtime/demand-snapshot.mjs';
 import { DeferredLatest } from './runtime/deferred-latest.mjs';
+import { fallJumpsIn } from './m59-falljump.mjs';
 
 // ---------------------------------------------------------------- args
 
@@ -1722,14 +1723,51 @@ const server = createServer(async (req, res) => {
             if (!me) { json({ error: 'own position unknown' }, 409); return; }
             const toRow = Number(args.to_row ?? args.toRow);
             const toCol = Number(args.to_col ?? args.toCol);
-            const declared = geo.declaredFallJumps(me.row, me.col) ?? [];
-            const match = declared.find(j => j.row === toRow && j.col === toCol);
+            // THE TAKE-OFF IS A LEDGE, NOT A SQUARE, AND ARRIVING ONE SQUARE SHORT IS NORMAL.
+            //
+            // This asked `declaredFallJumps(me.row, me.col)` for the body's EXACT square. The
+            // broker's copy of the same verb has always allowed a one-square neighbourhood,
+            // deliberately — you must leave from the ledge and the ledge is narrow, but where
+            // on it you end up after a walk is not something a walk guarantees. Measured: a
+            // character walked the whole Ancient Place spiral to the take-off, stopped at
+            // r41c33 instead of r40c33, and was refused with `declared_here: []` while the
+            // declaration sat one square north.
+            //
+            // AND THE FLOOR IS WHAT KEEPS IT HONEST. One square either way is "the same jump,
+            // a step to the left" only if it is on the SAME SHELF; r40c33 spans 3520 to 10880
+            // and the two halves are different places. Where the operator gave fine points
+            // they say which shelf, because they were read off somebody making the jump.
+            let match = null, from = { row: me.row, col: me.col };
+            const declaredHere = geo.declaredFallJumps(me.row, me.col) ?? [];
+            const floorClient = (x, y) => {
+              try { return geo.floorBaseAtClient(x, y); } catch { return null; }
+            };
+            const myFloor = floorClient(me.x, me.y) ??
+              (() => { try { const p = geo.standPoint(me.row, me.col); return p ? floorClient(p.x, p.y) : null; }
+                       catch { return null; } })();
+            const raw = (() => { try { return fallJumpsIn(Number(session.world?.room?.num ?? NaN)) ?? []; }
+                                 catch { return []; } })();
+            const shelfOk = (row, col) => {
+              const d = raw.find(x => x?.from && x.from_fine &&
+                Number(x.from.row) === row && Number(x.from.col) === col);
+              if (!d || myFloor == null) return true;          // nothing declared: do not invent a refusal
+              const h = floorClient(d.from_fine.x, d.from_fine.y);
+              return h == null || Math.abs(h - myFloor) <= 64;
+            };
+            for (let r0 = me.row - 1; r0 <= me.row + 1 && !match; r0++)
+              for (let c0 = me.col - 1; c0 <= me.col + 1 && !match; c0++) {
+                const here = geo.declaredFallJumps(r0, c0) ?? [];
+                const hit = here.find(j => Math.abs(j.row - toRow) <= 2 && Math.abs(j.col - toCol) <= 2);
+                if (hit && shelfOk(r0, c0)) { match = hit; from = { row: r0, col: c0 }; }
+              }
             if (!match) {
               json({ jumped: false,
                      reason: `no declared fall-jump from ${me.row},${me.col} to ${toRow},${toCol}`,
-                     declared_here: declared.map(j => j.row + ',' + j.col) });
+                     declared_here: declaredHere.map(j => j.row + ',' + j.col),
+                     my_floor: myFloor });
               return;
             }
+            void from;
             const r = await session.step(toCol, toRow, { fall: true });
             const now = session.client?.self;
             json({ jumped: true, asked: { row: toRow, col: toCol },

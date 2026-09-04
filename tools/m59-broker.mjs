@@ -153,6 +153,7 @@ import { COMMANDER_SCHEMA, COMMERCE_SCHEMA, COMMANDER_FACULTIES,
          resolveCommerceInventoryOrigins, tradeFingerprint } from './m59-rts-command.mjs';
 import { joinSessionOnce, sessionReadiness } from './m59-session-readiness.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
+import { fallJumpsIn } from './m59-falljump.mjs';
 
 const HOST = process.env.M59_HOST || '127.0.0.1';
 const PORT = Number(process.env.M59_PORT || 5959);
@@ -6569,6 +6570,31 @@ const TOOLS = [
         try { const pt = geo.standPoint(row, col); return pt ? geo.floorBaseAtClient(pt.x, pt.y) : null; }
         catch { return null; }
       };
+      // A SQUARE HAS ONE `standPoint` AND THE INTERESTING ONES HAVE TWO FLOORS.
+      //
+      // The floor test below is the thing that tells "the same jump, a step to the left" from
+      // "some other drop nearby", and it asked `standPoint` — one point per square, and on a
+      // split square that is whichever shelf the geometry happens to name. In the Ancient
+      // Place it names the wrong one: r40c33 spans 3520 to 10880, `standPoint` answers 10880,
+      // and the body standing on the declared take-off is at 8640. So a character that had
+      // just walked the whole spiral staircase to the right square was refused its jump with
+      // "no declared fall-jump from 41,33 to 40,32" — the declaration was right there.
+      //
+      // Where the operator gave FINE POINTS, they are the answer: they were read off a
+      // recording of somebody making the jump, so the floor under them is by construction the
+      // floor the body is on. `standPoint` stays the fallback for declarations without them.
+      const declaredFine = (() => {
+        try { return fallJumpsIn(Number(s.world?.room?.num ?? NaN)) ?? []; } catch { return []; }
+      })();
+      const floorOfDeclared = (row, col, side) => {
+        for (const d of declaredFine) {
+          const sq = side === 'from' ? d.from : d.to, fine = side === 'from' ? d.from_fine : d.to_fine;
+          if (!sq || !fine) continue;
+          if (Number(sq.row) !== Number(row) || Number(sq.col) !== Number(col)) continue;
+          try { const h = geo.floorBaseAtClient(fine.x, fine.y); if (h != null) return h; } catch { /* fall through */ }
+        }
+        return floorAt(row, col);
+      };
       // THE TAKE-OFF IS TIGHT AND THE LANDING IS NOT, because they are different questions.
       //
       // You must leave from the ledge, and the ledge is narrow — one square either way, or it
@@ -6588,8 +6614,8 @@ const TOOLS = [
       const declared = table.some(j =>
         nearFrom(j.from.row, j.from.col, me.row, me.col) &&
         near(j.to.row, j.to.col, a.to_row, a.to_col) &&
-        sameFloor(hereFloor, floorAt(j.from.row, j.from.col)) &&
-        sameFloor(wantFloor, floorAt(j.to.row, j.to.col)));
+        sameFloor(hereFloor, floorOfDeclared(j.from.row, j.from.col, 'from')) &&
+        sameFloor(wantFloor, floorOfDeclared(j.to.row, j.to.col, 'to')));
       if (!declared)
         throw new Error(`${a.agent}: ${me.row},${me.col} -> ${a.to_row},${a.to_col} is not a declared ` +
                         `fall-jump or a one-square variation of one. Declared near here: ` +

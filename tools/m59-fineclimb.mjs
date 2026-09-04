@@ -52,7 +52,7 @@ const flag = (n, d = null) => {
   return at >= 0 && argv[at + 1] && !argv[at + 1].startsWith('--') ? argv[at + 1] : d;
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
-                       'steps', 'max-jumps', 'allow-candidates', 'help']);
+                       'steps', 'stride', 'max-jumps', 'allow-candidates', 'help']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -75,6 +75,11 @@ const DRY   = has('dry-run');
 // How far off a waypoint the body may be before the follow is declared to have come off.
 const TOL   = Number(flag('tolerance', 1.6));       // squares
 const STEPS = Number(flag('steps', 6));             // fine steps allowed per waypoint
+// HOW BIG EACH FINE MOVE IS, in kod units of the 64 that make a square. `walk_to` defaults to
+// 48 — three quarters of a square a packet — and on a staircase of slivers that is enough to
+// step clean over the tread and into the gully beside it. Smaller strides cost packets and
+// buy precision, which is the trade this tool exists to make.
+const STRIDE = Number(flag('stride', 16));
 if (!AGENT || !TO) { console.error('fineclimb: need --agent and --to row,col'); process.exit(2); }
 const [toRow, toCol] = TO.split(',').map(Number);
 if (!Number.isFinite(toRow) || !Number.isFinite(toCol)) {
@@ -82,7 +87,18 @@ if (!Number.isFinite(toRow) || !Number.isFinite(toCol)) {
 }
 
 const F = 1024;
-const toClient = v => (v - 64) * 16;      // kod protocol -> client fine units
+// THE TWO COORDINATE SPACES, AND GETTING THEM THE WRONG WAY ROUND WALKS OFF THE MAP.
+//
+// `m59-fineroute.mjs` works in CLIENT fine units (1024 to a square) because that is what the
+// BSP is in. `walk_to`'s x/y are kod PROTOCOL units — its own col/row path computes
+// `col * 64 + 32`, which is protocol — and 64 units to a square with a +64 origin offset.
+//
+// Passing a client x of 52512 as a protocol x asks for square 820 of a 74-column room. The
+// mover dutifully set off toward it: a character standing ON the first waypoint was walked
+// 6.9 squares away from it in three seconds, and the follower called that "came off". It had
+// not come off; it had been sent somewhere else.
+const toClient = v => (v - 64) * 16;      // kod protocol -> client fine
+const toProto  = v => v / 16 + 64;        // client fine -> kod protocol
 
 function call(name, args, ms = 120000) {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
@@ -192,7 +208,8 @@ for (const [li, leg] of plan.legs.entries()) {
     continue;
   }
   for (const [wi, wp] of leg.waypoints.entries()) {
-    const w = await call('walk_to', { agent: AGENT, x: wp.x, y: wp.y, max_steps: STEPS }, 60000);
+    const w = await call('walk_to', { agent: AGENT, x: toProto(wp.x), y: toProto(wp.y),
+                                      max_steps: STEPS, stride: STRIDE }, 60000);
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
     const p = w?.position;
@@ -203,7 +220,27 @@ for (const [li, leg] of plan.legs.entries()) {
       console.log(`  leg ${li + 1}  waypoint ${wi + 1}/${leg.waypoints.length}: ${w._error}`);
       came_off = { leg: li + 1, waypoint: wi + 1, why: w._error }; break outer;
     }
+    // DISTANCE ALONE CANNOT TELL "NEARLY THERE" FROM "FELL OFF".
+    //
+    // The body ended 0.7 squares from the Ancient Place take-off and FIVE THOUSAND UNITS
+    // BELOW it — off the ledge, in the valley — and a horizontal tolerance called that
+    // arrived. The leg then reported reaching r40c33 and the jump was refused with
+    // `my_floor: 3520` against a take-off at 8640, which is the first thing that said out
+    // loud what had happened.
+    //
+    // So the check is both: how far, and WHICH SHELF. A body more than one step-height off
+    // its waypoint's floor is not near it in any sense that matters.
     const off = (cx == null) ? 0 : Math.hypot(cx - wp.x, cy - wp.y) / F;
+    const hBody = cx == null ? null : R.floorAt(cx, cy);
+    const hWant = R.floorAt(wp.x, wp.y);
+    const fell = hBody != null && hWant != null && Math.abs(hBody - hWant) > 384;
+    if (fell) {
+      console.log(`  leg ${li + 1}  FELL OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
+                  `asked r${wp.row}c${wp.col} floor ${hWant}, body at r${pos.row}c${pos.col} ` +
+                  `floor ${hBody} — ${off.toFixed(1)} squares away but ${hBody - hWant} below/above it`);
+      came_off = { leg: li + 1, waypoint: wi + 1, asked: wp, got: { ...pos }, off, hBody, hWant };
+      break outer;
+    }
     if (off > TOL) {
       console.log(`  leg ${li + 1}  CAME OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
                   `asked r${wp.row}c${wp.col} (fine ${wp.x},${wp.y}), body at ` +
