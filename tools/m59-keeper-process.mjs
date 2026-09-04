@@ -28,7 +28,7 @@ import { loadMap, buildReverseEdges, resolveRoom } from './m59-map.mjs';
 import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.mjs';
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
-import { attachStepMasks, applyDoorState } from './m59-routes.mjs';
+import { attachStepMasks, applyDoorState, doorStates } from './m59-routes.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
@@ -897,6 +897,25 @@ function state() {
     // anchored on it reaches slightly further back than the caller meant — which errs
     // toward returning the reply rather than missing it, and every caller filters by kind.
     ev_seq: session.client?.evSeq ?? null,
+    // WHAT THE SERVER HAS SAID ABOUT THIS ROOM'S MOVING FLOORS, and what we did about it.
+    //
+    // Without this the door machinery is unfalsifiable from outside. It logs only when a
+    // state CHANGES, so "the server replayed the shut state" and "the server said nothing
+    // at all" produce identical silence — and those want opposite fixes: the first means
+    // the hall really is closed and our model is right, the second means the packet never
+    // arrived and the model is stuck on whatever the .roo shipped. On 2026-09-04 a courier
+    // reached Blackstone Keep, failed to enter the feast hall, and there was no way to tell
+    // those two apart from any log on the machine.
+    //
+    // `observed` is straight off the wire (BP_SECTOR_MOVE, sector -> kod height) and
+    // `applied` is the door state the routing model is actually in — null meaning "as the
+    // .roo shipped it".
+    doors: {
+      observed: Object.fromEntries(
+        [...(session.client?.room?.sectorHeights ?? new Map())]
+          .map(([sector, v]) => [sector, v?.height ?? null])),
+      applied: doorStates()[Number(session.world?.room?.num)] ?? null,
+    },
     job: rtsJobReport(session.job) ?? null,
     // AND WHETHER SOMEBODY ELSE IS HOLDING IT STILL. `KeeperProxy.status()` reported
     // `inert: null` unconditionally, so a character standing still because a supply
