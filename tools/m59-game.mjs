@@ -4161,7 +4161,18 @@ class Session {
     if (r?.moved || r?.left_room || (r?.travelled ?? 0) > 0 || r?.reason === 'raw_move_rejected') return;
     await new Promise(res => setTimeout(res, 25));
   }
-  async step(col, row, { confirm = false, beforeMutation = null, fall = false } = {}) {
+  // `aimX`/`aimY` OVERRIDE THE SQUARE CENTRE, in kod protocol units, and a declared jump is
+  // why they exist. The landing below is computed as `col * KOD_FINENESS + 32` — the middle of
+  // the square — and on the ground jumps are declared over, the middle of the square is the
+  // WRONG WORLD: r40c32 in the Ancient Place spans 3200 to 10880, its centre is the gully, and
+  // the shelf the operator lands on is a third of a square north of it. Watched live: a
+  // character climbed the entire spiral, jumped, overshot the shelf and came down in the
+  // gully — aimed, faithfully, at the middle of the right square.
+  //
+  // `substrate/m59-falljumps.json` already carries `to_fine` for exactly this reason. Nothing
+  // was reading it.
+  async step(col, row, { confirm = false, beforeMutation = null, fall = false,
+                         aimX = null, aimY = null } = {}) {
     const c = this.need();
     const roomId = c.room.id;
     const before = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : null;
@@ -4326,7 +4337,8 @@ class Session {
       };
       const fromX = before.x ?? (before.col * KOD_FINENESS + 32);
       const fromY = before.y ?? (before.row * KOD_FINENESS + 32);
-      const toXc = col * KOD_FINENESS + 32, toYc = row * KOD_FINENESS + 32;
+      const toXc = aimX != null ? aimX : col * KOD_FINENESS + 32,
+            toYc = aimY != null ? aimY : row * KOD_FINENESS + 32;
       const measureLineGap = () => gapAlong(fromX, fromY, toXc, toYc, bodyPoints());
 
       // A LANE IS THE SAME JUMP, SHIFTED SIDEWAYS. Same take-off square, same landing square,

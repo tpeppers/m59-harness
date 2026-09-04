@@ -1806,11 +1806,32 @@ const server = createServer(async (req, res) => {
               return;
             }
             void from;
-            const r = await session.step(toCol, toRow, { fall: true });
+            // A JUMP THAT DID NOT MOVE THE BODY IS NOT A JUMP.
+            //
+            // This reported `jumped: true` whenever `step` returned at all, and a caller
+            // reasonably read that as "you are on the far side now". Measured on the Ancient
+            // Place: a character that had climbed the whole spiral fired jump 1 from one
+            // square off the take-off, did not move an inch, was told JUMPED, and its runner
+            // walked on along the post-jump route — off the ledge it was still standing on,
+            // into the valley. `arrived` was already here and already false; nothing looked at
+            // it because `jumped` said otherwise.
+            const before = { row: me.row, col: me.col };
+            // AIM AT THE DECLARED LANDING POINT, NOT THE MIDDLE OF ITS SQUARE. See `step`:
+            // r40c32 spans 3200..10880 and its centre is the gully. The operator's `to_fine`
+            // is the shelf.
+            const land = raw.find(x => x?.to && x.to_fine &&
+              Number(x.to.row) === Number(match.row) && Number(x.to.col) === Number(match.col));
+            const aim = land ? { aimX: land.to_fine.x / 16 + 64, aimY: land.to_fine.y / 16 + 64 } : {};
+            const r = await session.step(toCol, toRow, { fall: true, ...aim });
             const now = session.client?.self;
-            json({ jumped: true, asked: { row: toRow, col: toCol },
+            const moved = !!now && (now.row !== before.row || now.col !== before.col);
+            json({ jumped: moved, asked: { row: toRow, col: toCol },
+                   from: before, aimed_at_fine: !!land,
                    landed: now ? { row: now.row, col: now.col } : null,
                    arrived: !!now && now.row === toRow && now.col === toCol,
+                   ...(moved ? {} : { reason: `the jump was accepted but the body did not move — ` +
+                        `still at ${before.row},${before.col}. A fall is a trajectory: it has to ` +
+                        `start from the declared take-off, not a square beside it.` }),
                    mover: r ?? null });
             return;
           }
