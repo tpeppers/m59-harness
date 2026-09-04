@@ -4969,6 +4969,23 @@ class Session {
     // every careful walk careless. A caller that took the default gets to run.
     strideMax = stride >= FINE_STRIDE ? Math.max(FINE_STRIDE_MAX, stride) : stride,
     arriveWithin = 40,
+    // DO NOT WALK OFF THE SHELF YOU ARE ON. OFF BY DEFAULT, AND THAT IS DELIBERATE.
+    //
+    // The fan exists to find a way round geometry, and it is judged purely on DISTANCE: the
+    // first heading that moves and gets closer wins. On flat ground that is right. On a ledge
+    // it is how a body leaves one: a fanned heading slides off the tread, the step lands a few
+    // units nearer the destination, and the walk counts it as progress while the character is
+    // now in the gully five thousand units below the route.
+    //
+    // Measured on the Ancient Place staircase, following a plan that was correct: asked for
+    // r42c47 at floor 5856, arrived in THAT SAME SQUARE at 4672, and every later waypoint was
+    // then walked along the valley underneath the climb. The treads rise 352 a step against a
+    // MAX_STEP_HEIGHT of 384, so there is no margin for a heading that wanders.
+    //
+    // Every other caller of this function walks ordinary ground where descending is fine and
+    // often necessary, so this stays OFF unless asked. `m59-fineroute.mjs` plans routes that
+    // only make sense on one shelf, and that is who turns it on.
+    holdShelf = false,
     movementGeneration = this.movementGeneration,
     controlToken,
   } = {}) {
@@ -4982,6 +4999,20 @@ class Session {
     let stalls = 0, lastStep = null;
     let closest = Infinity, sinceCloser = 0;
     const geometryRejections = new Set();
+    // Floors, asked in CLIENT units. `me.x`/`aimX` here are kod PROTOCOL units — the same
+    // space `walk_to`'s col/row path builds with `col * KOD_FINENESS + half` — and the
+    // geometry is in client units, so everything must go through `protocolToClient`.
+    const shelfGeo = holdShelf ? (this.world?.geometry ?? null) : null;
+    const floorOf = (px, py) => {
+      if (!shelfGeo) return null;
+      try {
+        const cx = protocolToClient(px), cy = protocolToClient(py);
+        const leaf = shelfGeo.leafAtClient(cx, cy);
+        return leaf?.sector ? shelfGeo.floorBaseAtClient(cx, cy, leaf) : null;
+      } catch { return null; }
+    };
+    const destFloor = floorOf(destX, destY);
+    let shelfRefusals = 0;
     // Headings to try, in order: straight at it, then fanned out to either side.
     // The wide angles are what carry you along a wall rather than into it.
     const FAN = [0, 0.35, -0.35, 0.75, -0.75, 1.2, -1.2, 1.7, -1.7];
@@ -5013,6 +5044,7 @@ class Session {
       const remaining = Math.hypot(dx, dy);
       if (remaining <= arriveWithin)
         return { arrived: true, position: { col: me.col, row: me.row, x: me.x, y: me.y },
+                 ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
                  steps: i, log };
 
       const base = Math.atan2(dy, dx);
@@ -5033,7 +5065,22 @@ class Session {
                    Math.round(closest) + ' units, inside one square' };
       let progressed = false;
 
-      for (const off of FAN) {
+      // A NARROW FAN ON A LEDGE. The wide angles exist to carry a body ALONG a wall, and on
+      // flat ground they are what makes this function work at all. On a tread 352 units above
+      // the gully they are how it leaves: a heading 1.2 radians off course swings the body
+      // sideways past the edge, the step lands a little nearer the goal, and the walk counts
+      // it as progress. Measured on stair four — three headings correctly refused by the
+      // shelf guard and the fourth, a wide one, allowed.
+      //
+      // So when the caller says it is on a shelf, it may look a fifth of a turn either way and
+      // no further. If that finds nothing the walk stops, which is the right answer on a
+      // staircase: there is one way up and it is forward.
+      // NARROWED, NOT CRIPPLED. At [0, ±0.35] the body stopped falling and also stopped
+      // climbing: from the 5856 tread every one of three headings led down, twelve refusals a
+      // call, because the way up a spiral staircase TURNS. The wide angles (±1.2, ±1.7) are
+      // the ones that swing a body off a ledge; ±0.75 is still a step along it.
+      const fan = holdShelf ? [0, 0.35, -0.35, 0.75, -0.75] : FAN;
+      for (const off of fan) {
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return this.cancelledMovement({ steps: i, log });
         const a = base + off;
@@ -5056,7 +5103,89 @@ class Session {
           const col = Math.floor(aimX / KOD_FINENESS), row = Math.floor(aimY / KOD_FINENESS);
           if (avoidSquares.has(`${row},${col}`)) continue;
         }
+        // THE SHELF GUARD. A heading that drops off the ledge is refused before it is sent,
+        // not judged afterwards by whether it happened to get closer.
+        //
+        // Descending ONTO THE DESTINATION'S OWN SHELF is still allowed — the route may
+        // legitimately end lower than it starts, and a rule that forbade that would refuse
+        // the last step of every climb down. What is refused is leaving the shelf for
+        // somewhere that is neither where we are nor where we are going.
+        if (shelfGeo) {
+          const hereFloor = floorOf(me.x, me.y);
+          if (hereFloor != null) {
+            // ASK WHERE THE BODY WOULD LAND, NOT WHERE IT IS AIMED. The move slides, and on a
+            // ledge the slide is the whole danger: checking the aim point passed a heading
+            // whose aim was on the tread and whose SLID ENDPOINT was over the edge. Measured
+            // on stair four — three headings correctly refused, the fourth allowed, and the
+            // body 1536 units down in the gully with the walk reporting `arrived: true`.
+            // WITH THE BODIES IN IT, BECAUSE MONSTER COLLISION IS HEIGHT-AGNOSTIC AND THE
+            // GEOMETRY IS NOT.
+            //
+            // The operator's rule: every monster is infinitely tall. A hop or a step whose
+            // geometry is clear — 5000 down to 4000 over a gully at 0 — is still blocked by
+            // something standing in that gully, which the height model says is far below the
+            // arc. So a trace WITHOUT obstacles predicts a landing the body will not reach:
+            // the real move is blocked, slides somewhere else, and on a tread "somewhere
+            // else" is off it.
+            //
+            // That is also the only thing here that can vary between two runs of identical
+            // code, and it did: the same climb walked all 47 waypoints once and fell at 15
+            // the next time. Geometry does not move. Monsters do.
+            const bodies = [...(c.room?.objects?.values?.() ?? [])]
+              .filter(o => o.id !== c.selfId && blocksMovement(o.flags ?? 0) &&
+                           Number.isFinite(o.x) && Number.isFinite(o.y))
+              .map(o => ({ id: o.id, x: protocolToClient(o.x), y: protocolToClient(o.y) }));
+            // A TRACE THAT SAYS THE BODY WILL NOT MOVE IS A REFUSAL, NOT A REASON TO GUESS.
+            //
+            // This fell back to judging the AIM whenever the trace reported no movement, and
+            // the aim is the permissive case: on a tread it is the tread, so the heading was
+            // allowed, the real move slid, and the body left the shelf. Adding the obstacle
+            // list made that worse rather than better — a blocked step is exactly when the
+            // trace reports no movement — so the climb went from occasionally working to
+            // falling every time at the same tread. If the mover says this heading goes
+            // nowhere, take the next heading.
+            let landX = aimX, landY = aimY, traced = false;
+            try {
+              const t = shelfGeo.traceFineMoveClient(
+                protocolToClient(me.x), protocolToClient(me.y),
+                protocolToClient(aimX), protocolToClient(aimY),
+                { slide: true, obstacles: bodies, roomFlags: c.room?.flags ?? 0,
+                  overrideDepths: c.room?.overrideDepths ?? null });
+              if (t) {
+                traced = true;
+                if (!t.moved) { shelfRefusals++; continue; }
+                landX = clientToProtocol(t.x); landY = clientToProtocol(t.y);
+              }
+            } catch { traced = false; /* no trace at all: judge the aim and hope */ }
+            void traced;
+            const landFloor = floorOf(landX, landY);
+            if (landFloor != null &&
+                hereFloor - landFloor > MAX_STEP_HEIGHT &&
+                (destFloor == null || Math.abs(landFloor - destFloor) > MAX_STEP_HEIGHT)) {
+              shelfRefusals++;
+              continue;
+            }
+          }
+        }
         const r = await this.stepFine(aimX, aimY);
+        // AND CHECK WHERE IT ACTUALLY WENT. The trace is a model and the body is the fact: if
+        // this step has put us off the shelf, stop here. Walking on is how one missed tread
+        // becomes thirty-five waypoints walked along the valley underneath the climb, with the
+        // caller told it arrived.
+        if (shelfGeo && r?.moved) {
+          const now = this.client?.self;
+          const nowFloor = now ? floorOf(now.x, now.y) : null;
+          const wasFloor = floorOf(me.x, me.y);
+          if (nowFloor != null && wasFloor != null &&
+              wasFloor - nowFloor > MAX_STEP_HEIGHT &&
+              (destFloor == null || Math.abs(nowFloor - destFloor) > MAX_STEP_HEIGHT))
+            return { arrived: false, reason: 'left the shelf',
+                     note: `stepped from floor ${wasFloor} to ${nowFloor} on the way to a ` +
+                           `destination at ${destFloor}; stopped rather than walking on below the route`,
+                     shelf_refusals: shelfRefusals, dest_floor: destFloor,
+                     position: now ? { col: now.col, row: now.row, x: now.x, y: now.y } : null,
+                     steps: i + 1, log };
+        }
         if (off === 0) {
           baseReason = r.reason ?? null;
           baseBlockedId = r.reason === 'object_blocked' ? (r.objectId ?? null) : null;
@@ -5139,6 +5268,7 @@ class Session {
         stride = Math.max(24, Math.round(stride / 2));
         if (stalls >= 4)
           return { arrived: false, reason: 'blocked — every heading refused, at every reach tried',
+                   ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
                    // WHAT THE LAST REFUSAL ACTUALLY SAID. Without this the caller is told
                    // "every heading refused" and cannot tell a wall from a rate limit from a
                    // move the server simply ignored — which is exactly the wall this
@@ -5169,6 +5299,7 @@ class Session {
     }
     me = c.self;
     return { arrived: false, reason: 'ran out of steps',
+             ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
              position: me ? { col: me.col, row: me.row, x: me.x, y: me.y } : null, log,
              geometry_rejections: [...geometryRejections] };
   }

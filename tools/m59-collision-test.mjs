@@ -1354,6 +1354,11 @@ const walkFine = compileSessionMethod(brokerSource,
     // tuning detail — a fixture that walked with a stubbed ceiling would assert the
     // reach of a walker nobody runs.
     traceMove: () => {}, isTerminalMovementReason, KOD_FINENESS,
+    // THE SHELF GUARD'S THREE. `holdShelf` reads floors, and floors live in CLIENT units
+    // while this method works in kod PROTOCOL units, so both converters come with it. Real,
+    // not stubbed: what they convert between is the whole point of the guard, and a fixture
+    // that walked with a stubbed conversion would assert the shelf of a body nobody has.
+    protocolToClient, clientToProtocol, MAX_STEP_HEIGHT, blocksMovement,
     FINE_STRIDE: 48, FINE_STRIDE_MAX: 80 });
 // approachFine is compiled with FAKE fine-path helpers so the test can say what the A*
 // found without a real BSP: the contract under test is that a found path is FOLLOWED

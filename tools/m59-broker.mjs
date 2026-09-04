@@ -6728,6 +6728,10 @@ const TOOLS = [
       control_token: { type: 'string', description: 'optional owner token that can invalidate stale movement' },
       fine: { type: 'boolean',
               description: 'use locally validated fine BSP movement for this one call' },
+      hold_shelf: { type: 'boolean', description: 'refuse any step that drops off the ledge ' +
+        'you are standing on, instead of counting it as progress because it got closer. For ' +
+        'walking a route that only makes sense on one shelf — a staircase of slivers, a climb ' +
+        'along a cliff face. Off by default: ordinary ground wants to be able to walk downhill.' },
       stride: { type: 'number', description: 'kod fine units to reach per step, default 48 of 64 units per square' },
       x: { type: 'number', description: 'fine x/column-axis destination in kod units, instead of a square; x/y take precedence' },
       y: { type: 'number', description: 'fine y/row-axis destination in kod units, instead of a square; x/y take precedence' },
@@ -6751,6 +6755,7 @@ const TOOLS = [
         const r = await s.walkFine(num(a.x), num(a.y), {
           maxSteps: num(a.max_steps, 60),
           ...(a.stride != null ? { stride: num(a.stride) } : {}),
+          holdShelf: a.hold_shelf === true,
           controlToken: a.control_token,
         });
         return r ?? { arrived: false, reason: 'the mover said nothing' };
@@ -6762,6 +6767,7 @@ const TOOLS = [
       const half = KOD_FINENESS >> 1;
       return s.walkFine(num(a.col) * KOD_FINENESS + half, num(a.row) * KOD_FINENESS + half,
                         { maxSteps: num(a.max_steps, 120), stride: num(a.stride, 48),
+                          holdShelf: a.hold_shelf === true,
                           controlToken: a.control_token });
     },
   },

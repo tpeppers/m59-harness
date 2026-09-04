@@ -1690,9 +1690,15 @@ const server = createServer(async (req, res) => {
           // the ledges in 579 and the catwalk in 108 are. Without this a bot cannot walk a
           // sliver, and slivers are where the interesting places in this game are.
           case 'walk_fine': {
+            // EVERY OPTION THIS FORWARDS HAS TO BE NAMED HERE, and one that is not is dropped
+            // in silence — the proxy spreads `...opts` over the request and this end picks
+            // fields out by hand. `holdShelf` was added to `walkFine` and passed by the
+            // broker, and would have arrived, been ignored, and left the caller believing a
+            // guard was on that was not.
             const r = await session.walkFine(Number(args.x), Number(args.y), {
               maxSteps: Number(args.max_steps ?? args.maxSteps ?? 60),
               stride: args.stride != null ? Number(args.stride) : undefined,
+              holdShelf: (args.hold_shelf ?? args.holdShelf) === true,
               controlToken: args.control_token ?? args.controlToken,
             });
             json(r ?? { ok: true });

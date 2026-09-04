@@ -209,7 +209,8 @@ for (const [li, leg] of plan.legs.entries()) {
   }
   for (const [wi, wp] of leg.waypoints.entries()) {
     const w = await call('walk_to', { agent: AGENT, x: toProto(wp.x), y: toProto(wp.y),
-                                      max_steps: STEPS, stride: STRIDE }, 60000);
+                                      max_steps: STEPS, stride: STRIDE,
+                                      hold_shelf: true }, 60000);
     // THE REPLY CARRIES THE POSITION, in kod protocol units. Reading it here rather than
     // calling `look` halves the round trips on a long climb.
     const p = w?.position;
@@ -238,6 +239,7 @@ for (const [li, leg] of plan.legs.entries()) {
       console.log(`  leg ${li + 1}  FELL OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
                   `asked r${wp.row}c${wp.col} floor ${hWant}, body at r${pos.row}c${pos.col} ` +
                   `floor ${hBody} — ${off.toFixed(1)} squares away but ${hBody - hWant} below/above it`);
+      console.log(`           the mover said: ${JSON.stringify(w).slice(0, 300)}`);
       came_off = { leg: li + 1, waypoint: wi + 1, asked: wp, got: { ...pos }, off, hBody, hWant };
       break outer;
     }
