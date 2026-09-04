@@ -6618,6 +6618,71 @@ const TOOLS = [
     },
   },
   {
+    // A ROUTE THROUGH GROUND THE SQUARE GRID CANNOT DESCRIBE — PLANNED, NEVER WALKED.
+    //
+    // OPT-IN, AND THAT IS THE POINT. Nothing consults this on the hot path: `walk_to` and
+    // `travel` plan on squares and are right to, because squares are cheap and most ground is
+    // honest. This is for the ground that is not — a ledge whose square centres are in the
+    // valley below it, a mana node behind a spiral staircase of slivers — where a caller
+    // KNOWS it is about to cross something interesting and would rather have a plan than a
+    // series of refusals.
+    //
+    // It moves nobody. It returns legs, and the legs are executable with verbs that already
+    // exist: a walk leg is a list of fine points for `walk_to {x, y}`, a jump leg is a
+    // `jump {to_row, to_col}`. So an MCP client, a bot, or somebody with curl can ask how to
+    // get somewhere hard and then drive it with the same two verbs as everything else.
+    //
+    // BY DEFAULT IT ONLY OFFERS JUMPS SOMEBODY WALKED. `substrate/m59-falljumps.json` is
+    // operator-declared and confirmed by a character arriving; `allow_candidates` opens it up
+    // to hops this planner invents, which are a claim about geometry and nothing more — and
+    // which `jump` will refuse to execute anyway, deliberately. `confidence` on the reply says
+    // which of the two you are holding.
+    name: 'route_fine',
+    description: 'PLAN a route across ground the square router cannot express — a ledge, a ' +
+      'staircase of slivers, a mana node behind a jump. Returns legs and moves nobody. Walk ' +
+      'legs are fine points for walk_to {x,y}; jump legs are jump {to_row,to_col}. Opt in to ' +
+      'this when an ordinary walk_to has refused or wandered, not before: it is slower than ' +
+      'the square router and most ground does not need it. Only operator-DECLARED jumps are ' +
+      'used unless allow_candidates is set, and an undeclared one is a claim about geometry ' +
+      'that `jump` will refuse to execute.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string', description: 'whose room and position to plan from; omit from/room to use where it stands' },
+      room: { type: 'number', description: 'room number; defaults to the room the agent is in' },
+      from_col: { type: 'number', description: 'start column; defaults to where the agent stands' },
+      from_row: { type: 'number', description: 'start row' },
+      to_col: { type: 'number', description: 'destination column' },
+      to_row: { type: 'number', description: 'destination row' },
+      max_jumps: { type: 'number', description: 'how many jumps the search may chain, default 4' },
+      allow_candidates: { type: 'boolean', description: 'also consider hops nobody has walked; ' +
+        'they cannot be executed by `jump` and are marked CANDIDATE' },
+    }, required: ['to_col', 'to_row'] },
+    run: async (a) => {
+      const { fineRouter } = await import('./m59-fineroute.mjs');
+      let room = a.room, from = null;
+      if (a.agent) {
+        const s = session(a.agent);
+        const me = s.client?.self;
+        room = room ?? Number(s.world?.room?.num ?? NaN);
+        if (me) from = { row: me.row, col: me.col };
+      }
+      if (a.from_row != null && a.from_col != null) from = { row: a.from_row, col: a.from_col };
+      if (!Number.isFinite(Number(room))) throw new Error('route_fine: need a room, or an agent that is in one');
+      if (!from) throw new Error('route_fine: need from_row/from_col, or an agent to take them from');
+      const R = fineRouter(Number(room), { worldMap });
+      const out = R.plan(from, { row: a.to_row, col: a.to_col },
+                         { maxJumps: Number(a.max_jumps ?? 4),
+                           allowCandidates: a.allow_candidates === true });
+      // The waypoint list is the useful part and it is long. Say how to drive it, once, here,
+      // rather than leaving a caller to guess that x/y beat col/row on `walk_to`.
+      return { ...out,
+        how_to_execute: out.ok
+          ? "walk legs: walk_to { agent, x, y } for each waypoint IN ORDER — pass x/y, not " +
+            "col/row, because a square centre is the wrong place on this ground. jump legs: " +
+            "jump { agent, to_row, to_col }. Re-plan from where you actually are if a leg ends short."
+          : undefined };
+    },
+  },
+  {
     name: 'walk_to',
     description: 'Walk to a square, routing around walls through the room geometry, one step per ' +
       'second — the pace a human client moves at. Pass the named `col` and `row` fields returned by ' +
@@ -9109,6 +9174,11 @@ const TOOLS = [
                      'the character\'s proficiency in each weapon\'s own skill, which only ever ' +
                      'rewards what it is already best at; set this to train a weak weapon skill. ' +
                      'Pass [] to go back to proficiency ranking.' },
+      training_style: { type: 'string',
+        enum: ['normal', 'short_sword', 'unarmed', 'alternate'],
+        description: 'combat practice style for farm prey. alternate keeps one style for a whole ' +
+          'quarry, then flips between an exact short sword and bare hands. Outside the assigned ' +
+          'farm room the keeper still arms for travel and survival.' },
       drop_junk: { type: 'boolean',
         description: 'drop junk and weapons the server has refused as broken, default true. A ' +
                      'broken weapon is NOT renamed, so it otherwise outranks the working one for ever' },
@@ -9497,6 +9567,12 @@ const TOOLS = [
       const s = session(a.agent);
       s.need();
       const p = autopilotFor(s);
+      // A keeper-backed shell is only an assembly point for an order; it does not run
+      // and may have been created after resumeFleet dropped the boot-time shell. Seed it
+      // from the roster before applying an incremental change, or setting one field such
+      // as training_style rewrites every omitted policy value to constructor defaults.
+      const savedAutopilot = fleetState.get(a.agent)?.autopilot;
+      if (savedAutopilot?.policy) Object.assign(p.policy, savedAutopilot.policy);
       // The running stub's mode defaults to 'survive' (Autopilot constructor), but the
       // ROSTER may have a different mode (e.g. 'tick') that the keeper is actually using.
       // When a caller does NOT explicitly set the mode, we must preserve the roster's
@@ -9731,6 +9807,12 @@ const TOOLS = [
       if (a.weapon_priority !== undefined)
         p.policy.weaponPriority = Array.isArray(a.weapon_priority) && a.weapon_priority.length
           ? a.weapon_priority.map(String) : null;
+      if (a.training_style !== undefined) {
+        const style = String(a.training_style);
+        if (!['normal', 'short_sword', 'unarmed', 'alternate'].includes(style))
+          throw new Error(`training_style must be normal, short_sword, unarmed or alternate — got ${style}`);
+        p.policy.trainingStyle = style;
+      }
       // NORMALISED AT THE DOOR. `half` and `ab` were two names for the same retired
       // experiment and they are stored as `on`, because storing them as themselves means
       // every reader downstream has to remember the retirement — which is how `on` spent an
