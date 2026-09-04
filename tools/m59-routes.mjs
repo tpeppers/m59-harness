@@ -315,6 +315,10 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
     const result = applySectorHeights(geometry, [...shipped].map(([index, floor]) => ({ index, floor })),
       { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
     DOOR_STATE.set(roomNum, null);
+    // A DOOR THAT MOVED IS A ROOM WITH DIFFERENT REGIONS. Blackstone Keep goes from a
+    // 38-square island plus a 644-square body to ONE body of 682, so a cached labelling
+    // taken before the door opened says the feast hall is unreachable from the keep.
+    if (result.moved) REGION_LABELS.delete(Number(roomNum));
     return { changed: result.moved > 0, state: null, shut: true, ...(result.why ? { why: result.why } : {}) };
   }
 
@@ -332,6 +336,7 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
   const result = applySectorHeights(geometry, [...put].map(([index, floor]) => ({ index, floor })),
     { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
   DOOR_STATE.set(roomNum, key);
+  if (result.moved) REGION_LABELS.delete(Number(roomNum));
   return { changed: result.moved > 0, state: key, ...(result.why ? { why: result.why } : {}) };
 }
 
@@ -339,7 +344,106 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
 export const doorStates = () => Object.fromEntries(DOOR_STATE);
 
 /** Forget every door state — for tests, which must not inherit one another's rooms. */
-export function resetDoorStates() { DOOR_STATE.clear(); DOOR_BASELINE.clear(); }
+export function resetDoorStates() {
+  DOOR_STATE.clear(); DOOR_BASELINE.clear(); REGION_LABELS.clear();
+}
+
+// ------------------------------------------------------------- exits you can actually reach
+//
+// AN EXIT LIST WITHOUT A POSITION IS A LIST OF DOORS IN THE BUILDING, NOT DOORS YOU CAN USE.
+// `room.edgeExits` is a property of the ROOM, so every caller gets all of them wherever it
+// is standing — and a room is very often not one connected place. Room 599 has twelve
+// regions and eleven pockets; its three exits sit in two different ones, and neither is the
+// main body. A router that plans through whichever exit is nearest the destination will
+// happily aim a character at a door on the far side of a wall, and the symptom is not an
+// error: it is a character walking for ever and a journey that never ends.
+//
+// The bake already knows — every anchor carries the `region` it belongs to. Nothing was
+// asking. This is the asking.
+//
+// HONEST ABOUT WHAT THIS DOES NOT CATCH. It answers geometry, and geometry is not the only
+// way a door is shut. Three characters were stranded in Ukgoth on 2026-09-04 and this
+// filter would have passed all three of their exits, because the floor really does connect
+// to the north edge — leaving northward needs a Relic of Qor and a spoken phrase, which no
+// collision map models. Those rooms are named in `KNOWN_TRAPS` instead. Use both.
+const REGION_LABELS = new Map();          // roomNum -> Uint16Array, one region id per square
+
+/**
+ * Label every square in a room with the connected region it belongs to, by the mover's own
+ * step predicate. Computed once per room and kept — it is a few thousand squares and the
+ * answer only changes when a door moves, which is what `applyDoorState` clears it for.
+ */
+export function roomRegions(map, roomNum, { geometryOf } = {}) {
+  const cached = REGION_LABELS.get(Number(roomNum));
+  if (cached) return cached;
+  const room = map?.rooms?.[roomNum] ?? map?.rooms?.[String(roomNum)];
+  const geometry = geometryOf ? geometryOf(room) : (room ? sharedRoomGeometry(room) : null);
+  if (!geometry?.rows) return null;
+  const { rows, cols } = geometry;
+  const label = new Uint16Array(rows * cols);       // 0 means "not standable / unvisited"
+  const at = (r, c) => (r - 1) * cols + (c - 1);
+  let next = 0;
+  for (let r0 = 1; r0 <= rows; r0++) for (let c0 = 1; c0 <= cols; c0++) {
+    if (label[at(r0, c0)]) continue;
+    let standable = false;
+    try { standable = geometry.standable(r0, c0); } catch { standable = false; }
+    if (!standable) continue;
+    const id = ++next;
+    const queue = [[r0, c0]];
+    label[at(r0, c0)] = id;
+    for (let i = 0; i < queue.length; i++) {
+      const [r, c] = queue[i];
+      for (const [dr, dc] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 1 || nc < 1 || nr > rows || nc > cols) continue;
+        if (label[at(nr, nc)]) continue;
+        let lands = false;
+        try { lands = geometry.moverStepLands(r, c, nr, nc); } catch { lands = false; }
+        if (!lands) continue;
+        label[at(nr, nc)] = id;
+        queue.push([nr, nc]);
+      }
+    }
+  }
+  const out = { rows, cols, label, count: next,
+                idAt: (r, c) => (r >= 1 && c >= 1 && r <= rows && c <= cols) ? label[at(r, c)] : 0 };
+  REGION_LABELS.set(Number(roomNum), out);
+  return out;
+}
+
+/**
+ * The exits of `roomNum` a character standing at `(row, col)` can actually walk to.
+ *
+ * Returns `{ reachable, unreachable, region, why }`. A null `reachable` means "no opinion" —
+ * no geometry, no bake, or a position off the map — and a caller must then behave exactly as
+ * it did before this existed, which is to consider every exit. Narrowing to nothing on a
+ * missing answer would strand a character at a boundary it could have crossed.
+ */
+export function reachableExits(map, roomNum, row, col, { geometryOf } = {}) {
+  const room = map?.rooms?.[roomNum] ?? map?.rooms?.[String(roomNum)];
+  const all = [...(room?.edgeExits ?? []), ...(room?.goExits ?? [])];
+  const regions = roomRegions(map, roomNum, { geometryOf });
+  const table = attachedTable?.rooms?.[String(roomNum)];
+  const anchors = table?.anchors ?? [];
+  if (!regions || !anchors.length || !all.length)
+    return { reachable: null, unreachable: [], region: null,
+             why: !regions ? 'no geometry for this room'
+                : !anchors.length ? 'this room has no baked anchors' : 'this room has no exits' };
+  const mine = regions.idAt(Number(row), Number(col));
+  if (!mine)
+    return { reachable: null, unreachable: [], region: null,
+             why: `r${row}c${col} is not a standable square in room ${roomNum}` };
+
+  const reachable = [], unreachable = [];
+  for (const exit of all) {
+    // An exit is usable when SOME anchor that leads there shares our region. Several anchors
+    // may serve one destination — see the routing notes: exits are not doors and are not 1:1.
+    const serving = anchors.filter(a => Number(a.to) === Number(exit.to));
+    const ok = serving.some(a => regions.idAt(Number(a.row), Number(a.col)) === mine);
+    (ok ? reachable : unreachable).push({ to: Number(exit.to), dir: exit.leaveName ?? exit.direction ?? null });
+  }
+  return { reachable, unreachable, region: mine, why: null };
+}
 
 /** Is this room's exit set split by geometry, and into how many reachable groups? */
 export function regionsOf(table, roomNum) {

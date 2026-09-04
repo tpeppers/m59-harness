@@ -33,7 +33,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { attachStepMasks, applyDoorState, doorVariants, doorStateKey,
-         resetDoorStates } from './m59-routes.mjs';
+         reachableExits, roomRegions, resetDoorStates } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -173,6 +173,65 @@ console.log('\nUkgoth, which this fleet walks through daily');
      JSON.stringify(out));
   ok('the mask that arrived is the size of the room',
      g.hasStepMask === true);
+}
+
+console.log('\nan exit list without a position is a list of doors in the building');
+{
+  resetDoorStates();
+  const t = Date.now();
+  const regions = roomRegions(map, 951);
+  ok('a room labels its regions cheaply enough to do on demand',
+     regions && Date.now() - t < 2000, `${regions?.count} region(s) in ${Date.now() - t}ms`);
+  ok('and room 951 is not one connected place', regions.count > 1, `${regions.count} regions`);
+
+  // THE POINT, ON THE ROOM THIS WAS BUILT FOR. Standing at the feast exit with the door
+  // shut, half the keep's doors are on the far side of a wall. The room's exit list says
+  // otherwise, because an exit belongs to the room and not to where you are standing.
+  const shut = reachableExits(map, 951, 9, 9);
+  ok('with the feast door shut, some of the keep\'s exits are unreachable',
+     shut.unreachable.length > 0,
+     `${shut.reachable.length} reachable, ${shut.unreachable.length} not`);
+  ok('and the ones you cannot reach are named',
+     shut.unreachable.some(e => e.to === 950) && shut.unreachable.some(e => e.to === 952),
+     JSON.stringify(shut.unreachable.map(e => e.to)));
+
+  applyDoorState(map, 951, new Map([[3, { height: 356 }], [4, { height: 419 }]]));
+  const open = reachableExits(map, 951, 9, 9);
+  ok('opening the door makes every exit reachable from the same square',
+     open.unreachable.length === 0, JSON.stringify(open.unreachable));
+  ok('which is more exits than were reachable before',
+     open.reachable.length > shut.reachable.length,
+     `${shut.reachable.length} -> ${open.reachable.length}`);
+
+  // A door that moves changes the regions, so a labelling taken before it opened is a map
+  // of a room that no longer exists. The cache has to go with the door.
+  ok('the region labelling was rebuilt rather than served stale',
+     open.region !== shut.region || open.reachable.length !== shut.reachable.length);
+}
+
+console.log('\nno opinion is not the same as no exits');
+{
+  resetDoorStates();
+  // NARROWING TO NOTHING ON A MISSING ANSWER WOULD STRAND A CHARACTER at a boundary it
+  // could have crossed, so every "I do not know" has to be null and not an empty list.
+  const offMap = reachableExits(map, 951, 9999, 9999);
+  ok('a position off the map yields no opinion', offMap.reachable === null, JSON.stringify(offMap));
+  ok('and says why', /not a standable square/.test(offMap.why ?? ''), offMap.why);
+  const noRoom = reachableExits(map, 999999, 1, 1);
+  ok('so does a room we do not have', noRoom.reachable === null, JSON.stringify(noRoom));
+}
+
+console.log('\nthe region filter is honest about what it cannot see');
+{
+  resetDoorStates();
+  // Ukgoth stranded three characters on 2026-09-04 and this filter passes all three of its
+  // exits, because the floor really does connect to the north edge — leaving that way needs
+  // a Relic of Qor and a spoken phrase. Pinned so nobody later believes geometry is the
+  // whole answer: that room is caught by KNOWN_TRAPS, not by this.
+  const r = reachableExits(map, 599, 51, 17);
+  ok('it passes Ukgoth\'s north exit, which is NOT usable in the game',
+     r.reachable?.some(e => e.to === 2) === true,
+     JSON.stringify(r.reachable?.map(e => e.to)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

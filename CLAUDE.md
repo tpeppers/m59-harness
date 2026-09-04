@@ -479,6 +479,55 @@ Guilds — [`docs/m59-guilds.md`](docs/m59-guilds.md):
 - Lieutenant is capped at 2 and lord is uncapped, so spread to lord; the refusal goes to the promoter and is invisible from the member's side.
 - An invitation is an object in the invitee's pack that dies if either of them walks, and an inviter may hold only one.
 
+## ANY ORDER YOU GIVE THE FLEET GOES THROUGH FLEETSCRIPT. Do not write a script.
+
+```bash
+node tools/fleetscripts/come-home.mjs          # the shape: declare the errand, run it
+node tools/m59-fleetscript-test.mjs            # 72, offline
+```
+
+Move some characters, buy something, fetch somebody out of a hole — **declare it as a
+`fleetScript` and let it compile the safeties in.** Not because a hand-written script
+cannot work, but because the record is that it does not: five ad-hoc scripts drove this
+fleet in one day and each got a *different* subset of the same mandatory concerns wrong.
+
+The point is not that the traps are undocumented. **They are all documented, in this file,
+and they were still walked into** — a rule you have to remember is a rule you forget at
+02:00 with a character dying. So they live in
+[`tools/m59-fleetscript.mjs`](tools/m59-fleetscript.mjs) as guarantees that **refuse before
+anything walks**: one driver per fleet, the body held, a health floor on every journey,
+waits sized from the journey's own p90, travel issued once and never re-issued while
+walking, results read back from the world, the bot's lease taken, and a known trap room
+refused outright.
+
+**Two of those are the ones a hand-written script always misses.**
+
+- **`busy` does not stop the keeper, and it does not stop a bot.** `busy` is broker-side.
+  The thing holding the socket is the keeper process, and a DUM bot re-decides about every
+  thirty seconds — so an order given without a lease is quietly overwritten and you watch
+  a character do the opposite of what you asked while every call reports success.
+  `commander_claim` takes work, movement and economy off the keeper and leaves identity,
+  mortality, survival and recovery with it. FleetScript does this for every agent.
+
+- **A claim takes the FACULTIES, not the BODY.** A journey already in flight is a *job*,
+  and it keeps running through a successful claim: every travel you then issue comes back
+  `"<agent> is busy: walk to …"`. Measured 2026-09-04 — three characters stranded in
+  Ukgoth, the claim granting movement every eight seconds for six minutes, all three still
+  walking the castle patrol's route. `holdKeeper` now cancels the journey right after
+  claiming, and that single call was the difference between "refused: is busy" every round
+  and all three accepting the new destination.
+
+**When a fleet operation goes wrong for a reason this file already covered, the fix is a
+new guarantee in `m59-fleetscript.mjs`, not another paragraph here.** That is the entry
+criterion for the list: every guarantee in it is a mistake somebody made twice. Add the
+check, add its test, and name the incident in the comment — a refusal that cannot say why
+it fired gets deleted by the next person in a hurry.
+
+`KNOWN_TRAPS` is the same idea for geography. A collision map cannot see a lock, so a room
+that cannot be left by any route the bake knows is learned by stranding somebody in it —
+room 599 (Ukgoth) is the first entry, and `{ allowTraps: true }` is how a rescue says out
+loud that it is going in on purpose.
+
 ## Rules that have no exceptions
 
 - **Attach to the broker, do not spawn a second one.** `m59-broker.mjs` with no
