@@ -14,7 +14,8 @@
 //     the number is for and `3` does not;
 //   * `#height` is found even though the animation argument sits between it and `#sector`.
 
-import { sectorsInSource, gatesMovement, MAX_STEP_HEIGHT } from './m59-varsectors.mjs';
+import { sectorsInSource, gatesMovement, headroomRisk,
+         MAX_STEP_HEIGHT, PLAYER_HEIGHT } from './m59-varsectors.mjs';
 
 let pass = 0, fail = 0;
 const ok = (label, cond, detail = '') => {
@@ -39,6 +40,24 @@ console.log('\na sector is a door when it crosses the step limit, and scenery wh
      gatesMovement([100, 384]) === true);
 }
 
+console.log('\na moving CEILING is a question for the bake, not an answer from the kod');
+{
+  // The correction that made this list usable. A ceiling gates when `ceiling - floor` drops
+  // under PLAYER_HEIGHT, and the kod does not say what the floor is — so judging a ceiling
+  // with the floor's rule marked 59 of 109 sectors as doors, which nobody can act on.
+  ok('the headroom a character needs is the figure the client itself uses', PLAYER_HEIGHT === 768);
+  ok('a ceiling is never called a definite gate from the kod alone',
+     gatesMovement([284, 348], 'ceiling') === false);
+  ok('but a moving ceiling IS flagged for the bake to decide',
+     headroomRisk([284, 348], 'ceiling') === true);
+  ok('the Temple of Qor door is exactly that case — room 598, ANIMATE_CEILING_LIFT',
+     gatesMovement([284, 348], 'ceiling') === false &&
+     headroomRisk([284, 348], 'ceiling') === true);
+  ok('a ceiling that never moves asks nothing', headroomRisk([348], 'ceiling') === false);
+  ok('a sector moved as both floor and ceiling is judged by the floor rule AND flagged',
+     gatesMovement([356, 420], 'both') === true && headroomRisk([356, 420], 'both') === true);
+}
+
 console.log('\nthe kod is read for what it says, not for what a door usually looks like');
 {
   const src = `
@@ -60,6 +79,11 @@ console.log('\nthe kod is read for what it says, not for what a door usually loo
               #animation=ANIMATE_FLOOR_LIFT,#height=420,#speed=0);
          return;
       }
+      Qor()
+      {
+         send(self,@setsector,#sector=9,#animation=ANIMATE_CEILING_LIFT,
+                   #height = 348, #speed = 8);
+      }
 `;
   const found = sectorsInSource(src);
   const closed = found.find(s => s.sector === 3);
@@ -75,6 +99,16 @@ console.log('\nthe kod is read for what it says, not for what a door usually loo
      found.find(s => s.sector === 4)?.heights?.includes(419) === true);
   ok('it cites the lines, because a table of doors nobody can check is a rumour',
      Array.isArray(closed?.cite_lines) && closed.cite_lines.length > 0);
+  ok('the floor door is classified as a floor', closed?.kind === 'floor');
+
+  // LOWERCASE `@setsector` AND A SPACED `#height = 348`. kod is not case-sensitive about
+  // message names and i8.kod writes it in lower case — matching only `@SetSector` dropped
+  // the Temple of Qor door silently, and an empty result reads as "no doors in this room".
+  const qor = found.find(s => s.sector === 9);
+  ok('a lowercase @setsector is still found', !!qor, JSON.stringify(found.map(f => f.sector)));
+  ok('and a spaced `#height = 348` is read', qor?.heights?.includes(348) === true);
+  ok('and it is classified as a CEILING, which is judged differently',
+     qor?.kind === 'ceiling');
 }
 
 console.log('\nan unresolvable sector is dropped rather than guessed at');

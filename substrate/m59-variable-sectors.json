@@ -1,7 +1,7 @@
 {
  "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
  "max_step_height": 384,
- "built_at": "2026-09-04T16:40:57.339Z",
+ "built_at": "2026-09-04T17:05:38.874Z",
  "rooms": [
   {
    "room": 27,
@@ -11,6 +11,7 @@
     {
      "sector": 1,
      "name": null,
+     "kind": "floor",
      "heights": [
       24,
       128
@@ -19,11 +20,13 @@
       94,
       114
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": null,
+     "kind": "floor",
      "heights": [
       24,
       56
@@ -32,11 +35,13 @@
       95,
       115
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 3,
      "name": null,
+     "kind": "floor",
      "heights": [
       24,
       48
@@ -45,11 +50,13 @@
       96,
       116
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 4,
      "name": null,
+     "kind": "floor",
      "heights": [
       24,
       40
@@ -58,11 +65,13 @@
       97,
       117
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 5,
      "name": null,
+     "kind": "floor",
      "heights": [
       24,
       32
@@ -71,7 +80,8 @@
       98,
       118
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -83,6 +93,7 @@
     {
      "sector": 1,
      "name": "SECTOR_DOOR",
+     "kind": "floor",
      "heights": [
       340,
       440
@@ -91,7 +102,8 @@
       122,
       140
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     }
    ]
   },
@@ -103,24 +115,32 @@
     {
      "sector": 1,
      "name": "SECTOR_DOOR",
+     "kind": "ceiling",
      "heights": [
+      64,
       188
      ],
      "cite_lines": [
-      81
+      81,
+      105
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 2,
      "name": "SECTOR_PILLAR",
+     "kind": "floor",
      "heights": [
-      72
+      72,
+      96
      ],
      "cite_lines": [
-      83
+      83,
+      107
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -132,6 +152,7 @@
     {
      "sector": 1,
      "name": null,
+     "kind": "floor",
      "heights": [
       129,
       192
@@ -142,11 +163,13 @@
       492,
       582
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": null,
+     "kind": "floor",
      "heights": [
       129,
       192
@@ -157,11 +180,13 @@
       540,
       552
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 3,
      "name": null,
+     "kind": "floor",
      "heights": [
       129,
       192
@@ -172,11 +197,13 @@
       504,
       584
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 6,
      "name": null,
+     "kind": "floor",
      "heights": [
       129,
       192
@@ -187,11 +214,13 @@
       529,
       546
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 4,
      "name": null,
+     "kind": "floor",
      "heights": [
       129,
       192
@@ -202,11 +231,13 @@
       521,
       527
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 5,
      "name": null,
+     "kind": "floor",
      "heights": [
       129,
       192
@@ -217,11 +248,13 @@
       534,
       539
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 8,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       124,
       194
@@ -230,11 +263,13 @@
       563,
       594
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 9,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       230,
       300
@@ -243,7 +278,8 @@
       564,
       595
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -255,6 +291,7 @@
     {
      "sector": 15,
      "name": null,
+     "kind": "floor",
      "heights": [
       120,
       288
@@ -263,11 +300,13 @@
       189,
       204
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 16,
      "name": null,
+     "kind": "floor",
      "heights": [
       120,
       208
@@ -276,11 +315,13 @@
       191,
       206
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 17,
      "name": null,
+     "kind": "floor",
      "heights": [
       120,
       464
@@ -289,11 +330,13 @@
       193,
       208
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 18,
      "name": null,
+     "kind": "floor",
      "heights": [
       128,
       364
@@ -302,11 +345,13 @@
       195,
       210
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 9,
      "name": null,
+     "kind": "floor",
      "heights": [
       364,
       444
@@ -315,11 +360,13 @@
       197,
       212
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 10,
      "name": null,
+     "kind": "floor",
      "heights": [
       464,
       544
@@ -328,11 +375,13 @@
       199,
       214
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 5,
      "name": null,
+     "kind": "floor",
      "heights": [
       120,
       288
@@ -341,11 +390,13 @@
       221,
       232
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 6,
      "name": null,
+     "kind": "floor",
      "heights": [
       120,
       208
@@ -354,11 +405,13 @@
       223,
       234
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 7,
      "name": null,
+     "kind": "floor",
      "heights": [
       120,
       464
@@ -367,11 +420,13 @@
       225,
       236
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 8,
      "name": null,
+     "kind": "floor",
      "heights": [
       128,
       364
@@ -380,7 +435,52 @@
       227,
       238
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
+    }
+   ]
+  },
+  {
+   "room": 589,
+   "rid": "RID_H9",
+   "file": "object/active/holder/room/monsroom/objroom/h9.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "QOR_DOOR",
+     "kind": "floor",
+     "heights": [
+      290,
+      350
+     ],
+     "cite_lines": [
+      90,
+      100
+     ],
+     "gates": false,
+     "headroom_risk": false
+    }
+   ]
+  },
+  {
+   "room": 598,
+   "rid": "RID_I8",
+   "file": "object/active/holder/room/monsroom/i8.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "QOR_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      284,
+      348
+     ],
+     "cite_lines": [
+      76,
+      86
+     ],
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -392,6 +492,7 @@
     {
      "sector": 1,
      "name": "SECTOR_DOOR",
+     "kind": "floor",
      "heights": [
       340,
       440
@@ -400,7 +501,8 @@
       119,
       136
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     }
    ]
   },
@@ -412,6 +514,7 @@
     {
      "sector": 3,
      "name": "ENTRANCE",
+     "kind": "floor",
      "heights": [
       128,
       200
@@ -420,11 +523,13 @@
       125,
       137
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 1,
      "name": "OUT1",
+     "kind": "floor",
      "heights": [
       16,
       80
@@ -433,11 +538,13 @@
       149,
       163
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "OUT2",
+     "kind": "floor",
      "heights": [
       16,
       80
@@ -446,7 +553,8 @@
       151,
       165
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -456,8 +564,24 @@
    "file": "object/active/holder/room/ghall/guildh2.kod",
    "sectors": [
     {
+     "sector": 1,
+     "name": "BOOKS",
+     "kind": "ceiling",
+     "heights": [
+      104,
+      184
+     ],
+     "cite_lines": [
+      105,
+      232
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
      "sector": 3,
      "name": "MAINDOOR",
+     "kind": "ceiling",
      "heights": [
       24,
       88
@@ -466,11 +590,13 @@
       155,
       243
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 2,
      "name": "CLOSET",
+     "kind": "ceiling",
      "heights": [
       24,
       96
@@ -479,11 +605,13 @@
       171,
       254
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 4,
      "name": "EASTDOOR",
+     "kind": "ceiling",
      "heights": [
       96,
       168
@@ -492,22 +620,28 @@
       188,
       264
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 5,
      "name": "OFFICEDOOR",
+     "kind": "ceiling",
      "heights": [
+      96,
       176
      ],
      "cite_lines": [
-      198
+      198,
+      274
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 6,
      "name": "SOUTHDOOR",
+     "kind": "ceiling",
      "heights": [
       24,
       96
@@ -516,11 +650,13 @@
       208,
       284
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 7,
      "name": "WESTDOOR",
+     "kind": "ceiling",
      "heights": [
       24,
       184
@@ -529,22 +665,13 @@
       218,
       294
      ],
-     "gates": false
-    },
-    {
-     "sector": 1,
-     "name": "BOOKS",
-     "heights": [
-      104
-     ],
-     "cite_lines": [
-      232
-     ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 8,
      "name": "RAIDDOOR",
+     "kind": "ceiling",
      "heights": [
       104,
       184
@@ -553,7 +680,8 @@
       303,
       312
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -565,6 +693,7 @@
     {
      "sector": 4,
      "name": "WESTDOOR",
+     "kind": "ceiling",
      "heights": [
       128,
       204
@@ -573,11 +702,13 @@
       258,
       303
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 5,
      "name": "EASTDOOR",
+     "kind": "ceiling",
      "heights": [
       128,
       204
@@ -586,11 +717,13 @@
       260,
       312
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 6,
      "name": "MASTERDOOR",
+     "kind": "ceiling",
      "heights": [
       128,
       204
@@ -599,11 +732,13 @@
       262,
       321
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 7,
      "name": "ASSISTDOOR",
+     "kind": "ceiling",
      "heights": [
       128,
       204
@@ -612,7 +747,8 @@
       264,
       330
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -624,6 +760,7 @@
     {
      "sector": 7,
      "name": "SWDOOR",
+     "kind": "ceiling",
      "heights": [
       32,
       132
@@ -632,11 +769,13 @@
       202,
       231
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 8,
      "name": "NWDOOR",
+     "kind": "ceiling",
      "heights": [
       136,
       228
@@ -645,11 +784,13 @@
       210,
       241
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 9,
      "name": "NEDOOR",
+     "kind": "ceiling",
      "heights": [
       152,
       252
@@ -658,11 +799,13 @@
       218,
       251
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 1,
      "name": "STEP1",
+     "kind": "floor",
      "heights": [
       58,
       154
@@ -671,11 +814,13 @@
       262,
       284
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "STEP2",
+     "kind": "floor",
      "heights": [
       72,
       148
@@ -684,11 +829,13 @@
       264,
       286
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 3,
      "name": "STEP3",
+     "kind": "floor",
      "heights": [
       86,
       144
@@ -697,11 +844,13 @@
       266,
       288
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 4,
      "name": "STEP4",
+     "kind": "floor",
      "heights": [
       90,
       140
@@ -710,11 +859,13 @@
       268,
       290
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 5,
      "name": "STEP5",
+     "kind": "floor",
      "heights": [
       104,
       136
@@ -723,11 +874,13 @@
       270,
       292
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 6,
      "name": "STEP6",
+     "kind": "floor",
      "heights": [
       128,
       132
@@ -736,7 +889,8 @@
       272,
       294
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -748,6 +902,7 @@
     {
      "sector": 3,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       78,
       150
@@ -756,11 +911,13 @@
       210,
       226
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 4,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       70,
       150
@@ -769,11 +926,13 @@
       212,
       228
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 5,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       86,
       150
@@ -782,33 +941,43 @@
       214,
       230
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 1,
      "name": null,
+     "kind": "ceiling",
      "heights": [
+      93,
       125
      ],
      "cite_lines": [
-      286
+      286,
+      296
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 2,
      "name": null,
+     "kind": "ceiling",
      "heights": [
+      125,
       157
      ],
      "cite_lines": [
-      288
+      288,
+      298
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 6,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       70,
       168
@@ -817,11 +986,13 @@
       311,
       382
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 7,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       54,
       134
@@ -830,11 +1001,13 @@
       320,
       391
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 8,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       54,
       134
@@ -843,11 +1016,13 @@
       330,
       401
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 9,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       0,
       70
@@ -856,11 +1031,13 @@
       356,
       370
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 10,
      "name": null,
+     "kind": "ceiling",
      "heights": [
       0,
       70
@@ -869,7 +1046,8 @@
       358,
       372
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -881,6 +1059,7 @@
     {
      "sector": 1,
      "name": "MAINDOOR",
+     "kind": "floor",
      "heights": [
       128,
       224
@@ -889,11 +1068,13 @@
       126,
       138
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "SECRETDOOR",
+     "kind": "floor",
      "heights": [
       128,
       224
@@ -902,7 +1083,150 @@
       149,
       161
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
+    }
+   ]
+  },
+  {
+   "room": 710,
+   "rid": "RID_GUILDH10",
+   "file": "object/active/holder/room/ghall/guildh10.kod",
+   "sectors": [
+    {
+     "sector": 7,
+     "name": "SECRET_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      80
+     ],
+     "cite_lines": [
+      152,
+      165
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 9,
+     "name": "SECRET_WALL",
+     "kind": "ceiling",
+     "heights": [
+      32,
+      80
+     ],
+     "cite_lines": [
+      154,
+      167
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 6,
+     "name": "NORTH_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      72
+     ],
+     "cite_lines": [
+      177,
+      247
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 4,
+     "name": "EAST_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      72
+     ],
+     "cite_lines": [
+      185,
+      255
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 5,
+     "name": "WEST_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      72
+     ],
+     "cite_lines": [
+      193,
+      263
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 2,
+     "name": "BAR_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      72
+     ],
+     "cite_lines": [
+      208,
+      271
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": "NEWS_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      72
+     ],
+     "cite_lines": [
+      215,
+      279
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 1,
+     "name": "ENTRANCE_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      72
+     ],
+     "cite_lines": [
+      228,
+      239
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 10,
+     "name": "MAZE_FLOOR",
+     "kind": "floor",
+     "heights": [
+      0,
+      48
+     ],
+     "cite_lines": [
+      288,
+      297
+     ],
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -914,6 +1238,7 @@
     {
      "sector": 2,
      "name": "GH6ENTRANCE",
+     "kind": "floor",
      "heights": [
       128,
       208
@@ -922,11 +1247,13 @@
       122,
       134
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 1,
      "name": "GH6SECRET",
+     "kind": "ceiling",
      "heights": [
       160,
       204
@@ -935,7 +1262,8 @@
       145,
       157
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -947,6 +1275,7 @@
     {
      "sector": 1,
      "name": "MAINDOOR",
+     "kind": "floor",
      "heights": [
       48,
       128
@@ -955,11 +1284,13 @@
       136,
       150
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 3,
      "name": "MAINDOOR2",
+     "kind": "floor",
      "heights": [
       48,
       118
@@ -968,11 +1299,13 @@
       138,
       152
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "SECRETDOOR",
+     "kind": "floor",
      "heights": [
       4,
       45
@@ -981,7 +1314,8 @@
       163,
       175
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -993,24 +1327,33 @@
     {
      "sector": 2,
      "name": "MANA_DOOR",
+     "kind": "ceiling",
      "heights": [
-      380
+      380,
+      510
      ],
      "cite_lines": [
-      126
+      126,
+      182,
+      194
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 1,
      "name": "YETI_DOOR",
+     "kind": "ceiling",
      "heights": [
-      380
+      380,
+      448
      ],
      "cite_lines": [
+      148,
       160
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1022,6 +1365,7 @@
     {
      "sector": 1,
      "name": "SECTOR_DOOR",
+     "kind": "ceiling",
      "heights": [
       92,
       164
@@ -1030,7 +1374,8 @@
       112,
       128
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1042,13 +1387,17 @@
     {
      "sector": 4,
      "name": "SECTOR_DOOR",
+     "kind": "ceiling",
      "heights": [
+      192,
       270
      ],
      "cite_lines": [
-      180
+      180,
+      195
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1060,6 +1409,7 @@
     {
      "sector": 1,
      "name": "EAST_DOOR",
+     "kind": "floor",
      "heights": [
       356,
       436
@@ -1068,11 +1418,13 @@
       87,
       176
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "WEST_DOOR",
+     "kind": "floor",
      "heights": [
       356,
       436
@@ -1081,11 +1433,13 @@
       98,
       174
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 4,
      "name": "FEAST_DOOR_OPEN",
+     "kind": "floor",
      "heights": [
       356,
       419
@@ -1094,11 +1448,13 @@
       116,
       134
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 3,
      "name": "FEAST_DOOR_CLOSED",
+     "kind": "floor",
      "heights": [
       356,
       420
@@ -1107,7 +1463,8 @@
       118,
       132
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     }
    ]
   },
@@ -1119,6 +1476,7 @@
     {
      "sector": 2,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       408,
@@ -1131,11 +1489,13 @@
       301,
       310
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 3,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       536,
@@ -1147,11 +1507,13 @@
       302,
       311
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 4,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       408,
@@ -1164,11 +1526,13 @@
       303,
       312
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 5,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       480,
@@ -1181,11 +1545,13 @@
       304,
       313
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 6,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       408,
@@ -1198,11 +1564,13 @@
       305,
       314
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 7,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       408,
@@ -1215,11 +1583,13 @@
       306,
       315
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 8,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       408,
@@ -1232,11 +1602,13 @@
       307,
       316
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 9,
      "name": null,
+     "kind": "both",
      "heights": [
       392,
       480,
@@ -1249,7 +1621,75 @@
       308,
       317
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
+    }
+   ]
+  },
+  {
+   "room": 2500,
+   "rid": "RID_ORC_CAVE1",
+   "file": "object/active/holder/room/monsroom/orccave1.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": null,
+     "kind": "floor",
+     "heights": [
+      1492,
+      1608
+     ],
+     "cite_lines": [
+      100,
+      115,
+      124
+     ],
+     "gates": false,
+     "headroom_risk": false
+    }
+   ]
+  },
+  {
+   "room": 2507,
+   "rid": "RID_ORC_PIT_A",
+   "file": "object/active/holder/room/monsroom/orcpita.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "DOORSECTOR",
+     "kind": "ceiling",
+     "heights": [
+      500,
+      600
+     ],
+     "cite_lines": [
+      80,
+      102
+     ],
+     "gates": false,
+     "headroom_risk": true
+    }
+   ]
+  },
+  {
+   "room": 2508,
+   "rid": "RID_ORC_PIT_B",
+   "file": "object/active/holder/room/monsroom/orcpitb.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "DOORSECTOR",
+     "kind": "ceiling",
+     "heights": [
+      500,
+      600
+     ],
+     "cite_lines": [
+      175,
+      188
+     ],
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1261,6 +1701,7 @@
     {
      "sector": 4,
      "name": "SECTOR_NECRO1",
+     "kind": "both",
      "heights": [
       424,
       458,
@@ -1272,11 +1713,13 @@
       336,
       346
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 5,
      "name": "SECTOR_NECRO2",
+     "kind": "both",
      "heights": [
       434,
       468,
@@ -1288,11 +1731,13 @@
       338,
       348
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 3,
      "name": "SECTOR_DOOR",
+     "kind": "ceiling",
      "heights": [
       84,
       128,
@@ -1303,11 +1748,13 @@
       489,
       499
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 6,
      "name": "SECTOR_EXIT1",
+     "kind": "ceiling",
      "heights": [
       200,
       273
@@ -1316,11 +1763,13 @@
       582,
       592
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 7,
      "name": "SECTOR_EXIT2",
+     "kind": "ceiling",
      "heights": [
       88,
       161
@@ -1329,7 +1778,8 @@
       584,
       594
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1341,6 +1791,7 @@
     {
      "sector": 5,
      "name": "SECTOR_DOOR_CRYPT3A",
+     "kind": "ceiling",
      "heights": [
       1045,
       1098
@@ -1349,7 +1800,8 @@
       204,
       215
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1361,6 +1813,7 @@
     {
      "sector": 1,
      "name": "SECTOR_DOOR_TRAP1",
+     "kind": "floor",
      "heights": [
       1824,
       1864
@@ -1369,11 +1822,13 @@
       278,
       474
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "SECTOR_DOOR_TRAP2A",
+     "kind": "ceiling",
      "heights": [
       1910,
       1958
@@ -1382,11 +1837,13 @@
       300,
       497
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 3,
      "name": "SECTOR_DOOR_TRAP2B",
+     "kind": "ceiling",
      "heights": [
       1816,
       1864
@@ -1395,11 +1852,13 @@
       303,
       500
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 5,
      "name": "SECTOR_DOOR_TRAP3",
+     "kind": "ceiling",
      "heights": [
       1960,
       2022
@@ -1408,7 +1867,8 @@
       329,
       529
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     }
    ]
   },
@@ -1420,6 +1880,7 @@
     {
      "sector": 12,
      "name": "SECTOR_DOOR",
+     "kind": "floor",
      "heights": [
       260,
       336
@@ -1428,11 +1889,13 @@
       183,
       218
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 6,
      "name": "SECTOR_TEMPLE1",
+     "kind": "floor",
      "heights": [
       208,
       300
@@ -1441,11 +1904,13 @@
       187,
       222
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 7,
      "name": "SECTOR_TEMPLE2",
+     "kind": "floor",
      "heights": [
       208,
       308
@@ -1454,11 +1919,13 @@
       189,
       224
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 8,
      "name": "SECTOR_TEMPLE3",
+     "kind": "floor",
      "heights": [
       208,
       444
@@ -1467,11 +1934,13 @@
       191,
       226
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 9,
      "name": "SECTOR_TEMPLE4",
+     "kind": "floor",
      "heights": [
       208,
       372
@@ -1480,11 +1949,13 @@
       193,
       228
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 10,
      "name": "SECTOR_TEMPLE5",
+     "kind": "floor",
      "heights": [
       208,
       332
@@ -1493,11 +1964,13 @@
       195,
       230
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 11,
      "name": "SECTOR_TEMPLE6",
+     "kind": "floor",
      "heights": [
       208,
       324
@@ -1506,11 +1979,13 @@
       197,
       232
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 1,
      "name": "SECTOR_STAIR1",
+     "kind": "floor",
      "heights": [
       208,
       244
@@ -1519,11 +1994,13 @@
       201,
       236
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 2,
      "name": "SECTOR_STAIR2",
+     "kind": "floor",
      "heights": [
       208,
       260
@@ -1532,11 +2009,13 @@
       203,
       238
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 3,
      "name": "SECTOR_STAIR3",
+     "kind": "floor",
      "heights": [
       208,
       276
@@ -1545,11 +2024,13 @@
       205,
       240
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 4,
      "name": "SECTOR_STAIR4",
+     "kind": "floor",
      "heights": [
       208,
       292
@@ -1558,11 +2039,13 @@
       207,
       242
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     },
     {
      "sector": 5,
      "name": "SECTOR_STAIR5",
+     "kind": "floor",
      "heights": [
       208,
       300
@@ -1571,7 +2054,8 @@
       209,
       244
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": false
     }
    ]
   },
@@ -1583,6 +2067,7 @@
     {
      "sector": 3,
      "name": "SECTOR_DOOR",
+     "kind": "ceiling",
      "heights": [
       84,
       128,
@@ -1594,11 +2079,13 @@
       430,
       451
      ],
-     "gates": false
+     "gates": false,
+     "headroom_risk": true
     },
     {
      "sector": 4,
      "name": "SECTOR_NODE1",
+     "kind": "floor",
      "heights": [
       105,
       500
@@ -1607,11 +2094,13 @@
       484,
       515
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     },
     {
      "sector": 5,
      "name": "SECTOR_NODE2",
+     "kind": "floor",
      "heights": [
       124,
       519
@@ -1620,7 +2109,8 @@
       486,
       517
      ],
-     "gates": true
+     "gates": true,
+     "headroom_risk": false
     }
    ]
   }
