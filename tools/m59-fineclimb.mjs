@@ -87,6 +87,7 @@ if (!Number.isFinite(toRow) || !Number.isFinite(toCol)) {
 }
 
 const F = 1024;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 // THE TWO COORDINATE SPACES, AND GETTING THEM THE WRONG WAY ROUND WALKS OFF THE MAP.
 //
 // `m59-fineroute.mjs` works in CLIENT fine units (1024 to a square) because that is what the
@@ -198,7 +199,31 @@ let came_off = null, pos = at0;
 outer:
 for (const [li, leg] of plan.legs.entries()) {
   if (leg.kind === 'jump') {
+    // LINE UP ON THE DECLARED TAKE-OFF FIRST. A fall is a trajectory: it starts where it
+    // starts. The walk leaves the body on the right SHELF but not the right POINT, and the
+    // keeper's one-square tolerance then lets the jump fire from beside the take-off, where
+    // it reports success and moves nobody.
+    //
+    // `arrive_within` matters as much as the target: the default is 40 kod units, which is
+    // 640 client units and two thirds of a square, so a line-up "arrives" while still a
+    // square and a half out.
+    const aim = leg.declared_from ?? leg.fromFine;
+    for (let k = 0; k < 30; k++) {
+      const q = await look();
+      if (q?._error || q?.room !== ROOM) break;
+      if (Math.hypot(toClient(q.x) - aim.x, toClient(q.y) - aim.y) < 110) break;
+      await call('walk_to', { agent: AGENT, x: toProto(aim.x), y: toProto(aim.y),
+                              max_steps: 8, stride: 8, arrive_within: 6,
+                              hold_shelf: k < 6 }, 60000).catch(() => null);
+    }
     const j = await call('jump', { agent: AGENT, to_row: leg.to.row, to_col: leg.to.col }, 60000);
+    // A FALL IS CONFIRMED BY THE SERVER, NOT BY THE REPLY. The mover answers `predicted: true`
+    // and usually `geometry_blocked` — our local trace refuses what the client does anyway —
+    // and the body is still on the take-off if you read it at once. A moment later it is on
+    // the landing. Reading immediately recorded a jump that WORKED as one that did nothing,
+    // twice, and each time sent the follower down the post-jump route from the take-off,
+    // which is how it ended in the gully.
+    await sleep(3000);
     pos = await look();
     const ok = j?.jumped === true;
     console.log(`  leg ${li + 1}  JUMP r${leg.from.row}c${leg.from.col} -> r${leg.to.row}c${leg.to.col}  ` +

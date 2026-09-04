@@ -459,6 +459,8 @@ export function fineRouter(roomNum, {
             const wp = pathWithin(walkSeen, j.fromFine);
             legs.push(walkLeg(wp ?? [j.fromFine]));
             legs.push({ kind: 'jump', from: j.from, to: j.to, fromFine: j.fromFine, toFine: j.toFine,
+                        declared_from: j.declaredFrom ?? j.fromFine,
+                        declared_to: j.declaredTo ?? j.toFine,
                         declared: j.declared === true, requires: j.requires ?? null });
             here = j.toFine;
             walkSeen = closure(here);
@@ -492,7 +494,13 @@ export function fineRouter(roomNum, {
         // actually be sent, which is why it is returned rather than merely tested.
         const usable = declared.map(j => {
           const at = reachableTakeoff(seen, j);
-          return at ? { ...j, fromFine: at } : null;
+          // KEEP THE DECLARED POINT AS WELL AS THE REACHABLE ONE. `fromFine` becomes the cell
+          // the flood actually got to, which is what the WALK should aim at; but the JUMP has
+          // to leave from the point the operator left from. They sit about eighty units apart
+          // on jump 1 of the Ancient Place, which does not sound like much and is the whole
+          // difference between firing `from: {40,33}` and `from: {41,34}` — one lands, the
+          // other reports success and moves nobody.
+          return at ? { ...j, fromFine: at, declaredFrom: j.fromFine, declaredTo: j.toFine } : null;
         }).filter(Boolean);
         const cands = allowCandidates ? candidatesFrom(seen, goalPt).slice(0, branch) : [];
         for (const c of [...usable, ...cands]) {
