@@ -1,149 +1,216 @@
 {
-  "_what": "Places joined only by running off a ledge and staying in the air — a fall, not a climb. The mover's one vertical rule (MAX_STEP_HEIGHT) gates climbing, so none of these can be expressed as a step, and without them the router either cannot reach the far side or reaches it through a wall. See tools/m59-falljump.mjs.",
-  "_declared_not_derived": "The arc is computable and was computed; against the one jump with operator-supplied endpoints the fall curve tracks the stepped terrain within ~25-35 client units, a thirtieth of a square. A model that decides on rounding cannot be the gate. So these are walked and written down, and the physics is evidence to argue with.",
-  "_citation": "GRAVITY_ACCELERATION = -5 * FINENESS (clientd3d/moveobj.h:15); FALL_VELOCITY_0 = -FINENESS*2/3 (move.h:17); MOVEUNITS/MOVE_DELAY give 5 squares/second at a run (move.c:49,184).",
-  "_coordinates": "Square records in this file use named 1-based KOD `row` and `col` fields; JSON property order is not a positional convention. OPTIONAL `from_fine`/`to_fine` carry named {x,y} in CLIENT/BSP units (1024 to the square), and when present they are what the geometry validates against: a square is a summary and on jumping ground it is a false one — r40c33 spans 3520 to 10880, the valley floor and the high ledge in one square with one stand point. The squares remain the index every caller asks by; the fine points are the truth. See docs/m59-coordinates.md and docs/m59-routing.md.",
-  "jumps": [
-    {
-      "room": 599,
-      "room_name": "Ukgoth, Holy Land of Trolls",
-      "from": {
-        "row": 36,
-        "col": 16
-      },
-      "to": {
-        "row": 38,
-        "col": 10
-      },
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "note": "The notorious Ukgoth cliff jump. The ONLY doorway to Outside Castle Victoria is at row 1, col 27, on the cliff top this reaches; the eastern crossing the router used instead (row 1, col 62) goes through solid rock. Approximate endpoints as given by the operator — the take-off ledge runs out around 2.5 squares along this line.",
-      "observed_by": "operator, 2026-08-20",
-      "part_of_cycle": true
-    },
-    {
-      "room": 599,
-      "room_name": "Ukgoth, Holy Land of Trolls",
-      "from": {
-        "row": 8,
-        "col": 26
-      },
-      "to": {
-        "row": 10,
-        "col": 28
-      },
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "note": "The return leg, closing the loop: walk up the winding ramp, drop over the gulley to ~38,10, up the western ramp, down to the winding eastern ramp, and round again. Approximate endpoints as given by the operator. Ukgoth is a CYCLE rather than a one-way — which matters because the bake's regions are strongly connected components, so a room whose halves are joined only by one-way falls reports as severed and a return leg the fleet can actually make would be refused.",
-      "observed_by": "operator, 2026-08-20",
-      "part_of_cycle": true
-    },
-    {
-      "room": 108,
-      "room_name": "The Sewers of Barloque",
-      "from": {
-        "row": 29,
-        "col": 43
-      },
-      "to": {
-        "row": 23,
-        "col": 43
-      },
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "note": "The catwalk over the sewer pit, on the way to Roq. The coarse grid shows column 43 as continuous floor from row 29 to row 18, so nothing about it reads as a gap — the obstacle is VERTICAL and only the heights show it. Take-off 29,43 stands at 2080; row 28 is 2304 (a +224 step, walkable); row 27 drops to 820; and row 26 climbs back to 1920, which is +1100 against a MAX_STEP_HEIGHT of 384. So a character that walks north falls into row 27 and cannot get out again. CORRECTED 2026-08-29: that was measured under a predicate that had deleted this room's low corridor -- row 35 and col 47 carry 704 units of headroom, and `_occupiable` demanded 768 for a body to stand, which is a rule the game does not have (see STEP_MASK_VERSION 6 and docs/m59-routing.md). With that ground restored the gully is NOT a trap: from 27,43 a body reaches all 604 squares of the room body and all five anchors, and from the landing shelf 637 squares and all five anchors -- so the return leg needs no reverse jump, and the take-off itself is now walkable to (67 squares from the 5,43 anchor) rather than stranded on a 12-square island. The jump clears 28 and 27 and lands on the 1920 shelf, which runs from row 26 to row 22 — that is why it does not matter which square it lands on, and why players cannot say where they land: the sewers are dark and any of five squares does. Recorded to the far end of the shelf, 23,43, because that is where the walk continues to. The operator has made this jump; the reverse leg (south, over the pit, onto 29,43 at +160) is NOT declared here because nobody has confirmed it, and inventing a return that cannot be made is how a region gets reported as connected when it is not.",
-      "observed_by": "operator, 2026-08-25",
-      "part_of_cycle": false
-    },
-    {
-      "room": 579,
-      "room_name": "An ancient place, its origin forgotten",
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "observed_by": "operator, 2026-08-25",
-      "part_of_cycle": false,
-      "from": {
-        "row": 40,
-        "col": 33
-      },
-      "to": {
-        "row": 40,
-        "col": 32
-      },
-      "note": "First of three, at the top of the long climb. The approach is the hard part and is not a jump at all: from 40,52 the route hugs the wall on the FINE grid round to 47,40 and then to 40,33, rising the whole way, and a step off it is a fall. One square on the coarse grid and refused as a step (3520 -> 3392) because what you land on is the ELEVATED PORTION of 40,32 rather than its centre — the coarse grid has one height per square and this square has two. From here the route continues toward 33,37."
-    },
-    {
-      "room": 579,
-      "room_name": "An ancient place, its origin forgotten",
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "observed_by": "operator, 2026-08-25",
-      "part_of_cycle": false,
-      "from": {
-        "row": 38,
-        "col": 33
-      },
-      "to": {
-        "row": 38,
-        "col": 30
-      },
-      "note": "Second of three, and the one that reads as impossible. 38,30 is NOT walkable — no floor at its centre, it is mostly wall — and you jump into it anyway, because the footing is a sliver the coarse grid cannot express. The reason you must not fall short is 38,31: walkable, and 7488 below the take-off (10880 -> 3392). That is the valley, and landing in it costs the whole climb. Declared with a landing the grid calls solid on purpose; anything reading this must not assume the landing square is floor."
-    },
-    {
-      "room": 579,
-      "room_name": "An ancient place, its origin forgotten",
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "observed_by": "operator, 2026-08-25",
-      "part_of_cycle": false,
-      "from": {
-        "row": 38,
-        "col": 30
-      },
-      "to": {
-        "row": 42,
-        "col": 30
-      },
-      "note": "Last of three, four squares south onto real floor at 4800. After this a short walk south reaches the mana node at 51,30 — the point of the whole climb. Take-off is the sliver at 38,30 that the previous jump lands on, so these two are a PAIR: a character that can make the second and not the third is standing on a square the map says does not exist."
-    },
-    {
-      "room": 579,
-      "room_name": "An ancient place, its origin forgotten",
-      "from": {
-        "row": 47,
-        "col": 39
-      },
-      "to": {
-        "row": 49,
-        "col": 36
-      },
-      "from_fine": {
-        "x": 39296,
-        "y": 47360
-      },
-      "to_fine": {
-        "x": 36340,
-        "y": 50152
-      },
-      "kind": "fall",
-      "requires": {
-        "running": true
-      },
-      "part_of_cycle": false,
-      "observed_by": "m59-jumpfinder.mjs, confirmed by Cccc 2026-08-26 — keeper reported arrival 5/5, independently observed 3/5",
-      "note": "THE FIRST JUMP IN THIS FILE NOBODY DESCRIBED. Found by carving the room with a never-descend closure and asking the client's own fall physics what a 4208 drop buys — 0.96s of air and about 4.8 squares, against the 4 this needs. Then executed by a character: `{jumped:true, asked:{49,36}, landed:{49,36}, arrived:true}`. Declared with fine points because the SQUARES read uphill and the points do not; the square-only form of this entry was refused by the geometry, correctly. The 3/5 in observed_by is my own checker lagging, not a miss: the broker's `look` serves a two-second snapshot and twice reported the take-off while the keeper had already reported the landing. The keeper reads the live client and said 5/5."
-    }
-  ]
+ "_what": "Places joined only by running off a ledge and staying in the air — a fall, not a climb. The mover's one vertical rule (MAX_STEP_HEIGHT) gates climbing, so none of these can be expressed as a step, and without them the router either cannot reach the far side or reaches it through a wall. See tools/m59-falljump.mjs.",
+ "_declared_not_derived": "The arc is computable and was computed; against the one jump with operator-supplied endpoints the fall curve tracks the stepped terrain within ~25-35 client units, a thirtieth of a square. A model that decides on rounding cannot be the gate. So these are walked and written down, and the physics is evidence to argue with.",
+ "_citation": "GRAVITY_ACCELERATION = -5 * FINENESS (clientd3d/moveobj.h:15); FALL_VELOCITY_0 = -FINENESS*2/3 (move.h:17); MOVEUNITS/MOVE_DELAY give 5 squares/second at a run (move.c:49,184).",
+ "_coordinates": "Square records in this file use named 1-based KOD `row` and `col` fields; JSON property order is not a positional convention. OPTIONAL `from_fine`/`to_fine` carry named {x,y} in CLIENT/BSP units (1024 to the square), and when present they are what the geometry validates against: a square is a summary and on jumping ground it is a false one — r40c33 spans 3520 to 10880, the valley floor and the high ledge in one square with one stand point. The squares remain the index every caller asks by; the fine points are the truth. See docs/m59-coordinates.md and docs/m59-routing.md.",
+ "jumps": [
+  {
+   "room": 599,
+   "room_name": "Ukgoth, Holy Land of Trolls",
+   "from": {
+    "row": 36,
+    "col": 16
+   },
+   "to": {
+    "row": 38,
+    "col": 10
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "note": "The notorious Ukgoth cliff jump. The ONLY doorway to Outside Castle Victoria is at row 1, col 27, on the cliff top this reaches; the eastern crossing the router used instead (row 1, col 62) goes through solid rock. Approximate endpoints as given by the operator — the take-off ledge runs out around 2.5 squares along this line.",
+   "observed_by": "operator, 2026-08-20",
+   "part_of_cycle": true
+  },
+  {
+   "room": 599,
+   "room_name": "Ukgoth, Holy Land of Trolls",
+   "from": {
+    "row": 8,
+    "col": 26
+   },
+   "to": {
+    "row": 10,
+    "col": 28
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "note": "The return leg, closing the loop: walk up the winding ramp, drop over the gulley to ~38,10, up the western ramp, down to the winding eastern ramp, and round again. Approximate endpoints as given by the operator. Ukgoth is a CYCLE rather than a one-way — which matters because the bake's regions are strongly connected components, so a room whose halves are joined only by one-way falls reports as severed and a return leg the fleet can actually make would be refused.",
+   "observed_by": "operator, 2026-08-20",
+   "part_of_cycle": true
+  },
+  {
+   "room": 108,
+   "room_name": "The Sewers of Barloque",
+   "from": {
+    "row": 29,
+    "col": 43
+   },
+   "to": {
+    "row": 23,
+    "col": 43
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "note": "The catwalk over the sewer pit, on the way to Roq. The coarse grid shows column 43 as continuous floor from row 29 to row 18, so nothing about it reads as a gap — the obstacle is VERTICAL and only the heights show it. Take-off 29,43 stands at 2080; row 28 is 2304 (a +224 step, walkable); row 27 drops to 820; and row 26 climbs back to 1920, which is +1100 against a MAX_STEP_HEIGHT of 384. So a character that walks north falls into row 27 and cannot get out again. CORRECTED 2026-08-29: that was measured under a predicate that had deleted this room's low corridor -- row 35 and col 47 carry 704 units of headroom, and `_occupiable` demanded 768 for a body to stand, which is a rule the game does not have (see STEP_MASK_VERSION 6 and docs/m59-routing.md). With that ground restored the gully is NOT a trap: from 27,43 a body reaches all 604 squares of the room body and all five anchors, and from the landing shelf 637 squares and all five anchors -- so the return leg needs no reverse jump, and the take-off itself is now walkable to (67 squares from the 5,43 anchor) rather than stranded on a 12-square island. The jump clears 28 and 27 and lands on the 1920 shelf, which runs from row 26 to row 22 — that is why it does not matter which square it lands on, and why players cannot say where they land: the sewers are dark and any of five squares does. Recorded to the far end of the shelf, 23,43, because that is where the walk continues to. The operator has made this jump; the reverse leg (south, over the pit, onto 29,43 at +160) is NOT declared here because nobody has confirmed it, and inventing a return that cannot be made is how a region gets reported as connected when it is not.",
+   "observed_by": "operator, 2026-08-25",
+   "part_of_cycle": false
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "observed_by": "operator, 2026-08-25",
+   "part_of_cycle": false,
+   "from": {
+    "row": 40,
+    "col": 33
+   },
+   "to": {
+    "row": 40,
+    "col": 32
+   },
+   "note": "First of three, at the top of the long climb. The approach is the hard part and is not a jump at all: from 40,52 the route hugs the wall on the FINE grid round to 47,40 and then to 40,33, rising the whole way, and a step off it is a fall. One square on the coarse grid and refused as a step (3520 -> 3392) because what you land on is the ELEVATED PORTION of 40,32 rather than its centre — the coarse grid has one height per square and this square has two. From here the route continues toward 33,37. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 10880 when the body is actually at 8640, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 8640 -> 7040.",
+   "from_fine": {
+    "x": 33680,
+    "y": 40784
+   },
+   "to_fine": {
+    "x": 32304,
+    "y": 40080
+   },
+   "floors": {
+    "from": 8640,
+    "to": 7040
+   }
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "observed_by": "operator, 2026-08-25",
+   "part_of_cycle": false,
+   "from": {
+    "row": 38,
+    "col": 33
+   },
+   "to": {
+    "row": 38,
+    "col": 30
+   },
+   "note": "Second of three, and the one that reads as impossible. 38,30 is NOT walkable — no floor at its centre, it is mostly wall — and you jump into it anyway, because the footing is a sliver the coarse grid cannot express. The reason you must not fall short is 38,31: walkable, and 7488 below the take-off (10880 -> 3392). That is the valley, and landing in it costs the whole climb. Declared with a landing the grid calls solid on purpose; anything reading this must not assume the landing square is floor. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 12800 when the body is actually at 10880, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 10880 -> 8000.",
+   "from_fine": {
+    "x": 32848,
+    "y": 38352
+   },
+   "to_fine": {
+    "x": 30480,
+    "y": 38384
+   },
+   "floors": {
+    "from": 10880,
+    "to": 8000
+   }
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "observed_by": "operator, 2026-08-25",
+   "part_of_cycle": false,
+   "from": {
+    "row": 38,
+    "col": 30
+   },
+   "to": {
+    "row": 42,
+    "col": 30
+   },
+   "note": "Last of three, four squares south onto real floor at 4800. After this a short walk south reaches the mana node at 51,30 — the point of the whole climb. Take-off is the sliver at 38,30 that the previous jump lands on, so these two are a PAIR: a character that can make the second and not the third is standing on a square the map says does not exist. Fine points added 2026-09-03 from the operator's own recorded climb (substrate/walks/, room objId 1552, the visit ending at r51c30). THE SQUARES WERE ALWAYS RIGHT AND THE SHELVES WERE NOT: taking the HIGHEST floor in each square — which is what a footing search does — put this jump's take-off at 8000 when the body is actually at 8000, and a planner looking for a reachable cell at %HI% found none and silently never offered the jump. The recorded heights are 8000 -> 4800.",
+   "from_fine": {
+    "x": 30480,
+    "y": 38384
+   },
+   "to_fine": {
+    "x": 30320,
+    "y": 42000
+   },
+   "floors": {
+    "from": 8000,
+    "to": 4800
+   }
+  },
+  {
+   "room": 579,
+   "room_name": "An ancient place, its origin forgotten",
+   "from": {
+    "row": 47,
+    "col": 39
+   },
+   "to": {
+    "row": 49,
+    "col": 36
+   },
+   "from_fine": {
+    "x": 39296,
+    "y": 47360
+   },
+   "to_fine": {
+    "x": 36340,
+    "y": 50152
+   },
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "part_of_cycle": false,
+   "observed_by": "m59-jumpfinder.mjs, confirmed by Cccc 2026-08-26 — keeper reported arrival 5/5, independently observed 3/5",
+   "note": "THE FIRST JUMP IN THIS FILE NOBODY DESCRIBED. Found by carving the room with a never-descend closure and asking the client's own fall physics what a 4208 drop buys — 0.96s of air and about 4.8 squares, against the 4 this needs. Then executed by a character: `{jumped:true, asked:{49,36}, landed:{49,36}, arrived:true}`. Declared with fine points because the SQUARES read uphill and the points do not; the square-only form of this entry was refused by the geometry, correctly. The 3/5 in observed_by is my own checker lagging, not a miss: the broker's `look` serves a two-second snapshot and twice reported the take-off while the keeper had already reported the landing. The keeper reads the live client and said 5/5."
+  },
+  {
+   "room": 589,
+   "room_name": "Under the shadow of the Sentinel",
+   "kind": "fall",
+   "requires": {
+    "running": true
+   },
+   "observed_by": "operator, 2026-09-03",
+   "part_of_cycle": false,
+   "from": {
+    "row": 35,
+    "col": 16
+   },
+   "to": {
+    "row": 38,
+    "col": 19
+   },
+   "from_fine": {
+    "x": 15776,
+    "y": 35232
+   },
+   "to_fine": {
+    "x": 18976,
+    "y": 38368
+   },
+   "approach": {
+    "from_room": 599,
+    "why": "the take-off is only reachable coming in from Ukgoth; the west anchor from 579 lands in a pocket that cannot reach it"
+   },
+   "note": "THE ONLY WAY TO THE SENTINEL'S NODE, AND YOU GET ONE ATTEMPT PER CIRCUIT. The operator: you must come in from Ukgoth (599) to reach the take-off at all, and miss it and the way round is the long one. 4.24 squares corner to corner, which is ABOVE FALL_MAX_SQUARES (3), so no detector will ever propose this one -- it exists only because somebody walked it. Declared with fine points because both squares hold two worlds and the square centres are in the wrong one: r35c16 spans 720..6400 and r38c19 spans 720..4800, and the jump is 6400 -> 4800 along the high ground, a drop of 1600. 185/256 sampled points of the take-off are at 6400 and 235/256 of the landing are at 4800. The landing reads fineWalkable=FALSE, like the 579 sliver -- anything reading this must not assume the landing square is floor. Measured 2026-09-03: the node at r45c32 sits at 5024, and the square where nine characters 'got within 9' (r36c35) is at 960 -- the valley floor, four thousand units BELOW the node. Chebyshev closeness in this room is about the valley, not the shelf."
+  }
+ ]
 }
