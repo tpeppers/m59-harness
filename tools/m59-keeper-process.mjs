@@ -1907,6 +1907,90 @@ const server = createServer(async (req, res) => {
           // could not clear the orc standing on the stairs, because neither combat verb
           // reached the body. A climb that cannot defend its own route is not an unattended
           // climb.
+          // A SHORT HOP IS A STEP THE WALKER CANNOT SPELL, NOT A JUMP.
+          //
+          // The operator, 2026-09-04, having lept r37c33 -> r36c34 around a character standing
+          // in the way: "the distance you fall while running across in that square is less than
+          // the step-height for such a short run/drop". That is the whole rule. A declared jump
+          // is a CLIFF — it needs somebody to have walked it because no model can be trusted
+          // about that drop. A hop of a square or so, whose landing is within MAX_STEP_HEIGHT
+          // of where it left, is not a claim about a cliff at all; it is the ordinary step the
+          // walker refuses only because leaving the floor for an instant is not something
+          // `slide` can express.
+          //
+          // WHY IT EXISTS: monster collision is height-agnostic, so anything standing on a
+          // ledge is a wall to a walk — and three runs of the Ancient Place climb stalled on
+          // one orc. Going around it in the air is what a person does.
+          //
+          // THE GUARD MUST STAND ASIDE FOR EXACTLY THIS MOVE, which is the interesting part.
+          // `holdShelf` refuses any step whose landing leaves the shelf, and a hop leaves the
+          // floor by construction. So the hop is NOT walked: it goes through `step(fall:true)`,
+          // which has no shelf guard, and the safety is arithmetic instead —
+          //
+          //   * the landing must be within MAX_STEP_HEIGHT of the take-off, both read as the
+          //     highest floor under the body's footprint. That is what makes it a step.
+          //   * it must be SHORT. Past a square and a half this stops being a step the walker
+          //     could not spell and starts being a cliff somebody should have walked first.
+          //   * and the landing must have floor under it at all.
+          //
+          // Anything failing those is refused and told to use a declared jump.
+          case 'short_hop': {
+            const geo = session.world?.geometry;
+            if (!geo) { json({ error: 'no geometry for this room' }, 409); return; }
+            const me = session.client?.self;
+            if (!me) { json({ error: 'own position unknown' }, 409); return; }
+            const toRow = Number(args.to_row ?? args.toRow), toCol = Number(args.to_col ?? args.toCol);
+            const KOD = 64, RAD = 15, MAX_STEP_KOD = 24;      // 384 client units
+            const toClient = v => (v - 64) * 16;
+            const floorAt = (px, py) => {
+              let best = null;
+              for (const dx of [-RAD, 0, RAD]) for (const dy of [-RAD, 0, RAD]) {
+                try {
+                  const cx = toClient(px + dx), cy = toClient(py + dy);
+                  const leaf = geo.leafAtClient(cx, cy);
+                  const h = leaf?.sector ? geo.floorBaseAtClient(cx, cy, leaf) : null;
+                  if (h != null && (best == null || h > best)) best = h;
+                } catch { /* keep looking */ }
+              }
+              return best;
+            };
+            // Aim at the point given, or the middle of the square asked for.
+            const aimX = args.x != null ? Number(args.x) : toCol * KOD + 32;
+            const aimY = args.y != null ? Number(args.y) : toRow * KOD + 32;
+            const hFrom = floorAt(me.x, me.y), hTo = floorAt(aimX, aimY);
+            const span = Math.hypot(aimX - me.x, aimY - me.y) / KOD;   // squares
+            const maxSpan = Number(args.max_squares ?? 1.6);
+            if (hTo == null) {
+              json({ hopped: false, reason: 'nothing to land on there' }); return;
+            }
+            if (span > maxSpan) {
+              json({ hopped: false, reason: `${span.toFixed(2)} squares is too far for a hop ` +
+                     `(limit ${maxSpan}). A drop this long is a cliff — declare it as a fall-jump ` +
+                     `and use \`jump\`.` }); return;
+            }
+            if (hFrom != null && Math.abs(hFrom - hTo) > MAX_STEP_KOD * 16) {
+              json({ hopped: false, from_floor: hFrom, to_floor: hTo,
+                     reason: `${hFrom} -> ${hTo} is ${Math.abs(hFrom - hTo)} units, past a step ` +
+                     `(${MAX_STEP_KOD * 16}). That is a fall, not a hop — it needs a declaration.` });
+              return;
+            }
+            const before = { row: me.row, col: me.col, x: me.x, y: me.y };
+            const r = await session.step(toCol, toRow, { fall: true, aimX, aimY });
+            // A FALL IS CONFIRMED BY THE SERVER, NOT BY THE REPLY — the same lesson the jump
+            // verb paid for. The mover answers `predicted: true` and the body is still on the
+            // take-off if you read it at once; a moment later it is on the landing. 1200ms was
+            // not enough and reported a hop that worked as one that bounced back.
+            await new Promise(res => setTimeout(res, 2500));
+            const now = session.client?.self;
+            const moved = !!now && (now.x !== before.x || now.y !== before.y);
+            json({ hopped: moved, from: before, asked: { row: toRow, col: toCol, x: aimX, y: aimY },
+                   from_floor: hFrom, to_floor: hTo, span_squares: Number(span.toFixed(2)),
+                   landed: now ? { row: now.row, col: now.col, x: now.x, y: now.y } : null,
+                   landed_floor: now ? floorAt(now.x, now.y) : null,
+                   ...(moved ? {} : { reason: 'the hop was sent and the body did not move' }),
+                   mover: r ?? null });
+            return;
+          }
           case 'attack_rounds': {
             const targetId = Number(args.target_id ?? args.targetId);
             if (!Number.isFinite(targetId)) { json({ error: 'attack_rounds needs a target_id' }, 400); return; }

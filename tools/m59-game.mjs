@@ -5030,13 +5030,37 @@ class Session {
     // space `walk_to`'s col/row path builds with `col * KOD_FINENESS + half` — and the
     // geometry is in client units, so everything must go through `protocolToClient`.
     const shelfGeo = holdShelf ? (this.world?.geometry ?? null) : null;
-    const floorOf = (px, py) => {
-      if (!shelfGeo) return null;
+    // A GUARD THAT CANNOT RUN MUST SAY SO. Asking for `holdShelf` in a session with no geometry
+    // left it silently off — the failure this file keeps writing down, where a caller believes
+    // a guard is on and walks a ledge unprotected.
+    const shelfUnavailable = holdShelf && !shelfGeo;
+    const point = (px, py) => {
       try {
         const cx = protocolToClient(px), cy = protocolToClient(py);
         const leaf = shelfGeo.leafAtClient(cx, cy);
         return leaf?.sector ? shelfGeo.floorBaseAtClient(cx, cy, leaf) : null;
       } catch { return null; }
+    };
+    // WHAT A BODY STANDS ON IS THE HIGHEST FLOOR UNDER ITS FOOTPRINT, NOT ONE SAMPLE AT ITS
+    // CENTRE.
+    //
+    // This asked a single point, and on a ledge a single point is a coin toss: the 7040 band
+    // through the Ancient Place is 260 units wide at its narrowest against a body 496 across,
+    // so the centre sample sits over the gully while the body is on the shelf, or the reverse.
+    // Both directions are wrong — one refuses a legal step, the other lets a 3648-unit fall
+    // through as level ground, which is what it did at r37c34.
+    //
+    // `PLAYER_RADIUS` is 248 client units, 15.5 kod. Corners and centre, the same thing
+    // `standAt` does in m59-fineroute.mjs and for the same reason.
+    const RAD = 15;                                  // kod units, ~PLAYER_RADIUS
+    const floorOf = (px, py) => {
+      if (!shelfGeo) return null;
+      let best = null;
+      for (const dx of [-RAD, 0, RAD]) for (const dy of [-RAD, 0, RAD]) {
+        const h = point(px + dx, py + dy);
+        if (h != null && (best == null || h > best)) best = h;
+      }
+      return best;
     };
     const destFloor = floorOf(destX, destY);
     let shelfRefusals = 0;
@@ -5072,6 +5096,7 @@ class Session {
       if (remaining <= arriveWithin)
         return { arrived: true, position: { col: me.col, row: me.row, x: me.x, y: me.y },
                  ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
+               ...(shelfUnavailable ? { shelf_guard: 'REQUESTED BUT UNAVAILABLE — no geometry in this session; the walk was NOT guarded' } : {}),
                  steps: i, log };
 
       const base = Math.atan2(dy, dx);
@@ -5138,7 +5163,10 @@ class Session {
         // the last step of every climb down. What is refused is leaving the shelf for
         // somewhere that is neither where we are nor where we are going.
         if (shelfGeo) {
-          const hereFloor = floorOf(me.x, me.y);
+          // A BODY OVER THE VOID READS `null`, AND THAT TURNED THE GUARD OFF for exactly the
+          // step where it matters most — the one taken from the lip of a ledge. The route is a
+          // shelf, so when the body's own floor cannot be read, judge against the destination's.
+          const hereFloor = floorOf(me.x, me.y) ?? destFloor;
           if (hereFloor != null) {
             // ASK WHERE THE BODY WOULD LAND, NOT WHERE IT IS AIMED. The move slides, and on a
             // ledge the slide is the whole danger: checking the aim point passed a heading
@@ -5202,7 +5230,7 @@ class Session {
         if (shelfGeo && r?.moved) {
           const now = this.client?.self;
           const nowFloor = now ? floorOf(now.x, now.y) : null;
-          const wasFloor = floorOf(me.x, me.y);
+          const wasFloor = floorOf(me.x, me.y) ?? destFloor;
           if (nowFloor != null && wasFloor != null &&
               wasFloor - nowFloor > MAX_STEP_HEIGHT &&
               (destFloor == null || Math.abs(nowFloor - destFloor) > MAX_STEP_HEIGHT))
@@ -5296,6 +5324,7 @@ class Session {
         if (stalls >= 4)
           return { arrived: false, reason: 'blocked — every heading refused, at every reach tried',
                    ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
+               ...(shelfUnavailable ? { shelf_guard: 'REQUESTED BUT UNAVAILABLE — no geometry in this session; the walk was NOT guarded' } : {}),
                    // WHAT THE LAST REFUSAL ACTUALLY SAID. Without this the caller is told
                    // "every heading refused" and cannot tell a wall from a rate limit from a
                    // move the server simply ignored — which is exactly the wall this
@@ -5327,6 +5356,7 @@ class Session {
     me = c.self;
     return { arrived: false, reason: 'ran out of steps',
              ...(shelfGeo ? { shelf_refusals: shelfRefusals, dest_floor: destFloor } : {}),
+               ...(shelfUnavailable ? { shelf_guard: 'REQUESTED BUT UNAVAILABLE — no geometry in this session; the walk was NOT guarded' } : {}),
              position: me ? { col: me.col, row: me.row, x: me.x, y: me.y } : null, log,
              geometry_rejections: [...geometryRejections] };
   }

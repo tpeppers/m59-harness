@@ -2787,6 +2787,9 @@ class KeeperProxy {
                             ? merchantRef.id : merchantRef,
                           item, confirm: confirm === true });
   }
+  async shortHop(row, col, opts = {}) {
+    return keeperAction(this.name, this._index, 'short_hop', { to_row: row, to_col: col, ...opts });
+  }
   async rest(opts = {}) { return keeperAction(this.name, this._index, 'rest', opts); }
   setPolicy() { return null; }
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units.
@@ -6721,6 +6724,48 @@ const TOOLS = [
             "col/row, because a square centre is the wrong place on this ground. jump legs: " +
             "jump { agent, to_row, to_col }. Re-plan from where you actually are if a leg ends short."
           : undefined };
+    },
+  },
+  {
+    // A STEP THE WALKER CANNOT SPELL.
+    //
+    // The operator, having lept around a character standing in the way: "the distance you fall
+    // while running across in that square is less than the step-height for such a short
+    // run/drop". A hop of about a square, landing within a step's height of where it left, is
+    // not a claim about a cliff — it is an ordinary step that `walk_to` refuses only because
+    // leaving the floor for an instant is not something sliding can express.
+    //
+    // WHY IT MATTERS: monster collision is height-agnostic, so anything standing on a ledge is
+    // a WALL to a walk. Three runs of the Ancient Place climb stalled on a single orc. Going
+    // round it in the air is what a person does, and `hold_shelf` — which refuses any step that
+    // leaves the shelf — cannot be the thing that carries you.
+    //
+    // It is deliberately NOT `jump`. `jump` executes a declared fall and refuses everything
+    // else, because a cliff needs somebody to have walked it first. This refuses anything
+    // longer than a square and a half or steeper than a step, and points at `jump` for those.
+    name: 'short_hop',
+    description: 'Hop a short gap — around a body in the way, or over a lip the walker will ' +
+      'not step off. NOT a jump: the landing must be within one step-height (384) of the ' +
+      'take-off and no further than ~1.6 squares, or it is refused and you are told to declare ' +
+      'a fall-jump instead. Use it when walk_to is blocked by something STANDING there: monster ' +
+      'collision ignores height, so a creature below a ledge blocks a walk across it.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      to_col: { type: 'number', description: 'landing column' },
+      to_row: { type: 'number', description: 'landing row' },
+      x: { type: 'number', description: 'landing point in kod protocol units, instead of the square centre' },
+      y: { type: 'number' },
+      max_squares: { type: 'number', description: 'how long a hop may be, default 1.6' },
+    }, required: ['agent', 'to_col', 'to_row'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      s.need();
+      if (typeof s.shortHop !== 'function')
+        throw new Error(`${a.agent}: short_hop needs a keeper-backed session — the body and its ` +
+                        `geometry are both in the keeper`);
+      return s.shortHop(num(a.to_row), num(a.to_col),
+        { ...(a.x != null ? { x: num(a.x) } : {}), ...(a.y != null ? { y: num(a.y) } : {}),
+          ...(a.max_squares != null ? { max_squares: Number(a.max_squares) } : {}) });
     },
   },
   {
