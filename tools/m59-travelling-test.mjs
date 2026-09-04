@@ -727,8 +727,28 @@ console.log('NOT EVEN THE WATCHDOG STOPS A JOURNEY');
 {
   ok('the wedge rescue asks whether this is a journey first',
      /const travelling = !!this\.inert\?\.travelling;/.test(AUTOPILOT_SRC));
+  // UPDATED 2026-09-04, and the rule it guards is unchanged: a wedged journey is not
+  // cancelled for being wedged. Two things moved underneath it.
+  //
+  //   * `this.inert` became `heldByOther`. It asked whether the KEEPER had stood itself
+  //     down, which was the only way to drive a character when this was written. A
+  //     fleetscript or bot now takes `movement` with a commander claim and leaves survival
+  //     here, so the keeper is never inert and the rescue could never fire for the case its
+  //     own comment describes — "the character bleeds out in a healthy-looking keeper".
+  //
+  //   * A wedged journey below the FLEE LINE is now suspended. "The journey stands" is the
+  //     answer to being hit; the 2026-08-21 correction says it is not the answer to being
+  //     below the flee line, and a wedged journey is that picture with the walking removed.
+  //     Two couriers died proving it — 5 -> 1 -> 1 -> 2 health over fifty seconds at
+  //     `net_squares: 1`, with `travel_arm: null` so the guard was not armed either.
+  //     SUSPENDED, not ended: the destination is kept and resumed.
   ok('and only cancels when it is NOT one',
-     /if \(!travelling && this\.inert && wedge\?\.inert/.test(AUTOPILOT_SRC));
+     /if \(!travelling && heldByOther && wedge\?\.inert/.test(AUTOPILOT_SRC));
+  ok('a driver is either an inert keeper OR a claimed mover',
+     /const heldByOther = !!this\.inert \|\| this\.facultyHeld\('movement'\);/.test(AUTOPILOT_SRC));
+  ok('and a wedged journey below the flee line is SUSPENDED rather than ended',
+     /WEDGED AND DYING MID-JOURNEY — the trip is suspended, not ended/.test(AUTOPILOT_SRC) &&
+     /suspendedJourney = \{[\s\S]{0,200}wedged below the flee line/.test(AUTOPILOT_SRC));
   ok('a wedged journey says so rather than going quiet',
      /wedged mid-journey, and the journey stands/.test(AUTOPILOT_SRC));
   ok('once, not every pass — this runs on a 500ms clock',

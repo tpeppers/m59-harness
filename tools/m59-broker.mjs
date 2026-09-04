@@ -13839,6 +13839,24 @@ const TOOLS = [
           // food simply never gets its vigor back above what resting gives.
           has_weapon: skills.weaponsOf(c).length > 0,
           has_food: skills.larderOf(c).length > 0,
+          // HOW MUCH VIGOR THE LARDER CAN ACTUALLY DELIVER — because "has food" and "can
+          // reach the floor" are different questions and only the second one matters.
+          //
+          // A bot reading `has_food` alone raises a character's fighting floor to 180 on the
+          // strength of six water skins, which are 3 vigor each: eighteen against a hundred-
+          // point gap. The character then holds a safe spot for ever, correctly refusing to
+          // fight, technically fed. Measured on prod 2026-09-04 — the fleet's own vigor split
+          // idle-locked exactly the characters it was added to keep fighting.
+          //
+          // Nutrition IS the vigor gained (m59-items.foodValue), so this is the honest
+          // number. Uncapped by the stomach on purpose: filling limits one SITTING, and a
+          // character with time will eat, digest and eat again — what it cannot do is
+          // conjure nutrition it is not carrying.
+          // `|| 1`, NOT `?? 1`: a non-stacking object's amount is 0 on the wire, not null
+          // (m59-parse: `isNumberObj(raw) ? r.u32() : 0`), so a nullish default would value
+          // every single item at nothing. The same idiom the pack readers already use.
+          larder_vigor: skills.larderOf(c)
+            .reduce((n, x) => n + (x.food?.nutrition ?? 0) * (x.o?.amount || 1), 0),
           // CARRYING A WEAPON AND WIELDING ONE ARE DIFFERENT QUESTIONS, and the fleet
           // has been answering only the first. `has_weapon` reads the pack; this reads
           // the server's own use list, so it is the one that says whether the character

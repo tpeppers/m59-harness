@@ -9749,12 +9749,34 @@ export class Autopilot {
       return w.wedged;
     }
     w.wedges++;
+    // WHOSE STALL THIS IS — AND `inert` WAS THE WRONG QUESTION FOR HALF OF THEM.
+    //
+    // The rescue in `watchdogTick` is gated on this marker, and it was set only when the
+    // KEEPER had stood itself down (`goInert`). That was the whole story when the only way
+    // to drive a character from outside was to make its keeper inert. It is not any more: a
+    // fleetscript or a bot takes `movement` with a commander claim and deliberately LEAVES
+    // SURVIVAL WITH THE KEEPER — so `this.inert` is null, this marker was absent, and the
+    // one mechanism that could break the wedge could never fire.
+    //
+    // The rescue's own comment describes exactly that case — "while something else owns the
+    // character this keeper's passes finish in milliseconds, so the character bleeds out in
+    // a healthy-looking keeper" — so the intent was right and only the test had gone stale.
+    //
+    // Measured, prod 2026-09-04. Two supply couriers died on the road to Castle Victoria
+    // carrying the fleet's herbs. One record: `fled_in_time: 0.04`, and over fifty seconds
+    // `gross_squares: 18, net_squares: 1, shuffled: true, rooms_crossed: 0` — oscillating
+    // between two squares while a black spider ate it, health 5 -> 1 -> 1 -> 2. Every clause
+    // of the rescue was satisfied except the one asking whether the keeper had gone inert,
+    // which nothing in that path ever does.
+    //
+    // `facultyHeld` drops an expired claim on read, so a driver that has died or wandered
+    // off stops counting on its own rather than pinning this open.
+    const drivenByOther = this.inert ? (this.inert.why ?? 'inert')
+      : (this.facultyHeld('movement') ? `movement held by ${this.facultyOwner('movement')}` : null);
     w.wedged = { since: prev.at, for_ms: now - prev.at, doing,
                  at: { col: last.col, row: last.row, room: last.room },
                  taking_hits: takingHits,
-                 // Whose stall this is. An inert wedge is the one `watchdogTick` may act
-                 // on by taking the character back; an ordinary one is only ever reported.
-                 ...(this.inert ? { inert: this.inert.why ?? 'inert' } : {}) };
+                 ...(drivenByOther ? { inert: drivenByOther } : {}) };
     this.tally.pulse_wedges = (this.tally.pulse_wedges || 0) + 1;
     // A frame, because this is the moment a post-mortem will want and the ring is
     // otherwise written on health changes — and a wedge is quiet until something finds you.
@@ -9878,7 +9900,60 @@ export class Autopilot {
              'left to unstick itself, which is now a planned route rather than a bearing',
       });
     }
-    if (!travelling && this.inert && wedge?.inert && wedge.taking_hits
+    // ...UNLESS IT IS DYING, WHICH IS THE ONE THING THE STANDING RULE ALREADY EXCEPTS.
+    //
+    // "The journey stands" is right for a wedge, and this file has the deaths to prove that
+    // cancelling one is worse. But the rule it is derived from was corrected on 2026-08-21
+    // and the correction is the half that was missing here: walking THROUGH is the answer to
+    // being hit, and it is NOT the answer to being below the flee line. That is the Cccc
+    // lesson — walked out of a sanctuary at 27% and eaten in twenty-two seconds — and a
+    // wedged journey is the same picture with the walking removed.
+    //
+    // Measured, prod 2026-09-04: two couriers carrying the fleet's entire herb supply died
+    // on the road to Castle Victoria. One went 5 -> 1 -> 1 -> 2 health while `gross_squares
+    // 18, net_squares 1, shuffled: true` — fifty seconds oscillating between two squares —
+    // and `travel_arm: null`, so the journey's own guard was not armed either. It had no
+    // mechanism at all: the guard was absent and the watchdog was standing off.
+    //
+    // SUSPENDED, NOT CANCELLED, which is what keeps the standing rule intact. The destination
+    // is kept in `suspendedJourney` and `resumeSuspendedJourney` puts the character back on
+    // the same line once it is well enough to walk it — the trip is interrupted, not ended,
+    // exactly as a travel-guard take-back interrupts one.
+    if (travelling && wedge?.inert && wedge.taking_hits
+        && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
+      const frac = pct(hp);
+      if (frac !== null && frac < this.safety().fleeAt) {
+        w.rescuedPass = this.passes;
+        w.rescues = (w.rescues ?? 0) + 1;
+        this.tally.wedged_journey_rescues = (this.tally.wedged_journey_rescues || 0) + 1;
+        const journey = this.travelling;
+        if (journey?.to != null) this.suspendedJourney = {
+          to: journey.to, why: journey.why ?? 'travelling', at: Date.now(),
+          trigger: 'wedged below the flee line while travelling',
+          attempts: (journey.attempts ?? 0) + 1,
+          deaths_at: this.tally?.deaths ?? 0,
+        };
+        try { s.cancelMovement(null, 'wedged below the flee line while travelling'); } catch {}
+        // Mend at a wall FORWARD on the route rather than idling where it was dying — the
+        // same landing the watchdog's other rescue takes, and for the same reason.
+        this.wantsForwardShelter = 'wedged below the flee line while travelling';
+        if (this.inert) this.revive('wedged below the flee line while travelling');
+        this.note('WEDGED AND DYING MID-JOURNEY — the trip is suspended, not ended', {
+          health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
+          flee_at: Math.round(this.safety().fleeAt * 100) + '%',
+          still_ms: now - wedge.since, resume_to: journey?.to ?? null,
+          why: 'walking through is the answer to being hit, not to being below the flee ' +
+               'line. The destination is kept and resumed once it can walk again',
+        });
+      }
+    }
+    // A CLAIMED MOVER COUNTS AS A DRIVER. `this.inert` alone asked whether the keeper had
+    // stood ITSELF down, which is one of the two ways a character gets driven now — the
+    // other is a commander claim on `movement`, which leaves survival here on purpose. Both
+    // produce the same picture from this side: something else owns the walking, it has
+    // stopped, and the body is being hit. See the wedge marker above for the measurement.
+    const heldByOther = !!this.inert || this.facultyHeld('movement');
+    if (!travelling && heldByOther && wedge?.inert && wedge.taking_hits
         && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
       const frac = pct(hp);
       if (frac !== null && frac < this.safety().fleeAt) {
@@ -9888,7 +9963,7 @@ export class Autopilot {
         const stopped = (() => {
           try { return s.cancelMovement(null, 'the watchdog rescuing a stalled driver'); } catch (e) { return { cancelled: false, why: e.message }; }
         })();
-        const was = this.inert?.why ?? 'inert';
+        const was = this.inert?.why ?? `movement held by ${this.facultyOwner('movement')}`;
         // A RESCUED JOURNEY IS PAUSED, NOT CANCELLED.
         //
         // `revive` drops the objective and hands the body to the ordinary ladder. For an
@@ -9918,7 +9993,19 @@ export class Autopilot {
         // two legs, it went idle at +81s and was dead at 201s. The next pass now takes a wall
         // FORWARD on the route and mends there, with the destination kept.
         this.wantsForwardShelter = 'the watchdog took us back from a stalled driver';
-        this.revive('the character stopped moving and started dying while ' + was);
+        // `revive` only means anything to a keeper that stood ITSELF down. When the mover is
+        // held by a commander claim there is nothing to revive — the keeper has been awake
+        // the whole time — and the cancel above is the whole rescue: it frees the mover so
+        // this keeper's own survival ladder can walk the body on the very next pass. The
+        // claim is deliberately LEFT ALONE: taking ownership back is the operator's call
+        // (`autopilot action=release`), and survival never needed it to act.
+        if (this.inert) this.revive('the character stopped moving and started dying while ' + was);
+        else this.note('WATCHDOG — the mover was claimed and had stopped; cancelled its walk', {
+          held_by: this.facultyOwner('movement'), still_ms: now - wedge.since,
+          health: hp?.value == null ? null : `${hp.value}/${hp.max}`,
+          why: 'survival stays with the keeper under a claim, so the ladder can move this ' +
+               'body the moment the walk it was pinned behind is cancelled. The claim stands',
+        });
         this.note('WATCHDOG — took the character back from a driver that had stopped', {
           health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
           flee_at: Math.round(this.safety().fleeAt * 100) + '%',
