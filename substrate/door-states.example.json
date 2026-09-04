@@ -1,0 +1,24 @@
+{
+  "_": [
+    "DOORS THIS MACHINE KNOWS ARE OPEN, WHICH THE SERVER HAS NOT MENTIONED.",
+    "",
+    "Copy to substrate/door-states.local.json. That file is gitignored, because it is an",
+    "assertion about ONE server at ONE moment and a stranger cloning this repository has no",
+    "such knowledge. The shape is committed; the claim is not.",
+    "",
+    "WHY IT HAS TO EXIST. The keeper learns a door's position from BP_SECTOR_MOVE, and there",
+    "is a class of open door it can never hear about. duke2.kod gates the Duke's Feast Hall",
+    "on RID_DUKE4 @IsLocked -- SomethingTryGo returns TRUE and refuses the move while that is",
+    "set -- and the floor sectors are only what the door LOOKS like. They move when an actor",
+    "walks the door square. Unlock the hall any other way and no SetSector fires, nothing",
+    "accumulates in plSector_changes, SendSectorChanges replays nothing on entry, and our",
+    "bake goes on enforcing a wall the server would have let us walk through.",
+    "",
+    "The key is a state from the routing table's stepMaskVariants for that room:",
+    "  node tools/m59-doorbake.mjs        # lists them per room",
+    "",
+    "ANYTHING THE SERVER SAYS ABOUT THAT ROOM REPLACES THIS. It is a stand-in for silence,",
+    "not an override -- the server is the authority and this is the weakest claim here."
+  ],
+  "951": "sector3@356+sector4@419"
+}

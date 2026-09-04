@@ -538,3 +538,6 @@ _verify2.mjs
 
 # Atomic endpoint/account ownership records for broker and lab runtimes.
 /substrate/runtime-account-leases/
+
+# An assertion about ONE server at ONE moment; the shape is in door-states.example.json.
+/substrate/door-states.local.json

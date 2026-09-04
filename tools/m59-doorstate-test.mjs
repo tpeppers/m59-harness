@@ -34,7 +34,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { attachStepMasks, applyDoorState, doorVariants, doorStateKey,
          reachableExits, roomRegions, anchorReach, activeRoutes,
-         exitIsImpassable, resetDoorStates } from './m59-routes.mjs';
+         exitIsImpassable, assertDoorStates, resetDoorStates } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -278,6 +278,47 @@ console.log('\na boundary the game refuses is refused by the router, whatever th
   // reported, and it is how all three were eventually walked out.
   ok('but the south exit they actually leave by is untouched',
      anchorReach(table, 599, { row: 1, col: 27 }, { row: 71, col: 2 }) === true);
+}
+
+console.log('\na door the operator knows is open, which the server will never mention');
+{
+  resetDoorStates();
+  const table = activeRoutes();
+  const g = sharedRoomGeometry(map.rooms['951']);
+  // THE CASE THIS EXISTS FOR. duke2.kod gates the hall on `RID_DUKE4 @IsLocked` and moves
+  // the floor only when an actor walks the door square. Unlock it any other way and the
+  // hall is open, walkable, and completely silent on the wire — nothing accumulates in
+  // plSector_changes, so SendSectorChanges replays nothing and the bake enforces a wall
+  // the server would have let us through. 2026-09-04: a courier sat five minutes in the
+  // keep while the operator confirmed with the players that the hall was open.
+  ok('as shipped the hall is unreachable', region(g, 9, 9).size < 100);
+
+  const applied = assertDoorStates(map, { 951: 'sector3@356+sector4@419' });
+  ok('the assertion is accepted', applied[0]?.applied === true, JSON.stringify(applied));
+  ok('and it opens the hall', region(g, 9, 9).size > 600, `${region(g, 9, 9).size} squares`);
+  ok('the mover agrees', g.stepAllowedByCollision(9, 13, 10, 14) === true);
+  ok('and so does the router, which is the half that dispatches a courier',
+     anchorReach(table, 951, { row: 40, col: 15 }, { row: 9, col: 9 }) === true);
+
+  // A NAME NOBODY BAKED IS REFUSED AND SAYS WHAT IT HAS. An operator typing a state that
+  // does not exist must not get silence — that is how a door nobody opened reads as open.
+  resetDoorStates();
+  const bad = assertDoorStates(map, { 951: 'sector3@999' });
+  ok('an unbaked state name is refused', bad[0]?.applied === false);
+  ok('and the refusal lists the states that do exist',
+     /no baked state called/.test(bad[0]?.why ?? '') && /sector3@356/.test(bad[0]?.why ?? ''),
+     bad[0]?.why);
+  ok('a room with no baked doors says so',
+     assertDoorStates(map, { 39: 'sector1@100' })[0]?.why === 'this room has no baked door states');
+
+  // IT IS THE WEAKEST CLAIM IN THE SYSTEM. The server saying otherwise must win, because
+  // this only ever stood in for the server's silence.
+  resetDoorStates();
+  assertDoorStates(map, { 951: 'sector3@356+sector4@419' });
+  const shut = applyDoorState(map, 951, new Map([[3, { height: 420 }], [4, { height: 356 }]]));
+  ok('a real packet from the server replaces the assertion', shut.state === null,
+     JSON.stringify(shut));
+  ok('and the room is shut again', region(g, 9, 9).size < 100);
 }
 
 console.log('\nthe region filter is honest about what it cannot see');

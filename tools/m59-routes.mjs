@@ -345,6 +345,55 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
   return { changed: result.moved > 0, state: key, ...(result.why ? { why: result.why } : {}) };
 }
 
+/**
+ * A DOOR THE OPERATOR KNOWS IS OPEN, WHICH THE SERVER HAS NOT MENTIONED.
+ *
+ * `applyDoorState` reacts to `BP_SECTOR_MOVE`, and there is a whole class of open door it
+ * can never hear about. In `duke2.kod` the server's real gate on the Duke's Feast Hall is
+ * `RID_DUKE4 @IsLocked` — `SomethingTryGo` returns TRUE and refuses the move while it is
+ * set — and the floor sectors are what the door LOOKS like. They are only moved by an
+ * actor walking the door square. Unlock the hall any other way and no `SetSector` ever
+ * fires, `plSector_changes` stays empty, `SendSectorChanges` replays nothing to a joining
+ * character, and our bake enforces a wall the server would have let us walk through.
+ *
+ * Measured 2026-09-04: a courier reached Blackstone Keep, sat five minutes, and turned
+ * back, while the operator confirmed with the human players on the server that the hall
+ * was open and would be for another week.
+ *
+ * So this is the operator saying so. It is the same rule as everywhere else here — the
+ * collision map is EVIDENCE about a server and never AUTHORITY over one — and a person who
+ * asked the players is better evidence than a packet that never arrived.
+ *
+ * IT IS THE WEAKEST CLAIM IN THE SYSTEM, deliberately. Anything the server actually says
+ * about that room afterwards replaces it, because the server is the authority and this is
+ * a stand-in for its silence.
+ *
+ * @param assertions  room -> state key, e.g. `{ 951: 'sector3@356+sector4@419' }`
+ */
+export function assertDoorStates(map, assertions = {}, { geometryOf } = {}) {
+  const out = [];
+  for (const [roomNum, key] of Object.entries(assertions ?? {})) {
+    const room = Number(roomNum);
+    const variants = doorVariants(room);
+    if (!variants?.[key]) {
+      out.push({ room, key, applied: false,
+                 why: variants ? `no baked state called "${key}" — have ${Object.keys(variants).join(' ')}`
+                               : 'this room has no baked door states' });
+      continue;
+    }
+    // Expressed as an OBSERVATION so it goes through exactly the same path a real packet
+    // would, rather than a second way of moving a door that could drift from the first.
+    const observed = new Map();
+    for (const part of key.split('+')) {
+      const m = /^sector(\d+)@(-?\d+)$/.exec(part);
+      if (m) observed.set(Number(m[1]), { height: Number(m[2]) });
+    }
+    const r = applyDoorState(map, room, observed, { geometryOf });
+    out.push({ room, key, applied: r.state === key, ...(r.why ? { why: r.why } : {}) });
+  }
+  return out;
+}
+
 /** What state each room's doors are currently modelled in. For the boards and the tests. */
 export const doorStates = () => Object.fromEntries(DOOR_STATE);
 

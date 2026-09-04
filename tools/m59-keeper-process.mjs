@@ -28,7 +28,7 @@ import { loadMap, buildReverseEdges, resolveRoom } from './m59-map.mjs';
 import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.mjs';
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
-import { attachStepMasks, applyDoorState, doorStates } from './m59-routes.mjs';
+import { attachStepMasks, applyDoorState, doorStates, assertDoorStates } from './m59-routes.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
@@ -545,6 +545,30 @@ async function joinGenerationOnce(generation) {
     // planned on; a keeper that never attaches it is planning on the map the bake replaced.
     try { attachStepMasks(loadMap()); }
     catch (e) { console.error(`[keeper] ${agent} could not attach step masks: ${e.message}`); }
+
+    // AND THE DOORS THIS MACHINE KNOWS ARE OPEN THAT THE SERVER WILL NOT MENTION.
+    //
+    // The wire only reports a door that MOVES, and duke2.kod moves the feast hall's floor
+    // solely when an actor walks the door square — the server's real gate is
+    // `RID_DUKE4 @IsLocked`. So a hall unlocked any other way is open, walkable, and
+    // completely silent, and our bake goes on enforcing the wall. Applied at startup, and
+    // deliberately the weakest claim in the system: any BP_SECTOR_MOVE for that room
+    // afterwards replaces it, because the server is the authority and this only stands in
+    // for its silence.
+    try {
+      const file = new URL('../substrate/door-states.local.json', import.meta.url);
+      const asserted = JSON.parse(readFileSync(file, 'utf8'));
+      delete asserted._;                    // the file's own explanation, not a room
+      const applied = assertDoorStates(loadMap(), asserted);
+      for (const a of applied)
+        console.error(`[keeper] ${agent} room ${a.room} doors asserted ${a.key}` +
+                      (a.applied ? ' — applied' : ` — NOT applied: ${a.why ?? 'refused'}`));
+    } catch (e) {
+      // Absent is the ordinary case and not worth a line; anything else is worth one,
+      // because a file that will not parse is not an empty file.
+      if (e.code !== 'ENOENT')
+        console.error(`[keeper] ${agent} could not read door-states.local.json: ${e.message}`);
+    }
 
     assertJoinIntent(generation);
     if (mode === 'tick') {
