@@ -5052,9 +5052,22 @@ class Session {
     //
     // `PLAYER_RADIUS` is 248 client units, 15.5 kod. Corners and centre, the same thing
     // `standAt` does in m59-fineroute.mjs and for the same reason.
+    // THE CENTRE DECIDES WHAT YOU STAND ON; THE FOOTPRINT ONLY DECIDES WHETHER YOU FIT.
+    //
+    // Taking the highest floor under the footprint was the previous attempt at this and it is
+    // too permissive at exactly the edge it guards: a step whose centre goes over the drop
+    // still has a corner overlapping the shelf, so the predicted landing read 6208 while the
+    // body came to rest on 4672 — `shelf_refusals: 0`, and a 1536-unit fall waved through.
+    // The radius is for walls (move.c uses it for collision); the height under you comes from
+    // where your centre is.
+    //
+    // The footprint is kept only as a RESCUE for an unreadable centre: a point over the void
+    // answers null, and null used to turn the guard off at the lip.
     const RAD = 15;                                  // kod units, ~PLAYER_RADIUS
     const floorOf = (px, py) => {
       if (!shelfGeo) return null;
+      const middle = point(px, py);
+      if (middle != null) return middle;
       let best = null;
       for (const dx of [-RAD, 0, RAD]) for (const dy of [-RAD, 0, RAD]) {
         const h = point(px + dx, py + dy);
@@ -5063,6 +5076,7 @@ class Session {
       return best;
     };
     const destFloor = floorOf(destX, destY);
+    const startFloor = floorOf(me.x, me.y);
     let shelfRefusals = 0;
     // Headings to try, in order: straight at it, then fanned out to either side.
     // The wide angles are what carry you along a wall rather than into it.
@@ -5116,6 +5130,31 @@ class Session {
                  steps: i, log, note: 'as close as fine movement gets — ' +
                    Math.round(closest) + ' units, inside one square' };
       let progressed = false;
+
+      // HAVE WE ALREADY FALLEN? ASKED OF A SETTLED POSITION, WHICH IS THE ONLY KIND WORTH
+      // ASKING.
+      //
+      // The check right after `stepFine` reads `client.self`, and that is the PREDICTED
+      // position — the same lag the jump verb pays: the body is where we said it would be, and
+      // the drop appears when the server's word arrives. So a step that walked off the shelf
+      // was measured before it had happened and passed. Measured on the Ancient Place: three
+      // headings correctly refused, a fourth allowed, `shelf_refusals: 3`, and the walk
+      // returned `arrived: true` from the gully 1536 units below the route.
+      //
+      // At the top of the next iteration `me` has been re-read, so the floor under it is real.
+      // A body more than a step below the destination's shelf, having started on it, has come
+      // off — stop, rather than walking on underneath the route.
+      if (shelfGeo && destFloor != null && i > 0) {
+        const nowFloor = floorOf(me.x, me.y);
+        if (nowFloor != null && destFloor - nowFloor > MAX_STEP_HEIGHT &&
+            startFloor != null && startFloor - nowFloor > MAX_STEP_HEIGHT)
+          return { arrived: false, reason: 'left the shelf',
+                   note: `standing on ${nowFloor} with the route on ${destFloor} (started on ` +
+                         `${startFloor}); stopped rather than walking on below it`,
+                   shelf_refusals: shelfRefusals, dest_floor: destFloor,
+                   position: { col: me.col, row: me.row, x: me.x, y: me.y },
+                   steps: i, log };
+      }
 
       // A NARROW FAN ON A LEDGE. The wide angles exist to carry a body ALONG a wall, and on
       // flat ground they are what makes this function work at all. On a tread 352 units above

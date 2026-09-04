@@ -52,7 +52,7 @@ const flag = (n, d = null) => {
   return at >= 0 && argv[at + 1] && !argv[at + 1].startsWith('--') ? argv[at + 1] : d;
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
-                       'steps', 'stride', 'max-jumps', 'allow-candidates', 'help']);
+                       'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -195,7 +195,9 @@ if (!plan.all_declared)
 await call('cancel_movement', { agent: AGENT }, 20000).catch(() => null);
 
 const t0 = Date.now();
-let came_off = null, pos = at0;
+let came_off = null, pos = at0, hops = 0;
+// The body's own floor, one waypoint ago — see the fall test below.
+let lastFloor = (at0?.x != null) ? R.floorAt(toClient(at0.x), toClient(at0.y)) : null;
 outer:
 for (const [li, leg] of plan.legs.entries()) {
   if (leg.kind === 'jump') {
@@ -256,18 +258,60 @@ for (const [li, leg] of plan.legs.entries()) {
     //
     // So the check is both: how far, and WHICH SHELF. A body more than one step-height off
     // its waypoint's floor is not near it in any sense that matters.
-    const off = (cx == null) ? 0 : Math.hypot(cx - wp.x, cy - wp.y) / F;
-    const hBody = cx == null ? null : R.floorAt(cx, cy);
+    let off = (cx == null) ? 0 : Math.hypot(cx - wp.x, cy - wp.y) / F;
+    let hBody = cx == null ? null : R.floorAt(cx, cy);
     const hWant = R.floorAt(wp.x, wp.y);
-    const fell = hBody != null && hWant != null && Math.abs(hBody - hWant) > 384;
+
+    // BLOCKED BY SOMETHING STANDING THERE? GO ROUND IT IN THE AIR.
+    //
+    // Monster collision is HEIGHT-AGNOSTIC — every monster is effectively infinitely tall — so
+    // a creature in the gully below a ledge is a WALL to a walk across it, and `hold_shelf`
+    // correctly refuses to walk into one. Three runs of the Ancient Place climb stalled on a
+    // single orc, at full health, for want of this.
+    //
+    // A hop of about a square onto ground within one step-height is not a jump and needs no
+    // declaration; `short_hop` enforces exactly that and refuses anything bigger. It is tried
+    // only when the ordinary walk has stopped making ground — never as the first move — so a
+    // climb that is walking fine never leaves the floor.
+    if (!w?.arrived && off > 0.9 && hWant != null) {
+      const hop = await call('short_hop', { agent: AGENT, to_row: wp.row, to_col: wp.col,
+                                            x: toProto(wp.x), y: toProto(wp.y) }, 60000);
+      if (hop?.hopped) {
+        pos = await look();
+        const nx = pos?.x != null ? toClient(pos.x) : null, ny = pos?.y != null ? toClient(pos.y) : null;
+        off = nx == null ? off : Math.hypot(nx - wp.x, ny - wp.y) / F;
+        hBody = nx == null ? hBody : R.floorAt(nx, ny);
+        hops++;
+        console.log(`  leg ${li + 1}  hopped past a block at waypoint ${wi + 1}: ` +
+                    `${hop.span_squares} squares, floor ${hop.from_floor} -> ${hop.landed_floor}`);
+      } else if (hop?.reason && !/too far|past a step/.test(String(hop.reason))) {
+        // A refusal on distance or height is the guard doing its job and is not worth saying.
+        console.log(`  leg ${li + 1}  hop declined at waypoint ${wi + 1}: ${String(hop.reason).slice(0, 90)}`);
+      }
+    }
+    // A FALL IS A DROP FROM WHERE THE BODY JUST WAS, NOT A DIFFERENCE FROM A WAYPOINT IT HAS
+    // NOT REACHED YET.
+    //
+    // Waypoints are DECIMATED — kept on a heading change or every three quarters of a square —
+    // so two consecutive ones are several flood-steps apart and legitimately differ by more
+    // than one step-height. Judging the body against the NEXT waypoint's floor called the
+    // Ancient Place staircase a fall at every tread: 6208 -> 6560 -> 6896 -> 7600 rises 352 a
+    // step and the kept waypoints jump 704 at a time. The climb was working and the instrument
+    // was stopping it.
+    //
+    // Against the body's own last floor, a tread reads as the climb it is and only a real drop
+    // — the gully is thousands below the shelf — trips it.
+    const fell = hBody != null && lastFloor != null && lastFloor - hBody > 1000;
+    void hWant;
     if (fell) {
       console.log(`  leg ${li + 1}  FELL OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
-                  `asked r${wp.row}c${wp.col} floor ${hWant}, body at r${pos.row}c${pos.col} ` +
+                  `floor ${lastFloor} -> ${hBody}, body at r${pos.row}c${pos.col} ` +
                   `floor ${hBody} — ${off.toFixed(1)} squares away but ${hBody - hWant} below/above it`);
       console.log(`           the mover said: ${JSON.stringify(w).slice(0, 300)}`);
       came_off = { leg: li + 1, waypoint: wi + 1, asked: wp, got: { ...pos }, off, hBody, hWant };
       break outer;
     }
+    if (hBody != null) lastFloor = hBody;
     if (off > TOL) {
       console.log(`  leg ${li + 1}  CAME OFF at waypoint ${wi + 1}/${leg.waypoints.length}: ` +
                   `asked r${wp.row}c${wp.col} (fine ${wp.x},${wp.y}), body at ` +
@@ -285,6 +329,7 @@ const arrived = end.room === ROOM && Math.abs(end.row - toRow) < 3 && Math.abs(e
 console.log('');
 console.log(`${arrived ? 'ARRIVED' : 'did not arrive'} — r${end.row}c${end.col} in room ${end.room}, ` +
             `hp ${end.hp}, ${Math.round((Date.now() - t0) / 1000)}s` +
+            (hops ? `, ${hops} hop(s) round something in the way` : '') +
             (end.node ? `\n  sees "${end.node.name}" at r${end.node.row}c${end.node.col}, ${end.node.distance} away` : ''));
 if (came_off) console.log(`  came off at leg ${came_off.leg}` +
                           (came_off.waypoint ? ` waypoint ${came_off.waypoint}` : ''));
