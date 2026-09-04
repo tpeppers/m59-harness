@@ -180,6 +180,75 @@ console.log('\n--- a pull that cannot REACH the quarry relocates, it does not bl
      again.relocate === false && again.attempt === 1);
 }
 
+console.log('\n--- WITH NO WALL, A FAILED PULL STILL COSTS SOMETHING ---');
+{
+  // THE LOOP THIS PINS. `pullAttemptFailed` returned `{relocate:false, attempt:0}` whenever
+  // `spot` was null — and `spot` IS the hold, so with `use_safe_spots` off it was null on
+  // every pass. The budget therefore never advanced, `relocate` was unreachable, and the
+  // caller retried "from the same wall" it did not have, every 1.7 seconds, for ever.
+  //
+  // Measured in the Valley of Ileria on 2026-09-04, spots off against level-50 fungus
+  // beasts: Gonzo wedged 721s, Rizzo 942s, Lew 1025s, every one of them reporting
+  // `attempt: 0 of 4` the whole time, while their three fleet-mates working the middle of
+  // the same room took 30-40 kills each. Rizzo was eaten mid-wedge — `gross_squares: 0`
+  // over thirty-two seconds, 9 health to 4.
+  //
+  // A counter that silently stops counting reads exactly like one that is patient.
+  const w = world();
+  const p = keeper(w);
+  p.policy.pullsBeforeMovingOn = 2;
+  p.hold = null;                       // spots off: there is no wall and never will be
+
+  const first = p.pullAttemptFailed(null, 'not holding a spot to pull it back to');
+  ok('a failed pull with no hold counts against the square we are standing on',
+     first.attempt === 1, JSON.stringify(first));
+
+  const second = p.pullAttemptFailed(null, 'not holding a spot to pull it back to');
+  ok('and the budget actually runs out instead of sitting at zero for ever',
+     second.relocate === true && second.attempt === 2, JSON.stringify(second));
+
+  // The old code's signature failure, stated as an assertion so it cannot come back.
+  const p2 = keeper(world());
+  p2.policy.pullsBeforeMovingOn = 2;
+  p2.hold = null;
+  const attempts = [1, 2, 3, 4].map(() => p2.pullAttemptFailed(null, 'no hold').attempt);
+  ok('four failures are never four zeroes', !attempts.every(a => a === 0),
+     JSON.stringify(attempts));
+}
+
+console.log('\n--- NO WALL MEANS WALK UP TO IT, NOT FETCH IT TO NOWHERE ---');
+{
+  // `pull()` is "run out, hit it once, run BACK", and the run back needs a destination.
+  // Without a hold the right move is the same walk minus its second half — close the
+  // distance and fight where it stands, which is what switching spots off asks for.
+  const w = world();
+  const p = keeper(w);
+  p.hold = null;
+  w.addMonster(1, 6, 0, MONSTER);      // a giant rat six squares east
+  let walkedTo = null, returned = 0;
+  w.s.world.approachSquare = (col, row) => ({ col: col - 1, row, steps: 5 });
+  w.s.walkTo = async (col, row) => { walkedTo = { col, row }; return { arrived: true }; };
+  w.s.client.rsc.get = () => 'giant rat';
+
+  const closed = await p.closeOnQuarry({ id: 1 });
+  ok('it walks to the square beside the quarry', closed.closed && walkedTo != null,
+     JSON.stringify({ closed, walkedTo }));
+  ok('and it does NOT walk back — there is nowhere to walk back to', returned === 0);
+  ok('the note says why there was no wall to fetch it to',
+     p.journal.some(e => /closed on the quarry/.test(e.what || '')));
+
+  // A walk that fails is reported, not looped: the caller turns this into noProgress so
+  // the stall machinery finally sees something move.
+  const p3 = keeper(world());
+  p3.hold = null;
+  const w3 = w;
+  w3.s.walkTo = async () => ({ arrived: false, reason: 'blocked' });
+  p3.s.world.approachSquare = () => null;
+  const nope = await p3.closeOnQuarry({ id: 999 });
+  ok('a quarry that is gone is a reason, not a retry', nope.closed === false && !!nope.why,
+     JSON.stringify(nope));
+}
+
 console.log('\n--- A ROOM IS NEVER WRITTEN OFF FOR ITS WALLS ---');
 {
   // THIS SECTION USED TO ASSERT THE OPPOSITE, and the change is the operator's, 2026-08-27:

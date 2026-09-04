@@ -38,6 +38,12 @@ node_modules/
 # since it was first read. One server's characters, and the history is theirs — the
 # same reason the roster and the post-mortems are not here.
 /substrate/abilities/
+# A BASELINE IS A MEASUREMENT OF ONE FLEET, NOT A FIXTURE. Each row carries a character
+# name, an account handle and that character's skill levels on the day it was captured,
+# which is the roster in a different shape — and on this server the short handles are the
+# accounts themselves. The experiment's CODE and its test are reference material and are
+# committed; the numbers it was measured against are this machine's.
+/substrate/*-baseline.json
 # One JSON per character: faction membership observed from that character's own
 # player profile. This is live roster state, not reference data.
 /substrate/faction-status/
