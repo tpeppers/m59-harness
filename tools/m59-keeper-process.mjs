@@ -939,6 +939,11 @@ function state() {
         [...(session.client?.room?.sectorHeights ?? new Map())]
           .map(([sector, v]) => [sector, v?.height ?? null])),
       applied: doorStates()[Number(session.world?.room?.num)] ?? null,
+      // EVERY ROOM THIS PROCESS HAS MOVED A DOOR IN, not only the one underfoot. The
+      // per-room field answers "is the door beside me open"; this answers "did the
+      // assertion at startup take", which is a question nobody can otherwise ask without
+      // walking a character across the world to stand in the room and look.
+      all: doorStates(),
     },
     job: rtsJobReport(session.job) ?? null,
     // AND WHETHER SOMEBODY ELSE IS HOLDING IT STILL. `KeeperProxy.status()` reported

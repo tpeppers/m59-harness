@@ -33,8 +33,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { attachStepMasks, applyDoorState, doorVariants, doorStateKey,
-         reachableExits, roomRegions, anchorReach, activeRoutes,
-         exitIsImpassable, assertDoorStates, resetDoorStates } from './m59-routes.mjs';
+         reachableExits, reachableFrom, anchorReach, activeRoutes,
+         assertDoorStates, resetDoorStates } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -180,10 +180,11 @@ console.log('\nan exit list without a position is a list of doors in the buildin
 {
   resetDoorStates();
   const t = Date.now();
-  const regions = roomRegions(map, 951);
-  ok('a room labels its regions cheaply enough to do on demand',
-     regions && Date.now() - t < 2000, `${regions?.count} region(s) in ${Date.now() - t}ms`);
-  ok('and room 951 is not one connected place', regions.count > 1, `${regions.count} regions`);
+  const reach = reachableFrom(map, 951, 9, 9);
+  ok('a room answers reachability cheaply enough to do on demand',
+     reach && Date.now() - t < 2000, `${reach?.size} square(s) in ${Date.now() - t}ms`);
+  ok('and room 951 is not one connected place — the feast exit sees a fraction of it',
+     reach.size < 100, `${reach.size} squares`);
 
   // THE POINT, ON THE ROOM THIS WAS BUILT FOR. Standing at the feast exit with the door
   // shut, half the keep's doors are on the far side of a wall. The room's exit list says
@@ -206,8 +207,8 @@ console.log('\nan exit list without a position is a list of doors in the buildin
 
   // A door that moves changes the regions, so a labelling taken before it opened is a map
   // of a room that no longer exists. The cache has to go with the door.
-  ok('the region labelling was rebuilt rather than served stale',
-     open.region !== shut.region || open.reachable.length !== shut.reachable.length);
+  ok('the reachability was recomputed rather than served stale',
+     open.reachable.length !== shut.reachable.length);
 }
 
 console.log('\nno opinion is not the same as no exits');
@@ -259,25 +260,37 @@ console.log('\nthe ROUTER has to change its mind too, or none of this reaches th
      !!table.rooms['599'].reach['71,2>1,66']);
 }
 
-console.log('\na boundary the game refuses is refused by the router, whatever the geometry says');
+console.log('\nreachability is DIRECTED, and Ukgoth is the room that proves it');
 {
   resetDoorStates();
-  const table = activeRoutes();
-  ok('Ukgoth\'s north edge to Castle Victoria is on the list',
-     exitIsImpassable(599, 2) === true);
-  ok('and its other two exits are not', !exitIsImpassable(599, 589) && !exitIsImpassable(599, 598));
-  ok('a room with nothing banned is unaffected', exitIsImpassable(951, 953) === false);
+  // THE UKGOTH JUMP. The crossing to Castle Victoria is made by a jump; miss it and you
+  // land in the gutters below, and there is no way back up without a Relic of Qor. So the
+  // north exit is perfectly real from ABOVE and unreachable from BELOW, and a model that
+  // cannot express that has only two options, both wrong: strand characters in front of a
+  // door they can never take, or ban a route the fleet uses every day.
+  //
+  // An undirected component labelling cannot express it, because a fall-jump is one-way and
+  // a component welds the top of the drop to the bottom. Measured from the gutter at
+  // r51c17: undirected said all three exits were reachable; directed says two.
+  const below = reachableExits(map, 599, 51, 17);
+  ok('from the gutter, the exit to Castle Victoria is NOT offered',
+     below.reachable.every(e => e.to !== 2), JSON.stringify(below.reachable.map(e => e.to)));
+  ok('and it is named as unreachable rather than quietly omitted',
+     below.unreachable.some(e => e.to === 2), JSON.stringify(below.unreachable.map(e => e.to)));
+  // THIS IS THE LINE THAT SENDS IT HOME. Two real ways out, so a router asked from down
+  // there routes through one of them and takes the eight-map walk round instead of aiming
+  // at the jump for ever.
+  ok('while the two ways out that DO exist are offered',
+     below.reachable.some(e => e.to === 589) && below.reachable.some(e => e.to === 598),
+     JSON.stringify(below.reachable.map(e => e.to)));
 
-  // r1c27 is the anchor for 599's north exit. Refusing every pair that ENDS there is what
-  // stops `transitOk` planning a hop out through it — which is how three characters were
-  // fed into that room on the castle patrol's route and could not leave.
-  ok('no route may be planned out through the north anchor',
-     anchorReach(table, 599, { row: 71, col: 2 }, { row: 1, col: 27 }) === false);
-  // AND THE WAY OUT MUST STILL BE OPEN, or banning the boundary would seal the room
-  // instead of un-baiting it. South to 589 is what every stranded keeper's own exits()
-  // reported, and it is how all three were eventually walked out.
-  ok('but the south exit they actually leave by is untouched',
-     anchorReach(table, 599, { row: 1, col: 27 }, { row: 71, col: 2 }) === true);
+  const north = activeRoutes().rooms['599'].anchors.find(a => Number(a.to) === 2);
+  ok('the drop really is one-way: from the north anchor you can reach the gutter',
+     reachableFrom(map, 599, north.row, north.col).has('51,17'));
+  ok('but not back', !reachableFrom(map, 599, 51, 17).has(`${north.row},${north.col}`));
+  // And the route the fleet uses every day is untouched — this must not become a ban.
+  ok('a character above can still be routed out through the north exit',
+     reachableExits(map, 599, north.row, north.col).reachable.some(e => e.to === 2));
 }
 
 console.log('\na door the operator knows is open, which the server will never mention');
@@ -321,17 +334,29 @@ console.log('\na door the operator knows is open, which the server will never me
   ok('and the room is shut again', region(g, 9, 9).size < 100);
 }
 
-console.log('\nthe region filter is honest about what it cannot see');
+console.log('\nthe filter answers geometry, which is not everything that shuts a door');
 {
   resetDoorStates();
-  // Ukgoth stranded three characters on 2026-09-04 and this filter passes all three of its
-  // exits, because the floor really does connect to the north edge — leaving that way needs
-  // a Relic of Qor and a spoken phrase. Pinned so nobody later believes geometry is the
-  // whole answer: that room is caught by KNOWN_TRAPS, not by this.
-  const r = reachableExits(map, 599, 51, 17);
-  ok('it passes Ukgoth\'s north exit, which is NOT usable in the game',
-     r.reachable?.some(e => e.to === 2) === true,
-     JSON.stringify(r.reachable?.map(e => e.to)));
+  // WHAT THIS BLOCK USED TO SAY, AND WHY IT WAS WRONG. It asserted that the filter passed
+  // Ukgoth's north exit and could not catch it — written while the belief was that leaving
+  // northward needed a Relic of Qor outright. It does not: the crossing is a JUMP, real and
+  // used daily, and the Relic is only needed to climb back up after MISSING it. Directed
+  // reachability expresses that exactly, so the filter does catch it, from below, without
+  // banning it from above. The wrong belief had produced a blanket ban on the boundary,
+  // which would have sent every trip to Castle Victoria the eight-map way round for ever.
+  //
+  // The caveat that survives is the general one, and it is still worth a test: this answers
+  // where the FLOOR goes. A lock, a spoken word or a quest bit is invisible to it, and for
+  // those the answer has to come from somewhere else — KNOWN_TRAPS in m59-fleetscript.mjs,
+  // or the operator, as `assertDoorStates` above.
+  const below = reachableExits(map, 599, 51, 17);
+  ok('geometry alone still answers only about the floor: the hall door in 951 reads shut',
+     reachableExits(map, 951, 9, 9).unreachable.length > 0);
+  ok('and the operator had to tell us otherwise — no packet ever did',
+     assertDoorStates(map, { 951: 'sector3@356+sector4@419' })[0]?.applied === true);
+  resetDoorStates();
+  ok('while a one-way drop IS geometry, and is now answered as one',
+     below.reachable.every(e => e.to !== 2));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
