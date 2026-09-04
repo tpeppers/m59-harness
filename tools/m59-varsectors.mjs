@@ -78,10 +78,18 @@ const kodFiles = (dir) => {
  * constants. A sector named by a constant is the ordinary case and the name is worth
  * keeping — `FEAST_DOOR_CLOSED` says what the number is for, and the number does not.
  */
-export function sectorsInSource(src) {
+// A kod file's `constants:` block, which is where a door's sector number is almost always
+// written. Separate from the scan because a caller looking at ONE BLOCK of a file still
+// needs the whole file's constants — see groupsInSource, where not passing them resolved
+// `FEAST_DOOR_OPEN` to nothing and lost the Duke's feast hall from the group list.
+export function constantsInSource(src) {
   const consts = new Map();
   for (const c of src.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(\d+)\s*$/gm))
     consts.set(c[1], Number(c[2]));
+  return consts;
+}
+
+export function sectorsInSource(src, { consts = constantsInSource(src) } = {}) {
   const bySector = new Map();
   // `#height` does not always follow `#sector` immediately — the animation argument sits
   // between them — so this spans a bounded gap rather than requiring adjacency.
@@ -117,6 +125,67 @@ export function sectorsInSource(src) {
     heights: [...s.heights].sort((a, b) => a - b),
     cite_lines: s.lines.slice(0, 4),
   }));
+}
+
+/**
+ * The sector states this world sets TOGETHER — one entry per kod message that moves more
+ * than one sector at once.
+ *
+ * WHY THIS IS NOT AN EMBELLISHMENT. `duke2.kod`'s `Open()` sets sector 3 to 356 and sector
+ * 4 to 419 in the same breath, so the Duke's feast door has a state in which BOTH are off
+ * the height the .roo shipped. Measured 2026-09-04: the mask for that pair is not the mask
+ * for either sector alone, and is not the baseline — it is its own thing. A bake holding
+ * only single-sector variants therefore has no mask for the state the live server is
+ * actually in, and picking the closest one would be a confident map of a room nobody is
+ * standing in. This is what lets the bake hold the real states.
+ *
+ * A state is one BRACE BLOCK's worth of sends — see the note in the body for why the
+ * enclosing message is far too coarse a unit to find them.
+ */
+export function groupsInSource(src) {
+  // BRACE BLOCKS, NOT MESSAGES, and the difference is the whole answer. duke2.kod puts
+  // every door in one `SomethingTryGo`, and the feast hall's two states are the two halves
+  // of an if/else inside it: opening sends `{3:356, 4:419}` and closing sends
+  // `{3:420, 4:356}` — the same pair of sectors, swapped. Grouped by message those four
+  // sends are one indistinguishable heap and every sector has two heights, which is how a
+  // first attempt at this found ZERO states in a file that has two.
+  //
+  // kod comments run from `%` to the end of the line and may contain braces, so they are
+  // skipped rather than counted; a brace inside a comment would nest the whole file.
+  const consts = constantsInSource(src);
+  const blocks = [];                      // { start, end } for every {...}, innermost last
+  const stack = [];
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '%') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (ch === '"') { i++; while (i < src.length && src[i] !== '"') i++; continue; }
+    if (ch === '{') stack.push(i);
+    else if (ch === '}' && stack.length) blocks.push({ start: stack.pop(), end: i });
+  }
+  blocks.sort((a, b) => (a.end - a.start) - (b.end - b.start));
+
+  const seen = new Set();
+  const out = [];
+  for (const m of src.matchAll(/@setsector/gi)) {
+    // The innermost block containing this send — `blocks` is shortest-first, so the first
+    // hit is it. Two sends in the same branch resolve to the same block and become a state.
+    const block = blocks.find(b => m.index > b.start && m.index < b.end);
+    if (!block || seen.has(block.start)) continue;
+    seen.add(block.start);
+    // THE WHOLE FILE'S CONSTANTS, against a single block's text. `FEAST_DOOR_OPEN = 4` is
+    // declared in duke2.kod's header and used two hundred lines later; resolving names from
+    // the block alone found nothing and quietly dropped the one door this was written for.
+    const states = sectorsInSource(src.slice(block.start, block.end), { consts })
+      // ONE HEIGHT PER SECTOR, or this is a sequence rather than a position. A branch that
+      // sets the same sector twice is animating it, and picking one of the two would be
+      // baking a state the room is never at rest in.
+      .filter(s => s.heights.length === 1)
+      .map(s => ({ sector: s.sector, height: s.heights[0], name: s.name, kind: s.kind }));
+    if (states.length < 2) continue;
+    out.push({ line: src.slice(0, block.start).split('\n').length,
+               states: states.sort((a, b) => a.sector - b.sector) });
+  }
+  return out;
 }
 
 /**
@@ -177,6 +246,13 @@ export function scan(kodRoot = KOD_ROOT) {
       file: relative(kodRoot, file).replace(/\\/g, '/'),
       sectors: sectors.map(s => ({ ...s, gates: gatesMovement(s.heights, s.kind),
                                     headroom_risk: headroomRisk(s.heights, s.kind) })),
+      // Only groups in which at least two GATING sectors move together are worth a mask —
+      // a message that also nudges a bit of scenery is still one door as far as the bake
+      // is concerned, and the scenery would multiply the states for nothing.
+      groups: groupsInSource(src)
+        .map(g => ({ ...g, states: g.states.filter(st =>
+              sectors.some(s => s.sector === st.sector && gatesMovement(s.heights, s.kind))) }))
+        .filter(g => g.states.length >= 2),
     });
   }
   rooms.sort((a, b) => (a.room ?? 1e9) - (b.room ?? 1e9));

@@ -14,7 +14,7 @@
 //     the number is for and `3` does not;
 //   * `#height` is found even though the animation argument sits between it and `#sector`.
 
-import { sectorsInSource, gatesMovement, headroomRisk,
+import { sectorsInSource, groupsInSource, gatesMovement, headroomRisk,
          MAX_STEP_HEIGHT, PLAYER_HEIGHT } from './m59-varsectors.mjs';
 
 let pass = 0, fail = 0;
@@ -122,6 +122,96 @@ console.log('\nan unresolvable sector is dropped rather than guessed at');
   ok('the unresolvable one is not reported', !found.some(s => Number.isNaN(s.sector)));
   ok('and the literal one still is',
      found.length === 1 && found[0].sector === 7, JSON.stringify(found));
+}
+
+console.log('\nthe states this world sets TOGETHER, which are branches and not messages');
+{
+  // duke2.kod's shape, reduced: every door in ONE message, and the feast hall's two states
+  // are the two halves of an if/else inside it. Grouping by message finds nothing here,
+  // because every sector then has two heights and gets filtered as a sequence — which is
+  // exactly what a first attempt did, reporting zero states in a file that has two.
+  const src = `
+   constants:
+      FEAST_DOOR_CLOSED = 3
+      FEAST_DOOR_OPEN = 4
+
+   messages:
+
+   SomethingTryGo(what = $,row = $,col = $)
+   {
+      % wood door to the west wing
+      if row >= 9 AND row <= 10 AND col = 14
+      {
+         if NOT Send(hall,@IsLocked)
+         {
+            Send(self,@SetSector,#sector=FEAST_DOOR_OPEN,
+                 #animation=ANIMATE_FLOOR_LIFT,#height=356,#speed=0);
+            Send(self,@SetSector,#sector=FEAST_DOOR_CLOSED,
+                 #animation=ANIMATE_FLOOR_LIFT,#height=420,#speed=0);
+         }
+         else
+         {
+            Send(self,@SetSector,#sector=FEAST_DOOR_CLOSED,
+                 #animation=ANIMATE_FLOOR_LIFT,#height=356,#speed=0);
+            Send(self,@SetSector,#sector=FEAST_DOOR_OPEN,
+                 #animation=ANIMATE_FLOOR_LIFT,#height=419,#speed=0);
+         }
+      }
+      propagate;
+   }
+`;
+  const groups = groupsInSource(src);
+  ok('both halves of the if/else are found, as two separate states',
+     groups.length === 2, JSON.stringify(groups.map(g => g.states.map(s => `${s.sector}@${s.height}`))));
+  const keys = groups.map(g => g.states.map(s => `${s.sector}@${s.height}`).join('+'));
+  ok('the shut one is the pair the .roo ships', keys.includes('3@420+4@356'), keys.join(' | '));
+  ok('and the open one is the pair that lets a character in', keys.includes('3@356+4@419'));
+
+  // THE BUG THAT LOST THE ONE DOOR THIS WAS WRITTEN FOR. `FEAST_DOOR_OPEN = 4` is declared
+  // in the file's header, and a block two hundred lines away cannot resolve it from its own
+  // text. Reading constants per block found nothing and dropped room 951 in silence.
+  ok('a sector named by a file-level constant still resolves inside a nested block',
+     groups.every(g => g.states.every(s => Number.isInteger(s.sector))),
+     JSON.stringify(groups));
+
+  // Braces inside a kod comment must not nest the whole file, or every send ends up in one
+  // enormous block and no state has a boundary.
+  const commented = groupsInSource(`
+   constants:
+      A = 1
+      B = 2
+   Go()
+   {
+      % a comment with an unbalanced { in it
+      if x
+      {
+         Send(self,@SetSector,#sector=A,#animation=ANIMATE_FLOOR_LIFT,#height=100,#speed=0);
+         Send(self,@SetSector,#sector=B,#animation=ANIMATE_FLOOR_LIFT,#height=500,#speed=0);
+      }
+   }
+`);
+  ok('a brace inside a comment does not swallow the file',
+     commented.length === 1 && commented[0].states.length === 2,
+     JSON.stringify(commented));
+
+  ok('a branch that moves only one sector is not a multi-sector state',
+     groupsInSource(`
+   Go()
+   {
+      Send(self,@SetSector,#sector=7,#animation=ANIMATE_FLOOR_LIFT,#height=100,#speed=0);
+   }
+`).length === 0);
+
+  // A branch that sets the same sector twice is animating it, not holding a position.
+  ok('a sector set twice in one branch is a sequence, not a state',
+     groupsInSource(`
+   Go()
+   {
+      Send(self,@SetSector,#sector=7,#animation=ANIMATE_FLOOR_LIFT,#height=100,#speed=0);
+      Send(self,@SetSector,#sector=7,#animation=ANIMATE_FLOOR_LIFT,#height=500,#speed=0);
+      Send(self,@SetSector,#sector=8,#animation=ANIMATE_FLOOR_LIFT,#height=100,#speed=0);
+   }
+`).length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

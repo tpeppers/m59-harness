@@ -23,7 +23,8 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROUTES_FILE, replay, BAKE_VERSION } from './m59-routebake.mjs';
-import { sharedRoomGeometry, peekSharedRoomGeometry, STEP_MASK_VERSION } from './m59-roo.mjs';
+import { sharedRoomGeometry, peekSharedRoomGeometry, applySectorHeights,
+         heightKodToClient, STEP_MASK_VERSION } from './m59-roo.mjs';
 import { registerLazyRoomArtifacts } from './m59-room-artifacts.mjs';
 
 let cache = { mtime: -1, value: null };
@@ -209,6 +210,136 @@ export function attachStepMasks(map, { geometryOf, lazy = false } = {}) {
                  'rerun node tools/m59-routebake.mjs'
                : `${masked} step mask(s) on disk and none of them fit the map in play` }) };
 }
+
+// ------------------------------------------------------------------ doors that are floors
+//
+// A door in this world is usually a FLOOR: `SetSector` lifts it past the 384-unit step and
+// the square stops being climbable. The .roo ships one state — for a door, usually shut —
+// and the bake has enforced it ever since, which is how a fleet stood outside the Duke's
+// Feast Hall for a day reporting it locked while it was open.
+//
+// `m59-doorbake.mjs` bakes a step mask per state. This is the half that picks one, from
+// what the server actually said: `BP_SECTOR_MOVE` (m59-client.mjs) carries a sector id and
+// a height, and a room's live state is whichever of those are off the shipped height.
+
+/** The baked door states for a room, or null — refused unless baked by this predicate. */
+export function doorVariants(roomNum) {
+  const room = attachedTable?.rooms?.[String(roomNum)] ?? attachedTable?.rooms?.[roomNum];
+  if (!room?.stepMaskVariants) return null;
+  // Same rule as the baseline mask: a variant from an older predicate is a confident map
+  // of the wrong doors, and worse than planning on the shipped state.
+  if ((room.stepMaskVariantVersion ?? 1) !== STEP_MASK_VERSION) return null;
+  return room.stepMaskVariants;
+}
+
+// What each room's doors were at when we first touched them, so a door can be put back
+// without the caller having had to remember. Keyed by room, holding client floor heights
+// per collision index — captured from the geometry BEFORE anything moved it.
+const DOOR_BASELINE = new Map();
+const DOOR_STATE = new Map();
+
+/** `sector3@356+sector4@419` — the name of one state, sorted so it has only one name. */
+export const doorStateKey = (parts) =>
+  [...parts].sort((a, b) => a.id - b.id).map(p => `sector${p.id}@${p.kod}`).join('+');
+
+/**
+ * Move a room's doors to the state the server says they are in.
+ *
+ * @param map      the world map, for its geometry
+ * @param roomNum  the room
+ * @param observed sector id -> kod height, as `BP_SECTOR_MOVE` reported it. The client
+ *                 keeps exactly this in `client.room.sectorHeights`.
+ *
+ * WHAT IT REFUSES, AND WHY IT REFUSES RATHER THAN APPROXIMATES. A state with no baked mask
+ * is left alone, on the shipped geometry, and reported. The alternative would be to
+ * compose the single-sector masks, and that is not sound: a door that RISES removes legal
+ * steps, so OR-ing two masks is a wish rather than a state. Measured on room 951, the mask
+ * for `{3:356, 4:419}` is neither of its halves and is not the baseline. Refusing costs a
+ * door that stays shut in our model — which is exactly today's behaviour, so nothing
+ * regresses — while guessing costs a character walking at a wall it believes is a doorway.
+ *
+ * AND IT NEVER REBUILDS A MASK LIVE. `buildStepMask` is 2.4s for room 951 and 6.8s for 599
+ * on this machine; a keeper whose loop blocks is silent, and the server logs a silent
+ * keeper out at 30 seconds.
+ */
+export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
+  const variants = doorVariants(roomNum);
+  if (!variants) return { changed: false, state: null, why: 'no baked door states for this room' };
+  const room = map?.rooms?.[roomNum] ?? map?.rooms?.[String(roomNum)];
+  const geometry = geometryOf ? geometryOf(room) : (room ? sharedRoomGeometry(room) : null);
+  if (!geometry?.sectors) return { changed: false, state: null, why: 'no geometry for this room' };
+
+  // WHERE EACH SECTOR LIVES, learned from the variants themselves rather than from the
+  // collision payload — which stores floor heights but not sector ids, and so cannot say
+  // which of its 223 sectors is the one the wire calls 3.
+  const indices = new Map();
+  for (const variant of Object.values(variants))
+    for (const s of variant.sectors ?? []) {
+      // A Set, because the same sector appears in several variants and a room may carry
+      // the same id on more than one collision record (room 532's door is two of them).
+      if (!indices.has(s.id)) indices.set(s.id, new Set());
+      indices.get(s.id).add(s.index);
+    }
+
+  if (!DOOR_BASELINE.has(roomNum)) {
+    const shipped = new Map();
+    for (const list of indices.values())
+      for (const index of list) shipped.set(index, geometry.sectors[index]?.floorHeight ?? null);
+    DOOR_BASELINE.set(roomNum, shipped);
+  }
+  const shipped = DOOR_BASELINE.get(roomNum);
+
+  // A SECTOR AT ITS SHIPPED HEIGHT IS NOT PART OF THE STATE. The bake drops the state that
+  // equals the baseline, so including it would name a key that was deliberately not
+  // stored, and a shut door would read as unbaked instead of as ordinary.
+  const deviations = [];
+  for (const [id, kod] of observed instanceof Map ? observed : Object.entries(observed ?? {})) {
+    const height = typeof kod === 'object' ? kod?.height : kod;
+    const idNum = Number(id);
+    if (!Number.isFinite(height) || !indices.has(idNum)) continue;
+    const floor = heightKodToClient(height);
+    if ([...indices.get(idNum)].every(i => shipped.get(i) === floor)) continue;
+    deviations.push({ id: idNum, kod: height, floor });
+  }
+
+  const key = deviations.length ? doorStateKey(deviations) : null;
+  if (DOOR_STATE.get(roomNum) === key) return { changed: false, state: key, why: 'already there' };
+
+  if (key == null) {
+    // Back to what the .roo shipped, which is the mask the routing table already holds.
+    const baked = attachedTable?.rooms?.[String(roomNum)]?.stepMask;
+    if (typeof baked !== 'string')
+      return { changed: false, state: DOOR_STATE.get(roomNum) ?? null,
+               why: 'no baseline mask to return to' };
+    const bytes = Buffer.from(baked, 'base64');
+    const result = applySectorHeights(geometry, [...shipped].map(([index, floor]) => ({ index, floor })),
+      { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
+    DOOR_STATE.set(roomNum, null);
+    return { changed: result.moved > 0, state: null, shut: true, ...(result.why ? { why: result.why } : {}) };
+  }
+
+  const variant = variants[key];
+  if (!variant) {
+    return { changed: false, state: DOOR_STATE.get(roomNum) ?? null, unbaked: key,
+             why: `the server reports ${key}, which has no baked mask — left on the shipped ` +
+                  `state rather than guessed at` };
+  }
+  const bytes = Buffer.from(variant.mask, 'base64');
+  // Every door sector goes to where this STATE puts it — including the ones this state
+  // leaves at the shipped height, which a previous state may have moved.
+  const put = new Map([...shipped].map(([index, floor]) => [index, floor]));
+  for (const s of variant.sectors ?? []) put.set(s.index, s.floor);
+  const result = applySectorHeights(geometry, [...put].map(([index, floor]) => ({ index, floor })),
+    { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
+  DOOR_STATE.set(roomNum, key);
+  return { changed: result.moved > 0, state: key, ...(result.why ? { why: result.why } : {}) };
+}
+
+/** What state each room's doors are currently modelled in. For the boards and the tests. */
+export const doorStates = () => Object.fromEntries(DOOR_STATE);
+
+/** Forget every door state — for tests, which must not inherit one another's rooms. */
+export function resetDoorStates() { DOOR_STATE.clear(); DOOR_BASELINE.clear(); }
 
 /** Is this room's exit set split by geometry, and into how many reachable groups? */
 export function regionsOf(table, roomNum) {

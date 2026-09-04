@@ -28,7 +28,7 @@ import { loadMap, buildReverseEdges, resolveRoom } from './m59-map.mjs';
 import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.mjs';
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
-import { attachStepMasks } from './m59-routes.mjs';
+import { attachStepMasks, applyDoorState } from './m59-routes.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
@@ -393,6 +393,38 @@ async function joinGenerationOnce(generation) {
     connectionRevision++;
     cancelInitialJoinRetry();
     console.error(`[keeper] ${agent} joined as ${session.client?.me?.name ?? character}`);
+
+    // THE DOORS THAT ARE FLOORS — move the bake to the state the SERVER says it is in.
+    //
+    // A Meridian 59 door is usually a sector that lifts past the 384-unit step limit, and
+    // the .roo ships whichever state the room was authored in. So the bake held the Duke's
+    // feast door shut for ever: four journeys walked eleven hops to Blackstone Keep, could
+    // not take the last step, and the doctrine reported the hall LOCKED for a day while it
+    // stood open. `applyDoorState` swaps in the mask baked for the live state and moves the
+    // sector heights under it, so the router and the mover change their minds together —
+    // the mask alone moves only the router, and that is a plan the mover then refuses.
+    //
+    // ARRIVAL IS COVERED, not just changes we happen to witness. room.kod's SetSector keeps
+    // every change in `plSector_changes` and `SendSectorChanges` replays the lot at speed 0
+    // to a user "when gets into new room" — so a character walking into a room whose door
+    // opened yesterday is told about it, and this fires on that just as it does on a door
+    // moving in front of us.
+    session.client?.on?.('sector-height', () => {
+      // `session.world.room.num` and NOT the client's `room.id`, which is the room OBJECT
+      // id — a different number, and one this repository already warns is not stable.
+      const num = Number(session.world?.room?.num);
+      if (!Number.isFinite(num)) return;
+      try {
+        const out = applyDoorState(loadMap(), num, session.client?.room?.sectorHeights ?? new Map());
+        // Only the transitions, never the steady state — this fires per packet and a door
+        // that is animating sends a stream of them.
+        if (out.changed) console.error(`[keeper] ${agent} room ${num} doors -> ${out.state ?? 'as shipped'}`);
+        // An unbaked state is worth one line, because it is the case where we KNOW the bake
+        // disagrees with the server and are deliberately not guessing. Silence here is how
+        // the feast hall went unexplained for a day.
+        else if (out.unbaked) console.error(`[keeper] ${agent} room ${num} ${out.why}`);
+      } catch (error) { console.error(`[keeper] ${agent} door state: ${error.message}`); }
+    });
 
     // LISTEN. THIS IS WHERE THE SOCKET IS, AND FOR A YEAR IT WAS NOWHERE.
     //

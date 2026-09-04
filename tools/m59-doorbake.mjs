@@ -21,6 +21,11 @@
 // square is passable at one height and not at the other. For each, this bakes the room
 // again with that sector at each height the kod ever sets it to.
 //
+// Each variant is `{ index, floor, mask }`: the collision sector's INDEX and its floor in
+// CLIENT units, because a running broker decoded its rooms from `m59-map.json` and that
+// payload does not carry `serverId` — it could not resolve "sector 3" on its own. With
+// those two numbers it can move the door in place (`applySectorHeights`) without the .roo.
+//
 // The key is `sector<N>@<kodHeight>`, stored UNDER THE ROOM. The room is the container, so
 // it is not in the key; the sector is, because a room can have several independent doors —
 // Blackstone Keep has three, east, west and the feast door, and "room 951 at height 356"
@@ -44,7 +49,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { geometryWithSectorHeights, STEP_MASK_VERSION } from './m59-roo.mjs';
+import { geometryWithSectorHeights, heightKodToClient, STEP_MASK_VERSION } from './m59-roo.mjs';
 
 const HERE = (p) => fileURLToPath(new URL(p, import.meta.url));
 const ROUTES = HERE('../substrate/m59-routes.json');
@@ -65,12 +70,34 @@ const b64 = (mask) => Buffer.from(mask).toString('base64');
  */
 export function doorStates(roomEntry) {
   const out = [];
+  const seen = new Set();
+  const push = (parts) => {
+    const state = [...parts].sort((a, b) => a.sector - b.sector);
+    const key = stateKey(state);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(state);
+  };
   for (const sector of roomEntry.sectors ?? []) {
     if (!sector.gates) continue;
-    for (const height of sector.heights) out.push({ sector: sector.serverId ?? sector.sector, height, name: sector.name });
+    for (const height of sector.heights)
+      push([{ sector: sector.serverId ?? sector.sector, height, name: sector.name }]);
   }
+  // AND THE STATES THE WORLD ACTUALLY SETS, which are not always one sector at a time.
+  // duke2.kod's feast hall is TWO sectors that swap: open is `{3:356, 4:419}` and shut is
+  // `{3:420, 4:356}`. Measured 2026-09-04, the mask for that pair is not the mask for
+  // either half alone and is not the baseline — so a bake holding only single-sector
+  // variants has no mask for the state the live server is in, which is the one that
+  // matters. Single-sector masks cannot be composed into it either: a door that RISES
+  // removes steps, so OR-ing two masks is not a state, it is a wish.
+  for (const group of roomEntry.groups ?? []) push(group.states);
   return out;
 }
+
+/** `sector3@356+sector4@419` — sorted, so one state has exactly one name. */
+export const stateKey = (state) =>
+  [...state].sort((a, b) => a.sector - b.sector)
+            .map(s => `sector${s.sector}@${s.height}`).join('+');
 
 export function bakeRoomDoors(roomNum, rooFile, states, { baselineMask = null } = {}) {
   const path = join(ROOMS_DIR, rooFile);
@@ -90,8 +117,8 @@ export function bakeRoomDoors(roomNum, rooFile, states, { baselineMask = null } 
   const variants = {};
   let inert = 0;
   for (const state of states) {
-    const { geometry, moved } = geometryWithSectorHeights(buf, { [state.sector]: state.height },
-                                                          { file: rooFile });
+    const overrides = Object.fromEntries(state.map(s => [s.sector, s.height]));
+    const { geometry, moved } = geometryWithSectorHeights(buf, overrides, { file: rooFile });
     if (!moved) continue;                 // a sector this room does not actually have
     const mask = b64(geometry.buildStepMask());
     // A VARIANT THAT EQUALS THE BASELINE IS NOT A VARIANT. Two reasons it happens, and
@@ -109,7 +136,32 @@ export function bakeRoomDoors(roomNum, rooFile, states, { baselineMask = null } 
     // genuinely differ from it. Measured: room 951 goes from eight variants to four,
     // 532 from six to one.
     if (mask === baseB64) { inert++; continue; }
-    variants[`sector${state.sector}@${state.height}`] = mask;
+    // THE INDEX IS THE HALF THE RUNTIME CANNOT WORK OUT FOR ITSELF. A broker decodes its
+    // rooms from `m59-map.json`, whose collision payload stores each sector's height but
+    // not its `serverId` — so "sector 3" is a number it has no way to resolve. We are
+    // holding the parse that knows, so it is written down here: the position in the sector
+    // array, which `encodeCollisionSectors` preserves index for index (verified against
+    // the baked room 951 — 223 sectors, floor heights identical in order).
+    //
+    // ONE SERVER ID, SEVERAL SECTOR RECORDS. A `.roo` may carry the same `serverId` on more
+    // than one sector — the kod addresses the id and the server moves all of them — and
+    // room 532 does exactly that. So every matching record is listed, not the first: a
+    // runtime that patched one of them would move half a door and then enforce the half it
+    // had moved. (This is also how a `moved !== state.length` sanity check, which assumed
+    // one record per id, silently threw away six of that room's eight states.)
+    const sectors = [];
+    for (const want of state) {
+      const hits = base.geometry.sectors
+        .map((g, i) => (g.serverId === want.sector ? i : -1)).filter(i => i >= 0);
+      if (!hits.length) { sectors.length = 0; break; }
+      // `id` is the sector as the kod and the wire name it; `index` is where it landed in
+      // the collision array. Both, because the runtime is TOLD an id by BP_SECTOR_MOVE and
+      // can only patch an index, and one variant may name several of each.
+      for (const index of hits)
+        sectors.push({ id: want.sector, index, floor: heightKodToClient(want.height) });
+    }
+    if (!sectors.length) { inert++; continue; }
+    variants[stateKey(state)] = { sectors, mask };
   }
   return { room: roomNum, baseline_matches: baselineMask == null ? null : true,
            variants, count: Object.keys(variants).length, inert };

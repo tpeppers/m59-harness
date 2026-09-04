@@ -1,7 +1,7 @@
 {
  "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
  "max_step_height": 384,
- "built_at": "2026-09-04T17:05:38.874Z",
+ "built_at": "2026-09-04T18:09:19.446Z",
  "rooms": [
   {
    "room": 27,
@@ -83,7 +83,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 47,
@@ -105,7 +106,8 @@
      "gates": true,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 48,
@@ -142,7 +144,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 60,
@@ -281,7 +284,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 532,
@@ -438,6 +442,42 @@
      "gates": false,
      "headroom_risk": false
     }
+   ],
+   "groups": [
+    {
+     "line": 188,
+     "states": [
+      {
+       "sector": 9,
+       "height": 364,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 17,
+       "height": 120,
+       "name": null,
+       "kind": "floor"
+      }
+     ]
+    },
+    {
+     "line": 203,
+     "states": [
+      {
+       "sector": 9,
+       "height": 444,
+       "name": null,
+       "kind": "floor"
+      },
+      {
+       "sector": 17,
+       "height": 464,
+       "name": null,
+       "kind": "floor"
+      }
+     ]
+    }
    ]
   },
   {
@@ -460,7 +500,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 598,
@@ -482,7 +523,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 599,
@@ -504,7 +546,8 @@
      "gates": true,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 701,
@@ -556,7 +599,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 702,
@@ -683,7 +727,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 704,
@@ -750,7 +795,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 706,
@@ -892,7 +938,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 707,
@@ -1049,7 +1096,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 709,
@@ -1086,7 +1134,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 710,
@@ -1228,7 +1277,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 711,
@@ -1265,7 +1315,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 712,
@@ -1317,7 +1368,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 750,
@@ -1355,7 +1407,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 801,
@@ -1377,7 +1430,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 802,
@@ -1399,7 +1453,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 951,
@@ -1465,6 +1520,59 @@
      ],
      "gates": true,
      "headroom_risk": false
+    }
+   ],
+   "groups": [
+    {
+     "line": 113,
+     "states": [
+      {
+       "sector": 3,
+       "height": 420,
+       "name": "FEAST_DOOR_CLOSED",
+       "kind": "floor"
+      },
+      {
+       "sector": 4,
+       "height": 356,
+       "name": "FEAST_DOOR_OPEN",
+       "kind": "floor"
+      }
+     ]
+    },
+    {
+     "line": 131,
+     "states": [
+      {
+       "sector": 3,
+       "height": 356,
+       "name": "FEAST_DOOR_CLOSED",
+       "kind": "floor"
+      },
+      {
+       "sector": 4,
+       "height": 419,
+       "name": "FEAST_DOOR_OPEN",
+       "kind": "floor"
+      }
+     ]
+    },
+    {
+     "line": 171,
+     "states": [
+      {
+       "sector": 1,
+       "height": 436,
+       "name": "EAST_DOOR",
+       "kind": "floor"
+      },
+      {
+       "sector": 2,
+       "height": 436,
+       "name": "WEST_DOOR",
+       "kind": "floor"
+      }
+     ]
     }
    ]
   },
@@ -1624,7 +1732,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 2500,
@@ -1647,7 +1756,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 2507,
@@ -1669,7 +1779,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 2508,
@@ -1691,7 +1802,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 2600,
@@ -1781,7 +1893,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 2601,
@@ -1803,7 +1916,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": 2602,
@@ -1870,7 +1984,8 @@
      "gates": false,
      "headroom_risk": true
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": null,
@@ -2057,7 +2172,8 @@
      "gates": false,
      "headroom_risk": false
     }
-   ]
+   ],
+   "groups": []
   },
   {
    "room": null,
@@ -2111,6 +2227,42 @@
      ],
      "gates": true,
      "headroom_risk": false
+    }
+   ],
+   "groups": [
+    {
+     "line": 476,
+     "states": [
+      {
+       "sector": 4,
+       "height": 500,
+       "name": "SECTOR_NODE1",
+       "kind": "floor"
+      },
+      {
+       "sector": 5,
+       "height": 519,
+       "name": "SECTOR_NODE2",
+       "kind": "floor"
+      }
+     ]
+    },
+    {
+     "line": 512,
+     "states": [
+      {
+       "sector": 4,
+       "height": 105,
+       "name": "SECTOR_NODE1",
+       "kind": "floor"
+      },
+      {
+       "sector": 5,
+       "height": 124,
+       "name": "SECTOR_NODE2",
+       "kind": "floor"
+      }
+     ]
     }
    ]
   }

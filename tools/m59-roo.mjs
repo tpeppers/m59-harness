@@ -4283,6 +4283,70 @@ export function geometryWithSectorHeights(buf, overrides = {}, { file = '', mask
   return { geometry, moved };
 }
 
+/**
+ * Move a door on geometry that is ALREADY BUILT — the runtime half of the above.
+ *
+ * `geometryWithSectorHeights` needs the .roo bytes and rebuilds everything. A running
+ * broker has neither: it decoded its rooms from `m59-map.json`, whose collision payload
+ * carries each sector's floor height but NOT its `serverId` (see m59-doorbake.mjs). So the
+ * caller passes the collision sector's INDEX, which the bake resolved and wrote down, and
+ * this patches the decoded geometry in place.
+ *
+ * Verified against the real baked room 951 on 2026-09-04, with no .roo in the process:
+ * patching index 218 to 356 takes the feast exits from a 38-square island to 682 squares,
+ * and `stepAllowedByCollision(9,13 -> 10,14)` goes false -> true. That second half is the
+ * one that matters: the mask alone moves the ROUTER and leaves the MOVER refusing, which
+ * is the plan/enforce divergence this repository exists to avoid.
+ *
+ * A MASK MUST BE SUPPLIED, and this refuses without one. Rebuilding it live is not an
+ * option on any path a keeper is on: measured on this machine, `buildStepMask` is 2.4s for
+ * room 951 and 6.8s for 599, and a keeper whose event loop is blocked is silent, and the
+ * server logs a silent keeper out at 30 seconds. The bake is not an optimisation here, it
+ * is the only reason a door can move at runtime at all.
+ *
+ * Returns `{ moved, restore }`, where `restore` is the argument that puts it back — so the
+ * caller can revert without having to have remembered the shipped heights.
+ *
+ * @param {RoomGeometry} geometry  built, and about to be mutated
+ * @param {Array<{index:number, floor:number}>} overrides  collision sector index (0-based,
+ *        as decoded) and the floor height in CLIENT units, which is what the bake stores
+ * @param {Uint8Array} mask  the step mask baked for the state being applied
+ */
+export function applySectorHeights(geometry, overrides = [], { mask = null } = {}) {
+  if (!geometry?.sectors || !geometry?.walls) return { moved: 0, restore: [], why: 'no geometry' };
+  if (!(mask instanceof Uint8Array))
+    return { moved: 0, restore: [], why: 'a door may not move without the mask baked for it' };
+
+  const restore = [];
+  let moved = 0;
+  for (const { index, floor } of overrides) {
+    const sector = geometry.sectors[index];
+    if (!sector || !Number.isFinite(floor)) continue;
+    if (sector.floorHeight === floor) continue;
+    restore.push({ index, floor: sector.floorHeight });
+    sector.floorHeight = floor;
+    moved++;
+  }
+  if (!moved) return { moved: 0, restore: [], why: 'already at that height' };
+
+  // The line whose absence produced a false negative and a wrong conclusion out loud.
+  for (const wall of geometry.walls) setWallHeights(wall, geometry.sectors);
+
+  // EVERY MEMO THAT ASKED THE OLD HEIGHTS. Three are keyed on a step and two on a room
+  // edge; all five answer from wall z values that have just changed underneath them, and a
+  // stale entry here is a door that reads open in one direction and shut in the other.
+  geometry._stepCollisionCache = null;
+  geometry._moverStepCache = null;
+  geometry._fallCache = null;
+  geometry._edgeOpeningCache = new Map();
+  geometry._edgeApproachCache = new Map();
+
+  if (!geometry.attachStepMask(mask))
+    return { moved, restore, why: 'the mask is the wrong size for this room — geometry moved, ' +
+                                  'mask refused, and the two now disagree' };
+  return { moved, restore };
+}
+
 export function readRooFileBounded(file, maximum = MAX_ROO_FILE_BYTES) {
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_ROO_FILE_BYTES)
     throw new Error(`ROO read ceiling must be in 1..${MAX_ROO_FILE_BYTES} bytes`);
