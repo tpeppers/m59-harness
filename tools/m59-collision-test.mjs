@@ -1631,6 +1631,39 @@ console.log('\nclient protocol bounds and live geometry invalidation');
      JSON.stringify({ sector: movingSector.room.collisionInvalidated,
        wall: movingWall.room.collisionInvalidated,
        texture: lowerTexture.room.collisionInvalidated }));
+
+  // A MOVING FLOOR TELLS US WHERE IT MOVED TO, AND WE USED TO DROP THAT ON THE GROUND.
+  //
+  // HandleSectorMove (clientd3d/server.c:1453) is `type(1) sector_num(2) height(2) speed(1)`.
+  // Reading the sector and discarding the height made every door in the world permanently
+  // unknown: the bake holds the authored state, the refusal lapses after a few seconds, and
+  // the mover goes back to trusting a snapshot of a floor that has since lifted.
+  //
+  // Twelve sectors in this world cross MAX_STEP_HEIGHT (384) and are therefore doors — see
+  // tools/m59-varsectors.mjs. One of them is the way into the Duke's Feast Hall, which cost
+  // a fleet four eleven-hop journeys and a day of a doctrine reporting "the hall is locked"
+  // while it stood open.
+  const doorOpens = newClient();
+  const openBody = Buffer.alloc(6);
+  openBody.writeUInt16LE(3, 1);        // FEAST_DOOR_CLOSED in Blackstone Keep
+  openBody.writeUInt16LE(356, 3);      // ...dropping to the passable side of 384
+  doorOpens.onGameMessage(BP.SECTOR_MOVE, openBody);
+  ok('a sector move records the height the server actually moved it to',
+     doorOpens.room.sectorHeights?.get(3)?.height === 356,
+     JSON.stringify([...(doorOpens.room.sectorHeights ?? new Map())]));
+  ok('and the height rides along on the invalidation record too',
+     doorOpens.room.collisionInvalidated?.sector === 3 &&
+     doorOpens.room.collisionInvalidated?.height === 356,
+     JSON.stringify(doorOpens.room.collisionInvalidated));
+
+  // A SHORT PACKET IS NOT A HEIGHT OF ZERO. Zero is a floor at the bottom of the world and
+  // would read as "wide open" — the most dangerous possible default for a door.
+  const shortPacket = newClient();
+  shortPacket.onGameMessage(BP.SECTOR_MOVE, Buffer.alloc(3));
+  ok('a truncated sector move records no height rather than guessing one',
+     (shortPacket.room.sectorHeights?.size ?? 0) === 0 &&
+     shortPacket.room.collisionInvalidated?.height === null,
+     JSON.stringify(shortPacket.room.collisionInvalidated));
 }
 
 console.log('\nterminal movement propagation and edge packet authority');

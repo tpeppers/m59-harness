@@ -1,0 +1,1628 @@
+{
+ "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
+ "max_step_height": 384,
+ "built_at": "2026-09-04T16:40:57.339Z",
+ "rooms": [
+  {
+   "room": 27,
+   "rid": "RID_CAVE2",
+   "file": "object/active/holder/room/monsroom/objroom/cave2.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": null,
+     "heights": [
+      24,
+      128
+     ],
+     "cite_lines": [
+      94,
+      114
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": null,
+     "heights": [
+      24,
+      56
+     ],
+     "cite_lines": [
+      95,
+      115
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": null,
+     "heights": [
+      24,
+      48
+     ],
+     "cite_lines": [
+      96,
+      116
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": null,
+     "heights": [
+      24,
+      40
+     ],
+     "cite_lines": [
+      97,
+      117
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": null,
+     "heights": [
+      24,
+      32
+     ],
+     "cite_lines": [
+      98,
+      118
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 47,
+   "rid": "RID_CANYON2",
+   "file": "object/active/holder/room/monsroom/objroom/canyon2.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      340,
+      440
+     ],
+     "cite_lines": [
+      122,
+      140
+     ],
+     "gates": true
+    }
+   ]
+  },
+  {
+   "room": 48,
+   "rid": "RID_TEMPLE",
+   "file": "object/active/holder/room/temple.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      188
+     ],
+     "cite_lines": [
+      81
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_PILLAR",
+     "heights": [
+      72
+     ],
+     "cite_lines": [
+      83
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 60,
+   "rid": "RID_TOS_ARENA",
+   "file": "object/active/holder/room/tosrm/tosarena.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": null,
+     "heights": [
+      129,
+      192
+     ],
+     "cite_lines": [
+      481,
+      486,
+      492,
+      582
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": null,
+     "heights": [
+      129,
+      192
+     ],
+     "cite_lines": [
+      487,
+      493,
+      540,
+      552
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": null,
+     "heights": [
+      129,
+      192
+     ],
+     "cite_lines": [
+      494,
+      499,
+      504,
+      584
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": null,
+     "heights": [
+      129,
+      192
+     ],
+     "cite_lines": [
+      505,
+      522,
+      529,
+      546
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": null,
+     "heights": [
+      129,
+      192
+     ],
+     "cite_lines": [
+      510,
+      515,
+      521,
+      527
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": null,
+     "heights": [
+      129,
+      192
+     ],
+     "cite_lines": [
+      516,
+      528,
+      534,
+      539
+     ],
+     "gates": false
+    },
+    {
+     "sector": 8,
+     "name": null,
+     "heights": [
+      124,
+      194
+     ],
+     "cite_lines": [
+      563,
+      594
+     ],
+     "gates": false
+    },
+    {
+     "sector": 9,
+     "name": null,
+     "heights": [
+      230,
+      300
+     ],
+     "cite_lines": [
+      564,
+      595
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 532,
+   "rid": "RID_C2",
+   "file": "object/active/holder/room/monsroom/feyforst/c2.kod",
+   "sectors": [
+    {
+     "sector": 15,
+     "name": null,
+     "heights": [
+      120,
+      288
+     ],
+     "cite_lines": [
+      189,
+      204
+     ],
+     "gates": false
+    },
+    {
+     "sector": 16,
+     "name": null,
+     "heights": [
+      120,
+      208
+     ],
+     "cite_lines": [
+      191,
+      206
+     ],
+     "gates": false
+    },
+    {
+     "sector": 17,
+     "name": null,
+     "heights": [
+      120,
+      464
+     ],
+     "cite_lines": [
+      193,
+      208
+     ],
+     "gates": true
+    },
+    {
+     "sector": 18,
+     "name": null,
+     "heights": [
+      128,
+      364
+     ],
+     "cite_lines": [
+      195,
+      210
+     ],
+     "gates": false
+    },
+    {
+     "sector": 9,
+     "name": null,
+     "heights": [
+      364,
+      444
+     ],
+     "cite_lines": [
+      197,
+      212
+     ],
+     "gates": true
+    },
+    {
+     "sector": 10,
+     "name": null,
+     "heights": [
+      464,
+      544
+     ],
+     "cite_lines": [
+      199,
+      214
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": null,
+     "heights": [
+      120,
+      288
+     ],
+     "cite_lines": [
+      221,
+      232
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": null,
+     "heights": [
+      120,
+      208
+     ],
+     "cite_lines": [
+      223,
+      234
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": null,
+     "heights": [
+      120,
+      464
+     ],
+     "cite_lines": [
+      225,
+      236
+     ],
+     "gates": true
+    },
+    {
+     "sector": 8,
+     "name": null,
+     "heights": [
+      128,
+      364
+     ],
+     "cite_lines": [
+      227,
+      238
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 599,
+   "rid": "RID_I9",
+   "file": "object/active/holder/room/monsroom/i9.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      340,
+      440
+     ],
+     "cite_lines": [
+      119,
+      136
+     ],
+     "gates": true
+    }
+   ]
+  },
+  {
+   "room": 701,
+   "rid": "RID_GUILDH1",
+   "file": "object/active/holder/room/ghall/guildh1.kod",
+   "sectors": [
+    {
+     "sector": 3,
+     "name": "ENTRANCE",
+     "heights": [
+      128,
+      200
+     ],
+     "cite_lines": [
+      125,
+      137
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": "OUT1",
+     "heights": [
+      16,
+      80
+     ],
+     "cite_lines": [
+      149,
+      163
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "OUT2",
+     "heights": [
+      16,
+      80
+     ],
+     "cite_lines": [
+      151,
+      165
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 702,
+   "rid": "RID_GUILDH2",
+   "file": "object/active/holder/room/ghall/guildh2.kod",
+   "sectors": [
+    {
+     "sector": 3,
+     "name": "MAINDOOR",
+     "heights": [
+      24,
+      88
+     ],
+     "cite_lines": [
+      155,
+      243
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "CLOSET",
+     "heights": [
+      24,
+      96
+     ],
+     "cite_lines": [
+      171,
+      254
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": "EASTDOOR",
+     "heights": [
+      96,
+      168
+     ],
+     "cite_lines": [
+      188,
+      264
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": "OFFICEDOOR",
+     "heights": [
+      176
+     ],
+     "cite_lines": [
+      198
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": "SOUTHDOOR",
+     "heights": [
+      24,
+      96
+     ],
+     "cite_lines": [
+      208,
+      284
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": "WESTDOOR",
+     "heights": [
+      24,
+      184
+     ],
+     "cite_lines": [
+      218,
+      294
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": "BOOKS",
+     "heights": [
+      104
+     ],
+     "cite_lines": [
+      232
+     ],
+     "gates": false
+    },
+    {
+     "sector": 8,
+     "name": "RAIDDOOR",
+     "heights": [
+      104,
+      184
+     ],
+     "cite_lines": [
+      303,
+      312
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 704,
+   "rid": "RID_GUILDH4",
+   "file": "object/active/holder/room/ghall/guildh4.kod",
+   "sectors": [
+    {
+     "sector": 4,
+     "name": "WESTDOOR",
+     "heights": [
+      128,
+      204
+     ],
+     "cite_lines": [
+      258,
+      303
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": "EASTDOOR",
+     "heights": [
+      128,
+      204
+     ],
+     "cite_lines": [
+      260,
+      312
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": "MASTERDOOR",
+     "heights": [
+      128,
+      204
+     ],
+     "cite_lines": [
+      262,
+      321
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": "ASSISTDOOR",
+     "heights": [
+      128,
+      204
+     ],
+     "cite_lines": [
+      264,
+      330
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 706,
+   "rid": "RID_GUILDH7",
+   "file": "object/active/holder/room/ghall/guildh7.kod",
+   "sectors": [
+    {
+     "sector": 7,
+     "name": "SWDOOR",
+     "heights": [
+      32,
+      132
+     ],
+     "cite_lines": [
+      202,
+      231
+     ],
+     "gates": false
+    },
+    {
+     "sector": 8,
+     "name": "NWDOOR",
+     "heights": [
+      136,
+      228
+     ],
+     "cite_lines": [
+      210,
+      241
+     ],
+     "gates": false
+    },
+    {
+     "sector": 9,
+     "name": "NEDOOR",
+     "heights": [
+      152,
+      252
+     ],
+     "cite_lines": [
+      218,
+      251
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": "STEP1",
+     "heights": [
+      58,
+      154
+     ],
+     "cite_lines": [
+      262,
+      284
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "STEP2",
+     "heights": [
+      72,
+      148
+     ],
+     "cite_lines": [
+      264,
+      286
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": "STEP3",
+     "heights": [
+      86,
+      144
+     ],
+     "cite_lines": [
+      266,
+      288
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": "STEP4",
+     "heights": [
+      90,
+      140
+     ],
+     "cite_lines": [
+      268,
+      290
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": "STEP5",
+     "heights": [
+      104,
+      136
+     ],
+     "cite_lines": [
+      270,
+      292
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": "STEP6",
+     "heights": [
+      128,
+      132
+     ],
+     "cite_lines": [
+      272,
+      294
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 707,
+   "rid": "RID_GUILDH5",
+   "file": "object/active/holder/room/ghall/guildh5.kod",
+   "sectors": [
+    {
+     "sector": 3,
+     "name": null,
+     "heights": [
+      78,
+      150
+     ],
+     "cite_lines": [
+      210,
+      226
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": null,
+     "heights": [
+      70,
+      150
+     ],
+     "cite_lines": [
+      212,
+      228
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": null,
+     "heights": [
+      86,
+      150
+     ],
+     "cite_lines": [
+      214,
+      230
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": null,
+     "heights": [
+      125
+     ],
+     "cite_lines": [
+      286
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": null,
+     "heights": [
+      157
+     ],
+     "cite_lines": [
+      288
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": null,
+     "heights": [
+      70,
+      168
+     ],
+     "cite_lines": [
+      311,
+      382
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": null,
+     "heights": [
+      54,
+      134
+     ],
+     "cite_lines": [
+      320,
+      391
+     ],
+     "gates": false
+    },
+    {
+     "sector": 8,
+     "name": null,
+     "heights": [
+      54,
+      134
+     ],
+     "cite_lines": [
+      330,
+      401
+     ],
+     "gates": false
+    },
+    {
+     "sector": 9,
+     "name": null,
+     "heights": [
+      0,
+      70
+     ],
+     "cite_lines": [
+      356,
+      370
+     ],
+     "gates": false
+    },
+    {
+     "sector": 10,
+     "name": null,
+     "heights": [
+      0,
+      70
+     ],
+     "cite_lines": [
+      358,
+      372
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 709,
+   "rid": "RID_GUILDH9",
+   "file": "object/active/holder/room/ghall/guildh9.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "MAINDOOR",
+     "heights": [
+      128,
+      224
+     ],
+     "cite_lines": [
+      126,
+      138
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "SECRETDOOR",
+     "heights": [
+      128,
+      224
+     ],
+     "cite_lines": [
+      149,
+      161
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 711,
+   "rid": "RID_GUILDH6",
+   "file": "object/active/holder/room/ghall/guildh6.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "GH6ENTRANCE",
+     "heights": [
+      128,
+      208
+     ],
+     "cite_lines": [
+      122,
+      134
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": "GH6SECRET",
+     "heights": [
+      160,
+      204
+     ],
+     "cite_lines": [
+      145,
+      157
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 712,
+   "rid": "RID_GUILDH11",
+   "file": "object/active/holder/room/ghall/guildh11.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "MAINDOOR",
+     "heights": [
+      48,
+      128
+     ],
+     "cite_lines": [
+      136,
+      150
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": "MAINDOOR2",
+     "heights": [
+      48,
+      118
+     ],
+     "cite_lines": [
+      138,
+      152
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "SECRETDOOR",
+     "heights": [
+      4,
+      45
+     ],
+     "cite_lines": [
+      163,
+      175
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 750,
+   "rid": "RID_ICE_CAVE1",
+   "file": "object/active/holder/room/monsroom/objroom/icecave1.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "MANA_DOOR",
+     "heights": [
+      380
+     ],
+     "cite_lines": [
+      126
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": "YETI_DOOR",
+     "heights": [
+      380
+     ],
+     "cite_lines": [
+      160
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 801,
+   "rid": "RID_TEMPLE_KRAANAN",
+   "file": "object/active/holder/room/tempkra.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      92,
+      164
+     ],
+     "cite_lines": [
+      112,
+      128
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 802,
+   "rid": "RID_TEMPLE_QOR",
+   "file": "object/active/holder/room/tempqor.kod",
+   "sectors": [
+    {
+     "sector": 4,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      270
+     ],
+     "cite_lines": [
+      180
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 951,
+   "rid": "RID_DUKE2",
+   "file": "object/active/holder/room/duke2.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "EAST_DOOR",
+     "heights": [
+      356,
+      436
+     ],
+     "cite_lines": [
+      87,
+      176
+     ],
+     "gates": true
+    },
+    {
+     "sector": 2,
+     "name": "WEST_DOOR",
+     "heights": [
+      356,
+      436
+     ],
+     "cite_lines": [
+      98,
+      174
+     ],
+     "gates": true
+    },
+    {
+     "sector": 4,
+     "name": "FEAST_DOOR_OPEN",
+     "heights": [
+      356,
+      419
+     ],
+     "cite_lines": [
+      116,
+      134
+     ],
+     "gates": true
+    },
+    {
+     "sector": 3,
+     "name": "FEAST_DOOR_CLOSED",
+     "heights": [
+      356,
+      420
+     ],
+     "cite_lines": [
+      118,
+      132
+     ],
+     "gates": true
+    }
+   ]
+  },
+  {
+   "room": 2151,
+   "rid": "RID_TEMPLE_RIIJA",
+   "file": "object/active/holder/room/temprii.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": null,
+     "heights": [
+      392,
+      408,
+      536,
+      544
+     ],
+     "cite_lines": [
+      229,
+      238,
+      301,
+      310
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": null,
+     "heights": [
+      392,
+      536,
+      544
+     ],
+     "cite_lines": [
+      230,
+      239,
+      302,
+      311
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": null,
+     "heights": [
+      392,
+      408,
+      536,
+      544
+     ],
+     "cite_lines": [
+      231,
+      240,
+      303,
+      312
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": null,
+     "heights": [
+      392,
+      480,
+      536,
+      544
+     ],
+     "cite_lines": [
+      232,
+      241,
+      304,
+      313
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": null,
+     "heights": [
+      392,
+      408,
+      472,
+      504
+     ],
+     "cite_lines": [
+      233,
+      242,
+      305,
+      314
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": null,
+     "heights": [
+      392,
+      408,
+      488,
+      536
+     ],
+     "cite_lines": [
+      234,
+      243,
+      306,
+      315
+     ],
+     "gates": false
+    },
+    {
+     "sector": 8,
+     "name": null,
+     "heights": [
+      392,
+      408,
+      488,
+      536
+     ],
+     "cite_lines": [
+      235,
+      244,
+      307,
+      316
+     ],
+     "gates": false
+    },
+    {
+     "sector": 9,
+     "name": null,
+     "heights": [
+      392,
+      480,
+      488,
+      536
+     ],
+     "cite_lines": [
+      236,
+      245,
+      308,
+      317
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 2600,
+   "rid": "RID_MAR_CRYPT1",
+   "file": "object/active/holder/room/monsroom/marcryp1.kod",
+   "sectors": [
+    {
+     "sector": 4,
+     "name": "SECTOR_NECRO1",
+     "heights": [
+      424,
+      458,
+      484
+     ],
+     "cite_lines": [
+      292,
+      302,
+      336,
+      346
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_NECRO2",
+     "heights": [
+      434,
+      468,
+      494
+     ],
+     "cite_lines": [
+      294,
+      304,
+      338,
+      348
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      84,
+      128,
+      172
+     ],
+     "cite_lines": [
+      394,
+      489,
+      499
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": "SECTOR_EXIT1",
+     "heights": [
+      200,
+      273
+     ],
+     "cite_lines": [
+      582,
+      592
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": "SECTOR_EXIT2",
+     "heights": [
+      88,
+      161
+     ],
+     "cite_lines": [
+      584,
+      594
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 2601,
+   "rid": "RID_MAR_CRYPT2",
+   "file": "object/active/holder/room/monsroom/marcryp2.kod",
+   "sectors": [
+    {
+     "sector": 5,
+     "name": "SECTOR_DOOR_CRYPT3A",
+     "heights": [
+      1045,
+      1098
+     ],
+     "cite_lines": [
+      204,
+      215
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": 2602,
+   "rid": "RID_MAR_CRYPT3A",
+   "file": "object/active/holder/room/monsroom/marcry3a.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR_TRAP1",
+     "heights": [
+      1824,
+      1864
+     ],
+     "cite_lines": [
+      278,
+      474
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_DOOR_TRAP2A",
+     "heights": [
+      1910,
+      1958
+     ],
+     "cite_lines": [
+      300,
+      497
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR_TRAP2B",
+     "heights": [
+      1816,
+      1864
+     ],
+     "cite_lines": [
+      303,
+      500
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_DOOR_TRAP3",
+     "heights": [
+      1960,
+      2022
+     ],
+     "cite_lines": [
+      329,
+      529
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": null,
+   "rid": null,
+   "file": "object/active/holder/room/cave3.kod",
+   "sectors": [
+    {
+     "sector": 12,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      260,
+      336
+     ],
+     "cite_lines": [
+      183,
+      218
+     ],
+     "gates": false
+    },
+    {
+     "sector": 6,
+     "name": "SECTOR_TEMPLE1",
+     "heights": [
+      208,
+      300
+     ],
+     "cite_lines": [
+      187,
+      222
+     ],
+     "gates": false
+    },
+    {
+     "sector": 7,
+     "name": "SECTOR_TEMPLE2",
+     "heights": [
+      208,
+      308
+     ],
+     "cite_lines": [
+      189,
+      224
+     ],
+     "gates": false
+    },
+    {
+     "sector": 8,
+     "name": "SECTOR_TEMPLE3",
+     "heights": [
+      208,
+      444
+     ],
+     "cite_lines": [
+      191,
+      226
+     ],
+     "gates": true
+    },
+    {
+     "sector": 9,
+     "name": "SECTOR_TEMPLE4",
+     "heights": [
+      208,
+      372
+     ],
+     "cite_lines": [
+      193,
+      228
+     ],
+     "gates": false
+    },
+    {
+     "sector": 10,
+     "name": "SECTOR_TEMPLE5",
+     "heights": [
+      208,
+      332
+     ],
+     "cite_lines": [
+      195,
+      230
+     ],
+     "gates": false
+    },
+    {
+     "sector": 11,
+     "name": "SECTOR_TEMPLE6",
+     "heights": [
+      208,
+      324
+     ],
+     "cite_lines": [
+      197,
+      232
+     ],
+     "gates": false
+    },
+    {
+     "sector": 1,
+     "name": "SECTOR_STAIR1",
+     "heights": [
+      208,
+      244
+     ],
+     "cite_lines": [
+      201,
+      236
+     ],
+     "gates": false
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_STAIR2",
+     "heights": [
+      208,
+      260
+     ],
+     "cite_lines": [
+      203,
+      238
+     ],
+     "gates": false
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_STAIR3",
+     "heights": [
+      208,
+      276
+     ],
+     "cite_lines": [
+      205,
+      240
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": "SECTOR_STAIR4",
+     "heights": [
+      208,
+      292
+     ],
+     "cite_lines": [
+      207,
+      242
+     ],
+     "gates": false
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_STAIR5",
+     "heights": [
+      208,
+      300
+     ],
+     "cite_lines": [
+      209,
+      244
+     ],
+     "gates": false
+    }
+   ]
+  },
+  {
+   "room": null,
+   "rid": null,
+   "file": "object/active/holder/room/monsroom/guest6.kod",
+   "sectors": [
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR",
+     "heights": [
+      84,
+      128,
+      172
+     ],
+     "cite_lines": [
+      406,
+      413,
+      430,
+      451
+     ],
+     "gates": false
+    },
+    {
+     "sector": 4,
+     "name": "SECTOR_NODE1",
+     "heights": [
+      105,
+      500
+     ],
+     "cite_lines": [
+      484,
+      515
+     ],
+     "gates": true
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_NODE2",
+     "heights": [
+      124,
+      519
+     ],
+     "cite_lines": [
+      486,
+      517
+     ],
+     "gates": true
+    }
+   ]
+  }
+ ]
+}

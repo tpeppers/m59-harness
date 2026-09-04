@@ -1615,19 +1615,52 @@ export class M59Client {
       // anywhere in the Cragged Mountains could never move again — reproduced with the
       // character claimed, six attempts over seventy seconds, never moved a square. The
       // operator had named that room as THE exception to "the geometry does not change".
-      case BP.SECTOR_MOVE:
+      case BP.SECTOR_MOVE: {
+        // THE HEIGHT IS IN THIS PACKET AND WE WERE THROWING IT AWAY.
+        //
+        // `HandleSectorMove` (clientd3d/server.c:1453) reads
+        //     type(1) sector_num(2) height(2) speed(1)
+        // and until now this case read the sector number, armed a short refusal, and
+        // dropped the rest. That made every moving floor permanently unknown: the bake
+        // says whatever the .roo was authored with, the refusal lapses after a few
+        // seconds, and the mover goes back to trusting the snapshot for ever.
+        //
+        // Which is fine for scenery and fatal for a DOOR. A Meridian 59 door is often a
+        // floor that LIFTS: `SetSector` raises it past MAX_STEP_HEIGHT (384) and the same
+        // square stops being climbable. Twelve sectors in the world cross that line —
+        // `tools/m59-varsectors.mjs` derives the list from the kod — and they include the
+        // way into the Duke's Feast Hall and a door in Ukgoth, which this fleet walks
+        // through daily.
+        //
+        // Measured 2026-09-04: four separate journeys walked eleven hops to the feast
+        // hall, reached Blackstone Keep, and could not take the last step. `m59-walksim`
+        // agreed offline — `no route, plan 0 steps` — because the bake holds the door shut
+        // at 420. The doctrine reported "the hall is locked" for a day while it stood open,
+        // because a journey that never arrives is the only symptom it has.
+        //
+        // So the height is kept. This records what the SERVER says the floor is now; it
+        // does not yet decide a step on it — that is the mover's half — but a number we
+        // never read cannot be the basis of anything.
+        const sector = body.length >= 3 ? body.readUInt16LE(1) : null;
+        const height = body.length >= 5 ? body.readUInt16LE(3) : null;
+        if (sector != null && height != null) {
+          (this.room.sectorHeights ??= new Map()).set(sector, { height, at: Date.now() });
+          this.emit('sector-height', { room: this.room?.id ?? null, sector, height });
+        }
         this.room.collisionInvalidated = {
           opcode: op,
           kind: BPNAME[op] || `bp ${op}`,
           // Absent if the packet is short, and the movement check reads a missing sector
           // as "we do not know which" and keeps refusing the whole room — the same safe
           // reading it already applies to a record with no `until`.
-          sector: body.length >= 3 ? body.readUInt16LE(1) : null,
+          sector,
+          height,
           at: Date.now(),
           until: Date.now() + COLLISION_ANIMATION_MS,
         };
         this.emit('collision-geometry-invalidated', { ...this.room.collisionInvalidated });
         break;
+      }
 
       case BP.WALL_ANIMATE: {
         // WORD wall id, then the stock variable-length Animate, then RA_*. The
