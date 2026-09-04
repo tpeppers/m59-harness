@@ -4236,6 +4236,53 @@ const cache = new Map();
 
 export const MAX_ROO_FILE_BYTES = 64 * 1024 * 1024;
 
+/**
+ * The same room with one or more sectors moved to a different height — a DOOR OPEN.
+ *
+ * WHY THIS EXISTS. Many of this world's doors are floors. `SetSector` lifts a sector past
+ * MAX_STEP_HEIGHT and the square stops being climbable; the .roo ships whatever state the
+ * room was authored in, and for a door that is usually SHUT. So the baked geometry holds
+ * every such door closed for ever, and the mover — which is right to enforce the bake —
+ * refuses a step the server would allow. `tools/m59-varsectors.mjs` lists them: twelve
+ * floors in this world gate movement that way.
+ *
+ * AND HERE IS THE PART THAT COSTS AN HOUR IF YOU MISS IT. A wall's z heights are DERIVED
+ * from the sectors either side of it, by `setWallHeights`, ONCE, at parse time. Overriding
+ * `sector.floorHeight` afterwards changes nothing the mover can see, because the mover
+ * tests WALLS: the wall between Blackstone Keep and the feast antechamber keeps
+ * `{p0:5696, p1:6720, ...}` — a 1024-unit step against a 384 limit — and stays impassable
+ * however many times you lower the sector under it. Measured 2026-09-04: overriding the
+ * sector alone left the feast exits stranded in a 38-square island and looked like proof
+ * that the door was innocent. Re-deriving the walls joins that island to the keep's 644-square
+ * body in one step: 38 -> 682 squares, and the Duke's Feast Hall becomes reachable.
+ *
+ * So this re-derives them, and that is the whole reason it is a function rather than two
+ * lines at a call site.
+ *
+ * @param {Buffer} buf   the room file, unparsed — a fresh parse per variant, because
+ *                       sectors and walls are mutated and a shared parse would leak the
+ *                       override into every other caller of the same room.
+ * @param {object} overrides  serverId -> floor height in KOD units, as the kod writes it
+ *                       (`#height=356`). Converted here, so callers quote the kod.
+ */
+export function geometryWithSectorHeights(buf, overrides = {}, { file = '', mask = true } = {}) {
+  const parsed = parseRoo(buf, file);
+  let moved = 0;
+  for (const sector of parsed.sectors) {
+    const want = overrides[sector.serverId];
+    if (want == null) continue;
+    sector.floorHeight = heightKodToClient(want);
+    moved++;
+  }
+  // Only when something actually moved: re-deriving is not free, and a no-op override must
+  // leave the geometry byte-identical to an ordinary parse or the variants are not
+  // comparable with the baseline.
+  if (moved) for (const wall of parsed.walls) setWallHeights(wall, parsed.sectors);
+  const geometry = new RoomGeometry(parsed);
+  if (mask) geometry.attachStepMask(geometry.buildStepMask());
+  return { geometry, moved };
+}
+
 export function readRooFileBounded(file, maximum = MAX_ROO_FILE_BYTES) {
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_ROO_FILE_BYTES)
     throw new Error(`ROO read ceiling must be in 1..${MAX_ROO_FILE_BYTES} bytes`);
