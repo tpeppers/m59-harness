@@ -49,6 +49,10 @@
 // ended up with the goods. A half-finished trade is silent, which is exactly why that
 // tool exists and why this one calls it rather than reimplementing it.
 import { findPath, loadMap } from './m59-map.mjs';
+// WHAT COUNTS AS FOOD IS NOT A WORD LIST. `foodValue` answers out of the game's own Food
+// class tree and returns the vigor a bite is worth, so a courier carrying something the
+// Duke's tables do not dispense still counts, and scenery with a promising name does not.
+import { foodValue } from './m59-items.mjs';
 
 const arg = (n, d = null) => {
   const i = process.argv.indexOf('--' + n);
@@ -76,6 +80,11 @@ export const deliveryHops = (from, to, map = WORLD_MAP) => {
 // Keep the giver able to feed itself: handing away the last of it just moves the
 // problem. One casting is 2 of each, so this is several meals of margin.
 const KEEP_BACK = Number(arg('keep', 20));
+// --food: hand out the Duke's feast instead of reagents. See the block below.
+const FOOD = !!arg('food', false);
+// A stomach admits 100 and the hall's best dish fills 20, so five is one sitting. Ten
+// leaves a courier two sittings of its own before it walks back for more.
+const KEEP_FOOD = Number(arg('keep-food', 10));
 
 let id = 0;
 async function call(name, args = {}) {
@@ -180,6 +189,124 @@ if (!arg('no-signets', false)) {
   console.log('');
 }
 if (arg('signets-only', false)) process.exit(0);
+
+// ------------------------------------------------------------------ or the Duke's feast
+//
+// FOOD MODE — `--food`, for as long as the hall is open.
+//
+// While the Duke's tables give food away the fleet's supply stops being CAST and starts
+// being CARRIED: couriers fill a pack at the hall and walk it home. That inverts the
+// problem below. There is nothing to cook, nothing to pair and no scarce half — just a
+// stack of pork in three packs and, measured on the morning this was written, eleven of
+// fifteen characters sitting at the resting cap of 80 against a target of 140 they had no
+// way to climb to, with one meat pie between the lot of them.
+//
+// It is deliberately the same errand rather than a second tool: same donor-and-recipient
+// shape, same locality preference, same `supply`, same "raise the floor afterwards"
+// ending. Only what counts as a surplus and what counts as need are different.
+//
+// `what: 'food'` IS NOT THE CALL TO MAKE, and this is the trap worth writing down. It
+// hands over the giver's ENTIRE larder — m59-supply.mjs answers it with
+// `larderOf(give.client())`, every edible object it holds — so the first recipient would
+// take the whole trip and everyone behind it would get nothing, while the run reported
+// success for both. Dealing a SHARE means naming stacks as {id, amount}, which the same
+// tool accepts and which is what this does.
+if (FOOD) {
+  const larders = [];
+  for (const r of live) {
+    const inv = await call('inventory', { agent: r.agent }).catch(() => ({ items: [] }));
+    const stacks = (inv.items || [])
+      .map(i => ({ id: i.id, name: i.name, amount: i.amount || 1, food: foodValue(i.name) }))
+      .filter(x => x.food && x.id != null);
+    larders.push({ agent: r.agent, character: r.character, room: r.room_num,
+                   vigor: Number(r.vigor ?? 0), target: Number(r.vigor_target ?? FLOOR),
+                   meals: stacks.reduce((n, s) => n + s.amount, 0), stacks });
+  }
+
+  const donors = larders.filter(h => h.meals >= AMOUNT + KEEP_FOOD)
+                        .sort((a, b) => b.meals - a.meals);
+  // NEED IS A FLOOR IT CANNOT REACH, NOT AN EMPTY PACK — and the test must not be the
+  // character's OWN target. The harness drops that to the resting cap whenever a larder is
+  // empty (reachableFightFloor), precisely so an unfed character is not idle-locked, so the
+  // hungriest characters in the fleet are the ones whose target reads 80 and who therefore
+  // look perfectly satisfied. Judge against the floor this run intends to give them.
+  const hungry = larders.filter(h => h.meals < AMOUNT && h.vigor < FLOOR)
+                        .sort((a, b) => a.vigor - b.vigor);
+
+  console.log(`feast: ${donors.length} carrying a surplus, ${hungry.length} below ${FLOOR} vigor ` +
+              `with fewer than ${AMOUNT} meals`);
+  for (const d of donors) console.log(`  ${d.character}: ${d.meals} meals in ${d.room}`);
+  if (!donors.length) console.log('  nobody is carrying the feast — send a courier to the hall first');
+  if (!hungry.length) console.log('  nobody is short');
+
+  // Same rule as the reagents: prefer a donor already standing with the recipient, because
+  // the walk through monster rooms is the expensive and failure-prone half of this.
+  const left = new Map(donors.map(d => [d.agent, d.meals]));
+  const sent = new Map(donors.map(d => [d.agent, 0]));
+  const plan = [];
+  for (const n of hungry) {
+    const pick = donors
+      .filter(d => d.agent !== n.agent && (left.get(d.agent) ?? 0) >= AMOUNT + KEEP_FOOD &&
+                   (sent.get(d.agent) ?? 0) < MAX_DELIVERIES &&
+                   deliveryHops(d.room, n.room) <= MAX_HOPS)
+      .sort((a, b) => (a.room === n.room ? -1 : b.room === n.room ? 1 : 0) ||
+                      deliveryHops(a.room, n.room) - deliveryHops(b.room, n.room) ||
+                      (left.get(b.agent) ?? 0) - (left.get(a.agent) ?? 0))[0];
+    if (!pick) continue;
+    left.set(pick.agent, (left.get(pick.agent) ?? 0) - AMOUNT);
+    sent.set(pick.agent, (sent.get(pick.agent) ?? 0) + 1);
+    plan.push({ from: pick, to: n, sameRoom: pick.room === n.room });
+  }
+
+  for (const p of plan)
+    console.log(`  ${p.from.character} -> ${p.to.character} (${AMOUNT} meals, ` +
+                `${p.to.vigor} vigor)` +
+                (p.sameRoom ? '  [same room — no walk]' : `  [walk: ${p.from.room} -> ${p.to.room}]`));
+  if (!plan.length) console.log('  nothing to hand over this pass');
+  if (DRY) { console.log('\ndry run — nothing handed over'); process.exit(0); }
+
+  // Stacks are consumed as they are dealt, so the second delivery from one courier names
+  // what is actually left rather than what the survey saw.
+  const remaining = new Map(donors.map(d => [d.agent, d.stacks.map(s => ({ ...s }))]));
+  for (const p of plan) {
+    const stacks = remaining.get(p.from.agent) ?? [];
+    const give = [];
+    let want = AMOUNT;
+    for (const s of stacks) {
+      if (want <= 0) break;
+      const take = Math.min(want, s.amount);
+      if (take <= 0) continue;
+      give.push({ id: s.id, amount: take });
+      s.amount -= take;
+      want -= take;
+    }
+    if (!give.length) { console.log(`  ${p.from.character}: nothing left to deal`); continue; }
+    try {
+      let r = await call('supply', { from: p.from.agent, to: p.to.agent,
+                                     what: give, who_travels: 'from' });
+      // The same swap the reagents make: a blocked edge is directional and about the room
+      // being LEFT, so sending the other one is a different question with its own answer.
+      if (r?.supplied !== true && /could not get there|no floor|boundary/i.test(JSON.stringify(r))) {
+        console.log(`    ${p.from.character} is walled in — sending ${p.to.character} to fetch instead`);
+        r = await call('supply', { from: p.from.agent, to: p.to.agent,
+                                   what: give, who_travels: 'to' })
+                  .catch(e => ({ supplied: false, reason: e.message }));
+      }
+      const ok = r.supplied === true && (r.receiver_carrying ?? 0) > 0;
+      console.log(`  ${p.from.character} -> ${p.to.character}: ` +
+                  (ok ? 'delivered' : 'NOT delivered') + ' ' + JSON.stringify(r).slice(0, 160));
+      if (!ok) continue;
+      // The food is the easy half; the floor is the half that makes it worth carrying. A
+      // character left at a target of 80 eats nothing, because a larder is only drawn on
+      // BELOW the fighting floor — so the pork would ride around in its pack untouched.
+      await call('autopilot', { agent: p.to.agent, fight_above_vigor: FLOOR }).catch(() => {});
+      console.log(`    ${p.to.character}: fed, now fighting above ${FLOOR} vigor`);
+    } catch (e) {
+      console.log(`  ${p.from.character} -> ${p.to.character}: FAILED ${e.message}`);
+    }
+  }
+  process.exit(0);
+}
 
 // ------------------------------------------------------------------ then the reagents
 
