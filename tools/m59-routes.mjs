@@ -112,6 +112,10 @@ export function lazyRoomArtifactsCurrent(table) {
 // the table on it turned `step masks: {...}` into a 1.5 MB dump of base64 masks in every
 // one of them at once. A summary is something people look at.
 let attachedTable = null;
+// THE MAP THE MASKS WENT ONTO. Kept because a door that has MOVED makes the baked
+// reachability for that room a description of a room that no longer exists, and answering
+// the live question needs the geometry — see `anchorReach`.
+let attachedMap = null;
 export const activeRoutes = () => attachedTable;
 
 export function attachStepMasks(map, { geometryOf, lazy = false } = {}) {
@@ -124,6 +128,7 @@ export function attachStepMasks(map, { geometryOf, lazy = false } = {}) {
   // step masks" are different problems with different fixes, and a single counter told
   // the second story with the first one's words.
   attachedTable = table;
+  attachedMap = map;
   // A MASK FROM A DIFFERENT PREDICATE IS WORSE THAN NO MASK, so it is refused wholesale.
   // See stepMaskCurrent: the manifest hashes GEOMETRY and cannot see the predicate change,
   // so such a table verifies perfectly while encoding the wrong doors.
@@ -343,8 +348,26 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
 /** What state each room's doors are currently modelled in. For the boards and the tests. */
 export const doorStates = () => Object.fromEntries(DOOR_STATE);
 
-/** Forget every door state — for tests, which must not inherit one another's rooms. */
+/**
+ * Put every door back where the .roo shipped it, then forget them.
+ *
+ * IT HAS TO RESTORE AND NOT ONLY FORGET, and the difference is not tidiness. `DOOR_BASELINE`
+ * is the only record of the shipped heights; dropping it while the GEOMETRY is still open
+ * means the next `applyDoorState` captures the OPEN heights as the baseline, sees the
+ * server's open state as no deviation at all, and reports the room shut while it stands
+ * open. Caught by the router assertions in m59-doorstate-test, which failed in exactly that
+ * shape: `anchorReach` answering false with the door demonstrably open.
+ */
 export function resetDoorStates() {
+  for (const [roomNum, shipped] of DOOR_BASELINE) {
+    const room = attachedMap?.rooms?.[roomNum] ?? attachedMap?.rooms?.[String(roomNum)];
+    const geometry = room ? sharedRoomGeometry(room) : null;
+    const baked = attachedTable?.rooms?.[String(roomNum)]?.stepMask;
+    if (!geometry || typeof baked !== 'string') continue;
+    const bytes = Buffer.from(baked, 'base64');
+    applySectorHeights(geometry, [...shipped].map(([index, floor]) => ({ index, floor })),
+      { mask: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length) });
+  }
   DOOR_STATE.clear(); DOOR_BASELINE.clear(); REGION_LABELS.clear();
 }
 
@@ -606,6 +629,36 @@ export function anchorFor(table, roomNum, toRoom) {
 export function anchorReach(table, roomNum, from, to) {
   const r = table?.rooms?.[roomNum] ?? table?.rooms?.[String(roomNum)];
   if (!r) return null;
+
+  // A DOOR THAT HAS MOVED MAKES THIS TABLE A MAP OF A DIFFERENT ROOM, and the stale answer
+  // is a confident NO — which is worse than no answer, because `transitOk` refuses the hop
+  // on it and the character never tries.
+  //
+  // Blackstone Keep is the case this was written for and it would have wasted the whole
+  // fix. The bake was taken with the feast door shut, so its two feast anchors (r9c9,
+  // r10c9) are region 3 and every anchor into the keep's body is region 0, and there is no
+  // `reach` entry joining them in either direction. Open the door at runtime and the two
+  // are one region of 682 squares — but the table still says no, `sameRegion` agrees with
+  // it for the same stale reason, and the router refuses 951 -> 953 exactly as it did
+  // before any of the door work existed.
+  //
+  // So when this room's doors are NOT where the .roo shipped them, the question is asked
+  // of the geometry in play. `roomRegions` is the live labelling, rebuilt whenever a door
+  // moves and cached until the next one does, so this is a lookup rather than a flood.
+  //
+  // Undirected where the baked answer is directed, and that is a deliberate widening: it
+  // is the same approximation `sameRegion` already makes as the documented fallback, and
+  // the failure it risks (offering a one-way drop as a route) is one the mover refuses a
+  // step at a time, while the failure it fixes strands a fleet outside an open door.
+  if (doorStates()[roomNum] != null || doorStates()[String(roomNum)] != null) {
+    const regions = attachedMap ? roomRegions(attachedMap, roomNum) : null;
+    const a = regions?.idAt(Number(from.row), Number(from.col));
+    const b = regions?.idAt(Number(to.row), Number(to.col));
+    if (a && b) return a === b;
+    // Fall through when the live answer cannot be had: an unanswerable question must not
+    // become a no.
+  }
+
   // SERIALIZED CONTRACT: reach-map keys are `row,col>row,col`.
   if (!r.reach) return bakedPath(table, roomNum, from, to) ? true : null;
   return !!r.reach[`${from.row},${from.col}>${to.row},${to.col}`];

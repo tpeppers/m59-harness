@@ -33,7 +33,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { attachStepMasks, applyDoorState, doorVariants, doorStateKey,
-         reachableExits, roomRegions, resetDoorStates } from './m59-routes.mjs';
+         reachableExits, roomRegions, anchorReach, activeRoutes,
+         resetDoorStates } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -219,6 +220,43 @@ console.log('\nno opinion is not the same as no exits');
   ok('and says why', /not a standable square/.test(offMap.why ?? ''), offMap.why);
   const noRoom = reachableExits(map, 999999, 1, 1);
   ok('so does a room we do not have', noRoom.reachable === null, JSON.stringify(noRoom));
+}
+
+console.log('\nthe ROUTER has to change its mind too, or none of this reaches the fleet');
+{
+  resetDoorStates();
+  const table = activeRoutes();
+  // A body anchor (the 950 doorway at r40c15) and the feast doorway. `transitOk` in
+  // m59-world.mjs gates every hop through a room on exactly this call, so if it says no
+  // the router refuses 951 -> 953 and the door being open at runtime buys nothing at all.
+  const body = { row: 40, col: 15 }, feast = { row: 9, col: 9 };
+
+  ok('as shipped, the bake says the feast door is not reachable from the keep',
+     anchorReach(table, 951, body, feast) === false);
+  // AND THE BAKE CANNOT LEARN. Its reach map was computed with the door shut: the feast
+  // anchors are region 3, every body anchor is region 0, and no entry joins them in either
+  // direction. `sameRegion` — the documented fallback — agrees for the same stale reason.
+  const baked = table.rooms['951'];
+  ok('because the baked reach map has no entry joining them, in either direction',
+     !baked.reach['40,15>9,9'] && !baked.reach['9,9>40,15']);
+
+  applyDoorState(map, 951, new Map([[3, { height: 356 }], [4, { height: 419 }]]));
+  ok('with the door open the router is told the truth instead',
+     anchorReach(table, 951, body, feast) === true);
+  ok('in both directions, since the two are now one region',
+     anchorReach(table, 951, feast, body) === true);
+
+  applyDoorState(map, 951, new Map([[3, { height: 420 }], [4, { height: 356 }]]));
+  ok('and shutting it returns the baked answer rather than keeping the live one',
+     anchorReach(table, 951, body, feast) === false);
+
+  // A ROOM WHOSE DOORS HAVE NOT MOVED MUST BE UNTOUCHED BY ANY OF THIS. The live path is
+  // reached only through a non-baseline door state; everything else reads the bake exactly
+  // as it did before, which is what makes this safe to ship to a running fleet.
+  resetDoorStates();
+  ok('a room with no door state still reads the baked table',
+     anchorReach(table, 599, { row: 71, col: 2 }, { row: 1, col: 66 }) ===
+     !!table.rooms['599'].reach['71,2>1,66']);
 }
 
 console.log('\nthe region filter is honest about what it cannot see');
