@@ -4592,8 +4592,23 @@ class Session {
     // `laneAim` is the same landing square entered on the side that clears the blocker --
     // see laneClearing. Null when nothing was in the way, so an unobstructed jump aims at the
     // stand point exactly as before and is unchanged to the byte.
+    // THE DECLARED LANDING POINT OUTRANKS THE SQUARE'S STAND POINT, AND THIS IS THE LINE THAT
+    // DECIDES WHERE A JUMP GOES.
+    //
+    // `aimX`/`aimY` were added for exactly this and were plumbed into `toXc`/`toYc` — which
+    // feed the gap measurement and the lane clearing, and NOT the packet. So a jump carrying a
+    // declared `to_fine` still went to `standPointWire(row, col)`, one point per square, and
+    // on r40c32 — which spans 3200 to 10880 — that is the gully. Watched live: the character
+    // climbed the whole staircase, jumped, and the mover reported `position {x:2080,y:2592}`,
+    // which is `col*64+32, row*64+32` to the byte. The square centre, faithfully.
+    //
+    // `laneAim` still wins, and must: it is the same landing entered from the side that clears
+    // a body in the way, and with monster collision being height-agnostic something standing
+    // in the gully below is a wall. Order is therefore: dodge a blocker, else the point the
+    // operator actually landed on, else the square's stand point, else its middle.
     let aim = fall
       ? (laneAim
+         ?? ((aimX != null && aimY != null) ? { x: aimX, y: aimY } : null)
          ?? this.world?.geometry?.standPointWire?.(row, col)
          ?? { x: col * KOD_FINENESS + half, y: row * KOD_FINENESS + half })
       : null;

@@ -6743,6 +6743,9 @@ const TOOLS = [
       control_token: { type: 'string', description: 'optional owner token that can invalidate stale movement' },
       fine: { type: 'boolean',
               description: 'use locally validated fine BSP movement for this one call' },
+      arrive_within: { type: 'number', description: 'how close counts as arrived, in kod units ' +
+        '(64 to a square). Default 40, which is two thirds of a square — fine for walking ' +
+        'somewhere, far too coarse for standing on a jump take-off.' },
       hold_shelf: { type: 'boolean', description: 'refuse any step that drops off the ledge ' +
         'you are standing on, instead of counting it as progress because it got closer. For ' +
         'walking a route that only makes sense on one shelf — a staircase of slivers, a climb ' +
@@ -6771,6 +6774,7 @@ const TOOLS = [
           maxSteps: num(a.max_steps, 60),
           ...(a.stride != null ? { stride: num(a.stride) } : {}),
           holdShelf: a.hold_shelf === true,
+          ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
           controlToken: a.control_token,
         });
         return r ?? { arrived: false, reason: 'the mover said nothing' };
@@ -6783,6 +6787,7 @@ const TOOLS = [
       return s.walkFine(num(a.col) * KOD_FINENESS + half, num(a.row) * KOD_FINENESS + half,
                         { maxSteps: num(a.max_steps, 120), stride: num(a.stride, 48),
                           holdShelf: a.hold_shelf === true,
+                          ...(a.arrive_within != null ? { arriveWithin: Number(a.arrive_within) } : {}),
                           controlToken: a.control_token });
     },
   },

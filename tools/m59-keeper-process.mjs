@@ -1747,6 +1747,13 @@ const server = createServer(async (req, res) => {
               maxSteps: Number(args.max_steps ?? args.maxSteps ?? 60),
               stride: args.stride != null ? Number(args.stride) : undefined,
               holdShelf: (args.hold_shelf ?? args.holdShelf) === true,
+              // HOW CLOSE COUNTS AS THERE, in kod units. The default is 40 — SIX HUNDRED AND
+              // FORTY client units, near enough two thirds of a square — which is right for
+              // walking somewhere and hopelessly coarse for standing on a take-off. Measured:
+              // a line-up before jump 1 reported arrival 590 units short, the jump fired from
+              // a square and a half off the declared point, and the body did not move.
+              ...(args.arrive_within != null || args.arriveWithin != null
+                  ? { arriveWithin: Number(args.arrive_within ?? args.arriveWithin) } : {}),
               controlToken: args.control_token ?? args.controlToken,
             });
             json(r ?? { ok: true });
@@ -1825,10 +1832,17 @@ const server = createServer(async (req, res) => {
             // they say which shelf, because they were read off somebody making the jump.
             let match = null, from = { row: me.row, col: me.col };
             const declaredHere = geo.declaredFallJumps(me.row, me.col) ?? [];
+            // CLIENT UNITS IN, ALWAYS. `me.x`/`me.y` are kod PROTOCOL units and
+            // `floorBaseAtClient` wants client ones — 16 to a kod unit with a +64 origin. Feeding
+            // it protocol coordinates does not fail, it answers about a completely different
+            // part of the room: the body was standing on the 8640 ledge and this reported 3520,
+            // so the shelf guard refused a jump it had already found (`declared_here: ["40,32"]`).
+            // A wrong coordinate space is not an error, it is a confident wrong answer.
+            const toClient = v => (v - 64) * 16;
             const floorClient = (x, y) => {
               try { return geo.floorBaseAtClient(x, y); } catch { return null; }
             };
-            const myFloor = floorClient(me.x, me.y) ??
+            const myFloor = floorClient(toClient(me.x), toClient(me.y)) ??
               (() => { try { const p = geo.standPoint(me.row, me.col); return p ? floorClient(p.x, p.y) : null; }
                        catch { return null; } })();
             const raw = (() => { try { return fallJumpsIn(Number(session.world?.room?.num ?? NaN)) ?? []; }
