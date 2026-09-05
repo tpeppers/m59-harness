@@ -27,7 +27,9 @@
 // or died on the road: the outcome is a field rather than a reason to skip the row.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { readLedger } from './m59-ledger.mjs';
+import { fleetName, ledgerDirFor } from './m59-fleetpath.mjs';
 
 /**
  * Every journey the fleet finished in the window, newest last.
@@ -111,6 +113,7 @@ export function compareJourneys(rows = []) {
 
 // ---------------------------------------------------------------------------- CLI
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  // Top-level await: this block asks a running broker where its ledger is.
   const argv = process.argv.slice(2);
   const arg = (n, d = null) => { const i = argv.indexOf('--' + n); return i < 0 ? d : argv[i + 1]; };
   const hours = Number(arg('hours', 24)) || 24;
@@ -122,15 +125,53 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     console.log(JSON.stringify({ hours, journeys: rows.length, routes: compareJourneys(rows) }, null, 2));
     process.exit(0);
   }
+  // SAY WHICH LEDGER THIS IS, ALWAYS. There is more than one checkout of this repository on
+  // a machine that runs fleets, and reading the wrong one is THE mistake here — it is why
+  // m59-which.mjs exists and exits non-zero. A reporting tool that answers "nothing" without
+  // naming what it looked in is the same failure wearing a friendlier face: the operator ran
+  // this from a checkout whose substrate has no prod ledger, got a confident empty result,
+  // and the two explanations it offered were both wrong.
+  const fleet = fleetName();
+  const dir = ledgerDirFor(fleet);
+  const where = `fleet ${fleet ?? '(unnamed)'} · ${dir}`;
+
   if (!rows.length) {
     console.log(`\nno journeys recorded in the last ${hours}h.`);
-    console.log('`travel_journey` is written as each journey ENDS, so an empty result means');
-    console.log('either nothing has travelled yet or the keepers predate this code.\n');
+    console.log(`  looked in: ${where}`);
+    console.log(`  that directory ${existsSync(dir) ? 'exists and holds no matching rows' : 'DOES NOT EXIST'}.`);
+    // The likeliest cause first, and it is checkable rather than a guess: if a broker is
+    // answering and its root is somewhere else, this is the wrong checkout and the command
+    // to run is the same one over there.
+    try {
+      const health = await fetch('http://127.0.0.1:8901/health', { signal: AbortSignal.timeout(3000) })
+        .then(r => r.json());
+      const root = health?.root ?? health?.checkout ?? null;
+      if (root && !dir.startsWith(String(root))) {
+        console.log('');
+        console.log(`  A BROKER IS RUNNING AND ITS LEDGER IS SOMEWHERE ELSE. It holds ` +
+                    `"${health.fleet ?? '?'}" from:`);
+        console.log(`      ${root}`);
+        console.log('  This is almost certainly the wrong checkout. Run it there:');
+        // Joined with the platform's own separator: a path that mixes them is a path
+        // somebody has to fix before they can paste it.
+        console.log(`      node "${path.join(String(root), 'tools', 'm59-journeys.mjs')}" ` +
+                    `--hours ${hours}`);
+      } else if (health?.fleet && String(health.fleet) !== String(fleet)) {
+        console.log('');
+        console.log(`  The running broker holds "${health.fleet}" and this checkout reads ` +
+                    `"${fleet ?? '(unnamed)'}" — different fleets keep different ledgers.`);
+      }
+    } catch { /* no broker to ask; the directory line above is still the answer */ }
+    console.log('');
+    console.log('  Otherwise: `travel_journey` is written as each journey ENDS, so an empty');
+    console.log('  result means nothing has finished a journey yet, or the keepers predate');
+    console.log('  the code that writes the row.\n');
     process.exit(0);
   }
 
   const pad = v => (v == null ? '   -' : String(v).padStart(4));
-  console.log(`\n${rows.length} journey(s) in the last ${hours}h — arrivals first, failures second\n`);
+  console.log(`\n${rows.length} journey(s) in the last ${hours}h — arrivals first, failures second`);
+  console.log(`${where}\n`);
   console.log('route        arrived/n  rate    ms         legs      hp lost   stops');
   console.log('-'.repeat(76));
   for (const r of compareJourneys(rows)) {
