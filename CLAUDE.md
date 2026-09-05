@@ -694,16 +694,30 @@ is the only arrangement in which two people can both use this repository.
   nothing upstream will ever stop us walking up a cliff. When a plan is refused for a reason
   that makes no three-dimensional sense, you have asked a 2D authority a 3D question.
 
-- **PROD IS A VERSIONED DEPLOY OF MAIN, AND IS NEVER AHEAD OF IT.** Work lands on `main`; a
-  deploy is a **tag** on main plus a checkout of that tag. `node tools/m59-deploy.mjs
-  --verify` exits 1 on drift; `--cut` prints the two lines that ship the current trunk.
-  A deploy tracked as a BRANCH is an invitation to commit to it; a tag is a fact about main.
-  What the branch cost: on 2026-09-05 prod was **six commits and 2,428 insertions ahead** of
-  this repo — including new FleetScript guarantees — plus six uncommitted files, four named
-  `.superseded-handcopy`. It had happened before (`f732112`, "adopt the five tools that only
-  existed on the prod deploy branch"), and
-  `Merge … 'origin/max-efficiency' into deploy-2026-09-02` appears **nine** times: the deploy
-  ref was not a deploy, it was a long-lived integration branch. 86 branches, zero tags.
+- **PROD IS A VERSIONED DEPLOY OF MAIN, AND IS NEVER AHEAD OF IT.** `C:\code\m59-lab\prod-deploy`
+  is a **git worktree** of this repository, checked out **detached at a `deploy-YYYY-MM-DD` tag**.
+  Work lands on `main`; when it is worth shipping, cut another tag and move the worktree onto it.
+  Rolling back is checking out the previous tag.
+
+  ```bash
+  node tools/m59-deploy.mjs --verify   # exit 1 on drift. For CI and for cron.
+  node tools/m59-deploy.mjs --cut      # tag the trunk and print the two lines that ship it
+  ```
+
+  **Never check a branch out in the prod worktree.** The worktree was always shared — the objects
+  were never in a separate repository — but a long-lived *branch* sitting in it is an invitation to
+  commit there, and main then has no reason to merge it. That is the whole mechanism. On 2026-09-05
+  prod was **fourteen commits and thousands of lines ahead** of main on `deploy-2026-09-02`,
+  having already been rescued once (`f732112`, "adopt the five tools that only existed on the prod
+  deploy branch"), and `Merge … 'origin/max-efficiency' into deploy-2026-09-02` appears **nine
+  times** — it was not a deploy, it was an integration branch. The merge that reconciled the
+  previous round silently deleted four lease guards.
+
+  A tag cannot be committed to. `deploy-2026-09-02` and `max-efficiency` are both retired.
+
+  **Runtime state under `substrate/` is not drift** — the fleet rewrites its own learning
+  continuously and `--verify` exempts modified `substrate/*.json`. Untracked files still count
+  everywhere: a `.superseded-handcopy` in production is exactly what this catches.
 
 - **A claim that contradicts what is already written down needs a reproduction before
   anything is decided on it.** The bar is two things at once: the claim cuts against this
