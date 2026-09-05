@@ -144,27 +144,34 @@ function fromLive(live) {
 //
 // The page then reports both halves and never nets them into one number: a total that has
 // quietly had 350 subtracted from it is a number nobody can check.
+// "all" MEANS EVERY ONE OF THIS KIND, HOWEVER MANY THERE ARE, and it exists because a number
+// goes stale the moment the operator picks up one more. It did, within ten minutes: a
+// baseline of 362 spider eyes was written and the count was 632 at the next reading, so the
+// page reported 270 "earned" that no bot had touched — precisely what the baseline was added
+// to prevent. A number is for a haul that has finished; "all" is for one still going.
+//
+// THE SENTINEL BELONGS TO THE FORMAT, NOT TO THE FILE READER. It lived in `foodBaseline` for
+// one commit and a caller passing a baseline object directly — every test, and any future
+// board — got `Number('all')`, NaN, and silently no baseline at all. Normalising here means
+// there is one definition of what a baseline value may say, wherever it came from.
+export function normaliseBaseline(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, n] of Object.entries(raw)) {
+    if (String(k).startsWith('//')) continue;       // a comment key, by this repo's convention
+    const key = String(k).trim().toLowerCase();
+    if (String(n).trim().toLowerCase() === 'all') { out[key] = Infinity; continue; }
+    const amount = Number(n);
+    if (Number.isFinite(amount) && amount > 0) out[key] = amount;
+  }
+  return out;
+}
+
 export function foodBaseline(file = null) {
   const path = file ?? join(HERE, '..', 'substrate', 'food-baseline.json');
   try {
     if (!existsSync(path)) return {};
-    const v = JSON.parse(readFileSync(path, 'utf8'));
-    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
-    const out = {};
-    for (const [k, n] of Object.entries(v)) {
-      if (String(k).startsWith('//')) continue;     // a comment key, by this repo's convention
-      // "all" MEANS EVERY ONE OF THIS KIND, HOWEVER MANY THERE ARE, and it exists because a
-      // number goes stale the moment the operator picks up one more. It did, within minutes:
-      // a baseline of 362 spider eyes was set and the count was 632 by the next reading, so
-      // the page reported 270 "earned" that no bot had touched — which is precisely the
-      // thing the baseline was added to prevent.
-      //
-      // Use a number for a haul that has finished and `"all"` for one still going.
-      if (String(n).trim().toLowerCase() === 'all') { out[String(k).trim().toLowerCase()] = Infinity; continue; }
-      const amount = Number(n);
-      if (Number.isFinite(amount) && amount > 0) out[String(k).trim().toLowerCase()] = amount;
-    }
-    return out;
+    return normaliseBaseline(JSON.parse(readFileSync(path, 'utf8')));
   } catch { return {}; }          // a baseline that will not parse is no baseline, not a crash
 }
 
@@ -194,7 +201,7 @@ export function foodHeld(live, { baseline = null } = {}) {
   // Split each kind into what the operator declared and what is over and above it. Clamped
   // at zero per kind: a baseline larger than what is carried means some of it has been eaten
   // or lost, which is ordinary, and must not turn into a negative "earned".
-  const base = baseline ?? foodBaseline();
+  const base = baseline ? normaliseBaseline(baseline) : foodBaseline();
   for (const k of byName.values()) {
     k.baseline = Math.min(k.value, Number(base[k.name]) || 0);
     k.earned = Math.max(0, k.value - k.baseline);
