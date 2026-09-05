@@ -6462,13 +6462,24 @@ export class Autopilot {
         case 'nothing':
           return done('nothing, deliberately');
 
-        case 'retreat':
-          await this.retreatToSafety({ because: `playbook: ${trigger}` });
-          return done('retreated to a wall');
+        // A PLAYBOOK VERB REPORTS WHAT IT DID, and this pair used to report what it was
+        // asked to do. `retreatToSafety` refuses outright while `retreat_to_inn` is off,
+        // so "retreated to a wall" was written into the journal by a character that had
+        // not moved — the same lie, from the same call, that issue #51 is about. The
+        // header comment two dozen lines up already states the rule: a playbook that
+        // fires and achieves nothing must not be indistinguishable from one that worked.
+        case 'retreat': {
+          const r = await this.retreatToSafety({ because: `playbook: ${trigger}` });
+          return done(r?.arrived ? (r.took_spot ? 'retreated to a wall' : 'retreated to safety')
+                                 : 'nothing — the retreat was refused',
+                      { refused: r?.arrived ? undefined : (r?.refused ?? 'no reason given') });
+        }
 
-        case 'leave_room':
-          await this.retreatToSafety({ because: `playbook: ${trigger}`, leaveRoom: true });
-          return done('left the room');
+        case 'leave_room': {
+          const r = await this.retreatToSafety({ because: `playbook: ${trigger}`, leaveRoom: true });
+          return done(r?.arrived ? 'left the room' : 'nothing — the retreat was refused',
+                      { refused: r?.arrived ? undefined : (r?.refused ?? 'no reason given') });
+        }
 
         case 'logoff': {
           // THE ANSWER TO A GRIEFER, AND THE HALF THAT MATTERS IS THE WAITING. Logging
@@ -13142,12 +13153,36 @@ export class Autopilot {
       // "Somewhere I can heal" is an inn, not a wall in the same monster room. The
       // wall version left us inside the vision of everything that was already hitting
       // us, healing at a rate that damage cancelled out.
-      await this.retreatToSafety({
+      const went = await this.retreatToSafety({
         because: 'hurt, no wall here, and too much vigor for waiting to be worth anything',
         vigor: vigorNow2, monsters_in_room: hostiles.length,
       });
-      this.progress('moved toward somewhere I can heal');
-      return HANDLED;
+      // A RETREAT THAT WAS REFUSED IS NOT A RETREAT, AND MUST NOT END THE PASS.
+      //
+      // This called progress() and returned HANDLED whatever came back — and what comes
+      // back on this fleet is `{arrived:false, refused:'retreat_to_inn is off'}`, because
+      // the operator switched the inn walk off on 2026-08-27. So the rung that decides to
+      // move consumed the pass, told the stall detector everything was fine, and PRE-EMPTED
+      // the rung immediately below, which is the one that actually leaves the room —
+      // `leaveViaAny`, a reconnect to shed the crowd, and another try.
+      //
+      // That is issue #51 and it is four deaths: JohnsSlave, 2026-09-03 and 2026-09-04,
+      // every one of them `in_safe_spot:false`, `at_a_safe_wall:null`, and the last one
+      // 0.0 squares per second across the whole 31-second post-mortem window. The journal
+      // said "moving to somewhere I can heal" once a pass while the body stood still.
+      //
+      // So: only a retreat that actually happened is progress. A refusal falls THROUGH to
+      // the escape below, which is exactly where a character that cannot reach an inn and
+      // cannot hold a wall is supposed to end up.
+      if (went?.arrived) {
+        this.progress(went.took_spot ? 'took a wall rather than waiting it out'
+                                     : 'moved toward somewhere I can heal');
+        return HANDLED;
+      }
+      this.note('the retreat was refused — not ending the pass on it', {
+        refused: went?.refused ?? 'no reason given', no_spot: went?.no_spot ?? null,
+        why: 'saying we are moving is not moving. The next rung leaves the room, and it ' +
+             'only gets to run if this one does not claim the pass' });
     }
 
     // AND BELOW THE RESTING CEILING: GET OFF THE MAP ENTIRELY.
@@ -15374,11 +15409,21 @@ export class Autopilot {
         // four squares, being followed, and refusing again. 51 of 52 of them were
         // nominally hunting giant rats, in a room that generates none — only trolls at
         // attack rating 750 and groundworms at 600.
-        await this.retreatToSafety({
+        const left = await this.retreatToSafety({
           because: 'refused to fight ' + refused.name + ' (rating ' + refused.rating + ')',
           adjacent: adjacent.length,
         });
-        this.progress('left the room rather than trade blows with something out of band');
+        // REPORT THE RETREAT THAT HAPPENED, NOT THE ONE THAT WAS DECIDED ON. See issue #51:
+        // with `retreat_to_inn` off this returns a refusal, and calling it progress hid a
+        // motionless character from the stall detector for as long as it took to die. The
+        // pass still ends here — the survival ladder runs FIRST on the next one and is
+        // where a body that could not retreat is supposed to be handled — but it ends
+        // saying nothing moved.
+        if (left?.arrived)
+          this.progress('left the room rather than trade blows with something out of band');
+        else
+          this.noProgress('could not retreat from something out of band: ' +
+                          (left?.refused ?? 'no reason given'));
         return HANDLED;
       }
 
@@ -15733,13 +15778,17 @@ export class Autopilot {
           // A wall limits added attackers; it does not make the one already engaged
           // harmless. Leave the live pocket before ordinary recovery can choose to rest.
           if (holding) await this.leaveHold(reason, { force: true }).catch(() => null);
-          await this.retreatToSafety({
+          const away = await this.retreatToSafety({
             because: reason,
             mid_round: !!f.disengaged.mid_round,
             unarmed: true,
             still_here: (this.inReachOfUs() ?? []).length,
           });
-          this.progress('retreated after losing the weapon');
+          // Same rule as every other retreat here, and the same incident behind it (#51):
+          // a refusal is not a retreat, and reporting it as one is what kept four dying
+          // characters looking healthy to the stall machinery.
+          if (away?.arrived) this.progress('retreated after losing the weapon');
+          else this.noProgress('unarmed and could not retreat: ' + (away?.refused ?? 'no reason given'));
           return HANDLED;
         } else if (holding && this.holdWorks?.()) {
           this.note('broke off behind the wall — resting here rather than running', {
@@ -15747,13 +15796,15 @@ export class Autopilot {
             why: 'nothing can hit us on this square unless we swing first, so standing still ' +
                  'is a free heal and walking off it would start the damage' });
         } else {
-          await this.retreatToSafety({
+          const away = await this.retreatToSafety({
             because: f.disengaged.reason
               ?? ('broke off a fight at ' + (f.disengaged.at_health ?? hp)),
             mid_round: !!f.disengaged.mid_round,
             still_here: (this.inReachOfUs() ?? []).length,
           });
-          this.progress('retreated after breaking off a fight');
+          if (away?.arrived) this.progress('retreated after breaking off a fight');
+          else this.noProgress('broke off a fight and could not retreat: ' +
+                               (away?.refused ?? 'no reason given'));
           return HANDLED;
         }
       }
@@ -19057,7 +19108,58 @@ export class Autopilot {
              'killing us, at the health that made this an emergency. The move is a ' +
              'route-adjacent safe spot instead.',
         enable_with: 'retreat_to_inn: true' });
-      return { arrived: false, refused: 'retreat_to_inn is off', room: here };
+      // AND THE REPLACEMENT HAS TO BE DISPATCHED, NOT DESCRIBED.
+      //
+      // The paragraph above says the answer is a route-adjacent safe spot. It said so for
+      // nine days while this branch returned `{arrived:false}` and did nothing at all, and
+      // every caller of this function reported success anyway — so the sentence WAS the
+      // behaviour. JohnsSlave died of it four times in two days (issue #51): the ladder
+      // decided correctly at 14% health with seven things adjacent, wrote "moving to
+      // somewhere I can heal", called this, got the refusal, and reported progress. Final
+      // window on the last one: 31 seconds, 46 samples, `squares_per_second: 0.0`,
+      // `net_squares: 0`, `rooms_crossed: 0`. A body that never moved, in a journal that
+      // reads like an escape.
+      //
+      // The spot IS the doctrine's answer, so take one here. Standing in a monster room is
+      // the same problem the travel path solves with `shelterRun`, minus the route: the
+      // wall is a few squares away rather than a few rooms, and it is the only move that
+      // ends the damage instead of extending it.
+      //
+      // Sharing `wallTriedAt` with the ladder's own wall rung is deliberate — one 30s
+      // budget for "go and get a wall", however many rungs ask for it, so a hurt character
+      // does not spend every pass re-scanning a room that has no reachable wall. When the
+      // budget is spent or the room has none, this returns a refusal that MOVES NOTHING
+      // and says so, and the caller is required to treat that as the non-event it is.
+      const spotsOn = !!this.policy.useSafeSpots;
+      const mayTry = spotsOn && !this.hold &&
+                     (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000);
+      if (mayTry) {
+        this.wallTriedAt = Date.now();
+        // Not threat(), which reads names through `rsc` and is a heavier question than
+        // "what should this wall be biased toward".
+        const at = c?.self;
+        const foe = at && c?.room?.objects
+          ? [...c.room.objects.values()].find(o =>
+              o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)) ?? null
+          : null;
+        const took = await this.takeSafeSpot(
+          'the inn walk is off and the doctrine says a wall — taking one here',
+          foe, { source: 'retreat' }).catch(() => null);
+        if (took?.took) {
+          this.note('took a wall instead of an inn', {
+            room: here, spot: took.spot ?? null, ...why,
+            why: 'the route-adjacent safe spot is what replaced the inn walk, and this is it: ' +
+                 'a square in this room that nothing can reach us on, a few seconds away ' +
+                 'instead of a few rooms' });
+          return { arrived: true, took_spot: true, spot: took.spot ?? null, room: here };
+        }
+        return { arrived: false, refused: 'retreat_to_inn is off', room: here,
+                 no_spot: took?.why ?? 'no wall taken this pass' };
+      }
+      return { arrived: false, refused: 'retreat_to_inn is off', room: here,
+               no_spot: this.hold ? 'already holding a square' : (spotsOn
+                 ? 'a wall was already searched for within the last 30s'
+                 : 'safe spots are switched off in the policy') };
     }
     // NEAREST FIRST, AND NOT MANY. Iterating the six in declaration order would send a
     // character bleeding in the Badlands to whichever inn happened to be listed first —

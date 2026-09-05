@@ -695,3 +695,34 @@ is one the geometry calls safe (the old behaviour, and what killed); that with w
 default (skipped with a note where it was not — the Flatlands pipe spot is the wedge class); that blows landed
 on the stop square; and that no fixture names a character. **It should fail the day a wall in a crowd becomes
 a candidate again.**
+
+## m59-retreat-refusal-test.mjs (32)
+
+**A retreat that was refused is not a retreat, and must not end the pass.** `retreatToSafety`
+refuses outright while `retreat_to_inn` is off — the operator switched it off on 2026-08-27 —
+and every caller reported success anyway, so the journal read like an escape while the body
+stood still. JohnsSlave died of it four times in two days (issue #51); the last post-mortem
+window is 31.3 seconds, 46 samples, `squares_per_second: 0.0`, `net_squares: 0`,
+`rooms_crossed: 0`, seven things adjacent, 2 of 21 health, and a correct decision on every
+single pass.
+
+Two halves, and the suite pins both. The refusal now **dispatches the replacement it had been
+describing** — the comment above it has said "the replacement is not nothing, it is the
+route-adjacent safe spot" the whole time, so the branch takes a wall when there is one, shares
+the ladder's own 30-second `wallTriedAt` budget so a wall-less room is not re-scanned once per
+rung, obeys `use_safe_spots`, and still defers to the older guard that keeps a character on a
+wall that has held. And the caller **no longer claims the pass for a refusal**: the rung that
+decides "moving to somewhere I can heal" used to `progress()` and `return HANDLED` whatever
+came back, which pre-empted the rung immediately below it — the one that walks out via
+`leaveViaAny` with a reconnect to shed the crowd. The end-to-end assertion drives the real
+`passFleeAndRest` on a keeper at 3 of 21 health with seven monsters in the room and checks that
+the body actually leaves; its mirror checks that a retreat which DID arrive still ends the pass
+and does not also abandon the room.
+
+The last section is the churn guard, and it is the reason the class survived: five call sites
+had the same bug in the same shape and each reads perfectly well on its own. So the rule is
+checked over the file — every `retreatToSafety` call binds its answer, nothing follows one
+straight into an unconditional `progress()`, and the two behaviour trees (`m59-bt-flee.mjs`,
+`m59-bt-farm.mjs`) agree, because a selector's `SUCCESS` is the tree's version of `HANDLED` and
+landing them otherwise would re-open the same grave. **It should fail the day a caller reports
+a refused retreat as movement again.**

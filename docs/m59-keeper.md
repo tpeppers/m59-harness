@@ -486,3 +486,57 @@ stand in, `provedSquares` for two seconds per geometry — because both were bei
 every walker iteration and had become the whole of the 2–5 s stalls that remained. Tour 12:
 two stalls in twenty minutes, both in the loop the last yield now covers; prod: 9 stalls in a
 quarter hour with the worst 3.3 s, against 313 and 158 s in the tour that found them.
+
+## A rung that decided to move, said so, and reported progress for it
+
+`retreatToSafety` is the ladder's answer to "get out of here". It refuses outright while
+`retreat_to_inn` is off — the operator's call, 2026-08-27, on the grounds that walking to an
+inn means crossing more of the road that is already killing us — and returns
+`{ arrived: false, refused: 'retreat_to_inn is off' }` having moved nothing.
+
+Every caller ignored that. The post-mortems read:
+
+```
+what:  "hurt in the open — running for a town rather than playing dead"
+what:  "no wall and no town — withdrawing rather than freezing"
+what:  "not waiting this out — moving to somewhere I can heal"
+what:  "not changing objective for an inn"          <- the refusal
+progress: "moved toward somewhere I can heal"       <- the lie
+```
+
+JohnsSlave, four deaths in two days (2026-09-03 ×2, 2026-09-04, 2026-09-05), every one of them
+`in_safe_spot: false`, `at_a_safe_wall: null`, and the last one **0.0 squares per second across
+the whole 31-second window** with seven creatures adjacent at 2 of 21 health. The keeper
+understood the situation correctly on every single pass. Reported externally as issue #51.
+
+**Two separate faults, and only the second one is about survival.**
+
+The first is that the refusal did nothing at all while the comment above it declared what the
+replacement was: "the replacement is not nothing — it is the route-adjacent safe spot." A
+sentence in a comment is not a behaviour. The refusal now takes a wall when there is one to
+take, and returns `{ arrived: true, took_spot: true }` when it does. It shares `wallTriedAt`
+with the ladder's own wall rung, so a room with no reachable wall is searched once per pass
+rather than once per rung that wants one, and it obeys `use_safe_spots` — the operator
+switching spots off is an instruction, not a preference this branch gets to override because
+somebody is dying.
+
+The second is the one that killed. The rung that calls it —
+
+```js
+if (hurt && combatZone && !sheltered && !testing && !this.hold && vigor > restCeiling)
+```
+
+— called `progress()` and `return HANDLED` **whatever came back**. `HANDLED` ends the pass, so
+the rung immediately below it never ran, and that rung is the escape: `leaveViaAny` over every
+exit in the room, a `breakOut()` reconnect to shed the crowd when the walk is refused, and
+another try. A refusal now falls THROUGH to it, and only a retreat that actually happened may
+claim the pass or the progress.
+
+**The class, not the site.** Five call sites had this bug in the same shape — the ladder rung,
+the out-of-band retaliation refusal, both disengage branches, and the playbook's `retreat` and
+`leave_room` verbs — and it survived because each one reads perfectly well on its own. A
+`progress()` for something that did not happen is worse than a missing one: it is what keeps
+the stall detector quiet, so the character is invisible to `m59-status.mjs`, to the supervisor,
+and to the pulse, for exactly as long as it takes to die. `m59-retreat-refusal-test.mjs` (32)
+checks the rule over the whole file rather than per site, and checks that the two behaviour
+trees agree — in a selector, `SUCCESS` is the tree's version of `HANDLED`.

@@ -91,7 +91,10 @@ function mockKeeper(overrides = {}) {
     // Methods that the BT nodes call
     playDead: async () => true,
     townTripIfCornered: async () => false,
-    retreatToSafety: async () => {},
+    // ARRIVED, because a retreat that did not arrive is no longer a retreat: the nodes
+    // return FAILURE on a refusal so the selector can reach the node that walks out. See
+    // m59-retreat-refusal-test.mjs and issue #51.
+    retreatToSafety: async () => ({ arrived: true }),
     settle: async () => {},
     takeSafeSpot: async () => false,
     breakOut: async () => ({ did: false }),
@@ -205,12 +208,62 @@ t('fleeThresholdNode: SUCCESS when below fleeBelow in the open', async () => {
   const k = mockKeeper({
     _btFleeNear: () => [{ id: 2, nameRsc: 1 }],
     holdWorks: () => false,
-    retreatToSafety: async () => {},
+    // ARRIVED, because a retreat that did not arrive is no longer a retreat: the nodes
+    // return FAILURE on a refusal so the selector can reach the node that walks out. See
+    // m59-retreat-refusal-test.mjs and issue #51.
+    retreatToSafety: async () => ({ arrived: true }),
   });
   k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
   const node = fleeThresholdNode(k);
   const r = await node.tickAsync(bb(k));
   if (r !== 'SUCCESS') throw new Error(`expected SUCCESS, got ${r}`);
+});
+
+// ISSUE #51, IN THE TREE'S OWN GRAMMAR. `retreatToSafety` returns `{arrived:false}`
+// whenever `retreat_to_inn` is off, which on this fleet is always. A node that returns
+// SUCCESS on that ends the selector tick, so `leave_room` -- the node that actually walks
+// out -- never gets one, and the character stands still until it dies. Four deaths.
+t('fleeThresholdNode: a REFUSED retreat is FAILURE, so the tree can carry on', async () => {
+  const k = mockKeeper({
+    _btFleeNear: () => [{ id: 2, nameRsc: 1 }],
+    holdWorks: () => false,
+    retreatToSafety: async () => ({ arrived: false, refused: 'retreat_to_inn is off' }),
+  });
+  k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
+  const r = await fleeThresholdNode(k).tickAsync(bb(k));
+  if (r !== 'FAILURE') throw new Error(`expected FAILURE, got ${r}`);
+  if (k.tally.withdrawals !== 0)
+    throw new Error('a withdrawal that did not happen was tallied');
+  if (!k.calls.some(([kind, msg]) => kind === 'note' && /retreat was refused/.test(msg)))
+    throw new Error('the refusal was swallowed instead of said out loud');
+});
+
+t('vigorWalkNode: a REFUSED retreat is FAILURE and is not progress', async () => {
+  const k = mockKeeper({
+    _btFleeHostiles: () => [{ id: 2, nameRsc: 1 }],
+    _btFleeNear: () => [],
+    holdWorks: () => false,
+    retreatToSafety: async () => ({ arrived: false, refused: 'retreat_to_inn is off' }),
+  });
+  k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
+  const r = await vigorWalkNode(k).tickAsync(bb(k));
+  if (r !== 'FAILURE') throw new Error(`expected FAILURE, got ${r}`);
+  if (k.calls.some(([kind]) => kind === 'progress'))
+    throw new Error('a refused retreat was reported as progress');
+});
+
+t('vigorWalkNode: SUCCESS when the retreat actually arrives', async () => {
+  const k = mockKeeper({
+    _btFleeHostiles: () => [{ id: 2, nameRsc: 1 }],
+    _btFleeNear: () => [],
+    holdWorks: () => false,
+    retreatToSafety: async () => ({ arrived: true }),
+  });
+  k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
+  const r = await vigorWalkNode(k).tickAsync(bb(k));
+  if (r !== 'SUCCESS') throw new Error(`expected SUCCESS, got ${r}`);
+  if (!k.calls.some(([kind]) => kind === 'progress'))
+    throw new Error('a retreat that happened was not reported');
 });
 
 t('sanctuarySettleNode: FAILURE when not in a sanctuary', async () => {

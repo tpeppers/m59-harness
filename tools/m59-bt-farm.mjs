@@ -748,10 +748,32 @@ export function fightNode(keeper) {
           }
         }
       } else if (f.nearest) {
-        // No safe spot to hold: let the ordinary (non-holding) fight approach next pass.
-        keeper.note('out of reach, no safe spot -- will approach next pass', {
-          target: f.nearest?.name, distance: f.nearest?.distance });
-        keeper.noProgress('out of reach, will approach');
+        // NOBODY APPROACHES ON THE NEXT PASS. THAT IS THE WHOLE OF ISSUE #50.
+        //
+        // This said "let the ordinary (non-holding) fight approach next pass", and so did
+        // the note fight() writes on its way out ("the GOAP will travel closer on the next
+        // pass"). Neither is implemented: fight() caps its own approach at 6 grid steps /
+        // 8 raw cells and returns `out_of_reach` past it, and nothing between here and the
+        // next fight() walks. A quarry 22 cells away is therefore permanently out of reach
+        // and the character stands still reporting a fresh intention every 1.5 seconds --
+        // measured at 2 hours, 0 kills, 0 rooms moved, in its own assigned farm room.
+        //
+        // `closeOnQuarry` is the walk that promise was describing: the same approach square
+        // and the same walkTo that `pull()` uses, without the walk back, because with no
+        // wall there is nowhere to walk back TO. The legacy pass calls it here for exactly
+        // this case; the tree calling it too is what keeps them one behaviour.
+        const nearId = f.nearest?.id ?? null;
+        const nearFoe = nearId != null
+          ? c.room?.objects?.get?.(nearId) ?? found.find(o => o.id === nearId) ?? null
+          : null;
+        const closed = nearFoe && typeof keeper.closeOnQuarry === 'function'
+          ? await keeper.closeOnQuarry(nearFoe).catch(e => ({ closed: false, why: e.message }))
+          : { closed: false, why: 'no live object for the nearest quarry' };
+        if (closed.closed)
+          keeper.progress('closed on ' + closed.target + ' -- no wall to fetch it to, so the '
+                          + 'fight happens where it stands');
+        else
+          keeper.noProgress('could not close on the quarry: ' + (closed.why ?? 'no reason given'));
       } else {
         keeper.noProgress('out of reach and nothing to pull');
       }
@@ -770,12 +792,16 @@ export function fightNode(keeper) {
         const reason = f.disengaged.reason
           ?? 'the weapon was lost and no verified replacement could be equipped';
         if (atWall) await keeper.leaveHold?.(reason, { force: true }).catch(() => null);
-        await keeper.retreatToSafety?.({
+        const away = await keeper.retreatToSafety?.({
           because: reason,
           mid_round: !!f.disengaged.mid_round,
           unarmed: true,
-        }).catch(() => {});
-        keeper.progress('retreated after losing the weapon');
+        }).catch(() => ({ arrived: false, refused: 'the retreat threw' }));
+        // Only a retreat that happened is progress -- see issue #51. `retreatToSafety`
+        // refuses outright while `retreat_to_inn` is off, and calling that progress is
+        // how a motionless character stays invisible to the stall machinery.
+        if (away?.arrived) keeper.progress('retreated after losing the weapon');
+        else keeper.noProgress('unarmed and could not retreat: ' + (away?.refused ?? 'no reason given'));
       } else if (atWall) {
         keeper.note('broke off at the wall -- resting here rather than running', {
           at_health: f.disengaged.at_health, mid_round: !!f.disengaged.mid_round,
