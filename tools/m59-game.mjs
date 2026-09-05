@@ -541,6 +541,102 @@ function doorsLandingNear(map, fromRoomNum, toRoomNum, target) {
   return ok.size ? ok : null;
 }
 
+// THE DOOR WHOSE LANDING CAN STILL REACH THE NEXT HOP. The same question as
+// `doorsLandingNear`, asked one hop further ahead, and the reason a through-route stopped
+// stranding characters in Blackstone.
+//
+// WHY THE BACKTRACK MEMORY WAS NOT ENOUGH. `enteredVia` was added for this same trap, but it
+// only fires when the hop goes back to the room we most recently came from — a BACKTRACK.
+// The fleet's actual pattern is a through-route: Feast Hall 953 -> Keep 951 -> Courtyard 950
+// -> home 39. Entering 951 from 953 and then wanting 950, the next room is not the one we
+// came from, so the memory never applied, `orderExits` fell back to reachable-then-nearest,
+// the south-east door was nearest, and it lands in a watch tower — a pocket of 950 with no
+// floor connection to the main yard. Measured 2026-09-05: 950>39 and 951>39 both sat at
+// 0-7% arrival while the character stood in a tower re-planning for ever.
+//
+// THE QUESTION IS NOT "WHICH DOOR IS NEAREST" BUT "WHICH LANDING CAN CONTINUE". When the
+// route is A -> B -> C, a door out of A is only useful if the square it lands on in B can
+// walk to a door of B that leads to C. That is exactly `doorsLandingNear` with the onward
+// door as the target instead of the caller's final wish.
+//
+// B may publish several doors to C, so every one is asked and the answers unioned: a landing
+// that reaches ANY way onward is a landing that works. Null means no opinion and the caller
+// must leave the ordering alone — narrowing to nothing would refuse a boundary a wrong door
+// could still have crossed, and a wrong side is recoverable where a refusal is not.
+// COST IS THE WHOLE DESIGN HERE, not an afterthought. `doorsLandingNear` is one fine-grid
+// `path()` per candidate door, and a path that FAILS explores the entire component — which is
+// the common case, because the question is precisely about doors that do not connect. Naively
+// this is |A->B| x |B->C| pathfinds: measured 100-400ms on real triples, 97% of them returning
+// no opinion at all.
+//
+// That is not merely slow, it is the documented way this fleet dies. Every keeper shares ONE
+// event loop and all geometry is synchronous (m59-broker.mjs:15148) — "while one character is
+// planning, the other twenty get no timer service" — and a 1.2s cold path once "took twelve of
+// twenty-one characters out of the world in five minutes" (m59-broker.mjs:618). A hot-path
+// helper that blocks for 150ms on an ordinary journey is a fleet outage waiting for traffic.
+//
+// So two guards, in this order, and the cheap one first:
+//
+//   1. IDENTICAL LANDINGS ANSWER THEMSELVES, FOR FREE. If every A->B door arrives on the same
+//      square then either all of them reach the onward door or none do, and `doorsLandingNear`
+//      returns null for both. That is 83% of the triples this router can produce, decided by
+//      comparing two integers instead of running a pathfind.
+//   2. MEMOISE THE REST. Doors, geometry and step masks are fixed for a bake, so the answer
+//      for (A,B,C) cannot change while it holds. The lock states ARE mutable — a door that
+//      opens has to change the router's mind — so they go in the key rather than being
+//      assumed, which costs a string and keeps the cache honest.
+//
+// MEASURED over all 1,293 triples this router can produce, with masks attached:
+//
+//   cold (first ask for a triple)   mean 2.81ms, worst 306ms, 25 asks over 40ms
+//   warm (every ask after)          1ms TOTAL for all 1,293 — 0.001ms each
+//   asks that narrow anything       35 of 1,293
+//
+// THE RESIDUAL RISK, STATED PLAINLY: the worst first-ask still blocks the shared loop for
+// ~300ms, once, on a big room. That is paid once per triple for the life of the process and
+// never again, against a failure mode where characters stand in a pocket until another
+// player kills them. It is the right trade but it is not free, and if a cold stall is ever
+// implicated in a fleet incident, this is the line to come back to.
+const _onwardMemo = new Map();
+
+function doorsLandingOnward(map, fromRoomNum, viaRoomNum, ontoRoomNum) {
+  if (ontoRoomNum == null) return null;
+  const via = map?.rooms?.[viaRoomNum];
+  const from = map?.rooms?.[fromRoomNum];
+  if (!via || !from) return null;
+
+  const onward = (via.goExits || []).filter(g =>
+    !g.locked && Number(g.to) === Number(ontoRoomNum) &&
+    Number.isFinite(Number(g.col)) && Number.isFinite(Number(g.row)));
+  if (!onward.length) return null;
+
+  const inbound = (from.goExits || []).filter(g =>
+    !g.locked && Number(g.to) === Number(viaRoomNum) &&
+    g.arriveRow != null && g.arriveCol != null);
+  if (inbound.length < 2) return null;   // nothing to choose between
+
+  // GUARD 1 — free. One landing square means one answer for every door.
+  const landings = new Set(inbound.map(g => `${g.arriveCol},${g.arriveRow}`));
+  if (landings.size < 2) return null;
+
+  // GUARD 2 — memo. Lock state is in the key because it is the one input that moves.
+  const locks = `${inbound.length}:${landings.size}:${onward.length}`;
+  const key = `${fromRoomNum}>${viaRoomNum}>${ontoRoomNum}|${locks}`;
+  if (_onwardMemo.has(key)) return _onwardMemo.get(key);
+
+  const union = new Set();
+  let answered = false;
+  for (const g of onward) {
+    const ok = doorsLandingNear(map, fromRoomNum, viaRoomNum, { col: g.col, row: g.row });
+    if (ok === null) continue;          // no opinion about this particular onward door
+    answered = true;
+    for (const k of ok) union.add(k);
+  }
+  const answer = answered && union.size ? union : null;
+  _onwardMemo.set(key, answer);
+  return answer;
+}
+
 const orderExits = (candidates) => candidates.slice().sort((a, b) =>
   (a.reachable === false) - (b.reachable === false) ||
   // THE BAKED ANCHOR GOES FIRST, AND DISTANCE MUST NOT OUTRANK IT.
@@ -11244,20 +11340,40 @@ class Session {
                            && Number(back.from) === Number(nextHop.to)) ? back.door : null;
       const wantLanding = (arriveNear && Number(nextHop.to) === Number(toRoomNum))
         ? arriveNear : backtrackTo;
+
+      // AND WHEN NEITHER KNOWS, ASK THE ROUTE. An intermediate hop has no `arriveNear` — the
+      // caller only says where it wants to land in the FINAL room — and no backtrack unless
+      // it happens to be doubling back. That left every middle hop of a through-route picking
+      // by distance, which is how Blackstone stranded a fleet. See `doorsLandingOnward`.
+      const onwardTo = route.hops[1]?.to ?? null;
+      let wanted = null, doorChoice = null;
       if (wantLanding) {
-        const wanted = doorsLandingNear(this.world?.map, this.world?.room?.num,
-                                        nextHop.to, wantLanding);
+        wanted = doorsLandingNear(this.world?.map, this.world?.room?.num,
+                                  nextHop.to, wantLanding);
+        doorChoice = backtrackTo === wantLanding ? 'the door we came in by' : 'landing side';
+      } else if (onwardTo != null) {
+        wanted = doorsLandingOnward(this.world?.map, this.world?.room?.num,
+                                    nextHop.to, onwardTo);
+        doorChoice = 'the landing that can still reach the next hop';
+      }
+      if (wantLanding || wanted) {
         const right = wanted
           ? candidates.filter(e => e.stand_on &&
               wanted.has(`${e.stand_on.col},${e.stand_on.row}`))
           : [];
         // Narrow only when something survives. An empty result means the map disagrees with
         // the published exits, and crossing by the wrong door beats not crossing at all.
+        // `wantLanding` is null on the onward path — there the goal is a door in the NEXT
+        // room rather than a square this journey asked for, so it is named as the hop.
+        // Computed here so the narrowing below stays one short block: m59-doorside-test
+        // pins `candidates = right` to within a few lines of `if (right.length)`, which is
+        // what stops an empty answer ever being allowed to refuse a boundary.
+        const wantsToReach = wantLanding
+          ? { col: wantLanding.col, row: wantLanding.row }
+          : `a door onward to ${onwardTo}`;
         if (right.length) {
-          log.push({ door_choice: backtrackTo === wantLanding ? 'the door we came in by' : 'landing side',
-                     to: nextHop.to, to_name: nextHop.to_name,
-                     kept: right.length, of: candidates.length,
-                     wants_to_reach: { col: wantLanding.col, row: wantLanding.row } });
+          log.push({ door_choice: doorChoice, to: nextHop.to, to_name: nextHop.to_name,
+                     kept: right.length, of: candidates.length, wants_to_reach: wantsToReach });
           candidates = right;
         } else if (wanted) {
           log.push({ door_choice: 'no door lands on the wanted side', to: nextHop.to,
@@ -11876,4 +11992,9 @@ class Session {
   }
 }
 
-export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode };
+// `doorsLandingNear` and `doorsLandingOnward` are exported so a test can call the SHIPPED
+// function rather than reimplement it. m59-doorside-test used to re-derive the logic and
+// then grep this file's source to check it was still here, which pins the text and not the
+// behaviour — and it silently omitted the `ok.size === asked -> null` rule that is the most
+// consequential line in doorsLandingNear.
+export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode, doorsLandingNear, doorsLandingOnward };
