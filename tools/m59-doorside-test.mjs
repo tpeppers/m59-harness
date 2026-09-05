@@ -170,5 +170,61 @@ console.log('\nand the mover asks the question');
      /this\.wantSide = \{ room: plan\.fromRoom/.test(readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8')));
 }
 
+// ---------------------------------------------------------------------------
+// LEAVE BY THE DOOR YOU CAME IN BY.
+//
+// Room 39 above is split and its doors land on two islands. Blackstone Keep (951) is the
+// same shape and worse: THREE pairs of doors back to the Courtyard (950), landing at
+// r15c44, r15c16 and r14c29 - and no landing can walk to either of the others. Two of the
+// three are watch towers, which exist for shooting at people from and are not reachable
+// from the main yard at all.
+//
+// `orderExits` ranks reachable-then-nearest, so the nearest door won, put the character in
+// a tower, and it then spent vigor and minutes trying to path out of one before falling back
+// to a blink. Operator's report, 2026-09-05.
+//
+// The fix is not a better ranking. It is remembering: the door square we came IN by is one
+// square in the far room that we KNOW connects to where we were, so `doorsLandingNear` -
+// which already filters doors by whether their landing can walk to a target - is handed it.
+console.log('\nBlackstone Keep: three ways out, and only one is where you came from');
+{
+  const yard = sharedRoomGeometry(map.rooms[950]);
+  const outDoors = (map.rooms[951].goExits || []).filter(e => Number(e.to) === 950);
+  const inDoors  = (map.rooms[950].goExits || []).filter(e => Number(e.to) === 951);
+  ok('the Keep has six doors back to the Courtyard', outDoors.length === 6, String(outDoors.length));
+
+  const landings = [...new Set(outDoors.map(d => `${d.arriveRow},${d.arriveCol}`))];
+  ok('landing on three distinct squares', landings.length === 3, landings.join(' | '));
+
+  // THE PROPERTY THAT MAKES THIS MATTER AT ALL. If the three landings could reach each other
+  // the door choice would be cosmetic; they cannot, so it is the whole trip. If a re-bake
+  // ever joins them, read this rather than deleting it.
+  let joined = 0;
+  for (const a of landings) for (const b of landings) {
+    if (a === b) continue;
+    const [ar, ac] = a.split(',').map(Number), [br, bc] = b.split(',').map(Number);
+    if (yard.path(ar, ac, br, bc, { fine: true }).found) joined++;
+  }
+  ok('and no landing can walk to another - three pockets, not one yard', joined === 0, String(joined));
+
+  // The selection itself: for every way in, exactly the pair that lands back where we were.
+  let right = 0;
+  const sizes = new Set();
+  for (const came of inDoors) {
+    const usable = outDoors.filter(o => {
+      if (!yard.walkable(o.arriveRow, o.arriveCol)) return false;
+      if (o.arriveRow === came.row && o.arriveCol === came.col) return true;
+      return yard.path(o.arriveRow, o.arriveCol, came.row, came.col, { fine: true }).found;
+    });
+    sizes.add(usable.length);
+    if (usable.length === 2) right++;
+  }
+  ok('every way in narrows six ways out to the two that lead back',
+     right === inDoors.length, `${right} of ${inDoors.length}, sizes ${[...sizes].join(',')}`);
+  // Two rather than one because the doors come in pairs on adjacent squares: one boundary,
+  // two crossing squares. Either is correct. What matters is that the four belonging to the
+  // towers are gone.
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

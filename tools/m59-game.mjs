@@ -11222,9 +11222,21 @@ class Session {
       // distance arrives on the wrong island with the prey visible and unreachable. Only
       // consulted for the hop that actually ENTERS the destination, and only when the
       // caller said which side it wants.
-      if (arriveNear && Number(nextHop.to) === Number(toRoomNum)) {
+      // WHERE WE WANT TO LAND, from whichever of the two things knows.
+      //
+      // `arriveNear` is the caller's wish and only applies to the hop that ENTERS the final
+      // destination. The backtrack is this journey's own memory: if this hop goes back to the
+      // room we most recently came from, the door we came in by is a landing we know reaches
+      // where we were, and it beats "the nearest one" every time in a room whose exits do not
+      // land together. The caller's wish wins where both have an opinion.
+      const back = this.enteredVia;
+      const backtrackTo = (back && Number(back.room) === Number(this.world?.room?.num)
+                           && Number(back.from) === Number(nextHop.to)) ? back.door : null;
+      const wantLanding = (arriveNear && Number(nextHop.to) === Number(toRoomNum))
+        ? arriveNear : backtrackTo;
+      if (wantLanding) {
         const wanted = doorsLandingNear(this.world?.map, this.world?.room?.num,
-                                        nextHop.to, arriveNear);
+                                        nextHop.to, wantLanding);
         const right = wanted
           ? candidates.filter(e => e.stand_on &&
               wanted.has(`${e.stand_on.col},${e.stand_on.row}`))
@@ -11232,9 +11244,10 @@ class Session {
         // Narrow only when something survives. An empty result means the map disagrees with
         // the published exits, and crossing by the wrong door beats not crossing at all.
         if (right.length) {
-          log.push({ door_choice: 'landing side', to: nextHop.to, to_name: nextHop.to_name,
+          log.push({ door_choice: backtrackTo === wantLanding ? 'the door we came in by' : 'landing side',
+                     to: nextHop.to, to_name: nextHop.to_name,
                      kept: right.length, of: candidates.length,
-                     wants_to_reach: { col: arriveNear.col, row: arriveNear.row } });
+                     wants_to_reach: { col: wantLanding.col, row: wantLanding.row } });
           candidates = right;
         } else if (wanted) {
           log.push({ door_choice: 'no door lands on the wanted side', to: nextHop.to,
@@ -11766,6 +11779,24 @@ class Session {
       }
       hops++;
       stumbles = 0;                      // it moved; the patience is for the NEXT sticky room
+      // WHICH DOOR WE CAME IN BY, so the way out can be the same one.
+      //
+      // A room's several ways to the same place are alternatives only when that place is one
+      // connected floor. Blackstone Keep has THREE pairs of doors back to the Courtyard and
+      // they do not land together: two of them put a character in a watch tower, which is a
+      // pocket of the Courtyard that the main yard cannot be walked to from. The tower is
+      // there for shooting at people from, and the fleet has no business in one - but
+      // `orderExits` ranks by reachable-then-nearest, so the nearest door won and the
+      // character then spent vigor and minutes trying to path out of a tower before falling
+      // back to a blink.
+      //
+      // The door square we just used is the one square in the room we are LEAVING that we
+      // know connects to where we were. Storing it means the return trip can ask
+      // `doorsLandingNear` the question it already knows how to answer.
+      if (exit?.stand_on && Number.isFinite(leavingRoom))
+        this.enteredVia = { room: Number(this.world?.room?.num ?? NaN), from: leavingRoom,
+                            door: { col: exit.stand_on.col, row: exit.stand_on.row },
+                            at: Date.now() };
       // AND GET OFF THE DOORWAY BEFORE DOING ANYTHING ELSE. See stepInland: a crossing lands
       // on the far room's boundary, and the next movement from there is one square from
       // leaving again — sometimes into a different room than the one we came from.
