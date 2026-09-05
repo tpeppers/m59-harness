@@ -1030,6 +1030,81 @@ export async function freeRoomFor(s, { max = 4 } = {}) {
   return { dropped, note: dropped.length ? undefined : 'nothing known-dead to shed' };
 }
 
+// GIVE THE STREET EVERYTHING THAT IS NOT NAILED DOWN.
+//
+// `freeRoomFor` above sheds what is known-dead to make room for one spell. This is the
+// other shape: a character on a route that passes no merchant is hauling loot it will
+// never sell, and the pack space is worth more than the loot. Operator's call, 2026-09-05:
+// drop it in the Streets of Tos on the way to the Duke's tables, and yell about it, because
+// on a shared server a pile of free equipment in the street is a gift rather than litter.
+//
+// THREE THINGS ARE NEVER DROPPED, AND ONLY ONE OF THEM IS A LIST.
+//
+//   * WHAT IS WORN. What you CARRY and what you are WEARING are two different lists and
+//     `using` is the only answer — and when it is null it means UNKNOWN, not "nothing is
+//     equipped". Dropping on an unknown equipment set is how a character puts its own
+//     armour in the road, so unknown REFUSES the whole operation rather than proceeding
+//     carefully. There is no safe partial answer to this question.
+//   * MONEY. A purse in the street is gone, there is no undo, and no caller ever means it.
+//     This is a floor under the keep list rather than an entry in it, because a caller that
+//     forgets is the case it exists for.
+//   * WHATEVER THE CALLER NAMED. Matched as case-insensitive substrings, the same way every
+//     other keep list in this repository matches.
+//
+// AND IT IS JUDGED BY WHAT LEFT THE PACK. A drop is fire-and-forget on the wire; the server
+// answers a refusal with prose or with nothing at all. So the pack is read before and after
+// and the difference is the answer, exactly as the vault deposit is.
+export async function dropAllExcept(s, { keep = [], max = 60 } = {}) {
+  const c = s.need();
+  const patterns = [].concat(keep ?? []).map(String).map(x => x.trim()).filter(Boolean);
+  const kept = name => patterns.some(k => name.toLowerCase().includes(k.toLowerCase()));
+  // Money, always. `shilling` is the only currency this game has.
+  const isMoney = name => /shilling/i.test(name);
+
+  await s.pacer.submit('read', () => c.requestInventory());
+  await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+  const worn = equippedNow(c);
+  if (!worn)
+    return { dropped: [], kept: [], refused: true,
+             why: 'the equipment set is unknown, and unknown is not permission — a drop ' +
+                  'planned against it would put the character\'s own armour in the road' };
+
+  const carried = (c.inventory || []).map(o => ({ o, name: c.rsc.get(o.nameRsc) || '' }));
+  const keeping = [];
+  const going = [];
+  for (const x of carried) {
+    if (worn.has(x.o.id)) { keeping.push({ name: x.name, why: 'equipped' }); continue; }
+    if (isMoney(x.name)) { keeping.push({ name: x.name, why: 'money' }); continue; }
+    if (kept(x.name)) { keeping.push({ name: x.name, why: 'on the keep list' }); continue; }
+    going.push(x);
+  }
+  if (!going.length)
+    return { dropped: [], kept: keeping, nothing_to_drop: true,
+             why: 'everything carried is worn, money, or on the keep list' };
+
+  const before = new Map(carried.map(x => [x.o.id, x.o.amount ?? 1]));
+  const offered = going.slice(0, max);
+  for (const x of offered)
+    await s.pacer.submit('drop', () => c.drop([dropSpec(x.o)])).catch(() => {});
+  await s.pacer.submit('read', () => c.requestInventory());
+  await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+
+  const dropped = [];
+  const refusedItems = [];
+  for (const x of offered) {
+    const still = (c.inventory || []).find(o => o.id === x.o.id);
+    const left = still ? (still.amount ?? 1) : 0;
+    const gone = Math.max(0, (before.get(x.o.id) || 0) - left);
+    if (gone) dropped.push({ name: x.name, amount: gone });
+    else refusedItems.push(x.name);
+  }
+  return {
+    dropped, kept: keeping, refused_items: refusedItems,
+    offered: offered.length,
+    ...(going.length > offered.length ? { not_offered: going.length - offered.length } : {}),
+  };
+}
+
 export function junkAndBroken(c) {
   const broken = brokenSet(c);
   const worn = equippedNow(c) ?? new Set();

@@ -160,6 +160,14 @@ the records it describes.
   is defensible, was the rule for as long as the file existed, and left 578 The Cragged
   Mountains 31% ridable — nothing noticed, because a track that cannot be sent still looks
   exactly like a track) and
+  `node tools/m59-dropall-test.mjs` (23 — **the one irreversible verb on the surface**: that
+  an unknown equipment set REFUSES the whole operation rather than proceeding carefully,
+  because `using` being null means the question was not answered and not that nothing is
+  worn, and a drop planned against that puts a character's own armour in the road; that
+  money is a FLOOR rather than a keep-list entry, so the caller that forgets it is covered;
+  that a named reagent is kept while an unnamed one goes, which is why the list names
+  `inky` and not `mushroom`; and that the result is judged by what LEFT the pack, since a
+  drop is fire-and-forget and a refusal is prose or silence) and
   `node tools/m59-innerdoor-test.mjs` (38 — **a door that leads back into the room it is
   in**: that Castle Victoria is one room with a wall down it, that its trapdoor to the
   Underbasement is in a different region from every entrance so `anchorReach` honestly

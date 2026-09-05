@@ -2420,6 +2420,10 @@ class KeeperProxy {
   async vaultOp(op, opts = {}) {
     return keeperAction(this.name, this._index, 'vault', { op, ...opts });
   }
+  // And shedding the pack, fourth of the same kind.
+  async dropOp(opts = {}) {
+    return keeperAction(this.name, this._index, 'drop', { ...opts });
+  }
   // THE BOOKKEEPING HALF, WHICH IS NOT A WIRE CALL AND SO BELONGS HERE. Session has both of
   // these and the proxy had neither, so `bank` would have thrown `s.bankKnown is not a
   // function` one line past the `c.balance` failure. They read and write the shared bank
@@ -11472,6 +11476,55 @@ const TOOLS = [
           'Ko\'catan (Huital ko\'Nosak), which is a second, separate one. BARLOQUE HAS NONE — ' +
           'Setag\'lib is a compiled class that nothing ever creates. `balance` above, if present, is the last ' +
           'figure on record from tools/m59-bank.mjs rather than anything said just now.' }),
+      };
+    },
+  },
+  {
+    name: 'drop_all',
+    description:
+      'PUT EVERYTHING DOWN except what is worn, the money, and a keep list. For a character on ' +
+      'a route that passes no merchant, loot is dead weight and pack space is worth more than ' +
+      'it - and on a shared server a pile of free equipment in a public street is a gift, not ' +
+      'litter.\n' +
+      'IT REFUSES WHEN THE EQUIPMENT SET IS UNKNOWN, and that is the whole safety of it. What ' +
+      'you CARRY and what you are WEARING are two different lists; `using` is the only answer, ' +
+      'and null there means unknown rather than "nothing". A drop planned against an unknown ' +
+      'equipment set puts the character\'s own armour in the road, so unknown refuses the ' +
+      'operation outright rather than proceeding carefully. There is no safe partial answer.\n' +
+      'MONEY IS A FLOOR, NOT A LIST ENTRY. A purse in the street is gone and no caller ever ' +
+      'means it, so shillings are withheld whatever `keep` says - the caller that forgets is ' +
+      'exactly the case that floor exists for.\n' +
+      'JUDGED BY WHAT LEFT THE PACK. A drop is fire-and-forget on the wire and a refusal is ' +
+      'prose or silence, so the pack is read before and after and the difference is the ' +
+      'answer. `refused_items` is what would not go.\n' +
+      'This does not choose WHERE. Walk somewhere sensible first: dropping a pile in a ' +
+      'merchant\'s doorway or on a staging square is antisocial in a way the street is not.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      keep: { type: 'array', items: { type: 'string' },
+        description: 'case-insensitive substrings never dropped, on top of worn items and money' },
+      max: { type: 'number', description: 'most items to offer in one call, default 60' },
+    }, required: ['agent'] },
+    run: async (a) => {
+      const s = session(a.agent), c = s.need();
+      const keep = [].concat(a.keep ?? []).map(String).map(x => x.trim()).filter(Boolean);
+      const max = Number.isFinite(Number(a.max)) ? Number(a.max) : 60;
+      const proxied = s instanceof KeeperProxy ? s : null;
+      const r = proxied
+        ? await proxied.dropOp({ keep, max })
+        : await skills.dropAllExcept(s, { keep, max });
+      if (r?.error) return { ok: false, reason: r.error };
+      if (r?.refused) return { ok: false, refused: true, reason: r.why };
+      const dropped = r?.dropped ?? [];
+      return {
+        ok: true,
+        room: r?.room ?? c.room?.id ?? null,
+        dropped, count: dropped.reduce((n, d) => n + (d.amount ?? 1), 0),
+        kept: r?.kept ?? [],
+        refused_items: r?.refused_items ?? [],
+        ...(r?.not_offered ? { not_offered: r.not_offered } : {}),
+        ...(dropped.length ? {} : { note: r?.why ??
+          'nothing left the pack: everything carried is worn, money, or on the keep list' }),
       };
     },
   },

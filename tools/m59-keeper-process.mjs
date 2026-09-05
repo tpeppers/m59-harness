@@ -2368,6 +2368,20 @@ const server = createServer(async (req, res) => {
             json({ op, vaultman: name, seq: c.evSeq, ...r });
             return;
           }
+          // SHEDDING THE PACK, same seam as bank, shop and vault and for the same reason:
+          // `drop` is a mutation and the broker's client is a snapshot, so `c.drop is not a
+          // function` there. The decision about WHAT may go is the broker's; the pack read
+          // before and after, which is the only thing that makes the answer trustworthy, is
+          // here.
+          case 'drop': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const keep = [].concat(args.keep ?? []).map(String).filter(Boolean);
+            const r = await skills.dropAllExcept(session, { keep, max: Number(args.max) || 60 })
+              .catch(e => ({ dropped: [], error: e.message }));
+            json({ room: session.world?.room?.num ?? null, ...r });
+            return;
+          }
           case 'trade': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }
