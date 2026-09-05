@@ -541,3 +541,11 @@ _verify2.mjs
 
 # An assertion about ONE server at ONE moment; the shape is in door-states.example.json.
 /substrate/door-states.local.json
+
+# WHAT ONE SIMULATED FIGHT PRODUCED, ON ONE MACHINE, AGAINST ONE LOCAL SERVER.
+# m59-simulate.mjs writes an HTML report, its JSON, and a snapshot of every character's
+# policy taken before it stripped their safeties. All three are derived from a run that
+# cannot be reproduced from this repository — they are evidence about a test server, not
+# code — and the policy snapshot is a copy of this machine's orders, which never belong
+# in git (see the loadouts and tuning argument above).
+/substrate/simulations/
