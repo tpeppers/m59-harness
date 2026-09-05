@@ -175,13 +175,14 @@ function foodPie(kinds, { size = 190 } = {}) {
   return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="food carried, by kind">${slices}</svg>`;
 }
 
-function foodLegend(kinds) {
+function foodLegend(kinds, showEarned = false) {
   const total = kinds.reduce((n, k) => n + k.value, 0) || 1;
   const hue = i => Math.round((i * 360) / Math.max(1, kinds.length));
   return kinds.map((k, i) => `
     <tr>
       <td><span class="swatch" style="background:hsl(${hue(i)} 55% 55%)"></span>${esc(k.name)}</td>
       <td class="n">${num(k.value)}</td>
+      ${showEarned ? `<td class="n ${k.earned ? 'good' : 'dim'}">${num(k.earned)}</td>` : ''}
       <td class="n dim">${Math.round((k.value / total) * 100)}%</td>
       <td class="n dim" title="vigor per item, from the game's own Food table">${k.nutrition}</td>
       <td class="n dim" title="how many characters are carrying any">${k.holders}</td>
@@ -352,7 +353,9 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
          same severity as a character that cannot cast. -->
     <div class="card"><div class="k">food available</div>
       <div class="v ${food.total ? 'good' : 'bad'}">${num(food.total)}</div>
-      <div class="n">${food.kinds.length} kind(s) · ${food.fed} of ${food.characters} carrying any${
+      <div class="n">${food.baseline
+        ? `<b>${num(food.earned)} earned</b> · ${num(food.baseline)} hand-placed · `
+        : ''}${food.kinds.length} kind(s) · ${food.fed} of ${food.characters} carrying any${
         food.unread ? ` · ${food.unread} pack(s) not read` : ''}</div></div>
     <div class="card"><div class="k">short of something</div>
       <div class="v ${t.short ? 'bad' : 'good'}">${t.short}</div>
@@ -363,15 +366,20 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   <div class="sub">Every meal the fleet is carrying, by kind, totalled across all characters ·
     what counts as food is the game's own Food class tree, not a list written here — which
     matters, because four of this world's five mushrooms are casting reagents and only two
-    are edible.</div>
+    are edible.${food.baseline ? ` · <b>earned</b> is what the fleet's own errands brought
+    back: held minus what <code>substrate/food-baseline.json</code> declares was placed by
+    hand. The two are shown side by side and never netted, because a total that has quietly
+    had a number taken out of it is one nobody can check.` : ''}</div>
   ${food.total ? `
   <div class="foodwrap">
     <div class="foodpie">${foodPie(food.kinds)}</div>
     <table class="foodlegend">
-      <thead><tr><th>kind</th><th class="n">held</th><th class="n">share</th>
+      <thead><tr><th>kind</th><th class="n">held</th>${food.baseline
+        ? '<th class="n" title="held, minus what substrate/food-baseline.json declares was put there by hand">earned</th>' : ''}<th class="n">share</th>
         <th class="n">vigor ea.</th><th class="n">holders</th></tr></thead>
-      <tbody>${foodLegend(food.kinds)}</tbody>
-      <tfoot><tr><td>total</td><td class="n">${num(food.total)}</td><td class="n dim">100%</td>
+      <tbody>${foodLegend(food.kinds, !!food.baseline)}</tbody>
+      <tfoot><tr><td>total</td><td class="n">${num(food.total)}</td>${food.baseline
+        ? `<td class="n good">${num(food.earned)}</td>` : ''}<td class="n dim">100%</td>
         <td class="n dim" title="vigor if every bite were eaten — the stomach admits 100 at a sitting and drains about 7.2 a minute, so this is vigor the fleet could eat its way to, not vigor it has">${num(food.nutrition)}</td>
         <td class="n dim">${food.fed}</td></tr></tfoot>
     </table>

@@ -549,3 +549,7 @@ _verify2.mjs
 # code — and the policy snapshot is a copy of this machine's orders, which never belong
 # in git (see the loadouts and tuning argument above).
 /substrate/simulations/
+
+# What the OPERATOR hand-placed in the fleet's packs, so the economy page does not report it
+# as the fleet's own work. This machine's answer about this week; the page works without it.
+/substrate/food-baseline.json

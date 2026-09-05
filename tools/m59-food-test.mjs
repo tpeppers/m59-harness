@@ -116,6 +116,26 @@ console.log('\nthe fleet page counts what there is to eat, and only that');
   // vigor in hand: the stomach admits 100 at a sitting.
   ok('nutrition is the weighted sum', held.nutrition === 43 * 9 + 12 * 9 + 2 * 50,
      String(held.nutrition));
+  // THE OPERATOR'S OWN HAUL IS NOT THE FLEET'S WORK. While the feast errand was broken the
+  // operator walked characters into the hall by hand, and the page must not report that as
+  // progress. The obvious discriminator does not work: `platter of raw spider eyes` IS one
+  // of the hall's seven dispensers, so hand-placed and bot-fetched food is the same item
+  // from the same platter and only the person who did it knows which.
+  const split = foodHeld(
+    [{ character: 'A', pack_items: [{ name: 'spider eye', amount: 362 },
+                                    { name: 'slice of pork', amount: 12 }] }],
+    { baseline: { 'spider eye': 362 } });
+  ok('what was hand-placed is not counted as earned',
+     split.kinds.find(k => k.name === 'spider eye').earned === 0);
+  ok('and what was not is', split.kinds.find(k => k.name === 'slice of pork').earned === 12);
+  ok('the total still reports everything held', split.total === 374, String(split.total));
+  ok('the two halves are reported side by side, never netted',
+     split.baseline === 362 && split.earned === 12);
+  // A baseline bigger than what is carried means some has been eaten, which is ordinary.
+  const eaten = foodHeld([{ character: 'A', pack_items: [{ name: 'spider eye', amount: 40 }] }],
+                         { baseline: { 'spider eye': 362 } });
+  ok('eating into the baseline does not make earned negative', eaten.earned === 0);
+  ok('and the baseline reported is what is actually there', eaten.baseline === 40);
   ok('an empty fleet is zero, not a crash', foodHeld([]).total === 0);
   ok('and so is no fleet at all', foodHeld(null).total === 0);
 }

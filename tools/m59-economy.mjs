@@ -44,9 +44,14 @@
 // A LIVE ROW BEATS ALL OF IT. When the broker renders this page it has the real
 // inventory in hand, so it passes the fleet rows in and they win — the record is what
 // answers when nothing is running.
+import { existsSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readLedger } from './m59-ledger.mjs';
 import { foodValue } from './m59-items.mjs';
 import { listCharacters as bankedCharacters, balancesFor } from './m59-bank.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const NEED_PER_CAST = 2;          // create food: 2 ElderBerry + 2 Herbs, from the caster
 export const CASTS_FROM = (r) => Math.min(Math.floor((r.elderberry ?? 0) / NEED_PER_CAST),
@@ -124,7 +129,38 @@ function fromLive(live) {
 // A character whose pack has not been read contributes nothing and is counted as unknown
 // rather than as zero: an unread pack and an empty one are different facts, and reporting
 // the fleet as starving because nobody looked is the failure this whole page exists to avoid.
-export function foodHeld(live) {
+// WHAT THE OPERATOR PUT THERE BY HAND, so it cannot be mistaken for what the fleet earned.
+//
+// substrate/food-baseline.json, gitignored: `{ "<item>": <count> }`. It is this machine's
+// answer about this week and nothing about the game, which is exactly the split the rest of
+// this repository draws between committed shape and local fact.
+//
+// IT EXISTS BECAUSE THE OBVIOUS DISCRIMINATOR DOES NOT WORK. "Did it come from the Duke's
+// tables" sounds like the right question and answers the wrong one: `platter of raw spider
+// eyes` IS one of the hall's seven dispensers (feast-hall.mjs), so an operator walking a
+// character in by hand and one driven there by a bot come home carrying the same item from
+// the same platter. Only the person who did it knows which, so the person who did it writes
+// it down.
+//
+// The page then reports both halves and never nets them into one number: a total that has
+// quietly had 350 subtracted from it is a number nobody can check.
+export function foodBaseline(file = null) {
+  const path = file ?? join(HERE, '..', 'substrate', 'food-baseline.json');
+  try {
+    if (!existsSync(path)) return {};
+    const v = JSON.parse(readFileSync(path, 'utf8'));
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+    const out = {};
+    for (const [k, n] of Object.entries(v)) {
+      if (String(k).startsWith('//')) continue;     // a comment key, by this repo's convention
+      const amount = Number(n);
+      if (Number.isFinite(amount) && amount > 0) out[String(k).trim().toLowerCase()] = amount;
+    }
+    return out;
+  } catch { return {}; }          // a baseline that will not parse is no baseline, not a crash
+}
+
+export function foodHeld(live, { baseline = null } = {}) {
   const byName = new Map();
   let unread = 0, characters = 0;
   for (const r of live || []) {
@@ -147,10 +183,22 @@ export function foodHeld(live) {
       byName.set(key, prev);
     }
   }
+  // Split each kind into what the operator declared and what is over and above it. Clamped
+  // at zero per kind: a baseline larger than what is carried means some of it has been eaten
+  // or lost, which is ordinary, and must not turn into a negative "earned".
+  const base = baseline ?? foodBaseline();
+  for (const k of byName.values()) {
+    k.baseline = Math.min(k.value, Number(base[k.name]) || 0);
+    k.earned = Math.max(0, k.value - k.baseline);
+  }
   const kinds = [...byName.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
   const total = kinds.reduce((n, k) => n + k.value, 0);
   return {
     total,
+    // Reported side by side and never netted: a total that has quietly had a number
+    // subtracted from it is one nobody can check.
+    baseline: kinds.reduce((n, k) => n + (k.baseline || 0), 0),
+    earned: kinds.reduce((n, k) => n + (k.earned || 0), 0),
     kinds,
     // The stomach admits 100 at a sitting and drains about 7.2 a minute, so this is not
     // "vigor the fleet has" - it is vigor the fleet could eat its way to, given time.
