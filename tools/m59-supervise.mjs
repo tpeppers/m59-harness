@@ -390,6 +390,56 @@ export function fallbackHunt(level) {
 // So an existing MUTUAL pair is left exactly as it is, and only the unpaired are
 // matched up. That still heals a widowed character — its partner is gone, so it is
 // unpaired and gets re-matched — without disturbing anything that is working.
+// A RESTART IS A LEVER FOR A STALL THE KEEPER IS CARRYING, AND A LOOP FOR ONE IT IS NOT.
+//
+// Restarting a stalled keeper works when the thing in the way is keeper-local: a room
+// written off for the session, a route given up on, a square's failure budget, a stale
+// safe-spot hold. A fresh process throws all of that away and the character gets another
+// go. That is why this exists and it is not going anywhere.
+//
+// It is not a lever for a DETERMINISTIC stall. The keeper comes back, walks into the same
+// room with the same orders and the same geometry, and re-enters the loop within seconds —
+// once every ninety seconds, for ever, each line reading `restarted <character>` as though
+// something had been achieved. This file already refuses that trap twice by name, for
+// `NO_SAFE_WALL` and for a character resting up the mana to arm itself, and both of those
+// were found the same way: somebody noticed the log looked like work.
+//
+// So the restart is BOUNDED against the reason. The keeper now declares `STALL_NO_LEVER`
+// when the same stall reason repeats with nothing in the keeper that can act on it
+// (`stallLever` in m59-autopilot.mjs); when it does, this allows two restarts — because the
+// first one is a genuine experiment and the second covers a restart that raced something —
+// and then stops, and says why, and leaves the refusal standing where a person can see it.
+//
+// Pure and exported so it can be tested without a broker: it takes the memory and the row
+// and returns the decision. The memory is a plain Map owned by the caller.
+export const STALL_RESTARTS_BEFORE_GIVING_UP = 2;
+
+// One round's memory of who has been restarted for what. Module-level because the
+// supervisor loop is a long-running process and the whole point is to remember across
+// rounds; the helper below takes it as an argument so a test can hand it its own.
+const STALL_RESTARTS = new Map();
+
+export function stallRestartDecision(memory, character, row, { limit = STALL_RESTARTS_BEFORE_GIVING_UP } = {}) {
+  const refusals = Array.isArray(row?.refusals) ? row.refusals : [];
+  const declared = refusals.find(x => x?.code === 'STALL_NO_LEVER' && x?.blocking !== false);
+  // A keeper that has not declared one is the ordinary case and is not rationed. That
+  // matters: this must not become a general throttle on a mechanism that works.
+  if (!declared) { memory.delete(character); return { restart: true, count: 0, declared: false }; }
+  // Keyed on the REASON, not merely on the character. A character that gets stuck on
+  // something new has a new experiment coming to it, and the count starts again.
+  const why = String(declared.why ?? row?.stalled?.why ?? '');
+  const seen = memory.get(character);
+  const count = seen && seen.why === why ? seen.count : 0;
+  if (count >= limit) {
+    memory.set(character, { why, count });
+    return { restart: false, count, declared: true, why,
+             because: `restarted ${count} time(s) for the same declared stall and it came ` +
+                      'back — a restart is not the lever for this one' };
+  }
+  memory.set(character, { why, count: count + 1 });
+  return { restart: true, count: count + 1, declared: true, why };
+}
+
 export function pairUp(rows) {
   const by = new Map(rows.map(r => [r.agent, r]));
   const pairs = [], taken = new Set();
@@ -776,6 +826,16 @@ async function round(n) {
     if (DRY) { console.log(`   would restart ${r.character}: ${why}`); continue; }
     const persistent = typeof r.stalled === 'object' && (r.stalled.idle_passes ?? 0) >= 8;
     if (!persistent && !/no keeper|keeper stopped/.test(String(r.stalled))) continue;
+    // A DECLARED LEVERLESS STALL GETS TWO RESTARTS AND THEN THE TRUTH. See
+    // stallRestartDecision — the restart is the right experiment and a terrible habit.
+    const d = stallRestartDecision(STALL_RESTARTS, r.character, r);
+    if (!d.restart) {
+      console.log(`   NOT restarting ${r.character}: ${d.because}. ` +
+                  `stalled on: ${String(d.why).slice(0, 90)}`);
+      console.log('     this needs a different room, different orders, or a fix — ' +
+                  'the refusal STALL_NO_LEVER stays up until the character earns something');
+      continue;
+    }
     // Same reason as ensureKeeper: the stall restart is the one that fires every 90s, so
     // it is the one most likely to erase a deliberate placement. Read the policy back
     // and carry it, rather than rebuilding the keeper from defaults.

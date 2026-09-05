@@ -169,17 +169,31 @@ export function fleeThresholdNode(keeper) {
 
     if (!atWall) {
       // No wall at all: run.
-      keeper.tally.withdrawals = (keeper.tally.withdrawals || 0) + 1;
       keeper.note('running for safety', {
         health: Math.round(hp * 100) + '%',
         from: threat.map(o => bb.client.rsc.get(o.nameRsc)),
         why: 'below the flee threshold in the open -- distance is the only thing that ' +
              'stops this, and a wall four squares away is not distance',
       });
-      await keeper.retreatToSafety({
+      const away = await keeper.retreatToSafety({
         because: 'below the flee threshold in the open',
         from: threat.map(o => bb.client.rsc.get(o.nameRsc)),
       });
+      // A REFUSED RETREAT IS FAILURE, AND FAILURE IS WHAT LETS THE TREE CARRY ON.
+      //
+      // In a selector, SUCCESS ends the tick — so returning it here on a retreat that was
+      // refused pre-empts `leave_room` below, which is the node that actually walks out.
+      // That is issue #51 in the sequential ladder, and it is the same mistake in the same
+      // shape: `retreatToSafety` returns `{arrived:false}` whenever `retreat_to_inn` is
+      // off, which on this fleet is always. Four deaths, all of them nought squares moved.
+      if (!away?.arrived) {
+        keeper.note('the retreat was refused -- letting the tree carry on', {
+          refused: away?.refused ?? 'no reason given', no_spot: away?.no_spot ?? null,
+          why: 'deciding to run is not running, and this node claiming the tick is what ' +
+               'stops the leave-the-room node from getting one' });
+        return FAILURE;
+      }
+      keeper.tally.withdrawals = (keeper.tally.withdrawals || 0) + 1;
       return SUCCESS;
     }
 
@@ -189,7 +203,6 @@ export function fleeThresholdNode(keeper) {
     const critical = hp < 0.2;
     const unprovenCrowd = !sheltered && threat.length >= 2;
     if (critical || unprovenCrowd) {
-      keeper.tally.withdrawals = (keeper.tally.withdrawals || 0) + 1;
       keeper.note(critical ? 'safe spot is not enough at this HP -- running'
                             : 'unproven wall with multiple attackers -- running', {
         health: Math.round(hp * 100) + '%',
@@ -201,11 +214,19 @@ export function fleeThresholdNode(keeper) {
                       : 'an unproven wall with two or more attackers is not a wall -- '
                         + 'they get around it, and the character is taking hits from both sides',
       });
-      await keeper.retreatToSafety({
+      const away = await keeper.retreatToSafety({
         because: critical ? 'below 20% in a safe spot -- the spot is not enough'
                           : 'unproven wall, multiple attackers',
         from: threat.map(o => bb.client.rsc.get(o.nameRsc)),
       });
+      if (!away?.arrived) {
+        keeper.note('the retreat was refused -- letting the tree carry on', {
+          refused: away?.refused ?? 'no reason given', no_spot: away?.no_spot ?? null,
+          why: 'the wall is not enough and the retreat did not happen, so this tick belongs ' +
+               'to whichever node below can still move the body' });
+        return FAILURE;
+      }
+      keeper.tally.withdrawals = (keeper.tally.withdrawals || 0) + 1;
       return SUCCESS;
     }
 
@@ -336,12 +357,24 @@ export function vigorWalkNode(keeper) {
            'cannot raise vigor past ' + restCeiling + ' and we are already above it, so the ' +
            'only thing standing still produces is time spent hurt in a monster room',
     });
-    await keeper.retreatToSafety({
+    const went = await keeper.retreatToSafety({
       because: 'hurt, no wall here, and too much vigor for waiting to be worth anything',
       vigor: vigorNow,
       monsters_in_room: hostiles.length,
     });
-    keeper.progress('moved toward somewhere I can heal');
+    // The sequential ladder's version of this rung is what killed JohnsSlave four times
+    // (issue #51): it reported progress on a refusal and returned HANDLED, so the
+    // leave-the-room rung under it never ran. Here the same mistake is a SUCCESS that
+    // ends the selector tick. Only a retreat that happened may claim either.
+    if (!went?.arrived) {
+      keeper.note('the retreat was refused -- not claiming the tick for it', {
+        refused: went?.refused ?? 'no reason given', no_spot: went?.no_spot ?? null,
+        why: 'saying we are moving is not moving, and the leave_room node below only ' +
+             'gets a tick if this one gives it up' });
+      return FAILURE;
+    }
+    keeper.progress(went.took_spot ? 'took a wall rather than waiting it out'
+                                   : 'moved toward somewhere I can heal');
     return SUCCESS;
   });
 }

@@ -695,3 +695,72 @@ is one the geometry calls safe (the old behaviour, and what killed); that with w
 default (skipped with a note where it was not — the Flatlands pipe spot is the wedge class); that blows landed
 on the stop square; and that no fixture names a character. **It should fail the day a wall in a crowd becomes
 a candidate again.**
+
+## m59-retreat-refusal-test.mjs (32)
+
+**A retreat that was refused is not a retreat, and must not end the pass.** `retreatToSafety`
+refuses outright while `retreat_to_inn` is off — the operator switched it off on 2026-08-27 —
+and every caller reported success anyway, so the journal read like an escape while the body
+stood still. JohnsSlave died of it four times in two days (issue #51); the last post-mortem
+window is 31.3 seconds, 46 samples, `squares_per_second: 0.0`, `net_squares: 0`,
+`rooms_crossed: 0`, seven things adjacent, 2 of 21 health, and a correct decision on every
+single pass.
+
+Two halves, and the suite pins both. The refusal now **dispatches the replacement it had been
+describing** — the comment above it has said "the replacement is not nothing, it is the
+route-adjacent safe spot" the whole time, so the branch takes a wall when there is one, shares
+the ladder's own 30-second `wallTriedAt` budget so a wall-less room is not re-scanned once per
+rung, obeys `use_safe_spots`, and still defers to the older guard that keeps a character on a
+wall that has held. And the caller **no longer claims the pass for a refusal**: the rung that
+decides "moving to somewhere I can heal" used to `progress()` and `return HANDLED` whatever
+came back, which pre-empted the rung immediately below it — the one that walks out via
+`leaveViaAny` with a reconnect to shed the crowd. The end-to-end assertion drives the real
+`passFleeAndRest` on a keeper at 3 of 21 health with seven monsters in the room and checks that
+the body actually leaves; its mirror checks that a retreat which DID arrive still ends the pass
+and does not also abandon the room.
+
+The last section is the churn guard, and it is the reason the class survived: five call sites
+had the same bug in the same shape and each reads perfectly well on its own. So the rule is
+checked over the file — every `retreatToSafety` call binds its answer, nothing follows one
+straight into an unconditional `progress()`, and the two behaviour trees (`m59-bt-flee.mjs`,
+`m59-bt-farm.mjs`) agree, because a selector's `SUCCESS` is the tree's version of `HANDLED` and
+landing them otherwise would re-open the same grave. **It should fail the day a caller reports
+a refused retreat as movement again.**
+
+## m59-stall-lever-test.mjs (48)
+
+**A stall has to name its lever, and "none" is an answer rather than a silence.** `noProgress`
+counted idle passes and had exactly one keeper-side lever — blink — selected by testing the
+reason *sentence* against a regex. A reason that did not match got no lever at all, and
+nothing anywhere said so: the counter went up, `stuck.since` advanced, and the character
+stood still. Measured at 27 minutes, 1,623 seconds, 943 idle passes, zero kills, in the
+character's own assigned farm room, with the detector watching all of it (issue #50,
+suggested direction 3 — the half the approach walk did not close).
+
+The second lever is outside the keeper: `m59-supervise.mjs` restarts a keeper stalled for
+eight passes. That is a real lever for a **stateful** stall, where the thing in the way is
+keeper-local — a room written off for the session, a route given up on, a square's failure
+budget. It is not one for a **deterministic** stall: a fresh keeper walks into the same room
+with the same orders and re-enters the loop in seconds, once every ninety seconds, for ever,
+each line reading `restarted <character>` as though something had happened. That file already
+refuses the same trap twice by name, for `NO_SAFE_WALL` and for a character resting up the
+mana to arm itself.
+
+Four things are pinned. `stallLever` is the whole map from a reason to the thing that can act
+on it, enumerable rather than buried in a branch, with `null` a legitimate answer — and the
+blink classification is unchanged, which is asserted in both directions so making it explicit
+cannot quietly become making it different. A **repeat run** is counted separately from idle
+passes, because a character finding a new obstacle every pass is working and one reciting the
+same sentence is in a loop its own inputs cannot leave; sixty different failures are never
+declared. A leverless run past twenty repeats **declares** `STALL_NO_LEVER` on
+`status.refusals` — once, with `since` surviving, carrying the repeating sentence and the
+room, cleared by `progress()` and by nothing else. And the fact travels: `stalled`, `stuck`
+and the keeper process's own `/state` all carry `lever` and `repeats`, asserted together,
+because a field added in one publisher and forgotten in the other is how the fleet board once
+reported `stalled: false` for a character standing in a corner for twenty minutes.
+
+The last section is the supervisor's half: `stallRestartDecision` is pure and exported, an
+undeclared stall is never rationed (this must not become a throttle on a mechanism that
+works), a declared one gets two restarts and then the truth, a *different* declared reason
+starts the count again, and a character that earns something is forgotten. **It should fail
+the day a stall reason can go unclassified again.**

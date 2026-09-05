@@ -486,3 +486,118 @@ stand in, `provedSquares` for two seconds per geometry — because both were bei
 every walker iteration and had become the whole of the 2–5 s stalls that remained. Tour 12:
 two stalls in twenty minutes, both in the loop the last yield now covers; prod: 9 stalls in a
 quarter hour with the worst 3.3 s, against 313 and 158 s in the tour that found them.
+
+## A rung that decided to move, said so, and reported progress for it
+
+`retreatToSafety` is the ladder's answer to "get out of here". It refuses outright while
+`retreat_to_inn` is off — the operator's call, 2026-08-27, on the grounds that walking to an
+inn means crossing more of the road that is already killing us — and returns
+`{ arrived: false, refused: 'retreat_to_inn is off' }` having moved nothing.
+
+Every caller ignored that. The post-mortems read:
+
+```
+what:  "hurt in the open — running for a town rather than playing dead"
+what:  "no wall and no town — withdrawing rather than freezing"
+what:  "not waiting this out — moving to somewhere I can heal"
+what:  "not changing objective for an inn"          <- the refusal
+progress: "moved toward somewhere I can heal"       <- the lie
+```
+
+JohnsSlave, four deaths in two days (2026-09-03 ×2, 2026-09-04, 2026-09-05), every one of them
+`in_safe_spot: false`, `at_a_safe_wall: null`, and the last one **0.0 squares per second across
+the whole 31-second window** with seven creatures adjacent at 2 of 21 health. The keeper
+understood the situation correctly on every single pass. Reported externally as issue #51.
+
+**Two separate faults, and only the second one is about survival.**
+
+The first is that the refusal did nothing at all while the comment above it declared what the
+replacement was: "the replacement is not nothing — it is the route-adjacent safe spot." A
+sentence in a comment is not a behaviour. The refusal now takes a wall when there is one to
+take, and returns `{ arrived: true, took_spot: true }` when it does. It shares `wallTriedAt`
+with the ladder's own wall rung, so a room with no reachable wall is searched once per pass
+rather than once per rung that wants one, and it obeys `use_safe_spots` — the operator
+switching spots off is an instruction, not a preference this branch gets to override because
+somebody is dying.
+
+The second is the one that killed. The rung that calls it —
+
+```js
+if (hurt && combatZone && !sheltered && !testing && !this.hold && vigor > restCeiling)
+```
+
+— called `progress()` and `return HANDLED` **whatever came back**. `HANDLED` ends the pass, so
+the rung immediately below it never ran, and that rung is the escape: `leaveViaAny` over every
+exit in the room, a `breakOut()` reconnect to shed the crowd when the walk is refused, and
+another try. A refusal now falls THROUGH to it, and only a retreat that actually happened may
+claim the pass or the progress.
+
+**The class, not the site.** Five call sites had this bug in the same shape — the ladder rung,
+the out-of-band retaliation refusal, both disengage branches, and the playbook's `retreat` and
+`leave_room` verbs — and it survived because each one reads perfectly well on its own. A
+`progress()` for something that did not happen is worse than a missing one: it is what keeps
+the stall detector quiet, so the character is invisible to `m59-status.mjs`, to the supervisor,
+and to the pulse, for exactly as long as it takes to die. `m59-retreat-refusal-test.mjs` (32)
+checks the rule over the whole file rather than per site, and checks that the two behaviour
+trees agree — in a selector, `SUCCESS` is the tree's version of `HANDLED`.
+
+## The detector saw it for 27 minutes and had nothing to pull
+
+`noProgress(why)` increments a counter, sets `stalledSince` at five passes, and has exactly
+one keeper-side lever: `wantsBlink`, armed when the reason matches `STUCK_IN_PLACE` — a regex
+over the English sentence. Everything else got **no lever at all**, and nothing said so.
+
+That is the shape of the 27-minute wedge in issue #50: `stuck.since` advancing, `idle_passes`
+climbing past 900, `why: "a pull attempt failed transiently; retrying from the same wall"`
+recited every 1.5 seconds, in the character's own assigned farm room, with zero kills. The
+detector was working perfectly. It had nothing to pull.
+
+**There is a second lever and it is not in this file.** `m59-supervise.mjs` restarts a keeper
+stalled for eight passes, and that is a genuine lever for a *stateful* stall — one where the
+obstruction is keeper-local: `noWallRooms`, `unreachable`, `cappedRooms`, `pullFailures`, a
+stale hold. A fresh process throws all of it away and the character gets another go.
+
+It is not a lever for a **deterministic** stall, and telling them apart is the whole problem.
+A fresh keeper walks into the same room with the same orders and the same geometry and
+re-enters the loop within seconds — once every ninety seconds, for ever, each round printing
+`restarted <character>` as though something had been achieved. `m59-supervise.mjs` already
+refuses that trap twice by name (`NO_SAFE_WALL`, and a character sitting for `create weapon`
+mana), and both were found the same way: somebody noticed the log looked like work.
+
+### What changed
+
+**The lever is data.** `stallLever(why)` is the whole map from a reason to the thing that can
+act on it — today `{ blink: STUCK_IN_PLACE }` — and `null` is a legitimate, reportable
+answer. The classification of blink reasons is unchanged; what changed is that it can be
+enumerated, tested, and *reported* rather than being an implicit fall-through. An unrecognised
+reason is reported and never dropped, which is the same rule this repository applies to policy
+keys, and for the same reason: a setting that silently does nothing is how `purpose` stayed
+out of a schema for a year.
+
+**A repeat run is counted separately from idle passes.** The same sentence twice is a
+different fact from two ways of failing. A character finding a new obstacle every pass is
+working; one reciting the same sentence is in a loop its own inputs cannot leave. Only the
+second is worth declaring.
+
+**A leverless run is declared, not endured.** Past twenty repeats with no lever, the keeper
+raises `STALL_NO_LEVER` on `status.refusals` — the channel the supervisor and the fleet board
+already read as data — carrying the repeating sentence, the count and the room, said once,
+with `since` surviving, and cleared by `progress()`. `lever` and `repeats` also ride along on
+`stalled`, on `stuck`, and on the keeper process's own `/state`.
+
+**And the restart is bounded against that declaration.** `stallRestartDecision` allows two —
+the first is a real experiment, the second covers one that raced something — and then stops
+and says why, leaving the refusal standing.
+
+### What this is not
+
+It is not a cure. There is no verb in this file that fixes an unknown loop, and inventing one
+is how a fleet gets 107 room-flees and 0 kills: every one of those was a character below the
+vigor floor that fled a room it could have fought in, and the escape working better only
+converted "die where you stand" into "run for ever". Guessing at a lever for a stall nobody
+has classified would be the same mistake with a longer stride.
+
+What it fixes is that the state was **invisible**. "Stalled for 27 minutes" and "stalled for
+27 minutes with nothing that can act on it" are different facts, and only the second is an
+emergency. A character nobody can help and a character nobody can *see* look identical from
+outside, and only one of them is fixable by whoever is on shift.

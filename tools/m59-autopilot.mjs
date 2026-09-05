@@ -1020,6 +1020,43 @@ const BLINK_COOLDOWN_MS = 120_000;
 // a perfectly mobile character for no reason.
 const STUCK_IN_PLACE = /could not reach|cannot reach|no route|refused|no floor|stuck|could not get|unreachable|no exit/i;
 
+// A STALL HAS TO NAME ITS LEVER, AND "NONE" IS AN ANSWER RATHER THAN A SILENCE.
+//
+// `noProgress` had exactly one lever — blink — selected by testing the reason SENTENCE
+// against the regex above. A reason that did not match got no lever at all, and nothing
+// anywhere said so: the counter went up, `stuck.since` advanced, and the character stood
+// there. Issue #50 is 27 minutes of it in the character's own farm room, 943 idle passes,
+// zero kills, the detector watching the whole time.
+//
+// The second lever is outside this file — `m59-supervise.mjs` restarts a keeper stalled
+// for eight passes — and it is a lever for a STATEFUL stall, where the thing in the way is
+// keeper-local (a room written off, a route given up on, a square's failure budget). It is
+// not a lever for a DETERMINISTIC one: a fresh keeper walks into the same room with the
+// same inputs and re-enters the loop in seconds, once every ninety seconds, for ever, and
+// every line of it looks like the supervisor working. That file already names that trap
+// twice, for `NO_SAFE_WALL` and for a character resting up the mana to arm itself.
+//
+// So the lever becomes DATA. `stallLever` is the whole map from a reason to the thing that
+// can act on it, `null` is a legitimate and reportable answer, and a stall that keeps
+// giving the same leverless reason stops being endured and gets DECLARED — as a refusal,
+// with a code, on the channel the supervisor and the board already read. Declaring is not
+// a cure. It is the difference between a character nobody can help and a character nobody
+// can SEE, and only one of those is fixable by whoever is on shift.
+export const STALL_LEVERS = Object.freeze({ blink: STUCK_IN_PLACE });
+export const stallLever = (why) => {
+  const s = String(why ?? '');
+  for (const [name, test] of Object.entries(STALL_LEVERS)) if (test.test(s)) return name;
+  return null;
+};
+// THE SAME REASON TWICE IS A DIFFERENT FACT FROM TWO WAYS OF FAILING. A character finding
+// a new obstacle every pass is working; one reciting the same sentence is in a loop that
+// its own inputs cannot leave. Only the second is worth declaring, which is why this
+// counts REPEATS of one reason rather than idle passes of any kind.
+//
+// Twenty, at the ~1.5s pass the reported loop ran at, is about thirty seconds — well past
+// anything transient and a long way short of the 1,623 seconds it actually took.
+const STALL_NO_LEVER_REPEATS = 20;
+
 const vigorPct = v => {
   const g = v?.vigor;
   if (!g || g.value == null) return null;
@@ -1808,6 +1845,11 @@ export class Autopilot {
     this.idlePasses = 0;
     this.stalledSince = null;
     this.stalledWhy = null;
+    // WHICH loop, and what could act on it. A count of idle passes says a character is not
+    // earning; these two say whether anybody can do anything about it. See `stallLever`.
+    this.stalledLever = null;
+    this.stallRepeats = 0;
+    this.lastNoProgressWhy = null;
     // Passes in which the server's room contents did not contain our own object.
     // The usual cause is a save-game renumbering our object id out from under a live
     // session, after which everything that keys on selfId quietly reads as "dead".
@@ -6462,13 +6504,24 @@ export class Autopilot {
         case 'nothing':
           return done('nothing, deliberately');
 
-        case 'retreat':
-          await this.retreatToSafety({ because: `playbook: ${trigger}` });
-          return done('retreated to a wall');
+        // A PLAYBOOK VERB REPORTS WHAT IT DID, and this pair used to report what it was
+        // asked to do. `retreatToSafety` refuses outright while `retreat_to_inn` is off,
+        // so "retreated to a wall" was written into the journal by a character that had
+        // not moved — the same lie, from the same call, that issue #51 is about. The
+        // header comment two dozen lines up already states the rule: a playbook that
+        // fires and achieves nothing must not be indistinguishable from one that worked.
+        case 'retreat': {
+          const r = await this.retreatToSafety({ because: `playbook: ${trigger}` });
+          return done(r?.arrived ? (r.took_spot ? 'retreated to a wall' : 'retreated to safety')
+                                 : 'nothing — the retreat was refused',
+                      { refused: r?.arrived ? undefined : (r?.refused ?? 'no reason given') });
+        }
 
-        case 'leave_room':
-          await this.retreatToSafety({ because: `playbook: ${trigger}`, leaveRoom: true });
-          return done('left the room');
+        case 'leave_room': {
+          const r = await this.retreatToSafety({ because: `playbook: ${trigger}`, leaveRoom: true });
+          return done(r?.arrived ? 'left the room' : 'nothing — the retreat was refused',
+                      { refused: r?.arrived ? undefined : (r?.refused ?? 'no reason given') });
+        }
 
         case 'logoff': {
           // THE ANSWER TO A GRIEFER, AND THE HALF THAT MATTERS IS THE WAITING. Logging
@@ -7869,23 +7922,65 @@ export class Autopilot {
     this.idlePasses = 0;
     this.stalledSince = null;
     this.stalledWhy = null;
+    // The repeat run and the declaration go with it. A character that has done something
+    // is not in the loop any more, and leaving `STALL_NO_LEVER` standing would make the
+    // refusal outlive the condition — which is the failure `since` was added to avoid.
+    this.stallRepeats = 0;
+    this.stalledLever = null;
+    this.lastNoProgressWhy = null;
+    if (this.refusals?.has('STALL_NO_LEVER')) this.clearRefusal('STALL_NO_LEVER');
     if (why) this.lastProgress = { at: Date.now(), why };
   }
 
   // Nothing useful happened. After a few of these in a row, say so out loud.
   noProgress(why) {
     this.idlePasses++;
+    const reason = String(why ?? '');
+    // Same sentence again, or a different way of failing? See STALL_NO_LEVER_REPEATS.
+    this.stallRepeats = reason && reason === this.lastNoProgressWhy
+      ? (this.stallRepeats ?? 0) + 1 : 1;
+    this.lastNoProgressWhy = reason;
+    // WHAT COULD ACT ON THIS, NAMED. `null` is an answer and it is the interesting one.
+    const lever = stallLever(reason);
+    this.stalledLever = lever;
     if (this.idlePasses >= 5 && !this.stalledSince) {
       this.stalledSince = Date.now();
       this.stalledWhy = why;
-      this.note('STALLED', { why, passes: this.idlePasses,
+      this.note('STALLED', { why, passes: this.idlePasses, lever,
                              hint: 'nothing has worked for several passes running' });
     } else if (this.stalledSince) this.stalledWhy = why;
     // A STALL THAT IS ABOUT GETTING OUT OF A ROOM HAS A SPELL FOR IT — see blinkFree.
     // Flagged rather than cast, because this is called from synchronous code deep in the
     // pass and casting is several seconds of protocol.
-    if (this.idlePasses >= 5 && STUCK_IN_PLACE.test(String(why ?? '')))
+    if (this.idlePasses >= 5 && lever === 'blink')
       this.wantsBlink = { why, at: Date.now() };
+    // AND A STALL NOTHING CAN ACT ON IS DECLARED RATHER THAN ENDURED.
+    //
+    // Not a cure — there is no verb here that fixes an unknown loop, and inventing one is
+    // how a fleet gets 107 room-flees and 0 kills. What this fixes is that the state was
+    // INVISIBLE: `stuck.since` advanced for 27 minutes while every reader saw a number
+    // going up and no way to tell it from a character being patient. A code on
+    // `status.refusals` is the one channel the supervisor and the fleet board already read
+    // as data, and it carries the sentence that is repeating, so whoever is on shift can
+    // see WHICH loop rather than that there is one.
+    if (!lever && this.stallRepeats >= STALL_NO_LEVER_REPEATS) {
+      if (!this.refusals?.has('STALL_NO_LEVER'))
+        this.note('STALLED WITH NO LEVER', {
+          why: reason, repeats: this.stallRepeats, passes: this.idlePasses,
+          room: this.s?.world?.room?.num ?? null,
+          note: 'the same reason this many times running is a loop its own inputs cannot ' +
+                'leave, and no lever in this keeper matches it. Declaring it so somebody ' +
+                'can, rather than counting to a thousand quietly' });
+      this.refuse('STALL_NO_LEVER', {
+        faculty: 'work', blocking: true,
+        why: `the same stall ${this.stallRepeats} times running, and nothing here can act ` +
+             `on it: ${reason}`,
+        remedy: 'a keeper restart clears keeper-local state and is worth ONE try; if the ' +
+                'same reason comes back it is deterministic, and what it needs is a ' +
+                'different room, different orders, or a fix',
+        retryAfterMs: 300_000,
+      });
+    }
   }
 
   /**
@@ -7964,6 +8059,10 @@ export class Autopilot {
     if (!isTerminalMovementReason(result?.reason)) return null;
     this.stalledSince ??= Date.now();
     this.stalledWhy = `${context} stopped: ${result.reason}`;
+    // This writes the stall directly rather than through noProgress, so it has to name its
+    // own lever — otherwise `stuck.lever` would report whatever the last ordinary stall
+    // decided, which is a stale answer to the one question a reader is asking here.
+    this.stalledLever = stallLever(this.stalledWhy);
     this.note(`${context} stopped by the local collision contract`, {
       ...detail,
       reason: result.reason,
@@ -8494,7 +8593,13 @@ export class Autopilot {
         : null,
       stalled: this.stalledSince
         ? { since_seconds: Math.round((Date.now() - this.stalledSince) / 1000),
-            idle_passes: this.idlePasses, why: this.stalledWhy }
+            idle_passes: this.idlePasses, why: this.stalledWhy,
+            // WHAT COULD ACT ON IT, AND WHETHER THE SENTENCE IS REPEATING. Without these
+            // two a reader can see that a number is going up and cannot tell a character
+            // working through a hard room from one reciting the same failure. `lever: null`
+            // with a high `repeats` is the shape that ran for 27 minutes unseen.
+            lever: this.stalledLever ?? null,
+            repeats: this.stallRepeats ?? 0 }
         : false,
       // THE SAME FACT AGAIN, IN THE ONE SHAPE EVERY READER CAN USE.
       //
@@ -8507,7 +8612,9 @@ export class Autopilot {
       stuck: this.stalledSince
         ? { since: this.stalledSince,
             seconds: Math.round((Date.now() - this.stalledSince) / 1000),
-            why: this.stalledWhy ?? null }
+            why: this.stalledWhy ?? null,
+            lever: this.stalledLever ?? null,
+            repeats: this.stallRepeats ?? 0 }
         : null,
       // THE SAME TWO FACTS AS `stalled`, AS DATA RATHER THAN AS A SENTENCE.
       //
@@ -13192,12 +13299,36 @@ export class Autopilot {
       // "Somewhere I can heal" is an inn, not a wall in the same monster room. The
       // wall version left us inside the vision of everything that was already hitting
       // us, healing at a rate that damage cancelled out.
-      await this.retreatToSafety({
+      const went = await this.retreatToSafety({
         because: 'hurt, no wall here, and too much vigor for waiting to be worth anything',
         vigor: vigorNow2, monsters_in_room: hostiles.length,
       });
-      this.progress('moved toward somewhere I can heal');
-      return HANDLED;
+      // A RETREAT THAT WAS REFUSED IS NOT A RETREAT, AND MUST NOT END THE PASS.
+      //
+      // This called progress() and returned HANDLED whatever came back — and what comes
+      // back on this fleet is `{arrived:false, refused:'retreat_to_inn is off'}`, because
+      // the operator switched the inn walk off on 2026-08-27. So the rung that decides to
+      // move consumed the pass, told the stall detector everything was fine, and PRE-EMPTED
+      // the rung immediately below, which is the one that actually leaves the room —
+      // `leaveViaAny`, a reconnect to shed the crowd, and another try.
+      //
+      // That is issue #51 and it is four deaths: JohnsSlave, 2026-09-03 and 2026-09-04,
+      // every one of them `in_safe_spot:false`, `at_a_safe_wall:null`, and the last one
+      // 0.0 squares per second across the whole 31-second post-mortem window. The journal
+      // said "moving to somewhere I can heal" once a pass while the body stood still.
+      //
+      // So: only a retreat that actually happened is progress. A refusal falls THROUGH to
+      // the escape below, which is exactly where a character that cannot reach an inn and
+      // cannot hold a wall is supposed to end up.
+      if (went?.arrived) {
+        this.progress(went.took_spot ? 'took a wall rather than waiting it out'
+                                     : 'moved toward somewhere I can heal');
+        return HANDLED;
+      }
+      this.note('the retreat was refused — not ending the pass on it', {
+        refused: went?.refused ?? 'no reason given', no_spot: went?.no_spot ?? null,
+        why: 'saying we are moving is not moving. The next rung leaves the room, and it ' +
+             'only gets to run if this one does not claim the pass' });
     }
 
     // AND BELOW THE RESTING CEILING: GET OFF THE MAP ENTIRELY.
@@ -15424,11 +15555,21 @@ export class Autopilot {
         // four squares, being followed, and refusing again. 51 of 52 of them were
         // nominally hunting giant rats, in a room that generates none — only trolls at
         // attack rating 750 and groundworms at 600.
-        await this.retreatToSafety({
+        const left = await this.retreatToSafety({
           because: 'refused to fight ' + refused.name + ' (rating ' + refused.rating + ')',
           adjacent: adjacent.length,
         });
-        this.progress('left the room rather than trade blows with something out of band');
+        // REPORT THE RETREAT THAT HAPPENED, NOT THE ONE THAT WAS DECIDED ON. See issue #51:
+        // with `retreat_to_inn` off this returns a refusal, and calling it progress hid a
+        // motionless character from the stall detector for as long as it took to die. The
+        // pass still ends here — the survival ladder runs FIRST on the next one and is
+        // where a body that could not retreat is supposed to be handled — but it ends
+        // saying nothing moved.
+        if (left?.arrived)
+          this.progress('left the room rather than trade blows with something out of band');
+        else
+          this.noProgress('could not retreat from something out of band: ' +
+                          (left?.refused ?? 'no reason given'));
         return HANDLED;
       }
 
@@ -15783,13 +15924,17 @@ export class Autopilot {
           // A wall limits added attackers; it does not make the one already engaged
           // harmless. Leave the live pocket before ordinary recovery can choose to rest.
           if (holding) await this.leaveHold(reason, { force: true }).catch(() => null);
-          await this.retreatToSafety({
+          const away = await this.retreatToSafety({
             because: reason,
             mid_round: !!f.disengaged.mid_round,
             unarmed: true,
             still_here: (this.inReachOfUs() ?? []).length,
           });
-          this.progress('retreated after losing the weapon');
+          // Same rule as every other retreat here, and the same incident behind it (#51):
+          // a refusal is not a retreat, and reporting it as one is what kept four dying
+          // characters looking healthy to the stall machinery.
+          if (away?.arrived) this.progress('retreated after losing the weapon');
+          else this.noProgress('unarmed and could not retreat: ' + (away?.refused ?? 'no reason given'));
           return HANDLED;
         } else if (holding && this.holdWorks?.()) {
           this.note('broke off behind the wall — resting here rather than running', {
@@ -15797,13 +15942,15 @@ export class Autopilot {
             why: 'nothing can hit us on this square unless we swing first, so standing still ' +
                  'is a free heal and walking off it would start the damage' });
         } else {
-          await this.retreatToSafety({
+          const away = await this.retreatToSafety({
             because: f.disengaged.reason
               ?? ('broke off a fight at ' + (f.disengaged.at_health ?? hp)),
             mid_round: !!f.disengaged.mid_round,
             still_here: (this.inReachOfUs() ?? []).length,
           });
-          this.progress('retreated after breaking off a fight');
+          if (away?.arrived) this.progress('retreated after breaking off a fight');
+          else this.noProgress('broke off a fight and could not retreat: ' +
+                               (away?.refused ?? 'no reason given'));
           return HANDLED;
         }
       }
@@ -19107,7 +19254,58 @@ export class Autopilot {
              'killing us, at the health that made this an emergency. The move is a ' +
              'route-adjacent safe spot instead.',
         enable_with: 'retreat_to_inn: true' });
-      return { arrived: false, refused: 'retreat_to_inn is off', room: here };
+      // AND THE REPLACEMENT HAS TO BE DISPATCHED, NOT DESCRIBED.
+      //
+      // The paragraph above says the answer is a route-adjacent safe spot. It said so for
+      // nine days while this branch returned `{arrived:false}` and did nothing at all, and
+      // every caller of this function reported success anyway — so the sentence WAS the
+      // behaviour. JohnsSlave died of it four times in two days (issue #51): the ladder
+      // decided correctly at 14% health with seven things adjacent, wrote "moving to
+      // somewhere I can heal", called this, got the refusal, and reported progress. Final
+      // window on the last one: 31 seconds, 46 samples, `squares_per_second: 0.0`,
+      // `net_squares: 0`, `rooms_crossed: 0`. A body that never moved, in a journal that
+      // reads like an escape.
+      //
+      // The spot IS the doctrine's answer, so take one here. Standing in a monster room is
+      // the same problem the travel path solves with `shelterRun`, minus the route: the
+      // wall is a few squares away rather than a few rooms, and it is the only move that
+      // ends the damage instead of extending it.
+      //
+      // Sharing `wallTriedAt` with the ladder's own wall rung is deliberate — one 30s
+      // budget for "go and get a wall", however many rungs ask for it, so a hurt character
+      // does not spend every pass re-scanning a room that has no reachable wall. When the
+      // budget is spent or the room has none, this returns a refusal that MOVES NOTHING
+      // and says so, and the caller is required to treat that as the non-event it is.
+      const spotsOn = !!this.policy.useSafeSpots;
+      const mayTry = spotsOn && !this.hold &&
+                     (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000);
+      if (mayTry) {
+        this.wallTriedAt = Date.now();
+        // Not threat(), which reads names through `rsc` and is a heavier question than
+        // "what should this wall be biased toward".
+        const at = c?.self;
+        const foe = at && c?.room?.objects
+          ? [...c.room.objects.values()].find(o =>
+              o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)) ?? null
+          : null;
+        const took = await this.takeSafeSpot(
+          'the inn walk is off and the doctrine says a wall — taking one here',
+          foe, { source: 'retreat' }).catch(() => null);
+        if (took?.took) {
+          this.note('took a wall instead of an inn', {
+            room: here, spot: took.spot ?? null, ...why,
+            why: 'the route-adjacent safe spot is what replaced the inn walk, and this is it: ' +
+                 'a square in this room that nothing can reach us on, a few seconds away ' +
+                 'instead of a few rooms' });
+          return { arrived: true, took_spot: true, spot: took.spot ?? null, room: here };
+        }
+        return { arrived: false, refused: 'retreat_to_inn is off', room: here,
+                 no_spot: took?.why ?? 'no wall taken this pass' };
+      }
+      return { arrived: false, refused: 'retreat_to_inn is off', room: here,
+               no_spot: this.hold ? 'already holding a square' : (spotsOn
+                 ? 'a wall was already searched for within the last 30s'
+                 : 'safe spots are switched off in the policy') };
     }
     // NEAREST FIRST, AND NOT MANY. Iterating the six in declaration order would send a
     // character bleeding in the Badlands to whichever inn happened to be listed first —

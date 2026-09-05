@@ -897,10 +897,15 @@ function state() {
     //
     // Published here rather than derived over there, because "did anything happen in the last
     // five passes" is a question only the process running the passes can answer.
+    // `lever` and `repeats` travel with it for the same reason the rest does: "stuck for
+    // 27 minutes" and "stuck for 27 minutes with nothing that can act on it" are different
+    // facts, and only the second one is an emergency. See `stallLever` in m59-autopilot.mjs.
     stuck: (autopilot?.stalledSince)
       ? { since: autopilot.stalledSince,
           seconds: Math.round((Date.now() - autopilot.stalledSince) / 1000),
-          why: autopilot.stalledWhy ?? null }
+          why: autopilot.stalledWhy ?? null,
+          lever: autopilot.stalledLever ?? null,
+          repeats: autopilot.stallRepeats ?? 0 }
       : null,
     // IS THIS CHARACTER IN THE MIDDLE OF SOMETHING. `KeeperProxy.jobReport()` returns a
     // hardcoded `null`, so on a keeper-backed broker — every broker — `busy` was absent

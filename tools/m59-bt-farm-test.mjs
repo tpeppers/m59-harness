@@ -546,21 +546,49 @@ t('fightNode pulls the quarry to the wall on out_of_reach (no infinite broke-off
   if (pulled !== 1) throw new Error(`expected exactly one pull, got ${pulled}`);
 });
 
-t('fightNode does not pull when out_of_reach with no safe spot (lets the next pass approach)', async () => {
+// ISSUE #50. This node used to write "out of reach, no safe spot -- will approach next
+// pass" and do nothing, and so did fight() on its way out ("the GOAP will travel closer on
+// the next pass"). NOTHING APPROACHES ON THE NEXT PASS: fight() caps its own approach at
+// 6 grid steps / 8 raw cells and returns out_of_reach past it, so a quarry 22 cells away is
+// permanently out of reach. Measured at 2 hours, 0 kills and 0 rooms moved in the
+// character's own assigned farm room, repeating the same intention every 1.5 seconds.
+//
+// closeOnQuarry is that promise implemented: pull()'s walk without the walk back, because
+// with no wall there is nowhere to walk back to.
+t('fightNode CLOSES on the quarry when out_of_reach with no safe spot', async () => {
   const k = mockKeeper({ hibernation: false });
   k.hold = null;
   k.holdWorks = () => false;
   k.policy.hunt = 'giant rat';
   k._btFarmFoundTargets = () => [{ id: 7573, nameRsc: 'centipede' }];
   k.inReachOfUs = () => [];
-  let pulled = 0;
+  let pulled = 0, closed = 0;
   k.pull = async () => { pulled++; return { pulled: true, back: true, target: 'x', steps: 1 }; };
+  k.closeOnQuarry = async (foe) => { closed++; return { closed: true, target: 'centipede', steps: 22 }; };
   k._btFarmFight = async () => ({ out_of_reach: true,
-    nearest: { id: 7573, name: 'centipede', distance: 6.0, col: 2, row: 2 } });
+    nearest: { id: 7573, name: 'centipede', distance: 22.2, col: 2, row: 2 } });
   const node = fightNode(k);
   const r = await node.tickAsync(bb(k));
   if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
   if (pulled !== 0) throw new Error(`no safe spot -> no pull, got ${pulled}`);
+  if (closed !== 1) throw new Error(`expected exactly one close, got ${closed}`);
+  if (!k.calls.some(([kind, msg]) => kind === 'progress' && /closed on/.test(msg)))
+    throw new Error('closing the distance is progress and has to be reported as such');
+});
+
+t('fightNode reports a failed close rather than looping on an intention', async () => {
+  const k = mockKeeper({ hibernation: false });
+  k.hold = null;
+  k.holdWorks = () => false;
+  k._btFarmFoundTargets = () => [{ id: 7573, nameRsc: 'centipede' }];
+  k.inReachOfUs = () => [];
+  k.closeOnQuarry = async () => ({ closed: false, why: 'no square beside it that we can reach' });
+  k._btFarmFight = async () => ({ out_of_reach: true,
+    nearest: { id: 7573, name: 'centipede', distance: 22.2, col: 2, row: 2 } });
+  const r = await fightNode(k).tickAsync(bb(k));
+  if (r !== SUCCESS) throw new Error(`expected SUCCESS, got ${r}`);
+  if (!k.calls.some(([kind, msg]) => kind === 'noProgress' && /could not close/.test(msg)))
+    throw new Error('a close that failed must reach the stall machinery, not a note');
 });
 
 // ---------------------------------------------------------------------------
