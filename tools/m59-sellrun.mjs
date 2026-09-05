@@ -30,6 +30,7 @@ import { loadoutFor } from './m59-loadout.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { foodValue } from './m59-items.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sub = (f) => join(HERE, '..', 'substrate', f);
@@ -95,7 +96,18 @@ const KEEP_REAGENT = /\bherb\b|elderberry/i;
 // mushroom` and `Inky-cap mushroom` are in the game's Food class tree, and they have to be
 // named explicitly here because `edible mushroom` contains `mushroom` and the lane pattern
 // above cannot tell them apart. See m59-food-test.
-const KEEP_FOOD = /slice of pork|bowl of soup|roast pig|cauldron of soup|spider eye|drumstick|bunch of grapes|goblet of ale|fortune cookie|edible mushroom|inky-?cap/i;
+// FOOD IS NEVER SOLD, AND WHAT COUNTS AS FOOD IS THE GAME'S ANSWER.
+//
+// This was a typed list. It happened to be right, and the two beside it in this repository
+// were not — the sell circuit's keep list and the street giveaway's each named two of the
+// SEVEN things the Duke's tables hand out, so five were sold or dropped. A list that is
+// right today is one nobody has broken yet.
+//
+// The two dispenser names are kept as a pattern on purpose: `roast pig` and `cauldron of
+// soup` are the TABLES, not the food, so they are not in the Food class tree and a plan that
+// mentions one should still not offer it to a merchant.
+const DISPENSERS = /roast pig|cauldron of soup|platter of|basket of|pitcher of/i;
+export const KEEP_FOOD = { test: (n) => !!foodValue(n) || DISPENSERS.test(String(n || '')) };
 const VAULT = new RegExp('(' + (spec.vault?.keep || []).map(s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i');
 // the exact fragments handed to sell_all's `keep` so it never offers a protected item.
 //

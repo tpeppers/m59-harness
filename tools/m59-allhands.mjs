@@ -43,6 +43,9 @@
 // is pulled and restored afterwards, so the muster does not quietly undo a deployment.
 
 import { readFileSync } from 'node:fs';
+import { foodValue } from './m59-items.mjs';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 const PORT = process.env.M59_BROKER_PORT || '8901';
 const RPC = `http://127.0.0.1:${PORT}/`;
@@ -86,16 +89,26 @@ async function call(name, args = {}, ms = 300000) {
   } catch (e) { return { _err: String(e) }; } finally { clearTimeout(t); }
 }
 
-// Nutrition is vigor one for one (player.kod:1277). Edible mushrooms are 5, not the 3 a
-// larder audit here assumed for a while — characters carry them by the dozen and they are
-// also relay's reagent, so they are worth counting twice over.
-const NUT = [[/wheel of cheese/i, 30], [/meat ?pie/i, 30], [/loaf of bread/i, 20],
-             [/turkey leg/i, 20], [/\bapple\b/i, 10], [/bunch of grapes|grapes/i, 7],
-             [/edible mushroom/i, 5], [/water ?skin/i, 3]];
-const nut = n => NUT.find(([re]) => re.test(n))?.[1] ?? 0;
-const EDIBLE = /wheel of cheese|meat ?pie|loaf of bread|turkey leg|\bapple\b|grapes|edible mushroom/i;
-// Eat the weakest first so the dense meals survive for the road.
-const RANK = n => /edible mushroom/i.test(n) ? 0 : /grapes/i.test(n) ? 1 : /\bapple\b/i.test(n) ? 2 : 3;
+// NUTRITION IS VIGOR ONE FOR ONE (player.kod:1277), AND THE NUMBERS COME FROM THE GAME.
+//
+// This was a hand-written table of eight foods and it was wrong twice. The comment it
+// replaces recorded the first time — edible mushrooms assumed to be 3 when they are 5 — and
+// the second was still here: `turkey leg` was listed at 20 against the game's 15.
+//
+// The list was also short. It knew eight foods of the twenty-two that exist, and none of the
+// seven the Duke's tables hand out, so a fleet holding 1,177 slices of pork and 77 spider
+// eyes reported a larder of nearly nothing. That is not a rounding error in a report; it is
+// the report saying the fleet is starving while it eats.
+//
+// `foodValue` reads the table built from the game's own Food class tree. It cannot be short
+// and it cannot disagree.
+const nut = n => foodValue(n)?.nutrition ?? 0;
+const EDIBLE = n => !!foodValue(n);
+// Eat the weakest first so the dense meals survive for the road. Ranking by the real
+// nutrition does that for every food rather than for the four this file used to name — and
+// an Inky-cap at 50 now correctly outranks everything instead of falling in the `3` bucket
+// with the cheese.
+const RANK = n => nut(n);
 
 const pad = (s, n) => String(s ?? '').padEnd(n);
 const pr = (s, n) => String(s ?? '').padStart(n);
@@ -150,7 +163,7 @@ async function eatDown(a, want = 200) {
   const ate = [];
   for (let i = 0; i < 8 && now < want; i++) {
     const inv = await call('inventory', { agent: a }, 60000);
-    const f = (inv.items || []).filter(x => EDIBLE.test(x.name))
+    const f = (inv.items || []).filter(x => EDIBLE(x.name))
       .sort((x, y) => RANK(x.name) - RANK(y.name))[0];
     if (!f) break;
     const r = await call('act', { agent: a, verb: 'eat', target: f.id }, 60000);
@@ -302,4 +315,18 @@ const main = async () => {
   if (under.length) log('still short:', under.map(r => `${r.character} ${r.vigor}`).join('  '));
 };
 
-main().catch(e => { console.error('all hands failed:', e); process.exit(1); });
+// ONLY WHEN THIS FILE IS THE COMMAND, NEVER ON IMPORT.
+//
+// `main()` at module scope means `import` RUNS IT — and this one musters twenty-one live
+// characters across the world, feeds them, and re-issues their orders. It was imported once
+// to check a pure helper, and it mustered the fleet.
+//
+// The same trap is already written down for m59-broker ("importing runs it: it tries to take
+// the fleet lock and start rejoin timers") and m59-supervise was guarded for exactly this
+// reason. This file is more dangerous than either, because nothing about it fails — it works
+// perfectly, on a fleet nobody asked it to touch.
+//
+// Everything above this line is now importable: `nut`, `EDIBLE` and the report builders are
+// pure and worth reading from a test or another tool.
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)))
+  main().catch(e => { console.error('all hands failed:', e); process.exit(1); });

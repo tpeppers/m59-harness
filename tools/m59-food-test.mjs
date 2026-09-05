@@ -68,11 +68,13 @@ console.log('\nthe classifiers agree with the table, which is what actually matt
   // The sell circuit's own keep list. A meal must never reach a counter while the Duke's
   // tables are the fleet's only free food: vigor above the resting cap comes only from
   // eating, so a slice of pork is worth more in a pack than anything paid for it.
-  const sellrun = readFileSync(HERE('m59-sellrun.mjs'), 'utf8');
-  // To the end of the line, not \S+: the pattern contains spaces ("slice of pork").
-  const line = /const KEEP_FOOD = \/(.+)\/i;/.exec(sellrun);
-  ok('the sell circuit has a food keep-list', !!line);
-  const KEEP_FOOD = line ? new RegExp(line[1], 'i') : /$^/;
+  // ASK THE MODULE, NOT THE FILE. This used to read the source and pull the pattern out
+  // with a regex — and this very test's own heading says a source scan is the wrong
+  // instrument. It broke the moment KEEP_FOOD stopped being a regex literal and started
+  // asking the Food class tree, which is exactly the change it should have been indifferent
+  // to. A test that pins the SHAPE of an implementation fails on improvements.
+  const { KEEP_FOOD } = await import('./m59-sellrun.mjs');
+  ok('the sell circuit has a food keep-list', typeof KEEP_FOOD?.test === 'function');
   for (const meal of ['slice of pork', 'bowl of soup', 'edible mushroom', 'Inky-cap mushroom'])
     ok('it protects ' + meal, KEEP_FOOD.test(meal));
   for (const stock of ['mushroom', 'red mushroom', 'blue mushroom'])
