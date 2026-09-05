@@ -85,6 +85,17 @@ const LANE = {
 };
 // Never sold or vaulted-away: create-food reagents (kept and topped up), and the rare keepers.
 const KEEP_REAGENT = /\bherb\b|elderberry/i;
+// AND NEVER SELL A MEAL. While the Duke's tables are open, food is the scarcest thing this
+// fleet carries and the only thing it cannot buy: vigor above the resting cap of 80 comes
+// ONLY from eating, so a slice of pork is worth more standing in a pack than anything an
+// apothecary pays for it.
+//
+// `mushroom` on its own is a REAGENT and stays sellable — the brown one players call a
+// "brown" is named just `mushroom`, and red and blue are reagents too. Only `edible
+// mushroom` and `Inky-cap mushroom` are in the game's Food class tree, and they have to be
+// named explicitly here because `edible mushroom` contains `mushroom` and the lane pattern
+// above cannot tell them apart. See m59-food-test.
+const KEEP_FOOD = /slice of pork|bowl of soup|roast pig|cauldron of soup|spider eye|drumstick|bunch of grapes|goblet of ale|fortune cookie|edible mushroom|inky-?cap/i;
 const VAULT = new RegExp('(' + (spec.vault?.keep || []).map(s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i');
 // the exact fragments handed to sell_all's `keep` so it never offers a protected item.
 //
@@ -93,7 +104,8 @@ const VAULT = new RegExp('(' + (spec.vault?.keep || []).map(s => String(s).repla
 // stop and bought back at the last, paying the merchant spread twice for a pack that ended
 // the same. The loadout already knows what each character is meant to hold, so ask it — and
 // keep this list only for a character that has no loadout yet.
-const PROTECT = [...new Set([...(spec.vault?.keep || []), 'herb', 'elderberry'])];
+const PROTECT = [...new Set([...(spec.vault?.keep || []), 'herb', 'elderberry',
+                             'slice of pork', 'bowl of soup', 'edible mushroom'])];
 
 /**
  * Everything this character must not be offered, from its own loadout where it has one.
@@ -160,6 +172,7 @@ function planFor(pack, protect = PROTECT) {
     if (/\bshilling|\bcoins?\b/i.test(lname)) { plan.keep.push(it); continue; }
     if (VAULT.test(lname)) { plan.vault.push(it); continue; }          // rare keepers (incl. inky-cap)
     if (KEEP_REAGENT.test(lname)) { plan.keep.push(`${it}  [create-food reagent — keep]`); continue; }
+    if (KEEP_FOOD.test(lname)) { plan.keep.push(`${it}  [food — vigor above 80 comes only from eating]`); continue; }
     if (guarded(lname)) { plan.keep.push(`${it}  [this character's loadout protects it]`); continue; }
     const lane = LANE.gems.test(lname) ? 'gems' : LANE.equipment.test(lname) ? 'equipment' : LANE.reagents.test(lname) ? 'reagents' : null;
     if (lane) plan.stops[laneMerchant[lane]].push(it);

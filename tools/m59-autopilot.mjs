@@ -17466,7 +17466,14 @@ export class Autopilot {
                 'about this room rather than about the map' });
     }
     // The one that actually sells FOOD, not merely the first that can be bought from.
-    const pick = await this.sellerHere({ want: /cheese|pie|bread|apple|grape|mushroom|stew|drumstick/i })
+    // `mushroom` ON ITS OWN IS A REAGENT, NOT FOOD, AND THIS MATCHER USED TO SAY OTHERWISE.
+    // The brown one players call a "brown" is named just `mushroom` in the game, and the
+    // red and blue ones are reagents too — only `edible mushroom` and `Inky-cap mushroom`
+    // are in the Food class tree (m59-items.json: nutrition 5 and 50; the rest are absent).
+    // A bare /mushroom/ therefore matched every herbalist's stock and could pick the
+    // REAGENT seller as "the one that actually sells FOOD", which is the exact thing the
+    // line below this was written to avoid.
+    const pick = await this.sellerHere({ want: /cheese|pie|bread|apple|grape|edible mushroom|inky.?cap|stew|drumstick/i })
                         .catch(() => null);
     if (!pick) return this.note('nobody in the bread shop opened a food list', {
       at: FOOD_SHOP.name, short_by: want,

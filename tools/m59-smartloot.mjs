@@ -30,8 +30,19 @@ const WEARABLE = /\b(armor|armour|shield|helm|helmet|gauntlet|pants|leggings|jer
 // 1 bulk though, so the answer is to vault them rather than to route a trip around them.
 const GEM = /\b(emerald|sapphire|diamond|ruby|jewel)\b/i;
 
+// A MUSHROOM IS USUALLY A REAGENT AND SOMETIMES A MEAL, and only the name tells you which.
+// Five grow in this world. `mushroom` — the one players call a "brown", and note it carries
+// no adjective at all — plus `red mushroom` and `blue mushroom` are casting reagents.
+// `edible mushroom` and `Inky-cap mushroom` are in the game's own Food class tree, at
+// nutrition 5 and 50 (m59-items.json; the other three are absent from it entirely).
+//
+// The reagent pattern cannot help matching all five, because `mushroom` is a substring of
+// `edible mushroom`. So FOOD is tested FIRST in classifyPack and names the two edible ones
+// explicitly. Before that, an `edible mushroom` was filed as sellable stock, and the
+// Inky-cap — fifty vigor a bite, the best food this fleet can carry — escaped being sold
+// only by accident, because VAULTABLE happens to contain `inky`.
 const REAGENT = /\b(herb|elderberry|mushroom|dragon scale|silver|orb)\b/i;
-const FOOD = /\b(bread|cheese|pie|apple|grape|drumstick|turkey|pork|soup|wine|stout|ale|brew|water skin|snack)\b/i;
+const FOOD = /\b(bread|cheese|pie|apple|grape|drumstick|turkey|pork|soup|wine|stout|ale|brew|water skin|snack|edible mushroom|inky-?cap mushroom)\b/i;
 
 // Worth more kept than sold. Read off the Castle Victoria loot survey: wands and scrolls have
 // their spoil timer disabled (piGoBadTime = -1) so they never rot, the ring of invisibility
@@ -62,8 +73,11 @@ export function classifyPack(items = []) {
     if (VAULTABLE.test(n)) { out.vaultable.push(n); continue; }
     if (WEAPON.test(n) || WEARABLE.test(n)) { out.smithOnly.push(n); continue; }
     if (GEM.test(n)) { out.gems.push(n); continue; }
-    if (REAGENT.test(n)) { out.reagents.push(n); continue; }
+    // FOOD BEFORE REAGENT — the overlap is one-way and only this order resolves it. See the
+    // note on the two patterns: three mushrooms are reagents, two are meals, and the reagent
+    // pattern matches all five whatever it says.
     if (FOOD.test(n)) { out.food.push(n); continue; }
+    if (REAGENT.test(n)) { out.reagents.push(n); continue; }
     out.other.push(n);
   }
   out.stacks = items.filter(i => nameOf(i) && !/shilling/i.test(nameOf(i))).length;
