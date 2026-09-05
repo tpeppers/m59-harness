@@ -10543,6 +10543,170 @@ export class Autopilot {
   // count: a wedge that was genuinely transient earns another try, and one that was not
   // earns another single line, two minutes later, which is the cadence an operator can
   // read.
+  // BACK UP TO WHERE THIS ROOM WAS WORKING, AND WRITE DOWN EXACTLY WHERE IT STOPPED.
+  //
+  // Animal, the Cragged Mountains, 2026-09-05 14:49. Wedged against the eastern side with no
+  // realistic chance of ever getting out — while two other characters crossed the same room in
+  // the same minutes without noticing anything. Taken over by hand and walked back the way he
+  // came, he then travelled to Castle Victoria perfectly normally. Nothing was wrong with the
+  // character, the route or the map. He was standing on a square from which the router could
+  // not see a way on, and every remedy we had tried to solve that WITHOUT LEAVING THE SQUARE.
+  //
+  // That is the pattern behind most of what we call "stuck": the plan is fine two squares
+  // back. So the escape is positional, and it is a LADDER, because each rung costs more:
+  //
+  //   1. breadcrumbs   — undo the last few validated steps. Cheap, local, already existed,
+  //                      and it is enough for an ordinary bounce.
+  //   2. the entry     — walk back to the square this character ENTERED the room by. Not a
+  //                      guess: `enteredVia.door` is a square we have already stood on and
+  //                      which we know connects to the room next door.
+  //   3. the last room — cross back through it, and let the journey re-plan from there.
+  //
+  // The rung is chosen by how many times we have already had to do this in THIS room, so an
+  // ordinary wedge still gets the cheap answer and a genuinely trapped character stops paying
+  // for rungs that have already failed. Nothing here relaxes collision: rung 1 replays
+  // validated moves backwards, and rungs 2 and 3 walk to a square the character has already
+  // occupied, through the validator, like any other walk.
+  //
+  // THE LEDGER ROW IS HALF THE POINT. Backing up to go forward is a WORKAROUND — every time
+  // it fires, the routing could have done better — so each one writes a `stuck_backed_up`
+  // event carrying the square, the room, what the character was doing, which tactics had
+  // already been tried, where the monsters were standing and which rung actually freed it.
+  // `m59-stucks.mjs` reads them back grouped by square, so the recurring ones can be fixed
+  // properly and the workaround can stop being needed there. A workaround that is not
+  // recorded is a bug that never gets fixed.
+  stuckRung(place) {
+    // How many back-ups this character has already needed in this room lately. Keyed on the
+    // ROOM rather than the square: a character that bounces between three bad squares in one
+    // room is having one problem, not three, and answering each with rung 1 is how it spends
+    // ten minutes there.
+    const WINDOW_MS = 10 * 60_000;
+    const now = Date.now();
+    this.backUps = (this.backUps || []).filter(b => now - b.at < WINDOW_MS);
+    const here = this.backUps.filter(b => b.room === place?.room).length;
+    return Math.min(here + 1, 3);
+  }
+
+  /**
+   * Walk out of a place the router cannot plan out of, escalating until something moves.
+   *
+   * Returns the record of what was tried — never throws, and never acts below the flee line,
+   * where the survival ladder already owns the body and this would be a second opinion about
+   * the same emergency.
+   */
+  async backUpToUnstick(why, { advice = null, to = null } = {}) {
+    const s = this.s, geo = s?.world?.geometry;
+    const from = this.wedgePlace();
+    const t0 = Date.now();
+
+    const hp = s?.client?.vitals?.()?.health;
+    const frac = pct(hp);
+    if (frac !== null && frac < this.safety().fleeAt)
+      return { attempted: false, why: 'below the flee line — the survival ladder owns the body' };
+
+    const rung = this.stuckRung(from);
+    const tried = [];
+    const moved = () => {
+      const at = this.wedgePlace();
+      if (!at || !from) return false;
+      return at.room !== from.room || at.col !== from.col || at.row !== from.row;
+    };
+
+    // ---- rung 1: undo the last few validated steps.
+    if (typeof s?.retreatAlongBreadcrumbs === 'function') {
+      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
+        .catch(e => ({ moved: false, reason: e.message }));
+      tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
+                   reason: out?.reason ?? null, worked: moved() });
+    }
+
+    // ---- rung 2: the square we came in by. `enteredVia` is the session's own memory of the
+    // crossing, so it is only usable while it still describes the room we are standing in.
+    const back = s?.enteredVia;
+    const entryIsHere = back && Number(back.room) === Number(from?.room) && back.door;
+    if (rung >= 2 && !moved() && entryIsHere && typeof s?.walkTo === 'function') {
+      const d = back.door;
+      const already = from && d.col === from.col && d.row === from.row;
+      if (already) {
+        tried.push({ rung: 2, how: 'the door we came in by', skipped: 'already standing on it' });
+      } else {
+        const w = await s.walkTo(d.col, d.row).catch(e => ({ arrived: false, reason: e.message }));
+        tried.push({ rung: 2, how: 'the door we came in by', to: `${d.col},${d.row}`,
+                     arrived: !!w?.arrived, reason: w?.reason ?? null, worked: moved() });
+      }
+    }
+
+    // ---- rung 3: back through it, into the room we came from. The journey re-plans from
+    // there, which is the whole objective — not undoing the trip, changing where it starts.
+    if (rung >= 3 && entryIsHere && Number.isFinite(Number(back.from)) &&
+        typeof s?.travel === 'function') {
+      const prev = Number(back.from);
+      // ONE HOP, NOT A JOURNEY. The previous room is adjacent by construction — we walked
+      // out of it — so a 25-hop budget here would let an escape turn into a world tour, and
+      // this runs at the gate BEFORE the real journey is issued. `maxStumbles` is low for the
+      // same reason: if the door we came in by will not take us back, that is the finding,
+      // and the answer is the hold below rather than grinding on it.
+      const t = await s.travel(prev, { maxHops: 2, maxStumbles: 2 })
+        .catch(e => ({ arrived: false, reason: e.message }));
+      const at = this.wedgePlace();
+      tried.push({ rung: 3, how: 'back through the door, into the previous room', room: prev,
+                   arrived: !!t?.arrived, reason: t?.reason ?? null,
+                   worked: Number(at?.room) === prev });
+    }
+
+    const at = this.wedgePlace();
+    const freed = moved();
+    if (freed) this.backUps.push({ room: from?.room, col: from?.col, row: from?.row, at: t0 });
+
+    // WHAT THE ROOM LOOKED LIKE, so the recurring ones can be diagnosed without being caught
+    // live. Positions are relative to where the character was stuck: an absolute list of
+    // monster squares is a fact about one afternoon, but "two things two squares east" is the
+    // shape of the trap.
+    const th = this.threat?.() ?? null;
+    const v = s?.client?.vitals?.() ?? null;
+    const near = (th?.near || []).slice(0, 8).map(o => ({
+      name: s?.client?.rsc?.get?.(o.nameRsc) ?? null,
+      d: Math.round(Math.hypot(o.col - (from?.col ?? o.col), o.row - (from?.row ?? o.row))),
+      col: o.col, row: o.row,
+    }));
+
+    recordEvent(this.who(), 'stuck_backed_up', {
+      why, room: from?.room ?? null, room_name: s?.world?.room?.name ?? null,
+      square: from ? `${from.col},${from.row}` : null,
+      col: from?.col ?? null, row: from?.row ?? null,
+      wanted: to,
+      // WHAT THE ROUTING HAD ALREADY TRIED, which is the field that says whether this square
+      // is a map problem or a tactics problem.
+      doing: advice?.doing ?? null,
+      repeats: advice?.repeats ?? null,
+      wedged_for_ms: advice?.wedged_for_ms ?? null,
+      // Is this square one the coarse grid refuses? That single bit separates "the router
+      // cannot plan from here" from "the router planned and the walk failed", and they have
+      // completely different fixes.
+      coarse_walkable: (geo && from && typeof geo.walkable === 'function')
+        ? geo.walkable(from.row, from.col) : null,
+      entered_via: entryIsHere ? { door: back.door, from: back.from } : null,
+      rung_allowed: rung, tried, freed,
+      ended: at ? { room: at.room, square: `${at.col},${at.row}` } : null,
+      monsters: near, monsters_in_room: th?.near?.length ?? null,
+      adjacent: th?.adjacent?.length ?? null,
+      // NUMBERS, NOT THE VITALS OBJECTS. `vitals()` answers `{ value, max }` per vital, and
+      // a row carrying those verbatim reads as `[object Object]` in every report that prints
+      // it and sorts wrong in every one that does not.
+      health: v?.health?.value ?? null, max_health: v?.health?.max ?? null,
+      health_pct: pct(v?.health) === null ? null : Math.round(pct(v.health) * 100),
+      vigor: v?.vigor?.value ?? null,
+      took_ms: Date.now() - t0,
+      note: 'backing up to go forward is a WORKAROUND. Every row here is a place the routing ' +
+            'should have handled and did not — read them with m59-stucks.mjs, grouped by ' +
+            'square, and fix the ones that repeat',
+    });
+
+    return { attempted: true, rung, tried, freed,
+             from: from ? `${from.col},${from.row}` : null,
+             ended: at ? { room: at.room, col: at.col, row: at.row } : null };
+  }
+
   async answerWedge(to = null) {
     const now = Date.now();
     const w = this.watch;
@@ -10584,26 +10748,30 @@ export class Autopilot {
       //
       // NOT BELOW THE FLEE LINE. Down there the survival ladder owns the body and is
       // already running; a wedge-retreat would be a second opinion about the same emergency.
+      // AND THE RETREAT ESCALATES. Twelve breadcrumbs is the right answer to an ordinary
+      // bounce and no answer at all to a character standing somewhere the router cannot plan
+      // out of — Animal spent his afternoon in the Cragged Mountains proving that, while two
+      // fleet-mates crossed the same room without noticing. `backUpToUnstick` climbs from the
+      // breadcrumbs to the square this character came in by, and then back through the door
+      // into the previous room, depending on how many times this room has already needed it.
       let backedOff = null;
       try {
-        const hp = this.s?.client?.vitals?.()?.health;
-        const frac = pct(hp);
-        const above = frac === null || frac >= this.safety().fleeAt;
-        if (above && typeof this.s?.retreatAlongBreadcrumbs === 'function') {
-          const out = await this.s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
-            .catch(e => ({ moved: false, reason: e.message }));
-          const after = this.wedgePlace();
-          const moved = !!after && (after.room !== advice.room ||
-                                    after.col !== advice.col || after.row !== advice.row);
-          backedOff = { moved, steps: out?.steps ?? out?.crumbs ?? null,
-                        to: after ? `${after.col},${after.row}` : null,
-                        room: after?.room ?? null, why: out?.reason ?? null };
-          // AND PUT A WALL AT ITS BACK WHILE IT WAITS. A retreat that ends in open ground
-          // has traded one bad square for another; the wall is what makes the wait cheap.
-          if (moved && typeof this.takeSafeSpot === 'function')
-            await this.takeSafeSpot('waiting out a wedge give-up behind a wall', null,
-                                    { source: 'wedge' }).catch(() => null);
-        }
+        const out = await this.backUpToUnstick('a wedge the watchdog gave up on',
+                                               { advice, to });
+        const after = this.wedgePlace();
+        const moved = !!after && (after.room !== advice.room ||
+                                  after.col !== advice.col || after.row !== advice.row);
+        backedOff = { moved, rung: out?.rung ?? null, tried: out?.tried ?? null,
+                      to: after ? `${after.col},${after.row}` : null,
+                      room: after?.room ?? null,
+                      why: out?.attempted === false ? out.why : null };
+        // AND PUT A WALL AT ITS BACK WHILE IT WAITS. A retreat that ends in open ground
+        // has traded one bad square for another; the wall is what makes the wait cheap.
+        // Not after a rung-3 retreat: that one deliberately ended in a different room, and
+        // pinning it to a wall there would fight the journey that is about to re-plan.
+        if (moved && after?.room === advice.room && typeof this.takeSafeSpot === 'function')
+          await this.takeSafeSpot('waiting out a wedge give-up behind a wall', null,
+                                  { source: 'wedge' }).catch(() => null);
       } catch { /* the retreat is the improvement, never the requirement */ }
 
       // THE HOLD IS ANCHORED WHERE IT ENDED UP, not where it wedged. That is the whole

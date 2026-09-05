@@ -172,8 +172,13 @@ ok('the autopilot\'s own copy of the arm records the same way',
 
 // A keeper stripped to what answerWedge / wedgedInPlace / tradeInPlaceIfWedged touch.
 function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7,
-                 retreatMoves = true } = {}) {
-  const notes = [], walks = [], fights = [], retreats = [], walls = [];
+                 retreatMoves = true,
+                 // The session's memory of how this room was entered — what rungs 2 and 3 of
+                 // the back-up ladder are built on. Absent by default, because a character
+                 // that has not crossed a boundary this session genuinely has no such memory
+                 // and the ladder must degrade to the breadcrumbs rather than inventing one.
+                 enteredVia = null, travelWorks = true, walkWorks = true } = {}) {
+  const notes = [], walks = [], fights = [], retreats = [], walls = [], travels = [];
   const ap = Object.create(Autopilot.prototype);
   const self = { col, row };
   ap.watch = wd.freshState();
@@ -196,7 +201,20 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
     world: { room: { num: room } },
     // The fake mover MOVES the body, so "did the sidestep change the start square" is a
     // real question with a real answer rather than a fixture agreeing with itself.
-    walkTo: async (c, r, opts) => { walks.push({ col: c, row: r, opts }); self.col = c; self.row = r; return { arrived: true }; },
+    walkTo: async (c, r, opts) => {
+      walks.push({ col: c, row: r, opts });
+      if (!walkWorks) return { arrived: false, reason: 'every heading refused' };
+      self.col = c; self.row = r; return { arrived: true };
+    },
+    enteredVia,
+    // Rung 3. The fake actually changes the room, so "did it end up next door" is a real
+    // question — a fixture that only records the call would agree with itself.
+    travel: async (to, opts) => {
+      travels.push({ to, opts });
+      if (!travelWorks) return { arrived: false, reason: 'no route' };
+      ap.s.world.room.num = to; ap.s.client.room.id = to;
+      return { arrived: true };
+    },
     // GIVING UP NOW BACKS OFF. The fake trail walks the body two squares back the way it
     // came, which is what a real breadcrumb retreat does — every step of it a move the
     // validator already accepted on the way in.
@@ -207,7 +225,8 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
     },
   };
   ap.takeSafeSpot = async (why, q, opts) => { walls.push({ why, opts }); return { took: true }; };
-  return { ap, notes, walks, fights, self, retreats, walls };
+  ap.threat = () => ({ adjacent: [], near: [], engaged: 0, landing: 0, names: [] });
+  return { ap, notes, walks, fights, self, retreats, walls, travels };
 }
 const breakAt = (ap, n, place = { room: 586, col: 18, row: 18 }, doing = 'travelling') => {
   for (let i = 0; i < n; i++) wd.noteWedgeBreak(ap.watch, { ...place, doing, to: 586 }, Date.now() - (n - i) * 1000);
@@ -441,6 +460,112 @@ console.log('\na retreat that cannot move is not a failure — the hold still bo
   ok('and says it did not back off', k.ap.wedgeHold.backed_off === false);
   // No wall either: a wall taken without moving is the same square with a nicer name.
   ok('no wall was taken', k.walls.length === 0);
+}
+
+// ------------------------------------------------------------------ 4. the back-up ladder
+//
+// ANIMAL, THE CRAGGED MOUNTAINS, 2026-09-05. Wedged on the eastern side with no realistic
+// chance of ever getting out, while two fleet-mates crossed the same room in the same minutes
+// without noticing anything. Taken over by hand and walked back the way he came, he then
+// travelled to Castle Victoria perfectly normally.
+//
+// Nothing was wrong with the character, the route or the map. He was standing somewhere the
+// router could not plan out of, and every remedy tried to solve that WITHOUT LEAVING THE
+// SQUARE. Twelve breadcrumbs is the right answer to a bounce and no answer at all to that.
+console.log('\nthe back-up ladder — breadcrumbs, then the entry square, then the room next door');
+{
+  const k = keeper({ hp: 20, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  const out = await k.ap.backUpToUnstick('test');
+  ok('the first back-up in a room is the cheap one', out.rung === 1, JSON.stringify(out.rung));
+  ok('...so only the breadcrumbs ran', k.retreats.length === 1 && k.walks.length === 0
+     && k.travels.length === 0);
+  ok('and it reports that the body moved', out.freed === true);
+}
+{
+  // The breadcrumbs did nothing, and this room has already needed one back-up. Rung 2.
+  const k = keeper({ hp: 20, max: 22, retreatMoves: false,
+                     enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  k.ap.backUps = [{ room: 586, col: 18, row: 18, at: Date.now() }];
+  const out = await k.ap.backUpToUnstick('test');
+  ok('a second back-up in the same room climbs to the entry square', out.rung === 2);
+  ok('...and walks to the door it came in by, not to a guess',
+     k.walks.length === 1 && k.walks[0].col === 4 && k.walks[0].row === 30,
+     JSON.stringify(k.walks));
+  ok('...but does not leave the room at rung 2', k.travels.length === 0);
+  ok('the body is on the entry square now', k.self.col === 4 && k.self.row === 30);
+}
+{
+  // Twice already, and the entry square is not enough either. Rung 3: leave.
+  const k = keeper({ hp: 20, max: 22, retreatMoves: false, walkWorks: false,
+                     enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  k.ap.backUps = [{ room: 586, at: Date.now() }, { room: 586, at: Date.now() }];
+  const out = await k.ap.backUpToUnstick('test');
+  ok('a third goes back through the door into the previous room', out.rung === 3);
+  ok('...to the room it came FROM, one hop, not a journey',
+     k.travels.length === 1 && k.travels[0].to === 585 && k.travels[0].opts?.maxHops === 2,
+     JSON.stringify(k.travels));
+  ok('...and it ended up there', out.ended?.room === 585);
+  const r3 = out.tried.find(t => t.rung === 3);
+  ok('the record says which rung actually worked', r3?.worked === true);
+}
+{
+  // A ROOM WITH NO ENTRY MEMORY DEGRADES, IT DOES NOT INVENT ONE. A character that has not
+  // crossed a boundary this session has no known-good square to go back to, and guessing one
+  // would be exactly the coarse-grid escape hatch this repository refuses.
+  const k = keeper({ hp: 20, max: 22, retreatMoves: false });
+  k.ap.backUps = [{ room: 586, at: Date.now() }, { room: 586, at: Date.now() }];
+  const out = await k.ap.backUpToUnstick('test');
+  ok('rung 3 is allowed but there is nowhere known to go back to', out.rung === 3);
+  ok('...so nothing is walked to and nothing is crossed',
+     k.walks.length === 0 && k.travels.length === 0);
+  ok('...and it says so rather than claiming success', out.freed === false);
+}
+{
+  // The memory is about a DIFFERENT room — we have crossed since. Using it would walk to a
+  // square that means nothing here.
+  const k = keeper({ hp: 20, max: 22, retreatMoves: false,
+                     enteredVia: { room: 599, from: 598, door: { col: 4, row: 30 } } });
+  k.ap.backUps = [{ room: 586, at: Date.now() }];
+  const out = await k.ap.backUpToUnstick('test');
+  ok('an entry memory about another room is not used', k.walks.length === 0);
+}
+{
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  k.ap.backUps = [{ room: 586, at: Date.now() }, { room: 586, at: Date.now() }];
+  const out = await k.ap.backUpToUnstick('test');
+  ok('below the flee line the ladder does not run at all', out.attempted === false);
+  ok('...nothing moved the body', k.retreats.length === 0 && k.walks.length === 0
+     && k.travels.length === 0);
+}
+{
+  // THE COUNT IS PER ROOM, AND IT AGES OUT. A character that bounces between three bad
+  // squares in one room is having one problem, not three — answering each of them with the
+  // cheap rung is how it spends ten minutes there. But an hour later it is weather again.
+  const k = keeper({ hp: 20, max: 22 });
+  k.ap.backUps = [{ room: 586, at: Date.now() - 11 * 60_000 },
+                  { room: 586, at: Date.now() - 12 * 60_000 }];
+  ok('back-ups older than the window do not count', k.ap.stuckRung({ room: 586 }) === 1);
+  k.ap.backUps = [{ room: 585, at: Date.now() }, { room: 584, at: Date.now() }];
+  ok('nor do back-ups in other rooms', k.ap.stuckRung({ room: 586 }) === 1);
+  k.ap.backUps = [{ room: 586, at: Date.now() }, { room: 586, at: Date.now() },
+                  { room: 586, at: Date.now() }, { room: 586, at: Date.now() }];
+  ok('and the ladder stops at three — there is no fourth rung', k.ap.stuckRung({ room: 586 }) === 3);
+}
+
+console.log('\nthe give-up uses the ladder, and does not pin a wall in the room it just left');
+{
+  const k = keeper({ hp: 20, max: 22, retreatMoves: false, walkWorks: false,
+                     enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  k.ap.backUps = [{ room: 586, at: Date.now() }, { room: 586, at: Date.now() }];
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  const r = await k.ap.answerWedge(586);
+  ok('it gave up and left the room', r?.gave_up === true && k.travels.length === 1);
+  // A wall in the room we deliberately left would fight the journey about to re-plan.
+  ok('no wall was taken in the room it retreated out of', k.walls.length === 0,
+     JSON.stringify(k.walls));
+  const note = k.notes.find(n => /gave up/.test(n.what));
+  ok('the operator note carries the rung that was reached',
+     note?.detail?.backed_off?.rung === 3, JSON.stringify(note?.detail?.backed_off));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
