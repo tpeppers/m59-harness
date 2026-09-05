@@ -45,6 +45,7 @@
 // inventory in hand, so it passes the fleet rows in and they win — the record is what
 // answers when nothing is running.
 import { readLedger } from './m59-ledger.mjs';
+import { foodValue } from './m59-items.mjs';
 import { listCharacters as bankedCharacters, balancesFor } from './m59-bank.mjs';
 
 const NEED_PER_CAST = 2;          // create food: 2 ElderBerry + 2 Herbs, from the caster
@@ -101,6 +102,66 @@ function fromLive(live) {
                                                 herbs: r.reagents.herbs ?? 0, at, from: 'live' });
   }
   return { purse, reagents };
+}
+
+// ------------------------------------------------------------------ what there is to eat
+//
+// EVERY MEAL THE FLEET IS CARRYING, BY KIND.
+//
+// This is the one stock on the page that is not money and not a reagent, and it is the one
+// the fleet actually runs out of. Resting stops awarding vigor at 80 of 200; everything above
+// that has to be EATEN, so a fleet with no food fights at a fraction of its strength however
+// rich it is. "Reagents held" answers what could be COOKED and needs the right pockets;
+// this answers what could be eaten right now.
+//
+// WHAT COUNTS AS FOOD IS NOT THIS FILE'S OPINION. `foodValue` reads the table built from the
+// game's own Food class tree, so the answer is right by construction and cannot miss one -
+// which matters here more than anywhere, because four of this world's five mushrooms are
+// casting reagents and only two are edible. A hand-written list would have got that wrong in
+// whichever direction its author happened to be thinking about.
+//
+// It reads `pack_items`, which the fleet row already carries, so this costs no packet.
+// A character whose pack has not been read contributes nothing and is counted as unknown
+// rather than as zero: an unread pack and an empty one are different facts, and reporting
+// the fleet as starving because nobody looked is the failure this whole page exists to avoid.
+export function foodHeld(live) {
+  const byName = new Map();
+  let unread = 0, characters = 0;
+  for (const r of live || []) {
+    if (!r?.character) continue;
+    characters++;
+    const items = Array.isArray(r.pack_items) ? r.pack_items : null;
+    if (!items) { unread++; continue; }
+    for (const it of items) {
+      const name = String(it?.name ?? '').trim();
+      if (!name) continue;
+      const food = foodValue(name);
+      if (!food) continue;
+      const amount = Number(it.amount) || 0;
+      if (amount <= 0) continue;
+      const key = name.toLowerCase();
+      const prev = byName.get(key)
+        ?? { name: key, value: 0, nutrition: Number(food.nutrition) || 0, holders: 0 };
+      prev.value += amount;
+      prev.holders += 1;
+      byName.set(key, prev);
+    }
+  }
+  const kinds = [...byName.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
+  const total = kinds.reduce((n, k) => n + k.value, 0);
+  return {
+    total,
+    kinds,
+    // The stomach admits 100 at a sitting and drains about 7.2 a minute, so this is not
+    // "vigor the fleet has" - it is vigor the fleet could eat its way to, given time.
+    nutrition: kinds.reduce((n, k) => n + k.value * k.nutrition, 0),
+    characters, unread,
+    // Characters holding at least one of anything edible. The number that says whether the
+    // food is SPREAD or sitting in one pack, which is the difference between a fed fleet and
+    // one character with a larder.
+    fed: (live || []).filter(r => Array.isArray(r?.pack_items) &&
+      r.pack_items.some(it => Number(it?.amount) > 0 && foodValue(String(it?.name ?? '')))).length,
+  };
 }
 
 // ------------------------------------------------------------------ the money spent

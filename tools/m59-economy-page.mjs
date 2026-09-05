@@ -11,7 +11,7 @@
 // So the page leads with the totals, and then says how each one was measured — see
 // m59-economy.mjs for why the three quantities have three different kinds of evidence
 // behind them and why the page must never flatten that.
-import { economy, SHORT_BELOW } from './m59-economy.mjs';
+import { economy, SHORT_BELOW , foodHeld} from './m59-economy.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore } from './m59-dashboard.mjs';
 import { esc, ago, num, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
@@ -27,6 +27,16 @@ const EXTRA_STYLE = `
   .sparks { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; }
   .spark { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; }
   .spark .k { color:var(--dim); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+  .foodwrap { display:flex; gap:1.2rem; align-items:flex-start; flex-wrap:wrap; margin:.6rem 0 1rem; }
+  .foodpie { flex:0 0 190px; }
+  .foodpie svg { width:190px; height:190px; display:block; }
+  .foodlegend { flex:1 1 320px; border-collapse:collapse; font-size:.85rem; }
+  .foodlegend th, .foodlegend td { padding:.22rem .5rem; text-align:left; }
+  .foodlegend th { font-weight:600; color:var(--dim); border-bottom:1px solid var(--line); }
+  .foodlegend tfoot td { border-top:1px solid var(--line); font-weight:600; }
+  .foodlegend .n { text-align:right; font-variant-numeric:tabular-nums; }
+  .swatch { display:inline-block; width:.7rem; height:.7rem; border-radius:2px;
+            margin-right:.45rem; vertical-align:-1px; }
   .spark .v { font-size:1.3rem; font-weight:600; font-variant-numeric:tabular-nums; }
   .spark svg { width:100%; height:52px; display:block; margin-top:.35rem; overflow:visible; }
   .spark .line { fill:none; stroke:var(--accent); stroke-width:2; stroke-linejoin:round; }
@@ -132,9 +142,59 @@ function sourcePill(from, at) {
          `stated it was holding when it last cast, ${esc(ago(at))}">cast ${esc(ago(at))}</span>`;
 }
 
+// A PIE, DRAWN AS SVG ON THE SERVER, because this page has no JavaScript and should not
+// start having any for one chart. Every other figure here is server-rendered and readable
+// with the broker down; a chart that needs a script to appear is a chart that is blank in
+// exactly the situations somebody is reading this page urgently.
+//
+// ONE SLICE PER KIND. A 100% slice cannot be drawn as an arc — the start and end points
+// coincide and the path collapses — so a single kind is drawn as a plain circle. That is
+// not a rare edge here: a fleet that has just come back from the Duke's tables is usually
+// carrying one thing.
+function foodPie(kinds, { size = 190 } = {}) {
+  const total = kinds.reduce((n, k) => n + k.value, 0);
+  if (!total) return '';
+  const r = size / 2, cx = r, cy = r;
+  const hue = i => Math.round((i * 360) / Math.max(1, kinds.length));
+  const fill = i => `hsl(${hue(i)} 55% 55%)`;
+  if (kinds.length === 1)
+    return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="all of it is ${esc(kinds[0].name)}">` +
+           `<circle cx="${cx}" cy="${cy}" r="${r - 1}" fill="${fill(0)}"></circle></svg>`;
+  let at = -Math.PI / 2;                       // start at twelve o'clock
+  const slices = kinds.map((k, i) => {
+    const sweep = (k.value / total) * Math.PI * 2;
+    const x1 = cx + (r - 1) * Math.cos(at), y1 = cy + (r - 1) * Math.sin(at);
+    at += sweep;
+    const x2 = cx + (r - 1) * Math.cos(at), y2 = cy + (r - 1) * Math.sin(at);
+    const large = sweep > Math.PI ? 1 : 0;
+    const pct = Math.round((k.value / total) * 100);
+    return `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} ` +
+           `A ${r - 1} ${r - 1} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" ` +
+           `fill="${fill(i)}"><title>${esc(k.name)}: ${k.value} (${pct}%)</title></path>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="food carried, by kind">${slices}</svg>`;
+}
+
+function foodLegend(kinds) {
+  const total = kinds.reduce((n, k) => n + k.value, 0) || 1;
+  const hue = i => Math.round((i * 360) / Math.max(1, kinds.length));
+  return kinds.map((k, i) => `
+    <tr>
+      <td><span class="swatch" style="background:hsl(${hue(i)} 55% 55%)"></span>${esc(k.name)}</td>
+      <td class="n">${num(k.value)}</td>
+      <td class="n dim">${Math.round((k.value / total) * 100)}%</td>
+      <td class="n dim" title="vigor per item, from the game's own Food table">${k.nutrition}</td>
+      <td class="n dim" title="how many characters are carrying any">${k.holders}</td>
+    </tr>`).join('');
+}
+
 export function renderEconomy({ hours = 168, live = null, characters = null } = {}) {
   const e = economy({ sinceMs: hours * 3600 * 1000, live, characters });
   const t = e.totals;
+  // Read off the live rows' own `pack_items`, so it costs no packet and is exactly as fresh
+  // as the rest of the page. With `live: null` — a standalone read of the record — there is
+  // no pack to count and the section says so rather than reporting a starving fleet.
+  const food = foodHeld(live);
 
   const FACETS = {
     wealth: {
@@ -286,10 +346,42 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
       <div class="n">the abundant half</div></div>
     <div class="card"><div class="k">meals castable</div><div class="v">${num(t.casts_possible)}</div>
       <div class="n">2 + 2 a cast, from the caster's own pack</div></div>
+    <!-- THE ONE STOCK ON THIS PAGE THAT IS NOT MONEY. Resting stops awarding vigor at 80 of
+         200 and everything above it has to be EATEN, so a fleet with no food fights at a
+         fraction of its strength however rich it is. Red at zero, deliberately: it is the
+         same severity as a character that cannot cast. -->
+    <div class="card"><div class="k">food available</div>
+      <div class="v ${food.total ? 'good' : 'bad'}">${num(food.total)}</div>
+      <div class="n">${food.kinds.length} kind(s) · ${food.fed} of ${food.characters} carrying any${
+        food.unread ? ` · ${food.unread} pack(s) not read` : ''}</div></div>
     <div class="card"><div class="k">short of something</div>
       <div class="v ${t.short ? 'bad' : 'good'}">${t.short}</div>
       <div class="n">under ${SHORT_BELOW} of a reagent — three castings</div></div>
   </div>
+
+  <h2>What is there to eat?</h2>
+  <div class="sub">Every meal the fleet is carrying, by kind, totalled across all characters ·
+    what counts as food is the game's own Food class tree, not a list written here — which
+    matters, because four of this world's five mushrooms are casting reagents and only two
+    are edible.</div>
+  ${food.total ? `
+  <div class="foodwrap">
+    <div class="foodpie">${foodPie(food.kinds)}</div>
+    <table class="foodlegend">
+      <thead><tr><th>kind</th><th class="n">held</th><th class="n">share</th>
+        <th class="n">vigor ea.</th><th class="n">holders</th></tr></thead>
+      <tbody>${foodLegend(food.kinds)}</tbody>
+      <tfoot><tr><td>total</td><td class="n">${num(food.total)}</td><td class="n dim">100%</td>
+        <td class="n dim" title="vigor if every bite were eaten — the stomach admits 100 at a sitting and drains about 7.2 a minute, so this is vigor the fleet could eat its way to, not vigor it has">${num(food.nutrition)}</td>
+        <td class="n dim">${food.fed}</td></tr></tfoot>
+    </table>
+  </div>` : `
+  <div class="empty">${live
+    ? 'the fleet is carrying nothing edible. Vigor above the resting cap of 80 comes only ' +
+      'from eating, so every character is capped there until something is cooked or the ' +
+      'Duke\'s tables are visited.'
+    : 'no live pack reading — this page was rendered from the record alone, which does not ' +
+      'carry pack contents. An unread pack is not an empty one.'}</div>`}
 
   <h2>Is it moving?</h2>
   ${hasTrend ? `

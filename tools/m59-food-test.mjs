@@ -79,6 +79,47 @@ console.log('\nthe classifiers agree with the table, which is what actually matt
     ok('and still sells ' + stock, !KEEP_FOOD.test(stock));
 }
 
+console.log('\nthe fleet page counts what there is to eat, and only that');
+{
+  // THE ECONOMY PAGE'S FOOD TOTAL reads each row's own `pack_items`, so it costs no packet
+  // and is exactly as fresh as the rest of the page. What it must never do is decide for
+  // itself what food is: it asks the table above, which is built from the game's Food class
+  // tree, because a hand-written list on a page would be the fifth place this fleet could
+  // disagree with itself about a mushroom.
+  const { foodHeld } = await import('./m59-economy.mjs');
+  const held = foodHeld([
+    { character: 'A', pack_items: [{ name: 'slice of pork', amount: 40 },
+                                   { name: 'red mushroom', amount: 9 },
+                                   { name: 'shilling', amount: 100 }] },
+    { character: 'B', pack_items: [{ name: 'bowl of soup', amount: 12 },
+                                   { name: 'Inky-cap mushroom', amount: 2 },
+                                   { name: 'slice of pork', amount: 3 }] },
+    { character: 'C', pack_items: null },
+  ]);
+  ok('it totals every meal across the fleet', held.total === 57, String(held.total));
+  ok('the same kind in two packs is one slice',
+     held.kinds[0].name === 'slice of pork' && held.kinds[0].value === 43,
+     JSON.stringify(held.kinds[0]));
+  ok('and it knows how many are carrying it', held.kinds[0].holders === 2);
+  ok('reagents are not food, however mushroom-shaped',
+     !held.kinds.some(k => /red mushroom/.test(k.name)),
+     JSON.stringify(held.kinds.map(k => k.name)));
+  ok('money is not food either', !held.kinds.some(k => /shilling/.test(k.name)));
+  ok('the Inky-cap is counted, at its real nutrition',
+     held.kinds.some(k => k.name === 'inky-cap mushroom' && k.nutrition === 50));
+  // AN UNREAD PACK IS NOT AN EMPTY ONE. Reporting the fleet as starving because nobody
+  // looked is the mistake this page exists to prevent, so it is counted separately and
+  // said out loud on the card.
+  ok('an unread pack is counted as unread, not as zero', held.unread === 1);
+  ok('and does not count as fed', held.fed === 2 && held.characters === 3);
+  // Nutrition is what matters for vigor, and it is a sum of what COULD be eaten rather than
+  // vigor in hand: the stomach admits 100 at a sitting.
+  ok('nutrition is the weighted sum', held.nutrition === 43 * 9 + 12 * 9 + 2 * 50,
+     String(held.nutrition));
+  ok('an empty fleet is zero, not a crash', foodHeld([]).total === 0);
+  ok('and so is no fleet at all', foodHeld(null).total === 0);
+}
+
 console.log('\nthe Duke\'s Feast Hall cannot be fought in, and the approach can');
 {
   // Asked by the operator, 2026-09-04, and worth pinning because a PK rule is built on it.
