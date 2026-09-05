@@ -63,9 +63,25 @@ function survey() {
     }
   }
   const ref = git(PROD, 'rev-parse', '--abbrev-ref', 'HEAD');
-  const dirty = (git(PROD, 'status', '--porcelain') || '').split('\n').filter(Boolean);
+  // RUNTIME STATE IS NOT DRIFT. The fleet rewrites its own learning continuously —
+  // safespots, sector readings, ledgers — so counting those as a problem makes this check
+  // red forever, and a check that is always red is a check nobody reads. Only modified CODE
+  // and hand-copied backups count. Untracked files still count wherever they are: a
+  // `.superseded-handcopy` sitting in production is exactly what this tool exists to catch.
+  // Parsed by REGEX, not by column. `git()` trims its output, which strips the leading space
+  // off the first porcelain line — so a fixed slice(3) is off by one on exactly that line and
+  // silently fails to match it. The bug reported the file it was meant to exempt.
+  const RUNTIME = /^substrate\/[^\s]*\.(json|ndjson|log)$/;
+  const PORC = /^\s*([MADRCU?!]{1,2})\s+(.+)$/;
+  const all = (git(PROD, 'status', '--porcelain') || '').split('\n').filter(Boolean);
+  const dirty = all.filter(l => {
+    const m = PORC.exec(l);
+    if (!m) return true;                       // unparsed lines are always suspicious
+    return !(m[1] === 'M' && RUNTIME.test(m[2].trim()));
+  });
+  const runtime = all.length - dirty.length;
   const tag = git(PROD, 'describe', '--tags', '--exact-match') || null;
-  return { prodHead, trunkHead, known, ahead, behind, ref, dirty, tag };
+  return { prodHead, trunkHead, known, ahead, behind, ref, dirty, runtime, tag };
 }
 
 function report(s) {
@@ -78,6 +94,7 @@ function report(s) {
   }
   console.log(`        ${s.ahead} commit(s) main does not have, ${s.behind} commit(s) behind main`);
   if (s.dirty.length) console.log(`        ${s.dirty.length} uncommitted file(s)`);
+  if (s.runtime) console.log(`        ${s.runtime} runtime state file(s) (expected, not drift)`);
 }
 
 // What must be true for prod to be a deploy rather than a fork.
