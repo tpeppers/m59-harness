@@ -1,4 +1,5 @@
 // WHAT IS IN THE PACK DECIDES WHERE THE TRIP GOES.
+import { foodValue } from './m59-items.mjs';
 //
 //   import { classifyPack, routeFor } from './m59-smartloot.mjs';
 //
@@ -42,7 +43,25 @@ const GEM = /\b(emerald|sapphire|diamond|ruby|jewel)\b/i;
 // Inky-cap — fifty vigor a bite, the best food this fleet can carry — escaped being sold
 // only by accident, because VAULTABLE happens to contain `inky`.
 const REAGENT = /\b(herb|elderberry|mushroom|dragon scale|silver|orb)\b/i;
-const FOOD = /\b(bread|cheese|pie|apple|grape|drumstick|turkey|pork|soup|wine|stout|ale|brew|water skin|snack|edible mushroom|inky-?cap mushroom)\b/i;
+// FOOD IS NOT A WORD LIST HERE ANY MORE. It was, and the list drifted from the game.
+//
+// `spider eye`, `bunch of grapes` and `fortune cookie` are all Food in the class tree and
+// all three were filed as `other` — sellable stock — by the pattern below. The spider eye is
+// the expensive one: it is one of the seven things the Duke's tables hand out, nutrition 9,
+// the same as a slice of pork, and the fleet was carrying six hundred of them.
+//
+// The keeper's own eating has always asked `isFood`, with a comment saying that guessing by
+// name is the mistake. This is that comment applied here. The table is built from the game's
+// Food class tree, so it cannot miss one and cannot be argued with.
+//
+// The regex survives as a NARROW fallback for a name the table does not know — a renamed
+// item, a fresh extraction, a caller passing a description rather than a name — because a
+// classifier that goes blind when its table is stale is worse than one that guesses.
+const FOOD_FALLBACK = /\b(bread|cheese|pie|apple|grape|drumstick|turkey|pork|soup|wine|stout|ale|brew|water skin|snack|edible mushroom|inky-?cap mushroom|spider eye|fortune cookie)\b/i;
+const isFoodName = (n) => {
+  try { if (foodValue(n)) return true; } catch { /* fall through to the pattern */ }
+  return FOOD_FALLBACK.test(n);
+};
 
 // Worth more kept than sold. Read off the Castle Victoria loot survey: wands and scrolls have
 // their spoil timer disabled (piGoBadTime = -1) so they never rot, the ring of invisibility
@@ -76,7 +95,7 @@ export function classifyPack(items = []) {
     // FOOD BEFORE REAGENT — the overlap is one-way and only this order resolves it. See the
     // note on the two patterns: three mushrooms are reagents, two are meals, and the reagent
     // pattern matches all five whatever it says.
-    if (FOOD.test(n)) { out.food.push(n); continue; }
+    if (isFoodName(n)) { out.food.push(n); continue; }
     if (REAGENT.test(n)) { out.reagents.push(n); continue; }
     out.other.push(n);
   }
