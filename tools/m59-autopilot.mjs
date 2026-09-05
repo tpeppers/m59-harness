@@ -6252,6 +6252,14 @@ export class Autopilot {
         ended_in: Number(this.s?.world?.room?.num ?? NaN) || null,
         arrived: outcome?.arrived ?? false,
         reason: outcome?.reason ?? null,
+        // WHO CANCELLED IT, when that is what ended the journey. `reason` says "movement
+        // cancelled by a newer command", which names the mechanism and not the caller — and
+        // for one night that was the entire account the fleet could give of 46 of 46 failed
+        // journeys. Session.cancelMovement has always recorded a `why`; this carries it onto
+        // the row so the question is a COLUMN rather than an investigation.
+        cancelled_by: this.s?.lastMovementCancel?.why ?? null,
+        cancelled_ms_ago: this.s?.lastMovementCancel?.at
+          ? Date.now() - this.s.lastMovementCancel.at : null,
         stumbles: Number.isFinite(outcome?.stumbles) ? outcome.stumbles : null,
         ms: Date.now() - startedAt,
         // The A/B field retains its old budget-clock meaning. The inclusive recovery time
@@ -10244,7 +10252,7 @@ export class Autopilot {
       w.pinnedSince = null; w.pinnedAnchor = null;
       this.tally.watchdog_pinned_interrupts = (this.tally.watchdog_pinned_interrupts || 0) + 1;
       const broke = (() => {
-        try { return this.s.cancelMovement(); }
+        try { return this.s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
         catch (e) { return { cancelled: false, why: e.message }; }
       })();
       // AND THE RECORD THAT MAKES THE NEXT DECISION DIFFERENT. "The next pass can decide

@@ -7872,7 +7872,7 @@ const TOOLS = [
       if (job.kind === 'move' || job.kind === 'context:rest_here' ||
           job.kind === 'context:recover_here' || job.kind === 'context:approach' ||
           job.kind === 'context:grab_nearby' || job.kind === 'context:take')
-        return s.cancelMovement(token);
+        return s.cancelMovement(token, `a cancel of the ${job.kind} job in flight`);
       if (job.kind.startsWith('context:')) {
         job.cancelled = true;
         job.cancelRequestedAt = Date.now();

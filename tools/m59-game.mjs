@@ -1790,6 +1790,16 @@ class Session {
              ...extra };
   }
 
+  // WHO CANCELLED THIS, RECORDED WHERE IT HAPPENS.
+  //
+  // A journey that ends "movement cancelled by a newer command" names the mechanism and not
+  // the caller, and for one night that was the whole of what the fleet could say about 46 of
+  // 46 failed journeys. The `why` argument has always existed and four callers were passing
+  // nothing, so the answer was `unattributed` exactly where it mattered.
+  //
+  // `unattributed` is kept as the default deliberately rather than being made to guess: a
+  // guessed attribution is worse than an admitted gap, and it now shows up in the journey
+  // ledger as a named hole to go and close rather than as a plausible-looking caller.
   cancelMovement(controlToken, why = 'unattributed') {
     const job = this.job && !this.job.done ? this.job : null;
     this.lastMovementCancel = { why, at: Date.now(),

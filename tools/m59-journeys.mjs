@@ -84,6 +84,12 @@ export function compareJourneys(rows = []) {
     const reasons = {};
     for (const f of g.bad) if (f.reason) reasons[String(f.reason).slice(0, 44)] =
       (reasons[String(f.reason).slice(0, 44)] || 0) + 1;
+    // WHO CANCELLED IT. `reason` names the mechanism ("cancelled by a newer command") and
+    // this names the caller, which is the difference between knowing a journey was
+    // interrupted and knowing what to go and change.
+    const by = {};
+    for (const f of g.bad) if (f.cancelled_by) by[String(f.cancelled_by).slice(0, 50)] =
+      (by[String(f.cancelled_by).slice(0, 50)] || 0) + 1;
     return {
       route: g.route, n, arrived: g.ok.length, failed: g.bad.length,
       unknown: g.unknown.length,
@@ -97,6 +103,7 @@ export function compareJourneys(rows = []) {
       stops_ok: avg(g.ok, r => r.shelter_stops), stops_bad: avg(g.bad, r => r.shelter_stops),
       stopped_in: Object.entries(stops).sort((a, b) => b[1] - a[1]).slice(0, 4),
       reasons: Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3),
+      cancelled_by: Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 3),
     };
   }).filter(g => g.arrived + g.failed > 0 || g.unknown > 0)
     .sort((a, b) => (b.failed - a.failed) || (b.n - a.n));
@@ -139,6 +146,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
         r.stopped_in.map(([room, n]) => `${room} x${n}`).join(', ') +
         `  (asked for ${r.route.split('>')[1]})`);
     for (const [why, n] of r.reasons) console.log(`             x${n}  ${why}`);
+    for (const [who, n] of r.cancelled_by)
+      console.log(`             x${n}  cancelled by: ${who}`);
   }
   console.log('\nA route where the two columns differ is one where they were not making the same');
   console.log('trip. `failures stopped in` is the column the wrong-destination theory lives in:');

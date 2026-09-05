@@ -504,7 +504,8 @@ export function tick(host) {
     w.pinnedSince = null; w.pinnedAnchor = null;
     host.tally.watchdog_pinned_interrupts = (host.tally.watchdog_pinned_interrupts || 0) + 1;
     const broke = (() => {
-      try { return s.cancelMovement(); } catch (e) { return { cancelled: false, why: e.message }; }
+      try { return s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
+      catch (e) { return { cancelled: false, why: e.message }; }
     })();
     // AND THE RECORD THAT MAKES THE NEXT DECISION DIFFERENT. See WEDGE_REPEAT_CAP: a
     // cancel alone hands the next pass the same inputs, which is a loop.
@@ -537,7 +538,8 @@ export function tick(host) {
   w.interrupts++;
   host.tally.watchdog_interrupts = (host.tally.watchdog_interrupts || 0) + 1;
   const stopped = (() => {
-    try { return s.cancelMovement(); } catch (e) { return { cancelled: false, why: e.message }; }
+    try { return s.cancelMovement(null, 'the watchdog pulling us out of a blind walk'); }
+    catch (e) { return { cancelled: false, why: e.message }; }
   })();
   host.note('WATCHDOG — pulled the character out of a blind walk', {
     health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
