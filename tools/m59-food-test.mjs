@@ -136,6 +136,19 @@ console.log('\nthe fleet page counts what there is to eat, and only that');
                          { baseline: { 'spider eye': 362 } });
   ok('eating into the baseline does not make earned negative', eaten.earned === 0);
   ok('and the baseline reported is what is actually there', eaten.baseline === 40);
+  // A NUMBER GOES STALE THE MOMENT THE OPERATOR PICKS UP ONE MORE, and it did — within ten
+  // minutes of a baseline of 362 being written the count was 632, so the page reported 270
+  // "earned" that no bot had touched, which is the exact thing the baseline exists to stop.
+  // "all" is for a haul still in progress; a number is for one that has finished.
+  const still = foodHeld(
+    [{ character: 'A', pack_items: [{ name: 'spider eye', amount: 632 },
+                                    { name: 'slice of pork', amount: 7 }] }],
+    { baseline: { 'spider eye': 'all' } });
+  ok('"all" absorbs the whole kind however much it grows',
+     still.kinds.find(k => k.name === 'spider eye').earned === 0);
+  ok('and still reports what is actually held',
+     still.kinds.find(k => k.name === 'spider eye').value === 632);
+  ok('while a kind nobody claimed is entirely earned', still.earned === 7);
   ok('an empty fleet is zero, not a crash', foodHeld([]).total === 0);
   ok('and so is no fleet at all', foodHeld(null).total === 0);
 }

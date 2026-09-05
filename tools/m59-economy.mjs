@@ -153,6 +153,14 @@ export function foodBaseline(file = null) {
     const out = {};
     for (const [k, n] of Object.entries(v)) {
       if (String(k).startsWith('//')) continue;     // a comment key, by this repo's convention
+      // "all" MEANS EVERY ONE OF THIS KIND, HOWEVER MANY THERE ARE, and it exists because a
+      // number goes stale the moment the operator picks up one more. It did, within minutes:
+      // a baseline of 362 spider eyes was set and the count was 632 by the next reading, so
+      // the page reported 270 "earned" that no bot had touched — which is precisely the
+      // thing the baseline was added to prevent.
+      //
+      // Use a number for a haul that has finished and `"all"` for one still going.
+      if (String(n).trim().toLowerCase() === 'all') { out[String(k).trim().toLowerCase()] = Infinity; continue; }
       const amount = Number(n);
       if (Number.isFinite(amount) && amount > 0) out[String(k).trim().toLowerCase()] = amount;
     }
