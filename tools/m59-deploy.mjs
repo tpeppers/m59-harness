@@ -4,6 +4,7 @@
 //   node tools/m59-deploy.mjs --status    # where prod is relative to main
 //   node tools/m59-deploy.mjs --verify    # exit 1 if prod has drifted. For CI and for cron.
 //   node tools/m59-deploy.mjs --cut       # tag main and move prod onto that tag
+//   ... --no-fetch                        # do not refresh origin/main first (offline, or CI)
 //
 // THE MODEL. Work lands on `main`. A deploy is a TAG on main and a checkout of that tag —
 // a photograph of main at a moment, not a place work happens. main runs ahead; when it is
@@ -44,10 +45,81 @@ const git = (repo, ...args) => {
   }
 };
 
-function survey() {
+// A STALE LOCAL TRUNK MAKES THIS TOOL LIE, AND THE OBVIOUS FIX BREAKS THE DEV TREE.
+//
+// This compared prod against the LOCAL `main` ref. That ref only moves when somebody in this
+// checkout commits, merges or pulls — so after a push from any other checkout it is stale, and
+// this tool reports drift that does not exist. It did, twice in one day, reporting prod as
+// "5 ahead, 2 behind" when prod's HEAD was exactly `origin/main`. Both times the reading was
+// believed before it was checked, and the second time it nearly stopped a deploy.
+//
+// THE OBVIOUS FIX IS `git update-ref refs/heads/main origin/main`, AND IT IS A TRAP. That is
+// what was run by hand to silence the false reading, and it cost the shared dev tree: refs are
+// shared across every worktree of a repository, `update-ref` is plumbing with NO worktree
+// safety, and `prod-deploy` is a worktree of this same repo. So a ref moved from prod-deploy
+// silently advanced `main` under the development checkout that had it checked out — leaving
+// that tree's index and working files at the OLD commit while HEAD pointed at the new one.
+// `git status` showed 12 files staged with 438 lines of deletions, and the next commit anyone
+// made there would have reverted a deployed merge. `git branch -f` refuses exactly this;
+// `update-ref` does it without a word.
+//
+// So: fetch (which only ever moves remote-tracking refs, and is safe under any worktree), then
+// compare against whichever of the two refs is actually further along, and say which one
+// answered. Move the local ref only when nothing has it checked out — and never silently.
+function trunkCheckedOutIn() {
+  const out = git(HARNESS, 'worktree', 'list', '--porcelain') || '';
+  let dir = null;
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) dir = line.slice('worktree '.length).trim();
+    else if (line.trim() === `branch refs/heads/${TRUNK}`) return dir;
+  }
+  return null;
+}
+
+function resolveTrunk({ fetch = true } = {}) {
+  const note = [];
+  // `--quiet` and no refspec write: this updates refs/remotes/origin/<trunk> and nothing else.
+  if (fetch && git(HARNESS, 'fetch', '--quiet', 'origin', TRUNK) === null)
+    note.push(`could not reach origin — comparing against the refs already in this checkout, ` +
+              `which may be stale. (--no-fetch to stop trying.)`);
+
+  const local = git(HARNESS, 'rev-parse', '-q', '--verify', `refs/heads/${TRUNK}`);
+  const remote = git(HARNESS, 'rev-parse', '-q', '--verify', `refs/remotes/origin/${TRUNK}`);
+  if (!remote) return { head: local, ref: TRUNK, note };
+  if (!local) return { head: remote, ref: `origin/${TRUNK}`, note };
+  if (local === remote) return { head: local, ref: TRUNK, note };
+
+  // Local has commits origin does not: unpushed work, which is NOT staleness. Compare against
+  // the local ref — a deploy cut from it would be real — and say it needs pushing.
+  if (git(HARNESS, 'merge-base', '--is-ancestor', local, remote) === null) {
+    note.push(`local ${TRUNK} has commit(s) origin/${TRUNK} does not. Comparing against the ` +
+              `local ref; push it before cutting a deploy or the tag names a commit nobody else has.`);
+    return { head: local, ref: TRUNK, note };
+  }
+
+  // Strictly behind — the case that produced the false drift.
+  const heldBy = trunkCheckedOutIn();
+  if (heldBy) {
+    note.push(`local ${TRUNK} is stale; compared against origin/${TRUNK} instead. Not advancing ` +
+              `the ref: ${TRUNK} is checked out in ${heldBy}, and moving a ref under a worktree ` +
+              `leaves its index and files at the old commit. Update it there with a pull.`);
+    return { head: remote, ref: `origin/${TRUNK}`, note };
+  }
+  // Nothing has it checked out, so advancing it is safe. Compare-and-swap on the old value, so
+  // a concurrent change refuses instead of being clobbered.
+  const moved = git(HARNESS, 'update-ref', `refs/heads/${TRUNK}`, remote, local) !== null;
+  note.push(moved
+    ? `local ${TRUNK} was stale and nothing had it checked out — fast-forwarded it to origin/${TRUNK}.`
+    : `local ${TRUNK} is stale and could not be advanced; compared against origin/${TRUNK}.`);
+  return { head: remote, ref: moved ? TRUNK : `origin/${TRUNK}`, note };
+}
+
+function survey({ fetch = true } = {}) {
   if (!existsSync(PROD)) return { error: `no prod checkout at ${PROD}` };
   const prodHead = git(PROD, 'rev-parse', 'HEAD');
-  const trunkHead = git(HARNESS, 'rev-parse', TRUNK);
+  const trunk = resolveTrunk({ fetch });
+  const trunkHead = trunk.head;
+  const trunkRef = trunk.ref, trunkNote = trunk.note;
   if (!prodHead || !trunkHead) return { error: 'not a git checkout, or no such ref' };
 
   // Ask the DEVELOPMENT repo about both commits. If it has never heard of prod's HEAD, that
@@ -81,11 +153,14 @@ function survey() {
   });
   const runtime = all.length - dirty.length;
   const tag = git(PROD, 'describe', '--tags', '--exact-match') || null;
-  return { prodHead, trunkHead, known, ahead, behind, ref, dirty, runtime, tag };
+  return { prodHead, trunkHead, trunkRef, trunkNote, known, ahead, behind, ref, dirty, runtime, tag };
 }
 
 function report(s) {
-  console.log(`trunk   ${TRUNK} @ ${s.trunkHead?.slice(0, 8)}  (${HARNESS})`);
+  // NAME THE REF THAT ANSWERED. The whole failure this guards against was a number computed
+  // against a ref nobody realised was stale, so the reading has to carry its own provenance.
+  console.log(`trunk   ${s.trunkRef} @ ${s.trunkHead?.slice(0, 8)}  (${HARNESS})`);
+  for (const n of s.trunkNote || []) console.log(`        ${n}`);
   console.log(`prod    ${s.prodHead?.slice(0, 8)}  (${PROD})`);
   console.log(`        checked out as: ${s.ref === 'HEAD' ? `detached${s.tag ? ` at tag ${s.tag}` : ''}` : `BRANCH ${s.ref}`}`);
   if (!s.known) {
@@ -118,10 +193,13 @@ function problems(s) {
   return bad;
 }
 
-const s = survey();
-if (s.error) { console.error(s.error); process.exit(2); }
+// --no-fetch is for an offline run or a tight CI loop. It is opt-OUT rather than opt-in
+// because the reading is only worth having when the ref it is computed from is current.
+const noFetch = process.argv.includes('--no-fetch');
+const mode = process.argv.find(a => a.startsWith('--') && a !== '--no-fetch') || '--status';
 
-const mode = process.argv.find(a => a.startsWith('--')) || '--status';
+const s = survey({ fetch: !noFetch });
+if (s.error) { console.error(s.error); process.exit(2); }
 
 if (mode === '--status' || mode === '--verify') {
   report(s);
@@ -148,8 +226,11 @@ if (mode === '--cut') {
   let tag = `deploy-${day}`;
   for (let n = 2; git(HARNESS, 'rev-parse', '-q', '--verify', `refs/tags/${tag}`); n++)
     tag = `deploy-${day}-${n}`;
-  console.log(`would cut ${tag} at ${TRUNK} @ ${s.trunkHead.slice(0, 8)} and move prod onto it:`);
-  console.log(`  git -C "${HARNESS}" tag -a ${tag} ${TRUNK} -m "deploy ${day}"`);
+  // Tag the ref that ANSWERED, not the constant. When the local trunk was stale and held by a
+  // worktree, `main` here still points at the old commit — tagging it would name a version of
+  // the code nobody asked to deploy, and the tag would look perfectly correct.
+  console.log(`would cut ${tag} at ${s.trunkRef} @ ${s.trunkHead.slice(0, 8)} and move prod onto it:`);
+  console.log(`  git -C "${HARNESS}" tag -a ${tag} ${s.trunkRef} -m "deploy ${day}"`);
   console.log(`  git -C "${PROD}" fetch "${HARNESS}" ${TRUNK} && git -C "${PROD}" checkout ${tag}`);
   console.log('\nNot run: cutting a deploy restarts a live fleet. Run those two lines when ready.');
   process.exit(0);
