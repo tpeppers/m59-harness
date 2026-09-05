@@ -215,5 +215,35 @@ console.log('\nan old broker, and a fleet with no bots on it');
      heldBy(describeCommitment({ partner: 'x' })) === null);
 }
 
+console.log('');
+console.log('a leased movement faculty outranks a room assignment');
+{
+  // OPERATOR DECISION, 2026-09-03, and this block was lost in the three-way merge on
+  // 09-04 and restored with the code it guards. The lease used to be advisory: recorded,
+  // shown on the board, and ignored by the farm pass. Three supply waves bought nothing
+  // because a courier with work and movement leased to a fleet errand was walked back to
+  // its assigned room the moment the errand's walk ended — Sweetums went 587, 598, 599, 2,
+  // 39 with the lease held and live, crossing the road that kills this fleet twice for
+  // nothing.
+  const policy = { assignedRoom: 39 };
+  const elsewhere = { num: 108 };
+  ok('unleased, an assignment still pulls a character home',
+     shouldRelocateToAssignedRoom(policy, elsewhere, null, false) === true);
+  ok('leased, it does not',
+     shouldRelocateToAssignedRoom(policy, elsewhere, null, true) === false);
+  ok('and the default is still to come home, so an unattended character is unchanged',
+     shouldRelocateToAssignedRoom(policy, elsewhere) === true);
+
+  // THE GATE IS NARROW AND MUST STAY NARROW. It withholds the choice of WHERE TO GO. The
+  // four that keep a character alive are not on the table at any lease, which is the
+  // property this whole file exists to defend.
+  const ap = new Autopilot({ name: 'lease-probe' });
+  ap.claimFaculties({ faculties: ['work', 'movement', 'economy'], by: 'a fleet errand',
+                      leaseMs: 30000 });
+  ok('movement reads as held', ap.facultyHeld('movement') === true);
+  for (const f of ['identity', 'mortality', 'survival', 'recovery'])
+    ok(f + " is still the keeper's under that lease", ap.facultyOwner(f) === 'keeper');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

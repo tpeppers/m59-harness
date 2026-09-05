@@ -141,7 +141,19 @@ function preferredQuietRetreat(world, { maxHops = Infinity } = {}) {
 // the quarry. A bot assigned to Castle Victoria while standing in Marion's crypt could
 // therefore hunt the same skeleton there forever: status said assigned_room=39 while
 // the character never took one step toward 39.
-export function shouldRelocateToAssignedRoom(policy, room, deniedRooms = null) {
+export function shouldRelocateToAssignedRoom(policy, room, deniedRooms = null,
+                                             movementLeased = false) {
+  // A LEASE ON MOVEMENT OUTRANKS AN ASSIGNMENT. The assignment says where this character
+  // belongs when nobody else is deciding; a held movement faculty means somebody else IS.
+  // Taken as a parameter rather than read off the keeper so the rule can be pinned without
+  // building a world — see m59-unattended-test.
+  //
+  // OPERATOR DECISION, 2026-09-03, and it was lost in the three-way merge on 09-04 and
+  // restored: the lease used to be advisory — recorded, shown on the board, and ignored by
+  // the farm pass. Three supply waves bought nothing because a courier with work and
+  // movement leased to a fleet errand was walked back to its assigned room the moment the
+  // errand's walk ended.
+  if (movementLeased) return false;
   const assigned = policy?.assignedRoom;
   if (assigned == null || room?.num == null || room.num === assigned) return false;
   // An assignment is strong, not absolute. If this same keeper has already denied the
@@ -8735,7 +8747,27 @@ export class Autopilot {
   // `was_travelling_to: <the why string>`, which reads like a destination and is not one.
   goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0 } = {}) {
     // Already travelling for this reason: refresh nothing, the deadline is the caller's.
-    if (this.inert?.travelling) return this.inertStatus();
+    // A NEW JOURNEY RETIRES A SUSPENDED ONE, and this early return is why the rule below
+    // could not do it. Restored after the 2026-09-04 merge dropped it.
+    //
+    // A keeper already walking somewhere kept its OWN suspended objective, so the next time
+    // the ladder interrupted anything `resumeSuspendedJourney` brought that old objective
+    // back to life underneath the new instruction. Measured 2026-09-03: a courier sent to
+    // the Tos bank was found walking home to Castle Victoria instead, with the external
+    // owner's movement lease held and live, having crossed the killing ground twice for
+    // nothing. `passFarm` puts the resume ahead of the claim check deliberately — a resume
+    // restores a decision already made rather than making a new one — and that is sound
+    // only if a new travel actually retires the old decision. This is what makes it so.
+    if (this.inert?.travelling) {
+      if (to != null && this.suspendedJourney && Number(to) !== Number(this.suspendedJourney.to)) {
+        this.note('retired a suspended journey that a new instruction replaced', {
+          was: this.suspendedJourney.to, now: Number(to),
+          why: 'an older objective resuming underneath a live instruction is two directions ' +
+               'on one body' });
+        this.suspendedJourney = null;
+      }
+      return this.inertStatus();
+    }
     // An ERRAND already holds this character. An errand outranks a journey — it asked for
     // silence and got it — so the journey does not get to quietly upgrade itself.
     if (this.inert) return this.inertStatus();
@@ -13779,11 +13811,31 @@ export class Autopilot {
       this.note('loot run failed', { why: e.message }); this.errand = null; return false;
     })) return HANDLED;
 
-    // Standing in a bank? Put the takings away before anything can take them.
-    await this.bankSurplus().catch(() => {});
-    // Carrying enough that it is worth WALKING to one? Go. See bankRun().
-    if (await this.vaultRunIfPassing().catch(() => false)) return HANDLED;
-    if (await this.bankRun().catch(() => false)) return HANDLED;
+    // A LEASED PURSE IS SOMEBODY ELSE'S TO SPEND. Restored after the 2026-09-04 merge
+    // dropped it: the keeper's economy stayed live through a supply errand and banked a
+    // courier's purse down to walking_money the moment it stood beside a teller, which is
+    // why the errand's own withdrawal arithmetic kept coming out wrong.
+    //
+    // Narrow, like the other: this withholds VOLUNTARY banking and the vault detour, both
+    // of which are multi-minute economic decisions with no single right answer. It takes
+    // nothing from the ladder. A leased character that dies still drops what it carries,
+    // exactly as before — the lease is not a safe, and nothing here pretends otherwise.
+    if (this.facultyHeld('economy')) {
+      const owner = this.facultyOwner('economy');
+      if (this.notedEconomyOwner !== owner) {
+        this.notedEconomyOwner = owner;
+        this.note('economy is leased — not banking or vaulting', {
+          owner, why: 'the holder is spending this purse; banking it mid-errand is how a ' +
+                      'courier arrives at a counter unable to pay' });
+      }
+    } else {
+      this.notedEconomyOwner = null;
+      // Standing in a bank? Put the takings away before anything can take them.
+      await this.bankSurplus().catch(() => {});
+      // Carrying enough that it is worth WALKING to one? Go. See bankRun().
+      if (await this.vaultRunIfPassing().catch(() => false)) return HANDLED;
+      if (await this.bankRun().catch(() => false)) return HANDLED;
+    }
     // The ordinary farming relocation has brought a town runner back to its original
     // room. Complete the shared cargo hand-off before it eats, fights, or wanders.
     if (await this.deliverFarmSupplies().catch(error => {
@@ -14262,7 +14314,8 @@ export class Autopilot {
         const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
         const assignmentDenied = this.policy.assignedRoom != null
           ? deniedFarmRooms.get(this.policy.assignedRoom) : null;
-        const offAssignment = shouldRelocateToAssignedRoom(this.policy, room, deniedFarmRooms);
+        const offAssignment = shouldRelocateToAssignedRoom(this.policy, room, deniedFarmRooms,
+                                                          this.facultyHeld('movement'));
         if (preyHere && assignmentDenied && this.warnedAssignmentDeferred !== this.policy.assignedRoom) {
           this.warnedAssignmentDeferred = this.policy.assignedRoom;
           this.note('working an alternate room while the assignment is deferred', {
