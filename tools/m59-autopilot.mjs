@@ -1020,6 +1020,43 @@ const BLINK_COOLDOWN_MS = 120_000;
 // a perfectly mobile character for no reason.
 const STUCK_IN_PLACE = /could not reach|cannot reach|no route|refused|no floor|stuck|could not get|unreachable|no exit/i;
 
+// A STALL HAS TO NAME ITS LEVER, AND "NONE" IS AN ANSWER RATHER THAN A SILENCE.
+//
+// `noProgress` had exactly one lever — blink — selected by testing the reason SENTENCE
+// against the regex above. A reason that did not match got no lever at all, and nothing
+// anywhere said so: the counter went up, `stuck.since` advanced, and the character stood
+// there. Issue #50 is 27 minutes of it in the character's own farm room, 943 idle passes,
+// zero kills, the detector watching the whole time.
+//
+// The second lever is outside this file — `m59-supervise.mjs` restarts a keeper stalled
+// for eight passes — and it is a lever for a STATEFUL stall, where the thing in the way is
+// keeper-local (a room written off, a route given up on, a square's failure budget). It is
+// not a lever for a DETERMINISTIC one: a fresh keeper walks into the same room with the
+// same inputs and re-enters the loop in seconds, once every ninety seconds, for ever, and
+// every line of it looks like the supervisor working. That file already names that trap
+// twice, for `NO_SAFE_WALL` and for a character resting up the mana to arm itself.
+//
+// So the lever becomes DATA. `stallLever` is the whole map from a reason to the thing that
+// can act on it, `null` is a legitimate and reportable answer, and a stall that keeps
+// giving the same leverless reason stops being endured and gets DECLARED — as a refusal,
+// with a code, on the channel the supervisor and the board already read. Declaring is not
+// a cure. It is the difference between a character nobody can help and a character nobody
+// can SEE, and only one of those is fixable by whoever is on shift.
+export const STALL_LEVERS = Object.freeze({ blink: STUCK_IN_PLACE });
+export const stallLever = (why) => {
+  const s = String(why ?? '');
+  for (const [name, test] of Object.entries(STALL_LEVERS)) if (test.test(s)) return name;
+  return null;
+};
+// THE SAME REASON TWICE IS A DIFFERENT FACT FROM TWO WAYS OF FAILING. A character finding
+// a new obstacle every pass is working; one reciting the same sentence is in a loop that
+// its own inputs cannot leave. Only the second is worth declaring, which is why this
+// counts REPEATS of one reason rather than idle passes of any kind.
+//
+// Twenty, at the ~1.5s pass the reported loop ran at, is about thirty seconds — well past
+// anything transient and a long way short of the 1,623 seconds it actually took.
+const STALL_NO_LEVER_REPEATS = 20;
+
 const vigorPct = v => {
   const g = v?.vigor;
   if (!g || g.value == null) return null;
@@ -1808,6 +1845,11 @@ export class Autopilot {
     this.idlePasses = 0;
     this.stalledSince = null;
     this.stalledWhy = null;
+    // WHICH loop, and what could act on it. A count of idle passes says a character is not
+    // earning; these two say whether anybody can do anything about it. See `stallLever`.
+    this.stalledLever = null;
+    this.stallRepeats = 0;
+    this.lastNoProgressWhy = null;
     // Passes in which the server's room contents did not contain our own object.
     // The usual cause is a save-game renumbering our object id out from under a live
     // session, after which everything that keys on selfId quietly reads as "dead".
@@ -7880,23 +7922,65 @@ export class Autopilot {
     this.idlePasses = 0;
     this.stalledSince = null;
     this.stalledWhy = null;
+    // The repeat run and the declaration go with it. A character that has done something
+    // is not in the loop any more, and leaving `STALL_NO_LEVER` standing would make the
+    // refusal outlive the condition — which is the failure `since` was added to avoid.
+    this.stallRepeats = 0;
+    this.stalledLever = null;
+    this.lastNoProgressWhy = null;
+    if (this.refusals?.has('STALL_NO_LEVER')) this.clearRefusal('STALL_NO_LEVER');
     if (why) this.lastProgress = { at: Date.now(), why };
   }
 
   // Nothing useful happened. After a few of these in a row, say so out loud.
   noProgress(why) {
     this.idlePasses++;
+    const reason = String(why ?? '');
+    // Same sentence again, or a different way of failing? See STALL_NO_LEVER_REPEATS.
+    this.stallRepeats = reason && reason === this.lastNoProgressWhy
+      ? (this.stallRepeats ?? 0) + 1 : 1;
+    this.lastNoProgressWhy = reason;
+    // WHAT COULD ACT ON THIS, NAMED. `null` is an answer and it is the interesting one.
+    const lever = stallLever(reason);
+    this.stalledLever = lever;
     if (this.idlePasses >= 5 && !this.stalledSince) {
       this.stalledSince = Date.now();
       this.stalledWhy = why;
-      this.note('STALLED', { why, passes: this.idlePasses,
+      this.note('STALLED', { why, passes: this.idlePasses, lever,
                              hint: 'nothing has worked for several passes running' });
     } else if (this.stalledSince) this.stalledWhy = why;
     // A STALL THAT IS ABOUT GETTING OUT OF A ROOM HAS A SPELL FOR IT — see blinkFree.
     // Flagged rather than cast, because this is called from synchronous code deep in the
     // pass and casting is several seconds of protocol.
-    if (this.idlePasses >= 5 && STUCK_IN_PLACE.test(String(why ?? '')))
+    if (this.idlePasses >= 5 && lever === 'blink')
       this.wantsBlink = { why, at: Date.now() };
+    // AND A STALL NOTHING CAN ACT ON IS DECLARED RATHER THAN ENDURED.
+    //
+    // Not a cure — there is no verb here that fixes an unknown loop, and inventing one is
+    // how a fleet gets 107 room-flees and 0 kills. What this fixes is that the state was
+    // INVISIBLE: `stuck.since` advanced for 27 minutes while every reader saw a number
+    // going up and no way to tell it from a character being patient. A code on
+    // `status.refusals` is the one channel the supervisor and the fleet board already read
+    // as data, and it carries the sentence that is repeating, so whoever is on shift can
+    // see WHICH loop rather than that there is one.
+    if (!lever && this.stallRepeats >= STALL_NO_LEVER_REPEATS) {
+      if (!this.refusals?.has('STALL_NO_LEVER'))
+        this.note('STALLED WITH NO LEVER', {
+          why: reason, repeats: this.stallRepeats, passes: this.idlePasses,
+          room: this.s?.world?.room?.num ?? null,
+          note: 'the same reason this many times running is a loop its own inputs cannot ' +
+                'leave, and no lever in this keeper matches it. Declaring it so somebody ' +
+                'can, rather than counting to a thousand quietly' });
+      this.refuse('STALL_NO_LEVER', {
+        faculty: 'work', blocking: true,
+        why: `the same stall ${this.stallRepeats} times running, and nothing here can act ` +
+             `on it: ${reason}`,
+        remedy: 'a keeper restart clears keeper-local state and is worth ONE try; if the ' +
+                'same reason comes back it is deterministic, and what it needs is a ' +
+                'different room, different orders, or a fix',
+        retryAfterMs: 300_000,
+      });
+    }
   }
 
   /**
@@ -7975,6 +8059,10 @@ export class Autopilot {
     if (!isTerminalMovementReason(result?.reason)) return null;
     this.stalledSince ??= Date.now();
     this.stalledWhy = `${context} stopped: ${result.reason}`;
+    // This writes the stall directly rather than through noProgress, so it has to name its
+    // own lever — otherwise `stuck.lever` would report whatever the last ordinary stall
+    // decided, which is a stale answer to the one question a reader is asking here.
+    this.stalledLever = stallLever(this.stalledWhy);
     this.note(`${context} stopped by the local collision contract`, {
       ...detail,
       reason: result.reason,
@@ -8505,7 +8593,13 @@ export class Autopilot {
         : null,
       stalled: this.stalledSince
         ? { since_seconds: Math.round((Date.now() - this.stalledSince) / 1000),
-            idle_passes: this.idlePasses, why: this.stalledWhy }
+            idle_passes: this.idlePasses, why: this.stalledWhy,
+            // WHAT COULD ACT ON IT, AND WHETHER THE SENTENCE IS REPEATING. Without these
+            // two a reader can see that a number is going up and cannot tell a character
+            // working through a hard room from one reciting the same failure. `lever: null`
+            // with a high `repeats` is the shape that ran for 27 minutes unseen.
+            lever: this.stalledLever ?? null,
+            repeats: this.stallRepeats ?? 0 }
         : false,
       // THE SAME FACT AGAIN, IN THE ONE SHAPE EVERY READER CAN USE.
       //
@@ -8518,7 +8612,9 @@ export class Autopilot {
       stuck: this.stalledSince
         ? { since: this.stalledSince,
             seconds: Math.round((Date.now() - this.stalledSince) / 1000),
-            why: this.stalledWhy ?? null }
+            why: this.stalledWhy ?? null,
+            lever: this.stalledLever ?? null,
+            repeats: this.stallRepeats ?? 0 }
         : null,
       // THE SAME TWO FACTS AS `stalled`, AS DATA RATHER THAN AS A SENTENCE.
       //

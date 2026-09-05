@@ -540,3 +540,64 @@ the stall detector quiet, so the character is invisible to `m59-status.mjs`, to 
 and to the pulse, for exactly as long as it takes to die. `m59-retreat-refusal-test.mjs` (32)
 checks the rule over the whole file rather than per site, and checks that the two behaviour
 trees agree — in a selector, `SUCCESS` is the tree's version of `HANDLED`.
+
+## The detector saw it for 27 minutes and had nothing to pull
+
+`noProgress(why)` increments a counter, sets `stalledSince` at five passes, and has exactly
+one keeper-side lever: `wantsBlink`, armed when the reason matches `STUCK_IN_PLACE` — a regex
+over the English sentence. Everything else got **no lever at all**, and nothing said so.
+
+That is the shape of the 27-minute wedge in issue #50: `stuck.since` advancing, `idle_passes`
+climbing past 900, `why: "a pull attempt failed transiently; retrying from the same wall"`
+recited every 1.5 seconds, in the character's own assigned farm room, with zero kills. The
+detector was working perfectly. It had nothing to pull.
+
+**There is a second lever and it is not in this file.** `m59-supervise.mjs` restarts a keeper
+stalled for eight passes, and that is a genuine lever for a *stateful* stall — one where the
+obstruction is keeper-local: `noWallRooms`, `unreachable`, `cappedRooms`, `pullFailures`, a
+stale hold. A fresh process throws all of it away and the character gets another go.
+
+It is not a lever for a **deterministic** stall, and telling them apart is the whole problem.
+A fresh keeper walks into the same room with the same orders and the same geometry and
+re-enters the loop within seconds — once every ninety seconds, for ever, each round printing
+`restarted <character>` as though something had been achieved. `m59-supervise.mjs` already
+refuses that trap twice by name (`NO_SAFE_WALL`, and a character sitting for `create weapon`
+mana), and both were found the same way: somebody noticed the log looked like work.
+
+### What changed
+
+**The lever is data.** `stallLever(why)` is the whole map from a reason to the thing that can
+act on it — today `{ blink: STUCK_IN_PLACE }` — and `null` is a legitimate, reportable
+answer. The classification of blink reasons is unchanged; what changed is that it can be
+enumerated, tested, and *reported* rather than being an implicit fall-through. An unrecognised
+reason is reported and never dropped, which is the same rule this repository applies to policy
+keys, and for the same reason: a setting that silently does nothing is how `purpose` stayed
+out of a schema for a year.
+
+**A repeat run is counted separately from idle passes.** The same sentence twice is a
+different fact from two ways of failing. A character finding a new obstacle every pass is
+working; one reciting the same sentence is in a loop its own inputs cannot leave. Only the
+second is worth declaring.
+
+**A leverless run is declared, not endured.** Past twenty repeats with no lever, the keeper
+raises `STALL_NO_LEVER` on `status.refusals` — the channel the supervisor and the fleet board
+already read as data — carrying the repeating sentence, the count and the room, said once,
+with `since` surviving, and cleared by `progress()`. `lever` and `repeats` also ride along on
+`stalled`, on `stuck`, and on the keeper process's own `/state`.
+
+**And the restart is bounded against that declaration.** `stallRestartDecision` allows two —
+the first is a real experiment, the second covers one that raced something — and then stops
+and says why, leaving the refusal standing.
+
+### What this is not
+
+It is not a cure. There is no verb in this file that fixes an unknown loop, and inventing one
+is how a fleet gets 107 room-flees and 0 kills: every one of those was a character below the
+vigor floor that fled a room it could have fought in, and the escape working better only
+converted "die where you stand" into "run for ever". Guessing at a lever for a stall nobody
+has classified would be the same mistake with a longer stride.
+
+What it fixes is that the state was **invisible**. "Stalled for 27 minutes" and "stalled for
+27 minutes with nothing that can act on it" are different facts, and only the second is an
+emergency. A character nobody can help and a character nobody can *see* look identical from
+outside, and only one of them is fixable by whoever is on shift.

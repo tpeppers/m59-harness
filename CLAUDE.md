@@ -441,6 +441,7 @@ Keepers, deaths and the numbers on the board — [`docs/m59-keeper.md`](docs/m59
 - A wedge broken by a cancel is re-issued by the next pass with the SAME inputs — 589 breaks in 93 minutes, then 18 minutes dying on one square. The arm now counts breaks at a place, `travel()` sidesteps before re-planning and gives up out loud at five, and a hurt body that cannot move swings instead.
 - A RETREAT THAT WAS REFUSED IS NOT A RETREAT. `retreat_to_inn` is off, so `retreatToSafety` returns `{arrived:false}` having moved nothing, and five callers reported `progress()` for it — which also hides the body from every stall detector. Four deaths, the last at 0.0 squares per second with the decision correct on every pass.
 - Nothing "travels closer on the next pass". `fight()` caps its own approach at 6 grid steps and returns `out_of_reach` past it, so a quarry 22 cells off is permanently unreachable; `closeOnQuarry` is the walk that promise was describing, and without a wall it is also the right one.
+- A STALL NAMES ITS LEVER AND `null` IS ONE OF THE ANSWERS. `stallLever` is the whole map; blink is the only keeper-side one, the supervisor's restart is the only other, and it fixes a keeper-local stall and re-enters a deterministic one every 90s while the log reads `restarted`. A leverless reason repeating 20 times declares `STALL_NO_LEVER`, and that bounds the restart at two.
 
 What to fight — [`docs/m59-combat.md`](docs/m59-combat.md):
 

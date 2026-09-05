@@ -726,3 +726,41 @@ straight into an unconditional `progress()`, and the two behaviour trees (`m59-b
 `m59-bt-farm.mjs`) agree, because a selector's `SUCCESS` is the tree's version of `HANDLED` and
 landing them otherwise would re-open the same grave. **It should fail the day a caller reports
 a refused retreat as movement again.**
+
+## m59-stall-lever-test.mjs (48)
+
+**A stall has to name its lever, and "none" is an answer rather than a silence.** `noProgress`
+counted idle passes and had exactly one keeper-side lever — blink — selected by testing the
+reason *sentence* against a regex. A reason that did not match got no lever at all, and
+nothing anywhere said so: the counter went up, `stuck.since` advanced, and the character
+stood still. Measured at 27 minutes, 1,623 seconds, 943 idle passes, zero kills, in the
+character's own assigned farm room, with the detector watching all of it (issue #50,
+suggested direction 3 — the half the approach walk did not close).
+
+The second lever is outside the keeper: `m59-supervise.mjs` restarts a keeper stalled for
+eight passes. That is a real lever for a **stateful** stall, where the thing in the way is
+keeper-local — a room written off for the session, a route given up on, a square's failure
+budget. It is not one for a **deterministic** stall: a fresh keeper walks into the same room
+with the same orders and re-enters the loop in seconds, once every ninety seconds, for ever,
+each line reading `restarted <character>` as though something had happened. That file already
+refuses the same trap twice by name, for `NO_SAFE_WALL` and for a character resting up the
+mana to arm itself.
+
+Four things are pinned. `stallLever` is the whole map from a reason to the thing that can act
+on it, enumerable rather than buried in a branch, with `null` a legitimate answer — and the
+blink classification is unchanged, which is asserted in both directions so making it explicit
+cannot quietly become making it different. A **repeat run** is counted separately from idle
+passes, because a character finding a new obstacle every pass is working and one reciting the
+same sentence is in a loop its own inputs cannot leave; sixty different failures are never
+declared. A leverless run past twenty repeats **declares** `STALL_NO_LEVER` on
+`status.refusals` — once, with `since` surviving, carrying the repeating sentence and the
+room, cleared by `progress()` and by nothing else. And the fact travels: `stalled`, `stuck`
+and the keeper process's own `/state` all carry `lever` and `repeats`, asserted together,
+because a field added in one publisher and forgotten in the other is how the fleet board once
+reported `stalled: false` for a character standing in a corner for twenty minutes.
+
+The last section is the supervisor's half: `stallRestartDecision` is pure and exported, an
+undeclared stall is never rationed (this must not become a throttle on a mechanism that
+works), a declared one gets two restarts and then the truth, a *different* declared reason
+starts the count again, and a character that earns something is forgotten. **It should fail
+the day a stall reason can go unclassified again.**
