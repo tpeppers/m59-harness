@@ -925,6 +925,22 @@ The walk onto the square is the same shape `leaveVia` uses, and for the same rea
 `SomethingTryGo` (`room.kod:2777`) matches `piRow`/`piCol` against `plExits` with `=`. That
 exact square or nothing.
 
+### The wall is directed, and that is why one door is enough
+
+Measured after the fix was live, by watching a character that had got in and asking the
+geometry the question both ways round:
+
+```
+r1c19 -> r4c33   (stairs -> trapdoor)        no path, fine or coarse
+r3c34 -> r1c19   (beside the trapdoor -> stairs)   yes, 27 steps
+```
+
+**Region 3 is raised.** You can step down off it and you cannot step up onto it — exactly
+the way a fall makes a room directed in Ukgoth. So the door is needed in ONE direction, and
+a planner that asked for one in both would be wrong in an expensive way: it would send a
+character that can simply walk home hunting for a doorway instead. `sameRoomDoorPlan` is
+asymmetric because the room is.
+
 ### Three things that are easy to get wrong here
 
 - **Do not gate on `reachable`.** The obvious test is "every candidate says

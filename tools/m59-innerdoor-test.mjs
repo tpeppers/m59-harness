@@ -74,6 +74,31 @@ console.log('\nthe data: Castle Victoria is one room with a wall down it');
      anchorReach(table, 38, { row: 8, col: 32 }, { row: 4, col: 33 }) === true);
 }
 
+console.log('\nand the wall is DIRECTED, which is why one door is enough');
+{
+  // THE ASYMMETRY IS THE WHOLE SHAPE OF THIS FIX, and it was found the slow way: by watching
+  // a character that had got in fail to be pulled back out, then asking the geometry the
+  // question both ways round.
+  //
+  // Region 3 is RAISED. You can step down off it and you cannot step up onto it, exactly the
+  // way a fall makes a room directed in Ukgoth. So the door is needed in ONE direction, and a
+  // plan that asked for one in both would be wrong in an expensive way - it would send a
+  // character that can simply walk home hunting for a doorway instead.
+  const geo = sharedRoomGeometry(map.rooms[38]);
+  const walk = (a, b) => geo.path(a.row, a.col, b.row, b.col, { fine: true }).found;
+  const STAIRS = { row: 1, col: 19 }, CRATE = { row: 4, col: 33 };
+  ok('you cannot walk UP from the stairs to the trapdoor', walk(STAIRS, CRATE) === false);
+  ok('and you CAN walk down from beside the trapdoor to the stairs',
+     walk({ row: 3, col: 34 }, STAIRS) === true);
+  const out = (map.rooms[38].goExits ?? []).filter(e => e.to === 39)
+    .map(e => ({ row: e.row, col: e.col }));
+  const home = sameRoomDoorPlan(map, 38, geo, { row: 3, col: 34 }, out);
+  ok('so the way home needs no door at all',
+     home?.doors?.length === 0 && home?.walkable === true, JSON.stringify(home));
+  ok('while the way in needs exactly one',
+     sameRoomDoorPlan(map, 38, geo, STAIRS, [CRATE])?.doors?.length === 1);
+}
+
 console.log('\nsameRoomDoors finds them, and nothing else');
 {
   const doors = sameRoomDoors(map.rooms[38]);

@@ -160,7 +160,7 @@ the records it describes.
   is defensible, was the rule for as long as the file existed, and left 578 The Cragged
   Mountains 31% ridable — nothing noticed, because a track that cannot be sent still looks
   exactly like a track) and
-  `node tools/m59-innerdoor-test.mjs` (34 — **a door that leads back into the room it is
+  `node tools/m59-innerdoor-test.mjs` (38 — **a door that leads back into the room it is
   in**: that Castle Victoria is one room with a wall down it, that its trapdoor to the
   Underbasement is in a different region from every entrance so `anchorReach` honestly
   reports no walk, and that the only join is four `go` exits pointing back at room 38
