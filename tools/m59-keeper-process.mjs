@@ -2265,7 +2265,29 @@ const server = createServer(async (req, res) => {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }
             const op = String(args.op ?? '');
-            const amount = Math.floor(Number(args.amount) || 0);
+            let amount = Math.floor(Number(args.amount) || 0);
+            // BANK EVERYTHING ABOVE A WALKING FLOAT. The broker sends `keep` instead of an
+            // amount when the number could not be known where the request was built — the
+            // last step of a sell circuit, where what there is to bank is whatever the shops
+            // just paid. The purse is only a fact in this process: the broker's client is a
+            // snapshot, and the snapshot after a sale is the one from before it.
+            if (op === 'deposit' && args.keep != null && !(amount > 0)) {
+              const float = Math.max(0, Math.floor(Number(args.keep) || 0));
+              // Read the pack first. A sale that just completed has not necessarily landed in
+              // the cached inventory, and this number decides how much money moves.
+              await session.pacer.submit('read', () => c.requestInventory());
+              await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => null);
+              const purse = (c.inventory || [])
+                .filter(i => /shilling/i.test(c.rsc.get(i.nameRsc) || ''))
+                .reduce((sum, i) => sum + (i.amount ?? 1), 0);
+              amount = purse - float;
+              if (!(amount > 0)) {
+                // Not an error. A character that sold nothing has nothing to deposit, and a
+                // circuit must not stop on it.
+                json({ op, amount: 0, purse, keep: float, nothing_above_float: true, said: [] });
+                return;
+              }
+            }
             if (op !== 'balance' && !(amount > 0)) {
               json({ error: `${op || 'bank'} needs a positive amount` }, 400); return;
             }
@@ -2280,8 +2302,70 @@ const server = createServer(async (req, res) => {
             // A BALANCE IS PROSE, SENT ONCE, and a withdrawal states the amount HANDED OVER
             // rather than the new balance. So the sentences are the answer and the broker
             // parses them; this hands them over untouched rather than guessing here.
+            // `amount` IS THE ANSWER when the broker sent a float rather than a number —
+            // it is the only place that arithmetic happened, and the broker reports it back
+            // rather than re-deriving it from a snapshot that would give a different figure.
             json({ op, amount: op === 'balance' ? undefined : amount, seq: c.evSeq,
+                   ...(args.keep != null ? { keep: Math.max(0, Math.floor(Number(args.keep) || 0)) } : {}),
                    said: (after?.events ?? []).map(e => e.text).filter(Boolean) });
+            return;
+          }
+          // THE VAULT COUNTER, and the same seam as `bank` and `shop` for the same reason:
+          // depositing is a wire exchange (BP_REQ_DEPOSIT) and the broker's emulated client
+          // is a read-only snapshot, so `c.depositItems is not a function` was the whole of
+          // what a keeper-backed character could do at Obert Cair'bre's counter. The
+          // exchange happens here; the broker keeps the bookkeeping — the vault cache the
+          // economy board reads, and the ledger line.
+          //
+          // THE VAULTMAN IS RESOLVED HERE, IN THE PROCESS THAT CAN SEE THE ROOM, and not
+          // passed in as an id. Object ids are not stable across a room change, and the
+          // broker's snapshot is a frame or two old — an id that has gone stale aims a
+          // deposit at whatever now holds that number. The autopilot's own detour matches
+          // on the same two names (m59-autopilot.mjs vaultRunIfPassing), so a name the
+          // vaultman does not answer to fails identically in both places.
+          case 'vault': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const op = String(args.op ?? 'deposit');
+            const vaultman = [...(c.room?.objects?.values?.() ?? [])].find(o =>
+              /obert cair|vaultman/i.test(c.rsc.get(o.nameRsc) || '') && !(o.flags & OF.PLAYER));
+            if (!vaultman) {
+              // 409, not 400: the request is well formed and the room is wrong. A banker's
+              // absence reads as "the banker said nothing"; this says which room it looked in.
+              json({ error: 'no vaultman in this room', room: session.world?.room?.num ?? null,
+                     why: 'a deposit packet is never aimed at an inferred NPC' }, 409);
+              return;
+            }
+            const name = c.rsc.get(vaultman.nameRsc) || null;
+            if (op === 'list') {
+              // READ THE VAULT BACK BY BUYING FROM IT. A vaultman's sell list IS your own
+              // deposit, offered back at a retrieval fee — there is no "what is in my vault"
+              // packet, and nothing about a vault is ever pushed.
+              const since = c.evSeq;
+              await session.pacer.submit('buy', () => c.buy(vaultman.id));
+              const reply = await c.waitFor({ since, kinds: ['shop', 'message'],
+                timeoutMs: Number(args.timeout_ms) || 4000 }).catch(() => ({ events: [] }));
+              const shop = reply.events?.find(e => e.kind === 'shop');
+              json({ op, vaultman: name,
+                     items: (shop?.items ?? []).map(i => ({ name: i.name,
+                       amount: i.amount ?? 1, cost: i.cost ?? null })),
+                     opened: !!shop,
+                     said: (reply.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 4) });
+              return;
+            }
+            if (op !== 'deposit') {
+              json({ error: `vault op must be deposit or list, not "${op}"` }, 400); return;
+            }
+            const items = [].concat(args.items ?? []).map(String).map(x => x.trim()).filter(Boolean);
+            if (!items.length) { json({ error: 'vault deposit needs item names' }, 400); return; }
+            // depositInVault does the part that makes this trustworthy: it reads the pack,
+            // sends, reads the pack AGAIN and reports the delta. A vaultman who refuses says
+            // so out loud and returns nothing, which is indistinguishable from success on the
+            // wire — so the deposit is verified by what left the pack, never by the absence
+            // of an error.
+            const r = await skills.depositInVault(session, { vaultman: vaultman.id, items })
+              .catch(e => ({ deposited: [], error: e.message }));
+            json({ op, vaultman: name, seq: c.evSeq, ...r });
             return;
           }
           case 'trade': {

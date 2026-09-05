@@ -33,7 +33,11 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // Rooms the router cannot get to. Room 114 — the Barloque vaultman's
                       // office — was one of these for two of three couriers on 2026-09-02.
                       unreachable = new Set(),
-                      shopItems = [{ id: 7, name: 'herb' }, { id: 8, name: 'elderberry' }] } = {}) {
+                      shopItems = [{ id: 7, name: 'herb' }, { id: 8, name: 'elderberry' }],
+                      // What the vaultman does with a deposit. The default is a counter that
+                      // takes what it is offered; pass one that stores nothing to check the
+                      // step does not read that as a failure.
+                      vault = null } = {}) {
   const sent = [];
   globalThis.fetch = async (_url, opts) => {
     const body = JSON.parse(opts.body);
@@ -59,6 +63,11 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
     else if (name === 'bank') payload = { banker_said: ['Skivlat hands it over.'] };
     else if (name === 'sell_all') payload = { sold: [], not_offered: [] };
     else if (name === 'container') payload = { ok: true };
+    else if (name === 'vault') payload = vault ?? {
+      ok: true, action: 'deposit', vaultman: "Obert Cair'bre",
+      wanted: [].concat(a.items ?? []),
+      deposited: [].concat(a.items ?? []).map(n => ({ name: n, amount: 1 })),
+      refused: [], stored: [].concat(a.items ?? []).length, vaultman_said: [] };
     else payload = { ok: true };
     return { json: async () => ({ result: { content: [{ text: JSON.stringify(payload) }] } }) };
   };
@@ -240,6 +249,52 @@ console.log('\na banker refusal is prose, not an error');
   const r = await fleetScript({ name: 'poor', fleet: 'testfleet', agents: ['a1'],
     steps: [bank('withdraw', 5000)], onLog: quiet });
   ok('a refusal spoken as a sentence is caught as a failure', r.results.a1.ok === false);
+}
+
+console.log('\nthe vault step deposits, which it did not do for as long as it existed');
+{
+  // IT CALLED THE WRONG TOOL AND SAID `ok` EVERY TIME.
+  //
+  // `container` is BP_SEND_OBJECT_CONTENTS: it LOOKS INSIDE a box, and its schema is
+  // {agent, target, slot}. The vault step called it with {action:'deposit', container, items},
+  // so all three were ignored, `target` arrived undefined, the tool answered
+  // `nothing here matches "undefined"` - which is not a throw, so the catch never fired -
+  // nothing left the pack, and the step returned {ok:true, vaulted:0}. Every vault step ever
+  // run reported success having stored nothing. A silence that reads as success is this
+  // game's whole failure mode, and this was one of ours.
+  const sent = fakeBroker({ rooms: { a1: 114 } });
+  const r = await fleetScript({ name: 'deposit', fleet: 'testfleet', agents: ['a1'],
+    steps: [vault('vaultman', ['ring of invisibility'])], onLog: quiet });
+  ok('it calls `vault`, the tool that actually deposits', sent.some(c => c.name === 'vault'));
+  ok('and never `container`, which cannot', !sent.some(c => c.name === 'container'));
+  const call = sent.find(c => c.name === 'vault');
+  ok('as a deposit', call?.action === 'deposit', JSON.stringify(call));
+  ok('naming the items rather than object ids',
+     Array.isArray(call?.items) && call.items.includes('ring of invisibility'),
+     JSON.stringify(call?.items));
+  ok('the step succeeds when something was stored', r.results.a1.ok === true, r.results.a1.why);
+}
+{
+  // A PACK WITH NOTHING WORTH VAULTING IS NOT A FAILED VAULT TRIP. It is the ordinary case for
+  // a character whose loot was all sellable, and it must not stop a plan before the shops it
+  // was on its way to.
+  fakeBroker({ rooms: { a1: 114 },
+               vault: { ok: false, action: 'deposit', wanted: ['wand'], deposited: [],
+                        refused: [], stored: 0, vaultman_said: [] } });
+  const r = await fleetScript({ name: 'nothing to store', fleet: 'testfleet', agents: ['a1'],
+    steps: [vault('vaultman', ['wand'])], onLog: quiet });
+  ok('an empty deposit is still ok', r.results.a1.ok === true, r.results.a1.why);
+}
+{
+  // A VAULTMAN WHO REFUSES IS NOT AN EMPTY PACK, and the two must not report the same thing.
+  // He says why out loud and returns nothing, which on the wire looks exactly like success.
+  fakeBroker({ rooms: { a1: 114 },
+               vault: { ok: false, action: 'deposit', wanted: ['wand'], deposited: [],
+                        refused: ['wand'], stored: 0,
+                        vaultman_said: ['I have no room for that.'] } });
+  const r = await fleetScript({ name: 'refused', fleet: 'testfleet', agents: ['a1'],
+    steps: [vault('vaultman', ['wand'])], onLog: quiet });
+  ok('a refusal is reported as a failure', r.results.a1.ok === false, JSON.stringify(r.results.a1));
 }
 
 console.log('\nvault before sell, checked before anything walks');

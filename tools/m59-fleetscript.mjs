@@ -641,21 +641,32 @@ async function runStep(ctx, agent, step, state) {
       };
     }
 
+    // THIS STEP STORED NOTHING FOR AS LONG AS IT EXISTED, and said `ok` every time.
+    //
+    // It called `container` with `action:'deposit'`, and `container` has no deposit: it is
+    // BP_SEND_OBJECT_CONTENTS, it LOOKS INSIDE a box, and its schema is {agent, target, slot}.
+    // So `action`, `container` and `items` were all ignored, `target` arrived undefined, and
+    // the tool answered `nothing here matches "undefined"` - which is not a throw, so the
+    // catch never fired, `r.error` stayed undefined, nothing left the pack, and the step
+    // returned `{ok:true, vaulted:0}`. A silence that reads as success is this game's whole
+    // failure mode and this was one of ours.
+    //
+    // `vault` is the tool that actually deposits. It resolves the vaultman off the live room
+    // in the keeper process rather than trusting a name from here, and it reports what left
+    // the pack rather than what it sent - so the arithmetic below is the tool's now, and this
+    // step is thin on purpose.
     case 'vault': {
-      const inv = await call('inventory', { agent }, 60_000).catch(() => ({ items: [] }));
-      const want = (inv.items || []).filter(i =>
-        step.items.some(k => String(i.name || '').toLowerCase().includes(String(k).toLowerCase())) &&
-        !/shilling/i.test(i.name || ''));      // money has zero bulk and cannot be vaulted
-      if (!want.length) return { ok: true, vaulted: 0, why: 'nothing worth vaulting' };
-      const r = await call('container', {
-        agent, action: 'deposit', container: step.vaultman,
-        items: want.map(i => i.id).filter(Boolean),
-      }, 300_000).catch(e => ({ error: e.message }));
-      const after = await call('inventory', { agent }, 60_000).catch(() => ({ items: [] }));
-      // Judged by what LEFT the pack. A vaultman that will not take something says so to the
-      // room, and a deposit that moves nothing looks like success on the wire.
-      const gone = want.filter(w => !(after.items || []).some(i => i.id === w.id)).length;
-      return { ok: true, vaulted: gone, offered: want.length, note: r?.error };
+      const r = await call('vault', { agent, action: 'deposit', items: step.items },
+                           300_000).catch(e => ({ error: e.message }));
+      const stored = Number(r?.stored ?? 0);
+      // ok when something was stored OR when there was nothing to store. A pack with no
+      // keepers in it is not a failed vault trip, and must not stop a circuit.
+      const nothingToStore = !stored && !(r?.wanted?.length && r?.refused?.length);
+      return { ok: stored > 0 || (!r?.error && nothingToStore),
+               vaulted: stored, offered: (r?.wanted ?? step.items ?? []).length,
+               deposited: r?.deposited ?? [], refused: r?.refused ?? [],
+               said: r?.vaultman_said ?? [],
+               why: r?.error ?? r?.reason ?? r?.note ?? null };
     }
 
     case 'act': {

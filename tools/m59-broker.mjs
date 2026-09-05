@@ -2414,6 +2414,12 @@ class KeeperProxy {
   async bankOp(op, amount, opts = {}) {
     return keeperAction(this.name, this._index, 'bank', { op, amount, ...opts });
   }
+  // The vault counter, third of the same kind. `depositItems` is a mutation and this proxy
+  // is a snapshot, so the deposit runs in the keeper; the vaultman is resolved THERE, off
+  // the live room, because an object id from a snapshot can already name something else.
+  async vaultOp(op, opts = {}) {
+    return keeperAction(this.name, this._index, 'vault', { op, ...opts });
+  }
   // THE BOOKKEEPING HALF, WHICH IS NOT A WIRE CALL AND SO BELONGS HERE. Session has both of
   // these and the proxy had neither, so `bank` would have thrown `s.bankKnown is not a
   // function` one line past the `c.balance` failure. They read and write the shared bank
@@ -11369,22 +11375,64 @@ const TOOLS = [
       agent: { type: 'string' },
       action: { type: 'string', enum: ['balance', 'deposit', 'withdraw'] },
       amount: { type: 'number', description: 'shillings; required for deposit and withdraw' },
+      keep: { type: 'number',
+        description: 'deposit only: bank everything ABOVE this walking float instead of a fixed ' +
+          'amount. Use it when the purse is not knowable when the request is built — the end of a ' +
+          'sell circuit, where what there is to bank is whatever the shops just paid.' },
     }, required: ['agent', 'action'] },
     run: async (a) => {
       const s = session(a.agent), c = s.need();
-      if (a.action !== 'balance' && !(num(a.amount, 0) > 0))
-        throw new Error(`${a.action} needs a positive amount`);
-      const amount = Math.floor(num(a.amount, 0));
+      // THE AMOUNT AT THE END OF A SELL RUN IS NOT KNOWABLE WHEN THE RUN IS PLANNED.
+      //
+      // A multi-stop circuit is a fixed list of steps built before the first shop is reached,
+      // and "bank the surplus" is the last of them — so the number cannot be in it. Writing
+      // one in anyway means banking a guess: too high and the deposit is refused for the whole
+      // trip's takings, too low and the rest is still in the pack when the character dies on
+      // the way home, which is the entire thing banking exists to prevent. `keep` moves the
+      // arithmetic to the counter, where the purse is a fact.
+      //
+      // A purse at or below the float is not an error — it is the ordinary case for a
+      // character that sold nothing — so it returns saying so rather than throwing.
+      const proxiedSession = s instanceof KeeperProxy ? s : null;
+      const float = a.keep == null ? null : Math.max(0, Math.floor(num(a.keep, 0)));
+      let amount = Math.floor(num(a.amount, 0));
+      // AND THE PURSE IS ONLY A FACT IN THE PROCESS HOLDING THE SOCKET. On a keeper-backed
+      // character `c` is a snapshot, and the snapshot a sell circuit leaves behind is the one
+      // from before the last shop paid — so subtracting here would bank the takings of the
+      // stop before this one. The keeper computes it against its own inventory; this branch
+      // is for a direct session, where `c` IS the client.
+      if (a.action === 'deposit' && float != null && !(amount > 0) && !proxiedSession) {
+        const purse = purseAmount(c);
+        amount = Math.floor(purse - float);
+        if (!(amount > 0))
+          return { action: 'deposit', amount: 0, deposited: false, purse, keep: float,
+                   banker_said: [],
+                   note: `the purse holds ${purse} and the walking float is ${float}, so there is ` +
+                         'nothing above it to bank. Not an error: a character that sold nothing ' +
+                         'has nothing to deposit.' };
+      }
+      if (a.action !== 'balance' && !(amount > 0) && !(float != null && proxiedSession))
+        throw new Error(`${a.action} needs a positive amount` +
+          (a.action === 'deposit' ? ', or a `keep` float to bank everything above' : ''));
       // THE COUNTER IS A WIRE EXCHANGE, AND ON A KEEPER-BACKED CHARACTER THE WIRE IS NOT
       // HERE. `c` is a /state snapshot with no balance/deposit/withdraw, so this threw
       // `c.balance is not a function` for every character in the fleet — discovered at the
       // First Royal Bank of Tos after walking one across the map to reach it. The keeper
       // runs the exchange; the bookkeeping below is unchanged.
-      const proxied = s instanceof KeeperProxy ? s : null;
+      const proxied = proxiedSession;
       let said;
       if (proxied) {
-        const r = await proxied.bankOp(a.action, amount);
+        const r = await proxied.bankOp(a.action, amount, float != null ? { keep: float } : {});
         if (r?.error) throw new Error(`keeper refused: ${r.error}`);
+        // The keeper answers with the amount it actually worked out, which for a `keep`
+        // deposit is the only place the number exists. Nothing below may re-derive it.
+        if (Number.isFinite(r?.amount)) amount = Math.floor(r.amount);
+        if (r?.nothing_above_float)
+          return { action: 'deposit', amount: 0, deposited: false, purse: r.purse ?? null,
+                   keep: float, banker_said: [],
+                   note: `the purse holds ${r.purse ?? '?'} and the walking float is ${float}, so ` +
+                         'there is nothing above it to bank. Not an error: a character that sold ' +
+                         'nothing has nothing to deposit.' };
         said = (r.said ?? []).map(String);
         // The keeper reads the same event stream Session.noteBanker writes from, so the
         // stored record still has to see these sentences to keep its arithmetic honest.
@@ -11424,6 +11472,111 @@ const TOOLS = [
           'Ko\'catan (Huital ko\'Nosak), which is a second, separate one. BARLOQUE HAS NONE — ' +
           'Setag\'lib is a compiled class that nothing ever creates. `balance` above, if present, is the last ' +
           'figure on record from tools/m59-bank.mjs rather than anything said just now.' }),
+      };
+    },
+  },
+  {
+    name: 'vault',
+    description:
+      'STORE THINGS AT A VAULTMAN, or read back what is already there. This is the other half of ' +
+      'what makes progress survive dying: a bank holds money and a vault holds OBJECTS, and ' +
+      'everything not in one of the two is lying on the floor of wherever you died.\n' +
+      'THERE IS ONE ON THE MAINLAND: Obert Cair\'bre, room 114, North Barloque. You must be ' +
+      'standing in the room with him - the deposit is relayed to what is in the room with you, so ' +
+      'anywhere else this answers "no vaultman in this room" rather than failing quietly.\n' +
+      'DEPOSITING IS VERIFIED BY WHAT LEFT THE PACK, never by the absence of an error. A vaultman ' +
+      'who will not take something says so out loud and returns nothing, which on the wire is ' +
+      'indistinguishable from a deposit that worked - so this reads the pack, sends, reads the ' +
+      'pack again, and reports the difference as `deposited`. `refused` is what he would not take.\n' +
+      'READING IT BACK IS A BUY REQUEST, and that is not a trick: a vaultman\'s sell list IS your ' +
+      'own deposit offered back at a retrieval fee. Nothing about a vault is ever pushed, and there ' +
+      'is no "what is in my vault" packet, so `list` is the only way to know - and the answer is ' +
+      'cached, so the economy board can say what a character owns without anybody walking to ' +
+      'Barloque again.\n' +
+      'ITEMS ARE MATCHED BY NAME, the same way the keeper\'s own vault detour matches its ' +
+      '`vault_items` policy. A name nothing in the pack matches is reported, not an error.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      action: { type: 'string', enum: ['deposit', 'list'], description: 'default deposit' },
+      items: { type: 'array', items: { type: 'string' },
+        description: 'names to store. Omit to use the character\'s own vault_items policy.' },
+    }, required: ['agent'] },
+    run: async (a) => {
+      const s = session(a.agent), c = s.need();
+      const action = String(a.action ?? 'deposit');
+      // THE DEPOSIT IS A WIRE EXCHANGE AND THE BROKER'S CLIENT IS A SNAPSHOT. Same seam, and
+      // the same discovered-the-hard-way reason, as `bank` and `shop`: on a keeper-backed
+      // character `c.depositItems` is not a function, and the first symptom is a character
+      // standing at the counter having stored nothing. Everything the keeper cannot know -
+      // which items were wanted - is decided here; everything it alone can see - which object
+      // is the vaultman, what the pack held before and after - is decided there.
+      const proxied = s instanceof KeeperProxy ? s : null;
+      const policyItems = (() => {
+        try {
+          const p = proxied?._state?.policy ?? s.autopilot?.policy ?? null;
+          const v = p?.vaultItems ?? p?.vault_items;
+          return Array.isArray(v) ? v.map(String) : [];
+        } catch { return []; }
+      })();
+      const given = [].concat(a.items ?? []).map(String).map(x => x.trim()).filter(Boolean);
+      const wanted = given.length ? given : policyItems;
+      if (action === 'deposit' && !wanted.length)
+        return { ok: false, action, reason:
+          'nothing to store: no `items` were given and this character\'s vault_items policy is ' +
+          'empty. A deposit with no list is not a deposit of everything - it is a mistake.' };
+
+      let r;
+      if (proxied) {
+        r = await proxied.vaultOp(action === 'list' ? 'list' : 'deposit',
+                                  action === 'list' ? {} : { items: wanted });
+        if (r?.error) return { ok: false, action, reason: r.error, room: r.room ?? null };
+      } else {
+        const vaultman = [...c.room.objects.values()].find(o =>
+          /obert cair|vaultman/i.test(c.rsc.get(o.nameRsc) || '') && !(o.flags & OF.PLAYER));
+        if (!vaultman) return { ok: false, action, room: c.room?.id ?? null,
+          reason: 'no vaultman in this room. The mainland vault is Obert Cair\'bre, room 114, ' +
+                  'North Barloque; a deposit packet is never aimed at an inferred NPC.' };
+        if (action === 'list') {
+          const since = c.evSeq;
+          await s.pacer.submit('buy', () => c.buy(vaultman.id));
+          const reply = await c.waitFor({ since, kinds: ['shop', 'message'], timeoutMs: 4000 })
+            .catch(() => ({ events: [] }));
+          const shop = reply.events?.find(e => e.kind === 'shop');
+          r = { op: 'list', opened: !!shop, vaultman: c.rsc.get(vaultman.nameRsc) ?? null,
+                items: (shop?.items ?? []).map(i => ({ name: i.name, amount: i.amount ?? 1,
+                                                       cost: i.cost ?? null })),
+                said: (reply.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 4) };
+        } else {
+          r = await skills.depositInVault(s, { vaultman: vaultman.id, items: wanted });
+          r.vaultman = c.rsc.get(vaultman.nameRsc) ?? null;
+        }
+      }
+
+      const who = proxied?._state?.character ?? c.me?.name ?? s.name ?? null;
+      if (action === 'list') {
+        // CACHED IN THE ONE PLACE THE BOARDS READ. There were two homes for this once - the
+        // keeper wrote one and the economy board read the other - so a fleet whose vaults were
+        // being read every trip rendered a column of blanks. See StorageCache.
+        if (who && r?.opened) {
+          try { storage.writeVault(who, r.items ?? [], { at: Date.now() }); }
+          catch { /* a cache that will not write must not fail the reading */ }
+        }
+        return { ok: !!r?.opened, action, vaultman: r?.vaultman ?? null,
+                 items: r?.items ?? [], count: (r?.items ?? []).length,
+                 vaultman_said: r?.said ?? [],
+                 ...(r?.opened ? {} : { note:
+                   'the vaultman did not open a list. That is what an empty vault looks like ' +
+                   'too - there is no packet that distinguishes them.' }) };
+      }
+      const deposited = r?.deposited ?? [];
+      return {
+        ok: deposited.length > 0, action: 'deposit', vaultman: r?.vaultman ?? null,
+        wanted, deposited, refused: r?.refused ?? [], vaultman_said: r?.said ?? [],
+        stored: deposited.reduce((n, d) => n + (d.amount ?? 1), 0),
+        ...(r?.error ? { error: r.error } : {}),
+        ...(deposited.length ? {} : { note: r?.reason ??
+          'nothing left the pack. Either none of the wanted names was carried, or the vaultman ' +
+          'refused them - `vaultman_said` is the only place he explains himself.' }),
       };
     },
   },
