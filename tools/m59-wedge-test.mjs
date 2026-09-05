@@ -568,5 +568,109 @@ console.log('\nthe give-up uses the ladder, and does not pin a wall in the room 
      note?.detail?.backed_off?.rung === 3, JSON.stringify(note?.detail?.backed_off));
 }
 
+// ------------------------------------------------------------------ 5. survival's own rung
+//
+// THE HOLE THIS CLOSES. `tradeInPlaceIfWedged` argues that "every rung from here is
+// movement-shaped and the body has not moved, so a swing is the only rung left that changes
+// anything" — and that was true of every rung the ladder had, because every one of them
+// tries to reach somewhere NEW. Going somewhere OLD is a different question and nothing was
+// asking it. A character wedged AND below the flee line is the 70-of-70 not-swinging death:
+// the ladder correctly rejected freeze, rest and the town trip, then traded blows with
+// something that was beating it, because the option that would have worked was withheld.
+//
+// It is OFFERED to survival rather than taking the body from it: it runs as a rung of
+// passFleeAndRest, on survival's clock, and returns false so the trade happens if it cannot
+// move. The four protected faculties keep the body throughout.
+console.log('\nthe survival ladder may back out — the flee line is not a wall to its owner');
+{
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  const out = await k.ap.backUpToUnstick('test', { owner: 'survival' });
+  ok('survival is allowed below the flee line', out.attempted === true, JSON.stringify(out));
+  ok('...and the row records who asked', out.owner === 'survival');
+}
+{
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  const out = await k.ap.backUpToUnstick('test');
+  ok('a MOVEMENT caller is still refused down there — this is the Cccc rule',
+     out.attempted === false && /survival ladder owns the body/.test(out.why));
+}
+
+console.log('\nescapeIfWedgedAndHurt — the rung itself');
+{
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);              // so wedgedInPlace() says yes
+  const near = [{ id: 7, col: 18, row: 19, nameRsc: 1 }];
+  const handled = await k.ap.escapeIfWedgedAndHurt({ near, v: { health: { value: 3, max: 22 } } });
+  ok('it handles the pass when it gets the body out', handled === true);
+  ok('the body actually moved', k.self.col !== 18 || k.self.row !== 18);
+  const n = k.notes.find(n => /backed out the way we came/.test(n.what));
+  ok('and it says so, with the health and the reach that justified it',
+     n && n.detail.in_reach === 1 && n.detail.health === '3/22', JSON.stringify(n?.detail));
+  ok('the tally counts an escape', k.ap.tally.wedge_escapes === 1);
+}
+{
+  // NOTHING IN REACH IS NOT AN EMERGENCY. Being wedged and merely hurt is the ordinary
+  // wedge, and the movement side already answers it — this rung is for being wedged while
+  // something is hitting us.
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  ok('nothing in reach: not this rung',
+     await k.ap.escapeIfWedgedAndHurt({ near: [], v: { health: { value: 3, max: 22 } } }) === false);
+}
+{
+  const k = keeper({ hp: 20, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  const near = [{ id: 7, col: 18, row: 19, nameRsc: 1 }];
+  ok('above the flee line the ordinary rungs are right, not this one',
+     await k.ap.escapeIfWedgedAndHurt({ near, v: { health: { value: 20, max: 22 } } }) === false);
+}
+{
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  k.ap.holdWorks = () => true;                     // behind a proven wall: resting is right
+  const near = [{ id: 7, col: 18, row: 19, nameRsc: 1 }];
+  ok('behind a working wall it stands down',
+     await k.ap.escapeIfWedgedAndHurt({ near, v: { health: { value: 3, max: 22 } } }) === false);
+}
+{
+  // IT MUST FALL THROUGH TO THE TRADE RATHER THAN EATING THE PASS. A back-out that cannot
+  // move is not an answer, and the swing below is still strictly better than standing there.
+  const k = keeper({ hp: 3, max: 22, retreatMoves: false, walkWorks: false, travelWorks: false,
+                     enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  k.ap.backUps = [{ room: 586, at: Date.now() }, { room: 586, at: Date.now() }];
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  const near = [{ id: 7, col: 18, row: 19, nameRsc: 1 }];
+  const handled = await k.ap.escapeIfWedgedAndHurt({ near, v: { health: { value: 3, max: 22 } } });
+  ok('it tried every rung', k.retreats.length === 1 && k.walks.length === 1 && k.travels.length === 1);
+  ok('...and reports false so the trade still happens', handled === false);
+}
+{
+  const k = keeper({ hp: 3, max: 22, enteredVia: { room: 586, from: 585, door: { col: 4, row: 30 } } });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  k.ap.policy.backUpWhenWedged = false;
+  const near = [{ id: 7, col: 18, row: 19, nameRsc: 1 }];
+  ok('back_up_when_wedged: false switches it off',
+     await k.ap.escapeIfWedgedAndHurt({ near, v: { health: { value: 3, max: 22 } } }) === false);
+  ok('...and then nothing was even attempted', k.retreats.length === 0);
+}
+// THE LADDER ASKS IT FIRST. Order is the whole point: getting out of reach beats swinging at
+// something that is beating us, and the trade is what happens when escape is impossible.
+{
+  const esc = AUTOPILOT.indexOf('await this.escapeIfWedgedAndHurt({ near, v })');
+  const trade = AUTOPILOT.indexOf('await this.tradeInPlaceIfWedged({ near, v })');
+  ok('passFleeAndRest asks escape before trade', esc > 0 && trade > 0 && esc < trade,
+     `escape@${esc} trade@${trade}`);
+}
+// AND BOTH KEYS ARE REACHABLE FROM A TOOL ARGUMENT. `trade_in_place_when_wedged` was
+// documented as a per-character switch for as long as the rung existed and was never wired
+// to anything — the exact shape of `purpose` missing from a schema for a year.
+{
+  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  for (const k of ['back_up_when_wedged', 'trade_in_place_when_wedged']) {
+    ok(`${k} is declared in the autopilot tool's schema`, BROKER.includes(`${k}: { type: 'boolean'`));
+    ok(`...and actually applied`, BROKER.includes(`a.${k} !== undefined`));
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

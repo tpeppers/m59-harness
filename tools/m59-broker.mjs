@@ -9440,6 +9440,20 @@ const TOOLS = [
       use_safe_spots: { type: 'boolean',
         description: 'fight from a wall whenever the kill would pay (default true). Turning this off ' +
           'gives up the largest survival advantage in the game and is almost never right' },
+      back_up_when_wedged: { type: 'boolean',
+        description: 'WHEN WEDGED, HURT AND IN REACH, BACK OUT THE WAY WE CAME BEFORE TRADING BLOWS ' +
+          '(default true). Every other survival rung tries to reach somewhere NEW, which is exactly ' +
+          'what is failing; the way in is validated ground by construction, so it is the one ' +
+          'direction that cannot fail for the same reason. Escalates breadcrumbs -> the square the ' +
+          'room was entered by -> back through that door. Turning it off leaves the character ' +
+          'trading blows in place, which is what it did before this existed and is how a wedged ' +
+          'character below the flee line dies' },
+      trade_in_place_when_wedged: { type: 'boolean',
+        description: 'WHEN WEDGED, HURT AND IN REACH AND THE BACK-OUT DID NOT WORK, SWING (default ' +
+          'true). The last rung: a freeze recovers no health and a rest is refused with something in ' +
+          'swing range. This key is newly WIRED — the code has read `policy.tradeInPlaceWhenWedged` ' +
+          'since the rung was written, but nothing ever set it from a tool argument, so the comment ' +
+          'promising it could be switched off per character was not true' },
       clear_weak: { type: 'boolean',
         description: 'KILL WHAT IS HOLDING THE SPAWN CAP, even when it is not what we hunt. Default ' +
           'true, and it is usually right: the cap is a room-wide TOTAL, so the creatures declined ' +
@@ -10183,6 +10197,10 @@ const TOOLS = [
       if (a.inky_reserve_floor !== undefined)
         p.policy.inkyReserveFloor = Math.max(0, Number(a.inky_reserve_floor) || 0);
       if (a.use_safe_spots !== undefined) p.policy.useSafeSpots = !!a.use_safe_spots;
+      if (a.back_up_when_wedged !== undefined)
+        p.policy.backUpWhenWedged = !!a.back_up_when_wedged;
+      if (a.trade_in_place_when_wedged !== undefined)
+        p.policy.tradeInPlaceWhenWedged = !!a.trade_in_place_when_wedged;
       // See the schema entry: clearing applies only to the assigned room, and it had no
       // way in from here at all — a `clear_weak` passed to this tool was silently dropped.
       if (a.clear_weak !== undefined) p.policy.clearWeak = !!a.clear_weak;

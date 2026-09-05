@@ -10594,15 +10594,31 @@ export class Autopilot {
    * where the survival ladder already owns the body and this would be a second opinion about
    * the same emergency.
    */
-  async backUpToUnstick(why, { advice = null, to = null } = {}) {
+  async backUpToUnstick(why, { advice = null, to = null, owner = 'movement' } = {}) {
     const s = this.s, geo = s?.world?.geometry;
     const from = this.wedgePlace();
     const t0 = Date.now();
 
-    const hp = s?.client?.vitals?.()?.health;
-    const frac = pct(hp);
-    if (frac !== null && frac < this.safety().fleeAt)
-      return { attempted: false, why: 'below the flee line — the survival ladder owns the body' };
+    // WHOSE DECISION IS THIS? It decides whether the flee line is a wall or not.
+    //
+    // A MOVEMENT caller must stop at the flee line. Below it the survival ladder owns the
+    // body, and a mover that keeps steering down there is what killed Cccc — walked out of a
+    // sanctuary at 27% against a 70% threshold and eaten in twenty-two seconds, with the
+    // keeper watching every frame.
+    //
+    // THE SURVIVAL LADDER ITSELF IS A DIFFERENT CALLER. When it asks, this walk is not a
+    // second opinion about the emergency — it IS the survival decision, chosen by the thing
+    // that owns the body, on its own clock. Refusing it there was the hole: a character
+    // wedged AND below the line is the exact 70-of-70 not-swinging death, and it was the one
+    // case in which the only remedy that could have worked was switched off. Escaping the
+    // thing that is killing you is a survival act; that it happens to be a walk is not a
+    // reason to withhold it from the ladder whose job it is.
+    if (owner !== 'survival') {
+      const frac = pct(s?.client?.vitals?.()?.health);
+      if (frac !== null && frac < this.safety().fleeAt)
+        return { attempted: false, owner,
+                 why: 'below the flee line — the survival ladder owns the body' };
+    }
 
     const rung = this.stuckRung(from);
     const tried = [];
@@ -10686,6 +10702,11 @@ export class Autopilot {
       coarse_walkable: (geo && from && typeof geo.walkable === 'function')
         ? geo.walkable(from.row, from.col) : null,
       entered_via: entryIsHere ? { door: back.door, from: back.from } : null,
+      // WHO ASKED. A back-up done for the mover and one done to get out of a fight that is
+      // killing us are the same walk and completely different evidence: `survival` rows are
+      // the ones where a character was below the flee line with something in reach, and they
+      // are the rows worth reading first.
+      owner,
       rung_allowed: rung, tried, freed,
       ended: at ? { room: at.room, square: `${at.col},${at.row}` } : null,
       monsters: near, monsters_in_room: th?.near?.length ?? null,
@@ -10702,7 +10723,7 @@ export class Autopilot {
             'square, and fix the ones that repeat',
     });
 
-    return { attempted: true, rung, tried, freed,
+    return { attempted: true, owner, rung, tried, freed,
              from: from ? `${from.col},${from.row}` : null,
              ended: at ? { room: at.room, col: at.col, row: at.row } : null };
   }
@@ -10828,6 +10849,61 @@ export class Autopilot {
            'the map is where it starts, so change that first',
     });
     return { sidestepped: true, moved, direction: d.name };
+  }
+
+  // WEDGED, HURT, AND SOMETHING IN REACH: GET OUT FIRST. TRADE ONLY IF YOU CANNOT.
+  //
+  // `tradeInPlaceIfWedged` below is right about its premise and was wrong about one word.
+  // Its argument is "every rung from here is movement-shaped and the body has not moved, so
+  // a swing is the only rung left that changes anything" — and the body not moving was TRUE
+  // of every rung the ladder had, because every one of them tries to go SOMEWHERE NEW. Going
+  // somewhere OLD is a different question, and nothing was asking it.
+  //
+  // Backing out along the way we came is the one form of distance available to a body that
+  // cannot advance: every step of it is a move the fine validator already accepted, replayed
+  // backwards, so it cannot fail for the reason the forward walk is failing. And distance is
+  // what the whole ladder below is reaching for.
+  //
+  // SO IT IS OFFERED TO THE SURVIVAL LADDER RATHER THAN TAKING THE BODY FROM IT. This runs
+  // as a rung of `passFleeAndRest`, on survival's own clock, chosen by survival — the four
+  // protected faculties exist so an unattended character still runs from a fight it is
+  // losing, and this makes that promise keepable in the one case where it was not. A wedged
+  // character below the flee line was the 70-of-70 not-swinging death: the ladder correctly
+  // rejected freeze, rest and every town trip, then traded blows with something that was
+  // beating it, because the option that would have worked was withheld from it.
+  //
+  // If it moves the body, the pass ends and the NEXT one runs the whole ladder again from a
+  // square that is not a trap — flee, rest behind a wall, town trip, all of them available
+  // again. If it does not move, nothing is lost and the trade below happens exactly as
+  // before. `back_up_when_wedged: false` switches it off per character.
+  async escapeIfWedgedAndHurt({ near = [], v = null } = {}) {
+    if (this.policy?.backUpWhenWedged === false) return false;
+    // The same gates the trade uses, and for the same reasons: above the flee line the
+    // ordinary rungs are right, and behind a working wall resting is. Deliberately NOT
+    // gated on `crowded()` — the trade refuses in a crowd because swinging in one is
+    // hopeless, but backing out the way we came is the crowd answer, not a casualty of it.
+    if (!near.length || this.hold || this.holdWorks()) return false;
+    const frac = pct(v?.health);
+    if (frac === null || frac >= this.safety().fleeAt) return false;
+    const wedge = this.wedgedInPlace();
+    if (!wedge) return false;
+
+    const out = await this.backUpToUnstick('wedged and hurt with something in reach',
+                                           { owner: 'survival' }).catch(() => null);
+    if (!out?.freed) return false;
+
+    this.tally.wedge_escapes = (this.tally.wedge_escapes || 0) + 1;
+    this.note('wedged and hurt — backed out the way we came instead of trading blows', {
+      rung: out.rung, from: out.from, ended: out.ended, in_reach: near.length,
+      health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+      flee_at: Math.round(this.safety().fleeAt * 100) + '%',
+      wedged: wedge.why, wedged_for_s: Math.round(wedge.for_ms / 1000),
+      why: 'every other rung from here tries to reach somewhere NEW, which is the thing that ' +
+           'is failing. The way we came in is validated ground by construction, so it is the ' +
+           'one direction that cannot fail for the reason the forward walk is failing',
+    });
+    this.progress('backed out of a wedge while hurt');
+    return true;
   }
 
   // WEDGED, HURT, AND SOMETHING IN REACH: TRADE IN PLACE. Asked by the ladder ahead of
@@ -13060,6 +13136,14 @@ export class Autopilot {
     // "somewhere I can heal", the nearest exit. On a body that cannot move they are all
     // the same non-answer, repeated once a pass until the character dies, which is what
     // happened on square 18,18 of room 586 for eighteen minutes. See `tradeInPlaceIfWedged`.
+    //
+    // ESCAPE IS ASKED FIRST, AND TRADING IS WHAT HAPPENS WHEN IT CANNOT. Both rungs share a
+    // premise — the body is not moving — but only one of them ever tested whether it could
+    // move BACKWARDS. The way we came in is validated ground by construction, so it cannot
+    // fail for the reason the forward walk is failing, and getting out of reach beats
+    // swinging at something that is beating us. If it moves, the pass ends here and the next
+    // one runs this whole ladder from a square that is not a trap.
+    if (await this.escapeIfWedgedAndHurt({ near, v }).catch(() => false)) return HANDLED;
     if (await this.tradeInPlaceIfWedged({ near, v }).catch(() => false)) return HANDLED;
 
     // ABOUT TO DIE. Below two hits of margin with something adjacent, withdrawing is
