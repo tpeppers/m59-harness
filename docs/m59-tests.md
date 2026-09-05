@@ -160,13 +160,30 @@ the records it describes.
   is defensible, was the rule for as long as the file existed, and left 578 The Cragged
   Mountains 31% ridable — nothing noticed, because a track that cannot be sent still looks
   exactly like a track) and
-  `node tools/m59-travel-test.mjs` (62 — **one call is the whole journey**: that a refused
+  `node tools/m59-innerdoor-test.mjs` (34 — **a door that leads back into the room it is
+  in**: that Castle Victoria is one room with a wall down it, that its trapdoor to the
+  Underbasement is in a different region from every entrance so `anchorReach` honestly
+  reports no walk, and that the only join is four `go` exits pointing back at room 38
+  (castle1.kod:88-98). It pins the plan — one door, `r9c32`, from the body — and the two
+  refusals that matter: no plan when the room declares no such door, and no plan when the
+  target snaps more than three squares onto the floor, because `nearestWalkable` searches
+  until it finds SOMETHING and an unbounded snap turns an unreachable square into a
+  different one and then succeeds at going there. It also pins that `transitOk` now answers
+  `null` rather than `false` for these rooms — `false` removes the room from the route
+  graph, which is why `travel(41)` reported no route to a basement people walk to — while a
+  room with no internal door keeps the hard refusal the bake earned. Eleven rooms declare
+  one, and that census is part of the test: it is a class, not Castle Victoria) and
+  `node tools/m59-travel-test.mjs` (71 — **one call is the whole journey**: that a refused
   doorway and an off-grid instant are re-settled and retried rather than returned, that a
   stumble is not a hop so re-settling cannot eat the room budget, that patience is bounded
   and the reason survives to the caller, that a journey whose last hop is also its last
   permitted hop reports arrival rather than "gave up", that exhausted candidate sets block
   only their exact directed hop and cannot be re-walked by the permissive route fallback,
-  and that a cancelled movement still wins. It lifts the real method out of
+  and that a cancelled movement still wins. Three cases cover the internal door: that it is
+  opened when a hop's exit cannot be walked to, that opening one is NOT a hop — the body
+  moved inside one room, so counting it would over-report every journey through such a room
+  and spend the stumble budget on progress — and that a door which will not open falls
+  through to the ordinary path rather than ending the journey. It lifts the real method out of
   `m59-broker.mjs` by brace-matching rather than
   reimplementing it, because that file cannot be imported without taking the fleet lock) and
   `node tools/m59-travelguard-test.mjs` (32 — **one character has one body**: that a second

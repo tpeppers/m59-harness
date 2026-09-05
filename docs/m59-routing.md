@@ -865,6 +865,91 @@ answer there is still to move, not to thread.
   of 49 health through rooms holding six to nine things, and it died going through. That is
   an accepted outcome of a planned trip, not a defect to engineer around.
 
+## A door that leads back into the room it is in
+
+**A room number is not necessarily one connected floor, and four rooms in this map are cut
+in two by a wall with a door in it that the router could not see.**
+
+`sameRoomIslandBridgePlan` has known the first half of this for a long time: Castle
+Victoria's *upstairs* is one `Room` object with a solid wall down it, and a player changes
+wings by going downstairs and taking the other staircase. What nothing modelled is the
+shortcut the map authors wrote directly — a `go` exit whose destination room **is this
+room**. `castle1.kod:88-98` declares four of them, each a pair one row either side of the
+wall:
+
+```
+plExits = Cons([ 9, 32, RID_CASTLE1,  7, 32, ROTATE_NONE ])    stand south, land north
+plExits = Cons([ 8, 32, RID_CASTLE1, 10, 32, ROTATE_NONE ])    stand north, land south
+```
+
+**A room graph discards a self-loop**, so no router ever planned through one. The bake was
+not wrong about any of it — room 38's floor really is 23 disconnected regions, every
+entrance (from 2, from 39, from 40) really does land in region 0, and the trapdoor down to
+the Underbasement really is at `r4c33` in region 3. `anchorReach` answered `false` from
+every square in the body, correctly: **there is no walk.** There is a door.
+
+What that cost: `transitOk` refused room 38 for the pair `39 -> 41`, which removes the room
+from the route graph entirely, so `travel(41)` reported *no route* to a basement people walk
+to every day. Where a route did survive, the mover picked the trapdoor, could not reach it,
+and ground against the internal wall until the job timed out. That is the crate errand's
+whole failure — and it is why the fleet has never been able to work the castle's ground
+floor, because every side room off that corridor is entered the same way.
+
+**It is not a Castle Victoria fact.** Eleven rooms in this map declare a door back into
+themselves, including Blackstone Keep (951) on the feast road and the Duke's Grand Ballroom
+(954).
+
+### It cannot be `leaveVia`, and the reason is in `UtilGoToSquare`
+
+A `go` ends in `UtilGoNearSquare`, which branches on whether the destination room is the one
+the body is already in (`util.kod:116`):
+
+```
+if Send(what,@GetOwner) = where     ->  Send(where,@SomethingMoved, ...)
+else                                ->  Send(where,@NewHold, ...)
+```
+
+Only the second is a room change. **A same-room door takes the first branch, so no
+`room-entered` ever arrives** — and `leaveVia` waits for exactly that, with a four-second
+timeout. Routing an internal door through it would have called a door that worked a door
+that failed, every single time.
+
+So `crossSameRoomDoor` confirms by **position**, and confirms *loosely* on purpose: the
+server does not put the body on the square the exit names. `UtilGoNearSquare` spirals
+outward and takes the first square that accepts, which is the same reason CLAUDE.md says
+that call never says no. Landing within two squares of the stated arrival is the door having
+worked; landing where it started is the door not having fired — and a refusal
+(`user_cant_go`) is a *sentence*, not an error, like everything else here.
+
+The walk onto the square is the same shape `leaveVia` uses, and for the same reason:
+`SomethingTryGo` (`room.kod:2777`) matches `piRow`/`piCol` against `plExits` with `=`. That
+exact square or nothing.
+
+### Three things that are easy to get wrong here
+
+- **Do not gate on `reachable`.** The obvious test is "every candidate says
+  `reachable: false`", and `exits()` says in as many words why it is wrong: a `go` square IS
+  the door tile, is a pocket by design, and is *very often* false while the door is
+  perfectly usable. Ask `planSameRoomDoors`, which answers whether the body can walk to any
+  of the squares and returns `null` before touching geometry for the 253 rooms that declare
+  no internal door.
+- **A door is not a hop.** It moved the body inside one room; the route is unchanged. Count
+  it and every journey through such a room over-reports its length and spends the stumble
+  budget on progress.
+- **Bound the snap to the floor.** `nearestWalkable` searches until it finds *something*, so
+  an unbounded snap does not fail on an unreachable target — it silently becomes a different
+  square and then succeeds at going there. A doorway pocket is one or two squares from real
+  floor; three is the limit.
+
+`transitOk` now answers `null` — this module's word for "the table cannot say" — rather than
+`false` for a room that declares such a door, and only for a pair the region test just
+refused. The rule it is following is the one already written beside its other `null`s: **a
+bake must never be the thing that makes a doorway disappear.** Every other room keeps the
+hard refusal, which is what stops this resurrecting the stranded exits the bake exists to
+rule out.
+
+`node tools/m59-innerdoor-test.mjs` (34) pins the data, the plan and both refusals.
+
 ## Two rules of the road in a one-square pipe
 
 Both from the operator, 2026-09-01, after tour 6 of the shadow fleet timed out seven legs in

@@ -108,7 +108,31 @@ function fakeSession({ rooms = [1, 2, 3, 4], script = [], startAt = 0,
       if (outcome) { s.at += 1; return { left: true, used_exit: { stand_on: { col: 1, row: 1 } } }; }
       return { left: false, reason: 'no floor anywhere on the north boundary' };
     },
+
+    // A DOOR THAT LEADS BACK INTO THE ROOM IT IS IN. `travel` asks for one whenever a hop's
+    // exit candidates cannot be walked to, because a room number is not necessarily one
+    // connected floor — Castle Victoria's is 23 regions and its trapdoor to the
+    // Underbasement is on the far side of an internal wall.
+    //
+    // Null is "this room declares none", which is 253 of the map's 264 rooms and every
+    // other case in this file, so nothing below changes shape. `doorPlan` scripts one.
+    planSameRoomDoors() { return s.doorPlan ?? null; },
+    async crossSameRoomDoor(door) {
+      s.doorsCrossed.push(door);
+      const outcome = s.doorScript.length ? s.doorScript.shift() : true;
+      if (outcome === 'cancelled') return { crossed: false, cancelled: true };
+      if (outcome === true) {
+        // It moved the body inside one room. Nothing about the ROUTE changed — which is the
+        // property the test cares about — so the fixture's room index must not advance.
+        s.doorPlan = null;            // the far side is where the candidates are reachable
+        return { crossed: true, at: { row: door.arriveRow, col: door.arriveCol } };
+      }
+      return { crossed: false, reason: outcome || 'go_did_nothing' };
+    },
   };
+  s.doorsCrossed = [];
+  s.doorScript = [];
+  s.doorPlan = null;
   return s;
 }
 
@@ -144,6 +168,51 @@ const BARRED_ON_ENTRY = /guardian angel holds you back/i;
 const travel = new Function('orderExits', 'BARRED_ON_ENTRY',
   `return ({ ${travelSrc} }).travel`)((c) => c, BARRED_ON_ENTRY);
 
+
+// ---------------------------------------------------------------------------
+console.log('an internal door is opened when the exit cannot be walked to');
+{
+  // THE CASTLE VICTORIA CASE, in miniature. The last hop's exit is real, published and
+  // correctly baked, and no body in this room can walk to it: it is on the other side of an
+  // internal wall, and the only way through is a `go` exit that leads back into the same
+  // room. Nothing planned through one before, because a room graph discards a self-loop.
+  const s = fakeSession({ rooms: [1, 2, 3] });
+  s.doorPlan = { doors: [{ row: 9, col: 32, arriveRow: 7, arriveCol: 32 }], walkable: false };
+  const r = await travel.call(s, 3, {});
+  ok('the journey still arrives', r.arrived === true, JSON.stringify(r).slice(0, 160));
+  ok('the door was opened once', s.doorsCrossed.length === 1, String(s.doorsCrossed.length));
+  ok('and it was the square the plan named',
+     s.doorsCrossed[0]?.row === 9 && s.doorsCrossed[0]?.col === 32);
+  // A DOOR IS NOT A HOP. It moved the body inside one room, so the route is unchanged and
+  // the hop count must not include it — if it did, every journey through such a room would
+  // over-report its length and the stumble budget would be spent on progress.
+  ok('the door did not count as a hop', r.hops === 2, `hops=${r.hops}`);
+  ok('and it is on the record as an internal door',
+     (r.log ?? []).some(l => l.via === 'internal door'), JSON.stringify(r.log));
+}
+
+{
+  // A DOOR THAT WILL NOT OPEN MUST NOT END THE JOURNEY. The candidates are still there to
+  // be tried, and a refusal that never sent a packet at the boundary is not evidence that
+  // the boundary is shut — so travel falls through to the ordinary path rather than
+  // returning. Here the ordinary path works, and the journey completes.
+  const s = fakeSession({ rooms: [1, 2] });
+  s.doorPlan = { doors: [{ row: 9, col: 32, arriveRow: 7, arriveCol: 32 }], walkable: false };
+  s.doorScript = ['not_on_door_square'];
+  const r = await travel.call(s, 2, {});
+  ok('a refused door does not fail the journey', r.arrived === true);
+  ok('and the refusal is on the record',
+     (r.log ?? []).some(l => l.via === 'internal door' && l.ok === false));
+}
+
+{
+  // Rooms with no internal door — every other case in this file — must plan nothing and
+  // cross nothing. This is the assertion that says the feature is inert by default.
+  const s = fakeSession({ rooms: [1, 2, 3, 4] });
+  const r = await travel.call(s, 4, {});
+  ok('a room with no internal door opens none', s.doorsCrossed.length === 0);
+  ok('and the journey is exactly as it was', r.arrived === true && r.hops === 3);
+}
 
 // ---------------------------------------------------------------------------
 console.log('a clean journey arrives, and counts its hops');

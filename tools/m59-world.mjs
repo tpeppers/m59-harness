@@ -222,6 +222,143 @@ function summariseScenery(list) {
 // plan only. The broker remains the authority for walking through each exact doorway.
 // Keeping it data-driven makes the rule useful for any other split room authored the
 // same way rather than baking Castle Victoria coordinates into combat code.
+// A DOOR THAT LEADS BACK INTO THE ROOM IT IS IN.
+//
+// `sameRoomIslandBridgePlan` above joins two parts of one room by going out through a
+// NEIGHBOURING room and back. Some rooms do not need the detour, because the map authors
+// wrote the shortcut directly: a `go` exit whose destination room IS this room. Castle
+// Victoria has four of them (castle1.kod:88-98), each a pair -
+//
+//     plExits = Cons([ 9, 32, RID_CASTLE1,  7, 32, ROTATE_NONE ])   south side -> north
+//     plExits = Cons([ 8, 32, RID_CASTLE1, 10, 32, ROTATE_NONE ])   north side -> south
+//
+// - one row either side of a wall, each landing two rows beyond it. They are doors through
+// an internal wall, and they are the only way between the halves of that room.
+//
+// NOTHING PLANNED THROUGH THEM, because a room graph discards a self-loop. Room 38's floor
+// is 23 disconnected regions; its entrances from rooms 2, 39 and 40 all land in region 0,
+// and the trapdoor down to the Underbasement (41) is at r4c33 in region 3. `anchorReach`
+// is false from every square in the body, and correctly so: there is no WALK. Travel to 41
+// therefore had no reachable candidate for its last hop and ground against the wall until
+// it timed out. Eleven rooms in this map carry a door back into themselves, four of them
+// splitting anchors across regions the same way.
+//
+// THE COORDINATES ARE THE KOD'S OWN. `plExits = [25, 2, RID_CASTLE1, 5, 32]` in dungeon.kod
+// is `{row:25, col:2, to:38, arriveRow:5, arriveCol:32}` in the bake, digit for digit, so
+// there is no offset to apply here - which is worth stating because almost everything else
+// about coordinates in this repository does need one.
+//
+// A PLAN ONLY, like its neighbour above. Walking each doorway stays with the mover.
+
+/**
+ * The `go` exits of this room that lead back into it.
+ *
+ * @param {object} room  a room record from the map
+ * @returns {object[]}   usable internal doors, each with its landing square
+ */
+export function sameRoomDoors(room) {
+  const num = Number(room?.num);
+  if (!Number.isFinite(num)) return [];
+  return (room?.goExits ?? []).filter(e =>
+    !e.locked && Number(e.to) === num &&
+    Number.isFinite(e.row) && Number.isFinite(e.col) &&
+    Number.isFinite(e.arriveRow) && Number.isFinite(e.arriveCol));
+}
+
+/**
+ * Which internal doors join where we are standing to any of these squares.
+ *
+ * Returns `null` when no door is needed (a plain walk reaches one of them) and equally
+ * when no sequence of doors reaches any - the two are told apart by `walkable`, because a
+ * caller must never read "no doors needed" as "go and walk it" without checking.
+ *
+ * @param {object} map
+ * @param {number} roomNum
+ * @param {object} geo        room geometry, as the MOVER enforces it (step masks attached)
+ * @param {{row:number,col:number}} from
+ * @param {{row:number,col:number}[]} targets  any one of which is good enough
+ * @param {{maxDoors?:number}} [opts]
+ * @returns {{doors:object[], target:object, walkable:boolean}|null}
+ */
+export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoors = 4 } = {}) {
+  const room = map?.rooms?.[roomNum];
+  const wanted = [].concat(targets ?? []).filter(t => Number.isFinite(t?.row) && Number.isFinite(t?.col));
+  if (!room || !geo || !from || !wanted.length) return null;
+  const doors = sameRoomDoors(room);
+  if (!doors.length) return null;
+
+  // SNAPPING TO THE FLOOR IS BOUNDED, and its neighbour above does not bound it.
+  //
+  // A `go` square is very often a pocket the coarse grid calls unwalkable — that is what
+  // makes the snap necessary — but `nearestWalkable` searches until it finds something, so
+  // an unreachable target does not fail, it silently becomes a DIFFERENT PLACE and the plan
+  // then succeeds at going somewhere nobody asked for. A doorway pocket is one or two
+  // squares from real floor; anything further away is not the square that was named.
+  const SNAP = 3;
+  const onFloor = p => {
+    if (geo.walkable(p.row, p.col)) return { row: p.row, col: p.col };
+    const near = geo.nearestWalkable(p.row, p.col);
+    if (!near) return null;
+    return (Math.abs(near.row - p.row) <= SNAP && Math.abs(near.col - p.col) <= SNAP)
+      ? { row: near.row, col: near.col } : null;
+  };
+  const canWalk = (a, b) => {
+    if (!a || !b) return false;
+    if (a.row === b.row && a.col === b.col) return true;
+    return geo.path(a.row, a.col, b.row, b.col, { fine: true }).found;
+  };
+
+  // A DOOR SQUARE IS OFTEN NOT WALKABLE IN THIS ROOM'S OWN GRID, and that must not read as
+  // "cannot reach the door". It is the doorway tile - a pocket by design, which is what
+  // `exits()` already says about every `go` square - and the mover leans into it from the
+  // square beside it against the fine BSP. So reaching any neighbour counts as reaching it.
+  const reachesDoor = (origin, door) => {
+    if (canWalk(origin, { row: door.row, col: door.col })) return true;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const p = { row: door.row + dr, col: door.col + dc };
+      if (geo.walkable(p.row, p.col) && canWalk(origin, p)) return true;
+    }
+    return false;
+  };
+
+  const start = onFloor(from);
+  if (!start) return null;
+  const goals = wanted.map(t => ({ want: t, at: onFloor(t) })).filter(g => g.at);
+  if (!goals.length) return null;
+  const arrived = origin => goals.find(g => canWalk(origin, g.at)) ?? null;
+
+  const here = arrived(start);
+  if (here) return { doors: [], target: here.want, walkable: true };
+
+  // Breadth first over LANDINGS, so the plan that uses fewest doors wins. The state is the
+  // square a door put us on; a door is never taken twice in one plan, which bounds this at
+  // the number of doors in the room and stops a pair of doors facing each other looping.
+  const seen = new Set();
+  let frontier = [{ at: start, used: [] }];
+  for (let depth = 0; depth < maxDoors && frontier.length; depth++) {
+    const next = [];
+    for (const node of frontier) {
+      for (const door of doors) {
+        const key = `${door.row},${door.col}`;
+        if (node.used.some(d => d.row === door.row && d.col === door.col)) continue;
+        if (!reachesDoor(node.at, door)) continue;
+        const landing = onFloor({ row: door.arriveRow, col: door.arriveCol });
+        if (!landing) continue;
+        const landKey = `${landing.row},${landing.col}`;
+        if (seen.has(landKey)) continue;
+        seen.add(landKey);
+        const used = [...node.used, door];
+        const done = arrived(landing);
+        if (done) return { doors: used, target: done.want, walkable: false };
+        next.push({ at: landing, used });
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
 export function sameRoomIslandBridgePlan(map, roomNum, geo, from, target) {
   const room = map?.rooms?.[roomNum];
   if (!room || !geo || !from || !target) return null;
@@ -1243,7 +1380,29 @@ export class World {
       // the Sentinel doorway in 83 steps whose FIRST move is a fall, so the crossing the
       // fleet makes every lap was refused by a table that had walked it.
       if (anchorReach(table, room, inA, outA)) return true;
-      return sameRegion(table, room, inA, outA);
+      const joined = sameRegion(table, room, inA, outA);
+      if (joined !== false) return joined;
+      // A ROOM WITH A DOOR INTO ITSELF IS ONE THE BAKE CANNOT ANSWER FOR.
+      //
+      // The flood that assigns regions walks the floor. An internal `go` exit is not floor
+      // - it is a teleport from one square to another inside the same room - so the two
+      // halves of Castle Victoria are two regions in the table and joined in the world.
+      // `false` here is therefore a refusal on the strength of a model that does not
+      // represent the mechanism, and it is the strongest possible refusal: it removes the
+      // room from the route graph, so `travel(41)` answered "no route" about a basement
+      // people walk to, and the mover never got the chance to open the door.
+      //
+      // `null` is this module's word for "the table cannot say", it is already what an
+      // unbaked room and a missing anchor return, and the rule beside them is the one that
+      // applies here too: a bake must never be the thing that makes a doorway disappear.
+      // The mover then plans the door for real, against live geometry, in
+      // `planSameRoomDoors` - which can fail, and fails having tried.
+      //
+      // Narrow on purpose. It only softens the answer for a room that actually declares a
+      // door back into itself (eleven in this map) and only for a pair the region test
+      // just refused; every other room keeps the hard `false` the bake earned.
+      const here = this.map?.rooms?.[room];
+      return sameRoomDoors(here).length ? null : false;
     };
   }
 

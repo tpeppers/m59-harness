@@ -18,7 +18,7 @@ import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
 import { describeObject, affordances, OF, blocksMovement, prepareActTarget } from './m59-parse.mjs';
 import { World, spreadEdges, boundedSilentGo, boundedRegionEntry,
-         doorSettleMs, remainingDoorSettle } from './m59-world.mjs';
+         doorSettleMs, remainingDoorSettle , sameRoomDoorPlan} from './m59-world.mjs';
 import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPath, buildReverseEdges }
          from './m59-map.mjs';
 import { CLIENT_FINENESS, elideLoops, protocolToClient, loadRoo, buildAllRoomGeometry, sharedRoomGeometry,
@@ -8118,6 +8118,107 @@ class Session {
   // the raw-grid fallback, which was a beeline in a 50-second loop around an await.
   // COORDINATE CONTRACT: exit squares are named `{col,row}`; `fine_stand_on`,
   // `edge_target`, and fine-path points are named `{x,y}` in kod wire units.
+  // TAKE A DOOR THAT LEADS BACK INTO THE ROOM IT IS IN.
+  //
+  // This is `leaveVia`'s twin for the one exit kind that does not leave. Castle Victoria
+  // (castle1.kod:88-98) carries four of them, each a pair of squares one row either side
+  // of an internal wall, and they are the only way between the halves of that room.
+  //
+  // IT CANNOT BE `leaveVia`, AND THE REASON IS IN UtilGoToSquare (util.kod:116). A `go`
+  // ends in `UtilGoNearSquare`, which branches on whether the destination room is the one
+  // the body is already in:
+  //
+  //     if Send(what,@GetOwner) = where     -> Send(where,@SomethingMoved, ...)
+  //     else                                -> Send(where,@NewHold, ...)
+  //
+  // Only the second is a room change. A same-room door takes the first branch, so no
+  // room-entered ever arrives - and `leaveVia` waits for exactly that, with a 4s timeout.
+  // It would have called a door that worked a door that failed, every time.
+  //
+  // So this confirms by POSITION, and it confirms LOOSELY on purpose: the server does not
+  // put the body on the square the exit names. `UtilGoNearSquare` spirals outward from it
+  // and takes the first square that accepts, which is the same reason CLAUDE.md says that
+  // call never says no. Landing within two squares of the stated arrival is the door
+  // having worked; landing where we started is it not having fired.
+  //
+  // The walk onto the door square is `walkTo` plus a fine lean, the same shape `leaveVia`
+  // uses and for the same reason: `SomethingTryGo` (room.kod:2777) matches piRow/piCol
+  // against plExits with `=`, so it is that exact square or nothing, and a `go` exit's own
+  // square is very often a pocket the coarse grid calls unreachable.
+  async crossSameRoomDoor(door, { movementGeneration = this.movementGeneration,
+                                  controlToken } = {}) {
+    const c = this.need();
+    const roomBefore = Number(this.world?.room?.num ?? NaN);
+    const before = await this.confirmPosition();
+    const walked = await this.walkTo(door.col, door.row,
+                                     { movementGeneration, controlToken, clearance: 1 })
+                             .catch(error => ({ arrived: false, reason: error.message }));
+    if (walked?.left_room)
+      return { crossed: false, reason: 'the room changed while walking to the internal door' };
+    if (isTerminalMovementReason(walked?.reason))
+      return { crossed: false, reason: walked.reason, note: walked.note };
+
+    let at = await this.confirmPosition();
+    if (at && (at.col !== door.col || at.row !== door.row)) {
+      const half = KOD_FINENESS >> 1;
+      const lean = await this.stepFine(door.col * KOD_FINENESS + half,
+                                       door.row * KOD_FINENESS + half)
+                             .catch(error => ({ moved: false, reason: error.message }));
+      if (isTerminalMovementReason(lean?.reason))
+        return { crossed: false, reason: lean.reason, note: lean.note };
+      at = await this.confirmPosition();
+    }
+    if (!at) return { crossed: false, reason: 'position_confirmation_timeout',
+                      note: 'no `go` was sent, because the square under the body was unknown' };
+    if (at.col !== door.col || at.row !== door.row)
+      return { crossed: false, reason: 'not_on_door_square',
+               note: `stood at r${at.row}c${at.col}, and the door is matched on exactly ` +
+                     `r${door.row}c${door.col}` };
+
+    if (this.movementWasCancelled(movementGeneration, controlToken))
+      return { crossed: false, cancelled: true };
+    const since = c.evSeq;
+    await this.pacer.submit('move', () =>
+      this.movementWasCancelled(movementGeneration, controlToken) ? false : c.go());
+    // The door announces itself - room.kod sends room_door_was_opened before it moves the
+    // body - but the announcement is not the move, and a refusal (user_cant_go) is a
+    // message too. The position is the fact; the sentences are evidence for a refusal.
+    await new Promise(resolve => setTimeout(resolve, DOOR_SETTLE_MS));
+    const after = await this.confirmPosition();
+    const said = c.eventsSince(since).filter(e => e.text).map(e => String(e.text)).slice(0, 4);
+    const roomAfter = Number(this.world?.room?.num ?? NaN);
+    if (Number.isFinite(roomBefore) && Number.isFinite(roomAfter) && roomAfter !== roomBefore)
+      return { crossed: false, left_room: true, said,
+               reason: `an internal door moved the body to room ${roomAfter}`,
+               note: 'the map calls this exit same-room; it is not, and the bake is wrong' };
+    if (!after) return { crossed: false, reason: 'position_confirmation_timeout', said,
+                         note: 'the `go` was sent and where it left the body is unknown' };
+    const near = Math.abs(after.row - door.arriveRow) <= 2 &&
+                 Math.abs(after.col - door.arriveCol) <= 2;
+    if (near) return { crossed: true, at: { row: after.row, col: after.col }, said };
+    const moved = !before || after.row !== before.row || after.col !== before.col;
+    return { crossed: false, at: { row: after.row, col: after.col }, said,
+             reason: moved ? 'landed_off_target' : 'go_did_nothing',
+             note: moved
+               ? `expected to land near r${door.arriveRow}c${door.arriveCol}`
+               : 'the body did not move; a refused `go` says so in prose and nothing else' };
+  }
+
+  // WHICH INTERNAL DOOR, IF ANY, JOINS US TO ONE OF THESE SQUARES. Thin: the search is
+  // `sameRoomDoorPlan` in m59-world.mjs, which is pure and tested offline. This only
+  // supplies the three live things it needs - the map, the geometry the MOVER enforces,
+  // and where the body actually is.
+  planSameRoomDoors(targets) {
+    try {
+      const room = this.world?.room;
+      const geo = this.world?.geometry;
+      const me = this.client?.self ?? this.c?.self ?? null;
+      if (!room || !geo || !me) return null;
+      return sameRoomDoorPlan(this.world.map, Number(room.num), geo,
+                              { row: me.row, col: me.col }, targets);
+    } catch { return null; }
+  }
+
   async leaveVia(exit, { movementGeneration = this.movementGeneration, controlToken,
                          expectedRoomId = null } = {}) {
     // ROUTE AROUND THE PART OF THIS BOUNDARY THAT LEADS SOMEWHERE ELSE.
@@ -11140,6 +11241,60 @@ class Session {
                      of: candidates.length,
                      note: 'crossing anyway by the ordinary ordering — a wrong side is ' +
                            'recoverable, a refused boundary is not' });
+        }
+      }
+      // THE DOOR INTO THE HALF OF THIS ROOM THE EXIT IS IN.
+      //
+      // Every candidate above can be a real, published, correctly baked exit and still be
+      // one no body in this room can walk to, because a room number is not necessarily one
+      // connected floor. Castle Victoria's is 23 regions: everything arrives in region 0,
+      // and the trapdoor down to the Underbasement is in region 3. `anchorReach` says
+      // false from every square in the body and it is RIGHT - there is no walk. There is a
+      // door, four of them, declared in the map as `go` exits pointing back at room 38
+      // (castle1.kod:88-98), and nothing had ever planned through one because a room graph
+      // discards a self-loop.
+      //
+      // What that cost: travel to 41 picked the trapdoor, could not reach it, and ground
+      // against the internal wall until the job timed out - the crate errand's whole
+      // failure, and the reason the fleet has never been able to work the ground floor.
+      // Eleven rooms in this map have doors into themselves.
+      //
+      // ASK THE PLANNER, NOT `reachable`. The obvious gate here is "every candidate says
+      // reachable: false", and it is wrong: `exits()` says in as many words that a `go`
+      // square IS the door tile, is a pocket by design, and is very often false while the
+      // door is perfectly usable. Gating on it would open an internal door on ordinary
+      // crossings all over the world.
+      //
+      // `planSameRoomDoors` answers the real question — can this body WALK to any of these
+      // squares, allowing the doorway pocket — and returns `walkable: true` with no doors
+      // when it can. It also returns null before touching geometry for a room that declares
+      // no internal door, which is 253 of this map's 264, so this costs nothing anywhere
+      // else.
+      //
+      // ONE DOOR PER PASS. `continue` re-reads the room from the far side of the wall and
+      // re-plans, which is what makes a wrong guess cost a walk rather than a journey.
+      {
+        const plan = this.planSameRoomDoors(
+          candidates.map(e => e.stand_on).filter(Boolean)
+                    .map(p => ({ row: p.row, col: p.col })));
+        if (plan?.doors?.length) {
+          const door = plan.doors[0];
+          const crossed = await this.crossSameRoomDoor(door, { movementGeneration, controlToken });
+          log.push({ from: String(nextHop.from), to: nextHop.to_name, via: 'internal door',
+                     stand_on: { col: door.col, row: door.row },
+                     lands: { col: door.arriveCol, row: door.arriveRow },
+                     doors_planned: plan.doors.length,
+                     ok: crossed.crossed === true,
+                     ...(crossed.crossed ? { at: crossed.at }
+                                         : { reason: crossed.reason, note: crossed.note }) });
+          if (crossed.cancelled) return this.cancelledMovement({ log });
+          // A DOOR IS NOT A HOP. It moved the body inside one room, so nothing about the
+          // route changed and `hops` must not advance - `continue` re-reads the exits from
+          // the other side of the wall and the ordinary path takes it from there.
+          if (crossed.crossed) continue;
+          // It did not open. Fall through rather than returning: the candidates are still
+          // there to be tried, and a refusal that has never sent a packet at the boundary
+          // is not evidence that the boundary is shut.
         }
       }
       const exit = orderExits(candidates)[0];
