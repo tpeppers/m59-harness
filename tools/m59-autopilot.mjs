@@ -14329,6 +14329,37 @@ export class Autopilot {
           });
         }
         if (!preyHere || offAssignment) {
+          // MOVEMENT IS LEASED — SOMEBODY ELSE PICKS THE DESTINATION. Restored after the
+          // 2026-09-04 merge dropped it; `shouldRelocateToAssignedRoom`'s lease parameter
+          // covers the assignment, and this covers every other reason to leave a room.
+          //
+          // The suspended-journey fix was necessary and not sufficient, because homing is a
+          // NEW decision every pass rather than a resumed one. Measured on Sweetums:
+          // 587 -> 598 -> 599 -> 2 -> 39, the lease held and live the whole way, crossing
+          // the killing ground twice for nothing.
+          //
+          // Narrow on purpose. This gates the choice of WHERE TO GO and nothing else: the
+          // survival ladder, resting, fleeing, self-defence and the Underworld are all
+          // decided above this branch on a one-second clock and are untouched — they are
+          // PROTECTED_FACULTIES and no lease can take them. A leased character still eats,
+          // still fights what is in front of it, still sits down when hurt. It simply does
+          // not pick a destination while somebody else is holding its legs.
+          //
+          // The lease expires in 30s without a heartbeat, so a holder that dies gives the
+          // room back on its own rather than leaving a character stranded — which is the
+          // hazard the old advisory-only design was written to avoid.
+          if (this.facultyHeld('movement')) {
+            const owner = this.facultyOwner('movement');
+            if (this.notedMovementOwner !== owner) {
+              this.notedMovementOwner = owner;
+              this.note('movement is leased — not choosing where to go', {
+                owner, assigned_room: this.policy.assignedRoom, here: room?.num,
+                why: 'the holder decides the destination; this keeper still owns survival, ' +
+                     'resting, fighting back and the Underworld' });
+            }
+            return HANDLED;
+          }
+          this.notedMovementOwner = null;
           const known = this.preyRooms(room);
           if (known.length) {
             const target = known[0];
