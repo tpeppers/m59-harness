@@ -48,6 +48,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sharedRoomGeometry } from './m59-roo.mjs';
+import { doorsLandingOnward } from './m59-game.mjs';
 import { loadMap } from './m59-map.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 
@@ -224,6 +225,79 @@ console.log('\nBlackstone Keep: three ways out, and only one is where you came f
   // Two rather than one because the doors come in pairs on adjacent squares: one boundary,
   // two crossing squares. Either is correct. What matters is that the four belonging to the
   // towers are gone.
+}
+
+// THE CASE THE BACKTRACK MEMORY NEVER COVERED, and the one the fleet actually walks.
+//
+// `enteredVia` only fires when the hop returns to the room we came from. The real pattern is
+// a THROUGH-route: Feast Hall 953 -> Keep 951 -> Courtyard 950 -> Tos 50 -> ... -> home 39.
+// Arriving in 951 from 953 and then wanting 950, the next room is not the one we came from,
+// so nothing narrowed the six doors, the nearest one won, and it lands in a tower. Measured
+// 2026-09-05: 950>39 and 951>39 both sat at 0-7% arrival.
+//
+// `doorsLandingOnward` asks one hop further ahead: of the doors out of 951, which land
+// somewhere in 950 that can still walk to a door of 950 leading onward? The Courtyard has
+// exactly two ways on and both go to Tos, so this is a real question with a real answer.
+console.log('\nand a through-route picks the door that can still continue');
+{
+  const yard = sharedRoomGeometry(map.rooms[950]);
+  const outDoors = (map.rooms[951].goExits || []).filter(e => Number(e.to) === 950);
+  const onward   = (map.rooms[950].goExits || []).filter(e => Number(e.to) === 50);
+  ok('the Courtyard has a way onward to Tos', onward.length > 0, String(onward.length));
+
+  // CALL THE SHIPPED FUNCTION, NOT A COPY OF IT. The first version of this block
+  // reimplemented the reachability walk and then grepped m59-game.mjs to check the real one
+  // still existed — which pins the source text and not the behaviour, and quietly left out
+  // the `ok.size === asked -> null` rule that decides most real cases.
+  const wanted = doorsLandingOnward(map, 951, 950, 50);
+  ok('it has an opinion about leaving the Keep for Tos', wanted instanceof Set,
+     'null means no opinion, which would mean the trap is invisible to the router');
+  ok('and it narrows the six doors rather than keeping them all',
+     wanted && wanted.size > 0 && wanted.size < outDoors.length,
+     `kept ${wanted ? wanted.size : 'null'} of ${outDoors.length}`);
+
+  // Every door it kept must actually be able to continue; every door it dropped must not.
+  const onFloor = (r, c) => yard.walkable(r, c) ? { row: r, col: c }
+                          : (yard.nearestWalkable?.(r, c) ?? null);
+  const canContinue = (d) => {
+    const landing = onFloor(d.arriveRow, d.arriveCol);
+    if (!landing) return false;
+    return onward.some(g => {
+      const goal = onFloor(g.row, g.col);
+      return goal && yard.path(landing.row, landing.col, goal.row, goal.col, { fine: true }).found;
+    });
+  };
+  const kept    = outDoors.filter(d => wanted?.has(`${d.col},${d.row}`));
+  const dropped = outDoors.filter(d => !wanted?.has(`${d.col},${d.row}`));
+  ok('every door it kept can reach a way onward', kept.length > 0 && kept.every(canContinue),
+     `${kept.filter(d => !canContinue(d)).length} kept door(s) cannot continue`);
+  ok('and every door it dropped cannot', dropped.length > 0 && !dropped.some(canContinue),
+     `${dropped.filter(canContinue).length} dropped door(s) could have continued`);
+
+  // THE COST GUARD. This runs per hop on the one event loop all twenty-one keepers share, so
+  // a slow answer is a fleet outage, not an untidy one. Adversarial review measured the naive
+  // version at 100-400ms on real triples with 97% of calls returning null; the identical-
+  // landing early-out and the memo are what make it safe to call here at all.
+  const t0 = Date.now();
+  for (let i = 0; i < 50; i++) doorsLandingOnward(map, 951, 950, 50);
+  const warm = Date.now() - t0;
+  ok('fifty repeat asks cost almost nothing (memoised)', warm < 50, `${warm}ms for 50 calls`);
+
+  // 953 -> 951: all four of 953's doors into 951 land on one square, so the answer is
+  // decidable without a single pathfind. This is the 83% case.
+  const t1 = Date.now();
+  const noOpinion = doorsLandingOnward(map, 953, 951, 950);
+  const freeMs = Date.now() - t1;
+  ok('an identical-landing triple answers null without pathfinding',
+     noOpinion === null && freeMs < 20, `${freeMs}ms, returned ${noOpinion}`);
+
+  ok('a single-hop route never asks at all', doorsLandingOnward(map, 951, 950, null) === null);
+
+  // The only thing left that a behavioural call cannot reach: that `travel` actually WIRES
+  // this in for the hop after the current one. Everything above tests the function itself.
+  const src = readFileSync(join(HERE, 'm59-game.mjs'), 'utf8');
+  ok('and the mover asks it for the hop after this one',
+     /route\.hops\[1\]\?\.to/.test(src) && /doorsLandingOnward\(this\.world\?\.map/.test(src));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -392,6 +392,44 @@ export function isFood(name, file = ITEMS_FILE) {
   return !!foodValue(name, file);
 }
 
+// A PLURAL ON THE WIRE IS NOT A DIFFERENT FOOD, AND THIS USED TO THINK IT WAS.
+//
+// This was a raw lowercase index into the table, so it hit "spider eye" and missed
+// "spider eyes" — while `itemNameKey`, twelve lines up in this same file, exists precisely
+// to fold that and is documented as identity-not-spelling. Every other name-keyed lookup
+// for human settings goes through it; this one did not.
+//
+// WHAT IT COST, measured on prod 2026-09-05. `larderOf` (m59-skills.mjs) resolves names with
+// this function, `has_food` on the fleet row is `larderOf(c).length > 0`, and an empty larder
+// collapses the fighting floor to the resting cap — `reachableFightFloor(140, 200, 0) === 80`.
+// So a character carrying nothing but spider eyes or water skins was read as having NO food,
+// pinned at 80 vigor, and never told to eat the eighty-six meals in its pack. Four characters
+// were in that state at once; floors set to 140 on three of them reverted to exactly 80 within
+// sixty seconds and stayed there for the twenty minutes sampled. The almoner then kept dealing
+// them more of the same and reporting every delivery a success.
+//
+// BOTH SIDES HAVE TO BE NORMALISED, WHICH IS WHY THIS IS NOT A ONE-LINE SWAP. Two of the
+// table's own keys are not already canonical — "inky-cap mushroom" folds to "inky cap
+// mushroom" and "bunch of grapes" to "bunch of grape" — so normalising only the ARGUMENT
+// fixes spider eyes and breaks inky-caps, which are the most nutritious food the fleet
+// carries. The index below folds the keys too; there are no collisions among the 22 foods.
+//
+// Exact-match first, so a table key stays authoritative and this can only ever ADD hits.
+// `itemWord` handles regular plurals and a short irregular list, not every English plural:
+// "loaves of bread" still misses (it folds to "loave"). That is the same limit every other
+// caller of itemNameKey lives with, and "loaf of bread" — what the wire actually sends — works.
+let foodIndexCache = null;      // reset with the table; see loadItems' `cached`
+function foodIndex(t) {
+  if (foodIndexCache?.for === t) return foodIndexCache.byKey;
+  const byKey = new Map();
+  for (const [name, value] of Object.entries(t.food)) {
+    const key = itemNameKey(name);
+    if (key && !byKey.has(key)) byKey.set(key, value);
+  }
+  foodIndexCache = { for: t, byKey };
+  return byKey;
+}
+
 // What eating this is worth: {nutrition, filling}, where nutrition IS the vigor gained.
 // Null for anything that is not food. Rank a shop's stock on `nutrition` — the fleet's
 // constraint is the stomach and the walk to the shop, not the shillings.
@@ -412,7 +450,10 @@ export function allFoodNames(file = ITEMS_FILE) {
 export function foodValue(name, file = ITEMS_FILE) {
   const t = loadItems(file);
   if (!t?.food) return null;
-  return t.food[String(name || '').trim().toLowerCase()] || null;
+  const exact = t.food[String(name || '').trim().toLowerCase()];
+  if (exact) return exact;
+  const key = itemNameKey(name);
+  return key ? (foodIndex(t).get(key) || null) : null;
 }
 
 // The stomach admits 100 and drains ~7.2 a minute (FOOD_USE_RATE 12, player.kod:51,1347).
