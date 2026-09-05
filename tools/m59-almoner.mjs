@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MOVE REAGENTS FROM THE RICH TO THE STARVING, THEN TURN THEM INTO VIGOR.
+// MOVE FOOD AND REAGENTS FROM THE RICH TO THE STARVING, THEN TURN THEM INTO VIGOR.
 // AND MOVE SIGNET RINGS DOWNWARD, WHICH IS WORTH TEN TIMES MORE THAN ANY OF IT.
 //
 //   node tools/m59-almoner.mjs --dry-run
@@ -7,9 +7,20 @@
 //   node tools/m59-almoner.mjs --amount 10        # per reagent kind, default 10
 //   node tools/m59-almoner.mjs --floor 140        # vigor to fight above afterwards
 //   node tools/m59-almoner.mjs --max-hops 2       # locality cap for reagent handovers
-//   node tools/m59-almoner.mjs --max-deliveries 2 # per donor in one pass
+//   node tools/m59-almoner.mjs --max-deliveries 2 # per donor that has to WALK, in one pass
 //   node tools/m59-almoner.mjs --signets-only     # just the rings
-//   node tools/m59-almoner.mjs --no-signets       # just the reagents, as it used to be
+//   node tools/m59-almoner.mjs --no-signets       # just the reagents and the larders
+//   node tools/m59-almoner.mjs --room 39          # only hand out among the people standing there
+//   node tools/m59-almoner.mjs --room "Castle Victoria"   # the same, by name
+//   node tools/m59-almoner.mjs --food-amount 20   # meals per hand-over, default --amount
+//   node tools/m59-almoner.mjs --no-food          # reagents only, as it used to be
+//   node tools/m59-almoner.mjs --food-only        # larders only, skip the reagent round
+//   node tools/m59-almoner.mjs --drop-for-space   # let a full recipient drop mushrooms (OFF)
+//
+// `--food` used to mean "hand out the feast INSTEAD of the reagents, then exit". Both halves
+// now run every pass, so it is accepted and does nothing — the behaviour it used to select
+// is `--food-only`. It is spelled out here because an old command line quietly meaning
+// something new is worse than one that errors.
 //
 // THE RINGS COME FIRST AND THEY ARE NOT A SIDE ERRAND. A signet ring pays its value TEN
 // TIMES OVER to a character the server considers a newbie, and plain value to everyone
@@ -53,6 +64,14 @@ import { findPath, loadMap } from './m59-map.mjs';
 // class tree and returns the vigor a bite is worth, so a courier carrying something the
 // Duke's tables do not dispense still counts, and scenery with a promising name does not.
 import { foodValue } from './m59-items.mjs';
+// THE SHARING RULES LIVE IN A MODULE SO THEY CAN BE TESTED. This file takes the fleet run
+// lock and starts calling the broker on import, so it cannot itself be imported by a test —
+// the same reason m59-broker.mjs must not be. m59-almoner-share-test.mjs (48) pins these.
+import { orderLarder, dealShare, planFoodHandovers, alreadyStocked, invisibleFoodNames,
+         splitRoomsAmong } from './m59-almoner-share.mjs';
+// A ROOM NUMBER IS NOT A PLACE IN A SPLIT ROOM — room 39's walkable area is two components
+// joined only through room 38. Read through RoomGeometry rather than re-deriving the grid.
+import { RoomGeometry } from './m59-roo.mjs';
 import { takeRunLock } from './m59-runlock.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 
@@ -82,11 +101,48 @@ export const deliveryHops = (from, to, map = WORLD_MAP) => {
 // Keep the giver able to feed itself: handing away the last of it just moves the
 // problem. One casting is 2 of each, so this is several meals of margin.
 const KEEP_BACK = Number(arg('keep', 20));
-// --food: hand out the Duke's feast instead of reagents. See the block below.
-const FOOD = !!arg('food', false);
+// FOOD AND REAGENTS ARE ONE PASS, NOT TWO MODES. `--food` used to be a whole separate
+// errand that ran instead of the reagents and exited; the reagent round never saw a fleet
+// that had been handed a feast, and the feast round never saw one that could cook. Nothing
+// about them conflicts — they are the same donor-and-recipient shape over two different
+// surpluses — and a character short of both wants both. So both run, food first, and each
+// is a clean no-op when there is no surplus of its kind.
+//
+// Measured on prod the morning this was changed, room 39, fourteen characters: Kermit held
+// 72 spider eyes and 121 slices of pork, Fozzie 226 pork, Gonzo 100 spider eyes — 520 meals
+// standing in one room — while eight characters held NOTHING and sat at exactly 80 vigor
+// with their target dropped to 80 to match. Not one elderberry or herb in the room, so the
+// reagent round had nothing to do and the old default did nothing at all while the fleet's
+// entire food supply stood three feet away.
+const FOOD = !arg('no-food', false);
+const FOOD_ONLY = !!arg('food-only', false);
+// A meal is not a reagent and the right share is not the same number. `--amount` is per
+// reagent kind; this is per hand-over of food, and defaults to it only because one number
+// is usually enough.
+const FOOD_AMOUNT = Math.max(1, Number(arg('food-amount', AMOUNT)) || AMOUNT);
 // A stomach admits 100 and the hall's best dish fills 20, so five is one sitting. Ten
 // leaves a courier two sittings of its own before it walks back for more.
 const KEEP_FOOD = Number(arg('keep-food', 10));
+// --drop-for-space: let a failed hand-over put the recipient's mushrooms on the floor to make
+// room. OFF by default — see the note at the drop itself; it fired twice on prod, failed twice,
+// and cost real sellable stock both times.
+const DROP_FOR_SPACE = !!arg('drop-for-space', false);
+// --room: hand out only among the people standing in one room, by number or by name.
+//
+// The almoner is fleet-scoped by nature and normally should be. But "feed the fourteen
+// characters parked in Castle Victoria" is a real errand with a real reason to be narrow:
+// every hand-over inside one room is free, and the moment the set widens, the locality
+// preference is competing against hungry characters a walk away — and that walk through
+// monster rooms is the expensive and failure-prone half of this. Scoping is how you say
+// "spread what is already here" without also volunteering the room's best farmer as a
+// courier to Jasper.
+const ROOM = arg('room', null);
+const roomMatches = (r) => {
+  if (ROOM === null || ROOM === true) return true;
+  const n = Number(ROOM);
+  if (Number.isInteger(n) && String(n) === String(ROOM).trim()) return r.room_num === n;
+  return String(r.room || '').toLowerCase().includes(String(ROOM).toLowerCase());
+};
 
 let id = 0;
 async function call(name, args = {}) {
@@ -179,8 +235,19 @@ const pctOf = (r) => {
   return m ? Number(m[1]) / Number(m[2]) : null;
 };
 const inGame = (f.fleet || []).filter(x => x.in_game !== false);
-const hurt = inGame.filter(x => { const p = pctOf(x); return p !== null && p < HURT_BELOW; });
-const live = inGame.filter(x => !hurt.includes(x));
+// Scope BEFORE the health filter so the "sitting this round out" line names the people this
+// run was actually about, rather than reporting a hurt character in another town at somebody
+// who asked about one room.
+const scoped = inGame.filter(roomMatches);
+if (ROOM !== null && ROOM !== true)
+  console.log(`scoped to room "${ROOM}": ${scoped.length} of ${inGame.length} in game ` +
+              `(${[...new Set(scoped.map(x => `${x.room_num} ${x.room || ''}`.trim()))].join(', ') || 'nobody'})`);
+if (ROOM !== null && ROOM !== true && !scoped.length) {
+  console.log('nobody is standing there — nothing to do');
+  process.exit(0);
+}
+const hurt = scoped.filter(x => { const p = pctOf(x); return p !== null && p < HURT_BELOW; });
+const live = scoped.filter(x => !hurt.includes(x));
 if (hurt.length)
   console.log(`  ${hurt.length} sitting this round out below ${Math.round(HURT_BELOW * 100)}% health ` +
               `(a handover holds them inert, and an inert keeper cannot flee): ` +
@@ -190,7 +257,19 @@ if (hurt.length)
 //
 // Three steps and each is refused cleanly when it has nothing to do, so this costs a
 // single survey call on the passes — most of them — where the fleet is carrying none.
-if (!arg('no-signets', false)) {
+// THE RINGS ARE FLEET-WIDE AND CANNOT BE SCOPED, SO `--room` TURNS THEM OFF.
+//
+// `signets redistribute` and `signets return` are broker-side and act on the whole fleet —
+// the return errand DISPATCHES carriers to towns. There is no room-scoped form of either,
+// so a `--room` run that still ran them would answer a narrow question with a fleet-wide
+// action, which is exactly the class of surprise this tool is supposed not to be. Say so
+// out loud rather than doing it quietly, and `--signets` overrides.
+const SCOPED = ROOM !== null && ROOM !== true;
+const doSignets = !arg('no-signets', false) && (!SCOPED || !!arg('signets', false));
+if (SCOPED && !doSignets && !arg('no-signets', false))
+  console.log('signet rings: skipped — they are fleet-wide and this run is scoped to a room ' +
+              '(pass --signets to do them anyway)\n');
+if (doSignets) {
   const survey = await call('signets', { action: 'survey' }).catch(e => ({ __err: e.message }));
   if (survey.__err) {
     // A broker predating the signets tool answers "no such tool", and that must not take
@@ -251,90 +330,281 @@ if (arg('signets-only', false)) process.exit(0);
 // success for both. Dealing a SHARE means naming stacks as {id, amount}, which the same
 // tool accepts and which is what this does.
 if (FOOD) {
+  // DEAL THE DENSEST FOOD FIRST, BECAUSE THE RECIPIENT'S CONSTRAINT IS ITS STOMACH.
+  //
+  // The old code dealt stacks in whatever order the pack listed them, which reads as
+  // harmless and is not: what a hungry character can convert into vigor in one sitting is
+  // bounded by `filling`, not by how many objects it was handed. A stomach admits 100. Ten
+  // slices of pork (9 nutrition, 20 filling) is 200 filling — five of them is the sitting,
+  // 45 vigor, and the other five ride around waiting for it to drain at 7.2 a minute.
+  // Ten inky-cap mushrooms (50 nutrition, 25 filling) is 200 vigor over the same stomach.
+  //
+  // So sort by nutrition per unit of filling and hand over the best of the larder. The
+  // donor is by definition the one standing on a surplus; the recipient is the one pinned
+  // at the resting cap, and it is the one whose next hour is decided by which stack it got.
   const larders = [];
   for (const r of live) {
     const inv = await call('inventory', { agent: r.agent }).catch(() => ({ items: [] }));
-    const stacks = (inv.items || [])
+    const stacks = orderLarder((inv.items || [])
       .map(i => ({ id: i.id, name: i.name, amount: i.amount || 1, food: foodValue(i.name) }))
-      .filter(x => x.food && x.id != null);
+      .filter(x => x.food && x.id != null));
     larders.push({ agent: r.agent, character: r.character, room: r.room_num,
                    vigor: Number(r.vigor ?? 0), target: Number(r.vigor_target ?? FLOOR),
-                   meals: stacks.reduce((n, s) => n + s.amount, 0), stacks });
+                   meals: stacks.reduce((n, s) => n + s.amount, 0),
+                   nutrition: stacks.reduce((n, s) => n + s.amount * (s.food.nutrition ?? 0), 0),
+                   // GROUND TRUTH FOR "WILL THE KEEPER EVER EAT THIS", WHICH IS NOT THE SAME
+                   // QUESTION AS "IS IT FOOD". See the block below.
+                   harnessSeesFood: r.has_food === true,
+                   // A rejoining character has a session and no client; its vitals read empty
+                   // and its larder honestly reads empty with it. Not a name-table miss.
+                   alive: Number(r.vigor ?? 0) > 0 || !!r.health, stacks });
   }
 
-  const donors = larders.filter(h => h.meals >= AMOUNT + KEEP_FOOD)
-                        .sort((a, b) => b.meals - a.meals);
-  // NEED IS A FLOOR IT CANNOT REACH, NOT AN EMPTY PACK — and the test must not be the
-  // character's OWN target. The harness drops that to the resting cap whenever a larder is
-  // empty (reachableFightFloor), precisely so an unfed character is not idle-locked, so the
-  // hungriest characters in the fleet are the ones whose target reads 80 and who therefore
-  // look perfectly satisfied. Judge against the floor this run intends to give them.
-  const hungry = larders.filter(h => h.meals < AMOUNT && h.vigor < FLOOR)
-                        .sort((a, b) => a.vigor - b.vigor);
+  // A LARDER THIS TOOL CAN SEE AND THE HARNESS CANNOT IS WORSE THAN AN EMPTY ONE.
+  //
+  // `has_food` on the fleet row is `larderOf(c).length > 0`, and `larderOf` resolves names with
+  // `foodValue`, which is a RAW lowercase lookup into m59-items.json. `itemNameKey` — the
+  // canonical normaliser, twelve lines further down the same file — folds plurals, and
+  // `foodValue` does not use it. So a stack whose wire name is plural is not food to the
+  // harness: `foodValue('spider eye')` hits and `foodValue('spider eyes')` is null.
+  //
+  // That is not cosmetic. An empty larder collapses the fighting floor to 80
+  // (`reachableFightFloor(140, 200, 0) === 80`), so a character carrying nothing the harness
+  // recognises is pinned at the resting cap AND never eats its way off it — and this tool will
+  // cheerfully keep dealing it more of the same, reporting every delivery as a success.
+  //
+  // Measured 2026-09-05 across all 21 prod characters: every PERSISTENT `has_food: false` held
+  // only spider eyes and/or water skins (Scooter 86 spider eyes, Waldorf 20, Bunsen 14 + 6
+  // water skins, Floyd 4 water skins), stable across samples half an hour apart, while every
+  // row holding pork, bread, inky-cap or edible mushroom read true — Rowlf's 1 loaf plus 6
+  // water skins read true on the loaf alone. Floors set to 140 on three of them reverted to
+  // exactly 80 within 60 seconds and stayed there for the whole twenty minutes sampled.
+  //
+  // THERE IS A SECOND, INNOCENT SOURCE OF `has_food: false` AND THIS LIST WILL SHOW IT.
+  // A character between logging out and being rejoined has a session and no client, so
+  // `c.inventory` is null and `larderOf` honestly returns nothing — the same shape that makes
+  // `fleet` throw "Cannot read properties of null (reading 'inventory')" and that the retry at
+  // the top of this file exists for. Sweetums appeared here once holding nine slices of pork,
+  // with `vigor 0` on the same row, and read true again on the next pass. So a row in this list
+  // whose vitals look empty is a rejoin, not a name-table miss; one that persists across passes
+  // while the pack is full of a single item is the real thing. Do not tighten this into a
+  // filter on a guessed threshold — print both and let the reader tell them apart.
+  //
+  // The fix belongs in `foodValue` (use `itemNameKey`), NOT here — it is a shared predicate the
+  // keepers, the sell path and the vault path all read, and prod's keepers run from another
+  // checkout, so it only reaches them on a keeper restart. Until then, say it out loud: a
+  // silent inert delivery is exactly the failure this repository keeps paying for.
+  const INVISIBLE = invisibleFoodNames(larders);
+  const SPLIT = splitRoomsAmong(larders.map(h => h.room),
+                                { map: WORLD_MAP, geometryFor: r => RoomGeometry.fromJSON(r.roo) });
+  if (SPLIT.size)
+    console.log(`rooms here whose walkable area is in more than one piece: ${[...SPLIT].join(', ')} ` +
+                `— "same room" does not mean "can reach each other" in these
+`);
+  const invisible = larders.filter(h => h.meals > 0 && !h.harnessSeesFood && h.alive !== false);
+  if (invisible.length) {
+    console.log(`${invisible.length} carrying food the HARNESS CANNOT SEE (has_food=false with a ` +
+                `non-empty larder) — their floor will collapse to 80 whatever we set, and food ` +
+                `dealt to them is inert until foodValue() folds plurals:`);
+    for (const h of invisible)
+      console.log(`  ${h.character}: ${h.meals} meals — ` +
+                  h.stacks.map(s => `${s.name} x${s.amount}`).join(', '));
+    console.log('');
+  }
+
+  // THE CHEAPEST VIGOR IN THE FLEET IS ALREADY IN SOMEBODY'S PACK, BEING IGNORED.
+  //
+  // A larder is only drawn on BELOW the fighting floor, and the harness drops that floor to
+  // the resting cap whenever a pack is empty (`reachableFightFloor`) so an unfed character is
+  // not idle-locked. Nothing puts it back up when the food arrives by some other route — a
+  // hall run, a lucky drop, a bot's own errand. So a character can stand there holding a
+  // fortnight of meals with a target of 80, never eat one, and look perfectly satisfied to
+  // every report in this repository.
+  //
+  // Measured on prod the morning this was added: Gonzo carrying 100 spider eyes at 80/80 and
+  // Scooter 140 at 88/80 — 240 meals, two characters, both pinned at the resting cap by a
+  // number rather than by a shortage. That is the whole almoner's usual day's work, sitting
+  // in two packs, and it costs one call each to release. It runs BEFORE the hand-overs on
+  // purpose: it may remove the need for one, and it cannot fail in a way that hurts.
+  const canAffordTheClimb = alreadyStocked(larders, FLOOR);
+  if (canAffordTheClimb.length) {
+    console.log(`${canAffordTheClimb.length} already carrying enough to reach ${FLOOR} but ` +
+                `capped at a lower floor — raising it, no hand-over needed:`);
+    for (const h of canAffordTheClimb) {
+      console.log(`  ${h.character}: ${h.meals} meals (${h.nutrition} nutrition), ` +
+                  `${h.vigor}/${h.target} -> floor ${FLOOR}`);
+      if (!DRY) await call('autopilot', { agent: h.agent, fight_above_vigor: FLOOR }).catch(() => {});
+    }
+    console.log('');
+  }
+
+  // The donor test, the "need is a floor it cannot reach" test, the same-room preference and
+  // the walks-only delivery cap are all in m59-almoner-share.mjs with their arguments, because
+  // every one of them has been wrong at least once and none of them was checkable from here.
+  const { donors, hungry, plan } = planFoodHandovers({
+    larders, foodAmount: FOOD_AMOUNT, keepFood: KEEP_FOOD, floor: FLOOR,
+    maxHops: MAX_HOPS, maxDeliveries: MAX_DELIVERIES, hops: deliveryHops, splitRooms: SPLIT,
+    // Raised just above; it does not also need feeding this pass.
+    alreadyHandled: new Set(canAffordTheClimb.map(h => h.agent)) });
 
   console.log(`feast: ${donors.length} carrying a surplus, ${hungry.length} below ${FLOOR} vigor ` +
-              `with fewer than ${AMOUNT} meals`);
-  for (const d of donors) console.log(`  ${d.character}: ${d.meals} meals in ${d.room}`);
+              `with fewer than ${FOOD_AMOUNT} meals`);
+  for (const d of donors)
+    console.log(`  ${d.character}: ${d.meals} meals in ${d.room} — ` +
+                d.stacks.map(s => `${s.name} x${s.amount}`).join(', '));
   if (!donors.length) console.log('  nobody is carrying the feast — send a courier to the hall first');
   if (!hungry.length) console.log('  nobody is short');
 
-  // Same rule as the reagents: prefer a donor already standing with the recipient, because
-  // the walk through monster rooms is the expensive and failure-prone half of this.
-  const left = new Map(donors.map(d => [d.agent, d.meals]));
-  const sent = new Map(donors.map(d => [d.agent, 0]));
-  const plan = [];
-  for (const n of hungry) {
-    const pick = donors
-      .filter(d => d.agent !== n.agent && (left.get(d.agent) ?? 0) >= AMOUNT + KEEP_FOOD &&
-                   (sent.get(d.agent) ?? 0) < MAX_DELIVERIES &&
-                   deliveryHops(d.room, n.room) <= MAX_HOPS)
-      .sort((a, b) => (a.room === n.room ? -1 : b.room === n.room ? 1 : 0) ||
-                      deliveryHops(a.room, n.room) - deliveryHops(b.room, n.room) ||
-                      (left.get(b.agent) ?? 0) - (left.get(a.agent) ?? 0))[0];
-    if (!pick) continue;
-    left.set(pick.agent, (left.get(pick.agent) ?? 0) - AMOUNT);
-    sent.set(pick.agent, (sent.get(pick.agent) ?? 0) + 1);
-    plan.push({ from: pick, to: n, sameRoom: pick.room === n.room });
-  }
 
   for (const p of plan)
-    console.log(`  ${p.from.character} -> ${p.to.character} (${AMOUNT} meals, ` +
+    console.log(`  ${p.from.character} -> ${p.to.character} (${FOOD_AMOUNT} meals, ` +
                 `${p.to.vigor} vigor)` +
-                (p.sameRoom ? '  [same room — no walk]' : `  [walk: ${p.from.room} -> ${p.to.room}]`));
+                (p.free ? '  [same room — no walk]'
+                        : p.maybeFarHalf ? `  [room ${p.from.room} is split — may be the far half]`
+                        : `  [walk: ${p.from.room} -> ${p.to.room}]`));
   if (!plan.length) console.log('  nothing to hand over this pass');
-  if (DRY) { console.log('\ndry run — nothing handed over'); process.exit(0); }
+  if (DRY) console.log('  dry run — nothing handed over');
 
-  // Stacks are consumed as they are dealt, so the second delivery from one courier names
-  // what is actually left rather than what the survey saw.
-  const remaining = new Map(donors.map(d => [d.agent, d.stacks.map(s => ({ ...s }))]));
-  for (const p of plan) {
-    const stacks = remaining.get(p.from.agent) ?? [];
-    const give = [];
-    let want = AMOUNT;
-    for (const s of stacks) {
-      if (want <= 0) break;
-      const take = Math.min(want, s.amount);
-      if (take <= 0) continue;
-      give.push({ id: s.id, amount: take });
-      s.amount -= take;
-      want -= take;
-    }
+  // AN INVENTORY ID GOES STALE, AND A PLAN MADE OF IDS ROTS WHILE IT IS BEING EXECUTED.
+  //
+  // This used to deal from the stacks read during the survey, decrementing a local copy. That
+  // is only correct if nothing else touches the pack — and something always does. Measured on
+  // the run that found it, room 39: the first two hand-overs landed, and then
+  //
+  //   Kermit -> Floyd: NOT delivered  "Kermit is carrying nothing matching those ids"
+  //     carrying: ["hammer","mushroom","long sword","shilling","spider eye","slice of pork", ...]
+  //
+  // Kermit was still holding the pork. The IDS had moved — splitting a stack to hand part of
+  // it over renumbers what is left, and the survey was minutes and several exchanges old by
+  // then. Two of six deliveries failed this way, and the failure is the nastiest shape there
+  // is: a successful call that moves nothing and blames the goods.
+  //
+  // The reagent round never had this bug because it passes the symbolic `what: 'reagents'` and
+  // lets m59-supply.mjs resolve ids at the moment of the trade. Food has no symbolic form that
+  // deals a SHARE — `what: 'food'` hands over the entire larder — so the ids have to be named,
+  // and the only safe moment to read them is immediately before the offer.
+  for (const p of (DRY ? [] : plan)) {
+    const fresh = await call('inventory', { agent: p.from.agent }).catch(() => null);
+    if (!fresh) { console.log(`  ${p.from.character}: could not re-read the pack — skipping`); continue; }
+    const stacks = (fresh.items || [])
+      .map(i => ({ id: i.id, name: i.name, amount: i.amount || 1, food: foodValue(i.name) }))
+      .filter(x => x.food && x.id != null);
+    // Still keep something back for the courier itself, against the pack as it is NOW.
+    // Pork before spider eyes when the courier has both: equally dense, but only one of them
+    // makes the recipient's floor hold. Falls back to the invisible stock rather than starving
+    // somebody when it is all there is.
+    const { give, dealt, had } = dealShare(stacks, FOOD_AMOUNT, KEEP_FOOD, INVISIBLE);
+    if (dealt < FOOD_AMOUNT)
+      console.log(`  ${p.from.character}: down to ${had} meals since the survey — ` +
+                  (dealt > 0 ? `dealing ${dealt}` : 'nothing left to deal'));
     if (!give.length) { console.log(`  ${p.from.character}: nothing left to deal`); continue; }
     try {
       let r = await call('supply', { from: p.from.agent, to: p.to.agent,
                                      what: give, who_travels: 'from' });
-      // The same swap the reagents make: a blocked edge is directional and about the room
-      // being LEFT, so sending the other one is a different question with its own answer.
-      if (r?.supplied !== true && /could not get there|no floor|boundary/i.test(JSON.stringify(r))) {
+      // A CHARACTER IN FLIGHT IS NOT A CHARACTER WALLED IN, AND SWAPPING WHO WALKS DOES NOT
+      // HELP IT. The retry below is for GEOMETRY — a blocked edge is directional and about the
+      // room being LEFT, so sending the other one is a different question with its own answer.
+      // "busy", "already held" and "travelling" are not that: they say somebody else has the
+      // body, and the honest response is to leave it alone and come back next pass.
+      //
+      // The reason strings collide, which is why this needs to be tested first. Measured on the
+      // same run: `"Janice could not get there: t7 is busy: walk to The Duke's Feast Hall"`
+      // matched the geometry pattern on "could not get there" and bought a second doomed
+      // exchange against a character the DUM bot was walking across town.
+      const busy = /is busy|already held|travelling|cancelled by a newer/i.test(JSON.stringify(r));
+      if (r?.supplied !== true && busy) {
+        console.log(`    ${p.to.character} or ${p.from.character} is mid-errand — ` +
+                    `leaving it for the next pass rather than fighting for the body`);
+      } else if (r?.supplied !== true && /could not get there|no floor|boundary/i.test(JSON.stringify(r))) {
         console.log(`    ${p.from.character} is walled in — sending ${p.to.character} to fetch instead`);
         r = await call('supply', { from: p.from.agent, to: p.to.agent,
                                    what: give, who_travels: 'to' })
                   .catch(e => ({ supplied: false, reason: e.message }));
       }
-      const ok = r.supplied === true && (r.receiver_carrying ?? 0) > 0;
+      let ok = r.supplied === true && (r.receiver_carrying ?? 0) > 0;
       console.log(`  ${p.from.character} -> ${p.to.character}: ` +
                   (ok ? 'delivered' : 'NOT delivered') + ' ' + JSON.stringify(r).slice(0, 160));
+      // A RECEIVER THAT CAN GIVE BUT NOT RECEIVE IS FULL, AND A FULL PACK IS FIXABLE.
+      //
+      // m59-supply.mjs names this case itself and says so in its own `note`, because it is
+      // otherwise indistinguishable from an accept that ended the trade: no count rose on the
+      // receiver. Operator-authorised 2026-09-05 — "you're permitted to have anyone drop any
+      // items required to make space for carrying food".
+      //
+      // ONLY THE MUSHROOMS, AND ONLY AFTER A FAILURE. This is deliberately not a tidy-up pass.
+      // The mushroom-and-gem pile is what m59-reagents.mjs walks to the counter — Camilla once
+      // carried 148 mushrooms to a shop — so dropping is spending money to buy pack space, and
+      // it is only worth it against a hand-over that has actually just failed for want of room.
+      // Gems, weapons, armour, reagents, food and the purse are all kept: gems are the dense
+      // half of that value and the mushrooms are the bulky, cheap half, which makes them
+      // exactly the right thing to put down. `drop_all` withholds money and worn kit itself,
+      // and refuses outright when it cannot read the equipment set.
+      // A REJOINING CHARACTER PRODUCES THE SAME SIGNATURE AS A FULL PACK, AND DROPPING IS THE
+      // ONE THING HERE THAT CANNOT BE TAKEN BACK.
+      //
+      // `supply`'s own note says a receiver that can give but not receive "is nearly always
+      // full" — nearly. The other cause is a character between logging out and being rejoined:
+      // it has a session and no client, so no count can rise on it and the trade ends exactly
+      // the way a full pack ends. Measured 2026-09-05: Camilla read `vigor 0` on the plan line,
+      // the hand-over failed with the full-pack note, and this dropped four mushrooms and a red
+      // mushroom into room 39 before the retry failed the same way. The pack was never the
+      // problem, and mushrooms are what m59-reagents.mjs walks to a counter for money.
+      //
+      // So the vitals gate the drop. Everything else here is recoverable; putting items on the
+      // floor of a shared server is not, and a rejoin clears itself within a sweep.
+      if (!ok && p.to.alive === false)
+        console.log(`    ${p.to.character}: looks mid-rejoin (no vitals), not a full pack — ` +
+                    `dropping nothing and leaving it for the next pass`);
+      // DISARMED 2026-09-05 AFTER TWO FOR TWO. It fired twice on prod, the retry failed both
+      // times, and both times it put real money on the floor — 5 mushrooms off Camilla (who was
+      // mid-rejoin), then 57 off Robin (25 mushroom, 28 red, 4 purple) at vigor 122, wide awake,
+      // with the gate above satisfied. The pack was not the constraint on either occasion.
+      //
+      // So the trigger is wrong, not the gate. `supply` says a receiver that can give and not
+      // receive "is NEARLY always full", and the residue is evidently common — while the cost is
+      // asymmetric: a missed delivery waits thirty minutes for the next pass, and dropped
+      // mushrooms are what m59-reagents.mjs walks to a counter for money, gone the moment
+      // another player picks them up on a shared server.
+      //
+      // A destructive fallback that has never once worked does not stay armed. `--drop-for-space`
+      // opts back in for someone who has a genuinely full pack in front of them and knows it.
+      // Re-arming by default needs a POSITIVE full-pack signal — `pack.percent` would be it, and
+      // it reads null fleet-wide here because `carryCapacity` cannot see MIGHT.
+      else if (!ok && DROP_FOR_SPACE && /nearly always full|too full/i.test(JSON.stringify(r))) {
+        const inv = await call('inventory', { agent: p.to.agent }).catch(() => null);
+        const names = [...new Set((inv?.items || []).map(i => i.name).filter(Boolean))];
+        const junk = names.filter(n => /mushroom/i.test(n) && !foodValue(n));
+        if (!junk.length) {
+          console.log(`    ${p.to.character}: pack is full and holds no mushrooms to spare — ` +
+                      `leaving it alone`);
+        } else {
+          const keep = names.filter(n => !junk.includes(n));
+          console.log(`    ${p.to.character}: pack full — dropping ${junk.join(', ')} to make room`);
+          const dropped = await call('drop_all', { agent: p.to.agent, keep })
+                                .catch(e => ({ __err: e.message }));
+          console.log(`      ${JSON.stringify(dropped).slice(0, 200)}`);
+          r = await call('supply', { from: p.from.agent, to: p.to.agent,
+                                     what: give, who_travels: 'from' })
+                    .catch(e => ({ supplied: false, reason: e.message }));
+          ok = r.supplied === true && (r.receiver_carrying ?? 0) > 0;
+          console.log(`    ${p.from.character} -> ${p.to.character} (retry): ` +
+                      (ok ? 'delivered' : 'still NOT delivered') + ' ' + JSON.stringify(r).slice(0, 140));
+        }
+      }
       if (!ok) continue;
+      // VERIFY BY READING THE WORLD BACK, not by trusting a successful call. `supply` proves
+      // the goods MOVED; it cannot know whether the harness will ever count them. A recipient
+      // that started with nothing and still reads `has_food: false` after a verified delivery
+      // has been handed a stack the food table does not resolve (see the plural note above),
+      // and its floor is about to collapse to 80 again no matter what we set next.
+      if (!p.to.harnessSeesFood) {
+        const after = await call('fleet', {}).catch(() => null);
+        const row = (after?.fleet || []).find(x => x.agent === p.to.agent);
+        if (row && row.has_food !== true)
+          console.log(`    ${p.to.character}: INERT DELIVERY — the goods moved and has_food is ` +
+                      `still false, so this stack is invisible to the keeper and the floor ` +
+                      `below will not hold. Deal it pork or bread instead.`);
+      }
       // The food is the easy half; the floor is the half that makes it worth carrying. A
       // character left at a target of 80 eats nothing, because a larder is only drawn on
       // BELOW the fighting floor — so the pork would ride around in its pack untouched.
@@ -344,8 +614,9 @@ if (FOOD) {
       console.log(`  ${p.from.character} -> ${p.to.character}: FAILED ${e.message}`);
     }
   }
-  process.exit(0);
+  console.log('');
 }
+if (FOOD_ONLY) { if (DRY) console.log('dry run — nothing handed over'); process.exit(0); }
 
 // ------------------------------------------------------------------ then the reagents
 
@@ -408,7 +679,13 @@ const anyDonor = [...new Set([...pool.values()].flat())];
 console.log(`${needy.length} character(s) cannot cast create food; ` +
   KINDS.map(k => `${pool.get(k.kind).length} can spare ${k.kind}`).join(', '));
 if (!needy.length) { console.log('nothing to do'); process.exit(0); }
-if (!anyDonor.length) { console.log('nobody has a surplus — the fleet is genuinely short'); process.exit(0); }
+// Say WHICH set was short. Scoped, this is a fact about one room and not about the fleet —
+// there may be a donor two towns away that this run deliberately declined to send for.
+if (!anyDonor.length) {
+  console.log(SCOPED ? `nobody in room "${ROOM}" has a surplus — widen the scope or send a courier`
+                     : 'nobody has a surplus — the fleet is genuinely short');
+  process.exit(0);
+}
 
 // Give each donor a fair number of recipients rather than draining the richest one,
 // and PREFER A DONOR ALREADY IN THE RECIPIENT'S ROOM — the giver travels, and a walk

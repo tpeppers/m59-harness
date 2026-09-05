@@ -170,5 +170,52 @@ console.log('\nthe Duke\'s Feast Hall cannot be fought in, and the approach can'
      !NO_COMBAT.has(950) && !NO_COMBAT.has(951));
 }
 
+// ---------------------------------------------------------------- a plural on the wire
+//
+// `foodValue` was a raw lowercase index into the table, so it hit "spider eye" and missed
+// "spider eyes" — while `itemNameKey`, in the same file, exists precisely to fold that.
+//
+// WHAT IT COST, measured on prod 2026-09-05. `larderOf` resolves names with this function and
+// `has_food` on the fleet row is `larderOf(c).length > 0`; an empty larder collapses the
+// fighting floor to the resting cap (`reachableFightFloor(140, 200, 0) === 80`). So a character
+// carrying eighty-six spider eyes read as having NO food, sat pinned at 80 vigor, and never ate
+// one. Four were in that state at once, and floors set to 140 on three of them reverted to
+// exactly 80 within sixty seconds and held there for the twenty minutes sampled. The almoner
+// then dealt them more of the same and reported every delivery a success.
+{
+  ok('a plural spider eye is the same food', foodValue('spider eyes')?.nutrition === 9,
+     JSON.stringify(foodValue('spider eyes')));
+  ok('so is a plural water skin', foodValue('water skins')?.nutrition === 3,
+     JSON.stringify(foodValue('water skins')));
+  ok('and a plural slice of pork', foodValue('slices of pork')?.nutrition === 9,
+     JSON.stringify(foodValue('slices of pork')));
+  ok('the singular still works', foodValue('spider eye')?.nutrition === 9);
+
+  // BOTH SIDES ARE NORMALISED, WHICH IS WHY THIS WAS NOT A ONE-LINE SWAP. Two of the table's
+  // OWN keys are not canonical — "inky-cap mushroom" folds to "inky cap mushroom" and "bunch of
+  // grapes" to "bunch of grape" — so folding only the ARGUMENT fixes spider eyes and breaks the
+  // inky-cap, which is the most nutritious thing the fleet carries at 50 a bite.
+  ok('the hyphenated inky-cap still resolves', foodValue('inky-cap mushroom')?.nutrition === 50,
+     JSON.stringify(foodValue('inky-cap mushroom')));
+  ok('and in the capitalisation the wire actually sends',
+     foodValue('Inky-cap mushroom')?.nutrition === 50);
+  ok('and unhyphenated and pluralised', foodValue('inky cap mushrooms')?.nutrition === 50);
+  ok('a table key that is itself plural still resolves',
+     foodValue('bunch of grapes')?.nutrition === 7, JSON.stringify(foodValue('bunch of grapes')));
+  ok('and so does its folded form', foodValue('bunch of grape')?.nutrition === 7);
+  ok('the plural edible mushroom is food', foodValue('edible mushrooms')?.nutrition === 5);
+
+  // FOLDING MUST NOT WIDEN THE MATCH. Words may not be omitted: the bare "mushroom" is its own
+  // item and a reagent, and must not become food because longer food names contain the word.
+  ok('folding did not make the bare mushroom food', foodValue('mushroom') == null);
+  ok('nor the red one', foodValue('red mushroom') == null);
+  ok('nor the blue one', foodValue('blue mushroom') == null);
+  ok('nor a weapon', foodValue('long sword') == null);
+  ok('nor a gem', foodValue('emerald') == null);
+  ok('nor money', foodValue('shilling') == null);
+  ok('an empty name is not food', foodValue('') == null);
+  ok('and neither is null', foodValue(null) == null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
