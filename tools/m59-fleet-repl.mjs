@@ -25,8 +25,9 @@
 // contract m59-restore and the DUM planner both keep, and the right default habit when the
 // thing on the other end is twenty-one live characters on a shared server.
 import { createInterface } from 'node:readline';
-import { fleetScript } from './m59-fleetscript.mjs';
+import { fleetScript, formatGuarantees } from './m59-fleetscript.mjs';
 import { loadFleetScripts, runNamed, applyDefaults, checkParams, asAgents,
+         auditUnsafe, formatUnsafeAudit,
          PUBLIC_DIR, LOCAL_DIR } from './m59-fleetlib.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 
@@ -64,7 +65,7 @@ say('');
 say('scripts:');
 listScripts();
 say('');
-say('commands: list | reload | describe <name> | dry <name> k=v… | <name> k=v… | quit');
+say('commands: list | reload | describe <name> | dry <name> k=v… | guarantees | unsafe | <name> k=v… | quit');
 
 const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
 rl.prompt();
@@ -94,11 +95,19 @@ rl.on('line', (line) => queue(async () => {
       say(`reloaded — ${scripts.size} script(s)`);
       for (const p of problems) say(`  ${p.file}: ${p.why}`);
     }
+    else if (verb === 'guarantees') {
+      say(formatGuarantees());
+    }
+    else if (verb === 'unsafe') {
+      say(formatUnsafeAudit(auditUnsafe(scripts), { total: scripts.size }));
+    }
     else if (verb === 'describe') {
       const s = scripts.get(rest[0]);
       if (!s) say(`no script named "${rest[0] ?? ''}"`);
       else {
         say(`${s.name} (${s.source}) — ${s.describe ?? ''}`);
+        if (s.unsafe)
+          say(`  UNSAFE waives ${(s.unsafe.waives ?? []).join(', ')} — ${s.unsafe.reason ?? ''}`);
         say(`  file ${s.file}`);
         for (const [k, spec] of Object.entries(s.params ?? {}))
           say(`  ${k.padEnd(12)} ${spec.required ? 'REQUIRED' : `default ${JSON.stringify(spec.default)}`}` +

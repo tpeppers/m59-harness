@@ -27,6 +27,7 @@
 import { readdirSync, existsSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseUnsafe, UNSAFE_GUARANTEES, guaranteeText } from './m59-fleetscript.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -74,11 +75,56 @@ export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCA
         problems.push({ file: path, why: `script "${name}" has no steps(params) function` });
         continue;
       }
+      // A MALFORMED WAIVER IS REFUSED AT LOAD, not at run. The author of an unsafe block
+      // believes some guarantee is off; if the block is wrong they find out with a
+      // character already walking. `list` is where that should surface instead.
+      try {
+        parseUnsafe(script.unsafe, { scriptName: name });
+      } catch (e) {
+        problems.push({ file: path, why: e.message });
+        continue;
+      }
       const overrides = source === 'local' && found.has(name) ? found.get(name).file : null;
       found.set(name, { ...script, name, source, file: path, overrides });
     }
   }
   return { scripts: found, problems };
+}
+
+// EVERY PLACE THE CHECKING STOPPED. The counterpart to being allowed to waive a guarantee
+// is that the waivers are countable — an escape hatch nobody can enumerate is just a hole.
+// Sorted with the widest waivers first, because that is the order you want to read them in.
+export function auditUnsafe(scripts) {
+  const rows = [];
+  for (const s of scripts.values()) {
+    const u = parseUnsafe(s.unsafe, { scriptName: s.name });
+    if (!u.waived.size) continue;
+    rows.push({
+      name: s.name,
+      source: s.source,
+      file: s.file,
+      waives: [...u.waived],
+      reason: u.reason,
+      owner: u.owner,
+      all: u.all,
+    });
+  }
+  rows.sort((a, b) => b.waives.length - a.waives.length || a.name.localeCompare(b.name));
+  return rows;
+}
+
+export function formatUnsafeAudit(rows, { total = 0 } = {}) {
+  if (!rows.length)
+    return `no script waives any guarantee (${total} loaded). ` +
+      `Waivable: ${Object.keys(UNSAFE_GUARANTEES).join(', ')}.`;
+  const out = [`${rows.length} of ${total} script(s) waive a guarantee:`, ''];
+  for (const r of rows) {
+    out.push(`  ${r.name} [${r.source}]${r.all ? '  ALL GUARANTEES OFF' : ''}`);
+    out.push(`    waives: ${r.waives.join(', ')}`);
+    out.push(`    reason: ${r.reason}`);
+    if (r.owner) out.push(`    owner:  ${r.owner}`);
+  }
+  return out.join('\n');
 }
 
 /** Parameters a caller did not give, filled from the script's declared defaults. */
@@ -141,5 +187,9 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     agents,
     steps: agent => script.steps({ ...withDefaults, agent, agents }),
     minHealth: withDefaults.minHealth,
+    // A script's waiver travels with the script. Passing it from here rather than letting
+    // the caller supply one is the point: the exception belongs to the errand that needs
+    // it, not to whoever happened to invoke the errand today.
+    unsafe: script.unsafe ?? null,
   });
 }

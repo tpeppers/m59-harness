@@ -180,6 +180,161 @@ export function trapCheck(plan = [], { standingIn = null, allowTraps = false } =
   return null;
 }
 
+// ------------------------------------------------------------------------ unsafe
+//
+// THE ESCAPE HATCH, AND WHY IT IS SHAPED LIKE RUST'S.
+//
+// This file exists because five hand-written scripts each got a different subset of the
+// same mandatory concerns wrong. The answer to that cannot be "nobody may write anything
+// else" — people who did not write these rules have to be able to drive this fleet, and
+// some of them will need to do exactly the thing a guarantee here forbids. A rescue walks
+// into a known trap on purpose. A test wants a character to set out at 4 health.
+//
+// So: not a wall, a declaration. `unsafe` does not turn the safeties off. It turns off the
+// ones you NAME, leaves every other one running, and refuses to do even that without a
+// reason written at the call site. That is the whole of Rust's bargain — the compiler stops
+// checking, you start, and the block stays greppable so somebody can find every place the
+// checking stopped.
+//
+//   export const script = {
+//     name: 'rescue-from-ukgoth',
+//     unsafe: {
+//       reason: 'Rescue: going into 599 on purpose to pull a stranded character out.',
+//       waives: ['trapCheck'],
+//     },
+//     ...
+//   }
+//
+// FOUR PROPERTIES, EACH LOAD-BEARING:
+//
+//   1. NAMED, NOT BOOLEAN. `waives: ['trapCheck']` keeps the health floor. A single
+//      `unsafe: true` would make "I wanted one exception" and "I turned everything off"
+//      look identical in review — the failure `allowTraps` was already written to avoid.
+//   2. A REASON IS MANDATORY. An unsafe block without one is refused, not warned about.
+//      "I know about the trap" and "I forgot" have to look different on the page.
+//   3. LOUD AT RUN TIME. Every run prints which guarantees are off and why, so the person
+//      watching the log finds out before the character does.
+//   4. GREPPABLE. `grep -rn "unsafe:" tools/fleetscripts/ substrate/fleetscripts/` is the
+//      audit, and `unsafe` in the REPL prints it.
+//
+// `waives: ['*']` is the total waiver — a bare driver with a lock and nothing else. It is
+// deliberately ugly to type and still demands a reason.
+
+// EVERY GUARANTEE NAMES THE INCIDENT THAT CREATED IT, and that is a mechanism rather than a
+// courtesy. The entry criterion in CLAUDE.md is already "a mistake somebody made twice" —
+// writing the incident into the table is what makes that criterion checkable, and what makes
+// the ABSENCE of new guarantees visible.
+//
+// THE LOOP THIS IS HALF OF. A class of bug recurs -> a guarantee is added that refuses it ->
+// the class stops recurring. If we are hitting the same issues and this table is not growing,
+// the loop is broken and that is the finding, not the bug. `node tools/m59-fleetscript.mjs
+// --guarantees` prints the table with dates so the growth is countable.
+//
+// A guarantee with no incident is a guess. Do not add one.
+export const UNSAFE_GUARANTEES = Object.freeze({
+  runLock: {
+    what: 'one driver per fleet',
+    since: '2026-09-02',
+    incident: 'five ad-hoc scripts drove the fleet in one day; twenty-one keepers and one ' +
+              'runner ended up on the same bodies all afternoon',
+  },
+  keeperLease: {
+    what: 'the faculty lease that stops the keeper steering underneath you',
+    since: '2026-09-02',
+    incident: 'orders given without a lease were silently overwritten by a DUM bot ' +
+              're-deciding every ~30s, while every call reported success',
+  },
+  trapCheck: {
+    what: 'refusal to walk into a room KNOWN_TRAPS says keeps characters',
+    since: '2026-09-03',
+    incident: 'room 599 (Ukgoth) cannot be left by any route the bake knows; the fleet was ' +
+              'fed into it repeatedly and learned about it by stranding somebody',
+  },
+  minHealth: {
+    what: 'the health floor under every journey',
+    since: '2026-09-03',
+    incident: 'a recall written as a bare travel walked a character out of the inn it was ' +
+              'healing in at 1 of 44 health, back down the road that had just killed it',
+  },
+  vaultBeforeSell: {
+    what: 'vault before sell, so a sale cannot eat what you meant to bank',
+    since: '2026-09-03',
+    incident: 'sell_all offers the merchant everything, so a vault step after a sell banks ' +
+              'the leftovers — and the sale reports success either way',
+  },
+  journeyBudget: {
+    what: 'the patience floors that stop a walk being declared failed too early',
+    since: '2026-09-04',
+    incident: 'with the budget hard-coded at three minutes a failing walk took nine to reach ' +
+              'its verdict, so no offline test ever covered the give-up path',
+  },
+  coordUnits: {
+    what: 'coordinates carry their space (square / protocol / client) instead of being bare numbers',
+    since: '2026-09-05',
+    incident: 'kod PROTOCOL units fed to floorBaseAtClient, which wants CLIENT units — 16x ' +
+              'and a one-square origin apart (9fb1ad3); and a declared jump that aimed at ' +
+              'col*64+32, the square centre, when the point of declaring it was to land ' +
+              'somewhere specific (abec3ac). See tools/m59-coords.mjs.',
+  },
+});
+
+// The one-line form, for banners and messages.
+export const guaranteeText = g =>
+  (typeof UNSAFE_GUARANTEES[g] === 'string' ? UNSAFE_GUARANTEES[g] : UNSAFE_GUARANTEES[g]?.what)
+  ?? g;
+
+// THE LIST, OLDEST FIRST, WITH THE INCIDENT THAT BOUGHT EACH ONE. Read this when a fleet
+// operation goes wrong: if the failure is a class already on the list, the guarantee has a
+// hole; if it is not, the list is one entry short and that is the fix.
+export function formatGuarantees() {
+  const rows = Object.entries(UNSAFE_GUARANTEES)
+    .map(([name, g]) => (typeof g === 'string' ? [name, { what: g }] : [name, g]))
+    .sort((a, b) => String(a[1].since ?? '').localeCompare(String(b[1].since ?? '')));
+  const out = [`${rows.length} guarantees, oldest first.`,
+    'Each one is a mistake somebody made twice. A guarantee with no incident is a guess.', ''];
+  for (const [name, g] of rows) {
+    out.push(`  ${name}${g.since ? `  (since ${g.since})` : ''}`);
+    out.push(`    ${g.what}`);
+    if (g.incident) out.push(`    incident: ${g.incident}`);
+    out.push('');
+  }
+  out.push('If the same class of bug keeps happening and this list is not growing,');
+  out.push('the loop is broken — that is the finding, not the bug.');
+  return out.join('\n');
+}
+
+// Validates and normalises a script's `unsafe` block. Throws rather than warns: a malformed
+// waiver is the one case where carrying on is worse than stopping, because the author
+// believes a guarantee is off when it is not, or on when it is not.
+export function parseUnsafe(unsafe, { scriptName = 'script' } = {}) {
+  if (unsafe == null) return { waived: new Set(), reason: null, all: false, owner: null };
+  if (typeof unsafe !== 'object' || Array.isArray(unsafe))
+    throw new Error(`${scriptName}: unsafe must be an object, e.g. { reason, waives: [...] }`);
+
+  const reason = String(unsafe.reason ?? '').trim();
+  if (!reason)
+    throw new Error(
+      `${scriptName}: unsafe needs a reason. Write why this errand has to bypass the ` +
+      `guarantee — "I know about the trap" and "I forgot" are the same script otherwise.`);
+
+  const waives = unsafe.waives;
+  if (!Array.isArray(waives) || !waives.length)
+    throw new Error(
+      `${scriptName}: unsafe needs waives: [...] naming what to turn off. ` +
+      `Known: ${Object.keys(UNSAFE_GUARANTEES).join(', ')}, or '*' for all of them.`);
+
+  const all = waives.includes('*');
+  const named = waives.filter(w => w !== '*');
+  const unknown = named.filter(w => !(w in UNSAFE_GUARANTEES));
+  if (unknown.length)
+    throw new Error(
+      `${scriptName}: unsafe waives unknown guarantee(s): ${unknown.join(', ')}. ` +
+      `Known: ${Object.keys(UNSAFE_GUARANTEES).join(', ')}.`);
+
+  const waived = new Set(all ? Object.keys(UNSAFE_GUARANTEES) : named);
+  return { waived, reason, all, owner: unsafe.owner ?? null };
+}
+
 // ---------------------------------------------------------------- the step vocabulary
 
 export const walk = (to, opts = {}) => ({ do: 'walk', to, ...opts });
@@ -702,6 +857,10 @@ export async function fleetScript({
   // It has to be written at the call site because "I know about the trap" and "I forgot"
   // otherwise produce exactly the same script. See KNOWN_TRAPS.
   allowTraps = false,
+  // THE GENERAL FORM OF allowTraps. `{ reason, waives: ['trapCheck', ...] }` — see
+  // UNSAFE_GUARANTEES. allowTraps stays because scripts already pass it, and the two
+  // agree: either one waives the trap check, neither turns anything else off.
+  unsafe = null,
   // THE FLOOR UNDER A WALK'S PATIENCE, and the only reason it is a parameter: with it
   // hard-coded at three minutes, the FAILING walk took nine minutes to reach its verdict,
   // so no offline test ever covered the path where a walk gives up. That is exactly the
@@ -721,8 +880,32 @@ export async function fleetScript({
   if (!Array.isArray(agents) || !agents.length) throw new Error('fleetScript needs agents');
   if (!steps) throw new Error('fleetScript needs steps');
 
-  // RULE 1.
-  const claim = takeRunLock(fleet, { label: `${name} [${agents.join(',')}]`, force });
+  // Parsed BEFORE anything is claimed or walked: a malformed waiver must fail while the
+  // fleet is still untouched, and the banner has to be on screen before the first step.
+  const waiver = parseUnsafe(unsafe, { scriptName: name });
+  const waived = waiver.waived;
+  if (waived.size) {
+    onLog('─'.repeat(72));
+    onLog(`UNSAFE — ${name} is running with ${waived.size} guarantee(s) OFF:`);
+    for (const g of waived) onLog(`    ${g}: ${guaranteeText(g)}`);
+    onLog(`  reason: ${waiver.reason}`);
+    if (waiver.owner) onLog(`  owner: ${waiver.owner}`);
+    onLog(`  still on: ${Object.keys(UNSAFE_GUARANTEES)
+      .filter(g => !waived.has(g)).join(', ') || 'nothing'}`);
+    onLog('─'.repeat(72));
+  }
+  // A waived floor is zero, not "skip the check": every downstream reader keeps working,
+  // and a run that waives minHealth still reports the health it set out on.
+  if (waived.has('minHealth')) minHealth = 0;
+  if (waived.has('trapCheck')) allowTraps = true;
+  if (waived.has('journeyBudget')) { budgetFloorMs = 0; budgetCapMs = Math.max(budgetCapMs, 0); }
+
+  // RULE 1 — waivable, and the one most likely to be regretted: two drivers on one fleet is
+  // how twenty-one keepers ended up on the same bodies. It is here because a test harness
+  // driving a shadow fleet legitimately needs it.
+  const claim = waived.has('runLock')
+    ? { ok: true, holder: null, tookOverFrom: null }
+    : takeRunLock(fleet, { label: `${name} [${agents.join(',')}]`, force });
   if (!claim.ok) {
     const h = claim.holder ?? {};
     onLog(`REFUSING — fleet "${fleet}" is already being driven.`);
@@ -770,7 +953,12 @@ export async function fleetScript({
       await call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name }, 40_000)
         .catch(() => {});
       held.add(agent);
-      hold = await holdKeeper(ctx, agent, fleet);
+      // Waivable, and the sharpest edge in the file: without the lease a DUM bot re-decides
+      // about every thirty seconds and quietly overwrites the order while every call still
+      // reports success. Anything waiving this is choosing to race the keeper.
+      hold = waived.has('keeperLease')
+        ? { ok: true, cancelJourney: async () => {}, release: async () => {} }
+        : await holdKeeper(ctx, agent, fleet);
       const plan = typeof steps === 'function' ? await steps(agent, state) : steps;
 
       // VAULT BEFORE SELL, CHECKED BEFORE ANYTHING WALKS.
@@ -794,7 +982,8 @@ export async function fleetScript({
         return;
       }
 
-      const firstSell = plan.findIndex(x => x.do === 'sell');
+      const firstSell = waived.has('vaultBeforeSell')
+        ? -1 : plan.findIndex(x => x.do === 'sell');
       const lastVault = plan.map(x => x.do).lastIndexOf('vault');
       if (firstSell >= 0 && lastVault > firstSell) {
         const why = `step ${lastVault} vaults AFTER step ${firstSell} sells — ` +
@@ -810,7 +999,7 @@ export async function fleetScript({
       // it by omission, because "I decided the keep list is enough" and "I forgot" produce
       // exactly the same plan. `sell(merchant, { noVault: true })` is the acknowledgement:
       // it says the author considered the vault and is relying on VAULT_KEEP instead.
-      const unacknowledged = plan.findIndex((x, i) =>
+      const unacknowledged = waived.has('vaultBeforeSell') ? -1 : plan.findIndex((x, i) =>
         x.do === 'sell' && !x.noVault && !plan.slice(0, i).some(p => p.do === 'vault'));
       if (unacknowledged >= 0) {
         const why = `step ${unacknowledged} sells with no vault before it — add a vault() step, ` +

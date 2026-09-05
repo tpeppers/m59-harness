@@ -524,6 +524,32 @@ criterion for the list: every guarantee in it is a mistake somebody made twice. 
 check, add its test, and name the incident in the comment — a refusal that cannot say why
 it fired gets deleted by the next person in a hurry.
 
+**THE LIST HAS TO CHURN.** Each entry in `UNSAFE_GUARANTEES` carries `since` and `incident`,
+and `guarantees` in the REPL prints them oldest first. That is not decoration: it makes the
+entry criterion checkable and, more usefully, makes the ABSENCE of new entries visible. If
+the same class of bug keeps happening and the list is not growing, **the loop is broken, and
+that is the finding rather than the bug.**
+
+**AND IT IS NOT A WALL — `unsafe` IS THE ESCAPE HATCH.** People who did not write these
+rules have to be able to drive this fleet, and some errands genuinely need the thing a
+guarantee forbids: a rescue walks into a known trap on purpose. So, shaped like Rust's:
+
+```js
+export const script = {
+  name: 'rescue-from-ukgoth',
+  unsafe: { reason: 'Going into 599 on purpose to pull a stranded character out.',
+            waives: ['trapCheck'] },
+  ...
+}
+```
+
+It turns off the guarantees you **name** and leaves the rest running; `waives: ['*']` is the
+total waiver and is deliberately ugly to type. A **reason is mandatory** and is enforced at
+LOAD time, so a malformed waiver surfaces on `list` rather than with a character already
+walking — "I know about the trap" and "I forgot" have to look different on the page. Every
+run prints a banner naming what is off and what is still on, and `unsafe` in the REPL
+enumerates every waiver in the fleet: an escape hatch nobody can count is just a hole.
+
 `KNOWN_TRAPS` is the same idea for geography. A collision map cannot see a lock, so a room
 that cannot be left by any route the bake knows is learned by stranding somebody in it —
 room 599 (Ukgoth) is the first entry, and `{ allowTraps: true }` is how a rescue says out
@@ -635,6 +661,49 @@ A fresh clone therefore gets every tool for running a fleet and no orders for ou
 is the only arrangement in which two people can both use this repository.
 
 ## Working in this repository
+
+- **BEFORE YOU WRITE A TOOL, ASK WHETHER IT IS ALREADY HERE.**
+  `node tools/m59-index.mjs --find <word>`, or read [`tools/INDEX.md`](tools/INDEX.md).
+  This directory went from 151 tools to 589 in twenty-four days with no index, and the cost
+  is not disk — it is that the answer to "does this exist?" was unavailable, so it got
+  written again. On 2026-09-05 a review was about to recommend building "one command that
+  prints the whole operational picture" when `m59-status.mjs` already did exactly that, and
+  `m59-fleet-repl.mjs` — a REPL that runs any fleetscript by name, with `dry` — had been
+  rescued off the prod branch the day before and appeared in this file zero times. The index
+  is GENERATED from the header comment every tool already has, so it cannot drift.
+  `node tools/m59-index.mjs` rewrites it; `--check` fails a stale one.
+
+- **A COORDINATE CARRIES ITS UNIT. THERE ARE THREE SPACES AND `FINENESS` NAMES TWO OF THEM.**
+  `FINENESS` is **64** in kod (`blakston.khd:1163`) and **1024** in the client
+  (`clientd3d/drawdefs.h:42`) — the same identifier, 16x apart. The wire also subtracts one
+  whole square, and sends **row first**, which the client stores as **y**: `row` IS `y` and
+  `col` IS `x` (`clientd3d/server.c:176`). Use [`tools/m59-coords.mjs`](tools/m59-coords.mjs)
+  — `squareCentre`, `protocolPoint`, `clientPoint`, `asClient`, and
+  `expectUnit(p, 'client', where)` at every boundary. A bare number is refused, because a
+  number cannot say whether it is 1, 64 or 1024 to the square. What it cost without this:
+  `9fb1ad3`, kod PROTOCOL units fed to `floorBaseAtClient`, which wants CLIENT ones; and
+  `abec3ac`, a declared jump that aimed at `col*64+32` — the square CENTRE — when the entire
+  point of declaring it was to land somewhere specific. The arithmetic was never wrong.
+
+- **THE SERVER IS TWO-DIMENSIONAL. HEIGHT IS OURS.** `CanMoveInRoomFine`
+  (`blakserv/roomdata.c:235`) tests `ROOM_FLAG_WALKABLE` and a 2D `monster_grid`, and takes
+  no z at all. Every height rule — `GetFloorBase`, falling, and the 24-unit step limit at
+  `clientd3d/move.c:55` — exists **only in the client**, and we are the client. Two
+  consequences that look unrelated and are the same sentence: **monster collision is
+  height-agnostic**, so a body ten feet below a ledge still blocks a walk across it; and
+  nothing upstream will ever stop us walking up a cliff. When a plan is refused for a reason
+  that makes no three-dimensional sense, you have asked a 2D authority a 3D question.
+
+- **PROD IS A VERSIONED DEPLOY OF MAIN, AND IS NEVER AHEAD OF IT.** Work lands on `main`; a
+  deploy is a **tag** on main plus a checkout of that tag. `node tools/m59-deploy.mjs
+  --verify` exits 1 on drift; `--cut` prints the two lines that ship the current trunk.
+  A deploy tracked as a BRANCH is an invitation to commit to it; a tag is a fact about main.
+  What the branch cost: on 2026-09-05 prod was **six commits and 2,428 insertions ahead** of
+  this repo — including new FleetScript guarantees — plus six uncommitted files, four named
+  `.superseded-handcopy`. It had happened before (`f732112`, "adopt the five tools that only
+  existed on the prod deploy branch"), and
+  `Merge … 'origin/max-efficiency' into deploy-2026-09-02` appears **nine** times: the deploy
+  ref was not a deploy, it was a long-lived integration branch. 86 branches, zero tags.
 
 - **A claim that contradicts what is already written down needs a reproduction before
   anything is decided on it.** The bar is two things at once: the claim cuts against this
