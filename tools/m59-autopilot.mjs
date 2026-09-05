@@ -10438,8 +10438,56 @@ export class Autopilot {
     if (!advice) return null;
     const square = `${advice.col},${advice.row}`;
     if (advice.verdict === 'give_up') {
-      this.wedgeHold = { room: advice.room, col: advice.col, row: advice.row,
+      // GIVING UP MUST NOT MEAN STANDING THERE.
+      //
+      // The hold below exists for a good reason — "cancelling changes nothing when the
+      // inputs do not" — and for a long time its answer to that was to stop issuing walks
+      // and let the character wait two minutes where it was. On a hunting floor that is
+      // fine. On the road it is the whole death: measured over 24 hours, 70 of 70 deaths
+      // were characters NOT SWINGING and most were not moving either, wedged in the
+      // Cragged Mountains corridor with trolls and black spiders arriving, and the hold is
+      // 120 seconds. The postmortems read "travelling, moving:false" for a median of a
+      // minute; this is where that minute comes from.
+      //
+      // And standing still does not change the inputs either. RETREATING DOES. Backing out
+      // along the trail puts the next attempt on a different square in a different part of
+      // the room, which is the thing the hold was trying to achieve and could not.
+      //
+      // Every step of the retreat is a move the fine validator already accepted on the way
+      // in, replayed backwards, so this cannot invent a traversal a wedged character could
+      // not make — the same argument that lets a breadcrumb retreat work at all.
+      //
+      // NOT BELOW THE FLEE LINE. Down there the survival ladder owns the body and is
+      // already running; a wedge-retreat would be a second opinion about the same emergency.
+      let backedOff = null;
+      try {
+        const hp = this.s?.client?.vitals?.()?.health;
+        const frac = pct(hp);
+        const above = frac === null || frac >= this.safety().fleeAt;
+        if (above && typeof this.s?.retreatAlongBreadcrumbs === 'function') {
+          const out = await this.s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
+            .catch(e => ({ moved: false, reason: e.message }));
+          const after = this.wedgePlace();
+          const moved = !!after && (after.room !== advice.room ||
+                                    after.col !== advice.col || after.row !== advice.row);
+          backedOff = { moved, steps: out?.steps ?? out?.crumbs ?? null,
+                        to: after ? `${after.col},${after.row}` : null,
+                        room: after?.room ?? null, why: out?.reason ?? null };
+          // AND PUT A WALL AT ITS BACK WHILE IT WAITS. A retreat that ends in open ground
+          // has traded one bad square for another; the wall is what makes the wait cheap.
+          if (moved && typeof this.takeSafeSpot === 'function')
+            await this.takeSafeSpot('waiting out a wedge give-up behind a wall', null,
+                                    { source: 'wedge' }).catch(() => null);
+        }
+      } catch { /* the retreat is the improvement, never the requirement */ }
+
+      // THE HOLD IS ANCHORED WHERE IT ENDED UP, not where it wedged. That is the whole
+      // point of moving: `sameWedgePlace` then reads false at the new square, so the next
+      // travel is planned rather than refused, from ground that has not already failed.
+      const at = this.wedgePlace() ?? { room: advice.room, col: advice.col, row: advice.row };
+      this.wedgeHold = { room: at.room, col: at.col, row: at.row,
                          repeats: advice.repeats, to, at: now,
+                         backed_off: !!backedOff?.moved,
                          until: now + watchdog.WEDGE_GIVEUP_HOLD_MS };
       this.tally.wedge_giveups = (this.tally.wedge_giveups || 0) + 1;
       this.note('WATCHDOG — gave up: ' + advice.repeats + ' walks from the same square went nowhere', {
@@ -10451,8 +10499,10 @@ export class Autopilot {
              'the inputs do not, so this converts an unbounded loop into a bounded one: no ' +
              'walk is issued from this place until the hold expires, and the pass falls ' +
              'through to whatever it does when it cannot travel',
+        backed_off: backedOff ?? 'not attempted — below the flee line, or no trail to walk back',
         note: 'the objective is not thrown away — the hold expires and the next attempt ' +
-              'starts a fresh count. If this line repeats at the same square, the square ' +
+              'starts a fresh count, now from wherever the retreat ended rather than from ' +
+              'the square that failed. If this line repeats at the same square, the square ' +
               'is the problem: record it with m59-recordjam.mjs',
       });
       recordEvent(this.who(), 'wedge_gave_up', {

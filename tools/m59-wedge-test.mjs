@@ -171,8 +171,9 @@ ok('the autopilot\'s own copy of the arm records the same way',
 // ------------------------------------------------------------------ 3. the pass's half
 
 // A keeper stripped to what answerWedge / wedgedInPlace / tradeInPlaceIfWedged touch.
-function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7 } = {}) {
-  const notes = [], walks = [], fights = [];
+function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7,
+                 retreatMoves = true } = {}) {
+  const notes = [], walks = [], fights = [], retreats = [], walls = [];
   const ap = Object.create(Autopilot.prototype);
   const self = { col, row };
   ap.watch = wd.freshState();
@@ -196,8 +197,17 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
     // The fake mover MOVES the body, so "did the sidestep change the start square" is a
     // real question with a real answer rather than a fixture agreeing with itself.
     walkTo: async (c, r, opts) => { walks.push({ col: c, row: r, opts }); self.col = c; self.row = r; return { arrived: true }; },
+    // GIVING UP NOW BACKS OFF. The fake trail walks the body two squares back the way it
+    // came, which is what a real breadcrumb retreat does — every step of it a move the
+    // validator already accepted on the way in.
+    retreatAlongBreadcrumbs: async (opts) => {
+      retreats.push(opts ?? {});
+      if (retreatMoves) { self.col -= 2; self.row -= 1; }
+      return { moved: retreatMoves, steps: retreatMoves ? 2 : 0 };
+    },
   };
-  return { ap, notes, walks, fights, self };
+  ap.takeSafeSpot = async (why, q, opts) => { walls.push({ why, opts }); return { took: true }; };
+  return { ap, notes, walks, fights, self, retreats, walls };
 }
 const breakAt = (ap, n, place = { room: 586, col: 18, row: 18 }, doing = 'travelling') => {
   for (let i = 0; i < n; i++) wd.noteWedgeBreak(ap.watch, { ...place, doing, to: 586 }, Date.now() - (n - i) * 1000);
@@ -368,6 +378,69 @@ console.log('\nthe call sites — a rung that is never reached is the second inc
   const arm = WATCHDOG.indexOf('WATCHDOG — broke a wedge that was not hurting anybody');
   ok('the module arm records the break before it writes the note', WATCHDOG.lastIndexOf('noteWedgeBreak(w,', arm) > 0);
   ok('the status snapshot exposes the wedge, so one poll shows the loop', /^\s+wedge: this\.watch\?\.wedgeBreak \? \{/m.test(AUTOPILOT));
+}
+
+// ---------------------------------------------------------------------------
+// GIVING UP MUST NOT MEAN STANDING THERE.
+//
+// The hold exists because "cancelling changes nothing when the inputs do not", and for a
+// long time its answer was to stop issuing walks and wait 120 seconds where it stood. On a
+// hunting floor that is fine; on the road it is the death. Measured over 24 hours on prod:
+// 70 of 70 deaths were characters NOT SWINGING, most of them not moving either, wedged in
+// the Cragged Mountains corridor while trolls and black spiders arrived.
+//
+// Standing still does not change the inputs either. Backing out along the trail does, which
+// is the thing the hold was reaching for and could not do from a standstill.
+console.log('\ngiving up backs off along the trail instead of waiting where it wedged');
+{
+  const k = keeper({ hp: 20, max: 22 });            // healthy: above the flee line
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  const before = { col: k.self.col, row: k.self.row };
+  const r = await k.ap.answerWedge(586);
+  ok('it still gives up', r?.gave_up === true, JSON.stringify(r));
+  ok('but it retreated first', k.retreats.length === 1);
+  ok('the body actually moved off the wedged square',
+     k.self.col !== before.col || k.self.row !== before.row,
+     `${before.col},${before.row} -> ${k.self.col},${k.self.row}`);
+  ok('and put a wall at its back to wait behind', k.walls.length === 1,
+     JSON.stringify(k.walls));
+  // THE POINT OF MOVING. The hold is anchored where it ENDED UP, so `sameWedgePlace` reads
+  // false at the new square and the next travel is planned rather than refused — from
+  // ground that has not already failed.
+  ok('the hold is anchored where it ended up, not where it failed',
+     k.ap.wedgeHold.col === k.self.col && k.ap.wedgeHold.row === k.self.row,
+     JSON.stringify({ hold: [k.ap.wedgeHold.col, k.ap.wedgeHold.row], now: [k.self.col, k.self.row] }));
+  ok('and it records that it backed off', k.ap.wedgeHold.backed_off === true);
+  const note = k.notes.find(n => /gave up/.test(n.what));
+  ok('the operator note says so', note && typeof note.detail.backed_off === 'object',
+     JSON.stringify(note?.detail?.backed_off));
+}
+
+console.log('\nbut not below the flee line — the survival ladder owns the body down there');
+{
+  // hp 3 of 22 is 14%, under the 70% flee line this fixture uses. A wedge-retreat there
+  // would be a second opinion about an emergency the ladder is already handling.
+  const k = keeper({ hp: 3, max: 22 });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  const r = await k.ap.answerWedge(586);
+  ok('it gives up', r?.gave_up === true);
+  ok('and does NOT retreat', k.retreats.length === 0);
+  ok('nor take a wall', k.walls.length === 0);
+}
+
+console.log('\na retreat that cannot move is not a failure — the hold still bounds the loop');
+{
+  const k = keeper({ hp: 20, max: 22, retreatMoves: false });
+  breakAt(k.ap, wd.WEDGE_REPEAT_CAP);
+  const before = { col: k.self.col, row: k.self.row };
+  const r = await k.ap.answerWedge(586);
+  ok('it tried', k.retreats.length === 1);
+  ok('it still gives up rather than throwing', r?.gave_up === true);
+  ok('the hold anchors where it still is', k.ap.wedgeHold.col === before.col
+     && k.ap.wedgeHold.row === before.row);
+  ok('and says it did not back off', k.ap.wedgeHold.backed_off === false);
+  // No wall either: a wall taken without moving is the same square with a nicer name.
+  ok('no wall was taken', k.walls.length === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
