@@ -70,6 +70,7 @@
 // operation failing, which is the difference between a fleet tool and a script.
 import { takeRunLock } from './m59-runlock.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
+import { foodValue, allFoodNames } from './m59-items.mjs';
 
 const RPC = () => process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901/';
 let seq = 0;
@@ -101,6 +102,91 @@ export function purseOf(items = []) {
   return (items || []).filter(i => /shilling/i.test(i.name || ''))
                       .reduce((n, i) => n + (i.amount || 1), 0);
 }
+
+// ---------------------------------------------------------------- what is food, and what is not
+//
+// ASK THE GAME, NEVER A WORD LIST. `foodValue` reads the table built from the game's own Food
+// class tree, so it knows all twenty-two foods and cannot be argued with.
+//
+// This is here because the same mistake has now been made in four places by four different
+// hands, and each one cost something:
+//
+//   * m59-smartloot filed `spider eye`, `bunch of grapes` and `fortune cookie` as sellable
+//     stock, because its FOOD was a pattern somebody typed.
+//   * the sell circuit's keep list and the street giveaway's each named two of the SEVEN
+//     things the Duke's tables hand out, so the other five were sold in Barloque or dropped
+//     in the road — six hundred spider eyes among them, at nutrition 9, the same as pork.
+//   * and a keep list that matched `mushroom` as a family would have held all five of this
+//     world's mushrooms, four of which are casting reagents that are meant to be sold.
+//
+// So a script never has to decide what food is. It asks.
+//
+// VIGOR ABOVE 80 COMES ONLY FROM EATING — resting stops awarding it at 80 of 200 — which is
+// why this matters at all: food in a pack is the only route to a character that fights at
+// 150+, and every one of those four bugs was the fleet walking its own vigor to a merchant.
+
+/**
+ * The edible half of a pack, each with what it is worth.
+ *
+ * @param {Array<{name:string,amount?:number}|string>} items  from `pack(agent)`
+ * @returns {Array<{name:string,amount:number,nutrition:number,vigor:number}>}
+ *   `vigor` is nutrition * amount — what the whole stack is worth if it is all eaten.
+ */
+export function foodIn(items = []) {
+  return (items || []).map(i => {
+    const name = String(typeof i === 'string' ? i : (i?.name ?? '')).trim();
+    const amount = typeof i === 'string' ? 1 : Number(i?.amount ?? 1) || 1;
+    const f = name ? foodValue(name) : null;
+    if (!f) return null;
+    const nutrition = Number(f.nutrition) || 0;
+    return { name, amount, nutrition, vigor: nutrition * amount };
+  }).filter(Boolean);
+}
+
+/**
+ * Everything else, in the shape it arrived in.
+ *
+ * Money is NOT filtered out here — a shilling is not food and belongs in "not food", which is
+ * what a caller asking for non-food almost always means. Use `purseOf` when the question is
+ * about money specifically; the two answers are different and both are wanted.
+ */
+export function nonFoodIn(items = []) {
+  return (items || []).filter(i => {
+    const name = String(typeof i === 'string' ? i : (i?.name ?? '')).trim();
+    return !name || !foodValue(name);
+  });
+}
+
+/**
+ * Both halves and the arithmetic, in one pass — the usual call.
+ *
+ * `vigor` is the total if every bite were eaten. It is NOT vigor the character has: the
+ * stomach admits 100 at a sitting and drains about 7.2 a minute (FOOD_USE_RATE, player.kod),
+ * so a pack of 600 spider eyes is a fortnight of eating rather than a number to add to a
+ * vitals reading. `meals` counts items, `kinds` counts distinct foods.
+ */
+export function splitFood(items = []) {
+  const food = foodIn(items);
+  return {
+    food,
+    other: nonFoodIn(items),
+    meals: food.reduce((n, f) => n + f.amount, 0),
+    kinds: new Set(food.map(f => f.name.toLowerCase())).size,
+    vigor: food.reduce((n, f) => n + f.vigor, 0),
+  };
+}
+
+/**
+ * A keep list that spares every food this game has, for `sell`, `vault` and `drop_all`.
+ *
+ * Derived from the Food class tree rather than typed, for the reason at the top of this
+ * section. Spread it into a longer list: `keep: [...FOOD_KEEP, 'wand', 'signet']`.
+ *
+ * The names are exact and never families. `mushroom` as an entry would hold all five of this
+ * world's mushrooms and only two of them are edible; this list contains
+ * `edible mushroom` and `inky-cap mushroom` and not the other three.
+ */
+export const FOOD_KEEP = Object.freeze(allFoodNames());
 
 export async function observe(agent) {
   const s = await call('status', { agent }, 40_000).catch(() => null);

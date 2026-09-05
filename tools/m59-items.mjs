@@ -395,6 +395,20 @@ export function isFood(name, file = ITEMS_FILE) {
 // What eating this is worth: {nutrition, filling}, where nutrition IS the vigor gained.
 // Null for anything that is not food. Rank a shop's stock on `nutrition` — the fleet's
 // constraint is the stomach and the walk to the shop, not the shillings.
+/**
+ * Every food this game has, by name.
+ *
+ * For building a keep list that cannot drift: a caller that types its own list is answering
+ * a question the table already answers, and four separate hand-written lists in this
+ * repository have each been wrong about a different item. The names come back exactly as the
+ * table holds them, so a substring match against them is safe — `edible mushroom` and
+ * `inky-cap mushroom` are here and the three reagent mushrooms are not.
+ */
+export function allFoodNames(file = ITEMS_FILE) {
+  const t = loadItems(file);
+  return Object.keys(t?.food ?? {}).sort();
+}
+
 export function foodValue(name, file = ITEMS_FILE) {
   const t = loadItems(file);
   if (!t?.food) return null;

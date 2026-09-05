@@ -487,8 +487,18 @@ Guilds — [`docs/m59-guilds.md`](docs/m59-guilds.md):
 
 ```bash
 node tools/fleetscripts/come-home.mjs          # the shape: declare the errand, run it
-node tools/m59-fleetscript-test.mjs            # 72, offline
+node tools/m59-fleetscript-test.mjs            # 100, offline
 ```
+
+**And it answers "what is food" so your script does not have to.** `splitFood(pack(agent))`
+returns `{food, other, meals, kinds, vigor}`, `foodIn`/`nonFoodIn` are the halves on their
+own, and `FOOD_KEEP` is a keep list for `sell`, `vault` and `drop_all`. All of it reads the
+game's own Food class tree, which is the point: a hand-written list of foods has now been
+wrong in FOUR places in this repository, and the same item each time. `spider eye` is one of
+the seven things the Duke's tables hand out, nutrition 9 like a slice of pork — it was filed
+as sellable stock by `smartloot` and shed by two keep lists, with six hundred of them in the
+fleet's packs. Note the shape of the near miss too: an entry of `mushroom` holds all five of
+this world's mushrooms and only two are edible, so `FOOD_KEEP` names the two exactly.
 
 Move some characters, buy something, fetch somebody out of a hole — **declare it as a
 `fleetScript` and let it compile the safeties in.** Not because a hand-written script

@@ -15,7 +15,8 @@ const LOCK_DIR = mkdtempSync(join(tmpdir(), 'm59-fs-'));
 process.env.M59_RUNLOCK_DIR = LOCK_DIR;
 process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';   // never actually reached
 
-const { fleetScript, walk, shop, bank, verify, sell, vault, VAULT_KEEP } =
+const { fleetScript, walk, shop, bank, verify, sell, vault, VAULT_KEEP,
+        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -249,6 +250,55 @@ console.log('\na banker refusal is prose, not an error');
   const r = await fleetScript({ name: 'poor', fleet: 'testfleet', agents: ['a1'],
     steps: [bank('withdraw', 5000)], onLog: quiet });
   ok('a refusal spoken as a sentence is caught as a failure', r.results.a1.ok === false);
+}
+
+console.log('\nany script can ask what in a pack is food, without deciding for itself');
+{
+  // THE SAME MISTAKE HAS NOW BEEN MADE IN FOUR PLACES BY FOUR HANDS, each with a word list:
+  // smartloot filed spider eye, grapes and fortune cookies as sellable stock; the sell
+  // circuit's keep list and the street giveaway's each named two of the SEVEN foods the
+  // Duke's tables hand out, so the other five were sold in Barloque or left in the road.
+  // Six hundred spider eyes among them, at nutrition 9 — the same as a slice of pork.
+  //
+  // These helpers exist so the fifth script does not have to make it. They ask `foodValue`,
+  // which reads the game's own Food class tree.
+  const pack = [
+    { name: 'spider eye', amount: 600 }, { name: 'slice of pork', amount: 12 },
+    { name: 'Inky-cap mushroom', amount: 3 }, { name: 'red mushroom', amount: 9 },
+    { name: 'shilling', amount: 1208 }, { name: 'battle axe', amount: 1 },
+  ];
+  const split = splitFood(pack);
+  ok('the spider eye is food', split.food.some(f => f.name === 'spider eye'));
+  ok('and so is the Inky-cap, at fifty a bite',
+     split.food.some(f => f.name === 'Inky-cap mushroom' && f.nutrition === 50));
+  ok('a red mushroom is NOT — four of the five are reagents',
+     split.other.some(i => i.name === 'red mushroom'));
+  ok('counts the stacks, not the entries', split.meals === 615, String(split.meals));
+  ok('and what the whole larder is worth if eaten', split.vigor === 600 * 9 + 12 * 9 + 3 * 50,
+     String(split.vigor));
+
+  // MONEY IS NOT FOOD AND IS NOT FILTERED AWAY. A caller asking for non-food nearly always
+  // means "everything that is not a meal", which includes the purse; `purseOf` answers the
+  // other question. Two questions, two answers, and neither pretends to be the other.
+  ok('money lands in non-food', nonFoodIn(pack).some(i => /shilling/i.test(i.name)));
+  ok('and purseOf still answers the money question', purseOf(pack) === 1208);
+
+  // The string form callers get from some tools.
+  ok('a bare list of names works too', foodIn(['spider eye', 'battle axe']).length === 1);
+  ok('an empty pack is empty, not a crash', splitFood([]).meals === 0 && splitFood().meals === 0);
+}
+
+console.log('\nFOOD_KEEP is derived, so a keep list cannot drift from the game');
+{
+  ok('it holds every food the game has', FOOD_KEEP.length === 22, String(FOOD_KEEP.length));
+  const holds = n => FOOD_KEEP.some(k => n.toLowerCase().includes(k.toLowerCase()));
+  for (const meal of ['spider eye', 'slice of pork', 'bowl of soup', 'drumstick',
+                      'bunch of grapes', 'goblet of ale', 'fortune cookie', 'edible mushroom'])
+    ok('spares ' + meal, holds(meal));
+  // AND THE FAILURE IN THE OTHER DIRECTION, which is the one that costs money: a `mushroom`
+  // entry would hold all five and four of them are reagents the herbalist buys.
+  for (const stock of ['mushroom', 'red mushroom', 'blue mushroom'])
+    ok('still sells ' + stock, !holds(stock));
 }
 
 console.log('\nthe vault step deposits, which it did not do for as long as it existed');
