@@ -24,6 +24,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { foodValue } from './m59-items.mjs';
+import { larderOf } from './m59-skills.mjs';
 
 const HERE = (f) => fileURLToPath(new URL(f, import.meta.url));
 
@@ -217,6 +218,61 @@ console.log('\nthe Duke\'s Feast Hall cannot be fought in, and the approach can'
   ok('nor money', foodValue('shilling') == null);
   ok('an empty name is not food', foodValue('') == null);
   ok('and neither is null', foodValue(null) == null);
+}
+
+// ------------------------------------------------- larderOf reads the WIRE name
+//
+// `m59-skills.mjs` kept a private regex list beside this generated table, and two of its
+// patterns were kod CLASS names tested against the DISPLAY names the protocol sends:
+// `/waterskin/i` against "water skin", and `/spideye/i` against "spider eye". Neither ever
+// matched, so `larderOf` silently dropped every spider eye and water skin in the fleet.
+//
+// `has_food` is `larderOf(c).length > 0` and `larder_vigor` is its nutrition sum, so those
+// characters read as carrying NO food — and DUM's throttle prefers `larder_vigor` over its own
+// (correct) regex, so it called them unfed and sent fight_above_vigor 80 instead of 200. They
+// sat at the resting cap never eating what they held. Measured on prod 2026-09-05: Gonzo
+// larder_vigor 0 against a true 234, Clifford 0 of 156, Zoot 50 of 224 — 849 nutrition
+// invisible across the fleet and nine characters pinned at 80.
+//
+// The fake client is shaped like the real one: `rsc` maps nameRsc to the display name.
+{
+  const rsc = new Map([[1, 'spider eye'], [2, 'water skin'], [3, 'slice of pork'],
+                       [4, 'Inky-cap mushroom'], [5, 'red mushroom'], [6, 'long sword'],
+                       [7, 'goblet of wine'], [8, 'mug of brew']]);
+  const client = (entries) => ({ rsc, inventory: entries });
+  const vigorOf = (c) => larderOf(c).reduce((n, x) => n + (x.food?.nutrition ?? 0) * (x.o?.amount || 1), 0);
+
+  const eyes = client([{ nameRsc: 1, amount: 26 }]);
+  ok('a pack of spider eyes is a larder', larderOf(eyes).length === 1);
+  ok('and it is worth its real nutrition', vigorOf(eyes) === 234, String(vigorOf(eyes)));
+
+  const skins = client([{ nameRsc: 2, amount: 4 }]);
+  ok('water skins count too', vigorOf(skins) === 12, String(vigorOf(skins)));
+
+  const mixed = client([{ nameRsc: 1, amount: 26 }, { nameRsc: 2, amount: 4 },
+                        { nameRsc: 3, amount: 10 }, { nameRsc: 4, amount: 1 },
+                        { nameRsc: 5, amount: 9 }, { nameRsc: 6, amount: 1 }]);
+  ok('a mixed pack sums every food and nothing else', vigorOf(mixed) === 26 * 9 + 4 * 3 + 10 * 9 + 50,
+     String(vigorOf(mixed)));
+  ok('the reagent mushroom is not in the larder',
+     !larderOf(mixed).some(x => x.name === 'red mushroom'));
+  ok('nor is the sword', !larderOf(mixed).some(x => x.name === 'long sword'));
+  ok('the larder is ranked by nutrition per unit of filling — the stomach is what is scarce',
+     larderOf(mixed)[0].name === 'Inky-cap mushroom');
+
+  // The table is also more accurate than the regexes it replaced: `/mug of/i` valued every
+  // mug at 6/8 when brew is 3/10, and `/goblet/i` valued wine at 3/10 when it is 6/8.
+  ok('a goblet of wine is valued as wine, not as every goblet',
+     vigorOf(client([{ nameRsc: 7, amount: 1 }])) === 6);
+  ok('a mug of brew is valued as brew, not as every mug',
+     vigorOf(client([{ nameRsc: 8, amount: 1 }])) === 3);
+
+  // `|| 1`, not `?? 1`: a non-stacking object carries amount 0 on the wire, so a nullish
+  // default would value every single item at nothing.
+  ok('a non-stacking food with amount 0 is worth one of it',
+     vigorOf(client([{ nameRsc: 3, amount: 0 }])) === 9);
+  ok('an empty pack is an empty larder', larderOf(client([])).length === 0);
+  ok('a null client is not a crash', larderOf(null).length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

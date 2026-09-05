@@ -21,7 +21,7 @@ import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-
 // The Underworld's exits, and which city is nearest to any room. As a namespace,
 // because escapeUnderworld re-exports most of it and a bare import would shadow.
 import * as UW from './m59-underworld.mjs';
-import { weighPack, isWeaponName, itemNameKey } from './m59-items.mjs';
+import { weighPack, isWeaponName, itemNameKey, foodValue } from './m59-items.mjs';
 // A character's own buy/sell/keep list, when it has one. Imported for the two pure
 // predicates only — this file does not go looking for the file, because the caller knows
 // which character it is and this one does not.
@@ -1238,24 +1238,34 @@ export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
 //   edible mushroom      5/15 = 0.33   poor, but it clears in 125s and can be free
 //   drumstick            9/30 = 0.30
 //   goblet               3/10 = 0.30
-const FOOD = [
-  { re: /inky.?cap/i,       nutrition: 50, filling: 25 },
-  { re: /chocolate mint/i,  nutrition: 5,  filling: 5 },
-  { re: /wheel of cheese/i, nutrition: 30, filling: 40 },
-  { re: /turkey leg/i,      nutrition: 15, filling: 20 },
-  { re: /mug of/i,          nutrition: 6,  filling: 8 },
-  { re: /meat pie/i,        nutrition: 30, filling: 50 },
-  { re: /stew/i,            nutrition: 15, filling: 25 },
-  { re: /loaf of bread/i,   nutrition: 20, filling: 40 },
-  { re: /waterskin/i,       nutrition: 3,  filling: 6 },
-  { re: /slice of pork|bowl of soup|spideye/i, nutrition: 9, filling: 20 },
-  { re: /bunch of grapes/i, nutrition: 7,  filling: 16 },
-  { re: /apple/i,           nutrition: 10, filling: 24 },
-  { re: /edible mushroom/i, nutrition: 5,  filling: 15 },
-  { re: /drumstick/i,       nutrition: 9,  filling: 30 },
-  { re: /goblet/i,          nutrition: 3,  filling: 10 },
-];
-const foodValue = name => FOOD.find(f => f.re.test(name)) || null;
+// THE TABLE ANSWERS THIS, AND A SECOND LIST HERE MATCHED THE WRONG NAMES FOR MONTHS.
+//
+// This was a private regex list, and two of its patterns were the kod CLASS names tested
+// against the DISPLAY names the wire actually sends:
+//
+//     { re: /waterskin/i, ... }                              the wire says "water skin"
+//     { re: /slice of pork|bowl of soup|spideye/i, ... }      the wire says "spider eye"
+//
+// `spideye` and `waterskin` are what the classes are called (Spideye, Waterskin — and the
+// comment above still lists them that way); neither ever matched an inventory entry. So
+// `larderOf` silently dropped every spider eye and every water skin in the fleet.
+//
+// WHAT THAT COST, measured on prod 2026-09-05. `has_food` is `larderOf(c).length > 0` and
+// `larder_vigor` is its nutrition sum, so a character carrying nothing else read as having
+// NO food. DUM's throttle rule reads `larder_vigor` and PREFERS it over its own regex — which
+// does match "spider eye" — so it called them unfed and sent `fight_above_vigor: 80` (its
+// no_food floor) instead of 200. Pinned at the resting cap, never eating, while carrying it:
+// Gonzo 26 spider eyes reading larder_vigor 0 of a true 234, Clifford 16 of a true 156, Zoot
+// seeing 50 of 224. 849 nutrition invisible across the fleet, and 9 characters stuck at 80.
+//
+// The items table is generated from the Food class tree and keys on the display name, which
+// is the only name the protocol ever gives us. Use it. A second opinion about what food is,
+// maintained by hand next to a generated table, is the bug — not the spelling.
+//
+// It is also strictly better than the regexes were: `/mug of/i` valued every mug at 6/8 when
+// brew and pekonch are 3/10, and `/goblet/i` valued wine at 3/10 when it is 6/8. And it stops
+// matching substrings, which is the rule this repository already states for item identity —
+// "mushroom" is its own item and must never mean every item whose longer name contains it.
 
 // THE STOMACH, MODELLED — because the protocol never sends it.
 //
