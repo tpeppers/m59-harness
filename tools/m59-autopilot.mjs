@@ -6103,6 +6103,10 @@ export class Autopilot {
     this.travelRouteStops = 0;
     this.travelTrackStops = 0;
     const startedAt = Date.now();
+    // The room this journey BEGAN in, captured before anything walks. A destination is not a
+    // route; two characters asked for the same room from different places are not making the
+    // same trip, and comparing them as if they were is how a road looks safe on average.
+    const startedIn = Number(this.s?.world?.room?.num ?? NaN) || null;
     const v0 = this.s.client?.vitals?.()?.health;
     const hpStart = v0?.value ?? null, hpMax = v0?.max ?? null;
     const detailed = detailSettings(this.policy, 'travel');
@@ -6232,6 +6236,23 @@ export class Autopilot {
       this.ledgerEvent(travelKind === 'travel' ? 'travel_journey' : 'zone_change', {
         ...(travelKind === 'travel' && holdBetweenRooms ? { arm } : {}),
         to: room, legs, planned_legs: plannedLegs,
+        // WHERE IT STARTED AND WHERE IT ACTUALLY STOPPED.
+        //
+        // `to` alone cannot answer the question the operator asks of this ledger — "did it go
+        // to the wrong place" — because a row that says only `to: 953` looks identical whether
+        // the character is standing in the Duke's hall or two rooms short of it in the
+        // Courtyard. `from` makes a ROUTE out of a destination, so survivors and casualties on
+        // the same road can be compared; `ended_in` is the other half, and "asked for 953,
+        // ended in 950" is the whole hypothesis in two fields.
+        //
+        // `arrived` and `reason` were on the opt-in detailEvent below and not here, so the
+        // always-on row could not say whether the journey worked. A denominator you cannot
+        // split by outcome is a count of attempts.
+        from: startedIn ?? null,
+        ended_in: Number(this.s?.world?.room?.num ?? NaN) || null,
+        arrived: outcome?.arrived ?? false,
+        reason: outcome?.reason ?? null,
+        stumbles: Number.isFinite(outcome?.stumbles) ? outcome.stumbles : null,
         ms: Date.now() - startedAt,
         // The A/B field retains its old budget-clock meaning. The inclusive recovery time
         // is separate so observing route/track stops cannot change the experiment's units.
