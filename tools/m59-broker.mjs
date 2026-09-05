@@ -2395,8 +2395,11 @@ class KeeperProxy {
     // still understands this. They disagreed once and every journey silently failed.
     return keeperAction(this.name, this._index, 'travel', { to: toRoomNum, toRoomNum, ...opts });
   }
-  async cancelMovement(token) {
-    return keeperAction(this.name, this._index, 'cancel', {});
+  // The `why` travels with it. A cancel that cannot say who asked for it is the single
+  // commonest way a journey ends here, and it used to be the only one that recorded nothing.
+  async cancelMovement(token, why = null) {
+    return keeperAction(this.name, this._index, 'cancel',
+                        { ...(token ? { control_token: token } : {}), ...(why ? { why } : {}) });
   }
   // THE TWO HALVES OF SHOPPING THAT MUST TOUCH THE WIRE, forwarded to the process that owns
   // it. `buy` and `buyItems` are mutations and the emulated client is a snapshot, so faking
@@ -5645,8 +5648,16 @@ const TOOLS = [
     schema: { type: 'object', properties: {
       agent: { type: 'string' },
       control_token: { type: 'string', description: 'also reject a late stale movement carrying this token' },
+      why: { type: 'string',
+        description: 'WHO IS CANCELLING, in a few words. It lands on the journey ledger as ' +
+          '`cancelled_by`, and a cancellation is the commonest way a journey ends here — so ' +
+          'a caller that does not say leaves the fleet unable to explain its own biggest ' +
+          'failure mode. "the cancel_movement tool" is what an anonymous one looks like.' },
     }, required: ['agent'] },
-    run: (a) => session(a.agent).cancelMovement(a.control_token, 'the cancel_movement tool'),
+    run: (a) => session(a.agent).cancelMovement(
+      a.control_token,
+      (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
+                                                  : 'the cancel_movement tool, caller unnamed'),
   },
   {
     name: 'go_through',

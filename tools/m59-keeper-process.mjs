@@ -3195,11 +3195,26 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // THE CANCEL THAT LEFT NO TRACE, AND IT WAS 75 OF THE FLEET'S 98 LOST JOURNEYS.
+    //
+    // This bumped `movementGeneration` directly. That is enough to stop the walk — every
+    // movement checks the generation — and it skips `Session.cancelMovement`, which is the
+    // only thing that writes `lastMovementCancel`. So the journey died reporting "movement
+    // cancelled by a newer command", the ledger had no caller to name, and the commonest
+    // way a journey ends in this fleet was also the one way that recorded nothing about
+    // itself. Measured 2026-09-05: 98 cancelled journeys in twenty minutes, 23 with a name.
+    //
+    // Going through cancelMovement costs nothing here and buys attribution everywhere. The
+    // caller may pass its own `why`; the default names the endpoint rather than pretending
+    // to know who called it, because a guessed attribution is worse than an admitted gap.
     if (req.method === 'POST' && path === '/cancel') {
       const asked = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
       if (!requireAddressedWrite(req, asked)) return;
-      session.movementGeneration++;
-      json({ ok: true });
+      const why = typeof asked.why === 'string' && asked.why.trim()
+        ? asked.why.trim().slice(0, 80)
+        : 'POST /cancel with no caller named';
+      session.cancelMovement(asked.control_token ?? null, why);
+      json({ ok: true, cancelled: true, why });
       return;
     }
 
