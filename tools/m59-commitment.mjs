@@ -116,10 +116,27 @@ export function describeCommitment({ errand = null, inert = null, parked = null,
              detail: errand.kind === 'signet'
                ? 'a returned ring pays ten times its value to a character under 30 max health'
                : 'dispatched by the fleet; taking it abandons the other end' });
+  // A COMMITMENT WITH NO `since` CANNOT BE TOLD FROM A DEAD ONE.
+  //
+  // This said `since: null` while `goInert` had recorded the time all along — so a `driven`
+  // hold was the one commitment on the board that could not be aged. When an accidental
+  // import left all 21 characters inert and exited, the board showed 21 rows of "all hands —
+  // mustering at Cor Noth" with a null timestamp and no owner, every rule in the fleet
+  // stepped over them, and the only way to learn it was stale was for a second session to
+  // enumerate the running processes and prove the driver did not exist.
+  //
+  // `expires_at` matters as much as `since`: an inert keeper lapses on its own after fifteen
+  // minutes, and a reader that cannot see the deadline cannot tell "held" from "about to
+  // stop being held" — which is the difference between waiting and intervening.
   if (inert)
     return withOwner({ kind: 'driven', label: inert.why || 'something else is driving',
-             since: null,
-             detail: 'the keeper is awake and is not steering — usually a two-sided trade' });
+             since: inert.at ?? null,
+             expires_at: inert.expires_at ?? null,
+             by: inert.by ?? null,
+             detail: 'the keeper is awake and is not steering — usually a two-sided trade' +
+                     (inert.by ? `; taken by ${inert.by}` : '') +
+                     (inert.at ? '' : '. NO START TIME RECORDED — this predates the code that ' +
+                                      'stamps one, so it cannot be aged') });
   if (parked)
     return withOwner({ kind: 'parked', label: parked.ready ? 'parked, ready for a fleet update'
                                                  : 'parking for a fleet update',

@@ -8825,9 +8825,19 @@ export class Autopilot {
   // AND IT HAS A DEADLINE, because an errand that crashes between goInert and revive
   // would otherwise leave a character watching itself for the rest of the session. Every
   // caller here restores explicitly; the deadline is for the ones that do not get to.
-  goInert(why = null, { maxMs = INERT_MAX_MS } = {}) {
+  // `by` IS NOT DECORATION. A keeper made inert shows up on every board as a `driven`
+  // commitment, and every rule in the fleet steps over one — so an inert keeper nobody can
+  // account for is 21 characters standing down with no way to tell whether the thing driving
+  // them still exists. That happened: an accidental `import` of m59-allhands ran its muster,
+  // made all 21 inert, and ended. The commitment then read `since: null` with no owner, a
+  // peer session spent an investigation proving no such process was running, and the fleet
+  // did not eat while it lasted.
+  //
+  // The 15-minute cap always bounded it. What was missing was the ability to ask "is this
+  // still real" without waiting the cap out.
+  goInert(why = null, { maxMs = INERT_MAX_MS, by = null } = {}) {
     if (this.inert) return this.inertStatus();
-    this.inert = { why, at: Date.now(), maxMs };
+    this.inert = { why, at: Date.now(), maxMs, by };
     // Everything learned about which squares hold, in case the process goes away while
     // we are in this state. Same reason stop() does it.
     this.book.save();
@@ -9410,8 +9420,16 @@ export class Autopilot {
     // yes either way. What the travelling state adds is what it is still allowed to do,
     // which is the thing an operator wants when a character dies on a road.
     return { inert: true, why: this.inert.why,
+             // WHEN, ABSOLUTELY, AND NOT ONLY AS AN ELAPSED COUNT. `for_s` answers "how long"
+             // and every reader that wants to know "since when" — the commitment board above
+             // all — had to invent it or report null. It reported null.
+             at: this.inert.at,
+             by: this.inert.by ?? null,
              for_s: Math.round((Date.now() - this.inert.at) / 1000),
              gives_up_after_s: Math.round(this.inert.maxMs / 1000),
+             // The moment it stops being true on its own, so a reader can tell a live hold
+             // from one that is about to lapse without doing the arithmetic.
+             expires_at: this.inert.at + this.inert.maxMs,
              ...(this.inert.travelling ? {
                state: 'travelling',
                guard: this.inert.guard,

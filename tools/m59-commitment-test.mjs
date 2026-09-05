@@ -90,6 +90,35 @@ console.log('\nwhat counts as being spoken for');
 
   ok('an inert keeper is driven by something else',
      describeCommitment({ inert: { why: 'a supply trade is driving' } }).kind === 'driven');
+
+  // A COMMITMENT WITH NO `since` CANNOT BE TOLD FROM A DEAD ONE.
+  //
+  // This was the one commitment on the board that could not be aged: `goInert` had recorded
+  // the time all along and this builder hardcoded null. An accidental import left all 21
+  // characters inert and exited; the board showed 21 rows with a null timestamp and no
+  // owner, every rule in the fleet stepped over them, and the only way to learn it was
+  // stale was for a second session to enumerate running processes and prove the driver did
+  // not exist. Twenty minutes of a fleet not eating.
+  {
+    const at = 1_700_000_000_000;
+    const c = describeCommitment({ inert: { why: 'all hands — mustering', at,
+                                            expires_at: at + 900_000, by: 'm59-allhands' } });
+    ok('it reports when it was taken', c.since === at, String(c.since));
+    ok('and who took it', c.by === 'm59-allhands', String(c.by));
+    ok('and says so in the detail a human reads', /taken by m59-allhands/.test(c.detail));
+    // `expires_at` matters as much: an inert keeper lapses on its own after fifteen minutes,
+    // and a reader that cannot see the deadline cannot tell "held" from "about to stop being
+    // held" — the difference between waiting and intervening.
+    ok('and when it stops being true on its own', c.expires_at === at + 900_000);
+  }
+  {
+    // A HOLD FROM BEFORE THIS CODE SAYS SO rather than quietly reading as brand new. Null is
+    // still possible and the one thing it must not do is look like a timestamp.
+    const c = describeCommitment({ inert: { why: 'something older' } });
+    ok('an unstamped hold still works', c.kind === 'driven');
+    ok('reports no start time', c.since === null);
+    ok('and admits it cannot be aged', /NO START TIME RECORDED/.test(c.detail));
+  }
   ok('and reports the reason it was given',
      describeCommitment({ inert: { why: 'a supply trade is driving' } }).label === 'a supply trade is driving');
   ok('an inert keeper with no reason still greys the row',
