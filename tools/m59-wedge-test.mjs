@@ -737,6 +737,18 @@ console.log('\nthe ladder reaches rung 1.5, and falls through when there is no r
        rails[0].toSquare?.row === 4 && rails[0].toSquare?.col === 9);
     ok('on the same budget as rung 1, never a longer one', rails[0].maxCrumbs === 12);
     ok('and the blind unwind was not also spent', retreats.length === 0);
+    // CREDIT LANDS WHERE THE MOVEMENT DID. `worked` compares against the ladder's ENTRY
+    // position, so every rung after a successful one inherits its credit -- observed live
+    // on the first wedge after deploy-2026-09-06-8, where rung 1 recorded
+    // `steps: 0, worked: true` after rung 1.5 had already freed the character. Harmless to
+    // the character, fatal to the measurement that says whether rung 1.5 is worth having.
+    // Asked of backUpToUnstick directly, because `tried` is its return value.
+    const k = keeper({ hp: 20, railWorks: true });
+    const rec = await k.ap.backUpToUnstick('a test wedge', { to: 586 });
+    ok('the rung that moved the body is the one credited with moving it',
+       rec?.tried?.find(x => x.rung === 1.5)?.moved_here === true);
+    ok('...and when it rejoins, rung 1 is not run at all rather than run and credited',
+       rec?.tried?.some(x => x.rung === 1) === false);
   }
   {
     // No rail to rejoin: the rung declines and rung 1 does the ordinary thing.
@@ -745,6 +757,12 @@ console.log('\nthe ladder reaches rung 1.5, and falls through when there is no r
     await ap.answerWedge(586);
     ok('rung 1.5 was tried and gave nothing', rails.length === 1);
     ok('so rung 1 ran', retreats.length === 1);
+    const k2 = keeper({ hp: 20, railWorks: false });
+    const rec2 = await k2.ap.backUpToUnstick('a test wedge', { to: 586 });
+    ok('a rung that declined is not credited with a move it did not make',
+       rec2?.tried?.find(x => x.rung === 1.5)?.moved_here === false);
+    ok('...and the fallback that did move is', 
+       rec2?.tried?.find(x => x.rung === 1)?.moved_here === true);
   }
   {
     // No onward route: the rung must be skipped, never aimed at the far destination.
