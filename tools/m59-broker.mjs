@@ -9502,6 +9502,15 @@ const TOOLS = [
       use_safe_spots: { type: 'boolean',
         description: 'fight from a wall whenever the kill would pay (default true). Turning this off ' +
           'gives up the largest survival advantage in the game and is almost never right' },
+      escape_ladder: { type: 'boolean',
+        description: 'WHEN A HEALTHY CHARACTER IS WEDGED AND THE WATCHDOG HAS GIVEN UP, CLIMB THE ' +
+          'ESCAPE LADDER (default true): back along the breadcrumbs, rejoin the baked rail, leave ' +
+          'by the square the room was entered by, re-cross into the previous room. Turning it off ' +
+          'leaves the character holding where it wedged for WEDGE_GIVEUP_HOLD_MS and is how a ' +
+          'travelling character spends its afternoon in one corner. Exists to be turned off on ' +
+          'HALF a fleet: both arms then run the same hour in the same rooms, which is the only ' +
+          'honest way to price the ladder. Not the same switch as back_up_when_wedged, which ' +
+          'gates the survival rung below the flee line' },
       back_up_when_wedged: { type: 'boolean',
         description: 'WHEN WEDGED, HURT AND IN REACH, BACK OUT THE WAY WE CAME BEFORE TRADING BLOWS ' +
           '(default true). Every other survival rung tries to reach somewhere NEW, which is exactly ' +
@@ -10289,6 +10298,8 @@ const TOOLS = [
       if (a.inky_reserve_floor !== undefined)
         p.policy.inkyReserveFloor = Math.max(0, Number(a.inky_reserve_floor) || 0);
       if (a.use_safe_spots !== undefined) p.policy.useSafeSpots = !!a.use_safe_spots;
+      if (a.escape_ladder !== undefined)
+        p.policy.escapeLadder = !!a.escape_ladder;
       if (a.back_up_when_wedged !== undefined)
         p.policy.backUpWhenWedged = !!a.back_up_when_wedged;
       if (a.trade_in_place_when_wedged !== undefined)

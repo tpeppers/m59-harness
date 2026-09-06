@@ -706,7 +706,7 @@ console.log('\nescapeIfWedgedAndHurt — the rung itself');
 // to anything — the exact shape of `purpose` missing from a schema for a year.
 {
   const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
-  for (const k of ['back_up_when_wedged', 'trade_in_place_when_wedged']) {
+  for (const k of ['back_up_when_wedged', 'trade_in_place_when_wedged', 'escape_ladder']) {
     ok(`${k} is declared in the autopilot tool's schema`, BROKER.includes(`${k}: { type: 'boolean'`));
     ok(`...and actually applied`, BROKER.includes(`a.${k} !== undefined`));
   }
@@ -722,6 +722,39 @@ console.log('\nescapeIfWedgedAndHurt — the rung itself');
 // asked `anchorFor` for the journey's DESTINATION when `anchorFor` only answers for an
 // ADJACENT room, so it resolved only on the last hop of a trip. Neither is visible from a
 // unit test of the method. These cases exist to fail when the rung stops being reached.
+console.log('\nescape_ladder: false leaves this character out of the ladder entirely');
+{
+  // The A/B lever. It has to skip the WHOLE ladder, not merely a rung, and it must not be
+  // confused with back_up_when_wedged -- which gates escapeIfWedgedAndHurt, the survival
+  // rung below the flee line, and is a different population.
+  {
+    const { ap, retreats, rails, walks, travels } = keeper({ hp: 20, railWorks: true });
+    ap.policy.escapeLadder = false;
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('no rung ran at all', retreats.length === 0 && rails.length === 0);
+    ok('...not even the ones that walk', walks.length === 0 && travels.length === 0);
+    ok('and it still takes the hold, so the character is not left re-issuing the walk',
+       !!ap.wedgeHold);
+  }
+  {
+    // Default and explicit-true are the same thing, or half a fleet would drift.
+    const { ap, rails } = keeper({ hp: 20, railWorks: true });
+    ap.policy.escapeLadder = true;
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('escape_ladder: true climbs it', rails.length === 1);
+  }
+  {
+    // The two switches are independent: turning the survival one off must not silence this.
+    const { ap, rails } = keeper({ hp: 20, railWorks: true });
+    ap.policy.backUpWhenWedged = false;
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('back_up_when_wedged does not gate the healthy ladder', rails.length === 1);
+  }
+}
+
 console.log('\nthe ladder reaches rung 1.5, and falls through when there is no rail');
 {
   {

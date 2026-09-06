@@ -11012,8 +11012,25 @@ export class Autopilot {
       // fleet-mates crossed the same room without noticing. `backUpToUnstick` climbs from the
       // breadcrumbs to the square this character came in by, and then back through the door
       // into the previous room, depending on how many times this room has already needed it.
-      let backedOff = null;
-      try {
+      // ONE CHARACTER'S UNSTICK TACTIC IS A POLICY, NOT A BUILD FLAG.
+      //
+      // `escape_ladder: false` leaves this character to the hold below and nothing else, so
+      // a fleet can be split down the middle and both halves run at the same hour, in the
+      // same rooms, against the same spawns. That is the only way to ask "is the ladder
+      // worth its cost" without comparing two different days.
+      //
+      // Deliberately per character rather than per process. The arrangement it replaces was
+      // two brokers with different environments, which needs two keeper bands, two ports and
+      // twice the machine — and still cannot rule out that one arm simply had a worse hour.
+      //
+      // `back_up_when_wedged` is NOT this switch and never was: it gates
+      // escapeIfWedgedAndHurt, the survival rung below the flee line. This gates the ladder
+      // a HEALTHY wedged character reaches, which is the larger population and the one the
+      // record/cancel split restored.
+      const ladderOff = this.policy?.escapeLadder === false;
+      let backedOff = ladderOff
+        ? { moved: false, skipped: 'escape_ladder is off for this character' } : null;
+      if (!ladderOff) try {
         const out = await this.backUpToUnstick('a wedge the watchdog gave up on',
                                                { advice, to });
         const after = this.wedgePlace();
