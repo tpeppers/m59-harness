@@ -6241,7 +6241,9 @@ export class Autopilot {
     try { initialRoute = this.s.world?.route?.(room) ?? null; } catch { initialRoute = null; }
     const travelKind = routeTravelKind(initialRoute);
     const plannedLegs = Array.isArray(initialRoute?.hops) ? initialRoute.hops.length : null;
-    if (travelKind === 'zoning') this.doing = 'zoning';
+    // restBeforeSettingOut may have left the activity at 'recovering'. Movement owns
+    // it from here: otherwise the watchdog excuses a real walk as a deliberate rest.
+    this.doing = travelKind === 'zoning' ? 'zoning' : 'travelling';
     this.recordFrame('setting off');
     // One arm per journey, fixed before the first step so it cannot drift mid-route.
     // THE MODE DECIDES THE ARM, AND FOR "ON" IT DID NOT.
