@@ -10793,6 +10793,24 @@ export class Autopilot {
 
     const rung = this.stuckRung(from);
     const tried = [];
+    // WHICH RUNG ACTUALLY FREED IT, not which rung ran after one that did.
+    //
+    // `worked` used to be `moved()`, which compares against the position captured when the
+    // ladder was ENTERED — so every rung after a successful one inherited its credit. Seen
+    // live on the first wedge after deploy-2026-09-06-8: rung 1.5 walked Bunsen four steps
+    // out of the Cragged Mountains and rung 1, finding the trail already spent, recorded
+    // `steps: 0, worked: true`. Harmless to the character and fatal to the measurement,
+    // which is the whole reason the rungs are numbered separately.
+    //
+    // `sinceLastRung` compares against where the PREVIOUS rung left the body, so the credit
+    // lands where the movement did. Advanced by the caller after each attempt.
+    let rungMark = this.wedgePlace();
+    const sinceLastRung = () => {
+      const at = this.wedgePlace();
+      const was = rungMark;
+      rungMark = at ?? rungMark;
+      return !!at && !!was && (at.room !== was.room || at.col !== was.col || at.row !== was.row);
+    };
     const moved = () => {
       const at = this.wedgePlace();
       if (!at || !from) return false;
@@ -10842,7 +10860,7 @@ export class Autopilot {
         railed = out?.rejoined === true && moved();
         tried.push({ rung: 1.5, how: 'back onto the rail', steps: out?.steps ?? 0,
                      rejoined: out?.rejoined === true, rail_squares: out?.rail_squares ?? null,
-                     reason: out?.reason ?? null, worked: railed });
+                     reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: railed });
       }
     }
 
@@ -10852,7 +10870,7 @@ export class Autopilot {
       const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
         .catch(e => ({ moved: false, reason: e.message }));
       tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
-                   reason: out?.reason ?? null, worked: moved() });
+                   reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: moved() });
     }
 
     // ---- rung 2: the square we came in by. `enteredVia` is the session's own memory of the
