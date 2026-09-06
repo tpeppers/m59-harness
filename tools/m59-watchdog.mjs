@@ -48,18 +48,55 @@
 // or a no-op), NEVER a throw: an exception inside the tick would kill the timer and
 // take the guard down silently, which is the one failure mode it cannot have.
 
+// AN OPTIONAL MACHINE-LOCAL OVERRIDE, read from disk rather than the environment.
+//
+// `substrate/watchdog.local.json` — same shape and rules as `policy.local.json` and
+// `door-states.local.json`: gitignored, absent on every checkout that has not made one, and
+// ABSENT IS THE ORDINARY CASE. A checkout without the file behaves exactly as it does now, so
+// this imposes nothing on anybody.
+//
+// WHY NOT THE ENVIRONMENT, which these numbers already read: it does not stick. A Windows
+// User-scope variable is read from the registry at PROCESS CREATION and a child inherits from
+// its PARENT — so a fleet restarted from a terminal opened before the variable was set
+// silently runs the old value. Measured 2026-09-05: the override was set and verified present
+// in the registry, and the 20:53 restart still ran the watchdog on, producing 77 cancellations
+// in two hours. An override that survives only some restarts is worse than none, because it
+// makes behaviour depend on which window somebody used.
+//
+// Environment still wins where it is set, so a one-off run can override without editing a file.
+//   { "WATCHDOG_PINNED_MS": 2147483647 }
+import { readFileSync } from 'node:fs';
+
+const LOCAL = (() => {
+  try {
+    const o = JSON.parse(readFileSync(new URL('../substrate/watchdog.local.json',
+                                              import.meta.url), 'utf8'));
+    delete o._;                      // the file's own explanation, not a setting
+    for (const [k, v] of Object.entries(o))
+      console.error(`[watchdog] local override: ${k} = ${v}`);
+    return o;
+  } catch (e) {
+    // Absent is ordinary and not worth a line. Anything else is: a file that will not parse
+    // is not an empty file, and ignoring it silently would hide a typo in a live override.
+    if (e?.code !== 'ENOENT')
+      console.error(`[watchdog] could not read watchdog.local.json: ${e?.message ?? e}`);
+    return {};
+  }
+})();
+const num = (name, fallback) => Number(process.env[`M59_${name}`] ?? LOCAL[name] ?? fallback);
+
 // THE WATCHDOG'S THREE NUMBERS.
 //
 // The tick is fast because it is free: it reads `client.vitals()`, which the server
 // pushes, and writes nothing to the wire. 500ms is well inside the ~1s pace at which
 // damage can arrive, so nothing lands between two ticks unseen.
-export const WATCHDOG_MS = Number(process.env.M59_WATCHDOG_MS || 500);
+export const WATCHDOG_MS = num('WATCHDOG_MS', 500);
 // How long a pass may be inside one await before the watchdog will interrupt it.
-export const WATCHDOG_BLOCKED_MS = Number(process.env.M59_WATCHDOG_BLOCKED_MS || 3_000);
+export const WATCHDOG_BLOCKED_MS = num('WATCHDOG_BLOCKED_MS', 3_000);
 // The longest the record may go without a frame while nothing is changing. Matches
 // WATCH_MS in m59-postmortems.mjs deliberately: the thing that reports blindness and
 // the thing that prevents it must not disagree about what it is.
-export const WATCHDOG_FRAME_MS = Number(process.env.M59_WATCHDOG_FRAME_MS || 8_000);
+export const WATCHDOG_FRAME_MS = num('WATCHDOG_FRAME_MS', 8_000);
 export const PULSE_MS = Number(process.env.M59_PULSE_MS || 1_000);
 // SIX, NOT THREE, and the reason is a rate rather than a position. "How fast is it losing
 // health" cannot be asked of three samples: damage lands about once a second, so a
@@ -83,7 +120,7 @@ export const INERT_RESCUE_MS = Number(process.env.M59_INERT_RESCUE_MS || 4_000);
 // A long fight, a slow pull and a mid-journey pause are all legitimately still for several
 // seconds, and cancelling those would be the guard picking fights with the pass. Twenty
 // seconds of covering no ground at all is not any of them.
-export const WATCHDOG_PINNED_MS = Number(process.env.M59_WATCHDOG_PINNED_MS || 20_000);
+export const WATCHDOG_PINNED_MS = num('WATCHDOG_PINNED_MS', 20_000);
 // HOW FAR FROM WHERE IT STARTED STILL COUNTS AS GETTING NOWHERE, in squares.
 //
 // THIS IS A DISPLACEMENT TEST, NOT A STILLNESS TEST, and the difference is the whole
@@ -109,7 +146,7 @@ export const WATCHDOG_PINNED_MS = Number(process.env.M59_WATCHDOG_PINNED_MS || 2
 // real movement is on the order of a hundred squares, and it leaves an eight-square box in
 // under two. Anything still inside that box after twenty seconds is not on its way
 // anywhere, and the cost of being wrong is one cancelled walk that the next pass re-decides.
-export const WATCHDOG_PINNED_SQUARES = Number(process.env.M59_WATCHDOG_PINNED_SQUARES || 8);
+export const WATCHDOG_PINNED_SQUARES = num('WATCHDOG_PINNED_SQUARES', 8);
 
 // A WEDGE BROKEN BY A CANCEL IS A WEDGE RE-ISSUED. The second arm's whole action is
 // `cancelMovement()`, "so the next pass can decide with real numbers" — and the numbers
