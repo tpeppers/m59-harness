@@ -140,21 +140,34 @@ export const WATCHDOG_PINNED_MS = num('WATCHDOG_PINNED_MS', 20_000);
 export const WATCHDOG_HEALTHY_CANCEL_MS =
   num('WATCHDOG_HEALTHY_CANCEL_MS', WATCHDOG_PINNED_MS);
 
-// HOW LONG STATIONARY BEFORE THE ESCAPE LADDER IS OFFERED, as distinct from how long before
-// anything is cancelled. `pinnedSince` is already the right signal — it is only set while the
-// character is GOING somewhere, not inert, not deliberately holding a safe spot — so this is
-// "stationary and not on purpose", which is the only kind of still that is a problem.
+// HOW LONG STATIONARY BEFORE THIS PLACE IS RECORDED AS A WEDGE — which is what lets the
+// escape ladder run at all, and is NOT the same question as how long before a walk is
+// cancelled. The two were one number and one `if`, and fusing them is what broke this.
+//
+// `answerWedge` needs `wedgeBreak`, `wedgeBreak` is only written by the healthy arm in
+// m59-autopilot.mjs, and that arm used to return early when cancels were off. So setting
+// WATCHDOG_HEALTHY_CANCEL_MS high to stop the watchdog manufacturing journeys ALSO stopped
+// the ladder ever running for a healthy character: no break, no repeats, no `give_up`, no
+// retreat. The only surviving way in was escapeIfWedgedAndHurt, which needs the character
+// to be below the flee line already — the ladder was reachable only once it was late.
+//
+// So this gates the RECORD and WATCHDOG_HEALTHY_CANCEL_MS gates the CANCEL. An operator can
+// turn off the cancelling without turning off the escape.
+//
+// `pinnedSince` is the signal because it is only set while the character is GOING somewhere,
+// is not inert and is not deliberately holding a safe spot — "stationary and not on
+// purpose", the only kind of still that is a problem. Elapsed time would be wrong: on
+// successful journeys the median leg takes 19.1s and 90% of legs exceed 10s.
 //
 // Ten seconds, from measurement rather than taste. Over 1,238 travel deaths carrying
 // `ms_since_moved` (2026-09-05): the median character had not moved for 86 SECONDS when it
-// died and p25 was 22s. A 10s trigger would have fired before 87% of them, 8s before 89%, 20s
-// before 76%. The margin is enormous at any value in that band, so this is set at the cheap
-// end and left there — the rung existing at all is worth far more than its threshold.
+// died and p25 was 22s. A 10s record fires before 87% of them, 8s before 89%, 20s before
+// 76%. The margin is enormous at any value in that band, so this sits at the cheap end.
 //
-// It is lower than WATCHDOG_PINNED_MS on purpose: the ladder's first rungs REPLAY VALIDATED
-// MOVES BACKWARDS and cost a few seconds when wrong, where a cancel costs a journey. A cheap
-// remedy earns a lower bar. Raise it toward 15-20s if the ledger shows rung 1/1.5 firing
-// during ordinary crossings; 5s is the other arm if it shows deaths still arriving first.
+// It is also the ESCALATION CADENCE: one record per interval at the same place, and
+// WEDGE_REPEAT_CAP (5) records before `wedgeAdvice` says `give_up`. At 10s that is fifty
+// seconds of continuous, deliberate stillness before the ladder is climbed — comfortably
+// inside the 86s median and well outside an ordinary 19s leg.
 export const WEDGE_LADDER_MS = num('WEDGE_LADDER_MS', 10_000);
 // HOW FAR FROM WHERE IT STARTED STILL COUNTS AS GETTING NOWHERE, in squares.
 //
@@ -292,7 +305,12 @@ export function freshState() {
            pinnedSince: null, pinnedAnchor: null, pinnedInterrupts: 0,
            // Where the second arm last broke a wedge and how many times running it has
            // broken one there. See WEDGE_REPEAT_CAP.
-           wedgeBreak: null };
+           wedgeBreak: null,
+           // When that arm last RECORDED a wedge here, which paces the escalation now that
+           // recording no longer requires cancelling. Declared here rather than sprung into
+           // existence at the call site for the reason the rest of this object exists: a
+           // host cannot forget a field it was given.
+           wedgeNotedAt: null };
 }
 
 // start/stop own the timer. `unref` so a watchdog never holds a process open.

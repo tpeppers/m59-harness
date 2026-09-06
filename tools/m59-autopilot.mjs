@@ -10497,18 +10497,34 @@ export class Autopilot {
     // numbers. Holding a wall and being inert are already excluded above.
     const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
     if (frac >= fleeAt) {
-      if (pinnedFor < WATCHDOG_HEALTHY_CANCEL_MS) return;
-      w.interruptedPass = this.passes;
-      w.pinnedInterrupts = (w.pinnedInterrupts ?? 0) + 1;
+      // TWO DECISIONS, NOT ONE. Recording that this place is a wedge is what lets
+      // `answerWedge` climb the escape ladder; cancelling the walk is a separate, more
+      // expensive act that an operator may switch off. This arm used to do both behind a
+      // single `if`, so turning cancels off turned the ladder off with them — silently,
+      // for healthy characters only, which is the population it exists for. See
+      // WEDGE_LADDER_MS in m59-watchdog.mjs.
+      if (pinnedFor < WEDGE_LADDER_MS) return;
+      // Paced on its own clock rather than by clearing `pinnedSince`. The anchor's age is
+      // what `wedgedInPlace` reads for the survival rungs; resetting it here every ten
+      // seconds would mean it never reached WATCHDOG_PINNED_MS and those rungs would never
+      // fire again — the same shape of accident this whole change is repairing.
+      if (w.wedgeNotedAt && now - w.wedgeNotedAt < WEDGE_LADDER_MS) return;
+      w.wedgeNotedAt = now;
+      const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;
       // The anchor is where the wedge STARTED, which is the place to remember it by: a
       // pocket-wanderer's newest pulse moves and its anchor does not.
       const place = w.pinnedAnchor ?? spot ?? null;
-      w.pinnedSince = null; w.pinnedAnchor = null;
-      this.tally.watchdog_pinned_interrupts = (this.tally.watchdog_pinned_interrupts || 0) + 1;
-      const broke = (() => {
+      if (cancelling) {
+        w.interruptedPass = this.passes;
+        w.pinnedInterrupts = (w.pinnedInterrupts ?? 0) + 1;
+        w.pinnedSince = null; w.pinnedAnchor = null;
+        this.tally.watchdog_pinned_interrupts = (this.tally.watchdog_pinned_interrupts || 0) + 1;
+      }
+      const broke = cancelling ? (() => {
         try { return this.s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
         catch (e) { return { cancelled: false, why: e.message }; }
-      })();
+      })() : { cancelled: false, interrupted: null,
+               why: 'cancels are off here; this arm is recording the wedge so the ladder can run' };
       // AND THE RECORD THAT MAKES THE NEXT DECISION DIFFERENT. "The next pass can decide
       // with real numbers" was the claim, and the numbers were identical — same square,
       // same room, same destination — so the next pass re-issued the same walk and this arm
@@ -10519,7 +10535,9 @@ export class Autopilot {
       const record = place ? watchdog.noteWedgeBreak(w, { room: place.room, col: place.col, row: place.row,
                                                           doing: this.doing ?? null,
                                                           to: this.wedgeTarget() }, now) : null;
-      this.note('WATCHDOG — broke a wedge that was not hurting anybody', {
+      this.note(cancelling ? 'WATCHDOG — broke a wedge that was not hurting anybody'
+                           : 'WATCHDOG — recorded a wedge that was not hurting anybody', {
+        cancelled: cancelling,
         health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
         doing: this.doing ?? null,
         penned_for_s: Math.round(pinnedFor / 1000),
@@ -10537,7 +10555,7 @@ export class Autopilot {
             ? 'broken ' + record.repeats + ' times at this place — the next pass sidesteps before re-planning'
             : undefined,
       });
-      this.progress('watchdog broke a healthy wedge');
+      if (cancelling) this.progress('watchdog broke a healthy wedge');
       return;
     }
 
@@ -10645,7 +10663,7 @@ export class Autopilot {
     if (w.wedged && now - w.wedged.since >= WATCHDOG_PINNED_MS)
       return { why: 'same square for ' + Math.round((now - w.wedged.since) / 1000) + 's',
                for_ms: now - w.wedged.since, repeats: 0 };
-    if (w.pinnedSince && now - w.pinnedSince >= WEDGE_LADDER_MS)
+    if (w.pinnedSince && now - w.pinnedSince >= WATCHDOG_PINNED_MS)
       return { why: 'covered no ground for ' + Math.round((now - w.pinnedSince) / 1000) + 's',
                for_ms: now - w.pinnedSince, repeats: 0 };
     return null;
@@ -10757,40 +10775,52 @@ export class Autopilot {
       return at.room !== from.room || at.col !== from.col || at.row !== from.row;
     };
 
-    // ---- rung 1: undo the last few validated steps.
-    if (typeof s?.retreatAlongBreadcrumbs === 'function') {
-      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
-        .catch(e => ({ moved: false, reason: e.message }));
-      tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
-                   reason: out?.reason ?? null, worked: moved() });
-    }
-
     // ---- rung 1.5: back onto the RAIL, not merely back a few squares.
     //
-    // Rung 1 undoes the last steps and stops counting; rung 2 restarts the crossing from the
-    // door we came in by. Between them is the case that kills this fleet on long trips: the
-    // character left the baked lane, wandered, and is now stuck with a perfectly good rail
-    // three squares behind it. Rejoining CONTINUES the journey where rung 2 begins it again,
-    // and it replays the same validated crumbs rung 1 does — so it buys a better outcome at
-    // rung 1's safety, which is why it sits here and not after rung 2.
+    // ATTEMPTED BEFORE RUNG 1, AND STILL CALLED 1.5, because it is rung 1's move with a
+    // better place to stop: the same validated crumbs, the same 12-crumb budget, replayed
+    // through the same validator. Rung 1 unwinds blindly and stops counting; this stops the
+    // moment the baked lane is under foot again, which CONTINUES the journey where rung 2
+    // restarts it from the door. Same cost, strictly better ending — so it goes first, and
+    // rung 1 is what happens when there is no rail to aim at.
     //
-    // Only when we know where we were heading. `to` names the exit; without it there is no
-    // lane to speak of and this rung has nothing to say.
+    // Ordering it after rung 1 made it dead code, which is worth writing down because it
+    // looked right: rung 1 has no `until`, so any crumb it walks sets `moved()` and a
+    // `!moved()` guard below it can essentially never open. The only state that reached it
+    // was rung 1 moving ZERO crumbs — a broken or empty trail — where this rung replays the
+    // same trail through the same validator and fails the same way.
     //
     // Measured 2026-09-05 over 1,238 travel deaths carrying `ms_since_moved`: the median
     // character had not moved for 86 SECONDS when it died, p25 22s. The top three rooms are
     // the Cragged Mountains, the border of the Badlands and Ukgoth — all of them steps on a
     // longer trip, which is exactly where a rail exists to rejoin.
-    if (!moved() && to != null && typeof s?.retreatToRail === 'function') {
-      const anchor = Number.isFinite(Number(to))
-        ? anchorFor(activeRoutes(), Number(from?.room), Number(to)) : null;
-      if (anchor && Number.isFinite(Number(anchor.row)) && Number.isFinite(Number(anchor.col))) {
-        const out = await s.retreatToRail({ toSquare: { row: anchor.row, col: anchor.col } })
+    //
+    // `onwardExit` and not `anchorFor(activeRoutes(), from.room, to)`: `to` is the JOURNEY'S
+    // DESTINATION, up to 25 hops away, while `anchorFor` answers for an ADJACENT room. Asked
+    // the wrong way it resolves only when the wedged room happens to border the destination —
+    // the last hop of a trip — and returns null on exactly the long crossings this rung was
+    // built for. `onwardExit` takes the first hop of the route, and is memoised because
+    // `world.route()` runs the room's exits flood and can block the loop for seconds.
+    let railed = false;
+    if (to != null && typeof s?.retreatToRail === 'function') {
+      const aim = this.onwardExit(from?.room, to);
+      if (aim && Number.isFinite(Number(aim.row)) && Number.isFinite(Number(aim.col))) {
+        const out = await s.retreatToRail({ toSquare: { row: aim.row, col: aim.col }, maxCrumbs: 12 })
           .catch(e => ({ moved: false, reason: e.message }));
+        railed = moved();
         tried.push({ rung: 1.5, how: 'back onto the rail', steps: out?.steps ?? 0,
                      rejoined: out?.rejoined === true, rail_squares: out?.rail_squares ?? null,
-                     reason: out?.reason ?? null, worked: moved() });
+                     reason: out?.reason ?? null, worked: railed });
       }
+    }
+
+    // ---- rung 1: undo the last few validated steps. The fallback when there was no rail to
+    // aim at, or aiming at it moved nothing.
+    if (!railed && typeof s?.retreatAlongBreadcrumbs === 'function') {
+      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
+        .catch(e => ({ moved: false, reason: e.message }));
+      tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
+                   reason: out?.reason ?? null, worked: moved() });
     }
 
     // ---- rung 2: the square we came in by. `enteredVia` is the session's own memory of the
