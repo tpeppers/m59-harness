@@ -6300,6 +6300,54 @@ export class Autopilot {
     };
     let legs = 0;
     let outcome = null;
+
+    // EVERY JOURNEY IS A JOURNEY, INCLUDING THE ONE A SHOPPING TRIP IS MADE OF.
+    //
+    // `shelterPolicy` is what makes the shelter planner in `walkTo` live rather than dead
+    // code — it is read while the route is being planned, and `sheltersAlong` works out
+    // which route-adjacent walls a hurt walker may duck into on the way. It is set in
+    // exactly ONE place, `goTravelling`, and until now `goTravelling` had exactly one
+    // caller: `travelJob`, the external journey path.
+    //
+    // So the keeper's OWN travel — which is what a supply run is built from,
+    // `restockInTown` -> `Autopilot.travel` -> `Session.travel` — crossed the same roads
+    // with no shelters planned, no `travel_guard`, and no job slot. Those roads are 599
+    // Ukgoth and 598 The Cragged Mountains, which is where most of this fleet's road deaths
+    // happen. The comment beside the assignment even asserted the opposite — "an errand, a
+    // fight or a shopping trip has no route ahead to divert along" — and a shopping trip is
+    // precisely a route ahead: eleven hops out, and eleven back.
+    //
+    // The operator's model settles the shape: a shop trip IS travel-shop-travel-shop, so
+    // each leg is a journey and gets a journey's protection. That is why this goes here,
+    // around every internal journey, rather than lifting `shelterPolicy` out of
+    // `goTravelling` and installing it piecemeal — the posture and the shelters are the
+    // same thing, and splitting them is how they drift apart.
+    //
+    // NESTING IS SAFE AND IS THE COMMON CASE. `travelJob` already installs the posture
+    // before calling this method, and `goTravelling` returns early when a journey or an
+    // errand already holds the keeper — so `ours` is false there and the finally below
+    // hands nothing back. An ERRAND still outranks a journey and is not upgraded.
+    let ourTravelHold = null;
+    let holdTimer = null;
+    if (!this.inert) {
+      this.goTravelling(`travelling to ${room}`, { to: room });
+      ourTravelHold = this.inert;
+      // RE-ASSERTED, BECAUSE AN INERT KEEPER WAKES ON A DEADLINE. `goTravelling` carries
+      // INERT_MAX_MS so a crashed caller cannot silence a keeper for ever, and that deadline
+      // knows nothing about a journey still being in progress. Watched live on the external
+      // path: a hold lapsed mid-walk and the character was driven by the keeper and the
+      // mover at once. Same cadence travelJob uses.
+      if (ourTravelHold) {
+        holdTimer = setInterval(() => {
+          try {
+            if (!this.inert) { this.goTravelling(`travelling to ${room}`, { to: room });
+                               ourTravelHold = this.inert; }
+          } catch { /* re-asserting a hold is never worth ending a journey over */ }
+        }, 2000);
+        holdTimer.unref?.();
+      }
+    }
+
     try {
       // A FRAME PER ROOM, NOT PER JOURNEY.
       //
@@ -6376,6 +6424,13 @@ export class Autopilot {
         },
       });
     } finally {
+      // ONLY IF IT IS STILL THE VERY HOLD WE TOOK. Reviving somebody else's is how a
+      // character ends up driven by two things at once — the same rule travelJob follows.
+      if (holdTimer) clearInterval(holdTimer);
+      if (ourTravelHold && this.inert === ourTravelHold) {
+        try { this.revive('journey finished'); }
+        catch { /* the body is handed back on the next pass regardless */ }
+      }
       if (detailed) closeMap();
       this.recordFrame('arrived');
       const v1 = this.s.client?.vitals?.()?.health;
@@ -9053,8 +9108,15 @@ export class Autopilot {
     //
     // Without this the planner in `walkTo` is dead code — it checks `shelterPolicy` and
     // finds nothing, so no crossing ever carries its shelters and the whole point is lost.
-    // Set here rather than per walk because it is a property of BEING ON A JOURNEY: an
-    // errand, a fight or a shopping trip has no route ahead to divert along.
+    // Set here rather than per walk because it is a property of BEING ON A JOURNEY.
+    //
+    // CORRECTED 2026-09-06: this used to read "an errand, a fight or a SHOPPING TRIP has no
+    // route ahead to divert along", and the shopping trip half was wrong. A supply run is
+    // eleven hops out and eleven back over 599 Ukgoth and 598 The Cragged Mountains — as
+    // much route ahead as any journey, and the roads that kill this fleet. It had no
+    // shelters only because the keeper's own `travel` never installed this posture, which
+    // it now does for every internal journey. An errand and a fight genuinely have no route,
+    // and they still do not get one.
     //
     // `need()` is read by the walker between legs, so it must be cheap and must answer about
     // NOW rather than about when the journey started.
