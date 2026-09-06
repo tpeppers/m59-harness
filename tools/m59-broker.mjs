@@ -123,7 +123,7 @@ import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops } from './m59-spawns.mjs';
 // UNION: upstream's shelter helpers plus the book this checkout already used.
 import { safeSpots, safeSpotBook, geometryFor as safeSpotGeometryFor,
-         nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
+         exposureAt, nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { planRuns, planProvisioning } from './m59-lootrun.mjs';
 import { planCharacter, STAT_ORDER, STAT_PRESETS } from './m59-newchar.mjs';
 import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn } from './m59-ledger.mjs';
@@ -13645,15 +13645,41 @@ const TOOLS = [
         mustReach,
       });
       const rec = me && room ? book.get(room.num, me.col, me.row) : null;
+      // The geometric verdict for the square we are actually standing on. `spots` is capped
+      // at `limit`, so looking it up there would answer null for a sound wall that merely
+      // ranked ninth — the exposure is asked directly for that reason. null, never 0, when
+      // there is no geometry: `discredited` treats null as "no evidence" and keeps the old
+      // rule, which is the safe direction when we cannot tell.
+      let standingReach = null;
+      if (geo && me) { try { standingReach = exposureAt(geo, me.row, me.col)?.attackers ?? null; }
+                       catch { standingReach = null; } }
       const pilot = autopilotIfAny(a.agent);
       return {
         room: room ? { num: room.num, name: room.name } : null,
         standing_at: me ? { col: me.col, row: me.row } : null,
         // The question worth asking first, and the one the keeper answers from
         // evidence rather than from the grid.
+        // ASKED THE SAME WAY THE KEEPER ASKS IT, WHICH IT WAS NOT. This read alone still
+        // used the bare rule — any failure ever, forever — while the list below it and the
+        // keeper both pass the geometric verdict and ignore the ledger for a square nothing
+        // can reach. So an operator standing on a sound wall was told `works: false` by the
+        // one field named "the question worth asking first".
+        //
+        // It is not a cosmetic disagreement. Measured 2026-09-06 against the book: of the
+        // squares the geometry calls safe that carry any failure at all, 78% of the failure
+        // rows are room 39, Upstairs in Castle Victoria — 165 squares, 2,517 rows, median
+        // last touched 2026-08-21, before `max_bots_per_safe_spot` came down. That is the
+        // fleet crowding onto its own shelter, recorded as walls that leak. This field was
+        // reporting that artifact as fact in the fleet's home room.
         in_a_safe_spot_now: pilot?.status?.().safe_spot ??
-          (rec ? { at: { col: rec.col, row: rec.row }, works: rec.held > 0 && !book.discredited(rec),
-                   evidence: `held ${rec.held} time(s), hit in it ${rec.failed} time(s)` }
+          (rec ? { at: { col: rec.col, row: rec.row },
+                   works: rec.held > 0 && !book.discredited(rec, { reachable: standingReach }),
+                   ...(standingReach === 0 ? { reachable_by: 0 } : {}),
+                   evidence: `held ${rec.held} time(s), hit in it ${rec.failed} time(s)` +
+                             (standingReach === 0
+                               ? '; nothing can stand within reach of this square, so the '
+                                 + 'hits were not the wall'
+                               : '') }
                : false),
         spots: spots.map(x => {
           const k = book.get(room?.num, x.col, x.row);
