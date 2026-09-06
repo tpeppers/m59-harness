@@ -5710,6 +5710,33 @@ const TOOLS = [
                                                   : 'the cancel_movement tool, caller unnamed'),
   },
   {
+    name: 'cancel_fight',
+    description:
+      'Stop the fight this character is in. The counterpart to cancel_movement, and until it existed ' +
+      'there was NO way to stop a fight from outside it: `fight()` took no token, there is no ' +
+      'cancelAttack in the game protocol layer, and the only watchdog interrupt cancels WALKING. ' +
+      'So the round budget was the only exit anything outside the fight controlled. ' +
+      'It lands at the next swing boundary — a swing is about 2.9s on the wire and one already ' +
+      'accepted by the server is not recalled. The monster is still there and still hostile when ' +
+      'this returns: whatever cancelled owns the character now and has to decide what happens next. ' +
+      'DELIBERATELY NOT cancel_movement. Nearly every caller of that one is the watchdog or a travel ' +
+      'guard saying "stop walking", and a wedged character that cannot move is supposed to SWING — ' +
+      'sharing a generation would have the watchdog cancel the one rung that exists for that.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      control_token: { type: 'string',
+        description: 'also reject a late stale action carrying this token. The token set is shared ' +
+          'with cancel_movement, so a command lease cancelled by token stops the walk and the fight.' },
+      why: { type: 'string',
+        description: 'WHO IS CANCELLING, in a few words — it is the only record of why a fight ended ' +
+          'that was not lost, won or fled.' },
+    }, required: ['agent'] },
+    run: (a) => session(a.agent).cancelFight(
+      a.control_token,
+      (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
+                                                  : 'the cancel_fight tool, caller unnamed'),
+  },
+  {
     name: 'go_through',
     description: 'Use ONE exit from this room — the neighbouring-room version of travel. Name the exit ' +
       'by its destination room, or by direction for an edge exit.',

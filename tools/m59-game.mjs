@@ -1270,6 +1270,14 @@ class Session {
     // invalidates walks already in progress without poisoning later, independent
     // orders. This is deliberately session-local: one character has one body.
     this.movementGeneration = 0;
+    // A FIGHT IS ITS OWN GENERATION, AND NOT MOVEMENT'S. Deliberately separate: almost
+    // every `cancelMovement` caller in the keeper is the watchdog or a travel guard
+    // saying "stop WALKING" — breaking a wedge, pulling out of a blind walk. If a fight
+    // shared that counter, the watchdog breaking a movement wedge would also cancel the
+    // trade-in-place swing, which is the one rung that exists precisely for a body that
+    // cannot move. The cancelled-token set IS shared, so a commander that cancels by
+    // token stops both, which is what "stop what you are doing" means from outside.
+    this.fightGeneration = 0;
     this.cancelledMovementTokens = new Set();
     // BP_PLAYER/BP_MOVE do not carry the body's visual z. Keep a short-lived,
     // conservative range after changing floor height so a rapid follow-up packet
@@ -1870,6 +1878,37 @@ class Session {
   movementWasCancelled(generation, controlToken) {
     return generation !== this.movementGeneration ||
       (!!controlToken && this.cancelledMovementTokens.has(controlToken));
+  }
+
+  // THE SAME QUESTION FOR A FIGHT, WHICH COULD NOT BE ASKED AT ALL UNTIL NOW.
+  //
+  // `fight()` took no token and no generation, and there was no `cancelAttack` anywhere
+  // in the tree. Once the keeper entered a fight the only ways out were inside the loop:
+  // the foe died, we died, the weapon shattered, health fell through the flee line, or
+  // THE ROUND COUNT RAN OUT. So the round budget was not a tactical choice — it was the
+  // only exit that anything outside the fight controlled, which is why the three call
+  // sites disagree (3 by omission, 10 and 30 by choice) and why none of them argued.
+  //
+  // What that cost while it stood: a commander_claim, an errand, a park or a shutdown
+  // could not reach a swinging character; vigor is not checked inside the loop at all, so
+  // a long fight drains the bar that sets the health regeneration rate (1.0 hp/s at 200
+  // against 0.29 at 80) with nothing watching; and the room is invisible in there, so a
+  // crowd can build while "in a crowd the only wall is the exit" never gets to run.
+  fightWasCancelled(generation, controlToken) {
+    return generation !== this.fightGeneration ||
+      (!!controlToken && this.cancelledMovementTokens.has(controlToken));
+  }
+
+  /** Stop the fight this character is in. The counterpart to `cancelMovement`. */
+  cancelFight(controlToken, why = 'unattributed') {
+    this.lastFightCancel = { why, at: Date.now(), room: this.world?.room?.num ?? null };
+    this.fightGeneration++;
+    if (controlToken) {
+      this.cancelledMovementTokens.add(controlToken);
+      if (this.cancelledMovementTokens.size > 100)
+        this.cancelledMovementTokens.delete(this.cancelledMovementTokens.values().next().value);
+    }
+    return { cancelled: true, why, generation: this.fightGeneration };
   }
 
   cancelledMovement(extra = {}) {
@@ -10780,10 +10819,14 @@ class Session {
   // And the check is free. `c.vitals()` is already live: BP_STAT is PUSHED on every
   // change (player.kod:7343 calls DrawStatSkill on each one), so the number is sitting
   // in memory between swings. We were not failing to know it, we were failing to look.
-  async attackRounds(targetId, swings = 4, { abortBelow = null } = {}) {
+  // `shouldCancel` is asked between swings, where the health abort already is. A swing is
+  // ~2.9s on the wire, so this is the finest grain a cancel can land at without abandoning
+  // an attack the server has already accepted.
+  async attackRounds(targetId, swings = 4, { abortBelow = null, shouldCancel = null } = {}) {
     const c = this.need();
     const messages = [];
     let aborted = null;
+    let cancelled = null;
     const healthPct = () => {
       const h = c.vitals()?.health;
       return h?.max ? h.value / h.max : null;
@@ -10791,6 +10834,12 @@ class Session {
     for (let i = 0; i < swings; i++) {
       const o = c.room.objects.get(targetId);
       if (!o) break;
+      // Before the swing, like the health abort below it: a cancel that arrives mid-round
+      // must not buy one more packet.
+      if (typeof shouldCancel === 'function' && shouldCancel()) {
+        cancelled = { at_swing: i };
+        break;
+      }
       // Before the swing as well as after it: the previous exchange's damage has
       // already landed, and one more swing at 15% is how a character dies mid-round.
       if (abortBelow != null) {
@@ -10823,7 +10872,7 @@ class Session {
     // it and the stat only arrives when it changes.
     await this.pacer.submit('read', () => c.stats(1));
     await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
-    return { messages, vitals: c.vitals(), aborted };
+    return { messages, vitals: c.vitals(), aborted, cancelled };
   }
 
   // Pick up everything gettable within reach. Shared with the `loot` tool.
