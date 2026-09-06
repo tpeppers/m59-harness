@@ -635,6 +635,76 @@ console.log('\n--- is this fight worth a wall? ---');
   ok('a crowd of things we outclass still gets the wall', v.hold, `crowd ${v.crowd}`);
 }
 
+console.log('\n--- "not required" is a third setting, not the absence of the second ---');
+{
+  // THE BUG THIS PINS. There are two flags and the fleet only ever had two of the four
+  // states they describe: OFF (useSafeSpots false) and REQUIRED. Clearing requireSafeWall
+  // changed the room-denial branch and nothing about how a character FIGHTS, because the
+  // decision below still asked "does this kill pay" — and on a grinding fleet that is yes
+  // for every creature in every assigned room. So NOT REQUIRED walked to a corner before
+  // every engagement and was indistinguishable from REQUIRED on any board.
+  //
+  // Operator, 2026-09-05: "for 'not required', it should flee to a safe wall by default if
+  // 2+ creatures are attacking it, but otherwise not use a safe wall."
+  const w = world({ health: 25, max: 25 });
+  const p = keeper(w);
+  p.policy.requireSafeWall = false;
+
+  const alone = p.holdWorthwhile(['giant rat']);   // level 30 vs our 25 — pays, and used to hold
+  ok('a paying fight alone does NOT get the wall when one is not required', !alone.hold,
+     `${alone.attackers} in reach against a bar of ${alone.bar} — ${alone.why.slice(0, 70)}...`);
+  ok('and it is the SAME creature the required path walks to a corner for',
+     (() => { p.policy.requireSafeWall = true;
+              const req = p.holdWorthwhile(['giant rat']);
+              p.policy.requireSafeWall = false;
+              return req.hold; })(),
+     'if this ever goes false the two states have stopped differing and the test is vacuous');
+
+  // One in melee reach is the fight we came for.
+  w.addMonster(1, 1, 0, MONSTER);
+  ok('one attacker is still fought where it stands', !p.holdWorthwhile(['giant rat']).hold);
+
+  // Two is the thing that actually kills characters here.
+  w.addMonster(2, 0, 1, MONSTER);
+  const crowded = p.holdWorthwhile(['giant rat']);
+  ok('two in melee reach takes the wall', crowded.hold,
+     `attackers ${crowded.attackers} >= bar ${crowded.bar}`);
+
+  // MELEE REACH, NOT THE CROWD RADIUS. A creature four squares off is walking past, and
+  // counting it would take a wall for traffic. REACH is 3; CROWD_RADIUS is 4.
+  w.remove(1); w.remove(2);
+  w.addMonster(3, 4, 0, MONSTER);
+  w.addMonster(4, 0, 4, MONSTER);
+  const passing = p.holdWorthwhile(['giant rat']);
+  ok('two at four squares are traffic, not attackers', !passing.hold,
+     `crowd ${passing.crowd} within four squares, ${passing.attackers} inside melee reach`);
+
+  // The bar is a policy, because it is the whole content of the setting.
+  p.policy.wallAtAttackers = 1;
+  w.remove(3); w.remove(4);
+  w.addMonster(5, 1, 0, MONSTER);
+  ok('and the bar is settable', p.holdWorthwhile(['giant rat']).hold,
+     'wall_at_attackers 1 means the first thing in reach');
+
+  // OFF still beats everything: a character told not to look for a wall does not find one
+  // because a crowd arrived.
+  p.policy.useSafeSpots = false;
+  w.addMonster(6, 0, 1, MONSTER);
+  ok('OFF is still OFF under a crowd', !p.holdWorthwhile(['giant rat']).hold,
+     'useSafeSpots is the outer switch and the attacker bar is inside it');
+}
+{
+  // A WALL TAKEN AS A RESPONSE HAS TO BE GIVEN BACK. Without the release, the first crowd
+  // of the session takes a corner and the character stays in it for ever — REQUIRED
+  // arrived at by accident, and it would look exactly like the setting working.
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the release exists and is gated on the same flag',
+     /requireSafeWall === false && this\.hold && !worth\.hold/.test(src));
+  ok('and it will not step off a wall with something still in contact',
+     /requireSafeWall === false && this\.hold && !worth\.hold\s*\n\s*&& !this\.pendingPull && !\(this\.inReachOfUs\(\)\?\.length\)/.test(src),
+     'releasing at one attacker mid-fight is how a hysteresis-free bar thrashes');
+}
+
 console.log('\n--- what it reports back ---');
 {
   const w = world();

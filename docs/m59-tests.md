@@ -67,8 +67,15 @@ records, fixtures, history, recordings, commissions, or fleet state. Human-only
 underscore metadata such as `_coordinates` may be corrected without changing
 the records it describes.
 
-- Offline tests, safe to run any time: `node tools/m59-safespot-test.mjs` (187 — pins, among
-  the rest, that **the safe walls are the red squares in the debug client**: `safeWalls()` is
+- Offline tests, safe to run any time: `node tools/m59-safespot-test.mjs` (241 — pins, among
+  the rest, that **"not required" is a third safe-wall setting and not the absence of the
+  second**: with `require_safe_wall:false` the wall stops being the posture before every
+  fight and becomes the answer to a crowd, taken at `wall_at_attackers` creatures inside
+  melee reach and released when nothing is left in reach. Before it, clearing the flag
+  changed only the room-denial branch and left every character walking to a corner anyway,
+  because the decision underneath still asked "does this kill pay" — which on a grinding
+  fleet is yes for every creature in every assigned room. And that **the safe walls are the
+  red squares in the debug client**: `safeWalls()` is
   one function for the picture and the keeper's choice, `safeSpots()` iterates it with no
   membership gate, and the overlay has no second set that could drift from it),
   `node tools/m59-render-test.mjs` (81 — **what a renderer gets from a keeper-backed

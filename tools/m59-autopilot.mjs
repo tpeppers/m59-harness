@@ -1614,6 +1614,17 @@ export class Autopilot {
       // as "no wall". Treating the room as denied under-uses the world, which is
       // recoverable; guessing does not, which is not.
       requireSafeWall: true,
+      // AND WHAT "NOT REQUIRED" MEANS, WHICH IS THE SETTING ABOVE READ AS THREE STATES
+      // RATHER THAN TWO. With `requireSafeWall:false` the wall stops being the posture and
+      // becomes the answer to a crowd: hold one when this many creatures are inside melee
+      // reach, and fight in the open below it. See holdWorthwhile(), which is the only
+      // reader, and the release in the work branch, which is what makes it a response
+      // rather than a one-way door. Ignored entirely while `requireSafeWall` is true.
+      //
+      // 2 rather than 3 (the crowd bar the REQUIRED path uses for prey we outclass)
+      // because that path already has the wall by then; this one is deciding whether to
+      // move at all, and the second attacker is what changes a fight into a race.
+      wallAtAttackers: 2,
       // PARTY: who this character fights alongside, or null for solo.
       //
       // The pairing itself lives in m59-party.mjs, which is process-wide and shared by
@@ -3056,6 +3067,53 @@ export class Autopilot {
     const levels = names.map(n => this.creatureLevel(n)).filter(x => x != null);
     const worst = levels.length ? Math.max(...levels) : null;
     const crowd = this.threat().near.length;
+
+    // "NOT REQUIRED" IS A THIRD SETTING, AND UNTIL NOW IT WAS NOT ONE.
+    //
+    // There are two flags and the fleet has only ever had two of the four states they
+    // describe. `useSafeSpots:false` is OFF — never take a wall, which is what the Valley
+    // of Ileria ran because `takeSafeSpot -> returnToSpot` oscillated there and produced
+    // hours of "travelling / NOT MOVING" with prey in reach and zero kills. And
+    // `requireSafeWall:true` is REQUIRED — a room with no wall the detector can find is
+    // written off entirely.
+    //
+    // What was missing is the state in between, which is the one this fleet actually
+    // wants: the wall is AVAILABLE and is not the plan. Clearing `requireSafeWall` alone
+    // did not deliver it, because everything below still asks "does this kill pay", and on
+    // this fleet the answer is yes for every creature in every assigned room — a battered
+    // skeleton is 60 against max healths of 43-54, a fungus beast is 50 against the ones
+    // under it. So `requireSafeWall:false` bought the room-denial being skipped and changed
+    // nothing whatever about how a character fights: it still walked to a corner before
+    // every single engagement. On the board that is indistinguishable from REQUIRED, which
+    // is why it read as a setting nobody was using.
+    //
+    // Operator, 2026-09-05: "for 'not required', it should flee to a safe wall by default
+    // if 2+ creatures are attacking it, but otherwise not use a safe wall."
+    //
+    // So under NOT REQUIRED the wall stops being a posture and becomes a RESPONSE. One
+    // creature in reach is the fight we came for and is answered by fighting; two is the
+    // thing that actually kills characters here, and it is answered by putting our back
+    // somewhere. `wallAtAttackers` is the bar and it is a policy rather than a constant,
+    // because it is the whole content of the setting.
+    //
+    // MELEE REACH, NOT THE CROWD RADIUS. `near` is four squares and counts creatures that
+    // are walking past; `adjacent` is REACH (3) and is as close to "is hitting us" as this
+    // keeper can read without waiting for the damage. The count that decides whether to
+    // move has to be the one that is true before the blows land.
+    if (this.policy.requireSafeWall === false) {
+      const attackers = this.threat().adjacent.length;
+      const bar = Number.isFinite(Number(this.policy.wallAtAttackers))
+        ? Number(this.policy.wallAtAttackers) : 2;
+      if (attackers >= bar)
+        return { hold: true, level: worst, my_level: mine, crowd, attackers, bar,
+                 why: `${attackers} creatures are inside melee reach against a bar of ${bar} — ` +
+                      'a wall is not required here, but a crowd is the one thing it is for' };
+      return { hold: false, level: worst, my_level: mine, crowd, attackers, bar,
+               why: `${attackers} creature(s) in reach against a bar of ${bar}: the wall is ` +
+                    'available and not required, so fight this one where it stands rather ' +
+                    'than spending the pass walking to a corner' };
+    }
+
     if (worst == null)
       return { hold: true, crowd,
                why: 'nothing is known about what is here, and the careful reading of an unknown ' +
@@ -15487,6 +15545,23 @@ export class Autopilot {
           && this.hold.quarry_id !== selectedQuarry.id
           && !this.pendingPull && !(this.inReachOfUs()?.length)) {
         this.releaseHold('the selected quarry changed — recomputing its closest safe spot');
+      }
+      // A WALL TAKEN AS A RESPONSE HAS TO BE GIVEN BACK, OR THE SETTING IS A ONE-WAY DOOR.
+      //
+      // Under NOT REQUIRED the wall is held because two things were hitting us. Without
+      // this, the first crowd of the session takes a corner and the character stays in it
+      // for ever — which is the REQUIRED behaviour arrived at by accident, and it would
+      // look exactly like the setting working.
+      //
+      // THE RELEASE BAR IS ZERO IN REACH, NOT "BELOW THE TAKE BAR", and the gap between
+      // the two is deliberate hysteresis. Releasing at one attacker would step off the
+      // wall the instant a crowd of two became a crowd of one — mid-fight, with something
+      // still swinging — and the next pass would find two again and walk back. Take at
+      // two, hold while anything is in contact, let go when the floor is clear.
+      if (this.policy.requireSafeWall === false && this.hold && !worth.hold
+          && !this.pendingPull && !(this.inReachOfUs()?.length)) {
+        this.releaseHold('the crowd this wall was taken for has cleared, and the wall is ' +
+                         'not required here — back to fighting in the open');
       }
       if (worth.hold && !this.hold && room) {
         // The quarry was ranked and claimed above. Its identity stays attached to the
