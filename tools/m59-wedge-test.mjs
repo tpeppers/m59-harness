@@ -733,6 +733,15 @@ console.log('\nescape_ladder: false leaves this character out of the ladder enti
     breakAt(ap, wd.WEDGE_REPEAT_CAP);
     await ap.answerWedge(586);
     ok('no rung ran at all', retreats.length === 0 && rails.length === 0);
+    // THE DENOMINATOR STILL GETS WRITTEN. Without a row from the arm that has no ladder,
+    // the only available comparison is arm-wide averages diluted by every character that
+    // never wedged -- which is how six applications an hour look exactly like noise.
+    // `recordEvent` is a no-op for a nameless keeper, so this asserts the CALL SITE is
+    // outside the escape_ladder branch rather than the row itself.
+    ok('the give-up is recorded whether or not the ladder is climbed',
+       AUTOPILOT.indexOf("'wedge_gave_up'") < AUTOPILOT.indexOf('let backedOff = ladderOff'));
+    ok('...and the row carries which arm it came from, not a roster join',
+       AUTOPILOT.includes('escape_ladder: !ladderOff,'));
     ok('...not even the ones that walk', walks.length === 0 && travels.length === 0);
     ok('and it still takes the hold, so the character is not left re-issuing the walk',
        !!ap.wedgeHold);
