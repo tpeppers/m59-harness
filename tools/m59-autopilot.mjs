@@ -9403,9 +9403,17 @@ export class Autopilot {
     // within its next paced step; the pass-level gate below keeps the next one from
     // starting. Do this only when the operation BEGINS. A lease extension between errand
     // steps must not cancel movement belonging to the errand itself.
+    // AND SAY WHO TOOK IT. This call had no arguments at all, so `why` defaulted to null, the
+    // broker omitted it, and the keeper stamped the ledger with its own endpoint name. It was
+    // the single largest anonymous source of cancelled journeys — 72 in two hours on
+    // 2026-09-05, against an operator who had issued no orders and could not find out what
+    // had. The claimant was in `held.by` the whole time: a cancel that cannot say who asked
+    // for it is the commonest way a journey ends here, and this one always knew.
+    const claimant = (`${held.by ?? 'an unnamed holder'} declaring busy` +
+                      `${kind ? `: ${kind}` : ''}${label ? ` (${label})` : ''}`).slice(0, 80);
     const interrupted = beginning
       ? (() => {
-          try { return this.s?.cancelMovement?.() ?? null; }
+          try { return this.s?.cancelMovement?.(null, claimant) ?? null; }
           catch (e) { return { cancelled: false, why: e.message }; }
         })()
       : null;
