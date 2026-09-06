@@ -139,5 +139,66 @@ console.log('\na foreground travel waits for the journey, not for an acknowledge
   ok('and an abort says it was an abort', BROKER.includes('timed_out_after_ms: timeoutMs'));
 }
 
+// ------------------------------------------------ a pull is a lap of the melee in a crowd
+//
+// ROWLF, ROOM 39, 2026-09-06 04:55. Six battered skeletons in reach on every one of the last
+// sixteen frames (ten at peak), `doing: fighting` on all of them, oscillating 23,8 - 24,8 -
+// 23,8 - 22,8 while health went 34 -> 6. Gross fifteen squares travelled, NET ONE. That
+// oscillation was not a stall: it was `pull`, walking out three squares to fetch a skeleton
+// and walking back, once per pass. He died on 23,8 — a square the book has never recorded,
+// i.e. open floor — one square from the wall he had left.
+//
+// His flee threshold was 36 of 53 and he was under it for the whole minute, still pulling.
+// The last two decisions before the death broadcast are "pulled it to the wall, went 3" and
+// "waiting for it at the wall, follow_window_ms 8000".
+//
+// `pull` had neither guard every other aggressive rung carries. Its own comment argues that
+// distance does not make a pull more dangerous, which is true of ONE monster — the walk out
+// happens before it has noticed us — and false of six, because then the walk is through
+// their reach and they have already noticed.
+console.log('\nthe pull refuses a crowd and refuses to run below the flee line');
+{
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = AP.indexOf('  async pull(want) {');
+  const body = AP.slice(at, AP.indexOf("this.doing = 'fighting'", at));
+  ok('it asks crowded() before walking anywhere', body.includes('if (this.crowded())'));
+  ok('...and says so in the ledger rather than refusing in silence',
+     body.includes("noteCrowdRefusal('pulling quarry to the wall')"));
+  ok('it refuses below the flee line', body.includes('frac < this.safety().fleeAt'));
+  ok('...and the refusal names both numbers so a reader can tell which line it hit',
+     body.includes('below the flee line'));
+}
+
+// --------------------------------------------- the postmortem must name the verdict, not the tally
+//
+// The report read the raw failure TALLY. Since 2026-09-02 the tally and the verdict disagree
+// on purpose, and room 39 square 24,7 is the case that proves it — the very square this
+// death was reported against:
+//
+//   held 1, failed 309, failed_via "fight", failed_by { fight: 309 },
+//   verified true, verified_by an operator, "marked in game by the operator"
+//
+// It is not discredited, for THREE independent reasons: a person verified it, geometry says
+// nothing can reach it (can_reach_you 0), and every one of the 309 failures was recorded
+// while SWINGING from it — which is what `discreditedForPull` is for and is not what
+// condemns a place to heal.
+//
+// It nevertheless announced itself as "DISCREDITED — failed 319 time(s) here ... should not
+// have been offered" in the postmortem, which is the first line a reader sees. It sent this
+// session hunting a bug in the offering code that does not exist, while the actual killer —
+// an unguarded pull in a crowd — sat two lines further down the same trail.
+console.log('\nthe safe-spot report asks the verdict, not the tally');
+{
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the verdict is computed from the book, with the live geometry',
+     AP.includes('const condemned = this.book.discredited(known, { reachable: spot.can_reach_you ?? null })'));
+  ok('the headline branches on the verdict', AP.includes('proven_before: condemned ?'));
+  ok('and so does the explanation', AP.includes('note: condemned'));
+  // The tally is still SHOWN — it is real evidence about the square, just not a verdict —
+  // and the line now says why it is not being obeyed.
+  ok('a sound square with failures explains why they do not count',
+     AP.includes('so those are not the wall'));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

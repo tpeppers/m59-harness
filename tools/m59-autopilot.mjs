@@ -3688,6 +3688,10 @@ export class Autopilot {
 
     const now = c.self;
     const known = this.book.get(room.num, spot.col, spot.row);
+    // The VERDICT on this square, which is not the same as its failure tally — see the note
+    // beside `proven_before` below, and `SafeSpotBook.discredited`. Computed once here so
+    // the report and any future decision cannot drift apart by consulting different things.
+    const condemned = this.book.discredited(known, { reachable: spot.can_reach_you ?? null });
     // A SAFE WALL IS TRUSTED ON ARRIVAL UNLESS IT HAS ACTUALLY FAILED HERE.
     //
     // This used to require `known.held` — the square had to have been stood on and
@@ -3740,12 +3744,31 @@ export class Autopilot {
     this.note('took a safe spot', {
       where: { col: spot.col, row: spot.row }, why,
       can_reach_you: spot.can_reach_you, free_shots: spot.free_shots, back_cover: spot.back_cover,
-      proven_before: known?.failed ? `DISCREDITED — failed ${known.failed} time(s) here`
+      // ASK THE PREDICATE, NOT THE RAW COUNT. `known.failed` is a tally; `discredited()` is
+      // the verdict, and since 2026-09-02 they disagree on purpose: a failure row cannot
+      // condemn a square that geometry says nothing can reach, because a failure records
+      // only that something went wrong WHILE WE STOOD THERE — a crowd on the square, a
+      // blow resolved before we arrived, a poison tick — none of which are facts about the
+      // wall. Room 39 had 142 unreachable squares condemned that way; believing them again
+      // took fleet kills from 20 per 30 minutes to 48 and deaths from ~4 an hour to 0.6.
+      //
+      // This line kept reading the tally, so a perfectly good square announced itself as
+      // "DISCREDITED — failed 319 time(s) here ... should not have been offered" in every
+      // postmortem it appeared in. It is the first thing a reader sees and it points at the
+      // wrong culprit: it sent this session hunting a bug in the offering code that does not
+      // exist, while the actual killer — an unguarded `pull` in a crowd — sat two lines
+      // further down the same trail.
+      proven_before: condemned ? `DISCREDITED — failed ${known.failed} time(s) here`
+                   : known?.failed ? `failed ${known.failed} time(s) here, but nothing can ` +
+                       `reach this square (can_reach_you 0) so those are not the wall's doing`
                    : known?.held   ? `held ${known.held} time(s) before`
                    :                 'never tested',
-      note: known?.failed
+      note: condemned
         ? 'this square has failed before; it is treated as open floor and should not have ' +
           'been offered — a failure is permanent'
+        : known?.failed
+        ? 'the failure rows here predate the geometry, or were somebody else standing on ' +
+          'the square. Unreachable is unreachable: only geometry may condemn a place to HEAL'
         : known?.held
         ? 'this square has held under attack before and never failed, so it is trusted on arrival'
         : 'trusted on arrival: the geometry says nothing can reach it, and an algorithmically ' +
@@ -3767,6 +3790,37 @@ export class Autopilot {
   async pull(want) {
     const s = this.s, c = s.client;
     if (!this.hold) return { pulled: false, why: 'not holding a spot to pull it back to' };
+
+    // NOT IN A CROWD, AND NOT BELOW THE FLEE LINE. The two guards every other aggressive
+    // rung in this file has, and the one that fetches monsters had neither.
+    //
+    // A pull is a walk OUT to the quarry, a blow, and a walk BACK. The note below argues
+    // that distance does not make it more dangerous, and that is true of ONE monster: the
+    // walk out happens before it has noticed us. It is false of six, because the walk is
+    // through their reach and they have already noticed us — so the pull stops being a
+    // fetch and becomes a lap of the melee, once per pass, for as long as the room stays
+    // busy.
+    //
+    // Rowlf, room 39, 2026-09-06 04:55. Six battered skeletons in reach on every one of the
+    // last sixteen frames (ten at peak), `doing: fighting` on all of them, oscillating
+    // 23,8 - 24,8 - 23,8 - 22,8 while health went 34 -> 6. That oscillation IS this walk.
+    // Gross 15 squares travelled, NET ONE. His flee threshold was 36 of 53 and he was under
+    // it for the whole minute, still pulling, one second before he died: "pulled it to the
+    // wall, went 3" and "waiting for it at the wall, follow_window_ms 8000".
+    //
+    // Below the flee line the survival ladder owns the body — fetching another monster to
+    // it is the opposite of what the ladder is for. In a crowd the doctrine is already
+    // written down: IN A CROWD THE ONLY WALL IS THE EXIT.
+    if (this.crowded()) {
+      this.noteCrowdRefusal('pulling quarry to the wall');
+      return { pulled: false, why: 'too many things in this room to walk out and back through' };
+    }
+    const frac = pct(s?.client?.vitals?.()?.health);
+    if (frac !== null && frac < this.safety().fleeAt)
+      return { pulled: false,
+               why: `below the flee line (${Math.round(frac * 100)}% against ` +
+                    `${Math.round(this.safety().fleeAt * 100)}%) — the ladder owns the body, ` +
+                    'and a pull would fetch another one to it' };
     const spot = { ...this.hold };
     // NEVER TRUST A CAPTURED OBJECT'S COORDINATES. BP_ROOM_CONTENTS replaces the
     // whole object map with fresh instances, so anything picked up earlier in the
