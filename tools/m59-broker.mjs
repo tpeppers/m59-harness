@@ -9474,10 +9474,22 @@ const TOOLS = [
           'per hour by strategy rather than anyone having to argue about which ought to work. ' +
           'baseline is the control' },
       fight_above_vigor: { type: 'number', minimum: 0, maximum: 200,
-        description: 'eat until vigor reaches this before picking a fight. Resting alone tops out at ' +
+        description: 'THE FLOOR: do not START a fight below this vigor. Resting alone tops out at ' +
           'the rest threshold of 80 out of 200; above that only food will do it, and vigor is what ' +
-          'sets the health regeneration rate. An explicit value overrides both the selected ' +
-          'strategy floor and its provisioning ceiling' },
+          'sets the health regeneration rate. It overrides the selected strategy floor and NOT its ' +
+          'ceiling — see vigor_ceiling, and see applyFightAboveVigor, which leaves the ceiling alone ' +
+          'on purpose. (This description used to claim it set the ceiling too. It never did, and a ' +
+          'reader who believed it would expect a floor of 200 to mean "eat to 200" when what it ' +
+          'means is "be at 200 before swinging".)' },
+      vigor_ceiling: { type: 'number', minimum: 0, maximum: 200,
+        description: 'THE CEILING: keep eating until vigor reaches this. With the floor it makes a ' +
+          'BAND — set out at the top of it and keep fighting down to the floor — which is the whole ' +
+          'point: health returns as ((200-vigor)^2/6 + 1000) ms a point, 1.0 hp/s at 200 against ' +
+          '0.29 at 80, so a character pinned AT its floor throws away the regeneration it just paid ' +
+          'food for. A ceiling equal to the floor is the degenerate case: the character must be at ' +
+          'exactly that number to swing and drops out of the fight on the first tick of vigor burn. ' +
+          'Until now this could only be inherited from the strategy plan, so a fleet could not ' +
+          'declare its band — it got whatever `fieldrest` happened to say and nothing reported it.' },
       inky_reserve: { type: 'boolean',
         description: 'FIGHT BELOW THE VIGOR FLOOR WHILE HOLDING FOOD TOO BIG TO EAT. `eat` refuses ' +
           'anything that would carry vigor past 200 and an inky cap is fifty, so a character at 177 ' +
@@ -10258,6 +10270,21 @@ const TOOLS = [
       }
       if (a.fight_above_vigor !== undefined)
         applyFightAboveVigor(p.policy, a.fight_above_vigor);
+      // THE CEILING IS SET SEPARATELY, AND ORDER MATTERS: after the floor, so a caller that
+      // sends both gets the band it asked for rather than whichever arrived last. Refused
+      // below the floor, because a ceiling under the floor is a character that must eat DOWN
+      // to fight — there is no such action, and it would idle for ever while every call
+      // reported success.
+      if (a.vigor_ceiling !== undefined) {
+        const ceiling = Number(a.vigor_ceiling);
+        if (!Number.isFinite(ceiling) || ceiling < 0 || ceiling > 200)
+          throw new Error('vigor_ceiling must be a finite number from 0 to 200');
+        const floor = Number(p.policy.vigorFloor ?? p.policy.fightAboveVigor ?? 0);
+        if (Number.isFinite(floor) && ceiling < floor)
+          throw new Error(`vigor_ceiling ${ceiling} is below the fighting floor ${floor}: ` +
+                          'a character cannot eat downwards, so this would idle it for ever');
+        p.policy.vigorCeiling = ceiling;
+      }
       if (a.inky_reserve !== undefined) p.policy.inkyReserve = !!a.inky_reserve;
       if (a.inky_reserve_floor !== undefined)
         p.policy.inkyReserveFloor = Math.max(0, Number(a.inky_reserve_floor) || 0);
@@ -14619,7 +14646,19 @@ const TOOLS = [
           // staleness, not a healthy-looking frozen row.
           snapshot_age_ms: s instanceof KeeperProxy ? s.snapshotAgeMs() : 0,
           snapshot_source: s instanceof KeeperProxy ? 'keeper_process' : 'broker_process',
+          // KEPT, AND IT IS THE FLOOR RATHER THAN A TARGET. `vigor_target` has reported
+          // `fightAboveVigor` since it existed and readers are built on that, so the name
+          // stays wrong rather than the number changing under them. It is the vigor a
+          // character must have to START a fight, not the vigor it eats to.
           vigor_target: st?.policy?.fightAboveVigor || null,
+          // THE BAND, NAMED HONESTLY, because "how hard is this character being run" was not
+          // answerable from the board at all. The ceiling was only ever inherited from the
+          // strategy plan, so it read as `undefined` on all 21 rows while every character was
+          // in fact eating to 200 — and a floor EQUAL to the ceiling (ten characters were at
+          // 200/200) is the degenerate case nobody could see: it must be exactly full to
+          // swing, and drops out of the fight on the first tick of vigor burn.
+          vigor_floor: st?.policy?.vigorFloor ?? st?.policy?.fightAboveVigor ?? null,
+          vigor_ceiling: st?.policy?.vigorCeiling ?? null,
           // No keeper, or a keeper that is not running, IS a stall. It used to report
           // as `autopilot: null` next to a full health bar and a sensible room name,
           // which reads as a healthy character — and twenty-five of them sat like
