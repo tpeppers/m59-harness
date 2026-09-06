@@ -95,5 +95,35 @@ console.log('\nthe pass consults it, and keeps the two older reasons');
      branch.indexOf('readyToLeaveSanctuary') < branch.indexOf('this.travel('));
 }
 
+// ------------------------------------------------ a foreground travel must WAIT for the walk
+//
+// A KEEPER-BACKED `travelJob` DECIDES HOW TO ASK THE KEEPER FROM ONE WORD.
+//
+//     background: opts.foreground !== true
+//
+// and the travel tool never passed `foreground`, so `undefined !== true` was true and every
+// travel went to the keeper as a background action — including the ones whose entire purpose
+// was to block until arrival. `await startTravel().promise` then awaited an acknowledgement
+// rather than a walk and came back in about four milliseconds with no `arrived` in it.
+//
+// Nothing errored. What broke was every caller that asks "did it get there": an errand step
+// with `expect: 'arrived'` never matched, and every step carrying `needs:` that label was
+// skipped in silence. On prod 2026-09-06 the Barloque circuit walked to the vault and the
+// smith and neither deposited nor sold, the street giveaway never dropped or yelled, and
+// `sell`, `vault`, `bank` and `drop_all` were called ZERO times in a day of dispatches.
+//
+// Source-level because the two halves live in different objects and the bug is the ABSENCE
+// of an argument — there is no value to assert on, only a call site that must pass it.
+console.log('\na foreground travel waits for the journey, not for an acknowledgement');
+{
+  const BROKER = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  ok('the keeper-backed job still reads `foreground` to decide',
+     BROKER.includes('background: opts.foreground !== true'));
+  ok('and the travel tool now passes it, inverted from `background`',
+     BROKER.includes('foreground: !a.background,'));
+  // A foreground caller awaits the promise; that line is what the fix makes meaningful.
+  ok('the foreground path still awaits the journey', BROKER.includes('await startTravel().promise'));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

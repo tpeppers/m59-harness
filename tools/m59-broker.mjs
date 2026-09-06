@@ -5626,6 +5626,26 @@ const TOOLS = [
       const startTravel = () => s.travelJob(dest, {
         where: where.name, maxHops: num(a.max_hops, 25), controlToken: a.control_token,
         runErrands: a.run_errands !== false,
+        // FOREGROUND MEANS WAIT FOR THE JOURNEY, NOT FOR AN ACKNOWLEDGEMENT.
+        //
+        // A keeper-backed `travelJob` decides how to ask the keeper with
+        // `background: opts.foreground !== true`, and this call site never passed
+        // `foreground` — so `undefined !== true` was true and EVERY travel went to the
+        // keeper as a background action, including the ones whose whole purpose was to
+        // block until arrival. The `await startTravel().promise` below then awaited the
+        // keeper's acknowledgement rather than the walk, and returned in about four
+        // milliseconds with no `arrived` in it.
+        //
+        // Nothing errored, so nothing looked wrong. What broke was every caller that asks
+        // "did it get there": an errand step with `expect: 'arrived'` never matched, and
+        // every step carrying `needs:` that label was skipped in silence. Measured on prod
+        // 2026-09-06 — the Barloque sell circuit walked to the vault and the smith and did
+        // not deposit or sell at either, because `vault` needs `at-the-vault` and
+        // `sell_all` needs the shop arrival; the street giveaway never dropped or yelled,
+        // because both need `in-the-street`; and the feast's own arrival accounting is the
+        // same shape. `sell`, `vault`, `bank` and `drop_all` were each called ZERO times in
+        // a day of the circuit being dispatched over and over.
+        foreground: !a.background,
       });
 
       if (a.background) {
@@ -9475,7 +9495,22 @@ const TOOLS = [
           'cheap — fungus beast is level 50 but DIFFICULTY 1 at attack 210, so an open fight is ' +
           'survivable; a battered skeleton is difficulty 4 at attack 420 and it is not. It had no ' +
           'argument here at all until now, so the only way to set it was to reach into a running ' +
-          'keeper, which meant it could never be persisted and never survived a restart' },
+          'keeper, which meant it could never be persisted and never survived a restart. ' +
+          'AND OFF IS NO LONGER THE SAME AS "prefer a wall": see wall_at_attackers, which is ' +
+          'what "not required" now MEANS — the wall becomes the answer to a crowd rather than ' +
+          'the posture before every fight' },
+      wall_at_attackers: { type: 'number',
+        description: 'WHAT "NOT REQUIRED" MEANS, and it is only read while require_safe_wall is ' +
+          'false. Default 2: hold a wall once this many creatures are inside melee reach, and ' +
+          'fight in the open below it. Before this existed there were two flags and only two of ' +
+          'the four states they describe — OFF (use_safe_spots false, never take a wall) and ' +
+          'REQUIRED (refuse the fight without one). Clearing require_safe_wall alone changed ' +
+          'nothing about how a character fights, because holdWorthwhile still asks "does this ' +
+          'kill pay" and on a grinding fleet the answer is yes for every creature in every ' +
+          'assigned room — so a character still walked to a corner before every engagement and ' +
+          'the setting was indistinguishable from REQUIRED on any board. The wall is released ' +
+          'again when nothing is left in reach, which is what makes it a response rather than a ' +
+          'one-way door; the gap between taking at 2 and releasing at 0 is deliberate hysteresis' },
       hold_resume_above: { type: 'number',
         description: 'in a safe spot, top up to this fraction of health before swinging again, ' +
           'default 1.0 — rest FULL. Stopping costs nothing there, so there is no reason to fight ' +
@@ -10211,6 +10246,18 @@ const TOOLS = [
       // to prefer one. See the schema entry: with this on and the wall unreachable, the pass
       // retries for ever and the character never swings at prey standing next to it.
       if (a.require_safe_wall !== undefined) p.policy.requireSafeWall = !!a.require_safe_wall;
+      // The bar that gives "not required" its meaning. 0 or a negative is refused rather than
+      // stored: "hold a wall once zero creatures are attacking" is REQUIRED spelled another
+      // way, and a setting that silently means the opposite of its name is the failure the
+      // whole three-state split exists to end.
+      if (a.wall_at_attackers !== undefined) {
+        const bar = Number(a.wall_at_attackers);
+        if (!Number.isFinite(bar) || bar < 1)
+          return { started: false, reason: 'wall_at_attackers is how many creatures in melee ' +
+            'reach make a wall worth taking, so it is at least 1. Zero would mean "always hold ' +
+            'a wall", which is require_safe_wall: true' };
+        p.policy.wallAtAttackers = bar;
+      }
       if (a.hold_resume_above !== undefined) p.policy.holdResumeAbove = Number(a.hold_resume_above);
       if (a.blind_walk_watchdog !== undefined) p.policy.blindWalkWatchdog = a.blind_walk_watchdog === true;
       if (a.travel_vigor_floor !== undefined) p.policy.travelVigorFloor = Number(a.travel_vigor_floor);
