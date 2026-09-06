@@ -168,5 +168,85 @@ console.log('\nmovement and fighting are cancelled SEPARATELY');
      !out.cancelled && out.rounds === 4, JSON.stringify({ c: out.cancelled, r: out.rounds }));
 }
 
+// ============================================================ the two defensive manoeuvres
+//
+// Operator's doctrine, 2026-09-06: in a fight there are exactly two defensive moves.
+//
+//   1. NOT on a safe wall  ->  go to the nearest one.
+//   2. ON a safe wall      ->  log off and back on, turn, and rest.
+//
+// Nothing else may interrupt a fight — not a town trip, not a breadcrumb retreat, not a
+// wander to "somewhere I can heal". Those are the movement-shaped rungs a post-mortem
+// records as "every decision correct, 0.0 squares per second, dead".
+//
+// The two are ONE law rather than two, which is why they belong together: what makes a
+// square worth fleeing to is the same property that makes the logoff work there — nothing
+// can reach it.
+import { Autopilot } from './m59-autopilot.mjs';
+
+const keeper = ({ hp = 10, max = 40, hold = null, works = false } = {}) => {
+  const calls = { playDead: 0, takeSafeSpot: 0, notes: [] };
+  const ap = Object.create(Autopilot.prototype);
+  ap.policy = {}; ap.hold = hold; ap.doing = 'fighting';
+  ap.safety = () => ({ fleeAt: 0.7 });
+  ap.holdWorks = () => works;
+  ap.note = (what, detail) => calls.notes.push({ what, detail });
+  ap.playDead = async () => { calls.playDead++; return true; };
+  ap.takeSafeSpot = async () => { calls.takeSafeSpot++; return { took: true }; };
+  ap.s = { client: { vitals: () => ({ health: { value: hp, max } }) } };
+  return { ap, calls };
+};
+const vit = (hp, max = 40) => ({ health: { value: hp, max } });
+const near1 = [{ id: 7 }];
+
+console.log('\non a working wall, the answer is the logoff — and only that');
+{
+  const { ap, calls } = keeper({ hp: 10, hold: { col: 1, row: 1 }, works: true });
+  const did = await ap.defensiveAnswer({ near: near1, v: vit(10) });
+  ok('it handles the pass', did === true);
+  ok('...by logging off, which is manoeuvre 2', calls.playDead === 1);
+  ok('...and does NOT go looking for another wall', calls.takeSafeSpot === 0);
+}
+
+console.log('\noff a wall, the answer is the nearest wall — and only that');
+{
+  const { ap, calls } = keeper({ hp: 10, hold: null, works: false });
+  const did = await ap.defensiveAnswer({ near: near1, v: vit(10) });
+  ok('it handles the pass', did === true);
+  ok('...by taking the nearest wall, which is manoeuvre 1', calls.takeSafeSpot === 1);
+  ok('...and does NOT log off in the open', calls.playDead === 0,
+     'a freeze off a wall recovers no health and leaves us exactly where we were');
+}
+
+console.log('\nand it declines everything that is not a fight');
+{
+  const a = keeper({ hp: 10 });
+  ok('nothing in reach: not this rung',
+     await a.ap.defensiveAnswer({ near: [], v: vit(10) }) === false);
+  const b = keeper({ hp: 39 });
+  ok('above the flee line: not this rung',
+     await b.ap.defensiveAnswer({ near: near1, v: vit(39) }) === false);
+  // NARROWING THE LADDER FOR A CHARACTER MERELY HURT WHILE WALKING WOULD TAKE AWAY RUNGS
+  // THAT ARE RIGHT. Travel has its own guard, and somebody bleeding in a corridor is not
+  // having a fight.
+  const c = keeper({ hp: 10 }); c.ap.doing = 'travelling'; c.ap.hold = null;
+  ok('not in a fight and not at a wall: not this rung',
+     await c.ap.defensiveAnswer({ near: near1, v: vit(10) }) === false);
+  const d = keeper({ hp: 10 }); d.ap.policy = { defensiveAnswer: false };
+  ok('and it can be switched off per character',
+     await d.ap.defensiveAnswer({ near: near1, v: vit(10) }) === false);
+}
+
+console.log('\nwith nowhere to go it falls THROUGH rather than idling');
+{
+  // Refusing to fall through would strand a character that has no wall available, which is
+  // the failure mode this whole file keeps paying for.
+  const { ap, calls } = keeper({ hp: 10, hold: null });
+  ap.takeSafeSpot = async () => ({ took: false, why: 'no candidate' });
+  const did = await ap.defensiveAnswer({ near: near1, v: vit(10) });
+  ok('it does not claim the pass', did === false);
+  ok('...and says why exactly once', calls.notes.some(n => /no wall to reach/.test(n.what)));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
