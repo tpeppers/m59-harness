@@ -804,6 +804,8 @@ const WATCHDOG_FRAME_MS = Number(process.env.M59_WATCHDOG_FRAME_MS || 8_000);
 // a half minutes with a guard running and nothing to show for it. Thresholds at least come
 // from one place now, so they cannot disagree on top of everything else.
 const WATCHDOG_PINNED_MS = watchdog.WATCHDOG_PINNED_MS;
+// Only the healthy-wedge CANCEL uses this; wedge DETECTION keeps WATCHDOG_PINNED_MS.
+const WATCHDOG_HEALTHY_CANCEL_MS = watchdog.WATCHDOG_HEALTHY_CANCEL_MS;
 const WATCHDOG_PINNED_SQUARES = watchdog.WATCHDOG_PINNED_SQUARES;
 // WHERE A WEDGED BODY IS MOVED BEFORE THE WALK IS RE-PLANNED, indexed by how many times the
 // watchdog has broken a wedge at that place. Two squares, because one is inside the melee
@@ -10493,7 +10495,7 @@ export class Autopilot {
     // numbers. Holding a wall and being inert are already excluded above.
     const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
     if (frac >= fleeAt) {
-      if (pinnedFor < WATCHDOG_PINNED_MS) return;
+      if (pinnedFor < WATCHDOG_HEALTHY_CANCEL_MS) return;
       w.interruptedPass = this.passes;
       w.pinnedInterrupts = (w.pinnedInterrupts ?? 0) + 1;
       // The anchor is where the wedge STARTED, which is the place to remember it by: a

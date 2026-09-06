@@ -121,6 +121,24 @@ export const INERT_RESCUE_MS = Number(process.env.M59_INERT_RESCUE_MS || 4_000);
 // seconds, and cancelling those would be the guard picking fights with the pass. Twenty
 // seconds of covering no ground at all is not any of them.
 export const WATCHDOG_PINNED_MS = num('WATCHDOG_PINNED_MS', 20_000);
+
+// THE CANCEL THRESHOLD, SPLIT OUT FROM THE DETECTION THRESHOLD — and the reason is an
+// incident, 2026-09-05.
+//
+// WATCHDOG_PINNED_MS is read in THREE places, not one: the healthy-wedge cancel, and twice
+// inside `wedgeHere`, which is what decides a square is wedged at all and therefore what
+// feeds the whole escape ladder (breadcrumbs -> the entry door -> re-cross the last room).
+//
+// Raising it to disable the cancel — which looked like a one-number config change and got no
+// review because of that — silently disabled WEDGE DETECTION with it. For several hours the
+// fleet could not notice it was stuck, so no rung of the ladder could fire. The cancel and
+// the detection are different questions that happened to share a number.
+//
+// So the cancel gets its own, defaulting to the same value: a checkout that sets neither
+// behaves exactly as before, and an operator disabling the cancel no longer blinds the
+// ladder as a side effect.
+export const WATCHDOG_HEALTHY_CANCEL_MS =
+  num('WATCHDOG_HEALTHY_CANCEL_MS', WATCHDOG_PINNED_MS);
 // HOW FAR FROM WHERE IT STARTED STILL COUNTS AS GETTING NOWHERE, in squares.
 //
 // THIS IS A DISPLACEMENT TEST, NOT A STILLNESS TEST, and the difference is the whole
