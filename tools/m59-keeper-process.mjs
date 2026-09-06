@@ -1721,7 +1721,21 @@ const server = createServer(async (req, res) => {
             return;
           }
           case 'cancel': {
-            const r = session.cancelMovement?.(args.control_token, 'the keeper /action endpoint');
+            // KEEP THE CALLER'S NAME. The broker already sends `why` with every cancel
+            // (m59-broker.mjs:2402) and every in-process caller supplies one — the fight-back
+            // edict, the flee line, each watchdog rung, a travel guard. This handler threw all
+            // of that away and stamped its own name on the ledger, so 62 of the first 310
+            // journeys after the 2026-09-05 deploy recorded "the keeper /action endpoint",
+            // which says only that the cancel arrived over HTTP.
+            //
+            // That is the hole `011d288` was written for — "the cancel that left no trace was
+            // 75 of 98 lost journeys" — left open on the one path where the reason had been
+            // carried the whole way and was discarded at the last step. The operator's question
+            // was "who is cancelling, because it is not me", and the ledger could not answer.
+            const askedWhy = typeof args.why === 'string' && args.why.trim()
+              ? args.why.trim().slice(0, 80)
+              : 'the keeper /action endpoint, caller unnamed';
+            const r = session.cancelMovement?.(args.control_token, askedWhy);
             json({ cancelled: true, ...(r ?? {}) });
             return;
           }

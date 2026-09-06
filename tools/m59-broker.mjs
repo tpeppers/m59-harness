@@ -2477,7 +2477,10 @@ class KeeperProxy {
   // Autopilot methods — proxy to keeper
   async autopilot(action, args = {}) {
     if (action === 'start') return keeperAction(this.name, this._index, 'pass', {});
-    if (action === 'stop') return keeperAction(this.name, this._index, 'cancel', {});
+    // Name it. This is the second unattributed cancel path: an `autopilot stop` sent no `why`
+    // at all, so on the ledger it was indistinguishable from every other HTTP cancel.
+    if (action === 'stop')
+      return keeperAction(this.name, this._index, 'cancel', { why: 'an autopilot stop order' });
     if (action === 'status') return this._refreshState();
     return { error: `unknown autopilot action: ${action}` };
   }
