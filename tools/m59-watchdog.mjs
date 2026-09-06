@@ -585,24 +585,51 @@ export function tick(host) {
   // caller — a held wall is standing still on purpose and an errand is not ours to cancel.
   const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
   if (frac >= fleeAt) {
-    if (pinnedFor < WATCHDOG_PINNED_MS) return;
-    w.interruptedPass = host.passes;
-    w.pinnedInterrupts++;
+    // TWO DECISIONS, THE SAME TWO AS THE AUTOPILOT'S COPY OF THIS ARM. Recording that this
+    // place is a wedge is what an escape ladder is reached from; cancelling the walk is a
+    // separate and more expensive act an operator may switch off. Kept identical here on
+    // purpose: this arm and m59-autopilot.mjs's are two implementations of one contract, and
+    // the last time they diverged it was because only one of them was edited. This host does
+    // not currently climb a ladder — `wedgeAdvice` is asked by the Autopilot's `wedgeHere`,
+    // and a `mode: 'tick'` host has none — but honouring WATCHDOG_HEALTHY_CANCEL_MS matters
+    // regardless: an operator who sets it in watchdog.local.json is entitled to have it read
+    // by both arms rather than silently ignored by one.
+    if (pinnedFor < WEDGE_LADDER_MS) return;
+    const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;
+    // PACED ONLY WHERE THE ANCHOR IS NOT CLEARED. A cancel sets `pinnedSince` to null, so
+    // the next record already cannot arrive until the body has been pinned a further
+    // WEDGE_LADDER_MS — the cadence is self-limiting on that path and this clock would be
+    // a second, redundant limiter on it. On the record-only path nothing clears the
+    // anchor, `pinnedFor` keeps growing, and without this every tick would write a record:
+    // WEDGE_REPEAT_CAP reached in two and a half seconds of ordinary slow walking.
+    if (!cancelling && w.wedgeNotedAt && now - w.wedgeNotedAt < WEDGE_LADDER_MS) return;
+    w.wedgeNotedAt = now;
     // The anchor is where the wedge STARTED, which is the place to remember it by: a
     // pocket-wanderer's newest pulse moves and its anchor does not.
     const spot = w.pinnedAnchor ?? w.pulses[w.pulses.length - 1] ?? null;
-    w.pinnedSince = null; w.pinnedAnchor = null;
-    host.tally.watchdog_pinned_interrupts = (host.tally.watchdog_pinned_interrupts || 0) + 1;
-    const broke = (() => {
+    if (cancelling) {
+      w.interruptedPass = host.passes;
+      w.pinnedInterrupts++;
+      // Cleared only by a real cancel: `pinnedSince` is what the Autopilot's `wedgedInPlace`
+      // reads for the survival rungs, and resetting it on every record would mean it never
+      // reached WATCHDOG_PINNED_MS again.
+      w.pinnedSince = null; w.pinnedAnchor = null;
+      host.tally.watchdog_pinned_interrupts = (host.tally.watchdog_pinned_interrupts || 0) + 1;
+    }
+    host.tally.watchdog_wedges_recorded = (host.tally.watchdog_wedges_recorded || 0) + 1;
+    const broke = cancelling ? (() => {
       try { return s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
       catch (e) { return { cancelled: false, why: e.message }; }
-    })();
+    })() : { cancelled: false, interrupted: null,
+             why: 'cancels are off here; this arm is recording the wedge so a ladder can run' };
     // AND THE RECORD THAT MAKES THE NEXT DECISION DIFFERENT. See WEDGE_REPEAT_CAP: a
     // cancel alone hands the next pass the same inputs, which is a loop.
     const record = spot ? noteWedgeBreak(w, { room: spot.room, col: spot.col, row: spot.row,
                                               doing: host.doing ?? null,
                                               to: host.wedgeTarget?.() ?? null }, now) : null;
-    host.note('WATCHDOG — broke a wedge that was not hurting anybody', {
+    host.note(cancelling ? 'WATCHDOG — broke a wedge that was not hurting anybody'
+                         : 'WATCHDOG — recorded a wedge that was not hurting anybody', {
+      cancelled: cancelling,
       health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
       doing: host.doing ?? null,
       penned_for_s: Math.round(pinnedFor / 1000),
@@ -620,7 +647,9 @@ export function tick(host) {
           ? 'broken ' + record.repeats + ' times at this place — the next pass sidesteps before re-planning'
           : undefined,
     });
-    host.progress('watchdog broke a healthy wedge');
+    // Only on a real cancel. `progress()` resets the idle/stall counters and clears the
+    // STALL_NO_LEVER refusal; a record-only pass changed nothing and must not say it did.
+    if (cancelling) host.progress('watchdog broke a healthy wedge');
     return;
   }
 

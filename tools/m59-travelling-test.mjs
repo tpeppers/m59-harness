@@ -938,8 +938,19 @@ console.log('THE BLIND-WALK WATCHDOG IS OFF, AND ONLY THAT HALF');
   // it is gated on `frac >= fleeAt` — full health — so it cannot fire on a hurt traveller.
   ok('the pinned-wedge half is untouched and still fires at full health',
      /WATCHDOG — broke a wedge that was not hurting anybody/.test(AUTOPILOT_SRC));
-  ok('and it is still reached only when health is AT OR ABOVE the flee line',
-     /if \(frac >= fleeAt\) \{[\s\S]{0,400}pinnedFor < WATCHDOG_PINNED_MS/.test(AUTOPILOT_SRC));
+  // Reached only at or above the flee line, and its first gate is the LADDER clock, not the
+  // cancel clock. The arm asks two questions now: WEDGE_LADDER_MS decides whether to RECORD
+  // the wedge -- which is the only thing an escape ladder is reached from -- and
+  // WATCHDOG_HEALTHY_CANCEL_MS decides whether to also cancel. They were one `if`, and
+  // fusing them meant that turning cancels off turned the ladder off with them.
+  {
+    const arm = AUTOPILOT_SRC.indexOf('if (frac >= fleeAt) {');
+    const gate = AUTOPILOT_SRC.indexOf('if (pinnedFor < WEDGE_LADDER_MS) return;', arm);
+    const cancel = AUTOPILOT_SRC.indexOf(
+      'const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;', arm);
+    ok('and it is still reached only when health is AT OR ABOVE the flee line',
+       arm > 0 && gate > arm && cancel > gate, `arm ${arm}, gate ${gate}, cancel ${cancel}`);
+  }
 
   // KEPT, NOT DELETED — the repository's standing rule for a behaviour being retired.
   ok('the cancel itself is still in the file, switchable back on',

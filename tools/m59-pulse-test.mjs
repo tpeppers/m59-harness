@@ -12,7 +12,9 @@
 // only while the guard lived inside the monolith and broke the moment it moved. Testing
 // a real import instead of a string slice is the point of having extracted it.
 //
-import { pulse, tick, freshState, WATCHDOG_PINNED_MS, WATCHDOG_BLOCKED_MS, WATCHDOG_PINNED_SQUARES } from './m59-watchdog.mjs';
+import { pulse, tick, freshState, WATCHDOG_PINNED_MS, WATCHDOG_BLOCKED_MS,
+         WATCHDOG_PINNED_SQUARES, WEDGE_LADDER_MS } from './m59-watchdog.mjs';
+import { execFileSync } from 'node:child_process';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail) => {
@@ -247,6 +249,92 @@ console.log('\na wedge at full health is still a wedge');
      shuffling.tally.watchdog_pinned_interrupts === 1 &&
      !shuffling.tally.watchdog_interrupts);
   ok('it fires ONCE per pass, not once per tick', shuffling.cancels.length === 1);
+
+  // ---------------------------------------------------------------------------
+  // THE ARM RECORDS THE WEDGE EVEN WHEN IT IS NOT ALLOWED TO CANCEL.
+  //
+  // This is the property the record/cancel split exists for, and it is executed rather than
+  // grepped. What it defends, exactly: `wedgeBreak` is the only thing an escape ladder is
+  // reached from, this arm is the only thing that writes it, and it used to write it below
+  // `if (pinnedFor < WATCHDOG_HEALTHY_CANCEL_MS) return;`. So raising that threshold — the
+  // supported way to stop the watchdog manufacturing journeys, set in
+  // substrate/watchdog.local.json and live on prod since deploy-2026-09-06-7 — also stopped
+  // the ladder ever running for a HEALTHY character. Silently, nothing logged, every suite
+  // green.
+  //
+  // RUN IN A CHILD PROCESS, because the threshold is a module-level const resolved at import
+  // from `M59_*` env or watchdog.local.json. A fixture flag would test a fixture; this tests
+  // the override an operator actually uses, end to end, including that the env name is what
+  // `num()` looks for. A source-level check could not catch the regression returning at all:
+  // re-fusing the two decisions in different words passes any grep.
+  {
+    // `.href`, not a filesystem path: the child's ESM loader rejects a bare `C:\...`.
+    const probe = new URL('./m59-watchdog.mjs', import.meta.url).href;
+    const script = `
+      import { tick, freshState } from ${JSON.stringify(probe)};
+      const self = { col: 24, row: 3, x: 0, y: 0 };
+      const notes = [], cancels = [];
+      const host = {
+        doing: 'travelling', inert: null, hold: null, tally: {}, passes: 8,
+        passStartedAt: 1, lastFrameAt: 0, watch: freshState(),
+        s: { live: true,
+             cancelMovement: () => { cancels.push(true); return { cancelled: true }; },
+             client: { self, room: { id: 544 }, state: 'game',
+                       vitals: () => ({ health: { value: 50, max: 50 } }) } },
+        safety: () => ({ fleeAt: 0.4 }),
+        note: (what, detail) => notes.push({ what, detail }),
+        recordFrame: () => {}, progress: () => {},
+      };
+      const realNow = Date.now;
+      for (let t = 500; t <= Number(process.env.PROBE_MS); t += 500) {
+        Date.now = () => t;
+        const step = Math.floor(t / 1000) % 5;
+        self.col = [24, 25, 28, 29, 29][step];
+        self.row = [3, 3, 3, 3, 4][step];
+        tick(host);
+      }
+      Date.now = realNow;
+      process.stdout.write(JSON.stringify({
+        cancels: cancels.length, repeats: host.watch.wedgeBreak?.repeats ?? 0,
+        pinnedSince: host.watch.pinnedSince, tally: host.tally,
+        recorded: notes.some(n => n.what === 'WATCHDOG \u2014 recorded a wedge that was not hurting anybody'),
+      }));
+    `;
+    // The duration goes by env too: with `--eval`, the first user argument lands at
+    // argv[1], not argv[2], and reading the wrong slot silently ran ZERO ticks — a probe
+    // that asserts nothing while reporting failures that look like the code.
+    const runArm = (ms, env) => JSON.parse(execFileSync(
+      process.execPath, ['--input-type=module', '--eval', script],
+      { env: { ...process.env, ...env, PROBE_MS: String(ms) }, encoding: 'utf8' }));
+
+    const off = runArm(WEDGE_LADDER_MS + 4_000, { M59_WATCHDOG_HEALTHY_CANCEL_MS: '2147483647' });
+    ok('with cancels switched off, nothing is cancelled', off.cancels === 0);
+    ok('...but the wedge is still RECORDED, which is what a ladder is reached from',
+       off.repeats >= 1);
+    ok('...it is counted, so an operator can see the arm is alive',
+       (off.tally.watchdog_wedges_recorded ?? 0) >= 1);
+    ok('...the interrupt counter stays honest at zero',
+       !off.tally.watchdog_pinned_interrupts);
+    ok('...the note says it recorded rather than broke', off.recorded === true);
+    ok('...and `pinnedSince` is NOT cleared, so the survival rungs still reach their own ' +
+       'threshold', off.pinnedSince !== null);
+
+    // Paced, not per tick: WEDGE_REPEAT_CAP records is what makes a ladder give up, so an
+    // unpaced arm would reach the cap in under two seconds of ordinary slow walking.
+    const paced = runArm(WEDGE_LADDER_MS * 3, { M59_WATCHDOG_HEALTHY_CANCEL_MS: '2147483647' });
+    ok('records are paced one per WEDGE_LADDER_MS, never one per tick',
+       paced.repeats <= 3, `${paced.repeats} repeats`);
+
+    // And with cancels on — the shipped default — the arm still does both.
+    const on = runArm(WATCHDOG_PINNED_MS + 4_000, {});
+    ok('with cancels on the arm still cancels', on.cancels >= 1);
+    ok('...and records in the same breath', on.repeats >= 1);
+    // The cancel's bookkeeping, not the anchor's final value: clearing `pinnedSince` re-arms
+    // it the moment the body shuffles again, so reading it after the run measures the
+    // fixture's last tick rather than whether a cancel happened.
+    ok('...doing the interrupt bookkeeping a cancel is supposed to do',
+       on.tally.watchdog_pinned_interrupts >= 1);
+  }
 
   // NOT BEFORE ITS TIME. The 3s emergency threshold is for a character that is bleeding;
   // applying it here would cancel every legitimate slow walk in the game.

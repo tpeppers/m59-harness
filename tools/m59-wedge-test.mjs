@@ -182,7 +182,7 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
                  // one and there is no rail to rejoin, true = it rejoins.
                  railWorks = null, onward = { row: 4, col: 9 } } = {}) {
   const notes = [], walks = [], fights = [], retreats = [], walls = [], travels = [],
-        rails = [];
+        rails = [], onwardAsks = [];
   const ap = Object.create(Autopilot.prototype);
   const self = { col, row };
   ap.watch = wd.freshState();
@@ -241,10 +241,19 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
   };
   // The memoised first-hop lookup rung 1.5 aims with. null is the honest answer for a room
   // with no onward route, and the rung must decline rather than aim at the destination.
-  ap.onwardExit = () => onward;
+  //
+  // TAKES ITS ARGUMENTS, because a stub that ignores them cannot fail when the caller swaps
+  // them. The signature is `onwardExit(roomNum, destination, opts)`, and asking it the other
+  // way round is a real mistake with no symptom here — the fixture would happily answer.
+  // `cachedOnly` is recorded for the same reason: this is the survival ladder, and an
+  // unqualified ask can run the exits flood for seconds on the loop 21 characters share.
+  ap.onwardExit = (roomNum, destination, opts) => {
+    onwardAsks.push({ roomNum, destination, cachedOnly: opts?.cachedOnly === true });
+    return onward;
+  };
   ap.takeSafeSpot = async (why, q, opts) => { walls.push({ why, opts }); return { took: true }; };
   ap.threat = () => ({ adjacent: [], near: [], engaged: 0, landing: 0, names: [] });
-  return { ap, notes, walks, fights, self, retreats, walls, travels, rails };
+  return { ap, notes, walks, fights, self, retreats, walls, travels, rails, onwardAsks };
 }
 const breakAt = (ap, n, place = { room: 586, col: 18, row: 18 }, doing = 'travelling') => {
   for (let i = 0; i < n; i++) wd.noteWedgeBreak(ap.watch, { ...place, doing, to: 586 }, Date.now() - (n - i) * 1000);
@@ -716,10 +725,14 @@ console.log('\nescapeIfWedgedAndHurt — the rung itself');
 console.log('\nthe ladder reaches rung 1.5, and falls through when there is no rail');
 {
   {
-    const { ap, rails, retreats } = keeper({ hp: 20, railWorks: true });
+    const { ap, rails, retreats, onwardAsks } = keeper({ hp: 20, railWorks: true });
     breakAt(ap, wd.WEDGE_REPEAT_CAP);
     await ap.answerWedge(586);
     ok('rung 1.5 was tried', rails.length === 1);
+    ok('it asked onwardExit(room, destination), in that order',
+       onwardAsks[0]?.roomNum === 586 && onwardAsks[0]?.destination === 586);
+    ok('and asked for a cached answer only, so the ladder can never run the exits flood',
+       onwardAsks[0]?.cachedOnly === true);
     ok('aimed at the onward exit, in (row,col)',
        rails[0].toSquare?.row === 4 && rails[0].toSquare?.col === 9);
     ok('on the same budget as rung 1, never a longer one', rails[0].maxCrumbs === 12);
@@ -761,29 +774,34 @@ console.log('\nthe ladder reaches rung 1.5, and falls through when there is no r
 // this is the property that has to survive the next edit to it.
 console.log('\nthe healthy arm records the wedge even when it may not cancel');
 {
-  ok('the record is gated on WEDGE_LADDER_MS, not on the cancel threshold',
-     AUTOPILOT.includes('if (pinnedFor < WEDGE_LADDER_MS) return;'));
-  ok('cancelling is a separate question, asked after it',
-     AUTOPILOT.includes('const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;'));
-  ok('the break is recorded outside that question',
-     AUTOPILOT.includes('const record = place ? watchdog.noteWedgeBreak('));
-  ok('the interrupt bookkeeping is inside it',
-     AUTOPILOT.includes('if (cancelling) {') &&
-     AUTOPILOT.indexOf('w.interruptedPass = this.passes;') >
-       AUTOPILOT.indexOf('if (cancelling) {'));
-  // Scoped to the arm, not the file: `pinnedSince` is cleared in several places and a bare
-  // indexOf finds the wrong one.
-  {
-    const arm = AUTOPILOT.slice(AUTOPILOT.indexOf('if (cancelling) {'),
-                                AUTOPILOT.indexOf('const broke = cancelling'));
-    ok('`pinnedSince` is cleared only when a cancel really happened, so the survival rungs ' +
-       'still reach WATCHDOG_PINNED_MS',
-       arm.includes('w.pinnedSince = null; w.pinnedAnchor = null;'));
-  }
-  ok('the escalation is paced on its own clock, not by resetting the anchor',
-     AUTOPILOT.includes('if (w.wedgeNotedAt && now - w.wedgeNotedAt < WEDGE_LADDER_MS) return;'));
-  ok('and the field is declared in freshState, so a host cannot forget it',
+  // THE BEHAVIOUR IS TESTED IN m59-pulse-test.mjs, which drives this arm in a child process
+  // with M59_WATCHDOG_HEALTHY_CANCEL_MS set high and asserts that a break is recorded with
+  // nothing cancelled. It lives there because that is where the arm can be RUN.
+  //
+  // What is left here is the shape of the thing, which that test cannot see. The wall of
+  // `AUTOPILOT.includes('<the exact line I just wrote>')` pins that used to be here are
+  // gone: they fail on a reflow and they PASS if someone re-fuses the two decisions in
+  // different words, which is the only regression worth guarding against.
+  ok('the record threshold is shorter than the survival rungs own gate, or the ladder would '
+     + 'be reached last instead of first',
+     wd.WEDGE_LADDER_MS < wd.WATCHDOG_PINNED_MS);
+  ok('`wedgeNotedAt` is declared in freshState, so a host cannot forget it',
      wd.freshState().wedgeNotedAt === null);
+  // AND THE SHIPPED HOST IS THE ONE THAT MATTERS. `startWatchdog` used to build its watch as
+  // a hand-written literal of fifteen fields, so `wedgeNotedAt` was added to freshState and
+  // not to production: the fixture certified a guarantee that did not hold on the only path
+  // that runs. Asserting against the real constructor is what makes that visible.
+  {
+    const ap = Object.create(Autopilot.prototype);
+    ap.watchdogTick = () => {};
+    ap.startWatchdog();
+    try {
+      ok('the shipped watch is built from freshState, not a hand-copy of it',
+         'wedgeNotedAt' in ap.watch && ap.watch.wedgeNotedAt === null);
+      ok('...and carries the pulse ring and the wedge record with it',
+         Array.isArray(ap.watch.pulses) && 'wedgeBreak' in ap.watch && 'pinnedSince' in ap.watch);
+    } finally { clearInterval(ap.watchTimer); }
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
