@@ -15253,7 +15253,31 @@ export class Autopilot {
         const producesQuarry = !this.policy.hunt ? true
           : spawnHere.some(x => x.huntable && this.huntMatch()(x.creature));
         const inSanctuary = this.sanctuary(room);
-        if ((inSanctuary || !producesQuarry) && this.emptyPasses >= 2) {
+        // A STATION IS AN ORDER, AND BEING SOMEWHERE ELSE IS REASON ENOUGH TO WALK.
+        //
+        // This branch used to fire only in a sanctuary or in a room that cannot produce our
+        // quarry. Both are good reasons and neither covers the commonest one: we were told
+        // where we live, we are not there, and nothing is happening here.
+        //
+        // `roam: false` DOES NOT MEAN "GO TO YOUR STATION AND STAY". It means idle wherever
+        // you happen to be standing — so a character whose journey ended anywhere short of
+        // its destination stands there for ever, and nothing reports it: `activity: idle`,
+        // `stalled: false`, `busy` unset, `committed` null. Every detector we have is
+        // looking for a character that cannot move, and this one simply has nothing telling
+        // it to.
+        //
+        // Measured on prod 2026-09-05: twelve characters dispatched to the Duke's feast hall
+        // were standing in the Graveyard of Tos, the Cragged Mountains, Ukgoth, the
+        // Underworld and their own home room — every one of them with `assigned_room: 953`,
+        // `roam: false` and `activity: idle`. The feast trip arrived 56 times out of 438,
+        // and this is where the other 382 went. It also starved the sell circuit, because
+        // cleaning up after a failed journey is an errand and it wins the fleet pass.
+        //
+        // Only `policy.assignedRoom` counts here, never `homeRoom`: the first is an explicit
+        // order somebody gave, the second is just wherever we last settled, and walking
+        // "back" to that would move characters nobody asked to move.
+        const awayFromStation = this.awayFromStation(room);
+        if ((inSanctuary || !producesQuarry || awayFromStation) && this.emptyPasses >= 2) {
           // policy.assignedRoom is where `spread` put us; homeRoom is where we last
           // settled. `this.assignedRoom` does not exist — reading it would have made this
           // whole branch quietly do nothing, which is the failure mode this fix is about.
@@ -15266,9 +15290,14 @@ export class Autopilot {
             // hurt and bare-handed is what the last twenty minutes of records are.
             if (!await this.readyToLeaveSanctuary(home)) return HANDLED;
             this.note(inSanctuary ? 'this room spawns nothing at all — going back to work'
-                                  : 'this room cannot produce our quarry — going back to work', {
+                      : !producesQuarry ? 'this room cannot produce our quarry — going back to work'
+                      : 'not at our assigned station — walking to it', {
               room: room?.name, room_num: room?.num, going_to: home,
               hunting: this.policy.hunt, produces_quarry: producesQuarry,
+              // WHICH of the three reasons fired, because they have different fixes: a
+              // sanctuary means we died or shopped, a barren room means the orders and the
+              // spawn table disagree, and this one means a journey ended short.
+              reason: inSanctuary ? 'sanctuary' : !producesQuarry ? 'no_quarry' : 'away_from_station',
               why: 'a tavern has no spawn table, so waiting for a respawn here waits for ' +
                    'something that cannot happen. This is not roaming; roam guards against ' +
                    'leaving GOOD ground, and this is not that.' });
@@ -19177,6 +19206,22 @@ export class Autopilot {
     // than obeyed into a corner.
     const mine = this.policy.assignedRoom;
     return preferAssignedRoom(rooms, mine === room?.num ? null : mine, 8);
+  }
+
+  /**
+   * Were we given a station, and are we somewhere else?
+   *
+   * A seam rather than an inline comparison because it is the whole of a behaviour change
+   * that moves live characters, and the two ways to get it wrong are both silent: reading
+   * `this.assignedRoom` (which does not exist) makes it always false, and falling back to
+   * `homeRoom` makes it true for characters nobody ever gave an order to.
+   *
+   * ONLY AN EXPLICIT ORDER COUNTS. `policy.assignedRoom` is what `spread`, the supervisor
+   * or a bot set on purpose; `homeRoom` is merely where we last settled.
+   */
+  awayFromStation(room) {
+    const station = this.policy?.assignedRoom;
+    return Number.isFinite(station) && station !== room?.num;
   }
 
   async roam(room) {
