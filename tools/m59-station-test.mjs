@@ -123,6 +123,20 @@ console.log('\na foreground travel waits for the journey, not for an acknowledge
      BROKER.includes('foreground: !a.background,'));
   // A foreground caller awaits the promise; that line is what the fix makes meaningful.
   ok('the foreground path still awaits the journey', BROKER.includes('await startTravel().promise'));
+
+  // AND THE SECOND LAYER, which the first fix exposed. `keeperAction` capped EVERY keeper
+  // action at 60s and its catch returns `{ error }` as a VALUE rather than throwing — so an
+  // aborted action reports as a successful call carrying an error field, and the JSON-RPC
+  // reply is `ok`. The shortest leg this fleet walks is 659s, so every foreground journey
+  // was aborted at sixty seconds and reported as fine.
+  ok('keeperAction takes a per-call timeout with a 60s default',
+     BROKER.includes('async function keeperAction(agent, index, name, args, { timeoutMs = 60_000 } = {})'));
+  ok('...and uses it rather than a constant',
+     BROKER.includes('signal: AbortSignal.timeout(timeoutMs)'));
+  ok('a foreground travel asks for longer than any leg takes',
+     BROKER.includes('timeoutMs: foreground ? 20 * 60_000 : 60_000'));
+  // An abort has to be distinguishable from a refusal, which it was not.
+  ok('and an abort says it was an abort', BROKER.includes('timed_out_after_ms: timeoutMs'));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

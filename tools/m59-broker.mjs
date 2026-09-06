@@ -1586,18 +1586,36 @@ async function verifiedKeeperWriteTarget(agent, index) {
   return Object.freeze({ port, identity: Object.freeze(expected), record: rec });
 }
 
-async function keeperAction(agent, index, name, args) {
+// SIXTY SECONDS IS RIGHT FOR AN ACTION AND WRONG FOR A JOURNEY.
+//
+// This capped every keeper action at 60s, and the catch below returns `{ error }` as a
+// VALUE rather than throwing — so an aborted action reports as a successful call carrying
+// an error field, which the travel tool then spreads into its own result. The JSON-RPC
+// reply is `ok`. Nothing upstream can tell an abort from an arrival.
+//
+// For most actions 60s is generous. For a foreground `travel` it is impossible: measured
+// off the broker's own estimates, the shortest leg this fleet walks is 659s and the longest
+// is 830s, so EVERY foreground journey was aborted at sixty seconds and reported as fine.
+//
+// So the caller says how long its action can take, and the default stays 60s for everything
+// that has not thought about it. The caller's own timeout should be the binding one — DUM's
+// sell-circuit steps allow 900s — which is why travel asks for more than that rather than
+// less: two timeouts racing, and the wrong one winning silently, is this bug again.
+async function keeperAction(agent, index, name, args, { timeoutMs = 60_000 } = {}) {
   try {
     const target = await verifiedKeeperWriteTarget(agent, index);
     const res = await fetch(`http://127.0.0.1:${target.port}/action`, {
       method: 'POST',
       headers: keeperIdentityHeaders(target.identity),
       body: keeperEnvelope(target.identity, { name, args }),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return await res.json();
   } catch (e) {
-    return { error: e.message };
+    // Kept as a value rather than a throw because every caller here treats a keeper it
+    // cannot reach as a soft failure. It carries the timeout so a reader can tell "the
+    // keeper said no" from "we stopped waiting", which was indistinguishable before.
+    return { error: e.message, timed_out_after_ms: timeoutMs };
   }
 }
 
@@ -2112,13 +2130,22 @@ class KeeperProxy {
   // failed before it sent anything. Returns the same shape the tool expects — an object with
   // a `promise` — so foreground and background both work through one path.
   travelJob(dest, opts = {}) {
+    const foreground = opts.foreground === true;
     const started = keeperAction(this.name, this._index, 'travel', {
       to: dest, toRoomNum: dest,
       where: opts.where, max_hops: opts.maxHops, control_token: opts.controlToken,
       run_errands: opts.runErrands !== false,
       // The keeper backgrounds by default; a foreground caller awaits `promise` below and
       // wants the journey's own result rather than an acknowledgement.
-      background: opts.foreground !== true,
+      background: !foreground,
+    }, {
+      // A FOREGROUND TRAVEL HOLDS THE REQUEST OPEN FOR THE WHOLE WALK, so it cannot use the
+      // 60s default — the shortest leg this fleet walks is 659s. Twenty minutes is longer
+      // than any caller's own step timeout (DUM's circuit allows 900s), deliberately: the
+      // caller's timeout should be the one that fires, because it is the one that knows
+      // what to do next. A background travel returns an acknowledgement immediately and
+      // wants the short default.
+      timeoutMs: foreground ? 20 * 60_000 : 60_000,
     });
     return { promise: started, keeper: true };
   }
