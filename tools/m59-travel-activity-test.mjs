@@ -9,6 +9,7 @@ for (const [hops, activity] of [[2, 'travelling'], [1, 'zoning']]) {
   for (const restFails of [false, true]) {
     let health = 10;
     const frames = [];
+    const rests = [];
     const k = Object.assign(Object.create(Autopilot.prototype), {
       policy: {}, doing: 'banking', tally: {}, watch: freshState(), passes: 1,
       passStartedAt: Date.now() - 5000,
@@ -18,10 +19,8 @@ for (const [hops, activity] of [[2, 'travelling'], [1, 'zoning']]) {
       sanctuary: () => true, inReachOfUs: () => [],
       fightBackCheck() {}, pulsePosition() {}, safety: () => ({ fleeAt: 0.4 }),
       settle: async () => {
-        assert.equal(k.doing, 'recovering', 'the actual rest must remain a rest');
         k.watchdogTick();
-        assert.equal(k.watch.pinnedAnchor, null, 'resting is not a walking wedge');
-        if (restFails) throw new Error('synthetic interrupted rest');
+        rests.push({ doing: k.doing, pinned: k.watch.pinnedAnchor });
         health = 20; // the real restUntil can now observe its target without waiting
       },
       s: {
@@ -48,6 +47,8 @@ for (const [hops, activity] of [[2, 'travelling'], [1, 'zoning']]) {
     }
     assert.equal((await k.travel(104, {})).arrived, true);
     assert.equal(frames.find(f => f.why === 'setting off').doing, activity);
+    if (!restFails) assert.deepEqual(rests, [{ doing: 'recovering', pinned: null }],
+                                    'an actual rest remains recovery and is not a walking wedge');
     passed++;
   }
 }
