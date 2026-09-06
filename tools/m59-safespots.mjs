@@ -928,7 +928,11 @@ export function nearestSafeSpot(geo, from, {
   let partitionRejected = 0;
   for (const s of (wallsAllowed ? all : [])) {
     const seen = known?.get(key(s.col, s.row)) || null;
-    // Never send a character back to a square that has already been disproved.
+    // NO SQUARE IS DISQUALIFIED BY ITS HISTORY. `discredited` is unconditionally false now
+    // — see the argument on it — so this filter is a no-op and is kept only so the shape of
+    // the loop still says where the question used to be asked. Geometry has already decided
+    // that everything in `all` is a wall; what follows filters on REACHABILITY, which is
+    // about this walk rather than about the square.
     if (seen && book.discredited(seen)) continue;
     // NOR TO ONE WE HAVE JUST FAILED TO WALK TO. A wall that cannot be reached is not
     // shelter, and offering it again is how a hurt character spends a whole room choosing
@@ -1061,9 +1065,12 @@ export function nearestSafeSpot(geo, from, {
       // works. The empirical pull detector is the authority after arrival.
       predicted_unreachable_by_quarry: predictedUnreachable || undefined,
       quarry_prediction: predictedUnreachable ? quarryPrediction : undefined,
-      // Proven means held AND never failed. Discredited squares are already
-      // skipped above; this keeps the flag honest for anything reading it.
-      proven: !!seen?.held && !seen?.failed, held_before: seen?.held ?? 0,
+      // PROVEN MEANS IT IS A WALL. It used to mean "held before and never failed", which
+      // made a brand-new geometric wall read as unproven and a square with one unlucky
+      // afternoon read as disproved for ever. There is one kind of safe wall now and the
+      // geometry above has already established this is one, so anything asking "can I
+      // trust this" gets the same answer the selection just gave itself.
+      proven: true, held_before: seen?.held ?? 0,
       // The fine coordinate is what we actually want to stand on; see SafeSpotBook.
       // The square is only how we get there.
       fine: seen?.x != null ? { x: seen.x, y: seen.y } : null,
@@ -1282,23 +1289,60 @@ export class SafeSpotBook {
   // Absent it, the old behaviour stands — this must not quietly believe squares nobody has
   // any evidence about.
   discredited(rec, { reachable = null } = {}) {
-    if (!rec) return false;
-    if (rec.verified) return false;             // a person's word beats our arithmetic
-    // Nothing can reach this square, so nothing that happened here was the wall's doing.
-    if (reachable === 0) return false;
-    return (rec.failed || 0) >= 1;
+    // THERE IS ONLY ONE KIND OF SAFE WALL, AND GEOMETRY DECIDES IT. Operator, 2026-09-06.
+    //
+    // This used to be an experiential verdict with a geometric override bolted on. The
+    // override kept winning, which was the clue: room 39 had 142 squares nothing could
+    // physically reach recorded as having FAILED, one of them 431 times. Believing the
+    // geometry again took fleet kills from 20 per 30 minutes to 48 and deaths from about
+    // four an hour to 0.6. Square 24,7 in that room carries 309 failures, all of them
+    // `failed_via: "fight"`, on a square an operator had verified by hand.
+    //
+    // A failure row never recorded a fact about the WALL. It recorded that something went
+    // wrong while we stood there — a crowd on the square, a blow resolved before we
+    // arrived, an archer, a poison tick, another character's swing. None of those make an
+    // unreachable square reachable, and all of them are things the wall was never going
+    // to stop. So the ledger was measuring the afternoon, not the geometry, and then
+    // condemning the geometry for it. PERMANENTLY: one bad tick burned a good wall for
+    // the life of the fleet.
+    //
+    // So the answer is unconditional now. What makes a square a safe wall is that nothing
+    // can reach it, and that is a property of the .roo and the melee disc — a calculation,
+    // repeatable, with no history in it. Nothing that happens while a character stands
+    // there can change whether a monster can reach the square.
+    //
+    // The ledger is kept loadable so old files still parse and the boards still render,
+    // and it is no longer consulted by anything that decides.
+    return false;
   }
 
   // The strict, permanent rule, for choosing somewhere to fight FROM. Unchanged: being
   // wrong about a bad pull spot costs a character and being wrong about a good one costs
   // a walk to the next corner, and that asymmetry still holds for the fighting question.
   discreditedForPull(rec) {
-    if (!rec) return false;
-    if (rec.verified) return false;
-    return (rec.failed || 0) >= 1;
+    // AND THE FIGHTING QUESTION IS THE SAME QUESTION. This kept the old strict rule on the
+    // argument that "I could not hold this while swinging at that" is a real observation
+    // about the pull even when the wall is sound. It is not a separate law, and the
+    // operator's reason is the one that settles it:
+    //
+    //   A safe spot is the only place THE LOGOFF TRICK WORKS. You log off so the monster
+    //   disengages and you do not die; you reconnect, turn so the server registers the
+    //   move, and heal to full before re-engaging. That only works somewhere nothing can
+    //   reach you — which is the geometric test and nothing else.
+    //
+    // So "somewhere to fight from" is not a second property a square earns by surviving
+    // fights. It is the FIRST property, used for a second purpose: a wall you can pull to
+    // is a wall you can log off at, and both are `can_reach_you === 0`. A square that
+    // "failed a pull" failed because a fight went badly on it, which is what fights do.
+    return false;
   }
 
-  // We stood here under attack and nothing landed while we were not swinging.
+  // NOTHING DECIDES ON THESE ANY MORE — see `discredited`. They still record, because a
+  // read-only history is worth having for the boards and for asking after the fact whether
+  // the geometry was right; what they may never do again is gate a shelter.
+  //
+  // If this branch's A/B holds, the next step is deleting the writes as well: a ledger
+  // nobody reads is a file that will eventually be believed by somebody.
   held(room, { col, row, x = null, y = null, seconds = 0, attackers = 0, source = null }) {
     const rec = this.touch(room, col, row);
     rec.held++;
@@ -1350,10 +1394,12 @@ export class SafeSpotBook {
     const spots = this.recall(room);
     if (!spots) return [];
     return [...spots.values()]
-      // A failure is checked FIRST. Asking `held > 0` before it reported a square that
-      // had held once and killed someone once as simply "holds".
-      .map(r => ({ ...r, verdict: this.discredited(r) ? 'does not work'
-                                : r.held > 0 ? 'holds' : 'untested' }))
+      // THE VERDICT IS A HISTORY NOW, NOT A JUDGEMENT. `does not work` is gone with the
+      // concept: geometry decides whether a square is a wall, and this list is a record of
+      // what happened on squares that were already walls. `stood_on` and `never_stood_on`
+      // say what the rows actually contain without implying a square is disqualified.
+      .map(r => ({ ...r, verdict: r.held > 0 ? 'stood_on'
+                                : r.failed > 0 ? 'stood_on' : 'never_stood_on' }))
       .sort((a, b) => (a.failed - b.failed) || (b.held - a.held));
   }
 }

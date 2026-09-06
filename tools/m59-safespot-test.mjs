@@ -400,8 +400,12 @@ console.log('\n--- disproving a spot that does not ---');
   look(p);
   w.hurt(4);
   look(p, 8000);
-  ok('two failures discredit the square in the book',
-     p.book.discredited(p.book.get(999, 7, 7)), JSON.stringify(p.book.get(999, 7, 7)));
+  // THE FAILURES ARE STILL RECORDED AND NO LONGER CONDEMN. Two blows landed while we sat
+  // there, which is a fact about that fight and not about the geometry of the square.
+  ok('the failures are written down', (p.book.get(999, 7, 7)?.failed ?? 0) >= 2,
+     JSON.stringify(p.book.get(999, 7, 7)));
+  ok('and the square is not condemned by them',
+     !p.book.discredited(p.book.get(999, 7, 7)));
 }
 
 // A FAILURE IS PERMANENT, SO THE PACKET THAT ARRIVES LATE MUST NOT CAUSE ONE.
@@ -516,9 +520,12 @@ console.log('\n--- reinstating a square retired on one point of damage ---');
      'zeroing held alone would drop any square that qualified only because it had held');
   ok('and keeps what it used to be', back.retest_from?.held === 3 && back.retest_from?.failed === 1,
      JSON.stringify(back.retest_from));
-  ok('a reinstated square that fails again is out for good',
-     new SafeSpotBook(null).discredited({ ...back, failed: 1 }),
-     'retest must not survive a fresh failure, or the grace becomes a way back in for ever');
+  // The retest machinery exists to rehabilitate condemned squares. Nothing is condemned
+  // any more, so a fresh failure cannot put anything "out for good" either — there is no
+  // out. Kept as an assertion rather than deleted, because a future edit that reintroduces
+  // a permanent verdict should fail here loudly.
+  ok('a fresh failure still puts nothing out for good',
+     !new SafeSpotBook(null).discredited({ ...back, failed: 1 }));
 
   // SELECTED AGAINST ONE BOOK, WRITTEN TO ANOTHER. The pardon zeroes damage_taken, which
   // is the very number that identifies this subset — so after it has run the squares are
@@ -1139,8 +1146,11 @@ console.log('\n--- one character\'s experiment is every character\'s knowledge -
   const fresh = new SafeSpotBook(BOOK);
   ok('a proven spot survives a restart', fresh.get(999, 5, 5)?.held >= 1,
      JSON.stringify(fresh.list(999).map(x => `${x.col},${x.row}:${x.verdict}`)));
-  ok('and so does a disproved one', fresh.discredited(fresh.get(999, 7, 7)),
-     'the geometry will keep recommending it; the book is what stops us going back');
+  // The ROW survives a restart — it is history and worth keeping — but it is not a verdict
+  // and does not stop the geometry recommending the square again.
+  ok('and so does the record of a bad afternoon', (fresh.get(999, 7, 7)?.failed ?? 0) >= 1);
+  ok('...without that record disqualifying the square',
+     !fresh.discredited(fresh.get(999, 7, 7)));
 }
 
 // --- vigor is not shaped like health, and reading it wrong stops the whole fleet ---
@@ -1189,20 +1199,20 @@ console.log('\n--- a spot that has ever failed is retired ---');
   const b = safeSpotBook(BOOK);
   b.held(900, { col: 1, row: 1, seconds: 60, attackers: 2 });
   ok('a clean square is not discredited', !b.discredited(b.get(900, 1, 1)));
-  ok('and it reports as holding', b.list(900).find(r => r.col === 1)?.verdict === 'holds');
+  ok('and it reports as stood on', b.list(900).find(r => r.col === 1)?.verdict === 'stood_on');
 
   b.failed(900, { col: 1, row: 1, damage: 99, attackers: 6 });
   const rec = b.get(900, 1, 1);
-  ok('one failure discredits it even though it held first', b.discredited(rec),
+  ok('one failure does not condemn a square that held first', !b.discredited(rec),
      `held ${rec.held}, failed ${rec.failed}`);
-  ok('and the verdict says so rather than "holds"',
-     b.list(900).find(r => r.col === 1)?.verdict === 'does not work');
+  ok('and the listing reports history rather than a judgement',
+     b.list(900).find(r => r.col === 1)?.verdict === 'stood_on');
 
   // Holding again afterwards must not buy it back.
   b.held(900, { col: 1, row: 1, seconds: 120, attackers: 1 });
   b.held(900, { col: 1, row: 1, seconds: 120, attackers: 1 });
-  ok('holding three times afterwards does not rehabilitate it',
-     b.discredited(b.get(900, 1, 1)),
+  ok('and there is nothing to rehabilitate it from',
+     !b.discredited(b.get(900, 1, 1)),
      `held ${b.get(900,1,1).held}, failed ${b.get(900,1,1).failed}`);
 }
 
@@ -1245,21 +1255,26 @@ console.log('\nprovenance of a verdict');
   b.failed(544, { col: 5, row: 5, damage: 3, attackers: 1, source: 'travel' });
   const rec = b.list(544).find(r => r.col === 5);
 
-  ok('A TRAVEL FAILURE STILL DISCREDITS THE SQUARE — permanently, and on purpose',
-     b.discredited(rec) && rec.verdict === 'does not work');
+  // A TRAVEL FAILURE IS THE CLEAREST CASE OF ALL. "I was hit walking to this square" was
+  // never a fact about the square, and it condemned squares permanently.
+  ok('a travel failure condemns nothing, which is the clearest case of all',
+     !b.discredited(rec) && rec.verdict === 'stood_on');
   ok('the most recent judge is named', rec.failed_via === 'travel' && rec.held_via === 'fight');
   ok('and every judge is counted, so one travel failure against two fight holds is legible',
      rec.failed_by.travel === 1 && rec.held_by.fight === 2);
-  ok('THE TRAVEL-ONLY REJECTIONS CAN BE FISHED OUT, which is the whole reason for the tag',
-     [rec].filter(r => b.discredited(r) && r.failed_by && !r.failed_by.fight).length === 1);
+  // The tag survives the change: knowing WHICH judge wrote a row is still how anybody
+  // reads this history back, even though no row is a verdict any more.
+  ok('the travel-only rows can still be fished out by their tag',
+     [rec].filter(r => r.failed_by?.travel && !r.failed_by?.fight).length === 1);
 
   b.failed(544, { col: 9, row: 9, damage: 1, attackers: 1 });
   const untagged = b.list(544).find(r => r.col === 9);
   ok('an untagged failure — every record written before this existed — still reads exactly ' +
      'as it did, rather than defaulting into anybody\'s pile',
      untagged.failed === 1 && untagged.failed_via === undefined && untagged.failed_by === undefined);
-  ok('and it is still discredited, because that never depended on knowing who judged it',
-     b.discredited(untagged));
+  // ...and it condemns nothing either, tagged or not. Who judged a row is still useful
+  // for reading the history back; it was never what made the row a verdict.
+  ok('and it condemns nothing, tagged or not', !b.discredited(untagged));
 }
 
 try { unlinkSync(BOOK); } catch { /* never written */ }
@@ -1603,47 +1618,57 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
 }
 
 
-// GEOMETRY OUTRANKS THE LEDGER FOR SHELTER, AND ONLY FOR SHELTER.
+// THERE IS ONLY ONE KIND OF SAFE WALL, AND GEOMETRY DECIDES IT. Operator, 2026-09-06.
 //
-// Measured on prod 2026-09-02: room 39 held 185 squares with can_reach_you === 0 and 142
-// of them were discredited, r3c17 at 431 failures and r3c27 at 410 - squares nothing can
-// physically reach, recorded as failing hundreds of times, almost all of it accrued while
-// twenty-one characters were entitled to the same wall. Believing the south row again took
-// fleet kills from 20 per 30 minutes to 48 and deaths from ~4 an hour to 0.6.
+// This block used to assert the opposite: that a failure row condemned a square for ever,
+// with a geometric override for the shelter question only. The override kept winning, which
+// was the clue. Measured on prod 2026-09-02: room 39 held 185 squares with
+// can_reach_you === 0 and 142 of them were discredited, r3c17 at 431 failures and r3c27 at
+// 410 — squares nothing can physically reach, recorded as failing hundreds of times, almost
+// all of it accrued while twenty-one characters were entitled to the same wall. Believing
+// the south row again took fleet kills from 20 per 30 minutes to 48 and deaths from about
+// four an hour to 0.6. Square 24,7 in the same room carries 309 failures, every one of them
+// `failed_via: "fight"`, on a square an operator had verified by hand.
+//
+// A failure row never recorded a fact about the WALL. It recorded that something went wrong
+// while we stood there — a crowd on the square, an archer, a poison tick, a blow resolved
+// before we arrived, another character's swing. None of those make an unreachable square
+// reachable, and none of them were ever going to be stopped by a wall.
+//
+// AND THE FIGHTING QUESTION IS THE SAME QUESTION, which is the half that took longest to
+// see. A safe spot is the only place THE LOGOFF TRICK works: log off so the monster
+// disengages and you do not die, reconnect, turn so the server registers the move, heal to
+// full before re-engaging. That works exactly where nothing can reach you — the geometric
+// test — so "somewhere to pull to" is not a property a square earns by surviving fights. It
+// is the same property, used for a second purpose.
 {
   const b = new SafeSpotBook(null);
   b.failed(999, { col: 5, row: 5, damage: 9, attackers: 6 });
   const rec = b.get(999, 5, 5);
 
-  ok('a failed square is still discredited when nothing vouches for the geometry',
-     b.discredited(rec));
-  ok('and when the geometry says something CAN reach it, the failure still stands',
-     b.discredited(rec, { reachable: 3 }));
-
-  // The load-bearing one: a square nothing can reach is not made reachable by a bad
-  // afternoon spent on it. Healing there is the mechanism that turns a losing fight into
-  // a draw, and a failure row must never take it away.
-  ok('but a square nothing can reach is never condemned as shelter',
+  ok('a failure never condemns a square, whatever the geometry says',
+     !b.discredited(rec) && !b.discredited(rec, { reachable: 3 }) &&
      !b.discredited(rec, { reachable: 0 }));
+  ok('and the pull verdict is the same verdict, because it is the same question',
+     !b.discreditedForPull(rec));
 
-  // The fighting question is a different question and keeps the old permanent rule:
-  // 'I could not hold this while swinging at that' is a real observation about the pull.
-  ok('while the pull verdict stays strict and permanent',
-     b.discreditedForPull(rec));
+  // A hundred failures is still not evidence about the wall — it is evidence about a
+  // hundred afternoons. The old rule made ONE of them permanent.
+  for (let i = 0; i < 100; i++) b.failed(999, { col: 5, row: 5, damage: 9, attackers: 6 });
+  ok('a hundred failures is still not a fact about the wall',
+     !b.discredited(b.get(999, 5, 5)) && !b.discreditedForPull(b.get(999, 5, 5)));
 
-  // A human's mark still beats everything, unchanged.
+  // Verification is now redundant rather than load-bearing: nothing is condemned, so
+  // nothing needs a person's word to rescue it. It must still not throw or flip anything.
   b.verify(999, { col: 5, row: 5, by: 'operator' });
-  ok('a verified square is undiscredited by every route',
-     !b.discredited(b.get(999, 5, 5)) &&
-     !b.discredited(b.get(999, 5, 5), { reachable: 3 }) &&
-     !b.discreditedForPull(b.get(999, 5, 5)));
+  ok('verifying a square changes nothing, because nothing was against it',
+     !b.discredited(b.get(999, 5, 5)) && !b.discreditedForPull(b.get(999, 5, 5)));
 
-  // Absent geometry nothing changes - this must not quietly believe untested squares.
+  // A square nobody has ever stood on is a wall if the geometry says so. There is no
+  // "untested" tier any more.
   const c = new SafeSpotBook(null);
-  c.failed(999, { col: 6, row: 6, damage: 1, attackers: 1 });
-  ok('with no geometric opinion the old behaviour is exactly preserved',
-     c.discredited(c.get(999, 6, 6)) &&
-     c.discredited(c.get(999, 6, 6), { reachable: null }));
+  ok('an unknown square is not suspect', !c.discredited(c.get(999, 6, 6)) &&
+     !c.discredited(null) && !c.discreditedForPull(null));
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
