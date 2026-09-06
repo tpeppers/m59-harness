@@ -6300,6 +6300,21 @@ export class Autopilot {
     };
     let legs = 0;
     let outcome = null;
+    // An internal bank/shop/farm journey blocks this pass, so it cannot borrow the
+    // next pass's travel guard. Keep its guard on the independent clock and give the
+    // mover the same route shelters that goTravelling installs for an external job.
+    // Do not claim inert: the keeper still owns the body, including its existing
+    // healthy-wedge and opt-in blind-walk watchdogs. Explicit retreat walks and
+    // errands held by another driver keep their existing controls.
+    const internalTravel = holdBetweenRooms && !this.inert && !this.internalTravel
+      ? { to: Number(room), why: `travelling to ${room}`, at: Date.now() } : null;
+    const previousShelter = this.s.shelterPolicy;
+    const shelter = internalTravel && !previousShelter
+      ? this.travelShelterPolicy() : previousShelter;
+    if (internalTravel) {
+      this.internalTravel = internalTravel;
+      this.s.shelterPolicy = shelter;
+    }
     try {
       // A FRAME PER ROOM, NOT PER JOURNEY.
       //
@@ -6376,6 +6391,14 @@ export class Autopilot {
         },
       });
     } finally {
+      if (internalTravel) {
+        if (this.internalTravel === internalTravel) this.internalTravel = null;
+        // A newer driver may have replaced the policy while this await unwound.
+        if (this.s.shelterPolicy === shelter && shelter !== previousShelter) {
+          this.s.shelterPolicy = previousShelter;
+          this.s.activeShelter = null;
+        }
+      }
       if (detailed) closeMap();
       this.recordFrame('arrived');
       const v1 = this.s.client?.vitals?.()?.health;
@@ -9022,44 +9045,12 @@ export class Autopilot {
   // journey taken back mid-hop could not be resumed even in principle: the destination had
   // never been stored anywhere a later pass could read. `takeBack` even reported it as
   // `was_travelling_to: <the why string>`, which reads like a destination and is not one.
-  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0 } = {}) {
-    // Already travelling for this reason: refresh nothing, the deadline is the caller's.
-    // A NEW JOURNEY RETIRES A SUSPENDED ONE, and this early return is why the rule below
-    // could not do it. Restored after the 2026-09-04 merge dropped it.
-    //
-    // A keeper already walking somewhere kept its OWN suspended objective, so the next time
-    // the ladder interrupted anything `resumeSuspendedJourney` brought that old objective
-    // back to life underneath the new instruction. Measured 2026-09-03: a courier sent to
-    // the Tos bank was found walking home to Castle Victoria instead, with the external
-    // owner's movement lease held and live, having crossed the killing ground twice for
-    // nothing. `passFarm` puts the resume ahead of the claim check deliberately — a resume
-    // restores a decision already made rather than making a new one — and that is sound
-    // only if a new travel actually retires the old decision. This is what makes it so.
-    if (this.inert?.travelling) {
-      if (to != null && this.suspendedJourney && Number(to) !== Number(this.suspendedJourney.to)) {
-        this.note('retired a suspended journey that a new instruction replaced', {
-          was: this.suspendedJourney.to, now: Number(to),
-          why: 'an older objective resuming underneath a live instruction is two directions ' +
-               'on one body' });
-        this.suspendedJourney = null;
-      }
-      return this.inertStatus();
-    }
-    // An ERRAND already holds this character. An errand outranks a journey — it asked for
-    // silence and got it — so the journey does not get to quietly upgrade itself.
-    if (this.inert) return this.inertStatus();
-    const allow = this.travelGuard(guard);
-    // THE FUEL-STOP POLICY, HANDED TO THE MOVER FOR THE LENGTH OF THE JOURNEY.
-    //
-    // Without this the planner in `walkTo` is dead code — it checks `shelterPolicy` and
-    // finds nothing, so no crossing ever carries its shelters and the whole point is lost.
-    // Set here rather than per walk because it is a property of BEING ON A JOURNEY: an
-    // errand, a fight or a shopping trip has no route ahead to divert along.
-    //
-    // `need()` is read by the walker between legs, so it must be cheap and must answer about
-    // NOW rather than about when the journey started.
+  // Shared by external journeys and travel awaited inside a keeper pass. The mover
+  // owns each shelter waypoint, so protecting a crossing never adds a second mover.
+  travelShelterPolicy(allow = this.travelGuard()) {
+    let policy = null;
     if (allow.safe_spot) {
-      this.s.shelterPolicy = {
+      policy = {
         book: this.book,
         // NO DISTANCE CAP BY DEFAULT (operator, 2026-09-01): a wall along the route that the
         // body can reach and leave for the door is shelter however far off the line it sits.
@@ -9256,6 +9247,46 @@ export class Autopilot {
         },
       };
     }
+    return policy;
+  }
+
+  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0 } = {}) {
+    // Already travelling for this reason: refresh nothing, the deadline is the caller's.
+    // A NEW JOURNEY RETIRES A SUSPENDED ONE, and this early return is why the rule below
+    // could not do it. Restored after the 2026-09-04 merge dropped it.
+    //
+    // A keeper already walking somewhere kept its OWN suspended objective, so the next time
+    // the ladder interrupted anything `resumeSuspendedJourney` brought that old objective
+    // back to life underneath the new instruction. Measured 2026-09-03: a courier sent to
+    // the Tos bank was found walking home to Castle Victoria instead, with the external
+    // owner's movement lease held and live, having crossed the killing ground twice for
+    // nothing. `passFarm` puts the resume ahead of the claim check deliberately — a resume
+    // restores a decision already made rather than making a new one — and that is sound
+    // only if a new travel actually retires the old decision. This is what makes it so.
+    if (this.inert?.travelling) {
+      if (to != null && this.suspendedJourney && Number(to) !== Number(this.suspendedJourney.to)) {
+        this.note('retired a suspended journey that a new instruction replaced', {
+          was: this.suspendedJourney.to, now: Number(to),
+          why: 'an older objective resuming underneath a live instruction is two directions ' +
+               'on one body' });
+        this.suspendedJourney = null;
+      }
+      return this.inertStatus();
+    }
+    // An ERRAND already holds this character. An errand outranks a journey — it asked for
+    // silence and got it — so the journey does not get to quietly upgrade itself.
+    if (this.inert) return this.inertStatus();
+    const allow = this.travelGuard(guard);
+    // THE FUEL-STOP POLICY, HANDED TO THE MOVER FOR THE LENGTH OF THE JOURNEY.
+    //
+    // Without this the planner in `walkTo` is dead code — it checks `shelterPolicy` and
+    // finds nothing, so no crossing ever carries its shelters and the whole point is lost.
+    // Set here rather than per walk because it is a property of BEING ON A JOURNEY: an
+    // errand or a local fight has no journey route ahead to divert along.
+    //
+    // `need()` is read by the walker between legs, so it must be cheap and must answer about
+    // NOW rather than about when the journey started.
+    this.s.shelterPolicy = this.travelShelterPolicy(allow);
     // `attempts` RIDES ON THE JOURNEY, and it has to. The counter cannot live only on the
     // suspended note, because resuming clears that note — so a resumed journey taken back
     // again would start counting from zero and resume for ever, which is precisely the
@@ -9322,13 +9353,14 @@ export class Autopilot {
   // journey holds it, the answer is that entry's switch. While an ERRAND holds it, the
   // answer is no: an errand asked for silence, which is the state it still gets.
   travelAllows(faculty) {
-    if (!this.inert) return true;
+    if (!this.inert) return this.internalTravel ? this.travelGuard()[faculty] !== false : true;
     if (!this.inert.travelling) return false;
     return this.inert.guard?.[faculty] !== false;
   }
 
-  // Is a journey — rather than an errand — what is holding this character.
-  get travelling() { return this.inert?.travelling ? this.inert : null; }
+  // The journey whose route is active, whether an external job or this keeper owns it.
+  get travelling() { return this.inert ? (this.inert.travelling ? this.inert : null)
+                                     : this.internalTravel ?? null; }
 
   // The name the world knows this character by, falling back to the agent name before
   // login has answered. Everything keyed per character — the feed, the gains, the hits
@@ -10256,6 +10288,17 @@ export class Autopilot {
 
     // 1b'. THE FIGHT-BACK EDICT — under attack, not swinging, and told to. See fightBackCheck.
     this.fightBackCheck(w, hp, now, lostThisTick);
+
+    // Only the restricted guard runs here. Its actions cancel movement; shelter
+    // and rest remain in the single mover's callbacks, and shopping/hunting cannot
+    // re-enter the blocked pass. External journeys already get their regular pass.
+    const journey = this.internalTravel;
+    const room = s.world?.room;
+    const dead = room?.num === 1 || /underworld/i.test(room?.name ?? '');
+    if (journey && !journey.interrupted && !this.inert && !dead) {
+      this.passTravelling({ s, c, v, hp: pct(hp), journey })
+        .catch(e => { w.lastError = `internal travel guard: ${e.message}`; });
+    }
 
     // 1c. TAKE THE CHARACTER BACK FROM A DRIVER THAT HAS STOPPED DRIVING IT.
     //
@@ -12251,7 +12294,7 @@ export class Autopilot {
   // Returns CONTINUE when it has taken the character back, HANDLED to let the journey run.
   async passTravelling(ctx) {
     const { s, c, v, hp } = ctx;
-    const held = this.inert;
+    const held = ctx.journey ?? this.inert;
     // Hand back, once, with a reason the post-mortem can read.
     // ABANDONING A JOURNEY AND PAUSING ONE ARE DIFFERENT ACTS, AND ONLY ONE OF THEM IS
     // ALLOWED FOR A MONSTER.
@@ -12274,6 +12317,7 @@ export class Autopilot {
     // everything carried. That asymmetry is why `travel_hold_pvp` refuses a rest with people
     // about, and it is the same argument here.
     const takeBack = (what, why, detail = {}, { abandon = false } = {}) => {
+      if (held === this.internalTravel) held.interrupted = true;
       const stopped = (() => {
         try { return s.cancelMovement(null, 'a travel guard rung taking the character back'); } catch (e) { return { cancelled: false, why: e.message }; }
       })();
