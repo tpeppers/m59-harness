@@ -380,6 +380,9 @@ m59-nav-learned.json
 # clone runs; this file is how a machine says something different. Absent means the
 # committed behaviour, unchanged. See tools/m59-localpolicy.mjs.
 /substrate/policy.local.json
+# Machine-local watchdog numbers, read by tools/m59-watchdog.mjs when present.
+# Absent is the ordinary case: a checkout without one behaves exactly as shipped.
+/substrate/watchdog.local.json
 
 # Bearer capabilities that let another machine — or another person — drive some of
 # this fleet through the gateway, for a while. A grant file names who was trusted and
