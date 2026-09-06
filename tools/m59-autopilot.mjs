@@ -9409,8 +9409,13 @@ export class Autopilot {
     // 2026-09-05, against an operator who had issued no orders and could not find out what
     // had. The claimant was in `held.by` the whole time: a cancel that cannot say who asked
     // for it is the commonest way a journey ends here, and this one always knew.
-    const claimant = (`${held.by ?? 'an unnamed holder'} declaring busy` +
-                      `${kind ? `: ${kind}` : ''}${label ? ` (${label})` : ''}`).slice(0, 80);
+    // THE ACTION FIRST, THE HOLDER LAST, because 80 characters is the budget and the holder
+    // name is the least useful half of it. Measured on the first deploy of this line: a real
+    // holder is `dum/prod two bands (max health picks the room)@pid-11220` — 55 characters —
+    // which left "declaring busy: return-" truncated mid-word. What a reader needs is WHAT
+    // was claimed and WHY; which pid claimed it only matters once that is known.
+    const doing = `${kind ?? 'a claim'}${label && label !== kind ? ` (${label})` : ''}`;
+    const claimant = `busy: ${doing} — ${held.by ?? 'an unnamed holder'}`.slice(0, 80);
     const interrupted = beginning
       ? (() => {
           try { return this.s?.cancelMovement?.(null, claimant) ?? null; }
