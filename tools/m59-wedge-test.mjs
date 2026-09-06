@@ -328,6 +328,20 @@ console.log('\nwedgedInPlace — four signals, because the arm only fires at ful
   ap.watch.wedged = null;
   ap.watch.pinnedSince = Date.now() - wd.WATCHDOG_PINNED_MS - 1000;
   ok('so is an anchor that old', /no ground/.test(ap.wedgedInPlace()?.why ?? ''));
+
+  // THE ANCHOR GATE IS THE LADDER'S, AND IT IS SHORTER THAN THE CANCEL'S.
+  //
+  // `pinnedSince` is only set while the character is going somewhere, is not inert and is not
+  // deliberately holding — so an old anchor already means "stationary and not on purpose",
+  // which is the only kind of still worth acting on. The ladder's cheap rungs replay moves
+  // the server has already accepted, so they earn a lower bar than a cancel does. Pinned
+  // in a wedge for a second under it must still read as fine, or the threshold is decorative.
+  ap.watch.pinnedSince = Date.now() - wd.WEDGE_LADDER_MS + 1000;
+  ok('an anchor younger than WEDGE_LADDER_MS is not a wedge', ap.wedgedInPlace() === null);
+  ap.watch.pinnedSince = Date.now() - wd.WEDGE_LADDER_MS - 1;
+  ok('one older than it is', /no ground/.test(ap.wedgedInPlace()?.why ?? ''));
+  ok('and the ladder opens before the cancel does, not after',
+     wd.WEDGE_LADDER_MS < wd.WATCHDOG_PINNED_MS);
 }
 
 console.log('\ntradeInPlaceIfWedged — hurt, wedged, something in reach: swing, do not walk');

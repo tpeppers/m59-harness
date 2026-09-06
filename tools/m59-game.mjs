@@ -5596,6 +5596,58 @@ class Session {
              ...(blocked ? { reason: blocked } : {}) };
   }
 
+  /**
+   * WALK THE TRAIL BACK UNTIL YOU ARE ON THE RAIL AGAIN.
+   *
+   * The retreat above undoes the last few steps and stops counting. That is right for an
+   * ordinary bounce and blind to the thing that actually went wrong on a long trip: the
+   * character left the baked lane, wandered, and is now somewhere the router cannot plan out
+   * of — with a perfectly good rail two or three squares behind it.
+   *
+   * WHY BREADCRUMBS AND NOT A FRESH WALK TO THE RAIL. The crumbs are squares this body has
+   * already stood on, so replaying them backwards inherits the whole safety argument of rung
+   * 1: no relaxed collision, no guessing, nothing the validator has not already passed. A
+   * fresh walk at the rail is what the mover was already failing to do.
+   *
+   * WHY THE RAIL AND NOT THE DOOR WE CAME IN BY (rung 2). The entry square is somewhere we
+   * know connects to the last room; the rail is where the PLAN said to be. Rejoining it
+   * continues the journey, where rung 2 restarts it — which is why this sits between them.
+   *
+   * `until` is re-evaluated after every reversed step, so this stops the moment the body is
+   * back on the lane rather than spending the whole budget.
+   *
+   * Measured 2026-09-05 over 1,238 travel deaths carrying `ms_since_moved`: the MEDIAN
+   * character had not moved for 86 seconds when it died, p25 was 22s. Whatever the trigger,
+   * the margin is enormous — the rung existing at all is worth more than its threshold.
+   */
+  async retreatToRail({ toSquare = null, maxCrumbs = 24, nearSquares = 2,
+    movementGeneration = this.movementGeneration, controlToken } = {}) {
+    const rail = toSquare ? this.railAcross(toSquare) : null;
+    if (!rail?.squares?.length) return { moved: false, reason: 'no rail to rejoin' };
+
+    // Squares, not fine units. `client.self` carries col/row already, and the bake's lane is
+    // in the same space — mixing those two is the standing trap in this codebase.
+    const near = (sq) => !!sq && rail.squares.some(r =>
+      Math.abs(Number(r.row) - sq.row) <= nearSquares &&
+      Math.abs(Number(r.col) - sq.col) <= nearSquares);
+    const here = () => {
+      const me = this.client?.self;
+      return me && Number.isFinite(me.col) && Number.isFinite(me.row)
+        ? { col: Math.floor(me.col), row: Math.floor(me.row) } : null;
+    };
+
+    const start = here();
+    if (near(start))
+      return { moved: false, reason: 'already on the rail', rail_squares: rail.squares.length };
+
+    const out = await this.retreatAlongBreadcrumbs({
+      maxCrumbs, movementGeneration, controlToken, until: () => near(here()),
+    });
+    const end = here();
+    return { ...out, rejoined: near(end), rail_squares: rail.squares.length,
+             rail_from: rail.from ? { col: rail.from.col, row: rail.from.row } : null };
+  }
+
   // LEAVE A SAFE-WALL POCKET FOR THE ROOM'S MAIN BODY.
   //
   // Runtime geometry carries no region labels — only the bake does, and only on exit ANCHORS

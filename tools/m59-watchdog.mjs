@@ -139,6 +139,23 @@ export const WATCHDOG_PINNED_MS = num('WATCHDOG_PINNED_MS', 20_000);
 // ladder as a side effect.
 export const WATCHDOG_HEALTHY_CANCEL_MS =
   num('WATCHDOG_HEALTHY_CANCEL_MS', WATCHDOG_PINNED_MS);
+
+// HOW LONG STATIONARY BEFORE THE ESCAPE LADDER IS OFFERED, as distinct from how long before
+// anything is cancelled. `pinnedSince` is already the right signal — it is only set while the
+// character is GOING somewhere, not inert, not deliberately holding a safe spot — so this is
+// "stationary and not on purpose", which is the only kind of still that is a problem.
+//
+// Ten seconds, from measurement rather than taste. Over 1,238 travel deaths carrying
+// `ms_since_moved` (2026-09-05): the median character had not moved for 86 SECONDS when it
+// died and p25 was 22s. A 10s trigger would have fired before 87% of them, 8s before 89%, 20s
+// before 76%. The margin is enormous at any value in that band, so this is set at the cheap
+// end and left there — the rung existing at all is worth far more than its threshold.
+//
+// It is lower than WATCHDOG_PINNED_MS on purpose: the ladder's first rungs REPLAY VALIDATED
+// MOVES BACKWARDS and cost a few seconds when wrong, where a cancel costs a journey. A cheap
+// remedy earns a lower bar. Raise it toward 15-20s if the ledger shows rung 1/1.5 firing
+// during ordinary crossings; 5s is the other arm if it shows deaths still arriving first.
+export const WEDGE_LADDER_MS = num('WEDGE_LADDER_MS', 10_000);
 // HOW FAR FROM WHERE IT STARTED STILL COUNTS AS GETTING NOWHERE, in squares.
 //
 // THIS IS A DISPLACEMENT TEST, NOT A STILLNESS TEST, and the difference is the whole

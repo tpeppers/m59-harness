@@ -806,6 +806,8 @@ const WATCHDOG_FRAME_MS = Number(process.env.M59_WATCHDOG_FRAME_MS || 8_000);
 const WATCHDOG_PINNED_MS = watchdog.WATCHDOG_PINNED_MS;
 // Only the healthy-wedge CANCEL uses this; wedge DETECTION keeps WATCHDOG_PINNED_MS.
 const WATCHDOG_HEALTHY_CANCEL_MS = watchdog.WATCHDOG_HEALTHY_CANCEL_MS;
+// How long stationary-and-not-on-purpose before the escape ladder is offered.
+const WEDGE_LADDER_MS = watchdog.WEDGE_LADDER_MS;
 const WATCHDOG_PINNED_SQUARES = watchdog.WATCHDOG_PINNED_SQUARES;
 // WHERE A WEDGED BODY IS MOVED BEFORE THE WALK IS RE-PLANNED, indexed by how many times the
 // watchdog has broken a wedge at that place. Two squares, because one is inside the melee
@@ -10643,7 +10645,7 @@ export class Autopilot {
     if (w.wedged && now - w.wedged.since >= WATCHDOG_PINNED_MS)
       return { why: 'same square for ' + Math.round((now - w.wedged.since) / 1000) + 's',
                for_ms: now - w.wedged.since, repeats: 0 };
-    if (w.pinnedSince && now - w.pinnedSince >= WATCHDOG_PINNED_MS)
+    if (w.pinnedSince && now - w.pinnedSince >= WEDGE_LADDER_MS)
       return { why: 'covered no ground for ' + Math.round((now - w.pinnedSince) / 1000) + 's',
                for_ms: now - w.pinnedSince, repeats: 0 };
     return null;
@@ -10761,6 +10763,34 @@ export class Autopilot {
         .catch(e => ({ moved: false, reason: e.message }));
       tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
                    reason: out?.reason ?? null, worked: moved() });
+    }
+
+    // ---- rung 1.5: back onto the RAIL, not merely back a few squares.
+    //
+    // Rung 1 undoes the last steps and stops counting; rung 2 restarts the crossing from the
+    // door we came in by. Between them is the case that kills this fleet on long trips: the
+    // character left the baked lane, wandered, and is now stuck with a perfectly good rail
+    // three squares behind it. Rejoining CONTINUES the journey where rung 2 begins it again,
+    // and it replays the same validated crumbs rung 1 does — so it buys a better outcome at
+    // rung 1's safety, which is why it sits here and not after rung 2.
+    //
+    // Only when we know where we were heading. `to` names the exit; without it there is no
+    // lane to speak of and this rung has nothing to say.
+    //
+    // Measured 2026-09-05 over 1,238 travel deaths carrying `ms_since_moved`: the median
+    // character had not moved for 86 SECONDS when it died, p25 22s. The top three rooms are
+    // the Cragged Mountains, the border of the Badlands and Ukgoth — all of them steps on a
+    // longer trip, which is exactly where a rail exists to rejoin.
+    if (!moved() && to != null && typeof s?.retreatToRail === 'function') {
+      const anchor = Number.isFinite(Number(to))
+        ? anchorFor(activeRoutes(), Number(from?.room), Number(to)) : null;
+      if (anchor && Number.isFinite(Number(anchor.row)) && Number.isFinite(Number(anchor.col))) {
+        const out = await s.retreatToRail({ toSquare: { row: anchor.row, col: anchor.col } })
+          .catch(e => ({ moved: false, reason: e.message }));
+        tried.push({ rung: 1.5, how: 'back onto the rail', steps: out?.steps ?? 0,
+                     rejoined: out?.rejoined === true, rail_squares: out?.rail_squares ?? null,
+                     reason: out?.reason ?? null, worked: moved() });
+      }
     }
 
     // ---- rung 2: the square we came in by. `enteredVia` is the session's own memory of the
