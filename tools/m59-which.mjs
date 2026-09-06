@@ -103,6 +103,32 @@ function candidatePorts() {
 // milliseconds instead of minutes. Nothing in normal use sets it.
 const PROBE_MS = Number(process.env.M59_WHICH_TIMEOUT_MS) > 0
   ? Number(process.env.M59_WHICH_TIMEOUT_MS) : 15000;
+
+// A REPLY THAT IS NOT HTTP IS AN ANSWER. A REPLY THAT WAS CUT SHORT IS A QUESTION.
+//
+// These are the node HTTP parser's verdicts on the first bytes of a response: the peer did
+// not say `HTTP/1.x <status>`. A broker is a node `http` server and always does, so a port
+// that speaks something else is DEFINITELY not a broker — that is evidence, not silence,
+// and calling it silence is what made this tool refuse to answer at all.
+//
+// Measured here 2026-09-05: `substrate/broker-boscontrol.pid` still named http 8911 for a
+// broker whose pid had been gone for days, and the RTS gateway had since been given that
+// port. So `candidatePorts()` probed 8911, the gateway answered in a protocol that is not
+// HTTP, `HPE_INVALID_CONSTANT` was filed under "could not ask", and every run ended
+// INDETERMINATE — which every `/m59*` command gates on, so the whole fleet was
+// unaddressable while the prod broker sat there answering /health perfectly.
+//
+// THE LINE IS DRAWN AT THE STATUS LINE, AND DELIBERATELY NOT PAST IT. Codes that fire once
+// a valid status line has been parsed — a truncated body, a bad chunk size, an unexpected
+// content-length, an early EOF — are what a REAL broker looks like when it dies or is cut
+// off mid-answer, and reading those as "not a broker" would be exactly the false negative
+// the INDETERMINATE verdict exists to prevent. Those stay questions. So does ECONNRESET.
+const NOT_HTTP_AT_ALL = new Set([
+  'HPE_INVALID_CONSTANT',   // the bytes were never `HTTP/`
+  'HPE_INVALID_VERSION',
+  'HPE_INVALID_STATUS',
+  'HPE_INVALID_METHOD',
+]);
 function probeHealth(port, timeoutMs = PROBE_MS) {
   return new Promise((done) => {
     const req = http.request({
@@ -115,20 +141,31 @@ function probeHealth(port, timeoutMs = PROBE_MS) {
       // The body is drained even when the status is wrong. A response left unread is a
       // socket left open, which is the same class of leftover handle this replaced.
       res.on('end', () => {
+        // `spoke` marks a port that ANSWERED and is still not a broker, which is a fact
+        // worth printing: it is how you find out something else has been given a port on
+        // the broker band. A closed port is definite too and is simply silent.
         if (res.statusCode < 200 || res.statusCode >= 300)
-          return done({ ok: false, definite: true, why: `HTTP ${res.statusCode}` });
+          return done({ ok: false, definite: true, spoke: true, why: `HTTP ${res.statusCode}` });
         try { done({ ok: true, health: JSON.parse(body) }); }
-        catch { done({ ok: false, definite: true, why: 'unparsable /health' }); }
+        catch { done({ ok: false, definite: true, spoke: true, why: 'unparsable /health' }); }
       });
     });
     req.on('timeout', () => { req.destroy(); done({ ok: false, definite: false, why: `no answer in ${timeoutMs}ms` }); });
-    // ECONNREFUSED/EHOSTUNREACH are definite: nothing is listening. Anything else (a reset
-    // mid-read, a socket error) leaves the question open and must not be read as "empty".
-    req.on('error', (e) => done({
-      ok: false,
-      definite: e.code === 'ECONNREFUSED' || e.code === 'EHOSTUNREACH' || e.code === 'EADDRNOTAVAIL',
-      why: e.code || e.message,
-    }));
+    // ECONNREFUSED/EHOSTUNREACH are definite: nothing is listening. A reply that is not
+    // HTTP at all is definite too and for the opposite reason — something IS there and it
+    // is not a broker (see NOT_HTTP_AT_ALL). Anything else, a reset or a socket error
+    // mid-read, leaves the question open and must not be read as "empty".
+    req.on('error', (e) => {
+      const code = e.code || e.message;
+      if (NOT_HTTP_AT_ALL.has(code))
+        return done({ ok: false, definite: true, spoke: true,
+                      why: `answered, but not with HTTP (${code})` });
+      done({
+        ok: false,
+        definite: code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'EADDRNOTAVAIL',
+        why: code,
+      });
+    });
     req.end();
   });
 }
@@ -303,6 +340,9 @@ if (!ours && lock.held) {
 }
 
 const unknown = asked.filter(a => !a.ok && !a.definite);
+// Ports that answered and are not brokers. Definite, so they never reach `unknown` and
+// never make a verdict indeterminate; kept so `listOthers` can name them.
+const spoke = asked.filter(a => !a.ok && a.definite && a.spoke);
 
 console.log(`fleet    ${c.ok(fleet.label)}   ${c.dim('<- ' + fleet.source)}`);
 console.log(`roster   ${rosterLine}`);
@@ -318,6 +358,12 @@ function listOthers() {
   }
   for (const u of unknown)
     console.log(c.warn(`         port ${u.port} did not answer (${u.why}) — cannot say what, if anything, holds it`));
+  // NOT A QUESTION, AND STILL WORTH SAYING. Something is on a port this tool was told to
+  // treat as a broker's, and it is not one — which is almost always a pid record naming a
+  // port that was released and handed to somebody else. Printed, never counted: it does
+  // not touch the verdict, because a port that answered is not a port we could not ask.
+  for (const s of spoke)
+    console.log(c.dim(`         port ${s.port} is NOT a broker (${s.why}) — something else has that port`));
 }
 
 if (ours) {
@@ -409,6 +455,30 @@ if (ours) {
   listOthers();
   console.log('');
   const held = live.map(x => `"${x.health.fleet || 'default'}"`).join(', ');
+  // SAME NAME, DIFFERENT CHARACTERS — the exact trap this file was written for, and until
+  // now the one it described worst. When the broker's LABEL already matches ours, the
+  // generic advice below is not merely unhelpful, it is wrong: it tells the operator to
+  // say `--fleet prod`, which is what they said, which is how they got here. The
+  // disagreement is not the name, it is the ROSTER FILE, and the remedy is a different
+  // CHECKOUT rather than a different flag.
+  //
+  // This is the live case on this machine: prod is held by the deploy worktree, which has
+  // its own `substrate/fleets/prod.json`, so a fleet command run from the trunk checkout
+  // resolves a roster of the same name and a different file. Both are 21 characters called
+  // the Muppets and only one of them is logged in.
+  const twins = live.filter(x => (x.health.fleet || 'default') === fleet.label);
+  if (twins.length) {
+    console.log(c.bad(`MISMATCH: a broker IS holding a fleet called "${fleet.label}" — and it is not this one.`));
+    for (const t of twins) {
+      console.log(c.bad(`         it serves    ${t.health.state}`));
+      if (t.health.root) console.log(c.bad(`         from         ${t.health.root}`));
+    }
+    console.log(c.bad(`         you resolved ${fleet.stateFile}`));
+    console.log(c.bad(`A fleet is its ROSTER FILE and never its name: two checkouts can each hold a fleet`));
+    console.log(c.bad(`called "${fleet.label}" and they are not the same characters. Naming the fleet again will`));
+    console.log(c.bad(`not fix this — run fleet commands from the checkout whose roster that broker serves.`));
+    process.exitCode = 1;
+  } else {
   console.log(c.bad(`MISMATCH: ${live.length === 1 ? 'the broker up is holding' : 'the brokers up are holding'} ${held}, ` +
                     `but this command would act on "${fleet.label}".`));
   // `--fleet default` is not a way to ask for the unnamed fleet; `--fleet -` is. Printing an
@@ -417,6 +487,7 @@ if (ours) {
   const other = live.length === 1 ? askFor(live[0].health.fleet) : '--fleet <the one you meant>';
   console.log(c.bad(`Anything you run now targets the wrong fleet, quietly. Say ${other},`));
   console.log(c.bad(`or say ${askFor(fleet.fleet)} and mean it.`));
+  }
   // `exitCode`, NEVER `process.exit()`. Same argument as the probe above: the ONE thing
   // every caller of this file reads is the status, so it must not be decided by what the
   // event loop happens to be doing when the process is yanked. Setting it and letting the

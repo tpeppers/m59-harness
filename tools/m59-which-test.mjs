@@ -86,6 +86,18 @@ function fakeBroker({ pid, fleet, state, sessions = [], root = ROOT }) {
 function hungPort() {
   return listen(net.createServer(socket => { socket.on('error', () => {}); }));
 }
+// A port that ANSWERS AND IS NOT AN HTTP SERVER. This is the third thing a port can be and
+// the tool used to have no name for it: not dead, not slow, just something else — on this
+// machine the RTS gateway, handed port 8911 after the boscontrol broker that a pid record
+// still named had been gone for days. The bytes are deliberately not `HTTP/`, which is what
+// node's parser reports as HPE_INVALID_CONSTANT.
+function garbagePort() {
+  return listen(net.createServer(socket => {
+    socket.on('error', () => {});
+    socket.write('\x00\x01NOT-HTTP-AT-ALL\r\n');
+    socket.end();
+  }));
+}
 // A port that is closed, so probing it is a definite "nothing there".
 async function closedPort() {
   const s = net.createServer();
@@ -104,7 +116,7 @@ function lockFile(fleet, rec) {
   writeFileSync(join(FLEETS, `${fleet}.json.lock`), JSON.stringify(rec));
 }
 function clearRecords() {
-  for (const f of ['broker-prod.pid', 'broker-shadow.pid'])
+  for (const f of ['broker-prod.pid', 'broker-shadow.pid', 'broker-boscontrol.pid'])
     rmSync(join(SUB, f), { force: true });
   for (const f of ['prod.json.lock', 'shadow.json.lock'])
     rmSync(join(FLEETS, f), { force: true });
@@ -257,6 +269,79 @@ DEAD_PORT = await closedPort();
   ok('a broker whose pid disagrees with this fleet\'s records is called inconsistent',
      /INCONSISTENT/.test(r.out), r.out.trim().split('\n').pop());
   ok('and that refuses (exit 1)', r.code === 1, `exit ${r.code}`);
+}
+
+// 10. A PORT THAT ANSWERS AND IS NOT A BROKER IS AN ANSWER, NOT A QUESTION.
+//
+// The live failure, 2026-09-05. `substrate/broker-boscontrol.pid` still named http 8911 for
+// a broker whose pid had been gone for days; the RTS gateway had since been given that
+// port. The probe filed "not HTTP" under "could not ask", so every run ended INDETERMINATE
+// — and every `/m59*` command gates on that exit code, so a fleet whose broker was
+// answering /health perfectly was unaddressable.
+{
+  clearRecords();
+  const junk = await garbagePort();
+  const real = await fakeBroker({ pid: process.pid, fleet: 'prod', state: PROD_ROSTER, sessions: ['t1', 't2', 't3'] });
+  pidFile('boscontrol', junk, now);       // a record naming a port somebody else now has
+  pidFile('prod', real, now);
+  lockFile('prod', { pid: process.pid, at: now });
+  const r = await which(['--fleet', 'prod']);
+  ok('a non-HTTP port does not stop the tool answering about a fleet it can see',
+     r.code === 0 && /holding prod/.test(r.out), `exit ${r.code}`);
+  ok('and it is never called indeterminate', !/INDETERMINATE/.test(r.out));
+  ok('the port is named, because something has taken a broker port and that is worth knowing',
+     /is NOT a broker/.test(r.out) && new RegExp(String(junk)).test(r.out),
+     r.out.split('\n').filter(l => /NOT a broker/.test(l)).join(''));
+}
+
+// 11. THE SAME PORT WITH NOTHING ELSE UP. The all-clear must survive it too, or `./m59.sh up`
+//     can never start a fleet on a machine where anything at all squats a recorded port.
+{
+  clearRecords();
+  const junk = await garbagePort();
+  pidFile('boscontrol', junk, now);
+  const r = await which(['--fleet', 'prod']);
+  ok('a non-HTTP port alone is still an all-clear, exit 0',
+     r.code === 0 && /nothing is holding a fleet/.test(r.out), `exit ${r.code}`);
+}
+
+// 12. AND THE FIX MUST NOT HAVE EATEN THE THING IT WAS BUILT AROUND. A port that accepts and
+//     never speaks is still a question — that is a busy broker, and prod's /health was
+//     measured at 2573ms under load. Reading silence as "not a broker" would be the original
+//     bug wearing the fix's clothes.
+{
+  clearRecords();
+  const slow = await hungPort();
+  pidFile('prod', slow, now);
+  lockFile('prod', { pid: process.pid, at: now });
+  const r = await which(['--fleet', 'prod']);
+  ok('silence is still indeterminate, and still refuses',
+     r.code === 1 && /INDETERMINATE/.test(r.out), `exit ${r.code}`);
+}
+
+// 13. SAME NAME, DIFFERENT ROSTER — what the message says now.
+//
+// Case 4 pins that this is refused. This pins that the refusal is USEFUL: the old wording
+// ended "or say --fleet prod and mean it", which is what the operator already said and how
+// they got here. The disagreement is the roster FILE, so the remedy is a different checkout.
+// Live on this machine: prod is held by the deploy worktree, which has its own
+// substrate/fleets/prod.json, and a command run from the trunk resolves the other one.
+{
+  clearRecords();
+  const elsewhere = join(ROOT, 'elsewhere', 'substrate', 'fleets', 'prod.json');
+  const other = await fakeBroker({
+    pid: process.pid, fleet: 'prod', sessions: ['x1'],
+    state: elsewhere, root: join(ROOT, 'elsewhere'),
+  });
+  pidFile('shadow', other, now);
+  const r = await which(['--fleet', 'prod']);
+  ok('it names BOTH roster files, which is the only thing that tells them apart',
+     r.out.includes(elsewhere) && r.out.includes(PROD_ROSTER), r.out.trim().split('\n').slice(-6).join(' | '));
+  ok('and the root to run from, which is the actual remedy',
+     r.out.includes(join(ROOT, 'elsewhere')));
+  ok('it does not tell the operator to say the fleet name they already said',
+     !/mean it/.test(r.out), r.out.trim().split('\n').pop());
+  ok('and it still refuses (exit 1)', r.code === 1, `exit ${r.code}`);
 }
 
 // ------------------------------------------------------------------

@@ -150,8 +150,18 @@ non-zero.** A port that does not answer is a question, not a fleet. It used to f
 the prod broker printed `MISMATCH: the broker is holding "shadow"`, naming 21 entirely
 different characters, roughly one run in four. Prod's `/health` was measured at 1046ms idle
 and 2573ms under load against 4ms for an idle broker, so **the busiest broker is the one
-most likely to be missed, and it is always the one that matters**. `m59-which-test.mjs` (16)
+most likely to be missed, and it is always the one that matters**. `m59-which-test.mjs` (27)
 pins all of it; run against the old code, another checkout's `prod` returned exit 0.
+
+**But SILENCE is the question — a reply that is not HTTP is an ANSWER.** A port that speaks
+something other than HTTP is definitely not a broker, and filing that under "could not ask"
+is how a stale `broker-boscontrol.pid` naming port 8911, later handed to the RTS gateway,
+made every run INDETERMINATE while the prod broker answered `/health` perfectly — and every
+`/m59*` command gates on that exit code. The line is drawn at the status line and not past
+it: a truncated body or an early EOF is what a REAL broker looks like when it is cut off
+mid-answer, so those stay questions. **And when the LABEL matches but the roster file does
+not**, it now names both paths and the checkout to run from, because telling the operator to
+say `--fleet prod` is telling them to repeat what got them there.
 
 `m59-which.mjs` answers for **one** fleet — the one the next command would touch. When
 the question is *which fleets does this machine have at all*, ask the other one:

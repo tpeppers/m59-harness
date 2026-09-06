@@ -266,7 +266,7 @@ the records it describes.
   different facts, and a zero meaning *fixed* against a zero meaning *untested* is exactly
   the confusion that made Ukgoth's north door read `refused 182, crossings 0` on a day it
   crossed six times out of six. See [`m59-evidence.md`](m59-evidence.md)) and
-  `node tools/m59-which-test.mjs` (16 — **the gate every `/m59*` command runs first, and the
+  `node tools/m59-which-test.mjs` (27 — **the gate every `/m59*` command runs first, and the
   one tool that may never name the wrong fleet**. It builds a throwaway checkout in TEMP and
   runs the real `m59-which.mjs` against fake brokers, so it opens sockets only to itself and
   cannot see this machine's rosters. Two defects lived in one line — `live.find(x =>
@@ -764,3 +764,41 @@ undeclared stall is never rationed (this must not become a throttle on a mechani
 works), a declared one gets two restarts and then the truth, a *different* declared reason
 starts the count again, and a character that earns something is forgotten. **It should fail
 the day a stall reason can go unclassified again.**
+
+
+## m59-which-test.mjs (27) — the third answer a port can give
+
+The gate every `/m59*` command runs first already had two answers and a rule about them:
+a port that does not answer is a QUESTION, and a question may never become a statement about
+a fleet. That is what `INDETERMINATE` is for, it exits non-zero, and a hung port still
+produces it — prod's `/health` was measured at 2573ms under load, so the busiest broker is
+the one most likely to be missed and it is always the one that matters.
+
+**A port that answers in a protocol that is not HTTP is not a question.** A broker is a node
+`http` server and always opens with `HTTP/1.x`, so anything else is positive evidence: there
+is something on that port and it is not a broker. Filing that under "could not ask" is what
+happened on 2026-09-05. `substrate/broker-boscontrol.pid` still named http 8911 for a broker
+whose pid had been gone for days, the RTS gateway had since been given that port, and its
+first bytes came back as `HPE_INVALID_CONSTANT` — so every run ended INDETERMINATE, and since
+every `/m59*` command gates on the exit code, a fleet whose broker was answering `/health`
+perfectly was unaddressable from that checkout.
+
+**The line is drawn at the status line and deliberately not past it.** A truncated body, a
+bad chunk size, an early EOF are what a REAL broker looks like when it dies or is cut off
+mid-answer, and reading those as "not a broker" would be the original bug wearing the fix's
+clothes. So only the codes raised before a valid status line — `HPE_INVALID_CONSTANT`,
+`HPE_INVALID_VERSION`, `HPE_INVALID_STATUS`, `HPE_INVALID_METHOD` — are definite, `ECONNRESET`
+stays a question, and the suite pins silence as indeterminate in the same breath as pinning
+that a non-HTTP port no longer blocks an answer. It also pins that a non-HTTP port ALONE is
+still an all-clear, or `./m59.sh up` could never start a fleet on a machine where anything
+squats a recorded port.
+
+The last four assertions are about WORDING, which is not a lesser thing here: the message is
+the whole product of a tool whose only other output is an exit code. When a broker holds a
+fleet carrying our label while serving a different roster file, the old text ended "or say
+`--fleet prod` and mean it" — which is what the operator already said and how they got there.
+It now names both roster files and the checkout to run from. On this machine that is the
+difference between the trunk and the deploy worktree, which each have a
+`substrate/fleets/prod.json` holding 21 characters called the Muppets, and only one of them is logged in.
+**It should fail the day the tool turns an answer back into a question, or a question into an
+answer.**
