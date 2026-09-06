@@ -177,8 +177,12 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
                  // the back-up ladder are built on. Absent by default, because a character
                  // that has not crossed a boundary this session genuinely has no such memory
                  // and the ladder must degrade to the breadcrumbs rather than inventing one.
-                 enteredVia = null, travelWorks = true, walkWorks = true } = {}) {
-  const notes = [], walks = [], fights = [], retreats = [], walls = [], travels = [];
+                 enteredVia = null, travelWorks = true, walkWorks = true,
+                 // Rung 1.5. null = the session has no such method at all, false = it has
+                 // one and there is no rail to rejoin, true = it rejoins.
+                 railWorks = null, onward = { row: 4, col: 9 } } = {}) {
+  const notes = [], walks = [], fights = [], retreats = [], walls = [], travels = [],
+        rails = [], onwardAsks = [];
   const ap = Object.create(Autopilot.prototype);
   const self = { col, row };
   ap.watch = wd.freshState();
@@ -223,10 +227,33 @@ function keeper({ col = 18, row = 18, room = 586, hp = 3, max = 22, fleeAt = 0.7
       if (retreatMoves) { self.col -= 2; self.row -= 1; }
       return { moved: retreatMoves, steps: retreatMoves ? 2 : 0 };
     },
+    // RUNG 1.5, present only when the fixture asks for it: a session that has never
+    // travelled a baked route genuinely has no such lane, and the ladder must fall through
+    // to the blind unwind rather than invent one.
+    ...(railWorks == null ? {} : {
+      retreatToRail: async (opts) => {
+        rails.push(opts ?? {});
+        if (!railWorks) return { moved: false, reason: 'no rail to rejoin' };
+        self.col -= 1; self.row -= 1;
+        return { moved: true, steps: 1, rejoined: true, rail_squares: 4 };
+      },
+    }),
+  };
+  // The memoised first-hop lookup rung 1.5 aims with. null is the honest answer for a room
+  // with no onward route, and the rung must decline rather than aim at the destination.
+  //
+  // TAKES ITS ARGUMENTS, because a stub that ignores them cannot fail when the caller swaps
+  // them. The signature is `onwardExit(roomNum, destination, opts)`, and asking it the other
+  // way round is a real mistake with no symptom here — the fixture would happily answer.
+  // `cachedOnly` is recorded for the same reason: this is the survival ladder, and an
+  // unqualified ask can run the exits flood for seconds on the loop 21 characters share.
+  ap.onwardExit = (roomNum, destination, opts) => {
+    onwardAsks.push({ roomNum, destination, cachedOnly: opts?.cachedOnly === true });
+    return onward;
   };
   ap.takeSafeSpot = async (why, q, opts) => { walls.push({ why, opts }); return { took: true }; };
   ap.threat = () => ({ adjacent: [], near: [], engaged: 0, landing: 0, names: [] });
-  return { ap, notes, walks, fights, self, retreats, walls, travels };
+  return { ap, notes, walks, fights, self, retreats, walls, travels, rails, onwardAsks };
 }
 const breakAt = (ap, n, place = { room: 586, col: 18, row: 18 }, doing = 'travelling') => {
   for (let i = 0; i < n; i++) wd.noteWedgeBreak(ap.watch, { ...place, doing, to: 586 }, Date.now() - (n - i) * 1000);
@@ -328,6 +355,19 @@ console.log('\nwedgedInPlace — four signals, because the arm only fires at ful
   ap.watch.wedged = null;
   ap.watch.pinnedSince = Date.now() - wd.WATCHDOG_PINNED_MS - 1000;
   ok('so is an anchor that old', /no ground/.test(ap.wedgedInPlace()?.why ?? ''));
+
+  // THE ANCHOR GATE HERE IS THE SURVIVAL RUNGS', NOT THE LADDER'S — pinned because it was
+  // briefly changed to the ladder's shorter clock, which does not reach the ladder at all.
+  //
+  // `wedgedInPlace` has exactly two callers, `escapeIfWedgedAndHurt` and
+  // `tradeInPlaceIfWedged`. Neither is `backUpToUnstick`. Shortening this gate does not make
+  // the escape ladder run sooner; it makes a hurt character stop travelling and swing, and
+  // pre-empts the panic-logoff rung below that. The ladder is reached from `answerWedge`,
+  // off `wedgeBreak`, which the healthy arm writes on WEDGE_LADDER_MS.
+  ap.watch.pinnedSince = Date.now() - wd.WATCHDOG_PINNED_MS + 1000;
+  ok('an anchor younger than WATCHDOG_PINNED_MS is not a wedge', ap.wedgedInPlace() === null);
+  ok('and a wedge is recorded for the ladder sooner than the survival rungs fire',
+     wd.WEDGE_LADDER_MS < wd.WATCHDOG_PINNED_MS);
 }
 
 console.log('\ntradeInPlaceIfWedged — hurt, wedged, something in reach: swing, do not walk');
@@ -669,6 +709,116 @@ console.log('\nescapeIfWedgedAndHurt — the rung itself');
   for (const k of ['back_up_when_wedged', 'trade_in_place_when_wedged']) {
     ok(`${k} is declared in the autopilot tool's schema`, BROKER.includes(`${k}: { type: 'boolean'`));
     ok(`...and actually applied`, BROKER.includes(`a.${k} !== undefined`));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RUNG 1.5 THROUGH THE LADDER, NOT IN ISOLATION.
+//
+// m59-breadcrumb-test exercises `retreatToRail` against a hand-stubbed rail. That says
+// nothing about whether the ladder ever CALLS it, and the first version of this rung was
+// unreachable for two independent reasons that both read as correct: it was ordered after a
+// rung that always moves, behind a `!moved()` guard that therefore never opened; and it
+// asked `anchorFor` for the journey's DESTINATION when `anchorFor` only answers for an
+// ADJACENT room, so it resolved only on the last hop of a trip. Neither is visible from a
+// unit test of the method. These cases exist to fail when the rung stops being reached.
+console.log('\nthe ladder reaches rung 1.5, and falls through when there is no rail');
+{
+  {
+    const { ap, rails, retreats, onwardAsks } = keeper({ hp: 20, railWorks: true });
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('rung 1.5 was tried', rails.length === 1);
+    ok('it asked onwardExit(room, destination), in that order',
+       onwardAsks[0]?.roomNum === 586 && onwardAsks[0]?.destination === 586);
+    ok('and asked for a cached answer only, so the ladder can never run the exits flood',
+       onwardAsks[0]?.cachedOnly === true);
+    ok('aimed at the onward exit, in (row,col)',
+       rails[0].toSquare?.row === 4 && rails[0].toSquare?.col === 9);
+    ok('on the same budget as rung 1, never a longer one', rails[0].maxCrumbs === 12);
+    ok('and the blind unwind was not also spent', retreats.length === 0);
+    // CREDIT LANDS WHERE THE MOVEMENT DID. `worked` compares against the ladder's ENTRY
+    // position, so every rung after a successful one inherits its credit -- observed live
+    // on the first wedge after deploy-2026-09-06-8, where rung 1 recorded
+    // `steps: 0, worked: true` after rung 1.5 had already freed the character. Harmless to
+    // the character, fatal to the measurement that says whether rung 1.5 is worth having.
+    // Asked of backUpToUnstick directly, because `tried` is its return value.
+    const k = keeper({ hp: 20, railWorks: true });
+    const rec = await k.ap.backUpToUnstick('a test wedge', { to: 586 });
+    ok('the rung that moved the body is the one credited with moving it',
+       rec?.tried?.find(x => x.rung === 1.5)?.moved_here === true);
+    ok('...and when it rejoins, rung 1 is not run at all rather than run and credited',
+       rec?.tried?.some(x => x.rung === 1) === false);
+  }
+  {
+    // No rail to rejoin: the rung declines and rung 1 does the ordinary thing.
+    const { ap, rails, retreats } = keeper({ hp: 20, railWorks: false });
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('rung 1.5 was tried and gave nothing', rails.length === 1);
+    ok('so rung 1 ran', retreats.length === 1);
+    const k2 = keeper({ hp: 20, railWorks: false });
+    const rec2 = await k2.ap.backUpToUnstick('a test wedge', { to: 586 });
+    ok('a rung that declined is not credited with a move it did not make',
+       rec2?.tried?.find(x => x.rung === 1.5)?.moved_here === false);
+    ok('...and the fallback that did move is', 
+       rec2?.tried?.find(x => x.rung === 1)?.moved_here === true);
+  }
+  {
+    // No onward route: the rung must be skipped, never aimed at the far destination.
+    const { ap, rails, retreats } = keeper({ hp: 20, railWorks: true, onward: null });
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('no onward exit means the rung is skipped, not misaimed', rails.length === 0);
+    ok('and rung 1 carries the ladder', retreats.length === 1);
+  }
+  {
+    // An older session without the method at all still climbs the ladder.
+    const { ap, retreats } = keeper({ hp: 20 });
+    breakAt(ap, wd.WEDGE_REPEAT_CAP);
+    await ap.answerWedge(586);
+    ok('a session with no retreatToRail is unaffected', retreats.length === 1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RECORDING A WEDGE AND CANCELLING A WALK ARE TWO DECISIONS.
+//
+// They were one `if`, and the cost of that was total: raising WATCHDOG_HEALTHY_CANCEL_MS to
+// stop the watchdog manufacturing journeys also stopped `wedgeBreak` ever being written, so
+// `answerWedge` returned null forever and the escape ladder never ran for a HEALTHY
+// character -- the population it exists for. Nothing failed and nothing was logged; the
+// ladder was simply never reached. Pinned by source, because the arm needs a live pass and
+// this is the property that has to survive the next edit to it.
+console.log('\nthe healthy arm records the wedge even when it may not cancel');
+{
+  // THE BEHAVIOUR IS TESTED IN m59-pulse-test.mjs, which drives this arm in a child process
+  // with M59_WATCHDOG_HEALTHY_CANCEL_MS set high and asserts that a break is recorded with
+  // nothing cancelled. It lives there because that is where the arm can be RUN.
+  //
+  // What is left here is the shape of the thing, which that test cannot see. The wall of
+  // `AUTOPILOT.includes('<the exact line I just wrote>')` pins that used to be here are
+  // gone: they fail on a reflow and they PASS if someone re-fuses the two decisions in
+  // different words, which is the only regression worth guarding against.
+  ok('the record threshold is shorter than the survival rungs own gate, or the ladder would '
+     + 'be reached last instead of first',
+     wd.WEDGE_LADDER_MS < wd.WATCHDOG_PINNED_MS);
+  ok('`wedgeNotedAt` is declared in freshState, so a host cannot forget it',
+     wd.freshState().wedgeNotedAt === null);
+  // AND THE SHIPPED HOST IS THE ONE THAT MATTERS. `startWatchdog` used to build its watch as
+  // a hand-written literal of fifteen fields, so `wedgeNotedAt` was added to freshState and
+  // not to production: the fixture certified a guarantee that did not hold on the only path
+  // that runs. Asserting against the real constructor is what makes that visible.
+  {
+    const ap = Object.create(Autopilot.prototype);
+    ap.watchdogTick = () => {};
+    ap.startWatchdog();
+    try {
+      ok('the shipped watch is built from freshState, not a hand-copy of it',
+         'wedgeNotedAt' in ap.watch && ap.watch.wedgeNotedAt === null);
+      ok('...and carries the pulse ring and the wedge record with it',
+         Array.isArray(ap.watch.pulses) && 'wedgeBreak' in ap.watch && 'pinnedSince' in ap.watch);
+    } finally { clearInterval(ap.watchTimer); }
   }
 }
 

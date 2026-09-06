@@ -804,6 +804,13 @@ const WATCHDOG_FRAME_MS = Number(process.env.M59_WATCHDOG_FRAME_MS || 8_000);
 // a half minutes with a guard running and nothing to show for it. Thresholds at least come
 // from one place now, so they cannot disagree on top of everything else.
 const WATCHDOG_PINNED_MS = watchdog.WATCHDOG_PINNED_MS;
+// Only the healthy-wedge CANCEL uses this. It does NOT gate detection and it does not gate
+// the escape ladder: the ladder is reached from `answerWedge` off `wedgeBreak`, which the
+// arm writes on WEDGE_LADDER_MS. Believing otherwise is what left prod without an escape
+// ladder for hours after the cancel was turned off.
+const WATCHDOG_HEALTHY_CANCEL_MS = watchdog.WATCHDOG_HEALTHY_CANCEL_MS;
+// How long stationary-and-not-on-purpose before the escape ladder is offered.
+const WEDGE_LADDER_MS = watchdog.WEDGE_LADDER_MS;
 const WATCHDOG_PINNED_SQUARES = watchdog.WATCHDOG_PINNED_SQUARES;
 // WHERE A WEDGED BODY IS MOVED BEFORE THE WALK IS RE-PLANNED, indexed by how many times the
 // watchdog has broken a wedge at that place. Two squares, because one is inside the melee
@@ -3294,7 +3301,7 @@ export class Autopilot {
    * boundary, before any plan for the crossing exists. Mid-crossing the plan's own last
    * step is the same square and `activeShelter.onward` carries it.
    */
-  onwardExit(roomNum, destination) {
+  onwardExit(roomNum, destination, { cachedOnly = false } = {}) {
     try {
       const planned = this.s.activeShelter?.onward;
       if (planned && Number.isFinite(planned.row) && Number.isFinite(planned.col)) return planned;
@@ -3305,6 +3312,18 @@ export class Autopilot {
       const memoKey = `${roomNum}:${destination}`;
       const memo = (this._onwardMemo ??= new Map()).get(memoKey);
       if (memo && Date.now() - memo.at < 60_000) return memo.value;
+      // ASK ONLY WHAT IS ALREADY PAID FOR. `cachedOnly` callers are on the survival ladder,
+      // where a blocking call is the injury rather than the remedy: `world.route()` runs the
+      // room's exits flood, which m59-world.mjs:601 measures at 10-20 SECONDS on a ~2000
+      // square room, on the one event loop 21 characters share — and a 1.2s stall once took
+      // twelve of twenty-one out of the world in five minutes.
+      //
+      // The memo cannot be relied on to have the answer: its TTL is 60s and
+      // WEDGE_GIVEUP_HOLD_MS is 120s, so on consecutive give-ups at the same place it is
+      // GUARANTEED cold. Declining is therefore the common case by design, and the rung that
+      // asks must be written to be skipped. In practice `activeShelter.onward` above answers
+      // a body wedged mid-crossing, which is the case the rung is for.
+      if (cachedOnly) return null;
       const route = this.s.world?.route?.(destination);
       const hop = route?.found ? route.hops?.[0] : null;
       if (!hop) return null;
@@ -9959,18 +9978,17 @@ export class Autopilot {
 
   startWatchdog() {
     if (this.watchTimer) return;
-    this.watch = { ticks: 0, frames: 0, interrupts: 0, longest_block_ms: 0,
-                   lastHealth: null, blockedSince: null, interruptedPass: null,
-                   // The position pulse — see PULSE_MS. `pulses` is the ring, `wedged` is
-                   // the open episode (null when moving), `wedges` counts episodes rather
-                   // than ticks so a long one is one event and not six hundred.
-                   pulses: [], lastPulseAt: 0, wedged: null, wedges: 0,
-                   // Where the body was when it last stopped covering ground, and how many
-                   // times that has had to be broken. See THE SECOND ARM in watchdogTick.
-                   pinnedSince: null, pinnedAnchor: null, pinnedInterrupts: 0,
-                   // Where the arm last broke a wedge and how many times running it has
-                   // broken one there. See WEDGE_REPEAT_CAP in m59-watchdog.mjs.
-                   wedgeBreak: null };
+    // THE SHIPPED SCRATCH IS THE SAME SCRATCH THE MODULE DEFINES, not a hand-copy of it.
+    //
+    // This was a literal listing fifteen fields, and `freshState()` in m59-watchdog.mjs is a
+    // function whose whole stated purpose is "created here so a host cannot forget a field".
+    // The two drifted the moment one gained a field: `wedgeNotedAt` was added to the module
+    // and not here, so the PRODUCTION watch was missing it while the fixture that certified
+    // it used `freshState()` — a test proving a guarantee that did not hold on the path that
+    // matters. The copy is the bug; there is now one definition.
+    //
+    // The pulse ring, the pinned anchor and the wedge record are all documented there.
+    this.watch = watchdog.freshState();
     this.watchTimer = setInterval(() => {
       try { this.watchdogTick(); } catch (e) { this.watch.lastError = e.message; }
     }, WATCHDOG_MS);
@@ -10493,18 +10511,44 @@ export class Autopilot {
     // numbers. Holding a wall and being inert are already excluded above.
     const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
     if (frac >= fleeAt) {
-      if (pinnedFor < WATCHDOG_PINNED_MS) return;
-      w.interruptedPass = this.passes;
-      w.pinnedInterrupts = (w.pinnedInterrupts ?? 0) + 1;
+      // TWO DECISIONS, NOT ONE. Recording that this place is a wedge is what lets
+      // `answerWedge` climb the escape ladder; cancelling the walk is a separate, more
+      // expensive act that an operator may switch off. This arm used to do both behind a
+      // single `if`, so turning cancels off turned the ladder off with them — silently,
+      // for healthy characters only, which is the population it exists for. See
+      // WEDGE_LADDER_MS in m59-watchdog.mjs.
+      if (pinnedFor < WEDGE_LADDER_MS) return;
+      // Paced on its own clock rather than by clearing `pinnedSince`. The anchor's age is
+      // what `wedgedInPlace` reads for the survival rungs; resetting it here every ten
+      // seconds would mean it never reached WATCHDOG_PINNED_MS and those rungs would never
+      // fire again — the same shape of accident this whole change is repairing.
+      const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;
+      // PACED ONLY WHERE THE ANCHOR IS NOT CLEARED. A cancel sets `pinnedSince` to null, so
+      // the next record already cannot arrive until the body has been pinned a further
+      // WEDGE_LADDER_MS — the cadence is self-limiting on that path and this clock would be
+      // a second, redundant limiter on it. On the record-only path nothing clears the
+      // anchor, `pinnedFor` keeps growing, and without this every tick would write a record:
+      // WEDGE_REPEAT_CAP reached in two and a half seconds of ordinary slow walking.
+      if (!cancelling && w.wedgeNotedAt && now - w.wedgeNotedAt < WEDGE_LADDER_MS) return;
+      w.wedgeNotedAt = now;
       // The anchor is where the wedge STARTED, which is the place to remember it by: a
       // pocket-wanderer's newest pulse moves and its anchor does not.
       const place = w.pinnedAnchor ?? spot ?? null;
-      w.pinnedSince = null; w.pinnedAnchor = null;
-      this.tally.watchdog_pinned_interrupts = (this.tally.watchdog_pinned_interrupts || 0) + 1;
-      const broke = (() => {
+      if (cancelling) {
+        w.interruptedPass = this.passes;
+        w.pinnedInterrupts = (w.pinnedInterrupts ?? 0) + 1;
+        w.pinnedSince = null; w.pinnedAnchor = null;
+        this.tally.watchdog_pinned_interrupts = (this.tally.watchdog_pinned_interrupts || 0) + 1;
+      }
+      // A COUNTER FOR THE THING THAT NOW HAPPENS. With cancels off,
+      // `watchdog_pinned_interrupts` stays 0 forever while this arm records every
+      // WEDGE_LADDER_MS, so the only evidence the ladder is being fed at all was the note.
+      this.tally.watchdog_wedges_recorded = (this.tally.watchdog_wedges_recorded || 0) + 1;
+      const broke = cancelling ? (() => {
         try { return this.s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
         catch (e) { return { cancelled: false, why: e.message }; }
-      })();
+      })() : { cancelled: false, interrupted: null,
+               why: 'cancels are off here; this arm is recording the wedge so the ladder can run' };
       // AND THE RECORD THAT MAKES THE NEXT DECISION DIFFERENT. "The next pass can decide
       // with real numbers" was the claim, and the numbers were identical — same square,
       // same room, same destination — so the next pass re-issued the same walk and this arm
@@ -10515,7 +10559,9 @@ export class Autopilot {
       const record = place ? watchdog.noteWedgeBreak(w, { room: place.room, col: place.col, row: place.row,
                                                           doing: this.doing ?? null,
                                                           to: this.wedgeTarget() }, now) : null;
-      this.note('WATCHDOG — broke a wedge that was not hurting anybody', {
+      this.note(cancelling ? 'WATCHDOG — broke a wedge that was not hurting anybody'
+                           : 'WATCHDOG — recorded a wedge that was not hurting anybody', {
+        cancelled: cancelling,
         health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
         doing: this.doing ?? null,
         penned_for_s: Math.round(pinnedFor / 1000),
@@ -10533,7 +10579,7 @@ export class Autopilot {
             ? 'broken ' + record.repeats + ' times at this place — the next pass sidesteps before re-planning'
             : undefined,
       });
-      this.progress('watchdog broke a healthy wedge');
+      if (cancelling) this.progress('watchdog broke a healthy wedge');
       return;
     }
 
@@ -10747,18 +10793,84 @@ export class Autopilot {
 
     const rung = this.stuckRung(from);
     const tried = [];
+    // WHICH RUNG ACTUALLY FREED IT, not which rung ran after one that did.
+    //
+    // `worked` used to be `moved()`, which compares against the position captured when the
+    // ladder was ENTERED — so every rung after a successful one inherited its credit. Seen
+    // live on the first wedge after deploy-2026-09-06-8: rung 1.5 walked Bunsen four steps
+    // out of the Cragged Mountains and rung 1, finding the trail already spent, recorded
+    // `steps: 0, worked: true`. Harmless to the character and fatal to the measurement,
+    // which is the whole reason the rungs are numbered separately.
+    //
+    // `sinceLastRung` compares against where the PREVIOUS rung left the body, so the credit
+    // lands where the movement did. Advanced by the caller after each attempt.
+    let rungMark = this.wedgePlace();
+    const sinceLastRung = () => {
+      const at = this.wedgePlace();
+      const was = rungMark;
+      rungMark = at ?? rungMark;
+      return !!at && !!was && (at.room !== was.room || at.col !== was.col || at.row !== was.row);
+    };
     const moved = () => {
       const at = this.wedgePlace();
       if (!at || !from) return false;
       return at.room !== from.room || at.col !== from.col || at.row !== from.row;
     };
 
-    // ---- rung 1: undo the last few validated steps.
-    if (typeof s?.retreatAlongBreadcrumbs === 'function') {
+    // ---- rung 1.5: back onto the RAIL, not merely back a few squares.
+    //
+    // ATTEMPTED BEFORE RUNG 1, AND STILL CALLED 1.5, because it is rung 1's move with a
+    // better place to stop: the same validated crumbs, the same 12-crumb budget, replayed
+    // through the same validator. Rung 1 unwinds blindly and stops counting; this stops the
+    // moment the baked lane is under foot again, which CONTINUES the journey where rung 2
+    // restarts it from the door. Same cost, strictly better ending — so it goes first, and
+    // rung 1 is what happens when there is no rail to aim at.
+    //
+    // Ordering it after rung 1 made it dead code, which is worth writing down because it
+    // looked right: rung 1 has no `until`, so any crumb it walks sets `moved()` and a
+    // `!moved()` guard below it can essentially never open. The only state that reached it
+    // was rung 1 moving ZERO crumbs — a broken or empty trail — where this rung replays the
+    // same trail through the same validator and fails the same way.
+    //
+    // Measured 2026-09-05 over 1,238 travel deaths carrying `ms_since_moved`: the median
+    // character had not moved for 86 SECONDS when it died, p25 22s. The top three rooms are
+    // the Cragged Mountains, the border of the Badlands and Ukgoth — all of them steps on a
+    // longer trip, which is exactly where a rail exists to rejoin.
+    //
+    // `onwardExit` and not `anchorFor(activeRoutes(), from.room, to)`: `to` is the JOURNEY'S
+    // DESTINATION, up to 25 hops away, while `anchorFor` answers for an ADJACENT room. Asked
+    // the wrong way it resolves only when the wedged room happens to border the destination —
+    // the last hop of a trip — and returns null on exactly the long crossings this rung was
+    // built for. `onwardExit` takes the first hop of the route, and is memoised because
+    // `world.route()` runs the room's exits flood and can block the loop for seconds.
+    let railed = false;
+    if (to != null && typeof s?.retreatToRail === 'function') {
+      // `cachedOnly`, because this is the survival ladder and `onwardExit` can otherwise run
+      // the exits flood. Declining is the honest answer: rung 1 is right there.
+      const aim = this.onwardExit(from?.room, to, { cachedOnly: true });
+      if (aim && Number.isFinite(Number(aim.row)) && Number.isFinite(Number(aim.col))) {
+        const out = await s.retreatToRail({ toSquare: { row: aim.row, col: aim.col }, maxCrumbs: 12 })
+          .catch(e => ({ moved: false, reason: e.message }));
+        // REJOINING IS THE POINT; MOVING IS NOT. `near()` is a Chebyshev-2 box around any
+        // rail square, so a body three squares off the lane can walk ONE crumb back, open
+        // the box, and stop. Counting that as success would gate rung 1's twelve-crumb
+        // unwind and rungs 2 and 3 on it — leaving the character one square from the place
+        // that wedged it, recorded `freed: true`, having spent a level of `stuckRung`'s
+        // budget for the next episode in this room. Moved-but-not-rejoined falls through.
+        railed = out?.rejoined === true && moved();
+        tried.push({ rung: 1.5, how: 'back onto the rail', steps: out?.steps ?? 0,
+                     rejoined: out?.rejoined === true, rail_squares: out?.rail_squares ?? null,
+                     reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: railed });
+      }
+    }
+
+    // ---- rung 1: undo the last few validated steps. The fallback when there was no rail to
+    // aim at, or aiming at it moved nothing.
+    if (!railed && typeof s?.retreatAlongBreadcrumbs === 'function') {
       const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
         .catch(e => ({ moved: false, reason: e.message }));
       tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
-                   reason: out?.reason ?? null, worked: moved() });
+                   reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: moved() });
     }
 
     // ---- rung 2: the square we came in by. `enteredVia` is the session's own memory of the
@@ -10974,6 +11086,86 @@ export class Autopilot {
            'the map is where it starts, so change that first',
     });
     return { sidestepped: true, moved, direction: d.name };
+  }
+
+  // THERE ARE TWO DEFENSIVE MANOEUVRES IN A FIGHT AND THERE IS NO THIRD.
+  //
+  // Operator's doctrine, 2026-09-06:
+  //
+  //   1. NOT on a safe wall  ->  go to the nearest one.
+  //   2. ON a safe wall      ->  log off and back on, turn, and rest.
+  //
+  // Nothing else may interrupt a fight. Not a town trip, not a breadcrumb retreat, not a
+  // wander to "somewhere I can heal" — those are the movement-shaped rungs that a
+  // post-mortem records as "every decision correct, 0.0 squares per second, dead".
+  //
+  // WHY THE SECOND ONE IS A MANOEUVRE AND NOT A TRICK. A safe wall is a square nothing can
+  // reach, and that is the ONLY place the logoff works: log off so the monster disengages
+  // and you do not die, come back, turn so the server registers the move, and rest to full
+  // while the room mills about outside its reach. `playDead` already implements exactly
+  // that — logoff, reconnect, reclaim the square, turn — so this rung chooses it rather
+  // than reimplementing it. It is also the reason the two manoeuvres are ONE law rather
+  // than two: what makes a square worth fleeing to is the same property that makes the
+  // logoff work there, which is why the safe-wall ledger collapsed into geometry.
+  //
+  // GATED ON HAVING BEEN IN A FIGHT. This narrows the survival ladder, and narrowing it
+  // for a character that is merely hurt while walking would take away rungs that are
+  // right there — travel has its own guard, and a character bleeding in a corridor is not
+  // having a fight. `engagedRecently` is the gate.
+  async defensiveAnswer({ near = [], v = null } = {}) {
+    if (this.policy?.defensiveAnswer === false) return false;
+    if (!near.length) return false;                 // nothing is hitting us: not this rung
+    const frac = pct(v?.health);
+    if (frac === null || frac >= this.safety().fleeAt) return false;
+    // Only inside a fight. `doing` is what the pass last set, and a fight that broke off at
+    // the flee line leaves it on `fighting` until something else claims it.
+    if (this.doing !== 'fighting' && !this.hold) return false;
+
+    // ---- 2. ON a wall: log off, come back, turn, rest.
+    if (this.hold && this.holdWorks()) {
+      const did = await this.playDead(
+        `at ${v?.health?.value ?? '?'} health on a safe wall — the logoff is the manoeuvre here`)
+        .catch(() => false);
+      if (did) {
+        this.note('defensive answer: the logoff at a wall', {
+          health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+          in_reach: near.length, spot: { col: this.hold.col, row: this.hold.row },
+          why: 'nothing can reach this square, so logging off breaks the engagement without ' +
+               'losing the ground. Coming back, turning and resting is a free heal to full — ' +
+               'and it is the only defensive move that does not give up the wall',
+        });
+        return true;
+      }
+      // playDead refused (already turned since reclaiming, or no proven wall). Falling
+      // through is correct: the rest rung below is what it defers to, and resting ON the
+      // wall is still manoeuvre 2 minus the reconnect.
+      return false;
+    }
+
+    // ---- 1. NOT on a wall: go to the nearest one. Nowhere else.
+    if (typeof this.takeSafeSpot !== 'function') return false;
+    const took = await this.takeSafeSpot(
+      `at ${v?.health?.value ?? '?'} health with ${near.length} in reach — the nearest wall is ` +
+      'the only place to be', null, { source: 'defensive' }).catch(() => null);
+    if (took?.took) {
+      this.note('defensive answer: to the nearest safe wall', {
+        health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+        in_reach: near.length,
+        why: 'the one defensive move available off a wall. A town trip, a breadcrumb ' +
+             'retreat or a wander to "somewhere I can heal" are all movement-shaped rungs ' +
+             'that read correct in a post-mortem and end at 0.0 squares per second',
+      });
+      return true;
+    }
+    // No wall reachable. Say so once and let the ladder below have it — refusing to fall
+    // through would idle a character that has nowhere to go, which is the failure this
+    // whole file keeps paying for.
+    this.note('defensive answer: no wall to reach', {
+      health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+      in_reach: near.length, why: took?.why ?? 'takeSafeSpot found nothing',
+      note: 'falling through to the ordinary ladder because there is no second option here',
+    });
+    return false;
   }
 
   // WEDGED, HURT, AND SOMETHING IN REACH: GET OUT FIRST. TRADE ONLY IF YOU CANNOT.
@@ -13270,6 +13462,10 @@ export class Autopilot {
     // one runs this whole ladder from a square that is not a trap.
     if (await this.escapeIfWedgedAndHurt({ near, v }).catch(() => false)) return HANDLED;
     if (await this.tradeInPlaceIfWedged({ near, v }).catch(() => false)) return HANDLED;
+
+    // THERE ARE TWO DEFENSIVE MANOEUVRES IN A FIGHT AND THERE IS NO THIRD.
+    // Operator's doctrine, 2026-09-06. See `defensiveAnswer`.
+    if (await this.defensiveAnswer({ near, v }).catch(() => false)) return HANDLED;
 
     // ABOUT TO DIE. Below two hits of margin with something adjacent, withdrawing is
     // a gamble — the walk takes seconds during which it keeps swinging, and losing

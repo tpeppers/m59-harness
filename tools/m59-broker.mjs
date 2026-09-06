@@ -123,7 +123,7 @@ import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops } from './m59-spawns.mjs';
 // UNION: upstream's shelter helpers plus the book this checkout already used.
 import { safeSpots, safeSpotBook, geometryFor as safeSpotGeometryFor,
-         nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
+         exposureAt, nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { planRuns, planProvisioning } from './m59-lootrun.mjs';
 import { planCharacter, STAT_ORDER, STAT_PRESETS } from './m59-newchar.mjs';
 import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn } from './m59-ledger.mjs';
@@ -5708,6 +5708,33 @@ const TOOLS = [
       a.control_token,
       (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
                                                   : 'the cancel_movement tool, caller unnamed'),
+  },
+  {
+    name: 'cancel_fight',
+    description:
+      'Stop the fight this character is in. The counterpart to cancel_movement, and until it existed ' +
+      'there was NO way to stop a fight from outside it: `fight()` took no token, there is no ' +
+      'cancelAttack in the game protocol layer, and the only watchdog interrupt cancels WALKING. ' +
+      'So the round budget was the only exit anything outside the fight controlled. ' +
+      'It lands at the next swing boundary — a swing is about 2.9s on the wire and one already ' +
+      'accepted by the server is not recalled. The monster is still there and still hostile when ' +
+      'this returns: whatever cancelled owns the character now and has to decide what happens next. ' +
+      'DELIBERATELY NOT cancel_movement. Nearly every caller of that one is the watchdog or a travel ' +
+      'guard saying "stop walking", and a wedged character that cannot move is supposed to SWING — ' +
+      'sharing a generation would have the watchdog cancel the one rung that exists for that.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      control_token: { type: 'string',
+        description: 'also reject a late stale action carrying this token. The token set is shared ' +
+          'with cancel_movement, so a command lease cancelled by token stops the walk and the fight.' },
+      why: { type: 'string',
+        description: 'WHO IS CANCELLING, in a few words — it is the only record of why a fight ended ' +
+          'that was not lost, won or fled.' },
+    }, required: ['agent'] },
+    run: (a) => session(a.agent).cancelFight(
+      a.control_token,
+      (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
+                                                  : 'the cancel_fight tool, caller unnamed'),
   },
   {
     name: 'go_through',
@@ -13645,15 +13672,41 @@ const TOOLS = [
         mustReach,
       });
       const rec = me && room ? book.get(room.num, me.col, me.row) : null;
+      // The geometric verdict for the square we are actually standing on. `spots` is capped
+      // at `limit`, so looking it up there would answer null for a sound wall that merely
+      // ranked ninth — the exposure is asked directly for that reason. null, never 0, when
+      // there is no geometry: `discredited` treats null as "no evidence" and keeps the old
+      // rule, which is the safe direction when we cannot tell.
+      let standingReach = null;
+      if (geo && me) { try { standingReach = exposureAt(geo, me.row, me.col)?.attackers ?? null; }
+                       catch { standingReach = null; } }
       const pilot = autopilotIfAny(a.agent);
       return {
         room: room ? { num: room.num, name: room.name } : null,
         standing_at: me ? { col: me.col, row: me.row } : null,
         // The question worth asking first, and the one the keeper answers from
         // evidence rather than from the grid.
+        // ASKED THE SAME WAY THE KEEPER ASKS IT, WHICH IT WAS NOT. This read alone still
+        // used the bare rule — any failure ever, forever — while the list below it and the
+        // keeper both pass the geometric verdict and ignore the ledger for a square nothing
+        // can reach. So an operator standing on a sound wall was told `works: false` by the
+        // one field named "the question worth asking first".
+        //
+        // It is not a cosmetic disagreement. Measured 2026-09-06 against the book: of the
+        // squares the geometry calls safe that carry any failure at all, 78% of the failure
+        // rows are room 39, Upstairs in Castle Victoria — 165 squares, 2,517 rows, median
+        // last touched 2026-08-21, before `max_bots_per_safe_spot` came down. That is the
+        // fleet crowding onto its own shelter, recorded as walls that leak. This field was
+        // reporting that artifact as fact in the fleet's home room.
         in_a_safe_spot_now: pilot?.status?.().safe_spot ??
-          (rec ? { at: { col: rec.col, row: rec.row }, works: rec.held > 0 && !book.discredited(rec),
-                   evidence: `held ${rec.held} time(s), hit in it ${rec.failed} time(s)` }
+          (rec ? { at: { col: rec.col, row: rec.row },
+                   works: rec.held > 0 && !book.discredited(rec, { reachable: standingReach }),
+                   ...(standingReach === 0 ? { reachable_by: 0 } : {}),
+                   evidence: `held ${rec.held} time(s), hit in it ${rec.failed} time(s)` +
+                             (standingReach === 0
+                               ? '; nothing can stand within reach of this square, so the '
+                                 + 'hits were not the wall'
+                               : '') }
                : false),
         spots: spots.map(x => {
           const k = book.get(room?.num, x.col, x.row);

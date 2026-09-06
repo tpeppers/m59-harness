@@ -168,11 +168,25 @@ into the watchdog:
   with no working wall, and `wedgedInPlace` answers from four signals — a recorded break,
   a hold, the pulse's same-square episode past `WATCHDOG_PINNED_MS`, or an anchor that old
   — because the arm itself only fires at full health and the character in the second
-  incident was being eaten. The swing holds position and never disengages: disengaging is
+  incident was being eaten. `wedgedInPlace` has exactly two callers, this and
+  `escapeIfWedgedAndHurt`; **it does not gate the escape ladder**, so shortening its clock
+  does not make the ladder run sooner — it makes a hurt character stand and swing, and
+  pre-empts the panic-logoff rung below it. The swing holds position and never disengages: disengaging is
   what was already not working. `trade_in_place_when_wedged: false` switches it off per
   character.
 
-`node tools/m59-wedge-test.mjs` (66) is the guard, and it pins the call sites by source as
+**Recording a wedge and cancelling a walk are two decisions.** The escape ladder is reached
+from `answerWedge`, which needs `wedgeBreak`, which only the healthy arm in
+`m59-autopilot.mjs` writes. That arm used to do both behind one `if`, so raising
+`WATCHDOG_HEALTHY_CANCEL_MS` — the supported way to stop the watchdog manufacturing
+journeys — also stopped the ladder ever running for a healthy character, silently and with
+nothing logged. The record is now gated on `WEDGE_LADDER_MS` (10s, overridable in
+`substrate/watchdog.local.json`) and the cancel on `WATCHDOG_HEALTHY_CANCEL_MS`. Five
+records at one place is `WEDGE_REPEAT_CAP`, so the ladder is climbed after ~50s of
+deliberate stillness. `pinnedSince` is cleared only by a real cancel, or the survival rungs
+above would never reach `WATCHDOG_PINNED_MS`.
+
+`node tools/m59-wedge-test.mjs` (141) is the guard, and it pins the call sites by source as
 well as the methods by driving them — a rung that exists and is never reached is what the
 second incident was made of.
 

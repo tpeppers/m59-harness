@@ -121,6 +121,54 @@ export const INERT_RESCUE_MS = Number(process.env.M59_INERT_RESCUE_MS || 4_000);
 // seconds, and cancelling those would be the guard picking fights with the pass. Twenty
 // seconds of covering no ground at all is not any of them.
 export const WATCHDOG_PINNED_MS = num('WATCHDOG_PINNED_MS', 20_000);
+
+// THE CANCEL THRESHOLD, SPLIT OUT FROM THE DETECTION THRESHOLD — and the reason is an
+// incident, 2026-09-05.
+//
+// WATCHDOG_PINNED_MS is read in THREE places, not one: the healthy-wedge cancel, and twice
+// inside `wedgeHere`, which is what decides a square is wedged at all and therefore what
+// feeds the whole escape ladder (breadcrumbs -> the entry door -> re-cross the last room).
+//
+// Raising it to disable the cancel — which looked like a one-number config change and got no
+// review because of that — silently disabled WEDGE DETECTION with it. For several hours the
+// fleet could not notice it was stuck, so no rung of the ladder could fire. The cancel and
+// the detection are different questions that happened to share a number.
+//
+// So the cancel gets its own, defaulting to the same value: a checkout that sets neither
+// behaves exactly as before, and an operator disabling the cancel no longer blinds the
+// ladder as a side effect.
+export const WATCHDOG_HEALTHY_CANCEL_MS =
+  num('WATCHDOG_HEALTHY_CANCEL_MS', WATCHDOG_PINNED_MS);
+
+// HOW LONG STATIONARY BEFORE THIS PLACE IS RECORDED AS A WEDGE — which is what lets the
+// escape ladder run at all, and is NOT the same question as how long before a walk is
+// cancelled. The two were one number and one `if`, and fusing them is what broke this.
+//
+// `answerWedge` needs `wedgeBreak`, `wedgeBreak` is only written by the healthy arm in
+// m59-autopilot.mjs, and that arm used to return early when cancels were off. So setting
+// WATCHDOG_HEALTHY_CANCEL_MS high to stop the watchdog manufacturing journeys ALSO stopped
+// the ladder ever running for a healthy character: no break, no repeats, no `give_up`, no
+// retreat. The only surviving way in was escapeIfWedgedAndHurt, which needs the character
+// to be below the flee line already — the ladder was reachable only once it was late.
+//
+// So this gates the RECORD and WATCHDOG_HEALTHY_CANCEL_MS gates the CANCEL. An operator can
+// turn off the cancelling without turning off the escape.
+//
+// `pinnedSince` is the signal because it is only set while the character is GOING somewhere,
+// is not inert and is not deliberately holding a safe spot — "stationary and not on
+// purpose", the only kind of still that is a problem. Elapsed time would be wrong: on
+// successful journeys the median leg takes 19.1s and 90% of legs exceed 10s.
+//
+// Ten seconds, from measurement rather than taste. Over 1,238 travel deaths carrying
+// `ms_since_moved` (2026-09-05): the median character had not moved for 86 SECONDS when it
+// died and p25 was 22s. A 10s record fires before 87% of them, 8s before 89%, 20s before
+// 76%. The margin is enormous at any value in that band, so this sits at the cheap end.
+//
+// It is also the ESCALATION CADENCE: one record per interval at the same place, and
+// WEDGE_REPEAT_CAP (5) records before `wedgeAdvice` says `give_up`. At 10s that is fifty
+// seconds of continuous, deliberate stillness before the ladder is climbed — comfortably
+// inside the 86s median and well outside an ordinary 19s leg.
+export const WEDGE_LADDER_MS = num('WEDGE_LADDER_MS', 10_000);
 // HOW FAR FROM WHERE IT STARTED STILL COUNTS AS GETTING NOWHERE, in squares.
 //
 // THIS IS A DISPLACEMENT TEST, NOT A STILLNESS TEST, and the difference is the whole
@@ -257,7 +305,12 @@ export function freshState() {
            pinnedSince: null, pinnedAnchor: null, pinnedInterrupts: 0,
            // Where the second arm last broke a wedge and how many times running it has
            // broken one there. See WEDGE_REPEAT_CAP.
-           wedgeBreak: null };
+           wedgeBreak: null,
+           // When that arm last RECORDED a wedge here, which paces the escalation now that
+           // recording no longer requires cancelling. Declared here rather than sprung into
+           // existence at the call site for the reason the rest of this object exists: a
+           // host cannot forget a field it was given.
+           wedgeNotedAt: null };
 }
 
 // start/stop own the timer. `unref` so a watchdog never holds a process open.
@@ -532,24 +585,51 @@ export function tick(host) {
   // caller — a held wall is standing still on purpose and an errand is not ours to cancel.
   const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
   if (frac >= fleeAt) {
-    if (pinnedFor < WATCHDOG_PINNED_MS) return;
-    w.interruptedPass = host.passes;
-    w.pinnedInterrupts++;
+    // TWO DECISIONS, THE SAME TWO AS THE AUTOPILOT'S COPY OF THIS ARM. Recording that this
+    // place is a wedge is what an escape ladder is reached from; cancelling the walk is a
+    // separate and more expensive act an operator may switch off. Kept identical here on
+    // purpose: this arm and m59-autopilot.mjs's are two implementations of one contract, and
+    // the last time they diverged it was because only one of them was edited. This host does
+    // not currently climb a ladder — `wedgeAdvice` is asked by the Autopilot's `wedgeHere`,
+    // and a `mode: 'tick'` host has none — but honouring WATCHDOG_HEALTHY_CANCEL_MS matters
+    // regardless: an operator who sets it in watchdog.local.json is entitled to have it read
+    // by both arms rather than silently ignored by one.
+    if (pinnedFor < WEDGE_LADDER_MS) return;
+    const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;
+    // PACED ONLY WHERE THE ANCHOR IS NOT CLEARED. A cancel sets `pinnedSince` to null, so
+    // the next record already cannot arrive until the body has been pinned a further
+    // WEDGE_LADDER_MS — the cadence is self-limiting on that path and this clock would be
+    // a second, redundant limiter on it. On the record-only path nothing clears the
+    // anchor, `pinnedFor` keeps growing, and without this every tick would write a record:
+    // WEDGE_REPEAT_CAP reached in two and a half seconds of ordinary slow walking.
+    if (!cancelling && w.wedgeNotedAt && now - w.wedgeNotedAt < WEDGE_LADDER_MS) return;
+    w.wedgeNotedAt = now;
     // The anchor is where the wedge STARTED, which is the place to remember it by: a
     // pocket-wanderer's newest pulse moves and its anchor does not.
     const spot = w.pinnedAnchor ?? w.pulses[w.pulses.length - 1] ?? null;
-    w.pinnedSince = null; w.pinnedAnchor = null;
-    host.tally.watchdog_pinned_interrupts = (host.tally.watchdog_pinned_interrupts || 0) + 1;
-    const broke = (() => {
+    if (cancelling) {
+      w.interruptedPass = host.passes;
+      w.pinnedInterrupts++;
+      // Cleared only by a real cancel: `pinnedSince` is what the Autopilot's `wedgedInPlace`
+      // reads for the survival rungs, and resetting it on every record would mean it never
+      // reached WATCHDOG_PINNED_MS again.
+      w.pinnedSince = null; w.pinnedAnchor = null;
+      host.tally.watchdog_pinned_interrupts = (host.tally.watchdog_pinned_interrupts || 0) + 1;
+    }
+    host.tally.watchdog_wedges_recorded = (host.tally.watchdog_wedges_recorded || 0) + 1;
+    const broke = cancelling ? (() => {
       try { return s.cancelMovement(null, 'the watchdog breaking a healthy wedge'); }
       catch (e) { return { cancelled: false, why: e.message }; }
-    })();
+    })() : { cancelled: false, interrupted: null,
+             why: 'cancels are off here; this arm is recording the wedge so a ladder can run' };
     // AND THE RECORD THAT MAKES THE NEXT DECISION DIFFERENT. See WEDGE_REPEAT_CAP: a
     // cancel alone hands the next pass the same inputs, which is a loop.
     const record = spot ? noteWedgeBreak(w, { room: spot.room, col: spot.col, row: spot.row,
                                               doing: host.doing ?? null,
                                               to: host.wedgeTarget?.() ?? null }, now) : null;
-    host.note('WATCHDOG — broke a wedge that was not hurting anybody', {
+    host.note(cancelling ? 'WATCHDOG — broke a wedge that was not hurting anybody'
+                         : 'WATCHDOG — recorded a wedge that was not hurting anybody', {
+      cancelled: cancelling,
       health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
       doing: host.doing ?? null,
       penned_for_s: Math.round(pinnedFor / 1000),
@@ -567,7 +647,9 @@ export function tick(host) {
           ? 'broken ' + record.repeats + ' times at this place — the next pass sidesteps before re-planning'
           : undefined,
     });
-    host.progress('watchdog broke a healthy wedge');
+    // Only on a real cancel. `progress()` resets the idle/stall counters and clears the
+    // STALL_NO_LEVER refusal; a record-only pass changed nothing and must not say it did.
+    if (cancelling) host.progress('watchdog broke a healthy wedge');
     return;
   }
 

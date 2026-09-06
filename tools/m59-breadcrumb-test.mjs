@@ -72,6 +72,9 @@ const queueValidatedMove = lift('async queueValidatedMove(x, y, {', 'queueValida
 // before replaying it, and a hand-written imitation here would be testing the imitation.
 const retreatAlongBreadcrumbs = lift('async retreatAlongBreadcrumbs({', 'retreatAlongBreadcrumbs',
   { KOD_FINENESS, elideLoops });
+// Rung 1.5. Lifted, not copied, for the same reason as the rest: the value of this suite is
+// that it fails when the SHIPPED method changes.
+const retreatToRail = lift('async retreatToRail({', 'retreatToRail', { KOD_FINENESS });
 // `provedSquares` turns a plan into the legs the string pull proved, so the coalescer can
 // skip along them without tracing. These fixtures have no collision model at all, which is
 // exactly the case where it must decline — so null here is the real answer, not a stub of
@@ -128,6 +131,17 @@ function fakeSession({ at = { col: 5, row: 5 }, roomId = 587, legal = () => true
       if (session.selfComesBack && client.missingSelf) client.missingSelf = false;
       return client.self ?? null;
     },
+    // A WALK DOES NOT GET TO MARK ITS OWN HOMEWORK. `arrived` is gated on
+    // `confirmPosition` — a fresh room read, not the local prediction — because the
+    // prediction is exactly what is wrong when a walk lands somewhere it did not plan, and
+    // `arrived` is what a journey counts a leg by. A fixture without one made every walk in
+    // this suite report `arrived: false` while standing on the requested square, which read
+    // as a routing failure and is not one.
+    //
+    // `positionIsRead` stages the other answer: the real one returns null on a read that
+    // times out, and callers must treat "I do not know where I am" as not-arrived.
+    positionIsRead: true,
+    async confirmPosition() { return session.positionIsRead ? client.self ?? null : null; },
     movementWasCancelled() { return false; },
     cancelledMovement(extra) { return { cancelled: true, ...extra }; },
     threatsHere() { return null; },
@@ -409,6 +423,108 @@ console.log('the re-identify itself — lifted whole, because a free variable is
     ok('and waits for the room it asked about', waited?.kinds?.includes('room-entered') === true);
     ok('from the event sequence it read before asking', waited?.since === 7);
   }
+}
+
+// ---------------------------------------------------------------------------
+// RUNG 1.5 — BACK UP UNTIL THE RAIL IS UNDER FOOT AGAIN, THEN STOP.
+//
+// The rung exists because the trail and the route are different things. Walking the whole
+// trail back returns a character to where the leg BEGAN, which on a long crossing throws
+// away several minutes of progress and usually re-enters the room that wedged it. What is
+// wanted is the nearest point where the baked route and the body agree, which is almost
+// always a few squares back — so the stop condition is the rail, not the trail.
+//
+// NOTHING HERE CONSULTS A MODEL OF THE WORLD. Every square it steps onto is one the
+// validator accepted on the way in, replayed backwards through that same validator. That is
+// the whole reason this rung may run in a room the router has already given up on: it
+// cannot be wrong about the geometry, because it never forms an opinion about the geometry.
+console.log('rung 1.5 stops at the rail rather than unwinding the whole trail');
+{
+  // The rail runs through the square the walk started from; the body then wanders five
+  // squares off it. `nearSquares` is 2, so squares 3..7 count as on it and 8..10 do not.
+  const railed = (squares, extra = {}) => {
+    const s = fakeSession(extra);
+    s.retreatToRail = retreatToRail;
+    s.railAcross = () => ({ from: { col: 5, row: 5 }, squares });
+    return s;
+  };
+  const away = s => walk(s, [6, 7, 8, 9, 10].map(col => ({ col, row: 5 })));
+  {
+    const s = railed([{ col: 5, row: 5 }]);
+    await away(s);
+    const out = await s.retreatToRail({ toSquare: { col: 20, row: 5 } });
+    ok('it backed up to the first square the rail reaches', out.steps === 3);
+    ok('and stopped there rather than at the start of the leg', s.client.self.col === 7);
+    ok('reporting that it rejoined', out.rejoined === true);
+    ok('the rest of the trail is kept for the rungs above', out.crumbs_left === 2);
+    ok('it names the rail it was aiming at', out.rail_squares === 1);
+  }
+  {
+    // Already there: the rung must cost nothing rather than take a step to prove it.
+    const s = railed([{ col: 5, row: 5 }]);
+    const out = await s.retreatToRail({ toSquare: { col: 20, row: 5 } });
+    ok('a body already on the rail does not move', out.moved === false && s.packets.length === 0);
+    ok('and says so', out.reason === 'already on the rail');
+  }
+  {
+    // No rail baked for this crossing — the rung declines and the ladder goes on to rung 2.
+    const s = fakeSession();
+    s.retreatToRail = retreatToRail;
+    s.railAcross = () => null;
+    await walk(s, [{ col: 6, row: 5 }]);
+    const out = await s.retreatToRail({ toSquare: { col: 20, row: 5 } });
+    ok('no rail means no retreat at all', out.moved === false);
+    ok('and the trail is left whole for the rungs below', s.breadcrumbs.length === 1);
+  }
+  {
+    // The rail is real but the trail cannot reach it: a one-way step in the way. The rung
+    // gives up where the validator says so and reports honestly — it never forces the step.
+    const s = railed([{ col: 5, row: 5 }], { legal: (f, t) => !(f.col === 8 && t.col === 7) });
+    await away(s);
+    const out = await s.retreatToRail({ toSquare: { col: 20, row: 5 } });
+    ok('it undid what the validator allowed', out.steps === 2);
+    ok('stopped at the refusal', s.client.self.col === 8);
+    ok('and did not claim to have rejoined', out.rejoined === false);
+    // Square 7 was walked THROUGH on the way out, legally, so its packet count is the
+    // check: one on the way out and none on the way back is the refusal being respected
+    // rather than a square that was simply never aimed at.
+    ok('the refused square was never aimed at a second time',
+       s.packets.filter(p => p.x === fineOf(7, 5).x).length === 1);
+  }
+  {
+    // `nearSquares` is a tolerance, not a target: the rail is a lane of square centres and a
+    // body walking it is rarely dead on one. Two squares of slack, and it has to actually
+    // slacken — a rail well off the trail is not rejoined by standing vaguely near it.
+    const s = railed([{ col: 4, row: 5 }]);
+    await away(s);
+    ok('a rail two squares further out is reached two steps later',
+       (await s.retreatToRail({ toSquare: { col: 20, row: 5 } })).steps === 4);
+    const t = railed([{ col: 1, row: 5 }]);
+    await away(t);
+    const far = await t.retreatToRail({ toSquare: { col: 20, row: 5 } });
+    ok('a rail the whole trail never reaches is not rejoined', far.rejoined === false);
+    ok('and the trail was spent trying', far.steps === 5);
+    ok('with nothing left to try below', far.crumbs_left === 0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AND THE ARRIVAL ITSELF IS A READ, NOT A BELIEF.
+//
+// This is pinned because its absence is invisible in the worst way: the walk works, the
+// body is on the right square, and every walk in the suite quietly reports failure. In
+// production the same gap reads as a journey leg that failed at its own destination —
+// which is a retry, a wedge, and eventually a death, all at a square nothing was wrong with.
+console.log('arrival is confirmed by a room read, never by the local prediction');
+{
+  const s = fakeSession();
+  ok('a confirmed read on the requested square is an arrival',
+     (await walkTo.call(s, 8, 5, {})).arrived === true);
+  const t = fakeSession();
+  t.positionIsRead = false;                     // the read timed out
+  const r = await walkTo.call(t, 8, 5, {});
+  ok('an unconfirmed one is not, even standing there', r.arrived === false);
+  ok('and it still says where it believes it is', r.position?.col === 8);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
