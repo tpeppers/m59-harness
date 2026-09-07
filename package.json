@@ -15,7 +15,7 @@
     "stop": "node tools/m59-service.mjs stop",
     "restart": "node tools/m59-service.mjs restart",
     "status": "node tools/m59-service.mjs status",
-    "test:farm-loop": "node tools/m59-farm-bridge-test.mjs && node tools/m59-split-room-confinement-test.mjs && node tools/m59-doorside-test.mjs && node tools/m59-exactexit-test.mjs",
+    "test:farm-loop": "node tools/m59-farm-bridge-test.mjs && node tools/m59-keeper-authority-test.mjs && node tools/m59-resumetravel-test.mjs && node tools/m59-split-room-confinement-test.mjs && node tools/m59-doorside-test.mjs && node tools/m59-exactexit-test.mjs",
     "logs": "node tools/m59-service.mjs logs",
     "which": "node tools/m59-which.mjs",
     "field": "node tools/m59-webui.mjs start",

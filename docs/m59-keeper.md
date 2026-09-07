@@ -13,6 +13,15 @@ The fleet board's `has_food` and `larder_vigor` exclude vault/protected cargo,
 using the same `larderOf(..., {exclude})` filter as the keeper. A collection of
 inky caps is not usable fuel when the policy reserves it for the vault.
 
+A farming wall remains held while monsters are in contact or a pull is pending.
+Rest completion waits for `leaveHold` (including reconnect) before the next action.
+Otherwise a full-health farmer can release and retake its fighting wall every pass.
+
+For keeper-backed sessions, the public `autopilot` claim, heartbeat, busy, free and
+yield actions must reach the child process. The broker's dormant policy shell cannot
+hold the real keeper's steering. `m59-keeper-authority-test.mjs` exercises that
+dispatch and the resulting busy gate; RTS commander leases retain their shorter cap.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Postmortems, the watchdog, the yield check, and the counters that are not rates.
 
 ## What a death record can and cannot say

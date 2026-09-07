@@ -13974,7 +13974,7 @@ export class Autopilot {
     //
     // Called here so the wall is given up on the pass that finishes it. The release itself is
     // unchanged and still refuses a hurt character; all that changes is that it is asked.
-    if (this.hold && this.suspendedJourney) this.releaseRestedHold();
+    if (this.hold && this.suspendedJourney) await this.releaseRestedHold();
 
     // THE RECOVERY STOP A JOURNEY ASKED FOR, and the one poison always needs.
     //
@@ -14921,7 +14921,7 @@ export class Autopilot {
   // timeout. Both ceilings met means the wall has given all it has.
   //
   // Forced, because the ordinary refusal is about being hurt and this character is not.
-  releaseRestedHold() {
+  async releaseRestedHold() {
     if (!this.hold) return false;
     const v = this.s.client?.vitals?.();
     const hp = v?.health?.max ? v.health.value / v.health.max : null;
@@ -14947,6 +14947,11 @@ export class Autopilot {
     // The operator's rule for this was set before any of it: rest to FULL when healing at a
     // safe spot while travelling.
     const onARoad = !!(this.inert?.travelling || this.suspendedJourney);
+    // A farming wall is still doing its job while a quarry is being pulled or
+    // monsters are in contact. Full health does not finish that fight. Releasing
+    // here preempts passFarm's contact-clear hysteresis and reconnects every lap.
+    if (!onARoad && (this.pendingPull || this.inReachOfUs()?.length
+        || (this.mode === 'farm' && this.policy.requireSafeWall !== false))) return false;
     const floor = onARoad
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : (this.policy.holdResumeAbove ?? 0.9);
@@ -14959,9 +14964,13 @@ export class Autopilot {
       why: 'a rest stop is for getting well, and this character is as well as sitting down ' +
            'can make it. Staying is how a journey times out without ever being in danger.',
     });
-    this.leaveHold('rested to the ceiling — back on the road', { force: true })
-      .catch(e => this.note('could not leave the rested hold', { why: e.message }));
-    return true;
+    try {
+      const left = await this.leaveHold('rested to the ceiling — back on the road', { force: true });
+      return left.left === true;
+    } catch (e) {
+      this.note('could not leave the rested hold', { why: e.message });
+      return false;
+    }
   }
 
   // WHY THE RESUME SAID NO, ONCE PER REASON. A refusal that returns CONTINUE and writes
@@ -14985,7 +14994,7 @@ export class Autopilot {
     // Asked FIRST, and unconditionally: a held character that is whole should be moving
     // whether or not it has an objective to resume. Releasing costs nothing when there is
     // no hold, and the stage below decides where to go.
-    this.releaseRestedHold();
+    await this.releaseRestedHold();
     const j = this.suspendedJourney;
     if (!j) { this.resumeBest = null; this.resumeFlat = 0; this.resumeSaid = null; return CONTINUE; }
     if (this.policy.resumeTravel === false)

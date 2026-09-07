@@ -2109,6 +2109,7 @@ const server = createServer(async (req, res) => {
           // Autopilot and its per-faculty claims. Preserve that ownership API across the
           // keeper-process boundary so a split keeper can be driven without stopping its
           // survival, recovery, mortality, or identity faculties.
+          case 'autopilot_claim':
           case 'commander_claim': {
             if (!autopilot?.running || typeof autopilot.claimFaculties !== 'function') {
               json({ error: 'running keeper does not expose faculty ownership' }, 409);
@@ -2118,13 +2119,15 @@ const server = createServer(async (req, res) => {
               faculties: Array.isArray(args.faculties) ? args.faculties : [],
               by: String(args.by ?? ''),
               leaseMs: Math.max(1000,
-                Math.min(Number(args.leaseMs ?? args.lease_ms ?? 20000), 30000)),
+                Math.min(Number(args.leaseMs ?? args.lease_ms ?? 20000),
+                  name === 'autopilot_claim' ? 900000 : 30000)),
               why: String(args.why ?? 'RTS commander lease'),
               mayYield: Array.isArray(args.mayYield ?? args.may_yield)
                 ? (args.mayYield ?? args.may_yield) : [],
             }));
             return;
           }
+          case 'autopilot_heartbeat':
           case 'commander_heartbeat': {
             if (!autopilot?.running || typeof autopilot.heartbeatFaculties !== 'function') {
               json({ error: 'running keeper does not expose faculty ownership' }, 409);
@@ -2133,10 +2136,12 @@ const server = createServer(async (req, res) => {
             json(autopilot.heartbeatFaculties({
               by: String(args.by ?? ''),
               leaseMs: Math.max(1000,
-                Math.min(Number(args.leaseMs ?? args.lease_ms ?? 20000), 30000)),
+                Math.min(Number(args.leaseMs ?? args.lease_ms ?? 20000),
+                  name === 'autopilot_heartbeat' ? 900000 : 30000)),
             }));
             return;
           }
+          case 'autopilot_yield':
           case 'commander_release': {
             if (!autopilot || typeof autopilot.releaseFaculties !== 'function') {
               json({ released: [], faculties: {} });
@@ -2148,6 +2153,14 @@ const server = createServer(async (req, res) => {
             }));
             return;
           }
+          case 'autopilot_busy': {
+            if (!autopilot?.running) { json({ error: 'keeper is not running' }, 409); return; }
+            json(autopilot.declareBusy({ by: args.by ?? null,
+              kind: args.kind ?? null, label: args.label ?? null, detail: args.why ?? null,
+              leaseMs: Number(args.lease_ms ?? 300000) }));
+            return;
+          }
+          case 'autopilot_free':
           case 'commander_free_busy': {
             if (!autopilot || typeof autopilot.freeBusy !== 'function') {
               json({ busy: null, was: null });

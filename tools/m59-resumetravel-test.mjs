@@ -299,7 +299,7 @@ console.log('A WALL THAT HAS FINISHED ITS WORK IS RELEASED IN THE STAGE THAT OWN
   // their wall, so ask the function.
   {
     const hurt = keeper({ health: 20, max: 46, hold: { room: 587, col: 5, row: 42 } });
-    ok('the release still refuses a hurt character', hurt.releaseRestedHold() === false);
+    ok('the release still refuses a hurt character', (await hurt.releaseRestedHold()) === false);
 
     // ON A ROAD IT IS FULL HEALTH, NOT NINE-TENTHS. The last tenth is the margin that
     // decides whether the NEXT room is survivable, which is the whole reason it stopped.
@@ -308,18 +308,18 @@ console.log('A WALL THAT HAS FINISHED ITS WORK IS RELEASED IN THE STAGE THAT OWN
     const nearly = keeper({ health: 43, max: 46, hold: { room: 587, col: 5, row: 42 } });
     nearly.suspendedJourney = { to: 38, why: 'x', at: Date.now(), trigger: 't',
                                 attempts: 1, deaths_at: 0 };
-    ok('a traveller at nine-tenths keeps its wall', nearly.releaseRestedHold() === false,
+    ok('a traveller at nine-tenths keeps its wall', (await nearly.releaseRestedHold()) === false,
        'the last tenth is the margin the next room is crossed on');
 
     // ...AND A FARMER DOES NOT, because for it the last tenth is the slowest thing to come
     // back, the room it is in is the room it works in, and nothing waits on the other side.
     const farming = keeper({ health: 43, max: 46, hold: { room: 587, col: 5, row: 42 } });
-    ok('a character with no road keeps the old nine-tenths', farming.releaseRestedHold() !== false);
+    ok('a character with no road keeps the old nine-tenths', (await farming.releaseRestedHold()) !== false);
 
     const whole = keeper({ health: 46, max: 46, hold: { room: 587, col: 5, row: 42 } });
     whole.suspendedJourney = { to: 38, why: 'x', at: Date.now(), trigger: 't',
                                attempts: 1, deaths_at: 0 };
-    ok('and a whole one gives the wall up and goes', whole.releaseRestedHold() !== false);
+    ok('and a whole one gives the wall up and goes', (await whole.releaseRestedHold()) !== false);
     ok('and says what it needed, so the number is arguable from the record',
        said(whole, /needed/) || said(whole, /full health/));
   }
@@ -464,7 +464,7 @@ console.log('A REST STOP ENDS WHEN THERE IS NOTHING LEFT TO GAIN BY STANDING THE
 
   const full = keeper({ health: 54, max: 54, vigor: 80, hold: held() });
   ok('full health and vigor at the resting cap releases the hold',
-     full.releaseRestedHold() === true && full.left.length === 1);
+     (await full.releaseRestedHold()) === true && full.left.length === 1);
   ok('and it is FORCED, because the ordinary refusal is an argument about being hurt',
      full.left[0]?.opts?.force === true, JSON.stringify(full.left[0]?.opts));
   ok('and it says so, so a post-mortem can see why it moved',
@@ -474,22 +474,44 @@ console.log('A REST STOP ENDS WHEN THERE IS NOTHING LEFT TO GAIN BY STANDING THE
   // at the resting cap and everything above it has to be EATEN, so a release that waited for
   // vigor to be "full" in the ordinary sense would wait for the timeout instead.
   ok('one point under the resting cap is not full, and it stays',
-     keeper({ health: 54, max: 54, vigor: 79, hold: held() }).releaseRestedHold() === false);
+     (await keeper({ health: 54, max: 54, vigor: 79, hold: held() }).releaseRestedHold()) === false);
   ok('but ABOVE the cap is still full — vigor over 80 came from food, not from resting',
-     keeper({ health: 54, max: 54, vigor: 150, hold: held() }).releaseRestedHold() === true);
+     (await keeper({ health: 54, max: 54, vigor: 150, hold: held() }).releaseRestedHold()) === true);
 
   // Still hurt is still a rest stop: the Camilla case, who gave up a proven wall at 69%
   // and died 17.8 seconds later.
   ok('hurt at the wall is not released, however rested',
-     keeper({ health: 30, max: 54, vigor: 200, hold: held() }).releaseRestedHold() === false);
+     (await keeper({ health: 30, max: 54, vigor: 200, hold: held() }).releaseRestedHold()) === false);
   ok('and hold_resume_above decides that, not a literal',
-     keeper({ health: 40, max: 54, vigor: 80, hold: held(),
-              policy: { holdResumeAbove: 0.7 } }).releaseRestedHold() === true);
+     (await keeper({ health: 40, max: 54, vigor: 80, hold: held(),
+              policy: { holdResumeAbove: 0.7 } }).releaseRestedHold()) === true);
 
   // Cheap and silent when there is nothing to release — it is asked on every pass.
   const noHold = keeper({ health: 54, max: 54, vigor: 80 });
   ok('a character with no hold is a no-op rather than a throw',
-     noHold.releaseRestedHold() === false && noHold.left.length === 0 && noHold.notes.length === 0);
+     (await noHold.releaseRestedHold()) === false && noHold.left.length === 0 && noHold.notes.length === 0);
+
+  const fighting = keeper({ hold: held(), policy: { requireSafeWall: false } });
+  fighting.mode = 'farm';
+  fighting.inReachOfUs = () => [{ id: 2 }];
+  ok('full health does not give up a fighting wall while a monster is in contact',
+     await fighting.releaseRestedHold() === false && fighting.left.length === 0);
+  fighting.inReachOfUs = () => [];
+  fighting.pendingPull = { id: 2 };
+  ok('an outstanding pull also keeps its wall', await fighting.releaseRestedHold() === false);
+  fighting.pendingPull = null;
+  ok('an optional farming wall is released when its contact clears',
+     await fighting.releaseRestedHold() === true);
+
+  const reconnecting = keeper({ hold: held() });
+  let completeLeave;
+  reconnecting.leaveHold = () => new Promise(resolve => { completeLeave = resolve; });
+  let finished = false;
+  const leaving = reconnecting.releaseRestedHold().then(value => { finished = true; return value; });
+  await Promise.resolve();
+  ok('rest release waits for reconnect and pocket exit before farming can continue', !finished);
+  completeLeave({ left: true });
+  ok('release completes when the character is ready', await leaving === true);
 }
 
 console.log('');

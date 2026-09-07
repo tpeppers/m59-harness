@@ -9873,6 +9873,16 @@ const TOOLS = [
       // mode — writing the stub's default here is what silently reverted 'tick' back to
       // 'survive' on every rejoin (the stub never knows the keeper is running tick).
       const rosterMode = fleetState.get(a.agent)?.autopilot?.mode ?? p.mode;
+      // Authority belongs to the process executing the pass loop. Recording a claim
+      // or busy errand on this dormant shell leaves the real keeper free to recall
+      // a town runner home between travel legs.
+      if (s instanceof KeeperProxy && ['claim', 'heartbeat', 'yield', 'busy', 'free'].includes(a.action)) {
+        const result = await keeperAction(a.agent, s._index, `autopilot_${a.action}`, {
+          ...a, mayYield: fleetMayYield(),
+        });
+        if (result?.error) throw new Error(result.error);
+        return result;
+      }
       // ASK THE PROCESS THAT IS ACTUALLY RUNNING, NOT THE SHELL IN THIS ONE.
       //
       // `p` is an Autopilot built on `session(agent)`, and for a keeper-backed character that
