@@ -25,7 +25,7 @@ import {
 import { recordTactic } from './m59-tactics.mjs';
 import { anchorFor, activeRoutes, bakedPath } from './m59-routes.mjs';
 import { recordCrossing } from './m59-crossings.mjs';
-import { finePath, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
+import { finePath, fineRouteDetour, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { BP, M59Client } from './m59-client.mjs';
 import { MOVEON, blocksMovement, parsePlayer, OF } from './m59-parse.mjs';
@@ -1422,7 +1422,7 @@ const walkTo = compileSessionMethod(brokerSource,
     // THE FINE DETOUR'S FOUR, AND THE LEDGER. Half of what the square lattice calls a wall
     // is a slide that landed next door; these are what thread it. Real functions, because
     // all five are ordinary exports of modules that import without taking the fleet lock.
-    finePath, pullFine, pointOfSquare, boundsAround, recordTactic,
+    finePath, fineRouteDetour, pullFine, pointOfSquare, boundsAround, recordTactic,
     clientToProtocol,
     // How many packets a planned square may cost. The broker's own default, duplicated
     // for the same reason PIVOT_ARRIVE_WITHIN is: importing the module takes the fleet

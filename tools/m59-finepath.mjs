@@ -75,7 +75,7 @@ function moveLands(geo, x0, y0, x1, y1) {
  * thousands of nodes and is not what this is for: it exists to cross a POCKET, and the
  * caller knows where the pocket is. With no bounds it will still work and simply cost more.
  */
-export function finePath(geo, from, to, { bounds = null, maxNodes = 20000 } = {}) {
+export function finePath(geo, from, to, { bounds = null, maxNodes = 20000, goalSquare = null } = {}) {
   if (!geo?.collisionReady || typeof geo.traceFineMoveClient !== 'function')
     return { found: false, reason: 'no collision geometry' };
   const inBounds = (x, y) => !bounds
@@ -102,7 +102,12 @@ export function finePath(geo, from, to, { bounds = null, maxNodes = 20000 } = {}
     open.sort((a, b) => a.f - b.f);
     const cur = open.shift();
     if (++nodes > maxNodes) return { found: false, reason: 'fine search gave up', nodes };
-    if (Math.hypot(cur.x - to.x, cur.y - to.y) <= ARRIVE_WITHIN) {
+    // A square walk needs an occupiable point in that square. Its center can
+    // lie inside a wall even though the same square has a usable edge. Exact
+    // point callers retain their distance contract unless they opt into this.
+    const square = goalSquare ? squareOf(cur.x, cur.y) : null;
+    if (goalSquare ? square.row === goalSquare.row && square.col === goalSquare.col
+                   : Math.hypot(cur.x - to.x, cur.y - to.y) <= ARRIVE_WITHIN) {
       const points = [];
       let node = { x: cur.x, y: cur.y };
       while (node) {
@@ -181,11 +186,16 @@ export function fineRouteDetour(geo, from, route, { maxAhead = 4, maxNodes = 400
   const square = { row: Math.floor(from.y / CLIENT_PER_SQUARE) + 1,
                    col: Math.floor(from.x / CLIENT_PER_SQUARE) + 1 };
   let spent = 0;
-  for (let index = 0; index < Math.min(route.length, maxAhead + 1); index++) {
+  // Rejoin beyond the pocket first. Spending the whole search on the same
+  // unreachable intermediate square cannot discover the corridor beyond it.
+  // A declared fall bounds the prefix; it must still be executed separately.
+  let end = Math.min(route.length, maxAhead + 1);
+  for (let i = 0; i < end; i++) if (route[i].fall) { end = i; break; }
+  for (let index = end - 1; index >= 0; index--) {
     const target = route[index];
-    if (target.fall || spent >= maxNodes) break;
+    if (spent >= maxNodes) break;
     const found = finePath(geo, from, pointOfSquare(geo, target.row, target.col),
-      { bounds: boundsAround([square, target], margin), maxNodes: maxNodes - spent });
+      { bounds: boundsAround([square, target], margin), maxNodes: maxNodes - spent, goalSquare: target });
     spent += found.nodes ?? 0;
     if (found.found) return { ...found, target, index, nodes: spent };
   }

@@ -68,3 +68,9 @@ the modeled center of r2c19. The internal-door planner now proves reachable
 approaches to a published go exit; otherwise it incorrectly sends the body back
 into the northern room. The live north/south positions are both pinned by
 `m59-innerdoor-test.mjs`.
+
+Fine detours now use square arrival when rejoining a square route. An exact
+stand point can sit inside a wall even though a body can occupy another part
+of that square. The point-path API keeps its original distance requirement;
+only the detour opts into an endpoint anywhere inside its intended square,
+with every movement segment still checked against collision geometry.
