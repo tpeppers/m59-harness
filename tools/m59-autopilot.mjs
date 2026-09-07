@@ -11817,16 +11817,13 @@ export class Autopilot {
     } catch { /* never break the keeper */ }
   }
 
-  // ── passUnderworld: extracted from pass() ────────────────────────────────
-  async passUnderworld(ctx) {
-    const { s, c, room, v } = ctx;
-    // 1. Dead. The Underworld has no graph exits, so a character left there stays
-    //    there forever unless something walks it onto a portal.
-    // Check both the map room (nameRsc) and the client room (name, num).
-    const roomName = room?.name ?? c?.room?.name ?? '';
-    const roomNum  = room?.num  ?? c?.room?.num  ?? room?.objId;
-    if (/underworld/i.test(roomName) || roomNum === 6) {
-      this.tally.deaths++;
+  // Record mortality independently of movement. The normal pass and the room
+  // event share one promise, so retries in the Underworld count one death and
+  // neither observer starts a second escape while travel already owns the body.
+  observeDeath() {
+    if (this.reportedDeath) return this.deathReportTask;
+    this.deathReportTask = (async () => {
+      this.tally.deaths = (this.tally.deaths || 0) + 1;
       this.deathsThisRun = (this.deathsThisRun || 0) + 1;
       // WHAT THE PURSE WAS WORTH WHEN IT HIT THE FLOOR. Recorded from the last frame
       // before the Underworld, because by now the inventory is already gone — and it
@@ -11841,8 +11838,8 @@ export class Autopilot {
             : 'under the banking threshold, so this was the float we accept losing' });
       }
 
-      // Reconstruct the death from the short memory, ONCE, on the pass that first
-      // finds us here. The last frame that was not the Underworld is where it
+      // Reconstruct the death from the short memory, ONCE, when first observed.
+      // The last frame that was not the Underworld is where it
       // actually happened, and what was standing there is the best evidence of what
       // did it.
       if (!this.reportedDeath) {
@@ -11853,7 +11850,7 @@ export class Autopilot {
         const before = (this.recent5 || []).filter(f => !/underworld/i.test(f.room || ''));
         const at = before[before.length - 1] || null;
         const trail = before.slice(-4).map(f => `${f.health}/${f.max}`).join(' -> ');
-        this.lastDeath = {
+        const death = this.lastDeath = {
           at: Date.now(),
           died_in: at?.room ?? null, room_num: at?.num ?? null,
           at_col: at?.col ?? null, at_row: at?.row ?? null,
@@ -12106,37 +12103,40 @@ export class Autopilot {
         //
         // A couple of seconds is worth it once per death. If it never comes, the record
         // says so rather than falling back silently.
+        // Travel may leave the Underworld during this wait. Capture the record now,
+        // and retain this death's summary even if another death arrives first.
+        const pm = structuredClone(this.postMortem('died'));
+        const levelAfterDeath = this.s.client?.vitals?.()?.health?.max ?? null;
         const bcast = await this.awaitDeathBroadcast().catch(() => null);
         // WAS ANYTHING DRIVING WHEN THIS HAPPENED? A character whose keeper stopped
         // stands still in whatever fight it was in; attributing that to a hunting
         // decision charges the strategy for an operator restart. Marked, not excluded —
         // it is still a real death, it just should not be read as evidence about how the
         // fleet fights.
-        const unattended = uptime.outageAround(this.s.name, Date.now());
-        const pm = { ...this.postMortem('died'), summary: this.lastDeath,
-                     killed_by_broadcast: bcast,
-                     during_keeper_outage: unattended };
+        const unattended = uptime.outageAround(this.s.name, death.at);
+        Object.assign(pm, { summary: death, killed_by_broadcast: bcast,
+                            during_keeper_outage: unattended });
         if (bcast) {
           // The authoritative answer wins, and what was nearby is kept beside it — the
           // crowd is still the right answer to "how outnumbered were we".
-          this.lastDeath.was_nearby = this.lastDeath.killed_by;
-          this.lastDeath.killed_by = bcast.killer ? [bcast.killer] : [];
-          this.lastDeath.death_broadcast = bcast.text;
-          this.lastDeath.how_died = bcast.how;
+          death.was_nearby = death.killed_by;
+          death.killed_by = bcast.killer ? [bcast.killer] : [];
+          death.death_broadcast = bcast.text;
+          death.how_died = bcast.how;
         } else {
-          this.lastDeath.killed_by_is_a_guess = true;
-          this.lastDeath.note_killer = 'no death broadcast arrived within the wait, so ' +
+          death.killed_by_is_a_guess = true;
+          death.note_killer = 'no death broadcast arrived within the wait, so ' +
             'killed_by is only what was standing nearby — right about half the time';
         }
         if (unattended) {
-          this.lastDeath.unattended = true;
-          this.lastDeath.keeper_was_down_for_seconds = Math.round(unattended.ms / 1000);
-          this.lastDeath.note_unattended = 'nothing was driving this character when it died — ' +
+          death.unattended = true;
+          death.keeper_was_down_for_seconds = Math.round(unattended.ms / 1000);
+          death.note_unattended = 'nothing was driving this character when it died — ' +
             'do not read this as evidence about the hunting strategy';
         }
         const file = this.writePostMortem(pm);
-        this.lastDeath.post_mortem = file;
-        this.lastPostMortem = pm;
+        death.post_mortem = file;
+        if (this.lastDeath === death) this.lastPostMortem = pm;
         // WHAT THE FLEET DOES ABOUT A DEATH IS NOT A ONE-SECOND DECISION AND THE KEEPER
         // CANNOT MAKE IT. Getting back out of the Underworld is `mortality` and stays
         // here, unchanged. Whether somebody rich re-arms this character, whether the room
@@ -12146,8 +12146,8 @@ export class Autopilot {
         // Queued rather than run here: this branch is inside the death handling, the
         // character is in the Underworld, and a playbook that walked it somewhere would be
         // arguing with the escape. It fires on the next ordinary pass.
-        this.pendingDeath = {
-          killed_by: this.lastDeath.killed_by?.[0] ?? null,
+        const pendingDeath = {
+          killed_by: death.killed_by?.[0] ?? null,
           // THE ONE DISTINCTION A FLEET MOST LIKELY WANTS TO ACT ON DIFFERENTLY, and it
           // is read off the ARTICLE rather than off a field, because there is no field.
           // `system.kod` broadcasts `### X was just killed by a troll.` for a creature and
@@ -12161,22 +12161,46 @@ export class Autopilot {
           was_killed_by_player: bcast?.text
             ? !/killed by (?:an?|the)\s/i.test(bcast.text) : null,
           killed_by_player_is_a_guess: !!bcast?.text,
-          room: this.lastDeath.room_num ?? null,
-          purse_lost: this.lastDeath.purse ?? null,
-          level: this.s.client?.vitals?.()?.health?.max ?? null,
+          room: death.room_num ?? null,
+          purse_lost: death.purse ?? null,
+          level: levelAfterDeath,
         };
         // ON THE FEED TOO, beside the kills, and only now — after the broadcast has had
         // its couple of seconds. Recording it any earlier would put the 51%-accurate
         // guess on the live feed while the authoritative answer arrived a moment later
         // and went only into the file.
+        if (this.lastDeath === death) this.pendingDeath = pendingDeath;
         tougher.recordDeath(this.who(), {
-          at: this.lastDeath.at, killer: this.lastDeath.killed_by?.[0] ?? null,
+          at: death.at, killer: death.killed_by?.[0] ?? null,
           observed: !!bcast?.killer,
-          room: this.lastDeath.died_in, room_num: this.lastDeath.room_num,
-          level: this.lastDeath.level, in_safe_spot: !!diedHolding,
+          room: death.died_in, room_num: death.room_num,
+          level: death.level, in_safe_spot: !!diedHolding,
         });
-        this.note('DIED', { ...this.lastDeath, ...(file ? { post_mortem: file } : {}) });
+        this.note('DIED', { ...death, ...(file ? { post_mortem: file } : {}) });
       }
+    })();
+    return this.deathReportTask;
+  }
+
+  observeDeathRoom(event) {
+    if (!event?.roomName) return; // an unresolved resource is not proof of revival
+    if (!/underworld/i.test(event.roomName)) {
+      this.reportedDeath = false;
+      return;
+    }
+    return this.observeDeath();
+  }
+
+  // ── passUnderworld: extracted from pass() ────────────────────────────────
+  async passUnderworld(ctx) {
+    const { s, c, room, v } = ctx;
+    // 1. Dead. The Underworld has no graph exits, so a character left there stays
+    //    there forever unless something walks it onto a portal.
+    // Check both the map room (nameRsc) and the client room (name, num).
+    const roomName = room?.name ?? c?.room?.name ?? '';
+    const roomNum  = room?.num  ?? c?.room?.num  ?? room?.objId;
+    if (/underworld/i.test(roomName) || roomNum === 6) {
+      await this.observeDeath();
       this.note('woke up dead', { room: room.name, attempt: (this.underworldTries || 0) + 1 });
       // BEFORE ANY OF THE GETTING-OUT. Whatever suspended the objective — the travel job,
       // the watchdog, a take-back — this is the one moment every death passes through.

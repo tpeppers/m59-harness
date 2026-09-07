@@ -2001,6 +2001,14 @@ class Session {
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
       if (ev.kind === 'stat' && ev.name === 'health') this.noteHealth(ev);
+      // A travel await can enter AND leave the Underworld before the next keeper
+      // pass. Observe the authoritative room event while it is still here. The
+      // observer records only; the current movement owner remains the only escape.
+      if (ev.kind === 'room-entered' && this.client === c) {
+        const keeper = autopilotIfAny(this.name);
+        if (keeper?.s === this)
+          keeper.observeDeathRoom(ev)?.catch(e => keeper.note('death record failed', { why: e.message }));
+      }
     };
     if (character) c.wantName = character;
     try {
