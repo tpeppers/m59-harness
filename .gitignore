@@ -556,3 +556,11 @@ _verify2.mjs
 # What the OPERATOR hand-placed in the fleet's packs, so the economy page does not report it
 # as the fleet's own work. This machine's answer about this week; the page works without it.
 /substrate/food-baseline.json
+
+# THE DUM-BOT STRATEGY, WHICH IS OURS AND NOT THIS REPOSITORY'S.
+# The circuit a particular fleet runs on a particular server -- which rooms, which merchants,
+# which items are worth keeping -- is a BET, not a mechanic, and it does not survive being
+# cloned by a stranger whose roster and prey are different. The loaders that read these files
+# are committed and treat an absent file as "shipped behaviour, unchanged"; only the opinions
+# live here. Same rule as substrate/policy.local.json.
+/substrate/dumbot/
