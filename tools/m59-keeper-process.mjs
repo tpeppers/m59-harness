@@ -3585,12 +3585,19 @@ const server = createServer(async (req, res) => {
             }
             if (!merchant) { result = { error: `no merchant matching "${ref}" in this room` }; break; }
             const merchId = merchant.id;
-            const keepRe = (args.keep || []).map(k => String(k).toLowerCase());
+            const keepRe = [...(args.keep || []), ...(autopilot?.protectedItemNames?.() ?? [])]
+              .map(k => String(k).toLowerCase());
             const minPrice = Number(args.min_price ?? 1);
             const maxStack = args.max_stack == null ? null : Number(args.max_stack);
-            const wornIds = new Set((typeof c.equipment === 'function' ? (c.equipment() || []) : []).map(o => o.id));
+            const equipped = c.equipment?.();
+            if (!equipped?.known) { result = { error: 'equipment is not known; no items offered' }; break; }
+            const wornIds = new Set((equipped.equipped ?? []).map(o => o.id));
+            const equipmentPlan = skills.merchantEquipmentPlan(c, {
+              maxWeapons: args.max_weapons, weaponPriority: args.weapon_priority ?? autopilot?.policy?.weaponPriority,
+            });
             const nameOf = (o) => c.rsc?.get?.(o.nameRsc) || '';
             const sellChunk = async (id, amount) => {
+              const beforeAmount = c.inventory.find(o => o.id === id)?.amount ?? 1;
               const before = c.evSeq;
               await session.pacer.submit('trade', () => c.offer(merchId, [amount > 1 ? { id, amount } : id]));
               const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 }).catch(() => ({ events: [] }));
@@ -3601,7 +3608,9 @@ const server = createServer(async (req, res) => {
               await new Promise(r => setTimeout(r, 1200));
               await session.pacer.submit('read', () => c.requestInventory()).catch(() => {});
               await c.waitFor({ kinds: ['inventory'], timeoutMs: 4000 }).catch(() => {});
-              return { sold: true, price };
+              const remaining = c.inventory.find(o => o.id === id);
+              const removed = beforeAmount - (remaining ? remaining.amount || 1 : 0);
+              return { sold: removed >= amount, price };
             };
             const loop = session._tickLoop; if (loop) loop._frozen = true;
             const sold = [], refused = [];
@@ -3610,15 +3619,17 @@ const server = createServer(async (req, res) => {
             try {
               for (const nm of targets) {
                 let guard = 0;
-                while (guard++ < 25) {
-                  const it = (c.inventory || []).find(o => nameOf(o) === nm && !wornIds.has(o.id));
+                while (guard++ < 200) {
+                  const it = (c.inventory || []).find(o => nameOf(o) === nm
+                    && !wornIds.has(o.id) && !equipmentPlan.keep.has(o.id));
                   if (!it) break;
                   const stack = it.amount || 1;
                   const amount = maxStack && stack > maxStack ? maxStack : stack;
                   const r = await sellChunk(it.id, amount).catch(() => ({ sold: false }));
                   if (!r.sold) { refused.push(nm + (r.price != null ? ` (${r.price} < ${minPrice})` : '')); break; }
                   sold.push({ name: nm, amount, price: r.price });
-                  if (!maxStack || stack <= maxStack) break;   // whole stack sold, or single-shot when uncapped
+                  // Inventory was refreshed and the removal verified. Continue with
+                  // another object of the same name, or the remainder of a capped stack.
                 }
               }
             } catch (e) { refused.push('loop error: ' + e.message); }
