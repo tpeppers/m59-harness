@@ -1333,11 +1333,11 @@ export class Stomach {
 let _foodPreference = null;
 export function setFoodPreference(fn) { _foodPreference = typeof fn === 'function' ? fn : null; }
 
-export function larderOf(c, { vigor = null } = {}) {
+export function larderOf(c, { vigor = null, exclude = [] } = {}) {
   if (!c) return [];
   const rows = (c.inventory || [])
     .map(o => ({ o, name: c.rsc.get(o.nameRsc) || '', food: foodValue(c.rsc.get(o.nameRsc) || '') }))
-    .filter(x => x.food)
+    .filter(x => x.food && !itemIsProtected(x.name, exclude))
     .sort((a, b) => (b.food.nutrition / b.food.filling) - (a.food.nutrition / a.food.filling));
   if (!_foodPreference) return rows;
   // A preference may only REORDER and DEFER, never invent food. It returns a rank per row --

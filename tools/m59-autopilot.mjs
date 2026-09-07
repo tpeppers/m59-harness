@@ -3272,6 +3272,29 @@ export class Autopilot {
     return { arrived: true, room: room.num, position: { col: me.col, row: me.row } };
   }
 
+  // Door routing belongs to reaching the quarry, independent of whether combat
+  // requires a safe wall. End the pass after either outcome: room contents and
+  // vitals captured before a crossing are stale, even when the room number repeats.
+  async bridgeToQuarry(quarry) {
+    const s = this.s;
+    const plan = sameRoomIslandBridgePlan(s.world?.map, s.world?.room?.num,
+      s.world?.geometry, s.client?.self, quarry);
+    if (!plan) return false;
+    const result = await this.crossSameRoomIsland(plan)
+      .catch(e => ({ arrived: false, reason: e.message }));
+    if (result.arrived) {
+      this.progress('crossed to the quarry side — refresh before engaging');
+    } else {
+      this.deferPullTarget(plan.fromRoom, quarry.id, result.reason);
+      this.note('could not reach the quarry through the connecting room', {
+        target_id: quarry.id, room: plan.fromRoom, via: plan.viaRoom,
+        why: result.reason,
+      });
+      this.noProgress('split-room crossing did not complete');
+    }
+    return true;
+  }
+
   protectedItemNames() {
     return [...new Set([
       ...(Array.isArray(this.policy.vaultItems) ? this.policy.vaultItems : []),
@@ -3302,8 +3325,7 @@ export class Autopilot {
   // The keeper's usable larder excludes collection items. Centralising the filter is
   // what keeps hunger, gifting, town-trip decisions and the actual eat call in agreement.
   larder(c = this.s.client) {
-    return skills.larderOf(c).filter(item =>
-      !skills.itemIsProtected(item.name, this.protectedItemNames()));
+    return skills.larderOf(c, { exclude: this.protectedItemNames() });
   }
 
   // THE BIGGEST THING IN THE PACK THAT CANNOT BE EATEN YET, or null. "Cannot be eaten"
@@ -15646,6 +15668,12 @@ export class Autopilot {
         });
       }
       if (found.length) {
+        // Finish reachable prey before spending a round trip through another room.
+        // Advisory target claims must not make an inaccessible monster outrank one
+        // on our own side. Only restrict when the bridge planner proves the split.
+        const local = found.filter(o => !sameRoomIslandBridgePlan(s.world?.map,
+          room?.num, s.world?.geometry, c.self, o));
+        if (local.length) found = local;
         const agreed = party.agreedTarget(this.s.name);
         const preferId = found.some(o => o.id === this.pendingPull?.target_id)
           ? this.pendingPull.target_id
@@ -15954,6 +15982,8 @@ export class Autopilot {
         this.progress('resting up to fighting vigor');
         return HANDLED;
       }
+
+      if (await this.bridgeToQuarry(found[0])) return HANDLED;
 
       // PUT YOUR BACK TO A WALL BEFORE FIGHTING ANYTHING WORTH FIGHTING.
       //

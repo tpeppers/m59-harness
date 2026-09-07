@@ -14410,7 +14410,9 @@ const TOOLS = [
           // unarmed character punches monsters instead of erroring, and one with no
           // food simply never gets its vigor back above what resting gives.
           has_weapon: skills.weaponsOf(c).length > 0,
-          has_food: skills.larderOf(c).length > 0,
+          has_food: skills.larderOf(c, { exclude: [
+            ...(st?.policy?.vaultItems ?? []), ...(st?.policy?.protectedItems ?? []),
+          ] }).length > 0,
           // HOW MUCH VIGOR THE LARDER CAN ACTUALLY DELIVER — because "has food" and "can
           // reach the floor" are different questions and only the second one matters.
           //
@@ -14427,7 +14429,9 @@ const TOOLS = [
           // `|| 1`, NOT `?? 1`: a non-stacking object's amount is 0 on the wire, not null
           // (m59-parse: `isNumberObj(raw) ? r.u32() : 0`), so a nullish default would value
           // every single item at nothing. The same idiom the pack readers already use.
-          larder_vigor: skills.larderOf(c)
+          larder_vigor: skills.larderOf(c, { exclude: [
+            ...(st?.policy?.vaultItems ?? []), ...(st?.policy?.protectedItems ?? []),
+          ] })
             .reduce((n, x) => n + (x.food?.nutrition ?? 0) * (x.o?.amount || 1), 0),
           // CARRYING A WEAPON AND WIELDING ONE ARE DIFFERENT QUESTIONS, and the fleet
           // has been answering only the first. `has_weapon` reads the pack; this reads

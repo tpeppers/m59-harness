@@ -1,5 +1,18 @@
 # The keeper: what it can see, and what it cannot
 
+## Farming across disconnected room sections
+
+Open-ground farming must run `bridgeToQuarry` before safe-wall selection. A
+`requireSafeWall: false` character can still need the exact door route through a
+connecting room. Prefer quarry reachable on the current side; when none remains,
+cross out and back through the doors whose landing reaches the selected quarry.
+Finish the pass after a crossing attempt so combat uses refreshed room objects.
+`m59-farm-bridge-test.mjs` covers this alongside the confinement and door-side tests.
+
+The fleet board's `has_food` and `larder_vigor` exclude vault/protected cargo,
+using the same `larderOf(..., {exclude})` filter as the keeper. A collection of
+inky caps is not usable fuel when the policy reserves it for the vault.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Postmortems, the watchdog, the yield check, and the counters that are not rates.
 
 ## What a death record can and cannot say
