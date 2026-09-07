@@ -1319,12 +1319,39 @@ export class Stomach {
 // Of the seven callers, three pass `s.client` — which is null for any dropped session,
 // and this fleet drops and rejoins constantly. Answering "nothing to eat" for a
 // character that is not in the world is both true and harmless; throwing is neither.
-export function larderOf(c) {
+// A FLEET MAY HAVE OPINIONS ABOUT WHICH FOOD TO SPEND FIRST.
+//
+// The default sort below is nutrition-per-filling, descending, and it is a reasonable default
+// -- it wastes the least stomach. It is also, for this fleet, exactly backwards: an Inky-cap
+// is 50/25 = 2.00 and a slice of pork is 9/20 = 0.45, so a character carrying free Feast Hall
+// pork and an unbuyable Inky-cap eats the Inky-cap first, every time. Pork is inexhaustible
+// and the mushroom is not purchasable anywhere in the world.
+//
+// That is a STRATEGY disagreement, not a bug in the sort, so the sort keeps its default and
+// this lets a checkout say something different. Absent = the shipped ordering, unchanged.
+// The preference is given the vigor so it can answer "not yet" as well as "not this one".
+let _foodPreference = null;
+export function setFoodPreference(fn) { _foodPreference = typeof fn === 'function' ? fn : null; }
+
+export function larderOf(c, { vigor = null } = {}) {
   if (!c) return [];
-  return (c.inventory || [])
+  const rows = (c.inventory || [])
     .map(o => ({ o, name: c.rsc.get(o.nameRsc) || '', food: foodValue(c.rsc.get(o.nameRsc) || '') }))
     .filter(x => x.food)
     .sort((a, b) => (b.food.nutrition / b.food.filling) - (a.food.nutrition / a.food.filling));
+  if (!_foodPreference) return rows;
+  // A preference may only REORDER and DEFER, never invent food. It returns a rank per row --
+  // lower eats sooner -- and null means "held back entirely, do not eat this now". Wrapped
+  // because a private opinion must not be able to starve a character by throwing.
+  try {
+    const ranked = rows.map(r => ({ r, rank: _foodPreference(r.name, vigor, r.food) }));
+    const eatable = ranked.filter(x => x.rank !== null && x.rank !== false);
+    const held = ranked.filter(x => x.rank === null || x.rank === false);
+    eatable.sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+    // Held food goes to the BACK rather than out: a character with nothing else must still be
+    // able to eat the thing it was saving, or a preference becomes a way to starve.
+    return [...eatable.map(x => x.r), ...held.map(x => x.r)];
+  } catch { return rows; }
 }
 
 // Exact canonical identity, after punctuation/plural normalisation. A configured
