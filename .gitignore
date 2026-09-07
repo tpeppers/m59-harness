@@ -564,3 +564,4 @@ _verify2.mjs
 # are committed and treat an absent file as "shipped behaviour, unchanged"; only the opinions
 # live here. Same rule as substrate/policy.local.json.
 /substrate/dumbot/
+/substrate/hooks/

@@ -1968,8 +1968,32 @@ export class Autopilot {
     const larder = this.larder(this.s.client);
     if (!larder.length) {
       this.vigor.starved_passes++;
+      // SAY IT ONCE, ON THE EDGE. This is the moment the operator's whole circuit turns on --
+      // food is the countdown timer to the next town stop, and this is the alarm going off --
+      // but fightFloor() runs every pass, so a level-triggered event here would write
+      // thousands of identical rows and drown the ledger it is trying to inform.
+      //
+      // Fires when the larder goes empty and is armed again only once food is aboard, so a
+      // character that finds a mushroom and eats it produces two rows rather than two
+      // thousand. Cheap enough to sit on the hot path: one boolean.
+      if (!this._larderWasEmpty) {
+        this._larderWasEmpty = true;
+        try {
+          recordEvent(this.who(), 'larder_empty', {
+            room: this.s?.world?.room?.num ?? null,
+            room_name: this.s?.world?.room?.name ?? null,
+            vigor: this.s?.client?.vitals?.()?.vigor?.value ?? null,
+            fight_floor_wanted: want,
+            fight_floor_used: Math.min(want, STARVED_FIGHT_VIGOR),
+            purse: this.s?.client?.purse?.() ?? null,
+            note: 'resting caps vigor at 80 of 200 and only food goes above it, so from here '
+                + 'this character cannot reach a fight floor above 80 however long it rests',
+          });
+        } catch { /* telemetry must never break the thing it is measuring */ }
+      }
       return Math.min(want, STARVED_FIGHT_VIGOR);
     }
+    this._larderWasEmpty = false;
     // A LARDER THAT IS NOT EMPTY CAN STILL BE TOO SMALL. See reachableFightFloor: resting
     // stops at 80 and the rest has to be eaten, so one mushroom against a floor of 140 is
     // still a floor nothing can reach. Counted the same way, because it is the same fact
