@@ -50,3 +50,14 @@ or wand reports `amount:0`; it must be deposited by object id, not as a stack
 of zero. Deposits and drops now count an unchanged singleton as one remaining
 item. Vault refusals are tracked per object, including duplicates and partially
 deposited stacks. See `m59-vault-test.mjs` and `m59-dropall-test.mjs`.
+
+Faronath exposed an intermediate stand point that fine collision cannot reach
+(r36c12), while the route's following point at r36c11 is reachable from the same
+body position. The local fine detour now searches up to four points ahead within
+one shared node budget, rejoins only after an observed arrival, and never skips
+a declared fall. `m59-fine-detour-test.mjs` checks the live geometry.
+
+A numbered stack needs an explicit offered quantity even when only one remains:
+`UserOffer` consumes `number_list` for every `NumberItem`. The keeper's sale
+regression now sells 51 gems as 25 + 25 + 1. Rizzo's initial tagged run exposed
+the missing final quantity; a refused last gem is not a completed stack sale.

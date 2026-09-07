@@ -3603,9 +3603,12 @@ const server = createServer(async (req, res) => {
             });
             const nameOf = (o) => c.rsc?.get?.(o.nameRsc) || '';
             const sellChunk = async (id, amount) => {
-              const beforeAmount = c.inventory.find(o => o.id === id)?.amount || 1;
+              const item = c.inventory.find(o => o.id === id);
+              const beforeAmount = item?.amount || 1;
               const before = c.evSeq;
-              await session.pacer.submit('trade', () => c.offer(merchId, [amount > 1 ? { id, amount } : id]));
+              // NumberItem offers need a quantity even when the final chunk is
+              // one. UserOffer consumes number_list for every NumberItem.
+              await session.pacer.submit('trade', () => c.offer(merchId, [item?.amount > 0 ? { id, amount } : id]));
               const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 }).catch(() => ({ events: [] }));
               if (!ev.events.find(e => e.kind === 'countered')) { await session.pacer.submit('trade', () => c.cancelOffer()).catch(() => {}); return { sold: false }; }
               const price = (c.trade?.theirs || []).reduce((n, i) => n + (i.amount || 1), 0);

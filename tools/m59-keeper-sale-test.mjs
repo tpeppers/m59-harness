@@ -12,11 +12,16 @@ function session({ known = true, accept = true } = {}) {
   const names = new Map([[1, 'axe'], [2, 'long sword'], [3, 'amber'], [4, 'shilling']]);
   const c = {
     inventory: [{ id: 1, nameRsc: 1, amount: 0 }, { id: 2, nameRsc: 2, amount: 0 }, { id: 3, nameRsc: 2, amount: 0 },
-      { id: 4, nameRsc: 3, amount: 40 }, { id: 5, nameRsc: 4, amount: 10 }],
+      { id: 4, nameRsc: 3, amount: 51 }, { id: 5, nameRsc: 4, amount: 10 }],
     rsc: { get: key => names.get(key) },
     equipment: () => ({ known, equipped: [{ id: 1, name: 'axe' }] }),
     room: { objects: new Map([[99, { id: 99 }]]) }, evSeq: 1, offered: [],
-    offer(_merchant, items) { this.offered.push(items[0]); this.pending = items[0]; this.trade = { theirs: [{ amount: 5 }] }; },
+    offer(_merchant, items) {
+      const spec = items[0], id = spec.id ?? spec;
+      if (this.inventory.find(o => o.id === id)?.amount > 0)
+        assert.ok(spec.amount > 0, 'every NumberItem offer includes its quantity, even one');
+      this.offered.push(spec); this.pending = spec; this.trade = { theirs: [{ amount: 5 }] };
+    },
     acceptOffer() {
       if (!accept) return;
       const id = this.pending.id ?? this.pending;
@@ -36,11 +41,11 @@ const run = (s, args = {}) => dispatch(s, { merchant: 99, max_weapons: 1, max_st
 const s = session();
 const result = await run(s);
 assert.equal(result.sold.filter(o => o.name === 'long sword').length, 2, 'both duplicate spare weapons are sold');
-assert.deepEqual(result.sold.filter(o => o.name === 'amber').map(o => o.amount), [25, 15]);
+assert.deepEqual(result.sold.filter(o => o.name === 'amber').map(o => o.amount), [25, 25, 1]);
 assert.deepEqual(s.client.inventory.map(o => o.id), [1, 5], 'worn weapon and money remain');
 const protectedPack = session();
 await run(protectedPack, { keep: ['amber'] });
-assert.equal(protectedPack.client.inventory.find(o => o.id === 4).amount, 40);
+assert.equal(protectedPack.client.inventory.find(o => o.id === 4).amount, 51);
 const unknown = session({ known: false });
 assert.match((await run(unknown)).error, /equipment is not known/);
 assert.equal(unknown.client.offered.length, 0);
@@ -53,7 +58,7 @@ do {
   assert.ok(batch.sold.length <= 1, 'each HTTP call has bounded work');
   receipts.push(...batch.sold); resume = batch.resume;
 } while (batch.more);
-assert.equal(receipts.length, 4, 'all duplicate blades and gem chunks finish across batches');
+assert.equal(receipts.length, 5, 'all duplicate blades and gem chunks finish across batches');
 const occupied = session();
 occupied.job = { done: false, label: 'walking' };
 assert.match((await run(occupied)).error, /busy: walking/);

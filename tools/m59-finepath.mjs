@@ -173,3 +173,21 @@ export function boundsAround(squares, margin = 3) {
   return { minX: (minC - 1 - margin) * CLIENT_PER_SQUARE, maxX: (maxC + margin) * CLIENT_PER_SQUARE,
            minY: (minR - 1 - margin) * CLIENT_PER_SQUARE, maxY: (maxR + margin) * CLIENT_PER_SQUARE };
 }
+
+// A coarse route may contain a stand point a real body cannot occupy, even
+// though the corridor continues beyond it. Search a bounded prefix for a fine
+// route to rejoin; every leg still uses the ordinary collision trace.
+export function fineRouteDetour(geo, from, route, { maxAhead = 4, maxNodes = 4000, margin = 4 } = {}) {
+  const square = { row: Math.floor(from.y / CLIENT_PER_SQUARE) + 1,
+                   col: Math.floor(from.x / CLIENT_PER_SQUARE) + 1 };
+  let spent = 0;
+  for (let index = 0; index < Math.min(route.length, maxAhead + 1); index++) {
+    const target = route[index];
+    if (target.fall || spent >= maxNodes) break;
+    const found = finePath(geo, from, pointOfSquare(geo, target.row, target.col),
+      { bounds: boundsAround([square, target], margin), maxNodes: maxNodes - spent });
+    spent += found.nodes ?? 0;
+    if (found.found) return { ...found, target, index, nodes: spent };
+  }
+  return { found: false, nodes: spent };
+}

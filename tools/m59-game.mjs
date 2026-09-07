@@ -51,7 +51,7 @@ import { Recorder } from './m59-recorder.mjs';
 // outside caller found it. Named explicitly so the next move of this class fails loudly.
 import { spawn } from 'node:child_process';
 import { clientToProtocol } from './m59-roo.mjs';
-import { finePath, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
+import { fineRouteDetour, pullFine, pointOfSquare } from './m59-finepath.mjs';
 import { traceMove, traceUnsafeWireMove, traceWireMove } from './m59-collision-trace.mjs';
 import { isMutableGeometry } from './m59-mutable.mjs';
 import { recordTactic } from './m59-tactics.mjs';
@@ -6935,10 +6935,10 @@ class Session {
         const goal = pointOfSquare(geo, next.row, next.col);
         if (here && goal) {
           fineDetours++;
-          const bounds = boundsAround([{ row: was.row, col: was.col },
-                                       { row: next.row, col: next.col }], FINE_DETOUR_MARGIN);
-          const found = finePath(geo, here, goal, { bounds, maxNodes: FINE_DETOUR_NODES });
+          const found = fineRouteDetour(geo, here, [next, ...queue.slice(0, 4)],
+            { margin: FINE_DETOUR_MARGIN, maxNodes: FINE_DETOUR_NODES });
           if (found?.found) {
+            const rejoin = found.target;
             const legs = pullFine(geo, here, found.points);
             let threaded = false;
             for (const leg of legs) {
@@ -6949,10 +6949,11 @@ class Session {
                 return { arrived: false, left_room: true, steps: taken,
                          note: 'a fine detour crossed the room edge' };
               const at = c.self;
-              if (at && at.row === next.row && at.col === next.col) { threaded = true; break; }
+              if (at && at.row === rejoin.row && at.col === rejoin.col) { threaded = true; break; }
             }
             const at = c.self;
-            if (threaded || (at && at.row === next.row && at.col === next.col)) {
+            if (threaded || (at && at.row === rejoin.row && at.col === rejoin.col)) {
+              queue.splice(0, found.index);
               // Through the gap. The edge we blamed was never the problem, so unlearn it —
               // leaving it would push every later replan away from a way that works.
               // Local only. If `moverStepLands` called this edge impossible it is in the
