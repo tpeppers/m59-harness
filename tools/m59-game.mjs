@@ -2406,6 +2406,24 @@ class Session {
     await this.pacer.submit('rest', () => c.stand());
   }
 
+  // ONE BARE `GO` AT THE SQUARE THE CHARACTER IS ALREADY ON, stood up first.
+  //
+  // This is what the broker's `act verb=go` means — press the key, here — and it is NOT
+  // `leaveViaAny`, which picks an exit and walks to it. The two are different verbs and
+  // conflating them would turn "use the door under my feet" into "find me any way out".
+  //
+  // It exists because the broker could not express it any more. `act verb=go` called
+  // `c.go()` directly, and on a keeper-backed session `c` is the proxy, which forwards
+  // `standBeforeGo` but has no `go` — so the one crossing path that DID remember to stand
+  // up then threw `c.go is not a function`. Every character is keeper-backed, so that path
+  // had been dead for as long as the split has existed.
+  async rawGo() {
+    const c = this.need();
+    await this.standBeforeGo();
+    await this.pacer.submit('move', () => c.go(), DOOR_SETTLE_MS);
+    return { ok: true, sent: 'go' };
+  }
+
   // AND CONFIRM WHERE THE SERVER THINKS WE ARE, ONCE, BEFORE CROSSING OUT.
   //
   // `Room.SomethingTryGo` matches the exit against `piRow`/`piCol` — the SERVER's
@@ -8375,6 +8393,9 @@ class Session {
     if (this.movementWasCancelled(movementGeneration, controlToken))
       return { crossed: false, cancelled: true };
     const since = c.evSeq;
+    // A same-room door is still `UserGo`, so it is still refused while seated. This sender
+    // postdates d263bf0 and never had the call; see the note in `leaveVia`.
+    await this.standBeforeGo();
     await this.pacer.submit('move', () =>
       this.movementWasCancelled(movementGeneration, controlToken) ? false : c.go());
     // The door announces itself - room.kod sends room_door_was_opened before it moves the
@@ -9114,9 +9135,24 @@ class Session {
         stillCurrent: () => !leftExpectedRoom(),
         // The pacer may wait before invoking its callback. Re-check at emission time too,
         // otherwise a room handoff during that wait sends `go` inside the destination room.
-        send: () => this.pacer.submit('move', () =>
-          (this.movementWasCancelled(movementGeneration, controlToken) || leftExpectedRoom())
-            ? false : c.go(), DOOR_SETTLE_MS),
+        // STAND UP FIRST. `Player.ResetFlags` (player.kod:1162) sets PFLAG_NO_MOVE the
+        // moment IsResting is true, and `UserGo` (user.kod:5657) refuses on that flag with
+        // "You are unable to go anywhere." — 589 of 700 failed hops when it was measured.
+        //
+        // This was fixed once, in d263bf0, with three calls: this one, `askGo` below, and
+        // the broker's `act verb=go`. `leaveVia` then moved from m59-broker.mjs to this
+        // file with the keeper-process split and BOTH of its calls were dropped in the
+        // move. The method survived; its callers did not, and nothing noticed because a
+        // seated character's refusal is identical to a door that does not work.
+        //
+        // Per ATTEMPT, not once per crossing: the character can sit back down between
+        // tries, and a redundant stand costs one packet against a whole lost journey.
+        send: async () => {
+          await this.standBeforeGo();
+          return this.pacer.submit('move', () =>
+            (this.movementWasCancelled(movementGeneration, controlToken) || leftExpectedRoom())
+              ? false : c.go(), DOOR_SETTLE_MS);
+        },
         waitForEntry: async since => {
           const started = Date.now();
           const observed = await c.waitFor({ since, kinds: ['room-entered'], timeoutMs: 4000 });
@@ -9127,11 +9163,19 @@ class Session {
       const stoppedAfterGo = await stopAfterAwait();
       if (stoppedAfterGo)
         return { ...stoppedAfterGo, go_attempts: go.attempts };
-      if (go.cancelled) return this.cancelledMovement({ go_attempts: go.attempts });
+      if (go.cancelled)
+        return this.cancelledMovement({ go_attempts: go.attempts,
+                                        crossing_packet_sent: go.attempts > 0 });
       if (go.unconfirmed_transition) return staleExit();
       const entered = go.entered, messages = go.messages, goAttempts = go.attempts;
+      // SAY WHETHER A PACKET ACTUALLY WENT OUT. `boundedSilentGo` counts its `send()`
+      // calls, so this is knowable and was simply never reported: the field was set only
+      // on the edge path, and every go-door refusal came back `crossing_packet_sent: null`
+      // — which reads as "we never tried" and is the opposite of the truth when the server
+      // has answered `user_cant_go`. An operator lost an hour to that reading.
       return { left: !!entered, arrived_in: entered ? entered.roomName : null,
                go_attempts: goAttempts,
+               crossing_packet_sent: goAttempts > 0,
                ...(leaned && entered
                    ? { note: 'the exit square is not walkable in this room\'s grid, so this ' +
                              'leaned into the doorway from the square beside it' } : {}),
@@ -9568,6 +9612,7 @@ class Session {
         // A genuine region fires merely by arriving. Asking to go is retained as one
         // bounded compatibility probe for map entries that are really doors in disguise.
         askGo: async () => {
+          await this.standBeforeGo();          // same PFLAG_NO_MOVE gate as `send` above
           await this.pacer.submit('move', () =>
             (this.movementWasCancelled(movementGeneration, controlToken) || leftExpectedRoom())
               ? false : c.go(), DOOR_SETTLE_MS);

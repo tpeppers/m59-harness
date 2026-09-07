@@ -2071,6 +2071,13 @@ const server = createServer(async (req, res) => {
             json(r ?? { ok: true });
             return;
           }
+          case 'raw_go': {
+            // The bare GO, at the square the character is standing on. Distinct from the
+            // 'go' action above, which resolves an exit and calls leaveViaAny.
+            const r = await session.rawGo?.(args);
+            json(r ?? { ok: true });
+            return;
+          }
           case 'pass': {
             const r = await autopilot?.pass?.();
             json({ passed: true, ...(r ?? {}) });

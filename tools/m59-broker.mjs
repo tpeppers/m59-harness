@@ -2694,6 +2694,7 @@ class KeeperProxy {
   // Actions: the keeper executes them, for the same reason travel does.
   async lootFloor(opts = {}) { return keeperAction(this.name, this._index, 'loot', opts); }
   async standBeforeGo(opts = {}) { return keeperAction(this.name, this._index, 'stand', opts); }
+  async rawGo(opts = {}) { return keeperAction(this.name, this._index, 'raw_go', opts); }
 
   // Autopilot-like methods so the fleet tool and dashboard can read
   // GOAP state from the keeper process without an in-process Autopilot.
@@ -10997,8 +10998,10 @@ const TOOLS = [
       if (a.amount != null && a.verb !== 'drop')
         throw new Error('amount is only valid for drop');
       if (a.verb === 'go') {
-        await s.standBeforeGo();          // PFLAG_NO_MOVE, same as every other `go`
-        await s.pacer.submit('move', () => c.go(), DOOR_SETTLE_MS);
+        // `s.rawGo()` stands up AND sends, on whichever side owns the client. Calling
+        // `c.go()` from here threw on every keeper-backed character — which is all of
+        // them — because the proxy has no `go`. See Session.rawGo in m59-game.mjs.
+        await s.rawGo();
       } else {
         const t = resolveTarget(s, a.target);
         // A STACK IS DROPPED BY {id, amount}, NEVER BY A BARE ID. This sent the bare id
