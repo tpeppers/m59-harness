@@ -6194,41 +6194,6 @@ class Session {
       if (fine.arrived)
         return { arrived: true, steps: fine.steps, position: fine.position,
                  note: 'coarse grid found no route; fine grid walked it' };
-      // RAW WALK FALLBACK: both grids failed. In keeper mode,
-      // try a direct raw walk toward the target. Send move
-      // commands in the target direction, ignoring geometry.
-      // The server accepts or rejects each move. This bypasses
-      // stale local geometry that blocks both grids.
-      if (process.env.M59_KEEPER === '1') {
-        const c = this.client;
-        const self = c.self;
-        if (self) {
-          const dx = col - self.col;
-          const dy = row - self.row;
-          const dist = Math.hypot(dx, dy);
-          if (dist > 1) {
-            const deg = Math.atan2(dy, dx) * 180 / Math.PI;
-            console.error(`[walkTo] ${this.name ?? '?'} raw walk fallback: both grids failed, walking raw toward (${col},${row}) dist=${dist.toFixed(1)} [col,row; r${row}c${col}]`);
-            const rawSteps = Math.min(Math.ceil(dist), 8);
-            const speed = c.moveSpeed?.() ?? 1;
-            for (let i = 0; i < rawSteps; i++) {
-              try {
-                const step = 24; // 1/4 cell in fine units
-                const rad = deg * Math.PI / 180;
-                const nx = Math.round((self.x ?? self.col * 48) + Math.cos(rad) * step);
-                const ny = Math.round((self.y ?? self.row * 48) + Math.sin(rad) * step);
-                c.moveTo?.(nx, ny, speed, c.room?.id ?? 0);
-                await new Promise(r => setTimeout(r, 250));
-                const newSelf = c.self;
-                if (newSelf && (newSelf.col !== self.col || newSelf.row !== self.row)) {
-                  console.error(`[walkTo] ${this.name ?? '?'} raw walk moved to (${newSelf.col},${newSelf.row}) [col,row; r${newSelf.row}c${newSelf.col}]`);
-                  return { arrived: false, reason: 'raw walk made progress', position: { col: newSelf.col, row: newSelf.row }, raw_walk: true };
-                }
-              } catch { break; }
-            }
-          }
-        }
-      }
       return { arrived: false, reason: plan.reason, position: { col: from.col, row: from.row },
                ...(plan.stuck ? { nearest_floor: plan.nearest_floor } : {}),
                ...(escaped ? { retreated: escaped } : {}),
@@ -8399,7 +8364,7 @@ class Session {
       const me = this.client?.self ?? this.c?.self ?? null;
       if (!room || !geo || !me) return null;
       return sameRoomDoorPlan(this.world.map, Number(room.num), geo,
-                              { row: me.row, col: me.col }, targets);
+                              { row: me.row, col: me.col, x: me.x, y: me.y }, targets);
     } catch { return null; }
   }
 

@@ -165,6 +165,13 @@ console.log('\nthe plan refuses rather than inventing');
      sameRoomDoorPlan(map, 38, geo, { row: 1, col: 19 }, [{ row: 0, col: 0 }]) === null);
 }
 
+{
+  const plan = sameRoomDoorPlan(map, 38, sharedRoomGeometry(map.rooms[38]),
+    { row: 4, col: 34, x: 2224, y: 275 }, [{ row: 16, col: 19 }]);
+  ok('live body in the north-east room uses its door instead of the coarse stair shortcut',
+    plan?.doors?.[0]?.row === 8 && plan?.doors?.[0]?.col === 32);
+}
+
 console.log('\ntransitOk stops removing the room from the route graph');
 {
   const w = new World(null, map);

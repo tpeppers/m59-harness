@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as skills from './m59-skills.mjs';
+import { Session } from './m59-game.mjs';
 const source = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
 const start = source.indexOf("case 'sell_all': {");
 const end = source.indexOf('// APPLY IS NOT USE', start);
@@ -27,7 +28,8 @@ function session({ known = true, accept = true } = {}) {
     cancelOffer() {}, requestInventory() {},
     waitFor: async () => ({ events: [{ kind: 'countered' }] }),
   };
-  return { client: c, pacer: { submit: async (_kind, fn) => fn() } };
+  return { client: c, movementGeneration: 0, startJob: Session.prototype.startJob,
+    pacer: { submit: async (_kind, fn) => fn() } };
 }
 const run = (s, args = {}) => dispatch(s, { merchant: 99, max_weapons: 1, max_stack: 25, ...args },
   skills, { protectedItemNames: () => [], policy: {} }, fn => fn());
@@ -44,4 +46,16 @@ assert.match((await run(unknown)).error, /equipment is not known/);
 assert.equal(unknown.client.offered.length, 0);
 const refused = session({ accept: false });
 assert.equal((await run(refused)).sold.length, 0, 'an unchanged inventory is not a confirmed sale');
+const batches = session();
+let resume = {}, receipts = [], batch;
+do {
+  batch = await run(batches, { max_offers: 1, ...resume });
+  assert.ok(batch.sold.length <= 1, 'each HTTP call has bounded work');
+  receipts.push(...batch.sold); resume = batch.resume;
+} while (batch.more);
+assert.equal(receipts.length, 4, 'all duplicate blades and gem chunks finish across batches');
+const occupied = session();
+occupied.job = { done: false, label: 'walking' };
+assert.match((await run(occupied)).error, /busy: walking/);
+assert.equal(occupied.client.offered.length, 0, 'commerce cannot overlap another body job');
 console.log('keeper sales handle equipment, duplicate loot, capped stacks, and inventory receipts');

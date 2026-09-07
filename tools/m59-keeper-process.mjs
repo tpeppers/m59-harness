@@ -3578,6 +3578,7 @@ const server = createServer(async (req, res) => {
           // stack cap (the Barloque jeweler refuses a stack over 25, bqmerch.kod:113) is sold in
           // chunks of max_stack.
           case 'sell_all': {
+            if (session.job && !session.job.done) { result = { error: `busy: ${session.job.label}` }; break; }
             const c = session.client;
             if (!c) { result = { error: 'no client' }; break; }
             const ref = args.merchant;
@@ -3592,6 +3593,8 @@ const server = createServer(async (req, res) => {
               .map(k => String(k).toLowerCase());
             const minPrice = Number(args.min_price ?? 1);
             const maxStack = args.max_stack == null ? null : Number(args.max_stack);
+            const maxOffers = args.max_offers == null ? Infinity : Math.max(1, Math.min(200, Number(args.max_offers) || 1));
+            const skippedNames = new Set((args.skip_names ?? []).map(String));
             const equipped = c.equipment?.();
             if (!equipped?.known) { result = { error: 'equipment is not known; no items offered' }; break; }
             const wornIds = new Set((equipped.equipped ?? []).map(o => o.id));
@@ -3615,29 +3618,38 @@ const server = createServer(async (req, res) => {
               const removed = beforeAmount - (remaining ? remaining.amount || 1 : 0);
               return { sold: removed >= amount, price };
             };
-            const loop = session._tickLoop; if (loop) loop._frozen = true;
+            const job = session.startJob('commerce:sell', `sell to ${ref}`, async generation => {
+            const loop = session._tickLoop, wasFrozen = loop?._frozen;
+            if (loop) loop._frozen = true;
             const sold = [], refused = [];
+            let offers = 0, more = false;
             const targets = [...new Set((c.inventory || []).map(nameOf).filter(Boolean))]
-              .filter(nm => !/shilling|\bcoins?\b/i.test(nm) && !keepRe.some(k => nm.toLowerCase().includes(k)));
+              .filter(nm => !skippedNames.has(nm) && !/shilling|\bcoins?\b/i.test(nm) && !keepRe.some(k => nm.toLowerCase().includes(k)));
             try {
+              saleLoop:
               for (const nm of targets) {
                 let guard = 0;
                 while (guard++ < 200) {
                   const it = (c.inventory || []).find(o => nameOf(o) === nm
                     && !wornIds.has(o.id) && !equipmentPlan.keep.has(o.id));
                   if (!it) break;
+                  if (session.movementGeneration !== generation) throw new Error('sale cancelled');
+                  if (offers >= maxOffers) { more = true; break saleLoop; }
                   const stack = it.amount || 1;
                   const amount = maxStack && stack > maxStack ? maxStack : stack;
-                  const r = await sellChunk(it.id, amount).catch(() => ({ sold: false }));
-                  if (!r.sold) { refused.push(nm + (r.price != null ? ` (${r.price} < ${minPrice})` : '')); break; }
+                  offers++;
+                  const r = await sellChunk(it.id, amount);
+                  if (!r.sold) { skippedNames.add(nm); refused.push(nm + (r.price != null ? ` (${r.price} < ${minPrice})` : '')); break; }
                   sold.push({ name: nm, amount, price: r.price });
                   // Inventory was refreshed and the removal verified. Continue with
                   // another object of the same name, or the remainder of a capped stack.
                 }
               }
-            } catch (e) { refused.push('loop error: ' + e.message); }
-            if (loop) loop._frozen = false;
-            result = { sold, refused, total_received: sold.reduce((n, s) => n + (s.price || 0), 0), count: sold.length };
+            } finally { if (loop) loop._frozen = wasFrozen; }
+            return { sold, refused, total_received: sold.reduce((n, s) => n + (s.price || 0), 0), count: sold.length,
+              more, resume: { skip_names: [...skippedNames] } };
+            });
+            result = await job.promise;
             break;
           }
           // APPLY IS NOT USE, AND THE DIFFERENCE IS EATING.

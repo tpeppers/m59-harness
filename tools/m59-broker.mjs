@@ -9193,6 +9193,8 @@ const TOOLS = [
       max_stack: { type: ['number', 'null'],
         description: 'largest count a single offer may contain; a bigger stack is sold in chunks. ' +
           'The Barloque jeweler refuses a stack over 25 (bqmerch.kod). null means no cap.' },
+      max_offers: { type: 'number', description: 'Limit this call to this many offers; more and resume describe unfinished work.' },
+      skip_names: { type: 'array', items: { type: 'string' }, description: 'Names already refused by this merchant in the current sale, from resume.' },
     }, required: ['agent', 'merchant'] },
     run: async (a) => {
       const s = session(a.agent);
@@ -9201,7 +9203,8 @@ const TOOLS = [
       if (s instanceof KeeperProxy)
         return keeperAction(a.agent, s._index, 'sell_all', { merchant: a.merchant, keep: a.keep || [],
           min_price: num(a.min_price, 1), max_stack: a.max_stack == null ? null : Number(a.max_stack),
-          max_weapons: a.max_weapons == null ? null : Number(a.max_weapons) });
+          max_weapons: a.max_weapons == null ? null : Number(a.max_weapons),
+          max_offers: a.max_offers, skip_names: a.skip_names });
       const t = resolveTarget(s, a.merchant);
       // BY CHARACTER NAME. `t1` is this checkout's word for a roster slot; the loadout
       // belongs to the character and follows it across rosters.

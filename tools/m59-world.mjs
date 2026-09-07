@@ -22,7 +22,8 @@
 // positional RoomGeometry calls use `(row,col)`. Object and exit `{x,y}` fields
 // are 64-units-per-square kod wire points unless explicitly labelled client/BSP.
 
-import { sharedRoomGeometry, roomHasDeclaredFallJump } from './m59-roo.mjs';
+import { sharedRoomGeometry, roomHasDeclaredFallJump, protocolToClient } from './m59-roo.mjs';
+import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { exitsOf, findPath, inferredExits, codeExits, edgeExitsOf, edgeCandidatesOf, LEAVE,
          AVOID_IN_TRANSIT, selectedEdgeAt, routingRevision } from './m59-map.mjs';
 import { inRegion } from './m59-codeexits.mjs';
@@ -329,7 +330,17 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
   const arrived = origin => goals.find(g => canWalk(origin, g.at)) ?? null;
 
   const here = arrived(start);
-  if (here) return { doors: [], target: here.want, walkable: true };
+  if (here) {
+    // A square path can step down from a stand point the actual body cannot reach.
+    // In rooms with internal doors, prove the direct walk from the live fine position
+    // before deciding that no door is needed (Castle's north-east room exposed this).
+    const liveFine = Number.isFinite(from.x) && Number.isFinite(from.y) && geo.collisionReady;
+    const proved = !liveFine || finePath(geo,
+      { x: protocolToClient(from.x), y: protocolToClient(from.y) },
+      pointOfSquare(geo, here.at.row, here.at.col),
+      { bounds: boundsAround([from, here.at], 4), maxNodes: 4000 }).found;
+    if (proved) return { doors: [], target: here.want, walkable: true };
+  }
 
   // Breadth first over LANDINGS, so the plan that uses fewest doors wins. The state is the
   // square a door put us on; a door is never taken twice in one plan, which bounds this at

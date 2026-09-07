@@ -2,6 +2,11 @@
  "note": "Connections the MAP DECLARES that a player cannot actually use. Operator knowledge about the world, not a measurement of this machine — which is why it is committed. `leave` and `kind` narrow a block to ONE declared exit: without them a block removes every link between the two rooms, which killed the Cor Noth DOOR while trying to remove its dead west edge and sent the router eight hops round the Merchant Ways. Directed, and the reverse of each is a legitimate route. Delete an entry to let the router try it again.",
  "blocked": [
   {
+   "from": 599,
+   "to": 598,
+   "why": "Operator correction, 2026-09-07: Ukgoth has an entrance from the east, not an east exit. 598 -> 599 is one-way. A baked boundary approach cannot make the reverse a usable route. Leave Ukgoth via its western route instead."
+  },
+  {
    "from": 589,
    "to": 599,
    "why": "Under the shadow of the Sentinel -> Ukgoth is westward-only in the real game; the operator confirms a player cannot go this way. The route to Ukgoth from An ancient place [579] is 578 -> 576 -> 587 -> 597 -> 598 -> 599, which is a pain to walk and is how it is done. Our geometry catches the 599->598 half (zero routable crossing squares) and misses this half, which offers four."

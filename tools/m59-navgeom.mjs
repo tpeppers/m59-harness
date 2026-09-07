@@ -143,7 +143,7 @@ const NAV = {
     // route was clear. The step mask knows the edge is walled (it was baked from the
     // physics traces), so the A* routes around it, exactly as the old fine-lattice
     // search did — without re-paying the per-edge physics trace.
-    const toKod = v => Math.max(1, Math.round((v - KOD_FINENESS / 2) / KOD_FINENESS)); // protocol -> 1-based kod cell
+    const toKod = v => Math.floor(v / KOD_FINENESS); // protocol -> containing 1-based square
     const fromC = toKod(fromX), fromR = toKod(fromY), toC = toKod(toX), toR = toKod(toY);
 
     // EDGE PREDICATE: radius-free trace between stand points (or square centers if the
@@ -185,8 +185,7 @@ const NAV = {
       return t(0,0) || t(px*128,py*128) || t(-px*128,-py*128) || t(px*256,py*256) || t(-px*256,-py*256);
     };
     const edgeWalkable = (r1, c1, r2, c2) => {
-      const ek = r1 < r2 || (r1 === r2 && c1 < c2)
-        ? `${r1},${c1},${r2},${c2}` : `${r2},${c2},${r1},${c1}`;
+      const ek = `${r1},${c1}>${r2},${c2}`; // ledges and steps are directed
       const hit = edgeOk.get(ek);
       if (hit !== undefined) return hit;
       // THE SAME PREDICATE THE MOVER USES. `moverStepLands` is the function the
@@ -328,8 +327,8 @@ const NAV = {
 
     // Convert square path to protocol waypoints (center of each square).
     const waypoints = raw.map(({ r, c }) => ({
-      x: (c - 0.5) * KOD_FINENESS + KOD_FINENESS / 2,  // kod col -> protocol x (center)
-      y: (r - 0.5) * KOD_FINENESS + KOD_FINENESS / 2,  // kod row -> protocol y (center)
+      x: c * KOD_FINENESS + KOD_FINENESS / 2,
+      y: r * KOD_FINENESS + KOD_FINENESS / 2,
     }));
     // Append the exact destination as the final waypoint.
     waypoints.push({ x: toX, y: toY });
