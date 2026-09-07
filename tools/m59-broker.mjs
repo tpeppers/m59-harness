@@ -5737,10 +5737,14 @@ const TOOLS = [
           'a caller that does not say leaves the fleet unable to explain its own biggest ' +
           'failure mode. "the cancel_movement tool" is what an anonymous one looks like.' },
     }, required: ['agent'] },
-    run: (a) => session(a.agent).cancelMovement(
-      a.control_token,
-      (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
-                                                  : 'the cancel_movement tool, caller unnamed'),
+    run: (a) => {
+      const s = session(a.agent);
+      const why = (typeof a.why === 'string' && a.why.trim()) ? a.why.trim().slice(0, 80)
+        : 'the cancel_movement tool, caller unnamed';
+      const keeper = s instanceof KeeperProxy ? null : autopilotIfAny(a.agent);
+      return keeper?.cancelJourney ? keeper.cancelJourney(why, a.control_token)
+        : s.cancelMovement(a.control_token, why);
+    },
   },
   {
     name: 'cancel_fight',

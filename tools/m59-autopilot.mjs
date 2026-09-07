@@ -15222,7 +15222,7 @@ export class Autopilot {
       // something else; reviving that would be the two-drivers bug wearing a third hat.
       if (ours && this.inert === ours) {
         const here = Number(this.s.world?.room?.num);
-        if (outcome?.arrived !== true && here !== Number(j.to)
+        if (!ours.cancelled && outcome?.arrived !== true && here !== Number(j.to)
             && !outcome?.refused && here !== 1 && !this.recoverUntilWhole
             && (this.tally?.deaths ?? 0) === j.deaths_at) {
           this.suspendedJourney = { ...j, attempts: (j.attempts ?? 0) + 1,
@@ -15233,6 +15233,18 @@ export class Autopilot {
       }
     }
     return HANDLED;
+  }
+
+  cancelJourney(why = 'external movement cancellation', controlToken = null) {
+    // A watchdog pauses a route through Session.cancelMovement. An external
+    // cancellation withdraws its destination too; otherwise the next healthy
+    // pass resurrects the order that the director has already abandoned.
+    const to = this.suspendedJourney?.to ?? this.inert?.to ?? null;
+    this.suspendedJourney = null;
+    if (this.inert?.travelling) this.inert.cancelled = true;
+    const result = this.s.cancelMovement(controlToken, why);
+    this.note('journey cancelled by its caller', { to, why });
+    return { ...result, retired_destination: to };
   }
 
   async passFarm(ctx) {

@@ -937,5 +937,22 @@ console.log('FLAT ONLY MEANS "AS WELL AS I WILL GET" IF SOMETHING IS HEALING YOU
   ok('a death during a resumed route is not saved as another attempt', !k.suspendedJourney);
 }
 
+{
+  const k = keeper();
+  k.s.cancelMovement = (_token, why) => ({ cancelled: true, why });
+  k.suspendedJourney = { to: 114, at: Date.now(), attempts: 1, deaths_at: 0 };
+  k.travel = async () => {
+    k.cancelJourney('director abandoned the stalled route');
+    return { arrived: false, cancelled: true };
+  };
+  await k.resumeSuspendedJourney(ctxFor(k));
+  ok('an externally cancelled resumed journey cannot resurrect its destination', !k.suspendedJourney);
+  k.suspendedJourney = { to: 114 };
+  k.inert = null;
+  const cancelled = k.cancelJourney('director changed its objective');
+  ok('external cancellation also retires a paused destination',
+    !k.suspendedJourney && cancelled.retired_destination === 114);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

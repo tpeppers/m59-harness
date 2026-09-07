@@ -1760,7 +1760,9 @@ const server = createServer(async (req, res) => {
             const askedWhy = typeof args.why === 'string' && args.why.trim()
               ? args.why.trim().slice(0, 80)
               : 'the keeper /action endpoint, caller unnamed';
-            const r = session.cancelMovement?.(args.control_token, askedWhy);
+            const r = autopilot?.cancelJourney
+              ? autopilot.cancelJourney(askedWhy, args.control_token)
+              : session.cancelMovement?.(args.control_token, askedWhy);
             json({ cancelled: true, ...(r ?? {}) });
             return;
           }
@@ -3277,7 +3279,8 @@ const server = createServer(async (req, res) => {
       const why = typeof asked.why === 'string' && asked.why.trim()
         ? asked.why.trim().slice(0, 80)
         : 'POST /cancel with no caller named';
-      session.cancelMovement(asked.control_token ?? null, why);
+      if (autopilot?.cancelJourney) autopilot.cancelJourney(why, asked.control_token ?? null);
+      else session.cancelMovement(asked.control_token ?? null, why);
       json({ ok: true, cancelled: true, why });
       return;
     }

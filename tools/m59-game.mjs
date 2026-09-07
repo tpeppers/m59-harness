@@ -1854,7 +1854,7 @@ class Session {
                                                           : (keeper.tally?.deaths ?? 0),
               };
             keeper?.journeyEndedInADeath?.('the travel job ended in a death');
-          } else if (!arrived && dest != null && here !== Number(dest)) {
+          } else if (!ours.cancelled && !arrived && dest != null && here !== Number(dest)) {
             keeper.suspendedJourney = {
               to: Number(dest), why: `travelling to ${where}`, at: Date.now(),
               // Keep a stable executor diagnosis visible to status/polling callers. This
