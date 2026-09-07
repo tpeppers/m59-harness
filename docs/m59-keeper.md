@@ -22,6 +22,11 @@ yield actions must reach the child process. The broker's dormant policy shell ca
 hold the real keeper's steering. `m59-keeper-authority-test.mjs` exercises that
 dispatch and the resulting busy gate; RTS commander leases retain their shorter cap.
 
+Rearming runs the existing rate-limited broken-gear sweep before replacing a weapon.
+A shattered blade otherwise keeps occupying the replacement's bulk while the unarmed
+stage prevents farming's later sweep from running. The sweep respects `dropJunk` and
+the director's protected/vault item names.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). Postmortems, the watchdog, the yield check, and the counters that are not rates.
 
 ## What a death record can and cannot say

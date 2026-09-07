@@ -13054,6 +13054,10 @@ export class Autopilot {
     // Ahead of the danger and rest branches on purpose: being unarmed is WHY the fight
     // is going badly, and the shortest way out is to be holding something.
     if (!skills.isArmed(this.s.client)) {
+      // A shattered weapon still occupies the room needed for its replacement.
+      // The ordinary farm sweep is below this stage and cannot run while it is
+      // blocked here. Keep the same drop policy and sweep rate when rearming.
+      await this.sweepBroken().catch(() => null);
       const ok = await this.armSelf().catch(() => false);
       if (ok && skills.isArmed(this.s.client)) { this.progress('armed itself'); return HANDLED; }
       // makeWeapon refreshes the spell list before reporting failure when mana is
@@ -19478,7 +19482,8 @@ export class Autopilot {
     // `junkAndBroken` reports WHY, not a flag — there is no `d.broken`, and filtering on
     // one would have matched nothing and swept nothing, silently, for ever. Junk is left to
     // makeRoom: this sweep is only about gear the server will refuse to wield.
-    const dead = skills.junkAndBroken(c).filter(d => /broken/.test(d.why || ''));
+    const dead = skills.junkAndBroken(c).filter(d => /broken/.test(d.why || '')
+      && !skills.itemIsProtected(d.name, this.protectedItemNames()));
     if (!dead.length) return null;
     const dropped = [];
     for (const d of dead.slice(0, 3)) {
