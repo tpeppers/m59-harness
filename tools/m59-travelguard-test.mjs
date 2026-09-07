@@ -44,7 +44,15 @@ const ok = (what, cond) => { if (cond) pass++; else { fail++; console.log(`  FAI
 // Overridable so the negative control can point at a copy with the OLD foreground path
 // and prove this suite goes red on it. A structural assertion that has never been seen
 // to fail is a structural assertion nobody has checked.
-const src = readFileSync(process.env.M59_BROKER_SRC || 'tools/m59-broker.mjs', 'utf8');
+// TWO FILES SINCE 231ec65. `Session` — and with it `startJob` and `travelJob` — moved into
+// m59-game.mjs when upstream's Session was ported; the `travel` TOOL stayed in the broker.
+// This suite went silently red at that commit, reading the broker for methods no longer in
+// it, and nothing noticed because it is not in `npm test`. Read both and search the
+// concatenation: every pattern below occurs in exactly one of the two files.
+const src = [
+  readFileSync(process.env.M59_GAME_SRC || 'tools/m59-game.mjs', 'utf8'),
+  readFileSync(process.env.M59_BROKER_SRC || 'tools/m59-broker.mjs', 'utf8'),
+].join('\n');
 
 // ---------------------------------------------------------------------------
 // PART 1 — the mechanism. `startJob` lifted out of the broker and driven directly,
@@ -253,8 +261,13 @@ console.log('the hop loop is entered only from inside the one wrapper');
   // BY IDENTITY, not by "is it travelling". A take-back can end this journey and a second
   // one can start before the release runs, and the boolean version would then revive
   // somebody else's hold — which is the contention this whole file is about.
+  // ON ONE LINE UNTIL 231ec65, and the port put a 140-line comment between the guard and
+  // the call — so a regex that wanted them adjacent went red about formatting while the
+  // guarantee was intact. Assert the shape instead: the identity guard exists, and EVERY
+  // release in the wrapper is reached through it.
+  const guardAt = wrapper.indexOf('if (ours && keeper?.inert === ours)');
   ok('the wrapper releases only the very hold it took',
-     /if \(ours && keeper\?\.inert === ours\) keeper\.revive/.test(wrapper));
+     guardAt > 0 && [...wrapper.matchAll(/keeper\.revive\(/g)].every(m => m.index > guardAt));
   // The travelling guard can END the journey from under this wrapper — that is what a
   // take-back is — and the re-assert timer must not then put the character straight back
   // into the state the guard just left.

@@ -67,6 +67,13 @@ await test('Autopilot.travel returns its stop snapshot after clearing live count
   const keeper = {
     policy: {},
     doing: 'travelling',
+    // SINCE 3dfd6f0 EVERY INTERNAL JOURNEY TAKES A TRAVEL HOLD. `Autopilot.travel` calls
+    // `goTravelling` before the first step and hands the hold back in the finally, so a
+    // keeper stub without them throws before this suite reaches its assertions. `inert`
+    // stays undefined here, so the hold is never taken and the finally is a no-op — this
+    // suite is about the shelter counters, not about who owns the body.
+    goTravelling: () => {},
+    revive: () => {},
     answerWedge: async () => null,
     restBeforeSettingOut: async () => ({ rested: false }),
     travelHoldMode: () => 'on',
