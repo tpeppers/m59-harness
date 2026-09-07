@@ -329,13 +329,32 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
   if (!goals.length) return null;
   const arrived = origin => goals.find(g => canWalk(origin, g.at)) ?? null;
 
+  const liveFine = Number.isFinite(from.x) && Number.isFinite(from.y) && geo.collisionReady;
+  // A portal only helps if it reaches ground the body cannot already walk to.
+  // A bounded fine search to a distant exit can fail at a doorway pocket or its
+  // node budget. That must not send a body back through an internal door whose
+  // landing it already occupies (Blackstone's r10c15 loop).
+  const walkingLandings = new Set();
+  if (liveFine) for (const door of doors) {
+    const landing = onFloor({ row: door.arriveRow, col: door.arriveCol });
+    if (!landing) continue;
+    const key = `${landing.row},${landing.col}`;
+    if (walkingLandings.has(key)) continue;
+    if ((start.row === landing.row && start.col === landing.col) ||
+        (canWalk(start, landing) && finePath(geo,
+          { x: protocolToClient(from.x), y: protocolToClient(from.y) },
+          pointOfSquare(geo, landing.row, landing.col),
+          { bounds: boundsAround([from, landing], 4), maxNodes: 4000 }).found))
+      walkingLandings.add(key);
+  }
+
   const here = arrived(start);
   if (here) {
     // A square path can step down from a stand point the actual body cannot reach.
     // In rooms with internal doors, prove the direct walk from the live fine position
     // before deciding that no door is needed (Castle's north-east room exposed this).
-    const liveFine = Number.isFinite(from.x) && Number.isFinite(from.y) && geo.collisionReady;
-    const proved = !liveFine || finePath(geo,
+    const allLandingsWalkable = doors.every(d => walkingLandings.has(`${d.arriveRow},${d.arriveCol}`));
+    const proved = !liveFine || allLandingsWalkable || finePath(geo,
       { x: protocolToClient(from.x), y: protocolToClient(from.y) },
       pointOfSquare(geo, here.at.row, here.at.col),
       { bounds: boundsAround([from, here.at], 4), maxNodes: 4000 }).found;
@@ -357,6 +376,7 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
         const landing = onFloor({ row: door.arriveRow, col: door.arriveCol });
         if (!landing) continue;
         const landKey = `${landing.row},${landing.col}`;
+        if (!node.used.length && walkingLandings.has(landKey)) continue;
         if (seen.has(landKey)) continue;
         seen.add(landKey);
         const used = [...node.used, door];

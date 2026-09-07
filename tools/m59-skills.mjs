@@ -1082,7 +1082,7 @@ export async function dropAllExcept(s, { keep = [], max = 60 } = {}) {
     return { dropped: [], kept: keeping, nothing_to_drop: true,
              why: 'everything carried is worn, money, or on the keep list' };
 
-  const before = new Map(carried.map(x => [x.o.id, x.o.amount ?? 1]));
+  const before = new Map(carried.map(x => [x.o.id, x.o.amount || 1]));
   const offered = going.slice(0, max);
   for (const x of offered)
     await s.pacer.submit('drop', () => c.drop([dropSpec(x.o)])).catch(() => {});
@@ -1093,7 +1093,7 @@ export async function dropAllExcept(s, { keep = [], max = 60 } = {}) {
   const refusedItems = [];
   for (const x of offered) {
     const still = (c.inventory || []).find(o => o.id === x.o.id);
-    const left = still ? (still.amount ?? 1) : 0;
+    const left = still ? (still.amount || 1) : 0;
     const gone = Math.max(0, (before.get(x.o.id) || 0) - left);
     if (gone) dropped.push({ name: x.name, amount: gone });
     else refusedItems.push(x.name);
@@ -3153,7 +3153,9 @@ export async function depositInVault(s, { vaultman, items = [] } = {}) {
 
   const quantities = new Map(before.map(o => [o.id, o.amount || 1]));
   const names = new Map(before.map(o => [o.id, c.rsc.get(o.nameRsc) || 'unknown item']));
-  const specs = before.map(o => o.amount != null ? { id: o.id, amount: o.amount } : o.id);
+  // Wire amount:0 denotes a singleton. Sending it as a zero-sized stack is not
+  // a request to deposit that object.
+  const specs = before.map(o => o.amount > 0 ? { id: o.id, amount: o.amount } : o.id);
   const since = c.evSeq;
   await s.pacer.submit('trade', () => c.depositItems(vaultman, specs));
   const response = await c.waitFor({ since, kinds: ['message'], timeoutMs: 2500 })
@@ -3162,17 +3164,18 @@ export async function depositInVault(s, { vaultman, items = [] } = {}) {
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
 
   const deposited = [];
+  const refused = [];
   for (const o of before) {
-    const left = (c.inventory || []).find(now => now.id === o.id)?.amount ??
-      ((c.inventory || []).some(now => now.id === o.id) ? 1 : 0);
+    const remaining = (c.inventory || []).find(now => now.id === o.id);
+    const left = remaining ? remaining.amount || 1 : 0;
     const amount = Math.max(0, (quantities.get(o.id) || 0) - left);
     if (amount) deposited.push({ name: names.get(o.id), amount });
+    if (left) refused.push(names.get(o.id));
   }
   return {
     deposited,
     protected: wanted,
-    refused: before.filter(o => !deposited.some(d => d.name === names.get(o.id)))
-      .map(o => names.get(o.id)),
+    refused,
     said: (response.events || []).filter(e => e.text).map(e => e.text).slice(0, 4),
     verified: deposited.length > 0,
   };

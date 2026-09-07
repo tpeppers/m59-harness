@@ -29,7 +29,7 @@ const names = new Map([[1, 'Inky-cap mushroom'], [2, 'dark angel feather'], [3, 
 const client = {
   inventory: [
     { id: 71, nameRsc: 1, amount: 5 },
-    { id: 72, nameRsc: 2 },
+    { id: 72, nameRsc: 2, amount: 0 },
     { id: 73, nameRsc: 3, amount: 2 },
   ],
   rsc: { get: id => names.get(id) },
@@ -56,4 +56,17 @@ assert.deepEqual(result.deposited, [
 ]);
 assert.equal(client.inventory[0].id, 73);
 
-console.log('vault: 17 assertions passed');
+client.inventory = [{ id: 71, nameRsc: 2, amount: 0 }, { id: 72, nameRsc: 2, amount: 0 }];
+client.depositItems = function (_vaultman, specs) {
+  assert.deepEqual(specs, [71, 72]);
+  this.inventory = this.inventory.filter(o => o.id === 72);
+};
+const partial = await depositInVault(session, { vaultman: 9001, items: ['dark angel feather'] });
+assert.deepEqual(partial.deposited, [{ name: 'dark angel feather', amount: 1 }]);
+assert.deepEqual(partial.refused, ['dark angel feather']);
+client.depositItems = () => {};
+const refused = await depositInVault(session, { vaultman: 9001, items: ['dark angel feather'] });
+assert.equal(refused.verified, false);
+assert.deepEqual(refused.deposited, []);
+assert.deepEqual(refused.refused, ['dark angel feather']);
+console.log('vault: inventory removal and singleton refusals verified');

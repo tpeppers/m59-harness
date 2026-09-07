@@ -8294,25 +8294,33 @@ class Session {
   async crossSameRoomDoor(door, { movementGeneration = this.movementGeneration,
                                   controlToken } = {}) {
     const c = this.need();
+    const cancelled = () => this.movementWasCancelled(movementGeneration, controlToken);
+    const cancellation = () => ({ crossed: false, cancelled: true, reason: 'movement cancelled by a newer command' });
+    if (cancelled()) return cancellation();
     const roomBefore = Number(this.world?.room?.num ?? NaN);
     const before = await this.confirmPosition();
+    if (cancelled()) return cancellation();
     const walked = await this.walkTo(door.col, door.row,
                                      { movementGeneration, controlToken, clearance: 1 })
                              .catch(error => ({ arrived: false, reason: error.message }));
+    if (cancelled() || walked?.cancelled) return cancellation();
     if (walked?.left_room)
       return { crossed: false, reason: 'the room changed while walking to the internal door' };
     if (isTerminalMovementReason(walked?.reason))
       return { crossed: false, reason: walked.reason, note: walked.note };
 
     let at = await this.confirmPosition();
+    if (cancelled()) return cancellation();
     if (at && (at.col !== door.col || at.row !== door.row)) {
       const half = KOD_FINENESS >> 1;
       const lean = await this.stepFine(door.col * KOD_FINENESS + half,
                                        door.row * KOD_FINENESS + half)
                              .catch(error => ({ moved: false, reason: error.message }));
+      if (cancelled() || lean?.cancelled) return cancellation();
       if (isTerminalMovementReason(lean?.reason))
         return { crossed: false, reason: lean.reason, note: lean.note };
       at = await this.confirmPosition();
+      if (cancelled()) return cancellation();
     }
     if (!at) return { crossed: false, reason: 'position_confirmation_timeout',
                       note: 'no `go` was sent, because the square under the body was unknown' };
@@ -8327,13 +8335,16 @@ class Session {
     // A same-room door is still `UserGo`, so it is still refused while seated. This sender
     // postdates d263bf0 and never had the call; see the note in `leaveVia`.
     await this.standBeforeGo();
+    if (cancelled()) return cancellation();
     await this.pacer.submit('move', () =>
       this.movementWasCancelled(movementGeneration, controlToken) ? false : c.go());
     // The door announces itself - room.kod sends room_door_was_opened before it moves the
     // body - but the announcement is not the move, and a refusal (user_cant_go) is a
     // message too. The position is the fact; the sentences are evidence for a refusal.
     await new Promise(resolve => setTimeout(resolve, DOOR_SETTLE_MS));
+    if (cancelled()) return cancellation();
     const after = await this.confirmPosition();
+    if (cancelled()) return cancellation();
     const said = c.eventsSince(since).filter(e => e.text).map(e => String(e.text)).slice(0, 4);
     const roomAfter = Number(this.world?.room?.num ?? NaN);
     if (Number.isFinite(roomBefore) && Number.isFinite(roomAfter) && roomAfter !== roomBefore)
@@ -8344,7 +8355,8 @@ class Session {
                          note: 'the `go` was sent and where it left the body is unknown' };
     const near = Math.abs(after.row - door.arriveRow) <= 2 &&
                  Math.abs(after.col - door.arriveCol) <= 2;
-    if (near) return { crossed: true, at: { row: after.row, col: after.col }, said };
+    const goMoved = after.row !== at.row || after.col !== at.col;
+    if (near && goMoved) return { crossed: true, at: { row: after.row, col: after.col }, said };
     const moved = !before || after.row !== before.row || after.col !== before.col;
     return { crossed: false, at: { row: after.row, col: after.col }, said,
              reason: moved ? 'landed_off_target' : 'go_did_nothing',

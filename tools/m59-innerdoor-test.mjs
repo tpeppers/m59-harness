@@ -33,7 +33,7 @@
 // a room that the mover keeps apart, and every assertion here inverts — the same trap
 // m59-doorside-test records paying for.
 import { loadMap } from './m59-map.mjs';
-import { attachStepMasks, activeRoutes, regionsOf, anchorReach } from './m59-routes.mjs';
+import { attachStepMasks, activeRoutes, regionsOf, anchorReach, applyDoorState, resetDoorStates } from './m59-routes.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 import { sameRoomDoors, sameRoomDoorPlan, World } from './m59-world.mjs';
 
@@ -170,6 +170,19 @@ console.log('\nthe plan refuses rather than inventing');
     { row: 4, col: 34, x: 2224, y: 275 }, [{ row: 16, col: 19 }]);
   ok('live body in the north-east room uses its door instead of the coarse stair shortcut',
     plan?.doors?.[0]?.row === 8 && plan?.doors?.[0]?.col === 32);
+}
+
+{
+  applyDoorState(map, 951, new Map([[3, { height: 356 }], [4, { height: 419 }]]));
+  const geo = sharedRoomGeometry(map.rooms[951]);
+  const exits = map.rooms[951].goExits.filter(e => e.to === 950);
+  for (const from of [{ row: 10, col: 15, x: 992, y: 672 },
+                      { row: 2, col: 14, x: 928, y: 160 }]) {
+    const plan = sameRoomDoorPlan(map, 951, geo, from, exits);
+    ok(`Blackstone r${from.row}c${from.col} does not loop through an already reachable landing`,
+       !plan?.doors?.length);
+  }
+  resetDoorStates();
 }
 
 console.log('\ntransitOk stops removing the room from the route graph');

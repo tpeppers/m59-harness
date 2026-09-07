@@ -114,7 +114,7 @@ console.log('\nit is judged by what LEFT the pack');
   // A drop is fire-and-forget on the wire and a refusal is prose or silence, so the sent
   // list is not the answer. Item 2 is refused by the server and stays in the pack.
   const s = fakeSession({
-    items: [{ name: 'emerald' }, { name: 'cursed blade' }, { name: 'old boot' }],
+    items: [{ name: 'emerald' }, { name: 'cursed blade', amount: 0 }, { name: 'old boot', amount: 0 }],
     using: new Set(), refuse: new Set([2]),
   });
   const r = await dropAllExcept(s, { keep: [] });

@@ -36,3 +36,17 @@ old unsold cargo verified only the hall door and dispenser, not a town circuit.
 
 Offline regressions: `m59-ukgoth-oneway-test.mjs`, `m59-innerdoor-test.mjs`,
 `m59-keeper-sale-test.mjs`, and `m59-navgeom-routing-test.mjs`.
+
+Follow-up live checks found a Blackstone Keep loop at r10c15. A bounded fine
+search to one distant exit failed, and the planner repeatedly chose a portal
+whose landing was already reachable on foot. Internal-door plans now exclude
+that first crossing. The executor checks cancellation after each awaited
+operation and requires movement caused by `go`, rather than proximity to the
+landing, before reporting a crossing. `m59-innerdoor-crossing-test.mjs` covers
+cancellation and a silent refusal.
+
+Singleton quantities also matter at the vault and the street. A carried scroll
+or wand reports `amount:0`; it must be deposited by object id, not as a stack
+of zero. Deposits and drops now count an unchanged singleton as one remaining
+item. Vault refusals are tracked per object, including duplicates and partially
+deposited stacks. See `m59-vault-test.mjs` and `m59-dropall-test.mjs`.
