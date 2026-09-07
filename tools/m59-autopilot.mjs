@@ -12253,7 +12253,17 @@ export class Autopilot {
         });
         this.note('DIED', { ...death, ...(file ? { post_mortem: file } : {}) });
       }
-    })();
+    })().catch(e => {
+      // A REPORT THAT FAILED MUST STILL SETTLE. This promise is memoised and re-returned
+      // to every later observer, and `passUnderworld` awaits it BEFORE the escape — so a
+      // rejection here is not one bad pass, it is a character that never leaves the
+      // Underworld. Recording is evidence; escaping is mortality, and mortality wins.
+      // The same idiom `writePostMortem` already uses one screen up.
+      try { this.note('death record failed', { why: e?.message ?? String(e),
+              why_it_matters: 'the death is still real and the escape still runs — only ' +
+                              'the post-mortem was lost' }); }
+      catch { /* the note is the last thing that may take a death down */ }
+    });
     return this.deathReportTask;
   }
 

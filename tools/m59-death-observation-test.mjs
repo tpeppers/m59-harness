@@ -89,4 +89,34 @@ s.client = client; k.s = {};
 client.emit('room-entered', { roomName: 'The Underworld' });
 assert.equal(k.tally.deaths, 4);
 assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
-console.log('Death observation, deduplication, evidence snapshots and session ownership passed');
+// A REPORT THAT THREW MUST NOT WEDGE THE ESCAPE. The task is memoised and re-returned to
+// every later observer, and passUnderworld awaits it BEFORE escapeUnderworld — so if the
+// rejection is allowed to survive, every later pass throws on the cached promise and the
+// character never leaves. Measured on the unfixed head: escape reached on 0 of 3 passes,
+// deaths 1/1/1, DOMException "() => {} could not be cloned"; on main the same throw costs
+// one pass (escape reached on 2 of 3). The realistic source is `decisions` — note() spreads
+// arbitrary caller payload into the journal and structuredClone throws where the previous
+// shallow spread + JSON.stringify silently dropped — but ANY throw in the body does it,
+// including uptime.outageAround's unguarded ledger read.
+{
+  const reached = [];
+  const boom = Object.assign(Object.create(Autopilot.prototype), {
+    s, policy: {}, tally: { deaths: 0 }, money: { carried_at_death: 0 }, lastSeenPurse: 0,
+    passes: 1, passStartedAt: Date.now(), recent5: [],
+    who: () => null, safety: () => ({ fleeAt: 0.4 }), recentText: () => [],
+    note: () => {}, writePostMortem: () => null,
+    awaitDeathBroadcast: async () => null,
+    postMortem() { throw new TypeError('the post-mortem could not be built'); },
+    journeyEndedInADeath() { reached.push(true); throw new Error('probe: reached the escape'); },
+  });
+  const underworld = { num: 1, name: 'The Underworld' };
+  for (let pass = 0; pass < 3; pass++)
+    await assert.rejects(boom.passUnderworld({ s, c: client, room: underworld }),
+                         /probe: reached the escape/,
+                         'a failed death record must still let the pass reach the escape');
+  assert.equal(reached.length, 3, 'every pass reaches the escape, not just the first');
+  assert.equal(boom.tally.deaths, 1, 'and the death is still counted exactly once');
+}
+
+console.log('Death observation, deduplication, evidence snapshots, session ownership and ' +
+            'escape-despite-a-failed-report passed');
