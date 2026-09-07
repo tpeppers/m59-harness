@@ -22,6 +22,11 @@ assert.deepEqual(call('autopilot_claim', { by: 'director', faculties: ['work', '
 assert.ok(keeper.claims.get('work').until - Date.now() > 110000);
 assert.ok(call('autopilot_busy', { by: 'director', kind: 'town', lease_ms: 300000 }).busy);
 assert.equal(await keeper.passOutside({}), HANDLED, 'the socket owner stands down for a town job');
+keeper.suspendedJourney = { to: 114 };
+let resumed = 0;
+keeper.resumeSuspendedJourney = async () => { resumed++; return HANDLED; };
+assert.equal(await keeper.passOutside({}), HANDLED);
+assert.equal(resumed, 1, 'a busy owner still gets its interrupted destination resumed');
 assert.deepEqual(call('autopilot_heartbeat', { by: 'director', lease_ms: 120000 }).renewed, ['work']);
 assert.equal(call('autopilot_free', { by: 'stranger' }).refused, 'director owns it');
 assert.equal(call('autopilot_free', { by: 'director' }).busy, null);
@@ -30,4 +35,6 @@ call('commander_claim', { by: 'rts', faculties: ['work'], leaseMs: 120000 });
 assert.ok(keeper.claims.get('work').until - Date.now() <= 30000, 'RTS keeps its shorter lease');
 const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
 assert.match(broker, /s instanceof KeeperProxy && \['claim', 'heartbeat', 'yield', 'busy', 'free'\][\s\S]{0,200}keeperAction/);
+assert.match(broker, /committed: s instanceof KeeperProxy \? st\?\.committed/,
+  'the fleet board reports the actual socket owner commitment');
 console.log('keeper authority dispatch and busy gate regressions passed');

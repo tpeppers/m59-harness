@@ -14501,19 +14501,19 @@ const TOOLS = [
           mana_now: v.mana?.value ?? null,
           // What it is up to, in the words a person would use. `time` says which
           // bucket the seconds landed in; this says what is happening.
-          activity: (s instanceof KeeperProxy) ? s.activity() : (ap ? ap.activity() : 'no keeper'),
+          activity: st?.activity ?? (ap ? ap.activity() : 'no keeper'),
           // PUBLISHED ON THE ROW so that waiting for the fleet to park is ONE call
           // rather than one per character. m59-update.mjs polls this every few seconds
           // across twenty-one characters, and twenty-one `autopilot status` calls a
           // tick would be a self-inflicted load spike during the one window we most
           // want the fleet quiet. Null when nothing is parking, which is nearly always.
-          parked: ap ? ap.parkStatus() : null,
+          parked: st?.parked ?? (s instanceof KeeperProxy ? null : ap?.parkStatus() ?? null),
           // IS THE FLEET ALREADY USING THIS ONE? A loot run, a provisioning cast, a signet
           // ring being walked across the map, a pairing — all of them have another end,
           // and pulling a character out of one abandons that end silently. On the row for
           // the same reason `parked` is: the terminal greys these and steps over them, and
           // asking per character would be twenty-one calls a tick.
-          committed: ap ? ap.commitment() : null,
+          committed: s instanceof KeeperProxy ? st?.committed ?? null : ap?.commitment() ?? null,
           // IS A PERSON HOLDING THIS ONE RIGHT NOW? Published on the row for the same
           // reason `parked` is: the terminal and the fleet page both want to mark it, and
           // asking per character would be twenty-one calls a tick. pilotOf() re-checks

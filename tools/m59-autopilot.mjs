@@ -14652,6 +14652,10 @@ export class Autopilot {
     // pass that begins afterwards.
     const outside = this.busyStatus();
     if (outside) {
+      // An interrupted leg is still the outside owner's destination. Blocking
+      // its resume here strands a busy town runner before passFarm can reach it.
+      if (this.suspendedJourney
+          && await this.resumeSuspendedJourney(ctx) === HANDLED) return HANDLED;
       this.progress(`busy -- ${outside.label ?? outside.kind ?? 'something else is driving'}`);
       return HANDLED;
     }
