@@ -10,7 +10,7 @@ const dispatch = new AsyncFunction('session', 'args', 'skills', 'autopilot', 'se
 function session({ known = true, accept = true } = {}) {
   const names = new Map([[1, 'axe'], [2, 'long sword'], [3, 'amber'], [4, 'shilling']]);
   const c = {
-    inventory: [{ id: 1, nameRsc: 1 }, { id: 2, nameRsc: 2 }, { id: 3, nameRsc: 2 },
+    inventory: [{ id: 1, nameRsc: 1, amount: 0 }, { id: 2, nameRsc: 2, amount: 0 }, { id: 3, nameRsc: 2, amount: 0 },
       { id: 4, nameRsc: 3, amount: 40 }, { id: 5, nameRsc: 4, amount: 10 }],
     rsc: { get: key => names.get(key) },
     equipment: () => ({ known, equipped: [{ id: 1, name: 'axe' }] }),

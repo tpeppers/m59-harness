@@ -3600,7 +3600,7 @@ const server = createServer(async (req, res) => {
             });
             const nameOf = (o) => c.rsc?.get?.(o.nameRsc) || '';
             const sellChunk = async (id, amount) => {
-              const beforeAmount = c.inventory.find(o => o.id === id)?.amount ?? 1;
+              const beforeAmount = c.inventory.find(o => o.id === id)?.amount || 1;
               const before = c.evSeq;
               await session.pacer.submit('trade', () => c.offer(merchId, [amount > 1 ? { id, amount } : id]));
               const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 }).catch(() => ({ events: [] }));
