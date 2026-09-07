@@ -1976,7 +1976,20 @@ export class Autopilot {
       // Fires when the larder goes empty and is armed again only once food is aboard, so a
       // character that finds a mushroom and eats it produces two rows rather than two
       // thousand. Cheap enough to sit on the hot path: one boolean.
-      if (!this._larderWasEmpty) {
+      // AN EMPTY READ IS NOT AN EMPTY LARDER.
+      //
+      // The broker keeps in-process autopilot STUBS beside every keeper-backed session, and a
+      // stub has no client -- so `larder()` returns [] and the character reads as starving
+      // for ever. Live on prod 2026-09-06 that produced 73 firings for one agent inside an
+      // hour, against a handful of real ones, and the giveaway was the `character` column:
+      // agent ids (`t15`, `t5`) from stubs mixed with real names (`Clifford`, `Pepe`) from
+      // keepers.
+      //
+      // So require evidence that we could actually SEE a pack. `items` present and an array
+      // is the difference between "looked, found nothing" and "never looked". A character
+      // genuinely carrying nothing still has an items array; a stub has no client at all.
+      const canSeePack = Array.isArray(this.s?.client?.items);
+      if (canSeePack && !this._larderWasEmpty) {
         this._larderWasEmpty = true;
         try {
           recordEvent(this.who(), 'larder_empty', {

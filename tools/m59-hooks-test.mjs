@@ -97,8 +97,11 @@ console.log('\nthe protected list must not drift from the keeper\'s');
 console.log('\nlarder_empty is edge-triggered, or it would drown the ledger');
 {
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  ok('it fires only on the transition into empty',
-     /if \(!this\._larderWasEmpty\) \{/.test(AP));
+  ok('it fires only on the transition into empty, and only when a pack was actually read',
+     AP.includes('if (canSeePack && !this._larderWasEmpty) {'));
+  ok('an empty READ is distinguished from an empty larder — a broker stub has no client, '
+     + 'so it would otherwise report starvation for ever',
+     AP.includes('const canSeePack = Array.isArray(this.s?.client?.items);'));
   ok('and re-arms once food is aboard', /this\._larderWasEmpty = false;/.test(AP));
   const emit = AP.indexOf("'larder_empty'");
   const rearm = AP.indexOf('this._larderWasEmpty = false;');
