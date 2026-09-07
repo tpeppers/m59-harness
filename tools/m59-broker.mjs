@@ -126,7 +126,7 @@ import { safeSpots, safeSpotBook, geometryFor as safeSpotGeometryFor,
          exposureAt, nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { planRuns, planProvisioning } from './m59-lootrun.mjs';
 import { planCharacter, STAT_ORDER, STAT_PRESETS } from './m59-newchar.mjs';
-import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn } from './m59-ledger.mjs';
+import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn, attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { renderDashboard } from './m59-dashboard.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
@@ -3665,6 +3665,32 @@ async function resumeFleet() {
     if (work.length)
       console.error(`[state] ${work.length} keeper(s) up in ${Math.round((Date.now() - started) / 1000)}s ` +
                     `(${CONCURRENCY} at a time)`);
+
+    // PRIVATE STRATEGY, IF THIS CHECKOUT HAS ANY. See tools/m59-hooks.mjs.
+    //
+    // Loaded AFTER the keepers are up, so a handler that reacts to an event cannot fire at a
+    // half-built fleet, and imported lazily so a broker in a checkout with no
+    // substrate/hooks/ pays nothing but a failed directory read.
+    //
+    // Everything here is best-effort by construction: a hook that throws is disabled by the
+    // loader, and a loader that throws is caught right here. The fleet runs with no hooks
+    // exactly as it always has -- that is the shipped behaviour, and this must not be able
+    // to prevent it.
+    try {
+      const hooks = await import('./m59-hooks.mjs');
+      await hooks.loadHooks();
+      const rows = hooks.hookStatus();
+      if (rows.length) {
+        hooks.attachTo(ledgerAttachHooks);
+        const live = rows.filter(r => !r.disabled);
+        console.error(`[hooks] ${live.length} handler(s) registered: ` +
+                      live.map(r => `${r.kind}->${r.name}`).join(', '));
+        for (const r of rows.filter(r => r.disabled))
+          console.error(`[hooks] REFUSED ${r.name}: ${r.why}`);
+      }
+    } catch (e) {
+      console.error(`[hooks] not loaded (${e.message}) — the fleet runs without them`);
+    }
   }
   // Drop in-process autopilot stubs for keeper-backed sessions. The GOAP loop runs
   // in the keeper process; a stub in the broker just fails every pass against the

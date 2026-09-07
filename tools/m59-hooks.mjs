@@ -191,6 +191,14 @@ export function hookStatus() {
   return rows;
 }
 
+/**
+ * Hand the ledger our fire function. Called by whoever loaded the hooks -- the broker at
+ * startup -- so a tool that only reads the ledger never pulls this module in at all.
+ */
+export function attachTo(attach) {
+  if (typeof attach === 'function') attach(fireEvent);
+}
+
 /** Test seam. */
 export function resetHooks() { registry.clear(); health.clear(); loaded = false; }
 
