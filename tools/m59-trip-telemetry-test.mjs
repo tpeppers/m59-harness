@@ -67,6 +67,8 @@ await test('Autopilot.travel returns its stop snapshot after clearing live count
   const keeper = {
     policy: {},
     doing: 'travelling',
+    travelShelterPolicy: Autopilot.prototype.travelShelterPolicy,
+    travelGuard: Autopilot.prototype.travelGuard,
     answerWedge: async () => null,
     restBeforeSettingOut: async () => ({ rested: false }),
     travelHoldMode: () => 'on',
