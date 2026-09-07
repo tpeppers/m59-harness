@@ -2363,7 +2363,9 @@ const server = createServer(async (req, res) => {
             if (!fn) { json({ error: `bank op must be balance, deposit or withdraw, not "${op}"` }, 400); return; }
             const before = c.evSeq;
             await session.pacer.submit('bank', fn);
-            const after = await c.waitFor({ since: before,
+            // Inventory packets often arrive before the banker's receipt. They
+            // confirm neither a withdrawal nor a deposit and must not end this wait.
+            const after = await c.waitFor({ since: before, kinds: ['message', 'said'],
               timeoutMs: Number(args.timeout_ms) || 4000 });
             // A BALANCE IS PROSE, SENT ONCE, and a withdrawal states the amount HANDED OVER
             // rather than the new balance. So the sentences are the answer and the broker

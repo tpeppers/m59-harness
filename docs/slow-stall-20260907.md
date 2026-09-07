@@ -74,3 +74,9 @@ stand point can sit inside a wall even though a body can occupy another part
 of that square. The point-path API keeps its original distance requirement;
 only the detour opts into an endpoint anywhere inside its intended square,
 with every movement segment still checked against collision geometry.
+
+The tagged square-arrival canary crossed from Faronath into the Old Dwarven
+Hall and resumed its town journey. Bank exchanges also now wait for prose
+rather than the first event: an inventory update can precede the receipt and
+otherwise make a completed withdrawal appear silent. The keeper bank test
+replays that packet ordering; the balance/parser suite remains unchanged.

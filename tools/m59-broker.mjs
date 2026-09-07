@@ -11671,7 +11671,7 @@ const TOOLS = [
                      deposit: () => c.deposit(amount),
                      withdraw: () => c.withdraw(amount) }[a.action];
         await s.pacer.submit('bank', fn);
-        const { events } = await c.waitFor({ since: before, timeoutMs: 4000 });
+        const { events } = await c.waitFor({ since: before, kinds: ['message', 'said'], timeoutMs: 4000 });
         said = events.filter(e => e.text).map(e => String(e.text));
       }
       // WHAT THE BANKER SAID IS ALREADY BEING WRITTEN DOWN by Session.noteBanker, off
