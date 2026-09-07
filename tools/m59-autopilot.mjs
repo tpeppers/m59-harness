@@ -11028,32 +11028,6 @@ export class Autopilot {
       // a HEALTHY wedged character reaches, which is the larger population and the one the
       // record/cancel split restored.
       const ladderOff = this.policy?.escapeLadder === false;
-      // THE EVENT BOTH ARMS WRITE, so the ladder can be priced against something.
-      //
-      // `stuck_backed_up` is emitted inside `backUpToUnstick`, which `escape_ladder: false`
-      // never calls — so the arm WITHOUT the ladder recorded nothing at all, and the only
-      // available comparison was arm-wide averages diluted by every character that never
-      // wedged. With 21 characters and six applications an hour that is all noise and no
-      // signal, however long it runs.
-      //
-      // This is the denominator: one row per give-up, in both arms, written BEFORE the
-      // ladder is offered. The question "does the ladder help" is then asked of the
-      // characters it could have helped — what happened in the minutes after a wedge, with
-      // it and without it — instead of being averaged across a fleet that mostly never
-      // wedges at all.
-      try {
-        recordEvent(this.who(), 'wedge_gave_up', {
-          room: advice.room, room_name: this.s?.world?.room?.name ?? null,
-          square: `${advice.col},${advice.row}`, col: advice.col, row: advice.row,
-          wanted: to, doing: advice.doing ?? null, repeats: advice.repeats ?? null,
-          wedged_for_ms: advice.wedged_for_ms ?? null,
-          // The arm, recorded on the row rather than joined from a roster afterwards: a
-          // roster is edited between runs and a row is not.
-          escape_ladder: !ladderOff,
-          health: this.s?.client?.vitals?.()?.health?.value ?? null,
-          max_health: this.s?.client?.vitals?.()?.health?.max ?? null,
-        });
-      } catch { /* telemetry must never break the escape it is measuring */ }
       let backedOff = ladderOff
         ? { moved: false, skipped: 'escape_ladder is off for this character' } : null;
       if (!ladderOff) try {
@@ -11099,9 +11073,30 @@ export class Autopilot {
               'the square that failed. If this line repeats at the same square, the square ' +
               'is the problem: record it with m59-recordjam.mjs',
       });
+      // ONE ROW PER GIVE-UP, IN BOTH ARMS. This event already existed and already fired
+      // whether or not anything was climbed, which makes it the denominator the escape
+      // ladder can be priced against: of the characters that wedged, what happened next,
+      // with the ladder and without it.
+      //
+      // A duplicate emitter was briefly added at the top of this branch to do exactly this,
+      // because the search that preceded it looked for `stuck_backed_up` and never asked
+      // whether a give-up event already existed. It did. Every wedge then wrote two rows —
+      // one carrying the arm and one not — and an analysis that read a missing
+      // `escape_ladder` as false counted every ladder-arm wedge in BOTH arms. That is where
+      // "the ladder arm re-wedges 100% of the time" came from: it was the same event,
+      // counted twice, three seconds apart.
+      //
+      // `escape_ladder` is stamped on the ROW rather than joined from the roster afterwards,
+      // because a roster is edited between runs and a row is not.
       recordEvent(this.who(), 'wedge_gave_up', {
-        room: advice.room, col: advice.col, row: advice.row, to, repeats: advice.repeats,
+        room: advice.room, room_name: this.s?.world?.room?.name ?? null,
+        col: advice.col, row: advice.row, to, repeats: advice.repeats,
         wedged_for_ms: advice.wedged_for_ms,
+        escape_ladder: !ladderOff,
+        climbed: backedOff?.moved === true,
+        rung: backedOff?.rung ?? null,
+        health: this.s?.client?.vitals?.()?.health?.value ?? null,
+        max_health: this.s?.client?.vitals?.()?.health?.max ?? null,
       });
       this.recordFrame('gave up a wedge');
       return { refused: true, gave_up: true, repeats: advice.repeats,

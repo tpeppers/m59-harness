@@ -738,9 +738,15 @@ console.log('\nescape_ladder: false leaves this character out of the ladder enti
     // never wedged -- which is how six applications an hour look exactly like noise.
     // `recordEvent` is a no-op for a nameless keeper, so this asserts the CALL SITE is
     // outside the escape_ladder branch rather than the row itself.
-    ok('the give-up is recorded whether or not the ladder is climbed',
-       AUTOPILOT.indexOf("'wedge_gave_up'") < AUTOPILOT.indexOf('let backedOff = ladderOff'));
-    ok('...and the row carries which arm it came from, not a roster join',
+    // THE DENOMINATOR IS THE EVENT THAT WAS ALREADY THERE. `wedge_gave_up` predates the
+    // A/B and already fired on every give-up in both arms; it only needed the arm stamped
+    // on it. A second emitter was briefly added at the top of this branch by a search that
+    // looked for `stuck_backed_up` and never asked whether a give-up event existed -- every
+    // wedge then wrote two rows, one carrying the arm and one not, and an analysis reading a
+    // missing field as false counted every ladder-arm wedge in BOTH arms.
+    ok('there is exactly ONE wedge_gave_up emitter',
+       (AUTOPILOT.match(/recordEvent\(this\.who\(\), 'wedge_gave_up'/g) || []).length === 1);
+    ok('...and it stamps the arm on the row rather than leaving it to a roster join',
        AUTOPILOT.includes('escape_ladder: !ladderOff,'));
     ok('...not even the ones that walk', walks.length === 0 && travels.length === 0);
     ok('and it still takes the hold, so the character is not left re-issuing the walk',
