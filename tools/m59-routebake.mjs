@@ -113,6 +113,18 @@ import { sharedRoomGeometry, CLIENT_FINENESS, STEP_MASK_VERSION,
 //     rail on the next ideal-centre leg.
 export const BAKE_VERSION = 5;
 
+// Door variants are additional movement states of this exact baseline. Rebaking
+// routes must not erase them when the geometry and movement predicate still agree.
+export function preserveDoorVariants(baked, prior, { sameGeometry = false } = {}) {
+  if (!sameGeometry || !prior?.stepMaskVariants
+      || prior.stepMaskVariantVersion !== STEP_MASK_VERSION
+      || !baked?.stepMask || baked.stepMask !== prior.stepMask
+      || baked.security !== prior.security
+      || baked.rows !== prior.rows || baked.cols !== prior.cols) return baked;
+  return { ...baked, stepMaskVariants: prior.stepMaskVariants,
+    stepMaskVariantVersion: prior.stepMaskVariantVersion };
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
 export const ROUTES_FILE = () => process.env.M59_ROUTES_FILE ||
@@ -1520,6 +1532,12 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   // and same view, or the existing rooms are ignored and it bakes from scratch.
   const resume = argv.includes('--resume');
   const out = {};
+  let previousTable = null;
+  try { previousTable = JSON.parse(readFileSync(ROUTES_FILE(), 'utf8')); } catch {}
+  const keepDoors = baked => preserveDoorVariants(baked,
+    previousTable?.rooms?.[String(baked?.room)], {
+      sameGeometry: !!manifest && previousTable?.geometryManifestSha256 === manifest,
+    });
   // `--rooms` MEANS "REBAKE THESE", NOT "THE TABLE IS NOW THESE".
   //
   // It used to start from an empty table and write back only what it baked, so
@@ -1661,7 +1679,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     process.stderr.write('\n');
     for (const f of files) {
       const part = JSON.parse(readFileSync(f, 'utf8'));
-      for (const [num, baked] of Object.entries(part.rooms ?? {})) out[num] = baked;
+      for (const [num, baked] of Object.entries(part.rooms ?? {})) out[num] = keepDoors(baked);
       skipped += part.skipped ?? 0; pairs += part.pairs ?? 0;
       pockets += part.pockets ?? 0; stranded += part.stranded ?? 0;
     }
@@ -1673,7 +1691,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     const t = Date.now();
     const baked = bakeRoom(room, { collision });
     if (baked.skipped) { skipped++; continue; }
-    out[baked.room] = baked;
+    out[baked.room] = keepDoors(baked);
     pairs += Object.keys(baked.routes).length;
     pockets += baked.pockets ?? 0;
     stranded += baked.stranded_exits ?? 0;

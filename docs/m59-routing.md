@@ -1065,3 +1065,12 @@ no candidate is traced twice across its two passes; a cap on traced candidates
 on and the fleet's max health was decaying at the same time, which is not a measurement.
 And `World.room`, which rebuilt and scanned the rooms array on every access, is memoised on
 the client's room identity.
+# Preserve moving-door states when rebuilding routes
+
+`m59-routebake.mjs` preserves a room's `stepMaskVariants` only when its new baseline
+mask, dimensions, security, geometry manifest, and movement-predicate version still
+match. A full or partial route rebuild must not silently close the feast entrance or
+Ukgoth's moving door. When those inputs change, regenerate the variants with
+`node tools/m59-doorbake.mjs --write` and run `node tools/m59-doorstate-test.mjs`.
+The latter checks the committed table and proves that the open feast state joins
+the entrance to the keep in both the route mask and collision geometry.
