@@ -71,6 +71,7 @@
 import { takeRunLock } from './m59-runlock.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
+import { recordEvent } from './m59-ledger.mjs';
 
 const RPC = () => process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901/';
 let seq = 0;
@@ -903,7 +904,30 @@ async function runStep(ctx, agent, step, state) {
       // ok when something was stored OR when there was nothing to store. A pack with no
       // keepers in it is not a failed vault trip, and must not stop a circuit.
       const nothingToStore = !stored && !(r?.wanted?.length && r?.refused?.length);
-      return { ok: stored > 0 || (!r?.error && nothingToStore),
+      const ok = stored > 0 || (!r?.error && nothingToStore);
+      // WHETHER THE FLEET REACHES ITS VAULTS IS A NUMBER WE HAD TO RECONSTRUCT BY HAND.
+      //
+      // For a fortnight every trip to room 114 failed and nothing said so: the journey
+      // record said `route_progressing_exits_exhausted` like any other short walk, and the
+      // only way to see that a DESTINATION was at 0% while its neighbours were at 100% was
+      // to write a script that grouped journeys by `to`. That script is what found the
+      // off-grid door. It should not have taken a script.
+      //
+      // So the vault step now says what happened, every time, in one row. `reached` is the
+      // question that matters — arriving at the vaultman is the hard part and the part that
+      // was broken; `vaulted` is what it was worth once there. A trip that arrives and
+      // stores nothing is a healthy no-op and must read differently from one that never
+      // arrived, which is why `nothing_to_store` is its own field rather than a zero.
+      recordEvent(agent, 'vault_trip', {
+        reached: !r?.error,
+        vaulted: stored,
+        offered: (r?.wanted ?? step.items ?? []).length,
+        refused: (r?.refused ?? []).length,
+        nothing_to_store: nothingToStore,
+        ok,
+        why: r?.error ?? r?.reason ?? r?.note ?? null,
+      });
+      return { ok,
                vaulted: stored, offered: (r?.wanted ?? step.items ?? []).length,
                deposited: r?.deposited ?? [], refused: r?.refused ?? [],
                said: r?.vaultman_said ?? [],
