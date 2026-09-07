@@ -1945,6 +1945,15 @@ export async function fight(s, {
   // back to whatever is nearest throws away the work AND leaves a half-dead monster
   // to heal. Prefer the one we were already fighting, whenever it is still here.
   preferId = null,
+  // THE ROUND BUDGET IS NO LONGER THE ONLY WAY OUT. Until `controlToken` and
+  // `fightGeneration` existed below, nothing outside this function could stop it — there
+  // is no `cancelAttack` in the tree and the watchdog's only interrupt is
+  // `cancelMovement`, which cancels walking. So the budget was carrying a job it was
+  // never designed for, which is why the three call sites disagreed about it (3 by
+  // omission, 10 and 30 by choice) and why none of them argued for a number.
+  //
+  // It stays as a bound on a single call — a caller that wants to re-decide is entitled
+  // to say when — but it is no longer the mechanism that makes a fight abandonable.
   rounds = 3,
   swingsPerRound = 1,
   disengageAt = DEFAULT_DISENGAGE_AT,
@@ -1955,6 +1964,14 @@ export async function fight(s, {
   // save a few seconds. With this set, anything out of reach is reported as out of
   // reach and the caller decides what to do about it (pull it over, or wait).
   holdPosition = false,
+  // STOPPING A FIGHT FROM OUTSIDE IT. Same shape as `travel` and `lootFloor`: the
+  // generation is read at entry and compared each round, so anything that calls
+  // `Session.cancelFight()` — a commander claim, an errand, a park, a shutdown, an
+  // operator taking the wheel — ends the fight at the next swing boundary rather than
+  // waiting out the budget. The token is the shared one, so a cancel aimed at a command
+  // lease stops the walk and the fight together.
+  controlToken = null,
+  fightGeneration = s?.fightGeneration,
   // How far a swing carries. One square plus the diagonal; the caller can widen it
   // for a bow.
   reach = 1.5,
@@ -2154,7 +2171,20 @@ export async function fight(s, {
     say('faced target', { deg: Math.round(deg), target: foeName });
   }
 
+  const fightCancelled = () =>
+    typeof s?.fightWasCancelled === 'function' &&
+    s.fightWasCancelled(fightGeneration, controlToken);
+
   for (let r = 0; r < rounds; r++) {
+    // Asked before the round as well as inside it. A cancel that lands between rounds
+    // must not buy another exchange.
+    if (fightCancelled())
+      return { fought: roundsFought > 0, killed: false, died: false, cancelled: true,
+               rounds: roundsFought, target: foeName, foe_id: foe.id,
+               combat: combatLines.slice(-8), log,
+               note: `the fight was cancelled after ${roundsFought} round(s). The monster is ` +
+                     `still there and still hostile — whatever cancelled this owns the ` +
+                     `character now and has to decide what happens next.` };
     if (!c.room.objects.has(foe.id)) { killed = true; break; }
     // It backed off. Swinging at nothing is free, but the server refuses the swing
     // and the caller needs to know the creature broke contact rather than that we
@@ -2176,9 +2206,20 @@ export async function fight(s, {
       const deg = (Math.atan2(itNow.row - meRound.row, itNow.col - meRound.col) * 180 / Math.PI + 360) % 360;
       await c.face(deg);
     }
-    const res = await s.attackRounds(foe.id, swingsPerRound, { abortBelow: disengageAt });
+    const res = await s.attackRounds(foe.id, swingsPerRound,
+      { abortBelow: disengageAt, shouldCancel: fightCancelled });
     roundsFought++;
     combatLines.push(...res.messages);
+
+    // Cancelled between swings. Reported rather than folded into "still alive after N
+    // rounds", because a fight somebody STOPPED and a fight that ran out of budget call
+    // for opposite responses from the caller.
+    if (res.cancelled)
+      return { fought: true, killed: false, died: false, cancelled: true,
+               rounds: roundsFought, at_swing: res.cancelled.at_swing,
+               target: foeName, foe_id: foe.id, combat: combatLines.slice(-8), log,
+               note: `the fight was cancelled mid-round, after ${roundsFought} round(s). ` +
+                     `The monster is still there and still hostile.` };
 
     // WE ARE STILL SITTING DOWN, AND THE SERVER JUST SAID SO.
     //

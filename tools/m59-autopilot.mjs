@@ -11150,6 +11150,86 @@ export class Autopilot {
     return { sidestepped: true, moved, direction: d.name };
   }
 
+  // THERE ARE TWO DEFENSIVE MANOEUVRES IN A FIGHT AND THERE IS NO THIRD.
+  //
+  // Operator's doctrine, 2026-09-06:
+  //
+  //   1. NOT on a safe wall  ->  go to the nearest one.
+  //   2. ON a safe wall      ->  log off and back on, turn, and rest.
+  //
+  // Nothing else may interrupt a fight. Not a town trip, not a breadcrumb retreat, not a
+  // wander to "somewhere I can heal" — those are the movement-shaped rungs that a
+  // post-mortem records as "every decision correct, 0.0 squares per second, dead".
+  //
+  // WHY THE SECOND ONE IS A MANOEUVRE AND NOT A TRICK. A safe wall is a square nothing can
+  // reach, and that is the ONLY place the logoff works: log off so the monster disengages
+  // and you do not die, come back, turn so the server registers the move, and rest to full
+  // while the room mills about outside its reach. `playDead` already implements exactly
+  // that — logoff, reconnect, reclaim the square, turn — so this rung chooses it rather
+  // than reimplementing it. It is also the reason the two manoeuvres are ONE law rather
+  // than two: what makes a square worth fleeing to is the same property that makes the
+  // logoff work there, which is why the safe-wall ledger collapsed into geometry.
+  //
+  // GATED ON HAVING BEEN IN A FIGHT. This narrows the survival ladder, and narrowing it
+  // for a character that is merely hurt while walking would take away rungs that are
+  // right there — travel has its own guard, and a character bleeding in a corridor is not
+  // having a fight. `engagedRecently` is the gate.
+  async defensiveAnswer({ near = [], v = null } = {}) {
+    if (this.policy?.defensiveAnswer === false) return false;
+    if (!near.length) return false;                 // nothing is hitting us: not this rung
+    const frac = pct(v?.health);
+    if (frac === null || frac >= this.safety().fleeAt) return false;
+    // Only inside a fight. `doing` is what the pass last set, and a fight that broke off at
+    // the flee line leaves it on `fighting` until something else claims it.
+    if (this.doing !== 'fighting' && !this.hold) return false;
+
+    // ---- 2. ON a wall: log off, come back, turn, rest.
+    if (this.hold && this.holdWorks()) {
+      const did = await this.playDead(
+        `at ${v?.health?.value ?? '?'} health on a safe wall — the logoff is the manoeuvre here`)
+        .catch(() => false);
+      if (did) {
+        this.note('defensive answer: the logoff at a wall', {
+          health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+          in_reach: near.length, spot: { col: this.hold.col, row: this.hold.row },
+          why: 'nothing can reach this square, so logging off breaks the engagement without ' +
+               'losing the ground. Coming back, turning and resting is a free heal to full — ' +
+               'and it is the only defensive move that does not give up the wall',
+        });
+        return true;
+      }
+      // playDead refused (already turned since reclaiming, or no proven wall). Falling
+      // through is correct: the rest rung below is what it defers to, and resting ON the
+      // wall is still manoeuvre 2 minus the reconnect.
+      return false;
+    }
+
+    // ---- 1. NOT on a wall: go to the nearest one. Nowhere else.
+    if (typeof this.takeSafeSpot !== 'function') return false;
+    const took = await this.takeSafeSpot(
+      `at ${v?.health?.value ?? '?'} health with ${near.length} in reach — the nearest wall is ` +
+      'the only place to be', null, { source: 'defensive' }).catch(() => null);
+    if (took?.took) {
+      this.note('defensive answer: to the nearest safe wall', {
+        health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+        in_reach: near.length,
+        why: 'the one defensive move available off a wall. A town trip, a breadcrumb ' +
+             'retreat or a wander to "somewhere I can heal" are all movement-shaped rungs ' +
+             'that read correct in a post-mortem and end at 0.0 squares per second',
+      });
+      return true;
+    }
+    // No wall reachable. Say so once and let the ladder below have it — refusing to fall
+    // through would idle a character that has nowhere to go, which is the failure this
+    // whole file keeps paying for.
+    this.note('defensive answer: no wall to reach', {
+      health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+      in_reach: near.length, why: took?.why ?? 'takeSafeSpot found nothing',
+      note: 'falling through to the ordinary ladder because there is no second option here',
+    });
+    return false;
+  }
+
   // WEDGED, HURT, AND SOMETHING IN REACH: GET OUT FIRST. TRADE ONLY IF YOU CANNOT.
   //
   // `tradeInPlaceIfWedged` below is right about its premise and was wrong about one word.
@@ -13444,6 +13524,10 @@ export class Autopilot {
     // one runs this whole ladder from a square that is not a trap.
     if (await this.escapeIfWedgedAndHurt({ near, v }).catch(() => false)) return HANDLED;
     if (await this.tradeInPlaceIfWedged({ near, v }).catch(() => false)) return HANDLED;
+
+    // THERE ARE TWO DEFENSIVE MANOEUVRES IN A FIGHT AND THERE IS NO THIRD.
+    // Operator's doctrine, 2026-09-06. See `defensiveAnswer`.
+    if (await this.defensiveAnswer({ near, v }).catch(() => false)) return HANDLED;
 
     // ABOUT TO DIE. Below two hits of margin with something adjacent, withdrawing is
     // a gamble — the walk takes seconds during which it keeps swinging, and losing
