@@ -16,6 +16,7 @@ process.env.M59_KEEPER = '1';
 //   8. Handles SIGTERM gracefully
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
 import { Session, Pacer } from './m59-session.mjs';
@@ -571,6 +572,30 @@ async function joinGenerationOnce(generation) {
     }
 
     assertJoinIntent(generation);
+    // PRIVATE HOOKS RUN WHERE THE AUTOPILOT DOES, WHICH IS HERE.
+    //
+    // recordEvent -> fireEvent is PROCESS-LOCAL, and the autopilot lives in this process, not
+    // in the broker. Loading hooks only in the broker meant every event a keeper wrote --
+    // which is nearly all of them -- reached no handler at all. Live on prod 2026-09-06:
+    // `larder_empty` fired 105 times and the town circuit ran zero times, because the
+    // listener was in the wrong process. Nothing failed; it was simply never called.
+    //
+    // Best-effort, exactly as in the broker: a hook that throws is disabled by the loader,
+    // and a loader that throws is caught here. No hooks is the shipped behaviour.
+    try {
+      const hooks = await import('./m59-hooks.mjs');
+      await hooks.loadHooks();
+      const rows = hooks.hookStatus();
+      if (rows.length) {
+        hooks.attachTo(ledgerAttachHooks);
+        const live = rows.filter((r) => !r.disabled);
+        console.error(`[hooks] keeper: ${live.length} handler(s) registered`);
+        for (const r of rows.filter((r) => r.disabled))
+          console.error(`[hooks] keeper REFUSED ${r.name}: ${r.why}`);
+      }
+    } catch (e) {
+      console.error(`[hooks] keeper: not loaded (${e.message})`);
+    }
     if (mode === 'tick') {
       // WARM THE MAP THIS KEEPER'S ROUTER WILL USE, before the Router loads it.
       // loadMap() is cached per process, so calling it here (and building on the SAME map

@@ -1968,8 +1968,45 @@ export class Autopilot {
     const larder = this.larder(this.s.client);
     if (!larder.length) {
       this.vigor.starved_passes++;
+      // SAY IT ONCE, ON THE EDGE. This is the moment the operator's whole circuit turns on --
+      // food is the countdown timer to the next town stop, and this is the alarm going off --
+      // but fightFloor() runs every pass, so a level-triggered event here would write
+      // thousands of identical rows and drown the ledger it is trying to inform.
+      //
+      // Fires when the larder goes empty and is armed again only once food is aboard, so a
+      // character that finds a mushroom and eats it produces two rows rather than two
+      // thousand. Cheap enough to sit on the hot path: one boolean.
+      // AN EMPTY READ IS NOT AN EMPTY LARDER.
+      //
+      // The broker keeps in-process autopilot STUBS beside every keeper-backed session, and a
+      // stub has no client -- so `larder()` returns [] and the character reads as starving
+      // for ever. Live on prod 2026-09-06 that produced 73 firings for one agent inside an
+      // hour, against a handful of real ones, and the giveaway was the `character` column:
+      // agent ids (`t15`, `t5`) from stubs mixed with real names (`Clifford`, `Pepe`) from
+      // keepers.
+      //
+      // So require evidence that we could actually SEE a pack. `items` present and an array
+      // is the difference between "looked, found nothing" and "never looked". A character
+      // genuinely carrying nothing still has an items array; a stub has no client at all.
+      const canSeePack = Array.isArray(this.s?.client?.items);
+      if (canSeePack && !this._larderWasEmpty) {
+        this._larderWasEmpty = true;
+        try {
+          recordEvent(this.who(), 'larder_empty', {
+            room: this.s?.world?.room?.num ?? null,
+            room_name: this.s?.world?.room?.name ?? null,
+            vigor: this.s?.client?.vitals?.()?.vigor?.value ?? null,
+            fight_floor_wanted: want,
+            fight_floor_used: Math.min(want, STARVED_FIGHT_VIGOR),
+            purse: this.s?.client?.purse?.() ?? null,
+            note: 'resting caps vigor at 80 of 200 and only food goes above it, so from here '
+                + 'this character cannot reach a fight floor above 80 however long it rests',
+          });
+        } catch { /* telemetry must never break the thing it is measuring */ }
+      }
       return Math.min(want, STARVED_FIGHT_VIGOR);
     }
+    this._larderWasEmpty = false;
     // A LARDER THAT IS NOT EMPTY CAN STILL BE TOO SMALL. See reachableFightFloor: resting
     // stops at 80 and the rest has to be eaten, so one mushroom against a floor of 140 is
     // still a floor nothing can reach. Counted the same way, because it is the same fact
@@ -11074,8 +11111,25 @@ export class Autopilot {
       // fleet-mates crossed the same room without noticing. `backUpToUnstick` climbs from the
       // breadcrumbs to the square this character came in by, and then back through the door
       // into the previous room, depending on how many times this room has already needed it.
-      let backedOff = null;
-      try {
+      // ONE CHARACTER'S UNSTICK TACTIC IS A POLICY, NOT A BUILD FLAG.
+      //
+      // `escape_ladder: false` leaves this character to the hold below and nothing else, so
+      // a fleet can be split down the middle and both halves run at the same hour, in the
+      // same rooms, against the same spawns. That is the only way to ask "is the ladder
+      // worth its cost" without comparing two different days.
+      //
+      // Deliberately per character rather than per process. The arrangement it replaces was
+      // two brokers with different environments, which needs two keeper bands, two ports and
+      // twice the machine — and still cannot rule out that one arm simply had a worse hour.
+      //
+      // `back_up_when_wedged` is NOT this switch and never was: it gates
+      // escapeIfWedgedAndHurt, the survival rung below the flee line. This gates the ladder
+      // a HEALTHY wedged character reaches, which is the larger population and the one the
+      // record/cancel split restored.
+      const ladderOff = this.policy?.escapeLadder === false;
+      let backedOff = ladderOff
+        ? { moved: false, skipped: 'escape_ladder is off for this character' } : null;
+      if (!ladderOff) try {
         const out = await this.backUpToUnstick('a wedge the watchdog gave up on',
                                                { advice, to });
         const after = this.wedgePlace();
@@ -11118,9 +11172,30 @@ export class Autopilot {
               'the square that failed. If this line repeats at the same square, the square ' +
               'is the problem: record it with m59-recordjam.mjs',
       });
+      // ONE ROW PER GIVE-UP, IN BOTH ARMS. This event already existed and already fired
+      // whether or not anything was climbed, which makes it the denominator the escape
+      // ladder can be priced against: of the characters that wedged, what happened next,
+      // with the ladder and without it.
+      //
+      // A duplicate emitter was briefly added at the top of this branch to do exactly this,
+      // because the search that preceded it looked for `stuck_backed_up` and never asked
+      // whether a give-up event already existed. It did. Every wedge then wrote two rows —
+      // one carrying the arm and one not — and an analysis that read a missing
+      // `escape_ladder` as false counted every ladder-arm wedge in BOTH arms. That is where
+      // "the ladder arm re-wedges 100% of the time" came from: it was the same event,
+      // counted twice, three seconds apart.
+      //
+      // `escape_ladder` is stamped on the ROW rather than joined from the roster afterwards,
+      // because a roster is edited between runs and a row is not.
       recordEvent(this.who(), 'wedge_gave_up', {
-        room: advice.room, col: advice.col, row: advice.row, to, repeats: advice.repeats,
+        room: advice.room, room_name: this.s?.world?.room?.name ?? null,
+        col: advice.col, row: advice.row, to, repeats: advice.repeats,
         wedged_for_ms: advice.wedged_for_ms,
+        escape_ladder: !ladderOff,
+        climbed: backedOff?.moved === true,
+        rung: backedOff?.rung ?? null,
+        health: this.s?.client?.vitals?.()?.health?.value ?? null,
+        max_health: this.s?.client?.vitals?.()?.health?.max ?? null,
       });
       this.recordFrame('gave up a wedge');
       return { refused: true, gave_up: true, repeats: advice.repeats,

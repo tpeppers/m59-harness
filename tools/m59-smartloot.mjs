@@ -1,4 +1,5 @@
 // WHAT IS IN THE PACK DECIDES WHERE THE TRIP GOES.
+import { readFileSync } from 'node:fs';
 import { foodValue } from './m59-items.mjs';
 //
 //   import { classifyPack, routeFor } from './m59-smartloot.mjs';
@@ -68,6 +69,40 @@ const isFoodName = (n) => {
 // only spends charges while worn, and the rose is not consumed when used.
 const VAULTABLE = /\b(wand|scroll|rose|ring of invisibility|mystic sword|true lute|dragon scale|angel feather|shrunken head|inky)\b/i;
 
+// AND WHATEVER ELSE THIS FLEET HAS LEARNED IS WORTH KEEPING.
+//
+// The list above is a MECHANIC -- those items do not rot (piGoBadTime = -1), so keeping them
+// is a fact about the game and belongs in git. WHICH magical items a particular fleet
+// recognises on a particular server is a BET that changes as it learns, and editing a tracked
+// regex to record it puts this repository's history in the middle of somebody's loot table.
+//
+// So `substrate/dumbot/magical-items.local.json` may add names. ABSENT IS NOT EMPTY: an
+// absent file is the shipped list unchanged, the rule every other overlay here follows
+// (policy.local.json, watchdog.local.json, the loadouts). It can only ADD -- a private file
+// cannot make a wand sellable, because the reason wands are kept is that they do not rot,
+// and that reason is not ours to overrule.
+//
+// Names are ESCAPED rather than pasted into a pattern. A stray bracket in a hand-edited list
+// would otherwise throw at import and take the classifier with it, and a classifier that
+// throws here routes every trip as though the pack were empty -- which is a road death, not
+// a syntax error.
+const PRIVATE_VAULTABLE = (() => {
+  try {
+    const file = new URL('../substrate/dumbot/magical-items.local.json', import.meta.url);
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    const names = (doc.keep || doc.vaultable || [])
+      .filter((n) => typeof n === 'string' && n.trim());
+    if (!names.length) return null;
+    const esc = names.map((n) => n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp('(?:' + esc.join('|') + ')', 'i');
+  } catch { return null; }
+})();
+
+/** Kept rather than sold: the shipped mechanic, plus whatever this fleet has added. */
+export function isVaultable(name) {
+  return VAULTABLE.test(name) || (PRIVATE_VAULTABLE ? PRIVATE_VAULTABLE.test(name) : false);
+}
+
 // NEVER OFFER, NEVER WIELD. The amulet equips itself and cannot be removed; a cursed weapon
 // clings to the hand for the life of the character. Both are handled elsewhere too — this is
 // so a classification never quietly counts one as sellable stock.
@@ -89,7 +124,7 @@ export function classifyPack(items = []) {
     if (NEVER.test(n)) { out.never.push(n); continue; }
     // Vaultable first: a mystic sword is a weapon and a wand is not a reagent, and in both
     // cases what it IS matters less than the fact we are not selling it.
-    if (VAULTABLE.test(n)) { out.vaultable.push(n); continue; }
+    if (isVaultable(n)) { out.vaultable.push(n); continue; }
     if (WEAPON.test(n) || WEARABLE.test(n)) { out.smithOnly.push(n); continue; }
     if (GEM.test(n)) { out.gems.push(n); continue; }
     // FOOD BEFORE REAGENT — the overlap is one-way and only this order resolves it. See the

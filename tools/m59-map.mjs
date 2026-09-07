@@ -426,6 +426,7 @@ async function build({ chunk = 300 } = {}) {
                        `${roomRscs.filter(n => stringByRsc.has(n)).length}/${roomRscs.length} .roo filenames resolved\n`);
 
   // Assemble.
+  let goExitsClamped = 0;
   const byNum = {};
   for (const r of rooms) {
     const nameRsc = nameRscByClass.get(r.cls);
@@ -439,13 +440,62 @@ async function build({ chunk = 300 } = {}) {
       condition: e.length > 5 ? { type: e[5], name: COND_NAME[e[5]] || `cond${e[5]}`, threshold: e[6] } : null,
     }));
 
-    const gos = (r.exitList ? lists.get(r.exitList) || [] : []).map(e => ({
-      row: e[0], col: e[1],
-      to: e[2], locked: e[2] === ROOM_LOCKED_DOOR,
-      arriveRow: e[2] === ROOM_LOCKED_DOOR ? null : e[3],
-      arriveCol: e[2] === ROOM_LOCKED_DOOR ? null : e[4],
-      angleChange: e[2] === ROOM_LOCKED_DOOR ? null : e[5],
-    }));
+    // A DOOR ON THE FAR WALL IS DECLARED ONE SQUARE PAST THE END OF THE ROOM.
+    //
+    // `plExits` rows and columns are 1-based; RoomGeometry's grid is 0-based and its arrays
+    // are `[rows][cols]`. Nothing converted between them, so every door in the world sat one
+    // square down-and-right of where it is. Usually invisible — the next square over is open
+    // floor too, so the router walked to a spot beside the door and the door still worked.
+    //
+    // On a door against the FAR wall it is fatal. barlport.kod:47-48 declares
+    // `[29, 27, RID_BAR_NORTH, ...]` in a room that is 29 rows, so rows 0..28: the only two
+    // doors into The Ports of Barloque land off the grid. An off-grid square gets no
+    // outbound routes in the bake, so it exists purely as a destination — you can arrive on
+    // it and never leave. Room 114, the vaultman's office, has exactly two exits and both
+    // lead to 107, which made the vault reachable in one direction only. Every trip in
+    // failed `route_progressing_exits_exhausted` with `legs 0`, 14 times in 24 hours, while
+    // its neighbours arrived 100%; three characters wandered into Ukgoth instead and one
+    // died there.
+    //
+    // CLAMP, DO NOT SUBTRACT. 79 of the 83 off-grid doors land on walkable floor when the
+    // overflowing axis is clamped to the last valid index, and the round trip agrees the
+    // clamped square is the true one: entering 107 from 101 the map says you arrive at
+    // 27,27 — one row from the clamped door at 28,27, two from the declared 29,27, and every
+    // other door in that pair sits exactly one square from its arrival point.
+    //
+    // A BLANKET -1 ON EVERY DOOR IS NOT JUSTIFIED and would be a much larger change. The
+    // evidence points both ways: no coordinate anywhere in 1063 doors is ever 0, which is
+    // what a 1-based source looks like; but declared squares are walkable more often than
+    // declared-minus-one, 922 to 768. That second number is confounded, because a door
+    // square usually reads unwalkable in the static `.roo` — the file ships doors shut, as
+    // m59-routes.mjs already documents. Settling it needs a live test: stand a character on
+    // a known door and compare the server's reported position against both readings. Until
+    // then this fixes the doors that are provably broken and leaves the rest alone.
+    //
+    // `declared` is kept whenever the clamp fires so the original is never lost and a reader
+    // can tell a corrected door from an untouched one.
+    // EXACTLY ONE PAST THE EDGE, AND NO FURTHER. 82 of the 83 off-grid doors overshoot by
+    // exactly 1 on the high edge, which is the fencepost. The rest do not, and
+    // m59-atlas-topology.mjs records the reason: "a handful of public-map records
+    // deliberately sit beyond the collision grid (for example a scripted portal)". Room 853's
+    // four doors are 7 columns out and clamping them lands on solid rock — that is not this
+    // bug, and moving them would be inventing a door. So the correction fires only on the
+    // off-by-one it can prove, and anything further out is left exactly where the map put it.
+    const clampDoor = (v, extent) =>
+      (Number.isInteger(v) && Number.isInteger(extent) && v === extent) ? extent - 1 : v;
+    const gos = (r.exitList ? lists.get(r.exitList) || [] : []).map(e => {
+      const row = clampDoor(e[0], r.rows), col = clampDoor(e[1], r.cols);
+      const slid = row !== e[0] || col !== e[1];
+      if (slid) goExitsClamped++;
+      return {
+        row, col,
+        ...(slid ? { declared: { row: e[0], col: e[1] } } : {}),
+        to: e[2], locked: e[2] === ROOM_LOCKED_DOOR,
+        arriveRow: e[2] === ROOM_LOCKED_DOOR ? null : e[3],
+        arriveCol: e[2] === ROOM_LOCKED_DOOR ? null : e[4],
+        angleChange: e[2] === ROOM_LOCKED_DOOR ? null : e[5],
+      };
+    });
 
     // plYell_Zone is a FLAT list of room numbers, unlike the other two.
     const yell = r.yellList ? (lists.get(r.yellList) || []).filter(x => typeof x === 'number') : [];
@@ -1540,6 +1590,13 @@ if (import.meta.filename === process.argv[1]) {
     console.log(`${rooms.length} rooms, ${edges} directed exits`);
     console.log(`${rooms.filter(r => !r.edgeExits.length && !r.goExits.length).length} rooms with no exits at all`);
     console.log(`${rooms.reduce((n, r) => n + r.goExits.filter(g => g.locked).length, 0)} locked doors`);
+    // Say it out loud. These are doors the .kod declares one square past the end of the
+    // room; leaving them uncorrected is what made the Barloque vault unreachable.
+    const clamped = rooms.reduce((n, r) => n + r.goExits.filter(g => g.declared).length, 0);
+    console.log(clamped
+      ? `${clamped} door(s) clamped back onto the grid — declared past the room's own extent; ` +
+        `each keeps its original in .declared`
+      : 'no door was declared outside its room');
     // A destination that is not itself a room in the graph means the scan range
     // missed something, which would silently truncate every route through it.
     const nums = new Set(rooms.map(r => r.num));

@@ -87,7 +87,28 @@ export function recordEvent(character, kind, detail = {}) {
   if (!character) return;
   append({ t: Date.now(), iso: new Date().toISOString(), ...detail,
            type: 'event', character, kind });
+  // AND LET A PRIVATE STRATEGY KNOW, AFTER THE ROW IS SAFELY WRITTEN.
+  //
+  // This is the fleet's one choke point for "something notable happened", which is exactly
+  // what a hook wants to subscribe to -- so hooks hang here rather than every emitter growing
+  // its own listener list. See tools/m59-hooks.mjs for the rules a handler runs under.
+  //
+  // ORDER MATTERS AND IS NOT NEGOTIABLE: the append is above, the fire is below. Losing the
+  // record of what happened is worse than losing the reaction to it, and a hook that throws
+  // must never be able to cost us the evidence. `fireEvent` itself cannot throw.
+  //
+  // LAZY, AND SILENT WHEN ABSENT. The ledger is imported by tools that must never start a
+  // keeper, so it cannot import the hook loader at module scope. No hooks registered is the
+  // shipped behaviour, and it costs one Map lookup.
+  if (_fireEvent) {
+    try { _fireEvent(kind, { character, kind, detail }); } catch { /* never the ledger's problem */ }
+  }
 }
+
+// Wired by whoever loads hooks (the broker/keeper at startup), so a tool that only reads the
+// ledger never pulls the hook machinery in. Absent = no hooks, which is the default.
+let _fireEvent = null;
+export function attachHooks(fire) { _fireEvent = typeof fire === 'function' ? fire : null; }
 
 // `rows` is the fleet tool's own output, so the ledger records exactly what a
 // supervisor would have seen rather than a second, subtly different view.

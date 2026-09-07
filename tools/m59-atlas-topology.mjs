@@ -38,7 +38,10 @@ const EDGE_KEYS = new Set([
   'leaveName', 'to',
 ]);
 const GO_KEYS = new Set([
-  'angleChange', 'arriveCol', 'arriveRow', 'col', 'locked', 'row', 'to',
+  // `declared` is the door's original, pre-clamp coordinate, present only on the doors the
+  // map builder corrected. See m59-map.mjs: the .kod puts far-wall doors one square past the
+  // end of the room, and the original is kept rather than discarded so this stays reversible.
+  'angleChange', 'arriveCol', 'arriveRow', 'col', 'declared', 'locked', 'row', 'to',
 ]);
 const CONDITION_KEYS = new Set(['name', 'threshold', 'type']);
 const LEAVE_NAMES = new Map([
