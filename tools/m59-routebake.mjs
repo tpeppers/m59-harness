@@ -486,29 +486,24 @@ export function exitAnchors(room, geometry,
     out.push({ kind: 'edge', dir, to: e.to, row: best.row, col: best.col,
                ...(strict ? { body_reachable: true } : {}) });
   }
-  // A DOOR OUTSIDE THE ROOM'S OWN GRID IS NOT A PLACE TO STAND.
+  // KOD IS 1-BASED; THIS TABLE IS TOO, BECAUSE THE ROUTER WALKS TO THESE SQUARES.
   //
-  // `plExits` puts far-wall doors one square past the end (see m59-map.mjs, which clamps
-  // them on the way in and records the original in `.declared`). This is the second line of
-  // defence, for a map baked before that fix: an off-grid square gets no outbound routes,
-  // so it lands in the table as a destination you can arrive on and never leave. That is
-  // what made the Barloque vault a one-way room for a fortnight, silently.
+  // `exitAnchors` output is a MOVEMENT coordinate — `stand_on` in a refusal, the target of
+  // walk_to — and movement speaks the .kod's 1-based squares. So the anchor keeps the
+  // literal. The 0-based conversion belongs wherever geometry is indexed, not here, and
+  // editing the anchor to suit the geometry is what sealed a character into The Crypt.
   //
-  // Silence is the actual bug. Clamp it, and SAY SO, so a stale map announces itself at
-  // bake time instead of being discovered from a character wandering into Ukgoth.
+  // The bound below is therefore `> rows`, not `>= rows`: row `rows` is the last row.
   for (const g of room.goExits ?? []) {
     if (!Number.isInteger(g.row) || !Number.isInteger(g.col)) continue;
-    let { row, col } = g;
-    // Only the off-by-one, matching m59-map.mjs. A door further out than one square is
-    // either a scripted portal or something we do not understand, and both want leaving.
-    if (Number.isInteger(room.rows) && row === room.rows) row = room.rows - 1;
-    if (Number.isInteger(room.cols) && col === room.cols) col = room.cols - 1;
-    if (row < 0 || col < 0) continue;
-    if (row !== g.row || col !== g.col)
-      offGridDoors.push(`room ${room.num} door->${g.to} declared ${g.row},${g.col} ` +
-                        `in a ${room.rows}x${room.cols} room, clamped to ${row},${col}`);
-    out.push({ kind: 'go', to: g.to, row, col, locked: !!g.locked });
+    if (g.row < 1 || g.col < 1) continue;
+    if (Number.isInteger(room.rows) && g.row > room.rows) { offGridDoors.push(
+      `room ${room.num} door->${g.to} at row ${g.row} in a ${room.rows}-row room`); continue; }
+    if (Number.isInteger(room.cols) && g.col > room.cols) { offGridDoors.push(
+      `room ${room.num} door->${g.to} at col ${g.col} in a ${room.cols}-col room`); continue; }
+    out.push({ kind: 'go', to: g.to, row: g.row, col: g.col, locked: !!g.locked });
   }
+
   // TWO EXITS SHARING A SQUARE ARE ONE PLACE TO WALK TO AND STILL TWO EXITS.
   //
   // This used to drop the later one, which is right about the ROUTING — the pair share a
@@ -1733,10 +1728,9 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     // that fix, and every one of them was a square a character could arrive on and not leave.
     if (offGridDoors.length) {
       console.error(`
-${offGridDoors.length} door(s) were declared outside their own room ` +
-                    `and have been clamped back onto the grid.`);
-      console.error('The map on disk predates the m59-map.mjs fix — rebuild it: ' +
-                    'node tools/m59-map.mjs build');
+${offGridDoors.length} door(s) fall outside their room even read as ` +
+                    `1-based, and were skipped. These are genuinely odd — m59-atlas-topology.mjs ` +
+                    `notes a few deliberate ones ("a scripted portal").`);
       for (const d of offGridDoors.slice(0, 12)) console.error(`  ${d}`);
       if (offGridDoors.length > 12) console.error(`  ...and ${offGridDoors.length - 12} more`);
     } else {

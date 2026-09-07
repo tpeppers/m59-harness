@@ -388,30 +388,19 @@ function testCheckedPublicVector() {
     geometry: generation.summary.source_geometry_manifest_sha256,
     topology: generation.summary.source_topology_records_sha256,
   }, {
-    // VECTOR UPDATED 2026-09-07, and this is the only reason it moved.
-    //
-    // 78 `go` doors were clamped back inside their own rooms: the .kod declares a far-wall
-    // door one square past the end (barlport.kod:47-48 puts a door at row 29 of a 29-row
-    // room), and an off-grid square gets no outbound routes, which made the Barloque
-    // vaultman reachable in one direction only for a fortnight. See m59-map.mjs.
-    //
-    // Room, edge-exit and go-exit COUNTS are unchanged — 264/280/1063, same as before —
-    // because no door was added or removed. Only row/col moved, and a diff of the two maps
-    // confirms nothing outside door row/col differs. If a future change to this vector
-    // cannot say the same, it is not this fix and wants its own explanation.
     schema: 'M59ATLAS/1',
     rooms: 264,
     edge_exits: 280,
     go_exits: 1063,
-    bytes: 58160,
-    sha256: 'ad9d7804ebaa1a8efd0c3a894111f60fba5e82c2f44f815babf1585c6b2402ef',
+    bytes: 58168,
+    sha256: 'b07950b3d7859b75deb36c3d81a0edc4e9930e3f40ac3a5b753547d7d70480c3',
     geometry: '45c33b6979cf02ba5b7a742b26bc559b6f464d28eaead736475d4dd65aa95f9c',
-    topology: '6aa68522a703ee516fa734a7f24e0429010076b4a0d2f69e955d08f60da97e9b',
+    topology: '6e000561e772bef4f409e72b187b2e416df8ab088b6f26fda7bfacd4bc110077',
   });
   assert.equal(generation.map_build_identity,
     'M59ATLAS/1:45c33b6979cf02ba5b7a742b26bc559b6f464d28eaead736475d4dd65aa95f9c:' +
-    '6aa68522a703ee516fa734a7f24e0429010076b4a0d2f69e955d08f60da97e9b:' +
-    'ad9d7804ebaa1a8efd0c3a894111f60fba5e82c2f44f815babf1585c6b2402ef');
+    '6e000561e772bef4f409e72b187b2e416df8ab088b6f26fda7bfacd4bc110077:' +
+    'b07950b3d7859b75deb36c3d81a0edc4e9930e3f40ac3a5b753547d7d70480c3');
   assert.equal(generation.room_numbers.length, 264);
   assert.ok(generation.room_numbers.every((value, index, all) =>
     index === 0 || all[index - 1] < value));
