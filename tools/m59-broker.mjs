@@ -5703,7 +5703,13 @@ const TOOLS = [
       });
 
       if (a.background) {
-        startTravel();
+        const job = startTravel();
+        // A proxy has only sent an HTTP request. Wait for the socket owner's
+        // acknowledgement so a busy refusal cannot masquerade as a launched walk.
+        if (s instanceof KeeperProxy) {
+          const accepted = await job.promise;
+          if (accepted?.started !== true) return { destination: where, ...accepted };
+        }
         // `route()` returns { found, hops: [...] }, NOT an array — see the note in
         // m59-autopilot.mjs. Taking `.length` off it has always produced undefined, so this
         // number has never once been reported. A keeper-backed session answers `found: null`
@@ -14502,6 +14508,11 @@ const TOOLS = [
           // What it is up to, in the words a person would use. `time` says which
           // bucket the seconds landed in; this says what is happening.
           activity: st?.activity ?? (ap ? ap.activity() : 'no keeper'),
+          suspended_journey: st?.suspended_journey ?? null,
+          position: (() => {
+            const me = s instanceof KeeperProxy ? s._state?.you : c.self;
+            return me ? { row: me.row, col: me.col } : null;
+          })(),
           // PUBLISHED ON THE ROW so that waiting for the fleet to park is ONE call
           // rather than one per character. m59-update.mjs polls this every few seconds
           // across twenty-one characters, and twenty-one `autopilot status` calls a

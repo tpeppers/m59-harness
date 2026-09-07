@@ -4929,50 +4929,8 @@ class Session {
       { speed: this.moveSpeed(), slide: true, minGap: MOVE_INTERVAL_MS });
     const validation = queued.validation ?? {};
     if (!queued.sent) {
-      // In keeper mode, if the collision check rejected the move
-      // due to geometry (stale .roo), send it anyway. The server
-      // will accept or reject based on its own geometry.
-      if (process.env.M59_KEEPER && (validation.blocked || validation.reason) && validation.reason !== 'room_changed_before_move') {
-        // DECLARED OUTSIDE THE TRY. It used to be `const c2` inside it, and the catch
-        // below reads c2.room.id -- where it is out of scope. So any failure in this
-        // branch made the ERROR HANDLER throw `ReferenceError: c2 is not defined`,
-        // which destroyed the real error and propagated a crash to the caller. Seen
-        // live as `reason=c2 is not defined (32792ms)`: a swallowed ReferenceError
-        // wearing the costume of an ordinary refusal.
-        let c2 = null;
-        try {
-          c2 = this.need();
-          const rawTo = { x: Math.round(x), y: Math.round(y) };
-          const rawSpeed = c2.moveSpeed() ?? 1;
-          const rawRoomId = c2.room?.id ?? 0;
-          const rawFrom = c2.self ? { x: c2.self.x, y: c2.self.y } : null;
-          c2.moveTo(rawTo.x, rawTo.y, rawSpeed, rawRoomId);
-          this.recordUnsafeWireMove?.({
-            client: c2,
-            roomId: rawRoomId,
-            from: rawFrom,
-            requested: rawTo,
-            to: rawTo,
-            speed: rawSpeed,
-            offMap: false,
-            unsafeReason: 'keeper_unvalidated_fallback',
-            priorValidation: validation,
-          });
-          await new Promise(r => setTimeout(r, 300));
-          const after = c2.self;
-          if (after && before && (after.x !== before.x || after.y !== before.y)) {
-            return { moved: true, position: { x: after.x, y: after.y, col: after.col, row: after.row },
-                     left_room: c2.room?.id !== startRoom, travelled: Math.hypot(after.x - before.x, after.y - before.y),
-                     raw_move: true };
-          }
-          return { moved: false, position: before, left_room: c2.room?.id !== startRoom,
-                   reason: 'raw_move_rejected', note: 'server rejected the raw move' };
-        } catch (e) {
-          return { moved: false, position: before,
-                   left_room: (c2?.room?.id ?? startRoom) !== startRoom,
-                   reason: 'raw_move_error', note: e.message };
-        }
-      }
+      // Return the collision refusal to the walker so it can fan or replan.
+      // Keeper processes use the same local geometry contract as direct sessions.
       return {
         moved: false, position: p0 ? { x: p0.x, y: p0.y, col: p0.col, row: p0.row } : null,
         left_room: c.room.id !== startRoom,

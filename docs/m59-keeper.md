@@ -642,3 +642,15 @@ What it fixes is that the state was **invisible**. "Stalled for 27 minutes" and 
 27 minutes with nothing that can act on it" are different facts, and only the second is an
 emergency. A character nobody can help and a character nobody can *see* look identical from
 outside, and only one of them is fixable by whoever is on shift.
+# Travel completion and progress
+
+Background travel acknowledges the socket owner's accepted job; a busy refusal is
+returned to the caller. The fleet board includes named `position.row`/`position.col`
+and `suspended_journey` so an external director can distinguish progress, recovery,
+and an abandoned route. Crossing the destination door does not release the body:
+the job can still be completing its arrival rest.
+
+A resumed journey that ends short retains its original deadline and destination,
+with a five-second pause and the existing attempt/death guards. Fine-move collision
+refusals retain their original reason in keeper processes, allowing the walker to
+replan instead of failing with an unrelated raw-movement exception.

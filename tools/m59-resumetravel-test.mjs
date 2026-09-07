@@ -922,5 +922,20 @@ console.log('FLAT ONLY MEANS "AS WELL AS I WILL GET" IF SOMETHING IS HEALING YOU
      noWall.travelled.length > 0, JSON.stringify({ flat: noWall.resumeFlat, asks: noWall.resumeWallAsks }));
 }
 
+{
+  const k = keeper();
+  const at = Date.now() - 1000;
+  k.suspendedJourney = { to: 114, at, attempts: 1, deaths_at: 0 };
+  k.travel = async () => ({ arrived: false, reason: 'exit_candidates_exhausted' });
+  await k.resumeSuspendedJourney(ctxFor(k));
+  ok('a resumed route ending short retains its destination and original deadline',
+    k.suspendedJourney?.to === 114 && k.suspendedJourney.at === at
+    && k.suspendedJourney.attempts === 2 && k.suspendedJourney.next_try_at > Date.now());
+  k.suspendedJourney.next_try_at = 0;
+  k.travel = async () => { k.tally.deaths++; return { arrived: false }; };
+  await k.resumeSuspendedJourney(ctxFor(k));
+  ok('a death during a resumed route is not saved as another attempt', !k.suspendedJourney);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

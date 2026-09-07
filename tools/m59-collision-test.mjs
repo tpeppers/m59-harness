@@ -3103,6 +3103,19 @@ if (![validateFineTarget, queueValidatedMove, confirmPosition, stepFine, ordinar
      invalidated.packets.length === 0,
      JSON.stringify({ geometryChanged, packets: invalidated.packets }));
 
+  const wasKeeper = process.env.M59_KEEPER;
+  process.env.M59_KEEPER = '1';
+  try {
+    const refusedInKeeper = await stepFine.call(invalidated.session,
+      clientToWire(3072), clientToWire(2048));
+    ok('keeper mode preserves the collision refusal for the route planner',
+       refusedInKeeper.reason === 'collision_geometry_changed'
+       && invalidated.packets.length === 0, JSON.stringify(refusedInKeeper));
+  } finally {
+    if (wasKeeper === undefined) delete process.env.M59_KEEPER;
+    else process.env.M59_KEEPER = wasKeeper;
+  }
+
   let fatalFineCalls = 0;
   const fatalClient = {
     room: { id: 1 },

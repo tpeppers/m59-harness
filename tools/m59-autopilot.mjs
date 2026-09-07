@@ -15005,6 +15005,7 @@ export class Autopilot {
     await this.releaseRestedHold();
     const j = this.suspendedJourney;
     if (!j) { this.resumeBest = null; this.resumeFlat = 0; this.resumeSaid = null; return CONTINUE; }
+    if (Date.now() < (j.next_try_at ?? 0)) return CONTINUE;
     if (this.policy.resumeTravel === false)
       return this.resumeDeclined('resume_travel is switched off for this character');
 
@@ -15210,14 +15211,26 @@ export class Autopilot {
     });
     recordEvent(this.who(), 'travel_resumed', { to: j.to, trigger: j.trigger, attempts: j.attempts });
     this.goTravelling(`travelling to ${j.to} (resumed)`, { to: j.to, attempts: j.attempts });
+    const ours = this.inert;
+    let outcome = null;
     try {
-      await this.travel(j.to, { maxHops: 30 });
+      outcome = await this.travel(j.to, { maxHops: 30 });
     } catch (e) {
       this.note('resumed journey failed', { to: j.to, why: e.message });
     } finally {
       // Only ours. A take-back during the resume has already revived and may have started
       // something else; reviving that would be the two-drivers bug wearing a third hat.
-      if (this.inert?.travelling && this.inert.to === j.to) this.revive('resumed journey ended');
+      if (ours && this.inert === ours) {
+        const here = Number(this.s.world?.room?.num);
+        if (outcome?.arrived !== true && here !== Number(j.to)
+            && !outcome?.refused && here !== 1 && !this.recoverUntilWhole
+            && (this.tally?.deaths ?? 0) === j.deaths_at) {
+          this.suspendedJourney = { ...j, attempts: (j.attempts ?? 0) + 1,
+            trigger: outcome?.reason ?? outcome?.outcome ?? 'resumed journey ended short',
+            next_try_at: Date.now() + 5000 };
+        }
+        this.revive('resumed journey ended');
+      }
     }
     return HANDLED;
   }
