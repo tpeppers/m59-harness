@@ -187,6 +187,16 @@ console.log('\nthe plan refuses rather than inventing');
 
 console.log('\ntransitOk stops removing the room from the route graph');
 {
+  const geo = sharedRoomGeometry(map.rooms[38]);
+  const upstairs = map.rooms[38].goExits.filter(e => e.to === 39);
+  const south = sameRoomDoorPlan(map,38,geo,{row:10,col:32,x:2080,y:672},upstairs);
+  ok('the south side reaches the upstairs door lip without returning through the internal wall',
+    south?.walkable === true && !south.doors.length);
+  const north = sameRoomDoorPlan(map,38,geo,{row:7,col:32,x:2080,y:480},upstairs);
+  ok('the north room still needs its internal door to reach the upstairs stairs',
+    north?.doors?.[0]?.row === 8 && north?.doors?.[0]?.col === 32);
+}
+{
   const w = new World(null, map);
   const t = w.transitOk();
   ok('39 -> 41 through Castle Victoria is no longer a hard refusal', t(38, 39, 41) === null);

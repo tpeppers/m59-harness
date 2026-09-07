@@ -354,10 +354,29 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
     // In rooms with internal doors, prove the direct walk from the live fine position
     // before deciding that no door is needed (Castle's north-east room exposed this).
     const allLandingsWalkable = doors.every(d => walkingLandings.has(`${d.arriveRow},${d.arriveCol}`));
-    const proved = !liveFine || allLandingsWalkable || finePath(geo,
-      { x: protocolToClient(from.x), y: protocolToClient(from.y) },
-      pointOfSquare(geo, here.at.row, here.at.col),
-      { bounds: boundsAround([from, here.at], 4), maxNodes: 4000 }).found;
+    const approaches = [here.at];
+    // A published go square can be a doorway pocket, with no occupiable stand
+    // point at its center. Prove reaching the lip as well, just as reachesDoor
+    // does below. Otherwise the south side of Castle's wall loops north again
+    // even though the body can walk to r3c19 beside the stairs.
+    if (room.goExits?.some(d => d.row === here.want.row && d.col === here.want.col)) {
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if (!dr && !dc) continue;
+        const p = { row: here.want.row + dr, col: here.want.col + dc };
+        if (geo.walkable(p.row, p.col) && canWalk(start, p)) approaches.push(p);
+      }
+    }
+    approaches.sort((a, b) => Math.hypot(a.row-from.row,a.col-from.col) - Math.hypot(b.row-from.row,b.col-from.col));
+    let nodesLeft = 6000;
+    const proved = !liveFine || allLandingsWalkable || approaches.some(at => {
+      if (nodesLeft <= 0) return false;
+      const route = finePath(geo,
+        { x: protocolToClient(from.x), y: protocolToClient(from.y) },
+        pointOfSquare(geo, at.row, at.col),
+        { bounds: boundsAround([from, at], 4), maxNodes: Math.min(2000, nodesLeft) });
+      nodesLeft -= route.nodes ?? 0;
+      return route.found;
+    });
     if (proved) return { doors: [], target: here.want, walkable: true };
   }
 

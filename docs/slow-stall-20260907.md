@@ -61,3 +61,10 @@ A numbered stack needs an explicit offered quantity even when only one remains:
 `UserOffer` consumes `number_list` for every `NumberItem`. The keeper's sale
 regression now sells 51 gems as 25 + 25 + 1. Rizzo's initial tagged run exposed
 the missing final quantity; a refused last gem is not a completed stack sale.
+
+The upstairs go squares are doorway pockets too. From Castle's southern room,
+the body can reach r3c19 beside the stairs, although fine search cannot occupy
+the modeled center of r2c19. The internal-door planner now proves reachable
+approaches to a published go exit; otherwise it incorrectly sends the body back
+into the northern room. The live north/south positions are both pinned by
+`m59-innerdoor-test.mjs`.
