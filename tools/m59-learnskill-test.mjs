@@ -51,7 +51,7 @@
 // errand says it worked" into "the purse moved and the skill did not", which is the
 // difference between noticing it once and paying for it twenty-one times. It is also why
 // nothing here retries: each attempt costs the price again.
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +63,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // suite does — see the note at the top of m59-fleetscript-test.mjs.
 const LOCK_DIR = mkdtempSync(join(tmpdir(), 'm59-learnskill-'));
 process.env.M59_RUNLOCK_DIR = LOCK_DIR;
+// AND A SCRATCH LEDGER. `learn` writes a `learn_attempt` row and READS ITS OWN ROWS BACK to
+// refuse a second charge, so this suite both writes and reads history — which must never be
+// the fleet's own. m59-ledger refuses a test write without this and says so on stderr.
+const LEDGER_DIR = mkdtempSync(join(tmpdir(), 'm59-learnskill-ledger-'));
+process.env.M59_LEDGER_DIR = LEDGER_DIR;
 const LIVE = process.argv.includes('--live');
 if (!LIVE) process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';
 // Each fleetScript call installs its own signal handlers; a suite that runs a dozen trips
@@ -223,16 +228,20 @@ if (!LIVE) {
 
   console.log('\nCHARGED AND NOT DELIVERED IS A FAILURE — the defect of 2026-09-07');
   {
-    const inv = { a1: [{ name: 'shilling', amount: 900 }] };
-    const sent = fakeWorld({ rooms: { a1: 39 }, inventory: inv, learnedAfterPolls: Infinity });
-    const r = await fleetScript(trip({ steps: learnSkillSteps({
+    // ITS OWN AGENT. `learn` now remembers a charge that bought nothing and refuses the
+    // next attempt for that character, so a case that deliberately gets charged would
+    // poison every later case sharing the name. That refusal is exercised on purpose
+    // in its own section further down.
+    const inv = { a9: [{ name: 'shilling', amount: 900 }] };
+    const sent = fakeWorld({ rooms: { a9: 39 }, inventory: inv, learnedAfterPolls: Infinity });
+    const r = await fleetScript(trip({ agents: ['a9'], steps: learnSkillSteps({
       skill: 'punch', teacherRoom: 106, teacher: 'Rook', price: 500, carrying: 900, home: 39 }) }));
     ok('the errand fails even though the counter said nothing was wrong',
-       r.results.a1.ok === false);
+       r.results.a9.ok === false);
     ok('and it says the purse moved and the skill did not',
-       /never appeared in the skill or spell list/.test(r.results.a1.why ?? ''), r.results.a1.why);
+       /never appeared in the skill or spell list/.test(r.results.a9.why ?? ''), r.results.a9.why);
     ok('the purse is down by the price, which is the evidence that matters',
-       inv.a1[0].amount === 400, String(inv.a1[0].amount));
+       inv.a9[0].amount === 400, String(inv.a9[0].amount));
     ok('it asked more than once before believing the no',
        sent.filter(s => s.name === 'abilities').length >= 3,
        String(sent.filter(s => s.name === 'abilities').length));
@@ -329,6 +338,62 @@ if (!LIVE) {
        !sent.some(s => s.name === 'shop' && s.buy_ids));
   }
 
+  console.log('\nA CHARGE THAT BOUGHT NOTHING IS REMEMBERED, and the second attempt is refused');
+  {
+    // The first trip is charged and gets nothing — the 2026-09-07 defect, which writes a row.
+    fakeWorld({ rooms: { a2: 39 }, inventory: { a2: [{ name: 'shilling', amount: 900 }] },
+                learnedAfterPolls: Infinity });
+    const first = await fleetScript(trip({ agents: ['a2'], steps: learnSkillSteps({
+      skill: 'punch', teacherRoom: 106, teacher: 'Rook', price: 500, carrying: 900, home: 39 }) }));
+    ok('the first attempt fails as charged_but_not_delivered',
+       first.results.a2.state?.['1:learn']?.outcome === 'charged_but_not_delivered',
+       JSON.stringify(first.results.a2.state?.['1:learn']));
+
+    // The second is refused BEFORE the counter, on the evidence of the first.
+    const inv = { a2: [{ name: 'shilling', amount: 900 }] };
+    const sent = fakeWorld({ rooms: { a2: 39 }, inventory: inv, learnedAfterPolls: Infinity });
+    const second = await fleetScript(trip({ agents: ['a2'], steps: learnSkillSteps({
+      skill: 'punch', teacherRoom: 106, teacher: 'Rook', price: 500, carrying: 900, home: 39 }) }));
+    ok('the second attempt is refused rather than paying again',
+       second.results.a2.state?.['1:learn']?.outcome === 'refused_after_charge',
+       JSON.stringify(second.results.a2.state?.['1:learn']));
+    ok('and NO money moved the second time',
+       inv.a2[0].amount === 900 && !sent.some(s => s.name === 'shop' && s.buy_ids),
+       String(inv.a2[0].amount));
+    ok('the refusal says when it was charged and what to pass to override',
+       /retry: true/.test(second.results.a2.state?.['1:learn']?.why ?? ''),
+       second.results.a2.state?.['1:learn']?.why);
+
+    // An operator who has understood the cause can say so. Deliberately something you type.
+    const inv3 = { a2: [{ name: 'shilling', amount: 900 }] };
+    const sent3 = fakeWorld({ rooms: { a2: 39 }, inventory: inv3 });
+    const third = await fleetScript(trip({ agents: ['a2'], steps: [
+      walk(106), learn('Rook', 'punch', { retry: true }), { ...walk(39), always: true },
+    ] }));
+    ok('`retry: true` gets past the refusal', third.results.a2.ok === true,
+       JSON.stringify(third.results.a2.why ?? third.results.a2.state?.['1:learn']));
+    ok('and that attempt really did go to the counter',
+       sent3.some(s => s.name === 'shop' && s.buy_ids));
+  }
+
+  console.log('\nand every attempt leaves a row, so the defect is a number not an anecdote');
+  {
+    const rows = readdirSync(LEDGER_DIR)
+      .filter(f => f.endsWith('.jsonl'))
+      .flatMap(f => readFileSync(join(LEDGER_DIR, f), 'utf8').split('\n').filter(Boolean))
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(e => e && e.kind === 'learn_attempt');
+    ok('learn_attempt rows were written', rows.length >= 2, String(rows.length));
+    ok('each names the ability and the teacher',
+       rows.every(r => r.ability === 'punch' && r.teacher === 'Rook'));
+    ok('a charged-and-not-delivered row records what it cost',
+       rows.some(r => r.outcome === 'charged_but_not_delivered' && r.spent === 500),
+       JSON.stringify(rows.map(r => [r.outcome, r.spent])));
+    ok('and `room` is a MAP number, never a room object id',
+       rows.every(r => r.room === null || (Number.isInteger(r.room) && r.room < 1000)),
+       JSON.stringify(rows.map(r => r.room)));
+  }
+
   // OPPORTUNISTIC. `tools/fleetscripts/` holds ORDERS, which live on the machine that owns
   // the roster and are not all committed — so a missing script is not a failure here. When
   // one IS present, its shape is worth checking against what this suite just proved.
@@ -358,6 +423,7 @@ if (!LIVE) {
   }
 
   rmSync(LOCK_DIR, { recursive: true, force: true });
+  rmSync(LEDGER_DIR, { recursive: true, force: true });
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }

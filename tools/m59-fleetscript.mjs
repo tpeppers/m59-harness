@@ -73,7 +73,7 @@ import { fileURLToPath } from 'node:url';
 import { takeRunLock } from './m59-runlock.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
-import { recordEvent } from './m59-ledger.mjs';
+import { recordEvent, readLedger } from './m59-ledger.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const RPC = () => process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901/';
@@ -932,6 +932,21 @@ async function runStep(ctx, agent, step, state) {
     case 'learn': {
       const rx = step.ability instanceof RegExp ? step.ability
         : new RegExp(`^${String(step.ability).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      // ONE ROW PER ATTEMPT, WHATEVER HAPPENED. The money defect this verb exists to catch
+      // has been observed exactly once, by somebody who happened to be watching a console.
+      // A row makes it a number: how often the fleet is charged for nothing, and for what.
+      // It is also what the refusal above reads, so the two are one feature.
+      //
+      // `room` is the MAP NUMBER and never the room object id — `observe` reads it off
+      // `status.where.num`, which is the map's own view. See m59-ledger-space-test.
+      let learnRoom = null;
+      const note = (outcome, extra = {}) => {
+        try {
+          recordEvent(agent, 'learn_attempt', {
+            ability: String(step.ability), teacher: String(step.teacher),
+            outcome, room: learnRoom, ...extra });
+        } catch { /* a ledger write must never cost the errand */ }
+      };
       const held = async (refresh) => {
         const a = await call('abilities', { agent, kind: 'both', refresh }, 60_000)
           .catch(() => null);
@@ -942,11 +957,47 @@ async function runStep(ctx, agent, step, state) {
       // "not offered" branch below cannot tell "you have it" from "you have not earned it",
       // and the first is a success reported as a failure on every repeat run of an errand.
       if (await held(false)) return { ok: true, outcome: 'already_held', ability: step.ability };
+
+      // "DO NOT RETRY IN A LOOP" WAS A COMMENT, AND A COMMENT IS NOT A GUARANTEE.
+      //
+      // The failure this exists for is not a bug in a step, it is a TRIP THAT CANNOT FIX THE
+      // THING THAT OPENED IT: the ability is still missing, so the next sweep plans the same
+      // errand, walks the same road, and pays again — reporting a clean, correct,
+      // well-formed refusal every time. A sibling session watched exactly that shape on
+      // 2026-09-08 in an identify sweep (`karma_too_low`, unfixable by repetition, and it
+      // would have looped for ever once armed), and this verb carries the same hazard with
+      // money attached.
+      //
+      // So a charge that bought nothing is remembered, and the SECOND attempt is refused
+      // rather than merely deprecated in a comment. `retry: true` on the step is the way
+      // past it, because an operator who has fixed the cause must be able to say so — the
+      // same shape as `allowTraps`, and deliberately something you have to type.
+      // MATCHED ON THE SAME KEY IT IS WRITTEN WITH, which here is the AGENT — as the
+      // `vault_trip` row above already is. m59-ledger's own rule is that rows are keyed by
+      // CHARACTER NAME, because an agent name is a broker slot and gets reassigned, and
+      // fleetscript has been writing the slot instead. That is a real inconsistency and
+      // fixing it is a migration of existing rows, not a line in this step; what matters
+      // here is that the read and the write agree, so the refusal cannot silently miss.
+      const priorCharge = step.retry ? null : (() => {
+        try {
+          return readLedger({ sinceMs: step.forgetChargeMs ?? 7 * 24 * 3600 * 1000 }).events
+            .find(e => e.kind === 'learn_attempt' && e.character === agent
+                    && e.outcome === 'charged_but_not_delivered'
+                    && rx.test(String(e.ability ?? '')));
+        } catch { return null; }   // an unreadable ledger must never block an errand
+      })();
+      if (priorCharge) return { ok: false, outcome: 'refused_after_charge',
+        ability: step.ability, when: priorCharge.iso ?? null,
+        why: `this character was already charged ${priorCharge.spent ?? '?'} for ` +
+             `"${step.ability}" on ${String(priorCharge.iso ?? '?').slice(0, 19)} and never ` +
+             'received it. Refusing rather than paying again — pass `retry: true` once the ' +
+             'cause is understood.' };
       const list = await call('shop', { agent, seller: step.teacher }, 60_000).catch(() => null);
       const row = (list?.items || []).find(i => rx.test(String(i.name || '')));
       if (!row) return { ok: false, outcome: 'not_offered', ability: step.ability,
         why: `${step.teacher} is not offering "${step.ability}" and the character does not ` +
              'hold it — PlayerCanLearn says it has not been earned yet. Do not retry.' };
+      learnRoom = (await observe(agent).catch(() => null))?.room ?? null;
       const purseBefore = purseOf((await call('inventory', { agent }, 60_000)
         .catch(() => ({ items: [] }))).items ?? []);
       await call('shop', { agent, seller: step.teacher, buy_ids: [{ id: row.id, amount: 1 }] },
@@ -956,15 +1007,18 @@ async function runStep(ctx, agent, step, state) {
       const until = Date.now() + (ctx.learnSettleMs ?? 15_000);
       for (let i = 0; ; i++) {
         await sleep(Math.min(2500, Math.max(200, ctx.pollMs)));
-        if (await held(i > 0)) return { ok: true, outcome: 'learned', ability: step.ability,
-                                        paid: row.cost ?? null };
+        if (await held(i > 0)) {
+          note('learned', { paid: row.cost ?? null });
+          return { ok: true, outcome: 'learned', ability: step.ability, paid: row.cost ?? null };
+        }
         if (Date.now() >= until) break;
       }
       const purseAfter = purseOf((await call('inventory', { agent }, 60_000)
         .catch(() => ({ items: [] }))).items ?? []);
       const spent = purseBefore - purseAfter;
-      return { ok: false, outcome: spent > 0 ? 'charged_but_not_delivered' : 'not_learned',
-               ability: step.ability, spent,
+      const outcome = spent > 0 ? 'charged_but_not_delivered' : 'not_learned';
+      note(outcome, { spent });
+      return { ok: false, outcome, ability: step.ability, spent,
                why: spent > 0
                  ? `the purse went down ${spent} for "${step.ability}" and it never appeared ` +
                    'in the skill or spell list — do NOT retry in a loop, each attempt costs ' +
