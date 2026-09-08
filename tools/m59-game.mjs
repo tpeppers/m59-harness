@@ -11092,11 +11092,30 @@ class Session {
       try {
         recordEvent(c.me?.name ?? this.name ?? null, 'looted', {
           agent: this.name ?? undefined,
-          // `id`, not `num`: the CLIENT's room object is `{ id, security, flags, ... }`
-          // (m59-client.mjs:284). `num` is the BROKER's projection of it, and reading the
-          // broker's name off the client's object is how the first 25 rows of this event all
-          // recorded `room: null` while looking perfectly well-formed.
-          room: c.room?.id ?? null,
+          // A ROOM IDENTIFIER CARRIES ITS SPACE, AND THERE ARE TWO OF THEM.
+          //
+          // `c.room.id` is the SERVER'S ROOM OBJECT ID, assigned from BP_PLAYER's `roomId`
+          // (m59-client.mjs:1378). `world.room.num` is the MAP NUMBER — 39, 114, 544 — which
+          // is what the bake, the router, `travel`, every ledger and every human use.
+          // They are different spaces: the Valley of Ileria is object 1386 and room 544.
+          //
+          // This line has now been wrong twice, in opposite directions, and the second was
+          // worse than the first. `c.room?.num` was always undefined, so every row read
+          // `room: null` — honest, if useless. "Fixing" it to `c.room?.id` filled the field
+          // with 1386, which is not a room number in any table anything else consults: a
+          // confident answer in a language nothing else speaks. A null says "I do not know";
+          // a wrong-space number says "544" and is believed.
+          //
+          // AND AN OBJECT ID IS NOT EVEN STABLE. They are renumbered by `save game` — which
+          // is why this ledger is keyed on character NAME and not on object id. So `1386`
+          // was not merely the wrong language, it was a language whose words change meaning
+          // at the next checkpoint: rows written either side of a save would disagree about
+          // the same room while both looked perfectly well-formed.
+          //
+          // `world.room` resolves by roomNameRsc/roomRsc against the baked map
+          // (m59-world.mjs:493) and is the same idiom the hit book uses twelve hundred lines
+          // up. If the map does not know the room this is null again, which is correct.
+          room: this.world?.room?.num ?? null,
           items: taken.map(t => ({ id: t.id, name: t.name, amount: t.amount })),
           count: taken.length,
         });
