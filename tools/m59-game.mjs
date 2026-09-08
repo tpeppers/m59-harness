@@ -11884,10 +11884,25 @@ class Session {
         // Four different bugs, one sentence, and no way to tell them apart after the fact.
         // SERIALIZED CONTRACT: travel-ledger `refusals[].square` is a legacy
         // `"row,col"` string. Do not transpose or relabel the stored value.
+        // A DELIBERATE SECOND ASK AT ONE SQUARE MUST NOT READ AS THE BUG THAT ASKED TWICE
+        // BY ACCIDENT.
+        //
+        // `recentred` is carried because without it the two are indistinguishable in this
+        // book, and this book is the first thing anybody reads when a leg detours. The
+        // squares column for a re-centred crossing looks exactly like the duplicate-candidate
+        // bug fixed in 814f377 — `1,21 | 1,21 | 2,21 | 2,21 | 2,20` — and the note that says
+        // which it was is dropped by this very mapping.
+        //
+        // It caught its author out within twenty minutes of the deploy: the field check
+        // written to CONFIRM that fix read those repeats and reported the bug still present,
+        // in a boundary where it had in fact been fixed and the pairs were the new free
+        // retry. The tactics ledger had the answer under `edge_recentre` all along, but a
+        // reader should not need two instruments to answer one question.
         ...(r.tried?.length ? { refusals: r.tried.slice(0, 8).map(t => ({
               square: t.stand_on ? `${t.stand_on.row},${t.stand_on.col}` : null,
               stage: t.stage ?? null,
               crossing_packet_sent: t.crossing_packet_sent ?? null,
+              ...(t.recentred === undefined ? {} : { recentred: t.recentred }),
               why: String(t.why ?? t.reason ?? '?').slice(0, 90),
             })) } : {}),
         // The best square the model could offer, so a refusal can be set against the square
