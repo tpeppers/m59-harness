@@ -883,12 +883,25 @@ function state() {
     // complete, `may_accept` true, nothing moved, in both directions. Nobody was full; the
     // id list was malformed. `tag` is the server's own answer and is carried beside it, so
     // `dropSpec` can ask the authoritative question rather than infer from a quantity.
+    // WHAT AN ITEM LOOKS LIKE IS EVIDENCE ABOUT WHAT IT IS, and it was being thrown away
+    // here. Every `Wand` subclass shares one icon (wand6.bgf) and is told apart by its
+    // PALETTE TRANSLATION — `viColor`, which the server sends per object and
+    // `extractPaletteTranslation` (m59-parse.mjs:168) already parses. Blue (XLAT_TO_BLUE,
+    // 0x06) is the wand of identification and nothing else; grey is the four Qor wands.
+    // A wand reads as the bare word "wand" until identified, so without these two fields
+    // there is no way to tell a wand of identification from a wand of immobilization
+    // except by spending a charge and reading the refusal — which is exactly what happened
+    // on 2026-09-08, twice, and was misread as the CASTER lacking karma when it was in fact
+    // a Qor wand refusing a caster whose karma was too HIGH.
+    // Carried raw. What the numbers mean is a fleet's business, not this file's.
     items: c?.inventory ? c.inventory.map(o => ({
       id: o.id,
       name: c.rsc?.get?.(o.nameRsc) ?? '',
       amount: o.amount ?? 0,
       tag: o.tag ?? null,
       flags: o.flags ?? 0,
+      icon_rsc: o.iconRsc ?? null,
+      translation: o.translation ?? 0,
     })).filter(o => o.name) : [],
     // Load is derived beside the live client because might and the authoritative
     // inventory both live here. The broker's KeeperProxy cannot reconstruct might;

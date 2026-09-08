@@ -1977,8 +1977,12 @@ class KeeperProxy {
         // difference is the whole of whether an offer may carry a count for it. See the
         // note over `items` in m59-keeper-process.mjs: a malformed id list completes the
         // handshake and moves nothing.
+        // `icon_rsc` and `translation` come through under the names the parsed object uses,
+        // because every reader downstream — the `inventory` tool included — is written
+        // against a real client object and must not be able to tell which side produced it.
         ? s.items.map(o => ({ id: o.id, nameRsc: o.name, amount: o.amount ?? 0,
-                              tag: o.tag ?? null, flags: o.flags ?? 0 }))
+                              tag: o.tag ?? null, flags: o.flags ?? 0,
+                              iconRsc: o.icon_rsc ?? null, translation: o.translation ?? 0 }))
         : [
             ...(s.equipment ?? []).map(name => ({ nameRsc: name, amount: 1, flags: 0x04 })),
             ...(s.pack ?? []).map(entry => {
@@ -10936,6 +10940,17 @@ const TOOLS = [
                                               // alone cannot distinguish a one-item stack.
                                               amount: o.amount ?? 0, tag: o.tag ?? null,
                                               can: affordances(o.flags),
+                                              // WHAT IT LOOKS LIKE IS EVIDENCE ABOUT WHAT IT
+                                              // IS. Every Wand subclass shares wand6.bgf and
+                                              // is told apart by its palette translation
+                                              // (`viColor`): blue 0x06 is the wand of
+                                              // identification and nothing else, grey 0x09 is
+                                              // the four Qor wands. Since a wand reads as the
+                                              // bare word "wand" until identified, this is the
+                                              // only way to know which one you are holding
+                                              // without spending a charge to find out.
+                                              icon_rsc: o.iconRsc ?? null,
+                                              translation: o.translation ?? 0,
                                               broken: condemned.has(o.id) || undefined })),
                equipped: c.equipment().equipped.map(e => e.name ?? e.id),
                // HOW FULL, in the units the server actually refuses on. The ceiling is
