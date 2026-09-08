@@ -606,7 +606,7 @@ the records it describes.
   recover in order with durable loss markers, the physical cap survives restart, trace
   files are private, every actual send has a validated or explicitly unsafe wire row, and
   broker health publishes the effective trace and exit-fallback settings) and
-  `node tools/m59-collision-test.mjs` (333 — **the fail-closed contract for all
+  `node tools/m59-collision-test.mjs` (404 — **the fail-closed contract for all
   movement**: compact collision metadata survives a bake, legacy maps cannot authorize
   a coordinate packet, the player cylinder catches wall bodies and corners, long strides
   cannot tunnel, stock endpoint-0 slope and water-depth rules are preserved, every
@@ -615,7 +615,14 @@ the records it describes.
   client's own object rule is transcribed rather than modelled** — endpoint not swept,
   ending inside the zone allowed while moving away, and a slide instead of a refusal,
   all of `clientd3d/move.c:666-697` — and the documented Brownestone, Limping Toad, Icky,
-  Farol, Ukgoth, Cor Noth, Temple, and Fey precision cases remain usable),
+  Farol, Ukgoth, Cor Noth, Temple, and Fey precision cases remain usable. **It also holds
+  the crossing budget honest**: the three walks `M59_EXIT_CANDIDATES` pays for must land on
+  three DIFFERENT squares rather than one square asked three times, `atEdgeOpening`'s own
+  one-fine-square tolerance is what decides whether two openings are the same attempt, near
+  duplicates are moved to the tail and never deleted, and a `geometry_blocked` refusal
+  raised before the crossing packet is sent buys one free re-centre at the same square —
+  free because the budget counts different squares, capped so a wall that refuses from its
+  own centre still ends the crossing),
   `node tools/m59-needle-test.mjs` (30 — **getting past a body without treating its square
   as blocked**. You may share a SQUARE with a spider, never a fine position, so a corridor
   one square wide with a body in every square is still walkable. Pins the arithmetic

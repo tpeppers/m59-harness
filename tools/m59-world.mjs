@@ -1690,6 +1690,73 @@ export function spreadEdges(candidates) {
   return out;
 }
 
+// A BUDGET OF THREE HAS TO BUY THREE DIFFERENT SQUARES.
+//
+// `leaveViaAny` spends a bounded number of walks on a boundary (M59_EXIT_CANDIDATES, 3)
+// and then lets `travel` re-plan, because a candidate that works works in the first
+// try or two and the rest are minutes each. That argument only holds if the tries are
+// DIFFERENT PLACES. They were not.
+//
+// spreadEdges flattens every declared crossing of one wall plus every alternate into a
+// flat list, and several of those routinely stage on the SAME square: `_computeExits`
+// spreads its picks MIN_FINE_APART along the boundary and then appends whatever is left
+// as a distance-ordered tail, so a wall yields entries 16 fine units apart — a quarter
+// of a square — that a body cannot tell apart. `orderExits` then sorts on `steps_away`,
+// which is equal for all of them, and a stable sort leaves the near-duplicates adjacent
+// at the head of the list.
+//
+// Measured against the live bake on 2026-09-07: Outskirts of Barloque -> Main gate of
+// Barloque offers 12 candidates on 7 distinct squares, and from 58 of 60 sampled start
+// squares the three the budget pays for were `r31c47 r31c47 r16c47` — two of the three
+// spent on one square. The Sweet Grass Prairies -> Deep Forest of Farol is worse: 4
+// candidates on 2 distinct squares, and all 48 sampled starts get `r2c21 r2c21 r2c20`.
+// The fleet's own record agrees exactly — Waldorf's crossing on 2026-09-08 reads
+// `tried: 3` with all three refusals at `31,48`, and the one skipped candidate is that
+// same square a fourth time. The whole budget was one question asked three times.
+//
+// What it cost: that crossing is not shut, it passes 431 of 826 attempts. Losing it
+// deletes the hop from the journey's route for good (`exhaustedHops` is journey-scoped
+// and never retried), and the re-plan is the long way round. One such loss turned a
+// 3-hop walk to the Royal Blacksmith into a 22-leg, eight-minute tour through Jasper.
+//
+// REORDERED, NOT FILTERED. The duplicates go to the tail rather than being dropped: a
+// caller with a larger budget, or one that has exhausted every distinct square, should
+// still be able to reach them, and a stale bake should degrade rather than strand
+// anybody. This is the same shape `_computeExits` already uses for `precisePicked` —
+// a spread first, then the remainder in the order it had.
+//
+// AND THE SAME SQUARE IS NOT ALWAYS THE SAME ATTEMPT, which is why the key is not the
+// staging square on its own. A wide wall approached down one corridor can stage every
+// one of its crossings on one square and still offer genuinely different OPENINGS to
+// step out through — 599 -> 598 and 382 -> 377 both do — and those are different
+// outward packets, not a repeat. The line between the two is not a judgement call:
+// `atEdgeOpening` (m59-game.mjs) is what authorises the crossing packet, and it accepts
+// the body anywhere within one fine square of the opening on both axes. So two
+// candidates are the same attempt exactly when a body satisfying one satisfies the
+// other, and that is the test used here. Applied to Outskirts of Barloque it collapses
+// openings 16 fine units apart — a quarter of a square, the pair that was eating two of
+// the three tries — and leaves openings a square or more apart alone.
+export function distinctStagesFirst(candidates) {
+  const first = [], rest = [];
+  const kept = [];
+  const sameAttempt = (a, b) =>
+    a.stand_on && b.stand_on
+    && a.stand_on.col === b.stand_on.col && a.stand_on.row === b.stand_on.row
+    && Number.isFinite(a.fine_stand_on?.x) && Number.isFinite(b.fine_stand_on?.x)
+    && Math.abs(a.fine_stand_on.x - b.fine_stand_on.x) <= KOD_FINENESS
+    && Math.abs(a.fine_stand_on.y - b.fine_stand_on.y) <= KOD_FINENESS;
+  for (const e of candidates || []) {
+    // An entry with no square to stand on cannot be compared to one and is not a
+    // duplicate of anything; `orderExits` has already sunk it below those that have one.
+    // Same for one with no opening: `leaveVia` scans the boundary line for it, which is a
+    // different question from the one this is deduplicating.
+    if (!e?.stand_on || !Number.isFinite(e.fine_stand_on?.x)) { first.push(e); continue; }
+    if (kept.some(k => sameAttempt(k, e))) rest.push(e);
+    else { kept.push(e); first.push(e); }
+  }
+  return [...first, ...rest];
+}
+
 // A `go` sent immediately after the last movement update can disappear without either
 // a refusal or a room transition. Retry only that silent case, once by default. A
 // spoken refusal or a room change is authoritative, and the bound prevents a dead exit

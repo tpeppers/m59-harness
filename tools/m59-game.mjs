@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
 import { describeObject, affordances, OF, blocksMovement, prepareActTarget } from './m59-parse.mjs';
-import { World, spreadEdges, boundedSilentGo, boundedRegionEntry,
+import { World, spreadEdges, distinctStagesFirst, boundedSilentGo, boundedRegionEntry,
          doorSettleMs, remainingDoorSettle , sameRoomDoorPlan} from './m59-world.mjs';
 import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPath, buildReverseEdges }
          from './m59-map.mjs';
@@ -10406,6 +10406,12 @@ class Session {
     const stagingSquares = new Set(spread.map(e => `${e.stand_on?.col},${e.stand_on?.row}`));
     const isNeedle = stagingSquares.size <= 1 && spread.length > 0;
     let waited = 0;
+    // ONE RE-CENTRE PER SQUARE, AND A CAP FOR THE WHOLE BOUNDARY. See the branch that uses
+    // these: a geometry refusal before the crossing packet is sent is usually the body
+    // standing off-centre, which is worth correcting once and is not worth insisting on.
+    const recentred = new Set();
+    let recentres = 0;
+    const edgeRecentres = Number(process.env.M59_EDGE_RECENTRES || 2);
     // A cycling door is worth a handful of asks; a room whose geometry really has changed
     // is not. Both bounds matter — the count stops the loop, the per-wait cap stops one ask
     // swallowing the whole errand.
@@ -10419,7 +10425,12 @@ class Session {
     // again. `continue` in a for-of advances to the next one, which is not a retry — and
     // on a needle publishing a single square there is no next one, so the wait would have
     // been a no-op in exactly the case it exists for.
-    const ordered = orderExits(spread);
+    //
+    // AND ONE SQUARE PER PLACE AT THE HEAD OF IT, so the bounded budget below buys three
+    // different squares rather than one square asked three times. See distinctStagesFirst
+    // for the measurement; the duplicates are moved to the tail, not removed, so nothing
+    // that was reachable before is unreachable now.
+    const ordered = distinctStagesFirst(orderExits(spread));
     for (let index = 0; index < ordered.length; index++) {
       const exit = ordered[index];
       if (spent >= budget) {
@@ -10534,6 +10545,60 @@ class Session {
       if (isTerminalMovementReason(r.reason)) {
         tried.push(refusal(exit, r));
         return finish({ ...r, left: false, used_exit: exit, tried });
+      }
+      // A GEOMETRY REFUSAL AT A DOORWAY IS USUALLY THE BODY IN THE WRONG PART OF ITS OWN
+      // SQUARE, AND THAT IS NOT A REASON TO GIVE THE SQUARE UP.
+      //
+      // This is the same finding `followRail` already acts on — "geometry_blocked from a
+      // square the bake calls walkable means the BODY is in the wrong part of its own
+      // square, not that the line is wrong" — where adding `recentreInSquare` cut room
+      // 586's geometry refusals. The crossing path never learned it, and the crossing is
+      // where it matters most, because a refused hop is not a skipped waypoint: it deletes
+      // the edge from the journey's route for the rest of the journey.
+      //
+      // THE EVIDENCE THAT THIS IS POSITION AND NOT A WALL. Outskirts of Barloque -> Main
+      // gate of Barloque refuses `geometry_blocked` with `crossing_packet_sent: false` —
+      // the outward packet was never even sent — and yet the same boundary carries 431
+      // successful crossings against 395 failures. A wall does not pass 52% of the time.
+      // What varies between the two is where in the square the body came to rest, which is
+      // exactly what this puts right, and it costs at most three fine steps.
+      //
+      // IT DOES NOT CONSUME THE BUDGET, for the same reason the needle wait does not: the
+      // budget counts walks across the room to DIFFERENT squares, and this is the same
+      // square with the body standing properly on it. Bounded twice over — once per
+      // candidate, and a cap for the whole crossing — because a square that will not take
+      // a crossing from its own centre is genuinely refusing, and the caller has a wall to
+      // route around rather than a pose to correct.
+      const reapproachable = r.crossing_packet_sent !== true
+        && (r.reason === 'geometry_blocked' || r.reason === 'not_at_edge_opening');
+      if (reapproachable && recentres < edgeRecentres && !recentred.has(index)
+          && typeof this.recentreInSquare === 'function') {
+        recentred.add(index);
+        const centreRefusal = refusal(exit, r, {
+          note: `refused before the crossing packet was sent — re-centring in the square and ` +
+                `asking the same square again (${recentres + 1}/${edgeRecentres})`,
+        });
+        tried.push(centreRefusal);
+        recentres++; spent--;
+        if (!roomStillCurrent()) return staleBatch(exit);
+        const centred = await this.recentreInSquare().catch(() => false);
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return finish(this.cancelledMovement({ tried }));
+        if (!roomStillCurrent()) return staleBatch(exit);
+        centreRefusal.recentred = !!centred;
+        recordTactic({ character: this.client?.me?.name ?? this.name ?? null, room: roomBefore,
+                       tactic: 'edge_recentre', trigger: 'door_refused',
+                       // Not known to have worked yet — the NEXT attempt says that. A tactic
+                       // that reports its own success is the failure the ledger exists to
+                       // make visible; see the needle backoff above.
+                       worked: false, ms: Date.now() - askedAt, hp_lost: 0,
+                       note: `${r.reason} at r${exit.stand_on?.row}c${exit.stand_on?.col}; ` +
+                             (centred ? 're-centred' : 'could not re-centre') });
+        // A re-centre that moved nothing has not changed the question, so do not ask it
+        // again — fall through to the next candidate with the budget slot restored.
+        if (!centred) { spent++; continue; }
+        index--;                        // the same square, standing properly on it
+        continue;
       }
       // BLOCKED BY A BODY AT A ONE-SQUARE DOOR: the next candidate is this candidate, so
       // waiting is the only thing that can change the answer. It does not consume the

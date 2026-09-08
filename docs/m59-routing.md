@@ -1074,3 +1074,75 @@ Ukgoth's moving door. When those inputs change, regenerate the variants with
 `node tools/m59-doorbake.mjs --write` and run `node tools/m59-doorstate-test.mjs`.
 The latter checks the committed table and proves that the open feast state joins
 the entrance to the keep in both the route mask and collision geometry.
+
+## A crossing budget of three has to buy three different squares
+
+`leaveViaAny` spends a bounded number of walks on a boundary — `M59_EXIT_CANDIDATES`, 3 —
+and then lets `travel` re-plan. The argument for the bound is measured and still holds: a
+square that works works in the first try or two, and the hops that cost 5–16 minutes are the
+ones that ground through 5, 6, 7, 13 and 14 squares. **But the argument assumes the tries are
+different places, and for a long time they were not.**
+
+`spreadEdges` flattens every declared crossing of a wall plus every alternate into one list,
+and several of those routinely name the SAME staging square: `_computeExits` spreads its
+picks `MIN_FINE_APART` along the boundary and then appends whatever is left as a tail in
+distance order, so one wall yields entries 16 fine units apart — a quarter of a square.
+`orderExits` sorts on `steps_away`, which is equal for all of them, and a stable sort leaves
+the near-duplicates adjacent at the head of the list.
+
+Measured against the live bake, 2026-09-07: Outskirts of Barloque → Main gate of Barloque
+offers 12 candidates on 7 distinct squares, and from **58 of 60** sampled start squares the
+three the budget paid for were `r31c47 r31c47 r16c47`. The Sweet Grass Prairies → Deep Forest
+of Farol is worse — 4 candidates, 2 distinct squares, and all 48 sampled starts get a repeat.
+The fleet's own record agrees exactly: Waldorf's crossing on 2026-09-08 reads `tried: 3` with
+all three refusals at `31,48` and the one skipped candidate that same square a fourth time.
+**The whole budget was one question asked three times.**
+
+What it cost is not the walk. `exhaustedHops` is journey-scoped and never retried, so a
+boundary that loses its budget is deleted from the route for the rest of the journey — and
+that boundary is not shut, it passes 431 of 826 attempts. One such loss turned a 3-hop walk
+to the Royal Blacksmith into a 22-leg, eight-minute tour through Jasper and back. Over the
+transit book's whole window the fleet spent **252 hours inside failed crossings against 231
+inside successful ones** — more time lost at doors than spent going through them.
+
+`distinctStagesFirst` (m59-world.mjs, beside `spreadEdges` so it can be tested without
+starting a broker) puts one candidate per distinct attempt at the head and the rest in a
+tail. Two things about it are worth keeping:
+
+- **The key is not the staging square.** A wide wall approached down one corridor can stage
+  every crossing on one square and still offer genuinely different OPENINGS to step out
+  through — 599 → 598 and 382 → 377 both do, and those are different outward packets, not a
+  repeat. The line between the two is not a judgement call: `atEdgeOpening` is what
+  authorises the packet and it accepts the body within one fine square of the opening on both
+  axes, so two candidates are the same attempt exactly when a body satisfying one satisfies
+  the other. That is the test.
+- **Nothing is deleted, only reordered.** A caller with a larger budget, or one that has
+  exhausted every distinct square, still reaches the duplicates, and a stale bake degrades
+  rather than stranding anybody.
+
+### And a geometry refusal at a doorway is usually a pose, not a wall
+
+`followRail` already acts on this — "`geometry_blocked` from a square the bake calls walkable
+means the BODY is in the wrong part of its own square, not that the line is wrong" — and
+adding `recentreInSquare` there cut room 586's geometry refusals. The crossing path never
+learned it, and the crossing is where it matters most, because a refused hop deletes an edge
+rather than skipping a waypoint.
+
+The evidence that it is position and not geometry: these refusals carry
+`crossing_packet_sent: false` — the outward packet was never sent — and the same boundary
+still passes 52% of the time. A wall does not pass 52% of the time; what varies is where in
+the square the body came to rest.
+
+So a `geometry_blocked` or `not_at_edge_opening` refusal raised before the packet is sent now
+buys **one re-centre at the same square**, and it does not consume the budget, for the same
+reason the needle wait does not: the budget counts walks to different squares, and this is
+the same square with the body standing properly on it. Bounded twice — once per candidate,
+and `M59_EDGE_RECENTRES` (2) for the whole crossing — because a square that will not take a
+crossing from its own centre is genuinely refusing, and the caller has a wall to route around
+rather than a pose to correct. A re-centre that moves nothing hands the budget slot straight
+back. The tactics ledger records it as `edge_recentre`, `worked: false`, because the next
+attempt is what says whether it worked.
+
+**None of this widens the candidate SET.** `exits()` already publishes every declared crossing
+and every opening — that was checked, and the claim that it collapses them is wrong. What was
+collapsing was the budget.

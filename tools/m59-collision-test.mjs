@@ -39,7 +39,8 @@ import {
   geometryRefreshBaseFile, movementMapFile,
 } from './m59-map-path.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
-import { World, boundedRegionEntry, boundedSilentGo, spreadEdges } from './m59-world.mjs';
+import { World, boundedRegionEntry, boundedSilentGo, spreadEdges,
+         distinctStagesFirst } from './m59-world.mjs';
 
 let pass = 0, fail = 0, skipped = 0;
 const ok = (name, condition, detail = '') => {
@@ -1520,6 +1521,10 @@ const leaveViaAny = compileSessionMethod(brokerSource,
     // And the real evade window, because this site casts without a wall too.
     BLINK_EVADE_MS: 5_000,
     isTerminalMovementReason, spreadEdges, orderExits: exits => exits, KOD_FINENESS,
+    // THE REAL ONE, because what it decides IS the thing under test in the budget cases
+    // below — which of the flattened candidates count as different attempts — and a stub
+    // returning the list unchanged would restore exactly the bug it was written for.
+    distinctStagesFirst,
     // THE TWO INSTRUMENTS, AS THE REAL ONES. Both are ordinary exports of modules that
     // import without taking the fleet lock, and both are written to be unable to throw —
     // which is exactly the property worth exercising here rather than stubbing away. They
@@ -2675,6 +2680,191 @@ console.log('\nterminal movement propagation and edge packet authority');
        counted.outcome === 'exit_candidates_exhausted' &&
        counted.tried.every(t => t.stage === 'walk' && t.crossing_packet_sent === false) &&
        /\(3 tried\)/.test(counted.reason), JSON.stringify(counted));
+
+    // A BUDGET OF THREE BUYS THREE DIFFERENT SQUARES.
+    //
+    // Waldorf, 2026-09-08: `tried: 3` at Outskirts of Barloque with all three refusals
+    // recorded at `31,48` and the one skipped candidate that same square a fourth time.
+    // The boundary is not shut — it passes 431 of 826 attempts — but losing it deleted the
+    // hop for the rest of the journey and turned a 3-hop walk to the Royal Blacksmith into
+    // a 22-leg tour through Jasper. The wall offered seven distinct squares at the time.
+    const dupBudget = process.env.M59_EXIT_CANDIDATES;
+    process.env.M59_EXIT_CANDIDATES = '3';
+    const asked = [];
+    const wide = {
+      movementGeneration: 0,
+      movementWasCancelled() { return false; },
+      async _askStrategies() { return null; },
+      _blockingBodies() { return []; },
+      _blinkPointHere() { return null; },
+      async leaveVia(exit) {
+        asked.push(`${exit.stand_on.col},${exit.stand_on.row}`);
+        return { left: false, stage: 'edge', crossing_packet_sent: false,
+                 reason: 'geometry_blocked' };
+      },
+    };
+    // The real shape of that wall: two crossings a quarter of a square apart staging on one
+    // square — which `atEdgeOpening` cannot tell apart — then two further squares along it.
+    const oneWall = [
+      { kind: 'edge', to: 593, stand_on: { col: 47, row: 31 }, fine_stand_on: { x: 3104, y: 2064 } },
+      { kind: 'edge', to: 593, stand_on: { col: 47, row: 31 }, fine_stand_on: { x: 3104, y: 2080 } },
+      { kind: 'edge', to: 593, stand_on: { col: 47, row: 16 }, fine_stand_on: { x: 3104, y: 1056 } },
+      { kind: 'edge', to: 593, stand_on: { col: 47, row: 21 }, fine_stand_on: { x: 3104, y: 1408 } },
+    ];
+    let widened;
+    try { widened = await leaveViaAny.call(wide, oneWall, { exact: true }); }
+    finally {
+      if (dupBudget == null) delete process.env.M59_EXIT_CANDIDATES;
+      else process.env.M59_EXIT_CANDIDATES = dupBudget;
+    }
+    ok('the crossing budget is spent on three DIFFERENT squares, not one asked three times',
+       asked.length === 3 && new Set(asked).size === 3,
+       JSON.stringify({ asked, widened }));
+    ok('and the near-duplicate opening is kept as a tail rather than deleted',
+       widened.skipped?.length === 1 &&
+       widened.skipped[0].stand_on.col === 47 && widened.skipped[0].stand_on.row === 31,
+       JSON.stringify(widened.skipped));
+
+    // A GEOMETRY REFUSAL BEFORE THE PACKET IS SENT GETS ONE RE-CENTRE, AND IT IS FREE.
+    //
+    // The same finding followRail already acts on: `geometry_blocked` from a square the
+    // bake calls walkable is the body standing in the wrong part of its own square. The
+    // budget counts walks to DIFFERENT squares, so correcting the pose must not spend one.
+    const centreBudget = process.env.M59_EXIT_CANDIDATES;
+    process.env.M59_EXIT_CANDIDATES = '3';
+    const seen = [];
+    let recentreCalls = 0;
+    const offCentre = {
+      movementGeneration: 0,
+      movementWasCancelled() { return false; },
+      async _askStrategies() { return null; },
+      _blockingBodies() { return []; },
+      _blinkPointHere() { return null; },
+      async recentreInSquare() { recentreCalls++; return true; },
+      async leaveVia(exit) {
+        seen.push(`${exit.stand_on.col},${exit.stand_on.row}`);
+        // Refused the first time from each square, taken once the body is centred.
+        if (seen.filter(s => s === `${exit.stand_on.col},${exit.stand_on.row}`).length === 1)
+          return { left: false, stage: 'edge', crossing_packet_sent: false,
+                   reason: 'geometry_blocked' };
+        return { left: true, stage: 'edge', crossing_packet_sent: true };
+      },
+    };
+    let centred;
+    try {
+      centred = await leaveViaAny.call(offCentre,
+        [{ kind: 'edge', to: 593, stand_on: { col: 47, row: 31 }, fine_stand_on: { x: 3104, y: 2064 } },
+         { kind: 'edge', to: 593, stand_on: { col: 47, row: 16 }, fine_stand_on: { x: 3104, y: 1056 } }],
+        { exact: true });
+    } finally {
+      if (centreBudget == null) delete process.env.M59_EXIT_CANDIDATES;
+      else process.env.M59_EXIT_CANDIDATES = centreBudget;
+    }
+    ok('a geometry refusal re-centres once and asks the SAME square again',
+       recentreCalls === 1 && seen.length === 2 && seen[0] === '47,31' && seen[1] === '47,31'
+       && centred.left === true,
+       JSON.stringify({ seen, recentreCalls, centred }));
+    ok('and the re-centre did not cost a budget slot — the other squares are still available',
+       !centred.skipped?.length, JSON.stringify(centred.skipped));
+
+    // A RE-CENTRE THAT MOVES NOTHING HAS NOT CHANGED THE QUESTION.
+    const stuckBudget = process.env.M59_EXIT_CANDIDATES;
+    process.env.M59_EXIT_CANDIDATES = '3';
+    const stuckSeen = [];
+    let stuckRecentres = 0;
+    const stuck = {
+      movementGeneration: 0,
+      movementWasCancelled() { return false; },
+      async _askStrategies() { return null; },
+      _blockingBodies() { return []; },
+      _blinkPointHere() { return null; },
+      async recentreInSquare() { stuckRecentres++; return false; },
+      async leaveVia(exit) {
+        stuckSeen.push(`${exit.stand_on.col},${exit.stand_on.row}`);
+        return { left: false, stage: 'edge', crossing_packet_sent: false,
+                 reason: 'geometry_blocked' };
+      },
+    };
+    let unstuck;
+    try {
+      unstuck = await leaveViaAny.call(stuck,
+        [{ kind: 'edge', to: 593, stand_on: { col: 47, row: 31 }, fine_stand_on: { x: 3104, y: 2064 } },
+         { kind: 'edge', to: 593, stand_on: { col: 47, row: 16 }, fine_stand_on: { x: 3104, y: 1056 } },
+         { kind: 'edge', to: 593, stand_on: { col: 47, row: 21 }, fine_stand_on: { x: 3104, y: 1408 } }],
+        { exact: true });
+    } finally {
+      if (stuckBudget == null) delete process.env.M59_EXIT_CANDIDATES;
+      else process.env.M59_EXIT_CANDIDATES = stuckBudget;
+    }
+    // The allowance is spent (two candidates each got their one try at it) and every one of
+    // the three distinct squares was still asked: a re-centre that moved nothing hands the
+    // budget slot straight back rather than eating the square it was trying to rescue.
+    ok('a re-centre that moved nothing falls through and the budget is restored',
+       stuckRecentres === 2 && stuckSeen.length === 3 &&
+       new Set(stuckSeen).size === 3 && unstuck.attempts === 3,
+       JSON.stringify({ stuckSeen, stuckRecentres, attempts: unstuck.attempts }));
+
+    // AND THE WHOLE BOUNDARY IS CAPPED, so a wall that refuses from every centre still ends.
+    const cappedSeen = [];
+    let cappedRecentres = 0;
+    const capped = {
+      movementGeneration: 0,
+      movementWasCancelled() { return false; },
+      async _askStrategies() { return null; },
+      _blockingBodies() { return []; },
+      _blinkPointHere() { return null; },
+      async recentreInSquare() { cappedRecentres++; return true; },
+      async leaveVia(exit) {
+        cappedSeen.push(`${exit.stand_on.col},${exit.stand_on.row}`);
+        return { left: false, stage: 'edge', crossing_packet_sent: false,
+                 reason: 'geometry_blocked' };
+      },
+    };
+    const capBudget = process.env.M59_EXIT_CANDIDATES;
+    const capRecentres = process.env.M59_EDGE_RECENTRES;
+    process.env.M59_EXIT_CANDIDATES = '3';
+    process.env.M59_EDGE_RECENTRES = '2';
+    let cappedOut;
+    try {
+      cappedOut = await leaveViaAny.call(capped,
+        [47, 16, 21, 25].map((row, i) => ({ kind: 'edge', to: 593,
+          stand_on: { col: 47, row }, fine_stand_on: { x: 3104, y: 1000 + i * 256 } })),
+        { exact: true });
+    } finally {
+      if (capBudget == null) delete process.env.M59_EXIT_CANDIDATES;
+      else process.env.M59_EXIT_CANDIDATES = capBudget;
+      if (capRecentres == null) delete process.env.M59_EDGE_RECENTRES;
+      else process.env.M59_EDGE_RECENTRES = capRecentres;
+    }
+    ok('the re-centre allowance is capped for the whole crossing',
+       cappedRecentres === 2 && cappedOut.left !== true &&
+       cappedOut.outcome === 'exit_candidates_exhausted',
+       JSON.stringify({ cappedRecentres, cappedSeen, outcome: cappedOut.outcome }));
+  }
+
+  // THE CANDIDATE LIST ITSELF, without a session: what counts as a different attempt.
+  {
+    const at = (col, row, x, y) => ({ kind: 'edge', to: 9,
+      stand_on: { col, row }, fine_stand_on: { x, y } });
+    // A quarter of a square apart on one square: `atEdgeOpening` accepts a body within one
+    // fine square of the opening, so a body satisfying the first satisfies the second.
+    const near = distinctStagesFirst([at(47, 31, 3104, 2064), at(47, 31, 3104, 2080),
+                                      at(47, 16, 3104, 1056)]);
+    ok('two openings within one fine square of each other on one square are ONE attempt',
+       `${near[0].fine_stand_on.y},${near[1].fine_stand_on.y},${near[2].fine_stand_on.y}`
+         === '2064,1056,2080', JSON.stringify(near.map(e => e.fine_stand_on.y)));
+    // Further apart than the tolerance: two genuinely different outward packets from one
+    // approach square, which is what 599 -> 598 and 382 -> 377 publish. Not deduplicated.
+    const far = distinctStagesFirst([at(66, 1, 4224, 96), at(66, 1, 4224, 300)]);
+    ok('and two openings further apart than that stay two attempts, on the same square',
+       far.length === 2 && far[0].fine_stand_on.y === 96 && far[1].fine_stand_on.y === 300,
+       JSON.stringify(far.map(e => e.fine_stand_on.y)));
+    ok('nothing is dropped — the list only ever changes order',
+       distinctStagesFirst([at(1, 1, 64, 64), at(1, 1, 64, 64), at(2, 2, 128, 128)]).length === 3);
+    ok('a candidate with no square to stand on is not a duplicate of anything',
+       distinctStagesFirst([{ kind: 'edge', to: 9 }, { kind: 'edge', to: 9 }]).length === 2);
+    ok('and an empty or absent list is answered without throwing',
+       distinctStagesFirst([]).length === 0 && distinctStagesFirst(null).length === 0);
   }
 
   // A STEP A MONSTER REFUSED IS NOT A STEP THE ROUTE SPENT.
