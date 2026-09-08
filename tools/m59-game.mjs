@@ -11027,7 +11027,11 @@ class Session {
       try {
         recordEvent(c.me?.name ?? this.name ?? null, 'looted', {
           agent: this.name ?? undefined,
-          room: c.room?.num ?? null,
+          // `id`, not `num`: the CLIENT's room object is `{ id, security, flags, ... }`
+          // (m59-client.mjs:284). `num` is the BROKER's projection of it, and reading the
+          // broker's name off the client's object is how the first 25 rows of this event all
+          // recorded `room: null` while looking perfectly well-formed.
+          room: c.room?.id ?? null,
           items: taken.map(t => ({ id: t.id, name: t.name, amount: t.amount })),
           count: taken.length,
         });
