@@ -37,6 +37,9 @@ import * as abilities from './m59-abilities.mjs';
 import * as hitbook from './m59-hits.mjs';
 import * as transits from './m59-transits.mjs';
 import * as bankbook from './m59-bank.mjs';
+// Write-only, and safe to import anywhere: the ledger pulls in no keeper and no hook loader
+// at module scope — `attachHooks` is wired by whoever actually loads hooks. See m59-ledger.mjs.
+import { recordEvent } from './m59-ledger.mjs';
 import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
@@ -10999,6 +11002,38 @@ class Session {
       await this.pacer.submit('read', () => c.requestInventory());
       await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
     }
+
+    // SOMETHING ENTERED THE PACK, AND UNTIL NOW NOTHING SAID SO.
+    //
+    // The ledger already records what a character kills, buys, spends and dies of — but not
+    // what it PICKED UP, which is the one that decides whether the thing in the pack is worth
+    // a trip. Anybody wanting to react to loot had to poll every pack and diff it.
+    //
+    // Emitted here because this is the single place a floor drop becomes a carried item: the
+    // pickup atomic deliberately depends on nothing, and every other route in (a trade, a
+    // purchase, the operator's own client) already has its own record or is outside the
+    // harness entirely. `taken` is what the server CONFIRMED with a `got`, never what was
+    // asked for — a refusal is a sentence spoken to the room here, as everywhere.
+    //
+    // WHAT SUBSCRIBES TO THIS IS NOT THIS REPOSITORY'S BUSINESS. Which loot is worth
+    // abandoning a hunt for is a fleet's bet, and it lives in substrate/hooks. This states
+    // the fact and stops.
+    //
+    // NOTE FOR A HANDLER: recordEvent fires hooks in whatever process calls it, and lootFloor
+    // runs in the KEEPER — one keeper, the one that looted, not the broker and not all
+    // twenty-one. A handler that starts a fleet-wide anything from here starts it once per
+    // looting character. Act on `character`, or check argv[1] before doing something global.
+    if (taken.length) {
+      try {
+        recordEvent(c.me?.name ?? this.name ?? null, 'looted', {
+          agent: this.name ?? undefined,
+          room: c.room?.num ?? null,
+          items: taken.map(t => ({ id: t.id, name: t.name, amount: t.amount })),
+          count: taken.length,
+        });
+      } catch { /* a ledger write must never cost us the loot we just picked up */ }
+    }
+
     return { taken, refused,
              carrying: c.inventory.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc), amount: o.amount || undefined })),
              ...(wasCancelled ? { cancelled: true,

@@ -218,14 +218,31 @@ if (invokedDirectly) {
     console.log('  4. It observes and may act. It cannot veto — nothing here can refuse a flee.');
     console.log(`\nDrop a module in ${HOOK_DIR} exporting { name, on: { <kind>: fn } }.`);
   } else if (args.includes('--events')) {
+    // THIS LIST USED TO BE TYPED OUT, under a header saying it came from the call sites.
+    // It did not, and it was already stale: `looted` was added to lootFloor and this went on
+    // printing fourteen kinds that did not include it. A hand-maintained list wearing a
+    // generated list's clothes is worse than either, because the next person greps for their
+    // event, does not find it, and concludes the emitter never landed. So: actually scan.
     console.log('Event kinds this harness writes (from recordEvent call sites):\n');
-    console.log('  bought  cast  confinement_refused_travel  died  first_seen');
-    console.log('  left_the_newbie_zone  play_dead_refused_no_spot  returned_fire  stalled');
-    console.log('  strategy_changed  stuck_backed_up  travel_resume_dropped  travel_resumed');
-    console.log('  unstalled  wedge_gave_up');
+    const { readdirSync: rd, readFileSync: rf, statSync } = await import('node:fs');
+    const kinds = new Map();
+    const walk = (dir) => {
+      for (const f of rd(dir)) {
+        const p = join(dir, f);
+        if (statSync(p).isDirectory()) { if (f !== 'node_modules') walk(p); continue; }
+        if (!f.endsWith('.mjs')) continue;
+        const src = rf(p, 'utf8');
+        for (const m of src.matchAll(/recordEvent\s*\(\s*[^,]+,\s*['"]([a-z_][a-z0-9_]*)['"]/gi))
+          (kinds.get(m[1]) ?? kinds.set(m[1], []).get(m[1])).push(f);
+      }
+    };
+    try { walk(join(HERE, '.')); } catch (e) { console.log(`  (could not scan: ${e.message})`); }
+    for (const k of [...kinds.keys()].sort())
+      console.log(`  ${k.padEnd(30)} ${[...new Set(kinds.get(k))].join(', ')}`);
     console.log('\nMore arrive with computed kinds (killed, level_up, level_lost, zone_change,');
-    console.log('travel_journey, ...). `node tools/m59-hooks.mjs --events` lists the literals;');
-    console.log('the ledger itself is the complete answer — grep a fleet history for "kind".');
+    console.log('travel_journey, ...) whose name is built at the call site and so cannot be');
+    console.log('scanned for. The ledger itself is the complete answer — grep a fleet history');
+    console.log('for "kind".');
   } else {
     loadHooks().then(() => {
       const rows = hookStatus();
