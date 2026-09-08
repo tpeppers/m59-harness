@@ -24,6 +24,15 @@ import { classifyPack, routeFor } from '../m59-smartloot.mjs';
 
 export const script = {
   name: 'resupply',
+  // GUARANTEE 9. This one buys, sells and vaults, so it depends on the shop and bank seams
+  // in the keeper as well as the steps — and those are exactly what moved when the
+  // keeper-process driver landed. refuseOnDrift stays off: a warned operator who reads the
+  // diff is better placed than one whose resupply will not start.
+  provenance: {
+    pinned: 'dbcc73e', verified: '2026-09-07',
+    touches: ['tools/m59-fleetscript.mjs', 'tools/m59-broker.mjs',
+              'tools/m59-keeper-process.mjs', 'tools/m59-smartloot.mjs'],
+  },
   describe: 'Sell the loot, buy reagents, come home — routing by what is in the pack.',
   params: {
     agents: { type: 'agents', required: true, describe: 'who goes' },

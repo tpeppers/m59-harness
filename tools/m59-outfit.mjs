@@ -260,17 +260,41 @@ const BANK_ROOMS = (CATALOGUE?.merchants ?? [])
 // flag. Used for both legs of the errand — the bank and the shop — because a trip that
 // gives up on the first refusal is how the supervisor spent cycle after cycle walking
 // characters at the same refused exit in Marion, learning nothing between attempts.
+// A JOURNEY IS LONGER THAN AN RPC TIMEOUT, and treating the timeout as a refusal is how
+// this errand cancelled itself on a walk that was going fine.
+//
+// `call` defaults to 30s. A cross-map trip — the valley to Cor Noth, say — takes minutes,
+// so `AbortSignal.timeout` fired, the catch below turned it into `{arrived: false}`, and
+// the loop reported "travel refused" about a character that was still walking. Worse, it
+// then RE-ISSUED travel twice more into a journey already in flight, which is the exact
+// thing m59-fleetscript.mjs compiles in a guarantee against: "travel issued once and never
+// re-issued while walking".
+//
+// So: the travel call gets a timeout sized to a journey, and a timeout is no longer read
+// as a refusal — before retrying, ask where the character actually is, because "the answer
+// did not arrive" and "the walk failed" are different facts and only one of them is a
+// reason to walk again.
+const TRAVEL_TIMEOUT_MS = 8 * 60_000;
+
 async function goTo(agent, room, tries = 3) {
   let why = null;
   for (let i = 0; i < tries; i++) {
-    const t = await call('travel', { agent, to: room, max_hops: 20 })
-                    .catch(e => ({ arrived: false, why: e.message }));
+    let timedOut = false;
+    const t = await call('travel', { agent, to: room, max_hops: 20 }, TRAVEL_TIMEOUT_MS)
+                    .catch(e => { timedOut = /abort|timeout|timed out/i.test(e.message ?? '');
+                                  return { arrived: false, why: e.message }; });
     if (t.arrived) return { ok: true, why: null };
     const stuck = (t.log || []).filter(h => !h.ok).slice(-1)[0];
     why = stuck ? `${stuck.from} -> ${stuck.to}: ${stuck.also_tried?.[0]?.why ?? 'refused'}`
                 : (t.why || 'travel refused');
+    // ARRIVAL IS A FACT ABOUT THE WORLD, not about whether our call returned. Check it
+    // first, and note `room.num` — `where.num` is not a field the status tool returns, so
+    // the old test never fired and a character standing in the right room was walked again.
     const st = await call('status', { agent, brief: true }).catch(() => null);
-    if (st?.where?.num === room) return { ok: true, why: null };
+    const at = st?.room?.num ?? st?.where?.num;
+    if (at === room) return { ok: true, why: null };
+    if (timedOut) why = `travel did not answer within ${TRAVEL_TIMEOUT_MS / 60000}min ` +
+                        `(last seen in ${at ?? 'an unknown room'})`;
     await sleep(1500);
   }
   return { ok: false, why };
@@ -485,11 +509,29 @@ async function outfit(row) {
                                  'Izzio', 'JealousGeneral', 'Minstrel']);
       const isWanderer = x => x?.wanders ?? WANDERERS.has(String(x?.merchant ?? x?.cls ?? x?.class ?? ''));
 
+      // "I CANNOT ANSWER" IS NOT "THERE IS NO ROUTE", and conflating them silently
+      // cancelled this whole errand for every character on the fleet.
+      //
+      // Under the keeper-process session driver the World lives in the KEEPER, and the
+      // broker's `map` answers `route: {found: null, reason: "...driven by a keeper
+      // process; ask it over /action {name:\"route\"} — the broker holds a snapshot, not
+      // a World"}`. `found` is null rather than false, which is the tool being explicit
+      // that it did not decide. This test read it as falsy, dropped every candidate, and
+      // reported "no teacher of punch reachable" — for Rook, who is stationary in room
+      // 154 and whom the `merchants` tool had just returned.
+      //
+      // So an unanswerable route keeps the candidate with unknown cost, ordered AFTER
+      // every candidate that priced properly, and travel decides for real: `travel` is
+      // executed by the keeper, which does have a World and does know the way. A genuine
+      // `found: false` is still a refusal — that one is an answer.
       const priceAll = async (list) => {
         const out = [];
         for (const m of list) {
           const rt = await call('map', { agent: row.agent, to: m.room }).catch(() => null);
-          if (rt?.route?.found) out.push({ room: m.room, hops: rt.route.hops.length, roams: isWanderer(m) });
+          const route = rt?.route;
+          if (route?.found) { out.push({ room: m.room, hops: route.hops.length, roams: isWanderer(m) }); continue; }
+          if (route && route.found == null)
+            out.push({ room: m.room, hops: Number.POSITIVE_INFINITY, roams: isWanderer(m), unpriced: route.reason ?? true });
         }
         return out.sort((a, b) => a.hops - b.hops);
       };
@@ -892,9 +934,23 @@ async function outfit(row) {
       }
       const cost = opt.cost ?? opt.price ?? a.price ?? 0;
       if (cost > money) { refused.push(`${a.name}: ${cost}sh, only ${money}sh`); continue; }
-      await call('shop', { agent: row.agent, seller: seller.id, buy_ids: [opt.id] }).catch(() => null);
+      // THE MERCHANT'S ANSWER IS THE ONLY EVIDENCE THERE IS, and this threw it away.
+      //
+      // The keeper's shop handler already returns the two halves that matter — `got`,
+      // the items the wire actually moved, and `said`, the sentence the merchant spoke —
+      // precisely because "the packet succeeded" has never meant "the purchase happened".
+      // Discarding the response with .catch(() => null) meant a refusal that the server
+      // EXPLAINED in words was reported downstream as "paid N and did not get it", which
+      // sends a human to check a purse instead of reading the reason.
+      //
+      // A skill buy moves no item, so `got` is empty even on success and only `said` can
+      // separate the two. Keep it and put it in the log either way.
+      const bought = await call('shop', { agent: row.agent, seller: seller.id, buy_ids: [opt.id] })
+                             .catch(e => ({ error: e.message }));
+      if (bought?.error) refused.push(`${a.name}: buy failed — ${bought.error}`);
+      const said = String(bought?.said ?? '').trim();
       money -= cost;
-      learned.push({ ...a, cost });
+      learned.push({ ...a, cost, said: said || null });
     }
 
     // AND CHECK, BECAUSE THE BUY IS SILENT EITHER WAY. Nothing is sent when a skill is
@@ -904,15 +960,40 @@ async function outfit(row) {
     // is the difference between a log that says what happened and one that says what
     // was attempted.
     for (const a of learned) {
-      await sleep(1200);
-      // The first read is served from the record the server pushes into. Force a real
-      // one only when that disagrees — being wrong here is the failure this whole check
-      // exists for, and a spell or skill list arriving late looks exactly like a
-      // purchase that did not happen.
-      const sure = (await knows(row.agent, a.name)) === true
-                || (await knows(row.agent, a.name, { refresh: true })) === true;
+      // POLL, DO NOT PEEK ONCE — and BELIEVE THE ANSWER WHEN IT IS STILL NO.
+      //
+      // A skill buy is silent on BOTH paths: monster.kod:3865 adds the skill and says
+      // nothing, while every refusal ABOVE it speaks ("not selling", "too costly", "can't
+      // give you"). So the skill list is the only evidence there is, and asking once races
+      // it. Six polls over ~15s is the settle, not a verdict.
+      //
+      // BUT A "NO" THAT SURVIVES THE POLL IS REAL, AND IT HAS COST MONEY. Controlled
+      // trial, 2026-09-07: Camilla stood with Rook, punch was in the live shop list at
+      // 500, the buy went out well-formed, her purse went 2846 -> 2346 — exactly the
+      // price — and punch never appeared, in the live list or the keeper's book, over
+      // 100s of polling. Three OTHER characters holding punch that evening had been
+      // bought by hand by the operator, which is what made this look like it worked.
+      //
+      // That combination should be impossible from the source: AddSkill and
+      // SubtractNumber are in the SAME branch (monster.kod:3865-3877), so the money
+      // cannot move unless AddSkill was called, and the only early return in AddSkill
+      // that keeps the money is `HasSkill` — which PlayerCanLearn would have caught as
+      // PLAYER_LEARN_ALREADY, so the shop would not have offered it. Either the running
+      // server is not this source, or something in that chain differs. UNRESOLVED.
+      //
+      // Until it is: this failure is expensive, not cosmetic. Do not loop on it.
+      let sure = false;
+      for (let i = 0; i < 6 && !sure; i++) {
+        await sleep(i === 0 ? 1200 : 2500);
+        sure = (await knows(row.agent, a.name)) === true
+            || (await knows(row.agent, a.name, { refresh: true })) === true;
+      }
       log.push(sure ? `LEARNED ${a.name} @${a.cost}`
-                    : `paid ${a.cost} for ${a.name} AND DID NOT GET IT — check the purse`);
+                    : `PAID ${a.cost} FOR ${a.name} AND DID NOT GET IT — the purse was ` +
+                      'charged and the skill never arrived. This is a known unresolved ' +
+                      'defect: do NOT retry in a loop, each attempt costs the price again' +
+                      (a.said ? ` — the merchant said: "${a.said}"` : ' — the merchant said nothing, ' +
+                       'which is what BOTH success and this failure look like'));
     }
     log.push(...refused);
 

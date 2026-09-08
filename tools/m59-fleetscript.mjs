@@ -68,10 +68,126 @@
 //
 // A step that fails ends THAT AGENT's errand and no other's. One courier dying is not the
 // operation failing, which is the difference between a fleet tool and a script.
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { takeRunLock } from './m59-runlock.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+
+// ---------------------------------------------------------------- GUARANTEE 9: PROVENANCE
+//
+// A SCRIPT IS ONLY KNOWN TO WORK AGAINST THE WORLD IT WAS WRITTEN FOR, and nothing here
+// could previously say which world that was.
+//
+// The failure this exists for, measured 2026-09-07. `m59-outfit.mjs` had worked. Then the
+// fleet moved to the keeper-process session driver, which put the World inside the KEEPER
+// and left the broker holding a snapshot. Three things in that script broke at once, and
+// every one of them failed SILENTLY:
+//
+//   * `map` began answering `route: {found: null, reason: "...the broker holds a snapshot,
+//     not a World"}`, and the script's `if (rt?.route?.found)` read "I cannot answer" as
+//     "there is no route" — so it reported "no teacher of punch reachable" about a
+//     stationary merchant it had just successfully looked up;
+//   * a 30-second RPC timeout was being applied to a journey that takes minutes, so a walk
+//     that was going fine was recorded as "travel refused" and RE-ISSUED twice more, which
+//     is the thing guarantee 5 exists to prevent;
+//   * the arrival check read `status.where.num`, a field the status tool does not return,
+//     so it never fired and a character standing in the right room was walked again.
+//
+// None of that presented as a version problem. It presented as the game refusing, and it
+// cost an evening and one character's shillings to find. The script was not wrong when it
+// was written. The ground moved under it.
+//
+// So a task may now declare the generation it was last developed and seen green against,
+// and what it depends on. Before anything walks, this compares that pin against the tree as
+// it is now and says GREEN or REVIEW. It is deliberately the same mechanic as
+// m59-research's report staleness — `repo_commit` plus `sources`, where a report goes stale
+// when a file it cited changes — applied to an operation rather than a document, and for
+// the same reason: a pin is what turns "this used to work" into a checkable claim.
+//
+//   provenance: {
+//     pinned:   '1fb1f51',                    // last commit this was seen green against
+//     verified: '2026-09-07',                 // when, and by whom, it was last seen green
+//     touches:  ['tools/m59-outfit.mjs',      // what it would break WITH
+//                'tools/m59-broker.mjs'],
+//     refuseOnDrift: false,                   // default: warn loudly, run anyway
+//   }
+//
+// DRIFT IS NOT FAILURE, which is why warning is the default. Most commits touching a
+// dependency change nothing a given script relies on, and a check that refused on every one
+// would be switched off inside a week. What it buys is the thing nobody had on the night it
+// was written: the script says "I was last green at X, and these dependencies have moved
+// since" BEFORE it drives a fleet — so an agent reads a diff first, instead of discovering
+// it in production one silent failure at a time.
+
+const git = (args, cwd) => {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8',
+                                       stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null; }
+};
+
+/**
+ * Compare a task's pinned generation against the working tree.
+ *
+ * Exported on its own so an agent can ASK before it runs: deciding whether a script is
+ * likely to work is a different act from executing it, and wanting that answer must never
+ * require driving a fleet to get it.
+ *
+ * @returns {{status:'green'|'review'|'unpinned'|'unknown', why:string, changed:string[],
+ *            behind:number|null, head:string|null, pinned:string|null}}
+ */
+// THE REPO IS THIS FILE'S REPO, NOT THE CALLER'S WORKING DIRECTORY.
+//
+// `cwd` defaulted to process.cwd(), so running an errand from anywhere but the checkout
+// answered `unknown — not a git checkout` and the pin silently stopped meaning anything.
+// Caught 2026-09-08 running fish-for-weapon from a scratch directory: the banner said
+// "unknown" and I nearly read it as "this script has no pin". A guarantee that quietly
+// downgrades when you move is not a guarantee.
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+export function checkProvenance(provenance, { cwd = REPO_ROOT } = {}) {
+  if (!provenance?.pinned)
+    return { status: 'unpinned', changed: [], behind: null, head: null, pinned: null,
+             why: 'this task declares no `provenance.pinned`, so there is no generation to ' +
+                  'compare against — it may well be current, and nothing here can tell you' };
+
+  const head = git(['rev-parse', 'HEAD'], cwd);
+  if (!head)
+    return { status: 'unknown', changed: [], behind: null, head: null, pinned: provenance.pinned,
+             why: 'not a git checkout, or git is unavailable, so the pin cannot be checked' };
+
+  const pinned = provenance.pinned;
+  if (git(['rev-parse', '--verify', `${pinned}^{commit}`], cwd) === null)
+    return { status: 'unknown', changed: [], behind: null, head, pinned,
+             why: `the pinned commit ${pinned} is not in this checkout — it may predate a ` +
+                  'rebase, or belong to a different repository' };
+
+  // WHAT MOVED, NOT HOW FAR. A count of commits is a number nobody can act on; the list of
+  // dependencies that actually changed is a reading list.
+  const touches = [].concat(provenance.touches ?? []).filter(Boolean);
+  const range = `${pinned}..HEAD`;
+  const changed = (git(touches.length ? ['diff', '--name-only', range, '--', ...touches]
+                                      : ['diff', '--name-only', range], cwd) || '')
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  const behindRaw = git(['rev-list', '--count', range], cwd);
+  const behind = behindRaw == null ? null : Number(behindRaw);
+
+  if (!changed.length)
+    return { status: 'green', changed: [], behind, head, pinned,
+             why: (touches.length ? `nothing this task depends on has changed since ${pinned}`
+                                  : `the tree has not changed since ${pinned}`) +
+                  (behind ? ` (${behind} commit(s) back)` : '') };
+
+  return { status: 'review', changed, behind, head, pinned,
+           why: `${changed.length} dependenc${changed.length === 1 ? 'y has' : 'ies have'} ` +
+                `changed since this task was last green at ${pinned}` +
+                (behind ? `, ${behind} commit(s) back` : '') +
+                ' — read the diff before trusting it against production' };
+}
 
 const RPC = () => process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901/';
 let seq = 0;
@@ -846,6 +962,26 @@ async function runStep(ctx, agent, step, state) {
       const gained = step.lines.map((l, i) => ({ match: String(l.match), got: after[i] - before[i],
                                                  asked: l.amount }));
       const anything = gained.some(g => g.got > 0);
+      // A SKILL IS NOT AN ITEM AND NEVER ENTERS THE PACK, so "nothing entered the pack" is
+      // not evidence about a skill purchase -- it is the only possible outcome of one. The
+      // teacher lists abilities alongside goods and sells them with the same handshake
+      // (monster.kod:3866-3874), but what arrives is a row in plSkills, not an object.
+      //
+      // Measured 2026-09-08. Scooter bought punch from Rook for 500. This step declared
+      // "nothing entered the pack", the errand short-circuited, and the `verify` step that
+      // WOULD have polled the skill list never ran. He had the skill the whole time -- it
+      // read `ability: null` for several minutes first, which is how a freshly bought skill
+      // looks before the server states a value.
+      //
+      // The cost of getting this backwards is not a confusing log line. A purchase reported
+      // as failed is a purchase something will retry, and the sale takes the money whether
+      // or not the skill was added (monster.kod:3873). `expectsPack: false` hands the
+      // verdict to whatever check the caller actually wrote.
+      if (step.expectsPack === false)
+        return { ok: true, gained, note: r?.note ?? r?.error,
+                 bought: anything ? 'and something entered the pack too'
+                   : 'nothing entered the pack, which is what an ability purchase looks ' +
+                     'like — the caller’s own verification decides whether it worked' };
       return { ok: anything, gained, note: r?.note ?? r?.error,
                why: anything ? undefined : 'nothing entered the pack' };
     }
@@ -861,7 +997,13 @@ async function runStep(ctx, agent, step, state) {
         // MERGED, NEVER REPLACED. A script that passes its own `keep` is adding to the
         // floor, not choosing a different one — the commonest way to lose a vault item is a
         // narrower list written for one errand.
-        keep: [...new Set([...VAULT_KEEP, ...(step.keep ?? [])])],
+        // UN-KEEP WHAT THE VAULT JUST HANDED BACK. `state.sellAnyway` is written by the vault
+        // step for surplus it withdrew over a stockpile cap. Dropping those names is safe
+        // precisely BECAUSE the deposit ran first: the stock we mean to hold is in the vault,
+        // so what carries that name in the pack now is the overflow we already decided to sell.
+        keep: [...new Set([...VAULT_KEEP, ...(step.keep ?? [])])]
+          .filter(n => !(state.sellAnyway ?? []).some(e =>
+            String(e).trim().toLowerCase() === String(n).trim().toLowerCase())),
         min_price: step.minPrice ?? 1,
         // One wielded weapon and one spare. sell_all already keeps equipped gear and one
         // piece for an empty armour slot, which is the shape a farmer should walk home in.
@@ -927,10 +1069,28 @@ async function runStep(ctx, agent, step, state) {
         ok,
         why: r?.error ?? r?.reason ?? r?.note ?? null,
       });
+      // ALWAYS READ THE SHELF BACK AFTER DEPOSITING, even when this trip stored nothing. A
+      // stockpile grows by deposits and shrinks by nothing else, so the only moment it can be
+      // over its caps is just after one — and we are standing at the vaultman with the pack
+      // already lightened, which is the cheapest this check will ever be.
+      //
+      // A FAILED EVICTION NEVER FAILS THE VAULT STEP. The deposit is the thing that had to
+      // happen; tidying the shelf is a bonus, and a circuit that aborted because a retrieval
+      // fee was short would strand a character mid-town having gained nothing.
+      const eviction = ok
+        ? await runEvictionCheck(ctx, agent, step, call).catch(e => ({ ran: false, why: e.message }))
+        : { ran: false, why: 'the deposit did not succeed, so the shelf was not read back' };
+      for (const e of (eviction.evicted ?? []))
+        if (e.ok && e.disposition !== 'carry' && e.disposition !== 'drop')
+          (state.sellAnyway ??= []).push(e.name);
+      if (eviction.ran && (eviction.evicted ?? []).length)
+        ctx.log(agent, `vault at ${eviction.pct ?? '?'}% — took back ` +
+          eviction.evicted.map(e => `${e.evict} ${e.name} (${e.disposition})`).join(', '));
       return { ok,
                vaulted: stored, offered: (r?.wanted ?? step.items ?? []).length,
                deposited: r?.deposited ?? [], refused: r?.refused ?? [],
                said: r?.vaultman_said ?? [],
+               eviction,
                why: r?.error ?? r?.reason ?? r?.note ?? null };
     }
 
@@ -957,6 +1117,115 @@ async function inventoryCounts(agent, lines) {
     .reduce((n, i) => n + (i.amount || 1), 0));
 }
 
+// ---------------------------------------------------------------- vault eviction
+//
+// THE CAPS LIVE WITH THE FLEET, NOT WITH THE HARNESS. `substrate/dumbot/vault-strategy.mjs`
+// is this machine's file — gitignored, like substrate/loadouts — and it holds the per-item
+// stockpile caps, the bulk/value tables the eviction ranks on, and the disposition rules.
+// A machine without one simply does not evict, which is the correct behaviour for a fleet
+// that has never said what it wants kept.
+//
+// It is loaded ONCE and cached. That is a real constraint worth stating: editing the caps
+// does not take effect until the process restarts, the same as every other substrate hook.
+// THREE PLACES, MOST SPECIFIC FIRST, and there is always an answer:
+//
+//   M59_VAULT_STRATEGY                      an explicit path. Testing, and one-off runs.
+//   substrate/dumbot/vault-strategy.mjs     THIS MACHINE'S fleet, gitignored like loadouts.
+//   tools/vault-strategies/keep-unbuyable   the default that ships — see that file.
+//
+// A fleet that has never said what it wants therefore still gets a defensible shelf rather
+// than an unbounded one, which is the behaviour an operator expects from a feature that
+// exists at all. Overriding is writing one file; there is nothing to switch on.
+export const DEFAULT_VAULT_STRATEGY =
+  join(REPO_ROOT, 'tools', 'vault-strategies', 'keep-unbuyable.mjs');
+
+const vaultStrategyCache = new Map();
+export async function fleetVaultStrategy() {
+  const local = join(REPO_ROOT, 'substrate', 'dumbot', 'vault-strategy.mjs');
+  const file = process.env.M59_VAULT_STRATEGY
+    || (existsSync(local) ? local : DEFAULT_VAULT_STRATEGY);
+  if (vaultStrategyCache.has(file)) return vaultStrategyCache.get(file);
+  let mod = null;
+  if (existsSync(file)) {
+    try { mod = await import(pathToFileURL(file).href); }
+    catch { mod = null; }                  // a broken strategy must not break a vault trip
+  }
+  vaultStrategyCache.set(file, mod);
+  return mod;
+}
+
+const sameItemName = (a, b) =>
+  String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+/**
+ * READ THE VAULT BACK AND TAKE OUT WHAT NO LONGER EARNS ITS SLOT.
+ *
+ * Runs after every deposit, because the deposit is the only moment we are standing in front
+ * of the vaultman with the pack already unburdened. Reading it back is a BUY request — a
+ * vaultman's sell list is your own deposit offered at a retrieval fee — so `list` is both
+ * how we see the contents and how we open the menu we withdraw through.
+ *
+ * WHY WITHDRAWN SURPLUS IS SAFE TO SELL, which is the part that is not obvious: the circuit
+ * vaults BEFORE any shop stop, deliberately, so that a wrong keep list cannot sell the
+ * stock. That ordering gives the invariant this relies on — once the deposit has run, the
+ * intended stockpile is in the VAULT, and anything of a capped name left in the pack is
+ * surplus by construction. So the sell step may un-keep exactly the evicted names without
+ * risking the collection.
+ */
+async function runEvictionCheck(ctx, agent, step, call) {
+  const mod = await fleetVaultStrategy();
+  if (!mod?.evictionPlan)
+    return { ran: false, why: 'no usable vault strategy (not even the shipped default)' };
+
+  const listed = await call('vault', { agent, action: 'list' }, 180_000)
+    .catch(e => ({ error: e.message }));
+  if (listed?.error || listed?.ok === false)
+    return { ran: false, why: listed?.error ?? listed?.reason ?? 'the vaultman did not open a list' };
+  const contents = listed.items ?? [];
+  if (!contents.length) return { ran: true, held: 0, evicted: [], why: 'the vault is empty' };
+
+  const plan = mod.evictionPlan(contents);
+  const rows = (plan?.plan ?? []).filter(r => Number(r.evict) > 0);
+  if (!rows.length)
+    return { ran: true, held: contents.length, evicted: [],
+             pct: plan?.pct ?? null, why: 'everything is under its cap' };
+
+  // WITHDRAWAL IS A PURCHASE AND PURCHASES NEED IDS, which `vault list` does not carry — it
+  // reports names and amounts. The shop tool lists the same menu WITH ids, so one extra read
+  // buys the whole plan.
+  const menu = await call('shop', { agent, seller: step.vaultman }, 180_000)
+    .catch(e => ({ error: e.message }));
+  const offered = menu?.items ?? [];
+
+  const done = [];
+  for (const r of rows) {
+    const row = offered.find(i => sameItemName(i.name, r.name));
+    if (!row) { done.push({ ...r, ok: false, why: 'the vaultman did not offer it back' }); continue; }
+    const bought = await call('shop',
+      { agent, seller: step.vaultman, buy_ids: [{ id: row.id, amount: r.evict }] }, 300_000)
+      .catch(e => ({ error: e.message }));
+    if (bought?.error) { done.push({ ...r, ok: false, why: bought.error }); continue; }
+
+    // THE DISPOSITION DECIDES WHAT HAPPENS NEXT, AND SELL IS THE DEFAULT.
+    //
+    //   sell / hand-over-or-sell  leave it in the pack and un-keep the name for the shop
+    //                             stops further down the circuit. A genuine hand-off needs a
+    //                             two-sided trade with a character this errand is not driving,
+    //                             so it degrades to selling and SAYS SO rather than pretending.
+    //   carry                     leave it in the pack, still protected. Inky-caps are food.
+    //   drop                      put it down here; it was not worth the retrieval fee.
+    const disposition = r.disposition ?? 'sell';
+    if (disposition === 'drop') {
+      await call('act', { agent, verb: 'drop', target: r.name, amount: r.evict }, 120_000)
+        .catch(() => null);
+    }
+    done.push({ ...r, ok: true, disposition,
+                degraded: disposition === 'hand-over-or-sell'
+                  ? 'no fleetmate is being driven by this errand, so it is sold' : undefined });
+  }
+  return { ran: true, held: contents.length, pct: plan?.pct ?? null,
+           freed: plan?.freed ?? 0, evicted: done };
+}
 // ---------------------------------------------------------------- the compiler
 //
 // `steps` may be an array, or a function of the agent so each courier can compute its own
@@ -985,10 +1254,35 @@ export async function fleetScript({
   // so an errand cannot wait for ever on somebody who cannot heal where it stands.
   healMs = 300_000,
   force = process.argv.includes('--force'), parallel = true,
+  // GUARANTEE 9. `{ pinned, verified, touches, refuseOnDrift }` — the generation this task
+  // was last seen green against. See checkProvenance above for why it exists.
+  provenance = null,
   onLog = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a),
 } = {}) {
   if (!Array.isArray(agents) || !agents.length) throw new Error('fleetScript needs agents');
   if (!steps) throw new Error('fleetScript needs steps');
+
+  // BEFORE THE LOCK AND BEFORE ANYTHING WALKS, because the whole value of the answer is
+  // having it while the fleet is still untouched. Reported on every path — including
+  // `unpinned`, quietly — so that "nobody pinned this" and "this is current" never read
+  // the same, which is the distinction the outfit errand did not have.
+  const prov = checkProvenance(provenance);
+  if (prov.status === 'review') {
+    onLog(`PROVENANCE: REVIEW — ${prov.why}`);
+    for (const f of prov.changed.slice(0, 12)) onLog(`  moved: ${f}`);
+    if (prov.changed.length > 12) onLog(`  ...and ${prov.changed.length - 12} more`);
+    onLog(`  diff it with: git diff ${prov.pinned}..HEAD -- ${(provenance.touches ?? []).join(' ')}`);
+    // A REFUSAL IS THE AUTHOR'S CALL, not this file's. Some errands are cheap to retry and
+    // some spend money in a shop; only the author knows which, so the default runs and says
+    // so loudly rather than blocking an operation on a diff that may change nothing.
+    if (provenance?.refuseOnDrift && !force)
+      throw new Error(`${name}: refusing — ${prov.why}. Re-verify and move \`provenance.pinned\`, ` +
+                      'or pass --force if you have read the diff and it does not touch this task.');
+  } else if (prov.status === 'green') {
+    onLog(`provenance: green — ${prov.why}`);
+  } else {
+    onLog(`provenance: ${prov.status} — ${prov.why}`);
+  }
 
   // Parsed BEFORE anything is claimed or walked: a malformed waiver must fail while the
   // fleet is still untouched, and the banner has to be on screen before the first step.

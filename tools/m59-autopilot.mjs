@@ -2117,8 +2117,29 @@ export class Autopilot {
   // damaged target over a fresh one because changing targets discards advancement
   // credit; weapon style has to be just as sticky or an interrupted fight can count
   // once with each hand. The next style flips when a new quarry is selected.
+  // SWITCHING WEAPON TYPE COSTS UP TO 74 SWINGS OF PROGRESS, so when to flip is not a
+  // detail — it decides whether a training style trains anything at all.
+  //
+  // The server counts swings per proficiency and pays out in blocks of 75:
+  // `SwingWeapon` (player.kod:4736-4765) resets `piWeaponSwings` to 0 whenever the wielded
+  // weapon's proficiency differs from the one being counted, and BARE HANDS COUNT AS
+  // SKID_BRAWLING — so short sword <-> fists is a proficiency change like any other. Only
+  // every 75th swing raises `GetWeaponSwingBonus`, and `AssessHit` (player.kod:4536-4537)
+  // will not roll for an improvement at all while that bonus is 0.
+  //
+  // `alternate` flips per QUARRY, and a fungus beast dies in well under 75 swings. That
+  // combination never reaches the first payout: the counter is zeroed on every new monster,
+  // the bonus stays 0, and NOT ONE improvement roll ever fires. It does not fail loudly —
+  // the character fights normally for ever and simply never improves.
+  //
+  // `alternate_on_improve` flips only when an improvement actually lands, which is the one
+  // free moment: `ChangeSkillAbility` already zeroes the counter itself when a Stroke or
+  // Proficiency goes up (player.kod:7335-7339), so switching there discards nothing. Every
+  // other switching schedule throws away part of a block.
   trainingStyleFor(targetId = null) {
     const configured = this.policy.trainingStyle ?? 'normal';
+    if (configured === 'alternate_on_improve')
+      return this._trainingNextStyle ?? 'short_sword';
     if (configured !== 'alternate') return configured;
     if (targetId == null)
       return this._trainingBout?.style ?? this._trainingNextStyle ?? 'short_sword';
@@ -2127,6 +2148,28 @@ export class Autopilot {
     this._trainingBout = { target_id: targetId, style };
     this._trainingNextStyle = style === 'short_sword' ? 'unarmed' : 'short_sword';
     return style;
+  }
+
+  /**
+   * An improvement landed. Under `alternate_on_improve` this is the only place the style
+   * flips — the server has just reset the swing counter for us, so the next block starts
+   * on the other proficiency at no cost. Returns the style now in force, for telemetry.
+   *
+   * Deliberately a no-op under every other style: `alternate` owns its own schedule and
+   * `normal`/`short_sword`/`unarmed` do not switch at all.
+   */
+  onTrainingImprovement(facts = null) {
+    if ((this.policy.trainingStyle ?? 'normal') !== 'alternate_on_improve') return null;
+    const was = this._trainingNextStyle ?? 'short_sword';
+    // Only a stroke or a proficiency resets the counter server-side, so only those are a
+    // free switch. An improvement in dodge or a spell leaves the block running and must
+    // not move us off the weapon that is part-way through it.
+    const skill = String(facts?.skill ?? facts?.name ?? '').toLowerCase();
+    if (skill && !/sword|mace|hammer|axe|scimitar|brawl|punch|slash|thrust|pierce|bow|archery/.test(skill))
+      return was;
+    this._trainingNextStyle = was === 'short_sword' ? 'unarmed' : 'short_sword';
+    this._trainingBout = null;
+    return this._trainingNextStyle;
   }
 
   isTrainingPrey(name) {
@@ -2164,6 +2207,23 @@ export class Autopilot {
   // Prepare one exact, observable combat style. `equip:false` is passed to fight()
   // after this succeeds so its ordinary best-weapon convenience cannot silently undo
   // an unarmed bout or replace a missing short sword with a different weapon.
+  // THE TRAINED WEAPON IS A POLICY, NOT A CONSTANT.
+  //
+  // This branch was hardcoded to /short\s?sword/i and refused every other style with
+  // "unknown training style". That was right while short sword was the only proficiency
+  // anyone was training, and wrong the moment a character outgrew it: an armed proficiency
+  // stops improving once its ability reaches the TARGET's level (stroke.kod:115), so on a
+  // level-50 fungus beast a short sword at 50 trains nothing at all. Measured on prod
+  // 2026-09-08 — Camilla sat at exactly 50 with hammer at 7 and axe at 3, alternating a
+  // capped skill against her fists and gaining nothing on the armed half.
+  //
+  // `policy.trainingWeapon` names what to hold instead. It defaults to short sword, so
+  // every doctrine written before this behaves exactly as it did.
+  trainingWeaponNow() {
+    const w = String(this.policy?.trainingWeapon ?? '').trim();
+    return w || 'short sword';
+  }
+
   async prepareTrainingStyle(style, targetId) {
     if (style === 'normal') return { ready: true, equip: true };
     const s = this.s, c = s.client;
@@ -2173,44 +2233,56 @@ export class Autopilot {
         this.note('training bout: fighting unarmed', { target_id: targetId, removed: bare.removed });
       return { ...bare, equip: false, style, rounds: 1 };
     }
+    // `short_sword` is kept as the style NAME for compatibility — every caller and every
+    // stored policy already says it, and renaming it would be a migration for no gain.
+    // What it means now is "the armed half", and the weapon comes from policy.
     if (style !== 'short_sword')
       return { ready: false, equip: false, style, why: `unknown training style ${style}` };
 
-    const equippedShort = () => {
+    const want = this.trainingWeaponNow();
+    // WHOLE WORDS, ESCAPED. "sword" must not match "short sword": a character told to
+    // train swordsmanship and handed a short sword would train the wrong proficiency and
+    // report success, which is the silent-wrong-answer shape this file keeps recording.
+    // Spaces are flexible because the server writes "short sword" and some resources
+    // write "shortsword".
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s?');
+    const rx = new RegExp(`\\b${escaped}\\b`, 'i');
+    const equippedWanted = () => {
       const using = skills.equippedNow(c);
       if (!using) return null;
       return (c.inventory || []).find(o => using.has(o.id) &&
         !skills.brokenSet(c).has(o.id) &&
-        /short\s?sword/i.test(c.rsc.get(o.nameRsc) || '')) || null;
+        rx.test(c.rsc.get(o.nameRsc) || '')) || null;
     };
-    let short = equippedShort();
-    if (short)
-      return { ready: true, equip: false, style, already: true, weapon_id: short.id, rounds: 1 };
+    let held = equippedWanted();
+    if (held)
+      return { ready: true, equip: false, style, already: true, weapon_id: held.id,
+               weapon: want, rounds: 1 };
 
     const off = await this.unuseTrainingWeapon();
     if (!off.ready) return { ...off, equip: false, style };
-    let hasShort = (c.inventory || []).some(o =>
-      !skills.brokenSet(c).has(o.id) &&
-      /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
-    if (!hasShort) {
-      await this.makeWeapon('this training bout requires a short sword').catch(() => false);
-      hasShort = (c.inventory || []).some(o =>
-        !skills.brokenSet(c).has(o.id) &&
-        /short\s?sword/i.test(c.rsc.get(o.nameRsc) || ''));
+    const carries = () => (c.inventory || []).some(o =>
+      !skills.brokenSet(c).has(o.id) && rx.test(c.rsc.get(o.nameRsc) || ''));
+    if (!carries()) {
+      // Create Weapon ROLLS a ladder rather than granting a choice (creaweap.kod:66-107),
+      // so this may well produce something else. It is still worth one attempt — it is free
+      // and it sometimes lands — but it is not a supply plan, which is what
+      // fleetscripts/fish-for-weapon.mjs is for.
+      await this.makeWeapon(`this training bout requires a ${want}`).catch(() => false);
     }
-    if (hasShort && !equippedShort())
-      await skills.equipBest(s, { priority: ['short sword'] }).catch(() => null);
-    short = equippedShort();
-    if (short) {
-      this.note('training bout: fighting with a short sword', { target_id: targetId });
-      return { ready: true, equip: false, style, weapon_id: short.id, rounds: 1 };
+    if (carries() && !equippedWanted())
+      await skills.equipBest(s, { priority: [want] }).catch(() => null);
+    held = equippedWanted();
+    if (held) {
+      this.note(`training bout: fighting with a ${want}`, { target_id: targetId, weapon: want });
+      return { ready: true, equip: false, style, weapon_id: held.id, weapon: want, rounds: 1 };
     }
 
     // Do not leave a failed experiment empty-handed. Re-arm normally for survival,
     // but refuse this bout: fighting with a fallback weapon would corrupt the split.
     await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => null);
-    return { ready: false, equip: false, style,
-             why: 'no usable short sword could be made or equipped' };
+    return { ready: false, equip: false, style, weapon: want,
+             why: `no usable ${want} could be made or equipped` };
   }
 
   // A training bout belongs to one quarry. `skills.fight` deliberately resumes a
@@ -6901,6 +6973,13 @@ export class Autopilot {
     }
     if (this.pendingImprovement) {
       const facts = this.pendingImprovement; this.pendingImprovement = null;
+      // BEFORE the playbook, and not inside it. The flip has to happen whether or not this
+      // character has a playbook configured, and an `improved` action that logs off or asks
+      // for orders must not be able to skip it — the swing counter has already been reset
+      // server-side by now, so this is the one moment switching is free.
+      const flipped = this.onTrainingImprovement(facts);
+      if (flipped) this.note(`training style now ${flipped}, the swing counter having just reset`,
+        { style: flipped, after: facts?.skill ?? facts?.name ?? null });
       const action = playbook.decide('improved', pb, facts);
       if (action) await this.runPlaybook('improved', action, facts);
     }
@@ -13041,8 +13120,42 @@ export class Autopilot {
     // survival rule remains in force.
     const practice = this.trainingStyleFor();
     if (practice === 'unarmed' && this.mode === 'farm' &&
-        room?.num === this.policy.assignedRoom)
+        room?.num === this.policy.assignedRoom) {
+      // AND PUT DOWN WHAT IS ALREADY IN THE HAND. Declining to re-arm is not the same as
+      // being unarmed, and this branch only did the first — so a character switched to
+      // unarmed practice while holding a mace went on holding it between bouts.
+      //
+      // That is not cosmetic. SwingWeapon reads the proficiency of what is HELD and zeroes
+      // piWeaponSwings the moment it differs from the one the counter is on
+      // (player.kod:4753-4757), and no improvement fires at all until that counter reaches
+      // 75 (player.kod:4536-4537, 4759). So ONE swing landed with the mace throws away a
+      // bare-hand block that took twenty minutes to build.
+      //
+      // Worse on this fleet than it sounds: mace fighting runs 39-58 here and the quarry is
+      // level 50, so for most characters the mace cannot improve either (stroke.kod:115).
+      // The swing destroys the block and buys nothing with it.
+      //
+      // Measured 2026-09-08: 17 characters on `unarmed`, 16 of them holding a mace, hammer,
+      // axe or long sword, and brawling pinned at 4-5 across all twenty-one.
+      if (skills.isArmed(c)) {
+        const bare = await this.unuseTrainingWeapon()
+          .catch(e => ({ ready: false, why: e.message }));
+        if (bare.ready && bare.removed)
+          this.note('unarmed practice: put down the weapon', { removed: bare.removed,
+            why: 'a swing with it would reset the bare-hand improvement counter' });
+        // AND SAY SO WHEN IT DOES NOT COME OFF. A silent failure here looks exactly like a
+        // silent success from outside — the character carries on hunting either way — and
+        // the whole point of the branch is that the hand is empty. Rate-limited to once a
+        // minute so a server that simply will not take the weapon does not flood the log.
+        else if (!bare.ready && Date.now() - (this._lastDisarmComplaint ?? 0) > 60_000) {
+          this._lastDisarmComplaint = Date.now();
+          this.note('unarmed practice: could NOT put the weapon down', {
+            why: bare.why ?? 'no reason given',
+            cost: 'every swing landed with it zeroes the bare-hand improvement counter' });
+        }
+      }
       return CONTINUE;
+    }
     // NO WEAPON: FIX IT BEFORE ANYTHING ELSE, and never walk out to hunt without one.
     //
     // armSelf() already wields from the pack and falls back to conjuring, and makeWeapon

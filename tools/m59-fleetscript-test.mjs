@@ -9,6 +9,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // The run lock writes a real file; give it a scratch directory before importing the module.
 const LOCK_DIR = mkdtempSync(join(tmpdir(), 'm59-fs-'));
@@ -622,6 +623,102 @@ console.log('a walk to a non-room is refused before anything moves');
   // way to recover a stranded character is a hand-written script — which is the thing this
   // file exists to stop being necessary.
   ok('a declared rescue may go in', trapCheck([walk(599)], { allowTraps: true }) === null);
+}
+
+
+console.log('');
+console.log('the vault reads its own shelf back and takes out what is over the cap');
+{
+  // THE CAP TABLE WAS DOCUMENTATION. `evictionPlan` and `CAPS` lived in the fleet's
+  // vault-strategy.mjs, read authoritatively, and had NO CALLER anywhere -- so an operator
+  // who wrote 'keep only 120 nerudite arrows per person' had written a comment. This wires
+  // it to the one moment it can act: standing at the vaultman, just after a deposit.
+  process.env.M59_VAULT_STRATEGY =
+    fileURLToPath(new URL('./fixtures/vault-strategy-fixture.mjs', import.meta.url));
+  const sent = fakeBroker({ rooms: { a1: 114 },
+    // One payload serves both calls: the deposit path reads `stored`, the list path `items`.
+    vault: { ok: true, vaultman: 'Obert', stored: 1, deposited: [], refused: [],
+             items: [{ name: 'orc tooth', amount: 137 },
+                     { name: 'inky-cap mushroom', amount: 80 },
+                     { name: 'emerald', amount: 4 }] },
+    shopItems: [{ id: 21, name: 'orc tooth' }, { id: 22, name: 'inky-cap mushroom' }] });
+  const r = await fleetScript({ name: 'evict', fleet: 'testfleet', agents: ['a1'],
+    steps: [vault('vaultman', ['orc tooth']), sell('smith')], onLog: quiet });
+  const bought = sent.filter(c => c.name === 'shop' && c.buy_ids).flatMap(c => c.buy_ids);
+
+  ok('it withdraws exactly the surplus, not the stockpile',
+     bought.find(b => b.id === 21)?.amount === 37, JSON.stringify(bought));
+  ok('one over a different cap comes out too',
+     bought.find(b => b.id === 22)?.amount === 30, JSON.stringify(bought));
+  ok('and an item with no cap at all is never touched', bought.length === 2,
+     'emerald has no cap: ' + JSON.stringify(bought));
+
+  // SELL IS THE DEFAULT AND THE KEEP LIST HAS TO STAND ASIDE FOR IT. Without this the
+  // surplus rides the whole circuit protected by the very list that put it in the vault.
+  const sale = sent.find(c => c.name === 'sell_all');
+  ok('the sell step un-keeps what was evicted to sell',
+     !(sale?.keep ?? []).some(n => /orc tooth/i.test(n)), JSON.stringify(sale?.keep));
+  // The keep list holds NAME FRAGMENTS, not full names -- `inky` is the entry that protects
+  // an Inky-cap mushroom. A `carry` disposition must leave that fragment untouched.
+  ok('but keeps what was evicted to CARRY -- inky-caps are food, not surplus',
+     (sale?.keep ?? []).some(n => /^inky/i.test(n)), JSON.stringify(sale?.keep));
+  ok('and the vault step still reports success', r.results.a1.ok === true, r.results.a1.why);
+  delete process.env.M59_VAULT_STRATEGY;
+}
+
+console.log('');
+console.log('the shipped keep-unbuyable default, on its own terms');
+{
+  // TESTED AS A MODULE, NOT THROUGH THE LOADER. Whether the loader reaches it depends on
+  // whether THIS machine has a fleet of its own -- this one does -- so asserting the
+  // default's behaviour through the loader would pass or fail on a checkout detail.
+  const d = await import('./vault-strategies/keep-unbuyable.mjs');
+  ok('half the vault each, derived from bulk rather than written down',
+     d.CAPS['dark angel feather'] === 375 && d.CAPS['blue dragon scale'] === 150,
+     JSON.stringify(d.CAPS));
+  const plan = d.evictionPlan([{ name: 'dark angel feather', amount: 400 },
+                               { name: 'blue dragon scale', amount: 120 },
+                               { name: 'emerald', amount: 9 }]);
+  const row = (n) => plan.plan.find(r => r.name === n);
+  ok('an unbuyable keeper is trimmed to its cap', row('dark angel feather')?.evict === 25);
+  ok('and one under its cap is left entirely alone', !row('blue dragon scale'));
+  ok('anything a merchant restocks comes out in full', row('emerald')?.evict === 9);
+  ok('and the reason says which half of the rule it was',
+     /buyable somewhere/.test(row('emerald')?.why ?? ''), row('emerald')?.why);
+}
+
+console.log('');
+console.log('and the vault step evicts through it end to end');
+{
+  process.env.M59_VAULT_STRATEGY =
+    fileURLToPath(new URL('./vault-strategies/keep-unbuyable.mjs', import.meta.url));
+  const sent = fakeBroker({ rooms: { a1: 114 },
+    vault: { ok: true, vaultman: 'Obert', stored: 1, deposited: [], refused: [],
+             items: [{ name: 'dark angel feather', amount: 400 },
+                     { name: 'emerald', amount: 9 }] },
+    shopItems: [{ id: 31, name: 'dark angel feather' }, { id: 32, name: 'emerald' }] });
+  const r = await fleetScript({ name: 'default-strategy', fleet: 'testfleet', agents: ['a1'],
+    steps: [vault('vaultman', ['dark angel feather'])], onLog: quiet });
+  const bought = sent.filter(c => c.name === 'shop' && c.buy_ids).flatMap(c => c.buy_ids);
+  ok('the surplus feathers are withdrawn', bought.find(b => b.id === 31)?.amount === 25,
+     JSON.stringify(bought));
+  ok('and the buyable stock in full', bought.find(b => b.id === 32)?.amount === 9,
+     JSON.stringify(bought));
+  ok('and the step succeeds', r.results.a1.ok === true, r.results.a1.why);
+  delete process.env.M59_VAULT_STRATEGY;
+}
+
+console.log('');
+console.log('a strategy that will not load leaves the vault alone rather than failing');
+{
+  process.env.M59_VAULT_STRATEGY = 'C:/nonexistent/vault-strategy.mjs';
+  const sent = fakeBroker({ rooms: { a1: 114 } });
+  const r = await fleetScript({ name: 'broken-strategy', fleet: 'testfleet', agents: ['a1'],
+    steps: [vault('vaultman', ['ring of invisibility'])], onLog: quiet });
+  ok('the deposit still happens', sent.some(c => c.name === 'vault' && c.action === 'deposit'));
+  ok('nothing is bought back', !sent.some(c => c.name === 'shop' && c.buy_ids));
+  ok('and the step still succeeds', r.results.a1.ok === true, r.results.a1.why);
+  delete process.env.M59_VAULT_STRATEGY;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

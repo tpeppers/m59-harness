@@ -161,6 +161,7 @@ export function universalLauncherText({
     'rem clientd3d/m59dbg.c. Unset either one and that half goes quiet, which is what',
     'rem makes the patched binary safe to hand to somebody who just wants to play.',
     'rem Whatever the caller already put in the environment wins over these.',
+    'if not defined M59_INVENTORY_SERVER set "M59_INVENTORY_SERVER=%~1:%~2"',
     `if not defined M59_OVERLAY_DIR set "M59_OVERLAY_DIR=${overlayDir}"`,
     `if not defined M59_SIGNAL_PORT set "M59_SIGNAL_PORT=${signalPort}"`,
     `if not defined M59_DEBUG_TITLE set "M59_DEBUG_TITLE=${title ? 1 : 0}"`,
