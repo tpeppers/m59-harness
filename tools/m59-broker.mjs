@@ -777,6 +777,24 @@ function learningView(c) {
 
 const learningErrands = new Map();
 
+// PURCHASES THAT TOOK THE MONEY AND DID NOT DELIVER THE SKILL — `agent::ability` -> record.
+//
+// This is a money guard, and it exists because the failure is REAL, REPRODUCIBLE and SILENT
+// on the server side. Twice now — 2026-09-07 and 2026-09-08 — a character has stood in front
+// of Rook with punch listed at 500, been charged exactly 500, and never received the skill.
+// Confirmed the second time by a forced `abilities` refresh immediately afterwards: purse
+// 518 -> 18, skill list unchanged.
+//
+// Retrying costs the price again. That was survivable while purchases were dispatched by
+// hand; it is not, now that a fleet rule dispatches them unattended — the same character
+// would be re-selected on the next pass, for as long as its bank held out.
+//
+// So a purchase is attempted ONCE per ability per broker lifetime unless it succeeds. A
+// restart clears this deliberately: the operator restarting the broker is the human decision
+// to try again, and a persistent file would quietly make a transient failure permanent.
+const learningRefusals = new Map();
+const learnKey = (agent, ability) => `${agent}::${String(ability).toLowerCase()}`;
+
 const sessions = new Map();             // agent name -> Session
 
 // ---------------------------------------------------------------- keeper processes
@@ -1847,9 +1865,38 @@ class KeeperProxy {
           source: 'keeper snapshot — the process that owns the socket read these',
         };
       },
-      requestInventory: () => null,
-      requestSpells: () => null,
-      requestSkills: () => null,
+      // THESE WERE STUBS RETURNING null, AND THAT IS WHY THE SHEET WAS EMPTY.
+      //
+      // Nothing on this protocol is pushed until it is asked for: the server answers a
+      // stat group only on a request naming that group (user.kod:2659-2724), and the
+      // skill and spell LISTS are a separate request again. The broker was making all of
+      // those calls — `status` asks for groups 1 and 2 and both lists, then waits 700ms —
+      // and every one of them landed here and returned null. So it waited for a packet
+      // nobody had requested and then reported whatever the keeper's last snapshot held:
+      // `attributes: {}` across the whole fleet and a null ability on every skill. That
+      // null went into PlayerCanLearn as intellect 0, and into the shadow snapshot as
+      // "this character knows nothing".
+      //
+      // The refresh has to happen in the process that owns the socket, so it is a keeper
+      // action like every other mutation on this object. Fire-and-forget on purpose: the
+      // callers are `c.requestSkills()`-shaped void calls followed by their own settle,
+      // and `refreshPages` below is the awaitable form for a caller that needs to know
+      // what actually came back.
+      requestInventory: () => { act('refresh', { pages: ['inventory'] }).catch(() => {}); return null; },
+      requestSpells: () => { act('refresh', { pages: ['spells'] }).catch(() => {}); return null; },
+      requestSkills: () => { act('refresh', { pages: ['skills'] }).catch(() => {}); return null; },
+      // `stats(n)` was not stubbed here at all — it simply did not exist on this object,
+      // so every caller asking for attributes was reaching for a method that was not
+      // there. Map the group number to the page name the keeper understands.
+      stats: (n = 1) => {
+        const page = { 1: 'stats', 2: 'attributes', 3: 'spells', 4: 'skills' }[Number(n)];
+        if (page) act('refresh', { pages: [page] }).catch(() => {});
+        return null;
+      },
+      // THE AWAITABLE FORM, for anything that needs the numbers rather than merely newer
+      // ones eventually — the shadow snapshot above all, which is copying a character and
+      // must not write down a null as a fact about them.
+      refreshPages: (pages, opts = {}) => act('refresh', { pages, ...opts }),
 
       // ------------------------------------------------------------ the mutation half
       //
@@ -1958,8 +2005,34 @@ class KeeperProxy {
       // which `waitFor` above turns into "from now" rather than into "from the beginning".
       evSeq: s.ev_seq ?? null,
       eventsSince: () => [],
-      stat: () => null,
-      statsById: new Map(),
+      // THE ATTRIBUTES, FROM THE KEEPER'S SNAPSHOT — these were `() => null` and an empty
+      // Map, so every attribute read on a keeper-backed character answered "unknown".
+      //
+      // That is not a cosmetic gap. PlayerCanLearn subtracts `intellect * 2 * 7 / 5` from
+      // the threshold, so a missing intellect reads as ZERO and inflates what every
+      // character needs to learn its next skill. Measured 2026-09-08: `need` came back as
+      // 227 for all 21, while four of them held 142-154 and would have cleared a realistic
+      // ~113. They were being told they could not learn a skill they had already earned.
+      //
+      // `stat()` lowercases what it is asked for, and the keeper now sends these already
+      // lowercased, so the two agree. Both spellings are stored anyway — the server's own
+      // resource strings are capitalised ("Intellect", user.kod:136-141) and a reader that
+      // copies the server's spelling should not miss.
+      stat: (name) => {
+        const k = String(name ?? '').toLowerCase();
+        const v = (s.attributes ?? {})[k];
+        return v == null ? null : v;
+      },
+      statsById: (() => {
+        const m = new Map();
+        for (const [k, v] of Object.entries(s.attributes ?? {})) {
+          if (v == null) continue;
+          const row = { value: v, name: k };
+          m.set(k, row);
+          m.set(k[0].toUpperCase() + k.slice(1), row);
+        }
+        return m;
+      })(),
       spells: (s.spells ?? []).map(p => ({
         id: p.id, nameRsc: p.name, school: p.school, mana: p.mana,
         numTargets: p.targets,
@@ -2784,7 +2857,19 @@ class KeeperProxy {
   // Fallback for any method not explicitly defined: return null or empty.
   // This prevents "is not a function" errors when the fleet tool or other
   // MCP tools call methods we haven't implemented.
-  bankKnown() { return false; }
+  // NO `bankKnown()` STUB HERE. There was one — `bankKnown() { return false; }` — and it
+  // sat 310 lines BELOW the real implementation in the same class body, which in JavaScript
+  // means the real one never ran. Every consumer of a fleet row read `banked: false`.
+  //
+  // What that cost, measured 2026-09-08: the fleet's entire banked wealth was invisible.
+  // Beaker was holding 21,625 in Jasper and read as having nothing; Robin 26,664; Janice
+  // 13,027. A learning rule that gates on "can this character afford the skill" therefore
+  // answered no for a fleet that could have bought the whole ladder several times over.
+  //
+  // The shape is worth naming because this file has produced it twice now (see `stat()` and
+  // `statsById`): a catch-all block of "return null so nothing throws" stubs, appended to a
+  // class that had since grown a REAL implementation of one of them. A stub that silences a
+  // TypeError is a stub that silences the method it shadows, and nothing warns.
   armourKind() { return null; }
   carryCapacity() { return null; }
   cleanDescription() { return null; }
@@ -9432,11 +9517,23 @@ const TOOLS = [
                      'the character\'s proficiency in each weapon\'s own skill, which only ever ' +
                      'rewards what it is already best at; set this to train a weak weapon skill. ' +
                      'Pass [] to go back to proficiency ranking.' },
+      training_weapon: { type: 'string',
+        description: 'which weapon the ARMED half of a training style holds. Default ' +
+          '"short sword". An armed proficiency stops improving once its ability reaches ' +
+          "the target's level (stroke.kod:115), so a character whose short sword has " +
+          'already reached the quarry level trains NOTHING on the armed half until this ' +
+          'names a weapon it can still advance. Name it exactly — "sword" matches short, ' +
+          'long and mystic sword alike.' },
       training_style: { type: 'string',
-        enum: ['normal', 'short_sword', 'unarmed', 'alternate'],
+        enum: ['normal', 'short_sword', 'unarmed', 'alternate', 'alternate_on_improve'],
         description: 'combat practice style for farm prey. alternate keeps one style for a whole ' +
           'quarry, then flips between an exact short sword and bare hands. Outside the assigned ' +
-          'farm room the keeper still arms for travel and survival.' },
+          'farm room the keeper still arms for travel and survival. PREFER alternate_on_improve: ' +
+          'it flips only when an ability actually goes up. The server counts swings per ' +
+          'proficiency and pays out every 75 (SWINGS_PER_IMPROVE_CHECK), resetting the count ' +
+          'whenever the wielded proficiency changes -- and bare hands count as brawling -- so a ' +
+          'style that flips per quarry on prey that dies in fewer than 75 swings never reaches a ' +
+          'payout and improves NOTHING, silently.' },
       drop_junk: { type: 'boolean',
         description: 'drop junk and weapons the server has refused as broken, default true. A ' +
                      'broken weapon is NOT renamed, so it otherwise outranks the working one for ever' },
@@ -10136,10 +10233,16 @@ const TOOLS = [
       if (a.weapon_priority !== undefined)
         p.policy.weaponPriority = Array.isArray(a.weapon_priority) && a.weapon_priority.length
           ? a.weapon_priority.map(String) : null;
+      if (a.training_weapon !== undefined) {
+        const w = String(a.training_weapon).trim();
+        if (!w) throw new Error('training_weapon must name a weapon, not an empty string');
+        p.policy.trainingWeapon = w;
+      }
       if (a.training_style !== undefined) {
         const style = String(a.training_style);
-        if (!['normal', 'short_sword', 'unarmed', 'alternate'].includes(style))
-          throw new Error(`training_style must be normal, short_sword, unarmed or alternate — got ${style}`);
+        if (!['normal', 'short_sword', 'unarmed', 'alternate', 'alternate_on_improve'].includes(style))
+          throw new Error('training_style must be normal, short_sword, unarmed, alternate or ' +
+            `alternate_on_improve — got ${style}`);
         p.policy.trainingStyle = style;
       }
       // NORMALISED AT THE DOOR. `half` and `ab` were two names for the same retired
@@ -11336,13 +11439,39 @@ const TOOLS = [
       // order does match, but an id is checkable and a position is not.
       const group = n => [...c.statsById.entries()]
         .filter(([k]) => k.startsWith(`${n}.`)).map(([, v]) => v);
+      // THE KEEPER'S BOOK IS THE FALLBACK, because the live read comes back empty.
+      //
+      // Groups 3 and 4 are POLLED, not pushed, and on a live capture the server answers
+      // with zero ability slots — `skills_warning` below has been saying so all along. So
+      // every row reported null and this tool, which exists to answer "how good is this
+      // character", answered "unknown" about a fleet whose dodge is at 99. Everything
+      // downstream inherited it: the shadow snapshot copied nulls, and the learning
+      // preflight summed them to zero and called every level-3 skill unreachable.
+      //
+      // substrate/abilities/<name>.json is written by the KEEPER from the BP_STAT pushes
+      // the server sends the instant an ability moves (player.kod:7343), so it holds the
+      // last value actually seen. Prefer the live number when there is one — it is newer —
+      // and fall back to the book rather than to null. Same fix, same reason, as
+      // cachedLearningRows: one source for "how good is this character".
+      //
+      // NOT s.abilityBook(), WHICH IS NULL ON THE DRIVER THIS FLEET ACTUALLY RUNS. That
+      // method is `this._state?.abilities ?? null` on the keeper-process proxy and its
+      // sibling `recordAbilities()` is a stub returning null (see the proxy class above),
+      // so the `book` bound a few lines up is null exactly where it is needed most.
+      // loadBook reads substrate/abilities/<name>.json off disk and works under either
+      // driver — it is what cachedLearningRows uses, for the same reason.
+      const kbook = abilities.loadBook(c.me?.name ?? '') || {};
       const build = (list, n, label) => {
         const stats = group(n);
         const byId = new Map(stats.filter(x => x.id != null).map(x => [x.id, x]));
+        const kept = kbook[label === 'spells' ? 'spells' : 'skills'] || {};
         const rows = list.map((o, i) => {
           const st = byId.get(o.id) || stats[i];
-          return { name: c.rsc.get(o.nameRsc), id: o.id,
-                   ability: st ? st.value : null,
+          const name = c.rsc.get(o.nameRsc);
+          // `??`, not `||`: an ability of 0 is a real answer and must not fall through.
+          const live = st ? st.value : null;
+          return { name, id: o.id,
+                   ability: live ?? kept[name]?.ability ?? null,
                    ...(label === 'spells' ? { targets: o.numTargets } : {}) };
         });
         return { rows, missing: rows.filter(r => r.ability == null).length,
@@ -11459,11 +11588,21 @@ const TOOLS = [
       const fresh = await abilities.ensureAbilities(s, {
         kinds: 'both', force: a.refresh === true, maxAgeMs: ABILITY_MAX_AGE_MS,
       });
-      const knownNow = c.abilitiesKnown();
-      const known = [
-        ...knownNow.skills.map(x => ({ ...x, kind: 'skill' })),
-        ...knownNow.spells.map(x => ({ ...x, kind: 'spell' })),
-      ];
+      // ONE SOURCE FOR "HOW GOOD IS THIS CHARACTER", because two sources gave two answers.
+      //
+      // This used to read c.abilitiesKnown() directly. That is the LIVE client state, and
+      // its `ability` is null for every row on a live capture — group 4 is polled rather
+      // than pushed and comes back with zero ability slots (m59-mirror.mjs says so at
+      // length under "a fresh sheet is not the fullest sheet"). Summing nulls gave have=0,
+      // so EVERY level-3 ability reported "knows nothing at level 2 in this track" and
+      // remaining_required was the whole threshold — for a fleet whose dodge is at 99.
+      //
+      // cachedLearningRows() is the same list with the keeper's own book behind it
+      // (substrate/abilities/<name>.json, the last value actually seen), which is where
+      // the real numbers have been the entire time. learningView() — and therefore the
+      // BUY path — has always used it, so this read tool was contradicting the very thing
+      // it exists to preflight.
+      const known = cachedLearningRows(c);
       const normLearnName = x => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       const wantedKind = a.kind === 'skills' ? 'skill' : a.kind === 'spells' ? 'spell' : null;
       let targetName = null;
@@ -11557,6 +11696,16 @@ const TOOLS = [
           continue;
         }
         const view = learningView(c), next = view?.planned?.next;
+        // BEFORE ANYTHING IS SPENT. `expected_buyable` is the SERVER's willingness to offer
+        // it; this is our record of having already paid for it once and got nothing.
+        const burnt = next?.name ? learningRefusals.get(learnKey(agent, next.name)) : null;
+        if (burnt) {
+          results.push({ agent, character: c.me?.name, queued: false, charged: burnt.price,
+            reason: `${next.name} was already paid for once (${burnt.price}sh at ` +
+                    `${new Date(burnt.at).toISOString()}) and never arrived — refusing to buy ` +
+                    'it again. Restart the broker to allow a retry.' });
+          continue;
+        }
         if (!next?.expected_buyable) {
           const first = view?.planned?.abilities?.[0] ?? null;
           results.push({ agent, character: c.me?.name, queued: false,
@@ -11567,15 +11716,68 @@ const TOOLS = [
           });
           continue;
         }
-        const script = fileURLToPath(new URL('./m59-outfit.mjs', import.meta.url));
-        const httpAt = process.argv.indexOf('--http');
-        const brokerPort = httpAt >= 0 ? process.argv[httpAt + 1]
-          : process.env.M59_BROKER_PORT || '8901';
+        // THE FLEETSCRIPT, NOT `m59-outfit.mjs`. The old script is the one whose failures
+        // are catalogued at the top of fleetscripts/learn-skill.mjs — a null route read as
+        // "no teacher reachable", a 30-second timeout applied to a journey measured in
+        // minutes, and a single verification read that races the skill list. The rewrite
+        // fixed all three and then nothing was ever pointed at it; this line was still
+        // spawning the original.
+        //
+        // What that cost, measured 2026-09-08:
+        //
+        //     Scooter: short 482sh and no bank reachable, standing with Rook, at 154,
+        //              punch: 500sh, only 18sh
+        //
+        // He had 10,306 shillings in Jasper. The old script looks for a bank it deems
+        // reachable and gives up when the room has none; the FleetScript WALKS to one
+        // first. So the errand delivered a character to the teacher and left it standing
+        // there unable to pay, repeatedly.
+        const script = fileURLToPath(new URL('./m59-learn-run.mjs', import.meta.url));
+        // WHERE TO PUT IT BACK. A learning errand ends with a walk home, and home is the
+        // station it was taken from — not wherever the teacher happens to be. Falling back
+        // to the room it is standing in is the honest answer when no station is set.
+        const stNow = (s instanceof KeeperProxy) ? s.status() : null;
+        const homeRoom = stNow?.policy?.assignedRoom ?? c.room?.num ?? null;
+        // NOT `stdio: 'ignore'`. That is how the sentence above stayed invisible: the child
+        // printed exactly why it could not buy the skill, into a pipe nobody read, on every
+        // attempt. A learning errand spends money and walks a character across the world;
+        // it gets a log.
+        const logPath = join(BROKER_ROOT, 'substrate', `learn-${agent}.log`);
+        let out = 'ignore';
+        try {
+          mkdirSync(dirname(logPath), { recursive: true });
+          out = openSync(logPath, 'a');
+        } catch { /* a log that will not open must not stop the purchase */ }
         const child = spawn(process.execPath, [script,
-          '--port', String(brokerPort), '--agents', agent, '--learn', next.name,
-          '--withdraw', String(next.price), '--exact-funding',
-        ], { detached: true, stdio: 'ignore', cwd: BROKER_ROOT, windowsHide: true });
+          '--agent', agent, '--skill', next.name, '--price', String(next.price),
+          ...(next.teacher?.name ? ['--teacher', String(next.teacher.name)] : []),
+          ...(next.teacher?.room != null ? ['--teacher-room', String(next.teacher.room)] : []),
+          ...(homeRoom != null ? ['--home', String(homeRoom)] : []),
+        ], { detached: true, stdio: ['ignore', out, out], cwd: BROKER_ROOT, windowsHide: true });
+        // WHAT HAPPENED, RECORDED WHILE THE BROKER IS STILL HERE TO HEAR IT. `unref` lets the
+        // broker exit without waiting; it does not stop this listener firing meanwhile. The
+        // runner exits 0 only when the skill was verified in the list afterwards, so a
+        // non-zero exit is exactly "the money may have moved and the skill did not".
+        const ability = next.name, price = next.price;
+        child.on('exit', code => {
+          learningErrands.delete(agent);
+          if (code === 0) return;
+          // EXIT 2 IS "NEVER STARTED", AND IT MUST NOT BURN THE PURCHASE. The runner returns
+          // it when fleetScript refused before doing anything — almost always the per-fleet
+          // run lock, which one dispatch of three learning errands trips twice by
+          // construction. Recording those as burnt blocked two legitimate purchases on the
+          // first pass this path ever ran (2026-09-08), which is a guard doing more damage
+          // than the thing it guards against.
+          if (code === 2) return;
+          learningRefusals.set(learnKey(agent, ability), { at: Date.now(), price, code });
+          try {
+            appendFileSync(logPath, ['',
+              `[broker] ${agent} ${ability}: exit ${code} — refusing to attempt this purchase again`,
+              'until the broker restarts', ''].join(String.fromCharCode(10)));
+          } catch { /* the guard is in memory; the note is a courtesy */ }
+        });
         child.unref();
+        if (out !== 'ignore') { try { closeSync(out); } catch { /* the child holds it now */ } }
         learningErrands.set(agent, { pid: child.pid, at: Date.now(), ability: next.name });
         results.push({ agent, character: c.me?.name, queued: true,
                        ability: next.name, kind: next.kind, level: next.level,
@@ -14712,6 +14914,20 @@ const TOOLS = [
           // The same target and PlayerCanLearn arithmetic the planner uses. Cache-only:
           // a fleet-page refresh must not turn into 21 game-server reads.
           learning: learningView(c),
+          // THE ABILITY BEHIND EACH SKILL, because a fleet-scope decision cannot ask for it.
+          //
+          // `progress` is fetched per-agent and only for CHARACTER rules, so anything
+          // deciding across the whole fleet — which weapon each character should be
+          // training with, say — had no way to see an ability at all. It could see
+          // `learning.progress.current_level`, which is one number for the character, and
+          // not the per-skill values the decision actually turns on.
+          //
+          // Cache-only like `learning` above: cachedLearningRows reads the client's list
+          // and falls back to the keeper's own book, so this adds no game-server reads to
+          // a fleet refresh. Names and abilities only — the ids and schools are the
+          // planner's business and would triple the size of a page that is polled.
+          skills: cachedLearningRows(c).filter(r => r.kind === 'skill')
+            .map(r => ({ name: r.name, ability: r.ability })),
           // WHERE IT HAS BEEN GETTING HURT, in the last ten minutes. On the fleet row
           // because the row is what a person actually reads, and because the number that
           // matters is comparative: one character losing health while `travelling` is a

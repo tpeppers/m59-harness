@@ -1,0 +1,116 @@
+// BUY ONE SKILL FROM THE TEACHER WHO SELLS IT, AND PROVE THE CHARACTER GOT IT.
+//
+// PUBLIC. This is the `--learn` half of m59-outfit.mjs, rewritten as a declaration — and it
+// exists because that script broke in three separate places on 2026-09-07 and every one of
+// them is a guarantee this file gets for free.
+//
+// WHAT WENT WRONG THERE, because it is the whole argument for this rewrite:
+//
+//   * ROUTE. Under the keeper-process session driver the World lives in the KEEPER and the
+//     broker holds a snapshot, so `map` began answering
+//     `route: {found: null, reason: "...a snapshot, not a World"}`. The script tested
+//     `if (rt?.route?.found)`, read "I cannot answer" as "there is no route", and reported
+//     "no teacher of punch reachable" about a stationary merchant it had just looked up.
+//     Here there is no reachability pre-check at all: `walk` asks the keeper, which has the
+//     World, and a walk that cannot happen fails as a walk instead of as a phantom refusal.
+//
+//   * WAITS. A 30-second RPC timeout was applied to a journey that takes minutes, so a walk
+//     that was going fine was recorded "travel refused" — and then RE-ISSUED, twice, into a
+//     journey already in flight. Guarantees 4 and 5: budgets come from the journey's own p90
+//     and travel is issued once per attempt, never re-issued while walking.
+//
+//   * VERIFICATION. It checked once, 1.2s after the counter. A skill purchase is SILENT on
+//     both paths — monster.kod:3865 adds it and says nothing, while every refusal above it
+//     speaks — so the skill list is the only evidence there is, and asking once races it.
+//
+// AND THE ONE THING NOT FIXED HERE, stated plainly because it costs money: on 2026-09-07 a
+// character standing with Rook, with punch in the live shop list at 500, was charged exactly
+// 500 and never received the skill — confirmed over 100s of polling. That is unresolved and
+// it is NOT a bug in the script. The `verify` step below is what turns it from "the errand
+// says it worked" into "the errand says the purse moved and the skill did not", which is the
+// difference between noticing it once and paying for it twenty-one times.
+import { walk, shop, bank, verify } from '../m59-fleetscript.mjs';
+
+export const script = {
+  name: 'learn-skill',
+  describe: 'Walk to a teacher, buy one skill, and verify the character actually holds it.',
+
+  // GUARANTEE 9, ON THE TASK THAT MOTIVATED IT. The keeper-process driver is exactly the
+  // kind of change that breaks this errand without breaking anything visible, so the pin
+  // names what this was last seen working against and what it would break WITH.
+  provenance: {
+    pinned: 'dbcc73e',
+    verified: '2026-09-07',
+    touches: [
+      'tools/m59-fleetscript.mjs',   // the steps themselves
+      'tools/m59-broker.mjs',        // shop/list, shop/buy, travel, abilities
+      'tools/m59-keeper-process.mjs', // where the shop exchange actually happens
+      'tools/m59-client.mjs',        // the wire encoding of a buy
+    ],
+    // Deliberately NOT refusing on drift: a teacher trip is cheap to re-run and an operator
+    // who cannot get a character its skill because a comment moved in the broker is worse
+    // off than one who reads a warning. The MONEY risk here is the unresolved defect above,
+    // which no pin can see.
+    refuseOnDrift: false,
+  },
+
+  params: {
+    agents: { type: 'agents', required: true, describe: 'who is learning' },
+    skill: { required: true, describe: 'the ability to buy, exactly as the teacher lists it' },
+
+    // ROUTE BY ROOM, NEVER BY NAME ALONE. Two merchants can share a name and one of them can
+    // be nowhere — see the Fehr'loi Qan note in resupply.mjs. The room is the address.
+    teacherRoom: { type: 'number', required: true, describe: 'the room the teacher stands in' },
+    teacher: { required: true, describe: 'the teacher at teacherRoom' },
+
+    // Cost is `250 * 2^level` (skill.kod:127-140): 500 at Weaponcraft 1, 1000 at 2, 2000 at
+    // 3. Passed in rather than derived so this file holds no ability table to go stale.
+    price: { type: 'number', required: true, describe: 'the exact price of the skill' },
+
+    // The bank leg is SKIPPED when the character can already pay, which is most of them.
+    // A needless town lap is not free: four characters died on these roads in one night.
+    bankRoom: { type: 'number', default: 54, describe: 'bank to withdraw from if short' },
+    carrying: { type: 'number', default: 0, describe: 'shillings already in the pack' },
+
+    home: { type: 'number', required: true, describe: 'the room to return to afterwards' },
+  },
+
+  async steps({ skill, teacherRoom, teacher, price, bankRoom, carrying, home }) {
+    const needsBank = Number(carrying) < Number(price);
+    const rx = new RegExp(`^${String(skill).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+
+    return [
+      // EXACT FUNDING, and only when short. Withdrawing more than the errand needs means
+      // walking a character to a merchant carrying money it did not have to risk.
+      ...(needsBank ? [walk(bankRoom), bank('withdraw', Number(price) - Number(carrying))] : []),
+
+      walk(teacherRoom),
+
+      // A SKILL IS BOUGHT LIKE AN ITEM — the teacher lists it as an object with an id and a
+      // price, and it only APPEARS on the shelf when PlayerCanLearn says SUCCESS and the
+      // character does not already hold it (monster.kod:4855-4862). So "not offered here"
+      // and "you have not earned it yet" are the same observation, and neither is an error.
+      // `expectsPack: false` BECAUSE A SKILL NEVER ARRIVES AS AN OBJECT. The step's ordinary
+      // success test is "did the pack grow", which for an ability is false on every purchase,
+      // successful or not. Measured 2026-09-08: Scooter bought punch here for 500, the step
+      // reported "nothing entered the pack", the errand stopped, and the `verify` below --
+      // the ONLY check that can actually answer this -- never ran. He had the skill.
+      shop(teacher, [{ match: rx, amount: 1 }], { expectsPack: false }),
+
+      // THE ONLY EVIDENCE THERE IS. Poll, because the list lags the counter; believe a "no"
+      // that survives the poll, because it means the purse moved and the skill did not.
+      verify(async ({ agent, call }) => {
+        for (let i = 0; i < 6; i++) {
+          await new Promise(r => setTimeout(r, i === 0 ? 1500 : 2500));
+          const a = await call('abilities', { agent, kind: 'skills', refresh: i > 0 }, 60_000)
+                            .catch(() => null);
+          if ((a?.skills || []).some(s => rx.test(String(s.name || '')))) return true;
+        }
+        return false;
+      }, `the purse was charged for "${skill}" and it never appeared in the skill list — ` +
+         'do NOT retry in a loop, each attempt costs the price again'),
+
+      walk(home),
+    ];
+  },
+};

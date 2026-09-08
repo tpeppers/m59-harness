@@ -126,10 +126,42 @@ console.log('\nbroker preserves incremental keeper policy updates');
   const seed = broker.indexOf('const savedAutopilot = fleetState.get(a.agent)?.autopilot;');
   const guard = broker.indexOf('if (s instanceof KeeperProxy && savedAutopilot?.policy)', seed);
   const mutate = broker.indexOf('if (a.training_style !== undefined)', guard);
+  // THE LIST GROWS. This used to pin the enum to an exact four-element literal and went red
+  // the day `alternate_on_improve` was added (2026-09-07) -- a test asserting the schema had
+  // not changed, in a file whose whole subject is the schema changing. What matters is that
+  // every style this repository knows how to DRIVE is a style the broker will ACCEPT, so
+  // that is what is checked; extra values are the broker's business.
+  const styleEnum = /training_style:\s*\{[\s\S]*?enum:\s*\[([^\]]*)\]/.exec(broker);
   ok('training_style is an enumerated broker field',
-     /training_style:\s*\{[^}]*enum:\s*\['normal', 'short_sword', 'unarmed', 'alternate'\]/s.test(broker));
+     !!styleEnum && ['normal', 'short_sword', 'unarmed', 'alternate', 'alternate_on_improve']
+       .every(v => styleEnum[1].includes(`'${v}'`)));
   ok('only keeper proxies are seeded from saved roster policy', seed >= 0 && guard > seed);
   ok('saved policy is restored before the incremental field is applied', mutate > guard);
+}
+
+console.log('');
+console.log('unarmed practice puts the weapon down, it does not merely decline to draw one');
+{
+  // THE COUNTER FOLLOWS WHAT IS IN THE HAND, NOT WHAT THE POLICY SAYS. `passArm` used to
+  // return CONTINUE here and nothing else, so a character switched to unarmed practice
+  // while holding a mace kept holding it -- and one swing with it zeroes the bare-hand
+  // improvement counter (player.kod:4753-4757), which needs 75 swings to pay anything at
+  // all (player.kod:4536-4537, 4759). Measured 2026-09-08: 17 characters on `unarmed`, 16
+  // of them still holding a weapon, and brawling pinned at 4-5 across all twenty-one.
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = src.indexOf("if (practice === 'unarmed' && this.mode === 'farm' &&");
+  const branch = src.slice(at, at + 3200);
+  ok('the on-station unarmed branch exists', at > 0);
+  // The client guard is part of the contract, not incidental: isArmed() answers TRUE when it
+  // cannot see the equipment, so without `c &&` this branch tries to unwield for a session
+  // that does not exist.
+  ok('it disarms when the hand is not already empty, and only with a live client',
+     /if \(c && skills\.isArmed\(c\)\)/.test(branch) && /unuseTrainingWeapon\(\)/.test(branch));
+  ok('and it still yields rather than re-arming', /return CONTINUE;/.test(branch));
+  // DELIBERATELY NARROW: off-station or mid-travel, an empty hand is a fault to fix and not
+  // a regimen. Both conditions have to survive any edit to this branch.
+  ok('only on the assigned farm ground',
+     /this\.mode === 'farm'/.test(branch) && /room\?\.num === this\.policy\.assignedRoom/.test(branch));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
