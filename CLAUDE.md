@@ -596,6 +596,29 @@ loud that it is going in on purpose.
   `m59-mcp-attach.mjs`, which forwards to an existing broker and holds no state.
   Keep it that way.
 
+- **BUT THAT LOCK DOES NOT SPAN CHECKOUTS, AND THE RULE ABOVE READS AS THOUGH IT DOES.**
+  `m59-runlock.mjs` writes `run-prod.lock` into **its own** `REPO/substrate`. A tool run
+  from a clone and one run from `prod-deploy` therefore take two *different* locks, see
+  each other as absent, and both drive — or stop and restart — the same characters. The
+  refusal above is real for a second broker within ONE checkout and buys nothing across two.
+
+  Measured 2026-09-08: a session stopped the prod broker and all 21 keepers, did a
+  checkout, and its own `m59-service.mjs start` answered *"already up"* — something had
+  restarted the broker 62 seconds after the tree was written. It landed on the right side
+  of the swap by luck; a little earlier and it would have come up on a half-swapped tree,
+  with nobody having a reason to look. No supervisor was ever found: nothing in `tools/`
+  daemonises a broker restart, the RTS gateway has no spawn path to one, and the TUI spawns
+  a proxy rather than a broker. A *third session* running `m59-service.mjs start` from
+  another checkout fits everything observed.
+
+  So before any fleet-down, **ask who else is here** — `ListAgents`, then `SendMessage`.
+  No lock will tell you, and that includes a keeper-only rolling restart, because another
+  session's service may be talking to the same bodies. Point a prod tool run from a clone
+  at the deploy's own lock: `M59_RUNLOCK_DIR=/c/code/m59-lab/prod-deploy/substrate`.
+  And **check the swap actually took** — compare the broker's process start time against
+  the mtime of the file you swapped, rather than trusting that a restart loaded what you
+  wrote.
+
 - **Never call the `leave` tool** on a fleet anyone cares about. It drops the
   roster, and the roster is the only record of the account passwords.
 
