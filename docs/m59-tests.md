@@ -100,7 +100,19 @@ the records it describes.
   rather than handed to an arrival report as fact) and
   `node tools/m59-chat-test.mjs` (128) and
   `node tools/m59-rest-test.mjs` (38) and
-  `node tools/m59-ledger-test.mjs` (25) and
+  `node tools/m59-ledger-test.mjs` (25),
+  `node tools/m59-ledger-space-test.mjs` (9 — **the one that asks what a ledger field
+  MEANS**, which nothing else here does. A room identifier has two spaces: the server's
+  room OBJECT id and the map NUMBER. On 2026-09-08 the `looted` emitter shipped writing
+  the object id into a field every consumer reads as a map number — the Valley of Ileria
+  is object 1386 and room 544 — and 404 offline assertions stayed green through it,
+  because not one of them asserts a field's meaning. Five human-shaped checks passed it
+  too. So this lints the source rather than the behaviour: a DURABLE record may never
+  write `room:` from a `.id`, transient sites must each carry a written reason, and the
+  bake has to agree that 544 is a room and 1386 is not. It strips comments before
+  scanning and balances parens to the call's real end — both learned when its first
+  version quoted its own documentation back and then missed the very bug it was written
+  for**) and
   `node tools/m59-localpolicy-test.mjs` (71 — **the contract test for the overlay that
   separates this checkout's opinions from this repository's**: that an absent, empty or
   unparseable local file all mean the committed behaviour rather than an empty policy,

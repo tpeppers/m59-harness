@@ -1531,7 +1531,15 @@ class Session {
     try {
       const entry = bankbook.record(who, ev.text, {
         at: ev.at ?? Date.now(),
-        room: this.client?.room?.id ?? null,
+        // THE SAME SPACE CONFUSION AS THE `looted` EMITTER, FOUND WHILE FIXING THAT ONE.
+        // This wrote the room OBJECT id into a durable ledger field called `room`, while
+        // `world.room.name` — the map's own view of where we are — resolved on the very next
+        // line. Dormant rather than broken: `bankFromLine` keys off the NAME, and
+        // m59-bank.mjs:213 stores `room` without ever reading it back. But object ids are
+        // renumbered by `save game`, so the column's meaning drifts and rows either side of a
+        // checkpoint cannot be compared. Rows written before this keep an object id; nothing
+        // ever consumed them.
+        room: this.world?.room?.num ?? null,
         roomName: this.world?.room?.name ?? null,
       });
       if (entry) {
