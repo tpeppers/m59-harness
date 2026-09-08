@@ -29,7 +29,7 @@
 // it is NOT a bug in the script. The `verify` step below is what turns it from "the errand
 // says it worked" into "the errand says the purse moved and the skill did not", which is the
 // difference between noticing it once and paying for it twenty-one times.
-import { walk, shop, bank, verify } from '../m59-fleetscript.mjs';
+import { walk, learn, bank, verify } from '../m59-fleetscript.mjs';
 
 export const script = {
   name: 'learn-skill',
@@ -86,19 +86,21 @@ export const script = {
 
       walk(teacherRoom),
 
-      // A SKILL IS BOUGHT LIKE AN ITEM — the teacher lists it as an object with an id and a
-      // price, and it only APPEARS on the shelf when PlayerCanLearn says SUCCESS and the
-      // character does not already hold it (monster.kod:4855-4862). So "not offered here"
-      // and "you have not earned it yet" are the same observation, and neither is an error.
-      // `expectsPack: false` BECAUSE A SKILL NEVER ARRIVES AS AN OBJECT. The step's ordinary
-      // success test is "did the pack grow", which for an ability is false on every purchase,
-      // successful or not. Measured 2026-09-08: Scooter bought punch here for 500, the step
-      // reported "nothing entered the pack", the errand stopped, and the `verify` below --
-      // the ONLY check that can actually answer this -- never ran. He had the skill.
-      shop(teacher, [{ match: rx, amount: 1 }], { expectsPack: false }),
+      // THE `learn` VERB, NOT `shop`. A shop step is judged on whether the PACK grew, and an
+      // ability never enters it -- so the purchase reads as a failure, the verify and the walk
+      // home are skipped, and the character is left standing at the teacher. That is not
+      // hypothetical: on 2026-09-08 Kermit and Pepe were both stranded in Cor Noth exactly
+      // this way, and Scooter's punch looked lost for an hour having actually been bought.
+      //
+      // `learn` owns the whole exchange -- it knows an ability is invisible on the wire, polls
+      // the ability list rather than the pack, and reports 'charged and not delivered' as the
+      // distinct outcome it is.
+      learn(teacher, skill, { retry: true }),
 
-      // THE ONLY EVIDENCE THERE IS. Poll, because the list lags the counter; believe a "no"
-      // that survives the poll, because it means the purse moved and the skill did not.
+      // AND CHECK THE LIST ANYWAY. `learn` already polls, so this is belt and braces -- but
+      // the failure it guards is the one that costs money: the sale subtracts the price
+      // whether or not AddSkill did anything (monster.kod:3866-3874) and says nothing either
+      // way, so the ability list is the only evidence a purchase happened at all.
       verify(async ({ agent, call }) => {
         for (let i = 0; i < 6; i++) {
           await new Promise(r => setTimeout(r, i === 0 ? 1500 : 2500));
@@ -110,7 +112,9 @@ export const script = {
       }, `the purse was charged for "${skill}" and it never appeared in the skill list — ` +
          'do NOT retry in a loop, each attempt costs the price again'),
 
-      walk(home),
+      // ALWAYS. A purchase that fails must still bring the character home; without this the
+      // failure strands it wherever the teacher stands.
+      { ...walk(home), always: true },
     ];
   },
 };
