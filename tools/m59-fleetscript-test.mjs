@@ -229,8 +229,16 @@ console.log('\npurchases are read back from the pack');
 console.log('\none agent failing does not fail the others');
 {
   fakeBroker({ rooms: { a1: 39, a2: 39 }, health: { a1: { value: 1, max: 44 } } });
+  // healMs AND pollMs, LIKE EVERY OTHER HURT-CHARACTER CASE IN THIS FILE. Without them this
+  // case took the 300-SECOND default: a1 is at 1 of 44, the health floor sends it to rest,
+  // and the fake never heals anybody — so the suite sat here for five minutes and read as a
+  // hang, which is how it was reported. Three cases above already pass a short one.
+  //
+  // Same disease as the `budgetFloorMs` note in m59-fleetscript.mjs: a real constant applied
+  // to a fake that can never satisfy it. "Untestable code is where bugs live" covers slow
+  // tests too — a suite nobody will sit through is a suite nobody runs.
   const r = await fleetScript({ name: 'mixed', fleet: 'testfleet', agents: ['a1', 'a2'],
-    steps: [walk(54)], onLog: quiet });
+    steps: [walk(54)], pollMs: 30, healMs: 400, onLog: quiet });
   ok('the hurt one stops', r.results.a1.ok === false);
   ok('the healthy one still completes', r.results.a2.ok === true);
   ok('and the run reports partial success', r.ok === true);

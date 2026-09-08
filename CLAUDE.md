@@ -497,8 +497,27 @@ Guilds — [`docs/m59-guilds.md`](docs/m59-guilds.md):
 
 ```bash
 node tools/fleetscripts/come-home.mjs          # the shape: declare the errand, run it
-node tools/m59-fleetscript-test.mjs            # 100, offline
+node tools/m59-fleetscript-test.mjs            # 100, offline, ~80s
+node tools/m59-learnskill-test.mjs             # 21, offline — the CAPABILITY, end to end
+node tools/m59-learnskill-test.mjs --live --agent t4 --skill punch \
+     --teacher-room 106 --teacher Rook --price 500 --home 39
 ```
+
+**The second one is the demo: cross the world, spend money at a stranger, and prove the
+character is different afterwards.** The other suite pins the GUARANTEES one case per
+incident; this one pins the longest causal chain the repository can execute, and it is
+deliberately outside the standard offline list because the half worth having is `--live`,
+which walks a real body and spends real shillings.
+
+Its first run found that **a skill cannot be bought with the `shop` verb.** `shop` is judged
+on what enters the PACK — rightly, since a merchant that completes the handshake and hands
+over nothing looks like success on the wire — and a skill enters nothing: `PlayerCanLearn`
+adds it silently (`monster.kod:3865`). So the step waits out `packSettleMs`, reports
+`nothing entered the pack`, and because a non-optional failure skips every later step without
+`always`, **the `verify` that was the whole point never runs and neither does the walk home.**
+Spell it as two `verify` steps instead — read the shelf and remember the row, then buy and
+poll the ability list — and make the walk home `always`, or a character that failed to learn
+is abandoned at the teacher.
 
 **And it answers "what is food" so your script does not have to.** `splitFood(pack(agent))`
 returns `{food, other, meals, kinds, vigor}`, `foodIn`/`nonFoodIn` are the halves on their
