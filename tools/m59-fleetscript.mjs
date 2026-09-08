@@ -68,11 +68,14 @@
 //
 // A step that fails ends THAT AGENT's errand and no other's. One courier dying is not the
 // operation failing, which is the difference between a fleet tool and a script.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { takeRunLock } from './m59-runlock.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const RPC = () => process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901/';
 let seq = 0;
 
@@ -188,6 +191,91 @@ export function splitFood(items = []) {
  * `edible mushroom` and `inky-cap mushroom` and not the other three.
  */
 export const FOOD_KEEP = Object.freeze(allFoodNames());
+
+// ---------------------------------------------------------------- skills and spells
+//
+// A SKILL IS NOT GOODS, AND THE DIFFERENCE IS INVISIBLE AT THE COUNTER.
+//
+// A teacher's shelf arrives on BP_BUY_LIST as `{id, name, cost, amount}` — exactly the shape
+// a potion has. Nothing on the wire says "this one is an ability". So a script that buys a
+// skill with `shop` is making a mistake the protocol cannot warn it about, and `shop` cannot
+// notice either: it judges a purchase by what entered the PACK. That is the right rule — a
+// merchant that completes the handshake and hands over nothing looks like success on the
+// wire — and the wrong question here, because `PlayerCanLearn` adds the ability silently
+// (monster.kod:3865) and the pack is identical either side of a successful purchase.
+//
+// What that cost before this existed: the step waits out `packSettleMs`, reports `nothing
+// entered the pack`, and — since a non-optional failure skips every later step without
+// `always` — the verification that was the entire point never runs, and neither does the
+// walk home. The character is left standing at the teacher, having paid, and the run reports
+// a failure whose stated reason is about luggage.
+//
+// READ FROM THE GAME'S OWN CLASS TREE, never typed. Same discipline as FOOD_KEEP above and
+// for the same reason: a hand-written list of abilities goes stale in silence. 22 skills and
+// 177 spells carry a display name in `compendium/data/koddb.json` — a built artefact, absent
+// from a fresh clone that has not built the compendium, in which case this answers "I do not
+// know" and the runtime net in `case 'shop'` is what catches it. Not knowing must never
+// become a refusal to run an errand that would have worked.
+let ABILITY_NAMES;
+export function abilityNames(file = here('../compendium/data/koddb.json')) {
+  if (ABILITY_NAMES !== undefined) return ABILITY_NAMES;
+  try {
+    const cls = JSON.parse(readFileSync(file, 'utf8')).classes ?? {};
+    const names = new Set();
+    for (const root of ['skill', 'spell']) {
+      // Walk the whole chain rather than trusting a depth: `attackspell` hangs off `spell`
+      // and every bolt spell hangs off that.
+      const tree = new Set([root]);
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const [n, c] of Object.entries(cls)) {
+          const parent = String(c.parent ?? '').toLowerCase();
+          if (parent && tree.has(parent) && !tree.has(n)) { tree.add(n); grew = true; }
+        }
+      }
+      tree.delete(root);
+      for (const n of tree) {
+        const res = cls[n]?.resources ?? {};
+        const key = Object.keys(res).find(k => /name_rsc$/.test(k));
+        const value = key ? String(res[key].value ?? '').trim() : '';
+        if (value) names.add(value.toLowerCase());
+      }
+    }
+    ABILITY_NAMES = Object.freeze([...names].sort());
+  } catch { ABILITY_NAMES = Object.freeze([]); }
+  return ABILITY_NAMES;
+}
+
+/** Is this the name of a skill or a spell? False when the table is unavailable. */
+export function isAbilityName(name) {
+  const n = String(name ?? '').trim().toLowerCase();
+  return n ? abilityNames().includes(n) : false;
+}
+
+// Which of a `shop` step's lines are really abilities. A line carries a RegExp rather than a
+// name, so the question is asked the only way it can be: which known ability names does this
+// pattern accept AS A WHOLE NAME.
+//
+// THE WHOLE-NAME RULE IS NOT FUSSINESS, IT IS THE DIFFERENCE BETWEEN THIS CHECK AND A
+// BROKEN SUPPLY RUN. `resupply` buys reagents with a loose `/herb/i`, and `slitherbolt` is a
+// spell — so a plain `rx.test(name)` refuses the errand that keeps twenty-one characters in
+// reagents, on the grounds that it is secretly buying a bolt spell. Requiring the pattern to
+// consume the entire ability name keeps `/^punch$/` and `/punch/i` (both of which really do
+// name the skill) and drops `/herb/` against `slitherbolt`, which was never about it.
+//
+// A refusal that fires on a legitimate errand gets the whole check deleted by the next
+// person in a hurry, and they would be right to.
+export function abilitiesTargetedBy(lines = []) {
+  const hits = [];
+  for (const line of [].concat(lines ?? [])) {
+    if (!(line?.match instanceof RegExp)) continue;
+    for (const name of abilityNames()) {
+      const m = name.match(line.match);
+      if (m && m[0].length === name.length) hits.push(name);
+    }
+  }
+  return [...new Set(hits)];
+}
 
 export async function observe(agent) {
   const s = await call('status', { agent }, 40_000).catch(() => null);
@@ -463,6 +551,34 @@ export const vault = (vaultman, items = VAULT_KEEP, opts = {}) =>
   ({ do: 'vault', vaultman, items, ...opts });
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
+
+/**
+ * Buy one skill or spell from the teacher who sells it, and prove the character holds it.
+ *
+ * THE VERB `shop` CANNOT BE. See the ability-table section above: `shop` is judged on the
+ * pack and an ability enters nothing, so the purchase reads as a failure and every later
+ * step is skipped. This is the same errand judged on the only evidence that exists — the
+ * character's own skill and spell lists, asked for over the wire.
+ *
+ * THREE OUTCOMES, KEPT APART, because collapsing them is how money gets spent twice:
+ *
+ *   not offered  the shelf does not carry it. A teacher lists an ability only when
+ *                PlayerCanLearn says SUCCESS and the character does not already hold it
+ *                (monster.kod:4855-4862), so "not offered" means ALREADY HELD or NOT YET
+ *                EARNED. Neither is an error and neither is worth retrying.
+ *   learned      it appeared in the list afterwards. The purchase worked.
+ *   charged_but_not_delivered  the purse moved and the ability did not. Measured on
+ *                2026-09-07: a character standing with Rook, punch listed at 500, charged
+ *                exactly 500, no skill, confirmed over 100 seconds of polling. That defect
+ *                is unresolved and is not a scripting bug — which is exactly why this must
+ *                be its own outcome and must never be retried in a loop. Each attempt costs
+ *                the price again.
+ *
+ * The row id is DISCOVERED, never passed in: a shop row id is not stable and not derivable
+ * from the name, so a hard-coded one buys whatever is in that slot today.
+ */
+export const learn = (teacher, ability, opts = {}) =>
+  ({ do: 'learn', teacher, ability, ...opts });
 
 // ---------------------------------------------------------------- healing before a journey
 //
@@ -813,6 +929,50 @@ async function runStep(ctx, agent, step, state) {
                why: out.refused ? `banker refused: ${out.said.slice(0, 80)}` : undefined };
     }
 
+    case 'learn': {
+      const rx = step.ability instanceof RegExp ? step.ability
+        : new RegExp(`^${String(step.ability).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      const held = async (refresh) => {
+        const a = await call('abilities', { agent, kind: 'both', refresh }, 60_000)
+          .catch(() => null);
+        return [...(a?.skills ?? []), ...(a?.spells ?? [])]
+          .some(x => rx.test(String(x?.name ?? '')));
+      };
+      // ASK BEFORE BUYING. An ability already held is not on the shelf, so without this the
+      // "not offered" branch below cannot tell "you have it" from "you have not earned it",
+      // and the first is a success reported as a failure on every repeat run of an errand.
+      if (await held(false)) return { ok: true, outcome: 'already_held', ability: step.ability };
+      const list = await call('shop', { agent, seller: step.teacher }, 60_000).catch(() => null);
+      const row = (list?.items || []).find(i => rx.test(String(i.name || '')));
+      if (!row) return { ok: false, outcome: 'not_offered', ability: step.ability,
+        why: `${step.teacher} is not offering "${step.ability}" and the character does not ` +
+             'hold it — PlayerCanLearn says it has not been earned yet. Do not retry.' };
+      const purseBefore = purseOf((await call('inventory', { agent }, 60_000)
+        .catch(() => ({ items: [] }))).items ?? []);
+      await call('shop', { agent, seller: step.teacher, buy_ids: [{ id: row.id, amount: 1 }] },
+                 600_000).catch(() => null);
+      // POLLED, because the ability list lags the counter and asking once races it. A "no"
+      // that survives the poll is the real answer.
+      const until = Date.now() + (ctx.learnSettleMs ?? 15_000);
+      for (let i = 0; ; i++) {
+        await sleep(Math.min(2500, Math.max(200, ctx.pollMs)));
+        if (await held(i > 0)) return { ok: true, outcome: 'learned', ability: step.ability,
+                                        paid: row.cost ?? null };
+        if (Date.now() >= until) break;
+      }
+      const purseAfter = purseOf((await call('inventory', { agent }, 60_000)
+        .catch(() => ({ items: [] }))).items ?? []);
+      const spent = purseBefore - purseAfter;
+      return { ok: false, outcome: spent > 0 ? 'charged_but_not_delivered' : 'not_learned',
+               ability: step.ability, spent,
+               why: spent > 0
+                 ? `the purse went down ${spent} for "${step.ability}" and it never appeared ` +
+                   'in the skill or spell list — do NOT retry in a loop, each attempt costs ' +
+                   'the price again'
+                 : `"${step.ability}" was offered but never appeared in the list, and the ` +
+                   'purse did not move — the purchase did not happen' };
+    }
+
     case 'shop': {
       const list = await call('shop', { agent, seller: step.seller }, 60_000).catch(() => null);
       const items = list?.items || [];
@@ -820,6 +980,16 @@ async function runStep(ctx, agent, step, state) {
       for (const line of step.lines) {
         const row = items.find(i => line.match.test(i.name || ''));
         if (!row) return { ok: false, why: `${step.seller} has no row matching ${line.match}` };
+        // THE RUNTIME NET, for what the plan-time check could not see. `abilitiesTargetedBy`
+        // reads a built artefact a fresh clone may not have, and a teacher can list an
+        // ability under a name the table does not carry. Caught here the errand still stops
+        // before the money moves, which is the part that matters — the plan-time refusal is
+        // better only because it stops it before the character walks.
+        if (isAbilityName(row.name)) return { ok: false, outcome: 'ability_needs_learn',
+          why: `"${row.name}" on ${step.seller}'s shelf is a skill or spell, not goods. ` +
+               '`shop` is judged on what enters the pack and an ability enters nothing, so ' +
+               'this would have paid and then reported "nothing entered the pack". ' +
+               `Use learn('${step.seller}', '${row.name}') instead.` };
         buy.push({ id: row.id, amount: line.amount });
       }
       const before = await inventoryCounts(agent, step.lines);
@@ -978,6 +1148,11 @@ export async function fleetScript({
   budgetFloorMs = 180_000, budgetCapMs = 900_000,
   // How long to keep re-reading the pack for goods that are on their way in.
   packSettleMs = 15_000,
+  // The same patience for an ABILITY, which arrives on a different clock and in a different
+  // place: the skill and spell lists lag the counter, so asking once races the purchase.
+  // Separate from packSettleMs because they are answers to different questions and a caller
+  // tuning one must not silently retune the other.
+  learnSettleMs = 15_000,
   // How long to wait for a keeper to walk a corpse out of the Underworld before giving up.
   reviveMs = 300_000,
   // How long a character may rest before a journey. Long enough to climb a full bar
@@ -1028,7 +1203,7 @@ export async function fleetScript({
   if (claim.tookOverFrom) onLog(`note: took over a stale lock — ${claim.tookOverFrom.why}`);
 
   const ctx = { log: onLog, pollMs, minHealth, healMs, budgetFloorMs, budgetCapMs,
-                reviveMs, packSettleMs, name };
+                reviveMs, packSettleMs, learnSettleMs, name };
   const held = new Set();
 
   // RULE 2, and the part every script got wrong: freeing on the abnormal exits too. A
@@ -1089,6 +1264,33 @@ export async function fleetScript({
       if (trap) {
         ctx.log(agent, `plan refused: ${trap}`);
         results[agent] = { ok: false, at: 0, step: 'trap', why: trap, state: state.results };
+        return;
+      }
+
+      // A SKILL BOUGHT WITH `shop` IS REFUSED BEFORE THE CHARACTER WALKS.
+      //
+      // Here rather than at the counter because the counter is on the far side of the world:
+      // the mistake is cheap to catch and expensive to discover, and discovering it there
+      // means a character has crossed a continent, paid, and been left standing at the
+      // teacher with the run reporting a failure about luggage. `case 'shop'` keeps its own
+      // net for what this cannot see, but by then the walk has happened.
+      //
+      // The test is the ability table, which is read from the game's own class tree — so a
+      // fresh clone without a built compendium simply gets no opinion here and falls through
+      // to the runtime net, exactly as it should. Silence is "I do not know", never "fine".
+      const shopAbilities = plan.flatMap((s, at) => s.do !== 'shop' ? []
+        : abilitiesTargetedBy(s.lines).map(name => ({ at, name, seller: s.seller })));
+      if (shopAbilities.length) {
+        const first = shopAbilities[0];
+        const why = `step ${first.at} buys "${first.name}" from ${first.seller} with \`shop\`, ` +
+          'and that is a skill or spell rather than goods. `shop` is judged on what enters ' +
+          'the pack; an ability enters nothing (PlayerCanLearn adds it silently, ' +
+          'monster.kod:3865), so this would pay and then report "nothing entered the pack", ' +
+          'skipping every later step including the walk home. ' +
+          `Use learn('${first.seller}', '${first.name}') instead.`;
+        ctx.log(agent, `plan refused: ${why}`);
+        results[agent] = { ok: false, at: first.at, step: 'shop', why,
+                           abilities: shopAbilities.map(a => a.name), state: state.results };
         return;
       }
 

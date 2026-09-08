@@ -20,7 +20,7 @@
 // WHAT IT FOUND ON ITS FIRST RUN, which is the reason to keep it
 // ---------------------------------------------------------------------------
 //
-// **A SKILL IS NOT GOODS, AND THE `shop` VERB CANNOT EXPRESS ONE.** `shop` judges a purchase
+// **A SKILL IS NOT GOODS, AND THE `shop` VERB COULD NOT EXPRESS ONE.** `shop` judges a purchase
 // by what entered the PACK — `inventoryCounts` before and after, and `ok: anything` where
 // anything means a stack got bigger (m59-fleetscript.mjs, case 'shop'). That rule is right,
 // and it was bought expensively: a merchant that completes the handshake and hands over
@@ -34,25 +34,23 @@
 // neither does the walk home.** The character is left standing at the teacher, the run says
 // it failed, and the one question anybody cared about (did it learn the skill?) is unasked.
 //
-// The errand is expressible; it just cannot be spelled with `shop`. Two `verify` steps do it
-// — one that reads the teacher's shelf and remembers the row, one that buys it and then polls
-// the ability list — because `verify` is the only step judged on evidence the caller chooses
-// rather than on the pack. That is the shape asserted below, and the shape a working
-// `learn-skill` fleetscript has to have.
+// THAT IS NOW BAKED INTO FleetScript RATHER THAN WRITTEN DOWN. `learn(teacher, ability)` is
+// the verb, judged on the character's own skill and spell lists asked for over the wire, and
+// `shop` REFUSES an ability at plan time — before the character walks — naming `learn`. The
+// ability table is read from the game's own class tree (22 skills, 177 spells in
+// compendium/data/koddb.json), the same discipline FOOD_KEEP uses, because a hand-written
+// list of abilities goes stale in silence.
 //
-// THE LIST STEP IS NOT CEREMONY. The id has to be discovered: a skill's shop row id is not
-// stable, is not derivable from its name, and hard-coding one buys whatever is in that slot
-// today. Splitting the read from the buy also keeps two failures apart that would otherwise
-// collapse into one — "the teacher is not offering it" (already held, or PlayerCanLearn says
-// not yet, and neither is an error) against "the purse moved and the skill did not".
+// This suite is what proves all of that still holds, and it keeps the end-to-end errand as
+// the thing somebody can be SHOWN.
 //
-// A NOTE ON THE MONEY, because it is the reason `verify` is not optional. On 2026-09-07 a
-// character standing with Rook, punch in the live shop list at 500, was charged exactly 500
-// and never received the skill — confirmed over 100s of polling. That defect is unresolved
-// and is not a scripting bug. `verify` is what turns "the errand says it worked" into "the
-// purse moved and the skill did not", which is the difference between noticing it once and
-// paying for it twenty-one times. A test that let the errand report success without it would
-// be actively harmful.
+// A NOTE ON THE MONEY, because it is why `learn` reports THREE outcomes and not two. On
+// 2026-09-07 a character standing with Rook, punch in the live shop list at 500, was charged
+// exactly 500 and never received the skill — confirmed over 100s of polling. That defect is
+// unresolved and is not a scripting bug. `charged_but_not_delivered` is what turns "the
+// errand says it worked" into "the purse moved and the skill did not", which is the
+// difference between noticing it once and paying for it twenty-one times. It is also why
+// nothing here retries: each attempt costs the price again.
 import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -71,7 +69,8 @@ if (!LIVE) process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';
 // the noise is not a leak. Raised rather than silenced so a REAL leak still shows up.
 process.setMaxListeners(64);
 
-const { fleetScript, walk, bank, shop, verify, KNOWN_TRAPS } =
+const { fleetScript, walk, bank, shop, learn, verify, KNOWN_TRAPS,
+        abilityNames, isAbilityName, abilitiesTargetedBy } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -98,10 +97,15 @@ function fakeWorld({
   // money bug: charged, never delivered.
   learnedAfterPolls = 1,
   charge = 500,
+  // The character walked here already holding it. A teacher does not list an ability you
+  // hold, so without this the "not offered" branch cannot tell "you have it" from "you have
+  // not earned it" — and the first is a success being reported as a failure on every repeat
+  // run of a standing errand.
+  alreadyHeld = false,
 } = {}) {
   const sent = [];
   let abilityPolls = 0;
-  const skills = [];
+  const skills = alreadyHeld ? [{ name: shelf[0]?.name }] : [];
   globalThis.fetch = async (_url, opts) => {
     const body = JSON.parse(opts.body);
     const { name, arguments: a } = body.params;
@@ -129,8 +133,12 @@ function fakeWorld({
       } else payload = { items: shelf };
     } else if (name === 'abilities') {
       abilityPolls++;
-      payload = { skills: (Number.isFinite(learnedAfterPolls) && abilityPolls >= learnedAfterPolls)
-        ? skills : [] };
+      // An ability already held is visible on the FIRST ask; a freshly bought one only once
+      // the list has caught up with the counter. `spells` is answered too, because `learn`
+      // asks for both and a skill and a spell are bought the same way.
+      const visible = alreadyHeld
+        || (Number.isFinite(learnedAfterPolls) && abilityPolls >= learnedAfterPolls);
+      payload = { skills: visible ? skills : [], spells: [] };
     } else if (name === 'bank') {
       payload = { banker_said: ['Skivlat hands it over.'] };
       const inv = inventory[agent] ??= [];
@@ -148,45 +156,16 @@ function fakeWorld({
 const skillRx = s => new RegExp(`^${String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
 function learnSkillSteps({ skill, teacherRoom, teacher, price, bankRoom = 54,
-                           carrying = 0, home, pollEvery = 20, polls = 6 } = {}) {
-  const rx = skillRx(skill);
+                           carrying = 0, home } = {}) {
   const needsBank = Number(carrying) < Number(price);
   return [
     // EXACT FUNDING, AND ONLY WHEN SHORT. A needless town lap is not free — four characters
     // died on these roads in one night — so the bank leg is absent, not skipped at runtime.
     ...(needsBank ? [walk(bankRoom), bank('withdraw', Number(price) - Number(carrying))] : []),
     walk(teacherRoom),
-    // READ THE SHELF AND REMEMBER THE ROW. Not `shop` — see the header: `shop` is judged on
-    // the pack, a skill never enters it, and spelling this with `shop` fails the errand
-    // before the verify that is the entire point. The id is discovered rather than
-    // hard-coded, because a shop row id is not stable and not derivable from the name.
-    //
-    // An empty shelf is its own answer and a legitimate one: a skill only appears when
-    // PlayerCanLearn says SUCCESS and the character does not already hold it
-    // (monster.kod:4855-4862), so "not offered" means already held or not yet earned.
-    verify(async ({ agent, call, state }) => {
-      const list = await call('shop', { agent, seller: teacher }, 60_000).catch(() => null);
-      state.skillRow = (list?.items || []).find(i => rx.test(String(i.name || ''))) ?? null;
-      return Boolean(state.skillRow);
-    }, `${teacher} is not offering "${skill}" — either the character already holds it or ` +
-       'PlayerCanLearn says it has not been earned yet. Neither is an error; do not retry.'),
-    // BUY IT, THEN PROVE IT. The ability list is the only evidence there is, and it must be
-    // polled: the list lags the counter, so asking once races it. A "no" that survives the
-    // poll means the purse moved and the skill did not.
-    verify(async ({ agent, call, state }) => {
-      if (!state.skillRow) return false;
-      await call('shop', { agent, seller: teacher,
-                           buy_ids: [{ id: state.skillRow.id, amount: 1 }] }, 600_000)
-        .catch(() => null);
-      for (let i = 0; i < polls; i++) {
-        await new Promise(r => setTimeout(r, pollEvery));
-        const a = await call('abilities', { agent, kind: 'skills', refresh: i > 0 }, 60_000)
-                          .catch(() => null);
-        if ((a?.skills || []).some(s => rx.test(String(s.name || '')))) return true;
-      }
-      return false;
-    }, `the purse was charged for "${skill}" and it never appeared in the skill list — ` +
-       'do NOT retry in a loop, each attempt costs the price again'),
+    // `learn`, NOT `shop`. The verb discovers the row id, keeps "not offered" apart from
+    // "charged and not delivered", and is judged on the ability list rather than the pack.
+    learn(teacher, skill),
     // ALWAYS, so a character that failed to learn is still brought home rather than left
     // standing at a merchant on the far side of the world.
     { ...walk(home), always: true },
@@ -195,7 +174,8 @@ function learnSkillSteps({ skill, teacherRoom, teacher, price, bankRoom = 54,
 
 const trip = (over = {}) => ({
   name: 'learn-skill-test', fleet: 'learnskilltest', agents: ['a1'],
-  pollMs: 20, healMs: 200, packSettleMs: 200, budgetFloorMs: 400, budgetCapMs: 800,
+  pollMs: 20, healMs: 200, packSettleMs: 200, learnSettleMs: 400,
+  budgetFloorMs: 400, budgetCapMs: 800,
   onLog: quiet, ...over,
 });
 
@@ -246,12 +226,11 @@ if (!LIVE) {
     const inv = { a1: [{ name: 'shilling', amount: 900 }] };
     const sent = fakeWorld({ rooms: { a1: 39 }, inventory: inv, learnedAfterPolls: Infinity });
     const r = await fleetScript(trip({ steps: learnSkillSteps({
-      skill: 'punch', teacherRoom: 106, teacher: 'Rook', price: 500, carrying: 900, home: 39,
-      polls: 3 }) }));
+      skill: 'punch', teacherRoom: 106, teacher: 'Rook', price: 500, carrying: 900, home: 39 }) }));
     ok('the errand fails even though the counter said nothing was wrong',
        r.results.a1.ok === false);
     ok('and it says the purse moved and the skill did not',
-       /never appeared in the skill list/.test(r.results.a1.why ?? ''), r.results.a1.why);
+       /never appeared in the skill or spell list/.test(r.results.a1.why ?? ''), r.results.a1.why);
     ok('the purse is down by the price, which is the evidence that matters',
        inv.a1[0].amount === 400, String(inv.a1[0].amount));
     ok('it asked more than once before believing the no',
@@ -291,24 +270,63 @@ if (!LIVE) {
        r.results.a1.why);
   }
 
-  // WHY THIS IS ASSERTED RATHER THAN LEFT TO THE READER. It is the finding that made this
-  // file worth writing, and without a test it is a paragraph somebody deletes.
-  console.log('\nand the reason this errand cannot be spelled with `shop`');
+  // THE REFUSAL THAT MAKES ALL OF THE ABOVE UNNECESSARY TO REMEMBER.
+  console.log('\n`shop` refuses a skill BEFORE the character walks');
   {
     const sent = fakeWorld({ rooms: { a1: 39 }, inventory: { a1: [{ name: 'shilling', amount: 900 }] } });
     const r = await fleetScript(trip({ steps: [
       walk(106),
       shop('Rook', [{ match: skillRx('punch'), amount: 1 }]),
-      verify(async () => true, 'unreachable'),
       walk(39),
     ] }));
-    ok('`shop` judges on the pack, so a skill purchase reads as a failure',
-       r.results.a1.ok === false && /nothing entered the pack/.test(r.results.a1.why ?? ''),
+    ok('the plan is refused', r.results.a1.ok === false);
+    ok('and NOTHING WALKED — the refusal costs no journey',
+       !sent.some(s => s.name === 'travel'), JSON.stringify(sent.map(x => x.name)));
+    ok('it names the verb to use instead',
+       /learn\('Rook', 'punch'\)/.test(r.results.a1.why ?? ''), r.results.a1.why);
+    ok('and says why the pack cannot answer the question',
+       /enters nothing/.test(r.results.a1.why ?? ''), r.results.a1.why);
+  }
+
+  console.log('\nand the reagent run is NOT refused, which is the harder half');
+  {
+    // `/herb/i` matches `slitherbolt`, a real spell. A check that refused this would break
+    // the errand that keeps twenty-one characters in reagents, and would deserve deleting.
+    const sent = fakeWorld({ rooms: { a1: 39 }, inventory: { a1: [{ name: 'shilling', amount: 900 }] },
+                             shelf: [{ id: 7, name: 'herb', price: 3 }] });
+    const r = await fleetScript(trip({ steps: [
+      walk(106),
+      shop('Frisconar', [{ match: /herb/i, amount: 2 }]),
+    ] }));
+    ok('a loose /herb/ is goods, not the spell it happens to be a substring of',
+       r.results.a1.ok === true || !/learn\(/.test(r.results.a1.why ?? ''),
        r.results.a1.why);
-    ok('and the verify that was the whole point never runs',
-       !sent.some(s => s.name === 'abilities'));
-    ok('nor does the walk home — the character is left standing at the teacher',
-       sent.filter(s => s.name === 'travel').map(s => s.to).at(-1) === 106);
+    ok('and it really did go shopping', sent.some(s => s.name === 'shop'));
+  }
+
+  console.log('\nthe ability table, read from the game rather than typed');
+  {
+    ok('it has both skills and spells in it', abilityNames().length > 150,
+       String(abilityNames().length));
+    ok('punch is a skill', isAbilityName('punch'));
+    ok('blink is a spell', isAbilityName('blink'));
+    ok('herb is neither', !isAbilityName('herb'));
+    ok('an anchored pattern names its ability',
+       abilitiesTargetedBy([{ match: /^punch$/i }]).join() === 'punch');
+    ok("resupply's own reagent lines target no ability at all",
+       abilitiesTargetedBy([{ match: /elder/i }, { match: /herb/i }]).length === 0,
+       JSON.stringify(abilitiesTargetedBy([{ match: /elder/i }, { match: /herb/i }])));
+  }
+
+  console.log('\nan ability already held is a success, not a failed purchase');
+  {
+    const sent = fakeWorld({ rooms: { a1: 39 }, inventory: { a1: [{ name: 'shilling', amount: 900 }] },
+                             alreadyHeld: true });
+    const r = await fleetScript(trip({ steps: learnSkillSteps({
+      skill: 'punch', teacherRoom: 106, teacher: 'Rook', price: 500, carrying: 900, home: 39 }) }));
+    ok('the run succeeds', r.results.a1.ok === true, r.results.a1.why);
+    ok('and no money was spent buying something it already had',
+       !sent.some(s => s.name === 'shop' && s.buy_ids));
   }
 
   // OPPORTUNISTIC. `tools/fleetscripts/` holds ORDERS, which live on the machine that owns

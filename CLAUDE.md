@@ -509,16 +509,6 @@ incident; this one pins the longest causal chain the repository can execute, and
 deliberately outside the standard offline list because the half worth having is `--live`,
 which walks a real body and spends real shillings.
 
-Its first run found that **a skill cannot be bought with the `shop` verb.** `shop` is judged
-on what enters the PACK — rightly, since a merchant that completes the handshake and hands
-over nothing looks like success on the wire — and a skill enters nothing: `PlayerCanLearn`
-adds it silently (`monster.kod:3865`). So the step waits out `packSettleMs`, reports
-`nothing entered the pack`, and because a non-optional failure skips every later step without
-`always`, **the `verify` that was the whole point never runs and neither does the walk home.**
-Spell it as two `verify` steps instead — read the shelf and remember the row, then buy and
-poll the ability list — and make the walk home `always`, or a character that failed to learn
-is abandoned at the teacher.
-
 **And it answers "what is food" so your script does not have to.** `splitFood(pack(agent))`
 returns `{food, other, meals, kinds, vigor}`, `foodIn`/`nonFoodIn` are the halves on their
 own, and `FOOD_KEEP` is a keep list for `sell`, `vault` and `drop_all`. All of it reads the
