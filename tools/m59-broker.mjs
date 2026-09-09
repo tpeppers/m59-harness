@@ -14143,11 +14143,15 @@ const TOOLS = [
       'whatever steps into one, and it cannot answer, because Player.TargetWithinSightAndRange ' +
       '(player.kod:4115) checks range and facing but never calls LineOfSight while the monster does. ' +
       'That asymmetry is the mechanic. `back_cover` is the longest unbroken wall arc behind you, kept ' +
-      'as a tie-break. Treat a high score as a hypothesis — a good one, but the book still outranks it.\n' +
-      '  PROVEN    `known` is what has actually been tested here, by standing in it while something ' +
-      'tried to kill us: `holds` means nothing landed, `does not work` means something did. This ' +
-      'outranks the geometry in both directions and persists across sessions, so one character\'s ' +
-      'experiment is every character\'s knowledge.\n' +
+      'as a tie-break. `refused_approaches` is how many approaches the coarse grid offers into the ' +
+      'square that the MOVER refuses — the other half of the mechanic, and the operator\'s own ' +
+      'definition of a safe wall.\n' +
+      '  THE GEOMETRY IS THE ANSWER. There is no longer a `known` or a `tested` field, and nothing ' +
+      'here consults a history. The safe-spot book was retired because its failure column is ' +
+      'inverted: 78% of its 6,652 failure events are `failed_via: "fight"` — retaliation after WE ' +
+      'swung, which is the mechanic WORKING — and 11% more were recorded before the character even ' +
+      'reached the wall. The better a wall was, the more the fleet fought from it and the worse its ' +
+      'record looked. Rank on `can_reach_you` (zero is the property that matters), then distance.\n' +
       'Squares on the outer ring are excluded: stepping past row 1 or piRows triggers ' +
       'StandardLeaveDir, so a corner on the boundary is one that ejects you from the room mid-fight.\n' +
       'To USE one: walk_to it, then fight from it without moving, and pull anything that will not come ' +
@@ -14254,15 +14258,26 @@ const TOOLS = [
           // preferred `tested === 'holds'` was preferring squares the fleet happened to crowd
           // onto in August.
         })),
-        known,
+        // `known` is gone with the book it came from. It was `book.list(room)` — every square
+        // in this room the retired ledger had a row for — and shipping it invited exactly the
+        // ranking this change removes.
+        //
+        // ITS REMOVAL TOOK PROD'S `safe_spots` DOWN FOR SEVEN MINUTES. c05d507 deleted the
+        // `const known = ...` binding and left this shorthand behind, so every call threw
+        // `known is not defined`. No offline test covers a broker tool handler — they test the
+        // modules under it — so it passed 46 new assertions and eight suites and failed on the
+        // first real call. `node --check` cannot see it either: an undefined identifier is a
+        // runtime error, not a parse error.
+        //
         // Which grid these scores came off, said out loud. The live session's geometry and
         // the world map's .roo are the same bake, but a caller comparing two readings should
         // be able to see that one of them was taken without a live World behind it.
         geometry_source: geometrySource,
         ...(reachNote ? { reachable_only_note: reachNote } : {}),
-        note: 'walk_to one of these before any fight worth having. `can_reach_you` is how many of the ' +
-              'eight surrounding squares a monster can stand on — in the open it is eight — but ' +
-              '`tested` is worth more than any of the scores.',
+        note: 'walk_to one of these before any fight worth having. `can_reach_you` is how many of ' +
+              'the 28 squares within melee reach something could swing at you from — in the open ' +
+              'it is most of them, and ZERO is the property that matters. `refused_approaches` is ' +
+              'how many approaches the coarse grid offers that the mover refuses.',
       };
     },
   },
