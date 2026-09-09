@@ -76,6 +76,29 @@ try {
   writeFileSync(join(install,'Data','RedAlert.dll'),'changed');
   assert.throws(()=>attestViewer({...change,session:sessionPath},{sessionPath}),/build/);
   badBroker=true;await service.tick();assert.equal((await plans()).plans.length,0);
+
+// A STRUGGLING BROKER MUST BE ASKED LESS OFTEN, NOT AT THE SAME RATE.
+//
+// This polled flat at 1s for ever. Every tick costs the broker a full /health — 21 sessions
+// enumerated — plus a pilot RPC, and both are ABORTED at 2.5s/3.5s, which does not cancel
+// the work: the broker computes the answer and finds nobody there. m59-cnc's own launcher
+// warns a rejoin sweep "can stall the broker for most of a minute", so the old behaviour
+// spent that minute asking sixty more times, hardest exactly when it could least afford it.
+{
+  const first=service.pollMs();
+  assert.ok(first>1000,`one failure must widen the interval, got ${first}`);
+  await service.tick();
+  const second=service.pollMs();
+  assert.ok(second>first,`consecutive failures must keep widening, got ${second} after ${first}`);
+  assert.ok(second<=30000*1.15,`and stay capped, got ${second}`);
+  // AND IT MUST CLOSE AGAIN. A backoff with no way back is a service that quietly stops
+  // being useful after one bad minute and never recovers.
+  badBroker=false;await service.tick();
+  assert.equal(service.pollMs(),1000,'a good tick returns to the base interval at once');
+  // PUT THE FIXTURE BACK. The cases after this one need a service that is NOT current, and
+  // a recovery check that quietly heals it would make them assert nothing.
+  badBroker=true;await service.tick();
+}
   await assert.rejects(sendIntent({...change,revision:3},{dir,viewer:false}),/not current/);
   assert.equal(unexpected,0);
   console.log('inventory service tests passed: authenticated clicks, AI/veto, CAS, native handoff, paused sales, viewer attestation, stale identity');

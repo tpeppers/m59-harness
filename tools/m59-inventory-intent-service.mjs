@@ -73,6 +73,23 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
   const identities=new Map(roster.map(r=>[r.agent,{agent:r.agent,server:(r.host+':'+r.port).toLowerCase(),
     account:r.account.toLowerCase(),character:r.character}]));
   const token=randomBytes(32).toString('hex');let plans=[],health=null,busy=false,lastError='starting',lastTick=0;
+  // DO NOT KEEP ASKING A BROKER THAT IS ALREADY STRUGGLING.
+  //
+  // This polled every second, flat, for ever. Each tick costs the broker a full `/health`
+  // — which for a 21-character fleet enumerates every session — plus a `pilot status` RPC,
+  // and both are ABORTED at 2.5s/3.5s by AbortSignal.timeout. An abort does not cancel the
+  // work: the broker computes the whole answer and finds nobody listening.
+  //
+  // That is precisely backwards during the times it matters. m59-cnc's own launcher warns
+  // that "a rejoin sweep can stall the broker for most of a minute", and prod's /health was
+  // measured at 1046ms idle against 2573ms under load — so under load this timed out, threw
+  // the answer away, and asked again a second later. A minute-long stall took roughly sixty
+  // rounds of that, all of it work the broker did for nothing while it was least able to.
+  //
+  // So failure widens the gap and success closes it. The fleet is not more interesting when
+  // it is unreachable, and the one thing a slow broker does not need is to be asked faster.
+  const BASE_MS=1000,MAX_MS=30000;
+  let failures=0,waitMs=BASE_MS;
   // Keep policy assessments through the login gap, where neither the keeper nor
   // native inventory is current. They never supply carried items or sale authority.
   const assessments=new Map();
@@ -139,12 +156,22 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
       }
       plans=next;health=h;lastError=null;lastTick=now;
       writeText(join(dir,'viewer.tsv'),viewerText(plans,{fleet,broker_pid:h.pid,now}));
-    }catch(e){lastError=e.message;plans=[];}finally{busy=false;}
+      failures=0;waitMs=BASE_MS;
+    }catch(e){
+      lastError=e.message;plans=[];
+      failures++;
+      // Exponential, capped, with jitter so a fleet of these cannot resynchronise into a
+      // thundering herd against one broker after a restart.
+      waitMs=Math.min(MAX_MS,BASE_MS*2**Math.min(failures,5));
+      waitMs=Math.round(waitMs*(0.85+Math.random()*0.3));
+    }finally{busy=false;}
   }
   const server=createServer((req,res)=>{
     const reply=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
     if(req.headers.origin||req.socket.remoteAddress!=='127.0.0.1'){req.resume();reply(403,{error:'local clients only'});return;}
-    if(req.method==='GET'&&req.url==='/health'){reply(200,{kind:'inventory-intent',schema:1,fleet,pid:process.pid,broker_pid:health?.pid,plans:plans.length,clients:plans.filter(p=>p.paused).length,at:lastTick,error:lastError});return;}
+    // `poll_ms` and `failures` are reported because a service that has quietly backed off to
+    // 30s looks identical to one that is keeping up, and the difference is the whole point.
+    if(req.method==='GET'&&req.url==='/health'){reply(200,{kind:'inventory-intent',schema:1,fleet,pid:process.pid,broker_pid:health?.pid,plans:plans.length,clients:plans.filter(p=>p.paused).length,at:lastTick,error:lastError,poll_ms:waitMs,failures});return;}
     if(req.method==='GET'&&req.url==='/plans'){reply(200,{fleet,broker_pid:health?.pid,at:lastTick,plans});return;}
     if(req.method!=='POST'||req.url!=='/intent'||!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){req.resume();reply(404,{error:'unsupported request'});return;}
     const supplied=Buffer.from(String(req.headers['x-m59-intent-token']||'')),expected=Buffer.from(token);
@@ -161,8 +188,14 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
   server.requestTimeout=10000;server.headersTimeout=5000;
   await new Promise((done,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',done);});
   atomicJson(join(dir,'service.json'),{kind:'inventory-intent',pid:process.pid,port:server.address().port,fleet,token});
-  await tick();const timer=setInterval(tick,1000);timer.unref();
-  return {server,tick,close:()=>{clearInterval(timer);server.closeAllConnections();server.close();}};
+  // SELF-SCHEDULING, because a fixed setInterval cannot widen. Each tick books the next one
+  // at the interval the LAST result earned.
+  await tick();
+  let timer=null,stopped=false;
+  const arm=()=>{if(stopped)return;timer=setTimeout(async()=>{await tick();arm();},waitMs);timer.unref?.();};
+  arm();
+  return {server,tick,pollMs:()=>waitMs,
+    close:()=>{stopped=true;if(timer)clearTimeout(timer);server.closeAllConnections();server.close();}};
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const args=process.argv.slice(2),get=(key,fallback)=>args.includes(key)?args[args.indexOf(key)+1]:fallback;
