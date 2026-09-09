@@ -24,6 +24,7 @@ import { recordSeen } from './m59-trails.mjs';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { loadResources } from './m59-rsc.mjs';
+import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
 import {
   Reader, objId, MAX_ANGLE, KOD_FINENESS, OF,
   parseRoomContents, parseCreate, parseRemove, parseMove, parseTurn, parseChange,
@@ -311,6 +312,7 @@ export class M59Client {
     // WHAT IS CURRENTLY ON US — poison, disease, a blessing. Keyed by the enchantment
     // object's id, which is what BP_REMOVE_ENCHANTMENT names. See parseAddEnchantment.
     this.enchantmentsById = new Map();
+    this.enchantmentObservations = new EnchantmentObservations();
     this.events = [];                               // recent world events, newest last
     this.maxEvents = 500;
     this.evSeq = 0;
@@ -634,6 +636,12 @@ export class M59Client {
   // and 2 — so they were never indexed by name, and every by-name search of
   /** Everything currently on this character — poison, disease, a blessing. */
   enchantments() { return [...this.enchantmentsById.values()]; }
+  enchantmentStatus() {
+    // Advancing an HTTP/persistence read is not a new wire observation. Use
+    // the existing inbound-stream clock, plus directly handled event times.
+    return this.enchantmentObservations.snapshot(this.state==='game'&&this.inGame,
+      Math.max(this.enchantmentObservations.at,this.lastRxAt||0));
+  }
 
   /**
    * IS SOMETHING DRAINING US THAT IS NOT AN ATTACK?
@@ -853,6 +861,7 @@ export class M59Client {
         break;
       }
       case AP.GAME:
+        this.enchantmentObservations.reset();
         this.state = 'game';
         this.log('IN GAME');
         // startKeepalive() is public and historically worked even when called before
@@ -1374,6 +1383,7 @@ export class M59Client {
       // carries it, and the server rejects a move whose room does not match.
       case BP.PLAYER: {
         const p = parsePlayer(body);
+        this.enchantmentObservations.enter(p.id,p.roomId,Date.now());
         this.selfId = p.id;
         this.room.id = p.roomId;
         this.room.security = p.security;
@@ -2037,10 +2047,14 @@ export class M59Client {
       // to guess. `restUntil` aborts on falling health and a spot that fails a rest is
       // discredited for good, so a poisoned character was quietly burning good walls out of
       // the book on every rest it took.
+      case BP.INVALIDATE_DATA:
+        this.enchantmentObservations.invalidate(Date.now());
+        break;
       case BP.ADD_ENCHANTMENT: {
         const res = parseAddEnchantment(body);
         if (!this.check('ADD_ENCHANTMENT', res)) break;
         const o = res.object;
+        this.enchantmentObservations.add(res.type,o,this.rsc.get(o.nameRsc),Date.now());
         this.enchantmentsById.set(o.id, {
           id: o.id, type: res.type, nameRsc: o.nameRsc,
           name: this.rsc.get(o.nameRsc) ?? null, at: Date.now(),
@@ -2051,6 +2065,7 @@ export class M59Client {
       case BP.REMOVE_ENCHANTMENT: {
         const res = parseRemoveEnchantment(body);
         if (!this.check('REMOVE_ENCHANTMENT', res)) break;
+        this.enchantmentObservations.remove(res.type,res.id,Date.now());
         const gone = this.enchantmentsById.get(res.id) ?? { id: res.id, type: res.type };
         this.enchantmentsById.delete(res.id);
         this.emit('enchantment', { removed: gone });

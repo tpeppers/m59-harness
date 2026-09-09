@@ -990,6 +990,9 @@ function state() {
     // on 2026-09-08, twice, and was misread as the CASTER lacking karma when it was in fact
     // a Qor wand refusing a caster whose karma was too HIGH.
     // Carried raw. What the numbers mean is a fleet's business, not this file's.
+    // Existing cache only: no SEND_ENCHANTMENTS or LOOK requests. Coverage is
+    // observed-only, with exact player/room scope and original event times.
+    enchantment_observations: c?.enchantmentStatus?.() ?? null,
     items: c?.inventory ? c.inventory.map(o => ({
       id: o.id,
       name: c.rsc?.get?.(o.nameRsc) ?? '',
