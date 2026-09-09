@@ -85,7 +85,21 @@ const LANE = {
   reagents:  /mushroom/i,   // LOOT mushrooms only; inky-cap and the create-food reagents are caught first below
 };
 // Never sold or vaulted-away: create-food reagents (kept and topped up), and the rare keepers.
-const KEEP_REAGENT = /\bherb\b|elderberry/i;
+//
+// ORC TOOTH IS ON THIS LIST BECAUSE IT CANNOT BE BOUGHT BACK. It is the scarce half of
+// super strength (2 mushroom + 1 orc tooth) and no merchant in the game sells one --
+// `merchants sells:"orc tooth"` matches nobody, because it is a monster drop and orcs are
+// not where this fleet farms. Mushrooms are abundant and replaceable; the tooth is the
+// binding constraint on the fleet's only offensive buff.
+//
+// Measured 2026-09-09: all three buff casters held ZERO orc teeth while 159 sat in other
+// packs, and two floor characters carrying 50 between them had them sold out from under
+// the fleet by this very sell run, minutes before a redistribution could reach them. The
+// shillings were worth a fraction of the casts.
+//
+// Sapphire is deliberately NOT here: bless burns two per cast, but three merchants sell
+// them (Herbutte, Zhieu B'hob, Skivlat), so the sell run can be trusted with a surplus.
+const KEEP_REAGENT = /\bherb\b|elderberry|orc tooth/i;
 // AND NEVER SELL A MEAL. While the Duke's tables are open, food is the scarcest thing this
 // fleet carries and the only thing it cannot buy: vigor above the resting cap of 80 comes
 // ONLY from eating, so a slice of pork is worth more standing in a pack than anything an
@@ -117,6 +131,9 @@ const VAULT = new RegExp('(' + (spec.vault?.keep || []).map(s => String(s).repla
 // the same. The loadout already knows what each character is meant to hold, so ask it — and
 // keep this list only for a character that has no loadout yet.
 const PROTECT = [...new Set([...(spec.vault?.keep || []), 'herb', 'elderberry',
+                             // Unbuyable anywhere in the game and the scarce half of super
+                             // strength; see KEEP_REAGENT above for the measurement.
+                             'orc tooth',
                              'slice of pork', 'bowl of soup', 'edible mushroom'])];
 
 /**

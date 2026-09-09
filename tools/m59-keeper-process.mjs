@@ -2553,10 +2553,40 @@ const server = createServer(async (req, res) => {
           case 'drop': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }
+            // TWO VERBS WORE ONE NAME, AND THE DESTRUCTIVE ONE ANSWERED FIRST.
+            //
+            // `drop` here means SHED THE PACK. But the broker's proxy client sends
+            // `drop: (ids) => act('drop', { items })` for a precise, single-item drop --
+            // including `{id, amount}` for part of a stack -- and this handler ignored
+            // `items` completely and ran dropAllExcept with an empty keep list. A caller
+            // asking to put down five mushrooms put down everything it owned, and the
+            // reply said `dropped: [...]` so it read as success.
+            //
+            // Measured 2026-09-09: `act drop amount:5` against a 225 stack emptied the
+            // stack; against another character it emptied the whole pack onto the floor --
+            // 166 mushrooms, 58 emeralds, 25 sapphires, 15 orc teeth. Earlier the same
+            // day it destroyed a short sword that a caller was trying to keep, twice,
+            // while the caller blamed the keeper's ownership of the body.
+            //
+            // So: an `items` request is the PRECISE drop and is answered as one. Only a
+            // request with no items at all -- which is what `keep`/`max` callers send --
+            // means shed the pack. The correct item path already existed further down
+            // this file, in a switch the comment there notes "has never been reached".
+            const asked = [].concat(args.items ?? args.id ?? []).filter(x => x != null);
+            if (asked.length) {
+              const sinceEv = c.evSeq ?? 0;
+              let err = null;
+              await session.pacer.submit('drop', () => c.drop?.(asked))
+                .catch(e => { err = e.message; });
+              json({ op: 'drop_items', items: asked, since: sinceEv,
+                     room: session.world?.room?.num ?? null,
+                     ...(err ? { error: err } : { sent: true }) });
+              return;
+            }
             const keep = [].concat(args.keep ?? []).map(String).filter(Boolean);
             const r = await skills.dropAllExcept(session, { keep, max: Number(args.max) || 60 })
               .catch(e => ({ dropped: [], error: e.message }));
-            json({ room: session.world?.room?.num ?? null, ...r });
+            json({ op: 'drop_all_except', room: session.world?.room?.num ?? null, ...r });
             return;
           }
           case 'trade': {
@@ -2609,6 +2639,26 @@ const server = createServer(async (req, res) => {
                 const since = c.evSeq;
                 await session.pacer.submit('trade', () => c.counterOffer(items));
                 json({ sent: true, since, count: items.length, trade: view() });
+                return;
+              }
+              // WHAT THE SERVER SAID ABOUT THE TRADE, VERBATIM.
+              //
+              // A failed exchange is arithmetic on this side -- no count rose on the
+              // receiver -- and arithmetic cannot say WHY. The server can, and does: when
+              // `CanHoldWeightAndBulk` fails it messages BOTH sides by name and then
+              // cancels (user.kod:5469-5478). Handing those lines back is the difference
+              // between "nearly always full" and "full, and the server said so".
+              //
+              // Both `message` and `said` kinds, because the offer failures arrive as
+              // server messages while a merchant's refusal arrives as speech, and a caller
+              // trying to explain a dead trade wants whichever turned up.
+              case 'said': {
+                const w = await c.waitFor({ since: args.since ?? undefined,
+                                            kinds: ['message', 'said'],
+                                            timeoutMs: Number(args.timeout_ms ?? 1200) })
+                                 .catch(() => null);
+                json({ said: (w?.events ?? []).map(e => e.text).filter(Boolean),
+                       seq: c.evSeq, trade: view() });
                 return;
               }
               // WHAT THE SERVER SAID ABOUT THE TRADE, VERBATIM.

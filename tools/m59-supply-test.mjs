@@ -771,5 +771,53 @@ section('AND THE BROKER SIDE OF THE PROXY ANSWERS IN THE SHAPE THE CALLERS READ'
 }
 
 
+// ================= `drop` MEANT TWO THINGS AND THE DESTRUCTIVE ONE ANSWERED =================
+//
+// The keeper's first /action switch owned `case 'drop'` and ran `dropAllExcept` with an empty
+// keep list, ignoring `args.items` entirely. The broker's proxy client sends a PRECISE drop
+// through that same verb -- `drop: (ids) => act('drop', { items })`, with `{id, amount}` for
+// part of a stack -- so a caller asking to put down five mushrooms put down its whole pack,
+// and the reply said `dropped: [...]`, which reads as success.
+//
+// Measured 2026-09-09: `act drop amount:5` against a 225 stack emptied it; against another
+// character it put 166 mushrooms, 58 emeralds, 25 sapphires and 15 orc teeth on the floor.
+// Earlier the same day it twice destroyed a short sword the caller was trying to KEEP, while
+// the caller blamed the keeper's ownership of the body and wrote three paragraphs about it.
+//
+// The correct item path already existed further down the file, in a switch whose own comment
+// notes it "has never been reached".
+{
+  console.log('\nA PRECISE DROP IS NOT A PACK SHED');
+  const keeper = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  const first = keeper.slice(0, keeper.indexOf("case 'trade': {"));
+
+  ok('the reachable handler branches on `items` before anything destructive',
+     /const asked = \[\]\.concat\(args\.items \?\? args\.id \?\? \[\]\)/.test(first));
+  ok('and an items request never reaches dropAllExcept',
+     first.indexOf('if (asked.length) {') < first.indexOf('skills.dropAllExcept'));
+  ok('the precise path forwards the specs untouched, so {id, amount} survives',
+     /c\.drop\?\.\(asked\)/.test(first));
+  ok('the two outcomes are named differently in the reply, so a caller can tell them apart',
+     /op: 'drop_items'/.test(first) && /op: 'drop_all_except'/.test(first));
+  ok('shedding the pack still works when no items are named',
+     /skills\.dropAllExcept\(session, \{ keep, max/.test(first));
+}
+
+// ===================== WHAT THE FLEET MUST NOT SELL OUT FROM UNDER ITSELF =====================
+{
+  console.log('\nORC TOOTH IS UNBUYABLE, SO IT IS UNSELLABLE');
+  const sellrun = readFileSync(join(HERE, 'm59-sellrun.mjs'), 'utf8');
+  // Super strength is 2 mushroom + 1 orc tooth. No merchant anywhere sells a tooth -- it is a
+  // monster drop -- so a sold one is gone for good. Measured: all three buff casters at ZERO
+  // while 159 sat in other packs, and 50 more were fenced by this sell run minutes before a
+  // redistribution could reach them.
+  ok('the sell run keeps orc teeth', /KEEP_REAGENT = .*orc tooth/.test(sellrun));
+  ok('and never offers them to a merchant', /'orc tooth',/.test(sellrun));
+  ok('sapphire is deliberately NOT kept, because three merchants sell it',
+     !/KEEP_REAGENT = .*sapphire/.test(sellrun));
+  ok('the create-food reagents are still kept', /KEEP_REAGENT = .*elderberry/.test(sellrun));
+}
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
