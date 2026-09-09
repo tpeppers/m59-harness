@@ -191,5 +191,10 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     // the caller supply one is the point: the exception belongs to the errand that needs
     // it, not to whoever happened to invoke the errand today.
     unsafe: script.unsafe ?? null,
+    // AND SO DOES ITS PIN, for exactly the same reason. The generation an errand was last
+    // seen working against is a property of the errand, not of the invocation — and a
+    // `provenance` block that sat on a script and was never forwarded would be the quietest
+    // possible failure: declared, greppable, and doing nothing at all.
+    provenance: script.provenance ?? null,
   });
 }

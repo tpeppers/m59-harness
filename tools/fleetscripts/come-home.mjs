@@ -15,6 +15,14 @@ import { walk } from '../m59-fleetscript.mjs';
 
 export const script = {
   name: 'come-home',
+  // GUARANTEE 9. A recall is one `walk`, so the only things that can move under it are the
+  // step itself and the travel tool behind it. Narrow `touches` on purpose: a pin that
+  // watches the whole tree cries wolf on every commit and gets ignored, which is worse than
+  // no pin at all.
+  provenance: {
+    pinned: 'dbcc73e', verified: '2026-09-07',
+    touches: ['tools/m59-fleetscript.mjs', 'tools/m59-broker.mjs'],
+  },
   describe: 'Walk characters back to a room, refusing to set out hurt.',
   params: {
     agents: { type: 'agents', required: true, describe: 'who to bring back' },

@@ -27,6 +27,7 @@ import { weighPack, isWeaponName, itemNameKey, foodValue } from './m59-items.mjs
 // which character it is and this one does not.
 import { keepTest as keepTestFor, sellTest as sellTestFor } from './m59-loadout.mjs';
 import * as buyers from './m59-buyers.mjs';
+import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-inventory-intent.mjs';
 import { readFileSync } from 'node:fs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 
@@ -3042,6 +3043,38 @@ export function merchantEquipmentPlan(c, { maxWeapons = null, weaponPriority = n
 // `loadout` is this character's own list, or null. See `sellable` above for the order the
 // rules apply in and why. A caller that passes null gets the behaviour this function has
 // always had, which is what every existing caller relies on.
+export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons=null,weaponPriority=null}={}) {
+  const c=s.need(), equipped=equippedNow(c), worn=equipped??new Set();
+  const foods=new Set(larderOf(c).map(row=>row.o.id));
+  const pack=(c.inventory||[]).map(o=>({o,id:o.id,name:c.rsc.get(o.nameRsc)||'',amount:o.amount||1,equipped:worn.has(o.id)}));
+  const equipment=merchantEquipmentPlan(c,{maxWeapons,weaponPriority});
+  const armoured=pack.some(x=>x.equipped&&ARMOUR_BODY.test(x.name)&&!/shield/i.test(x.name));
+  const keepRe=new RegExp([...keep,'shilling','coin'].join('|'),'i');
+  const identity=sessionIdentity(s);let doc=null,error=null;
+  if(identity)try{doc=readIntent(identity);}catch{error='inventory intent unavailable';}
+  const held=[];
+  const candidates=pack.filter(x=>x.name).map(x=>{
+    const normal=sellable({name:x.name,worn:x.equipped,keepRe,loadout,armoured,pack});
+    const recommended=equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
+    let blocked=error||(!equipped?'equipment is not known':null);
+    if(itemIsProtected(x.name,protect))blocked='protected item';
+    else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
+    else if(!equipment.sell.has(x.id)&&interest.anyoneWants(x.name,{except:s.name})) {
+      blocked='wanted by the fleet';
+      if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});
+    }
+    // Explicit clicks may nominate ordinary carried loot, but do not override
+    // configured keep floors or reserve lists, equipped gear, or fleet needs.
+    if(!normal.sell&&!equipment.sell.has(x.id)&&!blocked)blocked=normal.why;
+    const slot=armourKind(x.name)?.slot;
+    const role=weaponScore(x.name)>0?'weapon':slot==='armour'?'armor':
+      slot==='shield'?'shield':slot==='helm'?'helmet':foods.has(x.id)?'food':'other';
+    // Intent metadata carries appearance, never grants an action capability.
+    return {...x,role,actions:[],recommended,blocked,reason:equipment.sell.get(x.id)||normal.why};
+  });
+  return {identity,revision:doc?.revision??0,items:planInventory(candidates,doc),held,error};
+}
+
 export async function sellAll(s, { merchant, keep = [], protect = [], minPrice = 1,
                                    loadout = null, maxWeapons = null,
                                    weaponPriority = null } = {}) {
@@ -3049,40 +3082,9 @@ export async function sellAll(s, { merchant, keep = [], protect = [], minPrice =
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
 
-  const keepRe = new RegExp([...keep, 'shilling', 'coin'].join('|'), 'i');
-  // ANYTHING WE ARE WEARING IS NOT FOR SALE. This set used to be constructed empty and
-  // never filled, so the guard below was decorative: the armour on your back and the
-  // ring on your finger were as sellable as a rat pelt, protected only by whether their
-  // names happened to match `keep`. It is the server's use list now, so it is right by
-  // construction rather than by a name pattern somebody has to maintain.
-  const wielded = equippedNow(c) ?? new Set();
-  const pack = c.inventory.map(o => ({ o, name: c.rsc.get(o.nameRsc) }));
-
-  // Is this character wearing body armour at all? If not, nothing armour-shaped in the
-  // pack counts as a spare — see sellable.
-  const armoured = pack.some(x => wielded.has(x.o.id) && ARMOUR_BODY.test(x.name) && !/shield/i.test(x.name));
-
-  const equipment = merchantEquipmentPlan(c, { maxWeapons, weaponPriority });
-
-  let items = pack.filter(x => equipment.sell.has(x.o.id) ||
-    (!equipment.keep.has(x.o.id) && sellable({
-      name: x.name, worn: wielded.has(x.o.id), keepRe, loadout, armoured,
-      pack: pack.map(y => ({ name: y.name, amount: y.o.amount || 1 })),
-    }).sell));
-  items = items.filter(x => !itemIsProtected(x.name, protect));
-
-  // DO NOT SELL WHAT A CRewMATE IS SHORT OF. The merchant buys low and sells high, so
-  // this round trip costs the fleet twice over, and the thing being round-tripped is
-  // usually the reagent that decides whether somebody can eat.
-  const held = [];
-  items = items.filter(x => {
-    // max_weapons and the armour slot rules are hard pack limits. A fleetmate's broad
-    // equipment interest must not turn one character back into the fleet warehouse.
-    if (equipment.sell.has(x.o.id)) return true;
-    if (!interest.anyoneWants(x.name, { except: s.name })) return true;
-    held.push({ name: x.name, wanted_by: interest.wantedBy(x.name, { except: s.name }) });
-    return false;
-  });
+  const selection=inventorySalePlan(s,{keep,protect,loadout,maxWeapons,weaponPriority});
+  const held=selection.held;
+  let items=selection.items.filter(x=>x.queued);
 
   // DO NOT OFFER A SMITH A MUSHROOM. Every merchant class declares what it deals in
   // (`ObjectDesired`), a refusal is a sentence spoken to the room rather than an error,
@@ -3115,6 +3117,8 @@ export async function sellAll(s, { merchant, keep = [], protect = [], minPrice =
   const sold = [], refused = [];
   let total = 0;
   for (const it of items) {
+    const blocked=saleBlocked(s,it);
+    if(blocked){refused.push({name:it.name,why:blocked});continue;}
     const q = await s.sellOne(merchant, it.o, false);
     if (!q.offered_price || q.offered_price < minPrice) {
       refused.push({ name: it.name, why: q.merchant_said?.join(' ') || q.note || 'no price offered' });

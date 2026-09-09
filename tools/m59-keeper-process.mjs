@@ -16,6 +16,7 @@ process.env.M59_KEEPER = '1';
 //   8. Handles SIGTERM gracefully
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
@@ -395,6 +396,24 @@ async function joinGenerationOnce(generation) {
     cancelInitialJoinRetry();
     console.error(`[keeper] ${agent} joined as ${session.client?.me?.name ?? character}`);
 
+    // ASK FOR THE ATTRIBUTES ONCE, HERE, BECAUSE NOTHING ELSE EVER WILL.
+    //
+    // Group 2 — might, intellect, stamina, agility, mysticism, aim, karma — is sent only
+    // in reply to a request naming that group (user.kod:2679-2692), and the keeper's
+    // routine loop asks for group 1 only. So on a fleet driven by keeper processes these
+    // six numbers were never fetched by anybody, and every consumer downstream read them
+    // as unknown: PlayerCanLearn ran with intellect 0 and inflated the learning threshold
+    // for all 21 characters, and the shadow clone copied characters with no attributes.
+    //
+    // Once is enough and once is correct: attributes are fixed at CREATION
+    // (player.kod:796-801) and never move, so this is not a poll — it is the one read that
+    // was missing. Fire-and-forget after a short delay so it cannot slow a join; the
+    // `refresh` action re-asks on demand for anything that wants to be sure.
+    setTimeout(() => {
+      session.pacer?.submit('read', () => session.client?.stats?.(2))
+        ?.catch(() => { /* a keeper that cannot read its own stats still plays fine */ });
+    }, 1500);
+
     // THE DOORS THAT ARE FLOORS — move the bake to the state the SERVER says it is in.
     //
     // A Meridian 59 door is usually a sector that lifts past the 384-unit step limit, and
@@ -737,12 +756,23 @@ async function join() {
 
 // ---------------------------------------------------------------- state
 
+let lastInventoryPlanPublication=0;
 function state() {
   const c = session.client;
   const me = c?.me;
   const roomBinding = session.world?.roomBinding ?? null;
   const room = roomBinding?.room ?? session.world?.room;
   const roomWire = roomBinding?.room_wire ?? null;
+  if(session.live&&Date.now()-lastInventoryPlanPublication>=1500) {
+    lastInventoryPlanPublication=Date.now();
+    try {
+      publishPlan(session,skills.inventorySalePlan(session,{
+        loadout:autopilot?.loadout?.()??null,protect:autopilot?.protectedItemNames?.()??[],
+        maxWeapons:autopilot?.policy?.maxWeapons??null,
+        weaponPriority:autopilot?.weaponPriorityNow?.()??null,
+      }),{room:room?.num??null,room_wire:roomWire});
+    } catch { /* Display telemetry may not interrupt a keeper. Missing/stale reports fail closed in the UI. */ }
+  }
   const v = c?.vitals?.() || {};
   // THE AUTHORITATIVE KEEPER STATUS CROSSES THE PROCESS BOUNDARY AS ONE OBJECT.
   //
@@ -791,6 +821,33 @@ function state() {
     hp: v.health ? { value: v.health.value, max: v.health.max } : null,
     vigor: v.vigor ? { value: v.vigor.value, max: v.vigor.max } : null,
     mana: v.mana ? { value: v.mana.value, max: v.mana.max } : null,
+    // THE SIX ATTRIBUTES, WHICH THIS SNAPSHOT HAS NEVER CARRIED — and that omission is why
+    // the whole fleet has been reading intellect 0.
+    //
+    // Group 2 is poll-only (user.kod:2679-2692): the server sends might, intellect,
+    // stamina, agility, mysticism and aim ONLY in reply to a request naming that group,
+    // and the keeper's ordinary loop asks for group 1. Even once the `refresh` action
+    // above fixes that, the numbers live in THIS process — and the broker's client is this
+    // snapshot, so anything not listed here simply does not exist on the far side.
+    //
+    // What it cost, measured 2026-09-08: PlayerCanLearn's threshold subtracts
+    // `intellect * 2 * POINTS_SLOPE / 5`, so intellect 0 inflated `need` to 227 for every
+    // character. Four of them — Gonzo 154, Robin 151, Beaker 143, Scooter 142 — hold more
+    // than enough for a level-3 Weaponcraft skill and were being told they could not learn
+    // one. The shadow clone had the same hole: it copied characters with no attributes at
+    // all, because the sheets it reads are filled from this snapshot.
+    //
+    // Names are lowercased on the way out. The server's resource strings are capitalised
+    // ("Intellect"), every reader here asks in lowercase, and that mismatch is its own
+    // bug — fixed in m59-client.mjs noteStat, and not worth re-introducing here.
+    attributes: (() => {
+      const out = {};
+      for (const k of ['might', 'intellect', 'stamina', 'agility', 'mysticism', 'aim', 'karma']) {
+        const st = c?.statsById?.get(k) ?? c?.statsById?.get(k[0].toUpperCase() + k.slice(1));
+        if (st && st.value != null) out[k] = st.value;
+      }
+      return Object.keys(out).length ? out : null;
+    })(),
     gold: me?.gold ?? null,
     // WHAT YOU ARE WEARING IS NOT A FILTER ON WHAT YOU CARRY, and this was.
     //
@@ -3619,6 +3676,10 @@ const server = createServer(async (req, res) => {
             const nameOf = (o) => c.rsc?.get?.(o.nameRsc) || '';
             const sellChunk = async (id, amount) => {
               const item = c.inventory.find(o => o.id === id);
+              if(!item)return {sold:false};
+              const intentItem={id,name:nameOf(item)};
+              const blocked=saleBlocked(session,intentItem);
+              if(blocked)return {sold:false,note:blocked};
               const beforeAmount = item?.amount || 1;
               const before = c.evSeq;
               // NumberItem offers need a quantity even when the final chunk is
@@ -3628,7 +3689,14 @@ const server = createServer(async (req, res) => {
               if (!ev.events.find(e => e.kind === 'countered')) { await session.pacer.submit('trade', () => c.cancelOffer()).catch(() => {}); return { sold: false }; }
               const price = (c.trade?.theirs || []).reduce((n, i) => n + (i.amount || 1), 0);
               if (price < minPrice) { await session.pacer.submit('trade', () => c.cancelOffer()).catch(() => {}); return { sold: false, price }; }
-              await session.pacer.submit('trade', () => c.acceptOffer());
+              const held=await session.pacer.submit('trade', () => {
+                const current=c.inventory.find(o=>o.id===id);
+                const reason=!current||nameOf(current)!==intentItem.name
+                  ? 'item changed during the offer' : saleBlocked(session,intentItem);
+                if(reason){c.cancelOffer();return reason;}
+                c.acceptOffer();return null;
+              });
+              if(held)return {sold:false,price,note:held};
               await new Promise(r => setTimeout(r, 1200));
               await session.pacer.submit('read', () => c.requestInventory()).catch(() => {});
               await c.waitFor({ kinds: ['inventory'], timeoutMs: 4000 }).catch(() => {});
@@ -3649,7 +3717,8 @@ const server = createServer(async (req, res) => {
                 let guard = 0;
                 while (guard++ < 200) {
                   const it = (c.inventory || []).find(o => nameOf(o) === nm
-                    && !wornIds.has(o.id) && !equipmentPlan.keep.has(o.id));
+                    && !wornIds.has(o.id) && !equipmentPlan.keep.has(o.id)
+                    && !saleBlocked(session,{id:o.id,name:nameOf(o)}));
                   if (!it) break;
                   if (session.movementGeneration !== generation) throw new Error('sale cancelled');
                   if (offers >= maxOffers) { more = true; break saleLoop; }
@@ -3762,6 +3831,71 @@ const server = createServer(async (req, res) => {
             result = result ?? { sent: true, id, before, after, equipped: after.includes(id), serverSaid };
             break;
           }
+          // ASK FOR EVERY PAGE, BECAUSE NOTHING IS PUSHED UNTIL YOU DO.
+          //
+          // The server answers a stat GROUP only when asked for that group by number
+          // (user.kod:2659-2724 ToCliStats): 1 is health/mana/vigor, 2 is the six
+          // attributes plus karma, 3 is spells, 4 is skills. Group 1 is the only one the
+          // keeper's ordinary loop requests, so everything else on the sheet is whatever
+          // happened to arrive at login, or nothing.
+          //
+          // AND THE LISTS ARE A SEPARATE ASK AGAIN. A stat group is positional against
+          // plSkills/plSpells and carries no names, so `requestSkills`/`requestSpells`
+          // must go out too or the numbers arrive with nothing to label them.
+          //
+          // This exists because the broker CANNOT do it. Its client is a snapshot the
+          // keeper sends, and on that object `requestInventory`/`requestSpells`/
+          // `requestSkills` are stubs returning null — so every refresh the broker issued
+          // was silently discarded and it then read the stale snapshot. Measured
+          // 2026-09-07: the whole fleet reported `attributes: {}` and every skill ability
+          // as null, which put intellect 0 into PlayerCanLearn and made the shadow clone
+          // copy characters with neither attributes nor abilities.
+          //
+          // Ordering matters: lists first, then the groups, then settle. A group that
+          // lands before the list that explains it is a number without a name.
+          case 'refresh': {
+            const c = session.client;
+            if (!c) { result = { error: 'no client' }; break; }
+            const want = new Set([].concat(args.pages ?? ['stats', 'attributes', 'skills',
+                                                          'spells', 'inventory']));
+            const asked = [];
+            const ask = async (label, fn) => {
+              await session.pacer.submit('read', fn).catch(() => {});
+              asked.push(label);
+            };
+            if (want.has('skills'))    await ask('skill list',  () => c.requestSkills());
+            if (want.has('spells'))    await ask('spell list',  () => c.requestSpells());
+            if (want.has('inventory')) await ask('inventory',   () => c.requestInventory());
+            // The lists are objects and arrive on their own opcode; give them a moment
+            // before the positional groups that reference them.
+            await new Promise(r => setTimeout(r, Number(args.list_settle_ms) || 500));
+            if (want.has('stats'))      await ask('group 1 (vitals)',     () => c.stats(1));
+            if (want.has('attributes')) await ask('group 2 (attributes)', () => c.stats(2));
+            if (want.has('spells'))     await ask('group 3 (spell abilities)', () => c.stats(3));
+            if (want.has('skills'))     await ask('group 4 (skill abilities)', () => c.stats(4));
+            await new Promise(r => setTimeout(r, Number(args.settle_ms) || 900));
+
+            // REPORT WHAT ARRIVED, NOT WHAT WAS ASKED FOR — the rule this file already
+            // applies to buying. A refresh that requested five pages and got none back
+            // must not read like a success.
+            const attrs = {};
+            for (const k of ['might', 'intellect', 'stamina', 'agility', 'mysticism', 'aim', 'karma']) {
+              const st = c.statsById?.get(k);
+              if (st && st.value != null) attrs[k] = st.value;
+            }
+            const known = c.abilitiesKnown?.() ?? { skills: [], spells: [] };
+            const withAbility = rows => (rows || []).filter(r => r.ability != null).length;
+            result = {
+              asked,
+              attributes: attrs,
+              attributes_known: Object.keys(attrs).length,
+              skills: { entries: (known.skills || []).length, with_ability: withAbility(known.skills) },
+              spells: { entries: (known.spells || []).length, with_ability: withAbility(known.spells) },
+              inventory_entries: (c.inventory || []).length,
+            };
+            break;
+          }
+
           case 'look': {
             const id = args.id ?? args.item;
             if (!id) { result = { error: 'no item id' }; break; }

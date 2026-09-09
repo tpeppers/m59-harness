@@ -552,7 +552,23 @@ export class M59Client {
   // name STAT_NAMES gives it, so an agent can ask for "health".
   noteStat(s, { bulk = false } = {}) {
     this.statsById.set(`${s.group}.${s.num}`, s);
-    if (s.name) this.statsById.set(s.name, s);
+    // BOTH SPELLINGS, because the server capitalises and every reader here does not.
+    //
+    // A stat's name is a RESOURCE STRING, and group 2's are "Might", "Intellect",
+    // "Stamina", "Agility", "Mysticism", "Aim" (user.kod:136-141). `stat()` lowercases
+    // whatever it is asked for, and the broker's own attribute read is a lowercase
+    // list — so storing only the verbatim name meant `stat('intellect')` MISSED, every
+    // attribute read as undefined, and PlayerCanLearn's formula ran with intellect 0.
+    // That silently inflated the learning threshold by intellect * 2.8 per character.
+    //
+    // Group 1 never showed this. Health, mana and vigor name ICON resources
+    // (`heal.bgf`, user.kod:144-146), so they carry no useful name and are read by the
+    // `group.num` key instead — two groups, two paths, and only one of them worked.
+    if (s.name) {
+      this.statsById.set(s.name, s);
+      const lower = String(s.name).toLowerCase();
+      if (lower !== s.name) this.statsById.set(lower, s);
+    }
     this.emit('stat', { name: s.name || `${s.group}.${s.num}`,
                         value: s.value, max: s.currentMax, text: s.text });
     if (s.group === STAT_GROUP.SPELLS || s.group === STAT_GROUP.SKILLS)

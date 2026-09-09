@@ -565,3 +565,4 @@ _verify2.mjs
 # live here. Same rule as substrate/policy.local.json.
 /substrate/dumbot/
 /substrate/hooks/
+/substrate/inventory-intent/
