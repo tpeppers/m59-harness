@@ -32,6 +32,11 @@ const ok = (what, cond, extra = '') => {
 // states. `sent` records every call so a test can assert on what was NOT sent, which is
 // where most of these bugs lived.
 function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
+                      // WHERE THE SAFE SPOTS ARE, and whether we are standing in one. Shaped
+                      // like the broker's own answer: `in_a_safe_spot_now` is either false or
+                      // an object carrying `works`, and every candidate square carries the
+                      // book's verdict as `tested`.
+                      safeNow = false, safeSpots = [], walkLands = true,
                       // Rooms the router cannot get to. Room 114 — the Barloque vaultman's
                       // office — was one of these for two of three couriers on 2026-09-02.
                       unreachable = new Set(),
@@ -40,7 +45,7 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // takes what it is offered; pass one that stores nothing to check the
                       // step does not read that as a failure.
                       vault = null } = {}) {
-  const sent = [];
+  const sent = [], rested = [];
   globalThis.fetch = async (_url, opts) => {
     const body = JSON.parse(opts.body);
     const { name, arguments: a } = body.params;
@@ -70,9 +75,14 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       wanted: [].concat(a.items ?? []),
       deposited: [].concat(a.items ?? []).map(n => ({ name: n, amount: 1 })),
       refused: [], stored: [].concat(a.items ?? []).length, vaultman_said: [] };
+    else if (name === 'safe_spots') payload = { room: { num: rooms[agent] ?? 39, name: 'room' },
+      in_a_safe_spot_now: safeNow, spots: safeSpots };
+    else if (name === 'walk_to') { if (walkLands) safeNow = { at: { col: a.col, row: a.row }, works: true }; payload = { arrived: walkLands }; }
+    else if (name === 'rest_up') { rested.push(agent); payload = { ok: true }; }
     else payload = { ok: true };
     return { json: async () => ({ result: { content: [{ text: JSON.stringify(payload) }] } }) };
   };
+  sent.rested = rested;
   return sent;
 }
 const quiet = () => {};
@@ -259,6 +269,63 @@ console.log('\na banker refusal is prose, not an error');
   const r = await fleetScript({ name: 'poor', fleet: 'testfleet', agents: ['a1'],
     steps: [bank('withdraw', 5000)], onLog: quiet });
   ok('a refusal spoken as a sentence is caught as a failure', r.results.a1.ok === false);
+}
+
+console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
+{
+  // Waldorf, 2026-09-08: four deaths in one day, every one `strategy: fieldrest`, three with
+  // `in_safe_spot: false` in a room holding six hostiles, at 5-10 health of 51. The survival
+  // ladder is quiet during a rest BY DESIGN — resting presupposes you walked somewhere
+  // unhittable first — so nothing reacted. restUntil does abort on damage, but on a 3s poll,
+  // and from six health one skeleton hit lands first.
+  const { rest } = await import('./m59-fleetscript.mjs');
+  const trip = (steps, name) => fleetScript({ name, fleet: 'testfleet', agents: ['a1'],
+    steps, pollMs: 30, healMs: 400, onLog: quiet });
+
+  let sent = fakeBroker({ rooms: { a1: 39 }, safeNow: { at: { col: 21, row: 7 }, works: true } });
+  let r = await trip([rest()], 'rest-here');
+  ok('a character already in a working spot rests where it stands',
+     r.results.a1.ok === true && r.results.a1.state['0:rest'].outcome === 'rested_in_place',
+     JSON.stringify(r.results.a1));
+  ok('and does not walk anywhere to do it', !sent.some(x => x.name === 'walk_to'));
+
+  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [
+    { col: 5, row: 5, tested: 'untested' }, { col: 21, row: 7, tested: 'holds' } ] });
+  r = await trip([rest()], 'rest-move');
+  ok('a character in the open walks to a spot before resting',
+     r.results.a1.state['0:rest'].outcome === 'rested_after_moving',
+     JSON.stringify(r.results.a1.state['0:rest']));
+  const walk = sent.find(x => x.name === 'walk_to');
+  ok('and it takes the PROVEN square over the geometry first guess',
+     walk && walk.col === 21 && walk.row === 7, JSON.stringify(walk));
+
+  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false,
+    safeSpots: [{ col: 9, row: 9, tested: 'does not work' }] });
+  r = await trip([rest()], 'rest-bad');
+  ok('a discredited square is not a safe spot and the rest is refused',
+     r.results.a1.ok === false && r.results.a1.state['0:rest'].outcome === 'nowhere_safe_to_rest',
+     JSON.stringify(r.results.a1.state['0:rest']));
+  ok('and nothing sat down', !sent.rested.length);
+
+  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, walkLands: false,
+    safeSpots: [{ col: 21, row: 7, tested: 'holds' }] });
+  r = await trip([rest()], 'rest-miss');
+  ok('a walk that did not land leaves the character standing, not resting',
+     r.results.a1.state['0:rest'].outcome === 'could_not_reach_safe_spot',
+     JSON.stringify(r.results.a1.state['0:rest']));
+  ok('and still nothing sat down', !sent.rested.length);
+
+  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [] });
+  r = await trip([rest({ unsafe: true })], 'rest-bare');
+  ok('unsafe: true without a reason is refused',
+     r.results.a1.state['0:rest'].outcome === 'unsafe_needs_reason',
+     JSON.stringify(r.results.a1.state['0:rest']));
+
+  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [] });
+  r = await trip([rest({ unsafe: { reason: 'pulling a body out of 599; nowhere here is safe' } })], 'rest-waived');
+  ok('a reasoned waiver rests anyway, and says what it waived',
+     r.results.a1.ok === true && /599/.test(r.results.a1.state['0:rest'].waived || ''),
+     JSON.stringify(r.results.a1.state['0:rest']));
 }
 
 console.log('\nany script can ask what in a pack is food, without deciding for itself');

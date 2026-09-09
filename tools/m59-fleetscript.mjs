@@ -557,6 +557,17 @@ export const UNSAFE_GUARANTEES = Object.freeze({
     incident: 'with the budget hard-coded at three minutes a failing walk took nine to reach ' +
               'its verdict, so no offline test ever covered the give-up path',
   },
+  safeRest: {
+    what: 'a rest happens in a safe spot, or it does not happen',
+    since: '2026-09-09',
+    incident: 'Waldorf died four times in one day, every one of them resting: three with ' +
+              '`in_safe_spot: false` in a room holding six hostiles, at 5-10 health of 51. ' +
+              'The survival ladder is quiet during a rest BY DESIGN — resting presupposes ' +
+              'you walked somewhere unhittable first — so nothing reacted. restUntil does ' +
+              'abort on damage, but on a 3s poll, and from six health one skeleton hit ' +
+              'lands first. 7 of 37 fleet deaths in three days were inside a safe spot and ' +
+              'the other 28 were not in one at all.',
+  },
   coordUnits: {
     what: 'coordinates carry their space (square / protocol / client) instead of being bare numbers',
     since: '2026-09-05',
@@ -691,6 +702,36 @@ export const verify = (fn, why) => ({ do: 'verify', fn, why });
  * The row id is DISCOVERED, never passed in: a shop row id is not stable and not derivable
  * from the name, so a hard-coded one buys whatever is in that slot today.
  */
+/**
+ * Sit down and recover — but only somewhere nothing can hit you.
+ *
+ * RESTING IS NOT AN ACTION, IT IS A BET THAT YOU CANNOT BE HIT. The survival ladder goes
+ * quiet during a rest on purpose: you are meant to have walked somewhere unhittable first,
+ * so there is nothing to react to. That is the whole contract, and when it is false the
+ * quiet is not caution, it is a character sitting still while something kills it.
+ *
+ * WHAT IT COST. Waldorf died four times on 2026-09-08, every one of them `strategy:
+ * fieldrest`. Three read `in_safe_spot: false` — he sat down in the open. His health trails
+ * are `5 -> 6 -> 6 -> 1` of 51, `10 -> 2 -> 3 -> 4` of 51, `10 -> 7 -> 4 -> 5` of 52, with
+ * six hostiles in the room each time, and his own fought_back rows show battered skeletons
+ * hitting for 12, 13 and 16. From six health one hit is fatal.
+ *
+ * `restUntil` DOES abort on damage — that was checked, and `abortOnDamage` defaults to true
+ * at all ten call sites. But it polls on `sleep(3000)` plus a stats read, so it can only
+ * abort 3-5 seconds after the first blow lands. That window is survivable at full health
+ * and fatal at a fifth of it. The abort is the second line of defence; standing somewhere
+ * nothing reaches is the first, and nothing was enforcing it.
+ *
+ * So this verb walks to a spot BEFORE it rests, and refuses rather than resting in the open.
+ * Preference order is the one `safe_spots` itself argues for: a PROVEN square that holds
+ * outranks the geometry's best guess, and a square the book has discredited is never taken.
+ *
+ * `unsafe: { reason }` is the escape hatch, shaped like the script-level waiver and
+ * deliberately as tedious to type: a rescue that must sit down in the open can say so, and
+ * the reason is mandatory so "I meant it" and "I forgot" cannot look the same afterwards.
+ */
+export const rest = (opts = {}) => ({ do: 'rest', ...opts });
+
 export const learn = (teacher, ability, opts = {}) =>
   ({ do: 'learn', teacher, ability, ...opts });
 
@@ -1041,6 +1082,71 @@ async function runStep(ctx, agent, step, state) {
       }
       return { ok: !out.refused, said: out.said.slice(0, 120), amount,
                why: out.refused ? `banker refused: ${out.said.slice(0, 80)}` : undefined };
+    }
+
+    case 'rest': {
+      const want = { health: step.health ?? 0.9, vigor: step.vigor ?? null };
+      // The SCRIPT-level waiver reaches here too, so `unsafe: { waives: ['safeRest'] }` on the
+      // script is honoured exactly like the per-step one, banner and all.
+      if (ctx.safeRestWaived && step.unsafe === undefined) step = { ...step, unsafe: { reason: ctx.safeRestWaived } };
+      // THE WAIVER IS READ BEFORE ANYTHING WALKS, and a bare `unsafe: true` is refused.
+      // A reason is the whole difference between a deliberate exception and a forgotten one,
+      // and the same rule the script-level waiver keeps.
+      if (step.unsafe !== undefined && step.unsafe !== null) {
+        const reason = typeof step.unsafe === 'object' ? step.unsafe.reason : null;
+        if (!reason || !String(reason).trim()) return { ok: false, outcome: 'unsafe_needs_reason',
+          why: 'rest({ unsafe: true }) is refused. Resting in the open is what killed Waldorf ' +
+               'four times on 2026-09-08; if an errand genuinely needs it, say why: ' +
+               "rest({ unsafe: { reason: 'pulling a corpse out of 599, nowhere is safe' } })" };
+        const r = await call('rest_up', { agent, to: want.health }, 300_000).catch(e => ({ error: e.message }));
+        recordEvent(agent, 'rest_unsafe', { reason: String(reason).slice(0, 200), room: state.room ?? null });
+        return { ok: !r?.error, outcome: 'rested_unsafe', waived: String(reason).slice(0, 200),
+                 why: r?.error };
+      }
+
+      const look = await call('safe_spots', { agent, reachable_only: true }, 60_000)
+        .catch(e => ({ error: e.message }));
+      if (look?.error) return { ok: false, outcome: 'no_safe_spot_read', why: look.error };
+
+      // ALREADY STANDING IN ONE THAT WORKS. `in_a_safe_spot_now` is the keeper's own verdict
+      // and it already discounts the book's failures for squares nothing can reach — see the
+      // note on that field in m59-broker.mjs. Believe it rather than re-deriving it here.
+      const here = look.in_a_safe_spot_now;
+      if (here && typeof here === 'object' && here.works !== false) {
+        const r = await call('rest_up', { agent, to: want.health }, 300_000).catch(e => ({ error: e.message }));
+        return { ok: !r?.error, outcome: 'rested_in_place', at: here.at ?? null, why: r?.error };
+      }
+
+      // A PROVEN SQUARE OUTRANKS THE GEOMETRY'S BEST GUESS, AND A DISCREDITED ONE IS NEVER
+      // TAKEN. `spots` arrives best-first by geometry, so keeping that order inside each
+      // tier means the tie-break is still the one safe_spots argues for.
+      const usable = (look.spots ?? []).filter(x => x.tested !== 'does not work'
+        && Number.isInteger(x.col) && Number.isInteger(x.row));
+      const target = usable.find(x => x.tested === 'holds') ?? usable[0] ?? null;
+      if (!target) return { ok: false, outcome: 'nowhere_safe_to_rest',
+        room: look.room ?? null,
+        why: `nothing in ${look.room?.name ?? 'this room'} is safe to rest in — ` +
+             `${(look.spots ?? []).length} candidate square(s), none usable. Move somewhere ` +
+             'else, or pass unsafe: { reason } if this errand really must sit down here.' };
+
+      const walked = await call('walk_to', { agent, col: target.col, row: target.row }, 120_000)
+        .catch(e => ({ error: e.message }));
+      // ARRIVING IS NOT ASSUMED. The whole failure this verb exists for is a character that
+      // believed it was somewhere it was not, so the spot is re-read from the world and the
+      // rest only happens if the keeper now agrees we are in one.
+      const after = await call('safe_spots', { agent, reachable_only: true }, 60_000)
+        .catch(() => null);
+      const nowIn = after?.in_a_safe_spot_now;
+      if (!(nowIn && typeof nowIn === 'object' && nowIn.works !== false))
+        return { ok: false, outcome: 'could_not_reach_safe_spot',
+                 wanted: { col: target.col, row: target.row, tested: target.tested },
+                 why: `walked toward r${target.row}c${target.col} and the keeper still does not ` +
+                      'report us in a working safe spot, so this is not a place to sit down' +
+                      (walked?.error ? ` (${walked.error})` : '') };
+
+      const r = await call('rest_up', { agent, to: want.health }, 300_000).catch(e => ({ error: e.message }));
+      return { ok: !r?.error, outcome: 'rested_after_moving',
+               at: nowIn.at ?? null, tested: target.tested, why: r?.error };
     }
 
     case 'learn': {
@@ -1549,7 +1655,12 @@ export async function fleetScript({
   if (claim.tookOverFrom) onLog(`note: took over a stale lock — ${claim.tookOverFrom.why}`);
 
   const ctx = { log: onLog, pollMs, minHealth, healMs, budgetFloorMs, budgetCapMs,
-                reviveMs, packSettleMs, learnSettleMs, name };
+                reviveMs, packSettleMs, learnSettleMs, name,
+                // WIRED, not merely registered. `waives: ['safeRest']` has to actually reach
+                // the step or the entry in UNSAFE_GUARANTEES is decoration — the same failure
+                // as a setting that silently does nothing, which is how `purpose` stayed out
+                // of a schema for a year with every audit switched off.
+                safeRestWaived: waived.has('safeRest') ? (waiver.reason ?? 'waived by the script') : null };
   const held = new Set();
 
   // RULE 2, and the part every script got wrong: freeing on the abnormal exits too. A
