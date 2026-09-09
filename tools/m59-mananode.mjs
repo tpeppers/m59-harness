@@ -126,15 +126,39 @@ async function meldOne(agent, character) {
     at = { row: me?.self?.row ?? me?.row, col: me?.self?.col ?? me?.col };
   }
 
+  // MEASURE THE THING THAT MUST CHANGE, which is MAX mana and not the current value.
+  // A meld raises the CEILING; the pool underneath it moves on its own every second.
+  const maxManaOf = (v) => v?.vitals?.mana?.max ?? v?.mana?.max ?? null;
+  const before = maxManaOf(await call('status', { agent }).catch(() => null));
+
   await call('act', { agent, verb: 'activate', target: node.id ?? node.name }).catch(() => {});
 
-  // The grant is silent on the wire; the sentence is the receipt.
-  const hist = await call('history', { agent, limit: 12 }).catch(() => null);
-  const lines = (hist?.events || hist || []).map(e => e.text || e.message || '').join('\n');
-  const outcome = readOutcome(lines);
+  // THE RECEIPT IS THE CEILING, NOT THE SENTENCE.
+  //
+  // This read `history` for the server's own words and `history` does not carry them: it
+  // answers a fleet-wide SUMMARY -- {window_hours, characters, fleet, recent_events, ...} --
+  // with no `events` key at all, so `(hist?.events || hist || []).map` called `.map` on the
+  // summary object and every run died with "(...).map is not a function". Standing on the
+  // stone in room 27 and unable to spend the activate, 2026-09-09. `recent_events` is
+  // structured rows (kind, character, creature) and never the spoken text either, so there
+  // was no version of this read that could have worked.
+  //
+  // Max mana is the better witness anyway. mananode.kod grants it and the grant is what we
+  // came for, so a rise IS the meld and needs no prose parsed. It is also the one number an
+  // already-bonded node leaves alone, which separates the two outcomes that matter.
+  await new Promise(r => setTimeout(r, 2500));
+  const after = maxManaOf(await call('status', { agent }).catch(() => null));
+  const gained = Number.isFinite(before) && Number.isFinite(after) ? after - before : null;
+
+  let outcome;
+  if (gained > 0) outcome = `MELDED -- max mana ${before} -> ${after} (+${gained})`;
+  else if (gained === 0) outcome = `no change -- max mana still ${after}; already bonded with ` +
+    `this node, or out of range (the test is per-axis: abs(drow) < 3 AND abs(dcol) < 3)`;
+  else outcome = 'could not read max mana before and after -- nothing is proven either way';
+
   return { agent, character, where: spot.where, node: spot.node,
            at: `${at.col},${at.row}`, in_range: inRange(at, spot),
-           result: outcome ?? 'no answer from the server — treat as NOT melded' };
+           max_mana_before: before, max_mana_after: after, result: outcome };
 }
 
 async function main() {
@@ -147,7 +171,13 @@ async function main() {
   }
 
   const fleet = await call('fleet', {});
-  const rows = (fleet?.characters || fleet?.rows || fleet || [])
+  // THE KEY IS `fleet`, AND GUESSING AT THREE OTHERS MEANT FALLING THROUGH TO THE WHOLE
+  // REPLY. `fleet` answers `{agents, stalled_count, fleet: [...], world_clock}`; this chain
+  // named `characters` and `rows`, neither of which exists, then defaulted to the OBJECT and
+  // called `.filter` on it — `mananode failed: (...).filter is not a function` for every run.
+  // Standing on the stone in room 27 with the tool unable to list anybody, 2026-09-09.
+  const rowsRaw = fleet?.fleet ?? fleet?.characters ?? fleet?.rows ?? fleet;
+  const rows = (Array.isArray(rowsRaw) ? rowsRaw : [])
     .filter(r => !ONLY || r.agent === ONLY);
   if (!rows.length) { console.log('nobody to meld'); return; }
 
