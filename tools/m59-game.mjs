@@ -1498,6 +1498,45 @@ class Session {
     } catch { /* a record is a convenience; never let it interrupt play */ }
   }
 
+  // AN ITEM LEFT THE PACK. THE COUNTERPART TO `looted`, AND IT DID NOT EXIST.
+  //
+  // `looted` records a floor drop becoming a carried item. Nothing recorded the other
+  // direction, so the ledger could answer "what did this character pick up" and could not
+  // answer "and where did it go" — which is how roughly two dozen magic items went missing
+  // across 2026-09-07/08, the whole identification queue among them, leaving no row of any
+  // kind behind. A sale leaves a purse trace, a death leaves `died`, and neither of those
+  // had happened. Everything else an item can do was invisible.
+  //
+  // NO FILTER, ON PURPOSE. It is tempting to record only the interesting items and skip the
+  // mushrooms and the arrows — but the filter would be a guess about the answer, and not
+  // having the answer is the reason for the hunt. It costs a few thousand rows a day against
+  // the twelve thousand `killed` rows already there; narrow it once it has spoken.
+  //
+  // The row's shape matches `looted` — a one-element `items` array — so a reader can put the
+  // two directions side by side without special-casing either.
+  noteLeftPack(ev) {
+    const who = this.client?.me?.name ?? null;
+    if (!who) return;
+    try {
+      recordEvent(who, 'left_pack', {
+        agent: this.name ?? undefined,
+        // The MAP NUMBER, never the room object id — the same distinction `looted` makes
+        // at length above, and for the same reason: object ids are renumbered by `save game`.
+        room: this.world?.room?.num ?? null,
+        items: [{ id: ev.id, name: ev.name ?? null, amount: ev.amount,
+                  icon_rsc: ev.icon_rsc, translation: ev.translation }],
+        count: 1,
+        // What we had asked for, if anything, and how long ago. `after: null` is the row
+        // worth reading: the item left and we had requested nothing that could explain it.
+        after: ev.after ?? null,
+        after_ms: ev.after_ms ?? null,
+        // False means it was not in the inventory we were holding — a stale id, or a pack
+        // we had never read. Still evidence something left; just not evidence of what.
+        known: ev.known !== false,
+      });
+    } catch { /* bookkeeping must never interrupt play */ }
+  }
+
   // THE ONLY NOTICE A FACTION MEMBER EVER GETS, CAUGHT ON ITS WAY PAST.
   //
   // `player_faction_time` (player.kod:160) is `MsgSendUser` prose, sent once when the
@@ -2009,6 +2048,10 @@ class Session {
       // has already paid for the trip, and if the reply goes past unread the contents are
       // unknown until somebody pays for it again.
       if (ev.kind === 'vault-list') this.noteVault(ev);
+      // AND OFF THE STREAM FOR THE SAME REASON. An item leaving is announced once, by the
+      // server, whatever took it; there is nothing to poll and nothing to ask afterwards,
+      // because by then it is gone. See noteLeftPack.
+      if (ev.kind === 'left') this.noteLeftPack(ev);
       // OFF THE STREAM, NOT OFF THE KEEPER. This is the one measurement that keeps
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
