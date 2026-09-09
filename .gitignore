@@ -566,3 +566,18 @@ _verify2.mjs
 /substrate/dumbot/
 /substrate/hooks/
 /substrate/inventory-intent/
+
+# TIMECAPSULES — what an agent was worried about, set aside BEFORE it merges.
+#
+# Several agents build in this tree at once and the merges genuinely step on each other. The
+# rule that makes that survivable is not "do not touch it" — it is: say what you are afraid of
+# losing FIRST, in a file, then go ahead and merge the way you think is right. Never
+# destructively: anything that is not retrievable from git gets backed up before it moves.
+#
+# Two things read these back. At the end of a day, somebody checks that the THRUST of each
+# capsule still holds in prod and main — not the wording, the functionality — and either
+# proposes a fix or says LGTM. And any agent that finds another one's work clobbered, or
+# notices somebody else editing under it, looks here before guessing what was meant.
+#
+# Gitignored on purpose: a capsule is a worry, not a record. The record is the commit.
+/timecapsules/
