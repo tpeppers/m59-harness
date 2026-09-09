@@ -24,6 +24,10 @@ node_modules/
 # runs the very feature that directory exists for.
 /substrate/fleets/
 /substrate/history/
+# One snapshot per friendly reboot: who was where, by character name, so a restart can
+# say what it moved. Runtime state and a roster at once -- it belongs in neither git nor
+# a guard report, and an untracked file in the prod worktree blocks a deploy cut.
+/substrate/reboot-handoffs/
 # Archived stats, moved aside so a run starts from a clean sheet. Same content as the two
 # directories it is made of, and the same reason for keeping it out: it names characters and
 # it is one machine's record of one fleet, not reference anybody cloning this should carry.
