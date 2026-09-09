@@ -21,6 +21,7 @@ import {
   RoomSceneV3Store, toNativeRoomSceneV3,
 } from './m59-rts-scene-v3.mjs';
 import { rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
+import { perf } from './m59-perf.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 export const BROKER_RTS_READ_SCHEMA = 'm59-broker-rts-read/v1';
@@ -170,6 +171,7 @@ export class BrokerReader {
     this.fastPathRetryMs = Math.max(1000, Number(fastPathRetryMs) || 30000);
     this.readToken = String(readToken || '');
     this.fastPathUnavailableUntil = 0;
+    this.aggregatePending = new Map();
     this.fastPathStatus = {
       mode: this.fastPathEnabled ? 'probing' : 'legacy-disabled',
       reason: this.fastPathEnabled ? null : 'disabled by configuration',
@@ -187,7 +189,9 @@ export class BrokerReader {
 
   async health(maxAgeMs = 1000) {
     const now = Date.now();
-    if (this.healthCache && now - this.healthCache.at <= maxAgeMs) return this.healthCache.value;
+    if (this.healthCache && now - this.healthCache.at <= maxAgeMs) {
+      perf('cache.health_hit');perf('cache.health_age_ms',now-this.healthCache.at);return this.healthCache.value;}
+    perf('cache.health_miss');
     const response = await this.fetch(new URL('/health', this.url), {
       cache: 'no-store',
       signal: AbortSignal.timeout(3000),
@@ -226,19 +230,34 @@ export class BrokerReader {
 
   async fleetState(maxAgeMs = 5000) {
     const now = Date.now();
-    if (this.fleetCache && now - this.fleetCache.at <= maxAgeMs) return this.fleetCache.value;
+    if (this.fleetCache && now - this.fleetCache.at <= maxAgeMs) {
+      perf('cache.fleet_hit');perf('cache.fleet_age_ms',now-this.fleetCache.at);return this.fleetCache.value;}
+    perf('cache.fleet_miss');
     const value = await this.tool('fleet', {});
     this.fleetCache = { at: now, value };
     return value;
   }
 
   async aggregateState(requestedAgents) {
+    // Coalesce simultaneous display reads only. Never cache/re-date a completed
+    // generation. Control validation below bypasses this pre-click work.
+    const key=[...requestedAgents].sort().join(',');
+    if(this.aggregatePending.has(key)){perf('cache.aggregate_join');return this.aggregatePending.get(key);}
+    if(this.aggregatePending.size>=40)throw new Error('too many concurrent aggregate cohorts');
+    const pending=this.readAggregateState(requestedAgents);this.aggregatePending.set(key,pending);
+    try{return await pending;}finally{if(this.aggregatePending.get(key)===pending)this.aggregatePending.delete(key);}
+  }
+
+  async readAggregateState(requestedAgents) {
+    perf('broker.aggregate_requested_agents',requestedAgents.length);
     if (!this.fastPathEnabled) {
       if (this.readToken)
         throw new Error('RTS read token requires the broker aggregate endpoint; legacy fallback is disabled');
       return null;
     }
     if (this.now() < this.fastPathUnavailableUntil) {
+      if(this.fastPathStatus.mode==='aggregate-unavailable')
+        throw new Error('broker aggregate read is recovering; retaining last observations');
       if (this.readToken)
         throw new Error('RTS read token forbids legacy fallback while the aggregate endpoint is unavailable');
       return null;
@@ -253,14 +272,17 @@ export class BrokerReader {
           accept: 'application/json',
           ...(this.readToken ? { authorization: `Bearer ${this.readToken}` } : {}),
         },
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(8000),
       });
     } catch (error) {
       if (this.readToken)
         throw new Error(`token-gated broker aggregate read failed closed: ${error.message}`);
-      this.fastPathUnavailableUntil = this.now() + this.fastPathRetryMs;
-      this.fastPathStatus = { mode: 'legacy-fallback', reason: `aggregate read failed: ${error.message}` };
-      return null;
+      // A busy/new broker is not an old broker. Legacy fallback would fan this
+      // one timeout into fleet + one look/equipment RPC per unit, and blank v8
+      // inventory for the entire 30s compatibility backoff.
+      this.fastPathUnavailableUntil = this.now() + 1000;
+      this.fastPathStatus = { mode: 'aggregate-unavailable', reason: `aggregate read failed: ${error.message}` };
+      throw new Error(this.fastPathStatus.reason);
     }
     if ([404, 405, 501].includes(response.status)) {
       if (this.readToken)
@@ -279,12 +301,12 @@ export class BrokerReader {
     if (!response.ok) {
       if (this.readToken)
         throw new Error(`token-gated broker aggregate read failed closed (HTTP ${response.status})`);
-      this.fastPathUnavailableUntil = this.now() + this.fastPathRetryMs;
+      this.fastPathUnavailableUntil = this.now() + 1000;
       this.fastPathStatus = {
-        mode: 'legacy-fallback',
+        mode: 'aggregate-unavailable',
         reason: `broker aggregate read returned ${response.status}`,
       };
-      return null;
+      throw new Error(this.fastPathStatus.reason);
     }
 
     const payload = await response.json();
@@ -319,10 +341,12 @@ export class BrokerReader {
     const now = this.now();
     const cached = this.equipmentCache.get(agent);
     if (cached && Object.hasOwn(cached, 'value') && now - cached.at <= this.equipmentCacheMs) {
+      perf('cache.equipment_hit');perf('cache.equipment_age_ms',now-cached.at);
       return ageEquipment(cached.value, now - cached.at);
     }
 
     if (!cached?.pending) {
+      perf('cache.equipment_refresh');
       // This is deliberately refresh:false and deliberately detached from the render
       // promise. Broker tool latency can spike while keepers are busy; equipment is
       // hero-panel telemetry and must never hold up positions or combat perception.
@@ -336,6 +360,7 @@ export class BrokerReader {
     // First frame is honestly unknown. A stale known value remains usable while its
     // background refresh runs, with freshness continuing to age.
     const current = this.equipmentCache.get(agent);
+    perf(current?.pending?'cache.equipment_pending':'cache.equipment_miss');
     return ageEquipment(current?.value, now - (current?.at ?? now));
   }
 
@@ -415,7 +440,7 @@ export class BrokerReader {
       // Writes deliberately have no legacy fallback. The aggregate generation carries
       // both each actor's own perception and its game-server identity; an older broker
       // cannot prove either and therefore remains read-only.
-      const aggregate = await this.aggregateState(agents);
+      const aggregate = await this.readAggregateState(agents);
       if (!aggregate)
         throw orderError(503, 'RTS control requires the broker aggregate endpoint; legacy brokers are read-only');
       if (aggregate.commander?.enabled !== true)
@@ -1914,11 +1939,13 @@ export function createGatewayServer({ reader, reconcileMs = 250, hub = null, sce
         if (!Number.isSafeInteger(room) || room < 1 || room > 0x7fffffff)
           return sendJson(res, 400, { error: 'scene v3 requires one canonical positive room number' });
         const result = boundSceneStore.getResult(room);
+        perf(result.ok?'cache.scene_prebuilt_hit':'cache.scene_prebuilt_miss');
         if (!result.ok)
           return sendJson(res, result.status, { error: result.message, code: result.code,
                                                 schema: RTS_SCENE_V3_SCHEMA });
         if (url.pathname.endsWith('.tsv')) {
           const native = toNativeRoomSceneV3(result.scene);
+          perf('serialize.scene_bytes',Buffer.byteLength(native));
           res.writeHead(200, {
             'content-type':
               `application/x-m59-rts-room; version=${RTS_SCENE_V3_NATIVE_VERSION}; charset=utf-8`,
