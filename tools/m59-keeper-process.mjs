@@ -3517,6 +3517,38 @@ const server = createServer(async (req, res) => {
             if (!spell) {
               result = { error: `spell not found: ${spellName}` };
             } else {
+              // A TARGETED SPELL SENT WITH NO TARGETS IS REFUSED IN SILENCE.
+              //
+              // This handler used to call `c.cast(spell.id, [])` unconditionally, dropping
+              // `args.target` on the floor. It was written for the self-cast case — the
+              // comment below is all about blink — and every spell that takes a target has
+              // therefore been dead on a keeper-backed character, which is every character
+              // on a keeper-process broker.
+              //
+              // The server says NOTHING about it. `GetNumSpellTargets` is 1 for remove
+              // curse, and `CanPayCosts` opens with `if Length(lTargets) <> 1 return FALSE`
+              // (remcurse.kod:70) — before any MsgSendUser — so the cast simply does not
+              // happen: no message, no mana spent, no reagent consumed. Measured on prod
+              // 2026-09-09: `cast: true` and `mana_spent: 0` for thirty consecutive casts
+              // while the same spell worked perfectly through the broker's own path, which
+              // resolves targets. That difference is the whole bug.
+              //
+              // Resolved the same way m59-broker.mjs:5617 `resolveTarget` does it — by id
+              // when given a number, otherwise by name against what is in the room — so the
+              // two paths agree about what "target" means.
+              let targets = [];
+              if (args.target !== undefined && args.target !== null && args.target !== '') {
+                const raw = args.target;
+                let hit = null;
+                if (typeof raw === 'number' || /^\d+$/.test(String(raw))) {
+                  hit = { id: Number(raw) };
+                } else {
+                  const found = c.find?.(String(raw)) ?? [];
+                  hit = found[0] ?? null;
+                }
+                if (!hit) { result = { error: `nothing here matches "${raw}"` }; break; }
+                targets = [hit.id];
+              }
               // A cast needs CONCENTRATION: any move or turn packet we send while the
               // spell is charging interrupts it and the cast fails. The tick driver
               // sends move/turn at 10Hz, so it would break the cast instantly. Freeze
@@ -3530,16 +3562,16 @@ const server = createServer(async (req, res) => {
               if (loop) {
                 const since = c.evSeq;  // events after this are from the cast
                 loop._frozen = true;
-                c.cast(spell.id, []);
+                c.cast(spell.id, targets);
                 const maxMs = Number(args.holdMs) || 15000;  // blink can take several s
                 const w = await c.waitFor({ since, kinds: ['moved'], timeoutMs: maxMs });
                 loop._frozen = false;
                 const moved = w.events.filter(e => e.kind === 'moved');
-                result = { sent: true, spell: spellName, frozenMs: Date.now() - since,
+                result = { sent: true, spell: spellName, targets, frozenMs: Date.now() - since,
                            relocated: moved.length > 0, timedOut: w.timedOut };
               } else {
-                c.cast(spell.id, []);
-                result = { sent: true, spell: spellName };
+                c.cast(spell.id, targets);
+                result = { sent: true, spell: spellName, targets };
               }
             }
             break;
