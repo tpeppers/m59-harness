@@ -281,6 +281,85 @@ try {
     assert.equal(successorFleet.release().released, true);
   }
 
+  // A RECYCLED PID IS NOT A SURVIVING KEEPER, AND LIVENESS ALONE CANNOT TELL THEM APART.
+  //
+  // 2026-09-08: the shadow fleet's lock carried 21 inherited guards. Twenty were genuinely
+  // gone; the twenty-first was alive and was an unrelated desktop application holding a pid
+  // an exited keeper used to have. Finalization refused for ever, and the only recovery left
+  // was deleting a lock, which this repository forbids.
+  //
+  // Every keeper here is node, so a process POSITIVELY identified as something else cannot
+  // be one of ours. The asymmetry is what makes it safe to act on: excluding it can never
+  // orphan a real guard, while the dangerous direction needs node to report as not-node.
+  //
+  // A FRESH SCENARIO PER CASE. A successful adoption clears the lineage, so three cases
+  // sharing one fleet lock would silently stop testing what they claim to.
+  {
+    const scenario = (tag, describeProcess) => {
+      const leaseDir = join(resolvedScratch, `recycled-${tag}`);
+      const fleetPath = join(resolvedScratch, `recycled-${tag}.lock`);
+      const livePids = new Set([1701, 1710, 1711]);
+      const isPidLive = pid => livePids.has(pid);
+      const common = { leaseDir, isPidLive, tokenFactory: tokens };
+      const oldFleet = claimFleetLock(fleetPath, {
+        pid: 1701, token: `recycled-old-${tag}`, kind: BROKER_FLEET_LOCK_KIND,
+        guards: [1710, 1711], isPidLive,
+      });
+      assert.equal(oldFleet.ok, true);
+      const old = registry({ ...common, pid: 1701, kind: BROKER_FLEET_LOCK_KIND });
+      assert.equal(old.acquireAll([
+        { agent: 'a', credentials: credentials(`recycled-${tag}-a`) },
+        { agent: 'b', credentials: credentials(`recycled-${tag}-b`) },
+      ]).ok, true);
+      assert.equal(old.addGuard('a', 1710).ok, true);
+      assert.equal(old.addGuard('b', 1711).ok, true);
+
+      livePids.delete(1701);
+      livePids.add(1702);
+      const newFleet = claimFleetLock(fleetPath, {
+        pid: 1702, token: `recycled-new-${tag}`, kind: BROKER_FLEET_LOCK_KIND,
+        guards: [], adoptGuardedBroker: true, isPidLive,
+      });
+      assert.equal(newFleet.ok, true);
+      const reg = registry({
+        ...common, pid: 1702, kind: BROKER_FLEET_LOCK_KIND,
+        adoptGuardedBroker: { previousPids: [1701], guardPids: [1710, 1711] },
+        describeProcess,
+      });
+      // Only `a` survives the edited roster, so 1711 is the guard nothing accounts for.
+      assert.equal(reg.acquire('a', credentials(`recycled-${tag}-a`)).ok, true);
+      const out = reg.finalizeAdoptions();
+      // The suite asserts at the end that nothing is left holding a lock. Retire the guard
+      // pids first so the predecessor's account claims are releasable, then give back both
+      // fleet claims — a fixture that leaks ownership files is a fixture that will one day
+      // fail a completely unrelated case.
+      livePids.delete(1710);
+      livePids.delete(1711);
+      reg.releaseAll();
+      old.releaseAll();
+      newFleet.release?.();
+      oldFleet.release?.();
+      return out;
+    };
+
+    // FAIL CLOSED BOTH WAYS. A guard that really is node is still a guard, and a process we
+    // cannot identify is not evidence of anything — the uncertain case must never become
+    // the permissive one.
+    assert.equal(scenario('node', () => 'node.exe').reason, 'inherited-fleet-guard-unaccounted',
+      'a live node guard is still a guard');
+    assert.equal(scenario('unknown', () => null).reason, 'inherited-fleet-guard-unaccounted',
+      'an unidentifiable process must still refuse');
+
+    // 1711 is alive but is not node: a reuse, so it stops counting as a guard and the
+    // surviving roster then accounts for everything that is actually left.
+    const excluded = scenario('reused', pid => (pid === 1711 ? 'ChatGPT.exe' : 'node.exe'));
+    assert.equal(excluded.ok, true,
+      'a guard pid held by something that is not node is a reuse, not a survivor');
+    assert.deepEqual(excluded.recycled_guards, [{ pid: 1711, process: 'ChatGPT.exe' }],
+      'and the takeover must name what it judged recycled, or the judgement is invisible');
+  }
+
+
   // Same slot/account/endpoint is still not the same live character. A roster edit from
   // Alice to Bob must not adopt Alice's guarded keeper and then erase the only predecessor
   // evidence. NFKC/case-only spelling differences normalize to the same subject.

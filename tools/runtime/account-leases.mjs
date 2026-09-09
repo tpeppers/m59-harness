@@ -386,6 +386,15 @@ export function auditLegacyRosterLocks(entries, {
 // so this only explains a refusal that liveness already made. Bounded and wrapped in its
 // own try, because it runs inside ownership checks and an ownership check that threw
 // because a DIAGNOSTIC failed would be a far worse bug than the one it describes.
+// Is this process image one of ours? Keepers are `m59-keeper-process.mjs` run under node,
+// so the image is node (node.exe on Windows). Deliberately generous — any name containing
+// `node` counts — because the cost of a false YES is only that a refusal stands, while a
+// false NO would exclude a real guard.
+function isNodeProcessName(name) {
+  return /(^|[\/])node(\.exe)?$/i.test(String(name ?? '').trim())
+      || /node/i.test(String(name ?? ''));
+}
+
 function describePid(pid) {
   try {
     if (process.platform === 'win32') {
@@ -413,6 +422,9 @@ export class AccountLeaseRegistry {
     defaultHost = '127.0.0.1',
     defaultPort = 5959,
     isPidLive = isProcessLive,
+    // Injectable for the same reason isPidLive is: the recycled-pid exclusion below is a
+    // decision, and a decision no test can drive is a decision nobody has checked.
+    describeProcess = describePid,
     now = Date.now,
     tokenFactory = randomUUID,
     legacyRosterRoots = [DEFAULT_LEGACY_ROSTER_ROOT],
@@ -427,6 +439,7 @@ export class AccountLeaseRegistry {
     this.defaultHost = defaultHost;
     this.defaultPort = defaultPort;
     this.isPidLive = isPidLive;
+    this.describeProcess = typeof describeProcess === 'function' ? describeProcess : describePid;
     this.now = now;
     this.tokenFactory = tokenFactory;
     if (typeof guardChildren !== 'boolean')
@@ -614,9 +627,36 @@ export class AccountLeaseRegistry {
       return value;
     };
     const inheritedLive = new Set();
+    const recycled = [];
     for (const guardPid of this.#guardedAdoption.guardPids) {
       const status = live(guardPid);
-      if (status === true) inheritedLive.add(guardPid);
+      if (status === true) {
+        // A KEEPER IS ALWAYS A NODE PROCESS, SO ANYTHING ELSE UNDER THAT PID IS A REUSE.
+        //
+        // Liveness alone cannot tell a surviving keeper from an unrelated program that was
+        // handed the number after ours exited, and on 2026-09-08 that difference made the
+        // shadow fleet permanently un-takeoverable: one of 21 inherited guards was "alive"
+        // and it was a desktop chat application.
+        //
+        // THE ASYMMETRY IS WHAT MAKES THIS SAFE. Every keeper this repository starts is
+        // `m59-keeper-process.mjs` under node, so a process POSITIVELY identified as
+        // something else cannot be one of ours and excluding it can never orphan a real
+        // guard. The dangerous direction — mistaking a live keeper for dead and letting a
+        // second broker in — requires node to report as not-node, which cannot happen.
+        // Anything we cannot identify (`null`) stays live and still refuses, so the
+        // uncertain case fails closed exactly as it did before.
+        //
+        // This is narrower than the real fix, which is for a guard to record its process
+        // START TIME at registration — the checksum m59-which.mjs uses — so that even a
+        // recycled NODE pid fails to match. That needs a lock-format migration. This covers
+        // the common case today without one.
+        const name = this.describeProcess(guardPid);
+        if (name !== null && !isNodeProcessName(name)) {
+          recycled.push({ pid: guardPid, process: name });
+          continue;
+        }
+        inheritedLive.add(guardPid);
+      }
       else if (status !== false) return Object.freeze({
         ok: false, reason: 'fleet-guard-liveness-uncertain', guard_pid: guardPid,
       });
@@ -676,7 +716,7 @@ export class AccountLeaseRegistry {
         ok: false, reason: 'inherited-fleet-guard-unaccounted', guard_pid: guardPid,
         // The pid alone sent a reader to Task Manager. Say what is actually running under
         // it, because "that is not a keeper" ends the investigation in one line.
-        guard_process: describePid(guardPid),
+        guard_process: this.describeProcess(guardPid),
         why: `pid ${guardPid} is live but claims no account in this roster. If it is not a ` +
              'keeper it is a recycled pid, and M59_ALLOW_UNGUARDED_TAKEOVER=1 is the ' +
              'one-time migration for it — never lock deletion.',
@@ -694,6 +734,9 @@ export class AccountLeaseRegistry {
     }
     return Object.freeze({
       ok: true, required: true, live_guards: inheritedLive.size,
+      // Named when it happened, absent when it did not: a takeover that only succeeded
+      // because a pid was judged recycled must say so, or the judgement is invisible.
+      ...(recycled.length ? { recycled_guards: Object.freeze(recycled) } : {}),
     });
   }
 
@@ -715,7 +758,11 @@ export class AccountLeaseRegistry {
     }
     this.#guardedAdoption = false;
     this.#unguardedRecovery = false;
-    return Object.freeze({ ok: true, finalized: this.#byKey.size, coverage });
+    // LIFTED, NOT LEFT NESTED. A takeover that only succeeded because a pid was judged
+    // recycled has to say so where the caller already looks — the broker logs this result,
+    // and a judgement buried one level down is a judgement nobody reads.
+    return Object.freeze({ ok: true, finalized: this.#byKey.size, coverage,
+      ...(coverage.recycled_guards ? { recycled_guards: coverage.recycled_guards } : {}) });
   }
 
   releaseAgent(agent) {
