@@ -268,6 +268,39 @@ export async function supplyBetween(a, deps) {
     const per = num(a.amount, 2);
     const take = re => inventory.filter(o => re.test(nameOf(o)))
       .map(o => (o.amount > 0 ? { ...o, amount: Math.max(1, Math.min(o.amount, per)) } : o));
+
+    // `what` NAMES A REAGENT. IT USED TO BE IGNORED.
+    //
+    // Everything that was not an id list, `all` or `food` fell through to the two lines
+    // below — elderberry and herb, the create-food pair — and the caller was told
+    // `supplied: true` with those two handed over. So `supply --what sapphire` reported
+    // success and delivered an elderberry and a herb, which is the worst possible answer:
+    // it is a receipt for a thing that did not happen.
+    //
+    // Measured 2026-09-09 trying to get Camilla the sapphires bless needs (2 mushroom +
+    // 2 sapphire per cast): three separate attempts each came back
+    // `handed_over: ["elderberry","herb"]` and I read them as a partial success twice
+    // before looking at the names.
+    //
+    // The default is UNCHANGED. No `what` still means the casting pair, so every caller
+    // that relies on that — the almoner, the resupply errand — behaves exactly as it did.
+    // A named `what` is matched against the item name as a whole word, so `sapphire` does
+    // not also take `sapphire ring` by accident and `orc tooth` matches with any spacing.
+    if (typeof a.what === 'string' && a.what.trim() &&
+        !/^(reagents?|casting)$/i.test(a.what.trim())) {
+      // Compared as NAMES, not as a built regex. The first version of this line built one
+      // from the argument and lost its escapes to the template literal - `` inside a
+      // backtick string is a backspace character, not a word boundary - so `sapphire`
+      // compiled to /(^|)sapphires?(|$)/ and matched nothing. A plain comparison cannot
+      // have that bug, and this is a short list of short names.
+      const wanted = a.what.trim().toLowerCase().replace(/\s+/g, ' ');
+      const hit = (o) => {
+        const n = nameOf(o).toLowerCase().replace(/\s+/g, ' ').trim();
+        return n === wanted || n === `${wanted}s` || `${n}s` === wanted;
+      };
+      return inventory.filter(hit).map(o => (o.amount > 0
+        ? { ...o, amount: Math.max(1, Math.min(o.amount, per)) } : o));
+    }
     return [...take(/elder\s*berry/i), ...take(/herb/i)];
   };
   const nothingMatching = (inventory) => ({

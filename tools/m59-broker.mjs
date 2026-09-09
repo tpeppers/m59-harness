@@ -33,6 +33,8 @@
 // the trade this whole file exists to make.
 
 import http from 'node:http';
+import { nativeContextReader } from './m59-native-context-read.mjs';
+const readNativeContext = nativeContextReader();
 import os from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
@@ -9095,8 +9097,13 @@ const TOOLS = [
       from: { type: 'string', description: 'agent handing things over' },
       to: { type: 'string', description: 'agent receiving them' },
       what: { type: ['string', 'array'],
-              description: '"reagents" (default), "food", "all", or an array of object ids / ' +
-                '{id,amount} partial-stack specifications',
+              description: '"reagents" (default: the create-food pair, elderberry + herb), ' +
+                '"food", "all", THE NAME OF ANY SINGLE REAGENT ("sapphire", "orc tooth", ' +
+                '"emerald"), or an array of object ids / {id,amount} partial-stack ' +
+                'specifications. A NAME USED TO BE IGNORED: anything that was not an id ' +
+                'list, "all" or "food" silently fell through to elderberry+herb and reported ' +
+                'success, so `what: "sapphire"` answered `handed_over: ["elderberry","herb"]`. ' +
+                'Matched as a whole name, so "sapphire" does not also take a "sapphire ring"',
               items: { anyOf: [
                 { type: 'number' },
                 { type: 'object', properties: {
@@ -15449,6 +15456,13 @@ const TOOLS = [
     },
   },
   {
+    name: 'native_context',
+    description: 'READ ONLY: cached observations from claimed human debug clients: inventory, cached stats, native position, condition pips, DUM configuration, and optional passive proxy room observations. Does not request game data or grant control. Missing/stale domains remain explicitly unavailable.',
+    schema: {type:'object',properties:{agent:{type:'string',description:'Optional exact fleet agent; omitted returns claimed humans only'}}},
+    run: async a => readNativeContext({fleet:FLEET||'default',brokerPid:process.pid,agents:a.agent?[a.agent]:[],
+      pilot:agent=>{const p=piloted.get(agent);return p&&pidAlive(p.pid)?p:null;}}),
+  },
+  {
     name: 'pilot',
     description:
       'HAND A CHARACTER OVER TO THE PERSON AT THE KEYBOARD, or take it back.\n' +
@@ -16314,6 +16328,11 @@ async function brokerRtsRead(url) {
   }
 
   const generation = brokerRtsGenerationClock.next(capturedAt, process.pid);
+  // Additive metadata, not a replacement for existing cached bot observations.
+  // Consumers must opt into human observation domains and their timestamps.
+  const nativeClients = process.env.M59_CLIENT_CONTEXT_URL && agents.some(agent=>piloted.has(agent))
+    ? await readNativeContext({fleet:FLEET||'default',brokerPid:process.pid,agents,
+        pilot:agent=>{const p=piloted.get(agent);return p&&pidAlive(p.pid)?p:null;}}) : null;
   return {
     schema: RTS_READ_SCHEMA,
     read_only: true,
@@ -16336,6 +16355,7 @@ async function brokerRtsRead(url) {
     },
     control,
     commerce,
+    native_clients: nativeClients,
   };
 }
 
