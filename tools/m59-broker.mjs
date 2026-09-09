@@ -9464,6 +9464,14 @@ const TOOLS = [
         enabled: { type: 'boolean' }, max_floor_items: { type: 'number' },
         keep_free_stacks: { type: 'number' },
       }, description: 'before sell-bound departures, discard confirmed dead gear and rank floor stock for the return pack; null disables it' },
+      buff_allies: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        spells: { type: 'array', items: { type: 'string' },
+          description: 'Which of the personal enchantments to cast. Defaults to all of them.' },
+        gap_ms: { type: 'number', description: 'Minimum wait between casts. Default 20000.' },
+        mana_floor: { type: 'number',
+          description: 'Do not cast below this much mana. Defaults per spell to its cost plus 4.' },
+      }, description: 'cast the Kraanan personal enchantments on other players standing in the same room. super strength adds might, and might is the requisite stat for brawling, read live -- so it raises the RECIPIENT improvement chance and its soft cap, not merely its damage; bless adds to-hit, which fills the 75-swing improvement counter faster. Reagents come from the caster own pack (2 mushroom + 1 orc tooth for super strength, 2 mushroom + 2 sapphire for bless) and are counted before each cast. null disables it' },
       farm_delivery: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, herbs_per_farmer: { type: 'number' },
         elderberries_per_farmer: { type: 'number' }, max_recipients: { type: 'number' },
@@ -10145,6 +10153,25 @@ const TOOLS = [
           p.policy.farmCleanup = { enabled: true,
             max_floor_items: Math.max(1, Math.min(40, Math.floor(Number(value.max_floor_items) || 12))),
             keep_free_stacks: Math.max(0, Math.min(12, Math.floor(Number(value.keep_free_stacks) || 0))) };
+        }
+      }
+      // SAME SHAPE AS farm_cleanup ABOVE: null is off, and an object must say `enabled`
+      // rather than merely existing. Casting on an ally is a real cost -- mana and two
+      // reagents a throw -- so being installed has to be a decision somebody made.
+      if (a.buff_allies !== undefined) {
+        if (a.buff_allies == null) p.policy.buffAllies = null;
+        else {
+          const value = a.buff_allies;
+          if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
+            throw new Error('buff_allies must be null or an enabled settings object');
+          const spells = Array.isArray(value.spells)
+            ? value.spells.map(x => String(x).trim().toLowerCase()).filter(Boolean)
+            : undefined;
+          p.policy.buffAllies = { enabled: true,
+            ...(spells && spells.length ? { spells } : {}),
+            gap_ms: Math.max(2000, Math.min(600_000, Math.floor(Number(value.gap_ms) || 20_000))),
+            ...(Number.isFinite(Number(value.mana_floor))
+              ? { mana_floor: Math.max(0, Math.floor(Number(value.mana_floor))) } : {}) };
         }
       }
       if (a.farm_delivery !== undefined) {
