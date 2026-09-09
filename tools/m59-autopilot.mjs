@@ -1445,6 +1445,10 @@ export class Autopilot {
       // either strategy is what widens the keeper's behaviour, not merely installing it.
       farmCleanup: null,
       farmDelivery: null,
+      // Cast the Kraanan personal enchantments on whoever else is in the room. null is
+      // inert like its neighbours: holding the spells is not the instruction, being posted
+      // as the group's caster is. Shape: { enabled, spells: [...], gap_ms, mana_floor }.
+      buffAllies: null,
       // A daily share of actual sale proceeds paid to Frular for guild rent. null is
       // inert; DUM's independent Guild Tithe strategy installs the settings object.
       guildTithe: null,
@@ -2151,6 +2155,17 @@ export class Autopilot {
   }
 
   /**
+   * What to hold for a fight that is NOT the configured quarry. See the block at the call
+   * site: 'normal' means equip:true, which re-arms a bare-handed character and undoes
+   * passArm. Only the assigned farm ground gets the bare-handed answer -- everywhere else
+   * the ordinary arm-first survival rule wins.
+   */
+  styleForNonPrey(room = null) {
+    const onOwnGround = this.mode === 'farm' && room?.num === this.policy?.assignedRoom;
+    return (onOwnGround && this.trainingStyleFor() === 'unarmed') ? 'unarmed' : 'normal';
+  }
+
+  /**
    * An improvement landed. Under `alternate_on_improve` this is the only place the style
    * flips — the server has just reset the swing counter for us, so the next block starts
    * on the other proficiency at no cost. Returns the style now in force, for telemetry.
@@ -2197,11 +2212,24 @@ export class Autopilot {
     const name = c.rsc.get(held.nameRsc) || 'weapon';
     const before = c.evSeq;
     await s.pacer.submit('use', () => c.unuse(held.id)).catch(() => {});
-    await c.waitFor({ since: before, kinds: ['equipment', 'message'], timeoutMs: 3000 })
+    const ev = await c.waitFor({ since: before, kinds: ['equipment', 'message'], timeoutMs: 3000 })
       .catch(() => ({ events: [] }));
+    // READ THE REFUSAL, DO NOT JUST OBSERVE THAT NOTHING HAPPENED.
+    //
+    // A cursed weapon answers "<Item> seems to cling to your hand!" and stays on
+    // (wacursed.kod:35, ItemReqUnuse returns FALSE unconditionally). Without this the
+    // caller sees only `ready:false`, treats it as a transient server hiccup, and asks
+    // again on every pass for the rest of the session -- while the real news, that this
+    // weapon can never come off and the character needs a remove curse potion, is sitting
+    // in the message we threw away.
+    const said = (ev?.events || []).filter(e => e.text).map(e => e.text);
+    const cursed = said.some(t => skills.noteCursedFromMessage(c, t, held.id));
     const ready = !skills.isArmed(c);
-    return { ready, removed: name,
-             ...(ready ? {} : { why: `the server did not take off ${name}` }) };
+    return { ready, removed: name, ...(cursed ? { cursed: true, said } : {}),
+             ...(ready ? {} : { why: cursed
+               ? `${name} is cursed and cannot be removed -- a remove curse potion (Marion healer) `
+                 + 'unuses it, or it comes off when the weapon breaks'
+               : `the server did not take off ${name}` }) };
   }
 
   // Prepare one exact, observable combat style. `equip:false` is passed to fight()
@@ -14967,6 +14995,13 @@ export class Autopilot {
     // second and it is the only action available that helps another character.
     if ((STRATEGIES[this.policy.strategy] || {}).medic) await this.medic().catch(() => {});
 
+    // And buff them, for the same reason: it helps the ally and it is the only way the
+    // spell improves. Gated on `policy.buffAllies` rather than on a strategy, so a doctrine
+    // can post ONE character as the group's caster without moving it onto a strategy that
+    // changes everything else about how it fights.
+    if (this.policy.buffAllies) await this.buffAllies().catch(error =>
+      this.note('buff pass failed', { why: error.message }));
+
     // HIBERNATING IS NOT DOING NOTHING. A keeper with no job still has a bar to fill,
     // and vigor is what a character walks out of an inn with — it sets the health
     // regeneration rate and it is what swinging spends. Standing about at 30 of 200
@@ -16730,7 +16765,36 @@ export class Autopilot {
       // defensive contact. Use the same canonical matcher as every other hunt decision,
       // so class and alias orders (for example `soldier`) train their actual prey too.
       const trainingPrey = this.isTrainingPrey(engageName);
-      const trainingStyle = trainingPrey ? this.trainingStyleFor(claimedSwing) : 'normal';
+      // A NON-PREY FIGHT MUST NOT RE-ARM A CHARACTER WHOSE REGIMEN IS BARE HANDS.
+      //
+      // This used to fall back to 'normal', and 'normal' means `equip: true`, and `equip:
+      // true` means fight() wields the best weapon in the pack. So one weak-room cleanup or
+      // one defensive contact put a weapon back in the hand of a character that passArm had
+      // just deliberately emptied -- and it stayed there, because nothing takes a weapon off
+      // except passArm, which then loses the same race on the next non-prey contact.
+      //
+      // Measured on prod 2026-09-08 with the station assignment held steady at 544 and
+      // trainingStyle 'unarmed' the whole time: Fozzie read bare at 19:17:57 and was holding
+      // the mace again by 19:18:08. Eleven seconds. Across the fleet that is the difference
+      // between fleet brawling +0 and the regimen actually running -- every swing with the
+      // weapon zeroes piWeaponSwings for the bare-hand block (player.kod:4753-4757) and no
+      // improvement fires at all until that counter reaches 75 (player.kod:4536-4537).
+      //
+      // Dropping the weapon does not fix it either: `unuse` then `drop` loses the same race,
+      // and the drop is refused because the thing is wielded again by the time it lands.
+      // Three characters were watched failing exactly that way.
+      //
+      // So the fallback is the character's OWN configured style, not 'normal'. The original
+      // reason for 'normal' was to keep the 50/50 experiment honest by not counting a
+      // cleanup kill as a training bout -- that intent is preserved, because the style only
+      // decides WHAT IS IN THE HAND. `finishTrainingBout` and the alternation schedule still
+      // only advance on the prey the order names.
+      //
+      // Only while standing on the assigned farm ground, which is the same gate passArm
+      // uses. Travelling, or anywhere else, the ordinary arm-first survival rule wins: being
+      // unarmed in a strange room is how the road kills people.
+      const trainingStyle = trainingPrey ? this.trainingStyleFor(claimedSwing)
+                                         : this.styleForNonPrey(room);
       const training = await this.prepareTrainingStyle(trainingStyle, claimedSwing)
         .catch(e => ({ ready: false, why: e.message, style: trainingStyle }));
       if (!training.ready) {
@@ -17151,6 +17215,149 @@ export class Autopilot {
       said: ev.events?.filter(e => e.text).map(e => e.text).slice(0, 2),
       why: 'heals them, trains the spell, and raises our karma if theirs is higher' });
     this.progress('cast a heal on an ally');
+  }
+
+
+  // BUFF WHOEVER ELSE IS STANDING HERE. A caster's second job.
+  //
+  // Same shape as medic() above and for the same reason: a character with a spell and an
+  // ally in the room has a move that helps the ally AND trains the spell, and casting is
+  // the only way a spell ability moves at all.
+  //
+  // What these two are actually worth, which is not obvious from their names:
+  //
+  //   super strength  AddMight(spellPower/5 + 1) for 300 + 6*power seconds
+  //                   (persench/strength.kod:67-84). Might is BRAWLING'S REQUISITE STAT,
+  //                   read live (brawling.kod:47-50), and the requisite stat enters skill
+  //                   improvement twice — `increase_chance = 60 + stat` and the soft cap at
+  //                   `2*stat - 1`, above which the chance is divided by five
+  //                   (skill.kod:395-439). On a might-25 character a mature +11 lifts the
+  //                   base chance 85 -> 96 and moves the soft cap 49 -> 71. That is the
+  //                   difference between a bare-handed grind that arrives and one that does
+  //                   not, and it is why this is worth a keeper pass.
+  //   bless           +spellPower on the hit roll (persench/bless.kod:105-113). More landed
+  //                   swings is more improvement rolls, because nothing improves until the
+  //                   75-swing counter pays out (player.kod:4536-4537).
+  //
+  // Deliberately NOT enchant weapon, which is the third of the Kraanan level-2 set: it
+  // takes a `&weapon` target rather than a `&User` (enchwp.kod:82-110), so it cannot buff
+  // an ally in place — the weapon has to change hands first. A different errand entirely.
+  //
+  // ORDER IS SUPER STRENGTH FIRST because its duration is an order of magnitude longer
+  // (300 + 6*power against bless's 40 + 6*power, both then halved by a Random), so it is
+  // the one that stays up between casts rather than the one that needs chasing.
+  static BUFFS = [
+    { name: 'super strength', mana: 10, base: 300,
+      reagents: [['mushroom', 2], ['orc tooth', 1]] },
+    { name: 'bless', mana: 6, base: 40,
+      reagents: [['mushroom', 2], ['sapphire', 2]] },
+  ];
+
+  /**
+   * The GUARANTEED remaining life of a cast, in ms — `Random(d/2, d)` means only d/2 is
+   * promised, so that is what a recast timer may assume. Spell power is about half the
+   * skill percent (spell.kod:2066), which is the only input we can read locally.
+   */
+  buffFloorMs(buff, ability) {
+    const power = Math.max(0, Math.floor(Number(ability || 0) / 2));
+    return ((buff.base + 6 * power) * 1000) / 2;
+  }
+
+  /**
+   * How many of a named reagent are in the pack. Substring, because the server names vary.
+   *
+   * NOT `reagentCount` — that name is taken, by the no-argument create-food version above
+   * that answers `{elderberry, herbs}`. A second definition of it would have shadowed the
+   * first and handed every create-food check a number where it expected an object.
+   * m59-shadowed-method-test.mjs caught exactly that, which is what it is for.
+   */
+  reagentOnHand(name) {
+    const c = this.s?.client;
+    const want = String(name).toLowerCase();
+    let n = 0;
+    for (const o of (c?.inventory || [])) {
+      const nm = String(c.rsc.get(o.nameRsc) || '').toLowerCase();
+      if (nm.includes(want)) n += Number(o.amount ?? 1) || 1;
+    }
+    return n;
+  }
+
+  async buffAllies() {
+    const cfg = this.policy.buffAllies;
+    if (!cfg || cfg.enabled === false) return;
+    const s = this.s, c = s.need();
+    const gap = Number(cfg.gap_ms) > 0 ? Number(cfg.gap_ms) : 20_000;
+    if (this.lastBuffAt && Date.now() - this.lastBuffAt < gap) return;
+
+    // Another player, not us, not a monster. Raw room objects carry flags, not the
+    // snapshot's derived booleans — the same note medic() makes, and for the same reason.
+    const others = [...c.room.objects.values()]
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
+    if (!others.length) return this.declinedCast('buff', 'nobody else in the room to buff');
+
+    const wanted = [].concat(cfg.spells ?? Autopilot.BUFFS.map(b => b.name))
+      .map(x => String(x).toLowerCase());
+    this._buffedAt ||= new Map();          // `${targetId}:${spell}` -> when it was cast
+
+    for (const buff of Autopilot.BUFFS) {
+      if (!wanted.includes(buff.name)) continue;
+      const spell = (c.spells || [])
+        .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === buff.name);
+      if (!spell) continue;                                     // not a caster of this one
+
+      const mana = c.vitals()?.mana;
+      const floor = Number(cfg.mana_floor) >= 0 ? Number(cfg.mana_floor) : buff.mana + 4;
+      if (mana && mana.value < floor)
+        return this.declinedCast(buff.name, 'not enough mana',
+          { mana: mana.value, needs: floor });
+
+      // REAGENTS ARE CHECKED BEFORE THE CAST, NOT INFERRED FROM ITS FAILURE. A cast that
+      // cannot pay its reagents is refused server-side and looks, from here, exactly like
+      // a cast that landed on somebody already enchanted.
+      const short = buff.reagents.filter(([n, k]) => this.reagentOnHand(n) < k);
+      if (short.length) {
+        this.declinedCast(buff.name, 'out of reagents',
+          { needs: buff.reagents.map(([n, k]) => `${k} ${n}`).join(', '),
+            missing: short.map(([n, k]) => `${n} (have ${this.reagentOnHand(n)} of ${k})`) });
+        continue;
+      }
+
+      // The caster's own ability drives spell power (about half of it, spell.kod:2066),
+      // which drives the duration. `c.abilities` is keyed by spell id and filled from the
+      // server's stat groups, so this is the server's number, not a guess -- but it is
+      // empty until the first read, hence the fallback.
+      const ability = c.abilities?.get?.(spell.id)?.ability ?? cfg.assume_ability ?? 20;
+      const holdMs = this.buffFloorMs(buff, ability);
+      const target = others.find(o => {
+        const at = this._buffedAt.get(`${o.id}:${buff.name}`);
+        return !at || Date.now() - at >= holdMs;
+      });
+      // Everyone in the room is still inside the guaranteed window for this one. Not a
+      // fault and not worth a log line every pass — try the next spell.
+      if (!target) continue;
+
+      this.lastBuffAt = Date.now();
+      this._buffedAt.set(`${target.id}:${buff.name}`, Date.now());
+      await s.pacer.submit('cast', () => c.cast(spell.id, [target.id]), 1050);
+      const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 })
+        .catch(() => ({ events: [] }));
+      this.tally.buffs_given = (this.tally.buffs_given || 0) + 1;
+      // Like a heal on somebody else, there is no inventory diff to prove it landed, so
+      // `ok` means the cast went out. The reagents leaving the pack is the nearest thing
+      // to a receipt and it is not read back here.
+      this.recordCast(buff.name, { ok: true, target: c.rsc.get(target.nameRsc),
+        why: 'an ally in the room: buffs them, and casting is how the spell improves',
+        mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
+      this.note('buffed an ally', {
+        target: c.rsc.get(target.nameRsc), spell: buff.name,
+        holds_for_s: Math.round(holdMs / 1000),
+        said: ev.events?.filter(e => e.text).map(e => e.text).slice(0, 2),
+        why: buff.name === 'super strength'
+          ? 'might is brawling’s requisite stat: raises their improvement chance and soft cap'
+          : 'to-hit, so more landed swings, so the 75-swing improvement counter pays sooner' });
+      this.progress(`cast ${buff.name} on an ally`);
+      return;                       // one cast per pass; the pacer owns the rest
+    }
   }
 
   // TELL PEOPLE WHERE THE BODY IS.

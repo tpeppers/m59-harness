@@ -164,5 +164,42 @@ console.log('unarmed practice puts the weapon down, it does not merely decline t
      /this\.mode === 'farm'/.test(branch) && /room\?\.num === this\.policy\.assignedRoom/.test(branch));
 }
 
+
+console.log('\na non-prey fight must not re-arm a bare-handed character on its own ground');
+{
+  const bare = () => {
+    const ap = Object.create(Autopilot.prototype);
+    ap.mode = 'farm';
+    ap.policy = { trainingStyle: 'unarmed', assignedRoom: 544 };
+    return ap;
+  };
+  // 'normal' means equip:true, and equip:true re-wields the best weapon in the pack. This
+  // is the whole bug: passArm empties the hand, then one weak-room cleanup or defensive
+  // contact fills it again. Measured 2026-09-08 with the station steady the entire time --
+  // Fozzie bare at 19:17:57, holding the mace again at 19:18:08.
+  ok('on the assigned ground it stays unarmed',
+     bare().styleForNonPrey({ num: 544 }) === 'unarmed');
+  ok('one room away it arms itself again',
+     bare().styleForNonPrey({ num: 545 }) === 'normal');
+  ok('with no room known it arms itself',
+     bare().styleForNonPrey(null) === 'normal');
+
+  const travelling = bare(); travelling.mode = 'travel';
+  ok('not farming, so the arm-first survival rule wins',
+     travelling.styleForNonPrey({ num: 544 }) === 'normal');
+
+  const armed = Object.create(Autopilot.prototype);
+  armed.mode = 'farm';
+  armed.policy = { trainingStyle: 'short_sword', assignedRoom: 544 };
+  ok('an armed regimen is unaffected',
+     armed.styleForNonPrey({ num: 544 }) === 'normal');
+
+  const plain = Object.create(Autopilot.prototype);
+  plain.mode = 'farm';
+  plain.policy = { assignedRoom: 544 };
+  ok('a doctrine with no training style is unaffected',
+     plain.styleForNonPrey({ num: 544 }) === 'normal');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

@@ -165,6 +165,82 @@ const WEAPON_WORDS = [
 // keeps it out of the candidate list and lets the ordinary sell rules shed it.
 export const isCursed = (name) => /\bcursed\b/i.test(String(name || ''));
 
+// THE NAME IS NOT A CURSE DETECTOR, AND RELYING ON IT IS HOW WE LOST A CHARACTER.
+//
+// `vrName = "cursed %s"` (wacursed.kod:36) only renders once the attribute has been
+// IDENTIFIED. Every loot attribute starts unidentified, so a cursed weapon fresh off the
+// floor is called "mystic sword", scores like a mystic sword, and passes isCursed() clean.
+// On 2026-09-08 our own equip_best wielded one for Floyd on exactly that reasoning, and
+// WeapAttCursed then refused every unuse, drop, give and vault for the rest of that
+// character's life -- ItemReqUnuse returns FALSE unconditionally (wacursed.kod:97-102) and
+// ItemReqLeaveOwner refuses while the item is in the use list (wacursed.kod:104-125).
+//
+// It is not a rare corner. AddToTreasureTable registers cursed at 10% on every treasure
+// level from 1 to 10 (wacursed.kod:134-145), so about one magical weapon drop in ten is one
+// of these.
+//
+// So detect it from what the SERVER says rather than from what the item is called. Two
+// signals, in the order you get them:
+//
+//   before wielding  the description. An identified curse reads "It glows with a pale red
+//                    aura."; an unidentified attribute of ANY kind reads "there is
+//                    something odd about it you can't put your finger on." The second does
+//                    not say which attribute, which is the whole point -- at a 10% cursed
+//                    rate, an unidentified attribute on a weapon we are about to hold is
+//                    not worth the coin flip.
+//   after wielding   "<Item> seems to cling to your hand!" (cursedweapon_fail_unuse,
+//                    wacursed.kod:35) comes back from every failed unuse, drop, give and
+//                    vault. By then the trap has sprung, but recording it stops us retrying
+//                    for ever and tells the operator to go buy the cure.
+//
+// The cure is a remove curse potion (rmcursep.kod, viValue_average 60, stocked by the
+// Marion healer at mrhealer.kod:44). It fires RemoveCurseAllItems, which UNUSES every
+// cursed item but does NOT strip the attribute (player.kod:10076-10091) -- so drink,
+// unwield, and sell it in the same trip, because ItemReqLeaveOwner only refuses while the
+// item is still in the use list. The other way out is to break it: WeaponBroke strips every
+// attribute before unusing, and says so (weapon.kod:532-551).
+export const CURSE_SAID = /seems to cling to your hand/i;
+export const CURSE_AURA = /glows with a pale red aura/i;
+export const UNIDENTIFIED_SAID = /something odd about it you can[^ ]?t put your finger on/i;
+
+// Item ids this session has learned are cursed. Held per client because ids are per session.
+const cursedIds = (c) => (c._cursedItemIds ||= new Set());
+
+/** The item name the server named in a cling-to-your-hand refusal, '' if unparsed, else null. */
+export const cursedFromSaid = (text) => {
+  const t = String(text || '');
+  if (!CURSE_SAID.test(t)) return null;
+  const m = t.match(/^\s*(?:the|a|an|your)?\s*(.+?)\s+seems to cling to your hand/i);
+  return m ? m[1].trim().toLowerCase() : '';
+};
+
+/** Remember that this item is cursed. Takes an id, a name, or both. */
+export function markCursedItem(c, { id = null, name = null } = {}) {
+  if (id != null) cursedIds(c).add(id);
+  if (name) cursedIds(c).add(`name:${String(name).trim().toLowerCase()}`);
+  return true;
+}
+
+/**
+ * Learn a curse from one server line. `attemptedId` is whatever we just tried to take off,
+ * so a refusal still lands on the right item when the wording does not parse.
+ */
+export function noteCursedFromMessage(c, text, attemptedId = null) {
+  const named = cursedFromSaid(text);
+  if (named === null) return false;
+  return markCursedItem(c, { id: attemptedId, name: named || null });
+}
+
+/** TRUE when the name says cursed, or when the server has already told us this one is. */
+export function isCursedItem(c, o = null, name = null) {
+  const n = name ?? (o && c?.rsc?.get?.(o.nameRsc)) ?? '';
+  if (isCursed(n)) return true;
+  const set = c?._cursedItemIds;
+  if (!set) return false;
+  if (o && set.has(o.id)) return true;
+  return set.has(`name:${String(n).trim().toLowerCase()}`);
+}
+
 export const weaponScore = name => {
   if (isJunk(name)) return 0;
   for (const [re, n] of WEAPON_WORDS) if (re.test(name)) return n;
@@ -387,7 +463,10 @@ export function weaponRanking(c, { priority = null } = {}) {
     // isCursed is checked here rather than in weaponScore, because scoring it zero would
     // also tell `sellable` and the equipment plan it is not a weapon — and selling it is
     // exactly what we want to happen to it. It must be unwieldable, not invisible.
-    .filter(x => !isJunk(x.name) && !isCursed(x.name) &&
+    .filter(x => // isCursedItem, not isCursed: the name only says "cursed" once the attribute has
+    // been identified, so the name test alone hands us the very weapon we must not
+    // pick up. See the block above isCursedItem.
+    !isJunk(x.name) && !isCursedItem(c, x.o, x.name) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
       const skill = proficiencyFor(x.name);
