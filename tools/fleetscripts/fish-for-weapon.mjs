@@ -85,6 +85,20 @@ export const reachableAt = spellPower =>
 export const script = {
   name: 'fish-for-weapon',
   describe: 'Cast Create Weapon until it yields a named weapon, refusing if it never could.',
+  recipe: {
+    effect: 'Conjures weapons until one of them is the weapon you asked for. Refuses up front ' +
+            'when the caster CANNOT produce it at any power, instead of casting until ' +
+            'the reagents run out.',
+    run: 'fish-for-weapon agents=<a> want="short sword" power=<n>',
+    needs: ['Create Weapon, and the mana and reagents for repeated casts',
+            'spell power inside the band that yields the wanted weapon — armour can be worn ' +
+              'to LOWER power into a reachable band'],
+    cost: { time: 'up to maxCasts (12 by default), each a cast plus a settle',
+            reagents: 'one cast worth of reagents per attempt', risk: 'none if done somewhere empty',
+            estimate: 'attempts are bounded by maxCasts; the yield per cast is the band table in this file' },
+    scales: 'Higher spell power moves the band upward, so the wanted weapon can become ' +
+            'unreachable by getting BETTER at the spell.',
+  },
 
   provenance: {
     pinned: 'dbcc73e', verified: '2026-09-08',

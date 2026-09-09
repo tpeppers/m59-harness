@@ -34,6 +34,21 @@ export const script = {
               'tools/m59-keeper-process.mjs', 'tools/m59-smartloot.mjs'],
   },
   describe: 'Sell the loot, buy reagents, come home — routing by what is in the pack.',
+  recipe: {
+    effect: 'Turns a pack full of loot into reagents and banked money, then comes home. ' +
+            'Routes itself by what the character is actually carrying rather than by a fixed ' +
+            'itinerary.',
+    run: 'resupply agents=<a,b> each=<n> home=<room>',
+    needs: ['something worth selling, or money to buy with',
+            'the apothecary stocks a real, finite inventory and CAN run out'],
+    cost: { money: 'about 5,500 shillings for a full 120/120 elderberry+herb load',
+            time: 'a multi-stop town circuit', risk: 'roughly one death per two trips',
+            measured: 'a --buy-only Tos trip bought 120/120 for ~5.5k' },
+    scales: 'Cost rises with how many stops the pack forces — a pack of sellable gear adds ' +
+            'the smith and the vault to the circuit.',
+    notes: ['Castings are min(elderberry, herbs) / 2, so 3 elderberry against 94 herbs is ONE ' +
+            'casting and reads as well stocked to anything that sums the two.'],
+  },
   params: {
     agents: { type: 'agents', required: true, describe: 'who goes' },
     each: { type: 'number', default: 150, describe: 'how many of EACH half to buy' },

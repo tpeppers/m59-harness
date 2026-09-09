@@ -24,6 +24,23 @@ export const script = {
     touches: ['tools/m59-fleetscript.mjs', 'tools/m59-broker.mjs'],
   },
   describe: 'Walk characters back to a room, refusing to set out hurt.',
+  recipe: {
+    effect: 'Puts named characters in a named room. The point is the REFUSAL: it will not ' +
+            'start a journey on a hurt character, and it treats health it cannot read as a ' +
+            'refusal rather than as permission.',
+    run: 'come-home agents=<a,b> home=<room>',
+    needs: ['full health to set out, unless minHealth is lowered on purpose',
+            'a route the bake knows — and one that does not cross a KNOWN_TRAP'],
+    cost: { time: '1-15 minutes a character, all of it road',
+            risk: 'the roads are what kills this fleet; a 20-health caster is at real risk ' +
+                  'and a 60-health fighter mostly is not',
+            measured: '2026-09-09 — 370->587 and 27->49 arrived at FULL health; 376->39 died ' +
+                      'to trolls because the route crossed 599' },
+    scales: 'Cost is the road, not the errand: distance and what lives on it. Sending a ' +
+            'tougher character along with a fragile one measurably helped.',
+    notes: ['A journey deliberately does NOT flee monsters — "a monster cannot end a journey" ' +
+            '— so the flee threshold does not save a fragile character en route.'],
+  },
   params: {
     agents: { type: 'agents', required: true, describe: 'who to bring back' },
     home: { type: 'number', required: true, describe: 'the room they belong in' },

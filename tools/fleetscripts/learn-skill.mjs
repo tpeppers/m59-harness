@@ -34,6 +34,22 @@ import { walk, learn, bank, verify } from '../m59-fleetscript.mjs';
 export const script = {
   name: 'learn-skill',
   describe: 'Walk to a teacher, buy one skill, and verify the character actually holds it.',
+  recipe: {
+    effect: 'Buys ONE named ability from a named teacher and proves the character came away ' +
+            'holding it. Crosses the world, withdraws the money if the purse is short, and ' +
+            'comes home.',
+    run: 'learn-skill agents=<a> skill="<name>" teacher=<who> teacherRoom=<room> price=<n> home=<room>',
+    needs: ['the exact price and the exact skill name as the teacher lists it',
+            'enough banked to cover it — it withdraws when the purse is short',
+            'the character must be ALLOWED to learn it: PlayerCanLearn gates level N on the ' +
+              'best THREE abilities at level N-1, and a skill you cannot learn is simply ' +
+              'ABSENT from the shop list rather than refused'],
+    cost: { money: 'the skill price, plus the trip', time: 'a round trip across the world',
+            risk: 'ordinary road risk both ways',
+            estimate: 'price is per-skill and passed in; the trip is a come-home each way' },
+    scales: 'Higher-level spells cost more and gate harder. The gate is the real cost: see ' +
+            'master-shalille for what it takes to become ELIGIBLE for the next level.',
+  },
 
   // GUARANTEE 9, ON THE TASK THAT MOTIVATED IT. The keeper-process driver is exactly the
   // kind of change that breaks this errand without breaking anything visible, so the pin

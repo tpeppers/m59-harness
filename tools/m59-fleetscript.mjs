@@ -9,6 +9,35 @@
 //              shop('Frisconar', [{ match: /herb/, amount: 150 }]), walk(39) ],
 //   });
 //
+// WHAT THIS CANNOT REACH YET — THE MANA NODES, AND WHY. (Operator, 2026-09-09.)
+//
+// Recorded here rather than in a doc for the same reason the #movement epoch tag is: it is a
+// statement about WHICH CODE was running, and it stops being true the moment somebody fixes
+// the mover. There are seven mana nodes and they are the standing test of the fleet's
+// movement stack, because each one is a POINT target at the end of the world's worst
+// approach — arriving in the room is not arriving at the stone.
+//
+//   reachable with the code as it stands   27 Icky Cave, 39 Castle Victoria,
+//                                          579 Ancient Place, 589 Sentinel
+//   NOT reachable — do not read a failure   45 Badlands, 515 Seafarer's Peak,
+//   here as a bug in the errand             750 Ice Caves, 1006 Mausoleum
+//
+// Melded so far: 27 (Loial the Ogier, 2026-09-09, max mana 25 -> 33). The 49 -> 45 hop was
+// attempted six times and refuses every time; the router offers it as ONE direct hop, so
+// that is a boundary the mover cannot cross rather than a route it cannot find. Expected,
+// and not worth debugging as an errand fault.
+//
+// What actually stands between us and the other four is not this file. It is exact .roo
+// geometry, monster POSITIONS (collision is height-agnostic, so a body under a ledge blocks
+// a hop over it), and jumps from location to location. Getting them needs enhancements to
+// the MCP server's capabilities, to the fleetscripts, and to routing/pathing/jumping —
+// three separate pieces of work, none of them a guarantee in this file.
+//
+// So: a node run that fails on one of the four right-hand entries is reporting the state of
+// the mover, and belongs in the movement ledger under its #movement epoch, not in a bug
+// report about the errand. See substrate/mananodes/<agent>.json for what a character holds
+// and how each one was got, and `node tools/m59-fleetbook.mjs mana-nodes` for the recipe.
+
 // WHY THIS EXISTS. Over one day, five separate ad-hoc scripts drove this fleet, and each one
 // re-implemented the same handful of concerns and got a DIFFERENT subset of them wrong:
 //
