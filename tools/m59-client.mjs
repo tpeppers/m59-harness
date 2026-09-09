@@ -101,6 +101,38 @@ export const BP = {
 };
 export const BPNAME = Object.fromEntries(Object.entries(BP).map(([k, v]) => [v, k]));
 
+// THE REQUESTS THAT CAN COST US AN ITEM — the breadcrumb behind the `left` event.
+//
+// An item leaving a pack is reported by the server the same way whatever the cause, which
+// is what makes BP_INVENTORY_REMOVE the right place to watch and also what makes it mute
+// about WHY. The only other party who knows is us: if we asked to drop something a quarter
+// of a second ago, that is the reason. If we asked for nothing, that is the interesting
+// case — the item went without us, and finding those is the entire point.
+//
+// Deliberately a small allowlist rather than "the last packet sent": movement, turning and
+// attacking outnumber everything else by orders of magnitude, and a breadcrumb they can
+// overwrite would read `move` for every departure in the fleet. Anything absent here leaves
+// the previous verb standing, and the age carried alongside it says how stale that is.
+//
+// USERCOMMAND is a second dispatch table behind one opcode, so its money-spending members
+// are keyed on the sub-opcode: `uc35` is UC.DEPOSIT, `uc29` is UC.GUILD_RENT.
+export const REQUEST_VERB = {
+  [BP.REQ_DROP]: 'drop',            [BP.REQ_PUT]: 'put',
+  [BP.REQ_GIVE]: 'give',            [BP.REQ_OFFER]: 'offer',
+  [BP.REQ_COUNTEROFFER]: 'counteroffer', [BP.ACCEPT_OFFER]: 'accept_offer',
+  [BP.REQ_DEPOSIT]: 'deposit_items', [BP.REQ_BUY]: 'buy',
+  [BP.REQ_BUY_ITEMS]: 'buy_items',  [BP.REQ_USE]: 'use',
+  [BP.REQ_APPLY]: 'apply',          [BP.REQ_ACTIVATE]: 'activate',
+  [BP.REQ_CAST]: 'cast',
+  uc35: 'bank_deposit',             uc29: 'guild_rent',
+};
+
+// Past this, a request is not a plausible explanation for a departure any more and saying
+// so would be worse than saying nothing. A round trip is milliseconds; a reagent burned by
+// a cast is seconds. A minute is generous on purpose — the failure this is hunting looks
+// like `after: null`, and an over-eager threshold would manufacture those.
+export const REQUEST_BREADCRUMB_MS = 60_000;
+
 // BP_USERCOMMAND sub-opcodes, include/proto.h:222. A whole second command space
 // reached through one opcode, holding the things the real client's slash commands
 // do — resting, safety toggling, banking, guild administration.
@@ -1789,9 +1821,51 @@ export class M59Client {
         break;
       }
 
+      // THE COUNTERPART TO `got`, AND IT WAS BEING THROWN AWAY.
+      //
+      // INVENTORY_ADD above emits `got`; this emitted nothing, so an item LEAVING a pack
+      // was the one thing that happened to a character and left no trace anywhere. Around
+      // two dozen magic items went missing across 2026-09-07/08 — including every one of
+      // the 21 queued for identification — with no `died`, no `vault_trip` and no sale row,
+      // and the ledger could not say when, let alone to what. It still cannot say WHY; it
+      // can now say WHEN and WHAT, which is the half that was missing.
+      //
+      // Watching here rather than at each verb is the point: the server sends this whatever
+      // the cause — sold, dropped, given, vaulted, eaten, spent, stolen, or lost on death —
+      // so it does not depend on having enumerated the ways an item can go.
+      //
+      // The object has to be read BEFORE the filter. Afterwards only the id is left, and an
+      // id is exactly what cannot be looked up later: object ids are renumbered by `save
+      // game`, and the thing it named is gone from our inventory by definition.
       case BP.INVENTORY_REMOVE: {
         const res = parseRemove(body);
-        if (res.exact) this.inventory = this.inventory.filter(o => o.id !== res.id);
+        if (!this.check('INVENTORY_REMOVE', res)) break;
+        const had = this.inventory.find(o => o.id === res.id) ?? null;
+        this.inventory = this.inventory.filter(o => o.id !== res.id);
+        this.emit('left', {
+          id: res.id,
+          // `known: false` is a removal for something we were not carrying as far as we
+          // knew — a stale id, or an inventory we never read. Worth emitting: it is still
+          // evidence that something left, and inventing a description for it would not be.
+          known: !!had,
+          what: had ? describeObject(had, this.lookup) : `id ${res.id}`,
+          name: had ? (this.rsc.get(had.nameRsc) ?? null) : null,
+          amount: had?.amount || undefined,
+          tag: had?.tag,
+          // Carried so a reader can tell a magic wand from a mundane stick without a second
+          // lookup — by then the object is gone and cannot be asked. `translation` is the
+          // PACKED wire byte (0x87 + 11*primary + secondary, util.kod:302), not a raw
+          // XLAT_TO_* value; decode it, never compare it.
+          icon_rsc: had?.iconRsc,
+          translation: had?.translation,
+          // WHY, as far as we can honestly say. A verb here is something WE asked for
+          // just now; `null` means the item went without us having asked for anything,
+          // which is the case worth chasing.
+          after: this.lastItemRequest
+                 && Date.now() - this.lastItemRequest.at <= REQUEST_BREADCRUMB_MS
+                 ? this.lastItemRequest.verb : null,
+          after_ms: this.lastItemRequest ? Date.now() - this.lastItemRequest.at : null,
+        });
         break;
       }
 
@@ -2269,6 +2343,9 @@ export class M59Client {
   }
 
   send(op, ...parts) {
+    // WHAT WE JUST ASKED FOR. Read by the `left` event to name a cause; see REQUEST_VERB.
+    const verb = REQUEST_VERB[op === BP.USERCOMMAND ? 'uc' + (parts[0]?.[0] ?? '') : op];
+    if (verb) this.lastItemRequest = { verb, at: Date.now() };
     const payload = Buffer.concat([Buffer.from([op]), ...parts]);
     if (this.state === 'game' && this.seeds) {
       const out = Buffer.alloc(HEADER + payload.length);

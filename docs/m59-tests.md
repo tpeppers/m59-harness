@@ -113,6 +113,23 @@ the records it describes.
   scanning and balances parens to the call's real end — both learned when its first
   version quoted its own documentation back and then missed the very bug it was written
   for**) and
+  `node tools/m59-leftpack-test.mjs` (53 — **the counterpart to `looted`, and it exists
+  because that counterpart did not**. `BP_INVENTORY_REMOVE` is the server saying "this is
+  no longer in your pack" whatever took it — sold, dropped, given, vaulted, eaten, spent,
+  lost on death — and the client filtered the object out of its inventory and emitted
+  nothing, while `BP_INVENTORY_ADD` beside it emitted `got`. Arrivals were recorded and
+  departures were not, so when roughly two dozen magic items went missing across
+  2026-09-07/08 — the whole identification queue among them — there was no row of any kind
+  to read. Not a wrong row. None. Three assertions carry the weight: that the object is
+  read BEFORE the filter (move it one line down and every field but `id` is null for ever,
+  silently — and an object id is precisely what cannot be looked up afterwards); that only
+  an ALLOWLIST of requests may set the `after` breadcrumb, because movement outnumbers item
+  verbs by orders of magnitude and a breadcrumb they could overwrite would read `move`
+  fleet-wide and erase the `after: null` rows that are the entire point; and that
+  `translation` travels as the PACKED wire byte rather than being half-decoded here and
+  again in the wand identification. The first two are mutation-checked: the shipped version
+  passes 53/53, reading after the filter fails 7, letting any packet set the breadcrumb
+  fails 15**) and
   `node tools/m59-localpolicy-test.mjs` (71 — **the contract test for the overlay that
   separates this checkout's opinions from this repository's**: that an absent, empty or
   unparseable local file all mean the committed behaviour rather than an empty policy,
