@@ -568,9 +568,16 @@ if (FOOD) {
       //
       // A destructive fallback that has never once worked does not stay armed. `--drop-for-space`
       // opts back in for someone who has a genuinely full pack in front of them and knows it.
-      // Re-arming by default needs a POSITIVE full-pack signal — `pack.percent` would be it, and
-      // it reads null fleet-wide here because `carryCapacity` cannot see MIGHT.
-      else if (!ok && DROP_FOR_SPACE && /nearly always full|too full/i.test(JSON.stringify(r))) {
+      //
+      // THE POSITIVE SIGNAL THIS ASKED FOR NOW EXISTS. The note above wanted "a POSITIVE
+      // full-pack signal — `pack.percent` would be it, and it reads null fleet-wide here
+      // because `carryCapacity` cannot see MIGHT". `reason_code: 'receiver_full'` is a
+      // better one than pack.percent ever was: it is the SERVER's verdict, sent to both
+      // sides as it cancels the trade (user.kod:5469-5478), not an estimate this side
+      // computed. The text match stays as a fallback for a broker that predates it.
+      else if (!ok && DROP_FOR_SPACE &&
+               (r?.reason_code === 'receiver_full' ||
+                /nearly always full|too full|cannot hold it/i.test(JSON.stringify(r)))) {
         const inv = await call('inventory', { agent: p.to.agent }).catch(() => null);
         const names = [...new Set((inv?.items || []).map(i => i.name).filter(Boolean))];
         const junk = names.filter(n => /mushroom/i.test(n) && !foodValue(n));

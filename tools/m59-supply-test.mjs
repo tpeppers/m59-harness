@@ -697,50 +697,79 @@ section('AND THE BROKER SIDE OF THE PROXY ANSWERS IN THE SHAPE THE CALLERS READ'
      broker.includes("from './m59-supply.mjs'"));
 }
 
-
-console.log('');
-console.log('`what` names a reagent, and used to be ignored');
+// ==================== WHY IT FAILED, FROM THE SERVER'S OWN WORDS ====================
+//
+// A hand-over that moves nothing is arithmetic on this side, and arithmetic cannot say why.
+// The server can: when `CanHoldWeightAndBulk` fails it messages BOTH sides by name and then
+// cancels the trade (user.kod:5469-5478). Reading those lines turns a hedge into a fact.
+//
+// This is here because the hedge cost real time. The old note read "a receiver that can give
+// but not receive is NEARLY ALWAYS full"; a caller read the first two fields of the JSON,
+// concluded the giver was refusing to release the item, and spent an hour on a theory about
+// keeper ownership while six hand-overs failed for want of pack space. The fix is both
+// halves: say it definitively, and say it FIRST.
 {
-  // WHAT THIS PINS. Everything that was not an id list, `all` or `food` fell through to the
-  // create-food pair, and the caller was told `supplied: true` with an elderberry and a herb
-  // handed over. A receipt for a thing that did not happen is worse than a refusal: asked
-  // three times for sapphires on 2026-09-09, it answered `handed_over: ["elderberry","herb"]`
-  // three times and was read as a partial success twice.
-  const pack = [
-    { id: 1, name: 'sapphire', amount: 55 },
-    { id: 2, name: 'sapphire ring', amount: 1 },
-    { id: 3, name: 'orc tooth', amount: 43 },
-    { id: 4, name: 'elderberry', amount: 20 },
-    { id: 5, name: 'herb', amount: 30 },
+  console.log('\nTHE FAILURE CLASSIFIER READS THE WIRE, NOT THE TEA LEAVES');
+  const { offerFailureFrom } = await import('./m59-supply.mjs');
+
+  // Every string here is the kod resource with its %s%s filled in, because that is what
+  // actually arrives. Patterns anchored on the invariant half survive any name.
+  const cases = [
+    ["Waldorf can't carry all the items you have offered.", 'receiver_full'],
+    ["You can't carry all the items that the Camilla has offered you.", 'receiver_full'],
+    ["Robin tries to give you the scimitar, but it doesn't seem to want to be given!",
+     'item_refuses_to_leave'],
+    ["Offer invalid, Bunsen didn't have everything offered.", 'giver_no_longer_has_it'],
+    ["Janice can't deal with you now.", 'counterparty_busy'],
+    ['You try to offer your goods to Pepe, but he is no longer here.', 'counterparty_left'],
+    ['Scooter is not online to accept your offer.', 'counterparty_offline'],
   ];
-  const pickFor = (what, amount = 40) => {
-    const per = amount;
-    const nameOf = o => o.name;
-    if (typeof what === 'string' && what.trim() && !/^(reagents?|casting)$/i.test(what.trim())) {
-      const wanted = what.trim().toLowerCase().replace(/\s+/g, ' ');
-      const hit = o => {
-        const n = nameOf(o).toLowerCase().replace(/\s+/g, ' ').trim();
-        return n === wanted || n === `${wanted}s` || `${n}s` === wanted;
-      };
-      return pack.filter(hit).map(o => ({ ...o, amount: Math.min(o.amount, per) }));
-    }
-    const take = re => pack.filter(o => re.test(nameOf(o))).map(o => ({ ...o, amount: Math.min(o.amount, per) }));
-    return [...take(/elder\s*berry/i), ...take(/herb/i)];
-  };
-  const names = rows => rows.map(r => r.name);
-  ok('a named reagent is actually taken', names(pickFor('sapphire')).join() === 'sapphire');
-  ok('and a longer name that CONTAINS it is not', !names(pickFor('sapphire')).includes('sapphire ring'));
-  ok('a two-word reagent matches whatever the spacing', names(pickFor('orc  tooth')).join() === 'orc tooth');
-  ok('the plural is the same reagent', names(pickFor('sapphires')).join() === 'sapphire');
-  ok('the amount caps the STACK, not the entry count', pickFor('sapphire', 10)[0].amount === 10);
-  // THE DEFAULT IS UNCHANGED, which is the half that matters for every existing caller.
-  ok('no `what` still means the create-food pair',
-     names(pickFor(undefined)).join() === 'elderberry,herb');
-  ok('and so does `reagents` said out loud',
-     names(pickFor('reagents')).join() === 'elderberry,herb');
-  ok('a reagent nobody is carrying comes back empty rather than as something else',
-     pickFor('fairy wing').length === 0);
+  for (const [line, want] of cases)
+    ok(`${want} <- "${line.slice(0, 40)}..."`, offerFailureFrom([line])?.code === want);
+
+  ok('an unrelated line classifies as nothing rather than as a guess',
+     offerFailureFrom(['You gained a level!']) === null);
+  ok('no messages at all is null, not a default diagnosis',
+     offerFailureFrom([]) === null && offerFailureFrom() === null);
+  ok('the verdict is found among noise, because both sides say plenty',
+     offerFailureFrom(['You feel stronger.', 'A fungus beast attacks you.',
+                       "Waldorf can't carry all the items you have offered."])?.code
+       === 'receiver_full');
+  ok('the line that decided it is handed back for the record',
+     /can't carry all the items/.test(
+       offerFailureFrom(["Waldorf can't carry all the items you have offered."]).said));
+
+  // BOTH SIDES, because the server addresses them differently about the same event: the
+  // giver hears "<name> can't carry...", the receiver hears "You can't carry that <name>...".
+  // A caller reading one side only would diagnose half the failures.
+  ok('the giver-side and receiver-side sentences reach the same verdict',
+     offerFailureFrom(["Waldorf can't carry all the items you have offered."]).code ===
+     offerFailureFrom(["You can't carry all the items that the Camilla has offered you."]).code);
 }
+
+{
+  console.log('\nTHE ANSWER IS THE FIRST FIELD, IN EVERY RESPONSE');
+  const src = readFileSync(join(HERE, 'm59-supply.mjs'), 'utf8');
+  // A caller that reads one field reads the first one. This used to lead with
+  // `supplied: false` and five fields of arithmetic, with the only actionable sentence
+  // last, under `note`.
+  ok('the returned object opens with `reason`', /return \{\s*\n\s*reason,/.test(src));
+  ok('a recognised failure also carries a machine-readable code',
+     /reason_code: failure\.code/.test(src) && /server_said: failure\.said/.test(src));
+  ok('the code is absent rather than guessed when the wire said nothing',
+     /\.\.\.\(failure \? \{ reason_code/.test(src));
+  ok('the unexplained branch admits it instead of naming a cause',
+     /unexplained: no count rose/.test(src));
+  ok('both sides are asked what they were told',
+     /give\.saidSince\(/.test(src) && /recv\.saidSince\(/.test(src));
+  ok('the stream is marked BEFORE the accept, so the cancellation lands in the window',
+     src.indexOf('const saidFromGive = await give.seq();') < src.indexOf('await give.acceptOffer();'));
+
+  const keeperSrc = readFileSync(join(HERE, 'm59-keeper-process.mjs'), 'utf8');
+  ok('the keeper can be asked, so a proxied character is diagnosable too',
+     /case 'said': \{/.test(keeperSrc));
+}
+
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -206,7 +206,77 @@ export function supplyOps(sess, { isProxied, autopilotIfAny }) {
       if (proxied) return sess.tradeStep('accept');
       return sess.pacer.submit('trade', () => c().acceptOffer());
     },
+    // EVERYTHING THE SERVER SAID TO THIS SIDE SINCE `since`.
+    //
+    // Both sides are read, because the offer failures are addressed to different people:
+    // the GIVER is told "<name> can't carry all the items you have offered" and the
+    // RECEIVER is told "You can't carry all the items that <name> has offered you"
+    // (user.kod:178-181). Reading only one side would miss half the diagnoses.
+    async saidSince(since, timeoutMs = 1200) {
+      if (proxied) {
+        const r = await sess.tradeStep('said', { since, timeout_ms: timeoutMs })
+                            .catch(() => null);
+        return [].concat(r?.said ?? []);
+      }
+      const w = await c().waitFor({ since, kinds: ['message', 'said'], timeoutMs })
+                         .catch(() => ({ events: [] }));
+      return (w?.events ?? []).map(e => e.text).filter(Boolean);
+    },
   };
+}
+
+// WHY A HAND-OVER FAILED, FROM THE SERVER'S OWN WORDS RATHER THAN FROM A GUESS.
+//
+// Every line here is a message resource in kod/object/active/holder/nomoveon/battler/
+// player/user.kod:157-181, and each is sent at a single site with the trade cancelled
+// immediately afterwards. That makes them DEFINITIVE: if the text is on the wire, that is
+// the reason, and no inference about pack percentages is needed or wanted.
+//
+// The `%s%s` in the resources is a definite article plus a name, so every pattern here is
+// anchored on the invariant half of the sentence and tolerant of whatever is spliced in.
+//
+// This exists because the honest-but-hedged version cost real time: the note used to read
+// "a receiver that can give but not receive is NEARLY ALWAYS full", a caller read the first
+// two fields of the JSON, concluded the giver was refusing to release the item, and spent
+// an hour building a theory about keeper ownership while six hand-overs failed for want of
+// pack space. A hedge invites a theory; a fact ends one.
+const OFFER_FAILURES = [
+  { re: /can'?t carry all the items you have offered/i,
+    code: 'receiver_full',
+    why: 'the receiver cannot hold it — the server refused the offer on weight or bulk ' +
+         'and cancelled the trade. Free space on the RECEIVER and retry' },
+  { re: /you can'?t carry all the items that .* offered you/i,
+    code: 'receiver_full',
+    why: 'the receiver cannot hold it — the server refused the offer on weight or bulk ' +
+         'and cancelled the trade. Free space on the RECEIVER and retry' },
+  { re: /doesn'?t seem to want to be given/i,
+    code: 'item_refuses_to_leave',
+    why: 'the item itself refused to be handed over — a cursed weapon in the use list ' +
+         'does exactly this, and no amount of retrying will move it' },
+  { re: /didn'?t have everything offered/i,
+    code: 'giver_no_longer_has_it',
+    why: 'the giver no longer had everything offered when the trade closed' },
+  { re: /can'?t deal with you now/i,
+    code: 'counterparty_busy',
+    why: 'the counterparty was busy with another trade or dialogue' },
+  { re: /is no longer here/i,
+    code: 'counterparty_left',
+    why: 'the counterparty left the room before the offer completed' },
+  { re: /is not online to accept/i,
+    code: 'counterparty_offline',
+    why: 'the counterparty is not online' },
+  { re: /can'?t offer that many/i,
+    code: 'amount_refused',
+    why: 'the server refused the quantity offered' },
+];
+
+/** The first definitive reason present in anything either side was told, or null. */
+export function offerFailureFrom(lines = []) {
+  for (const line of [].concat(lines)) {
+    const hit = OFFER_FAILURES.find(f => f.re.test(String(line || '')));
+    if (hit) return { code: hit.code, why: hit.why, said: String(line) };
+  }
+  return null;
 }
 
 // The whole hand-over, driven from both ends, because both ends are ours.
@@ -538,6 +608,10 @@ export async function supplyBetween(a, deps) {
     const giveSeq = await give.seq();
     await recv.counterOffer([]);
     const countered = await give.sawCounter(giveSeq, 6000);
+    // Mark the stream on BOTH sides before the accept, so the failure messages the server
+    // sends as it cancels are inside the window we later read.
+    const saidFromGive = await give.seq();
+    const saidFromRecv = await recv.seq();
     await give.acceptOffer();
 
     // Prove it. A trade that did not complete looks exactly like one that did.
@@ -550,6 +624,10 @@ export async function supplyBetween(a, deps) {
     // LOSING the stack is the corroborating half, and it costs one read.
     const recvAfter = countsOf(recvAfterRows, recvName);
     const giveAfter = countsOf(await give.inventory(), nameOf);
+    // The server tells the two sides DIFFERENT sentences about the same failure, so both
+    // are read and pooled before classifying.
+    const heard = [...await give.saidSince(saidFromGive), ...await recv.saidSince(saidFromRecv)];
+    const failure = offerFailureFrom(heard);
 
     // ONE VERDICT PER ITEM, ON ARITHMETIC. `asked` is what this call tried to move,
     // `received` is what the receiver's own count rose by, `giver_lost` is what left the
@@ -573,7 +651,27 @@ export async function supplyBetween(a, deps) {
     // one makes it cast a spell that fails silently for want of the other half. So
     // anything short of everything asked for is false, with `partial` saying which.
     const allMoved = items.length > 0 && missed.length === 0;
+    // REASON FIRST, AND IN EVERY RESPONSE.
+    //
+    // A caller that reads one field reads the first one. This used to be `supplied: false`
+    // followed by five fields of arithmetic, with the explanation last under `note` — and
+    // the explanation was the only part that told anyone what to DO. Leading with it costs
+    // nothing and removes the failure mode where a true answer goes unread.
+    const reason = allMoved
+      ? "delivered: every item asked for rose in the receiver's own count"
+      : failure ? `${failure.code}: ${failure.why}`
+      : moved.length ? 'partial: some items moved and some did not — see not_received'
+      : countered.saw === false
+        ? 'no_counteroffer: the counteroffer never arrived, so the accept ended the trade ' +
+          'rather than completing it'
+        : 'unexplained: no count rose on the receiver and the server said nothing this ' +
+          'side recognises. Check pack.percent and pack.binding on the RECEIVER first — ' +
+          'that is the usual cause when the wire is silent';
     return {
+      reason,
+      // The machine-readable half of `reason`, present only when the server actually said
+      // something we recognise. Absent means "not established", never "fine".
+      ...(failure ? { reason_code: failure.code, server_said: failure.said } : {}),
       supplied: allMoved,
       partial: moved.length > 0 && missed.length > 0,
       from: giverName, to: receiverName,

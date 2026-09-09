@@ -2611,6 +2611,26 @@ const server = createServer(async (req, res) => {
                 json({ sent: true, since, count: items.length, trade: view() });
                 return;
               }
+              // WHAT THE SERVER SAID ABOUT THE TRADE, VERBATIM.
+              //
+              // A failed exchange is arithmetic on this side -- no count rose on the
+              // receiver -- and arithmetic cannot say WHY. The server can, and does: when
+              // `CanHoldWeightAndBulk` fails it messages BOTH sides by name and then
+              // cancels (user.kod:5469-5478). Handing those lines back is the difference
+              // between "nearly always full" and "full, and the server said so".
+              //
+              // Both `message` and `said` kinds, because the offer failures arrive as
+              // server messages while a merchant's refusal arrives as speech, and a caller
+              // trying to explain a dead trade wants whichever turned up.
+              case 'said': {
+                const w = await c.waitFor({ since: args.since ?? undefined,
+                                            kinds: ['message', 'said'],
+                                            timeoutMs: Number(args.timeout_ms ?? 1200) })
+                                 .catch(() => null);
+                json({ said: (w?.events ?? []).map(e => e.text).filter(Boolean),
+                       seq: c.evSeq, trade: view() });
+                return;
+              }
               case 'await_countered': {
                 const w = await c.waitFor({ since: args.since ?? undefined, kinds: ['countered'],
                                             timeoutMs: Number(args.timeout_ms ?? 6000) })
