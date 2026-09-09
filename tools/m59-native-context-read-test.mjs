@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {nativeContextReader} from './m59-native-context-read.mjs';
+let now=10000,calls=0,claimed=true;
+const client={agent:'fixture',pid:3,player_id:4,character:'Fixture',control:'human',at:now};
+let payload={schema:'m59-native-context/1',fleet:'fixture-fleet',broker_pid:2,at:now,clients:[client]};
+const read=nativeContextReader({url:'http://127.0.0.1:8918',now:()=>now,fetcher:async()=>{calls++;return Response.json(payload);}});
+const args={fleet:'fixture-fleet',brokerPid:2,pilot:()=>claimed?{pid:3,objectId:4,character:'Fixture'}:null};
+await Promise.all([read(args),read(args)]);assert.equal(calls,1);
+assert.equal((await read(args)).clients.length,1);assert.equal(calls,1);
+claimed=false;assert.equal((await read(args)).clients.length,0,'release invalidates even fresh cache');claimed=true;
+assert.equal((await read({...args,brokerPid:5})).clients.length,0);
+assert.equal((await read({...args,agents:['other']})).clients.length,0);
+now+=7000;assert.equal((await read(args)).clients.length,0);
+payload={...payload,at:now,clients:[{...client,at:now}]};now+=1100;assert.equal((await read(args)).clients.length,1);
+assert.throws(()=>nativeContextReader({url:'http://192.0.2.1'}));
+const disabled=nativeContextReader({url:null,fetcher:()=>assert.fail('disabled reader fetched')});assert.equal((await disabled(args)).clients.length,0);
+console.log('PASS broker native context: demand-only single-flight cache, exact fleet/PID/claim binding, expiry, immediate claim release, opt-in');
