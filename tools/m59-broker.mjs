@@ -9470,6 +9470,8 @@ const TOOLS = [
         description: 'total equipped plus carried weapons to retain; null keeps every weapon' },
       weapon_priority: { type: 'array', items: { type: 'string' },
         description: 'name fragments best first when choosing which weapons fit under max_weapons' },
+      banned_weapons: { type: ['array', 'null'], items: { type: 'string' },
+        description: 'Weapons this character must NEVER draw, whatever weapon_priority says. A priority is a preference and its last entry is still an entry: with nothing better in the pack, equip_best reaches the bottom and wields it. Substring, case-insensitive. Does not stop the weapon being carried or sold -- selling it is what should happen to it -- and cannot unwield a curse, which refuses every unuse.' },
       ignore_loadout: { type: 'boolean',
         description: 'sell against the generic rules, ignoring this character\'s own list' },
       max_stack: { type: ['number', 'null'],
@@ -10477,6 +10479,14 @@ const TOOLS = [
       if (a.weapon_priority !== undefined)
         p.policy.weaponPriority = Array.isArray(a.weapon_priority) && a.weapon_priority.length
           ? a.weapon_priority.map(String) : null;
+      // A PROHIBITION, NOT A RANKING. Lower-cased at the door because isBannedWeapon
+      // compares that way, and an empty list stores null so "no ban" and "a ban that
+      // matches nothing" cannot be confused downstream.
+      if (a.banned_weapons !== undefined) {
+        const list = Array.isArray(a.banned_weapons)
+          ? a.banned_weapons.map(x => String(x).trim().toLowerCase()).filter(Boolean) : [];
+        p.policy.bannedWeapons = list.length ? list : null;
+      }
       if (a.training_weapon !== undefined) {
         const w = String(a.training_weapon).trim();
         if (!w) throw new Error('training_weapon must name a weapon, not an empty string');

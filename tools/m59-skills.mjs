@@ -456,7 +456,40 @@ export function abilityOf(c, skillName) {
 // training: a character with 90% sword and 11% axe will otherwise wield the sword for
 // ever and never move the axe, because proficiency ranking is a feedback loop that
 // rewards what you are already good at. Pass ['axe'] and it trains the axe.
-export function weaponRanking(c, { priority = null } = {}) {
+// A PRIORITY LIST IS A PREFERENCE. SOME WEAPONS NEED A PROHIBITION.
+//
+// `weaponPriority` ranks what to draw first and says nothing about what must never be
+// drawn, so the last entry on it is still an entry: when nothing better is in the pack,
+// equip_best reaches the bottom of the list and wields it. On this fleet that bottom entry
+// was `mace`, and the same character was found holding one three times in an evening.
+//
+// That is not cosmetic. Mace fighting is Weaponcraft LEVEL 1, and the level-3 unlock counts
+// only the top three LEVEL-2 abilities — so a mace trains a number that no threshold reads,
+// while the bare hands it displaced would have trained brawling, which is level 2 and has no
+// cap on this quarry (stroke/unarmed.kod:56-68). Swinging it is strictly worse than swinging
+// nothing, and every swing also zeroes the bare-hand improvement counter
+// (player.kod:4753-4757).
+//
+// So: a named ban, checked beside junk and cursed rather than expressed as "rank it last".
+// Substring, case-insensitive, and it applies to the ARMED choice only — nothing here stops
+// a banned weapon being carried, looted or sold, because taking it to a merchant is what
+// should happen to it.
+//
+// THE ONE THING A BAN CANNOT DO IS UNWIELD A CURSE. WeapAttCursed refuses every unuse
+// unconditionally (wacursed.kod:97-102), so a cursed mace already in the hand stays there
+// whatever this list says — which is why the ban is on CHOOSING a weapon, and why
+// isCursedItem is a separate filter above rather than folded into this one.
+export const isBannedWeapon = (name, banned = null) => {
+  if (!banned || !banned.length) return false;
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return false;
+  return [].concat(banned).some(b => {
+    const want = String(b || '').trim().toLowerCase();
+    return want && n.includes(want);
+  });
+};
+
+export function weaponRanking(c, { priority = null, banned = null } = {}) {
   const broken = brokenSet(c);
   const rows = (c.inventory || [])
     .map(o => ({ o, name: c.rsc.get(o.nameRsc) || '' }))
@@ -467,6 +500,7 @@ export function weaponRanking(c, { priority = null } = {}) {
     // been identified, so the name test alone hands us the very weapon we must not
     // pick up. See the block above isCursedItem.
     !isJunk(x.name) && !isCursedItem(c, x.o, x.name) &&
+                 !isBannedWeapon(x.name, banned) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
       const skill = proficiencyFor(x.name);
@@ -525,7 +559,8 @@ export const isArmed = (c) => {
 export const HANDS_FULL = /hands are too full/i;
 export const handsFullText = (t) => HANDS_FULL.test(t || '');
 
-export async function equipBest(s, { priority = null, maxTries = 4, refresh = true,
+export async function equipBest(s, { priority = null, banned = null, maxTries = 4,
+                                     refresh = true,
                                      beforeMutation = null, shouldCancel = null } = {}) {
   const c = s.need();
   if (refresh) {
@@ -533,7 +568,7 @@ export async function equipBest(s, { priority = null, maxTries = 4, refresh = tr
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
   const broken = brokenSet(c);
-  const ranked = weaponRanking(c, { priority });
+  const ranked = weaponRanking(c, { priority, banned });
   if (!ranked.length)
     return { wielding: null, verified: false,
              ...(broken.size ? { known_broken: broken.size } : {}),
@@ -2084,6 +2119,11 @@ export async function fight(s, {
   reach = 1.5,
   // Name fragments overriding which weapon to reach for. See weaponRanking.
   weaponPriority = null,
+  // NEVER DRAW THESE, however the priority list ranks them. A priority is a preference
+  // and its last entry is still an entry: with nothing better in the pack, equip_best
+  // reaches the bottom and wields it. Ranking a mace last did not stop a character
+  // holding one three times in an evening. See isBannedWeapon.
+  bannedWeapons = null,
   // PvP is opt-in and every existing caller remains creature-only. exactTargetId
   // prevents a name match from drifting to a different player after verification.
   includePlayers = false,
@@ -2165,7 +2205,7 @@ export async function fight(s, {
 
   let wielded = null;
   if (equip) {
-    const e = await equipBest(s, { priority: weaponPriority });
+    const e = await equipBest(s, { priority: weaponPriority, banned: bannedWeapons });
     wielded = e.id ?? null;
     say('equipped', { wielding: e.wielding, verified: e.verified, skill: e.skill,
                       ability: e.ability, rejected: e.rejected, note: e.note });
@@ -2174,7 +2214,7 @@ export async function fight(s, {
     // verified weapon so a mid-fight shatter can retire its exact id before stopping;
     // deliberate bare-hand training simply leaves this null.
     const held = equippedNow(c);
-    wielded = weaponRanking(c, { priority: weaponPriority })
+    wielded = weaponRanking(c, { priority: weaponPriority, banned: bannedWeapons })
       .find(candidate => held?.has(candidate.o.id))?.o.id ?? null;
   }
 
@@ -2394,7 +2434,7 @@ export async function fight(s, {
     // use list verifies. Otherwise stop before another attack silently becomes a punch.
     if (weaponBroke) {
       if (equip) {
-        const again = await equipBest(s, { priority: weaponPriority });
+        const again = await equipBest(s, { priority: weaponPriority, banned: bannedWeapons });
         const replacementVerified = again.verified === true && again.id != null;
         wielded = replacementVerified ? again.id : null;
         say(replacementVerified ? 're-armed' : 're-arm failed', {

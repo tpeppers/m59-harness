@@ -1453,6 +1453,9 @@ export class Autopilot {
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.
       acceptDonations: null,
+      // Weapons never to draw. null means no prohibition, which is what every doctrine
+      // written before this expects.
+      bannedWeapons: null,
       // A daily share of actual sale proceeds paid to Frular for guild rent. null is
       // inert; DUM's independent Guild Tithe strategy installs the settings object.
       guildTithe: null,
@@ -2107,6 +2110,20 @@ export class Autopilot {
   // loadout's own preference order, which is the standing answer. Null falls through to
   // ranking by proficiency, which is a feedback loop that only ever rewards what the
   // character is already good at.
+  /**
+   * Weapons this character must never draw, whatever the priority list says.
+   *
+   * A priority is a preference and its last entry is still an entry, so ranking a mace
+   * last does not stop equip_best reaching it when the pack holds nothing else. Mace
+   * fighting is Weaponcraft level 1 and the level-3 unlock reads only level-2 abilities,
+   * so a mace trains a number no threshold looks at while displacing bare hands, which
+   * train brawling -- level 2, and uncapped on this quarry.
+   */
+  bannedWeaponsNow() {
+    const b = this.policy?.bannedWeapons;
+    return Array.isArray(b) && b.length ? b : null;
+  }
+
   weaponPriorityNow(targetName = null) {
     // Undead override, above even the operator's list: blunt for a skeleton, a short
     // sword for a zombie (operator order, 2026-09-01). Only these two prey — every
@@ -2303,7 +2320,7 @@ export class Autopilot {
       await this.makeWeapon(`this training bout requires a ${want}`).catch(() => false);
     }
     if (carries() && !equippedWanted())
-      await skills.equipBest(s, { priority: [want] }).catch(() => null);
+      await skills.equipBest(s, { priority: [want], banned: this.bannedWeaponsNow() }).catch(() => null);
     held = equippedWanted();
     if (held) {
       this.note(`training bout: fighting with a ${want}`, { target_id: targetId, weapon: want });
@@ -2312,7 +2329,7 @@ export class Autopilot {
 
     // Do not leave a failed experiment empty-handed. Re-arm normally for survival,
     // but refuse this bout: fighting with a fallback weapon would corrupt the split.
-    await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => null);
+    await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
     return { ready: false, equip: false, style, weapon: want,
              why: `no usable ${want} could be made or equipped` };
   }
@@ -2498,7 +2515,7 @@ export class Autopilot {
            : 'full cost — it was cast and succeeded, so the weapon was refused on being handed over' });
       return false;
     }
-    const eq = await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => null);
+    const eq = await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
     this.tally.weapons_conjured = (this.tally.weapons_conjured || 0) + 1;
     this.recordCast('create weapon', { ok: true, why, made: made.map(o => c.rsc.get(o.nameRsc)),
       mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
@@ -2517,7 +2534,7 @@ export class Autopilot {
     if (!c) return false;
     await this.wearArmourIfNeeded().catch(() => {});
     if (skills.weaponsOf(c).length) {
-      const eq = await skills.equipBest(this.s, { priority: this.weaponPriorityNow() }).catch(() => null);
+      const eq = await skills.equipBest(this.s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
       if (eq?.wielding) return true;
     }
     return await this.makeWeapon('about to fight with nothing in hand').catch(() => false);
@@ -11542,6 +11559,7 @@ export class Autopilot {
       ...(name ? { target: name } : {}), exactTargetId: target.id,
       rounds: 3, disengageAt: 0, loot: false, holdPosition: true, reach: REACH,
       weaponPriority: this.weaponPriorityNow(),
+      bannedWeapons: this.bannedWeaponsNow(),
     });
   }
 
@@ -13513,6 +13531,7 @@ export class Autopilot {
         rounds: this.policy.fightRounds ?? 30, disengageAt: safe.fleeAt,
         loot: false, holdPosition: !!this.hold, reach: REACH,
         weaponPriority: this.weaponPriorityNow(),
+        bannedWeapons: this.bannedWeaponsNow(),
       }).catch(e => ({ killed: false, died: false, note: e.message }));
 
       if (f.killed) {
@@ -13727,6 +13746,7 @@ export class Autopilot {
       target: pick.name, preferId: pick.o.id, exactTargetId: pick.o.id,
       rounds: this.policy.fightRounds ?? 10, disengageAt: fleeAt, loot: true,
       holdPosition: holding, reach: REACH, weaponPriority: this.weaponPriorityNow(),
+      bannedWeapons: this.bannedWeaponsNow(),
     }).catch(e => ({ fought: false, killed: false, died: false, note: e.message }));
     // The clock restarts either way: ten more seconds of being hit re-arms it.
     if (w) w.attack = null;
@@ -16832,7 +16852,8 @@ export class Autopilot {
                                         holdPosition: holding, reach: PLAYER_REACH,
                                         equip: training.equip,
                                         rounds: training.rounds,
-                                        weaponPriority: this.weaponPriorityNow(engageName) });
+                                        weaponPriority: this.weaponPriorityNow(engageName),
+                                        bannedWeapons: this.bannedWeaponsNow() });
 
       // With equip:false fight() cannot know which prepared weapon shattered. Remember
       // the exact short-sword id here so the next pass makes a replacement instead of
@@ -17115,7 +17136,7 @@ export class Autopilot {
                                        items: t.theirs.map(i => i.name + (i.amount > 1 ? ` x${i.amount}` : '')) });
         this.progress('someone gave us something');
         // Put it to use immediately — a donated sword is no help in the pack.
-        await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => {});
+        await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => {});
       } catch (e) { this.note('could not accept a gift', { why: e.message }); }
     }
 
@@ -19620,12 +19641,12 @@ export class Autopilot {
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
 
-    let eq = await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => null);
+    let eq = await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
     // Before asking a stranger for a blade, try the one we can make. Charity is slow,
     // uncertain, and costs another player something; the spell costs 15 mana.
     if (!eq?.wielding && await this.makeWeapon('the alternative was begging a stranger for a blade')
                                   .catch(() => false))
-      eq = await skills.equipBest(s, { priority: this.weaponPriorityNow() }).catch(() => eq);
+      eq = await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => eq);
     const armed = !!eq?.wielding;
     const where = c.rsc.get(c.roomNameRsc) || 'somewhere';
     const hurt = /hurt|heal|flask/i.test(reason || '');
