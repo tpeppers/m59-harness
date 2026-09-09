@@ -207,23 +207,25 @@ function assign(reads) {
     //
     // `can_reach_you` is how many of the 28 squares within melee reach something could
     // actually swing at you from, filtered by the server's own line-of-sight walk. Zero is
-    // the property that matters and it is on every row, tested or not. The BOOK only has an
-    // opinion about squares somebody has already stood in and been attacked on, so ranking
-    // by `tested` alone throws away every good square nobody has tried yet — which on this
-    // fleet is most of them.
+    // the property that matters and it is on every row, whoever has stood there.
+    //
+    // THE `tested` FIELD IS GONE AND NOTHING HERE MOURNS IT. It reported the retired book's
+    // standing for a square, and both uses of it were wrong in the same direction: the
+    // filter excluded squares on evidence that is 89% mis-recorded retaliation, and the
+    // three-square handicap for `holds` preferred squares the fleet crowded onto in August.
+    // Geometry is on every row and needs no history.
     //
     // AND DISTANCE IS THE OTHER HALF, because this is a TIMED walk. The first run picked
     // geometrically perfect squares 38 squares away and gave everybody ten seconds to reach
     // them; at roughly a square a second not one of twenty-one arrived. A near square that
-    // nothing can reach beats a perfect one nobody gets to. `holds` is worth a small
-    // handicap rather than an override — three squares, so a proven square wins a close
-    // race and does not win a long one.
-    const usable = (seen.spots ?? []).filter(x => x.tested !== 'does not work'
-      && x.can_reach_you === 0
+    // nothing can reach beats a perfect one nobody gets to.
+    const usable = (seen.spots ?? []).filter(x => x.can_reach_you === 0
       && Number.isInteger(x.col) && Number.isInteger(x.row)
       && !claimed.has(`${x.col},${x.row}`));
+    // Ties break toward the square that is harder to walk INTO — the operator's definition
+    // of a wall, and free to consult since `safeSpots()` already publishes it.
     const cost = (x) => (Number.isFinite(x.distance) ? x.distance : 999)
-                      + (x.tested === 'holds' ? 0 : 3);
+                      - Math.min(3, (x.refused_approaches ?? 0));
     const target = usable.sort((a, b) => cost(a) - cost(b))[0] ?? null;
     if (!target) { out.push({ agent, state: 'nowhere-safe', room: seen.room?.name ?? null,
                               why: `${(seen.spots ?? []).length} candidate(s), none unreachable-by-anything` }); continue; }

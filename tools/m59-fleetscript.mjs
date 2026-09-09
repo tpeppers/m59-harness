@@ -1160,21 +1160,24 @@ async function runStep(ctx, agent, step, state) {
         .catch(e => ({ error: e.message }));
       if (look?.error) return { ok: false, outcome: 'no_safe_spot_read', why: look.error };
 
-      // ALREADY STANDING IN ONE THAT WORKS. `in_a_safe_spot_now` is the keeper's own verdict
-      // and it already discounts the book's failures for squares nothing can reach — see the
-      // note on that field in m59-broker.mjs. Believe it rather than re-deriving it here.
+      // ALREADY STANDING IN ONE THAT WORKS. `in_a_safe_spot_now` is now a MEASUREMENT of the
+      // square underfoot rather than a lookup in the retired book — see `standingVerdict` in
+      // m59-safewall.mjs. Believe it rather than re-deriving it here.
       const here = look.in_a_safe_spot_now;
       if (here && typeof here === 'object' && here.works !== false) {
         const r = await call('rest_up', { agent, to: want.health }, 300_000).catch(e => ({ error: e.message }));
         return { ok: !r?.error, outcome: 'rested_in_place', at: here.at ?? null, why: r?.error };
       }
 
-      // A PROVEN SQUARE OUTRANKS THE GEOMETRY'S BEST GUESS, AND A DISCREDITED ONE IS NEVER
-      // TAKEN. `spots` arrives best-first by geometry, so keeping that order inside each
-      // tier means the tie-break is still the one safe_spots argues for.
-      const usable = (look.spots ?? []).filter(x => x.tested !== 'does not work'
-        && Number.isInteger(x.col) && Number.isInteger(x.row));
-      const target = usable.find(x => x.tested === 'holds') ?? usable[0] ?? null;
+      // THE GEOMETRY'S ORDER IS THE ORDER. This used to promote squares the book called
+      // `holds` above the geometry's own ranking, and to drop the ones it called
+      // `does not work`. Both tiers came from a failure column that is 89% mis-recorded
+      // retaliation and crowding (see m59-safewall.mjs), so the promotion preferred whichever
+      // square the fleet had piled onto in August and the filter excluded sound walls.
+      // `spots` already arrives best-first by geometry, which is the whole answer.
+      const usable = (look.spots ?? []).filter(x => Number.isInteger(x.col)
+                                                 && Number.isInteger(x.row));
+      const target = usable[0] ?? null;
       if (!target) return { ok: false, outcome: 'nowhere_safe_to_rest',
         room: look.room ?? null,
         why: `nothing in ${look.room?.name ?? 'this room'} is safe to rest in — ` +
@@ -1191,14 +1194,17 @@ async function runStep(ctx, agent, step, state) {
       const nowIn = after?.in_a_safe_spot_now;
       if (!(nowIn && typeof nowIn === 'object' && nowIn.works !== false))
         return { ok: false, outcome: 'could_not_reach_safe_spot',
-                 wanted: { col: target.col, row: target.row, tested: target.tested },
+                 wanted: { col: target.col, row: target.row,
+                           can_reach_you: target.can_reach_you ?? null,
+                           refused_approaches: target.refused_approaches ?? null },
                  why: `walked toward r${target.row}c${target.col} and the keeper still does not ` +
                       'report us in a working safe spot, so this is not a place to sit down' +
                       (walked?.error ? ` (${walked.error})` : '') };
 
       const r = await call('rest_up', { agent, to: want.health }, 300_000).catch(e => ({ error: e.message }));
       return { ok: !r?.error, outcome: 'rested_after_moving',
-               at: nowIn.at ?? null, tested: target.tested, why: r?.error };
+               at: nowIn.at ?? null, can_reach_you: target.can_reach_you ?? null,
+               why: r?.error };
     }
 
     case 'learn': {

@@ -127,9 +127,11 @@ import { RANK, RANK_NAME, COMMANDS, mayI, commandsIn, validateGuild,
          SELF_SUSTAINING_RANK, CANNOT_REJOIN_MINUTES } from './m59-guild.mjs';
 import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops } from './m59-spawns.mjs';
-// UNION: upstream's shelter helpers plus the book this checkout already used.
-import { safeSpots, safeSpotBook, geometryFor as safeSpotGeometryFor,
+// The shelter helpers. `safeSpotBook` is deliberately NOT imported: the book is retired and
+// this file is the place it kept creeping back in. See tools/m59-safewall.mjs.
+import { safeSpots, geometryFor as safeSpotGeometryFor,
          exposureAt, nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
+import { standingVerdict } from './m59-safewall.mjs';
 import { planRuns, planProvisioning } from './m59-lootrun.mjs';
 import { planCharacter, STAT_ORDER, STAT_PRESETS } from './m59-newchar.mjs';
 import { recordSample, recordEvent, summarise as ledgerSummary, readLedger, deathReport, timeReport, spellReport, killsIn, attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
@@ -14199,21 +14201,10 @@ const TOOLS = [
         }
       }
 
-      const book = safeSpotBook(SAFESPOT_FILE);
-      const known = room ? book.list(room.num) : [];
       const spots = safeSpots(geo, {
         limit: num(a.limit, 8),
         mustReach,
       });
-      const rec = me && room ? book.get(room.num, me.col, me.row) : null;
-      // The geometric verdict for the square we are actually standing on. `spots` is capped
-      // at `limit`, so looking it up there would answer null for a sound wall that merely
-      // ranked ninth — the exposure is asked directly for that reason. null, never 0, when
-      // there is no geometry: `discredited` treats null as "no evidence" and keeps the old
-      // rule, which is the safe direction when we cannot tell.
-      let standingReach = null;
-      if (geo && me) { try { standingReach = exposureAt(geo, me.row, me.col)?.attackers ?? null; }
-                       catch { standingReach = null; } }
       const pilot = autopilotIfAny(a.agent);
       return {
         room: room ? { num: room.num, name: room.name } : null,
@@ -14232,29 +14223,30 @@ const TOOLS = [
         // last touched 2026-08-21, before `max_bots_per_safe_spot` came down. That is the
         // fleet crowding onto its own shelter, recorded as walls that leak. This field was
         // reporting that artifact as fact in the fleet's home room.
+        // ASKED OF THE GEOMETRY, NOT OF A HISTORY. This used to answer `rec.held > 0` — has
+        // anyone ever stood here and survived — which made it FALSE for every sound wall
+        // nobody had happened to try. That is not a subtle bug: `m59-friendly-reboot.mjs`
+        // evacuated twenty-one characters to walls the geometry chose and then reported that
+        // none of them had reached safety, because none of those squares were in the book.
+        //
+        // The book is retired (see m59-safewall.mjs for the 89%-inverted failure column).
+        // `standingVerdict` returns the same `{ at, works, evidence }` shape so every caller
+        // keeps working while the SOURCE changes from a tally to a measurement.
         in_a_safe_spot_now: pilot?.status?.().safe_spot ??
-          (rec ? { at: { col: rec.col, row: rec.row },
-                   works: rec.held > 0 && !book.discredited(rec, { reachable: standingReach }),
-                   ...(standingReach === 0 ? { reachable_by: 0 } : {}),
-                   evidence: `held ${rec.held} time(s), hit in it ${rec.failed} time(s)` +
-                             (standingReach === 0
-                               ? '; nothing can stand within reach of this square, so the '
-                                 + 'hits were not the wall'
-                               : '') }
-               : false),
-        spots: spots.map(x => {
-          const k = book.get(room?.num, x.col, x.row);
-          return { ...x,
-            distance: me ? Math.max(Math.abs(x.col - me.col), Math.abs(x.row - me.row)) : null,
-            // Reported against the same rule the keeper acts on: a square the geometry
-            // says nothing can reach is never 'does not work', whatever the ledger holds.
-            tested: k ? (k.held > 0 ? 'holds'
-              : book.discredited(k, { reachable: Number.isInteger(x.can_reach_you) ? x.can_reach_you : null })
-                ? 'does not work' : 'inconclusive') : 'untested',
-            ...(k?.x != null ? { exact: { x: k.x, y: k.y },
-                                 note: 'stand HERE, not at the middle of the square — walk_to aims at ' +
-                                       'the centre and this spot works from a specific place in it' } : {}) };
-        }),
+          (geo && me ? standingVerdict(geo, { row: me.row, col: me.col }) : false),
+        spots: spots.map(x => ({ ...x,
+          distance: me ? Math.max(Math.abs(x.col - me.col), Math.abs(x.row - me.row)) : null,
+          // `tested` IS GONE, AND ITS ABSENCE IS THE FIX. It reported a square's standing in
+          // the book — 'holds' / 'does not work' / 'untested' — and every consumer used it to
+          // rank or to filter, which is how a retired book kept steering the fleet. The
+          // geometry already published `can_reach_you`, `free_shots` and `refused_approaches`
+          // on every row here; those are facts about the square and they are what to sort on.
+          //
+          // Anything that filtered on `tested !== 'does not work'` was filtering on nothing
+          // (`discredited()` has been unconditionally false since 2026-09-06); anything that
+          // preferred `tested === 'holds'` was preferring squares the fleet happened to crowd
+          // onto in August.
+        })),
         known,
         // Which grid these scores came off, said out loud. The live session's geometry and
         // the world map's .roo are the same bake, but a caller comparing two readings should

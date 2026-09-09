@@ -34,6 +34,8 @@ import { sameRoomIslandBridgePlan } from './m59-world.mjs';
 import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { recordTactic } from './m59-tactics.mjs';
+import { verdictFromRow } from './m59-safewall.mjs';
+import { recordRest } from './m59-restwatch.mjs';
 import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
@@ -3115,6 +3117,15 @@ export class Autopilot {
             col: this.hold.col, row: this.hold.row, damage: lost, attackers: company,
             settledMs, source: this.hold.source ?? 'fight' });
           this.book.save();
+          // THE ONE OBSERVATION THAT DISPROVES THE DEFINITION, WRITTEN SOMEWHERE CLEAN.
+          //
+          // The `book.failed` call above is kept for now because other things still read the
+          // book's shape, but it is not evidence: 78% of that file's failure events carry
+          // `failed_via: "fight"` — retaliation, which is the mechanic WORKING — and a further
+          // 11% were recorded before the character arrived. This row is the same event
+          // recorded under the four qualifiers that make it mean something, and nothing that
+          // chooses a square may ever read it. See tools/m59-restwatch.mjs.
+          this.recordRestOutcome({ damage: lost, settledMs, swung: false });
           this.note('THIS IS NOT A SAFE SPOT', {
             where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
             lost_health: lost, attackers: company, was_proven: wasProven,
@@ -3146,6 +3157,10 @@ export class Autopilot {
               seconds: this.hold.quietMs / 1000, attackers: this.hold.mostAttackers,
               source: this.hold.source ?? 'fight' });
             this.book.save();
+            // THE CASE THE DEFINITION PREDICTS: things stood next to us for PROOF_MS and not
+            // one of them landed a blow. Recorded so `clean` has a denominator — a rule with
+            // no violations and no observations says nothing at all.
+            this.recordRestOutcome({ damage: 0, settledMs: this.hold.quietMs, swung: false });
             this.note('this safe spot works', {
               where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
               quiet_for_s: Math.round(this.hold.quietMs / 1000), attackers: this.hold.mostAttackers,
@@ -3179,6 +3194,32 @@ export class Autopilot {
 
     this.lastObs = { at: now, health, adjacentIds,
                      col: me?.col ?? null, row: me?.row ?? null, room: room?.num ?? null };
+  }
+
+  // ONE REST EPISODE, INTO THE CLEAN LEDGER. Never throws and never decides anything: the
+  // ledger it writes may not be read by anything that chooses a square, which is the
+  // guarantee the retired safe-spot book did not have and is exactly how that book stopped
+  // being a record of what happened and became an input to the thing it was measuring.
+  //
+  // `ailing` is asked HERE rather than passed in, so the poison exclusion cannot be
+  // forgotten by a future caller — a poison tick drains through any wall ever built and
+  // says nothing about the square.
+  recordRestOutcome({ damage = 0, settledMs = 0, swung = false } = {}) {
+    try {
+      if (!this.hold) return;
+      const ailing = (this.s.client?.ailments?.() ?? []).length > 0;
+      recordRest({
+        agent: this.s.name ?? null,
+        room: this.hold.room ?? null,
+        verdict: verdictFromRow({
+          col: this.hold.col, row: this.hold.row,
+          can_reach_you: this.hold.canReachYou, free_shots: this.hold.freeShots,
+          refused_approaches: this.hold.refusedApproaches,
+          offered_approaches: this.hold.offeredApproaches,
+        }),
+        damage, swung, ailing, rested_ms: Math.max(0, settledMs),
+      });
+    } catch { /* a ledger may never take a character down */ }
   }
 
   releaseHold(why) {
@@ -3934,6 +3975,12 @@ export class Autopilot {
       // walk a character back onto the square that killed the last one.
       proven: trusted, inherited: trusted, provenAt: trusted ? Date.now() : null,
       canReachYou: spot.can_reach_you, freeShots: spot.free_shots, backCover: spot.back_cover,
+      // THE NUMBERS THIS DECISION WAS MADE WITH, carried so the outcome can be recorded
+      // against them. Re-measuring at the moment of the outcome would record a different
+      // reading from the one that was acted on, and the gap between those two is exactly
+      // where the interesting bugs are. See verdictFromRow in m59-safewall.mjs.
+      refusedApproaches: spot.refused_approaches ?? null,
+      offeredApproaches: spot.offered_approaches ?? null,
     };
     // Tell the other keepers this one is taken, so the next of them to look at this
     // room ranks it out instead of walking into us.

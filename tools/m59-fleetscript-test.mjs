@@ -314,26 +314,43 @@ console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
      JSON.stringify(r.results.a1));
   ok('and does not walk anywhere to do it', !sent.some(x => x.name === 'walk_to'));
 
+  // THE GEOMETRY'S ORDER IS THE ORDER, AND THE BOOK NO LONGER REORDERS IT.
+  //
+  // This pair used to assert the opposite: that a square the book called `holds` was walked
+  // to ahead of the geometry's own first choice, and that one it called `does not work` was
+  // struck out entirely. Both tiers read a failure column that is 89% mis-recorded
+  // retaliation (`failed_via: "fight"` on 5,187 of 6,652 events) and fleet crowding, so the
+  // promotion preferred whichever square twenty-one characters piled onto in August and the
+  // filter hid sound walls. `safe_spots` no longer publishes `tested` at all.
   sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [
-    { col: 5, row: 5, tested: 'untested' }, { col: 21, row: 7, tested: 'holds' } ] });
+    { col: 5, row: 5, can_reach_you: 0 }, { col: 21, row: 7, can_reach_you: 0 } ] });
   r = await trip([rest()], 'rest-move');
   ok('a character in the open walks to a spot before resting',
      r.results.a1.state['0:rest'].outcome === 'rested_after_moving',
      JSON.stringify(r.results.a1.state['0:rest']));
   const walk = sent.find(x => x.name === 'walk_to');
-  ok('and it takes the PROVEN square over the geometry first guess',
-     walk && walk.col === 21 && walk.row === 7, JSON.stringify(walk));
+  ok('and it takes the square the GEOMETRY ranked first, not one with a history',
+     walk && walk.col === 5 && walk.row === 5, JSON.stringify(walk));
 
+  // A square carrying the retired book's worst verdict is now an ordinary candidate, because
+  // that verdict was never evidence about the wall. What still refuses a rest is an EMPTY
+  // list — the geometry offering nothing — which is the real "nowhere safe" and is below.
   sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false,
-    safeSpots: [{ col: 9, row: 9, tested: 'does not work' }] });
+    safeSpots: [{ col: 9, row: 9, tested: 'does not work', can_reach_you: 0 }] });
+  r = await trip([rest()], 'rest-stale-verdict');
+  ok('a square the retired book condemned is taken on its geometry anyway',
+     r.results.a1.state['0:rest'].outcome === 'rested_after_moving',
+     JSON.stringify(r.results.a1.state['0:rest']));
+
+  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [] });
   r = await trip([rest()], 'rest-bad');
-  ok('a discredited square is not a safe spot and the rest is refused',
+  ok('a room the geometry offers NO wall in refuses the rest',
      r.results.a1.ok === false && r.results.a1.state['0:rest'].outcome === 'nowhere_safe_to_rest',
      JSON.stringify(r.results.a1.state['0:rest']));
   ok('and nothing sat down', !sent.rested.length);
 
   sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, walkLands: false,
-    safeSpots: [{ col: 21, row: 7, tested: 'holds' }] });
+    safeSpots: [{ col: 21, row: 7, can_reach_you: 0 }] });
   r = await trip([rest()], 'rest-miss');
   ok('a walk that did not land leaves the character standing, not resting',
      r.results.a1.state['0:rest'].outcome === 'could_not_reach_safe_spot',

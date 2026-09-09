@@ -617,3 +617,10 @@ _verify2.mjs
 #    directory the runtime enumerates and never inside it, because `listScripts()` reads
 #    every .json in scripts/ and an example in there is an extra behaviour on the board.
 /substrate/menagerie/scripts/
+
+# THE CLEAN SAFE-WALL LEDGER. This machine's evidence about this machine's fleet: it names
+# agent slots and it is a measurement of a live roster, not a fact about the tooling. It is
+# also deliberately re-startable — the whole point of it is that `--report` counts only the
+# current `safespots` epoch, so a stranger cloning this repository wants an empty one rather
+# than ours. See tools/m59-restwatch.mjs.
+/substrate/restwatch.jsonl
