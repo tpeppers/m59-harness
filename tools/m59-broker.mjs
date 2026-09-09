@@ -9657,6 +9657,14 @@ const TOOLS = [
         enabled: { type: 'boolean' }, max_floor_items: { type: 'number' },
         keep_free_stacks: { type: 'number' },
       }, description: 'before sell-bound departures, discard confirmed dead gear and rank floor stock for the return pack; null disables it' },
+      accept_donations: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        reagents: { type: 'array', items: { type: 'string' },
+          description: 'What this character will take unasked. Defaults to the reagent list.' },
+        drop_for_space: { type: 'array', items: { type: 'string' },
+          description: 'Cheapest kinds it may put on the floor to make room. Default mushroom.' },
+        min_bulk_free: { type: 'number', description: 'Shed below this much free bulk. Default 40.' },
+      }, description: 'accept reagents a FLEETMATE offers, without negotiating: reply with an empty counteroffer and accept. Turns a two-sided handover into a one-sided one -- the donor walks over, pushes the goods across and leaves, and nobody agrees a moment. Refuses a stranger, refuses a pile containing anything not on the list, and cancels rather than leaving the window open. null disables it' },
       buff_allies: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         spells: { type: 'array', items: { type: 'string' },
@@ -10346,6 +10354,22 @@ const TOOLS = [
           p.policy.farmCleanup = { enabled: true,
             max_floor_items: Math.max(1, Math.min(40, Math.floor(Number(value.max_floor_items) || 12))),
             keep_free_stacks: Math.max(0, Math.min(12, Math.floor(Number(value.keep_free_stacks) || 0))) };
+        }
+      }
+      if (a.accept_donations !== undefined) {
+        if (a.accept_donations == null) p.policy.acceptDonations = null;
+        else {
+          const value = a.accept_donations;
+          if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
+            throw new Error('accept_donations must be null or an enabled settings object');
+          const list = (k) => Array.isArray(value[k])
+            ? value[k].map(x => String(x).trim().toLowerCase()).filter(Boolean) : undefined;
+          const reagents = list('reagents'), sheds = list('drop_for_space');
+          p.policy.acceptDonations = { enabled: true,
+            ...(reagents && reagents.length ? { reagents } : {}),
+            ...(sheds ? { drop_for_space: sheds } : {}),
+            min_bulk_free: Math.max(0, Math.min(1000,
+              Math.floor(Number(value.min_bulk_free) || 40))) };
         }
       }
       // SAME SHAPE AS farm_cleanup ABOVE: null is off, and an object must say `enabled`
