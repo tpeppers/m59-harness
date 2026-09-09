@@ -115,7 +115,8 @@ export function roster() {
   try {
     const j = JSON.parse(readFileSync(ACCOUNTS_FILE, 'utf8'));
     for (const [account, v] of Object.entries(j.accounts || {}))
-      byAccount.set(account, { account, password: v.password, character: v.character || null, agent: null });
+      byAccount.set(account, { account, password: v.password, character: v.character || null,
+                               host: v.host || null, port: v.port || null, agent: null });
   } catch { /* no fleet made here yet */ }
   try {
     const j = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
@@ -127,6 +128,14 @@ export function roster() {
         account: cr.account,
         password: cr.password || prev.password,
         character: cr.character || prev.character || null,
+        // CARRIED, BECAUSE `clientArgs` ASKS FOR THEM AND THE COMMENT THERE IS THE REASON.
+        // Dropping these made `e.host` undefined for every entry, so the opts fallback —
+        // M59_HOST or 127.0.0.1 — won every time. Every shortcut on this machine pointed at
+        // 127.0.0.1:5959 while all 22 roster entries said 76.214.42.186:5959, and the
+        // failure is the silent one that comment predicts: the client opens, finds nothing
+        // on the port, and waits.
+        host: cr.host || prev.host || null,
+        port: cr.port || prev.port || null,
         agent,
       });
     }
