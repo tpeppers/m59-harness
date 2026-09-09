@@ -34,7 +34,7 @@
 
 import http from 'node:http';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -92,6 +92,10 @@ import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings, recordAbandoned
          recordDeclined, recordFailed, unusedTools } from './runtime/deadlines.mjs';
 import { allocateKeeperBand, KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
 import { resolveAgentName } from './m59-agent-name.mjs';
+import { menageriePathFor, loadMenagerie, splitRosters, hostConfig, excludedNote,
+         isMenageriePath } from './m59-menagerie-roster.mjs';
+import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
+         isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
 import { resolveItemNames, weighItem } from './m59-items.mjs';
@@ -1457,7 +1461,7 @@ async function keeperState(agent, index, { fresh = false } = {}) {
         return null;
       }
       const expectedCharacter = keeperCharacterIdentity(
-        fleetState.get(agent)?.credentials?.character);
+        rosterEntry(agent)?.credentials?.character);
       const observedCharacter = keeperCharacterIdentity(j?.character);
       if (expectedCharacter && observedCharacter !== expectedCharacter) {
         console.error(`[keeper] ${agent}: port ${port} reports character ` +
@@ -1492,7 +1496,7 @@ async function keeperState(agent, index, { fresh = false } = {}) {
 async function keeperGet(agent, index, path, params = {}) {
   const port = keeperPort(agent, index);
   const q = new URLSearchParams(Object.entries({ ...params, agent,
-    character: fleetState.get(agent)?.credentials?.character ?? null,
+    character: rosterEntry(agent)?.credentials?.character ?? null,
     keeper_pid: keeperProcesses.get(agent)?.pid ?? null })
     .filter(([, v]) => v !== undefined && v !== null && v !== ''));
   try {
@@ -1578,7 +1582,7 @@ async function verifiedKeeperWriteTarget(agent, index) {
 
   const expected = {
     agent,
-    character: fleetState.get(agent)?.credentials?.character ?? null,
+    character: rosterEntry(agent)?.credentials?.character ?? null,
     pid,
   };
   const proxy = sessions.get(agent);
@@ -1743,7 +1747,7 @@ class KeeperProxy {
     this._stateInFlight = null;
     this._liveness = new KeeperLiveness({
       agent,
-      character: fleetState.get(agent)?.credentials?.character ?? null,
+      character: rosterEntry(agent)?.credentials?.character ?? null,
       phantomAfterMs: KeeperProxy.PHANTOM_AFTER_MS,
       probeEveryMs: KEEPER_LIVENESS_SWEEP_MS,
     });
@@ -2290,7 +2294,7 @@ class KeeperProxy {
   _expectedIdentity() {
     return {
       agent: this.name,
-      character: fleetState.get(this.name)?.credentials?.character ?? null,
+      character: rosterEntry(this.name)?.credentials?.character ?? null,
       pid: keeperProcesses.get(this.name)?.pid ?? null,
     };
   }
@@ -3200,12 +3204,33 @@ function saveFleetState() {
 const callerTrace = (label) =>
   new Error(label).stack.split('\n').slice(2, 8).join('\n');
 
+// A WRITE GOES TO THE ROSTER THE AGENT ALREADY BELONGS TO, AND NEVER TO THE OTHER ONE.
+//
+// This is the single most dangerous line in the split. `saveFleetState()` writes the whole
+// of `fleetState` into the fleet's roster file — the only record of those account
+// passwords — and it deliberately carries forward every entry already on disk so a
+// truncated write can never lose a character. So an accidental `fleetState.set(host, ...)`
+// does not merely mislabel a row: it writes a merchant permanently into the fleet's
+// password file, where the next fleet-wide instruction finds it and nothing ever removes
+// it. `rememberJoin` used to be an unconditional set, and every host joins.
+//
+// Neither map is the default. An agent in neither is new, and a new agent is the FLEET's —
+// a host only ever becomes one through `m59-menagerie.mjs enlist`, which is the deliberate
+// act that moves an entry between the two files.
+const rosterOwnerOf = agent => menagerieState.has(agent) ? 'menagerie' : 'fleet';
+
 function rememberJoin(agent, credentials) {
+  if (rosterOwnerOf(agent) === 'menagerie') {
+    menagerieState.set(agent, { ...(menagerieState.get(agent) || {}), credentials });
+    saveMenagerieState();
+    return;
+  }
   fleetState.set(agent, { ...(fleetState.get(agent) || {}), credentials });
   saveFleetState();
 }
 function rememberAutopilot(agent, config) {
-  const e = fleetState.get(agent);
+  const host = rosterOwnerOf(agent) === 'menagerie';
+  const e = host ? menagerieState.get(agent) : fleetState.get(agent);
   if (!e) return;                       // never joined through us; nothing to rebuild
   // LOG the mode write so a silent tick->survive revert is visible. This was the
   // undiagnosable part of "the bot won't stay on tick" — nothing said which line wrote
@@ -3234,12 +3259,121 @@ function rememberAutopilot(agent, config) {
   // Preserve useGOAP — it's set in the fleet file but not in the in-memory policy.
   if (e.autopilot?.policy?.useGOAP && !config.policy?.useGOAP) config.policy.useGOAP = true;
   e.autopilot = config;
-  saveFleetState();
+  if (host) saveMenagerieState(); else saveFleetState();
 }
 // The ONE way an entry leaves the file. Recorded rather than inferred, because the save
 // now carries forward anything it did not expect to be missing — without this, `forget`
 // would write the entry straight back.
-function forgetAgent(agent) { forgotten.add(agent); fleetState.delete(agent); saveFleetState(); }
+function forgetAgent(agent) {
+  forgotten.add(agent);
+  // A host leaves its OWN file. Without this, `forget` on a host deletes nothing (it is
+  // not in fleetState), saves the fleet roster, and reports success — the quiet no-op this
+  // repository keeps paying for.
+  if (menagerieState.has(agent)) { menagerieState.delete(agent); menagerieIndex = hostNameIndex(menagerieState); saveMenagerieState(); return; }
+  fleetState.delete(agent); saveFleetState();
+}
+
+// ---------------------------------------------------------------- the menagerie
+//
+// A SECOND ROSTER, ON THIS BROKER, THAT THE FLEET'S TOOLS CANNOT REACH.
+//
+// Hosts are characters that exist to run a script — a merchant standing in Tos selling the
+// fleet's excess gear and talking to whoever talks to it — rather than to be commanded.
+// They share this process, this server, this keeper band, the safe-spot book and the
+// grudge book. They are not the fleet, and "the fleet" must never quietly include them.
+//
+// THE SPLIT IS TWO MAPS AND TWO FILES, AND THAT IS THE WHOLE MECHANISM.
+//
+// It would have been less code to add a `host: true` flag to entries in `fleetState`. That
+// is the version that breaks, and it breaks the same way every time: `saveFleetState()`
+// writes `Object.fromEntries(fleetState)` into the fleet's roster — the file that is the
+// ONLY record of the account passwords — and it carries forward every entry already on
+// disk, on purpose, so that a truncated write can never lose a character. A host in that
+// map is therefore a host written permanently into the fleet's password file by any of a
+// dozen code paths, including every keeper that starts and writes its policy back. The
+// separation has to be structural or it is not a separation: a fleet-wide instruction
+// cannot pick up a host it cannot enumerate, and no fleet write can reach a file it does
+// not open.
+//
+// See docs/m59-menagerie.md for the argument, and tools/m59-menagerie-test.mjs for what
+// is pinned.
+// Where a host's keeper listens: this fleet's own band, top half. See resumeFleet.
+const MENAGERIE_KEEPER_SLOT = Number(process.env.M59_MENAGERIE_KEEPER_SLOT || 50);
+const MENAGERIE_FILE = menageriePathFor(STATE_FILE);
+const menagerieState = new Map();   // agent -> { credentials, autopilot, host }
+// Rebuilt whenever the menagerie changes, because the guard runs on EVERY tool call and
+// must not rebuild a name index per call.
+let menagerieIndex = hostNameIndex(menagerieState);
+
+function loadMenagerieState() {
+  // A ROSTER THAT WILL NOT PARSE IS NOT AN EMPTY MENAGERIE. loadMenagerie throws for that
+  // case on purpose: the refusal below is driven by this map, so an empty map is an OPEN
+  // DOOR — every host name would fall straight back to the fleet's command surface. A
+  // broker that cannot read its menagerie must say so and hold none of them, rather than
+  // come up healthy and quietly commandable.
+  try {
+    const m = loadMenagerie(MENAGERIE_FILE);
+    menagerieState.clear();
+    for (const [agent, entry] of m.hosts) menagerieState.set(agent, entry);
+    menagerieIndex = hostNameIndex(menagerieState);
+    if (m.present)
+      console.error(`[menagerie] ${menagerieState.size} host(s) from ${MENAGERIE_FILE}`);
+    return m;
+  } catch (e) {
+    console.error(`[menagerie] ${e.message}`);
+    console.error('[menagerie] NO hosts will be held this session. The fleet is unaffected.');
+    menagerieState.clear();
+    menagerieIndex = hostNameIndex(menagerieState);
+    return null;
+  }
+}
+
+// The menagerie's own writer. It opens ONE file and it is not the fleet's.
+function saveMenagerieState() {
+  try {
+    mkdirSync(dirname(MENAGERIE_FILE), { recursive: true });
+    const next = Object.fromEntries(menagerieState);
+    // Same carry-forward rule as the fleet roster and for the same reason: this file holds
+    // the only copy of these accounts' passwords, so a write that shrinks it is the one
+    // write worth being afraid of.
+    try {
+      const now = JSON.parse(readFileSync(MENAGERIE_FILE, 'utf8'));
+      const kept = [];
+      for (const [agent, entry] of Object.entries(now)) {
+        if (agent in next) continue;
+        next[agent] = entry; kept.push(agent);
+      }
+      if (kept.length) {
+        writeFileSync(MENAGERIE_FILE + '.prev', JSON.stringify(now, null, 2));
+        console.error(`[menagerie] keeping ${kept.length} entry(s) not loaded this session: ${kept.join(', ')}`);
+      }
+    } catch { /* no current file — nothing to preserve */ }
+    writeFileSync(MENAGERIE_FILE, JSON.stringify(next, null, 2));
+  } catch (e) { console.error(`[menagerie] could not save: ${e.message}`); }
+}
+
+const isHost = agent => menagerieState.has(agent);
+const hostNames = () => [...menagerieState.keys()];
+
+// THE PLUMBING SERVES BOTH; THE COMMAND SURFACE SERVES ONE.
+//
+// That sentence is the whole design. Joining, spawning a keeper, allocating a port,
+// rejoining after a drop, taking an account lease — none of those cares whether a
+// character is a merchant or a Muppet, and duplicating them for the menagerie would mean
+// two copies of the code that logs characters in, which is how the second copy rots.
+// So the plumbing looks a name up HERE, in both maps, and every surface that decides who
+// obeys an instruction reads `fleetState` alone.
+const rosterEntry = agent => fleetState.get(agent) ?? menagerieState.get(agent);
+const inAnyRoster = agent => fleetState.has(agent) || menagerieState.has(agent);
+
+// The characters a HOST plays, for the allied set below.
+function menagerieCharacters() {
+  const names = new Set();
+  for (const e of menagerieState.values())
+    if (e?.credentials?.character) names.add(e.credentials.character);
+  return names;
+}
+
 
 // WHICH CHARACTERS ARE THIS FLEET'S, for anything that reads a directory keyed by
 // character name — `substrate/postmortems/`, `substrate/abilities/`, `substrate/hits/`.
@@ -3255,7 +3389,19 @@ function fleetCharacters() {
   const names = new Set();
   for (const s of sessions.values()) if (s?.client?.me?.name) names.add(s.client.me.name);
   for (const e of fleetState.values()) if (e?.credentials?.character) names.add(e.credentials.character);
-  return names.size ? names : null;
+  // HOSTS ARE OURS HERE, AND THIS IS THE ONE PLACE THEY ARE.
+  //
+  // This resolver answers "which characters on this server are ours" for the party module,
+  // the grudge book and the fleetmate check — every decision about whether to ATTACK
+  // something. A host left out of it is a stranger standing in a town full of our own
+  // armed characters, and this repository has already killed one of its own exactly that
+  // way: Statler, 2026-08-27, a keeper process that could not see its own roster called
+  // the whole fleet strangers, and the grudge book filled with our own names.
+  //
+  // "Do not shoot" and "obey a fleet order" are different questions with different
+  // answers. Everything that decides who obeys reads fleetState alone.
+  const allied = alliedCharacters(names, menagerieCharacters());
+  return allied.size ? allied : null;
 }
 
 // TELL THE PARTY MODULE WHO IS OURS BEFORE ANY KEEPER HAS HAD A PASS. Its own map fills
@@ -3621,6 +3767,28 @@ async function resumeFleet() {
   let saved;
   try { saved = JSON.parse(readFileSync(STATE_FILE, 'utf8')); }
   catch { return; }
+
+  // THE MENAGERIE COMES UP WITH THE FLEET, from its own file, and is merged into this
+  // resume rather than given a second one. Logging characters in is plumbing — the account
+  // lease, the piloted-client check, the keeper spawn, the concurrency lanes — and a second
+  // copy of it for the hosts is a second copy that rots. What is NOT shared is which map
+  // each entry lands in, twenty lines below.
+  const menagerie = loadMenagerieState();
+  // Minted after the load, because it is only written when there is actually a menagerie
+  // to drive — and it is rewritten every start, so a token cannot outlive the process that
+  // knew which characters it authorised.
+  mintMenagerieToken();
+  const overlap = splitRosters(Object.keys(saved), hostNames()).overlap;
+  if (overlap.length) {
+    // AN AGENT IN BOTH FILES IS A CORRUPTED SPLIT, NOT A PREFERENCE. Whichever file was
+    // written last would decide whether a character is a merchant or a Muppet, and the two
+    // files are written by different processes. Refuse rather than pick: the same rule the
+    // keeper band registry applies to a duplicated fleet key.
+    throw new Error(`refusing fleet resume: ${overlap.length} agent(s) are in BOTH the fleet ` +
+      `roster and the menagerie — ${overlap.join(', ')}. One of the two files is wrong. ` +
+      `${STATE_FILE} and ${MENAGERIE_FILE}`);
+  }
+  for (const [agent, entry] of menagerieState) saved[agent] = entry;
   // The file may have changed between process startup and this async resume. Re-validate
   // aliases and acquire every newly introduced endpoint/account before the first await or
   // login. acquireAll is transactional, so one conflict leaves none of the additions held.
@@ -3723,16 +3891,31 @@ async function resumeFleet() {
   // preferred port — is assigned by roster position exactly as it was serially. A port
   // that moves every restart is a port nothing outside this process can predict.
   const work = [];
+  // HOSTS TAKE THE TOP HALF OF THIS FLEET'S KEEPER BAND.
+  //
+  // A band is 100 ports wide and no fleet here is close to that, so the split costs
+  // nothing and buys something real: `netstat` says at a glance which listeners are the
+  // fleet's and which are the menagerie's. Shadow's fleet sits at 9111-9130 and its hosts
+  // begin at 9161. It stays inside the fleet's OWN registered band, so it cannot collide
+  // with another fleet — the failure the band registry exists for, where prod's t10 and
+  // shadow's shadow10 both wanted port 8920 and each broker read the other's keeper.
+  let hostIndex = MENAGERIE_KEEPER_SLOT;
   for (const agent of names) {
-    const { credentials, autopilot } = saved[agent] || {};
+    const { credentials, autopilot, host } = saved[agent] || {};
     if (!credentials) continue;
-    fleetState.set(agent, { credentials, autopilot });
+    // THE ONE LINE THE WHOLE SPLIT RESTS ON. An entry loaded from the menagerie file goes
+    // into the menagerie map; everything else goes into the fleet's. Nothing downstream
+    // re-decides this, and no fleet write can reach the other file.
+    if (menagerieState.has(agent)) menagerieState.set(agent, { credentials, autopilot, host });
+    else fleetState.set(agent, { credentials, autopilot });
     // A locally-held character still owns its stable keeper slot.  We skip only the
     // spawn while the human client has it; once that claim is released, reconciliation
     // must take the keeper-backed branch rather than quietly creating an in-process
     // Session on the broker's event loop.  Incrementing before the continue also keeps
     // every later roster member on the same port whether or not somebody was held at boot.
-    const index = useKeepers ? keeperIndex++ : null;
+    const index = useKeepers
+      ? (menagerieState.has(agent) ? hostIndex++ : keeperIndex++)
+      : null;
     if (useKeepers) agentIndices.set(agent, index);
     if (held.has(agent)) continue;
     work.push({ agent, credentials, autopilot, index });
@@ -3883,7 +4066,7 @@ async function confirmHeldOnline(held) {
     releasePilot(agent, 'its client is running but the character is not in the world');
     // The roster entry, which the resume loop recorded on its way past even for the
     // agents it skipped — precisely so this path has something to log in with.
-    const { credentials, autopilot } = fleetState.get(agent) || {};
+    const { credentials, autopilot } = rosterEntry(agent) || {};
     if (!credentials) continue;
     try {
       requireBrokerAccountLease(agent, credentials);
@@ -3956,7 +4139,7 @@ async function reconcileFleet() {
   const livenessProofs = new Map();
   await Promise.all([...sessions.entries()]
     .filter(([agent, s]) => s instanceof KeeperProxy &&
-      fleetState.has(agent) && !leftOnPurpose.has(agent) &&
+      inAnyRoster(agent) && !leftOnPurpose.has(agent) &&
       !keeperSpawning.has(agent) && !pilotOf(agent))
     .map(async ([agent, proxy]) => {
       const proof = await proxy.refreshLiveness({ force: true });
@@ -3965,7 +4148,11 @@ async function reconcileFleet() {
   if (brokerStopping) return;
   if (!fleetClaimStillOurs()) return;
 
-  for (const [agent, entry] of [...fleetState]) {
+  // BOTH ROSTERS. A host that drops and is never rejoined is a shop that closed without
+  // telling anybody — no error, no alert, just a merchant who is not there any more. The
+  // sweep is plumbing and serves the menagerie for exactly the same reason it serves the
+  // fleet.
+  for (const [agent, entry] of [...fleetState, ...menagerieState]) {
     if (brokerStopping) return;
     const credentials = entry?.credentials;
     if (!credentials) continue;
@@ -4322,7 +4509,7 @@ async function autoClaimLocalClient() {
   const s = sessions.get(hit.agent);
   // The client must be pointed at the server this fleet is on. A second checkout playing
   // the same account elsewhere is not our operator.
-  const want = s?.credentials ?? fleetState.get(hit.agent)?.credentials ?? null;
+  const want = s?.credentials ?? rosterEntry(hit.agent)?.credentials ?? null;
   if (want?.host && hit.host && want.host !== hit.host) {
     console.error(`[pilot] a local client is playing ${hit.agent} against ${hit.host}, not ` +
                   `${want.host} — not claiming`);
@@ -4450,7 +4637,7 @@ function releasePilot(agent, why = 'released') {
   if (s?.live && p.keeperWasRunning && !(s instanceof KeeperProxy)) {
     try {
       const keeper = autopilotFor(s);
-      const saved = fleetState.get(agent)?.autopilot;
+      const saved = rosterEntry(agent)?.autopilot;
       if (saved) {
         keeper.mode = saved.mode || keeper.mode;
         Object.assign(keeper.policy, saved.policy || {});
@@ -4845,7 +5032,11 @@ const session = (name, { create = false } = {}) => {
   const r = resolveAgentName(name, {
     held: sessions.has(name),
     keeperBacked: agentIndices.has(name),
-    inRoster: fleetState.has(name),
+    // BOTH ROSTERS. This is plumbing, not a command surface: a name nobody answers to is
+    // still a typo, and a host is answered to. The refusal that keeps hosts away from
+    // fleet instructions is in callTool, not here — putting it here would stop the
+    // menagerie runtime from driving its own characters.
+    inRoster: inAnyRoster(name),
     create,
     roster: fleetState,
   });
@@ -4957,7 +5148,7 @@ function requireControlEndpoint(s, hostValue, portValue) {
     throw new Error('RTS control requires an explicit game server host and port');
   // A KeeperProxy owns no credential copy on the proxy object. Its credentials remain
   // in fleetState, which is the exact roster record used to spawn that keeper.
-  const credentials = s.credentials ?? fleetState.get(s?.name)?.credentials ?? null;
+  const credentials = s.credentials ?? rosterEntry(s?.name)?.credentials ?? null;
   const actualHost = typeof credentials?.host === 'string'
     ? credentials.host.trim().toLowerCase() : String(HOST).trim().toLowerCase();
   const actualPort = Number(credentials?.port ?? PORT);
@@ -4968,7 +5159,7 @@ function requireControlEndpoint(s, hostValue, portValue) {
 
 function exactRosterAuthority(s, { agent = s?.name, character, host, port } = {}) {
   if (!s || s.name !== agent) throw new Error('RTS roster authority agent mismatch');
-  const entry = fleetState.get(agent);
+  const entry = rosterEntry(agent);
   const saved = entry?.credentials;
   if (!saved) throw new Error(`${agent} is not present in the selected fleet roster`);
   const wantedCharacter = typeof character === 'string' ? character : saved.character;
@@ -5577,7 +5768,7 @@ const TOOLS = [
       // So the remembered entry fills anything the caller did not say. An explicit argument
       // still wins: pointing a session somewhere else on purpose stays possible, it just
       // stops being what happens by accident.
-      const known = fleetState.get(a.agent)?.credentials;
+      const known = rosterEntry(a.agent)?.credentials;
       const args = known
         ? { ...a,
             account:  a.account  ?? known.account,
@@ -9988,7 +10179,7 @@ const TOOLS = [
       // as training_style rewrites every omitted policy value to constructor defaults.
       // Do not do this to an in-process autopilot: loadout overlays may have legitimately
       // changed its live policy since the roster was written.
-      const savedAutopilot = fleetState.get(a.agent)?.autopilot;
+      const savedAutopilot = rosterEntry(a.agent)?.autopilot;
       if (s instanceof KeeperProxy && savedAutopilot?.policy)
         Object.assign(p.policy, savedAutopilot.policy);
       // The running stub's mode defaults to 'survive' (Autopilot constructor), but the
@@ -9996,7 +10187,7 @@ const TOOLS = [
       // When a caller does NOT explicitly set the mode, we must preserve the roster's
       // mode — writing the stub's default here is what silently reverted 'tick' back to
       // 'survive' on every rejoin (the stub never knows the keeper is running tick).
-      const rosterMode = fleetState.get(a.agent)?.autopilot?.mode ?? p.mode;
+      const rosterMode = rosterEntry(a.agent)?.autopilot?.mode ?? p.mode;
       // Authority belongs to the process executing the pass loop. Recording a claim
       // or busy errand on this dormant shell leaves the real keeper free to recall
       // a town runner home between travel legs.
@@ -14624,6 +14815,10 @@ const TOOLS = [
       // 24-hour death count and latest-death fallback.
       const recentDeaths = recentDeathsIn(POSTMORTEM_DIR, { sinceMs: DEATH_WINDOW_MS });
       for (const [name, s] of sessions) {
+        // MENAGERIE HOSTS ARE NOT THE FLEET AND DO NOT APPEAR ON THE FLEET BOARD.
+        // Counted, though, and reported below — a board that silently drops rows is the
+        // failure this repository has paid for more than once.
+        if (isHost(name)) continue;
         const c = s.client;
         const ap = autopilotIfAny(name);
         const st = (s instanceof KeeperProxy) ? s.status() : (ap ? ap.status() : null);
@@ -15092,8 +15287,18 @@ const TOOLS = [
       // exactly like one that has simply been walking. Anything scanning this board for
       // "why is nobody killing" has to be able to see it without opening an inventory.
       const tokens = rows.filter(r => r.holding_token === true);
+      // SAY THAT THE MENAGERIE EXISTS AND THAT IT IS NOT IN THIS ANSWER.
+      //
+      // Not filtering silently. A reader who asks for "the fleet", acts on twenty rows and
+      // is never told that two more characters are logged in on this same broker has been
+      // given a true answer to a question they did not know they were asking — and that is
+      // indistinguishable from the answer they wanted right up until it matters. The count
+      // is here; the names are deliberately not, because naming them here is the beginning
+      // of somebody passing one back in.
+      const hiddenHosts = withoutHosts([...sessions.keys()], hostNames()).hiddenCount;
       return {
         agents: rows.length,
+        ...(hiddenHosts ? { menagerie_hosts: hiddenHosts, menagerie: excludedNote(hiddenHosts) } : {}),
         stalled_count: stuck.length,
         // NOT THE SAME NUMBER AS stalled_count, and the difference is the point: that one
         // counts everything wrong including a keeper that never started, this one counts
@@ -15375,6 +15580,27 @@ const SNAPSHOT_OPTIONAL_TOOLS = new Set([
 async function callTool(name, args, caller) {
   const t = byName.get(name);
   if (!t) throw new Error(`unknown tool "${name}"`);
+
+  // THE MENAGERIE DOOR, AND IT IS THIS ONE BECAUSE THERE IS ONLY ONE.
+  //
+  // Every MCP request over both transports arrives here and nothing else does, which is
+  // what makes a single check sufficient. A call that names a host — by its agent name or
+  // by its character name, in any argument at any depth — is refused unless the caller is
+  // the menagerie runtime that owns it.
+  //
+  // BEFORE the snapshot resolve below, deliberately: that block will build a KeeperProxy
+  // and await a keeper's rich state for `args.agent`, and a refused call must not first go
+  // and touch the host it is being refused.
+  //
+  // The requirement in the operator's own words: "I don't ever want me to say 'send
+  // everyone to Castle Victoria' and have it be interpreted to be ALSO one of these
+  // ride-along characters." Documentation cannot hold that line, because the mistake it
+  // prevents is somebody doing the obvious thing with the obvious tool at 02:00. A door
+  // can.
+  if (menagerieIndex.size) {
+    const verdict = guardToolCall({ tool: name, args, caller, index: menagerieIndex });
+    if (verdict.action === 'refuse') throw new Error(verdict.error);
+  }
   // Rich keeper state is now demand-driven. Resolve the target before the tool reads any
   // object id, position, inventory or vital, and coalesce bursts through the proxy's 2s
   // TTL. Join/reroll are the two tools allowed to introduce a name and therefore cannot
@@ -15382,7 +15608,7 @@ async function callTool(name, args, caller) {
   if (args?.agent && name !== 'join' && name !== 'reroll' &&
       !SNAPSHOT_OPTIONAL_TOOLS.has(name)) {
     let targeted = sessions.get(args.agent);
-    if (!targeted && agentIndices.has(args.agent) && fleetState.has(args.agent))
+    if (!targeted && agentIndices.has(args.agent) && inAnyRoster(args.agent))
       targeted = session(args.agent);
     if (targeted instanceof KeeperProxy)
       await targeted.ensureSnapshot();
@@ -15572,7 +15798,7 @@ function brokerGameEndpoints() {
   for (const [agent, s] of sessions) {
     // KeeperProxy deliberately has no socket credentials of its own; the exact
     // credentials used to spawn it remain in fleetState.
-    const credentials = s.credentials ?? fleetState.get(agent)?.credentials ?? null;
+    const credentials = s.credentials ?? rosterEntry(agent)?.credentials ?? null;
     const host = typeof credentials?.host === 'string'
       ? credentials.host.trim() : String(HOST).trim();
     const port = Number(credentials?.port ?? PORT);
@@ -15772,6 +15998,15 @@ function brokerHealth() {
     // about a tool the fleet reaches for once a day, and reading it as proof is how a
     // working tool gets deleted.
     tools_unused_this_run: unusedTools(TOOLS.map(t => t.name)),
+    // THE MENAGERIE IS DECLARED HERE, because /health is the one place a tool asks a
+    // broker what it is holding, and m59-which.mjs's entire doctrine is that a broker is
+    // identified by the roster it serves rather than by its label. A broker holding two
+    // rosters that only announced one would be lying by the same mechanism.
+    // The count and the file, never the names.
+    ...(menagerieState.size
+      ? { menagerie: { hosts: menagerieState.size, state: MENAGERIE_FILE,
+                       note: 'not the fleet; not commandable over MCP' } }
+      : {}),
     ...readiness,
     session_driver: SESSION_DRIVER,
     ...liveSessionIdentity(readiness),
@@ -15811,6 +16046,55 @@ function brokerLoopbackRequest(req) {
     ? rawHost.slice(0, rawHost.indexOf(']') + 1)
     : rawHost.split(':')[0];
   return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+// THE MENAGERIE RUNTIME'S DOOR, AND THE ONLY ONE.
+//
+// The refusal in callTool is absolute by tool and by name: nothing that arrives over MCP
+// may drive a host. But the menagerie runtime drives hosts through those same tools, so it
+// needs a way to say "I am the thing that owns these characters" — and it has to be a way
+// that an ordinary MCP client cannot accidentally be.
+//
+// A capability, carried, never inferred from reachability. This transport has no
+// authentication of its own and M59_BIND can put it on a LAN interface, so the same rule
+// the RTS read token follows applies here: loopback AND the token, both.
+//
+// WHAT THIS IS AND IS NOT. It is not a security boundary and must never be described as
+// one — anything that can read a file on this machine can read the token, and the operator
+// is supposed to be able to. It is the difference between DELIBERATE and ACCIDENTAL, which
+// is the entire requirement: a fleet-wide instruction cannot pick up a merchant, because
+// nothing in the fleet's path has the token, and nothing acquires it by mistake.
+const MENAGERIE_TOKEN_FILE = STATE_FILE.replace(/\.json$/i, '') + '.menagerie.token';
+let menagerieToken = null;
+
+function mintMenagerieToken() {
+  // Only when there is a menagerie. A broker with no hosts writes no token, so a stale one
+  // from a previous configuration cannot authorise anything.
+  if (!menagerieState.size) {
+    try { unlinkSync(MENAGERIE_TOKEN_FILE); } catch { /* absent is the goal */ }
+    menagerieToken = null;
+    return null;
+  }
+  menagerieToken = randomBytes(32).toString('hex');
+  try {
+    mkdirSync(dirname(MENAGERIE_TOKEN_FILE), { recursive: true });
+    // 0600, and rewritten every start: a token that outlives the process that minted it is
+    // a token that authorises a broker holding a different set of characters.
+    writeFileSync(MENAGERIE_TOKEN_FILE, menagerieToken + '\n', { mode: 0o600 });
+  } catch (e) {
+    console.error(`[menagerie] could not write ${MENAGERIE_TOKEN_FILE}: ${e.message} — ` +
+                  'the runtime will not be able to attach');
+  }
+  return menagerieToken;
+}
+
+function menagerieAuthorized(req) {
+  if (!menagerieToken) return false;
+  if (!brokerLoopbackRequest(req)) return false;
+  const sent = req.headers['x-m59-menagerie'];
+  if (typeof sent !== 'string' || sent.length !== menagerieToken.length) return false;
+  // Constant-time, because the comparison is cheap and the alternative is a habit.
+  return timingSafeEqual(Buffer.from(sent), Buffer.from(menagerieToken));
 }
 
 function brokerRtsReadAuthorized(req) {
@@ -16109,11 +16393,14 @@ function serveHttp(port, dashboardPort = null) {
     // message rather than re-derived later. Every tool but RTS control ignores it;
     // this transport is otherwise unauthenticated by design and M59_BIND can put it
     // on a LAN interface, so a write must not infer locality from reachability.
-    // THE CALLER'S DEADLINE TRAVELS WITH THE CALL. Read at the socket, beside `local`, and
-    // carried on `caller` rather than re-derived later — it is the same argument shape: a
-    // fact about the request that a tool must not have to guess at.
+    // THE CALLER'S DEADLINE TRAVELS WITH THE CALL, AND SO DOES ITS AUTHORITY. Both are
+    // read at the socket beside `local` and carried on `caller` rather than re-derived
+    // later -- same argument shape, and for `menagerie` it is also the security boundary:
+    // a tool argument by that name reaches `args`, never here, which is what the guard's
+    // test pins.
     const caller = { transport: 'http', local: brokerLoopbackRequest(req),
-                     deadlineAt: deadlineFrom({ headers: req.headers }) };
+                     deadlineAt: deadlineFrom({ headers: req.headers }),
+                     menagerie: menagerieAuthorized(req) };
     let body = '';
     req.on('data', d => { body += d; if (body.length > 4e6) req.destroy(); });
     req.on('end', async () => {
@@ -16447,7 +16734,7 @@ function heroSnapshot(name) {
       mulligans: st?.did?.mulligans ?? 0,
       breakoffs: st?.did?.breakoffs ?? 0,
       logoffs: st?.did?.logoffs ?? 0,
-      credentials: fleetState.get(agent)?.credentials ?? null,
+      credentials: rosterEntry(agent)?.credentials ?? null,
       client_path: process.env.M59_CLIENT_EXE || null,
     };
   }

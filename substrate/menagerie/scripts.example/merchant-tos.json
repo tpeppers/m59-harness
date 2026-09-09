@@ -1,0 +1,70 @@
+{
+  "name": "merchant-tos",
+  "kind": "merchant",
+  "say": {
+    "greeting": [
+      "Well met. I buy and sell — ask me what I have."
+    ]
+  },
+  "broadcast": {
+    "every_s": 240,
+    "lines": [
+      "Arms and armour, bought and sold — right here.",
+      "Fair prices paid for anything you have no use for."
+    ]
+  },
+  "dialogue": [
+    {
+      "intent": "wares",
+      "when": "\\b(what|wares|stock|sell(ing)?|buy(ing)?|shop|trade)\\b",
+      "say": [
+        "I deal in arms and armour. Show me what you have and I will name a price."
+      ]
+    },
+    {
+      "intent": "price",
+      "when": "\\b(how much|price|cost|worth)\\b",
+      "say": [
+        "Hand it to me and I will tell you what it is worth."
+      ]
+    },
+    {
+      "intent": "haggle",
+      "when": "\\b(too much|too dear|lower|discount|deal|cheap)\\b",
+      "say": [
+        "Make me an offer and I will consider it."
+      ]
+    },
+    {
+      "intent": "thanks",
+      "when": "\\b(thank|thanks|cheers|ta)\\b",
+      "say": [
+        "A pleasure. Come back when you have more."
+      ],
+      "ends": true
+    }
+  ],
+  "routine": [
+    {
+      "do": "stand",
+      "seconds": 240
+    },
+    {
+      "do": "broadcast",
+      "seconds": 5
+    }
+  ],
+  "shop": {
+    "sell_markup": 1.25,
+    "buy_markdown": 0.6,
+    "haggle": {
+      "min_ratio": 0.85,
+      "max_rounds": 2
+    },
+    "free_for_fleet_above": 5000,
+    "refuses": [
+      "amulet of shadows",
+      "ring of lethargy"
+    ]
+  }
+}

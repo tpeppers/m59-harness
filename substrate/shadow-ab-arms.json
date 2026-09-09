@@ -1,0 +1,91 @@
+{
+ "_": "agent -> arm for the escape-ladder A/B; read this when bucketing history rows.",
+ "built_at": "2026-09-06",
+ "roster": "shadow-ab",
+ "arms": {
+  "shadow01": {
+   "character": "Aaaa",
+   "arm": "ladder"
+  },
+  "shadow02": {
+   "character": "Bbbb",
+   "arm": "noladder"
+  },
+  "shadow03": {
+   "character": "Cccc",
+   "arm": "ladder"
+  },
+  "shadow04": {
+   "character": "Dddd",
+   "arm": "noladder"
+  },
+  "shadow05": {
+   "character": "Eeee",
+   "arm": "ladder"
+  },
+  "shadow06": {
+   "character": "Ffff",
+   "arm": "noladder"
+  },
+  "shadow07": {
+   "character": "Gggg",
+   "arm": "ladder"
+  },
+  "shadow08": {
+   "character": "Hhhh",
+   "arm": "noladder"
+  },
+  "shadow09": {
+   "character": "Iiii",
+   "arm": "ladder"
+  },
+  "shadow10": {
+   "character": "Jjjj",
+   "arm": "noladder"
+  },
+  "shadow11": {
+   "character": "Kkkk",
+   "arm": "ladder"
+  },
+  "shadow12": {
+   "character": "Llll",
+   "arm": "noladder"
+  },
+  "shadow13": {
+   "character": "Mmmm",
+   "arm": "ladder"
+  },
+  "shadow14": {
+   "character": "Nnnn",
+   "arm": "noladder"
+  },
+  "shadow15": {
+   "character": "Oooo",
+   "arm": "ladder"
+  },
+  "shadow16": {
+   "character": "Pppp",
+   "arm": "noladder"
+  },
+  "shadow17": {
+   "character": "Qqqq",
+   "arm": "ladder"
+  },
+  "shadow18": {
+   "character": "Rrrr",
+   "arm": "noladder"
+  },
+  "shadow19": {
+   "character": "Ssss",
+   "arm": "ladder"
+  },
+  "shadow20": {
+   "character": "Tttt",
+   "arm": "noladder"
+  },
+  "shadow21": {
+   "character": "Uuuu",
+   "arm": "ladder"
+  }
+ }
+}

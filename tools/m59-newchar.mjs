@@ -104,6 +104,11 @@ export function planCharacter({
   spellsFile = null,
 } = {}) {
   const problems = [];
+  // REPORTED, NEVER REFUSED. A problem means the request is illegal and the server would
+  // quietly replace the character; a warning means the request is legal and something about
+  // it is known to disappoint. Folding the second into the first turns a note into a wall,
+  // and a wall somebody did not ask for is a wall they route around.
+  const warnings = [];
   if (!name || !/^[A-Za-z][A-Za-z' -]{1,15}$/.test(name))
     problems.push(`"${name}" is not a usable character name`);
 
@@ -139,6 +144,26 @@ export function planCharacter({
   for (const n of (want?.spells ?? [])) {
     const sp = cat.find(x => x.name === n);
     if (!sp) { problems.push(`no spell called "${n}" in the catalogue`); continue; }
+    // A SPELL ABOVE LEVEL 1 MAY NOT SURVIVE CREATION, AND THE SERVER WILL NOT SAY SO.
+    //
+    // Observed once, 2026-09-09, on the shadow server: a character asked for
+    // `identify` (Shal'ille level 3, 25 of the 45 ability points) plus two level-1
+    // spells. The request was within budget and was accepted. The two level-1 spells
+    // arrived; identify did not, and nothing anywhere reported a refusal - the
+    // character simply came back holding the level-1s and the server's own free
+    // `blink`. That is this game's standard failure mode ("no error has never meant
+    // success here"), so the cost is charged against the budget for a spell that may
+    // never be granted.
+    //
+    // WARNED, NOT REFUSED. One observation is not a rule, and the ability budget's
+    // arithmetic for higher levels (COST_HIGHER) came from somewhere. Whoever next
+    // asks for one should read this, check the result, and either promote it to a
+    // refusal or delete it - see the reproduction standard in CLAUDE.md.
+    if (sp.level > 1)
+      warnings.push(`"${n}" is level ${sp.level}; a spell above level 1 was silently ` +
+        'DROPPED at creation when this was last tried (2026-09-09), while its points were ' +
+        'still spent. Prefer level-1 spells at creation and LEARN the rest from a teacher. ' +
+        'If you mean to try anyway, read the character back afterwards and check.');
     const c = abilityCost(sp.level);
     picked.push({ num: sp.num, name: sp.name, level: sp.level, cost: c,
                   school: sp.school_name, mana: sp.mana,
@@ -157,7 +182,7 @@ export function planCharacter({
 
   return {
     ok: problems.length === 0,
-    problems,
+    problems, warnings,
     name, gender,
     stats: chosen ? Object.fromEntries(STAT_ORDER.map((k, i) => [k, statList[i]])) : null,
     stat_list: statList,

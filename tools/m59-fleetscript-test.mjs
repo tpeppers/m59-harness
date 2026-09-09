@@ -16,7 +16,8 @@ const LOCK_DIR = mkdtempSync(join(tmpdir(), 'm59-fs-'));
 process.env.M59_RUNLOCK_DIR = LOCK_DIR;
 process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';   // never actually reached
 
-const { fleetScript, walk, shop, bank, verify, sell, vault, VAULT_KEEP,
+const { stateFileFor } = await import('./m59-fleetpath.mjs');
+const { fleetScript, walk, shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
         foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf } =
   await import('./m59-fleetscript.mjs');
 
@@ -44,9 +45,23 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // What the vaultman does with a deposit. The default is a counter that
                       // takes what it is offered; pass one that stores nothing to check the
                       // step does not read that as a failure.
-                      vault = null } = {}) {
+                      vault = null,
+                      // Whether the museum portal actually takes. The tool reports `left`,
+                      // and the step is required NOT to believe it - see the room readback.
+                      leftRaza = true,
+                      // What this broker says it is holding. undefined = the right roster;
+                      // a path = a DIFFERENT fleet's; null = a broker that will not say.
+                      healthState = undefined } = {}) {
   const sent = [], rested = [];
   globalThis.fetch = async (_url, opts) => {
+    // GUARANTEE 11 asks the broker which roster it is holding, before anything else. A
+    // fleetScript run that could not answer that question refuses, so the fake has to be a
+    // broker that answers it — which is the point: the suite now exercises the check on
+    // every single run rather than in one bespoke case.
+    if (!opts || opts.method !== 'POST') {
+      const state = healthState === undefined ? stateFileFor('testfleet') : healthState;
+      return { json: async () => (state === null ? {} : { ok: true, fleet: 'testfleet', state }) };
+    }
     const body = JSON.parse(opts.body);
     const { name, arguments: a } = body.params;
     sent.push({ name, ...a });
@@ -79,6 +94,12 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       in_a_safe_spot_now: safeNow, spots: safeSpots };
     else if (name === 'walk_to') { if (walkLands) safeNow = { at: { col: a.col, row: a.row }, works: true }; payload = { arrived: walkLands }; }
     else if (name === 'rest_up') { rested.push(agent); payload = { ok: true }; }
+    // The portal, as the server behaves: it moves the character out of 1011-1018, or it
+    // does not and says so. `leftRaza: false` models a portal that did not take.
+    else if (name === 'leave_raza') {
+      if (leftRaza) rooms[agent] = 39;
+      payload = { left: leftRaza, log: [] };
+    }
     else payload = { ok: true };
     return { json: async () => ({ result: { content: [{ text: JSON.stringify(payload) }] } }) };
   };
@@ -794,6 +815,47 @@ console.log('a strategy that will not load leaves the vault alone rather than fa
   ok('nothing is bought back', !sent.some(c => c.name === 'shop' && c.buy_ids));
   ok('and the step still succeeds', r.results.a1.ok === true, r.results.a1.why);
   delete process.env.M59_VAULT_STRATEGY;
+}
+
+console.log('');
+console.log('leaving the newbie zone is a step, not a travel');
+{
+  // RAZA HAS NO DOOR. `travel` answers `started: true, hops: 0` for a character in the Raza
+  // Inn and moves nobody - the only way out is a two-touch portal in the Grand Museum. The
+  // point of the verb is that FleetScript can SAY this at all; the point of these
+  // assertions is that it does not believe the tool's own answer.
+  const sent = fakeBroker({ rooms: { a1: 1011 } });
+  const r = await fleetScript({ name: 'grad', fleet: 'testfleet', agents: ['a1'],
+    steps: [leaveRaza(), walk(101)], onLog: quiet });
+  ok('a character in Raza leaves through the museum portal', r.results.a1.ok === true,
+     JSON.stringify(r.results.a1));
+  ok('and the leave_raza tool was the thing that did it',
+     sent.some(x => x.name === 'leave_raza' && x.agent === 'a1'));
+  ok('and the onward leg is a SEPARATE walk, so it keeps the health floor and the trap check',
+     sent.some(x => x.name === 'travel' && x.to === 101));
+  ok('the tool is never asked to do the onward journey itself',
+     !sent.some(x => x.name === 'leave_raza' && x.then_travel_to !== undefined));
+}
+{
+  // A PORTAL THAT DID NOT TAKE MUST NOT READ AS SUCCESS. The tool says `left: false` and the
+  // character is still in 1011; either alone would be enough, and the step is required to
+  // check the ROOM rather than the reply.
+  const sent = fakeBroker({ rooms: { a1: 1011 }, leftRaza: false });
+  const r = await fleetScript({ name: 'stuck', fleet: 'testfleet', agents: ['a1'],
+    steps: [leaveRaza(), walk(101)], onLog: quiet });
+  ok('a portal that did not take is a FAILED step', r.results.a1.ok === false);
+  ok('and it says which room the character is still in',
+     /still in the newbie zone \(room 1011\)/.test(r.results.a1.why ?? ''), r.results.a1.why);
+  ok('and the onward journey never starts', !sent.some(x => x.name === 'travel' && x.to === 101));
+}
+{
+  // IDEMPOTENT, so it is safe at the head of any errand that might be handed a character
+  // that graduated last week.
+  const sent = fakeBroker({ rooms: { a1: 39 } });
+  const r = await fleetScript({ name: 'already', fleet: 'testfleet', agents: ['a1'],
+    steps: [leaveRaza()], onLog: quiet });
+  ok('a character already outside Raza is skipped', r.results.a1.ok === true);
+  ok('and the portal is not touched at all', !sent.some(x => x.name === 'leave_raza'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

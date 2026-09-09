@@ -37,7 +37,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { STAT_PRESETS } from './m59-newchar.mjs';
+import { STAT_PRESETS, planCharacter } from './m59-newchar.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -152,9 +152,24 @@ function saveRoster(r) {
 
 // ------------------------------------------------------------------ main
 
+// SIX NUMBERS, IN THE ORDER THE GAME USES, or a preset name.
+//
+// `--stats 50/40/40/19/50/1` is might/intellect/stamina/agility/mysticism/aim - STAT_ORDER
+// in m59-newchar.mjs, which is also the order the wire wants. Parsed here and VALIDATED by
+// planCharacter, never by this function: the whole reason that planner exists is that the
+// server accepts an illegal request and silently replaces the character with 3/1/4/1/5/9,
+// and a second opinion here about what is legal is how the two quietly drift apart.
+function parseStats(value) {
+  if (typeof value !== 'string' || !value.includes('/')) return value;
+  const n = value.split('/').map(x => Number(x.trim()));
+  if (n.length !== 6 || n.some(x => !Number.isInteger(x))) return value;   // let the planner refuse it
+  const [might, intellect, stamina, agility, mysticism, aim] = n;
+  return { might, intellect, stamina, agility, mysticism, aim };
+}
+
 function parseArgs(argv) {
   const a = { count: 10, prefix: 'fleet', broker: 8901, loadout: 'selfSufficient',
-              dryRun: false, stats: null };
+              dryRun: false, stats: null, name: null, account: null, spells: null };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === '--count' || v === '-n') a.count = Number(argv[++i]);
@@ -162,6 +177,17 @@ function parseArgs(argv) {
     else if (v === '--broker') a.broker = Number(argv[++i]);
     else if (v === '--loadout') a.loadout = argv[++i];
     else if (v === '--stats') a.stats = argv[++i];
+    // ONE BESPOKE CHARACTER, THROUGH THE SAME THREE STEPS.
+    //
+    // A fleet is a batch of interchangeable NATO-named characters and that is the common
+    // case. But the create / zero-first-time / reroll dance is identical for one deliberate
+    // character with a chosen name, chosen numbers and chosen spells - a merchant, a banker,
+    // a menagerie host - and writing that path a second time elsewhere is how the second
+    // copy rots. Every guard still applies: the plan is checked before the account is made,
+    // because the server accepts an illegal request and silently stamps 3/1/4/1/5/9 on it.
+    else if (v === '--name') a.name = argv[++i];
+    else if (v === '--account') a.account = argv[++i];
+    else if (v === '--spells') a.spells = String(argv[++i]).split(',').map(x => x.trim()).filter(Boolean);
     else if (v === '--dry-run' || v === '-d') a.dryRun = true;
     else if (v === '--help' || v === '-h') a.help = true;
     else { console.error(`unknown argument: ${v}`); process.exit(2); }
@@ -169,8 +195,33 @@ function parseArgs(argv) {
   return a;
 }
 
+// ONE ACCOUNT NAME FROM THE ROSTER THE BROKER IS ACTUALLY HOLDING.
+//
+// Read from the broker rather than from a path this tool guesses, because which roster is in
+// play is the broker's answer and not ours. Returns null when it cannot be read, and the
+// caller says so out loud rather than proceeding as though the check had passed - "I could
+// not ask" and "the answer was yes" must never look the same.
+async function rosterWitness(brokerPort) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${brokerPort}/health`, { signal: AbortSignal.timeout(4000) });
+    const h = await r.json();
+    if (!h?.state) return null;
+    const roster = JSON.parse(readFileSync(h.state, 'utf8'));
+    for (const entry of Object.values(roster)) {
+      const acct = entry?.credentials?.account;
+      if (typeof acct === 'string' && acct) return acct;
+    }
+  } catch { /* unreadable - reported as unknown by the caller, never as ok */ }
+  return null;
+}
+
 async function main() {
   const a = parseArgs(process.argv.slice(2));
+  a.stats = parseStats(a.stats);
+  // A named character is ONE character. `--name` with `--count 10` asks for ten characters
+  // sharing a name, which the server would happily accept and which is never what is meant.
+  if (a.name) a.count = 1;
+  if (a.spells) a.loadout = { spells: a.spells, why: 'named on the command line' };
   if (a.help) {
     console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8')
       .split('\n').filter(l => l.startsWith('//')).slice(0, 12).join('\n'));
@@ -185,22 +236,47 @@ async function main() {
   const plan = [];
   for (let i = 0; i < a.count; i++) {
     plan.push({
-      account: `${a.prefix}${String(i + 1).padStart(2, '0')}`,
-      name: NAMES[i],
+      account: a.account || `${a.prefix}${String(i + 1).padStart(2, '0')}`,
+      name: a.name || NAMES[i],
       stats: a.stats || MIX[i % MIX.length],
     });
   }
 
-  console.log(`fleet of ${a.count}, loadout ${a.loadout}\n`);
+  const loadoutLabel = typeof a.loadout === 'string' ? a.loadout : (a.loadout.spells || []).join(', ');
+  console.log(`fleet of ${a.count}, loadout ${loadoutLabel}\n`);
   for (const p of plan) {
-    const s = STAT_PRESETS[p.stats];
-    console.log(`  ${p.account.padEnd(10)} ${p.name.padEnd(12)} ${p.stats.padEnd(9)}` +
+    const s = typeof p.stats === 'string' ? STAT_PRESETS[p.stats] : p.stats;
+    console.log(`  ${p.account.padEnd(10)} ${p.name.padEnd(12)} ${(typeof p.stats === 'string' ? p.stats : 'custom').padEnd(9)}` +
       (s ? ` mig ${s.might} int ${s.intellect} sta ${s.stamina} agi ${s.agility} mys ${s.mysticism} aim ${s.aim}` : ''));
+    // CHECKED BEFORE ANY ACCOUNT EXISTS, because past here the server accepts whatever it
+    // is sent and says nothing at all about what it did with it.
+    const check = planCharacter({ name: p.name, stats: p.stats, loadout: a.loadout });
+    for (const why of check.problems) console.log(`    ! ${why}`);
+    for (const why of check.warnings ?? []) console.log(`    ~ ${why}`);
+    if (!check.ok) { console.error('refusing: fix the above. Nothing was created.'); return 2; }
+    for (const sp of check.spells ?? [])
+      console.log(`    spell ${String(sp.name).padEnd(14)} ${sp.school} lvl ${sp.level}, ${sp.cost}pts` +
+        (sp.castable_when_new ? '' : `  - NOT castable when new: needs karma ${sp.required_karma}`));
   }
-  const counts = plan.reduce((m, p) => (m[p.stats] = (m[p.stats] || 0) + 1, m), {});
+  const counts = plan.reduce((m, p) => {
+    const k = typeof p.stats === 'string' ? p.stats : 'custom';
+    m[k] = (m[k] || 0) + 1; return m;
+  }, {});
   console.log(`\n  ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}`);
-  console.log(`  every character gets max stamina — 50 is the per-stat cap, and`);
-  console.log(`  max health is 101 + stamina, so this is the 151 ceiling.\n`);
+  // SAY WHAT THE STAMINA ACTUALLY BUYS, rather than asserting the preset's answer.
+  //
+  // Every preset spends 50 on stamina because max health is 101 + stamina and the whole
+  // fleet is measured in max health gained per hour, so 50 buys the highest ceiling the
+  // game allows and any point spent elsewhere is a point off the number being farmed. A
+  // CUSTOM build may legitimately trade that away - a merchant that never fights is not
+  // farming anything - but this used to claim the 151 ceiling unconditionally, which is a
+  // false statement about a character whose attributes can never be changed afterwards.
+  const staminas = [...new Set(plan.map(p => (typeof p.stats === 'string' ? STAT_PRESETS[p.stats] : p.stats)?.stamina))];
+  for (const st of staminas)
+    console.log(`  stamina ${st} -> max-health ceiling ${101 + Number(st)}` +
+      (Number(st) === 50 ? '  (the cap; the most the game will ever allow)'
+                         : `  ${50 - Number(st)} below the cap, and attributes NEVER move`));
+  console.log('');
 
   if (a.dryRun) { console.log('--dry-run: nothing was created.'); return 0; }
 
@@ -217,6 +293,39 @@ async function main() {
     console.error(`no maintenance socket on ${ADMIN_HOST}:${ADMIN_PORT} (${e.message}).\n` +
       `  the server must be running, and 9998 published on loopback.`);
     return 1;
+  }
+  // IS THIS MAINTENANCE SOCKET THE SAME SERVER AS THAT BROKER'S GAME SERVER?
+  //
+  // A maintenance port that answers is not evidence that it answers for the RIGHT server,
+  // and this machine runs more than one blakserv at once. Measured 2026-09-09: two
+  // instances, started two minutes apart, on maintenance ports 9998 and 19998 with entirely
+  // separate account databases. This tool defaulted to 9998, so `create automated` made the
+  // account on the wrong server and reported success; the reroll then failed against the
+  // right one with `login rejected - wrong username or password`. The account and the
+  // password were both real. They were real somewhere else.
+  //
+  // Same doctrine as m59-which.mjs, one port over: a broker is ours only when its /health
+  // state path IS our roster, never when a label or a reachable port merely matches. So this
+  // is a FACT ABOUT THE DATA rather than about the ports - does this maintenance socket know
+  // an account the broker's own roster names? Nothing else correlates the two, and a wrong
+  // answer is silent in both directions.
+  const witness = await rosterWitness(a.broker);
+  if (witness) {
+    const seen = clean(await admin(`show account ${witness}`, 1200));
+    if (/cannot find account/i.test(seen)) {
+      console.error(`WRONG SERVER: the maintenance socket on ${ADMIN_HOST}:${ADMIN_PORT} has never`);
+      console.error(`heard of "${witness}", an account in the roster the broker on 127.0.0.1:${a.broker}`);
+      console.error('is holding. They are two different blakserv instances.');
+      console.error('');
+      console.error('Creating here would make the account on the wrong server, print "Created');
+      console.error('account", and then fail to log in against the right one.');
+      console.error('  point it at the right one:  M59_ADMIN_PORT=<port> node tools/m59-makefleet.mjs ...');
+      return 1;
+    }
+    console.log(`  maintenance ${ADMIN_HOST}:${ADMIN_PORT} agrees with the broker's roster (knows ${witness})`);
+  } else {
+    console.log('  NOTE: could not read the broker roster, so nothing here can tell you whether');
+    console.log(`  ${ADMIN_HOST}:${ADMIN_PORT} is the same server that broker plays on.`);
   }
 
   const roster = loadRoster();

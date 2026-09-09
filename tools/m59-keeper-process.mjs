@@ -36,6 +36,7 @@ import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { resolveFleet } from './m59-fleetpath.mjs';
+import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
 import { OF } from './m59-parse.mjs';
 import { renderState } from './m59-world.mjs';
@@ -95,9 +96,32 @@ try {
   process.exit(1);
 }
 
-const entry = fleet[agent];
+// A KEEPER SERVES BOTH ROSTERS, BECAUSE A KEEPER IS PLUMBING.
+//
+// The menagerie is a second roster beside the fleet's — hosts, which run a script instead
+// of taking orders (docs/m59-menagerie.md). They are logged in by the same broker and each
+// gets its own keeper process exactly as a fleet character does, so this process has to be
+// able to find a host's credentials or the host never joins.
+//
+// Measured on shadow, 2026-09-09, which is why this comment exists: the split landed with
+// the broker reading both files and the keeper reading only one, so both hosts spawned on
+// their ports, exited immediately with "not found in shadow.json", and the broker reported
+// `keeper process did not become ready`. Nothing said the word "menagerie" anywhere in the
+// failure. It is the same shape as the fleet-mate check that was installed only in the
+// broker process and left every keeper calling the fleet strangers (Statler, 2026-08-27):
+// the broker knowing a thing is not the keeper knowing it.
+//
+// What this does NOT do is make a host commandable. That refusal lives at the broker's MCP
+// door, in callTool, and nowhere else.
+const menageriePath = menageriePathFor(fleetPath);
+let menagerieRoster = {};
+try { menagerieRoster = JSON.parse(readFileSync(menageriePath, 'utf8')); }
+catch { /* no menagerie on this fleet, which is the ordinary case */ }
+
+const entry = fleet[agent] ?? menagerieRoster[agent];
 if (!entry?.credentials) {
-  console.error(`[keeper] ${agent} not found in ${fleetPath} or has no credentials`);
+  console.error(`[keeper] ${agent} not found in ${fleetPath}` +
+    (Object.keys(menagerieRoster).length ? ` or ${menageriePath}` : '') + `, or has no credentials`);
   process.exit(1);
 }
 
@@ -112,10 +136,25 @@ if (!entry?.credentials) {
 //
 // Seeded with the roster just parsed so the first answer is right before the first stat;
 // re-read on mtime so a character added by hand reaches this process without a restart.
+// AND THE MENAGERIE'S HOSTS ARE US TOO.
+//
+// "Do not shoot" and "obey a fleet order" are different questions with different answers,
+// and this is the first one. A host is a character of ours standing in a town — often the
+// busiest town — and a keeper that reads it as a stranger is one mis-click away from the
+// exact incident above, with a merchant as the victim. The broker answers this correctly
+// via alliedCharacters(); a keeper process that did not would be the same bug one process
+// deeper, which is how it went unnoticed for two days last time.
+//
+// Carried in `extra` rather than as a second watched file: `withExtra` is re-applied on
+// every refresh, so hosts stay in the set for the life of the process, and the fleet roster
+// remains the one thing whose mtime is watched.
+const hostCharacters = Object.values(menagerieRoster)
+  .map(e => e?.credentials?.character).filter(Boolean);
 party.setRosterSource(party.rosterFileSource(fleetPath, {
-  seed: fleet, extra: [entry.credentials.character],
+  seed: fleet, extra: [entry.credentials.character, ...hostCharacters],
 }));
-console.error(`[keeper] ${agent} knows ${party.rosterCharacterNames(fleet).size} fleetmate(s) from ${fleetPath}`);
+console.error(`[keeper] ${agent} knows ${party.rosterCharacterNames(fleet).size} fleetmate(s) ` +
+  `from ${fleetPath}` + (hostCharacters.length ? ` plus ${hostCharacters.length} menagerie host(s)` : ''));
 
 const { account, password, character } = entry.credentials;
 const credHost = entry.credentials.host || host;

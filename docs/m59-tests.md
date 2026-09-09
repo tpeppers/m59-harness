@@ -403,6 +403,21 @@ the records it describes.
   the genuinely dangerous case that used to look identical to the blip. It drives the real
   `notePassSucceeded`/`notePassFailed`, which were named for this: the catch arm sleeps five
   seconds, so a test going through `loop()` could ask one question a working day) and
+  `node tools/m59-menagerie-test.mjs` (58 — **"the fleet" never means the ride-along
+  characters**: a host is a host because of the FILE it was loaded from and never a name
+  convention; a menagerie roster that will not parse is an ERROR rather than an empty
+  menagerie, because an empty host set is an OPEN DOOR; every tool refuses a host by agent
+  name and by character name, in nested and array arguments, reads included; free text is
+  not an identifier, so a fleet character may SAY a host's name; only the menagerie runtime
+  gets through, and the capability is set by the transport rather than claimable from an
+  argument; a listing that hides hosts says how many it hid; and hosts are still OURS for
+  the fleetmate check, which is a different question from who obeys an order — that last
+  one is the Statler incident, and it is why the claim is pinned) and
+  `node tools/m59-menagerie-script-test.mjs` (40 — **what a host does is a table**: a script
+  reports every problem and never half-loads, a rule that matches but says nothing is
+  dropped rather than swallowing every later rule, a pattern from disk cannot hang the
+  driver, the haggle provably terminates and never sells below its floor, and the routine
+  is a pure function of elapsed time so a crashed driver resumes mid-cycle) and
   `node tools/m59-unattended-test.mjs` (44 — **the contract test for the carve-out**: with
   no bot attached every faculty answers `keeper`, a bot asking for all eight gets only the
   directional four, an expired lease is the keeper's again, and the override takes a

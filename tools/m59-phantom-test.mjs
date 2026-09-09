@@ -122,9 +122,18 @@ console.log('\nthe two tools whose job is to introduce a new name are still allo
   ok('the broker\'s session() takes it as an option rather than a positional flag',
      /const session = \(name, \{ create = false \} = \{\}\) => \{/.test(BROKER));
   ok('it asks the shared resolver rather than restating the rule',
-     /const r = resolveAgentName\(name, \{[\s\S]{0,220}roster: fleetState,/.test(BROKER));
-  ok('and the roster is what decides "known", not the sessions map',
-     /inRoster: fleetState\.has\(name\),/.test(BROKER));
+     /const r = resolveAgentName\(name, \{[\s\S]{0,600}roster: fleetState,/.test(BROKER));
+  // UPDATED 2026-09-08, when the menagerie landed. This used to pin the literal text
+  // `inRoster: fleetState.has(name)`. The claim it was making — a name is known because a
+  // ROSTER says so, never because the sessions map happens to hold it — is unchanged; the
+  // broker now holds two rosters (the fleet's and the menagerie's) and a host is answered
+  // to, so the plumbing asks both. What keeps hosts away from fleet instructions is the
+  // refusal in callTool, not this line; putting it here would stop the menagerie runtime
+  // from driving its own characters. See tools/m59-menagerie-guard.mjs.
+  ok('and a roster is what decides "known", not the sessions map',
+     /inRoster: inAnyRoster\(name\),/.test(BROKER));
+  ok('...and the error still lists only fleet names, so no host is advertised over MCP',
+     /roster: fleetState,/.test(BROKER));
   ok('`join` passes create — recovering a dropped character must still work by name alone',
      /const s = session\(a\.agent, \{ create: true \}\);\n      \/\/ A CHARACTER EXISTS ON ONE SERVER/.test(BROKER));
   ok('and so does making a character',

@@ -71,9 +71,11 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { takeRunLock } from './m59-runlock.mjs';
-import { fleetName } from './m59-fleetpath.mjs';
+import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
+import { menageriePathFor } from './m59-menagerie-roster.mjs';
+import { RAZA_ROOMS } from './m59-errandstate.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 
@@ -520,6 +522,32 @@ export function trapCheck(plan = [], { standingIn = null, allowTraps = false } =
 // --guarantees` prints the table with dates so the growth is countable.
 //
 // A guarantee with no incident is a guess. Do not add one.
+// WHICH OF THESE AGENTS ARE MENAGERIE HOSTS.
+//
+// Read from the roster FILE rather than asked of the broker, deliberately: this runs before
+// the lock and before anything walks, and "can I ask the broker" is a different question
+// from "is this script well formed". A menagerie that cannot be read is reported as no
+// hosts here — the authoritative refusal is still the broker's door, which cannot be
+// bypassed; this one exists only to fail EARLY and legibly.
+export function hostsAmong(agents, fleet = fleetName()) {
+  let roster = {};
+  try {
+    roster = JSON.parse(readFileSync(menageriePathFor(stateFileFor(fleet)), 'utf8'));
+  } catch { return []; }
+  const names = new Map();
+  for (const [agent, entry] of Object.entries(roster ?? {})) {
+    names.set(agent.toLowerCase(), agent);
+    const c = entry?.credentials?.character;
+    if (c) names.set(String(c).toLowerCase(), agent);
+  }
+  const hit = new Set();
+  for (const a of agents ?? []) {
+    const found = names.get(String(a ?? '').toLowerCase());
+    if (found) hit.add(found);
+  }
+  return [...hit];
+}
+
 export const UNSAFE_GUARANTEES = Object.freeze({
   runLock: {
     what: 'one driver per fleet',
@@ -532,6 +560,22 @@ export const UNSAFE_GUARANTEES = Object.freeze({
     since: '2026-09-02',
     incident: 'orders given without a lease were silently overwritten by a DUM bot ' +
               're-deciding every ~30s, while every call reported success',
+  },
+  brokerHoldsFleet: {
+    what: 'the broker this talks to is the one holding the fleet this names',
+    since: '2026-09-09',
+    incident: 'the control URL defaults to port 8901 and the fleet name comes from --fleet, ' +
+              'so `M59_FLEET=shadow` with no M59_CONTROL_URL named the shadow fleet, took the ' +
+              'shadow run lock, and sent every call to the PROD broker. Nothing errored: the ' +
+              'agent simply did not exist there, so it read as an unreadable character',
+  },
+  menagerieCheck: {
+    what: 'refusal to drive a MENAGERIE HOST as though it were a fleet character',
+    since: '2026-09-09',
+    incident: 'hosts share the broker, the server and the keeper band with the fleet, so a ' +
+              'script written for "everyone" reaches them; the broker refuses each call, ' +
+              'but only AFTER the lock is taken and the other characters have started ' +
+              'walking. Refused here instead, before anything moves',
   },
   trapCheck: {
     what: 'refusal to walk into a room KNOWN_TRAPS says keeps characters',
@@ -674,6 +718,14 @@ export const sell = (merchant, opts = {}) => ({ do: 'sell', merchant, ...opts })
 // dies holding is on the floor where it fell; a vault is the only thing that is not.
 export const vault = (vaultman, items = VAULT_KEEP, opts = {}) =>
   ({ do: 'vault', vaultman, items, ...opts });
+// LEAVE THE NEWBIE ZONE, ONCE, AND READ BACK THAT IT HAPPENED.
+//
+// One-way and not routable: Raza's only exit is a portal in the Grand Museum that takes two
+// touches, so `walk`/`travel` cannot express it and answers `started: true, hops: 0` for a
+// character that then goes nowhere. Idempotent — a character already outside is skipped, so
+// this is safe to put at the head of any errand that might be given a brand-new character.
+export const leaveRaza = (opts = {}) => ({ do: 'leave_raza', ...opts });
+
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
 
@@ -1422,6 +1474,56 @@ async function runStep(ctx, agent, step, state) {
                why: r?.error ?? r?.reason ?? r?.note ?? null };
     }
 
+    // LEAVE THE NEWBIE ZONE. One-way, and not a journey the router can plan.
+    //
+    // Raza has no door. The only way out is the portal standing in the Grand Museum
+    // (room 1018) at col 11, row 2, and it takes TWO touches — the first bounces you off
+    // with a warning. `travel` cannot express that: it returned `started: true, hops: 0`
+    // for a character in the Raza Inn and moved it nowhere, which is the exact shape of
+    // failure this repository keeps paying for. Nothing errored.
+    //
+    // The capability was already here twice — the broker's `leave_raza` tool and the
+    // `leave_raza` atomic in m59-atomics.mjs — and FLEETSCRIPT HAD NO VERB FOR IT. So the
+    // one thing every order is supposed to go through could not express the one move a new
+    // character has to make first, and the obvious substitute (`travel`) fails silently
+    // rather than refusing. That is the gap this closes: not a missing capability, an
+    // unreachable one, which costs the same and is harder to see.
+    //
+    // TWO THINGS THIS DELIBERATELY DOES NOT DO.
+    //
+    // It does not use the tool's own `then_travel_to`. That would run a cross-world
+    // journey inside a single tool call, outside every guarantee this file exists to
+    // compile in — no health floor, no p90-sized wait, no once-only travel. The onward leg
+    // is a separate `walk` step, which gets all of them.
+    //
+    // And it does not trust the reply. `left: true` is what the tool believes; the room
+    // the character is standing in is what happened. Read back, always.
+    case 'leave_raza': {
+      // `observe`, NOT a hand-rolled status read. This file's own comment above observe()
+      // says why: every script used to write its own and they disagreed, one reading
+      // `st.room.id`, which does not exist. The first draft of this step made that exact
+      // mistake one more time.
+      const roomNow = async () => (await observe(agent)).room;
+      const before = await roomNow();
+      if (Number.isInteger(before) && !RAZA_ROOMS.includes(before))
+        return { ok: true, skipped: `already outside the newbie zone (room ${before})` };
+
+      const r = await call('leave_raza', { agent }, step.timeoutMs ?? 240_000)
+        .catch(e => ({ error: e.message }));
+      const after = await roomNow();
+      const out = Number.isInteger(after) && !RAZA_ROOMS.includes(after);
+      // An unreadable room is NOT success. It is the one answer that must never be
+      // rounded to the convenient one — see the menagerie driver reading `where.num`.
+      if (!Number.isInteger(after))
+        return { ok: false, why: 'could not read which room it is in afterwards, so whether ' +
+                 'it left is unknown — not assuming it did', result: r };
+      return out
+        ? { ok: true, result: { from: before, to: after, note: 'one-way; it cannot walk back in' } }
+        : { ok: false, why: `still in the newbie zone (room ${after})` +
+             (r?.error ? `: ${r.error}` : '. The portal is in room 1018 at col 11 row 2 and ' +
+              'needs two touches; the first only warns.'), result: r };
+    }
+
     case 'act': {
       const r = await call(step.tool, { agent, ...step.args }, step.timeoutMs ?? 120_000)
         .catch(e => ({ error: e.message }));
@@ -1595,6 +1697,7 @@ export async function fleetScript({
   if (!Array.isArray(agents) || !agents.length) throw new Error('fleetScript needs agents');
   if (!steps) throw new Error('fleetScript needs steps');
 
+
   // BEFORE THE LOCK AND BEFORE ANYTHING WALKS, because the whole value of the answer is
   // having it while the fleet is still untouched. Reported on every path — including
   // `unpinned`, quietly — so that "nobody pinned this" and "this is current" never read
@@ -1631,6 +1734,61 @@ export async function fleetScript({
       .filter(g => !waived.has(g)).join(', ') || 'nothing'}`);
     onLog('─'.repeat(72));
   }
+  // GUARANTEE 11. THE BROKER YOU ARE TALKING TO MUST BE HOLDING THE FLEET YOU NAMED.
+  //
+  // These arrive from two unrelated places: the fleet name from `--fleet`/`M59_FLEET`/the
+  // fleet-default file, and the broker from `M59_CONTROL_URL`, which DEFAULTS TO 8901. So
+  // `M59_FLEET=shadow node ...` names shadow, takes shadow's run lock, reports "fleet
+  // shadow" in every log line, and sends every call to whatever is on 8901 — which on this
+  // machine is production.
+  //
+  // Measured 2026-09-09, doing exactly that: a `graduate` run for a shadow character was
+  // sent to the prod broker. It was harmless only because the agent name did not exist
+  // there, so every call refused; had the two fleets shared an agent name — `t1`, or any
+  // name a lab roster copies — it would have driven the wrong twenty-one characters and
+  // said `fleet shadow` the whole way.
+  //
+  // This is m59-which.mjs's doctrine, which every /m59 command already runs and which
+  // scripts had no equivalent of: a broker is ours only when its /health STATE PATH IS our
+  // roster file, never when a label or a reachable port merely matches.
+  if (!waived.has('brokerHoldsFleet')) {
+    const want = stateFileFor(fleet);
+    let held = null, why = null;
+    try {
+      const r = await fetch(new URL('/health', RPC()), { signal: AbortSignal.timeout(8000) });
+      held = (await r.json())?.state ?? null;
+    } catch (e) { why = String(e?.message ?? e); }
+    // A BROKER THAT WILL NOT ANSWER IS A QUESTION, NOT A FLEET. Same third answer
+    // m59-which.mjs had to grow: silence is INDETERMINATE and refuses, because the busiest
+    // broker is the one slowest to reply and it is always the one that matters.
+    if (held === null)
+      throw new Error(`${name}: cannot tell whether the broker at ${RPC()} is holding fleet ` +
+        `"${fleet}" (${why ?? 'no state path in /health'}). Refusing rather than guessing. ` +
+        `Point it at the right one with M59_CONTROL_URL=http://127.0.0.1:<port>/`);
+    if (resolve(held) !== resolve(want))
+      throw new Error(`${name}: WRONG BROKER. You named fleet "${fleet}" (${want}) but ` +
+        `${RPC()} is holding ${held}. A fleet is its ROSTER FILE and never its name. ` +
+        `Set M59_CONTROL_URL=http://127.0.0.1:<port>/ for the broker that holds it.`);
+  }
+
+  // GUARANTEE 10. A MENAGERIE HOST IS NOT A FLEET CHARACTER.
+  //
+  // Hosts ride along on this fleet's broker and are refused by every MCP tool (see
+  // docs/m59-menagerie.md), so a script naming one would fail anyway — but it would fail on
+  // the call, which is after the run lock is taken and after every other character has
+  // started walking. The whole argument for this file is that the refusals happen BEFORE
+  // anything moves, so this is checked with the rest of them.
+  if (!waived.has('menagerieCheck')) {
+    const named = hostsAmong(agents, fleet);
+    if (named.length)
+      throw new Error(`${name}: ${named.length} of these agents are MENAGERIE HOSTS, not fleet ` +
+        `characters: ${named.join(', ')}.
+They are driven by tools/m59-menagerie.mjs and ` +
+        `their behaviour is a script on disk, not an errand. Drop them from \`agents\`, or — if ` +
+        `this script really is meant to drive one — say so with ` +
+        `\`unsafe: { reason: '...', waives: ['menagerieCheck'] }\`.`);
+  }
+
   // A waived floor is zero, not "skip the check": every downstream reader keeps working,
   // and a run that waives minHealth still reports the health it set out on.
   if (waived.has('minHealth')) minHealth = 0;

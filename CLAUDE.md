@@ -25,6 +25,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | run, back up, restore, lend out or shut down the fleet | [`docs/m59-operations.md`](docs/m59-operations.md) |
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
+| add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
 | read a ledger, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
 | interpret, log, serialize, or compare a coordinate | [`docs/m59-coordinates.md`](docs/m59-coordinates.md) |
 | run or extend the offline tests | [`docs/m59-tests.md`](docs/m59-tests.md) |
@@ -182,6 +183,98 @@ starts a broker. A broker is matched to a roster by the **state path** that brok
 
 `maps/m59-boswars`'s commander client is the first consumer — its main menu offers what
 this reports rather than only what somebody typed on a command line.
+
+## THE MENAGERIE — characters on this broker that are NOT the fleet
+
+A **host** is a character whose job is decided in advance: a merchant standing in Tos
+selling the fleet's excess gear, telling passers-by what it has, answering whoever answers
+back. Hosts share the fleet's broker, server, keeper band, safe-spot book and grudge book,
+and **"the fleet" never means them.**
+
+```bash
+node tools/m59-menagerie.mjs status --fleet shadow    # what the menagerie is, and doing
+node tools/m59-menagerie.mjs run    --fleet shadow    # the driver — a separate process
+node tools/m59-menagerie.mjs enlist t9 --script merchant-tos --room 50
+```
+
+The requirement, in the operator's words: *"I don't ever want me to say 'send everyone to
+Castle Victoria' and have it be interpreted to be ALSO one of these ride-along
+characters."* So it is structural, not documented:
+
+- **A host is a host because of the FILE it was loaded from.** `substrate/fleets/shadow.json`
+  is the fleet; `substrate/fleets/shadow.menagerie.json` is the menagerie, derived from it
+  so it can never be the wrong fleet's, and un-nameable as a fleet (`--fleet` allows no dot).
+  Two maps in the broker, two writers, and `saveFleetState()` still opens only one file —
+  because it carries forward everything already on disk, so a host written into the fleet
+  roster by accident would be permanent.
+- **Every MCP tool refuses a host, by agent name and by character name, in any argument at
+  any depth. Reads included.** One door, `callTool`; the decision is a pure function in
+  `m59-menagerie-guard.mjs`. `fleet` hides them and SAYS how many it hid.
+- **What drives them is a different program with a different door.** `m59-menagerie.mjs`
+  carries a token the broker minted at startup. That is a capability, not a security
+  boundary — it stops the accident, which is the whole requirement.
+- **But they ARE ours for "do not shoot".** `fleetCharacters()` includes hosts, in the
+  broker and in every keeper process, because a host excluded from the fleetmate set is a
+  stranger in a town full of our own armed characters. That is the Statler incident
+  (2026-08-27) waiting to be reissued with a merchant as the victim.
+- **The conversion is deliberate and one-directional at a time.** A character is created
+  into the fleet and commanded normally until it is standing where it will live, then
+  `enlist` moves its roster entry. It refuses while a broker holds the fleet, backs both
+  files up, and writes the menagerie FIRST — a crash between the two writes leaves the
+  character in both files, which the broker refuses to resume loudly, rather than in
+  neither, which is a password gone.
+- **A script is an instruction, so it is this machine's.** `substrate/menagerie/scripts/` is
+  gitignored; `scripts.example/` beside it carries the shape. No language model is in the
+  script engine — the input is a sentence typed by a stranger.
+
+[`docs/m59-menagerie.md`](docs/m59-menagerie.md) has the argument for each of those, the
+posture a host keeps (`survive`, `roam:false`, `assigned_room` — converged every round, or
+the keeper walks the merchant off to hunt and the driver walks it back for ever), and the
+traps. Guards: `m59-menagerie-test.mjs` (58) and `m59-menagerie-script-test.mjs` (40), both
+offline.
+
+## Which GENERATION — is this task still true of the code it was written against?
+
+The check above asks whether you are pointed at the right characters. This one asks whether
+the script you are about to run still matches the world it was written for, and it is the
+same class of quiet failure: **nothing errors, and the breakage presents as the game
+refusing.**
+
+```js
+import { checkProvenance } from './tools/m59-fleetscript.mjs';
+checkProvenance({ pinned: '1fb1f51', touches: ['tools/m59-outfit.mjs'] });
+// -> { status: 'green' | 'review' | 'unpinned' | 'unknown', why, changed: [...], behind }
+```
+
+Declare `provenance` on the task and `fleetScript` checks it before the lock and before
+anything walks (guarantee 9). Call it directly to ask *without* running anything — deciding
+whether a script will still work must never require driving a fleet to find out.
+
+| status | meaning |
+|---|---|
+| `green` | nothing this task depends on has moved since it was last seen working |
+| `review` | a dependency changed — it names the files, and the `git diff` to read |
+| `unpinned` | nobody pinned this, so **nothing here can tell you** — not the same as green |
+| `unknown` | the pin is not in this checkout, or this is not a git tree |
+
+**Drift is not failure, so the default warns and still runs.** Most commits touching a
+dependency change nothing a given script relies on, and a check that cried wolf on every one
+would be switched off inside a week. Pass `refuseOnDrift: true` on tasks where being wrong
+is expensive — anything that spends money at a counter.
+
+**The failure this exists for, 2026-09-07.** `m59-outfit.mjs` worked. Then the fleet moved to
+the keeper-process session driver, which put the World in the KEEPER and left the broker
+holding a snapshot. Three things broke at once and every one was silent: `map` began
+answering `route: {found: null, reason: "...a snapshot, not a World"}` and the script read
+"I cannot answer" as "there is no route"; a 30-second RPC timeout was applied to a journey
+that takes minutes, so a walk that was going fine read as refused and was **re-issued into
+itself**; and the arrival check read `status.where.num`, a field the status tool does not
+return. None of it presented as a version problem. The script was not wrong when it was
+written — the ground moved under it, and a pin would have said so before it drove anything.
+
+Same mechanic as `m59-research`'s report staleness (`repo_commit` + `sources`, stale when a
+cited file changes), applied to an operation instead of a document, and for the same reason:
+**a pin is what turns "this used to work" into a checkable claim.**
 
 ## Running the broker as a service
 

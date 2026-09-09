@@ -123,7 +123,11 @@ console.log('\nknown-broken short swords are replaced');
 console.log('\nbroker preserves incremental keeper policy updates');
 {
   const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
-  const seed = broker.indexOf('const savedAutopilot = fleetState.get(a.agent)?.autopilot;');
+  // MATCH THE INTENT, NOT THE SPELLING. This pinned the exact expression
+  // `fleetState.get(a.agent)?.autopilot` and went red the day that lookup was renamed to
+  // `rosterEntry(a.agent)` -- a test about WHO gets seeded, failing over HOW the roster is
+  // read. The same lesson the enum check two lines down already learned.
+  const seed = broker.search(/const savedAutopilot = \w+[.(]a\.agent\)?[^;]*autopilot;/);
   const guard = broker.indexOf('if (s instanceof KeeperProxy && savedAutopilot?.policy)', seed);
   const mutate = broker.indexOf('if (a.training_style !== undefined)', guard);
   // THE LIST GROWS. This used to pin the enum to an exact four-element literal and went red

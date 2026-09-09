@@ -58,11 +58,20 @@ RUN make -C blakcomp -f makefile.linux RELEASE=1 makedirs \
  && make -C blakcomp -f makefile.linux RELEASE=1 -j"$(nproc)"
 
 # Compile the game code to .bof bytecode. The kod makefile copies each .bof
-# into run/server/loadkod, which must be a DIRECTORY — the source tree ships
-# it as a plain file (a placeholder), so we replace it first.
+# into run/server/loadkod, which must be a DIRECTORY.
+#
+# `rm -rf`, NOT `rm -f`, AND THE DIFFERENCE IS A BUILD THAT WILL NOT RUN AT ALL.
+# Upstream ships run/server/loadkod as a plain FILE (a placeholder) and `rm -f`
+# clears that. A checkout where it is already a DIRECTORY — which is what a tree
+# that has been built once locally looks like, and what tpeppers/Meridian59-deck
+# ships — makes `rm -f` fail with "cannot remove: Is a directory", and because the
+# RUN is `&&`-chained the whole layer exits 1. Measured 2026-09-07: this took the
+# local test server out entirely, which takes the shadow fleet with it, which is
+# every integration test that needs a server to run against.
+#
 # The makefile's copy rule only runs when it recompiles; since .bof files are
 # already committed to the tree, we also collect them explicitly afterwards.
-RUN rm -f run/server/loadkod && mkdir -p run/server/loadkod && \
+RUN rm -rf run/server/loadkod && mkdir -p run/server/loadkod && \
     make -C kod -f makefile.linux RELEASE=1 && \
     find kod -name '*.bof' -exec cp {} run/server/loadkod/ \;
 

@@ -12,6 +12,7 @@
 //   import { Session, Recorder } from './m59-game.mjs';
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import {saleBlocked} from './m59-inventory-intent.mjs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
@@ -11141,6 +11142,11 @@ class Session {
   // counteroffer -> accept (or cancel, when we only wanted the quote).
   async sellOne(merchantRef, item, confirm) {
     const c = this.need();
+    const liveItem=(c.inventory||[]).find(o=>o.id===item.id);
+    if(!liveItem)return {sold:false,offered_price:null,note:'item is no longer carried'};
+    const intentItem={id:item.id,name:c.rsc.get(liveItem.nameRsc)||liveItem.name||''};
+    const blocked=saleBlocked(this,intentItem);
+    if(blocked)return {sold:false,offered_price:null,note:blocked};
     const t = typeof merchantRef === 'object' && merchantRef !== null ? merchantRef : { id: Number(merchantRef) };
     const before = c.evSeq;
     await this.pacer.submit('trade', () => c.offer(t.id, [item.amount > 1 ? { id: item.id, amount: item.amount } : item.id]));
@@ -11160,7 +11166,14 @@ class Session {
       await this.pacer.submit('trade', () => c.cancelOffer());
       return { sold: false, offered_price: price, merchant_said: said, note: 'quote only' };
     }
-    await this.pacer.submit('trade', () => c.acceptOffer());
+    const held=await this.pacer.submit('trade', () => {
+      const current=(c.inventory||[]).find(o=>o.id===item.id);
+      const reason=!current||c.rsc.get(current.nameRsc)!==intentItem.name
+        ? 'item changed during the offer' : saleBlocked(this,intentItem);
+      if(reason){c.cancelOffer();return reason;}
+      c.acceptOffer();return null;
+    });
+    if(held)return {sold:false,offered_price:price,merchant_said:said,note:held};
     await new Promise(r => setTimeout(r, 1400));
     await this.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 4000 });

@@ -581,3 +581,35 @@ _verify2.mjs
 #
 # Gitignored on purpose: a capsule is a worry, not a record. The record is the commit.
 /timecapsules/
+
+# THE MENAGERIE — a second roster of characters, on the same broker, that the fleet's
+# tools cannot reach. A HOST is one of them: a merchant standing in Tos selling the fleet's
+# excess gear, driven by a script instead of by an operator. See docs/m59-menagerie.md.
+#
+# Three things are ignored here and they are ignored for three different reasons.
+#
+# 1. THE ROSTER IS A CREDENTIAL STORE, exactly as the fleet's is. It sits beside the fleet
+#    roster it belongs to and is derived from its name, so a menagerie can never be pointed
+#    at the wrong fleet: substrate/fleets/shadow.json -> substrate/fleets/shadow.menagerie.json.
+#    /substrate/fleets/ above already covers the named case; this covers the unnamed fleet's.
+/substrate/fleet-state.menagerie.json
+/substrate/fleet-state.menagerie.json.prev
+/substrate/*.menagerie.json*
+
+# 2. THE TOKEN IS A CAPABILITY, minted by the broker at startup and rewritten every time it
+#    comes up. It is what tells the broker that a caller is the menagerie's own runtime
+#    rather than an MCP client, which is the whole of "hosts are not commandable from the
+#    fleet's tools". Never committed, never printed into a shared transcript.
+/substrate/*.menagerie.token
+/substrate/fleets/*.menagerie.token
+
+# 3. A SCRIPT IS AN INSTRUCTION TO A CHARACTER, not a description of one — the same
+#    argument this file already makes for loadouts, playbooks and tuning. What a merchant
+#    says, what it will pay, and where it stands are this machine's answers, and a script
+#    that arrives from somebody else's afternoon is obeyed silently by a character that is
+#    talking to real players on a shared server.
+#
+#    The SHAPE is committed instead, in substrate/menagerie/scripts.example/ — BESIDE the
+#    directory the runtime enumerates and never inside it, because `listScripts()` reads
+#    every .json in scripts/ and an example in there is an extra behaviour on the board.
+/substrate/menagerie/scripts/
