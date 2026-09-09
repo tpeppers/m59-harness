@@ -518,8 +518,8 @@ async function ensureProxy(host, port) {
 }
 
 async function launch(row, { viaProxy = false } = {}) {
-  const creds = rosterFor(row.agent);
-  if (!creds) { S.status = c.red('no credentials on file for ' + row.agent); return; }
+  const { creds, why } = rosterFor(row.agent);
+  if (!creds) { S.status = c.red(why ?? ('no credentials on file for ' + row.agent)); return; }
   // THE PATCHED CLIENT FIRST — see the header. Its directory has no `steamapps` in it, so
   // isSteamInstall says no and `/S` stays off, which is right: it is a build, not a
   // Steam install that would try to patch itself.
@@ -924,16 +924,39 @@ if (li >= 0) {
 // The roster is the only place the passwords live, and it is read here rather than
 // fetched, because the broker deliberately does not serve them over the network.
 function rosterFor(agent) {
-  try {
-    // Resolved from this file and the --fleet flag, never from cwd. The TUI is often
-    // launched from somewhere else entirely — from a parent repository that vendors
-    // this one, or by a shortcut with no working directory set. Reading cwd gave a
-    // missing file, which this reports as "no credentials" — indistinguishable from
-    // a character that genuinely has none.
-    const f = STATE_FILE;
-    const s = JSON.parse(readFileSync(f, 'utf8'));
-    return s[agent]?.credentials ?? null;
-  } catch { return null; }
+  // Resolved from this file and the --fleet flag, never from cwd. The TUI is often
+  // launched from somewhere else entirely — from a parent repository that vendors
+  // this one, or by a shortcut with no working directory set. Reading cwd gave a
+  // missing file, which this reports as "no credentials" — indistinguishable from
+  // a character that genuinely has none.
+  //
+  // AND THAT RESOLUTION IS WHY THE FILE HAS TO BE NAMED. Reading from "this file"
+  // rather than cwd fixed one ambiguity and created another: a second CHECKOUT has a
+  // second substrate/, so which prod.json this is now depends on which copy of the TUI
+  // you invoked. On 2026-09-09 a character added to the live roster was reported as
+  // "no credentials on file for hk1" by a TUI reading a trunk roster frozen since
+  // 2026-09-01 — and the one fact that would have ended it, which of the two files was
+  // being read, was the fact this function withheld.
+  //
+  // Four different situations used to return a bare null and share one sentence: no
+  // such file, a file that will not parse, an agent absent from it, and an agent
+  // present with no credentials. docs/m59-policy.md's rule is that a file which will
+  // not parse IS NOT AN EMPTY FILE and says so; m59-which.mjs was given a third answer
+  // for the same class of mistake. So say which one it is, and always say where.
+  const f = STATE_FILE;
+  let raw;
+  try { raw = readFileSync(f, 'utf8'); }
+  catch (e) {
+    return { creds: null, why: e.code === 'ENOENT' ? `no roster at ${f}`
+                                                   : `cannot read ${f}: ${e.message}` };
+  }
+  let s;
+  try { s = JSON.parse(raw); }
+  catch (e) { return { creds: null, why: `${f} will not parse: ${e.message}` }; }
+  const entry = s[agent];
+  if (!entry) return { creds: null, why: `${agent} is not in ${f} (${Object.keys(s).length} agent(s) there)` };
+  if (!entry.credentials) return { creds: null, why: `${agent} is in ${f} but has no credentials block` };
+  return { creds: entry.credentials, why: null };
 }
 
 // ------------------------------------------------------------- the compendium
