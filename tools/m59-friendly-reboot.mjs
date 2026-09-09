@@ -219,16 +219,33 @@ function assign(reads) {
     // geometrically perfect squares 38 squares away and gave everybody ten seconds to reach
     // them; at roughly a square a second not one of twenty-one arrived. A near square that
     // nothing can reach beats a perfect one nobody gets to.
-    const usable = (seen.spots ?? []).filter(x => x.can_reach_you === 0
-      && Number.isInteger(x.col) && Number.isInteger(x.row)
-      && !claimed.has(`${x.col},${x.row}`));
+    // THE TWO REASONS A CHARACTER GETS NOTHING ARE DIFFERENT FACTS, AND THIS USED TO
+    // REPORT ONLY ONE OF THEM. `nowhere-safe` said "none unreachable-by-anything" whether
+    // the geometry was bad or every good square had simply been taken by a fleet-mate
+    // earlier in this same loop. On 2026-09-09 the Valley of Ileria held TWENTY characters
+    // and offers EIGHT squares: the first eight were assigned, the remaining twelve were
+    // told the geometry had refused them, and a session went looking for a bug in
+    // `can_reach_you` — which was present and 0 on all eight rows the whole time.
+    // Capacity and geometry need separate sentences, because they have separate fixes:
+    // one is "this room cannot shelter this many", the other is "this room has no walls".
+    const unreachable = (seen.spots ?? []).filter(x => x.can_reach_you === 0
+      && Number.isInteger(x.col) && Number.isInteger(x.row));
+    const usable = unreachable.filter(x => !claimed.has(`${x.col},${x.row}`));
     // Ties break toward the square that is harder to walk INTO — the operator's definition
     // of a wall, and free to consult since `safeSpots()` already publishes it.
     const cost = (x) => (Number.isFinite(x.distance) ? x.distance : 999)
                       - Math.min(3, (x.refused_approaches ?? 0));
     const target = usable.sort((a, b) => cost(a) - cost(b))[0] ?? null;
-    if (!target) { out.push({ agent, state: 'nowhere-safe', room: seen.room?.name ?? null,
-                              why: `${(seen.spots ?? []).length} candidate(s), none unreachable-by-anything` }); continue; }
+    if (!target) {
+      const all = (seen.spots ?? []).length;
+      out.push({ agent, state: 'nowhere-safe', room: seen.room?.name ?? null,
+                 spots: all, unreachable: unreachable.length,
+                 short: unreachable.length ? 'capacity' : 'geometry',
+                 why: unreachable.length
+                   ? `all ${unreachable.length} unreachable square(s) here are taken - capacity`
+                   : `${all} candidate(s), none unreachable-by-anything` });
+      continue;
+    }
     claimed.add(`${target.col},${target.row}`);
     out.push({ agent, state: 'assigned', to: { col: target.col, row: target.row },
                tested: target.tested, distance: target.distance ?? null });
@@ -274,6 +291,26 @@ for (const r of results.sort((a, b) => a.agent.localeCompare(b.agent)))
 
 const safe = results.filter(r => r.state === 'already-safe' || r.state === 'moved-to-safety');
 console.log(`\n${safe.length} of ${results.length} in a safe spot`);
+
+// A ROOM WITH MORE CHARACTERS THAN WALLS IS A FACT ABOUT THE ROOM, SAID ONCE.
+// Twelve identical paragraphs down the character list is how a real constraint reads as
+// noise. Per room: how many squares it has, and who is left over.
+const shortfall = results.filter(r => r.state === 'nowhere-safe' && r.short === 'capacity');
+if (shortfall.length) {
+  const byRoom = new Map();
+  for (const r of shortfall) {
+    const k = r.room ?? '(unknown room)';
+    if (!byRoom.has(k)) byRoom.set(k, { walls: r.unreachable ?? 0, agents: [] });
+    byRoom.get(k).agents.push(r.agent);
+  }
+  console.log('');
+  console.log('OUT OF WALLS - these rooms hold more characters than they can shelter.');
+  console.log('One square per character is deliberate: crowding onto one is what the');
+  console.log('safe-spot book records as "walls that leak". The fix is fewer bodies per room.');
+  for (const [room, v] of byRoom)
+    console.log(`  ${room}: ${v.walls} square(s) nothing can reach, ` +
+      `${v.agents.length} character(s) left standing (${v.agents.sort().join(', ')})`);
+}
 if (!GO) { console.log('\nplan only — nothing was moved and no keeper was stopped'); process.exit(0); }
 
 // ---------------------------------------------------------------- phase 2: restart
