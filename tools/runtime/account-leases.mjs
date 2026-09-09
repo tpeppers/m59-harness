@@ -5,6 +5,7 @@
 // These leases are keyed by canonical game endpoint + normalized account id, so every
 // runtime in this checkout meets at the same atomic file before any login is attempted.
 
+import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { isIP } from 'node:net';
@@ -374,6 +375,31 @@ export function auditLegacyRosterLocks(entries, {
   });
 }
 
+// WHAT IS ACTUALLY RUNNING UNDER A PID — DIAGNOSTIC ONLY, AND IT MAY NEVER THROW.
+//
+// A refusal that says only "pid 18292 is live" sends the reader to Task Manager. Saying
+// "pid 18292 is live (ChatGPT)" ends the investigation in one line, because a keeper is a
+// node process and anything else is a recycled pid.
+//
+// It is deliberately NOT used to DECIDE anything. Process names are not a security
+// boundary — another node process could take a recycled pid and still not be our keeper —
+// so this only explains a refusal that liveness already made. Bounded and wrapped in its
+// own try, because it runs inside ownership checks and an ownership check that threw
+// because a DIAGNOSTIC failed would be a far worse bug than the one it describes.
+function describePid(pid) {
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'],
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+      const name = String(out).trim().split('","')[0]?.replace(/^"/, '') ?? '';
+      return name && !/^INFO:/i.test(name) ? name : null;
+    }
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'comm='],
+      { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return String(out).trim() || null;
+  } catch { return null; }
+}
+
 export class AccountLeaseRegistry {
   #byAgent = new Map();
   #byKey = new Map();
@@ -623,8 +649,37 @@ export class AccountLeaseRegistry {
 
     for (const guardPid of [...inheritedLive].sort((a, b) => a - b)) {
       const agents = accountOwners.get(guardPid) ?? [];
+      // A LIVE PID IS NOT PROOF OF A LIVE KEEPER, AND THIS REFUSAL COULD NOT SAY SO.
+      //
+      // `isProcessLive` asks `kill(pid, 0)`. That answers "is SOMETHING running under this
+      // number", never "is it the process that made the claim" — and pids get reused. On
+      // 2026-09-08 the shadow fleet's lock carried 21 inherited guard pids; twenty were
+      // genuinely gone and the twenty-first, 18292, had been recycled to an unrelated
+      // desktop application. It mapped to no account, this branch refused, and the fleet
+      // became un-takeoverable by anything short of deleting a lock — the one recovery this
+      // repository forbids.
+      //
+      // The refusal now NAMES WHAT IS RUNNING. It still refuses: a process name is not an
+      // identity check and must not decide ownership. But "pid 18292 is live (ChatGPT)"
+      // ends the investigation in one line, where the bare pid sent two sessions to Task
+      // Manager and a wrong diagnosis of the credentials.
+      //
+      // THE REAL FIX IS IDENTITY AND IT IS NOT HERE. A guard should record its process
+      // START TIME when it is registered — the same checksum m59-which.mjs uses to tell a
+      // genuine claim from a recycled pid wearing the same number — so a reused pid simply
+      // does not match. That is a lock-format addition and old locks carry no such field,
+      // so it needs its own migration and is deliberately not smuggled in beside a
+      // diagnostic. `M59_ALLOW_UNGUARDED_TAKEOVER` does NOT cover this case: the broker
+      // only supplies that context for a predecessor lock with no `guards` key at all
+      // (m59-broker.mjs ~3492), and this lock has guards — they are merely dead.
       if (!agents.length) return Object.freeze({
         ok: false, reason: 'inherited-fleet-guard-unaccounted', guard_pid: guardPid,
+        // The pid alone sent a reader to Task Manager. Say what is actually running under
+        // it, because "that is not a keeper" ends the investigation in one line.
+        guard_process: describePid(guardPid),
+        why: `pid ${guardPid} is live but claims no account in this roster. If it is not a ` +
+             'keeper it is a recycled pid, and M59_ALLOW_UNGUARDED_TAKEOVER=1 is the ' +
+             'one-time migration for it — never lock deletion.',
       });
       if (agents.length !== 1) return Object.freeze({
         ok: false, reason: 'inherited-guard-claimed-more-than-once',

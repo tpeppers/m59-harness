@@ -243,6 +243,18 @@ try {
     assert.equal(truncated.ok, false);
     assert.equal(truncated.reason, 'inherited-fleet-guard-unaccounted');
     assert.equal(truncated.guard_pid, 1611);
+    // THE REFUSAL HAS TO SAY WHAT IS RUNNING UNDER THAT PID, because a live pid is not
+    // proof of a live keeper. On 2026-09-08 the shadow fleet was stuck here for hours: one
+    // of 21 inherited guards was alive, and it was an unrelated desktop application holding
+    // a recycled pid. The bare number sent two sessions hunting the credentials instead.
+    // `guard_process` is null here — 1611 is a fixture pid owned by nobody — and the point
+    // is that the FIELD is present and the advice names the migration rather than the
+    // lock-deletion this repository forbids.
+    assert.ok(Object.hasOwn(truncated, 'guard_process'),
+      'the refusal must report what process holds the pid, not just the number');
+    assert.equal(truncated.guard_process, null);
+    assert.match(truncated.why, /recycled pid/);
+    assert.match(truncated.why, /never lock deletion/);
     assert.deepEqual(inspectFleetLock(fleetPath, { isPidLive }).lock.predecessors, [1601],
       'fleet lineage remains until the selected roster accounts for every live keeper');
     const accountAPath = successor.permitForAgent('a').path;
