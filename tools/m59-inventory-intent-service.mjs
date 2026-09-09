@@ -95,7 +95,11 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
   const assessments=new Map();
   const identityMatches=(p,r)=>r&&p.identity.server===r.server&&p.identity.account===r.account&&p.identity.character===r.character;
   async function rpc(name,args) {
-    const r=await fetch(broker+'/',{method:'POST',headers:{'Content-Type':'application/json'},
+    // TELL THE BROKER THE DEADLINE IT IS WORKING AGAINST. AbortSignal.timeout hangs up
+    // this socket; it does not reach across and cancel anything, so without this header the
+    // broker computes the whole answer and finds nobody waiting. Under load that is the
+    // majority of what it does for us. See tools/runtime/deadlines.mjs.
+    const r=await fetch(broker+'/',{method:'POST',headers:{'Content-Type':'application/json','x-m59-deadline-ms':'3500'},
       body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}}),signal:AbortSignal.timeout(3500)});
     need(r.ok,'broker read failed');const j=await r.json();need(!j.error&&!j.result?.isError,'broker tool failed');
     return JSON.parse(j.result.content.find(c=>c.type==='text').text);

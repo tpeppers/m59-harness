@@ -88,6 +88,8 @@ import {
   assertCanonicalAccountLeaseNamespace,
 } from './runtime/account-leases.mjs';
 import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
+import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings }
+  from './runtime/deadlines.mjs';
 import { allocateKeeperBand, KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
 import { resolveAgentName } from './m59-agent-name.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
@@ -15422,6 +15424,37 @@ async function callTool(name, args, caller) {
     }
   }
 
+  // WORK NOBODY IS WAITING FOR ANY MORE.
+  //
+  // A caller's `AbortSignal.timeout` hangs up its own socket; it does not reach across and
+  // cancel anything here. So this computes the whole answer — for 21 characters a `/health`
+  // enumerates every session — and finds nobody there. Under load that is wasted at exactly
+  // the moment the queue is longest, which makes the next caller slower, which makes IT hang
+  // up. Four separate failures on 2026-09-08 were that loop: the Quartermaster's flat 1Hz
+  // poll with a 2.5s abort against a /health measured at 2573ms under load; m59-which
+  // reading a slow answer as "no answer" and naming the wrong fleet one run in four; the RTS
+  // gateway serving nothing for 30s after missing a 3s aggregate; and friendly-reboot
+  // reporting `unknown` for eleven of twenty-one characters.
+  //
+  // So a caller may now say how long it will wait, and this DECLINES rather than starting
+  // work that its own history says will not land in time. Declining is not failing: nothing
+  // was half-done and the caller may retry with a longer budget, which is strictly more than
+  // a timeout tells anybody. Skipping it also leaves the queue shorter for the caller who
+  // can still be served, which is the half that compounds.
+  //
+  // SILENCE MEANS RUN IT. No deadline, or no timing history for this tool, and nothing
+  // changes — every existing caller passes nothing and must be unaffected.
+  const deadlineAt = caller?.deadlineAt ?? null;
+  const verdict = shouldAttempt(name, deadlineAt);
+  if (!verdict.ok) {
+    rec?.line('call', { tool: name, args: recordedArgs, ms: 0, declined: verdict.reason });
+    return { declined: true, tool: name, reason: verdict.reason,
+             remaining_ms: verdict.remaining ?? null, p90_ms: verdict.p90 ?? null,
+             needed_ms: verdict.need ?? null,
+             note: 'NOT ATTEMPTED — nothing was started, so nothing is half-done. Retry with ' +
+                   'a longer x-m59-deadline-ms, or without one to run it regardless.' };
+  }
+
   const t0 = Date.now();
   try {
     const out = await t.run(args || {}, caller);
@@ -15429,10 +15462,17 @@ async function callTool(name, args, caller) {
     // wrong is the one reading this reply.
     if (unrecognised && out && typeof out === 'object' && !Array.isArray(out))
       out.unrecognised_settings = unrecognised;
-    rec?.line('call', { tool: name, args: recordedArgs, ms: Date.now() - t0 });
+    const ms = Date.now() - t0;
+    recordToolMs(name, ms);
+    rec?.line('call', { tool: name, args: recordedArgs, ms });
     return out;
   } catch (e) {
-    if (rec?.line) rec.line('call', { tool: name, args: recordedArgs, ms: Date.now() - t0, error: e.message });
+    // TIMED EVEN WHEN IT THREW. A tool that fails slowly is still a tool that costs the
+    // caller its budget, and leaving those out of the history flatters exactly the calls
+    // most worth declining.
+    const ms = Date.now() - t0;
+    recordToolMs(name, ms);
+    if (rec?.line) rec.line('call', { tool: name, args: recordedArgs, ms, error: e.message });
     throw e;
   }
 }
@@ -15446,6 +15486,8 @@ const SERVER_INFO = { name: 'meridian59', version: '1.0.0' };
 // reply, which matters: answering `notifications/initialized` with a result is a
 // protocol error some clients reject the connection over.
 async function handleRpc(msg, caller) {
+  // Reassigned when a message carries its own deadline; see tools/call below.
+  /* eslint-disable-next-line no-param-reassign */
   const { id, method, params } = msg;
   const reply = result => (id === undefined ? null : { jsonrpc: '2.0', id, result });
   const fail = (code, message) => (id === undefined ? null : { jsonrpc: '2.0', id, error: { code, message } });
@@ -15462,6 +15504,11 @@ async function handleRpc(msg, caller) {
       return reply({ tools: TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.schema })) });
     case 'tools/call': {
       const { name, arguments: args } = params || {};
+      // A STDIO CALLER HAS NO HEADERS, so the same budget may ride on the params. A
+      // per-message deadline also lets ONE expensive call in a batch say it is willing to
+      // wait longer than the connection default.
+      const perCall = deadlineFrom({ params });
+      if (perCall != null) caller = { ...(caller || {}), deadlineAt: perCall };
       try {
         const out = await callTool(name, args, caller);
         return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
@@ -15714,6 +15761,10 @@ function brokerHealth() {
     root: BROKER_ROOT,
     fleet: FLEET || 'default',
     state: STATE_FILE,
+    // WHAT THIS BROKER COSTS, IN ITS OWN WORDS. A caller choosing a timeout is guessing
+    // without this, and every wrong guess is work computed for nobody. Slowest first,
+    // and a tool with too few samples is left out rather than reported as fact.
+    tool_timings: toolTimings(),
     ...readiness,
     session_driver: SESSION_DRIVER,
     ...liveSessionIdentity(readiness),
@@ -16051,7 +16102,11 @@ function serveHttp(port, dashboardPort = null) {
     // message rather than re-derived later. Every tool but RTS control ignores it;
     // this transport is otherwise unauthenticated by design and M59_BIND can put it
     // on a LAN interface, so a write must not infer locality from reachability.
-    const caller = { transport: 'http', local: brokerLoopbackRequest(req) };
+    // THE CALLER'S DEADLINE TRAVELS WITH THE CALL. Read at the socket, beside `local`, and
+    // carried on `caller` rather than re-derived later — it is the same argument shape: a
+    // fact about the request that a tool must not have to guess at.
+    const caller = { transport: 'http', local: brokerLoopbackRequest(req),
+                     deadlineAt: deadlineFrom({ headers: req.headers }) };
     let body = '';
     req.on('data', d => { body += d; if (body.length > 4e6) req.destroy(); });
     req.on('end', async () => {

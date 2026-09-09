@@ -50,7 +50,11 @@ const ONLY = (val('--agents', '') || '').split(',').map(s => s.trim()).filter(Bo
 
 const rpc = async (name, params, ms = 30_000) => {
   const r = await fetch(`http://127.0.0.1:${PORT}/`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    // The deadline goes WITH the call. Without it the broker finishes work this side has
+    // already given up on — which is what made the first live run of this tool report
+    // `unknown` for eleven of twenty-one characters against a broker that was recovering.
+    method: 'POST', headers: { 'content-type': 'application/json',
+                               'x-m59-deadline-ms': String(Math.max(250, Math.round(ms))) },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
                            params: { name, arguments: params } }),
     signal: AbortSignal.timeout(ms),
