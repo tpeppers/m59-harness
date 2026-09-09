@@ -202,13 +202,34 @@ function assign(reads) {
       out.push({ agent, state: 'already-safe', at: here.at ?? null });
       continue;
     }
+    // SAFETY IS `can_reach_you === 0`, NOT THE BOOK. The first live run walked nobody
+    // anywhere useful because both halves of this were wrong.
+    //
+    // `can_reach_you` is how many of the 28 squares within melee reach something could
+    // actually swing at you from, filtered by the server's own line-of-sight walk. Zero is
+    // the property that matters and it is on every row, tested or not. The BOOK only has an
+    // opinion about squares somebody has already stood in and been attacked on, so ranking
+    // by `tested` alone throws away every good square nobody has tried yet — which on this
+    // fleet is most of them.
+    //
+    // AND DISTANCE IS THE OTHER HALF, because this is a TIMED walk. The first run picked
+    // geometrically perfect squares 38 squares away and gave everybody ten seconds to reach
+    // them; at roughly a square a second not one of twenty-one arrived. A near square that
+    // nothing can reach beats a perfect one nobody gets to. `holds` is worth a small
+    // handicap rather than an override — three squares, so a proven square wins a close
+    // race and does not win a long one.
     const usable = (seen.spots ?? []).filter(x => x.tested !== 'does not work'
+      && x.can_reach_you === 0
       && Number.isInteger(x.col) && Number.isInteger(x.row)
       && !claimed.has(`${x.col},${x.row}`));
-    const target = usable.find(x => x.tested === 'holds') ?? usable[0] ?? null;
-    if (!target) { out.push({ agent, state: 'nowhere-safe', room: seen.room?.name ?? null }); continue; }
+    const cost = (x) => (Number.isFinite(x.distance) ? x.distance : 999)
+                      + (x.tested === 'holds' ? 0 : 3);
+    const target = usable.sort((a, b) => cost(a) - cost(b))[0] ?? null;
+    if (!target) { out.push({ agent, state: 'nowhere-safe', room: seen.room?.name ?? null,
+                              why: `${(seen.spots ?? []).length} candidate(s), none unreachable-by-anything` }); continue; }
     claimed.add(`${target.col},${target.row}`);
-    out.push({ agent, state: 'assigned', to: { col: target.col, row: target.row }, tested: target.tested });
+    out.push({ agent, state: 'assigned', to: { col: target.col, row: target.row },
+               tested: target.tested, distance: target.distance ?? null });
   }
   return out;
 }
@@ -222,10 +243,20 @@ async function walkTo(row) {
   // it is not is what gets it killed, so ask the world again rather than the walk's reply.
   const after = await rpc('safe_spots', { agent: row.agent, reachable_only: true }, Math.max(2000, left()))
     .catch(() => null);
-  const now = after?.in_a_safe_spot_now;
-  return (now && typeof now === 'object' && now.works !== false)
-    ? { ...row, state: 'moved-to-safety', at: now.at ?? null }
-    : { ...row, state: 'did-not-reach' };
+  // VERIFIED BY POSITION, NOT BY THE BOOK. `in_a_safe_spot_now` is derived from the book's
+  // record for the square underfoot (m59-broker.mjs), so it is FALSE for every untested
+  // square no matter how good it is — which is why the first live run reported nobody
+  // arrived when some of them may well have. What we actually need to know is: are we
+  // standing where we aimed, and can anything reach us there.
+  const at = after?.standing_at;
+  const arrived = at && at.col === row.to.col && at.row === row.to.row;
+  const stillSafe = (after?.spots ?? []).find(x => x.col === row.to.col && x.row === row.to.row);
+  const bookSays = after?.in_a_safe_spot_now;
+  if (arrived && (stillSafe?.can_reach_you === 0
+                  || (bookSays && typeof bookSays === 'object' && bookSays.works !== false)))
+    return { ...row, state: 'moved-to-safety', at };
+  return { ...row, state: arrived ? 'arrived-but-exposed' : 'did-not-reach',
+           at: at ?? null };
 }
 
 const reads = await Promise.all(agents.map(a => look(a).catch(e => ({ agent: a, seen: { error: e.message } }))));
@@ -235,7 +266,7 @@ const results = await Promise.all(assign(reads)
 for (const r of results.sort((a, b) => a.agent.localeCompare(b.agent)))
   console.log(`  ${r.agent.padEnd(5)} ${r.state.padEnd(16)}` +
     (r.at ? ` at r${r.at.row}c${r.at.col}` : '') +
-    (r.to ? ` -> r${r.to.row}c${r.to.col}` : '') +
+    (r.to ? ` -> r${r.to.row}c${r.to.col}${r.distance != null ? ` (${r.distance} sq)` : ''}` : '') +
     (r.tested ? ` (${r.tested})` : '') + (r.why ? `  ${r.why}` : '') +
     (r.room ? `  in ${r.room}` : ''));
 
