@@ -32,14 +32,41 @@
 // tool whose cost changes is believed again quickly.
 const SAMPLES = 64;
 const seen = new Map();
+// Lifetime counters, separate from the rolling window. The window answers "how slow is this
+// now"; these answer "is anybody using it at all", which is a different question with a
+// different half-life — a tool called twice a day must not age out of the record just
+// because sixty-four other calls happened since.
+const totals = new Map();
+const row = (name) => {
+  let t = totals.get(name);
+  if (!t) { t = { calls: 0, declined: 0, abandoned: 0, failed: 0, ms: 0 }; totals.set(name, t); }
+  return t;
+};
+
+/** A call the broker finished and nobody was left to read. See recordAbandoned's note. */
+export function recordAbandoned(name) {
+  if (typeof name === 'string') row(name).abandoned++;
+}
+
+/** A call declined before it started, because it could not have landed in time. */
+export function recordDeclined(name) {
+  if (typeof name === 'string') row(name).declined++;
+}
+
+/** A call that threw. Counted apart from abandonment: a slow failure is not a hang-up. */
+export function recordFailed(name) {
+  if (typeof name === 'string') row(name).failed++;
+}
 
 /** Record how long a tool actually took. Never throws; this is bookkeeping. */
 export function recordToolMs(name, ms) {
   if (typeof name !== 'string' || !Number.isFinite(ms) || ms < 0) return;
-  let row = seen.get(name);
-  if (!row) { row = []; seen.set(name, row); }
-  row.push(ms);
-  if (row.length > SAMPLES) row.shift();
+  let samples = seen.get(name);
+  if (!samples) { samples = []; seen.set(name, samples); }
+  samples.push(ms);
+  if (samples.length > SAMPLES) samples.shift();
+  const t = row(name);
+  t.calls++; t.ms += ms;
 }
 
 /**
@@ -114,12 +141,31 @@ export function shouldAttempt(name, deadlineAt, { now = Date.now(), margin = 1.2
 /** What the broker knows about its own costs, for /health. Sorted slowest first. */
 export function toolTimings({ minSamples = 8 } = {}) {
   const rows = [];
-  for (const [name, row] of seen) {
-    if (row.length < minSamples) continue;
-    rows.push({ tool: name, samples: row.length, p90_ms: toolP90(name, { minSamples }) });
+  for (const [name, t] of totals) {
+    const samples = seen.get(name) ?? [];
+    rows.push({
+      tool: name, calls: t.calls,
+      // WORK THIS BROKER FINISHED AND NOBODY READ. The number this whole mechanism exists
+      // to drive to zero, and the one nothing could previously report at all.
+      abandoned: t.abandoned, declined: t.declined, failed: t.failed,
+      avg_ms: t.calls ? Math.round(t.ms / t.calls) : null,
+      p90_ms: samples.length >= minSamples ? toolP90(name, { minSamples }) : null,
+    });
   }
-  return rows.sort((a, b) => b.p90_ms - a.p90_ms);
+  return rows.sort((a, b) => (b.abandoned - a.abandoned) || ((b.p90_ms ?? 0) - (a.p90_ms ?? 0)));
+}
+
+/**
+ * Tools nobody has called, from a list of every tool the broker offers.
+ *
+ * A DECLUTTER CANDIDATE IS NOT A DEAD TOOL, and the difference matters: this process may
+ * have been up for ten minutes, and the fleet does not buy a guild hall every hour. It is
+ * the START of the question — "these were not used in this window" — and the window is
+ * reported with it so nobody reads a short one as proof.
+ */
+export function unusedTools(allNames = []) {
+  return allNames.filter(n => !(totals.get(n)?.calls > 0)).sort();
 }
 
 /** Test seam only: forget every measurement. */
-export function resetToolTimings() { seen.clear(); }
+export function resetToolTimings() { seen.clear(); totals.clear(); }

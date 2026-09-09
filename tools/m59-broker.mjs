@@ -88,8 +88,8 @@ import {
   assertCanonicalAccountLeaseNamespace,
 } from './runtime/account-leases.mjs';
 import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
-import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings }
-  from './runtime/deadlines.mjs';
+import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings, recordAbandoned,
+         recordDeclined, recordFailed, unusedTools } from './runtime/deadlines.mjs';
 import { allocateKeeperBand, KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
 import { resolveAgentName } from './m59-agent-name.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
@@ -15447,6 +15447,7 @@ async function callTool(name, args, caller) {
   const deadlineAt = caller?.deadlineAt ?? null;
   const verdict = shouldAttempt(name, deadlineAt);
   if (!verdict.ok) {
+    recordDeclined(name);
     rec?.line('call', { tool: name, args: recordedArgs, ms: 0, declined: verdict.reason });
     return { declined: true, tool: name, reason: verdict.reason,
              remaining_ms: verdict.remaining ?? null, p90_ms: verdict.p90 ?? null,
@@ -15472,6 +15473,7 @@ async function callTool(name, args, caller) {
     // most worth declining.
     const ms = Date.now() - t0;
     recordToolMs(name, ms);
+    recordFailed(name);
     if (rec?.line) rec.line('call', { tool: name, args: recordedArgs, ms, error: e.message });
     throw e;
   }
@@ -15765,6 +15767,11 @@ function brokerHealth() {
     // without this, and every wrong guess is work computed for nobody. Slowest first,
     // and a tool with too few samples is left out rather than reported as fact.
     tool_timings: toolTimings(),
+    // NOT USED SINCE THIS PROCESS STARTED — the beginning of a declutter question, never the
+    // end of one. `uptime_s` is beside it on purpose: a ten-minute window proves nothing
+    // about a tool the fleet reaches for once a day, and reading it as proof is how a
+    // working tool gets deleted.
+    tools_unused_this_run: unusedTools(TOOLS.map(t => t.name)),
     ...readiness,
     session_driver: SESSION_DRIVER,
     ...liveSessionIdentity(readiness),
@@ -16116,10 +16123,23 @@ function serveHttp(port, dashboardPort = null) {
         return res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'parse error' } }));
       }
       const batch = Array.isArray(msg) ? msg : [msg];
-      // Named, not point-free: batch.map(handleRpc) would hand each call the array
-      // index as its caller, which is exactly the argument that decides whether a
-      // Meridian packet may be sent.
+      // WORK THIS BROKER FINISHED AND NOBODY READ.
+      //
+      // The failure deadline propagation exists to prevent, counted rather than assumed. A
+      // caller's AbortSignal.timeout closes ITS end; nothing here notices, so the whole
+      // answer is computed and thrown at a socket that has gone. Until now that was
+      // invisible — the broker looked busy and healthy and half its effort could be going
+      // nowhere. `res` emitting 'close' before it has finished writing IS the hang-up, and
+      // it is the only honest signal available: there is no other way to learn that the
+      // reader left.
+      let clientGone = false;
+      res.on('close', () => { if (!res.writableFinished) clientGone = true; });
       const outs = (await Promise.all(batch.map(m => handleRpc(m, caller)))).filter(Boolean);
+      if (clientGone) {
+        for (const m of batch)
+          if (m?.method === 'tools/call' && m?.params?.name) recordAbandoned(m.params.name);
+        return;
+      }
       if (!outs.length) { res.writeHead(202); return res.end(); }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(Array.isArray(msg) ? outs : outs[0]));

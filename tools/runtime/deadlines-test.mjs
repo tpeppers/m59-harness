@@ -3,8 +3,8 @@
 //
 //   node tools/runtime/deadlines-test.mjs
 import assert from 'node:assert/strict';
-import { deadlineFrom, recordToolMs, toolP90, shouldAttempt, toolTimings, resetToolTimings }
-  from './deadlines.mjs';
+import { deadlineFrom, recordToolMs, toolP90, shouldAttempt, toolTimings, resetToolTimings,
+         recordAbandoned, recordDeclined, recordFailed, unusedTools } from './deadlines.mjs';
 
 // ---------------------------------------------------------------- where a deadline comes from
 {
@@ -97,11 +97,35 @@ import { deadlineFrom, recordToolMs, toolP90, shouldAttempt, toolTimings, resetT
   for (let i = 0; i < 10; i++) { recordToolMs('slow', 3000); recordToolMs('fast', 5); }
   recordToolMs('rare', 999);
   const rows = toolTimings();
-  assert.deepEqual(rows.map(r => r.tool), ['slow', 'fast'],
-    'slowest first, and a tool with too few samples is not reported as fact');
-  assert.equal(rows[0].p90_ms, 3000);
+
+  // EVERY TOOL THAT WAS CALLED IS REPORTED, because "is anybody using this" is a different
+  // question from "how slow is it" and the declutter pass needs the first one. A tool with
+  // too few samples appears with its call count and NO p90 — present, but not pretending to
+  // an opinion it has not earned.
+  const rare = rows.find(r => r.tool === 'rare');
+  assert.equal(rare.calls, 1, 'a rarely-called tool still shows its usage');
+  assert.equal(rare.p90_ms, null, 'and no p90, because one sample is not a distribution');
+  assert.equal(rows.find(r => r.tool === 'slow').p90_ms, 3000);
+
+  // ABANDONMENT SORTS FIRST. It is the number this whole mechanism exists to drive to zero,
+  // so it belongs at the top of the page rather than buried under the slowest tool.
+  recordAbandoned('fast'); recordAbandoned('fast');
+  recordDeclined('slow'); recordFailed('slow');
+  const after = toolTimings();
+  assert.equal(after[0].tool, 'fast', 'the most-abandoned tool leads, whatever its p90');
+  assert.equal(after[0].abandoned, 2);
+  const slow = after.find(r => r.tool === 'slow');
+  assert.equal(slow.declined, 1); assert.equal(slow.failed, 1);
+
+  // A DECLUTTER CANDIDATE IS NOT A DEAD TOOL. This answers "not used in THIS window", which
+  // is the start of the question and not the end of it — the fleet does not found a guild
+  // every hour.
+  assert.deepEqual(unusedTools(['slow', 'fast', 'rare', 'never_called', 'also_never']),
+    ['also_never', 'never_called'], 'sorted, and only the ones with no calls at all');
+  assert.deepEqual(unusedTools([]), [], 'and an empty tool list is answered, not thrown at');
 }
 
 // Bookkeeping may never throw: it runs inside the call path.
 recordToolMs(null, 5); recordToolMs('x', NaN); recordToolMs('x', -1);
+recordAbandoned(null); recordDeclined(undefined); recordFailed(42);
 console.log('runtime deadlines: PASS');
