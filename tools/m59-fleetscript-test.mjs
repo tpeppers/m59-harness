@@ -247,6 +247,8 @@ console.log('\npurchases are read back from the pack');
   fakeBroker({ rooms: { a1: 53 }, inventory: inv });
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (u, o) => {
+    // The /health probe guarantee 11 makes is a GET with no body; only POSTs are RPC.
+    if (!o || o.method !== 'POST') return realFetch(u, o);
     const b = JSON.parse(o.body);
     if (b.params.name === 'shop' && b.params.arguments.buy_ids) {
       bought = true; inv.a1 = [{ name: 'herb', amount: 150 }];
@@ -281,6 +283,8 @@ console.log('\na banker refusal is prose, not an error');
   fakeBroker({ rooms: { a1: 54 } });
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (u, o) => {
+    // Only POSTs are RPC; guarantee 11's /health probe is a bodyless GET.
+    if (!o || o.method !== 'POST') return realFetch(u, o);
     const b = JSON.parse(o.body);
     if (b.params.name === 'bank')
       return { json: async () => ({ result: { content: [{ text: JSON.stringify(
@@ -624,6 +628,8 @@ console.log('a bank that says no does not end the shopping');
   const sent = fakeBroker({ rooms: { a1: 54 },
     inventory: { a1: [{ id: 1, name: 'shilling', amount: 300 }] } });
   globalThis.fetch = (orig => async (url, opts) => {
+    // Only POSTs are RPC; guarantee 11's /health probe is a bodyless GET.
+    if (!opts || opts.method !== 'POST') return orig(url, opts);
     const body = JSON.parse(opts.body);
     if (body.params.name === 'bank')
       return { json: async () => ({ result: { content: [{ text: JSON.stringify(
@@ -654,6 +660,8 @@ console.log('a banker that names the balance is quoting, not refusing');
   fakeBroker({ rooms: { a1: 54 } });
   const asks = [];
   globalThis.fetch = (orig => async (url, opts) => {
+    // Only POSTs are RPC; guarantee 11's /health probe is a bodyless GET.
+    if (!opts || opts.method !== 'POST') return orig(url, opts);
     const body = JSON.parse(opts.body);
     if (body.params.name === 'bank') {
       const asked = Number(body.params.arguments.amount);
@@ -818,6 +826,55 @@ console.log('a strategy that will not load leaves the vault alone rather than fa
 }
 
 console.log('');
+console.log('');
+console.log('the broker you talk to must be holding the fleet you named');
+{
+  // THE TWO COME FROM UNRELATED PLACES. The fleet name is --fleet/M59_FLEET; the broker is
+  // M59_CONTROL_URL, which DEFAULTS TO 8901. On this machine 8901 is production, so
+  // `M59_FLEET=shadow` with no control URL names shadow, takes shadow's run lock, prints
+  // "fleet shadow" in every line, and drives prod. Done for real on 2026-09-09; it was
+  // harmless only because the agent name did not exist on the other side.
+  const sent = fakeBroker({ rooms: { a1: 39 }, healthState: 'C:/somewhere/else/prod.json' });
+  let threw = null;
+  try {
+    await fleetScript({ name: 'wrong broker', fleet: 'testfleet', agents: ['a1'],
+      steps: [walk(39)], onLog: quiet });
+  } catch (e) { threw = e; }
+  ok('a broker holding a DIFFERENT roster is refused', threw !== null);
+  ok('and the refusal names both paths, because a fleet is its roster file',
+     /WRONG BROKER/.test(threw?.message ?? '') && /prod\.json/.test(threw?.message ?? ''));
+  ok('and it says how to fix it', /M59_CONTROL_URL/.test(threw?.message ?? ''));
+  ok('and nothing at all was sent to that broker',
+     !sent.some(x => x.name === 'travel'), JSON.stringify(sent.map(x => x.name)));
+}
+{
+  // SILENCE IS A QUESTION, NOT A FLEET. The same third answer m59-which.mjs had to grow:
+  // the busiest broker is the slowest to reply and it is always the one that matters, so
+  // "could not ask" must never round to "close enough".
+  const sent = fakeBroker({ rooms: { a1: 39 }, healthState: null });
+  let threw = null;
+  try {
+    await fleetScript({ name: 'silent broker', fleet: 'testfleet', agents: ['a1'],
+      steps: [walk(39)], onLog: quiet });
+  } catch (e) { threw = e; }
+  ok('a broker that will not say what it holds is refused, not assumed', threw !== null);
+  ok('and it says it is refusing rather than guessing',
+     /Refusing rather than guessing/.test(threw?.message ?? ''));
+  ok('and nothing was sent', !sent.some(x => x.name === 'travel'));
+}
+{
+  // AND IT IS WAIVABLE BY NAME, like every other guarantee here - a lab harness pointing a
+  // script at a stand-in broker is a real thing to want.
+  const sent = fakeBroker({ rooms: { a1: 39 }, healthState: 'C:/somewhere/else/prod.json' });
+  const r = await fleetScript({ name: 'deliberate', fleet: 'testfleet', agents: ['a1'],
+    unsafe: { reason: 'pointing at a stand-in broker on purpose', waives: ['brokerHoldsFleet'] },
+    steps: [walk(101)], onLog: quiet });
+  ok('naming the waiver lets it through', r.results.a1.ok === true);
+  // Somewhere it is NOT already standing: walk(39) from room 39 is correctly a no-op and
+  // would have proved nothing about whether the guarantee was waived.
+  ok('and the journey actually ran', sent.some(x => x.name === 'travel' && x.to === 101));
+}
+
 console.log('leaving the newbie zone is a step, not a travel');
 {
   // RAZA HAS NO DOOR. `travel` answers `started: true, hops: 0` for a character in the Raza

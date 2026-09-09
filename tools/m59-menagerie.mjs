@@ -406,6 +406,12 @@ function scripts() {
 // because anything writing orders every tick is writing them for ever.
 const HOST_POSTURE = { mode: 'survive', roam: false };
 
+// How long a `walk to ...` is believed while the character does not change room. A journey
+// across the world takes minutes; one that has not moved the body in ten of them is a
+// stall wearing a journey's clothes.
+const JOURNEY_BELIEF_S = Number(flag('journey-belief', 600));
+const stalledSince = new Map();   // agent -> { room, at } from the previous round
+
 async function keepPosture(call, agent, cfg, { dry = false } = {}) {
   let st = null;
   try { st = await call('autopilot', { agent, action: 'status' }, { timeoutMs: 20_000 }); }
@@ -501,11 +507,44 @@ async function serveHost(call, agent, entry, startedAt, { dry = false } = {}) {
     // silent failures that broke m59-outfit.mjs: a walk that was going fine reads as
     // refused and is sent again, and the character spends its time being re-planned
     // instead of walking. A journey across the world takes minutes; a round takes seconds.
-    const busy = String(where?.job?.busy ?? '');
-    if (/^walk to /i.test(busy)) {
-      did.push(`walking home (${busy}, ${where.job.running_for_s ?? '?'}s)`);
+    // DEATH IS THE KEEPER'S, NOT THE DRIVER'S.
+    //
+    // The Underworld is `recovery`, one of the four protected faculties, and it decides on a
+    // one-second clock inside the keeper. A merchant driver on a 45-second clock has nothing
+    // to add and everything to get in the way of, so it says what it sees and stands off.
+    if (/underworld/i.test(String(where?.where?.name ?? ''))) {
+      did.push('dead — in the Underworld; the keeper owns recovery, not this');
       return { agent, did, home: false };
     }
+
+    // A JOURNEY IS ONLY A JOURNEY WHILE IT IS GOING SOMEWHERE.
+    //
+    // Not re-issuing a travel that is already running is right, and believing that flag
+    // forever is how it goes wrong: shadowb19 was killed on the road to Tos and its keeper
+    // reported `busy: "walk to The Streets of Tos"` for FIFTY-TWO MINUTES while the body sat
+    // in the Underworld at room 1. The driver dutifully printed "walking home" 54 times.
+    // Every round was correct and nothing moved — this repository's most expensive shape of
+    // bug, and the reason `ms_since_moved` was never enough on its own.
+    //
+    // So the belief is bounded and it is bounded by PROGRESS, not by stillness: the same
+    // room across two consecutive checks plus a journey older than the cap is a stall, and
+    // the remedy is to cancel and let the next round plan afresh.
+    const busy = String(where?.job?.busy ?? '');
+    if (/^walk to /i.test(busy)) {
+      const forS = Number(where.job.running_for_s ?? 0);
+      const last = stalledSince.get(agent);
+      const movedSinceLastLook = last?.room !== room;
+      stalledSince.set(agent, { room, at: Date.now() });
+      if (forS < JOURNEY_BELIEF_S || movedSinceLastLook) {
+        did.push(`walking home (${busy}, ${forS}s)`);
+        return { agent, did, home: false };
+      }
+      did.push(`journey has run ${forS}s without leaving room ${room} — cancelling and re-planning`);
+      if (!dry) await call('travel', { agent, action: 'cancel' }, { timeoutMs: 20_000 })
+        .catch(e => did.push(`cancel refused: ${String(e.message).slice(0, 60)}`));
+      return { agent, did, home: false };
+    }
+    stalledSince.delete(agent);
     if (dry) did.push(`would walk home: ${room} -> ${cfg.station.room}`);
     else {
       try {
