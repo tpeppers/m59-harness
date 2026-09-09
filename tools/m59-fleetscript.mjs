@@ -73,7 +73,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { takeRunLock } from './m59-runlock.mjs';
-import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
+import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
@@ -192,7 +192,13 @@ export function checkProvenance(provenance, { cwd = REPO_ROOT } = {}) {
                 ' — read the diff before trusting it against production' };
 }
 
-const RPC = () => process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901/';
+// WHICH BROKER. Resolved rather than defaulted — see resolveControlUrl in
+// m59-fleetpath.mjs for why this checkout is allowed to refuse to guess.
+const RPC = () => {
+  const r = resolveControlUrl();
+  if (!r.url) throw new Error(`no broker named: ${r.why}`);
+  return r.url;
+};
 let seq = 0;
 
 /** One broker call. Kept private so a step cannot bypass the pacing or the timeout. */
@@ -395,7 +401,20 @@ export function abilitiesTargetedBy(lines = []) {
 
 export async function observe(agent) {
   const s = await call('status', { agent }, 40_000).catch(() => null);
-  const hp = s?.hp && Number.isFinite(s.hp.value) && s.hp.max > 0 ? s.hp.value / s.hp.max : null;
+  // HEALTH LIVES UNDER TWO DIFFERENT KEYS AND ONLY ONE OF THEM WAS READ.
+  //
+  // A keeper-backed character's status carries `hp`; a character the broker holds directly —
+  // one joined after the broker started, before the 45s sweep has given it a keeper — carries
+  // `vitals.health` and no `hp` at all. This read only the first, so `observe()` returned
+  // health: null for the second, and every journey then refused with "health is unreadable —
+  // not setting out".
+  //
+  // That refusal is RIGHT when health is genuinely unknown (it is what catches a character
+  // whose keeper has died) and it was firing on a character sitting at a perfectly readable
+  // 20/20. Measured on prod 2026-09-09 with Loial, whose fleet row showed `health: "20/20"`
+  // in the same breath as the script refusing to move him.
+  const vit = s?.hp ?? s?.vitals?.health ?? null;
+  const hp = vit && Number.isFinite(vit.value) && vit.max > 0 ? vit.value / vit.max : null;
   const roomName = s?.where?.name ?? s?.room?.name ?? '';
   return {
     ok: Boolean(s),
@@ -414,9 +433,9 @@ export async function observe(agent) {
     // it was written to catch straight through. The null has to be tested first.
     gold: s?.gold == null || !Number.isFinite(Number(s.gold)) ? null : Number(s.gold),
     health: hp,
-    hpText: s?.hp ? `${s.hp.value}/${s.hp.max}` : '?',
+    hpText: vit ? `${vit.value}/${vit.max}` : '?',
     // A character in the Underworld is dead however its hit points read on the way in.
-    dead: s?.hp?.value === 0 || /underworld/i.test(roomName),
+    dead: vit?.value === 0 || /underworld/i.test(roomName),
     busy: s?.busy ?? null,
   };
 }
@@ -459,6 +478,37 @@ export const KNOWN_TRAPS = Object.freeze({
  * written down at the call site, because "I know about the trap" and "I forgot" otherwise
  * produce the same script.
  */
+// GUARANTEE 12: A ROUTE THROUGH A TRAP IS A TRAP, AND `trapCheck` COULD NOT SEE ONE.
+//
+// `trapCheck` reads the PLAN — where each step is aimed and where the body is standing. The
+// router picks everything in between, and nothing was asking it what it had chosen.
+//
+// 2026-09-09, and it cost the character this rule exists to protect. Loial the Ogier (20 max
+// health) was sent `walk(39)` — Upstairs in Castle Victoria, an ordinary destination that is
+// not a trap and never has been. From Jasper the router planned
+//
+//     382 -> 350 -> 568 -> 567 -> 566 -> 576 -> 587 -> 597 -> 598 -> 599 -> 2 -> 38 -> 39
+//
+// straight through **599**, the single entry in `KNOWN_TRAPS`, and the guarantee written for
+// exactly that room said nothing because 599 was not the destination. Six trolls, health
+// 11/20 -> 4/20 -> dead, and the travel doctrine makes it worse rather than better: "a
+// monster cannot end a journey", so the flee threshold deliberately did not apply.
+//
+// So the destination test was never the whole test. This asks the ROUTER what it intends
+// before anything walks, and refuses a journey that crosses a room we have written down as
+// one that keeps characters. It is advisory when the route cannot be read — an unanswerable
+// router is a question, not a permit, but refusing every walk because a keeper was slow
+// would ground the fleet for the wrong reason. Which is why it says which of the two it did.
+export function routeCrossesTrap(hops = []) {
+  if (!Array.isArray(hops)) return null;
+  for (const hop of hops) {
+    const room = Number(hop?.room ?? hop?.to ?? hop);
+    if (Number.isFinite(room) && KNOWN_TRAPS[room])
+      return { room, why: KNOWN_TRAPS[room] };
+  }
+  return null;
+}
+
 export function trapCheck(plan = [], { standingIn = null, allowTraps = false } = {}) {
   if (allowTraps) return null;
   const into = plan.find(s => s?.do === 'walk' && KNOWN_TRAPS[Number(s.to)]);
@@ -578,10 +628,14 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'walking. Refused here instead, before anything moves',
   },
   trapCheck: {
-    what: 'refusal to walk into a room KNOWN_TRAPS says keeps characters',
+    what: 'refusal to walk into — or THROUGH — a room KNOWN_TRAPS says keeps characters',
     since: '2026-09-03',
     incident: 'room 599 (Ukgoth) cannot be left by any route the bake knows; the fleet was ' +
-              'fed into it repeatedly and learned about it by stranding somebody',
+              'fed into it repeatedly and learned about it by stranding somebody. Widened ' +
+              '2026-09-09 to the ROUTE as well as the destination: `walk(39)` is an ' +
+              'ordinary errand to an ordinary room, and from Jasper the router planned it ' +
+              'through 599, where six trolls killed a 20-health caster. The destination ' +
+              'test was never the whole test',
   },
   minHealth: {
     what: 'the health floor under every journey',
@@ -846,6 +900,26 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
 //
 // Rules 3, 4 and 5 live here together because they are one behaviour: do not set out hurt,
 // wait the road's own length, and do not shout at a character that is already walking.
+// Ask the character's own keeper for the route it would take, and judge it against
+// KNOWN_TRAPS. Returns {trap} to refuse, {unknown} when the router could not be asked, or
+// null when the road is clear. A waived trapCheck waives this too — the rescue that walks
+// into 599 on purpose is the same errand either way.
+async function routeTrapAhead(ctx, agent, from, to) {
+  if (ctx.allowTraps) return null;
+  try {
+    const ports = await keeperPorts(ctx.fleet);
+    const who = ports?.get?.(agent);
+    if (!who) return { unknown: 'no keeper port' };
+    const r = await keeperCall(who, 'route', { to });
+    const hops = r?.route?.hops ?? r?.hops ?? r?.route ?? null;
+    if (!Array.isArray(hops) || !hops.length) return { unknown: 'router gave no hops' };
+    const trap = routeCrossesTrap(hops);
+    return trap ? { trap } : null;
+  } catch (e) {
+    return { unknown: e?.message ?? String(e) };
+  }
+}
+
 async function compiledWalk(ctx, agent, to, { minHealth }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
@@ -875,6 +949,19 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
                                hurt: true, dead: /died|dead/.test(healed.why) };
       continue;   // re-observe: it may have been moved while the keeper held it
     }
+
+    // GUARANTEE 12. Ask the router what it intends BEFORE the body moves. The broker holds a
+    // snapshot for a keeper-backed character and answers "ask the keeper", so this asks the
+    // keeper — the same process that will actually do the planning, which is the only answer
+    // worth having.
+    const crossing = await routeTrapAhead(ctx, agent, at.room, to);
+    if (crossing?.trap)
+      return { ok: false, why: `the route ${at.room} -> ${to} crosses room ${crossing.trap.room} ` +
+                               `— ${crossing.trap.why} Pass { allowTraps: true } if this errand ` +
+                               `is the rescue.`, trap: crossing.trap };
+    if (crossing?.unknown)
+      ctx.log(agent, `route ${at.room} -> ${to} could not be read (${crossing.unknown}) — ` +
+                     'walking without a trap check on the path');
 
     const est = await call('travel_estimate', { from: at.room, to, basis: 'p90' }, 30_000)
       .catch(() => null);
@@ -1820,6 +1907,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
 
   const ctx = { log: onLog, pollMs, minHealth, healMs, budgetFloorMs, budgetCapMs,
                 reviveMs, packSettleMs, learnSettleMs, name,
+                // GUARANTEE 12 needs both: the fleet to find the keeper that will plan the
+                // route, and the waiver so a rescue into 599 is still allowed to go.
+                fleet, allowTraps,
                 // WIRED, not merely registered. `waives: ['safeRest']` has to actually reach
                 // the step or the entry in UNSAFE_GUARANTEES is decoration — the same failure
                 // as a setting that silently does nothing, which is how `purpose` stayed out

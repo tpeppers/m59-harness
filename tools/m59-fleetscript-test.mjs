@@ -744,6 +744,29 @@ console.log('a walk to a non-room is refused before anything moves');
   // way to recover a stranded character is a hand-written script — which is the thing this
   // file exists to stop being necessary.
   ok('a declared rescue may go in', trapCheck([walk(599)], { allowTraps: true }) === null);
+
+  // GUARANTEE 12. THE DESTINATION TEST WAS NEVER THE WHOLE TEST.
+  //
+  // 2026-09-09: `walk(39)` — Castle Victoria upstairs, an ordinary room — was planned from
+  // Jasper as 382 -> 350 -> 568 -> 567 -> 566 -> 576 -> 587 -> 597 -> 598 -> 599 -> 2 -> 38
+  // -> 39. Every assertion above passes on that plan, because 599 is not the destination and
+  // the body was not standing in it. Six trolls killed a 20-health caster on the way.
+  const { routeCrossesTrap } = await import('./m59-fleetscript.mjs');
+  const deadly = [382, 350, 568, 567, 566, 576, 587, 597, 598, 599, 2, 38, 39];
+  ok('a plan aimed at an ordinary room is still allowed by the destination test',
+     trapCheck([walk(39)]) === null);
+  ok('but the ROUTE it would take is refused', routeCrossesTrap(deadly)?.room === 599);
+  ok('and the refusal carries the reason the operator needs',
+     /Relic of Qor/.test(routeCrossesTrap(deadly)?.why ?? ''));
+  ok('a clear road is not refused',
+     routeCrossesTrap([382, 350, 568, 567, 566, 576, 587, 27]) === null);
+
+  // The router answers in more than one shape depending on who was asked, and a check that
+  // only understands one of them is a check that silently passes everything.
+  ok('hops as {room} objects are read', routeCrossesTrap([{ room: 599 }])?.room === 599);
+  ok('hops as {to} objects are read', routeCrossesTrap([{ to: 599 }])?.room === 599);
+  ok('an unreadable route is not a trap claim', routeCrossesTrap(null) === null);
+  ok('an empty route is not a trap claim', routeCrossesTrap([]) === null);
 }
 
 
