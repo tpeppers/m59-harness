@@ -103,7 +103,13 @@ const untracked = new Map();
 const sources = new Set();
 
 for (const line of hits) {
-  // `<ref>:tools/x.mjs:12:  } from './y.mjs';`
+  // Shape of a git-grep line: `<ref>:tools/SOME.mjs:12:` then the import text.
+  //
+  // Written without a literal example of that import text ON PURPOSE: this file scans
+  // every module for import specifiers, itself included, so an illustrative `from
+  // "./whatever.mjs"` in a comment here is indistinguishable from a real edge and reports
+  // a missing module that never existed. It did exactly that on the first tag cut with
+  // this check in place — the guard's first finding was itself.
   const m = /^[^:]*:(tools\/[^:]+):\d+:(.*)$/.exec(line);
   if (!m) continue;
   const [, src, text] = m;
