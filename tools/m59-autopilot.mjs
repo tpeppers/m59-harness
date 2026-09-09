@@ -1449,6 +1449,10 @@ export class Autopilot {
       // inert like its neighbours: holding the spells is not the instruction, being posted
       // as the group's caster is. Shape: { enabled, spells: [...], gap_ms, mana_floor }.
       buffAllies: null,
+      // Take reagents from a fleetmate without negotiating. The provider half of a
+      // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
+      // min_bulk_free }.
+      acceptDonations: null,
       // A daily share of actual sale proceeds paid to Frular for guild rent. null is
       // inert; DUM's independent Guild Tithe strategy installs the settings object.
       guildTithe: null,
@@ -14999,6 +15003,11 @@ export class Autopilot {
     // spell improves. Gated on `policy.buffAllies` rather than on a strategy, so a doctrine
     // can post ONE character as the group's caster without moving it onto a strategy that
     // changes everything else about how it fights.
+    // TAKE THE PAYMENT BEFORE DOING THE WORK, and before anything else in this pass: an
+    // open trade window blocks the donor from doing anything else, and it costs one reply.
+    if (this.policy.acceptDonations) await this.acceptDonations().catch(error =>
+      this.note('donation pass failed', { why: error.message }));
+
     if (this.policy.buffAllies) await this.buffAllies().catch(error =>
       this.note('buff pass failed', { why: error.message }));
 
@@ -17217,6 +17226,139 @@ export class Autopilot {
     this.progress('cast a heal on an ally');
   }
 
+
+
+  // ACCEPT REAGENTS FROM A FLEETMATE WITHOUT BEING ASKED TWICE.
+  //
+  // The point of this is to turn a two-sided coordination problem into a one-sided one.
+  // A fleetmate that wants a buff should be able to walk over, push the reagents across,
+  // and leave — with nobody having to agree on timing, and no message sent. The service
+  // provider's whole job here is to say yes.
+  //
+  // THE WIRE PROTOCOL ALREADY MAKES THAT THE EASY HALF. From the OFFER handler in
+  // m59-client.mjs: "This is the only unsolicited message that requires a reply to make
+  // progress: until we counteroffer, the other side cannot accept, and the trade sits
+  // open." So the obligation on this side is a COUNTEROFFER THAT MAY BE EMPTY — a
+  // mechanical reply with nothing in it and no judgement required. That is exactly what
+  // can be automated, and it is why this works.
+  //
+  // THREE REFUSALS, and they are the whole safety of it:
+  //
+  //   not a fleetmate      this is a shared server. `party.isFleetmate` is answered from
+  //                        the roster the broker actually loaded, and it is the same test
+  //                        the grudge book uses. A stranger offering junk to a caster
+  //                        whose pack is already 98% full is a denial of service, not a
+  //                        donation.
+  //   something unwanted   every item offered has to be on the take list. Accepting a
+  //                        mixed pile means accepting whatever else was in it.
+  //   nothing to gain      an empty offer is somebody opening a trade window, not giving.
+  //
+  // Anything refused is CANCELLED rather than ignored, because an open trade blocks the
+  // other side from doing anything else with that window.
+  static DONATION_TAKES = ['orc tooth', 'sapphire', 'mushroom', 'elderberry', 'herb'];
+  static DONATION_SHEDS = ['mushroom'];
+
+  /**
+   * Bulk headroom, or null when the pack cannot be measured.
+   *
+   * `carryCapacity` withholds `room_for` whenever anything in the pack is unweighed, and
+   * that silence is load-bearing: an unknown load must not be read as a full one. Every
+   * caller here treats null as "carry on", certainty in one direction only -- the same
+   * rule the create-weapon path already follows.
+   */
+  bulkFree() {
+    const cap = skills.carryCapacity(this.s?.client);
+    const room = cap?.room_for?.bulk;
+    return Number.isFinite(room) ? room : null;
+  }
+
+  /**
+   * PUT DOWN THE CHEAP BULKY THING TO MAKE ROOM FOR THE USEFUL ONE.
+   *
+   * m59-almoner.mjs has the same idea behind `--drop-for-space`, disarmed, and its comment
+   * says precisely why it stayed off: "Re-arming by default needs a POSITIVE full-pack
+   * signal — `pack.percent` would be it, and it reads null fleet-wide here because
+   * `carryCapacity` cannot see MIGHT." The keeper is where that signal exists: its own
+   * carry block reports `load` and `room_for` with `exact: true`, computed from
+   * `1700 + might * 20` (player.kod:10456). So this is the same fallback moved to the one
+   * place that can tell a full pack from an unreadable one.
+   *
+   * Mushrooms are the right thing to shed: they are the bulky, cheap half of the reagent
+   * pile, and this caster is standing in a room that produces them. It is still SPENDING
+   * money to buy pack space, so it happens only when the space is actually needed.
+   *
+   * THE FLOOR IS NOT A SAFE. `farmCleanup` sweeps floor items before sell-bound
+   * departures, and on a shared server another player can simply take them. Treat a
+   * dropped stack as spent, not stored -- which is why only the cheapest kind goes down.
+   */
+  async shedForDonation(need = 0) {
+    const c = this.s?.client;
+    const sheds = [].concat(this.policy.acceptDonations?.drop_for_space
+                            ?? Autopilot.DONATION_SHEDS).map(x => String(x).toLowerCase());
+    if (!sheds.length) return { shed: false, why: 'nothing is listed as sheddable' };
+    const held = (c?.inventory || []).filter(o => {
+      const n = String(c.rsc.get(o.nameRsc) || '').toLowerCase();
+      return sheds.some(s => n.includes(s));
+    });
+    if (!held.length) return { shed: false, why: 'holding none of the sheddable kinds' };
+    const target = held[0];
+    const name = c.rsc.get(target.nameRsc) || 'reagent';
+    await this.s.pacer.submit('act', () => c.drop(target.id)).catch(() => {});
+    this.note('shed a reagent to make room for a donation', {
+      dropped: name, bulk_free_before: need,
+      why: 'providing the service matters more than the stack, and the floor is not a safe: '
+         + 'farm cleanup sweeps it and another player can take it' });
+    return { shed: true, dropped: name };
+  }
+
+  async acceptDonations() {
+    const cfg = this.policy.acceptDonations;
+    if (!cfg || cfg.enabled === false) return;
+    const c = this.s?.client;
+    const t = c?.trade;
+    if (!t || t.role !== 'recipient') return;              // nobody is offering us anything
+    if (this._donationSeen === t.revision) return;          // already dealt with this one
+    this._donationSeen = t.revision;
+
+    const takes = [].concat(cfg.reagents ?? Autopilot.DONATION_TAKES)
+      .map(x => String(x).trim().toLowerCase()).filter(Boolean);
+    const offered = (t.theirs || []).map(i => String(i.name || '').toLowerCase());
+
+    const refuse = async (why) => {
+      await this.s.pacer.submit('act', () => c.cancelOffer()).catch(() => {});
+      this.note('declined a trade', { from: t.withName, offered: t.theirs, why });
+      return { accepted: false, why };
+    };
+
+    if (!offered.length) return refuse('an empty offer is a trade window, not a donation');
+    if (!party.isFleetmate(t.withName))
+      return refuse(`${t.withName} is not on the fleet roster — this is a shared server`);
+    const unwanted = offered.filter(n => !takes.some(w => n.includes(w)));
+    if (unwanted.length)
+      return refuse(`offered something not on the take list: ${[...new Set(unwanted)].join(', ')}`);
+
+    // ROOM FIRST, THEN YES. Accepting into a pack with no space is the failure `supply`
+    // reports as "a receiver that can give but not receive", and from outside it is
+    // indistinguishable from an accept that worked: nothing arrives and no count rises.
+    const free = this.bulkFree();
+    const floor = Number(cfg.min_bulk_free ?? 40);
+    if (free !== null && free < floor) await this.shedForDonation(free);
+
+    // The empty counteroffer is the whole mechanism: it gives nothing and it is what
+    // unblocks the other side. Then accept.
+    const before = c.evSeq;
+    await this.s.pacer.submit('act', () => c.counterOffer([])).catch(() => {});
+    await c.waitFor({ since: before, kinds: ['trade', 'message'], timeoutMs: 2500 })
+      .catch(() => ({ events: [] }));
+    await this.s.pacer.submit('act', () => c.acceptOffer()).catch(() => {});
+    this.tally.donations_taken = (this.tally.donations_taken || 0) + 1;
+    this.note('accepted a donation', {
+      from: t.withName, took: t.theirs,
+      why: 'a fleetmate paying for a service in advance: accept now, cast at the next '
+         + 'opportunity, so the donor never has to coordinate a moment with us' });
+    this.progress(`took reagents from ${t.withName}`);
+    return { accepted: true, from: t.withName, took: t.theirs };
+  }
 
   // BUFF WHOEVER ELSE IS STANDING HERE. A caster's second job.
   //
