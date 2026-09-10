@@ -687,6 +687,17 @@ the records it describes.
   against the walls are kept because they are the safe-spot signal, and that an exit a bake
   cannot reach is still OFFERED — a bake must never be the reason a doorway disappears, and
   that the clearance preference routes further from the walls while never removing a route) and
+  `node tools/m59-exits-test.mjs` (64 — **the five sources of "an exit", and the one view that
+  unions them**: that a kod `OR` stored as a flat condition list becomes an unsatisfiable AND and
+  is REPORTED rather than carried (six of twenty-four entries were dead that way, including a
+  second way into the Temple of Shal'ille, and the room-48 case is the canary for the generator
+  that still has the bug); that the room `m59-exitreport.mjs` called "NOTHING IN THE WORLD GRAPH
+  ARRIVES HERE" has two inbound triggers with provenance and a landing square; that every room
+  the inbound verdict refuses, `findPath` refuses too — asserted over the WHOLE map, because
+  that equivalence is the only thing that makes it honest for fleetScript and the broker to
+  refuse a journey on it; that a dead predicate leaves the room PLANNABLE, which is exactly the
+  trap; and that the waiver works, needs a reason, and quotes it back — the errand that finds
+  the missing trigger has to be able to aim at the room nothing arrives at) and
   `node tools/m59-impossible-test.mjs` (126 — **the polarity the 153 collision assertions do
   not cover**: every one of those asserts a legitimate move REMAINS USABLE, so that suite
   passes cleanly on the day the walls stop working. This one asserts refusals, by checked-in

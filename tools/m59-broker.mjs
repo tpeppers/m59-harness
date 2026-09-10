@@ -1738,6 +1738,11 @@ async function pushPolicyToKeeper(agent, p) {
 const KEEPER_LIVENESS_SWEEP_MS = Math.max(1000,
   Number(process.env.M59_KEEPER_LIVENESS_MS || 10_000) || 10_000);
 
+// tools/m59-exits.mjs once imported, for KeeperProxy._arrivalGate. Module-level rather than on
+// a class, and NOT on the imported `Session` -- a cache hung off another module's class is a lie
+// about who owns it.
+let _exitView = null;
+
 class KeeperProxy {
   constructor(agent, index) {
     this.name = agent;
@@ -2271,7 +2276,36 @@ class KeeperProxy {
   // this costs nothing on a fleet that is already being watched; when the keeper genuinely
   // cannot be reached the health comes back null and the gate refuses, which is the rule
   // fleetScript earned the hard way -- unknown is not permission.
+  // MAY ANYTHING ARRIVE THERE? Asked of the same unified exit view fleetScript asks, so an LLM
+  // calling this tool and a script calling `walk` are refused by the same sentence. That
+  // equivalence is the whole point: the operator's rule is that "the way an LLM responds to
+  // 'send Statler to Marion' needs to be fundamentally the same as the way the localhost:3000
+  // field command sends units to Marion", and a gate only one of them consults is a gate the
+  // other walks past.
+  //
+  // IT ASKS THE MAP THIS BROKER IS ALREADY HOLDING. `worldMap` is the map the mover plans and
+  // moves on, and its reverse-edge table was built at startup off the request path -- so this
+  // costs a scan of the exits and nothing else. Loading a second copy would have been a second
+  // OPINION about the world, in the one file whose job is to have one.
+  //
+  // Only the module is lazy, and only so a broker that never travels does not import it.
+  async _arrivalGate(dest, opts = {}) {
+    try {
+      if (!_exitView) _exitView = await import('./m59-exits.mjs');
+      return _exitView.mayArrive(worldMap, dest, { waiver: opts.despiteUnreachable ?? null });
+    } catch (e) {
+      // AN UNREADABLE MAP IS NOT A REFUSAL -- see the same argument in m59-fleetscript.mjs.
+      // Grounding the whole fleet over a missing bake is the worse failure of the two.
+      return { ok: true, code: 'unknown', note: `could not ask the unified exit view about ` +
+                                                `room ${dest}: ${e?.message ?? e}` };
+    }
+  }
+
   async _journeyGate(dest, opts = {}) {
+    // THE DESTINATION FIRST, THE BODY SECOND. There is no point refusing a journey for health
+    // -- or resting a character up to a floor -- when nothing could have arrived there anyway.
+    const arrival = await this._arrivalGate(dest, opts);
+    if (!arrival.ok) return { ok: false, code: arrival.code, why: arrival.why, destination: dest };
     let st = null;
     try { st = await this._refreshState(); } catch { st = null; }
     const hp = st?.hp ?? null;
@@ -6018,6 +6052,16 @@ const TOOLS = [
           'because it is the same escape hatch: a corpse run, a rescue, or a deliberate test ' +
           'genuinely needs to set out hurt. The reason is MANDATORY and a waiver without one ' +
           'is refused, so "I know about the floor" and "I forgot" cannot look identical.' },
+      // AND A DESTINATION GATE, for the same reason and with the same escape hatch. 25 of the
+      // 264 baked rooms have nothing arriving at them in ANY of the five exit sources, so no
+      // route the mover could take ends there -- and a travel to one used to walk, retry and
+      // burn the whole budget before saying so.
+      despite_unreachable: { type: 'object',
+        properties: { reason: { type: 'string' } },
+        description: 'GO ANYWAY, AND SAY WHY, when nothing in the unified exit view arrives at ' +
+          'the destination. This is the errand that FINDS the missing trigger -- and 17 of ' +
+          'those 25 rooms have a way out, so a person can plainly get into them. The reason ' +
+          'is MANDATORY. See tools/m59-exits.mjs.' },
       run_errands: { type: 'boolean', description: 'do the outstanding errands — bank the ' +
         'takings, visit a vault being passed, hand over farm supplies — BEFORE setting off. ' +
         'Default true, because a character sent across the world should stock up first ' +
@@ -6101,6 +6145,7 @@ const TOOLS = [
         // Straight through to the gate in `travelJob`; see m59-travelgate.mjs for the decision.
         healthFloor: a.health_floor,
         despiteHealth: a.despite_health,
+        despiteUnreachable: a.despite_unreachable,
         where: where.name, maxHops: num(a.max_hops, 25), controlToken: a.control_token,
         runErrands: a.run_errands !== false,
         // FOREGROUND MEANS WAIT FOR THE JOURNEY, NOT FOR AN ACKNOWLEDGEMENT.

@@ -66,6 +66,7 @@ import { loadMap, movementMapFile, CHECKED_MAP_FILE } from './m59-map.mjs';
 import { routesFor, anchorReachVia, stepMaskCurrent, attachStepMasks,
          reachableFrom } from './m59-routes.mjs';
 import { KNOWN_TRAPS } from './m59-fleetscript.mjs';
+import { inboundFor } from './m59-exits.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -124,6 +125,37 @@ export function roomReport(map, table, roomNum,
         arrivals.push({ from: Number(id), fromName: r.name, kind: 'go',
                         via: `door at ${sq(g.row, g.col)}`, row: g.arriveRow, col: g.arriveCol });
   }
+  // A TRIGGER IS AN ARRIVAL, AND IT IS THE ONE THAT KNOWS EXACTLY WHERE YOU LAND.
+  //
+  // This scan used to read `edgeExits` and `goExits` and stop there, so a room entered by a
+  // kod trigger came back with an EMPTY inbound list and printed "NOTHING IN THE WORLD GRAPH
+  // ARRIVES HERE" -- said of room 48, the Temple of Shal'ille, on a night the router was
+  // planning fifteen-hop journeys into it. The room's only two ways in are triggers.
+  //
+  // The irony is that a trigger carries a BETTER answer than a door does: `arrive: {row, col}`
+  // is the exact square the room class puts the body on, where an edge exit's arrival square is
+  // inferred from the boundary. So the matrix below -- which doors can I take from where I
+  // landed -- now works in a trigger-entered room without `--at`, which used to be the only
+  // form that worked there.
+  //
+  // Read through `m59-exits.mjs` rather than by scanning m59-codeexits.json here, because the
+  // whole reason that file was invisible to this tool is that four call sites each unioned a
+  // different subset of the five sources. One view, one owner.
+  for (const e of inboundFor(map, roomNum, { telemetry: false })) {
+    if (e.kind !== 'trigger' || !e.arrive) continue;
+    arrivals.push({ from: e.from, fromName: map.rooms[String(e.from)]?.name ??
+                                            e.provenance?.from_name ?? null,
+                    kind: 'trigger',
+                    // NOT a door: there is nothing to press and no square to aim at on this
+                    // side. What there is, is the predicate that fires -- print that.
+                    via: `trigger ${e.provenance?.cite ?? ''} where ${e.trigger}`.trim(),
+                    // A DEAD PREDICATE IS STILL LISTED, and marked. A reader who cannot see
+                    // the difference between a way in and a way in that can never fire is
+                    // exactly the reader this file exists for.
+                    dead: e.unsatisfiable ?? null,
+                    row: e.arrive.row, col: e.arrive.col });
+  }
+
   // One row per (neighbour, landing square): three doors that all drop you on the same
   // square are one arrival as far as this question is concerned.
   const seenArrival = new Set();
@@ -286,13 +318,23 @@ function printRoom(rep) {
 
   console.log('');
   console.log('  WHERE YOU LAND COMING IN');
-  if (!rep.inbound.length) console.log('    NOTHING IN THE WORLD GRAPH ARRIVES HERE — ' +
-    'this room is entered by a trigger or not at all');
+  // THE SENTENCE THAT WAS WRONG. It used to read "NOTHING IN THE WORLD GRAPH ARRIVES HERE --
+  // this room is entered by a trigger or not at all", which offered the true explanation and
+  // the false claim in one breath: the triggers ARE in the graph the router plans on, this tool
+  // just was not reading them. Now that it does, an empty list means something much stronger,
+  // and the honest version of it names what was consulted and what to do next.
+  if (!rep.inbound.length) console.log('    NOTHING ARRIVES HERE in any of the five sources ' +
+    '(declared exits, inferred reverse edges, kod triggers, falljumps, hoptests) — so no route ' +
+    'the mover could take ends in this room. A body can still BE here, and if one can, the ' +
+    'missing affordance is a trigger nobody has written down: add it to m59-codeexits.json. ' +
+    'Use --at rNcM to ask this room\'s questions from where that body is standing.');
   for (const a of rep.inbound) {
     const onDoor = rep.anchors.find(x => sameSquare(x, a));
     console.log(`    ${a.from == null ? 'HERE '.padEnd(10)
                     : ('from ' + String(a.from)).padEnd(10)}${String(a.fromName).slice(0, 30).padEnd(31)}` +
-                `-> ${sq(a.row, a.col).padEnd(8)}${onDoor ? ` (on the ${onDoor.dir} door itself)` : ''}`);
+                `-> ${sq(a.row, a.col).padEnd(8)}${onDoor ? ` (on the ${onDoor.dir} door itself)` : ''}` +
+                `${a.kind === 'trigger' ? '  [trigger]' : ''}${a.dead ? '  DEAD PREDICATE' : ''}`);
+    if (a.dead) console.log(`             this way in CANNOT FIRE — ${a.dead}`);
     if (a.canTake === null)
       console.log(`             no opinion — ${a.why}`);
     else {

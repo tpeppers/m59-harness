@@ -689,6 +689,85 @@ and it is an aim rather than a promise — `_traceMoverStep` still decides wheth
 lands. It also does nothing about a body that is *hitting* you: that is `underFire`, and the
 answer there is still to move, not to thread.
 
+## FIVE SOURCES OF "AN EXIT", AND ONE VIEW THAT UNIONS THEM
+
+```bash
+node tools/m59-exits.mjs 48            # every way in and out of one room, with provenance
+node tools/m59-exits.mjs 48 --json     # the same, for a script
+node tools/m59-exits-test.mjs          # 64, offline
+```
+
+There is no single file that says how a room connects. There are five, and until 2026-09-10
+**every tool that asked "what arrives here?" asked a different subset of them**:
+
+| source | what it holds | who was reading it |
+|---|---|---|
+| `edgeExits` / `goExits` in the bake | the declared doors | everybody |
+| `inferredExits` (the reverse table) | the far room declares an edge in and this one does not | the router |
+| `substrate/m59-codeexits.json` | kod triggers — a room class hands you to a neighbour when you walk onto a region of floor | the router, and nothing else |
+| `substrate/m59-falljumps.json` | intra-room affordances a person has made | the mover |
+| `substrate/hoptests.json` | what has actually been crossed, and how often | the ledgers |
+
+**What that cost.** `m59-exitreport.mjs` printed `NOTHING IN THE WORLD GRAPH ARRIVES HERE`
+about room 48, the Temple of Shal'ille — a room the router was planning fifteen-hop journeys
+into — because the temple's only two ways in are triggers and that tool scanned declared exits
+alone. The sentence even offered the right explanation in its second clause ("this room is
+entered by a trigger or not at all") while making a false claim in its first: the triggers
+ARE in the graph the router plans on.
+
+`tools/m59-exits.mjs` is the union, and every entry carries **where the claim came from** and
+**what the ledger has measured at that boundary**. Two things fell out of it the day it was
+written, neither of which any single source could show:
+
+- **A trigger knows exactly where you land** (`arrive: {row, col}`), which is a better answer
+  than a door gives — an edge exit's arrival square is inferred from the boundary. So the exit
+  report now answers "which doors can I take from where I landed" in a trigger-entered room
+  without `--at`, which used to be the only form that worked there.
+
+- **A kod `OR` had been flattened into an unsatisfiable `AND`.** The kod condition for the
+  temple is `((new_row = 17) or (new_row = 18)) and (new_col = 12)`; the file stored the three
+  as a flat list, and every reader joins a flat list with AND. The predicate became
+  `row == 17 and row == 18 and col == 12`, which nothing can satisfy, and **the trigger was dead
+  while looking healthy on the page**. Six of twenty-four entries were in that state, including
+  a second way into the temple and one into Marion. `values: [17, 18]` is the repaired shape and
+  means "any of"; `unsatisfiableWhen()` is the check that finds the next one.
+  **THE GENERATOR STILL HAS THIS BUG** — regenerating `m59-codeexits.json` without carrying the
+  OR through reintroduces all six, and `m59-exits-test.mjs` is the canary that fails when it does.
+
+### `mayArrive()` — and why BOTH the broker and fleetScript ask it
+
+`inboundVerdict(map, room)` answers "is there any way in at all, and what did you consult?",
+and `mayArrive(map, room, { waiver })` is the decision built on it. **The router's BFS expands
+exactly the same three sources the verdict unions**, so `nothing_arrives` is not an opinion about
+the world — it is the statement that no route the mover could take ends at that room, from
+anywhere, ever. Asserted across the whole map in the test rather than argued: every room the
+verdict refuses, `findPath` refuses too. 25 of 264 rooms are in that state.
+
+That equivalence is what makes it safe to refuse on, and both callers do:
+
+- **fleetScript** — guarantee 15 (`reachable`), refused in `compiledWalk` *before* the attempt
+  loop and before `healToFloor` can spend two minutes resting a body for a journey that could
+  never have ended anywhere. What it replaces: a walk to room 351 taking three attempts and the
+  whole 490s budget to discover the same fact three times, logging `router gave no hops` —
+  which reads as a bad route rather than as an unroutable destination.
+- **the broker** — `KeeperProxy._arrivalGate`, asked before the health gate, against the
+  `worldMap` the broker is already holding rather than a second copy. `despite_unreachable:
+  { reason }` is the waiver.
+
+Same arrangement as [`tools/m59-travelgate.mjs`](../tools/m59-travelgate.mjs) and for the same
+reason: that one decides for the **body** (is it well enough to set out), this one for the
+**destination**. The operator's rule is that "the way an LLM responds to 'send Statler to Marion'
+needs to be fundamentally the same as the way the localhost:3000 field command sends units to
+Marion" — and a gate only one caller consults is a gate the other walks past.
+
+**AND IT IS STILL A FACT ABOUT THE FILE.** Seventeen of those 25 rooms have a way OUT, and a
+room a person can leave is a room a person got into. So the refusal names the file to add the
+missing trigger to, never says the place cannot be reached, and always offers the waiver —
+because the errand that FINDS the missing affordance has to be able to aim at the room nothing
+arrives at. A gate that stopped that would be the thing preventing the world model from
+improving. See also the standing rule in [`CLAUDE.md`](../CLAUDE.md):
+"'unreachable' is a fact about `substrate/m59-falljumps.json`, not about the world."
+
 ## Exits, reach and the safe wall
 
 - **EXITS ARE NOT DOORS, AND THEY ARE NOT 1:1.** Walking from room A to room B through

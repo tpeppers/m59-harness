@@ -835,6 +835,21 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'through 599, where six trolls killed a 20-health caster. The destination ' +
               'test was never the whole test',
   },
+  reachable: {
+    what: 'refusal to walk to a room that NOTHING IN THE UNIFIED EXIT VIEW arrives at',
+    since: '2026-09-10',
+    incident: 'there are five sources of "an exit" -- the bake edgeExits/goExits, the ' +
+              'inferred reverse edges, the kod triggers in m59-codeexits.json, the ' +
+              'falljumps and the hoptests ledger -- and every tool that asked "what ' +
+              'arrives here?" asked a DIFFERENT SUBSET. m59-exitreport.mjs printed "NOTHING ' +
+              'IN THE WORLD GRAPH ARRIVES HERE" about room 48, a room the router was ' +
+              'planning fifteen-hop journeys into, because the temple only inbound is a ' +
+              'trigger and that tool scanned declared exits alone. The mirror of the same ' +
+              'gap is what this refuses: 25 of 264 rooms have nothing arriving in the ' +
+              'union, the router therefore cannot plan into any of them, and a walk to one ' +
+              'burns three attempts and the whole budget before saying so. Asked of ' +
+              'm59-exits.mjs, which is the ONE view all of it now agrees on',
+  },
   minHealth: {
     what: 'the health floor under every journey',
     since: '2026-09-03',
@@ -1202,6 +1217,55 @@ async function routeTrapAhead(ctx, agent, from, to) {
   }
 }
 
+// GUARANTEE 15 -- MAY ANYTHING ARRIVE THERE AT ALL? Asked of the unified exit view.
+//
+// The router BFS expands exactly three sources: the bake declared exits, the inferred reverse
+// edges, and the kod triggers. `inboundVerdict` unions the same three, so `nothing_arrives` is
+// not an opinion about the world -- it is the statement that NO ROUTE THE MOVER COULD TAKE ends
+// at this room, from anywhere, ever. Confirmed against the live map: every room the verdict
+// refuses, `findPath` also refuses from 39.
+//
+// That equivalence is the whole reason this may refuse rather than warn. What it replaces is a
+// walk to room 351 taking three attempts and the entire 490s budget to discover the same fact
+// three times, logging `router gave no hops` -- which reads as a bad route rather than as a
+// destination nothing can arrive at.
+//
+// AND THE OPERATOR AXIOM IS BUILT INTO THE WORDING: "'unreachable' is a fact about the FILE, not
+// about the world." Seventeen of the twenty-five have a way OUT, and a room a person can leave
+// is a room a person got into -- so the refusal names the file to add the missing trigger to and
+// never says the place cannot be reached. `waives: ['reachable']` is how an errand says it is
+// going to go and find out.
+//
+// AN UNREADABLE MAP IS NOT A REFUSAL. Unknown health is not permission because the danger there
+// is to the BODY; here the cost of being wrong that way is grounding the whole fleet over a
+// missing bake, while the cost of proceeding is the budget that would have been burned anyway.
+// So a VERDICT refuses, and a failure to obtain one is an advisory.
+let _exitsView = null;
+async function inboundView() {
+  if (_exitsView) return _exitsView;
+  const [{ loadMap, movementMapFile }, { mayArrive }] = await Promise.all([
+    import('./m59-map.mjs'), import('./m59-exits.mjs')]);
+  // Paid once per run and only by a run that walks: the reverse-edge table behind the view
+  // costs about 1.3s to build and nothing at all after that.
+  _exitsView = { map: loadMap(movementMapFile()), mayArrive };
+  return _exitsView;
+}
+
+async function arrivalAhead(ctx, to) {
+  try {
+    const v = await inboundView();
+    // THE DECISION IS NOT THIS FILE'S. `mayArrive` is what the broker's own journey gate asks,
+    // so a script and an LLM calling the travel tool are refused by the same sentence -- the
+    // same arrangement m59-travelgate.mjs already has for the BODY's health.
+    const verdict = v.mayArrive(v.map, to,
+      { waiver: ctx.allowUnreachable ? (ctx.unreachableReason ?? 'waived by the script') : null });
+    if (!verdict.ok) return { refuse: verdict.why, code: verdict.code };
+    return verdict.note ? { note: verdict.note } : null;
+  } catch (e) {
+    return { unknown: e?.message ?? String(e) };
+  }
+}
+
 async function compiledWalk(ctx, agent, to, { minHealth }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
@@ -1230,6 +1294,19 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
   // from a command line, which is where every string-shaped number in this repository comes
   // from, so refusing the string would only move the failure to the caller. Coerce.
   to = Number(to);
+
+  // GUARANTEE 15, before the attempt loop -- and before healToFloor can spend two minutes
+  // resting a body for a journey that could never have ended anywhere.
+  const arrival = await arrivalAhead(ctx, to);
+  if (arrival?.refuse)
+    return { ok: false, unreachable: true, code: arrival.code,
+             why: `${arrival.refuse} (refused before anything moved; ` +
+                  `\`unsafe: { waives: ['reachable'] }\` to go and find out)` };
+  if (arrival?.note) ctx.log(agent, arrival.note);
+  if (arrival?.unknown)
+    ctx.log(agent, `could not ask the unified exit view whether anything arrives at ${to} ` +
+                   `(${arrival.unknown}) -- walking without that check`);
+
   for (let attempt = 0; attempt < 3; attempt++) {
     const at = await observe(agent);
     if (!at.ok) return { ok: false, why: 'could not read the character' };
@@ -2425,6 +2502,10 @@ They are driven by tools/m59-menagerie.mjs and ` +
   // and a run that waives minHealth still reports the health it set out on.
   if (waived.has('minHealth')) minHealth = 0;
   if (waived.has('trapCheck')) allowTraps = true;
+  const allowUnreachable = waived.has('reachable');
+  // A REASON IS MANDATORY ON A WAIVER and the refusal quotes it back, so "I know about this"
+  // and "I forgot" look different in the log rather than only on the page.
+  const unreachableReason = allowUnreachable ? (waiver.reason ?? null) : null;
   if (waived.has('journeyBudget')) { budgetFloorMs = 0; budgetCapMs = Math.max(budgetCapMs, 0); }
 
   // RULE 1 — waivable, and the one most likely to be regretted: two drivers on one BODY is
@@ -2476,6 +2557,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
                 // GUARANTEE 12 needs both: the fleet to find the keeper that will plan the
                 // route, and the waiver so a rescue into 599 is still allowed to go.
                 fleet, allowTraps,
+                // GUARANTEE 15's waiver. An errand deliberately probing for the missing
+                // trigger has to be able to aim at the room nothing arrives at.
+                allowUnreachable, unreachableReason,
                 // WIRED, not merely registered. `waives: ['safeRest']` has to actually reach
                 // the step or the entry in UNSAFE_GUARANTEES is decoration — the same failure
                 // as a setting that silently does nothing, which is how `purpose` stayed out

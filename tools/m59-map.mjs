@@ -918,8 +918,22 @@ export function codeExits(roomNum) {
     kind: 'region', to: e.to, when: e.when, arrive: e.arrive,
     ...(Array.isArray(e.trigger_targets) && e.trigger_targets.length
         ? { trigger_targets: e.trigger_targets } : {}),
+    // AND SO IS THE PROVENANCE, for the same reason. `rid` is the kod resource the trigger was
+    // read out of and `from_name` is the room a person would say they were standing in; both
+    // were being dropped here, so the unified exit view could report a trigger inbound and not
+    // say where the claim came from. An exit whose source cannot be named is an exit nobody can
+    // check, which is how a hand-removal of the 534 -> 48 entry survived a month.
+    ...(e.rid ? { rid: e.rid } : {}),
+    ...(e.from_name ? { from_name: e.from_name } : {}),
+    // A CONDITION MAY BE AN OR. `values: [17, 18]` means "any of", and rendering it as
+    // `row == 17 and row == 18` -- which is what a flat list joined with AND produces -- states
+    // an impossible predicate. Six of twenty-four entries were stored that way, and the
+    // unified exit view is what made it visible: room 6 -> 48 read
+    // `[row == 17 and row == 18 and col == 12]`, which nothing can satisfy.
     how: 'walk into the part of this room where ' +
-         e.when.map(c => `${c.axis} ${c.op} ${c.value}`).join(' and ') +
+         e.when.map(c => Array.isArray(c.values)
+           ? `${c.axis} ${c.op} ${c.values.join(' or ')}`
+           : `${c.axis} ${c.op} ${c.value}`).join(' and ') +
          ' — the room moves you across by itself, there is nothing to press',
   }));
 }

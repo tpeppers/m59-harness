@@ -13,19 +13,18 @@
      {
       "axis": "col",
       "op": "==",
-      "value": 46
-     },
-     {
-      "axis": "col",
-      "op": "==",
-      "value": 47
+      "values": [
+       46,
+       47
+      ]
      }
     ],
     "arrive": {
      "row": 54,
      "col": 46
     },
-    "from_name": "The Deep Dark Woods of Tos"
+    "from_name": "The Deep Dark Woods of Tos",
+    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
    },
    {
     "to": 28,
@@ -60,24 +59,19 @@
      {
       "axis": "col",
       "op": "==",
-      "value": 3
-     },
-     {
-      "axis": "col",
-      "op": "==",
-      "value": 4
-     },
-     {
-      "axis": "col",
-      "op": "==",
-      "value": 5
+      "values": [
+       3,
+       4,
+       5
+      ]
      }
     ],
     "arrive": {
      "row": 7,
      "col": 56
     },
-    "from_name": "The Deep Dark Woods of Tos"
+    "from_name": "The Deep Dark Woods of Tos",
+    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
    }
   ],
   "6": [
@@ -114,19 +108,18 @@
      {
       "axis": "col",
       "op": "==",
-      "value": 5
-     },
-     {
-      "axis": "col",
-      "op": "==",
-      "value": 6
+      "values": [
+       5,
+       6
+      ]
      }
     ],
     "arrive": {
      "row": 30,
      "col": 65
     },
-    "from_name": "The Deep Dark Woods of Marion"
+    "from_name": "The Deep Dark Woods of Marion",
+    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
    },
    {
     "to": 48,
@@ -135,12 +128,10 @@
      {
       "axis": "row",
       "op": "==",
-      "value": 17
-     },
-     {
-      "axis": "row",
-      "op": "==",
-      "value": 18
+      "values": [
+       17,
+       18
+      ]
      },
      {
       "axis": "col",
@@ -152,7 +143,8 @@
      "row": 9,
      "col": 31
     },
-    "from_name": "The Deep Dark Woods of Marion"
+    "from_name": "The Deep Dark Woods of Marion",
+    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
    }
   ],
   "26": [
@@ -252,19 +244,18 @@
      {
       "axis": "col",
       "op": "==",
-      "value": 46
-     },
-     {
-      "axis": "col",
-      "op": "==",
-      "value": 47
+      "values": [
+       46,
+       47
+      ]
      }
     ],
     "arrive": {
      "row": 10,
      "col": 47
     },
-    "from_name": "The Forests of Meridian"
+    "from_name": "The Forests of Meridian",
+    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
    }
   ],
   "28": [
@@ -275,12 +266,10 @@
      {
       "axis": "row",
       "op": "==",
-      "value": 39
-     },
-     {
-      "axis": "row",
-      "op": "==",
-      "value": 40
+      "values": [
+       39,
+       40
+      ]
      },
      {
       "axis": "col",
@@ -292,7 +281,8 @@
      "row": 54,
      "col": 49
     },
-    "from_name": "The Forests of Meridian"
+    "from_name": "The Forests of Meridian",
+    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
    }
   ],
   "35": [
@@ -602,5 +592,5 @@
   "rooms_with_code_exits": 11,
   "unmatched_classes": []
  },
- "note": "534->48 (RID_TEMPLE) removed by hand 2026-08-07: 9 successes against 1645 failures in the transit record, and it was the destination of 82% of every failed hop in the fleet. The kod condition (row<18 AND col<13) is real but no square in that region reliably fires it. Regenerating this file will bring it back. | 2026-09-10: 534->48 RESTORED with an explicit trigger_target at r15c11, the measured reachable frontier, which satisfies the kod predicate. Regenerating this file will drop the aim and reintroduce the 1645-failure behaviour -- keep the trigger_targets field."
+ "note": "534->48 (RID_TEMPLE) removed by hand 2026-08-07: 9 successes against 1645 failures in the transit record, and it was the destination of 82% of every failed hop in the fleet. The kod condition (row<18 AND col<13) is real but no square in that region reliably fires it. Regenerating this file will bring it back. | 2026-09-10: 534->48 RESTORED with an explicit trigger_target at r15c11, the measured reachable frontier, which satisfies the kod predicate. Regenerating this file will drop the aim and reintroduce the 1645-failure behaviour -- keep the trigger_targets field. | 2026-09-10: six entries had a kod OR flattened into an unsatisfiable AND and now use `values: [...]`. The generator has the same bug; regenerating without fixing it reintroduces all six."
 }

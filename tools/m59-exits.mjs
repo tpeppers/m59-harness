@@ -1,0 +1,396 @@
+// EVERY WAY IN AND OUT OF A ROOM, FROM ONE PLACE, WITH ITS PROVENANCE AND ITS RECORD.
+//
+//   import { unifiedRoom, exitsFor, inboundFor } from './m59-exits.mjs';
+//   node tools/m59-exits.mjs 48          # what the unified view says about one room
+//   node tools/m59-exits.mjs 48 --json
+//
+// WHY THIS EXISTS. Asked for by the operator, 2026-09-10: "is there a reason we don't have
+// synthetic exits w/debugging/telemetry attached, generated for this to create a single unified
+// view for our internal tools?" There was no reason. There were FIVE sources of "an exit" and
+// the union was hand-written at every call site, so each tool had its own view of the same graph
+// and every one of them was honest about its subset and wrong about the world.
+//
+// THE MOMENT THAT PROVED IT. Same room, same second, two tools:
+//
+//   m59-exitreport.mjs 48   ->  "NOTHING IN THE WORLD GRAPH ARRIVES HERE"
+//   findPath(map, 38, 48)   ->  found: true, 14 hops, last hop kind: "region"
+//
+// The router unions declared + inferred + code exits (m59-map.mjs:816 and :1028). The
+// diagnostic read `edgeExits` and `goExits` and nothing else. So the tool an operator reaches
+// for to ask "how do I get in here?" had the narrowest view of any of them — and it is the tool
+// that told a session the Temple of Shal'ille was unreachable, and told me its exit was
+// "one-way". Neither was true. The temple is entered by a trigger, which that tool cannot see.
+//
+// THE FIVE SOURCES, and what each one actually is:
+//
+//   declared  `room.edgeExits` / `room.goExits` — the bake, from the .roo and the room's own kod.
+//   inferred  the FAR room declares an edge into us and we declare nothing back. Asymmetric
+//             bakes are the normal case, not a defect: "exits are not doors and are not 1:1".
+//   trigger   `m59-codeexits.json` — a kod `UtilGoNearSquare` that moves you when you walk into
+//             a region. There is nothing to press and no packet to send, so it is invisible to
+//             anything looking for a door. This is the one that cost a month.
+//   fall      `m59-falljumps.json` — and it is NOT an exit. It is an INTRA-ROOM affordance
+//             (`{room: 599, from: r36c16, to: r38c10}`) that makes a door reachable which the
+//             step-height rule otherwise forbids. Filed here because "can I get out of this
+//             room?" cannot be answered without it, and because the standing rule is that
+//             "unreachable" is a fact about that file rather than about the world.
+//   telemetry `substrate/hoptests.json` — tries, successes and failure reasons per boundary.
+//             A door that exists and has never once been crossed is a different object from a
+//             door that works, and no view that omits this can tell them apart.
+//
+// DIRECTEDNESS IS THE POINT, NOT A DETAIL. Every record says which way it works, because the
+// whole class of error tonight was reading an asymmetry in the MODEL as an asymmetry in the
+// WORLD. The temple has one declared door OUT and a trigger IN: two mechanisms, both traversable,
+// and "one-way" was my word rather than the game's.
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { exitsOf, inferredExits, codeExits, loadMap, movementMapFile, hazardReason,
+         AVOID_IN_TRANSIT } from './m59-map.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = join(HERE, '..');
+
+const readJson = (p, fallback) => {
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; }
+};
+
+// ---------------------------------------------------------------- the record
+
+/** Every kind of way through a boundary this repository knows about. */
+export const KINDS = Object.freeze(['declared', 'inferred', 'trigger', 'fall']);
+
+// ---------------------------------------------------------------- trigger predicates
+//
+// A kod trigger is a CONJUNCTION OF CONDITIONS and a condition may itself be a DISJUNCTION:
+// `((new_row = 17) or (new_row = 18)) and (new_col = 12)`. m59-codeexits.json stored that as a
+// flat list, which every reader joins with AND -- so the predicate became `row == 17 and row ==
+// 18 and col == 12`, which nothing can satisfy, and the trigger was dead while looking healthy.
+// SIX OF TWENTY-FOUR ENTRIES were in that state, including a second way into the Temple of
+// Shal'ille and one into Marion. `values: [...]` is the repaired shape and means "any of".
+
+const condText = (c) => Array.isArray(c.values)
+  ? `${c.axis} ${c.op} ${c.values.join(' or ')}`
+  : `${c.axis} ${c.op} ${c.value}`;
+
+export const describeWhen = (when) => (when ?? []).map(condText).join(' and ');
+
+/**
+ * Why this predicate can never be true, or null when it can.
+ *
+ * Only the case that actually occurred is detected -- two different `==` values required on one
+ * axis at once. A general satisfiability checker would be a bigger thing that this file cannot
+ * justify, and a checker that reports MORE than it can prove is worse than none: it would send
+ * readers to hunt a defect that is not there. See the standing rule about a refusal that cannot
+ * say why it fired.
+ */
+export function unsatisfiableWhen(when) {
+  const eq = new Map();
+  for (const c of when ?? []) {
+    if (c.op !== '==' || Array.isArray(c.values)) continue;
+    if (!eq.has(c.axis)) eq.set(c.axis, new Set());
+    eq.get(c.axis).add(c.value);
+  }
+  for (const [axis, vals] of eq)
+    if (vals.size > 1)
+      return `${axis} is required to equal ${[...vals].sort((a, b) => a - b).join(' and ')} at ` +
+             `once. That is a kod OR flattened into an AND; it should be ` +
+             `{ axis: '${axis}', op: '==', values: [${[...vals].sort((a, b) => a - b)}] }`;
+  return null;
+}
+// ---------------------------------------------------------------- telemetry
+
+let hopCache = null;
+/**
+ * Tries, successes and the last failure per `from->to`, aggregated from the hop ledger.
+ *
+ * A DOOR THAT HAS NEVER BEEN CROSSED IS NOT A DOOR YET, and that is the distinction the
+ * geometry alone cannot make. CLAUDE.md's own example: Ukgoth's north door read
+ * `refused 182, crossings 0` on a day it was crossing six times out of six — a counter that
+ * could not come down. So this reports `tries`, `ok` and `last_failure` and lets the reader
+ * judge, rather than computing a verdict nobody can audit.
+ */
+export function hopStats({ file = join(REPO, 'substrate', 'hoptests.json') } = {}) {
+  if (hopCache) return hopCache;
+  const runs = readJson(file, { runs: [] })?.runs ?? [];
+  const by = new Map();
+  for (const r of runs) {
+    if (r?.from == null || r?.to == null) continue;
+    const key = `${r.from}->${r.to}`;
+    const cur = by.get(key) ?? { tries: 0, ok: 0, median_ms: null, last_failure: null, last_at: null };
+    cur.tries += Number(r.tries ?? 0);
+    cur.ok += Number(r.ok ?? 0);
+    if (Number.isFinite(r.median_ms)) cur.median_ms = r.median_ms;
+    if (r.at && (!cur.last_at || r.at > cur.last_at)) cur.last_at = r.at;
+    const why = r.failures?.[0]?.why;
+    if (why) cur.last_failure = String(why).slice(0, 160);
+    by.set(key, cur);
+  }
+  hopCache = by;
+  return by;
+}
+
+const telemetryFor = (from, to) => hopStats().get(`${from}->${to}`) ?? null;
+
+// ---------------------------------------------------------------- falls
+
+let jumpCache = null;
+/**
+ * The declared intra-room falls, indexed by room.
+ *
+ * These are not exits and are deliberately not presented as such. They answer a different
+ * question — "can a body standing here reach that door at all" — and the mover's one vertical
+ * rule (MAX_STEP_HEIGHT) is why they have to be written down rather than derived.
+ */
+export function fallsIn(roomNum, { file = join(REPO, 'substrate', 'm59-falljumps.json') } = {}) {
+  if (!jumpCache) {
+    jumpCache = new Map();
+    for (const j of readJson(file, { jumps: [] })?.jumps ?? []) {
+      const k = Number(j?.room);
+      if (!Number.isFinite(k)) continue;
+      if (!jumpCache.has(k)) jumpCache.set(k, []);
+      jumpCache.get(k).push(j);
+    }
+  }
+  return jumpCache.get(Number(roomNum)) ?? [];
+}
+
+// ---------------------------------------------------------------- out
+
+/**
+ * Every way OUT of `roomNum`, from all sources, each saying where it came from.
+ *
+ * The union that was hand-written at four call sites, written once. `m59-map.mjs`'s router
+ * already unions the same three for pathfinding; this exists so a DIAGNOSTIC cannot disagree
+ * with the router about what a room is connected to.
+ */
+export function exitsFor(map, roomNum, { telemetry = true } = {}) {
+  const num = Number(roomNum);
+  const room = map?.rooms?.[num] ?? map?.rooms?.[String(num)] ?? null;
+  const out = [];
+  const add = (rec) => {
+    out.push({ from: num, ...rec,
+               hazard: hazardReason(rec.to) ?? null,
+               avoid_in_transit: AVOID_IN_TRANSIT.has(Number(rec.to)),
+               telemetry: telemetry ? telemetryFor(num, rec.to) : null });
+  };
+
+  // A PARTIAL ROOM IS NOT AN ERROR HERE. `exitsOf` iterates both lists unguarded, so a room
+  // object carrying only `edgeExits` -- which is what every synthetic fixture in the offline
+  // tests builds, and what a hand-written map has -- threw `room.goExits is not iterable` and
+  // took the whole report down. A diagnostic must survive the shapes a debugger hands it.
+  for (const e of (room ? exitsOf({ ...room, edgeExits: room.edgeExits ?? [],
+                                    goExits: room.goExits ?? [] }) : []))
+    add({ to: Number(e.to), kind: 'declared', directed: 'out',
+          direction: e.direction ?? e.dir ?? null,
+          stand_on: e.stand_on ?? null, arrive: null, trigger: null,
+          provenance: { source: 'bake.edgeExits/goExits', cite: null } });
+
+  for (const e of inferredExits(map, num) ?? [])
+    add({ to: Number(e.to), kind: 'inferred', directed: 'out',
+          direction: e.direction ?? null, stand_on: e.stand_on ?? null,
+          arrive: null, trigger: null,
+          provenance: { source: 'inferred from the far room declaring an edge in', cite: null } });
+
+  for (const e of codeExits(num) ?? [])
+    add({ to: Number(e.to), kind: 'trigger', directed: 'out',
+          direction: null, stand_on: null,
+          arrive: e.arrive ?? null,
+          trigger: describeWhen(e.when) || null,
+          // A TRIGGER WHOSE PREDICATE CANNOT BE SATISFIED IS A DEAD CONNECTION, and it looks
+          // exactly like a live one to anything that does not check. Reported rather than
+          // silently carried -- this is the debugging half the operator asked for.
+          unsatisfiable: unsatisfiableWhen(e.when),
+          trigger_targets: e.trigger_targets ?? null,
+          provenance: { source: 'substrate/m59-codeexits.json', cite: e.rid ?? null,
+                        // The name a person would use for the room they are standing in. The
+                        // file records it; nothing downstream was carrying it.
+                        from_name: e.from_name ?? null } });
+
+  return out;
+}
+
+/**
+ * Every way IN to `roomNum` — THE QUESTION THAT WAS BEING ANSWERED WRONG.
+ *
+ * `m59-exitreport.mjs` asked it by scanning other rooms' `edgeExits` and `goExits`, which
+ * cannot see a trigger, and so printed "NOTHING IN THE WORLD GRAPH ARRIVES HERE" about a room
+ * the router was planning fourteen-hop journeys into. There is no cheap index for this — it is a
+ * scan of every room's exits — so it is done once, here, where the cost is paid in one place.
+ */
+export function inboundFor(map, roomNum, { telemetry = true } = {}) {
+  const want = Number(roomNum);
+  const found = [];
+  for (const key of Object.keys(map?.rooms ?? {})) {
+    const from = Number(key);
+    if (from === want) continue;
+    for (const e of exitsFor(map, from, { telemetry })) if (Number(e.to) === want) found.push(e);
+  }
+  return found;
+}
+
+// ---------------------------------------------------------------- both
+
+/**
+ * One answer for one room: how you leave, how you arrive, what the falls afford, and what the
+ * ledger says about each boundary.
+ */
+export function unifiedRoom(map, roomNum) {
+  const num = Number(roomNum);
+  const room = map?.rooms?.[num] ?? map?.rooms?.[String(num)] ?? null;
+  const out = exitsFor(map, num);
+  const inbound = inboundFor(map, num);
+  const falls = fallsIn(num);
+  const byKind = (list) => Object.fromEntries(
+    KINDS.map(k => [k, list.filter(e => e.kind === k).length]).filter(([, n]) => n));
+  return {
+    room: num, name: room?.name ?? null,
+    out, inbound, falls,
+    // The summary a human reads first, and the one that would have prevented tonight: a room
+    // with no DECLARED inbound but a trigger inbound is reachable, and saying "nothing arrives
+    // here" about it is false.
+    summary: {
+      out_by_kind: byKind(out),
+      inbound_by_kind: byKind(inbound),
+      reachable: inbound.length > 0,
+      // A trigger-entered room is the case that reads as unreachable to anything looking for a
+      // door, so it is called out by name rather than left to be inferred from the counts.
+      entered_only_by_trigger: inbound.length > 0 && inbound.every(e => e.kind === 'trigger'),
+      leaves_only_by_trigger: out.length > 0 && out.every(e => e.kind === 'trigger'),
+      falls_declared: falls.length,
+      // The count that matters for trust: a room whose only way in is a DEAD trigger is
+      // reachable on paper and unreachable in fact.
+      dead_triggers_in: inbound.filter(e => e.unsatisfiable).length,
+      dead_triggers_out: out.filter(e => e.unsatisfiable).length,
+      hazard: hazardReason(num) ?? null,
+      avoid_in_transit: AVOID_IN_TRANSIT.has(num),
+    },
+  };
+}
+
+/**
+ * Is there any way in at all, and if not, what was consulted?
+ *
+ * fleetScript's enforcement point. The value is the NAMED SOURCES: "no inbound" is only useful
+ * if it says what it looked at, because the answer has been wrong twice by looking at less than
+ * everything.
+ */
+export function inboundVerdict(map, roomNum) {
+  const num = Number(roomNum);
+  if (!(map?.rooms?.[num] ?? map?.rooms?.[String(num)]))
+    return { ok: false, code: 'no_such_room', why: `room ${num} is not in the baked map.`,
+             consulted: [] };
+  const inbound = inboundFor(map, num, { telemetry: false });
+  const consulted = ['bake.edgeExits/goExits', 'inferred', 'substrate/m59-codeexits.json'];
+  if (!inbound.length)
+    return { ok: false, code: 'nothing_arrives', consulted,
+             why: `nothing in the unified exit view arrives at room ${num}. All of ` +
+                  `${consulted.join(', ')} were consulted, so this is not one tool's blind ` +
+                  `spot — it is a room with no recorded way in. If the game has one, it is a ` +
+                  `trigger nobody has declared: add it to m59-codeexits.json.` };
+  // A DEAD TRIGGER IS REACHABLE ON PAPER AND UNREACHABLE IN FACT, and this is the one place
+  // that can tell the difference. If every way in is a predicate nothing can satisfy, the
+  // honest answer is 'no way in' -- and the refusal names the file and the entry, because the
+  // remedy is a data fix rather than a route.
+  const live = inbound.filter(e => !e.unsatisfiable);
+  if (!live.length)
+    return { ok: false, code: 'only_dead_triggers', consulted,
+             dead: inbound.map(e => ({ from: e.from, cite: e.provenance?.cite ?? null,
+                                       why: e.unsatisfiable })),
+             why: `every recorded way into room ${num} is a trigger whose predicate cannot be ` +
+                  `satisfied, so nothing can arrive: ` +
+                  `${inbound.map(e => `${e.from} -> ${num} (${e.unsatisfiable})`).join('; ')}. ` +
+                  `This is a data defect in substrate/m59-codeexits.json, not a missing route.` };
+  return { ok: true, code: 'reachable', consulted,
+           kinds: [...new Set(live.map(e => e.kind))], count: live.length,
+           // Named even on the OK path: a room reachable only because ONE of its two triggers
+           // is alive is one bad regeneration away from being sealed.
+           ...(live.length < inbound.length
+             ? { dead_triggers: inbound.length - live.length } : {}) };
+}
+
+/**
+ * MAY A JOURNEY TO THIS ROOM BE STARTED AT ALL? The one decision, for every caller.
+ *
+ * `m59-travelgate.mjs` is the same idea for the BODY -- is it well enough to set out -- and this
+ * is the idea for the DESTINATION. Both exist for the reason the operator gave: "the way an LLM
+ * responds to 'send Statler to Marion' needs to be fundamentally the same as the way the
+ * localhost:3000 field command sends units to Marion". A gate that only fleetScript consults is a
+ * gate a bot walks straight past, and a journey no script would have permitted then starts
+ * anyway.
+ *
+ * Returns `{ ok: true }`, `{ ok: true, note }` when the way in is unusual enough to say out
+ * loud, or `{ ok: false, code, why }`. A WAIVER IS ALWAYS AVAILABLE and needs a reason, because
+ * the errand that finds the missing trigger has to be able to aim at the room nothing arrives
+ * at -- refusing that would make this gate the thing that stops the world model improving.
+ */
+export function mayArrive(map, roomNum, { waiver = null } = {}) {
+  const num = Number(roomNum);
+  const reason = typeof waiver === 'string' ? waiver : (waiver?.reason ?? null);
+  const verdict = inboundVerdict(map, num);
+  if (!verdict.ok) {
+    if (reason) return { ok: true, waived: reason, code: verdict.code, note:
+      `room ${num}: ${verdict.why} GOING ANYWAY, because: ${reason}` };
+    return { ok: false, code: verdict.code,
+             why: `${verdict.why} A caller that means to go anyway -- to find the missing ` +
+                  `trigger, or because a body is already there -- must say so with a reason.` };
+  }
+  // Reachable, but say HOW when the answer is unusual: eight rooms are entered ONLY by a kod
+  // trigger, and a reader watching a walk that never aims at a door needs to know that is
+  // correct rather than a mover fault.
+  const u = unifiedRoom(map, num);
+  if (u.summary.entered_only_by_trigger)
+    return { ok: true, code: 'trigger_only', note:
+      `room ${num} is entered ONLY by a kod trigger (${verdict.count} of them) -- there is no ` +
+      `door, and the mover has to stand on the square that moves it. At a trigger, arriving at ` +
+      `the boundary is the FAILURE and being moved across is the success.` };
+  if (verdict.dead_triggers)
+    return { ok: true, code: 'partly_dead', note:
+      `room ${num} is reachable, but ${verdict.dead_triggers} of its inbound triggers carry an ` +
+      `unsatisfiable predicate -- it is one regeneration of substrate/m59-codeexits.json away ` +
+      `from being sealed.` };
+  return { ok: true, code: verdict.code };
+}
+// ---------------------------------------------------------------- CLI
+
+const IS_ENTRY = !!process.argv[1] &&
+  join(process.argv[1]) === join(fileURLToPath(import.meta.url));
+
+if (IS_ENTRY) {
+  const argv = process.argv.slice(2);
+  const num = Number(argv.find(a => /^\d+$/.test(a)));
+  if (!Number.isFinite(num)) {
+    console.log(readFileSync(new URL(import.meta.url), 'utf8')
+      .split('\n').filter(l => l.startsWith('//')).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+    process.exit(argv.length ? 1 : 0);
+  }
+  const map = loadMap(movementMapFile());
+  const u = unifiedRoom(map, num);
+  if (argv.includes('--json')) { console.log(JSON.stringify(u, null, 2)); process.exit(0); }
+
+  const line = (e) => `    ${String(e.kind).padEnd(9)} ${String(e.from).padStart(4)} -> ` +
+    `${String(e.to).padEnd(5)} ${(e.direction ?? '').padEnd(6)} ` +
+    (e.trigger ? `[${e.trigger}] ` : '') +
+    (e.telemetry ? `(${e.telemetry.ok}/${e.telemetry.tries} crossed)` : '(never measured)') +
+    (e.hazard ? '  HAZARD' : '') + (e.avoid_in_transit ? '  avoid-in-transit' : '') +
+    (e.unsatisfiable ? '  DEAD TRIGGER' : '');
+
+  console.log(`\nroom ${u.room} — ${u.name ?? '(unnamed)'}`);
+  console.log(`\n  OUT (${u.out.length})`);
+  for (const e of u.out) console.log(line(e));
+  console.log(`\n  IN (${u.inbound.length})`);
+  if (!u.inbound.length) console.log('    nothing in the unified view arrives here');
+  for (const e of u.inbound) console.log(line(e));
+  if (u.falls.length) {
+    console.log(`\n  DECLARED FALLS INSIDE THIS ROOM (${u.falls.length}) — affordances, not exits`);
+    for (const f of u.falls)
+      console.log(`    r${f.from?.row}c${f.from?.col} -> r${f.to?.row}c${f.to?.col}` +
+                  (f.requires?.running ? '  (running)' : ''));
+  }
+  console.log('');
+  if (u.summary.entered_only_by_trigger)
+    console.log('  NOTE: this room is entered ONLY by a trigger. Anything looking for a door ' +
+                'will report it unreachable, and be wrong.');
+  if (u.summary.hazard) console.log(`  HAZARD: ${u.summary.hazard}`);
+  console.log('');
+}
