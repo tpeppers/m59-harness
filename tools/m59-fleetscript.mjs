@@ -496,6 +496,19 @@ export const KNOWN_TRAPS = Object.freeze({
   599: 'Ukgoth, Holy Land of Trolls — leaving northward to Castle Victoria needs a Relic of ' +
        'Qor and a spoken phrase. The baked map offers three exits and only the SOUTH one ' +
        '(to 589) is real for us; a plan through the north exit walks for ever.',
+  // 2026-09-09, and learned the way 599 was — by stranding two characters in it. Loial the
+  // Ogier and Beaker walked IN from 593 on a route to the Badlands node, and then could not
+  // leave in any direction: 6 attempts to 45, 2 to 39 and 3 back to 593, across two
+  // characters, every one refused with the router insisting 49 -> 45 was a single direct hop.
+  // `look` reports `exits: []` and ONE object in the room, so it is not a crowd blocking a
+  // boundary — there is nothing there. Blink was cast to move the body to the room's place of
+  // power on the chance it was wedged against geometry; it moved him and changed nothing.
+  // Entering worked and leaving does not, which is the signature of a bake that has the
+  // inbound edge and no usable outbound one.
+  49: "Kardde's Canyon - characters walk IN and cannot walk OUT. Eleven refused " +
+      "departures across two characters and three destinations, with `exits: []` and " +
+      "an empty room, so this is not a crowd. Reached on the way to the Badlands " +
+      "node (45), which is itself not reachable with the current mover.",
 });
 
 /**
