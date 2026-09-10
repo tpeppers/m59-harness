@@ -112,9 +112,17 @@
 //
 // THE GUARANTEES, and none of them is optional:
 //
-//   1. ONE DRIVER PER FLEET. Takes the m59-runlock claim, refuses with the holder's pid,
-//      label, age and argv, exits 3. Parallelism lives INSIDE one locked run, because what
-//      contends is two drivers on the same character, not two characters.
+//   1. ONE DRIVER PER CHARACTER, OVER THE SET THE SCRIPT DECLARED. A script says at the
+//      top which characters it will control (`controls: ['t2','t3']`, or `'*'` for a
+//      genuine whole-fleet script); the m59-runlock claim is taken over exactly that set,
+//      in sorted order so two overlapping errands cannot deadlock; and driving a character
+//      OUTSIDE the declaration is refused, because a body the script did not declare is a
+//      body it did not lock. Refuses with the contended character's name, the holder's pid,
+//      label, age and argv, exits 3. This used to be one lock over the whole fleet, which
+//      contradicted its own next sentence: what contends is two drivers on the same
+//      character, not two characters. Scripts that declare nothing derive the set from
+//      `agents` and are WARNED rather than refused, so the twenty already on disk keep
+//      working. It does NOT span checkouts — see the note in m59-runlock.mjs.
 //   2. THE BODY IS HELD. Every agent is marked `busy` for the whole errand and freed in a
 //      finally AND on signals AND on uncaught exceptions — the three ways today's scripts
 //      leaked a stuck character.
@@ -149,7 +157,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { takeRunLock } from './m59-runlock.mjs';
+import { takeAgentLocks } from './m59-runlock.mjs';
+import { declaredControl, controlViolation } from './m59-control-guard.mjs';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
@@ -745,6 +754,26 @@ export function trapCheck(plan = [], { standingIn = null, allowTraps = false } =
 // from "is this script well formed". A menagerie that cannot be read is reported as no
 // hosts here — the authoritative refusal is still the broker's door, which cannot be
 // bypassed; this one exists only to fail EARLY and legibly.
+/**
+ * EVERY NAME THAT IS A CHARACTER ON THIS FLEET — agent slot and character name both.
+ *
+ * The control guard only ever flags a string that is REALLY a character, so a step
+ * mentioning "rescue" cannot trip it because somebody, somewhere, has a character called
+ * Rescue. Both spellings are indexed because naming the character where the agent goes is
+ * this repository's commonest identifier mistake (see m59-agent-name.mjs).
+ */
+export function knownCharacters(fleet = fleetName()) {
+  const names = new Map();
+  let roster = {};
+  try { roster = JSON.parse(readFileSync(stateFileFor(fleet), 'utf8')); } catch { return names; }
+  for (const [agent, entry] of Object.entries(roster ?? {})) {
+    names.set(agent.toLowerCase(), agent);
+    const c = entry?.credentials?.character;
+    if (c) names.set(String(c).toLowerCase(), agent);
+  }
+  return names;
+}
+
 export function hostsAmong(agents, fleet = fleetName()) {
   let roster = {};
   try {
@@ -766,10 +795,13 @@ export function hostsAmong(agents, fleet = fleetName()) {
 
 export const UNSAFE_GUARANTEES = Object.freeze({
   runLock: {
-    what: 'one driver per fleet',
+    what: 'one driver per character, over the set the script declared in `controls`',
     since: '2026-09-02',
     incident: 'five ad-hoc scripts drove the fleet in one day; twenty-one keepers and one ' +
-              'runner ended up on the same bodies all afternoon',
+              'runner ended up on the same bodies all afternoon. Narrowed from the whole ' +
+              'fleet to the declared characters 2026-09-10, after two learn-skill errands ' +
+              'for Pepe and Statler — no character in common — serialised on a lock neither ' +
+              'of them needed',
   },
   keeperLease: {
     what: 'the faculty lease that stops the keeper steering underneath you',
@@ -1468,6 +1500,30 @@ async function recoverFromDeath(ctx, agent, budgetMs) {
 }
 
 async function runStep(ctx, agent, step, state) {
+  // GUARANTEE 1, THE OTHER HALF: a script drives what it declared, and nothing else.
+  //
+  // The lock is taken over the DECLARED set, so a body outside it is a body this run never
+  // locked — another driver may hold it and neither would be told. Most verbs take the
+  // agent the step is running for, and for those this is nearly free; the case it exists
+  // for is `act`, which forwards arbitrary arguments to any broker tool, so
+  // `act('supply', { from: 't7', to: 't2' })` drives t7 from a script that named only t2.
+  // That call is indistinguishable from a correct one until somebody reads the transit book.
+  //
+  // A DECLARED set REFUSES; a derived one WARNS ONCE. Every script written before `controls`
+  // existed declares nothing, and a guard that breaks all of them the day it lands is a
+  // guard that gets reverted rather than adopted. The warning is per-character rather than
+  // per-step so a loop cannot bury the log.
+  const bad = controlViolation({ step, agent, control: ctx.control, known: ctx.known });
+  if (bad) return { ok: false, undeclared: bad.named, why: bad.error };
+  if (ctx.control && !ctx.control.declared && !ctx.control.wildcard) {
+    const stray = controlViolation({ step, agent, known: ctx.known,
+                                     control: { ...ctx.control, declared: true } });
+    if (stray && !ctx.controlWarned.has(stray.named)) {
+      ctx.controlWarned.add(stray.named);
+      ctx.log(agent, `WARNING — this step drives "${stray.named}", which the script never ` +
+                     `declared. It is therefore NOT locked. Add controls: [...] at the top.`);
+    }
+  }
   switch (step.do) {
     case 'walk':
       return compiledWalk(ctx, agent, step.to, { minHealth: step.minHealth ?? ctx.minHealth });
@@ -2231,6 +2287,13 @@ async function runEvictionCheck(ctx, agent, step, call) {
 // (a withdrawal sized to what it already carries, say).
 export async function fleetScript({
   name, agents, steps, fleet = fleetName(), minHealth = 1, pollMs = 8000,
+  // WHICH CHARACTERS THIS SCRIPT WILL CONTROL, declared at the top of the script rather
+  // than inferred from what it turns out to touch. This is the unit the lock is taken over
+  // and the unit the guard enforces; see m59-control-guard.mjs for the argument. Omit it
+  // and the set is derived from `agents`, which is what every script on disk did before
+  // this existed — derived sets are WARNED about rather than refused, so nothing breaks on
+  // the day this lands. `controls: '*'` is the deliberate whole-fleet script.
+  controls = null,
   // DELIBERATELY GOING INTO A ROOM WE KNOW KEEPS CHARACTERS — a rescue, and nothing else.
   // It has to be written at the call site because "I know about the trap" and "I forgot"
   // otherwise produce exactly the same script. See KNOWN_TRAPS.
@@ -2364,25 +2427,52 @@ They are driven by tools/m59-menagerie.mjs and ` +
   if (waived.has('trapCheck')) allowTraps = true;
   if (waived.has('journeyBudget')) { budgetFloorMs = 0; budgetCapMs = Math.max(budgetCapMs, 0); }
 
-  // RULE 1 — waivable, and the one most likely to be regretted: two drivers on one fleet is
-  // how twenty-one keepers ended up on the same bodies. It is here because a test harness
-  // driving a shadow fleet legitimately needs it.
+  // RULE 1 — waivable, and the one most likely to be regretted: two drivers on one BODY is
+  // how twenty-one keepers ended up fighting over the same characters. It is waivable
+  // because a test harness driving a shadow fleet legitimately needs it.
+  //
+  // THE SCOPE IS THE CHARACTERS THE SCRIPT DECLARED, NOT THE FLEET. This used to take one
+  // lock over the whole roster, which contradicted the sentence directly above it — what
+  // contends is two drivers on the same character, not two characters. Operator, 2026-09-10:
+  // "FleetScript should not enforce a fleet-wide lock unless it's actually a script that
+  // uses the whole fleet, scripts should only lock characters it's using." Measured the same
+  // day: minor heal had to be bought for Pepe and then Statler one after the other, disjoint
+  // characters and the same teacher, because the fleet was the unit of exclusion.
+  //
+  // The whole-fleet case is not lost, it falls out: a script that declares all twenty-three
+  // locks all twenty-three, and `takeAgentLocks` still contends with the fleet-wide lock the
+  // direct callers of `takeRunLock` (solo-run, couriers, almoner, reagents, city-matrix,
+  // node-run) continue to take.
+  const control = declaredControl({ controls }, agents);
+  const known = knownCharacters(fleet);
   const claim = waived.has('runLock')
-    ? { ok: true, holder: null, tookOverFrom: null }
-    : takeRunLock(fleet, { label: `${name} [${agents.join(',')}]`, force });
+    ? { ok: true, holder: null, tookOverFrom: [] }
+    : takeAgentLocks(fleet, control.names, { label: `${name} [${control.names.join(',')}]`, force });
   if (!claim.ok) {
     const h = claim.holder ?? {};
-    onLog(`REFUSING — fleet "${fleet}" is already being driven.`);
+    // NAME THE CHARACTER, NOT THE FLEET. "the fleet is busy" cannot tell an operator which
+    // errand to wait for; "t3 is already being driven" can.
+    onLog(`REFUSING — ${claim.why ?? `fleet "${fleet}" is already being driven`}.`);
+    onLog(`  contended: ${claim.agent ?? '(whole fleet)'} of ${control.names.join(', ')}`);
     onLog(`  pid ${h.pid ?? '?'} | ${h.label ?? '?'} | ` +
           `${h.at ? Math.round((Date.now() - h.at) / 1000) + 's ago' : '?'}`);
     onLog(`  argv ${h.argv ?? '?'}`);
     onLog('Wait for it, stop that pid, or pass --force if you know it is dead.');
-    return { ok: false, refused: true, holder: h };
+    return { ok: false, refused: true, holder: h, agent: claim.agent };
   }
-  if (claim.tookOverFrom) onLog(`note: took over a stale lock — ${claim.tookOverFrom.why}`);
+  for (const stale of claim.tookOverFrom ?? [])
+    onLog(`note: took over a stale lock on ${stale.agent} — ${stale.why}`);
+  onLog(`controls ${control.names.join(', ')}` +
+        (control.declared ? (control.wildcard ? ' (declared: whole fleet)' : ' (declared)')
+                          : ' (derived from agents — undeclared control is warned, not refused)'));
 
   const ctx = { log: onLog, pollMs, minHealth, healMs, budgetFloorMs, budgetCapMs,
                 reviveMs, packSettleMs, learnSettleMs, name,
+                // THE DECLARATION AND THE NAMES THAT COUNT AS CHARACTERS. Carried on ctx so
+                // the check happens at ONE door (runStep) rather than in each verb — the
+                // same argument m59-menagerie-guard.mjs makes: a rule enforced per-verb is
+                // a rule the next verb forgets.
+                control, known, controlWarned: new Set(),
                 // GUARANTEE 12 needs both: the fleet to find the keeper that will plan the
                 // route, and the waiver so a rescue into 599 is still allowed to go.
                 fleet, allowTraps,
