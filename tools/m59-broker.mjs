@@ -9804,6 +9804,26 @@ const TOOLS = [
                      'the character\'s proficiency in each weapon\'s own skill, which only ever ' +
                      'rewards what it is already best at; set this to train a weak weapon skill. ' +
                      'Pass [] to go back to proficiency ranking.' },
+      // DECLARED, BECAUSE AN UNDECLARED ARGUMENT IS REPORTED AS IGNORED AND IS NOT.
+      //
+      // `run()` below reads `banned_weapons` and sets policy.bannedWeapons from it, so the
+      // prohibition has always worked. The schema simply never listed it, and the generic
+      // unrecognised-argument check therefore logged, on every single order:
+      //
+      //   [autopilot] unrecognised setting(s) ignored: banned_weapons -- not declared by
+      //   this tool, so nothing was applied for them
+      //
+      // That sentence is FALSE for this argument -- the check reports, it does not strip --
+      // and it cost an hour of chasing a weapon ban that was never broken. A warning that
+      // lies is worse than no warning, and the fix is to declare what the tool reads.
+      banned_weapons: { type: ['array', 'null'], items: { type: 'string' },
+        description: 'weapons this character must never CHOOSE to wield, matched as ' +
+          'lower-cased substrings of the item name. A priority list is a preference and ' +
+          'its last entry is still an entry, so ranking a weapon last does not stop ' +
+          'equip_best reaching it when the pack holds nothing better. This is the ' +
+          'prohibition. It does not stop a weapon being carried, looted or sold, and it ' +
+          'cannot unwield a curse -- WeapAttCursed refuses every unuse unconditionally ' +
+          '(wacursed.kod:97-102), so the ban is on CHOOSING. null or [] means no ban.' },
       training_weapon: { type: 'string',
         description: 'which weapon the ARMED half of a training style holds. Default ' +
           '"short sword". An armed proficiency stops improving once its ability reaches ' +
