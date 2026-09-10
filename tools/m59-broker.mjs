@@ -12468,9 +12468,14 @@ const TOOLS = [
         'declare_war', 'make_peace', 'rent_hall', 'abandon_hall', 'set_password',
         'induct', 'spread', 'promote', 'fund_hall'] },
       promote_to: { type: 'number',
-        description: 'spread: rank to promote each new member to, 1..5. Default 4 (lieutenant), ' +
-          'which is what makes the spread self-sustaining — 3 is enough to invite, but 4 is ' +
-          'needed to promote the next one.' },
+        description: 'spread: rank to promote each new member to, 1..5. Default 3 (LORD), which ' +
+          'is the rank that actually makes a spread self-sustaining: invite needs only lord, ' +
+          'and lord is UNCAPPED. Do not pass 4. Lieutenant is capped at 2 (MAX_LIEUTENANT, ' +
+          'guild.kod:49), so promoting to 4 succeeds twice and is then refused in TOTAL ' +
+          'SILENCE — the refusal goes to the promoter, is invisible from the member\'s side, ' +
+          'and a spread that has stopped working looks exactly like one that is working. ' +
+          'Measured live 2026-08-12: Piggy promoted Lew to lieutenant and was refused for five ' +
+          'more, all of whom stayed apprentices.' },
       rounds: { type: 'number', description: 'spread: how many passes, default 1' },
       need: { type: 'number', description: 'fund_hall: shillings to raise, default 25000' },
       buyer: { type: 'string', description: 'fund_hall: agent who will hold the money and buy' },

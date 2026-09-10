@@ -24,8 +24,26 @@
 // `guild action=create` answered `c.requestGuildInfo is not a function` and founding was
 // impossible fleet-wide. The seventeen verbs are now forwarded to the keeper that owns the
 // socket; `m59-keeperproxy-test.mjs` is the guard that keeps them forwarded.
-import { walk, carryAtLeast, foundGuild } from '../m59-fleetscript.mjs';
+import { walk, carryAtLeast, foundGuild, verify } from '../m59-fleetscript.mjs';
 
+// THE BANK IS NOT DIRECTLY ROUTABLE FROM THE FIELD, AND THE PLANNER SAYS SO QUIETLY.
+//
+// Asked for 544 -> 54 the router answers "no route ... without crossing 555 (The Forest
+// Shrine — acid gas puzzle, kills outright)", declines, and the walk then reports `ok`
+// having gone as far as room 50 and stopped. Measured 2026-09-10: two runs of this errand
+// died at the withdrawal because the character was standing in the Streets of Tos, where
+// the banker is not, and "You can't check any balance here!" is a sentence rather than an
+// error.
+//
+// Every leg is individually routable, which is what makes the direct ask so misleading:
+//
+//     50 -> 61    1 hop,  ~76s      61 -> 54    1 hop,  ~5s
+//     54 -> 61    1 hop,   ~2s      54 -> 700   9 hops, ~306s
+//
+// So the failure is the long-distance graph search, not the ground. Going through the town
+// explicitly turns one refused plan into two that work. Room 54 also carries 0 baked routes
+// and one `go` exit (to 61), so nothing was ever going to plan INTO it.
+const TOS_TOWN = 61;          // Tos proper. Its `go` to 54 is at (2,13).
 const TOS_BANK = 54;          // a teller. Jasper (376) is the other one.
 const GUILDMASTER_HALL = 700; // Frular, in Barloque.
 const PRICE = 5000;
@@ -85,7 +103,21 @@ export const script = {
       // `bank_above` is below what is being asked for, and reads the purse back afterwards
       // because the banker answers in prose and "You can't check any balance here!" is a
       // sentence rather than an error.
+      // TWO HOPS, NOT ONE. See the note on TOS_TOWN: the planner will not route to 54 from
+      // the field and the walk reports success having stopped in the street outside.
+      walk(TOS_TOWN, { why: 'the bank is only routable from inside Tos itself' }),
       walk(TOS_BANK, { why: 'the fee comes from the purse and Barloque has no teller' }),
+
+      // ARRIVING IS A SEPARATE OBSERVATION FROM BEING SENT. Both previous runs of this
+      // errand had `walk ok` followed by a withdrawal into an empty room, so the room is
+      // read back off the world before any money is asked for.
+      verify(async ({ call, agent }) => {
+        const st = await call('status', { agent }, 45_000).catch(() => null);
+        return (st?.where?.num ?? st?.room?.num) === TOS_BANK;
+      }, `standing in room ${TOS_BANK} before asking a banker for anything — a bank call ` +
+         'made anywhere else fails as PROSE ("You can\'t check any balance here!"), which ' +
+         'is not an error and is invisible to anything checking for a throw'),
+
       carryAtLeast(PRICE, { why: 'founding is paid from what the character is CARRYING' }),
 
       walk(GUILDMASTER_HALL, { why: 'Frular only founds guilds in his own hall' }),
