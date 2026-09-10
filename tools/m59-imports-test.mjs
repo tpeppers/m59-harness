@@ -131,6 +131,74 @@ for (const line of hits) {
   }
 }
 
+// ---------------------------------------------------------------- does the SYMBOL exist?
+//
+// A FILE THAT EXISTS IS NOT A SYMBOL THAT IS EXPORTED, and the gap between those two shipped
+// a broken fleetScript in every tag ever cut. `m59-fleetscript.mjs:105` imported
+// `resolveControlUrl` from `m59-fleetpath.mjs`; the committed `m59-fleetpath.mjs` never
+// exported it. Found by m59-harness-31 on 2026-09-10, by hand, AFTER the file-existence half
+// of this test had passed the same tag — so this is the half that was missing.
+//
+// The offline suites cannot catch it either, and the reason is the same one that hid the
+// untracked modules: THEY RUN FROM THE WORKING TREE, where the function exists. Every test
+// passed against a tag whose fleetScript throws on import.
+//
+// BIASED HARD TOWARD SILENCE, because this checker has already cried wolf twice and a third
+// time would end it. Anything it cannot resolve confidently — a re-export chain, a computed
+// export, a namespace import — is skipped rather than guessed at.
+function exportsOf(src) {
+  const names = new Set();
+  let starExports = false;
+  for (const m of src.matchAll(/^\s*export\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm))
+    names.add(m[1]);
+  for (const m of src.matchAll(/^\s*export\s*\{([^}]*)\}/gm))
+    for (const part of m[1].split(',')) {
+      const as = /(?:\s|^)([A-Za-z_$][\w$]*)\s*$/.exec(part.replace(/\s+as\s+/, ' as '));
+      const alias = /\bas\s+([A-Za-z_$][\w$]*)/.exec(part);
+      if (alias) names.add(alias[1]);
+      else if (as) names.add(as[1]);
+    }
+  if (/^\s*export\s+default\b/m.test(src)) names.add('default');
+  // `export * from './x'` re-exports names this file never mentions. Following the chain is
+  // possible but the failure mode of getting it wrong is a false alarm, so a module with one
+  // is simply not checked.
+  if (/^\s*export\s*\*/m.test(src)) starExports = true;
+  return { names, starExports };
+}
+
+const missingSymbols = [];
+if (!failures) {
+  const cache = new Map();
+  const read = (path) => {
+    if (!cache.has(path)) {
+      try { cache.set(path, git(['show', `${REF}:${path}`])); } catch { cache.set(path, null); }
+    }
+    return cache.get(path);
+  };
+  // Re-read the import STATEMENTS, which git grep gave us one line at a time. A multi-line
+  // `import {\n a,\n b\n} from './x'` is the common shape here, so the single-line grep is
+  // not enough and each importing file is read whole.
+  for (const src of sources) {
+    const text = read(src);
+    if (!text) continue;
+    for (const im of text.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"](\.\/[^'"]+)['"]/g)) {
+      const spec = im[2];
+      if (!/\.(mjs|js)$/.test(spec)) continue;
+      const target = joinPosix(src.replace(/\/[^/]+$/, ''), spec);
+      const targetSrc = read(target);
+      if (!targetSrc) continue;                       // already reported by the half above
+      const { names, starExports } = exportsOf(targetSrc);
+      if (starExports) continue;
+      for (const raw of im[1].split(',')) {
+        const want = raw.trim().split(/\s+as\s+/)[0].trim();
+        if (!want || !/^[A-Za-z_$][\w$]*$/.test(want)) continue;
+        if (!names.has(want))
+          missingSymbols.push({ src: src.replace(/^tools\//, ''), target, want });
+      }
+    }
+  }
+}
+
 console.log(`\nimport graph at ${REF}: ${sources.size} module(s), ${edges} relative import(s)`);
 
 // THE CHECK. A target the ref does not contain is a module that is not there after a clone
@@ -145,6 +213,20 @@ if (untracked.size) {
 } else {
   console.log(`  ok   all ${edges} import(s) resolve to files ${REF} actually contains`);
   console.log('  ok   so a fresh clone, and any deploy tag cut from it, can start');
+}
+
+// The second half. Only run when the first passed — a missing FILE explains every missing
+// symbol in it, and reporting both would bury the cause under its own consequences.
+if (!failures) {
+  if (missingSymbols.length) {
+    for (const { src, target, want } of missingSymbols)
+      fail(`${src} imports { ${want} } from ${target}, which does not export it in ${REF} — `
+         + 'the file is there and the symbol is not, so this throws on import');
+    console.error('\n  The offline suites cannot catch this: they run from the WORKING TREE,');
+    console.error('  where the symbol usually exists. Commit the export, not just the caller.');
+  } else {
+    console.log('  ok   and every named import resolves to a symbol that ref exports');
+  }
 }
 
 console.log(failures ? `\nimports: ${failures} FAILURE(S)` : '\nimports: PASS');
