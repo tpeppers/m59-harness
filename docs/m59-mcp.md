@@ -593,9 +593,14 @@ It makes only the decisions that are genuinely mechanical, in order of urgency:
 
 1. **dead** — the Underworld has no graph exits, so a character left there stays
    forever. It walks onto a portal.
-2. **in danger** — below `flee_below` with something hostile adjacent, it routes to the
-   nearest square far enough away, because there is no flee command and walking out
-   costs a second a square while still being hit.
+2. **in danger** — below `flee_below` with something hostile adjacent **and a wall the
+   safe-spot book has confirmed**, it logs off and back on. Corrected 2026-09-10: this
+   used to say it "routes to the nearest square far enough away", and that walk is gone.
+   Walking out costs a second a square *while still being hit*, and waiting on a wall
+   lets the attack run for dozens of seconds; the logoff ends it at once. Off a proven
+   wall the verb refuses and the character rests instead — the refusal is the safe
+   direction. It is the same call the `doomed` rung makes, so `flee_below` chooses when
+   to reach for it, never what it does.
 3. **hurt but safe** — rests, but only with nothing adjacent; resting next to a monster
    just feeds it.
 4. **work** — in `farm` mode only, and only the creature you named.

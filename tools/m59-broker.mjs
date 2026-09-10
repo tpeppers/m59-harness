@@ -9709,7 +9709,9 @@ const TOOLS = [
           'lets a two-generator room be worked at the rate it spawns — and the room spawn ' +
           'cap is a room-wide total, so quarry nobody kills is what stops the rest appearing.' },
       rest_below: { type: 'number', description: 'rest when a vital drops under this fraction, default 0.7' },
-      flee_below: { type: 'number', description: 'withdraw under this fraction, default 0.4' },
+      flee_below: { type: 'number', description: 'under this fraction, reach for the logoff ' +
+          'on a proven wall (identical to the doomed rung; this only picks the moment) -- ' +
+          'NOT a withdrawal, which is what this said until 2026-09-10. Default 0.4' },
       max_carry: { type: 'number', description: 'stop farming at this many items, default 14' },
       max_weapons: { type: ['number', 'null'],
         description: 'weapons retained after selling, including the equipped weapon. Default 2; null removes the limit' },

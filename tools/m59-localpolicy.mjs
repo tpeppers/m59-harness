@@ -103,7 +103,11 @@ const KEYS = {
   },
   flee_below: {
     type: 'fraction',
-    what: 'the health fraction at which a character disengages and runs',
+    what: 'the health fraction at which a character stops fighting and plays dead',
+    mechanics: 'it does NOT run. Below this, behind a wall the book has confirmed, the '
+      + 'character logs off and back on -- the same verb the doomed rung calls, with the '
+      + 'same guard, so this key selects a MOMENT and not a behaviour. Off a proven wall '
+      + 'playDead refuses and the pass falls through to resting',
   },
   max_carry: {
     type: 'number', min: 1, max: 100,

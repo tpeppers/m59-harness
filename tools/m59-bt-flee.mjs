@@ -230,15 +230,29 @@ export function fleeThresholdNode(keeper) {
       return SUCCESS;
     }
 
-    // Sheltered and above critical: mulligan (break off without moving)
+    // SHELTERED AND ABOVE CRITICAL: LOG OFF. This used to break off without moving.
+    //
+    // Operator, 2026-09-10: "the logoff trick makes the enemy immediately stop attacking,
+    // waiting and hoping can let the enemy continue attacking for up to dozens of seconds",
+    // and then: make this "identical to play_dead, such that there's no real point in having
+    // flee_below".
+    //
+    // The old note's reasoning was that a spot which has held means "nothing can hit us
+    // unless we swing first". `sheltered` is a wall the BOOK has confirmed, and the book
+    // records room 39 with 132 squares tested and ZERO that held without later failing — so
+    // it means the wall held BEFORE, not that it is holding now. Standing still bets on that
+    // difference; the logoff does not, and on a wall that does hold it heals to full because
+    // the character turns in place to re-arm regeneration.
+    //
+    // The ladder in m59-autopilot.mjs was changed the same way in the same commit. Both paths
+    // reach for the same verb in the same state, because two survival paths that disagree is
+    // how this fleet gets a decision that is correct on every pass and still fatal.
     keeper.tally.mulligans = (keeper.tally.mulligans || 0) + 1;
-    keeper.note('breaking off without moving', {
-      health: Math.round(hp * 100) + '%',
-      crowd: threat.length,
-      where: { col: keeper.hold.col, row: keeper.hold.row },
-      why: 'we are in a spot that has held under attack, so nothing can hit us unless we ' +
-           'swing first. Stopping is the whole withdrawal.',
-    });
+    if (await keeper.playDead(`at ${Math.round(hp * 100)}% with ${threat.length} adjacent, ` +
+                              'behind a wall that holds').catch(() => false)) return SUCCESS;
+    // playDead refused, which means the spot is no longer one that holds. Do NOT fall back to
+    // standing still — that is the case the operator objected to, at its most dangerous. The
+    // tick belongs to whichever node below can still move the body.
     return FAILURE; // fall through to rest
   });
 }

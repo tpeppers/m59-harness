@@ -113,18 +113,32 @@ console.log('THERE IS NO FLEE RUNG AT ALL — NOT FOR A MONSTER, NOT FOR A PERSO
   // operator's call rather than a measurement.
   //
   // What is left is the set of answers that change a situation: a wall a creature cannot
-  // path to, resting behind it, breaking off without moving when already sheltered, and
-  // carrying on. Walking away was never one of them.
+  // path to, resting behind it, PLAYING DEAD when already sheltered, and carrying on.
+  // Walking away was never one of them.
   ok('the stage no longer withdraws on a health threshold at all',
      !/this\.tally\.withdrawals\+\+/.test(stage));
   ok('and nothing in it runs for safety any more',
      !/running for safety/.test(stage));
   ok('and it says why, where the rung used to be',
      /THERE IS NO FLEE RUNG AT ALL ANY MORE/.test(stage));
-  // The one thing that still stops in place, because it is not flight: already behind a wall,
-  // stop swinging and let the fight end itself.
-  ok('breaking off without moving survives — it is the opposite of running',
-     /breaking off without moving/.test(stage));
+  // AND THE ANSWER BEHIND A WALL IS THE LOGOFF, NOT STANDING STILL. Changed 2026-09-10 on
+  // the operator's instruction: "the logoff trick makes the enemy immediately stop attacking,
+  // waiting and hoping can let the enemy continue attacking for up to dozens of seconds", and
+  // make it "identical to play_dead, such that there's no real point in having flee_below".
+  //
+  // This assertion used to pin `breaking off without moving` as the thing that survived,
+  // because it is not flight — which was the right half of the question and the wrong answer
+  // to it. Not running is necessary; standing still is not sufficient. `sheltered` means a
+  // wall the BOOK confirmed, and room 39 has 132 squares tested with ZERO that held without
+  // later failing, so it means the wall held BEFORE.
+  // Matched on the CALL, not the phrase: the comment that explains the removal necessarily
+  // contains the old note's text, and a test that cannot tell code from a comment about code
+  // reports a false failure — which this one did, against itself, on first run.
+  ok('the sheltered answer is now playDead, not standing still',
+     /await this\.playDead\(/.test(stage) &&
+     !/this\.note\('breaking off without moving'/.test(stage));
+  ok('and there is no lesser fallback left, which is what makes flee_below redundant',
+     /no LESSER PATH LEFT/i.test(stage) || /no lesser path left/i.test(stage));
 }
 
 console.log('');
@@ -157,8 +171,25 @@ console.log('the ladder still has an answer for a monster');
   ok('resting lives in the same stage as fleeing, so declining is not a dead end',
      /restUntil|rest to full|SIT DOWN PROPERLY/.test(stage));
   ok('and a proven wall is still the monster answer', /safe spot/i.test(stage));
-  ok('the stage still runs where it always did in the ladder',
-     PASS_STAGES.indexOf('passFleeAndRest') === 3, PASS_STAGES.join(','));
+  // PIN THE ORDER, NOT THE INDEX. This read `=== 3` and was correct when it was written
+  // (174448a, 2026-08-22). `passFightBack` was then inserted above it (55c4815, 2026-08-27)
+  // and the stage moved to 4, so this assertion has been RED for two weeks -- failing on a
+  // stage being added rather than on the ordering it meant to protect. An index is a count of
+  // everything above it; what actually matters is which side of the ladder this stage sits on,
+  // and that is what the four deaths in the retreat note were about.
+  const at = PASS_STAGES.indexOf('passFleeAndRest');
+  const before = ['passUnderworld', 'passArm', 'passPlaybook'];
+  const after = ['passFollow', 'passOutside', 'passErrand', 'passFarm'];
+  ok('the stage still runs after the ones that outrank it -- dead, armed, and told what to do',
+     at > 0 && before.every(n => {
+       const i = PASS_STAGES.indexOf(n);
+       return i >= 0 && i < at;
+     }), PASS_STAGES.join(','));
+  ok('and still ahead of every stage that would send the character somewhere',
+     at > 0 && after.every(n => {
+       const i = PASS_STAGES.indexOf(n);
+       return i >= 0 && i > at;
+     }), PASS_STAGES.join(','));
 }
 
 console.log('');

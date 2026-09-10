@@ -14172,7 +14172,7 @@ export class Autopilot {
     // being hit to reach a square no safer than the one it left. Then for people too.
     //
     // What is left is the set of answers that actually change a situation: a wall a creature
-    // cannot path to, resting behind it, breaking off without moving when already sheltered,
+    // cannot path to, resting behind it, PLAYING DEAD when already sheltered (it used to break
     // and carrying on to where we were going. Walking away was never one of them — it buys
     // seconds and spends them going nowhere, and in a room that is the danger it spends them
     // going AWAY FROM THE DOOR.
@@ -14213,16 +14213,23 @@ export class Autopilot {
       // The logoff does not bet: it ends the attack at once, and on a wall that does hold it
       // also heals to full, because the character turns in place to re-arm regeneration while
       // the room mills about outside its reach. `playDead` keeps its own guard, so a spot that
-      // does not hold still refuses and we fall through to the old behaviour rather than
-      // freezing in the open — the refusal is the safe direction.
+      // does not hold still refuses, and the pass then falls through to the rest rung below
+      // rather than freezing in the open — the refusal is the safe direction.
+      //
+      // AND THERE IS NO LESSER PATH LEFT, WHICH IS THE POINT. Operator, 2026-09-10: make
+      // this "identical to play_dead, such that there's no real point in having
+      // flee_below". It is now exactly that — the same verb the `doomed` rung calls, in the
+      // same state, with the same guard. `flee_below` therefore no longer selects a
+      // BEHAVIOUR, only an earlier moment to reach for the one behaviour that works, and
+      // the argument for deleting the key is now visible in the code rather than asserted
+      // in a comment.
+      //
+      // The `breaking off without moving` note that used to sit here is gone rather than
+      // demoted. Keeping it as a fallback would have preserved the thing the operator
+      // objected to for exactly the case where it is most dangerous: a wall that has begun
+      // to leak, which is when `playDead` refuses.
       if (await this.playDead(`at ${Math.round(hp * 100)}% with ${near.length} adjacent, ` +
                               'behind a wall that holds').catch(() => false)) return HANDLED;
-      this.note('breaking off without moving', {
-        health: Math.round(hp * 100) + '%', crowd: near.length,
-        where: { col: this.hold.col, row: this.hold.row },
-        why: 'we are in a spot that has held under attack, so nothing can hit us unless we ' +
-             'swing first. Stopping is the whole withdrawal.',
-        next: 'rest to full here, then take the fight again from the top or leave on our own terms' });
     }
 
     // SIT DOWN PROPERLY THE MOMENT WE ARRIVE SOMEWHERE SAFE.
