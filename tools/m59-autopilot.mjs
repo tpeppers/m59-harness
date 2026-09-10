@@ -5262,7 +5262,49 @@ export class Autopilot {
   // shape as the sanctuary hold, and for the same reason: a condition that cannot be met
   // is a character retired by accident.
   async leaveHold(why, { force = false } = {}) {
-    if (!this.hold) return { left: false };
+    // NO WALL IS NOT THE SAME AS NOTHING TO DECIDE. #movement
+    //
+    // This line used to read `if (!this.hold) return { left: false };` — a character holding
+    // nothing was waved through the discretionary-departure gate without its health ever being
+    // looked at. That is the hole every one of these deaths went through.
+    //
+    // MEASURED over the 268 travelling deaths since 2026-09-01, on the 163 where the departure
+    // itself is inside the frame ring:
+    //
+    //     131 of 163 (80%)  set off ALREADY BELOW their own flee line
+    //     128 of 163 (79%)  below the flee line AND holding nothing   <- this branch
+    //       4 of 163        were holding a wall                       <- the branch below
+    //      13 of 163  (8%)  set off at full health
+    //
+    //   modal departure health 20-29%; 26 of them set off under 10%; median time from
+    //   setting off to dying TWENTY-FIVE SECONDS, p10 six seconds.
+    //
+    // The rule below — a discretionary departure is refused while hurt — was already exactly
+    // right, and it governed four departures out of a hundred and sixty-three. Camilla is named
+    // in it for giving up a proven wall at 69%; these characters never had a wall to give up,
+    // so the rule never ran. The fleet was not ignoring the gate. It was walking past it.
+    //
+    // SO THE ANSWER IS TO TAKE A WALL, NOT TO STAND HERE. Refusing on its own would be the
+    // same bug pointing the other way, and `readyToLeaveSanctuary` says why in its first line:
+    // "a character standing in a monster room must never be held there by this — that is the
+    // worse direction". Once a wall is taken this becomes the ordinary held case, which already
+    // rests to full on the wall, caps the wait at HOLD_WHILE_HURT_MAX_MS and goes anyway.
+    //
+    // AND IF NO WALL CAN BE TAKEN, THE JOURNEY GOES. Standing hurt in a room that spawns, with
+    // nothing to put our back against, is worse than walking — that is the whole argument of
+    // the rung at `going somewhere safe to recover`, and it is why this is not capped here: the
+    // two outcomes are "we are behind a wall now" and "we are leaving now", never "we are
+    // waiting in the open".
+    //
+    // WHY HERE AND NOT IN `travel()`. The confinement gate one screen down argues that the
+    // single door every journey passes through is the place to enforce a rule, and for THAT
+    // rule it is. Not for this one: `travel()` is also how a character flees to town after
+    // fleeing twice (`:4749`) and how it walks out of the room it respawned in (`:12918`), and
+    // both of those are journeys begun BECAUSE the character is hurt. Gating the door would
+    // have refused the two cases where travelling hurt is the correct answer. `leaveHold` is
+    // already the discretionary-only gate — its thirteen callers are the discretionary
+    // departures, and the non-discretionary ones pass `force`.
+    if (!this.hold) return force ? { left: false } : await this.wallUpBeforeSettingOff(why);
     if (!force) {
       const hp = pct(this.s.client?.vitals?.()?.health);
       const floor = this.policy.restBelow ?? 0.7;
@@ -5299,6 +5341,71 @@ export class Autopilot {
     this.releaseHold(why);
     return { left: true, reconnected: !!out.did, crowd: out.crowd ?? 0,
              ...(stepped ? { stepped_out_of_the_pocket: stepped } : {}) };
+  }
+
+  // HURT, IN THE OPEN, AND ABOUT TO WALK ACROSS THE WORLD. TAKE A WALL FIRST. #movement
+  //
+  // The `leaveHold` branch above; the measurement and the argument are there. This turns
+  // "hurt and holding nothing" into "hurt and holding a wall", after which the existing rule
+  // governs the departure — including its cap and its `leaving the wall anyway` escape. It
+  // decides nothing about the journey itself and never cancels one that is already running.
+  //
+  // THREE ANSWERS, AND ONE OF THEM IS NOT "WAIT IN THE OPEN":
+  //   * not hurt, or in a sanctuary   -> go, unchanged. `readyToLeaveSanctuary` owns the inn.
+  //   * a wall was taken              -> refuse THIS attempt; the rest rung fills the bars and
+  //                                      the next attempt is the ordinary held case.
+  //   * no wall could be taken        -> go, and say so. Standing here is the worse option.
+  async wallUpBeforeSettingOff(why) {
+    const hp = pct(this.s.client?.vitals?.()?.health);
+    const floor = this.policy.restBelow ?? 0.7;
+    // A null reading is "no such bar", not "empty" — the same rule every other gate here
+    // follows. Blocking on a missing number is how a character gets retired by accident.
+    if (hp === null || hp >= floor) {
+      this.setOffHurtNoted = false;
+      return { left: false };
+    }
+    // An inn already has a gate with a longer rule than this one, and running both would mean
+    // two thresholds for one question.
+    if (this.sanctuary()) return { left: false };
+    // `source: 'travel'` is deliberate: it makes the selector judge walls against the door we
+    // are heading for rather than against a fight, which is what a stopover on a journey is.
+    const took = await this.takeSafeSpot(why, null, { source: 'travel' })
+                           .catch(e => ({ took: false, why: e.message }));
+    if (took?.took) {
+      this.setOffHurtNoted = false;
+      this.note('taking a wall before setting off — too hurt to start a journey', {
+        wanted_to: why, health: Math.round(hp * 100) + '%',
+        rest_below: Math.round(floor * 100) + '%',
+        where: this.hold ? { col: this.hold.col, row: this.hold.row } : null,
+        why: 'eighty per cent of this fleet\'s travelling deaths set off already below the ' +
+             'flee line and holding nothing, and the median one was dead twenty-five seconds ' +
+             'later. The destination will still be there once the bar is full',
+        note: 'the journey is not cancelled — this refuses one attempt. Resting on the wall ' +
+              'happens below, and the next attempt goes through the ordinary held rule',
+      });
+      this.tally.walled_up_before_setting_off =
+        (this.tally.walled_up_before_setting_off || 0) + 1;
+      // Progress, and truthfully: a wall was taken. This is not the `progress()`-on-a-refusal
+      // that hid these bodies from every stall detector — something changed.
+      this.progress('took a wall instead of setting off hurt');
+      return { left: false, refused: true, sheltering: true, health: hp, wanted_to: why };
+    }
+    // NOWHERE TO MEND. Say it once per episode rather than once per pass, and GO.
+    if (!this.setOffHurtNoted) {
+      this.setOffHurtNoted = true;
+      this.note('setting off hurt — nothing here to put our back against', {
+        wanted_to: why, health: Math.round(hp * 100) + '%',
+        rest_below: Math.round(floor * 100) + '%',
+        could_not_shelter: took?.why ?? 'no wall found',
+        why: 'a character standing hurt in a room that spawns, with no wall available, is not ' +
+             'made safer by being held here. This is the worse-direction case that ' +
+             'readyToLeaveSanctuary refuses to create, so the journey stands',
+        note: 'this is the departure that kills, recorded rather than prevented — a run of ' +
+              'these is a room that needs a safe spot in the book, not a threshold change',
+      });
+    }
+    this.tally.set_off_hurt_unsheltered = (this.tally.set_off_hurt_unsheltered || 0) + 1;
+    return { left: false };
   }
 
   /**
@@ -12297,6 +12404,18 @@ export class Autopilot {
     const ran = [];
     for (const stage of PASS_STAGES) {
       ran.push(stage);
+      // WHICH RUNG THE PASS IS SITTING IN, FOR THE POSTMORTEM TO READ.
+      //
+      // `pass_blocked_ms` says the keeper stopped deciding and does not say WHERE, and that
+      // gap has now cost two investigations. 93% of the deaths since 2026-09-01 had the pass
+      // blocked over thirty seconds, and the only honest answer to "blocked on what" was a
+      // guess, because a pass sitting in an `await` is invisible to every instrument here:
+      // `loop_stall` in m59-keeper-process.mjs profiles the EVENT LOOP, which an await does
+      // not block, so it reports nothing for exactly this case.
+      //
+      // One assignment per stage, no allocation, no I/O. Read by `postMortem`.
+      this.passStage = stage;
+      this.passStageAt = Date.now();
       const verdict = await this[stage](ctx);
       if (verdict === CONTINUE) continue;
       if (verdict !== HANDLED) {
@@ -12506,6 +12625,58 @@ export class Autopilot {
             ? { arm: this.travelArm.arm, to: this.travelArm.to,
                 into_journey_ms: Date.now() - this.travelArm.since,
                 held_ms: this.travelHeldMs ?? 0 }
+            : null,
+          // DID IT EVER TRY FOR A WALL? THE RECORD COULD NOT SAY, AND THAT WAS THE PROBLEM.
+          //
+          // The operator's question, 2026-09-10: "it seems like these dying characters aren't
+          // even trying to make it to safe spots — do we capture that?" The answer was no. The
+          // postmortem carried the OUTCOME (`at_a_safe_wall`, `in_safe_spot`, both empty in 250
+          // of 270 travelling deaths) and nothing about the attempt, so "tried for a wall and
+          // could not reach one" and "never looked" were the same record.
+          //
+          // The counters existed and went somewhere else. `recordTravelShelterStop` feeds
+          // `journeyMetrics`, which is written to the travel/A-B ledger at JOURNEY END — a line
+          // a character that dies mid-journey never reaches. The join back was meant to be
+          // `travel_arm` (see its comment above), and `travel_arm` is null in 247 of those 270,
+          // because it is only set while a journey hold is live. So the one field designed to
+          // connect a journey to its death is absent exactly when the death happens.
+          //
+          // Read straight off the counters, no new bookkeeping. A journey resets them, so these
+          // are "this journey", which is the window that matters.
+          shelter: {
+            stops: this.travelSafeStops ?? 0,
+            hop_wall: this.travelHopWallStops ?? 0,
+            sanctuary: this.travelSanctuaryStops ?? 0,
+            route: this.travelRouteStops ?? 0,
+            track: this.travelTrackStops ?? 0,
+            held_ms: this.travelShelterHeldMs ?? 0,
+            // The per-ROOM budget, which is what actually refuses a stop. `taken >= budget`
+            // is the state in which the guard says "walking on — the wall for this is at the
+            // end of the hop", so a death with a spent budget is a different story from one
+            // with an untouched budget and no stops at all.
+            this_room: this.shelterStops?.room ?? null,
+            taken_this_room: this.shelterStops?.taken ?? 0,
+            budget_per_room: this.policy.travelShelterPerRoom ?? 4,
+            // The threshold the shelter rung compares health against, recorded because it is
+            // zone-dependent — it returns 1 (any scratch at all) where the zone outranks the
+            // character — so the same number cannot be reconstructed afterwards.
+            below: (() => { try { return this.travelShelterBelow(); } catch { return null; } })(),
+            // The ORDINARY ladder's wall attempt, which is the one that applies when no journey
+            // hold is live — 241 of 270. Throttled to one attempt per 30s, so its age says
+            // whether the rung had even come round again.
+            ordinary_wall_tried_ms_ago:
+              this.wallTriedAt ? Date.now() - this.wallTriedAt : null,
+          },
+          // WHERE THE PASS WAS WHEN IT STOPPED DECIDING.
+          //
+          // `pass_blocked_ms` has always said a pass went quiet and never said what it was
+          // waiting on, and every reading of these deaths has had to guess. See the note in
+          // `runPassLadder`. `stage` is the rung that was awaiting; `in_stage_ms` is how long
+          // it has been in it, which is the number to compare against `pass_blocked_ms` —
+          // when they match, the stage named here is the one that stopped the keeper.
+          blocked_in: this.passStage
+            ? { stage: this.passStage,
+                in_stage_ms: this.passStageAt ? Date.now() - this.passStageAt : null }
             : null,
           watchdog: (() => {
             const w = this.watch;
@@ -13253,7 +13424,12 @@ export class Autopilot {
              'of any budget.',
       });
     }
-    // MID-HOP THIS RUNG IS RETIRED, AND `wouldPlayDead` IS ALL THAT IS LEFT OF IT.
+    // MID-HOP THIS RUNG IS RETIRED ENTIRELY. There is no mid-hop shelter trigger.
+    //
+    // This line used to end "AND `wouldPlayDead` IS ALL THAT IS LEFT OF IT", which was not
+    // true of the code underneath it — see the correction below, where that leftover was
+    // deleted. The dying-mid-hop case belongs to the `flee` arm, which fires earlier and
+    // plays dead; nothing here shelters mid-hop.
     //
     // The only thing a mid-hop trigger can do is CANCEL the crossing: the mover has the
     // body, and the keeper cannot walk to a wall without taking the body off the line
@@ -13267,12 +13443,28 @@ export class Autopilot {
     // the character down without fighting it for the body, and the journey PAUSES instead
     // of ending. See TRAVEL_GUARD_CLOCK.
     //
-    // WHAT STAYS. Two hits from death is not "a bad room", it is about to be a death, and
-    // waiting for a boundary that is 2,450 squares away is how the Cragged Mountains killed
-    // seven of eleven. So the rung still fires for `wouldPlayDead` — and only for that.
-    // The budget does not gate it, because there is no budget on dying.
-    const shelterNow = wouldPlayDead
-      || (hp !== null && hp < this.travelShelterBelow() && !shelterSpent);
+    // WHAT STAYS, AND WHERE IT ACTUALLY LIVES. Two hits from death is not "a bad room", it is
+    // about to be a death, and waiting for a boundary 2,450 squares away is how the Cragged
+    // Mountains killed seven of eleven. That case is still answered — by the `flee` arm below,
+    // not by a rung here.
+    //
+    // CORRECTED 2026-09-10. This paragraph used to end "so the rung still fires for
+    // `wouldPlayDead` — and only for that", above a `const shelterNow = wouldPlayDead || ...`
+    // that NOTHING IN THE FILE READ. One occurrence, this assignment, in both this tree and
+    // the prod deploy. The rung fired for nothing, and the comment said it fired for something.
+    //
+    // Deleted rather than re-wired, because re-wiring it would be redundant: `wouldPlayDead`
+    // is `near.length && hp < doomedInOpenBelow (0.3)`, and the `flee` arm below triggers at
+    // `hp < safety().fleeAt` — around 0.68, more than twice that — needs only
+    // `(worthEnding.length || near.length)`, which `near.length` satisfies, and calls
+    // `playDead()` unconditionally. That is the same action at a threshold reached strictly
+    // earlier on the way down, so every state this expression could have caught is already
+    // caught. The other half was the mid-hop trigger retired immediately above.
+    //
+    // The cost of leaving it was never to the fleet, it was to readers: an agent reviewing
+    // these deaths read the old comment, believed a degraded mid-hop safety net existed, and
+    // reported a defect that was not there. A dead variable with a live-sounding comment is a
+    // claim the next person has to disprove.
     // NO ADJACENCY REQUIREMENT. BEING HURT ON A ROAD IS THE WHOLE CONDITION.
     //
     // This asked for something within melee reach AT THE INSTANT OF THE PASS, and that is

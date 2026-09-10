@@ -118,5 +118,81 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
   assert.equal(boom.tally.deaths, 1, 'and the death is still counted exactly once');
 }
 
-console.log('Death observation, deduplication, evidence snapshots, session ownership and ' +
-            'escape-despite-a-failed-report passed');
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE RECORD HAS TO SAY WHETHER IT TRIED FOR A WALL, AND WHERE THE PASS STOPPED.
+//
+// Both were unanswerable from a postmortem until 2026-09-10. 250 of the 270 travelling deaths
+// since 2026-09-01 died with no wall and no safe spot, and nothing in the file distinguished
+// "tried and could not reach one" from "never looked" — the shelter counters go to the travel
+// ledger at journey end, which a character that dies mid-journey never reaches. Separately,
+// 93% of deaths had the pass blocked over thirty seconds and no field said blocked ON WHAT.
+{
+  const record = records.find(r => r?.summary);
+  assert.ok(record, 'the earlier cases must have produced a real record to inspect');
+  const sh = record.summary.shelter;
+  assert.ok(sh && typeof sh === 'object', 'the summary carries a shelter block');
+  // Every counter present even at zero: an absent field and a zero read identically to a
+  // grep, and "never tried" is the finding this block exists to be able to state.
+  for (const f of ['stops', 'hop_wall', 'sanctuary', 'route', 'track', 'held_ms',
+                   'taken_this_room', 'budget_per_room'])
+    assert.equal(typeof sh[f], 'number', `shelter.${f} is always a number, never absent`);
+  assert.ok('below' in sh, 'the threshold it would have sheltered below is recorded');
+  assert.ok('ordinary_wall_tried_ms_ago' in sh,
+            'the ordinary ladder\'s wall attempt is recorded — it is the rung that applies '
+          + 'when no journey hold is live, which was 241 of 270 deaths');
+  assert.ok('blocked_in' in record.summary,
+            'the summary says which pass stage was running, or null');
+
+  // A KEEPER THAT DID SHELTER MUST LOOK DIFFERENT FROM ONE THAT DID NOT, or the block could
+  // report zeroes for ever and every assertion above would still pass. So: set the counters a
+  // real journey would have set, kill the character through the SAME wiring, and read the
+  // record back. `postMortem()` alone cannot be used for this — it does not build `summary`;
+  // `observeDeath` does, and that is the path a real death takes.
+  const mine = [];
+  const walled = Object.assign(Object.create(Autopilot.prototype), {
+    s, policy: { travelShelterPerRoom: 4 }, tally: { deaths: 0 },
+    money: { carried_at_death: 0 }, lastSeenPurse: 0,
+    passes: 7, passStartedAt: Date.now() - 97_000, recent5: [],
+    who: () => null, safety: () => ({ fleeAt: 0.4 }), recentText: () => [],
+    note: () => {},
+    writePostMortem: record => { mine.push(structuredClone(record)); return 'offline'; },
+    awaitDeathBroadcast: async () => null,
+    // what a journey that DID shelter would have left behind
+    travelSafeStops: 3, travelHopWallStops: 2, travelSanctuaryStops: 1,
+    travelRouteStops: 0, travelTrackStops: 0, travelShelterHeldMs: 41_000,
+    shelterStops: { room: 599, taken: 4 }, wallTriedAt: Date.now() - 12_000,
+    passStage: 'passFarm', passStageAt: Date.now() - 97_000,
+  });
+  await walled.passUnderworld({ s, c: client, room: { num: 1, name: 'The Underworld' } })
+              .catch(() => {});
+  await walled.deathReportTask;
+  assert.equal(mine.length, 1, 'the instrumented death produced a record');
+  const s2 = mine[0].summary.shelter;
+  assert.equal(s2.stops, 3, 'shelter stops are reported');
+  assert.equal(s2.hop_wall, 2, 'and which kind of stop they were');
+  assert.equal(s2.sanctuary, 1, 'including a sanctuary pause');
+  assert.equal(s2.held_ms, 41_000, 'and how long was spent behind cover');
+  assert.equal(s2.taken_this_room, 4, 'and the per-room spend that refuses the next stop');
+  assert.equal(s2.budget_per_room, 4, 'and the budget it is spent against');
+  assert.equal(s2.this_room, 599, 'and which room that budget belongs to');
+  assert.ok(s2.ordinary_wall_tried_ms_ago >= 12_000,
+            'and how long ago the ORDINARY ladder last tried for a wall — the rung that '
+          + 'applies when no journey hold is live, which was 241 of 270 deaths');
+  const b2 = mine[0].summary.blocked_in;
+  assert.equal(b2.stage, 'passFarm', 'the blocked pass names the stage it was sitting in');
+  assert.ok(b2.in_stage_ms >= 97_000, 'and how long it had been there');
+}
+
+// AND THE FIELD HAS TO BE FED, IN THE RIGHT ORDER. `blocked_in` is worth nothing if the
+// dispatcher sets it after the await: it would then always name the stage that had already
+// finished, which is precisely the stage that did NOT block.
+{
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  assert.match(src,
+    /this\.passStage = stage;\s*\n\s*this\.passStageAt = Date\.now\(\);\s*\n\s*const verdict = await this\[stage\]\(ctx\);/,
+    'runPassLadder records the stage IMMEDIATELY BEFORE awaiting it');
+}
+
+console.log('Death observation, deduplication, evidence snapshots, session ownership, ' +
+            'escape-despite-a-failed-report, the shelter record and the blocked-stage '
+          + 'record passed');

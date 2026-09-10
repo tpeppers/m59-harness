@@ -121,5 +121,107 @@ function keeper({ assignedRoom, currentRoom, vitalsValue = null }) {
      `got ${JSON.stringify(r)}`);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE OTHER DEPARTURE GATE: HURT, IN THE OPEN, AND HOLDING NOTHING.
+//
+// `readyToLeaveSanctuary` above owns the inn and `leaveHold` owns a held wall. Between them
+// sat the departure that actually kills this fleet: a keeper farming in a monster room, no
+// wall held, hurt, deciding to walk somewhere else. Measured over the 268 travelling deaths
+// since 2026-09-01, on the 163 whose departure is inside the frame ring: 128 (79%) set off
+// below their own flee line holding nothing, against 4 that were holding a wall. Median time
+// from setting off to dying: twenty-five seconds.
+//
+// These pin the three answers. The one that must never appear is a fourth: waiting in the open.
+
+function outdoors({ health = null, hold = null, room = 999 } = {}) {
+  const c = {
+    selfId: 99,
+    room: { id: room, objects: new Map() },
+    rsc: { get: () => '' },
+    vitals: () => (health === null ? null : { health }),
+    equipment: () => ({ known: true, equipped: [{ name: 'short sword' }] }),
+    inventory: [],
+  };
+  const s = { name: 'test', live: true, client: c,
+    world: { room: { num: room, name: room === 999 ? 'hunting ground' : 'somewhere safe' },
+             geometry: null } };
+  const ap = new Autopilot(s, { mode: 'farm', policy: { hunt: 'giant rat' } });
+  ap.policy.assignedRoom = room;
+  ap.hold = hold;
+  ap.walls = [];
+  ap.takeSafeSpot = async (why, quarry, opts) => {
+    ap.walls.push({ why, opts });
+    if (ap.wallAvailable) { ap.hold = { col: 5, row: 5, takenAt: Date.now(), proven: true }; }
+    return ap.wallAvailable ? { took: true } : { took: false, why: 'no wall found' };
+  };
+  return ap;
+}
+
+console.log('\nSETTING OFF HURT WITH NOTHING HELD');
+{
+  // 1. THE FIX. Hurt, in a room that spawns, no wall held -> take a wall, refuse this attempt.
+  const ap = outdoors({ health: { value: 12, max: 50 } });   // 24%, the modal departure health
+  ap.wallAvailable = true;
+  const r = await ap.leaveHold('travelling to a room that generates our prey');
+  ok('hurt and holding nothing -> the departure is refused', r.refused === true,
+     JSON.stringify(r));
+  ok('and a wall was actually taken, not merely wanted', ap.walls.length === 1 && !!ap.hold);
+  ok('and the wall was chosen as a journey stopover, not as a fight position',
+     ap.walls[0]?.opts?.source === 'travel', JSON.stringify(ap.walls[0]?.opts));
+
+  // 2. THE WORSE DIRECTION, REFUSED. No wall to be had: the journey must GO, because standing
+  //    hurt in a spawn room with nothing at our back is not safety. readyToLeaveSanctuary's
+  //    first line refuses to create this state and so does this.
+  const stuck = outdoors({ health: { value: 12, max: 50 } });
+  stuck.wallAvailable = false;
+  const s2 = await stuck.leaveHold('travelling to a room that generates our prey');
+  ok('hurt with NO wall available -> the journey stands rather than waiting in the open',
+     s2.refused !== true, JSON.stringify(s2));
+  ok('and it tried before giving up', stuck.walls.length === 1);
+
+  // 3. Healthy departures are untouched — no wall, no refusal, no cost.
+  const well = outdoors({ health: { value: 48, max: 50 } });
+  well.wallAvailable = true;
+  const s3 = await well.leaveHold('walking to the bank');
+  ok('a healthy character sets off unchanged', s3.refused !== true, JSON.stringify(s3));
+  ok('and is not made to take a wall it does not need', well.walls.length === 0);
+}
+
+console.log('\nTHE GATE MUST NOT REACH WHAT IT DOES NOT OWN');
+{
+  // A forced departure is a withdrawal, a resume or a rested character going back on the road.
+  // None of them is discretionary and none may be held up.
+  const forced = outdoors({ health: { value: 5, max: 50 } });
+  forced.wallAvailable = true;
+  const r = await forced.leaveHold('carrying on with the journey', { force: true });
+  ok('force skips the gate entirely', r.refused !== true && forced.walls.length === 0,
+     JSON.stringify(r));
+
+  // An inn has its own gate with a longer rule. Running both would be two thresholds for one
+  // question, and the sanctuary one also knows how to give up and go.
+  const inn = outdoors({ health: { value: 12, max: 50 }, room: 1016 });
+  inn.wallAvailable = true;
+  const r2 = await inn.leaveHold('leaving the inn');
+  ok('a sanctuary is left to readyToLeaveSanctuary', r2.refused !== true && inn.walls.length === 0,
+     JSON.stringify(r2));
+
+  // The rule every other gate in this file follows: a missing bar is not an empty one. This is
+  // the broker-restart case the top of this file exists for, arriving at a second door.
+  const blind = outdoors({ health: null });
+  blind.wallAvailable = true;
+  const r3 = await blind.leaveHold('back to work');
+  ok('unknown vitals are not a reason to stay', r3.refused !== true && blind.walls.length === 0,
+     JSON.stringify(r3));
+
+  // And a character that IS holding a wall still goes down the original branch, which has the
+  // cap and the `leaving the wall anyway` escape. This gate only ever handles the no-hold case.
+  const held = outdoors({ health: { value: 12, max: 50 },
+                          hold: { col: 1, row: 1, takenAt: Date.now(), proven: true } });
+  held.wallAvailable = true;
+  const r4 = await held.leaveHold('roaming to look for hunting elsewhere');
+  ok('a held character is refused by the ORIGINAL rule, not this one',
+     r4.refused === true && held.walls.length === 0, JSON.stringify(r4));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
