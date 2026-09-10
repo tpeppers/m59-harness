@@ -33,7 +33,7 @@
 // the trade this whole file exists to make.
 
 import http from 'node:http';
-import { mayStartJourney, floorFor } from './m59-travelgate.mjs';
+import { mayStartJourney, floorFor, floorSource } from './m59-travelgate.mjs';
 import { nativeContextReader } from './m59-native-context-read.mjs';
 const readNativeContext = nativeContextReader();
 import os from 'node:os';
@@ -2283,6 +2283,9 @@ class KeeperProxy {
       floor: floorFor({ explicit: opts.healthFloor,
                         travelStartHealth: pol.travelStartHealth,
                         fleeBelow: pol.fleeBelow }),
+      // Read AFTER floorFor, which is what sets it. Passed so the refusal can name where its
+      // number came from instead of asserting the flee line for a floor the caller chose.
+      floorFrom: floorSource(),
       from: st?.room?.num ?? null,
       to: dest,
       homeRoom: st?.autopilot_status?.home_room ?? pol.homeRoom ?? null,

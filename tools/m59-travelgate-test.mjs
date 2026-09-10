@@ -24,7 +24,8 @@
 // THE LAST SECTION IS THE ONE THAT MATTERS. A shared decision that both callers copy is not a
 // shared decision; it is two decisions that agree today. So the final block asserts that the
 // broker and fleetScript both IMPORT this module and that neither carries its own comparison.
-import { mayStartJourney, floorFor, UNDERWORLD, REASONS } from './m59-travelgate.mjs';
+import { mayStartJourney, floorFor, floorSource, UNDERWORLD, REASONS }
+  from './m59-travelgate.mjs';
 import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0;
@@ -50,6 +51,32 @@ console.log('THE TWO DEATHS THIS IS WRITTEN FROM');
      cccc.ok === false && cccc.code === REASONS.TOO_HURT);
 }
 
+console.log('');
+console.log('A REFUSAL SAYS WHERE ITS NUMBER CAME FROM, rather than asserting the flee line');
+{
+  // MEASURED ON THE FIRST LIVE CALL after deploy-2026-09-10-15. Janice at 39/58 was refused a
+  // journey with an explicit `health_floor: 1`, and the message read "A body that would flee a
+  // fight at 100% has no business starting a journey at 67%" -- which describes no character in
+  // this game. The sentence is true and useful when the floor IS the flee line and false the
+  // moment a caller passes one, and a refusal that misstates where its own number came from is
+  // what gets a guarantee deleted by the next person in a hurry.
+  const flee = mayStartJourney({ health: 0.2, floor: 0.5, floorFrom: 'the flee line' });
+  ok('when the floor IS the flee line, the argument is made',
+     /would flee a fight at 50%/.test(flee.why), flee.why);
+  const caller = mayStartJourney({ health: 0.67, floor: 1, floorFrom: 'the caller' });
+  ok('when the caller chose it, the flee-line claim is NOT made',
+     !/would flee a fight/.test(caller.why), caller.why);
+  ok('and it names the source instead', /came from the caller/.test(caller.why), caller.why);
+  ok('an unknown source claims nothing either way',
+     !/would flee a fight/.test(mayStartJourney({ health: 0.2, floor: 0.5 }).why));
+  // The source is reported by floorFor rather than guessed, and read after it.
+  floorFor({ explicit: 0.9, fleeBelow: 0.5 });
+  ok('floorSource says the caller when an explicit floor won', floorSource() === 'the caller');
+  floorFor({ fleeBelow: 0.5 });
+  ok('and the flee line when that is what applied', floorSource() === 'the flee line');
+  floorFor({ travelStartHealth: 0.8, fleeBelow: 0.5 });
+  ok('and travel_start_health when it is set', floorSource() === 'travel_start_health');
+}
 console.log('');
 console.log('AND THE THINGS THAT MUST NOT BE REFUSED, or the gate causes what it prevents');
 {
