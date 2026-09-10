@@ -289,6 +289,13 @@ async function call(name, args = {}, ms = 180_000) {
   const d = await r.json();
   try { return JSON.parse(d.result.content[0].text); } catch { return d.result?.content?.[0]?.text ?? d; }
 }
+// THE SAME DECISION THE BROKER USES. This file's health floor was the ONLY one in the
+// repository, which is exactly the problem the operator named: a script refused to set out
+// hurt and every other driver had no floor at all. It is one function now, in one place, and
+// what differs is the REMEDY -- a script rests to the floor and then goes, because it is
+// patient and owns the body; the broker refuses and says so, because a bot asking for
+// something impossible needs an answer rather than a body held while it heals.
+import { mayStartJourney } from './m59-travelgate.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- reading a character
@@ -1197,12 +1204,22 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     // Numeric on both sides on purpose; see the coercion note above.
     if (Number(at.room) === to) return { ok: true, room: to };
     if (at.dead) return { ok: false, why: 'died', dead: true };
-    if (at.health == null)
-      // UNKNOWN IS STILL NOT PERMISSION, and it is not something resting fixes: a health we
-      // cannot read usually means the keeper is not answering at all, which is exactly when
-      // a journey must not start. This caught a character whose keeper process had died.
-      return { ok: false, why: 'health is unreadable — not setting out', hurt: true };
-    if (at.health < minHealth) {
+    // MAY THIS BODY SET OUT? Asked of m59-travelgate.mjs, which the broker's `travelJob` also
+    // asks -- so a script and a bot now get the same answer to the same question. The two
+    // rules this file earned are still the rules; they just live where everyone can reach
+    // them: unknown health is not permission (it caught a character whose keeper had died),
+    // and the Underworld is always leavable.
+    const gate = mayStartJourney({
+      health: at.health, floor: minHealth, from: at.room, to,
+      // A script names its own destination, so `homeRoom` is not consulted here: the
+      // recovery exemption is for a DRIVER that sent a hurt body somewhere, and a script
+      // that wants to walk one home lowers `minHealth` and says so in the errand.
+    });
+    if (!gate.ok && gate.code === 'health_unreadable')
+      return { ok: false, why: gate.why, hurt: true };
+    if (!gate.ok) {
+      // THE REMEDY IS THIS FILE'S, NOT THE GATE'S. A script is patient: rest to the floor and
+      // set out, rather than refusing an errand somebody asked for.
       const healed = await healToFloor(ctx, agent, minHealth, ctx.healMs);
       if (!healed.ok) return { ok: false, why: `could not reach the health floor: ${healed.why}`,
                                hurt: true, dead: /died|dead/.test(healed.why) };
@@ -1231,7 +1248,11 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     const budget = Math.min(ctx.budgetCapMs,
       Math.max(ctx.budgetFloorMs, (Number(est?.ms) || 400_000) + 90_000));
     ctx.log(agent, `walking ${at.room} -> ${to}, budget ${Math.round(budget / 1000)}s`);
-    await call('travel', { agent, to, background: true, run_errands: false }, 60_000).catch(() => ({}));
+    // CARRY THE FLOOR THROUGH. The broker gates every journey now, and a script that has
+    // already rested to ITS floor must not then be refused by a different one -- `come-home`
+    // deliberately lowers `minHealth` for an escort, and that decision is the script's.
+    await call('travel', { agent, to, background: true, run_errands: false,
+                           health_floor: minHealth }, 60_000).catch(() => ({}));
 
     const until = Date.now() + budget;
     while (Date.now() < until) {

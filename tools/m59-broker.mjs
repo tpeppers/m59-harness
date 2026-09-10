@@ -33,6 +33,7 @@
 // the trade this whole file exists to make.
 
 import http from 'node:http';
+import { mayStartJourney, floorFor } from './m59-travelgate.mjs';
 import { nativeContextReader } from './m59-native-context-read.mjs';
 const readNativeContext = nativeContextReader();
 import os from 'node:os';
@@ -2259,9 +2260,51 @@ class KeeperProxy {
   // is the one definition of the slot and the keeper hold. Without it a keeper-backed travel
   // failed before it sent anything. Returns the same shape the tool expects — an object with
   // a `promise` — so foreground and background both work through one path.
+  // WHETHER A JOURNEY MAY START, ASKED HERE BECAUSE THIS IS THE DOOR EVERY DRIVER USES.
+  //
+  // The `travel` tool calls this, the `spread` assignment driver calls this, and fleetScript's
+  // walk reaches it through the tool -- so a check here covers an LLM, a bot and the field
+  // command page with one implementation, which is the whole point. m59-travelgate.mjs holds
+  // the decision and nothing here re-implements it.
+  //
+  // READS CACHED STATE. `_refreshState` is the same 2s-TTL projection every other read uses, so
+  // this costs nothing on a fleet that is already being watched; when the keeper genuinely
+  // cannot be reached the health comes back null and the gate refuses, which is the rule
+  // fleetScript earned the hard way -- unknown is not permission.
+  async _journeyGate(dest, opts = {}) {
+    let st = null;
+    try { st = await this._refreshState(); } catch { st = null; }
+    const hp = st?.hp ?? null;
+    const pol = st?.autopilot_status?.policy ?? {};
+    // The fraction, not the value: every floor in this repository is a fraction of max.
+    const health = hp && Number(hp.max) > 0 ? Number(hp.value) / Number(hp.max) : null;
+    return mayStartJourney({
+      health,
+      floor: floorFor({ explicit: opts.healthFloor,
+                        travelStartHealth: pol.travelStartHealth,
+                        fleeBelow: pol.fleeBelow }),
+      from: st?.room?.num ?? null,
+      to: dest,
+      homeRoom: st?.autopilot_status?.home_room ?? pol.homeRoom ?? null,
+      waiver: opts.despiteHealth ?? null,
+    });
+  }
+
   travelJob(dest, opts = {}) {
     const foreground = opts.foreground === true;
-    const started = keeperAction(this.name, this._index, 'travel', {
+    // THE SIGNATURE IS UNCHANGED ON PURPOSE. Callers do `travelJob(...).promise` and one of
+    // them fires and forgets, so the gate runs INSIDE the promise rather than making this
+    // method async -- and it RESOLVES with a refusal rather than rejecting, because a
+    // fire-and-forget caller would turn a rejection into an unhandled crash.
+    const started = (async () => {
+      const gate = await this._journeyGate(dest, opts);
+      if (!gate.ok) {
+        // The same shape a refused travel already returns, so `accepted?.started !== true`
+        // -- which the travel tool already tests -- carries this back without a new branch.
+        return { started: false, refused: gate.code, why: gate.why,
+                 health: gate.health, floor: gate.floor, destination: dest };
+      }
+      return keeperAction(this.name, this._index, 'travel', {
       to: dest, toRoomNum: dest,
       where: opts.where, max_hops: opts.maxHops, control_token: opts.controlToken,
       run_errands: opts.runErrands !== false,
@@ -2276,7 +2319,8 @@ class KeeperProxy {
       // what to do next. A background travel returns an acknowledgement immediately and
       // wants the short default.
       timeoutMs: foreground ? 20 * 60_000 : 60_000,
-    });
+      });
+    })();
     return { promise: started, keeper: true };
   }
 
@@ -2651,6 +2695,12 @@ class KeeperProxy {
 
   async cancelRtsAction(args = {}) {
     const result = await keeperAction(this.name, this._index, 'rts_cancel', args);
+    if (result?.error) throw new Error(result.error);
+    return result;
+  }
+
+  async tacticalStatus(args = {}) {
+    const result = await keeperAction(this.name, this._index, 'rts_tactical_status', args);
     if (result?.error) throw new Error(result.error);
     return result;
   }
@@ -5951,6 +6001,20 @@ const TOOLS = [
       control_token: { type: 'string', description: 'optional owner token that can invalidate stale movement' },
       background: { type: 'boolean', description: 'return at once and walk in the background; ' +
         'watch for it under `busy` in status/fleet, and the outcome under `last_action`' },
+      // A HEALTH FLOOR IS NOW ENFORCED FOR EVERY CALLER, and these two are how a caller that
+      // has already decided keeps its decision. Without them the gate would be a wall rather
+      // than a guarantee, and the first errand it blocked would get it deleted.
+      health_floor: { type: 'number',
+        description: 'the fraction of max health required to SET OUT, 0..1. Omitted uses this ' +
+          "character's own travel_start_health, and then its flee threshold -- because a body " +
+          'that would flee a fight at 50% has no business starting a journey at 2%. Pass 0 to ' +
+          'switch the floor off for this journey.' },
+      despite_health: { type: 'object',
+        properties: { reason: { type: 'string' } },
+        description: 'GO ANYWAY, AND SAY WHY. Shaped like fleetScript\'s `unsafe: { reason }` ' +
+          'because it is the same escape hatch: a corpse run, a rescue, or a deliberate test ' +
+          'genuinely needs to set out hurt. The reason is MANDATORY and a waiver without one ' +
+          'is refused, so "I know about the floor" and "I forgot" cannot look identical.' },
       run_errands: { type: 'boolean', description: 'do the outstanding errands — bank the ' +
         'takings, visit a vault being passed, hand over farm supplies — BEFORE setting off. ' +
         'Default true, because a character sent across the world should stock up first ' +
@@ -6031,6 +6095,9 @@ const TOOLS = [
       // tool having its own private copy of them is precisely why every other caller in
       // the file had neither. ONE definition, two ways to wait for it.
       const startTravel = () => s.travelJob(dest, {
+        // Straight through to the gate in `travelJob`; see m59-travelgate.mjs for the decision.
+        healthFloor: a.health_floor,
+        despiteHealth: a.despite_health,
         where: where.name, maxHops: num(a.max_hops, 25), controlToken: a.control_token,
         runErrands: a.run_errands !== false,
         // FOREGROUND MEANS WAIT FOR THE JOURNEY, NOT FOR AN ACKNOWLEDGEMENT.
@@ -7699,6 +7766,47 @@ const TOOLS = [
       for (const out of outcomes) Object.assign(out, commanderKeeperState(out.agent));
       return { ...commanderLeaseView(record, outcomes), owner: record.clientOwner,
                lease_token: record.token };
+    },
+  },
+  {
+    name: 'tactical_intent',
+    description: 'One temporary exact-bound viewer attack or selected-exit job. Keeper-owned sessions only; no saved policy changes.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' }, action: { type: 'string', enum: ['attack', 'exit'] },
+      order_id: { type: 'string' }, binding: { type: 'object' }, target: { type: 'object' },
+      control_token: { type: 'string' }, lease_token: { type: 'string' },
+      server_host: { type: 'string' }, server_port: { type: 'number' },
+    }, required: ['agent', 'action', 'order_id', 'binding', 'target', 'control_token',
+      'lease_token', 'server_host', 'server_port'] },
+    run: async (a, caller) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) throw new Error('tactical orders require a qualified keeper process');
+      const authority = requireControlSession(s, caller, a.server_host, a.server_port, a.lease_token);
+      const b = a.binding;
+      if (!b || b.agent !== a.agent || b.fleet !== COMMANDER_FLEET || b.broker_pid !== process.pid)
+        throw new Error('tactical fleet/broker/agent binding mismatch');
+      exactRosterAuthority(s, { agent: a.agent, character: b.character,
+        host: a.server_host, port: a.server_port });
+      const room = requireRtsRoom(s, b.room, 'tactical-intent');
+      const token = controlToken(a.control_token);
+      return s.rtsIntent('tactical', { ...a, control_token: token, room: b.room,
+        room_object_id: room.room_object_id, commander_owner: authority.lease.record.owner });
+    },
+  },
+  {
+    name: 'tactical_status',
+    description: 'Read the exact accepted tactical job; an absent/replaced receipt is an error, never completion. No game query.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' }, order_id: { type: 'string' }, started_at: { type: 'number' },
+      control_token: { type: 'string' }, lease_token: { type: 'string' },
+      server_host: { type: 'string' }, server_port: { type: 'number' },
+    }, required: ['agent', 'order_id', 'started_at', 'control_token', 'lease_token', 'server_host', 'server_port'] },
+    run: async (a, caller) => {
+      requireRtsLocalCaller(caller);
+      const s = session(a.agent);
+      requireControlEndpoint(s, a.server_host, a.server_port);
+      if (!(s instanceof KeeperProxy)) throw new Error('tactical status requires a keeper process');
+      return s.tacticalStatus(a);
     },
   },
   {
@@ -16142,6 +16250,9 @@ function brokerHealth() {
   const readiness = sessionReadiness(sessions);
   return {
     ok: true,
+    tactical_orders: 1,
+    audio_observations: 1,
+    intent_observations: 1,
     pid: process.pid,
     root: BROKER_ROOT,
     fleet: FLEET || 'default',
@@ -16477,6 +16588,7 @@ async function brokerRtsRead(url) {
 }
 
 function serveHttp(port, dashboardPort = null) {
+  const audioPending=new Map();
   const server = http.createServer(async (req, res) => {
     // A page for the human, on the same port everything else runs on. Read-only: it
     // renders the ledger and drives nothing, so it is safe to leave open in a tab.
@@ -16501,6 +16613,36 @@ function serveHttp(port, dashboardPort = null) {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(brokerHealth()));
+    }
+    if(req.method==='GET'&&(req.url==='/rts/v1/intent'||req.url.startsWith('/rts/v1/intent?'))){
+      const reply=(status,value)=>{const body=JSON.stringify(value);res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','content-length':Buffer.byteLength(body)});res.end(body);};
+      if(!brokerRtsReadAuthorized(req))return reply(403,{error:'authorized loopback intent read required'});
+      const agent=new URL(req.url,'http://127.0.0.1').searchParams.get('agent');
+      if(!/^[a-zA-Z0-9_-]{1,64}$/.test(agent||''))return reply(400,{error:'invalid intent selection'});
+      const s=sessions.get(agent),owner=keeperProcesses.get(agent),v=s instanceof KeeperProxy?s._state:null;
+      // Existing keeper snapshot only: no refresh, HTTP fan-out, or DUM reads.
+      if(!owner?.pid||!v||v.pid!==owner.pid||v.agent!==agent||v.character!==rosterEntry(agent)?.credentials?.character)
+        return reply(503,{error:'no bound intent observation'});
+      return reply(200,{fleet:COMMANDER_FLEET,broker_pid:process.pid,agent,character:v.character,
+        room:v.room,room_wire:v.room_wire,intent:v.intent_observation??null,
+        connected:!!s.live&&v.connected===true});
+    }
+    if(req.method==='GET'&&(req.url==='/rts/v1/audio'||req.url.startsWith('/rts/v1/audio?'))){
+      const reply=(status,value)=>{const body=JSON.stringify(value);res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','content-length':Buffer.byteLength(body)});res.end(body);};
+      if(!brokerRtsReadAuthorized(req))return reply(403,{error:'authorized loopback audio read required'});
+      try{
+        const u=new URL(req.url,'http://127.0.0.1'),agent=u.searchParams.get('agent'),epoch=u.searchParams.get('epoch')||'',after=u.searchParams.get('after')||'0';
+        if(!/^[a-zA-Z0-9_-]{1,64}$/.test(agent||'')||epoch.length>40||!/^\d{1,12}$/.test(after))throw Error('invalid audio selection');
+        const s=sessions.get(agent),owner=keeperProcesses.get(agent);
+        if(!(s instanceof KeeperProxy)||!owner?.pid)throw Error('no bound audio keeper');
+        if(audioPending.has(agent))throw Error('audio read already pending');
+        audioPending.set(agent,true);
+        try{
+          const v=await keeperGet(s.name,s._index,'audio',{epoch,after});
+          if(v.error||v.agent!==agent||v.pid!==owner.pid||v.character!==rosterEntry(agent)?.credentials?.character||sessions.get(agent)!==s||keeperProcesses.get(agent)?.pid!==owner.pid)throw Error('audio owner changed or unavailable');
+          return reply(200,{...v,fleet:COMMANDER_FLEET,broker_pid:process.pid});
+        }finally{audioPending.delete(agent);}
+      }catch(e){return reply(503,{error:String(e.message).slice(0,160)});}
     }
     // One bounded, read-only renderer read from state this process already holds.
     // The former path made one HTTP JSON-RPC request for fleet state and another for
