@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 // THE GUARANTEES THE COMPILER MAKES, PINNED. Offline: no broker, no server, no network —
 // every call is answered by a fake, so this is safe to run while a live fleet is playing.
 //
@@ -744,7 +745,8 @@ console.log('a walk to a non-room is refused before anything moves');
 // ---------------------------------------------------------------- rooms that keep characters
 {
   console.log('\na room we know traps characters is refused before anything walks');
-  const { trapCheck, KNOWN_TRAPS } = await import('./m59-fleetscript.mjs');
+  const { trapCheck, KNOWN_TRAPS, TRAP_WAY_OUT,
+          routeCrossesTrap: crossesTrap } = await import('./m59-fleetscript.mjs');
 
   ok('Ukgoth is on the list, with the reason an operator needs',
      /Relic of Qor/.test(KNOWN_TRAPS[599] ?? ''), KNOWN_TRAPS[599]);
@@ -756,12 +758,53 @@ console.log('a walk to a non-room is refused before anything moves');
 
   ok('an ordinary plan is not refused', trapCheck([walk(54), walk(39)]) === null);
 
-  // Standing in one is the case that cost us: the errand cannot finish from there, and
-  // retrying is what turned a stranding into hours of shuffling.
-  const standing = trapCheck([walk(39)], { standingIn: 599 });
-  ok('a character already standing in one is refused too', !!standing, String(standing));
-  ok('and is told to get out first rather than to try again',
-     /Get it out first/.test(standing ?? ''));
+  // STANDING IN ONE IS NOT REFUSED ANY MORE, AND THIS IS THE ASSERTION THAT FLIPPED.
+  //
+  // It used to refuse, on the reasoning that the errand could not finish from there. Measured
+  // 2026-09-10, which is what changed my mind: a character standing in the Ukgoth gutters was
+  // asked -- through its own keeper -- for a route to room 2, and it answered the nine-hop way
+  // round unprompted (599->589->579->578->576->587->597->598->599->2). The router is already
+  // right, and positionally right: it declines the north door three rows above the body and
+  // comes the whole way round to re-enter from 598, whose landing square can reach it.
+  //
+  // So the refusal was not protecting the character, it was stranding it -- with a message
+  // addressed to an operator who is asleep. Operator, the same night: 'There is no reason for
+  // anyone to get stuck in the gutter, that's the point of the gutter, to clean out people so
+  // they continue on naturally.'
+  ok('a character standing in a trap is NOT refused -- the router plans the way out',
+     trapCheck([walk(39)], { standingIn: 599 }) === null);
+  ok('and that is true of every trap entry, not just 599',
+     Object.keys(KNOWN_TRAPS).every(r =>
+       trapCheck([walk(39)], { standingIn: Number(r) }) === null));
+
+  // TRANSIT IS ADVISORY; A DESTINATION IS STILL A REFUSAL. This is the distinction the old
+  // check did not draw, and it is why it grounded the fleet the hour it started working: the
+  // ONLY road to Castle Victoria runs through 599, so refusing transit refuses the destination.
+  const transit = crossesTrap([{ from: 598, to: 599 }, { from: 599, to: 2 }]);
+  ok('a route through a trap is still REPORTED', !!transit && transit.room === 599);
+  ok('but it is marked advisory, which is what stops it being a refusal',
+     transit?.advisory === true);
+  ok('and a clean route still reports nothing',
+     crossesTrap([{ from: 54, to: 39 }]) === null);
+  ok('aiming an errand AT a trap is still refused, because that is a deliberate act',
+     !!trapCheck([walk(599)]));
+
+  // The way out is kept as a measurement for diagnostics. It must NOT be used to pre-empt the
+  // router: it is room-level, and a body on TOP of 599 is one hop from Castle Victoria, so
+  // walking it to 589 first would send it around the whole loop for nothing. That was the
+  // first version of this fix and it was wrong.
+  ok('every trap records the exit that actually works',
+     Object.keys(KNOWN_TRAPS).every(r => Number.isFinite(TRAP_WAY_OUT[Number(r)])));
+  ok('599 leaves south to 589', TRAP_WAY_OUT[599] === 589);
+  ok('49 leaves north to 593', TRAP_WAY_OUT[49] === 593);
+  // MATCHED ON A SUBSCRIPT, NOT THE NAME. The first version tested for `TRAP_WAY_OUT`
+  // anywhere after compiledWalk and failed on the COMMENT inside it that explains why the
+  // walker must not use it -- the second time in one session that an assertion could not tell
+  // code from a comment about code. A read is `TRAP_WAY_OUT[...]`; prose is not.
+  ok('and nothing in the walker READS it, so it cannot pre-empt the router',
+     !/TRAP_WAY_OUT\s*\[/.test(
+       readFileSync(new URL('./m59-fleetscript.mjs', import.meta.url), 'utf8')
+         .split('async function compiledWalk')[1] ?? ''));
   ok('but only when the plan would actually walk it somewhere',
      trapCheck([], { standingIn: 599 }) === null);
 
@@ -1090,6 +1133,35 @@ console.log('\na trigger square is a walk whose SUCCESS is leaving the room');
   ok('standing on a trigger that does not fire is a FAILURE, not an arrival',
      dud.results.a1.ok === false &&
      /did not fire/.test(dud.results.a1.state['0:walk_to'].why ?? ''));
+}
+
+console.log('\nA ROOM NUMBER THAT ARRIVED AS A STRING IS STILL A ROOM NUMBER');
+{
+  // MEASURED 2026-09-10, on the guild gather. Eight of twenty-one characters failed with
+  // `did not reach 382 in three attempts` in a room they were ALREADY STANDING IN. The early
+  // return was `at.room === to`, `at.room` is a number off the wire, and the caller had passed
+  // `room` through from a command line -- so `382 === '382'` was false, the walk was re-issued
+  // to the body's own room, the router correctly answered `no hops` (there is no route from a
+  // room to itself), and the whole budget burned three times over.
+  //
+  // The log line was `walking 382 -> 382`, which is the bug printing itself in full and still
+  // being easy to miss. Refusing the string would only have moved the failure to the caller: a
+  // command line is where every string-shaped number in this repository comes from.
+  fakeBroker({ rooms: { a1: 382 }, positions: { a1: { row: 20, col: 20 } } });
+  const already = await fleetScript({ name: 'string dest', fleet: 'testfleet', agents: ['a1'],
+    steps: [walk('382')], onLog: quiet });
+  ok('a body already in the destination succeeds even when the destination is a string',
+     already.results.a1.ok === true);
+
+  // And it must still actually travel when it IS somewhere else, rather than coercing its way
+  // into a false arrival.
+  const rooms2 = { a1: 587 };
+  fakeBroker({ rooms: rooms2, positions: { a1: { row: 20, col: 20 } },
+    onTravel: ({ agent }) => { setTimeout(() => { rooms2[agent] = 382; }, 30).unref?.(); } });
+  const moved = await fleetScript({ name: 'string dest walk', fleet: 'testfleet', agents: ['a1'],
+    steps: [walk('382', { pollMs: 20 })], onLog: quiet });
+  ok('and a string destination it has to travel to still arrives properly',
+     moved.results.a1.ok === true);
 }
 
 console.log('\nand an ordinary walk that ends in a different room is a failure');

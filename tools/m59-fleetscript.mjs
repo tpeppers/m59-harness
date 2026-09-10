@@ -576,6 +576,55 @@ export const KNOWN_TRAPS = Object.freeze({
       "south edge and the walk never ends.",
 });
 
+// WHY THIS FILE NO LONGER SECOND-GUESSES THE ROUTER ABOUT TRAPS. MEASURED 2026-09-10.
+//
+// Operator: "There's no reason for anyone to get stuck in the gutter, that's the point of the
+// gutter, to clean out people so they continue on naturally." And: "At no point should any
+// bot ever be sitting in (col 21, row 48) or (col 27, row 48) in Ukgoth (599) trying to get to
+// Outside Castle Victoria (2)."
+//
+// So I asked the keeper of a character standing in those gutters for a route to room 2. It
+// answered, in nine hops, the operator's own loop:
+//
+//     599 -> 589 south | 589 -> 579 west | 579 -> 578 north (only when col<21)
+//     578 -> 576 north | 576 -> 587 east | 587 -> 597 east (only when row>20)
+//     597 -> 598 south | 598 -> 599 south | 599 -> 2 north
+//
+// THE ROUTER IS ALREADY RIGHT, AND IT IS RIGHT POSITIONALLY. From the gutter it does not offer
+// the north door three rows above the body; it walks out south and comes the whole way round to
+// re-enter 599 from 598, whose landing square (r4c63) CAN reach the east door and the declared
+// fall three columns west onto the north door. That is what step masks bought when they were
+// attached on the goap path.
+//
+// WHICH MAKES THE EIGHTH HOP `598 -> 599`, AND THAT IS WHAT BROKE. `routeCrossesTrap` refused
+// any route with a KNOWN_TRAP anywhere in it. 599 is a trap entry, the only road to Castle
+// Victoria passes through it, and this check had never actually run until 65ddcb1 fixed its
+// addressing tonight. The hour it started working, EVERY journey to Castle Victoria became
+// unplannable and four characters standing in the gutters were told "Get it out first; an
+// errand started from here will not finish" -- a sentence addressed to a human who is not
+// there at 01:00.
+//
+// The guarantee was written because Loial the Ogier died crossing 599 at 20 max health. That
+// death was real and the diagnosis was wrong: the ROUTE was correct, the TROLLS killed him.
+// Refusing the route to fix that is refusing to go to Castle Victoria, which nobody asked for.
+// Danger belongs where the router already keeps it -- it volunteered `blocked_by_hazard: [555]`
+// for the Forest Shrine without being asked -- and fragility belongs in the health floor, which
+// this file already enforces on every journey.
+//
+// So: a trap as a DESTINATION still needs `allowTraps`, because aiming an errand into one is a
+// deliberate act. A trap in TRANSIT is now advisory: logged, and walked.
+//
+// TRAP_WAY_OUT is kept as the measurement rather than as a plan. An earlier version of this fix
+// had `compiledWalk` walk the body to the way-out room before planning, and it was wrong for
+// the same reason the refusal was: it is ROOM-level, so a body standing on TOP of 599 -- which
+// can reach the north door and is ONE hop from its destination -- would have been sent south to
+// 589 and around the entire loop for nothing.
+export const TRAP_WAY_OUT = Object.freeze({
+  // The exit a keeper standing in the low part of each room reports, and the only one that
+  // works from there. Read by diagnostics and by the stuck guide; NOT by the walker.
+  599: 589,   // south, r71c2. From the 589 landing (r67c3) it is the only door reachable at all.
+  49: 593,    // north, r1c21. South to 45 is a one-way drop: 6016 rim over 3840 ground, 384 cap.
+});
 /**
  * Refuse a plan that walks into a room we know keeps characters, and say so about a
  * character already standing in one.
@@ -610,8 +659,10 @@ export function routeCrossesTrap(hops = []) {
   if (!Array.isArray(hops)) return null;
   for (const hop of hops) {
     const room = Number(hop?.room ?? hop?.to ?? hop);
+    // ADVISORY, NOT A REFUSAL, and `advisory: true` is what tells the caller so. The only road
+    // to Castle Victoria runs through 599, so refusing transit refuses the destination.
     if (Number.isFinite(room) && KNOWN_TRAPS[room])
-      return { room, why: KNOWN_TRAPS[room] };
+      return { room, why: KNOWN_TRAPS[room], advisory: true };
   }
   return null;
 }
@@ -621,10 +672,11 @@ export function trapCheck(plan = [], { standingIn = null, allowTraps = false } =
   const into = plan.find(s => s?.do === 'walk' && KNOWN_TRAPS[Number(s.to)]);
   if (into) return `walks to room ${into.to} — ${KNOWN_TRAPS[Number(into.to)]} ` +
                    `Pass { allowTraps: true } if this errand is the rescue.`;
-  const here = Number(standingIn);
-  if (KNOWN_TRAPS[here] && plan.some(s => s?.do === 'walk'))
-    return `is standing in room ${here} — ${KNOWN_TRAPS[here]} ` +
-           `Get it out first; an errand started from here will not finish.`;
+  // STANDING IN A TRAP IS NOT A REFUSAL. Measured 2026-09-10: asked for a route out of the
+  // Ukgoth gutters, the keeper's own router answered the nine-hop way round without being told
+  // anything at all. Refusing here does not protect the character, it strands it -- and it
+  // strands it with a message addressed to an operator who is asleep. Getting out is the
+  // router's job and the router can do it; see the note above TRAP_WAY_OUT for the measurement.
   return null;
 }
 
@@ -1124,10 +1176,26 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
   if (to == null || !Number.isFinite(Number(to)))
     return { ok: false, why: `the plan asked for a walk to ${JSON.stringify(to)}, ` +
                              'which is not a room number' };
+  // AND A ROOM NUMBER THAT ARRIVED AS A STRING IS STILL A ROOM NUMBER — COERCE IT ONCE, HERE.
+  //
+  // The line above validates `Number.isFinite(Number(to))` and then everything below compared
+  // the RAW value. `at.room` is a number off the wire, so `382 === '382'` is false and a body
+  // standing exactly where it was asked to go never takes the early return: it re-issues a
+  // walk to its own room, gets `router gave no hops` (correct — there is no route from a room
+  // to itself), burns the whole budget, and does that three times before reporting
+  // `did not reach 382 in three attempts`.
+  //
+  // Measured 2026-09-10 on the guild gather: 8 of 21 characters failed exactly this way, in
+  // rooms they had ALREADY REACHED, and the log line reads `walking 382 -> 382` — which is the
+  // bug printing itself in full and still being easy to miss. A caller passed `room` through
+  // from a command line, which is where every string-shaped number in this repository comes
+  // from, so refusing the string would only move the failure to the caller. Coerce.
+  to = Number(to);
   for (let attempt = 0; attempt < 3; attempt++) {
     const at = await observe(agent);
     if (!at.ok) return { ok: false, why: 'could not read the character' };
-    if (at.room === to) return { ok: true, room: to };
+    // Numeric on both sides on purpose; see the coercion note above.
+    if (Number(at.room) === to) return { ok: true, room: to };
     if (at.dead) return { ok: false, why: 'died', dead: true };
     if (at.health == null)
       // UNKNOWN IS STILL NOT PERMISSION, and it is not something resting fixes: a health we
@@ -1146,10 +1214,14 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     // keeper — the same process that will actually do the planning, which is the only answer
     // worth having.
     const crossing = await routeTrapAhead(ctx, agent, at.room, to);
+    // A CROSSING IS NOW REPORTED AND WALKED, NOT REFUSED. See TRAP_WAY_OUT's note: the router
+    // is positionally correct about these rooms, and the only route to Castle Victoria goes
+    // through one of them, so a refusal here grounded the fleet the hour it began working. It
+    // is still worth saying out loud, because these rooms are where this fleet loses bodies.
     if (crossing?.trap)
-      return { ok: false, why: `the route ${at.room} -> ${to} crosses room ${crossing.trap.room} ` +
-                               `— ${crossing.trap.why} Pass { allowTraps: true } if this errand ` +
-                               `is the rescue.`, trap: crossing.trap };
+      ctx.log(agent, `the route ${at.room} -> ${to} crosses room ${crossing.trap.room} - ` +
+                     `${crossing.trap.why} Walking it anyway: the router plans these ` +
+                     'positionally, and refusing transit would refuse the destination too.');
     if (crossing?.unknown)
       ctx.log(agent, `route ${at.room} -> ${to} could not be read (${crossing.unknown}) — ` +
                      'walking without a trap check on the path');
@@ -1165,7 +1237,7 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     while (Date.now() < until) {
       await sleep(ctx.pollMs);
       const now = await observe(agent);
-      if (now.room === to) return { ok: true, room: to };
+      if (Number(now.room) === to) return { ok: true, room: to };
       if (now.dead) return { ok: false, why: 'died en route', dead: true };
     }
   }

@@ -644,3 +644,7 @@ _verify2.mjs
 # revives — so a committed copy would be a claim about somebody else's world. Same argument
 # as substrate/loadouts/ beside it. See tools/m59-mananode.mjs.
 /substrate/mananodes/
+
+# This machine's tally of what the fleet keeps getting stuck on — an observation
+# about THIS fleet, not a fact about the game. m59-stuck.mjs appends to it.
+/substrate/stuck-tally.jsonl
