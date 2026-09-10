@@ -3548,6 +3548,36 @@ const server = createServer(async (req, res) => {
             break;
           }
           case 'go': {
+            // AN ARGUMENT THIS VERB DOES NOT TAKE IS A REFUSAL, NOT A DEFAULT.
+            //
+            // `go` takes a ROOM (`to`), and with no room it treats EVERY exit as a candidate
+            // and leaves by whichever `leaveViaAny` prefers. So a caller that says
+            // `{ direction: 'west' }` — a plausible thing to type, and not a key this verb has
+            // — gets neither west nor an error: it gets 'go anywhere'.
+            //
+            // MEASURED 2026-09-10, on a 20-health character at 3 health in the Forest of Farol
+            // with seven spiders in it. The west door was 15 rows away at r18c1; the exit this
+            // chose was the SOUTH door at r49c27, 16 rows the other way and 26 columns across
+            // the room. She died on the walk. The request was mine and it was malformed — and a
+            // malformed request that silently becomes a different, longer errand is the failure
+            // this repository names explicitly: an unrecognised key is REPORTED, never applied
+            // and never dropped, because a setting that silently does nothing is how `purpose`
+            // stayed out of a schema for a year with every audit switched off.
+            //
+            // The no-destination behaviour is left alone — something may rely on it — but it
+            // can now only be reached by asking for it and nothing else.
+            {
+              const takes = ['to', 'room'];
+              const unknown = Object.keys(args ?? {}).filter(k => !takes.includes(k));
+              if (unknown.length) {
+                result = { error: `go takes { to: <room number> } and does not take ` +
+                                  `${unknown.join(', ')}. With no destination it leaves by ANY ` +
+                                  `exit, which is not what a named direction meant to ask for: ` +
+                                  `pass the room number, or use go_exact with to/col/row.`,
+                           takes, ignored: unknown };
+                break;
+              }
+            }
             const dest = args.to ?? args.room;
             const exits = session.world?.exits?.() ?? [];
             const candidates = dest != null ? exits.filter(e => e.to === Number(dest)) : exits;

@@ -531,6 +531,65 @@ const ordinal = n => {
   return n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th');
 };
 
+// WHEN A LEG FAILS, SAY WHERE IT STOPPED AND WHAT IT NEEDED. "timed out" IS NOT A DIAGNOSIS.
+//
+// MEASURED 2026-09-10, Marco Polo to the Ice Caves. The whole account of a ten-minute failure
+// was one word:
+//
+//     Marco Polo   ice   timed out   603s   0s   50 -> 536 r34c2   10   0r
+//
+// Which is true and tells you nothing. The answer took two more commands by hand, and it was
+// not a hazard, not a boundary the mover cannot cross, and not a missing affordance:
+//
+//     the west door out of 536 to 526 stands at r18c1
+//     she stopped at r34c2 — the CORRECT WALL, sixteen rows south of the door
+//     and from r34c2 the geometry says that door IS reachable by walking
+//
+// So the leg stood on the right wall at the wrong row for ten minutes while spiders took it
+// from 20 health to 10. A run that reports the word and not the square makes the next session
+// re-derive this from scratch, which is the failure this skill exists to stop — eleven refused
+// departures in room 49 and not one measurement.
+//
+// The instruments already existed: `m59-exitreport.mjs` answers exactly this and is importable
+// (it guards its own CLI). Nothing was missing but the CALL. Paid only on a failure, because
+// the map and the route table together cost about a second and a half to load.
+let _geo = null;
+async function geometry() {
+  if (_geo) return _geo;
+  const [{ loadMap, movementMapFile }, routes, report] = await Promise.all([
+    import('./m59-map.mjs'), import('./m59-routes.mjs'), import('./m59-exitreport.mjs')]);
+  const map = loadMap(movementMapFile());
+  // The step masks are what make the flood answer about the map the MOVER enforces rather than
+  // a map nobody walks — see the standing rule about measuring geometry without them.
+  try { routes.attachStepMasks(map); } catch { /* an unmasked answer is still better than none */ }
+  // THE TABLE IS ASKED FOR BY MANIFEST, and it answers null when the bake was built against a
+  // different map. That is not a detail to swallow: without anchors the door list comes back
+  // EMPTY, and an empty list printed as "NO door in this room" is a fabrication of exactly the
+  // kind this run is trying to stop reporting.
+  _geo = { map, table: routes.routesFor(map.geometryManifestSha256) ?? null,
+           roomReport: report.roomReport, reachableFrom: routes.reachableFrom };
+  return _geo;
+}
+
+async function frontier(roomNum, at) {
+  if (!Number.isFinite(Number(roomNum)) || !at || at.row == null || at.col == null) return null;
+  try {
+    const g = await geometry();
+    if (!g.table) return { unavailable: 'the baked route table was built against a different ' +
+                                        'map, so this checkout cannot say which doors are ' +
+                                        'reachable — rebake, or ask m59-exitreport --checked' };
+    const rep = g.roomReport(g.map, g.table, Number(roomNum),
+                             { reachFrom: g.reachableFrom,
+                               standingAt: { row: at.row, col: at.col } });
+    if (rep?.error) return null;
+    const here = (rep.inbound ?? []).find(a => a.from == null);
+    if (!here) return null;
+    const name = x => `${x.dir ?? x.kind} to ${x.to} at r${x.row}c${x.col}`;
+    return { at, why: here.why ?? null,
+             can: (here.canTake ?? []).map(name), cannot: (here.cannotTake ?? []).map(name) };
+  } catch { return null; }
+}
+
 // WHERE IS THE BODY, IN SQUARES. `status` answers with a room and NO COORDINATES, so the
 // position has to come from `look` — which is also the only thing that can say whether the
 // stone was visible from wherever the character stopped, and "could see it and could not
@@ -881,6 +940,20 @@ async function runLeg(r, node, { from, place, heal, next = null } = {}) {
               ` ${String(low ?? '?').padStart(3)}  ${String(restSecs).padStart(4)}r`);
   if (refusedWhy)
     console.log('               REFUSED: ' + refusedWhy);
+
+  // THE FRONTIER, on any leg that did not reach the stone. Printed for the room the body is
+  // ACTUALLY in, which on a failed road is not the room it was aiming at.
+  if (ended !== 'at node' && pos?.room != null && pos.col != null) {
+    const f = await frontier(pos.room, { row: pos.row, col: pos.col });
+    if (f?.unavailable)
+      console.log(`               FRONTIER: cannot say — ${f.unavailable}`);
+    else if (f?.why)
+      console.log(`               FRONTIER r${pos.row}c${pos.col}: ${f.why}`);
+    else if (f)
+      console.log(`               FRONTIER r${pos.row}c${pos.col} in room ${pos.room}: ` +
+                  `can walk to ${f.can.length ? f.can.join(', ') : 'NO door in this room'}` +
+                  `${f.cannot.length ? `; cannot reach ${f.cannot.join(', ')}` : ''}`);
+  }
   if (ended === 'no trigger')
     console.log(`               ${triggerSecs}s walking at r${node.entry.trigger.row}c${node.entry.trigger.col} ` +
                 `of room ${node.entry.via} and was never sent to ${node.room} ` +
