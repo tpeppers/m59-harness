@@ -53,12 +53,160 @@
 // with a count, because "we do not know where 253 of these happened" is a finding and
 // silently dropping them would hide it.
 
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import http from 'node:http';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR || here('../substrate/postmortems');
+
+// ------------------------------------------------------ WHICH TREE'S DEATHS, AND SAYING SO
+//
+// A KEEPER WRITES ITS POSTMORTEMS INTO THE CHECKOUT IT IS RUNNING FROM, AND THAT IS USUALLY
+// NOT THE CHECKOUT YOU ARE READING FROM.
+//
+// `POSTMORTEM_DIR` above resolves to THIS tree. That is right for the writer — the autopilot
+// does the same thing at m59-autopilot.mjs:117 — and wrong for every reader, because prod is a
+// separate worktree (`C:\code\m59-lab\prod-deploy`, see CLAUDE.md § PROD IS A VERSIONED DEPLOY
+// OF MAIN) and development happens somewhere else.
+//
+// MEASURED 2026-09-10, and it is the reason this exists. `m59-critic.mjs travel --since 12h`,
+// run from the mindmap checkout, printed:
+//
+//     0 candidate(s); 0 exempt as PVP; 0 default to DEFECT.
+//       nothing in the window.
+//
+// The prod fleet had died FORTY-FOUR TIMES in those twelve hours. The critic had read
+// `<this tree>/substrate/postmortems`, whose newest record was eleven days old, and reported
+// the empty answer with no more hesitation than a true one. That is the exact failure the
+// memory note "verify the value, not the instrument" is about: the question was never asked of
+// the fleet, and nothing in the output said so.
+//
+// SO THE STORE IS RESOLVED, NOT ASSUMED, AND THE ANSWER CARRIES ITS ADDRESS. Same shape and the
+// same precedence rule as every other fleet resolution in this repository (CLAUDE.md § Which
+// fleet), most explicit first:
+//
+//     explicit          what this invocation said        (--postmortems <dir>)
+//     M59_POSTMORTEM_DIR  what this shell said
+//     the live broker   what is actually holding the fleet, off its own /health
+//     this checkout     what it has always been
+//
+// THE BROKER RUNG IS WHY THIS IS A FIX AND NOT A FLAG. An env var only helps somebody who
+// already knows they are in the wrong tree, which is precisely what today's failure proves
+// nobody knows. A broker answers `state` — the roster file it is serving — and CLAUDE.md is
+// explicit that the state path, never the fleet label, is what identifies a broker as ours.
+// Its `substrate` ancestor is the tree the keepers are writing deaths into.
+//
+// AND IT IS ADVISORY, NEVER LOAD-BEARING. Forensics happen most often when the fleet is DOWN,
+// so a probe that cannot answer must cost nothing: it is time-boxed, every failure is
+// swallowed, and the local store is still there underneath. What the caller must not do is
+// drop the `why` and the `records` count on the floor — an empty window that cannot name the
+// directory it read is the bug this whole block exists to stop reissuing.
+
+const BROKER_PROBE_MS = Number(process.env.M59_POSTMORTEM_PROBE_MS || 700);
+
+// The `substrate` ancestor of a path, which is what a roster or a root resolves to. Returns
+// null rather than guessing: a path with no `substrate` in it is a broker we do not understand,
+// and inventing a directory for it would be the same class of quiet wrongness as the bug above.
+export function substrateOf(p) {
+  if (!p) return null;
+  const parts = resolve(String(p)).split(/[\\/]/);
+  const i = parts.lastIndexOf('substrate');
+  return i < 0 ? null : parts.slice(0, i + 1).join(sep);
+}
+
+// How many records a store holds and how new the newest is, read from the FILENAMES — the same
+// trick readPostmortems uses for its window, and it means a candidate store costs a readdir
+// rather than several thousand JSON parses.
+export function storeStats(dir) {
+  if (!dir || !existsSync(dir)) return { dir, exists: false, records: 0, newest: null };
+  let names;
+  try { names = readdirSync(dir).filter(f => f.endsWith('.json')); }
+  catch { return { dir, exists: false, records: 0, newest: null }; }
+  let newest = null;
+  for (const f of names) {
+    const m = f.match(/(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.json$/);
+    if (!m) continue;
+    const t = Date.parse(m[1].replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, 'T$1:$2:$3.$4Z'));
+    if (Number.isFinite(t) && (newest === null || t > newest)) newest = t;
+  }
+  return { dir, exists: true, records: names.length, newest };
+}
+
+// The ports worth asking. The default first — one broker on 8901 is the ordinary case — then
+// anything a local `broker-*.pid` names, which is how a second fleet on this machine is found.
+// Mirrors candidateBrokerPorts() in m59-fleets.mjs; that file cannot be imported because it
+// runs its main and calls process.exit at load.
+function candidateBrokerPorts() {
+  const ports = [Number(process.env.M59_BROKER_PORT || 8901)];
+  const sub = here('../substrate');
+  if (existsSync(sub)) {
+    for (const file of readdirSync(sub)) {
+      if (!/^broker-.+\.pid$/.test(file)) continue;
+      try {
+        const port = Number(JSON.parse(readFileSync(join(sub, file), 'utf8'))?.http);
+        if (Number.isInteger(port) && port > 0 && port < 65536) ports.push(port);
+      } catch { /* a pid file we cannot read is a lost hint, not a failure */ }
+    }
+  }
+  return [...new Set(ports.filter(p => Number.isInteger(p) && p > 0 && p < 65536))];
+}
+
+function askHealth(port, timeoutMs) {
+  return new Promise((done) => {
+    const finish = (v) => { try { req.destroy(); } catch { /* already gone */ } done(v); };
+    const req = http.request({ hostname: '127.0.0.1', port, path: '/health', method: 'GET',
+                               timeout: timeoutMs }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => { body += d; if (body.length > 1e6) finish(null); });
+      res.on('end', () => { try { finish(JSON.parse(body)); } catch { finish(null); } });
+    });
+    req.on('error', () => finish(null));
+    req.on('timeout', () => finish(null));
+    req.end();
+  });
+}
+
+// Every store this machine can offer, ordered most-authoritative-first, each carrying WHY it is
+// a candidate and what is in it. The caller reads [0] and is expected to print the rest when the
+// window comes back empty.
+export async function resolvePostmortemStores({ explicit = null, probe = true,
+                                                timeoutMs = BROKER_PROBE_MS } = {}) {
+  const out = [];
+  const seen = new Set();
+  const add = (dir, why) => {
+    if (!dir) return;
+    const key = resolve(dir).toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ ...storeStats(resolve(dir)), why });
+  };
+
+  if (explicit) add(explicit, '--postmortems');
+  if (process.env.M59_POSTMORTEM_DIR) add(process.env.M59_POSTMORTEM_DIR, 'M59_POSTMORTEM_DIR');
+
+  if (probe) {
+    const ports = candidateBrokerPorts();
+    const healths = await Promise.all(ports.map(p => askHealth(p, timeoutMs).catch(() => null)));
+    for (let i = 0; i < ports.length; i += 1) {
+      const h = healths[i];
+      if (!h) continue;
+      // `state` before `root`: the roster path is what CLAUDE.md makes the identity of a
+      // broker, and `root` is only a hint about where it was started from. `root` is a TREE
+      // and carries no `substrate` segment to find, so it is joined rather than scanned —
+      // `substrateOf(root)` is null by construction and reading it as a fallback would make
+      // this rung quietly dead.
+      const sub = substrateOf(h.state) ?? (h.root ? join(resolve(String(h.root)), 'substrate') : null);
+      if (sub) add(join(sub, 'postmortems'),
+                   `the broker on ${ports[i]} holding fleet "${h.fleet || 'default'}"`);
+    }
+  }
+
+  add(POSTMORTEM_DIR, 'this checkout');
+  return out;
+}
 
 // How fresh an observation has to be to place a death. See the table above.
 export const TRUST_MS = Number(process.env.M59_DEATH_TRUST_MS || 30_000);
@@ -218,21 +366,23 @@ export function keeperOf(pm) {
 
 // ------------------------------------------------------------------ loading
 
-const parse = (file) => {
-  try { return JSON.parse(readFileSync(join(POSTMORTEM_DIR, file), 'utf8')); }
+const parse = (file, dir = POSTMORTEM_DIR) => {
+  try { return JSON.parse(readFileSync(join(dir, file), 'utf8')); }
   catch { return null; }
 };
 
 // Every death, newest first, with the two judgements already made. `frames`, `text` and
 // `decisions` are the bulk of the file and are NOT carried — a list of 600 deaths with
 // full frame logs is 40MB and the page wants a table. `digest()` re-reads one on demand.
-export function loadPostmortems({ sinceMs = null, limit = 5000 } = {}) {
+// `dir` defaults to POSTMORTEM_DIR so every existing caller is unchanged. A reader that wants the
+// fleet's deaths rather than this tree's passes one from resolvePostmortemStores.
+export function loadPostmortems({ sinceMs = null, limit = 5000, dir = POSTMORTEM_DIR } = {}) {
   let files = [];
-  try { files = readdirSync(POSTMORTEM_DIR).filter(f => f.endsWith('.json')); } catch { return []; }
+  try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { return []; }
   const cutoff = sinceMs ? Date.now() - sinceMs : null;
   const out = [];
   for (const f of files) {
-    const pm = parse(f);
+    const pm = parse(f, dir);
     if (!pm?.at) continue;
     if (cutoff && pm.at < cutoff) continue;
     const where = locate(pm), cause = causeOf(pm);
@@ -399,10 +549,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // not the fleet named in a file. `--all-fleets` puts it back.
   const { fleetScope, partition, scopeLine } = await import('./m59-fleetscope.mjs');
   const scope = await fleetScope({ allFleets: process.argv.includes('--all-fleets') });
-  const { kept: rows, setAside } = partition(loadPostmortems({ sinceMs }), scope);
+
+  // AND WHOSE TREE. The scope above picks a fleet out of a store; this picks the store. They
+  // are different questions and only one of them used to be asked, so this tool answered
+  // "0 deaths in that window" on 2026-09-10 for the same twelve hours in which prod died
+  // forty-four times. The argument is above `substrateOf`.
+  const stores = await resolvePostmortemStores({
+    explicit: arg('postmortems', null),
+    probe: !process.argv.includes('--no-probe'),
+  });
+  const store = stores[0];
+  const { kept: rows, setAside } = partition(loadPostmortems({ sinceMs, dir: store.dir }), scope);
 
   const f = facets(rows);
   console.log(`${rows.length} deaths${sinceMs ? ' in that window' : ''}`);
+  console.log(`  ${store.records} record(s) in ${store.dir} [${store.why}]`);
+  for (const o of stores.slice(1)) {
+    if (!o.records || (store.newest && o.newest && o.newest <= store.newest)) continue;
+    console.log(`  ALSO ON THIS MACHINE: ${o.records} record(s), newer, in ${o.dir} [${o.why}]`);
+  }
   console.log('  ' + scopeLine(scope, setAside) + '\n');
   console.log('WHAT KILLED THEM — announced by the server');
   for (const c of f.cause.children.slice(0, 12))
