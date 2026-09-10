@@ -523,7 +523,35 @@ export function tick(host) {
   // The measure is DISPLACEMENT FROM AN ANCHOR, not stillness between samples — see
   // WATCHDOG_PINNED_SQUARES for why the obvious version of this never fired.
   const spot = w.pulses[w.pulses.length - 1] ?? null;
-  const eligible = GOING.includes(host.doing ?? null) && !host.inert && !host.hold && spot;
+  // AN ERRAND HOLDING THE BODY DOES NOT MAKE IT UN-WEDGED. THIRD VARIANT OF ONE BUG.
+  //
+  // This read `&& !host.inert`, so a character an errand or a driver holds could NEVER be
+  // pinned: `pinnedSince` was cleared on every pulse and the healthy-wedge arm below could not
+  // fire for it. Meanwhile the wedge RESCUE in m59-autopilot.mjs required the OPPOSITE --
+  // `wedge.inert`, so it only fired when somebody else was driving. Two gates on the same
+  // fact, pointing in opposite directions, and between them every case fell through a hole:
+  // a held body could be pinned and never noticed, an unheld one noticed and never rescued.
+  //
+  // MEASURED 2026-09-10, and this sample is the one that reframed it. hk2 in room 598, one
+  // pulse every ~16s, all at r42c26:
+  //
+  //     13/20, 13, 13, 13, 6, 1, 1, 1, 1  ->  The Underworld
+  //
+  // FOUR CONSECUTIVE SAMPLES STATIONARY AT FULL HEALTH before any damage began. The wedge is
+  // the antecedent condition, not a consequence of being attacked -- so a health-based gate
+  // can only ever fire once the runway is gone, while displacement fires while the body is
+  // still whole. It would have caught Sweetums nine minutes before she died
+  // (`ms_since_moved: 546611`) and Camilla thirty-four (`2029414`), and neither postmortem
+  // contains a single line saying the body was stuck.
+  //
+  // And hk2 was the STACKED case: mid-walk(39) inside a fleetScript holding work, movement and
+  // economy, so a journey held it AND an errand lease held it AND survival sat with the keeper
+  // by design. Three parties, none of them the one that needed to act.
+  //
+  // `GOING` is what keeps this honest: it only counts while something claims the body is
+  // travelling, pulling, converging or zoning. A character standing at a shop counter is not
+  // in GOING and is not pinned, held or otherwise.
+  const eligible = GOING.includes(host.doing ?? null) && !host.hold && spot;
   if (!eligible) { w.pinnedSince = null; w.pinnedAnchor = null; }
   else {
     const a = w.pinnedAnchor;
@@ -595,7 +623,14 @@ export function tick(host) {
     // regardless: an operator who sets it in watchdog.local.json is entitled to have it read
     // by both arms rather than silently ignored by one.
     if (pinnedFor < WEDGE_LADDER_MS) return;
-    const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS;
+    // BUT THE CANCEL IS STILL ONLY OURS TO MAKE WHEN NOBODY ELSE IS DRIVING.
+    //
+    // Detection and intervention are different rights. Yanking the movement out from under a
+    // lease holder that is mid-errand is how two drivers end up fighting for one body, which
+    // this repository has already paid for. So a held body is RECORDED and said out loud --
+    // which is the part that was missing entirely -- and the lease holder keeps the decision.
+    // `wedgedInPlace` reads `pinnedSince`, so an errand runner can now see it too.
+    const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS && !host.inert;
     // PACED ONLY WHERE THE ANCHOR IS NOT CLEARED. A cancel sets `pinnedSince` to null, so
     // the next record already cannot arrive until the body has been pinned a further
     // WEDGE_LADDER_MS — the cadence is self-limiting on that path and this clock would be
@@ -636,6 +671,9 @@ export function tick(host) {
       pass_blocked_for_s: Math.round(blockedFor / 1000),
       square: spot ? `${spot.col},${spot.row}` : null, room: spot?.room ?? null,
       interrupted: broke.interrupted ?? null,
+      // Who is driving, when somebody is. A note that cannot name the holder leaves the
+      // reader unable to tell a stuck errand from a stuck keeper.
+      held_by: host.inert ? (host.inert.why ?? 'an errand or driver') : null,
       repeats_here: record?.repeats ?? null, cap: WEDGE_REPEAT_CAP,
       why: 'covering no ground for ' + Math.round(pinnedFor / 1000) + 's while ' +
            (host.doing ?? 'going somewhere') + ', and full health meant nothing else here ' +

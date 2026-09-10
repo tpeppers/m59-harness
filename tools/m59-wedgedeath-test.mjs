@@ -109,6 +109,39 @@ console.log('the inert marker is still RECORDED — it is evidence, just not a p
 }
 
 console.log('');
+console.log('THE WEDGE COMES FIRST, AND THE BODY IS HEALTHY IN IT');
+{
+  // THE SAMPLE THAT REFRAMED THIS, from hk2 in room 598, one pulse every ~16s, all at r42c26:
+  //
+  //     13/20, 13, 13, 13, 6, 1, 1, 1, 1  ->  The Underworld
+  //
+  // Four consecutive samples STATIONARY AT FULL HEALTH before any damage began. So the wedge is
+  // the antecedent condition and not a consequence of being attacked -- which means every gate
+  // in this file that keys on health can only fire once the runway is gone. Displacement fires
+  // while the body is still whole: it would have caught Sweetums nine minutes before she died
+  // (ms_since_moved 546611) and Camilla thirty-four (2029414).
+  const WD = readFileSync(new URL('./m59-watchdog.mjs', import.meta.url), 'utf8');
+  const wcode = WD.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+
+  // THIRD VARIANT OF ONE BUG, AND THE TWO GATES POINTED OPPOSITE WAYS. The healthy-wedge pin
+  // required `!host.inert` -- so a body an errand held could never be pinned -- while the wedge
+  // RESCUE required `wedge.inert`, so it only fired when somebody else was driving. Between
+  // them a held body was pinned and never noticed, and an unheld one noticed and never rescued.
+  ok('a body under a lease can now be pinned at all',
+     !/const eligible = GOING\.includes\(host\.doing \?\? null\) && !host\.inert/.test(wcode));
+  ok('and the pin still only counts while something claims it is GOING somewhere',
+     /const eligible = GOING\.includes\(host\.doing \?\? null\) && !host\.hold && spot;/.test(wcode));
+  // Detection and intervention are different rights: yanking movement from a lease holder is
+  // how two drivers fight for one body, which this repository has already paid for.
+  ok('but the CANCEL is still only taken when nobody else is driving',
+     /const cancelling = pinnedFor >= WATCHDOG_HEALTHY_CANCEL_MS && !host\.inert;/.test(wcode));
+  ok('and the note names the holder, so a stuck errand is distinguishable from a stuck keeper',
+     /held_by: host\.inert \?/.test(wcode));
+  // hk2 was the stacked case: a journey AND an errand lease AND survival with the keeper.
+  ok('GOING is still the honest filter — a body at a shop counter is not travelling',
+     /export const GOING = \['travelling', 'pulling', 'converging', 'zoning'\]/.test(WD));
+}
+console.log('');
 console.log('WHAT IS STILL NOT FIXED, asserted so it cannot be quietly forgotten');
 {
   // NEITHER CHARACTER EVER SWUNG. `swung_ms: null` in both postmortems, with six trolls in melee
