@@ -168,3 +168,51 @@ is on it*.
   country. Use `walkTo(col, row)`, which issues once and reads the world back.
 - **`rest({health})` refuses on a road leg** and that is the guarantee working. Mark it
   `optional: true`.
+
+## THE WORKING PRIMITIVE IS `short_hop`, NOT `walk_to`. START THE NEXT ATTEMPT HERE.
+
+The last run got further than anything else, and it did it by changing one call.
+
+**`walk_to` PLANS, and its planner believes in this room's phantom ground.** Asked for the
+square *next door*, it consults the coarse grid — which says `moverStepLands` is true for
+c34→c35 on every row 2–9 and for c39→c40 on every row 1–17, while the live mover refuses
+both — so it routes a one-square step as a forty-square loop back through the west of the
+room. Measured: the crawl asked for one step EAST from `r13c40` and the body arrived at
+`r4c27`, nineteen squares out. `connection_revision` stayed **1** the whole night, so nothing
+logged it off and nothing teleported it. That was the planner walking it home.
+
+That is what made the earlier rounds look like a teleport: `r11c42 -> r3c27`,
+`r8c42 -> r8c29`, `r13c40 -> r4c27`. All three are the same thing.
+
+**`short_hop` moves the body and does not plan** — at most ~1.6 squares, one step-height,
+refused outright if it cannot be done. Swapped in, the crawl walked a clean line east along
+row 9 straight through the boundary that had stopped everything else:
+
+```
+E -> r9c33 (13 out)   E -> r9c36 (10 out)
+E -> r9c34 (12 out)   E -> r9c37  (9 out)
+E -> r9c35 (11 out)   E -> r9c38  (8 out)
+```
+
+**ROW 9 CROSSES. Rows 3, 6, 10, 11 and 12 do not.** Every refusal is
+`validateFineTarget: geometry_blocked`, and the offline model says all of them land. The wall
+is a row-by-row thing and the bake cannot see any of it.
+
+Where it ended: boxed at `c34` between rows 10 and 12 with all four cardinals
+`geometry_blocked`, having dropped off row 9 on a diagonal and been unable to climb back.
+Closest approach all night was **Chebyshev 4**, against a meld box of 2.
+
+**The recipe to try next, in order.** Get into room 39 through the EAST doorway (`r2c19` in
+38), then `short_hop` east **along row 9** — not row 3, 6, 11, 12 or 13 — to about c38, and
+only then work south toward `r11c44`, which is the nearest square of the meld box. Never
+issue a `walk_to` inside this room for anything closer than the far side; it will walk the
+body home. And ask `/movecheck` before each step rather than trusting any plan: it is the only
+thing in the stack that has been right about this room, and it distinguishes `object_blocked`
+(a body — wait a few seconds, it moves) from `geometry_blocked` (this row does not cross).
+
+**The tooling gap this leaves, and it is the frontier report again.** Nothing can enumerate
+which rows of a boundary the live mover will cross without walking a body to each one and
+asking. `/movecheck` answers four cardinals from wherever the body happens to stand;
+diagonals cannot be asked at all and were probed blind. A report that floods to the boundary
+and prints the refusing predicate per frontier cell would have produced the "row 9 crosses,
+rows 3/6/10/11/12 do not" table in one command instead of an hour of walking.
