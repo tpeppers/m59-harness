@@ -997,9 +997,32 @@ async function routeTrapAhead(ctx, agent, from, to) {
   if (ctx.allowTraps) return null;
   try {
     const ports = await keeperPorts(ctx.fleet);
-    const who = ports?.get?.(agent);
-    if (!who) return { unknown: 'no keeper port' };
+    const entry = ports?.get?.(agent);
+    if (!entry) return { unknown: 'no keeper port' };
+    // THE MAP IS KEYED BY AGENT AND ITS VALUES DO NOT CARRY IT — SO PUT IT BACK.
+    //
+    // `keeperPorts` stores `{ port, character, pid }`; the agent is the KEY. `keeperCall`
+    // sends `agent: who.agent`, which was `undefined` here, and a keeper refuses a partially
+    // addressed write before it will answer anything — 409, `this keeper is "t16", not
+    // "undefined"`. `holdKeeper` does `{ ...entry, agent }` for exactly this reason; this
+    // call site did not.
+    //
+    // SO THIS CHECK HAS NEVER RUN. Every fleetScript walk logged `route X -> Y could not be
+    // read (router gave no hops) — walking without a trap check on the path` and carried on,
+    // and "no hops" reads as a map that cannot plan the route rather than as an address the
+    // keeper rejected. Verified 2026-09-09 against a live keeper: the identical call answers
+    // `found: true` with four hops WITH the agent field, and 409 without it.
+    //
+    // What that silently disarmed is guarantee 12 — the refusal written after a character
+    // was walked into room 599 and died there. It has been a one-line advisory on every
+    // walk, for every script, since it was written. Two sessions hit the log line on the
+    // same night against different rooms, which is what made it look systemic rather than
+    // like a bad route.
+    const who = { ...entry, agent };
     const r = await keeperCall(who, 'route', { to });
+    // AN ADDRESSING OR TRANSPORT FAILURE IS NOT "THE ROUTER HAS NO ROUTE". Reporting one as
+    // the other is what sent two readers to the map instead of to the call.
+    if (r?.error) return { unknown: `the keeper refused the route request: ${r.error}` };
     const hops = r?.route?.hops ?? r?.hops ?? r?.route ?? null;
     if (!Array.isArray(hops) || !hops.length) return { unknown: 'router gave no hops' };
     const trap = routeCrossesTrap(hops);
