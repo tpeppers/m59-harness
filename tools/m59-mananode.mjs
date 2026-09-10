@@ -99,7 +99,14 @@ function readOutcome(text) {
 
 async function meldOne(agent, character) {
   const st = await call('status', { agent }).catch(() => null);
-  const roomNum = st?.room?.num ?? st?.room_num ?? null;
+  // `status` HAS TWO SHAPES AND THIS READ ONLY ONE OF THEM. A keeper-backed character
+  // reports `room_num`; a character the broker holds IN-PROCESS reports `where: {num, name}`
+  // — so this resolved null for the second kind, `byRoom.get(null)` missed, and the tool
+  // announced "no node in this room" while the character was standing on the stone. Marco
+  // Polo in room 27, 2026-09-10. Third instance of this exact family in one session, after
+  // fleetScript's `observe()` reading `s.hp` and not `s.vitals.health`, so `where` is asked
+  // FIRST here: it is the one the status tool documents.
+  const roomNum = st?.where?.num ?? st?.room?.num ?? st?.room_num ?? null;
   const spot = byRoom.get(Number(roomNum));
   if (!spot) return { agent, character, room: roomNum, result: 'no node in this room' };
 
