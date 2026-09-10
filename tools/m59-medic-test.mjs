@@ -101,5 +101,33 @@ console.log('the pass is still gated on the strategy that asked for it');
 }
 
 console.log('');
+console.log('and a healer behind a wall can actually reach the pass');
+{
+  // THE BUG THIS PINS. `medic()` is called from the WORK pass, several stages below the
+  // flee-and-rest stage. That stage's own comment says why the work pass is unreachable,
+  // about a different victim: "a character holding a wall never reaches it, because this
+  // stage handles the pass and returns first." A dedicated healer's normal resting state IS
+  // holding a wall, so the medic was unreachable in the one configuration it is for.
+  //
+  // Measured on prod 2026-09-10: Loial the Ogier, coop strategy, 65/65 mana, hospice known,
+  // two wounded fleet-mates in the room, activity "holding a proven safe spot" — six samples
+  // over a hundred seconds and mana never moved.
+  const holdCall = /if \(this\.hold && \(STRATEGIES\[this\.policy\.strategy\] \|\| \{\}\)\.medic\)/;
+  ok('the hold stage asks the medic too', holdCall.test(SRC));
+  const at = SRC.search(holdCall);
+  const work = SRC.indexOf("if ((STRATEGIES[this.policy.strategy] || {}).medic) await this.medic()");
+  ok('and it is asked EARLIER than the work pass, which is the unreachable one',
+     at > 0 && work > 0 && at < work);
+  const near = SRC.slice(at, at + 700);
+  ok('only while sheltered — a wall at our back', /this\.hold &&/.test(near));
+  ok('and only while whole, so a character mending itself does not spend mana on others',
+     /whole >= 0\.9/.test(near));
+  // The ordering of the survival ladder is the thing that must NOT change: mis-ranking one
+  // rung of it has already cost four deaths, per the retreat note in the same function.
+  ok('the work-pass call is still there, so nothing was reordered away',
+     work > 0);
+}
+
+console.log('');
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

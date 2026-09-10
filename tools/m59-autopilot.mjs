@@ -14224,6 +14224,31 @@ export class Autopilot {
     // unchanged and still refuses a hurt character; all that changes is that it is asked.
     if (this.hold && this.suspendedJourney) await this.releaseRestedHold();
 
+    // A HEALER BEHIND A WALL NEVER HEALED ANYBODY, AND THAT IS THIS STAGE'S DOING.
+    //
+    // `medic()` is called from the WORK pass, several stages below. The note above says why
+    // that is unreachable, about a different victim: "a character holding a wall never
+    // reaches it, because this stage handles the pass and returns first." Exactly the same
+    // sentence applies to mending an ally, and it bites harder — a dedicated healer's normal
+    // resting state IS holding a wall. It is not an edge case, it is the configuration.
+    //
+    // Measured on prod 2026-09-10: Loial the Ogier in the Valley of Ileria on the `coop`
+    // strategy, 65 of 65 mana, hospice in his book, one and then two wounded fleet-mates in
+    // the room with him, activity "holding a proven safe spot" — and six samples over a
+    // hundred seconds with mana never moving. The pass that would have cast was never run.
+    //
+    // So it is asked HERE, additively: the ladder's ordering is untouched, because that
+    // ordering is the survival ladder and mis-ranking one rung of it has already cost four
+    // deaths (see the retreat note below). Gated on being SHELTERED AND WHOLE — a wall at our
+    // back and health at or above the rest threshold — because a character still mending
+    // itself is the one case where spending mana on somebody else is wrong, and because
+    // `medic()` carries its own 45s gap, mana floor and reagent check on top.
+    if (this.hold && (STRATEGIES[this.policy.strategy] || {}).medic) {
+      const vit = this.s.client?.vitals?.()?.health;
+      const whole = vit?.max > 0 ? vit.value / vit.max : null;
+      if (whole != null && whole >= 0.9) await this.medic().catch(() => {});
+    }
+
     // THE RECOVERY STOP A JOURNEY ASKED FOR, and the one poison always needs.
     //
     // Two triggers, one answer — a wall FORWARD on the route, mended at, objective kept:
