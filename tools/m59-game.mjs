@@ -6252,13 +6252,47 @@ class Session {
       const destY = row * KOD_FINENESS + half;
       if (process.env.M59_EXIT_DEBUG !== '0')
         console.error(`[walkTo] ${this.name ?? '?'} coarse grid failed (${plan.reason}), trying fine grid to (${destX},${destY}) [fine x,y in kod units; requested square r${row}c${col}]`);
+      // `arriveWithin: 100` WAS A TOLERANCE OF ONE AND A HALF SQUARES, AND IT REPORTED
+      // ARRIVAL WITHOUT MOVING.
+      //
+      // KOD_FINENESS is 64, so 100 kod units is 1.56 squares: any target inside that reads
+      // as reached from where the body already stands. Measured on prod 2026-09-10, trying
+      // to walk Beaker out of Kardde's Canyon (room 49) across its north edge to 593. He
+      // stood at x1348 y124; aiming one square PAST the boundary at r0c21 computes
+      // destX 1376, destY 32, and hypot(28, 92) = 96.2 < 100 — so:
+      //
+      //     r0c21  ->  { arrived: true, steps: 0, position: { col: 21, row: 1 } }
+      //
+      // A false success on the exact manoeuvre that crosses a room boundary, which is
+      // "walk one square outward". Anything trying to leave a room that way is told it
+      // worked and has not moved, and the room it wanted is one hop away for ever. Aiming
+      // at r-1c21 instead DID cross — and returned `arrived: false, "goal is outside the
+      // room grid"`, so the reply was wrong in both directions at the same boundary.
+      //
+      // Half a square (32) is inside one square, so a neighbouring target now requires
+      // real movement to satisfy. And the SQUARE IS CHECKED, not just the distance: a
+      // tolerance is a claim about proximity and `arrived` is a claim about a square, and
+      // conflating them is what made a 0-step walk a success. Same rule as everywhere else
+      // here — verify the value, not the instrument.
       const fine = await this.walkFine(destX, destY, {
-        maxSteps: Math.max(60, Math.ceil(Math.hypot(col - from.col, row - from.row) * 2)), stride: 48, arriveWithin: 100,
+        maxSteps: Math.max(60, Math.ceil(Math.hypot(col - from.col, row - from.row) * 2)),
+        stride: 48, arriveWithin: half,
         movementGeneration, controlToken,
       }).catch(e => ({ arrived: false, reason: e.message }));
-      if (fine.arrived)
+      const landedOn = fine.position && Number.isFinite(fine.position.col)
+        ? { col: fine.position.col, row: fine.position.row } : null;
+      const onTheSquare = !landedOn || (landedOn.col === col && landedOn.row === row);
+      if (fine.arrived && onTheSquare)
         return { arrived: true, steps: fine.steps, position: fine.position,
                  note: 'coarse grid found no route; fine grid walked it' };
+      if (fine.arrived && !onTheSquare)
+        // Inside the tolerance and on the WRONG SQUARE. Reported rather than rounded off,
+        // because the caller asked for a square and a boundary crossing depends on which
+        // one the body is standing on.
+        return { arrived: false, reason: 'the fine walk stopped inside its tolerance but on ' +
+                   `r${landedOn.row}c${landedOn.col}, not the r${row}c${col} that was asked for`,
+                 position: fine.position, steps: fine.steps,
+                 note: 'a tolerance is a claim about distance; `arrived` is a claim about a square' };
       return { arrived: false, reason: plan.reason, position: { col: from.col, row: from.row },
                ...(plan.stuck ? { nearest_floor: plan.nearest_floor } : {}),
                ...(escaped ? { retreated: escaped } : {}),
