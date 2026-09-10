@@ -194,6 +194,40 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Who buys what, what a loadout is, what
   — it drives both ends and verifies the receiver actually holds the goods afterwards, which
   is the whole reason it exists.
 
+  **BUT READ `supplied`, NOT `!error`.** A refused exchange answers with a complete, honest,
+  well-shaped account of the refusal and **no `error` field anywhere in it**:
+
+      { supplied: false,
+        reason: "Loial the Ogier is not in the room with Floyd",
+        giver_in: 544, receiver_in: 370,
+        players_the_giver_can_see: [ ... ] }
+
+  A caller testing `!r.error` therefore reads every refusal as a success, and the failure
+  surfaces at whatever step next asks the world a question — which points at the wrong half
+  of the errand entirely. That cost three diagnosed runs on 2026-09-09, each blamed on a
+  different innocent step: a lease released too early, then a mover that could not move,
+  then an arrival that had not happened. All three were real and none of them was why the
+  item had not moved. `reason` had been saying so the whole time, unread.
+
+  This is the ordinary shape of an answer here, not a quirk of `supply`: **an outcome field
+  and a prose reason, with `error` reserved for the call going wrong rather than the errand
+  being refused.** Test the field that names the outcome.
+
+- **A HELD CHARACTER CANNOT BE WALKED BY `supply`.** `who_travels` will happily name an end
+  to move, and `m59-supply.mjs` says why it then does not: *"the mover is deliberately NOT
+  held; `travelJob` already stops its keeper driving and leaves it able to defend itself."*
+  So if your script has already taken work/movement/economy with `commander_claim` — which
+  every fleetScript does — the travel is refused as busy, and the exchange still returns
+  without an `error` because it did issue what it meant to issue. Measured 2026-09-09: both
+  ends held, supply's step reporting ok, and the courier still standing in room 544 seven
+  minutes later having never taken a step.
+
+  **Issue the journey through the script that holds the body** — fleetScript's `walk(room)`,
+  which carries the same lease, health floor and journey guards as any other movement — and
+  call `supply` with `who_travels: 'neither'` once they are standing together. And wait for
+  them to actually BE together by reading the two keepers, not the fleet rows: a fleet row is
+  a snapshot with an age on it, and `supply` checks the live world.
+
 - **A HAND-OVER THAT COMPLETES THE HANDSHAKE AND MOVES NOTHING IS USUALLY A MALFORMED ID
   LIST, NOT A FULL PACK.** `may_accept` true, the counteroffer seen, the accept sent, and
   zero counts move: the entry above says read `pack.percent`, and that is right most of the
