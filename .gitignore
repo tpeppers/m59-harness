@@ -624,3 +624,23 @@ _verify2.mjs
 # current `safespots` epoch, so a stranger cloning this repository wants an empty one rather
 # than ours. See tools/m59-restwatch.mjs.
 /substrate/restwatch.jsonl
+
+# WHICH BROKER a fleetscript talks to when nothing says. One line, and it is this
+# CHECKOUT's opinion rather than the repository's — `require` means "there is no default
+# here, name one". The built-in default (8901) stays in the code so a clone with one fleet
+# behaves exactly as it always has; this file exists because a machine running several
+# fleets needs 8901 to stop being a silent fallback. Same argument, and same shape, as
+# substrate/fleet-default beside it.
+/substrate/control-url
+
+# Local integration performance samples; no live fleet telemetry in git.
+/substrate/perf/
+/substrate/client-context/
+
+# WHAT MANA NODES A CHARACTER HAS MELDED, and how each one was reached. Per-character and
+# per-machine: it names characters, and a stranger cloning this repository has none of them.
+# It is also a RECORD OF STATE THE SERVER OWNS — max mana is recomputed from the node bitmask
+# on every login (ComputeMaxMana), and a node that has gone dead contributes nothing until it
+# revives — so a committed copy would be a claim about somebody else's world. Same argument
+# as substrate/loadouts/ beside it. See tools/m59-mananode.mjs.
+/substrate/mananodes/
