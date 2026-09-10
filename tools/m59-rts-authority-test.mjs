@@ -225,7 +225,7 @@ assert.deepEqual(requireRtsLocalCaller({ transport: 'stdio', local: true }),
 
 // Both transports must decide locality themselves and hand it down; neither may let a
 // tool infer it. The HTTP path derives it at the socket, before a body is parsed.
-assert.match(broker, /const caller = \{ transport: 'http', local: brokerLoopbackRequest\(req\) \}/,
+assert.match(broker, /const caller = \{ transport: 'http', local: brokerLoopbackRequest\(req\)(?:,| \})/,
   'the HTTP transport does not derive caller locality from the socket');
 assert.match(broker, /handleRpc\(msg, CALLER_STDIO\)/,
   'the stdio transport does not declare itself local');

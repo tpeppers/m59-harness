@@ -826,7 +826,7 @@ try {
   assert.equal(aggregateDegraded.status, 503);
   const aggregateDegradedBody = await aggregateDegraded.json();
   assert.equal(aggregateDegradedBody.writes, false);
-  assert.match(aggregateDegradedBody.control.reason, /aggregate endpoint/);
+  assert.match(aggregateDegradedBody.control.reason, /broker aggregate read returned 503/);
   const degradedContract = await fetch(url.replace('/v1/orders', '/v1/contract'));
   assert.equal((await degradedContract.json()).writes, false,
     'the contract stops advertising writes when the aggregate command path fails');

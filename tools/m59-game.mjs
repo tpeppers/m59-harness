@@ -12,6 +12,7 @@
 //   import { Session, Recorder } from './m59-game.mjs';
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { bindPacketScope } from './m59-packet-scope.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -716,7 +717,7 @@ class Pacer {
     this.prodTimes.push(Date.now());
     if (!this.prodByKind.has(kind)) this.prodByKind.set(kind, []);
     this.prodByKind.get(kind).push(Date.now());
-    const job = { kind, fn, minGapForKind, resolve: null, reject: null, queuedAt: Date.now() };
+    const job = { kind, fn: bindPacketScope(kind, fn), minGapForKind, resolve: null, reject: null, queuedAt: Date.now() };
     // PRIORITY: attack packets are time-critical (server cooldown = 1s). They jump
     // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
     // of movement packets. Without this, a busy mover (move+turn every ~270ms) pushes

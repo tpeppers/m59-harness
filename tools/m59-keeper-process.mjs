@@ -38,6 +38,7 @@ import './m59-navgeom.mjs';   // installs the height model + lenient fine path o
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
+import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { OF } from './m59-parse.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
@@ -1319,6 +1320,7 @@ const server = createServer(async (req, res) => {
       // dominant idle hot loop. Legacy `/health` remains rich for rolling compatibility.
       json({
         schema: 'm59-keeper-live/v1',
+        tactical_orders: 1,
         ok: !!(inGame && session.live),
         agent,
         character: session.client?.me?.name ?? character,
@@ -1340,7 +1342,7 @@ const server = createServer(async (req, res) => {
       // The broker may survive-reuse this process across a Windows service restart.
       // Publishing the exact PID lets it adopt the existing keeper instead of spawning
       // a doomed duplicate on the occupied port and recording that dead child's PID.
-      json({ ok: inGame, agent, pid: process.pid, ...s, as_of_ms: snapshot.ageMs });
+      json({ ok: inGame, agent, pid: process.pid, ...s, as_of_ms: snapshot.ageMs, tactical_orders: 1 });
       return;
     }
 
@@ -1404,6 +1406,18 @@ const server = createServer(async (req, res) => {
       if (!inGame) { json({ error: `${agent}: not in game` }, 409); return; }
       try {
         switch (name) {
+          case 'rts_tactical_intent': {
+            json(startTacticalJob(session, autopilot, args,
+              packet => requireKeeperRtsAuthority(args, packet)));
+            return;
+          }
+          case 'rts_tactical_status': {
+            if (String(args.server_host).toLowerCase() !== String(credHost).toLowerCase() ||
+                Number(args.server_port) !== Number(credPort))
+              throw new Error('tactical status server mismatch');
+            json(tacticalJobStatus(session.job, args));
+            return;
+          }
           case 'rts_move_intent': {
             const c = requireKeeperRtsAuthority(args, 'move-intent');
             const col = Number(args.col), row = Number(args.row);
