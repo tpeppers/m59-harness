@@ -39,6 +39,8 @@ import { resolveFleet } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
 import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
+import { audioView } from './m59-audio-observations.mjs';
+import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
 import { OF } from './m59-parse.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
@@ -850,6 +852,7 @@ function state() {
     // — see the rawmove note below — so a reader that treats one false sample as death
     // will rejoin healthy characters. Judge them together, with hysteresis.
     connected: !!session.live,
+    intent_observation: intentObservation(session),
     // Stable room RID and live room object id are different namespaces. The latter is
     // renumbered by server saves and is the generation guard used by RTS packets.
     room: room ? { name: c?.rsc?.get?.(room.nameRsc) ?? room.name, num: room.num,
@@ -1321,6 +1324,8 @@ const server = createServer(async (req, res) => {
       json({
         schema: 'm59-keeper-live/v1',
         tactical_orders: 1,
+        audio_observations: 1,
+        intent_observations: 1,
         ok: !!(inGame && session.live),
         agent,
         character: session.client?.me?.name ?? character,
@@ -1331,6 +1336,19 @@ const server = createServer(async (req, res) => {
         uptime_s: Math.floor((Date.now() - startedAt) / 1000),
       });
       return;
+    }
+
+    if (req.method === 'GET' && path === '/audio') {
+      const c=session.client,epoch=url.searchParams.get('epoch')||'',raw=url.searchParams.get('after')||'0';
+      if(!/^\d{1,12}$/.test(raw)||epoch.length>40){json({error:'invalid audio cursor'},400);return;}
+      if(!c?.audioObservations){json({error:'audio capture unavailable'},503);return;}
+      const after=Number(raw),same=epoch===c.audioObservations.epoch;
+      // Existing event waiter, one second maximum; no world projection or game query.
+      if(same&&after===c.audioObservations.sequence&&inGame)
+        await c.waitFor({kinds:['audio','room-entered'],timeoutMs:1000}).catch(()=>null);
+      json(audioView(c,{agent,character:c.me?.name??character,pid:process.pid,
+        room:session.world?.room?.num,connected:inGame&&session.live&&session.client===c},
+        epoch===c.audioObservations.epoch?after:null));return;
     }
 
     if (req.method === 'GET' && path === '/health') {
@@ -1473,6 +1491,7 @@ const server = createServer(async (req, res) => {
             const swings = Math.max(1, Math.min(20, Math.trunc(Number(args.swings ?? 20))));
             const job = session.startJob('attack',
               `attack ${target} in room ${Number(args.room)}`, async () => {
+                setIntentTarget(session,{kind:'attack',object_id:target});
                 const log = [];
                 for (let swing = 1; swing <= swings; swing++) {
                   if (keeperRtsCancelled(controlToken))
@@ -1644,6 +1663,7 @@ const server = createServer(async (req, res) => {
               : action === 'cast' ? `cast ${spellName}` : action.replaceAll('_', ' ');
             const job = session.startJob(`context:${action}`, label, async movementGeneration => {
               if (cancelled()) return { cancelled: true };
+              if(action==='approach'||action==='take')setIntentTarget(session,{kind:action==='take'?'pickup':'approach',object_id:target});
               if (action === 'stand') {
                 await session.pacer.submit('rest', () => { guard('stand'); return c.stand(); });
                 return { resting: false };

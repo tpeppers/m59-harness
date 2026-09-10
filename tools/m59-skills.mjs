@@ -2079,7 +2079,9 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
 // discarded if it swings twice in a second. So: read health every round, disengage on
 // a threshold, and stop rather than dying — but report everything, so the caller can
 // override next time.
-export async function fight(s, {
+import {withIntent,setIntentTarget} from './m59-intent-observations.mjs';
+export function fight(s,options){return withIntent(s,null,()=>fightWithIntent(s,options));}
+async function fightWithIntent(s, {
   target,
   // The id of a creature we have already hurt. A kill scores nothing unless we
   // damaged it AND it was our current target, and every new attack resets those
@@ -2198,6 +2200,7 @@ export async function fight(s, {
 
   const resumed = preferId != null && inReach.find(o => o.id === preferId);
   const foe = resumed || inReach[0];
+  setIntentTarget(s,{kind:'attack',object_id:foe.id});
   const foeName = c.rsc.get(foe.nameRsc);
   say('chose', { target: describeObject(foe, c.lookup),
                  ...(resumed ? { resumed: 'the one we already damaged' } : {}),
