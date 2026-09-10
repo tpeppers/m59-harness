@@ -51,6 +51,11 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       leftRaza = true,
                       // What this broker says it is holding. undefined = the right roster;
                       // a path = a DIFFERENT fleet's; null = a broker that will not say.
+                      // WHAT THE GUILD TOOL ANSWERS. A function so a case can make the
+                      // server refuse in the way it really does: `ok:false` with prose and
+                      // no error, which is what fourteen guild verbs look like when the
+                      // caller lacks the bit (user.kod:4848).
+                      guildReply = null,
                       healthState = undefined } = {}) {
   const sent = [], rested = [];
   globalThis.fetch = async (_url, opts) => {
@@ -100,6 +105,10 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       if (leftRaza) rooms[agent] = 39;
       payload = { left: leftRaza, log: [] };
     }
+    else if (name === 'guild') payload = guildReply
+      ? guildReply({ ...a })
+      : { ok: true, name: a.name, price: 5000, guild: { name: a.name, rank: 'master' },
+          messages: [] };
     else payload = { ok: true };
     return { json: async () => ({ result: { content: [{ text: JSON.stringify(payload) }] } }) };
   };

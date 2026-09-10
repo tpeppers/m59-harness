@@ -2376,6 +2376,71 @@ const server = createServer(async (req, res) => {
           // Two ops rather than one: reading a shop and buying from it are separate wire
           // exchanges, and the clamping in between needs the item list and its prices before
           // it can decide what actually fits.
+          // EVERY GUILD VERB TOUCHES THE WIRE, SO IT HAS TO HAPPEN HERE.
+          //
+          // Same seam and the same argument as `shop` below: the broker's emulated client is
+          // a SNAPSHOT since the keeper-process migration, and `c.requestGuildInfo` simply is
+          // not a function on it. The broker's whole guild tool — permission checks, the
+          // induct choreography, hall renting — called those methods on the snapshot and
+          // every single action died with `c.requestGuildInfo is not a function`. Founding a
+          // guild was impossible fleet-wide and nothing said so until you tried it.
+          //
+          // This is the same gap that made `sell_all` fail keeper-backed. The capability was
+          // never missing; it was on the wrong side of a process boundary.
+          //
+          // A GUILD COMMAND IS REFUSED BY TOTAL SILENCE — no message, no packet, just
+          // `Debug(...)` in the SERVER log (user.kod:4848). So `said` is the entire
+          // diagnosis and is always returned, and a caller must never read "no error" as
+          // "it worked". `guild` comes back so the broker can populate `c.guild`.
+          case 'guild': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const op = String(args.op ?? 'info');
+            const wait = Number(args.timeout_ms) || 4000;
+            const id = () => Number(args.id);
+            const before = c.evSeq;
+            const send = async (fn) => { await session.pacer.submit('guild', fn); };
+            try {
+              switch (op) {
+                case 'info':        await send(() => c.requestGuildInfo()); break;
+                case 'list':        await send(() => c.requestGuildList()); break;
+                case 'create':      await send(() => c.guildCreate({
+                                      name: String(args.name ?? ''),
+                                      titles: [].concat(args.titles ?? []),
+                                      secret: !!args.secret })); break;
+                case 'invite':      await send(() => c.guildInvite(id())); break;
+                case 'exile':       await send(() => c.guildExile(id())); break;
+                case 'renounce':    await send(() => c.guildRenounce()); break;
+                case 'abdicate':    await send(() => c.guildAbdicate(id())); break;
+                case 'vote':        await send(() => c.guildVote(id())); break;
+                case 'disband':     await send(() => c.guildDisband()); break;
+                case 'ally':        await send(() => c.guildAlly(id())); break;
+                case 'end_alliance':await send(() => c.guildEndAlliance(id())); break;
+                case 'declare_war': await send(() => c.guildDeclareWar(id())); break;
+                case 'make_peace':  await send(() => c.guildMakePeace(id())); break;
+                case 'abandon_hall':await send(() => c.guildAbandonHall()); break;
+                case 'set_password':await send(() => c.guildSetPassword(String(args.password ?? ''))); break;
+                case 'set_rank':    await send(() => c.guildSetRank(id(), Number(args.rank))); break;
+                case 'rent_hall':   await send(() => c.guildRentHall(Number(args.hall_id),
+                                                                    String(args.password ?? ''))); break;
+                default: json({ error: `unknown guild op: ${op}` }, 400); return;
+              }
+            } catch (e) { json({ error: String(e?.message || e), op }, 500); return; }
+            const { events, timedOut } = await c.waitFor({
+              since: before, kinds: ['guild', 'guild_list', 'message'], timeoutMs: wait });
+            json({
+              op,
+              // The parsed roster the client keeps. NO GUILD IS AN ANSWER, NOT A TIMEOUT:
+              // UserGuildSendInfo (user.kod:1974) sends `user_no_guild` as prose and no
+              // packet at all, so null-with-a-message is the guildless case.
+              guild: c.guild ?? null,
+              guild_list: (events ?? []).find(e => e.kind === 'guild_list')?.guilds ?? null,
+              said: (events ?? []).map(e => e.text).filter(Boolean),
+              timed_out: !!timedOut,
+              seq: c.evSeq,
+            });
+            return;
+          }
           case 'shop': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }

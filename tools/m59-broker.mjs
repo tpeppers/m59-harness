@@ -2515,6 +2515,48 @@ class KeeperProxy {
     return keeperAction(this.name, this._index, 'cancel',
                         { ...(token ? { control_token: token } : {}), ...(why ? { why } : {}) });
   }
+  // THE GUILD VERBS, FORWARDED FOR THE SAME REASON AS SHOPPING.
+  //
+  // Every one of these used to be called straight on the emulated client, which has been a
+  // SNAPSHOT since the keeper-process migration — so `c.requestGuildInfo is not a function`
+  // was the answer to every guild action in this broker, including founding one. The
+  // capability was never missing: `M59Client` has had all seventeen of these since the
+  // protocol work (m59-client.mjs:1238-1292). They were simply on the wrong side of a
+  // process boundary, exactly like `sellOne` and `buyItems` before them.
+  //
+  // `_guild` is the roster the last round trip returned, so the tool's `c.guild ?? null`
+  // keeps reading what it always read. It is deliberately NOT a cache with a TTL: a rank
+  // change by somebody else is invisible until asked for, and acting on a stale bitmask is
+  // the exact failure the guild tool exists to prevent — so this is only ever written by a
+  // real reply, and `readRoster` does a real round trip every time.
+  async _guildAct(op, args = {}) {
+    const r = await keeperAction(this.name, this._index, 'guild', { op, ...args });
+    if (r && !r.error && 'guild' in r) this._guild = r.guild;
+    return r;
+  }
+  get guild() { return this._guild ?? null; }
+  async requestGuildInfo()      { return this._guildAct('info'); }
+  async requestGuildList()      { return this._guildAct('list'); }
+  async guildCreate(plan = {})  { return this._guildAct('create', {
+                                    name: plan.name, titles: plan.titles,
+                                    secret: !!plan.secret }); }
+  async guildInvite(id)         { return this._guildAct('invite', { id }); }
+  async guildExile(id)          { return this._guildAct('exile', { id }); }
+  async guildRenounce()         { return this._guildAct('renounce'); }
+  async guildAbdicate(id)       { return this._guildAct('abdicate', { id }); }
+  async guildVote(id)           { return this._guildAct('vote', { id }); }
+  async guildDisband()          { return this._guildAct('disband'); }
+  async guildAlly(id)           { return this._guildAct('ally', { id }); }
+  async guildEndAlliance(id)    { return this._guildAct('end_alliance', { id }); }
+  async guildDeclareWar(id)     { return this._guildAct('declare_war', { id }); }
+  async guildMakePeace(id)      { return this._guildAct('make_peace', { id }); }
+  async guildAbandonHall()      { return this._guildAct('abandon_hall'); }
+  async guildSetPassword(pw)    { return this._guildAct('set_password', { password: pw ?? '' }); }
+  async guildSetRank(id, rank)  { return this._guildAct('set_rank', { id, rank }); }
+  async guildRentHall(hallId, password = '') {
+    return this._guildAct('rent_hall', { hall_id: hallId, password });
+  }
+
   // THE TWO HALVES OF SHOPPING THAT MUST TOUCH THE WIRE, forwarded to the process that owns
   // it. `buy` and `buyItems` are mutations and the emulated client is a snapshot, so faking
   // them here would be inventing a purchase that never left the building. See the `shop`

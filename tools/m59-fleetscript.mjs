@@ -897,6 +897,19 @@ export const verify = (fn, why) => ({ do: 'verify', fn, why });
  */
 export const rest = (opts = {}) => ({ do: 'rest', ...opts });
 
+/**
+ * FOUND A GUILD. Five thousand shillings, from the PURSE, standing next to Frular.
+ *
+ * `foundGuild('The Second Swines')` — titles default to the harness's ten.
+ *
+ * A guild cannot be renamed. `disband` and pay again is the only correction, so the name and
+ * all ten rank titles are validated before anything is sent (validateGuild in m59-guild.mjs)
+ * — and TEN is not a typo: five ranks times two genders, flat, in the order user.kod:1697
+ * reads them. The wrong ORDER does not error; it gives every woman in the guild a man's
+ * title for the life of the guild.
+ */
+export const foundGuild = (name, opts = {}) => ({ do: 'found_guild', name, ...opts });
+
 export const learn = (teacher, ability, opts = {}) =>
   ({ do: 'learn', teacher, ability, ...opts });
 
@@ -1351,6 +1364,43 @@ async function runStep(ctx, agent, step, state) {
       return { ok: !r?.error, outcome: 'rested_after_moving',
                at: nowIn.at ?? null, can_reach_you: target.can_reach_you ?? null,
                why: r?.error };
+    }
+
+    case 'found_guild': {
+      // THE PRICE COMES OUT OF THE PURSE, NOT THE BANK BALANCE (system.kod:243). A character
+      // with 40,000 banked and an empty pocket is refused with `user_no_guild_broke`, which
+      // is a sentence spoken to the room and not an error on the wire — so it reads exactly
+      // like success to anything that only checks for a thrown error.
+      const price = Number(step.price ?? 5000);
+      const inv = await call('inventory', { agent }, 45_000).catch(() => null);
+      const purse = purseOf(inv?.items ?? []);
+      if (Number.isFinite(purse) && purse < price)
+        return { ok: false, outcome: 'purse_short',
+                 purse, needs: price,
+                 why: `founding costs ${price} from the PURSE and this character is carrying ` +
+                      `${purse}. A bank balance does not count — withdraw first, at Tos (54) ` +
+                      'or Jasper (376); there is no teller in Barloque.' };
+
+      const r = await call('guild', { agent, action: 'create', name: step.name,
+                                      ...(step.titles ? { titles: step.titles } : {}),
+                                      ...(step.secret ? { secret: true } : {}) }, 90_000)
+        .catch(e => ({ error: e.message }));
+      if (r?.error) return { ok: false, outcome: 'guild_call_failed', why: r.error };
+
+      // READ BACK FROM THE WORLD, never from the reply's own optimism. The broker's create
+      // action already re-reads the roster and reports `ok: !!after`, so this trusts that
+      // field and NOT the absence of an error — the whole guild command space refuses in
+      // total silence (user.kod:4848), and "no error" is the shape of fourteen different
+      // refusals.
+      if (!r?.ok)
+        return { ok: false, outcome: 'not_founded', name: step.name,
+                 said: r?.messages ?? r?.said ?? null,
+                 refused_locally: r?.refused_locally ?? false,
+                 why: r?.reason ?? r?.note ??
+                      'the server said nothing and no guild exists afterwards' };
+      return { ok: true, outcome: 'founded', name: r.name, price: r.price,
+               guild: r.guild ?? null, maturity: r.maturity ?? null,
+               said: r.messages ?? null };
     }
 
     case 'learn': {
