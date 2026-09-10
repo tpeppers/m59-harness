@@ -1,6 +1,6 @@
 // FOUND A GUILD: withdraw the fee, cross to Barloque, pay Frular, read it back.
 //
-//   node tools/m59-fleet-repl.mjs run found-guild agent=t18 name="The Second Swines"
+//   > found-guild agents=t18              # in tools/m59-fleet-repl.mjs
 //
 // PUBLIC. Written for "have Gonzo create The Second Swines", but the errand is general and
 // the traps in it are not obvious from outside:
@@ -42,7 +42,8 @@ export const script = {
     effect: 'Creates a guild with the named character as its master. Verified by reading the ' +
             'roster back off the world, never from the absence of an error — the entire ' +
             'guild command space refuses in TOTAL SILENCE (user.kod:4848).',
-    run: 'found-guild agent=<slot> name="<guild name>" [withdraw=<n>] [secret=true]',
+    run: 'found-guild agents=<slot> [withdraw=<n>] — the NAME is a script default, because ' +
+         'the REPL does not support quoting and a guild name has spaces in it',
     needs: ['5,000 shillings IN THE PURSE at the moment of founding',
             'the character not already in a guild — renounce or disband first',
             'a route to 700; the fee is withdrawn at Tos (54) because Barloque has no teller'],
@@ -54,31 +55,40 @@ export const script = {
             'action=spread`, which walks nobody and costs no travel.',
   },
 
-  // A guild is founded once and cannot be renamed, so this refuses rather than guesses.
-  args: {
-    agent: { required: true, why: 'which character becomes the guild master' },
-    name:  { required: true, why: 'the guild name — permanent, and it cannot be renamed' },
+  // A GUILD NAME LIVES IN THE SCRIPT, NOT ON THE PROMPT. The REPL does not support quoting
+  // — "a value that needs quotes wants a script, not a prompt" (m59-fleet-repl.mjs:45) — and
+  // a guild name has spaces in it. That rule is right here for a second reason: the name is
+  // PERMANENT and unrenameable, so it belongs somewhere reviewable rather than typed once at
+  // a prompt at two in the morning.
+  params: {
+    agents: { type: 'agents', required: true, describe: 'who founds it — becomes guild master' },
+    name: { type: 'string', default: 'The Second Swines',
+            describe: 'the guild name. PERMANENT: there is no rename, only disband and pay again' },
+    withdraw: { type: 'number', default: 6000,
+                describe: 'what to draw at Tos. More than the fee on purpose — arriving short ' +
+                          'means paying for the whole crossing twice' },
   },
 
-  steps: (a) => [
-    // THE MONEY FIRST, AND MORE THAN THE PRICE. Arriving at Frular a hundred short means
-    // paying for the whole crossing twice. The banker names the balance when it refuses and
-    // the `bank` step takes what it named, so asking high is free.
-    walk(TOS_BANK, { why: 'the fee comes from the purse and Barloque has no teller' }),
-    bank('withdraw', Number(a.withdraw ?? PRICE + 1000),
-         { why: 'founding is paid from what the character is CARRYING (system.kod:243)' }),
+  async steps({ name, withdraw }) {
+    return [
+      // THE MONEY FIRST, AND MORE THAN THE PRICE. The banker names the balance when it
+      // refuses and the `bank` step takes what it named, so asking high is free.
+      walk(TOS_BANK, { why: 'the fee comes from the purse and Barloque has no teller' }),
+      bank('withdraw', withdraw,
+           { why: 'founding is paid from what the character is CARRYING (system.kod:243)' }),
 
-    verify(async ({ call, agent }) => {
-      const inv = await call('inventory', { agent }, 45_000).catch(() => null);
-      const purse = (inv?.items ?? [])
-        .filter(o => /shilling/i.test(o.name ?? ''))
-        .reduce((t, o) => t + (o.amount || 1), 0);
-      return purse >= PRICE;
-    }, `carrying at least ${PRICE} before setting out — a short purse is refused by a ` +
-       'sentence, not an error, and only after the whole crossing has been paid for'),
+      verify(async ({ call, agent }) => {
+        const inv = await call('inventory', { agent }, 45_000).catch(() => null);
+        const purse = (inv?.items ?? [])
+          .filter(o => /shilling/i.test(o.name ?? ''))
+          .reduce((t, o) => t + (o.amount || 1), 0);
+        return purse >= PRICE;
+      }, `carrying at least ${PRICE} before setting out — a short purse is refused by a ` +
+         'sentence, not an error, and only after the whole crossing has been paid for'),
 
-    walk(GUILDMASTER_HALL, { why: 'Frular only founds guilds in his own hall' }),
+      walk(GUILDMASTER_HALL, { why: 'Frular only founds guilds in his own hall' }),
 
-    foundGuild(a.name, { price: PRICE, ...(a.secret ? { secret: true } : {}) }),
-  ],
+      foundGuild(name, { price: PRICE }),
+    ];
+  },
 };
