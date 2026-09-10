@@ -427,10 +427,17 @@ console.log('\nthe call sites — a rung that is never reached is the second inc
 
   const ladder = AUTOPILOT.indexOf('  async passFleeAndRest(ctx) {');
   const trade = AUTOPILOT.indexOf('await this.tradeInPlaceIfWedged({ near, v })', ladder);
-  const town = AUTOPILOT.indexOf('hurt in the open — running for a town rather than playing dead', ladder);
+  // THE TOWN RUN IS GONE FROM THIS LADDER. Removed 2026-09-10 on the operator's instruction to
+  // fall through to the one correct behaviour: 'There is truly only one way: The play_dead.' So
+  // the thing the trade must come before is the LOGOFF rung, not a run for a town, and the
+  // absence of the town string is now itself the assertion.
+  const town = AUTOPILOT.indexOf('if (doomed && this.policy.panicLogoff !== false)', ladder);
   const heal = AUTOPILOT.indexOf('not waiting this out — moving to somewhere I can heal', ladder);
   const exit = AUTOPILOT.indexOf('const mustLeaveForHealth = belowRoomRetreatHealth', ladder);
-  ok('the ladder trades in place BEFORE running for a town', ladder > 0 && trade > ladder && town > trade);
+  ok('the ladder trades in place BEFORE reaching for the logoff',
+     ladder > 0 && trade > ladder && town > trade);
+  ok('...and no longer runs for a town as a survival move at all',
+     AUTOPILOT.indexOf('running for a town rather than playing dead') === -1);
   ok('...before "moving to somewhere I can heal"', heal > trade);
   ok('...and before taking the nearest exit', exit > trade);
 

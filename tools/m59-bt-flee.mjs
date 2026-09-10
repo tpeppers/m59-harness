@@ -113,42 +113,42 @@ export function doomedNode(keeper) {
 
     if (v.health?.value == null || v.health.value > doomedAt) return FAILURE;
 
-    if (sheltered) {
-      const result = await keeper.playDead(
-        'at ' + v.health.value + ' health with ' + near.length +
-        ' adjacent, behind a wall that holds'
-      );
-      if (result) return SUCCESS;
-      // playDead REFUSED: the "refusing to freeze again" guard fired because the
-      // character has already frozen from this health (or worse) and gained nothing.
-      // Returning FAILURE here was the bug: the rest of the tree has nothing that
-      // moves a character that is about to die in a held spot, so the pass fell
-      // through to the legacy fallback, which also refused, and the character bled
-      // out in place (Lee, Main gate to the city of Tos, 13 freezes at 1-4 HP).
-      // The answer when freezing is not working is to MOVE: give up the spot and
-      // run. Dying in a corner with a monster adjacent is worse than losing the
-      // safe spot and having a chance at distance.
-      keeper.note('playDead refused -- abandoning the spot and running', {
-        health: v.health.value, adjacent: near.length,
-        why: 'freezing is not recovering; the only thing that changes the situation is distance',
-      });
-      keeper.doing = 'travelling';
-      await keeper.leaveHold?.().catch(() => {});
-      const went = await keeper.townTripIfCornered().catch(() => false);
-      return went ? SUCCESS : FAILURE;
-    }
+    // ONE ANSWER, NO BRANCH ON SHELTER. Operator, 2026-09-10: "implement fall throughs to the
+    // singular correct behavior... the preexisting play_dead() -- it is universally the best
+    // survival mechanism available... There is truly only one way: The play_dead."
+    //
+    // THIS NODE USED TO FORK THREE WAYS and two of them ran. Sheltered it played dead, and on a
+    // refusal it abandoned the spot and ran for a town; unsheltered it went straight to the town
+    // run, on the note "a freeze recovers no health and leaves us exactly where we were". Both
+    // runs are dozens of seconds of being hit on the way out, through the rooms that were
+    // already killing us. The logoff stops the attack at once.
+    //
+    // The sequential ladder in m59-autopilot.mjs was collapsed the same way in the same commit;
+    // the two halves of this decision have disagreed before (that is what m59-fleeline-test
+    // exists for) and the point of doing both at once is that they cannot.
+    const wall = keeper.wallHere?.() ?? null;
+    const result = await keeper.playDead(
+      'at ' + v.health.value + ' health with ' + near.length + ' adjacent' +
+      (wall?.ok ? ', behind a wall the geometry confirms'
+                : ', in the open -- the logoff is what stops the attack')
+    ).catch(() => false);
+    if (result) return SUCCESS;
 
-    keeper.note('hurt in the open -- running for a town rather than playing dead', {
-      health: v.health.value, adjacent: near.length, worst_single_hit: worstHit,
-      why: 'a freeze recovers no health and leaves us exactly where we were, in reach ' +
-           'of everything that put us here. Only distance changes this fight',
+    // playDead now declines in only one state: we have already frozen here and not yet acted,
+    // so freezing again would clear PFLAG_MOVED_SINCE_ENTRY and undo the healing the last one
+    // bought. There is nothing better to reach for, and FAILURE is what lets the rest of the
+    // tree run -- specifically `leave_room`, which crosses an exit and is real movement rather
+    // than a walk across a monster room. Returning SUCCESS here would claim the tick and
+    // pre-empt it, which is issue #51 in a different shape.
+    keeper.note('cannot freeze again yet -- letting the tree reach the exit', {
+      health: v.health.value, adjacent: near.length,
+      wall_here: wall ? { attackers: wall.attackers, ok: wall.ok } : null,
+      why: 'the logoff is the only thing that stops an attack outright and it has just been ' +
+           'used here; the exit is the next real move, not a walk to a town',
     });
-    keeper.doing = 'travelling';
-    const went = await keeper.townTripIfCornered().catch(() => false);
-    return went ? SUCCESS : FAILURE;
+    return FAILURE;
   });
 }
-
 // ---------------------------------------------------------------------------
 // Node: flee_threshold (below fleeBelow with something adjacent)
 // ---------------------------------------------------------------------------
@@ -168,35 +168,34 @@ export function fleeThresholdNode(keeper) {
     if (hp === null || hp >= keeper.policy.fleeBelow || !threat.length) return FAILURE;
 
     if (!atWall) {
-      // No wall at all: run.
-      keeper.note('running for safety', {
+      // NO WALL IS NOT A REASON TO RUN. IT IS THE REASON TO LOG OFF.
+      //
+      // This node used to say "distance is the only thing that stops this" and call
+      // `retreatToSafety`, which returns `{arrived:false}` whenever `retreat_to_inn` is off --
+      // and it has been off on this fleet since 2026-08-27, so the strategy was decorative. Four
+      // deaths came of it, every one with nought squares moved (issue #51).
+      //
+      // Operator, 2026-09-10: "never resting in the open: use SAFE WALLS, and log out/in if the
+      // danger is immediate". Below the flee line with something adjacent IS immediate.
+      const wall = keeper.wallHere?.() ?? null;
+      const froze = await keeper.playDead(
+        'below the flee line at ' + Math.round(hp * 100) + '% with ' + threat.length +
+        ' on us, and no wall here'
+      ).catch(() => false);
+      if (froze) {
+        keeper.tally.logoffs = (keeper.tally.logoffs || 0) + 1;
+        return SUCCESS;
+      }
+      // Same reasoning as the doomed node: FAILURE lets `leave_room` have the tick, and
+      // crossing an exit is the one movement that actually breaks contact.
+      keeper.note('below the flee line, cannot freeze again -- leaving it to the exit node', {
         health: Math.round(hp * 100) + '%',
         from: threat.map(o => bb.client.rsc.get(o.nameRsc)),
-        why: 'below the flee threshold in the open -- distance is the only thing that ' +
-             'stops this, and a wall four squares away is not distance',
+        wall_here: wall ? { attackers: wall.attackers, ok: wall.ok } : null,
+        why: 'deciding to run is not running; the exit is the only move that breaks contact',
       });
-      const away = await keeper.retreatToSafety({
-        because: 'below the flee threshold in the open',
-        from: threat.map(o => bb.client.rsc.get(o.nameRsc)),
-      });
-      // A REFUSED RETREAT IS FAILURE, AND FAILURE IS WHAT LETS THE TREE CARRY ON.
-      //
-      // In a selector, SUCCESS ends the tick — so returning it here on a retreat that was
-      // refused pre-empts `leave_room` below, which is the node that actually walks out.
-      // That is issue #51 in the sequential ladder, and it is the same mistake in the same
-      // shape: `retreatToSafety` returns `{arrived:false}` whenever `retreat_to_inn` is
-      // off, which on this fleet is always. Four deaths, all of them nought squares moved.
-      if (!away?.arrived) {
-        keeper.note('the retreat was refused -- letting the tree carry on', {
-          refused: away?.refused ?? 'no reason given', no_spot: away?.no_spot ?? null,
-          why: 'deciding to run is not running, and this node claiming the tick is what ' +
-               'stops the leave-the-room node from getting one' });
-        return FAILURE;
-      }
-      keeper.tally.withdrawals = (keeper.tally.withdrawals || 0) + 1;
-      return SUCCESS;
+      return FAILURE;
     }
-
     // At a wall (proven or not): the wall is blocking at least one direction.
     // Only run if critically low (below 20%) or the wall is not proven AND
     // there are multiple attackers (the wall can't block them all).
@@ -214,20 +213,31 @@ export function fleeThresholdNode(keeper) {
                       : 'an unproven wall with two or more attackers is not a wall -- '
                         + 'they get around it, and the character is taking hits from both sides',
       });
-      const away = await keeper.retreatToSafety({
-        because: critical ? 'below 20% in a safe spot -- the spot is not enough'
-                          : 'unproven wall, multiple attackers',
-        from: threat.map(o => bb.client.rsc.get(o.nameRsc)),
-      });
-      if (!away?.arrived) {
-        keeper.note('the retreat was refused -- letting the tree carry on', {
-          refused: away?.refused ?? 'no reason given', no_spot: away?.no_spot ?? null,
-          why: 'the wall is not enough and the retreat did not happen, so this tick belongs ' +
-               'to whichever node below can still move the body' });
-        return FAILURE;
+      // THE WALL NOT BEING ENOUGH IS THE LOGOFF'S CASE, NOT A REASON TO RUN.
+      //
+      // This called `retreatToSafety`, which returns `{arrived:false}` whenever `retreat_to_inn`
+      // is off -- and it has been off since 2026-08-27, so on this fleet the strategy has never
+      // once moved a body. Both notes above end in "-- running" and nothing ran.
+      //
+      // Note also what "unproven" meant here: proven-by-the-BOOK. The operator retired that
+      // question on 2026-09-10 -- "do *not* consult the safe spot ledger regarding safe walls, use
+      // the formula" -- so whether the wall holds is asked of the geometry, and whether to log
+      // off does not depend on the answer.
+      const froze = await keeper.playDead(
+        (critical ? 'below 20% behind a wall -- the margin is gone'
+                  : 'multiple attackers and this wall is not holding them') +
+        ' at ' + Math.round(hp * 100) + '% with ' + threat.length + ' on us'
+      ).catch(() => false);
+      if (froze) {
+        keeper.tally.logoffs = (keeper.tally.logoffs || 0) + 1;
+        return SUCCESS;
       }
-      keeper.tally.withdrawals = (keeper.tally.withdrawals || 0) + 1;
-      return SUCCESS;
+      keeper.note('the wall is not enough and we cannot freeze again -- leaving it to the exit', {
+        health: Math.round(hp * 100) + '%', crowd: threat.length,
+        why: 'a refusal from playDead means we froze here and have not acted since; the exit ' +
+             'node is the only thing left that moves the body out of contact',
+      });
+      return FAILURE;
     }
 
     // SHELTERED AND ABOVE CRITICAL: LOG OFF. This used to break off without moving.
@@ -371,11 +381,14 @@ export function vigorWalkNode(keeper) {
            'cannot raise vigor past ' + restCeiling + ' and we are already above it, so the ' +
            'only thing standing still produces is time spent hurt in a monster room',
     });
-    const went = await keeper.retreatToSafety({
-      because: 'hurt, no wall here, and too much vigor for waiting to be worth anything',
-      vigor: vigorNow,
-      monsters_in_room: hostiles.length,
-    });
+    // SAME RUNG AS THE SEQUENTIAL LADDER'S, AND THE SAME REPLACEMENT. Hurt, no wall here, and
+    // vigor already above the resting ceiling so waiting produces nothing but time spent hurt in
+    // a monster room. That is the operator's "danger is immediate" case exactly, and the answer
+    // is the logoff rather than a walk to an inn the fleet has had switched off for a fortnight.
+    const went = await keeper.playDead(
+      'hurt with no wall here and vigor above the rest ceiling'
+    ).then(ok => (ok ? { arrived: true } : { arrived: false, refused: 'already frozen here' }))
+     .catch(() => ({ arrived: false, refused: 'playDead threw' }));
     // The sequential ladder's version of this rung is what killed JohnsSlave four times
     // (issue #51): it reported progress on a refusal and returned HANDLED, so the
     // leave-the-room rung under it never ran. Here the same mistake is a SUCCESS that

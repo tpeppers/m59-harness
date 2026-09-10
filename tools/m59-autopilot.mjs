@@ -13385,20 +13385,68 @@ export class Autopilot {
     // Gated the same way: an emptying bar with only monsters on it is the road doing what
     // the road does, and the wall rung above is the answer to it. A stranger emptying it is
     // somebody choosing to, which is worth ending a journey over.
-    if (this.travelAllows('fight_back') && (fleeFrom === 'anything' || worthEnding.length)) {
+    // A MONSTER EMPTYING THE BAR IS NOT "THE ROAD DOING WHAT THE ROAD DOES". IT IS A DEATH.
+    //
+    // This rung had the right instrument and the wrong gate. `worthEnding` is the strangers
+    // list, and under the default `travel_flee_from: 'players'` it is EMPTY for monsters -- so
+    // the rate rescue only ever fired for a PERSON emptying the bar. The comment that used to
+    // sit here said it out loud: "A monster doing the same is the road doing what the road does,
+    // and the wall rung is the answer to it."
+    //
+    // IT IS NOT THE ANSWER TO IT. Four deaths on 2026-09-10, every one a monster and every one
+    // in transit, with this rung declining each time:
+    //
+    //   Floyd     room 40, The Throne Room of Victoria Castle. Ten TUSKED SKELETONS, level 100
+    //             against an engagement ceiling of 87. 112 seconds without moving or swinging,
+    //             41 -> 1 health, health_per_second -0.52, flee threshold 0.689 and his trail
+    //             sat at 40-45 of 58 for a long stretch first. Flee had every opportunity.
+    //   Gonzo     Ukgoth 599, `inert -- travelling to 39`. 36 -> 1 in FORTY-FIVE SECONDS, never
+    //             swinging, never fleeing -- and `ms_since_moved` read 0 the whole way, because
+    //             he was being WALKED while he was killed. Every stillness instrument in this
+    //             file reads that as healthy, which is why the rate is the only signal.
+    //   Camilla   Ukgoth 599, 34 minutes wedged, 20 -> 3.
+    //   Rizzo     Ukgoth 599, 83 seconds after Camilla, 52 -> 7.
+    //
+    // So the gate is gone. The instrument was always right -- `damageRate` reads the position
+    // pulse ring on the CHARACTER's clock, so it keeps measuring through a travel await nothing
+    // else can see into -- and the arithmetic does not care what is holding the sword.
+    //
+    // AND THE ANSWER IS THE LOGOFF, not merely ending the journey. Operator, 2026-09-10:
+    // "implement fall throughs to the singular correct behavior... the preexisting play_dead()
+    // -- it is universally the best survival mechanism available." Taking the journey back leaves
+    // the body standing in the room that is killing it, one pass richer and no safer; the logoff
+    // stops the attack outright. So: freeze first, THEN hand the journey back so the character
+    // is not walked straight back into it.
+    if (this.travelAllows('fight_back')) {
       const ttl = this.timeToDeath();
-      if (ttl !== null && ttl <= TRAVEL_RESCUE_TTL_MS)
+      if (ttl !== null && ttl <= TRAVEL_RESCUE_TTL_MS) {
+        const rate = Math.round(this.damageRate() * 100) / 100;
+        const byPlayer = fleeFrom === 'anything' || worthEnding.length > 0;
+        // The freeze is attempted before the take-back and its outcome is reported, because
+        // "we decided to save it" and "we saved it" have looked identical in this file before
+        // and that is what issue #51 was.
+        const froze = await this.playDead(
+          'dying at ' + rate + ' health/s while travelling, ' +
+          Math.round(ttl / 100) / 10 + 's left'
+        ).catch(() => false);
+        if (froze) this.tally.logoffs = (this.tally.logoffs || 0) + 1;
         return takeBack('dying faster than this journey can finish',
                         'health is falling at a rate that empties the bar inside ' +
                         Math.round(TRAVEL_RESCUE_TTL_MS / 1000) + ' seconds. Whether the body ' +
-                        'is moving is not the question — the arithmetic is',
+                        'is moving is not the question — the arithmetic is, and a monster ' +
+                        'emptying it counts',
                         { seconds_left: Math.round(ttl / 100) / 10,
-                          losing_per_s: Math.round(this.damageRate() * 100) / 100,
-                          adjacent: near.length },
-                        // Gated on `worthEnding` above, so this is a PERSON emptying the
-                        // bar. A monster doing the same is the road doing what the road
-                        // does, and the wall rung is the answer to it.
+                          losing_per_s: rate,
+                          adjacent: near.length,
+                          logged_off: froze,
+                          emptied_by: byPlayer ? 'a player' : 'monsters',
+                          note: froze ? 'logged off first, so the attack has already stopped'
+                                      : 'could not log off (already frozen here and not yet ' +
+                                        'acted); the journey is still ended so the ladder below ' +
+                                        'can take a wall or rest',
+                        },
                         { abandon: true });
+      }
     }
 
     // ---- 6. NOTHING WORTH STOPPING FOR. The journey keeps the character.
@@ -14236,7 +14284,12 @@ export class Autopilot {
       if (await this.playDead('at ' + v.health.value + ' health with ' + near.length +
                               ' adjacent' + (wall?.ok ? ', behind a wall the geometry confirms'
                                                       : ', in the open and out of better options'))
-            .catch(() => false)) return HANDLED;
+            .catch(() => false)) {
+        // Every rung that reaches the logoff reports the same way, because a landed logoff IS an
+        // action and a supervisor that cannot see it restarts the keeper mid-freeze.
+        this.progress('logged off rather than dying');
+        return HANDLED;
+      }
       // playDead only answers no when we have ALREADY frozen at this spot and not yet acted --
       // freezing again would clear PFLAG_MOVED_SINCE_ENTRY and undo the regeneration the last
       // one bought. There is nothing better to reach for in that state, so say so and let the
@@ -14275,7 +14328,10 @@ export class Autopilot {
         if (await this.playDead(`at ${Math.round(frac * 100)}% with ${near.length} adjacent` +
                                 (wall?.ok ? ', behind a wall the geometry confirms'
                                           : ', in the open — the logoff is what stops the attack'))
-              .catch(() => false)) return HANDLED;
+              .catch(() => false)) {
+          this.progress('logged off at the flee line rather than waiting it out');
+          return HANDLED;
+        }
       }
     }
     // SIT DOWN PROPERLY THE MOMENT WE ARRIVE SOMEWHERE SAFE.
@@ -14588,6 +14644,14 @@ export class Autopilot {
       // The logoff needs no walk, no destination and no wall: it stops the attack outright.
       const went = await this.playDead('hurt with no wall here and vigor above the rest ceiling')
         .catch(() => false);
+      // A LOGOFF THAT LANDED IS PROGRESS; ONE THAT WAS REFUSED IS NOT. That distinction is the
+      // whole of issue #51 -- the old rung reported progress whatever came back, which told every
+      // stall detector the body was fine while it stood still and died. Report the one that
+      // happened, and say nothing for the one that did not.
+      if (went) {
+        this.progress('logged off rather than standing hurt in a monster room');
+        return HANDLED;
+      }
       // A RETREAT THAT WAS REFUSED IS NOT A RETREAT, AND MUST NOT END THE PASS.
       //
       // This called progress() and returned HANDLED whatever came back — and what comes

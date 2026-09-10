@@ -59,7 +59,7 @@ const monster = (id, col = 25, row = 6) => ({ id, flags: OF.ATTACKABLE, col, row
 // `retreatToSafety` and `passFleeAndRest` are the real ones.
 const keeper = ({ health = 3, max = 21, vigor = 140, monsters = 1, hold = null,
                   policy = {}, exits = [{ to: 545, to_name: 'Deep Woods', steps_away: 3 }],
-                  spot = null, retreat = null } = {}) => {
+                  spot = null, retreat = null, playDead = null } = {}) => {
   const notes = [], progressed = [], stalled = [];
   const self = { id: 1, col: 25, row: 5 };
   const objects = new Map();
@@ -89,7 +89,9 @@ const keeper = ({ health = 3, max = 21, vigor = 140, monsters = 1, hold = null,
     tooTiredToTravel: () => false,
     tradeInPlaceIfWedged: async () => false,
     townTripIfCornered: async () => { calls.townTrip++; return false; },
-    playDead: async () => false,
+    // The ladder's answer is the logoff now, so this is the stub that matters. Defaults to a
+    // refusal so every existing case keeps exercising the fall-through it was written for.
+    playDead: playDead ?? (async () => false),
     settle: async () => {},
     cookSomething: async () => { calls.cooked++; },
     provision: async () => 'full',
@@ -227,10 +229,13 @@ console.log('A REFUSED RETREAT DOES NOT CLAIM THE PASS');
   // THE OTHER DIRECTION, WHICH IS WHAT MAKES THE ONE ABOVE AN ASSERTION RATHER THAN A
   // TAUTOLOGY: a retreat that HAPPENED still ends the pass, and must not also walk out of
   // the room it just retreated inside.
+  // Was `retreat: async () => ({arrived:true})`. The ladder no longer calls retreatToSafety at
+  // all -- removed 2026-09-10 with every other survival strategy -- so the verb whose success
+  // must end the pass is playDead.
   const k = keeper({ health: 3, max: 21, vigor: 140, monsters: 7,
-                     retreat: async () => ({ arrived: true, took_spot: true }) });
+                     playDead: async () => true });
   const r = await k.passFleeAndRest(ctxFor(k));
-  ok('a retreat that arrived ends the pass', r === HANDLED);
+  ok('a logoff that landed ends the pass', r === HANDLED);
   ok('and is reported as progress', k.progressed.length > 0, JSON.stringify(k.progressed));
   ok('and nothing walks out of the room on top of it', k.calls.leaveViaAny === 0);
 }

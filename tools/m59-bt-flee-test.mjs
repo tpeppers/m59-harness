@@ -154,28 +154,37 @@ t('doomedNode: FAILURE when health is above doomedAt', async () => {
   if (r !== 'FAILURE') throw new Error(`expected FAILURE, got ${r}`);
 });
 
-t('doomedNode: playDead refused -> abandons spot and runs (not a silent FAILURE)', async () => {
-  // THE BUG: when playDead() refuses (the "refusing to freeze again" guard fired),
-  // the old code returned FAILURE, which let the pass fall through to the legacy
-  // fallback. The legacy also refused, and the character bled out in place -- Lee
-  // froze 13 times at 1-4 HP in Main gate to the city of Tos and died. The fix: when
-  // playDead refuses, abandon the safe spot and run for a town. Moving is the only
-  // thing that changes the situation; staying still is how you die.
-  let leftHold = false, townTrip = false;
+t('doomedNode: a refused playDead yields the tick instead of running for a town', async () => {
+  // FLIPPED 2026-09-10, BY THE OPERATOR. This used to assert that a refused freeze abandons the
+  // spot and runs: "Moving is the only thing that changes the situation; staying still is how you
+  // die." The evidence behind it was Lee, who froze 13 times at 1-4 HP in Main gate to the city
+  // of Tos and died -- so the OLD conclusion was that freezing had failed and distance was left.
+  //
+  // The operator's instruction is the opposite and is about the whole codebase, not this node:
+  // "everything else in our codebase is wrong about how to get monsters to stop attacking you.
+  // There is truly only one way: The play_dead." A run for a town is dozens of seconds of being
+  // hit through the rooms that were already killing us.
+  //
+  // So what a refusal now means is narrower and the response is different. playDead only
+  // declines when we have ALREADY frozen here and not yet acted -- freezing again would clear
+  // PFLAG_MOVED_SINCE_ENTRY and undo the healing the last one bought. In that state the right
+  // answer is FAILURE, because FAILURE is what lets `leave_room` have the tick, and crossing an
+  // exit is real movement rather than a walk across a monster room. Lee's 13 freezes are still
+  // the case to beat; the answer to them is the exit, not the town.
+  let townTrip = false;
   const k = mockKeeper({
     _btFleeNear: () => [{ id: 2, nameRsc: 1 }],
-    holdWorks: () => true,          // sheltered
+    holdWorks: () => true,
     hold: { col: 3, row: 17 },
-    playDead: async () => false,    // playDead REFUSES (not helping)
-    leaveHold: async () => { leftHold = true; return { refused: false }; },
+    playDead: async () => false,    // already frozen here and not yet acted
     townTripIfCornered: async () => { townTrip = true; return true; },
   });
   k.s.client.vitals = () => ({ health: { value: 3, max: 30 }, vigor: { value: 80, max: 200 } });
-  const node = doomedNode(k);
-  const r = await node.tickAsync(bb(k));
-  if (r !== 'SUCCESS') throw new Error(`expected SUCCESS (ran for a town), got ${r}`);
-  if (!leftHold) throw new Error('expected leaveHold to be called (abandon the spot)');
-  if (!townTrip) throw new Error('expected townTripIfCornered to be called (run)');
+  const r = await doomedNode(k).tickAsync(bb(k));
+  if (r !== 'FAILURE') throw new Error(`expected FAILURE (yield to the exit node), got ${r}`);
+  if (townTrip) throw new Error('ran for a town; that strategy was removed');
+  if (!k.calls.some(([kind, msg]) => kind === 'note' && /cannot freeze again yet/.test(msg)))
+    throw new Error('the refusal was swallowed instead of said out loud');
 });
 
 t('doomedNode: playDead accepted -> SUCCESS (stays and freezes)', async () => {
@@ -223,41 +232,77 @@ t('fleeThresholdNode: SUCCESS when below fleeBelow in the open', async () => {
 // whenever `retreat_to_inn` is off, which on this fleet is always. A node that returns
 // SUCCESS on that ends the selector tick, so `leave_room` -- the node that actually walks
 // out -- never gets one, and the character stands still until it dies. Four deaths.
-t('fleeThresholdNode: a REFUSED retreat is FAILURE, so the tree can carry on', async () => {
+t('fleeThresholdNode: no wall means the LOGOFF, not a retreat', async () => {
+  // The retreat this replaces was decorative: `retreatToSafety` returns `{arrived:false}`
+  // whenever `retreat_to_inn` is off, and it has been off on this fleet since 2026-08-27. Four
+  // deaths came of a node that decided to run and did not (issue #51). Operator, 2026-09-10:
+  // "never resting in the open: use SAFE WALLS, and log out/in if the danger is immediate".
+  let froze = false, retreated = false;
   const k = mockKeeper({
     _btFleeNear: () => [{ id: 2, nameRsc: 1 }],
     holdWorks: () => false,
-    retreatToSafety: async () => ({ arrived: false, refused: 'retreat_to_inn is off' }),
+    playDead: async () => { froze = true; return true; },
+    retreatToSafety: async () => { retreated = true; return { arrived: true }; },
   });
   k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
   const r = await fleeThresholdNode(k).tickAsync(bb(k));
-  if (r !== 'FAILURE') throw new Error(`expected FAILURE, got ${r}`);
-  if (k.tally.withdrawals !== 0)
-    throw new Error('a withdrawal that did not happen was tallied');
-  if (!k.calls.some(([kind, msg]) => kind === 'note' && /retreat was refused/.test(msg)))
-    throw new Error('the refusal was swallowed instead of said out loud');
+  if (r !== 'SUCCESS') throw new Error(`expected SUCCESS (the logoff landed), got ${r}`);
+  if (!froze) throw new Error('expected playDead to be the answer with no wall');
+  if (retreated) throw new Error('retreatToSafety was called; that strategy was removed');
+
+  // AND A REFUSAL STILL YIELDS THE TICK, which is the half of issue #51 that must not regress:
+  // a node claiming SUCCESS it did not earn pre-empts `leave_room`, the one node that walks out.
+  const k2 = mockKeeper({
+    _btFleeNear: () => [{ id: 2, nameRsc: 1 }],
+    holdWorks: () => false,
+    playDead: async () => false,
+  });
+  k2.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
+  const r2 = await fleeThresholdNode(k2).tickAsync(bb(k2));
+  if (r2 !== 'FAILURE') throw new Error(`expected FAILURE on a refused freeze, got ${r2}`);
+  if (k2.tally.withdrawals) throw new Error('a withdrawal that did not happen was tallied');
 });
 
-t('vigorWalkNode: a REFUSED retreat is FAILURE and is not progress', async () => {
+t('vigorWalkNode: the logoff answers it, and a refusal is not progress', async () => {
+  // This rung is hurt + no wall + vigor already above the resting ceiling, so waiting produces
+  // nothing but time spent hurt in a monster room. It used to walk to an inn; the inn walk has
+  // been switched off since 2026-08-27, so it never moved anybody. It is now the logoff.
+  let froze = false, retreated = false;
   const k = mockKeeper({
     _btFleeHostiles: () => [{ id: 2, nameRsc: 1 }],
     _btFleeNear: () => [],
     holdWorks: () => false,
-    retreatToSafety: async () => ({ arrived: false, refused: 'retreat_to_inn is off' }),
+    playDead: async () => { froze = true; return true; },
+    retreatToSafety: async () => { retreated = true; return { arrived: true }; },
   });
   k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
   const r = await vigorWalkNode(k).tickAsync(bb(k));
-  if (r !== 'FAILURE') throw new Error(`expected FAILURE, got ${r}`);
-  if (k.calls.some(([kind]) => kind === 'progress'))
-    throw new Error('a refused retreat was reported as progress');
+  if (r !== 'SUCCESS') throw new Error(`expected SUCCESS (the logoff landed), got ${r}`);
+  if (!froze) throw new Error('expected playDead to answer this rung');
+  if (retreated) throw new Error('retreatToSafety was called; that strategy was removed');
+
+  // A REFUSED FREEZE IS STILL NOT PROGRESS. That half is issue #51 and must never regress:
+  // reporting progress for something that did not happen hides the body from every stall
+  // detector at the same time as pre-empting the node that could still move it.
+  const k2 = mockKeeper({
+    _btFleeHostiles: () => [{ id: 2, nameRsc: 1 }],
+    _btFleeNear: () => [],
+    holdWorks: () => false,
+    playDead: async () => false,
+  });
+  k2.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
+  const r2 = await vigorWalkNode(k2).tickAsync(bb(k2));
+  if (r2 !== 'FAILURE') throw new Error(`expected FAILURE on a refused freeze, got ${r2}`);
+  if (k2.calls.some(([kind]) => kind === 'progress'))
+    throw new Error('a refused freeze was reported as progress');
 });
 
-t('vigorWalkNode: SUCCESS when the retreat actually arrives', async () => {
+t('vigorWalkNode: SUCCESS when the logoff lands', async () => {
   const k = mockKeeper({
     _btFleeHostiles: () => [{ id: 2, nameRsc: 1 }],
     _btFleeNear: () => [],
     holdWorks: () => false,
-    retreatToSafety: async () => ({ arrived: true }),
+    playDead: async () => true,
   });
   k.s.client.vitals = () => ({ health: { value: 10, max: 36 }, vigor: { value: 140, max: 200 } });
   const r = await vigorWalkNode(k).tickAsync(bb(k));

@@ -204,46 +204,77 @@ console.log('a turn that does not go through is said out loud');
 // stationary at the moment of death, median 29 seconds still. In that corridor, standing
 // still IS the cause of death, and a freeze is a way of standing still on purpose.
 console.log('');
-console.log('and off a proven spot it is refused outright');
+console.log('and OFF a wall it freezes anyway, which is the operator\'s reversal');
 {
+  // REVERSED 2026-09-10, BY THE OPERATOR, AND THE EVIDENCE ABOVE IS KEPT BECAUSE IT IS REAL.
+  //
+  //   "implement fall throughs to the singular correct behavior that would have saved any
+  //    character that died in this window: the preexisting play_dead() -- it is universally the
+  //    best survival mechanism available... There is truly only one way: The play_dead."
+  //
+  // The refusal this replaces was argued from the Twisted Wood corridor: three characters froze
+  // in the OPEN at 4, 10 and 13 health and all three died. That happened. What it does not show
+  // is that freezing CAUSED it -- those characters had no way out either way, and the comparison
+  // the refusal made was against a rescue they did not have.
+  //
+  // What the logoff actually buys, in the operator's words: the enemy stops attacking IMMEDIATELY,
+  // where "waiting and hoping can let the enemy continue attacking for up to dozens of seconds".
+  // So off a wall the choice is not healing versus not healing; it is an attack that ends now
+  // versus one that continues.
+  //
+  // AND IT COST TWO MORE CHARACTERS BEFORE IT WAS REVERSED. Camilla and Rizzo died in Ukgoth on
+  // 2026-09-10 with `at_a_safe_wall: null` -- precisely the state in which this verb answered no.
   const s = fakeSession({ health: 4, max: 37 });
   const a = keeper(s);
-  a.holdWorks = () => false;          // the open ground, which is where they were dying
-  a.hold = { col: 9, row: 24, proven: false };
+  a.holdWorks = () => false;          // open ground: the case that used to be refused
+  a.hold = null;
   const froze = await a.playDead('at 4 health with 15 adjacent, nothing that holds');
-  ok('playDead returns false rather than freezing', froze === false);
-  ok('and nothing was sent to the server — no disconnect, no reconnect', s.sent.length === 0,
-     JSON.stringify(s.sent).slice(0, 120));
-  ok('and it says why, naming the trade rather than just refusing',
-     a.notes.some(n => /refusing to play dead/.test(n.msg ?? '') &&
-                       /never health/i.test(JSON.stringify(n.detail ?? {}))));
+  ok('playDead freezes in the open rather than refusing', froze !== false);
+  // AND OFF A WALL IT DELIBERATELY SENDS NOTHING. On a wall the freeze ends with a TURN, which
+  // re-arms regeneration without giving up the square. In the open there is no square worth
+  // arming and a turn is an action monsters are entitled to answer, so the correct freeze here
+  // is a logoff and then nothing at all. My first version of this assertion asked for a send and
+  // failed on the behaviour being right.
+  ok('and it sends no TURN, because turning in the open re-exposes the body',
+     !s.sent.some(x => x.kind === 'face'), JSON.stringify(s.sent).slice(0, 120));
+  ok('and it says it did nothing that counts as an action',
+     a.notes.some(n => /do NOTHING that counts as an action/.test(JSON.stringify(n.detail ?? {}))));
+  ok('and it no longer emits the old refusal note',
+     !a.notes.some(n => /refusing to play dead/.test(n.msg ?? '')));
 
-  // An UNPROVEN wall is not a wall. holdWorks() is `hold && hold.proven`, and the deaths
-  // that prompted all of this included two on unproven walls — a spot the book has not
-  // confirmed is exactly as reachable as open floor.
+  // An unproven wall is no longer a special case either -- there is nothing left for the book to
+  // be consulted ABOUT. The operator: "do *not* consult the safe spot ledger regarding safe
+  // walls, use the formula".
   const s2 = fakeSession({ health: 6, max: 40 });
   const b = keeper(s2);
   b.holdWorks = () => false;
   b.hold = { col: 1, row: 1, proven: false, takenAt: Date.now() };
-  ok('an UNPROVEN wall is refused too — it is not a spot until the book says so',
-     (await b.playDead('on a wall nobody has tested')) === false);
+  ok('an unproven wall freezes too, because proof is no longer the question',
+     (await b.playDead('on a wall nobody has tested')) !== false);
 }
-
 // The rule lives in the VERB, not in one caller, and the caller that used to override it
 // is gone. Both pinned by source, because an absence cannot be exercised.
 console.log('');
 console.log('the rule is enforced where it cannot be routed around');
 {
   const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
-  ok('playDead itself refuses off a proven spot, before anything is sent',
-     /async playDead\(why\) \{[\s\S]{0,1800}if \(!this\.holdWorks\(\)\)[\s\S]{0,400}refusing to play dead/.test(SRC));
-  const doomed = SRC.slice(SRC.indexOf('if (doomed && this.policy.panicLogoff !== false)'));
-  const afterTown = doomed.slice(doomed.indexOf('townTripIfCornered'), doomed.indexOf('townTripIfCornered') + 2600);
-  ok('the open-ground fallback that used to freeze anyway is GONE',
-     !/await this\.playDead\(/.test(afterTown),
-     afterTown.match(/await this\.playDead\([^)]*/)?.[0] ?? '');
-  ok('and what replaced it says it withdraws instead',
-     /withdrawing rather than freezing/.test(SRC));
+  // The REFUSAL is what is gone, and an absence has to be pinned by source.
+  ok('playDead no longer gates on a book-proven hold',
+     !/if \(!this\.holdWorks\(\)\)[\s\S]{0,400}refusing to play dead/.test(SRC));
+  ok('and the wall question, where it is still asked, is answered by the GEOMETRY',
+     /wallHere\(\) \{/.test(SRC) && /exposureAt\(geo, Math\.round\(row\)/.test(SRC));
+  ok('which is the same formula safeWalls uses — attackers must be zero',
+     /\(ex\.attackers \?\? 0\) === 0/.test(SRC));
+  // THE DOOMED RUNG NO LONGER FORKS. It used to play dead when sheltered and run for a town when
+  // not; both are now the one verb, which is what the operator asked for. The town trip survives
+  // as an ERRAND (unarmed with no mana, or the vigor/food deadlock) and not as survival.
+  const doomed = SRC.slice(SRC.indexOf('if (doomed && this.policy.panicLogoff !== false)'),
+                           SRC.indexOf('SIT DOWN PROPERLY THE MOMENT WE ARRIVE'));
+  ok('the doomed rung reaches for playDead', /await this\.playDead\(/.test(doomed));
+  ok('and no longer runs for a town as a survival move',
+     !/townTripIfCornered/.test(doomed), doomed.match(/townTripIfCornered/)?.[0] ?? '');
+  ok('and there is no sheltered/unsheltered branch left in it',
+     !/if \(sheltered\) \{/.test(doomed));
   // A journey no longer ends for a tactic that will be refused. `flee` catches the same
   // characters (doomed_in_open_below 0.3 sits under flee_below) and hands over to moving.
   ok('play_dead is no longer a travel guard, so it cannot cancel a journey',

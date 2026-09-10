@@ -437,15 +437,34 @@ console.log('\nthe triggers — none of them ask whether the body is moving');
   // ---- ABOVE THE FLEE LINE, BUT DYING FAST. Nothing adjacent in the room model at all,
   // so this can only fire on the rate.
   //
-  // AND IT IS GATED ON A PERSON DOING IT, for the same reason rung 4 is: this rung is the
-  // only one in the file that ABANDONS. A bar emptying under monsters is the road doing what
-  // the road does — the wall rung answers that and keeps the objective. I asserted this one
-  // wrongly too, in the same direction, which is what a rule is for.
+  // REVERSED 2026-09-10, BY FOUR DEATHS. This used to assert the opposite, and the reasoning
+  // was written twice in this file: "A bar emptying under monsters is the road doing what the
+  // road does -- the wall rung answers that and keeps the objective."
+  //
+  // The wall rung does not answer it. In one night, all four in transit, all four monsters,
+  // this rung declining every time:
+  //
+  //   Floyd    room 40, ten TUSKED SKELETONS (level 100) against an engagement ceiling of 87;
+  //            112 seconds without moving or swinging, 41 -> 1, health_per_second -0.52, and
+  //            his health sat AT the flee threshold for a long stretch beforehand.
+  //   Gonzo    Ukgoth 599, 36 -> 1 in forty-five seconds, and `ms_since_moved` read 0 the whole
+  //            way because he was being WALKED while he was killed -- so every stillness
+  //            instrument in the file read him as healthy and the rate was the only signal.
+  //   Camilla, Rizzo   Ukgoth 599, 83 seconds apart.
+  //
+  // The instrument was never the problem: `damageRate` reads the position pulse ring on the
+  // CHARACTER's clock and keeps measuring through a travel await. The GATE was the problem, and
+  // arithmetic does not care what is holding the sword.
   const bleedingMonsters = keeper({ health: 30, max: 37, adjacent: 2, fleeAt: 0.7, guard: {},
                                     pulses: ring({ from: 34, perSample: 4 }) });
   const rBleedMon = await run(bleedingMonsters);
-  ok('a bar emptying under MONSTERS never abandons the journey', !rBleedMon.abandoned,
-     JSON.stringify(bleedingMonsters.notes.map(n => n.detail?.trigger)));
+  ok('a bar emptying under MONSTERS now abandons the journey too', !!rBleedMon.abandoned,
+     JSON.stringify(bleedingMonsters.notes.map(n => n.detail?.trigger ?? n.msg)));
+  ok('and it says monsters emptied it, so the postmortem can tell the two apart',
+     bleedingMonsters.notes.some(n => n.detail?.emptied_by === 'monsters'),
+     JSON.stringify(bleedingMonsters.notes.map(n => n.detail?.emptied_by)));
+  ok('and it reaches for the logoff rather than only ending the journey',
+     bleedingMonsters.notes.some(n => n.detail?.logged_off !== undefined));
   const bleeding = keeper({ health: 30, max: 37, adjacent: 0, players: 1, fleeAt: 0.7, guard: {},
                             pulses: ring({ from: 34, perSample: 4 }) });
   const r3 = await run(bleeding);
