@@ -75,7 +75,11 @@ const BROKER_SRC = read('tools/m59-broker.mjs') + '\n' + read('tools/m59-game.mj
 // `who()` resolves to null here on purpose — `recordEvent` is a no-op for a nameless
 // character, so a test that exercises a take-back does not append to the real ledger.
 const keeper = ({ health = 30, max = 37, vigor = 80, adjacent = 0, players = 0, armed = true,
-                  fleeAt = 0.7, guard = null, policy = {}, pulses = null } = {}) => {
+                  fleeAt = 0.7, guard = null, policy = {}, pulses = null,
+                  // The travel guard reaches for the logoff now, so it has to exist here. It
+                  // defaults to SUCCEEDING, because the interesting question in this file is what
+                  // happens to the JOURNEY afterwards, not whether the freeze landed.
+                  playDead = async () => true } = {}) => {
   const notes = [];
   const objects = new Map();
   // A monster carries ATTACKABLE and not PLAYER. That distinction is load-bearing
@@ -96,6 +100,7 @@ const keeper = ({ health = 30, max = 37, vigor = 80, adjacent = 0, players = 0, 
     book: { save: () => {} },
     watch: { pulses: pulses ?? [], wedges: 0 },
     note: (what, detail) => notes.push({ what, detail }),
+    playDead,
     progress: () => {},
     noProgress: () => {},
     recordFrame: () => {},
@@ -434,6 +439,33 @@ console.log('\nthe triggers — none of them ask whether the body is moving');
      !r2.took && r2.verdict === HANDLED);
   ok('and stays in the travelling state', !!noFlee.travelling);
 
+  // ---- BELOW THE FLEE LINE WITH MONSTERS: LOG OFF, AND KEEP THE CROSSING.
+  //
+  // Two decisions that used to be one. Stopping the attack is not person-only -- the logoff is
+  // the only thing that stops one outright, and it does not care what is swinging. Taking the
+  // JOURNEY away still is person-only, because a character that keeps walking outpaces most of
+  // what is chasing it and one that stops is surrounded by all of it.
+  //
+  // MEASURED, and it is why this rung exists at all: after deploy-2026-09-10-11 removed the same
+  // players-only gate from the RATE rung, two characters still died in transit within ten
+  // minutes, keepers demonstrably on the new code (broker 02:57:44, keepers 02:57:46):
+  //   Floyd  room 597, spider, trail 1/57 -> 1/57 -> 1/57 -> 2/57, flee line 0.667
+  //   Pepe   room 70, zombie,  trail 4/49 -> 1/49 -> 1/49 -> 2/49, flee line 0.694
+  // The rate rung could not fire for either, and NOT because of a gate: `damageRate` is a delta
+  // across the pulse ring, so a body already sitting at 1 health has a rate of zero and a
+  // `timeToDeath` of null. The rate fires during a collapse and is blind at the floor. Absolute
+  // health is the signal at the floor.
+  const lowWithMonsters = keeper({ health: 8, max: 57, adjacent: 3, players: 0, fleeAt: 0.667,
+                                   guard: {} });
+  const rLowMon = await run(lowWithMonsters);
+  ok('below the flee line with MONSTERS, the logoff fires',
+     lowWithMonsters.notes.some(n => /logged off below the flee line/.test(n.what ?? '')),
+     JSON.stringify(lowWithMonsters.notes.map(n => n.what)));
+  ok('and the crossing is NOT abandoned for monsters -- that is the road doctrine',
+     !rLowMon.abandoned, JSON.stringify(rLowMon));
+  ok('and the note says why the journey was kept',
+     lowWithMonsters.notes.some(n => /outpaces most of what is chasing it/.test(
+       JSON.stringify(n.detail ?? {}))));
   // ---- ABOVE THE FLEE LINE, BUT DYING FAST. Nothing adjacent in the room model at all,
   // so this can only fire on the rate.
   //

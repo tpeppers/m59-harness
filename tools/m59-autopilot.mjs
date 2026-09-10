@@ -13362,19 +13362,95 @@ export class Autopilot {
     // Movement is not consulted here at all. Below the flee line with something adjacent
     // is a fight the keeper has already decided it does not take, and a journey is not a
     // reason to take it.
-    if (this.travelAllows('flee') && hp !== null && worthEnding.length
-        && hp < this.safety().fleeAt)
-      return takeBack('below the flee line with someone adjacent',
-                      'the keeper flees at this fraction when it is driving, and a journey ' +
-                      'is not a reason to stand and take it',
-                      { adjacent: worthEnding.length, monsters_near: near.length,
-                        players_near: strangers.length, flee_from: fleeFrom },
-                      // THE ONLY KIND OF TROUBLE THAT ENDS A JOURNEY. `worthEnding` is the
-                      // STRANGERS list under the default `travel_flee_from: 'players'`, so
-                      // this rung cannot fire for monsters unless somebody sets 'anything'
-                      // — and if they have, they have asked for the old behaviour.
-                      { abandon: true });
+    // AND IT COULD NOT FIRE FOR A MONSTER, WHICH IS WHY IT SAVED NOBODY TONIGHT.
+    //
+    // The gate was `worthEnding.length` -- the STRANGERS list under the default
+    // `travel_flee_from: 'players'` -- and the comment that used to sit at the bottom of this
+    // rung said so proudly: "this rung cannot fire for monsters unless somebody sets 'anything'
+    // -- and if they have, they have asked for the old behaviour."
+    //
+    // MEASURED AFTER THE FIRST FIX, WHICH IS THE POINT. I removed the same gate from rung 5
+    // (the damage rate) in deploy-2026-09-10-11 and two characters died in transit within ten
+    // minutes of the restart anyway, with the keepers demonstrably running the new code
+    // (broker 02:57:44, keepers 02:57:46):
+    //
+    //   Floyd  room 597, spider, `doing: travelling`, trail 1/57 -> 1/57 -> 1/57 -> 2/57
+    //          against a flee threshold of 0.667. He was at ONE HEALTH for the whole window.
+    //   Pepe   room 70, zombie, `doing: travelling`, trail 4/49 -> 1/49 -> 1/49 -> 2/49
+    //          against a flee threshold of 0.694.
+    //
+    // Rung 5 could not save either, and not because of its gate: `damageRate` is a DELTA across
+    // the pulse ring, so a character that has already collapsed and is sitting at 1 health has
+    // a rate of ZERO and a `timeToDeath` of null. The rate rung fires during a descent and is
+    // blind at the floor. Absolute health is the signal at the floor, and that is this rung.
+    //
+    // So: any threat, not just a person. A journey is not a reason to stand and take a fight
+    // the keeper has already decided it does not take, and which side of the monster/player
+    // line the attacker falls on has nothing to do with whether the bar is emptying.
+    //
+    // AND THE ANSWER IS THE LOGOFF FIRST. Operator, 2026-09-10: "There is truly only one way:
+    // The play_dead." Taking the journey back leaves the body standing in the room that is
+    // killing it; the logoff stops the attack outright and costs a reconnect.
+    //
+    // Movement is still not consulted here at all -- that is the Cccc lesson (10 of 37 health,
+    // six things in the room, twenty-two seconds of a two-square shuffle that reset every
+    // stillness timer it met).
+    // TWO DIFFERENT DECISIONS, AND CONFLATING THEM IS WHAT I GOT WRONG FIRST.
+    //
+    //   (a) SHOULD THE ATTACK BE STOPPED? Yes, always, below the flee line -- and the only
+    //       thing that stops one outright is the logoff. That does not care whether a monster
+    //       or a person is swinging.
+    //   (b) SHOULD THE JOURNEY BE TAKEN AWAY? That is the road doctrine and it is still a
+    //       PERSON-ONLY question. A character that keeps walking outpaces most of what is
+    //       chasing it; one that stops is surrounded by all of it. CLAUDE.md's correction of
+    //       2026-08-21 draws the line exactly here: "Walking through is still the answer to
+    //       being HIT; it is not the answer to being below the flee line."
+    //
+    // My first version answered (a) by doing (b) -- freezing AND abandoning for monsters -- and
+    // seven assertions in m59-travelling-test caught it, every one of them a record of a death
+    // that came from stopping in a crowd. They were right and I was reinstating the failure
+    // they were written from. The logoff needs no cancellation to work: it stops the attack
+    // where the body stands, and the journey is still there when the reconnect lands.
+    if (this.travelAllows('flee') && hp !== null && hp < this.safety().fleeAt
+        && (worthEnding.length || near.length)) {
+      const byPlayer = worthEnding.length > 0;
+      // (a) ALWAYS. This is the rung Floyd and Pepe needed after deploy-11: both were
+      // travelling far below their flee thresholds (1/57 at 0.667, 4/49 at 0.694) with a
+      // monster on them, and rung 5 could not help because `damageRate` is a delta across the
+      // pulse ring -- a body already sitting at 1 health has a rate of ZERO. The rate rung
+      // fires during a collapse; absolute health is the signal at the floor.
+      const froze = await this.playDead(
+        'below the flee line at ' + Math.round(hp * 100) + '% while travelling, with ' +
+        (byPlayer ? worthEnding.length + ' stranger(s) on us' : near.length + ' monster(s) on us')
+      ).catch(() => false);
+      if (froze) this.tally.logoffs = (this.tally.logoffs || 0) + 1;
 
+      // (b) ONLY FOR A PERSON. Unchanged, deliberately, and the detail says which happened so
+      // a postmortem can tell a freeze-and-carry-on from a freeze-and-stop.
+      if (byPlayer)
+        return takeBack('below the flee line with someone adjacent',
+                        'the keeper flees at this fraction when it is driving, and a journey ' +
+                        'is not a reason to stand and take it',
+                        { adjacent: worthEnding.length, monsters_near: near.length,
+                          players_near: strangers.length, flee_from: fleeFrom,
+                          logged_off: froze },
+                        { abandon: true });
+
+      if (froze) {
+        this.note('logged off below the flee line and kept the journey', {
+          at_fraction: Math.round(hp * 100) + '%',
+          flee_at: Math.round(this.safety().fleeAt * 100) + '%',
+          monsters_near: near.length,
+          why: 'the logoff stops the attack outright, which is what being under the flee line ' +
+               'needs; the crossing is not cancelled because a character that keeps walking ' +
+               'outpaces most of what is chasing it and one that stops is surrounded by all ' +
+               'of it',
+        });
+        return HANDLED;
+      }
+      // Could not freeze (already frozen here and not yet acted). Fall through to rung 5 and
+      // the rest of the guard rather than inventing a third answer.
+    }
     // ---- 5. LOSING HEALTH FAST ENOUGH THAT THE ROAD WILL NOT END FIRST.
     //
     // The rate, not the position. A character being eaten while it walks is in exactly as
