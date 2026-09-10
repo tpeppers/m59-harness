@@ -96,6 +96,31 @@ export const VERBS = {
   // SAY_YELL (2) reaches this room AND the ones next to it (user.kod:4088), which is the
   // difference between telling the person killing you and telling somebody who might come.
   yell: { args: ['message'], outward: true, why: 'shout to this room and the adjacent ones' },
+  // THE WHOLE SERVER HEARS THIS, WHICH IS A DIFFERENT CLASS OF ACT FROM `yell`.
+  //
+  // `say` reaches a room and `yell` reaches the adjacent ones; this reaches EVERY player
+  // logged in, including strangers who never opted into anything we are doing. The game
+  // itself treats it as the help-of-last-resort channel — the guardian angel's death mail
+  // tells a new player to `broadcast` for somebody to find their corpse — so using it for
+  // colour is borrowing a siren to tell a joke.
+  //
+  // It is in the set because the operator asked for it by name, for a character whose JOB
+  // is dying: "he's going to be spamming a little bit here or there if he dies, he might
+  // as well broadcast funny one liners." Their accounts, their server, their call.
+  //
+  // BUT IT CARRIES A COOLDOWN AND THE OTHER OUTWARD VERBS DO NOT, because the failure mode
+  // is not one broadcast, it is a death loop: a character that dies every ninety seconds on
+  // a road it cannot survive broadcasts every ninety seconds for as long as nobody is
+  // watching, and that is indistinguishable from griefing to the people reading it.
+  // `cooldown_s` defaults to ten minutes and the executor is expected to honour it; a
+  // playbook may lower it, which is a choice somebody has to type.
+  //
+  // `message` MAY BE A LIST, and for this verb it usually should be. One line broadcast
+  // repeatedly is worse than no line at all, so an array is picked from at random and a
+  // bare string is used as-is.
+  broadcast: { args: ['message', 'cooldown_s'], outward: true, server_wide: true,
+               cooldown_s: 600,
+               why: 'tell every player on the server, sparingly' },
   // SAY_GUILD (10) reaches every guild member who is logged on, anywhere in the world
   // (UserSayGuild, user.kod:4112). Refused with a sentence if the character has no guild.
   tell_guild: { args: ['message'], outward: true, why: 'tell the guild, wherever they are' },
@@ -229,6 +254,32 @@ export function decide(trigger, playbook, facts = {}) {
     if (!holds(r.when, facts)) continue;
     const args = {};
     for (const a of spec.args) if (r[a] !== undefined) args[a] = r[a];
+    // A LIST OF LINES IS ONE DECISION, NOT A LIST OF DECISIONS. Rotating text is the
+    // difference between a character with a voice and a character with a stuck record, and
+    // the alternative — one rule per line with the same `when` — never fires past the first,
+    // because first match wins.
+    //
+    // CHOSEN FROM THE FACTS, NOT FROM Math.random, AND THAT IS NOT FUSSINESS. This module's
+    // contract is stated a few lines above: "PURE. Facts in, one action or null out. No
+    // clock, no randomness -- which is what lets the whole table be tested against fixtures,
+    // and what makes an action reproducible from the journal line that recorded the facts it
+    // was given." A random pick would have quietly cost both of those. Hashing the facts
+    // keeps them: the same death always yields the same line, a different death usually
+    // yields a different one, and a journal entry can still be replayed to the same result.
+    if (Array.isArray(args.message)) {
+      const lines = args.message.filter(x => typeof x === 'string' && x.trim());
+      if (!lines.length) delete args.message;
+      else {
+        let h = 2166136261;
+        for (const ch of JSON.stringify(facts))
+          h = ((h ^ ch.charCodeAt(0)) * 16777619) >>> 0;
+        args.message = lines[h % lines.length];
+      }
+    }
+    // A cooldown the playbook did not state is the verb's own, so an executor never has to
+    // know which verbs are rate-limited.
+    if (spec.cooldown_s !== undefined && args.cooldown_s === undefined)
+      args.cooldown_s = spec.cooldown_s;
     return { verb: r.do, args, why: r.why || spec.why, rule: i };
   }
   return null;

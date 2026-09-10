@@ -6985,6 +6985,34 @@ export class Autopilot {
                                                'character is refused with prose)');
         }
 
+        // EVERY PLAYER LOGGED IN HEARS THIS, SO IT IS THE ONE SPOKEN VERB WITH A CLOCK.
+        //
+        // `say` reaches a room and `yell` the ones next door; this reaches strangers who
+        // never opted into anything the fleet is doing. The game itself treats it as the
+        // help-of-last-resort channel — the guardian-angel death mail teaches a new player
+        // to `broadcast` for somebody to find their corpse — so the failure mode worth
+        // guarding is not one broadcast, it is a DEATH LOOP: a character dying every ninety
+        // seconds on a road it cannot survive would broadcast every ninety seconds for as
+        // long as nobody is watching, which reads as griefing however good the line is.
+        //
+        // The cooldown is the verb's own default (600s) unless the playbook lowered it, and
+        // it is enforced HERE rather than trusted, because m59-playbook.mjs is pure and has
+        // no clock to enforce it with. A suppressed broadcast is reported as suppressed —
+        // silence that looks like success is the thing this repository keeps paying for.
+        case 'broadcast': {
+          const text = String(action.args.message ?? '');
+          if (!text) return done('nothing — no message was written');
+          const waitS = Number(action.args.cooldown_s ?? 600);
+          const last = this.lastBroadcastAt ?? 0;
+          const sinceS = (Date.now() - last) / 1000;
+          if (last && sinceS < waitS)
+            return done(`suppressed — broadcast cooldown, ${Math.round(waitS - sinceS)}s left`,
+                        { suppressed: true, cooldown_s: waitS });
+          this.lastBroadcastAt = Date.now();
+          await this.s.pacer.submit('say', () => this.s.client.broadcast(text));
+          return done('broadcast it to everyone logged in', { cooldown_s: waitS });
+        }
+
         case 'call_for_help': {
           // THE ORDER IS THE POINT, AND IT IS WHY THIS IS ONE VERB. Shout, tell the guild,
           // then go. Logging off first would mean nobody ever learns where it happened;

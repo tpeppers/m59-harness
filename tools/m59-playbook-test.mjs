@@ -21,6 +21,7 @@
 //   4. THE TWO OUTWARD VERBS need a literal message, because `prod` is a shared server
 //      and the text is visible to strangers and attributable to the account.
 
+import { readFileSync } from 'node:fs';
 import { decide, validate, VERBS, TRIGGERS, unknownVerbs } from './m59-playbook.mjs';
 
 let pass = 0, fail = 0;
@@ -320,6 +321,59 @@ console.log('\ncalling for help — the three verbs that speak to strangers');
     { who: 'X', health_pct: 20, room: 999, attackers: 1, in_safe_spot: false });
   ok('an unwritten room falls through to the plain logoff', elsewhere.verb === 'logoff');
   ok('and says nothing at all there', elsewhere.args.message === undefined);
+}
+
+
+console.log('');
+console.log('a broadcast is heard by the whole server, so it rotates its line and carries a clock');
+{
+  // THE VERB EXISTS FOR THE DESIGNATED DIE-ER, and every part of it is a thing that was
+  // nearly got wrong. Added 2026-09-10 for Marco Polo on the mana-node tour.
+  const pb = { on: { died: [
+    { do: 'broadcast', when: { was_killed_by_player: false },
+      message: ['line one', 'line two', 'line three'] },
+    { do: 'nothing' },
+  ] } };
+  const monster = { killed_by: ['troll'], was_killed_by_player: false, room: 599, level: 20 };
+  const player  = { killed_by: ['someone'], was_killed_by_player: true, room: 39, level: 20 };
+
+  const a = decide('died', pb, monster);
+  ok('a monster death broadcasts', a?.verb === 'broadcast');
+  ok('and the line comes from the list', ['line one', 'line two', 'line three'].includes(a.args.message));
+
+  // PURITY IS THE PROPERTY THIS MODULE DEFENDS: "no clock, no randomness -- which is what
+  // lets the whole table be tested against fixtures, and what makes an action reproducible
+  // from the journal line that recorded the facts it was given." A Math.random pick would
+  // have cost both, so the line is hashed FROM THE FACTS.
+  ok('the same death replays to the same line',
+     decide('died', pb, monster).args.message === a.args.message);
+  const other = decide('died', pb, { ...monster, room: 568, killed_by: ['baby spider'] });
+  ok('a different death is free to choose differently', typeof other.args.message === 'string');
+
+  // A CLOCK THE PURE LAYER CANNOT ENFORCE STILL HAS TO BE HANDED DOWN, or the executor has
+  // to know which verbs are rate-limited, which is exactly the sort of split knowledge that
+  // goes stale.
+  ok('the verb hands its own cooldown down', a.args.cooldown_s === 600);
+  ok('and a playbook may lower it',
+     decide('died', { on: { died: [{ do: 'broadcast', message: ['x'], cooldown_s: 30 }] } },
+            monster).args.cooldown_s === 30);
+
+  ok('a player kill falls through to the next rule', decide('died', pb, player)?.verb === 'nothing');
+
+  // AN EMPTY LIST IS NOT AN EMPTY MESSAGE. The executor refuses a blank one, but the
+  // decision should not carry a `message` key at all rather than carry undefined.
+  const blank = decide('died', { on: { died: [{ do: 'broadcast', message: ['', '  '] }] } }, monster);
+  ok('an all-blank list leaves no message behind', !('message' in blank.args));
+
+  // AND THE EXECUTOR HAS TO KNOW THE VERB. A verb in VERBS that no executor dispatches is
+  // decided, journalled and silently dropped -- the exact shape of failure this repository
+  // keeps paying for, and it was the state of `broadcast` for the first ten minutes of its
+  // life. Checked as SOURCE because the executor needs a live client to run.
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('the executor dispatches broadcast', /case 'broadcast':/.test(AP));
+  ok('and enforces the cooldown rather than trusting it', /broadcast cooldown/.test(AP));
+  ok('and reports a suppressed one instead of reporting success',
+     /suppressed: true/.test(AP));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
