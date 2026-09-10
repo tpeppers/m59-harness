@@ -299,7 +299,8 @@ export function getAWallNode(keeper) {
     const sheltered = keeper.holdWorks();
     const near = keeper._btFleeNear();
 
-    if (!keeper.policy.useSafeSpots || keeper.hold) return FAILURE;
+    // NON-COMBAT: this is the flee rung. The wall is always available to it now.
+    if (keeper.hold) return FAILURE;
     if (sheltered) return FAILURE;
     if (hostiles.length === 0) return FAILURE;
 

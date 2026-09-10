@@ -506,7 +506,7 @@ async function main() {
     action: 'start', flee_below: 0, rest_below: 0,
     panic_logoff: false, break_out_via_logoff: false,
     doomed_in_open_below: 0.01, doomed_in_spot_below: 0.01,
-    use_safe_spots: false, require_safe_wall: false,   // PAIRED: false alone is coerced back
+    use_safe_spots: false, require_safe_wall: false,   // spots are coerced UP now; the wall flag is the real one
     retreat_to_inn: false, ask_for_help: false,
     threat_ceiling: { mode: 'flat', value: 200 }, fight_rounds: 200,
   };

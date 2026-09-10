@@ -10009,27 +10009,29 @@ const TOOLS = [
           'is assigned to — clearing a room it is merely standing in buys nothing, and the movement ' +
           'it issues cancels the walk back to the room that does. It had no argument here at all ' +
           'until now, so the only way to set it was to reach into a running keeper' },
+      pull_to_safe_wall: { type: 'boolean',
+        description: 'DOES A FIGHT OPEN BY WALKING TO A WALL? Default true. Renamed 2026-09-10 ' +
+          'from require_safe_wall, which had grown four jobs and only one of them was this. ' +
+          'The safe wall is now ALWAYS ON for everything that is not combat — resting, parking, ' +
+          'recovering, being hurt in a spawn room, every rung of the survival ladder — and none ' +
+          'of those consults a policy flag any more, because every one of them presupposes you ' +
+          'already walked somewhere nothing can reach you. Tying that to a FIGHTING flag is what ' +
+          'killed Waldorf four times on 2026-09-08. So this controls only the opening pull: true ' +
+          'means walk to a wall before engaging (and a room with no findable wall is unusable, ' +
+          'which is the same statement); false means open the fight where the prey is and take a ' +
+          'wall as a RESPONSE at wall_at_attackers creatures in melee reach. Measured on prod ' +
+          '2026-08-27: nine characters in the Valley of Ileria, five fungus beasts visible, zero ' +
+          'kills, until this was turned off. require_safe_wall is still accepted as the legacy ' +
+          'spelling and is adopted into this key' },
       require_safe_wall: { type: 'boolean',
-        description: 'WILL THIS CHARACTER FIGHT WITHOUT A WALL? Default true, and it is not the same ' +
-          'setting as use_safe_spots: that one is whether to PREFER a wall, this is whether to REFUSE ' +
-          'the fight without one. With it on, a character that cannot walk onto a candidate square ' +
-          'retries every pass for ever — "could not reach a wall this pass" — and never swings, which ' +
-          'reads from outside as a bot shuffling in a corner ignoring prey in swing range. Measured on ' +
-          'prod 2026-08-27: nine characters in the Valley of Ileria, five fungus beasts visible, ' +
-          'safe_spot false, zero kills, until this was turned off. Turn it off only where the prey is ' +
-          'cheap — fungus beast is level 50 but DIFFICULTY 1 at attack 210, so an open fight is ' +
-          'survivable; a battered skeleton is difficulty 4 at attack 420 and it is not. It had no ' +
-          'argument here at all until now, so the only way to set it was to reach into a running ' +
-          'keeper, which meant it could never be persisted and never survived a restart. ' +
-          'AND OFF IS NO LONGER THE SAME AS "prefer a wall": see wall_at_attackers, which is ' +
-          'what "not required" now MEANS — the wall becomes the answer to a crowd rather than ' +
-          'the posture before every fight' },
+        description: 'LEGACY SPELLING of pull_to_safe_wall, still accepted because it is what is ' +
+          'persisted in the live roster. Sets the same thing. Prefer the new name' },
       wall_at_attackers: { type: 'number',
-        description: 'WHAT "NOT REQUIRED" MEANS, and it is only read while require_safe_wall is ' +
+        description: 'WHAT "NOT REQUIRED" MEANS, and it is only read while pull_to_safe_wall is ' +
           'false. Default 2: hold a wall once this many creatures are inside melee reach, and ' +
           'fight in the open below it. Before this existed there were two flags and only two of ' +
           'the four states they describe — OFF (use_safe_spots false, never take a wall) and ' +
-          'REQUIRED (refuse the fight without one). Clearing require_safe_wall alone changed ' +
+          'REQUIRED (refuse the fight without one). Clearing the wall flag alone changed ' +
           'nothing about how a character fights, because holdWorthwhile still asks "does this ' +
           'kill pay" and on a grinding fleet the answer is yes for every creature in every ' +
           'assigned room — so a character still walked to a corner before every engagement and ' +
@@ -10843,10 +10845,17 @@ const TOOLS = [
       // See the schema entry: clearing applies only to the assigned room, and it had no
       // way in from here at all — a `clear_weak` passed to this tool was silently dropped.
       if (a.clear_weak !== undefined) p.policy.clearWeak = !!a.clear_weak;
-      // Whether to REFUSE a fight without a wall, which is a different question from whether
-      // to prefer one. See the schema entry: with this on and the wall unreachable, the pass
-      // retries for ever and the character never swings at prey standing next to it.
-      if (a.require_safe_wall !== undefined) p.policy.requireSafeWall = !!a.require_safe_wall;
+      // Whether a fight OPENS with a walk to a wall. See the schema entry: with this on and
+      // the wall unreachable, the pass retries for ever and the character never swings at prey
+      // standing next to it. Both spellings land on both keys so the roster stays readable by
+      // an un-migrated keeper; coerceSpotPair below reconciles them either way.
+      if (a.pull_to_safe_wall !== undefined) {
+        p.policy.pullToSafeWall = !!a.pull_to_safe_wall;
+        p.policy.requireSafeWall = !!a.pull_to_safe_wall;
+      } else if (a.require_safe_wall !== undefined) {
+        p.policy.requireSafeWall = !!a.require_safe_wall;
+        p.policy.pullToSafeWall = !!a.require_safe_wall;
+      }
       // The bar that gives "not required" its meaning. 0 or a negative is refused rather than
       // stored: "hold a wall once zero creatures are attacking" is REQUIRED spelled another
       // way, and a setting that silently means the opposite of its name is the failure the
@@ -10856,7 +10865,7 @@ const TOOLS = [
         if (!Number.isFinite(bar) || bar < 1)
           return { started: false, reason: 'wall_at_attackers is how many creatures in melee ' +
             'reach make a wall worth taking, so it is at least 1. Zero would mean "always hold ' +
-            'a wall", which is require_safe_wall: true' };
+            'a wall", which is pull_to_safe_wall: true' };
         p.policy.wallAtAttackers = bar;
       }
       if (a.hold_resume_above !== undefined) p.policy.holdResumeAbove = Number(a.hold_resume_above);
@@ -10878,10 +10887,9 @@ const TOOLS = [
       if (a.break_out_via_logoff !== undefined) p.policy.breakOutViaLogoff = !!a.break_out_via_logoff;
       if (p.mode === 'farm' && !p.policy.hunt)
         return { started: false, reason: 'farm mode needs something to hunt — pass hunt with a creature name' };
-      // THE TWO SPOT FLAGS ARE SET BY INDEPENDENT GUARDS ABOVE, so `require_safe_wall:true`
-      // with spots off is representable — and it asks the keeper to refuse a fight for the
-      // want of a wall it has been told not to look for. Coerced here, before the policy is
-      // persisted OR pushed, so the roster and the keeper cannot disagree about it.
+      // SPOTS ARE NO LONGER A CHOICE, and the legacy wall key has to be adopted before
+      // anything reads the new one. Both happen here, before the policy is persisted OR
+      // pushed, so the roster and the keeper cannot disagree about either.
       const coerced = coerceSpotPair(p.policy);
       for (const c of coerced)
         console.error(`[autopilot] ${a.agent} policy ${c.key} ${c.from} -> ${c.to} (coerced: ${c.why})`);

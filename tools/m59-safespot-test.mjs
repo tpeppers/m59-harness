@@ -628,8 +628,13 @@ console.log('\n--- is this fight worth a wall? ---');
      `level ${below.level} vs our ${below.my_level}`);
   ok('unknown creatures get the wall', p.holdWorthwhile(['no such beast']).hold,
      'the careful reading of an unknown creature is that it can hurt us');
-  p.policy.useSafeSpots = false;
-  ok('and the owner can still switch it off', !p.holdWorthwhile(['giant rat']).hold);
+  // THE OWNER SWITCHES OFF THE OPENING PULL, NOT THE WALL. Renamed 2026-09-10: spots are
+  // the always-on non-combat facility and there is no longer a switch for them, so the
+  // thing an owner turns off is whether a fight OPENS from a corner.
+  p.policy.pullToSafeWall = false;
+  ok('and the owner can still switch off the opening pull',
+     !p.holdWorthwhile(['giant rat']).hold,
+     'nothing is in reach, so the response posture does not want a wall either');
 }
 {
   // Outclassed prey, but three of them: swarms are what actually kills characters.
@@ -693,12 +698,16 @@ console.log('\n--- "not required" is a third setting, not the absence of the sec
   ok('and the bar is settable', p.holdWorthwhile(['giant rat']).hold,
      'wall_at_attackers 1 means the first thing in reach');
 
-  // OFF still beats everything: a character told not to look for a wall does not find one
-  // because a crowd arrived.
+  // AND THERE IS NO LONGER AN OUTER SWITCH TO BEAT IT. This assertion used to read "OFF
+  // is still OFF under a crowd": `useSafeSpots:false` was the outer switch and the attacker
+  // bar sat inside it. Operator, 2026-09-10 — the wall is always on outside combat, and a
+  // CROWD is exactly the case it exists for, so nothing may switch this off any more. The
+  // opening pull is the only remaining choice and it is already false here.
   p.policy.useSafeSpots = false;
   w.addMonster(6, 0, 1, MONSTER);
-  ok('OFF is still OFF under a crowd', !p.holdWorthwhile(['giant rat']).hold,
-     'useSafeSpots is the outer switch and the attacker bar is inside it');
+  ok('a crowd still gets a wall even with the retired flag forced off',
+     p.holdWorthwhile(['giant rat']).hold,
+     'useSafeSpots is no longer an outer switch — coerceSpotPair forces it true on every write');
 }
 {
   // A WALL TAKEN AS A RESPONSE HAS TO BE GIVEN BACK. Without the release, the first crowd
@@ -706,9 +715,9 @@ console.log('\n--- "not required" is a third setting, not the absence of the sec
   // arrived at by accident, and it would look exactly like the setting working.
   const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('the release exists and is gated on the same flag',
-     /requireSafeWall === false && this\.hold && !worth\.hold/.test(src));
+     /!opensFightFromWall\(this\.policy\) && this\.hold && !worth\.hold/.test(src));
   ok('and it will not step off a wall with something still in contact',
-     /requireSafeWall === false && this\.hold && !worth\.hold\s*\n\s*&& !this\.pendingPull && !\(this\.inReachOfUs\(\)\?\.length\)/.test(src),
+     /!opensFightFromWall\(this\.policy\) && this\.hold && !worth\.hold\s*\n\s*&& !this\.pendingPull && !\(this\.inReachOfUs\(\)\?\.length\)/.test(src),
      'releasing at one attacker mid-fight is how a hysteresis-free bar thrashes');
 }
 

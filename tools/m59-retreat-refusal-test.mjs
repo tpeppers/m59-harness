@@ -182,13 +182,23 @@ console.log('THE REFUSAL DISPATCHES THE REPLACEMENT IT HAS BEEN DESCRIBING');
 }
 
 {
-  // SPOTS OFF MEANS SPOTS OFF. The operator switching `use_safe_spots` off is an
-  // instruction, not a preference this branch gets to override because somebody is dying.
+  // AND THERE IS NO LONGER A SWITCH TO TURN IT OFF WITH. This block used to read "SPOTS
+  // OFF MEANS SPOTS OFF": `use_safe_spots:false` was an instruction this branch had to
+  // respect even with somebody dying. Operator, 2026-09-10 — reversed. The wall is always
+  // on for everything that is NOT combat, and a retreat is the clearest case there is:
+  // its entire premise is reaching somewhere nothing can hit you. Tying it to a FIGHTING
+  // flag is what killed Waldorf four times on 2026-09-08 resting in the open.
+  //
+  // `coerceSpotPair` forces the retired flag true on every write, so a policy carrying
+  // false is a fixture that could no longer exist in the fleet — and even handed one
+  // directly, this branch no longer consults it.
   const k = keeper({ policy: { useSafeSpots: false } });
   const r = await k.retreatToSafety({ because: 'test' });
-  ok('with safe spots switched off it does not take one', k.calls.takeSafeSpot === 0);
-  ok('and the refusal names the switch rather than the room',
-     /switched off in the policy/.test(r?.no_spot ?? ''), r?.no_spot);
+  ok('the retreat takes a wall even with the retired flag forced off',
+     k.calls.takeSafeSpot === 1,
+     'survival is not a preference — see opensFightFromWall, which is COMBAT only');
+  ok('and it does not refuse for the want of a switch that no longer exists',
+     !/switched off in the policy/.test(r?.no_spot ?? ''), r?.no_spot);
 }
 
 {

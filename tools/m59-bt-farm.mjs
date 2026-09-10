@@ -32,6 +32,7 @@ import {
   SUCCESS, FAILURE, RUNNING,
 } from './m59-bt.mjs';
 import { updateBlackboard } from './m59-bt-nodes.mjs';
+import { opensFightFromWall } from './m59-policydiff.mjs';
 import { gearUpgradeNode } from './m59-bt-gear.mjs';
 import * as skills from './m59-skills.mjs';
 import { beginPullProgress } from './m59-pull-progress.mjs';
@@ -360,8 +361,9 @@ export function scavengeNode(keeper) {
     const target = weak[0];
     const targetName = c.rsc.get(target.nameRsc) || 'something';
 
-    // Take a wall if we don't have one.
-    if (keeper.policy?.useSafeSpots && !keeper.hold) {
+    // Take a wall if we don't have one. COMBAT, so it asks the opening-pull flag, not
+    // `useSafeSpots` — that one is the always-on non-combat facility and is forced true.
+    if (opensFightFromWall(keeper.policy) && !keeper.hold) {
       await keeper.takeSafeSpot('scavenging: taking a wall before punching', target).catch(() => {});
     }
 
@@ -564,7 +566,8 @@ export function tooTiredNode(keeper) {
 
     keeper.vigor.waited++;
     keeper.doing = 'recovering';
-    if (!keeper.hold && keeper.policy.useSafeSpots && bb.room)
+    // NON-COMBAT: a rest presupposes somewhere nothing can reach us. Unconditional.
+    if (!keeper.hold && bb.room)
       await keeper.takeSafeSpot('too tired to fight -- need somewhere safe to rest', null).catch(() => {});
     const skills = getSkills();
     const r = skills
@@ -637,12 +640,12 @@ export function fightNode(keeper) {
     // Bystander selection happened above; the wall and fight must use the same exact
     // quarry rather than validating the hunt-list head and then switching targets.
     const wallQuarry = bystander ?? found[0] ?? null;
-    if (keeper.policy?.useSafeSpots && keeper.hold && wallQuarry
+    if (opensFightFromWall(keeper.policy) && keeper.hold && wallQuarry
         && keeper.hold.quarry_id !== wallQuarry.id && !adjacent.length
         && !keeper.pendingPull && typeof keeper.releaseHold === 'function') {
       keeper.releaseHold('the selected quarry changed -- recomputing its closest safe spot');
     }
-    if (keeper.policy?.useSafeSpots && !keeper.hold) {
+    if (opensFightFromWall(keeper.policy) && !keeper.hold) {
       await keeper.takeSafeSpot(
         'taking a wall before fighting in a spawn room',
         wallQuarry

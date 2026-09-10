@@ -30,7 +30,7 @@
 //      keeper names the writer, and the spot pair gets the same caller trace `mode` gets.
 
 import { readFileSync } from 'node:fs';
-import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair, SPOT_POLICY_KEYS }
+import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair, SPOT_POLICY_KEYS, opensFightFromWall }
   from './m59-policydiff.mjs';
 
 let passed = 0, failed = 0;
@@ -83,38 +83,63 @@ console.log('\nevery field, because a watchlist is the same mistake one field la
        policyDiff({ farmDelivery: { enabled: true, radius: 4, requested: { herb: 30 } } },
                   { farmDelivery: null }))));
   ok('missing policies on both sides are not a crash', policyDiff(null, undefined).length === 0);
-  ok('there are exactly two survival keys, and they are the pair',
-     SPOT_POLICY_KEYS.join(',') === 'useSafeSpots,requireSafeWall');
+  ok('the survival keys are the pair plus the name the wall flag was renamed to',
+     SPOT_POLICY_KEYS.join(',') === 'useSafeSpots,pullToSafeWall,requireSafeWall',
+     'requireSafeWall stays in the list because it is what the live roster still holds');
 }
 
 // ------------------------------------------------------------------ 2. the invariant
 
-console.log('\nrequire-a-wall while not looking for one is not a resting value');
+console.log('\nthe wall is not optional outside combat, and the opening pull has its own name');
 {
+  // COERCED UP, UNCONDITIONALLY. This used to fire only while `requireSafeWall === true`,
+  // on the reasoning that requiring a wall while refusing to look for one is incoherent.
+  // True, but far too narrow: with the wall flag false — which is the whole prod fleet — a
+  // bare `useSafeSpots:false` STUCK, and it switched off SHELTER as well as fighting
+  // posture. Waldorf died four times resting in the open on 2026-09-08 for exactly that.
   const p = { useSafeSpots: false, requireSafeWall: true };
   const changed = coerceSpotPair(p);
-  ok('THE PARTIAL STATE IS COERCED', p.useSafeSpots === true && p.requireSafeWall === true);
+  ok('THE RETIRED FLAG IS COERCED UP', p.useSafeSpots === true);
   ok('and it is reported, so the caller learns what it actually got',
-     changed.length === 1 && changed[0].key === 'useSafeSpots' && changed[0].to === true);
+     changed.some(c => c.key === 'useSafeSpots' && c.to === true));
   ok('with the reason, because a silently rewritten argument is the bug next door',
-     /meaningless with spots off/.test(changed[0].why));
+     changed.some(c => /always-on non-combat facility/.test(c.why)));
 
-  // COERCED UP, NEVER DOWN. Clearing requireSafeWall instead would answer a request for
-  // more caution by removing it — on the exact pair that has killed three characters.
-  const q = { useSafeSpots: false, requireSafeWall: true };
-  coerceSpotPair(q);
-  ok('the stricter flag is the one that survives', q.requireSafeWall === true);
-
-  // The other three combinations are all meaningful and must be left alone.
-  for (const [spots, wall] of [[false, false], [true, false], [true, true]]) {
-    const r = { useSafeSpots: spots, requireSafeWall: wall };
-    ok(`${spots}/${wall} is a legal setting and is left alone`,
-       coerceSpotPair(r).length === 0 && r.useSafeSpots === spots && r.requireSafeWall === wall);
+  // SPOTS-OFF IS NO LONGER REPRESENTABLE AT ALL, whatever the wall flag says.
+  for (const wall of [true, false, undefined]) {
+    const r = { useSafeSpots: false };
+    if (wall !== undefined) r.requireSafeWall = wall;
+    coerceSpotPair(r);
+    ok(`spots cannot be switched off (wall ${wall})`, r.useSafeSpots === true);
   }
-  ok('a policy that mentions neither flag is untouched',
-     coerceSpotPair({ hunt: 'giant rat' }).length === 0);
+
+  // THE LEGACY NAME IS ADOPTED, NOT DROPPED. Every character in the live roster holds
+  // `requireSafeWall`; losing it would hand 21 of them the DEFAULT posture at the next
+  // keeper restart, which is the silent-revert failure this whole file exists for.
+  const legacy = { useSafeSpots: true, requireSafeWall: false };
+  const adopted = coerceSpotPair(legacy);
+  ok('the legacy wall flag is adopted into the new name', legacy.pullToSafeWall === false,
+     'a roster written before the rename must keep meaning what it said');
+  ok('and the adoption is reported', adopted.some(c => c.key === 'pullToSafeWall'));
+
+  // AND THE NEW NAME WINS WHEN BOTH ARE PRESENT, so a fresh write is not overridden by a
+  // stale default sitting underneath it.
+  const both = { useSafeSpots: true, pullToSafeWall: true, requireSafeWall: false };
+  coerceSpotPair(both);
+  ok('the new name is authoritative when both are set', both.requireSafeWall === true);
+
+  // A policy that says nothing about the wall still gets the always-on facility, and still
+  // leaves the opening pull unstated — which the READER defaults to cautious.
+  const bare = { hunt: 'giant rat' };
+  coerceSpotPair(bare);
+  ok('a policy that mentions neither flag still gets spots on', bare.useSafeSpots === true);
+  ok('and its opening pull is left unstated rather than invented',
+     bare.pullToSafeWall === undefined);
+  ok('which the reader defaults to the cautious answer', opensFightFromWall(bare) === true,
+     'undefined must never mean the less careful posture');
   ok('and a missing policy is not a crash', coerceSpotPair(null).length === 0);
 }
+
 
 // ------------------------------------------------------------------ 3. the wiring
 

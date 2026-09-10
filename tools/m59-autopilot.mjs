@@ -21,6 +21,7 @@
 //     find itself somewhere else can find out why.
 
 import * as skills from './m59-skills.mjs';
+import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
 import { OF, affordances, dropSpec as dropSpecFor,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
@@ -1601,16 +1602,18 @@ export class Autopilot {
       // How long to stay frozen and unattackable after reconnecting.
       freezeMs: 90_000,
 
-      // FIGHT FROM A WALL WHENEVER THE FIGHT IS WORTH ANYTHING. See holdWorthwhile().
+      // THE ALWAYS-ON FACILITY, AND NO LONGER A CHOICE. Operator, 2026-09-10: the safe
+      // wall is on for everything that is not combat. `coerceSpotPair` forces this true
+      // on every write, so the key survives only so that anything still writing it keeps
+      // parsing. To choose a COMBAT posture, use `pullToSafeWall`.
       useSafeSpots: true,
 
       // WHERE YOU STOP IS NOT THE SAME QUESTION AS HOW YOU FIGHT, AND CONFLATING THEM COST
       // FOUR DEATHS.
       //
-      // `useSafeSpots` governs the FIGHTING posture, and the fleet turns it off for a real
-      // reason: in the Valley of Ileria `takeSafeSpot -> returnToSpot` oscillated and
-      // produced hours of "travelling / NOT MOVING" with prey in reach and zero kills. That
-      // ruling stands and this does not touch it.
+      // `useSafeSpots` used to govern the FIGHTING posture, and the fleet turned it off for
+      // a real reason: in the Valley of Ileria `takeSafeSpot -> returnToSpot` oscillated and
+      // produced hours of "travelling / NOT MOVING" with prey in reach and zero kills.
       //
       // But it also silently governed where a character SITS DOWN, so switching the fighting
       // posture off switched off the shelter you rest in — and resting is the one activity
@@ -1618,7 +1621,12 @@ export class Autopilot {
       // 2026-09-08 resting in the open with the survival ladder quiet, because a rest
       // presupposes you already walked somewhere unhittable.
       //
-      // So resting seeks a safe wall on its OWN default, whatever the fighting posture is.
+      // FINISHED 2026-09-10: the split this block started is now the whole design. Nothing
+      // outside combat asks about a policy flag at all — the five non-combat rungs that
+      // used to test `useSafeSpots` (hurt in a spawn room, parking for an outage, a wall
+      // before a vigor rest, hit while resting, the survival ladder) are unconditional, and
+      // the fighting choice moved to `pullToSafeWall`. This key remains only as the
+      // always-on facility, forced true on every write.
       // `restAnywhere: true` is the deliberate order to sit wherever you stand — per
       // character, off unless somebody asks for it. Operator's rule, 2026-09-10: never
       // arrive at an unsafe stop by default; you may always arrive at one on purpose.
@@ -1645,26 +1653,38 @@ export class Autopilot {
       // pull in it was being refused, and each of those numbers was a room-shaped guess
       // standing in for the reasoning. Set `pull_within` to put a ceiling back.
       pullWithin: null,
-      // NEVER FIGHT IN A ROOM WITH NO SAFE WALL IN IT.
+      // WHETHER A FIGHT OPENS BY WALKING TO A WALL. Renamed 2026-09-10 from
+      // `requireSafeWall`, which had grown four jobs and only one of them was this.
       //
-      // holdWorthwhile() already said a wall was wanted against anything that outlevels
-      // us, but it was only ever advice: when takeSafeSpot failed, the keeper noted "no
-      // safe spot available here" and had the fight anyway, in the open, against the one
-      // class of creature the wall exists for.
+      // The wall used to be a REQUIREMENT that reached everywhere: it decided the fighting
+      // posture, it decided where a character sat down to rest, and it wrote off any room
+      // no wall could be found in. Two of those were never combat, and tying them to a
+      // combat flag is what killed Waldorf four times on 2026-09-08 — a rest presupposes
+      // you already walked somewhere unhittable, whatever you had decided about fighting.
       //
-      // This is stronger than that, on purpose. A room we cannot find a wall in is
-      // written off entirely — not just for hard prey — and the fleet goes elsewhere.
-      // The reasoning is at the check itself: the wall IS the survival model, and this
-      // detector is known to miss plain wall edges, so "no wall found" is not the same
-      // as "no wall". Treating the room as denied under-uses the world, which is
-      // recoverable; guessing does not, which is not.
+      // So non-combat wall-seeking is now unconditional and has no flag at all, and this
+      // key controls ONLY the opening pull:
+      //
+      //   true   open the fight from a wall — walk there first, and treat a room with no
+      //          findable wall as unusable, which is the same statement
+      //   false  open the fight where the prey is, and take a wall as a RESPONSE when
+      //          `wallAtAttackers` creatures are inside melee reach. Not a posture.
+      //
+      // THE LEGACY NAME IS STILL THE DEFAULT KEY ON PURPOSE, and this is load-bearing
+      // rather than laziness. Every character in the live roster has `requireSafeWall`
+      // persisted; `coerceSpotPair` adopts it into `pullToSafeWall` when the new key is
+      // absent. If this default were written as `pullToSafeWall` instead, a roster saying
+      // `requireSafeWall: false` would merge against a default of `true`, both keys would
+      // be defined, and the adoption could not tell the roster's answer from the default's
+      // — flipping 21 characters to the strict posture at the next keeper restart. Leave
+      // the default under the old name until the roster has migrated.
       requireSafeWall: true,
       // AND WHAT "NOT REQUIRED" MEANS, WHICH IS THE SETTING ABOVE READ AS THREE STATES
-      // RATHER THAN TWO. With `requireSafeWall:false` the wall stops being the posture and
+      // RATHER THAN TWO. With `pullToSafeWall:false` the wall stops being the posture and
       // becomes the answer to a crowd: hold one when this many creatures are inside melee
       // reach, and fight in the open below it. See holdWorthwhile(), which is the only
       // reader, and the release in the work branch, which is what makes it a response
-      // rather than a one-way door. Ignored entirely while `requireSafeWall` is true.
+      // rather than a one-way door. Ignored entirely while `pullToSafeWall` is true.
       //
       // 2 rather than 3 (the crowd bar the REQUIRED path uses for prey we outclass)
       // because that path already has the wall by then; this one is deciding whether to
@@ -3353,45 +3373,41 @@ export class Autopilot {
   // The exception is the one the rule names: prey we outclass pays nothing, cannot
   // realistically kill us, and the walk to the corner costs more than the fight.
   holdWorthwhile(names = []) {
-    if (!this.policy.useSafeSpots) return { hold: false, why: 'safe spots are switched off in the policy' };
+    // NOT `useSafeSpots` — that is the always-on non-combat facility now (rest, park,
+    // recover, the ladder) and cannot be switched off. This function is COMBAT, and the
+    // only combat choice is whether the fight OPENS with a walk to a wall.
     const mine = this.s.client?.vitals?.()?.health?.max ?? 0;
     const levels = names.map(n => this.creatureLevel(n)).filter(x => x != null);
     const worst = levels.length ? Math.max(...levels) : null;
     const crowd = this.threat().near.length;
 
-    // "NOT REQUIRED" IS A THIRD SETTING, AND UNTIL NOW IT WAS NOT ONE.
+    // THE WALL IS A RESPONSE, NOT A POSTURE — unless `pullToSafeWall` says otherwise.
     //
-    // There are two flags and the fleet has only ever had two of the four states they
-    // describe. `useSafeSpots:false` is OFF — never take a wall, which is what the Valley
-    // of Ileria ran because `takeSafeSpot -> returnToSpot` oscillated there and produced
-    // hours of "travelling / NOT MOVING" with prey in reach and zero kills. And
-    // `requireSafeWall:true` is REQUIRED — a room with no wall the detector can find is
-    // written off entirely.
-    //
-    // What was missing is the state in between, which is the one this fleet actually
-    // wants: the wall is AVAILABLE and is not the plan. Clearing `requireSafeWall` alone
-    // did not deliver it, because everything below still asks "does this kill pay", and on
-    // this fleet the answer is yes for every creature in every assigned room — a battered
-    // skeleton is 60 against max healths of 43-54, a fungus beast is 50 against the ones
-    // under it. So `requireSafeWall:false` bought the room-denial being skipped and changed
-    // nothing whatever about how a character fights: it still walked to a corner before
-    // every single engagement. On the board that is indistinguishable from REQUIRED, which
-    // is why it read as a setting nobody was using.
+    // History, because the setting reads oddly without it. There were two flags and only
+    // two of the four states they describe were ever used: `useSafeSpots:false` (never
+    // take a wall) and `requireSafeWall:true` (refuse a fight without one). The state the
+    // fleet actually wanted — the wall is AVAILABLE and is not the plan — did not exist,
+    // because clearing `requireSafeWall` alone only skipped the room denial and still
+    // walked to a corner before every single engagement.
     //
     // Operator, 2026-09-05: "for 'not required', it should flee to a safe wall by default
     // if 2+ creatures are attacking it, but otherwise not use a safe wall."
     //
-    // So under NOT REQUIRED the wall stops being a posture and becomes a RESPONSE. One
-    // creature in reach is the fight we came for and is answered by fighting; two is the
-    // thing that actually kills characters here, and it is answered by putting our back
-    // somewhere. `wallAtAttackers` is the bar and it is a policy rather than a constant,
-    // because it is the whole content of the setting.
+    // Operator, 2026-09-10: the wall is always on for everything that is NOT combat, and
+    // the only remaining choice is the opening pull. So the flag was renamed to say that
+    // and nothing else, and `useSafeSpots` stopped being a switch — the non-combat rungs
+    // no longer ask it, and this function no longer asks it either.
+    //
+    // One creature in reach is the fight we came for and is answered by fighting; two is
+    // the thing that actually kills characters here, and it is answered by putting our
+    // back somewhere. `wallAtAttackers` is the bar and it is a policy rather than a
+    // constant, because it is the whole content of the setting.
     //
     // MELEE REACH, NOT THE CROWD RADIUS. `near` is four squares and counts creatures that
     // are walking past; `adjacent` is REACH (3) and is as close to "is hitting us" as this
     // keeper can read without waiting for the damage. The count that decides whether to
     // move has to be the one that is true before the blows land.
-    if (this.policy.requireSafeWall === false) {
+    if (!opensFightFromWall(this.policy)) {
       const attackers = this.threat().adjacent.length;
       const bar = Number.isFinite(Number(this.policy.wallAtAttackers))
         ? Number(this.policy.wallAtAttackers) : 2;
@@ -14652,7 +14668,7 @@ export class Autopilot {
     }
 
     const spawnsHere = !this.sanctuary();
-    if (hurt && (combatZone || spawnsHere) && !sheltered && !testing && this.policy.useSafeSpots && !this.hold
+    if (hurt && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
       const got = await this.takeSafeSpot(
@@ -15323,7 +15339,7 @@ export class Autopilot {
       // makes and for the same reason: a room with four monsters in it and none beside
       // us right now is not a place to sit out an outage. And a room that merely SPAWNS
       // counts too, because an empty spawn room is a room between spawns.
-      const wantWall = this.policy.useSafeSpots && !this.hold &&
+      const wantWall = !this.hold &&
                        (hostiles.length > 0 || !this.sanctuary());
       if (wantWall && !p.ready) {
         p.tries++;
@@ -15608,7 +15624,7 @@ export class Autopilot {
     // monsters are in contact. Full health does not finish that fight. Releasing
     // here preempts passFarm's contact-clear hysteresis and reconnects every lap.
     if (!onARoad && (this.pendingPull || this.inReachOfUs()?.length
-        || (this.mode === 'farm' && this.policy.requireSafeWall !== false))) return false;
+        || (this.mode === 'farm' && opensFightFromWall(this.policy)))) return false;
     const floor = onARoad
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : (this.policy.holdResumeAbove ?? 0.9);
@@ -16655,7 +16671,7 @@ export class Autopilot {
         this.doing = 'recovering';
         // A wall first, if one is going and we do not already have it — resting with
         // something adjacent is only safe behind one.
-        if (!this.hold && this.policy.useSafeSpots && room)
+        if (!this.hold && room)
           await this.takeSafeSpot('too tired to fight — need somewhere safe to rest',
                                   found[0] ?? null).catch(() => {});
         const r = await skills.restUntil(s, {
@@ -16713,7 +16729,7 @@ export class Autopilot {
       // wall the instant a crowd of two became a crowd of one — mid-fight, with something
       // still swinging — and the next pass would find two again and walk back. Take at
       // two, hold while anything is in contact, let go when the floor is clear.
-      if (this.policy.requireSafeWall === false && this.hold && !worth.hold
+      if (!opensFightFromWall(this.policy) && this.hold && !worth.hold
           && !this.pendingPull && !(this.inReachOfUs()?.length)) {
         this.releaseHold('the crowd this wall was taken for has cleared, and the wall is ' +
                          'not required here — back to fighting in the open');
@@ -16761,7 +16777,10 @@ export class Autopilot {
       // a room with no wall we can find is a denial of service for that area: recorded,
       // reported, and left alone until better detection earns it back. Under-using the
       // world is recoverable; the alternative is not.
-      if (this.policy.requireSafeWall !== false && !this.hold && room?.num != null) {
+      // GATED ON THE OPENING PULL, because that is what it is a consequence of: if a
+      // fight may only be opened from a wall, a room with no wall cannot be fought in.
+      // With `pullToSafeWall` false the fight opens in the open and the room is fine.
+      if (opensFightFromWall(this.policy) && !this.hold && room?.num != null) {
         // Ask once per room, not once per pass. takeSafeSpot is a scan plus pathfinds,
         // and the answer does not change while we stand here — but it DOES change when
         // the book learns something, so this is per session rather than persisted.
@@ -18259,7 +18278,7 @@ export class Autopilot {
           : rc?.why });
     }
     // Then go and get a wall. Not resting again until we have one.
-    if (this.policy.useSafeSpots) {
+    {
       const got = await this.takeSafeSpot('hit while resting — need a square that holds',
                                           near[0] ?? null).catch(() => false);
       this.note('moving rather than resting again', { got_a_wall: !!got, shed_aggro: dropped,
@@ -21210,8 +21229,7 @@ export class Autopilot {
       // does not spend every pass re-scanning a room that has no reachable wall. When the
       // budget is spent or the room has none, this returns a refusal that MOVES NOTHING
       // and says so, and the caller is required to treat that as the non-event it is.
-      const spotsOn = !!this.policy.useSafeSpots;
-      const mayTry = spotsOn && !this.hold &&
+      const mayTry = !this.hold &&
                      (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000);
       if (mayTry) {
         this.wallTriedAt = Date.now();
@@ -21237,9 +21255,8 @@ export class Autopilot {
                  no_spot: took?.why ?? 'no wall taken this pass' };
       }
       return { arrived: false, refused: 'retreat_to_inn is off', room: here,
-               no_spot: this.hold ? 'already holding a square' : (spotsOn
-                 ? 'a wall was already searched for within the last 30s'
-                 : 'safe spots are switched off in the policy') };
+               no_spot: this.hold ? 'already holding a square'
+                 : 'a wall was already searched for within the last 30s' };
     }
     // NEAREST FIRST, AND NOT MANY. Iterating the six in declaration order would send a
     // character bleeding in the Badlands to whichever inn happened to be listed first —
