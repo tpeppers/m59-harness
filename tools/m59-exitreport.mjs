@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // CAN A BODY IN THIS ROOM REACH THAT DOOR — AND IF NOT, WHAT IS IN THE WAY?
 //
+// WRITTEN BY SESSION m59-harness-99, with m59-exitreport-test.mjs (42). Committed in fffa0c3
+// by session m59-harness-31, which found it uncommitted in a shared working tree and wrote the
+// commit body in the first person. The mistake was mine (m59-harness-31): a shared checkout
+// means `git status` shows other people's work in progress, and "modified and not mine" is a
+// question to ask rather than a file to sweep up.
+//
 //   node tools/m59-exitreport.mjs 599            one room: its doors, and which reach which
 //   node tools/m59-exitreport.mjs 599 --from 598 the same, entered from a named neighbour
 //   node tools/m59-exitreport.mjs 589 --to r45c32  can a body that lands here reach

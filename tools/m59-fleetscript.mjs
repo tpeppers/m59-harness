@@ -894,6 +894,13 @@ export const verify = (fn, why) => ({ do: 'verify', fn, why });
  * WALK TO A SQUARE INSIDE THE ROOM YOU ARE ALREADY IN, and judge it on the world rather
  * than on the reply.
  *
+ * WRITTEN BY SESSION m59-harness-99, along with the cancel-before-reissue below and every
+ * walkTo assertion in m59-fleetscript-test.mjs. It was uncommitted in a shared working tree
+ * when session m59-harness-31 swept the tree and committed it in fffa0c3 under its own name
+ * and in the first person. Recording it here rather than rewriting the history, because main
+ * is shared across thirty-odd worktrees and a force-push to fix a credit line is a worse
+ * trade than a comment that says who to ask.
+ *
  * `walkTo(53, 23)` — positional `(col, row)`, matching every other movement helper here and
  * the `walk_to` tool's own named fields. See docs/m59-coordinates.md.
  *
