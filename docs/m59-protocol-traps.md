@@ -2,6 +2,37 @@
 
 Split out of [`CLAUDE.md`](../CLAUDE.md). Things the wire, the server or the source will tell you wrongly if you ask the obvious way.
 
+- **NO ERROR HAS NEVER MEANT SUCCESS HERE — AND NO CHANGE HAS NEVER MEANT UNSUPPORTED.**
+  The first half is in `CLAUDE.md`, and the answer to it is *read the value that must change
+  if it worked, never the call's own account of itself*: the purse, the reagent, the
+  position. That rule is right, and on 2026-09-09 it was beaten three times by one shape —
+  **a refusal so EARLY that it changes nothing at all.** Then "nothing moved" is
+  indistinguishable from "this verb does not exist", and the conclusion drawn is always the
+  bigger of the two.
+
+  What it cost, three ways in one day. Two sessions concluded **"identify cannot be cast at
+  an inventory item"** from five and six attempts with the orc tooth count unmoved — the
+  caster was RESTING, and `UserCast` checks `PFLAG_NO_MAGIC` *before* `CanPayCosts`
+  (`user.kod:4774`, `player.kod:1162`), so the cast was refused before it could spend
+  anything. `walk_to` answered `arrived: true, steps: 0` **without moving**, because a
+  coarse-grid tolerance of 100 against `KOD_FINENESS` 64 is satisfied standing still. And the
+  whole guild surface answered `c.requestGuildInfo is not a function` — which at least threw;
+  had it returned `undefined`, the reading would have been "this server has no guilds".
+
+  **The distinguishing signal in all three was a SENTENCE** — the server's own prose, which
+  in the identify case appeared only once the event window was widened past a 15-22 second
+  casting trance. So when a value that must change does not: do not conclude the capability
+  is missing. Widen the window and read what the server actually said. Silence is still the
+  default failure mode here, and an early refusal is silence wearing the costume of a missing
+  feature.
+
+  Corollary with teeth: **`IsResting` sets `PFLAG_NO_MOVE`, `PFLAG_NO_FIGHT` and
+  `PFLAG_NO_MAGIC` together** (`player.kod:1162-1166`), and **a commander hold does not stop
+  a character resting** — recovery is one of the four protected faculties the keeper keeps by
+  design. So an errand that takes work/movement/economy and then walks somewhere can be sat
+  down by the very keeper it left recovery with, and a sat-down character can neither cast
+  nor step. Send `stand` before every attempt, not once at the top.
+
 - **A `send` REPLY NAMES ITS RECEIVER BEFORE IT NAMES ITS ANSWER, so a bare
   `/OBJECT (\d+)/` reads the wrong number.** The maintenance socket answers
 
