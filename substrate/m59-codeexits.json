@@ -427,6 +427,37 @@
      "col": 66
     },
     "from_name": "Deep Woods of Ileria"
+   },
+   {
+    "to": 48,
+    "rid": "RID_TEMPLE",
+    "when": [
+     {
+      "axis": "row",
+      "op": "<",
+      "value": 18
+     },
+     {
+      "axis": "col",
+      "op": "<",
+      "value": 13
+     }
+    ],
+    "arrive": {
+     "row": 9,
+     "col": 31
+    },
+    "from_name": "Deep Woods of Ileria",
+    "trigger_targets": [
+     {
+      "stand_on": {
+       "row": 15,
+       "col": 11
+      }
+     }
+    ],
+    "why": "RESTORED 2026-09-10 WITH AN AIM, having been removed by hand 2026-08-07 on the measurement \"9 successes against 1645 failures, and the destination of 82% of every failed hop in the fleet\". Both facts were right and the conclusion was wrong: the kod condition (c4.kod:79-86, row<18 AND col<13, a QUADRANT rather than a square) is real, and the region is genuinely unreachable AT ITS MIDDLE -- m59-exitreport.mjs 534 --to r9c6 says so from all three inbound landings (from 48 at r20c15, from 533 at r1c27, from 544 at r6c54), each stopping 6 squares short. But the square it stops ON is r15c11, and row 15 < 18 and col 11 < 13, so THE FRONTIER ITSELF SATISFIES THE TRIGGER. The 1645 failures are a mover walking at an unreachable point inside a region it only had to touch the edge of. `trigger_targets` names the reachable square instead. If this regresses, the thing to check is whether r15c11 is still the frontier (the bake moves) -- not whether the trigger exists.",
+    "unblocks": "Room 48 is the Temple of Shal’ille and Priestess Xiana is the ONLY teacher of minor heal, remove curse, cure poison, cure disease, holy touch, detect evil, holy weapon and rescue across all 70 merchants. remove curse is the one that matters: wacursed.kod:97-102 refuses every unuse unconditionally, so a cursed weapon can be removed by nothing else, and Rowlf has repeated \"training unarmed unavailable: mace is cursed and cannot be removed\" 674 times. 534 is one hop from the Valley of Ileria."
    }
   ],
   "587": [
@@ -571,5 +602,5 @@
   "rooms_with_code_exits": 11,
   "unmatched_classes": []
  },
- "note": "534->48 (RID_TEMPLE) removed by hand 2026-08-07: 9 successes against 1645 failures in the transit record, and it was the destination of 82% of every failed hop in the fleet. The kod condition (row<18 AND col<13) is real but no square in that region reliably fires it. Regenerating this file will bring it back."
+ "note": "534->48 (RID_TEMPLE) removed by hand 2026-08-07: 9 successes against 1645 failures in the transit record, and it was the destination of 82% of every failed hop in the fleet. The kod condition (row<18 AND col<13) is real but no square in that region reliably fires it. Regenerating this file will bring it back. | 2026-09-10: 534->48 RESTORED with an explicit trigger_target at r15c11, the measured reachable frontier, which satisfies the kod predicate. Regenerating this file will drop the aim and reintroduce the 1645-failure behaviour -- keep the trigger_targets field."
 }

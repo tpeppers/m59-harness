@@ -910,7 +910,14 @@ export function codeExits(roomNum) {
   const list = idx?.rooms?.[roomNum];
   if (!list) return [];
   return list.map(e => ({
+    // `trigger_targets` IS CARRIED THROUGH WHEN THE FILE NAMES ONE, and this mapper used to
+    // drop it. The mover already supports it -- m59-game.mjs prefers `exit.trigger_targets`
+    // over a single `stand_on` and `boundedRegionEntry` tries each in turn -- so a hand-measured
+    // square could be written into the file and would never arrive. That is why the 534 -> 48
+    // entry could not be repaired by editing data alone; see its `why` in m59-codeexits.json.
     kind: 'region', to: e.to, when: e.when, arrive: e.arrive,
+    ...(Array.isArray(e.trigger_targets) && e.trigger_targets.length
+        ? { trigger_targets: e.trigger_targets } : {}),
     how: 'walk into the part of this room where ' +
          e.when.map(c => `${c.axis} ${c.op} ${c.value}`).join(' and ') +
          ' — the room moves you across by itself, there is nothing to press',
