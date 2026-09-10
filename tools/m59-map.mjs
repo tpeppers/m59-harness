@@ -1534,10 +1534,52 @@ function _findPathImpl(map, fromNum, toNum,
   // comes back `found: false` and names the room rather than walking a character into it.
   const last = bfsPath(map, fromNum, toNum, forbidden.size ? forbidden : null,
                        crossing, blocked, crossCost, availableFirstHops);
-  if (!last.found && forbidden.size)
-    return { ...last, blocked_by_hazard: [...forbidden],
-             reason: `${last.reason} without crossing ${[...forbidden]
-               .map(r => `${r} (${hazardReason(r)})`).join('; ')}` };
+
+  // A HAZARD IS BLAMED ONLY WHEN IT WAS MEASURABLY IN THE WAY.
+  //
+  // This used to append "without crossing 555 (...)" and set `blocked_by_hazard` whenever the
+  // final search failed and the forbidden set was non-empty -- WITHOUT ever checking that a
+  // hazard was on any candidate route. So every unroutable pair in the game got the same
+  // sentence, naming rooms that had nothing to do with it.
+  //
+  // WHAT IT COST, 2026-09-10. Asked for 38 -> 48 while the 534 -> 48 trigger was missing from
+  // m59-codeexits.json, it answered `found: false, blocked_by_hazard: [555, 40]` and
+  // "no route ... without crossing 555 (The Forest Shrine -- acid gas puzzle, kills outright)".
+  // The real reason was that NOTHING DECLARES AN EDGE INTO 48 -- the temple's only inbound is
+  // that trigger -- so there was no route for a hazard to be on. And 555 is a DEAD END: its
+  // whole exit list is `[556]`, so it cannot be crossed by anything, ever.
+  //
+  // The operator spotted it from the shape alone: "It's my understanding that room 555 is a
+  // dead-end with a shrine and only one entrance/exit, why is it being routed along the planned
+  // paths?" It was not. A session had already tested fourteen origins, received this same
+  // manufactured sentence fourteen times, and concluded "every inbound path crosses 555" --
+  // one bug repeated fourteen times reads exactly like corroboration.
+  //
+  // So: ask the SAME search again with the hazards allowed. If it then finds a route, the
+  // hazards really were the obstacle and the ones ON that route are named. If it fails both
+  // ways, they are irrelevant and the honest answer is the search's own reason with nothing
+  // added. The extra search runs only on a failure, so the common path pays nothing.
+  if (!last.found && forbidden.size) {
+    const unhindered = bfsPath(map, fromNum, toNum, soft.length ? new Set(soft) : null,
+                               crossing, blocked, crossCost, availableFirstHops);
+    if (unhindered.found) {
+      const onRoute = (unhindered.hops ?? [])
+        .map(h => Number(h?.to))
+        .filter(r => forbidden.has(r));
+      const named = onRoute.length ? [...new Set(onRoute)] : [...forbidden];
+      return { ...last, blocked_by_hazard: named,
+               reason: `${last.reason} without crossing ${named
+                 .map(r => `${r} (${hazardReason(r)})`).join('; ')}` };
+    }
+    // The hazards were not what stopped this. Say so, rather than inventing a cause -- and say
+    // it out loud, because "no route, and not because of a hazard" is the answer that sends the
+    // reader to the exits and the trigger file instead of to a death room.
+    return { ...last, hazards_were_not_the_obstacle: [...forbidden],
+             reason: `${last.reason} — and NOT because of a hazard: the same search with ` +
+                     `${[...forbidden].join(', ')} allowed still finds nothing, so the ` +
+                     `obstacle is the graph itself (a missing exit, a trigger that is not ` +
+                     `declared, or a room nothing arrives at)` };
+  }
   return last;
 }
 
