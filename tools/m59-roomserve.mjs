@@ -23,8 +23,10 @@
 // rest of it fit to publish. Bind to localhost and leave it there.
 
 import http from 'node:http';
-import { readFileSync, statSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+import { mkdirSync, openSync, writeFileSync, existsSync,
+         readFileSync, statSync, readdirSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectRoom, renderPage } from './m59-roomview.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
@@ -39,7 +41,13 @@ const flag = (n, d = null) => {
 const PORT = Number(flag('port', 8977));
 const FLEET = flag('fleet', null) ?? fleetName();
 
-if (argv.includes('--help')) {
+// AM I THE PROGRAM, OR AM I A LIBRARY? Computed before anything that exits or binds, because
+// the two things below this line -- `--help` calling process.exit(0), and `server.listen` --
+// are both fatal to an importer, and the TUI imports this file to run its G key.
+const IS_ENTRY = !!process.argv[1] &&
+  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+
+if (IS_ENTRY && argv.includes('--help')) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').filter(l => l.startsWith('//')).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
   process.exit(0);
@@ -139,7 +147,7 @@ const server = http.createServer(async (req, res) => {
                   + 'color:#d8dee9;margin:2rem}a{color:#8fb7ff;text-decoration:none}'
                   + 'a:hover{text-decoration:underline}td{padding:.15rem .8rem .15rem 0}';
       return send(200, 'text/html; charset=utf-8',
-        '<title>Rooms</title><meta name=viewport content="width=device-width,initial-scale=1">'
+        '<title>' + TITLE + '</title><meta name=viewport content="width=device-width,initial-scale=1">'
         + '<style>' + style + '</style>'
         + '<h2>rooms with a baked route - fleet "' + (FLEET ?? '(unnamed)') + '"</h2><table>'
         + rows.map(r => '<tr><td><a href="/' + r.num + '">' + r.num + '</a></td><td>'
@@ -152,7 +160,110 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log('room views on http://127.0.0.1:' + PORT + '/   (fleet "' + (FLEET ?? '(unnamed)') + '")');
-  console.log('  /108  a room     /  the index     /here?agent=shadow01  wherever it is now');
+// ---------------------------------------------------------------- start it from elsewhere
+//
+// THE TUI'S "G" KEY NEEDS TO ASK AND TO START, so this file has to be importable -- and
+// until now importing it BOUND A SOCKET, because `server.listen` ran at the top level. That is
+// the same trap CLAUDE.md records against m59-broker.mjs ("importing runs it: it tries to take
+// the fleet lock and start rejoin timers") and the same fix m59-supervise.mjs already took: guard
+// the main loop on being the entry point, and the pure parts can be read by anybody.
+
+const SUB = join(REPO, 'substrate');
+const PID_FILE = join(SUB, 'roomserve.pid');
+const LOG_FILE = join(SUB, 'roomserve.log');
+
+// The index page's own <title>, and the only thing that tells "our site is here" from
+// "something else has 8977". A port that answers is not an answer -- that distinction is why
+// m59-which.mjs grew an INDETERMINATE verdict, and the cost of skipping it is a browser opened
+// on somebody else's server. It is NOT enough to tell this checkout's copy from another's,
+// which is why nothing here is ever killed on the strength of it.
+export const TITLE = 'Geometry Debug Maps';
+export const MAPS_PORT = PORT;
+
+const probe = (port, path = '/', ms = 1500) => new Promise(resolve => {
+  const req = http.get({ host: '127.0.0.1', port, path, timeout: ms }, res => {
+    let body = '';
+    res.setEncoding('utf8');
+    // The title is in the <head>, so a few kilobytes settles it. Reading a whole room index
+    // to answer "is this ours" would make the check cost as much as the page.
+    res.on('data', chunk => { if (body.length < 4096) body += chunk; });
+    res.on('end', () => resolve({ status: res.statusCode, body }));
+  });
+  req.on('timeout', () => { req.destroy(); resolve(null); });
+  req.on('error', () => resolve(null));
 });
+
+const readPid = () => {
+  try {
+    if (!existsSync(PID_FILE)) return null;
+    const rec = JSON.parse(readFileSync(PID_FILE, 'utf8'));
+    // A pid file is a claim, not a fact: the process may be long gone and the number reused.
+    // It is only ever used to say "we started this one", never to decide it is alive.
+    return rec && Number.isFinite(rec.pid) ? rec : null;
+  } catch { return null; }
+};
+
+/**
+ * Is the geometry site up, is it OURS, or is something else on the port?
+ *
+ * Three answers rather than two, for the same reason m59-which.mjs has three: a port that
+ * does not answer and a port answering with somebody else's server are different problems and
+ * only one of them is fixed by starting ours.
+ */
+export async function status() {
+  const ours = readPid();
+  const served = await probe(PORT);
+  const isSite = !!served && typeof served.body === 'string' && served.body.includes(TITLE);
+  if (ours && isSite) return { running: true, ours: true, pid: ours.pid, port: PORT, fleet: FLEET };
+  if (isSite) return { running: true, ours: false, port: PORT, fleet: FLEET,
+    why: `something is serving ${TITLE} on ${PORT} and this checkout did not start it` };
+  if (served) return { running: false, blocked: true, port: PORT,
+    why: `port ${PORT} is answering and it is not ${TITLE}` };
+  return { running: false, port: PORT, fleet: FLEET };
+}
+
+/**
+ * Start it detached, logging into substrate/ beside every other service log.
+ *
+ * BEST EFFORT, ALWAYS -- every failure returns rather than throws, because the caller is an
+ * operator pressing a key and a thrown error there takes the whole terminal down.
+ *
+ * AND IT WAITS FOR THE PAGE, not for the process. A browser opened at a port that is still
+ * binding shows a connection error and teaches the operator that the key is broken.
+ */
+export async function start({ log = console.error, waitMs = 20_000 } = {}) {
+  const now = await status();
+  if (now.running && now.ours) { log(`${TITLE} already up on ${PORT} (pid ${now.pid})`); return { ok: true, ...now }; }
+  if (now.running) { log(now.why); return { ok: false, ...now }; }
+  if (now.blocked) { log(now.why); return { ok: false, ...now }; }
+
+  mkdirSync(SUB, { recursive: true });
+  const fd = openSync(LOG_FILE, 'a');
+  // `process.execPath` rather than 'node': this repository is run from a Windows shell where
+  // 'node' on PATH is not always the node that is running us.
+  const args = [join(HERE, 'm59-roomserve.mjs'), '--port', String(PORT)];
+  if (FLEET) args.push('--fleet', FLEET);
+  const child = spawn(process.execPath, args,
+                      { detached: true, stdio: ['ignore', fd, fd] });
+  child.unref();
+  writeFileSync(PID_FILE, JSON.stringify({ pid: child.pid, port: PORT, fleet: FLEET,
+                                           at: Date.now() }, null, 2));
+
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    await new Promise(r => setTimeout(r, 300));
+    const s = await status();
+    if (s.running) return { ok: true, ...s, started: true };
+  }
+  return { ok: false, running: false, port: PORT, pid: child.pid,
+           why: `started pid ${child.pid} but ${PORT} did not answer within ` +
+                `${Math.round(waitMs / 1000)}s — read ${LOG_FILE}` };
+}
+
+// RUN ONLY WHEN RUN. See the note above: importing this file used to bind port 8977.
+if (IS_ENTRY) {
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log('room views on http://127.0.0.1:' + PORT + '/   (fleet "' + (FLEET ?? '(unnamed)') + '")');
+    console.log('  /108  a room     /  the index     /here?agent=shadow01  wherever it is now');
+  });
+}

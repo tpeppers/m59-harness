@@ -37,6 +37,11 @@ import { findClient, findClientExe, isSteamInstall, clientArgs, STEAM_APPID }
 import { DEV_CLIENT, ensureUniversalLauncher, universalLauncherArgs } from './m59-devclient.mjs';
 import { ensureServing, openBrowser, importUrl, COMPENDIUM_PORT } from './m59-compendium.mjs';
 import * as webui from './m59-webui.mjs';
+// The geometry debug maps -- every room by number, plus an index. Imported rather than
+// shelled out to, so `G` can tell "already up" from "somebody else has 8977" before it
+// opens a browser. Importing it is only safe because m59-roomserve.mjs guards its listen on
+// being the entry point; it used to bind the port on import.
+import * as maps from './m59-roomserve.mjs';
 import { commitmentOf, stepSelection, firstSelectable, allCommitted } from './m59-commitment.mjs';
 import { mergeTuiRow, fleetFreshness } from './m59-tui-state.mjs';
 import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
@@ -364,7 +369,8 @@ function listView() {
         c.dim(' off ' + cut(curHeld.label ?? 'fleet work', 24))
       : c.bold(c.yellow('X')) + c.dim(' leave override');
   L.push(c.dim('  ↑↓/jk move · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') +
-         c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') +
+         c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') +
+         c.cyan('G geometry') +
          c.dim(' · C compendium · P plan · ') + xSays +
          c.dim(' · r refresh · q quit'));
   if (S.status) L.push('  ' + S.status);
@@ -1044,6 +1050,58 @@ async function fieldCommand() {
   draw();
 }
 
+// THE GEOMETRY DEBUG MAPS -- EVERY ROOM BY NUMBER, ON ONE KEY.
+//
+// `m59-roomview.mjs` writes a file for one room and `m59-roomserve.mjs` serves all of them,
+// which is the difference between "go and look at Ukgoth" and "something is wrong in a room I am
+// looking at NOW". By the time you have found the number, run the tool and opened the file, the
+// thing you were looking at has moved -- so this is a key rather than a command.
+//
+// SAME CONTRACT AS `F`: ensure, then open. A browser pointed at a port that is still binding
+// shows a connection error and teaches the operator that the key is broken, so this waits for
+// the PAGE and not for the process.
+//
+// AND IT SAYS WHICH OF THREE THINGS HAPPENED. Not running, ours already running, and somebody
+// else's server on 8977 are three different answers; a port that answers is not an answer, and
+// nothing is killed on the strength of a title match.
+async function geometryMaps() {
+  S.status = c.dim('opening geometry maps…');
+  draw();
+  try {
+    const before = await maps.status();
+    if (before.blocked) {
+      S.status = c.red('geometry maps: port busy') + ' ' + c.dim('· ' + before.why);
+      return draw();
+    }
+    const r = before.running ? before : await maps.start({ log: () => {} });
+    if (!r.ok && !r.running) {
+      S.status = c.red('geometry maps did not come up') + ' ' +
+                 c.dim('· ' + (r.why ?? 'read substrate/roomserve.log'));
+      return draw();
+    }
+    // The room under the cursor if there is one, because the commonest reason to press this is
+    // that the selected character is somewhere odd. The index is one click up from there.
+    const cur = S.rows?.[S.i] ?? null;
+    // `room_num` IS THE NUMBER; `room` IS THE NAME. The first version of this read
+    // `cur.room ?? cur.room_num`, and since `room` holds 'Castle Victoria' rather than 38 the
+    // `??` always took it, Number() made NaN, and the key silently opened the index every
+    // time -- a feature that looks implemented and never fires. The TUI prints them side by
+    // side two hundred lines up (`${r.room} [room ${r.room_num}]`), which is what settled it.
+    const room = Number(cur?.room_num ?? NaN);
+    const port = r.port ?? maps.MAPS_PORT;
+    const url = Number.isFinite(room) && room > 0
+      ? 'http://127.0.0.1:' + port + '/' + room
+      : 'http://127.0.0.1:' + port + '/';
+    openBrowser(url);
+    S.status = c.green(before.running ? 'geometry maps already serving' : 'started geometry maps') +
+               ' ' + c.dim('· ' + url) +
+               (before.running && before.ours === false
+                 ? ' ' + c.yellow('(this checkout did not start it)') : '');
+  } catch (e) {
+    S.status = c.red('geometry maps: ' + e.message);
+  }
+  draw();
+}
 // ------------------------------------------------------------------ keys
 
 // THE OVERRIDE KEY, and what it does depends on where the cursor is — which is why the
@@ -1105,6 +1163,7 @@ function onKey(str, key) {
     // B is about the FLEET, not the row under the cursor — the board draws all of them.
     else if (str === 'B' || str === 'b') commander();
     else if (str === 'F' || str === 'f') fieldCommand();
+    else if (str === 'G' || str === 'g') geometryMaps();
     else if (str === 'C' || str === 'c') compendium(S.rows[S.sel]);
     else if (str === 'P' || str === 'p') compendium(S.rows[S.sel], '/planner/');
     else if (str === 'r') { S.status = c.dim('refreshing…'); refresh().then(draw); }
@@ -1116,6 +1175,7 @@ function onKey(str, key) {
     else if (str === 'S' || str === 's') swarm(S.hero).then(draw, fail);
     else if (str === 'B' || str === 'b') commander();
     else if (str === 'F' || str === 'f') fieldCommand();
+    else if (str === 'G' || str === 'g') geometryMaps();
     else if (str === 'C' || str === 'c') compendium(S.hero);
     else if (str === 'P' || str === 'p') compendium(S.hero, '/planner/');
     else if (str === 'r') { refresh().then(() => { S.hero = S.rows.find(r => r.agent === S.hero.agent) ?? S.hero; draw(); }); }
