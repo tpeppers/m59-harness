@@ -17505,10 +17505,31 @@ export class Autopilot {
     // so the only honest way to learn it is to try and watch the mana. A target that costs
     // nothing is remembered as unhurt and skipped for a while, which lets the next pass try
     // somebody else instead of re-picking the same healthy body for ever.
+    // THE MOST WOUNDED FIRST — AS CLOSE AS A KEEPER CAN GET TO IT, WHICH IS NOT ALL THE WAY.
+    //
+    // The operator asked for "always pick the most wounded" and a keeper cannot read another
+    // player's health: the wire does not carry it, and `m59-party.mjs`'s health board is a
+    // module-level Map, so every keeper PROCESS has its own copy of it — it stopped being a
+    // cross-character source the day keepers moved out of the broker, the same casualty as
+    // the fleet-mate check (see docs/m59-keeper.md). Anything here claiming to rank by health
+    // would be ranking by null.
+    //
+    // What IS knowable is what our own casts told us. A cast that spends nothing proves the
+    // target was whole (hospice.kod:88), so each body carries a timestamp of when it was last
+    // PROVEN whole. Ordering by that — never-tried first, then longest-ago — converges on the
+    // wounded and self-corrects: somebody healed five minutes ago and since chewed on by a
+    // spider sorts back to the front, and somebody standing at full health all afternoon sorts
+    // to the back and stays there.
+    //
+    // A real most-wounded pick needs the health the BROKER already has for every character,
+    // so it belongs in a driver outside the keeper — which is what m59-karmapump.mjs does when
+    // it chooses its patient. Written down rather than faked.
     this._unhurtUntil ||= new Map();
+    this._provenWholeAt ||= new Map();
     const now = Date.now();
     const candidates = [...c.room.objects.values()]
-      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER))
+      .sort((a, b) => (this._provenWholeAt.get(a.id) ?? 0) - (this._provenWholeAt.get(b.id) ?? 0));
     const other = candidates.find(o => !(this._unhurtUntil.get(o.id) > now)) ?? null;
     if (!other)
       return this.declinedCast(rung.name, candidates.length
@@ -17524,7 +17545,11 @@ export class Autopilot {
     const manaAfter = c.vitals?.()?.mana?.value ?? null;
     const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
     const landed = !(spent === 0);
-    if (!landed) this._unhurtUntil.set(other.id, Date.now() + 5 * 60_000);
+    if (!landed) {
+      this._unhurtUntil.set(other.id, Date.now() + 5 * 60_000);
+      // Proven whole just now, so it sorts to the BACK of the next pass's queue.
+      this._provenWholeAt.set(other.id, Date.now());
+    }
     if (landed) this.tally.heals_given = (this.tally.heals_given || 0) + 1;
     // A heal cast on someone else has no inventory diff to prove it landed, so `ok`
     // here means "the cast went out", not "they were healed". Said plainly rather than
