@@ -548,7 +548,10 @@ async function build() {
       if (num === null) continue;
       const active = prop(b.lines, 'plActive', 'LIST');
       roomInfo.set(b.id, { objId: b.id, cls: b.cls, num });
-      if (active) activeLists.push({ room: b.id, list: active });
+      // `b.id` IS AN OBJECT ID and it is used as one two steps down (`roomInfo.get(...)`), so
+      // only the NAME was wrong — and a field called `room` holding an object id is exactly
+      // how that id ends up somewhere that wants a room number. Renamed, not converted.
+      if (active) activeLists.push({ roomObjId: b.id, list: active });
     }
     process.stderr.write(`\r  ${Math.min(i + 300, roomIds.length)}/${roomIds.length}`);
   }
@@ -564,7 +567,8 @@ async function build() {
       const lid = Number(/^show list (\d+)/.exec(part.trim())?.[1]);
       const owner = slice.find(x => x.list === lid);
       if (!owner) continue;
-      for (const m of part.matchAll(/OBJECT (\d+)/g)) candidates.push({ id: Number(m[1]), room: owner.room });
+      for (const m of part.matchAll(/OBJECT (\d+)/g))
+        candidates.push({ id: Number(m[1]), roomObjId: owner.roomObjId });
     }
     process.stderr.write(`\r  ${Math.min(i + 200, activeLists.length)}/${activeLists.length} rooms`);
   }
@@ -588,7 +592,7 @@ async function build() {
       merchants.push({
         id: b.id, cls: b.cls,
         roomObjId: home?.room ?? null,
-        roomNum: home ? roomInfo.get(home.room)?.num ?? null : null,
+        roomNum: home ? roomInfo.get(home.roomObjId)?.num ?? null : null,
         markup: prop(b.lines, 'viMerchant_markup'),
         forSaleList: forSale, wantedList: wanted,
       });

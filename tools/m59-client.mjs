@@ -539,8 +539,15 @@ export class M59Client {
     const objs = [...this.room.objects.values()]
       .sort((a, b) => a.id - b.id)
       .map(o => describeObject(o, this.lookup));
-    const where = this.roomNameRsc ? this.rsc.get(this.roomNameRsc) : `room ${this.room.id}`;
-    return { room: this.room.id, roomName: where, count: objs.length, objects: objs };
+    // THIS CLIENT HAS NO BAKE, SO IT CANNOT KNOW A ROOM NUMBER — and it must therefore not use
+    // the word. `room ${this.room.id}` printed "room 413" about the room whose OBJECT ID is 413
+    // and whose number is 153, and the reply's `room` field carried the same id. Two readers
+    // took that for a room number on 2026-09-10 and one of them pinned a keeper's assignedRoom
+    // to a room that does not exist. See tools/m59-roomref.mjs for the two spaces.
+    const where = this.roomNameRsc ? this.rsc.get(this.roomNameRsc)
+                                   : `room object ${this.room.id}`;
+    return { room_object_id: this.room.id, roomName: where,
+             count: objs.length, objects: objs };
   }
 
   // Anything in the room whose name matches, for turning agent words into ids.

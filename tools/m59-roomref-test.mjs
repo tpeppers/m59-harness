@@ -130,12 +130,17 @@ console.log('AND NO NEW SITE MAY PUT AN OBJECT ID IN A FIELD CALLED `room`');
   // here so the debt is legible instead of forgotten.
   // FOUR, not the three I first wrote down — the scan found one I had missed by reading,
   // which is the whole argument for scanning rather than reading.
-  const KNOWN = [
-    ['m59-client.mjs:545', 'the raw client own room summary — { room: this.room.id }'],
-    ['m59-game.mjs:2770',  'a security-drift diagnostic reports room: c.room.id'],
-    ['m59-game.mjs:5521',  'a walk reply, when a step left the room'],
-    ['m59-game.mjs:5530',  'the second of that pair'],
-  ];
+  // DRIVEN TO ZERO, 2026-09-10. Operator: "I think we should actually go through and just try to
+  // remove anywhere the code reports the objectID that could confuse it with room number, I
+  // don't think we ever want an Object ID for a room?" — right, for REPORTS. Comparisons of an
+  // id to an id are correct and stay. The four sites this list used to name are fixed:
+  //
+  //   m59-client.mjs   the raw client has no bake, so it cannot know a room number and no
+  //                    longer uses the word: `room_object_id`, and the prose says "room object"
+  //   m59-game.mjs     three replies now carry the NUMBER as `room` plus `room_object_id`
+  //   m59-merchants.mjs an intermediate called `room` that held an id is now `roomObjId`
+  //   m59-autopilot.mjs the Underworld test compared one mixed-space variable against 6
+  const KNOWN = [];
   const dir = dirname(fileURLToPath(import.meta.url));
   const hits = [];
   for (const f of readdirSync(dir).filter(f => /^m59-.*\.mjs$/.test(f) &&

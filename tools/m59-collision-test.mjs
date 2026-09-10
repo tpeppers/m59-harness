@@ -3233,8 +3233,13 @@ if (![validateFineTarget, queueValidatedMove, confirmPosition, stepFine, ordinar
   // PATCHED WITHOUT TELLING US. So a mismatch has to carry BOTH values out to the caller
   // — refusing the move says a character did not walk; naming the two security values is
   // what says the world changed, which is the half anyone can act on.
-  ok('and it carries the evidence out: the room, and both security values',
-     mismatched.validation?.drift?.room != null &&
+  // AND THE ROOM IS NAMED IN A SPACE, which this used to leave implicit: `drift.room` carried
+  // the room's OBJECT ID under a name every reader takes for a room number. The two are
+  // separate fields now (tools/m59-roomref.mjs), and `room` is null here rather than wrong,
+  // because this fake has no World to ask for the number — an absent answer, not a zero.
+  ok('and it carries the evidence out: the room, in a named space, and both security values',
+     (mismatched.validation?.drift?.room != null ||
+      mismatched.validation?.drift?.room_object_id != null) &&
      Number.isInteger(mismatched.validation.drift.live) &&
      Number.isInteger(mismatched.validation.drift.baked) &&
      mismatched.validation.drift.live !== mismatched.validation.drift.baked,

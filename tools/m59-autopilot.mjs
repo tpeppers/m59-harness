@@ -97,6 +97,12 @@ import { fileURLToPath } from 'node:url';
 
 // One resolver, shared with the broker's `tithe` tool — see titheFleet in m59-tithe.mjs
 // for why two answers here meant two books and a fleet that tithed twice a day.
+import { UNDERWORLD } from './m59-travelgate.mjs';
+
+// THE UNDERWORLD'S ROOM OBJECT ID, which is not its room number: it is room 1 and its room
+// object's id is 6. Named because a bare 6 in a room comparison is unreadable, and because it
+// was already being compared against a variable that usually held a room NUMBER instead.
+const UNDERWORLD_ROOM_OBJECT_ID = 6;
 const TITHE_FLEET = titheFleet();
 
 // Keep the stall-accounting decision independently testable. A partial exchange is
@@ -12720,15 +12726,28 @@ export class Autopilot {
     return this.observeDeath();
   }
 
-  // ── passUnderworld: extracted from pass() ────────────────────────────────
+// ── passUnderworld: extracted from pass() ────────────────────────────────
   async passUnderworld(ctx) {
     const { s, c, room, v } = ctx;
     // 1. Dead. The Underworld has no graph exits, so a character left there stays
     //    there forever unless something walks it onto a portal.
     // Check both the map room (nameRsc) and the client room (name, num).
     const roomName = room?.name ?? c?.room?.name ?? '';
-    const roomNum  = room?.num  ?? c?.room?.num  ?? room?.objId;
-    if (/underworld/i.test(roomName) || roomNum === 6) {
+    // ONE VARIABLE, TWO SPACES, AND A CONSTANT THAT ONLY MEANS SOMETHING IN ONE OF THEM.
+    //
+    // This read `room?.num ?? c?.room?.num ?? room?.objId` and compared it to 6. The Underworld
+    // is ROOM 1 and its room object's id is 6, so the `=== 6` test could only ever fire on the
+    // third fallback — and in the ordinary case the variable held 1 and the comparison was dead.
+    // What actually caught a death was the NAME test beside it, which the two lines above
+    // already warn is not proof when a resource has not resolved.
+    //
+    // So the spaces are separated and each is compared against its own constant. `UNDERWORLD`
+    // is the room number, shared with the journey gate; 6 is the object id and is named here
+    // because it belongs to this one room. See tools/m59-roomref.mjs.
+    const roomNum   = room?.num ?? c?.room?.num ?? null;
+    const roomObjId = room?.objId ?? c?.room?.id ?? null;
+    if (/underworld/i.test(roomName) || roomNum === UNDERWORLD ||
+        roomObjId === UNDERWORLD_ROOM_OBJECT_ID) {
       await this.observeDeath();
       this.note('woke up dead', { room: room.name, attempt: (this.underworldTries || 0) + 1 });
       // BEFORE ANY OF THE GETTING-OUT. Whatever suspended the objective — the travel job,

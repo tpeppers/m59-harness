@@ -2765,7 +2765,10 @@ class Session {
         // Fall through and use the geometry anyway
       } else {
         return { available: false, moved: false, blocked: true, reason: 'room_geometry_mismatch',
-                 drift: { room: c.room.id, live: roomSecurity >>> 0, baked: geo.security >>> 0 },
+                 // THE ROOM NUMBER IS WHAT A READER MEANS BY `room`; the object id goes under
+                 // its own name. See tools/m59-roomref.mjs.
+                 drift: { room: this.world?.room?.num ?? null, room_object_id: c.room.id,
+                          live: roomSecurity >>> 0, baked: geo.security >>> 0 },
                  note: 'the server announced a different .roo security value; refresh collision geometry' };
       }
     }
@@ -5516,7 +5519,8 @@ class Session {
                      position: r.position ?? null, note: (r.note ?? '').slice(0, 90) };
         if (r.left_room || (c.room.id !== startRoom)) {
           log.push({ step: i, left_room: true });
-          return { arrived: false, left_room: true, room: c.room.id, steps: i + 1, log,
+          return { arrived: false, left_room: true, room: this.world?.room?.num ?? null,
+                   room_object_id: c.room.id, steps: i + 1, log,
                    note: 'walked out of the room while following the fine route' };
         }
         if (r.reason) geometryRejections.add(r.reason);
@@ -5525,7 +5529,8 @@ class Session {
                    position: r.position, steps: i, log };
         if (r.left_room || (c.room.id !== startRoom)) {
           log.push({ step: i, left_room: true });
-          return { arrived: false, left_room: true, room: c.room.id, steps: i + 1, log,
+          return { arrived: false, left_room: true, room: this.world?.room?.num ?? null,
+                   room_object_id: c.room.id, steps: i + 1, log,
                    note: 'walked out of the room — for an edge exit that IS arriving' };
         }
         // PROGRESS IS GROUND GAINED ON THE TARGET, NOT A POSITION COMPARISON THAT RACES
