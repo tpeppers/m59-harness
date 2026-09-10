@@ -17286,35 +17286,92 @@ export class Autopilot {
   // And casting is how abilities improve at all, so a Shal'ille character with a
   // wounded ally in the room has a move that heals the ally, trains the spell, and
   // raises its own karma in one action. There is no reason not to take it.
+  // THE HEAL LADDER, HIGHEST FIRST — and which rung is cast is the whole point.
+  //
+  // Shal'ille has three: minor heal at level 1 (3 mana), hospice at level 3 (10 mana and
+  // 3 herbs), major heal at level 5 (20). This used to match `/^(minor heal|heal)$/` and so
+  // always cast the LEVEL ONE spell, whatever the caster knew.
+  //
+  // That is not a style point. `PlayerCanLearn` gates level N on the best THREE abilities at
+  // level N-1, so for a character whose goal is the next school level, practice on a level-1
+  // spell contributes exactly NOTHING to the gate. Loial the Ogier, 2026-09-09: hospice 25,
+  // cure disease 19, identify 17 against the 115 that "forces of light" wants — and a medic
+  // pass that healed allies all day with minor heal would have moved none of it. Casting the
+  // best rung instead turns every hurt fleet-mate into practice at the level that counts, and
+  // needs no amulet, no dedicated patient and no second character held still for it.
+  static HEALS = Object.freeze([
+    { name: 'major heal', mana: 20, reagents: [] },
+    { name: 'hospice',    mana: 10, reagents: [['herb', 3]] },
+    { name: 'minor heal', mana: 3,  reagents: [] },
+  ]);
+
   async medic() {
     const s = this.s, c = s.need();
     const MEDIC_GAP_MS = 45_000;
     if (this.lastHealAt && Date.now() - this.lastHealAt < MEDIC_GAP_MS) return;
 
-    const spell = (c.spells || []).find(sp => /^(minor heal|heal)$/i.test(c.rsc.get(sp.nameRsc) || ''));
-    if (!spell) return this.declinedCast('heal', 'the character does not have the spell');
+    // Pick the best rung this character HOLDS and can actually pay for, then fall down the
+    // ladder. Reagents are checked before the cast for the same reason buffAllies checks
+    // them: a cast that cannot pay them is refused server-side and, from here, looks exactly
+    // like a cast that landed.
     const mana = c.vitals()?.mana;
-    if (mana && mana.value < 4)                            // 3 to cast, leave a margin
-      return this.declinedCast('heal', 'not enough mana', { mana: mana.value, needs: 4 });
+    let spell = null, rung = null;
+    const tried = [];
+    for (const h of Autopilot.HEALS) {
+      const found = (c.spells || [])
+        .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === h.name);
+      if (!found) continue;
+      if (mana && mana.value < h.mana + 1) { tried.push(`${h.name} (needs ${h.mana + 1} mana)`); continue; }
+      const short = h.reagents.filter(([n, k]) => this.reagentOnHand(n) < k);
+      if (short.length) { tried.push(`${h.name} (short ${short.map(([n]) => n).join(', ')})`); continue; }
+      spell = found; rung = h; break;
+    }
+    if (!spell)
+      return this.declinedCast('heal', tried.length ? `cannot pay for any heal: ${tried.join('; ')}`
+                                                    : 'the character does not have the spell',
+                               { mana: mana?.value ?? null });
 
     // Another player, not us, not a monster.
     // Raw room objects carry flags, not the snapshot's derived booleans — `is_player`
     // is computed in the world model and does not exist here.
-    const other = [...c.room.objects.values()]
-      .find(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
-    if (!other) return this.declinedCast('heal', 'nobody else in the room to heal');
+    //
+    // AND A FULL-HEALTH TARGET IS A WASTED PASS THAT SAYS NOTHING. `hospice.kod:88`
+    // CanPayCosts returns FALSE when the target is already at full health, before any
+    // message, so the cast simply does not happen: no mana, no reagent, no practice. We
+    // cannot see another player's health from a room object — the wire does not carry it —
+    // so the only honest way to learn it is to try and watch the mana. A target that costs
+    // nothing is remembered as unhurt and skipped for a while, which lets the next pass try
+    // somebody else instead of re-picking the same healthy body for ever.
+    this._unhurtUntil ||= new Map();
+    const now = Date.now();
+    const candidates = [...c.room.objects.values()]
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER));
+    const other = candidates.find(o => !(this._unhurtUntil.get(o.id) > now)) ?? null;
+    if (!other)
+      return this.declinedCast(rung.name, candidates.length
+        ? 'everyone here read as unhurt on a recent pass'
+        : 'nobody else in the room to heal');
 
     this.lastHealAt = Date.now();
+    const manaBefore = c.vitals()?.mana?.value ?? null;
     await s.pacer.submit('cast', () => c.cast(spell.id, [other.id]), 1050);
     const ev = await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
-    this.tally.heals_given = (this.tally.heals_given || 0) + 1;
+    // A CAST THAT SPENT NO MANA DID NOT HAPPEN, and here it usually means the target was
+    // already whole. Remember that for a few minutes so the next pass tries somebody else.
+    const manaAfter = c.vitals?.()?.mana?.value ?? null;
+    const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
+    const landed = !(spent === 0);
+    if (!landed) this._unhurtUntil.set(other.id, Date.now() + 5 * 60_000);
+    if (landed) this.tally.heals_given = (this.tally.heals_given || 0) + 1;
     // A heal cast on someone else has no inventory diff to prove it landed, so `ok`
     // here means "the cast went out", not "they were healed". Said plainly rather than
-    // borrowing the confidence the creation spells earn from a changed pack.
+    // borrowing the confidence the creation spells earn from a changed pack — and where the
+    // mana says nothing was spent, it does not even claim that much.
     this.recordCast(c.rsc.get(spell.nameRsc) || 'heal', {
-      ok: true, target: c.rsc.get(other.nameRsc),
-      why: 'a wounded ally in the room: heals them, trains the spell, raises our karma',
-      mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
+      ok: landed, target: c.rsc.get(other.nameRsc),
+      why: landed ? 'a wounded ally in the room: heals them, trains the spell, raises our karma'
+                  : 'nothing was spent — the target was already whole, so no practice either',
+      mana_before: manaBefore, mana_after: manaAfter, mana_spent: spent });
     this.note('healed someone', {
       target: c.rsc.get(other.nameRsc), spell: c.rsc.get(spell.nameRsc),
       said: ev.events?.filter(e => e.text).map(e => e.text).slice(0, 2),
