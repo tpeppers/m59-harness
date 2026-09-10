@@ -804,10 +804,20 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'of them needed',
   },
   keeperLease: {
-    what: 'the faculty lease that stops the keeper steering underneath you',
+    what: 'the faculty lease that stops the keeper steering underneath you, and the cancel of ' +
+          'the journey it started, before EVERY walk rather than only at claim time',
     since: '2026-09-02',
     incident: 'orders given without a lease were silently overwritten by a DUM bot ' +
-              're-deciding every ~30s, while every call reported success',
+              're-deciding every ~30s, while every call reported success. Widened 2026-09-10: ' +
+              'a claim takes the FACULTIES and a journey is a JOB, so cancelling once at claim ' +
+              'time leaves the keeper free to start walking the character back to its ' +
+              '`assignedRoom` during the errand -- and every travel the errand then issues is ' +
+              'refused `is busy`. Beaker spent nine minutes and three attempts on a hop that ' +
+              'takes seven and a half seconds, because the errand\'s `home` equalled his ' +
+              '`assignedRoom`, which is the common case -- three occurrences in one evening on ' +
+              'the same pair, against 5554ms for a cancelled-then-issued travel. The reply was ' +
+              'being discarded too, so each refusal was followed by polling out a 188s budget ' +
+              'for a walk that had never sent a packet',
   },
   brokerHoldsFleet: {
     what: 'the broker this talks to is the one holding the fleet this names',
@@ -1266,6 +1276,34 @@ async function arrivalAhead(ctx, to) {
   }
 }
 
+// A REFUSAL SAYS WHY IN ONE OF FOUR FIELDS, depending on which layer refused. Read all of them
+// rather than picking one: the broker's journey gate answers `refused`/`why`, the job slot
+// throws and arrives as `error`, and the keeper's own refusals come back as `reason`.
+const refusalText = (r) => String(r?.why ?? r?.refused ?? r?.error ?? r?.reason ??
+                                  'the broker did not say');
+
+// `<agent> is busy: walk to Yonder Inn of Jasper` — the job slot refusing because something
+// else is already walking this body. Matched on the SENTENCE because that is what the layer
+// produces; there is no code for it, which is itself worth fixing one day.
+const isBusyRefusal = (r) => /\bis busy\b|\bbusy:/i.test(refusalText(r));
+// ONE CLEAN CANCEL IS ENOUGH, and this loop is only for losing the race, not for grinding it.
+//
+// The first version of this said "measured: four cancel/re-issue passes were needed". That number
+// was withdrawn by the session that produced it: their helper's CLI block was guarded on
+// `process.argv[2]` rather than on being the entry point, so importing it tried to invoke a
+// broker tool named after the agent, printed `unknown tool "t6"` once at the top where it read
+// as noise, and every `cancel_movement` in their loop silently did nothing. Five cancel-less
+// travels then failed `is busy` and the script concluded the hop was "genuinely refusing, not
+// just contended". Cancel-then-travel wins on the FIRST attempt: 1 hop, 0 stumbles, 5554ms on
+// the same 382 -> 370 pair.
+//
+// So the retry is not the fix -- the cancel before every send is. Two tries, because a race
+// CAN be lost (the keeper may re-issue in the gap between our cancel and our travel) and one
+// extra send costs 2.5s against the 180s of polling this replaces. A number that survives its
+// own justification being withdrawn has to be justified again, not just kept.
+const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
+const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
+
 async function compiledWalk(ctx, agent, to, { minHealth }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
@@ -1307,6 +1345,12 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     ctx.log(agent, `could not ask the unified exit view whether anything arrives at ${to} ` +
                    `(${arrival.unknown}) -- walking without that check`);
 
+  // WHAT THE THREE ATTEMPTS ACTUALLY DID. Three attempts that never sent a packet are not the
+  // same evidence as three that walked and failed, and they used to unwind identically -- so a
+  // contention failure was filed as a movement defect. `#movement` ledgers are keyed on that
+  // distinction being right.
+  let launched = 0;
+  const sends = [];
   for (let attempt = 0; attempt < 3; attempt++) {
     const at = await observe(agent);
     if (!at.ok) return { ok: false, why: 'could not read the character' };
@@ -1357,11 +1401,58 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     const budget = Math.min(ctx.budgetCapMs,
       Math.max(ctx.budgetFloorMs, (Number(est?.ms) || 400_000) + 90_000));
     ctx.log(agent, `walking ${at.room} -> ${to}, budget ${Math.round(budget / 1000)}s`);
+    // THE REPLY IS EVIDENCE AND IT USED TO BE THROWN AWAY.
+    //
+    // `await call('travel', ...).catch(() => ({}))` discarded the answer, so a travel that was
+    // REFUSED -- `started: false` -- was followed by polling the character's room for the whole
+    // budget. Three minutes of waiting for a walk that never sent a packet, three times, then
+    // `did not reach 370 in three attempts`, which reads as a mover failure and is recorded as
+    // one. It is not: nothing ever tried to move.
+    //
+    // A refusal now ends the wait immediately, and the two refusals that mean different things
+    // are handled differently:
+    //
+    //   `is busy`  -- the keeper is walking this body somewhere of its own accord. That is a
+    //                 RACE, not a failure, and the way to win it is measured: cancel the
+    //                 keeper's journey and re-issue at once, which took 5554ms on the pair that
+    //                 had been failing for nine minutes. A second try is kept for a lost race
+    //                 and costs 2.5s, not 188.
+    //   anything else -- a named refusal is an ANSWER (too hurt, nothing arrives there). Waiting
+    //                 it out cannot change it, so it is reported.
+    //
     // CARRY THE FLOOR THROUGH. The broker gates every journey now, and a script that has
     // already rested to ITS floor must not then be refused by a different one -- `come-home`
     // deliberately lowers `minHealth` for an escort, and that decision is the script's.
-    await call('travel', { agent, to, background: true, run_errands: false,
-                           health_floor: minHealth }, 60_000).catch(() => ({}));
+    const send = async () => {
+      // END WHAT THE KEEPER STARTED, EVERY TIME, not only when the lease was taken. A claim
+      // takes the faculties and a journey is a JOB, so it outlives the claim -- and the keeper
+      // has had this whole errand to decide the character belongs in assignedRoom.
+      await ctx.holds?.get(agent)?.cancelJourney?.(
+        `clearing the way for the errand's own walk to ${to}`).catch(() => {});
+      return call('travel', { agent, to, background: true, run_errands: false,
+                              health_floor: minHealth }, 60_000)
+        .catch(e => ({ error: e?.message ?? String(e) }));
+    };
+    let sent = await send();
+    for (let race = 0; race < BUSY_RACE_TRIES && sent?.started !== true && isBusyRefusal(sent);
+         race++) {
+      ctx.log(agent, `the keeper is holding the body (${refusalText(sent)}) — cancelled its ` +
+                     `journey and re-issuing (${race + 1} of ${BUSY_RACE_TRIES})`);
+      await sleep(BUSY_RACE_MS);
+      sent = await send();
+    }
+    if (sent?.started !== true) {
+      const why = refusalText(sent);
+      sends.push(why);
+      ctx.log(agent, `the walk to ${to} was NOT STARTED (${why}) — not waiting out a ` +
+                     `${Math.round(budget / 1000)}s budget for a journey that never began`);
+      // A body the keeper will not let go of is worth one more OUTER attempt (it re-observes,
+      // re-gates, and cancels again). Any other refusal is an answer and is returned.
+      if (isBusyRefusal(sent)) continue;
+      return { ok: false, why: `the broker refused the walk to ${to}: ${why}`,
+               refused: sent?.refused ?? null, never_started: true };
+    }
+    launched++;
 
     const until = Date.now() + budget;
     while (Date.now() < until) {
@@ -1371,7 +1462,15 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
       if (now.dead) return { ok: false, why: 'died en route', dead: true };
     }
   }
-  return { ok: false, why: `did not reach ${to} in three attempts` };
+  if (!launched)
+    return { ok: false, never_started: true, refusals: sends,
+             why: `never even set out for ${to}: every attempt was refused before a packet was ` +
+                  `sent (${[...new Set(sends)].join('; ')}). This is CONTENTION, not a mover ` +
+                  `failure — do not read it as one, and do not record it as one` };
+  return { ok: false, launched, refusals: sends,
+           why: `did not reach ${to} in three attempts (${launched} of them actually set out` +
+                `${sends.length ? `, ${sends.length} refused before sending a packet: ` +
+                  `${[...new Set(sends)].join('; ')}` : ''})` };
 }
 
 /**
@@ -2557,6 +2656,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
                 // GUARANTEE 12 needs both: the fleet to find the keeper that will plan the
                 // route, and the waiver so a rescue into 599 is still allowed to go.
                 fleet, allowTraps,
+                // Per-agent keeper holds, so any step can end a journey the keeper started
+                // while the step before it was doing something else. See setHold.
+                holds: new Map(),
                 // GUARANTEE 15's waiver. An errand deliberately probing for the missing
                 // trigger has to be able to aim at the room nothing arrives at.
                 allowUnreachable, unreachableReason,
@@ -2589,7 +2691,18 @@ They are driven by tools/m59-menagerie.mjs and ` +
   const runOne = async agent => {
     const state = { agent, results: {} };
     // Reassigned across a death, when the legs go back to the keeper and are taken again.
+    // THE HOLD HAS TO BE REACHABLE FROM A STEP, not just from this closure.
+    //
+    // `holdKeeper` cancels the keeper's in-flight journey at CLAIM time, which is right and is
+    // not enough: by the time an errand reaches its final `walk(home)` the keeper has had the
+    // whole errand to notice the character is away from `assignedRoom` and start walking it
+    // back. Every travel the errand then issues comes back `<agent> is busy: walk to ...`.
+    // Measured on prod 2026-09-10 by the session driving Beaker: nine minutes and three
+    // attempts on a hop that takes seven and a half seconds, because home EQUALLED
+    // assignedRoom -- which is the common case, not the exotic one.
     let hold = { ok: false, cancelJourney: async () => {}, release: async () => {} };
+    const setHold = h => { hold = h; ctx.holds.set(agent, h); return h; };
+    setHold(hold);
     try {
       // TWO DIFFERENT HOLDS, AND BOTH ARE NEEDED. `busy` is for the FLEET — it is what makes
       // stall detectors and supervisors step over this character. The faculty lease is for the
@@ -2602,9 +2715,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // Waivable, and the sharpest edge in the file: without the lease a DUM bot re-decides
       // about every thirty seconds and quietly overwrites the order while every call still
       // reports success. Anything waiving this is choosing to race the keeper.
-      hold = waived.has('keeperLease')
+      hold = setHold(waived.has('keeperLease')
         ? { ok: true, cancelJourney: async () => {}, release: async () => {} }
-        : await holdKeeper(ctx, agent, fleet);
+        : await holdKeeper(ctx, agent, fleet));
       const plan = typeof steps === 'function' ? await steps(agent, state) : steps;
 
       // VAULT BEFORE SELL, CHECKED BEFORE ANYTHING WALKS.
@@ -2738,7 +2851,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
             // corpse out of the Underworld while we are holding the character's legs.
             await hold.release();
             const back = await recoverFromDeath(ctx, agent, ctx.reviveMs);
-            if (back.ok) hold = await holdKeeper(ctx, agent, fleet);
+            if (back.ok) hold = setHold(await holdKeeper(ctx, agent, fleet));
             if (!back.ok) {
               failure = { at, step: step.do, why: `died and did not recover: ${back.why}`,
                           dead: true };
@@ -2759,7 +2872,14 @@ They are driven by tools/m59-menagerie.mjs and ` +
           }
           ctx.log(agent, `step ${at} (${step.do}) failed: ${r.why ?? '?'}` +
             (plan.some(x => x.always) ? ' — unwinding to the steps that always run' : ''));
-          failure = { at, step: step.do, why: r.why };
+          // A MACHINE-READABLE FLAG TRAVELS WITH THE PROSE. `never_started` says the body was
+          // never even asked to move -- the step was refused before a packet went out -- and a
+          // caller or a ledger must be able to branch on that without parsing a sentence.
+          // Filing contention as a movement failure corrupts the #movement evidence, which is
+          // keyed on the distinction being right.
+          failure = { at, step: step.do, why: r.why,
+                      ...(r.never_started ? { never_started: true } : {}),
+                      ...(r.refused ? { refused: r.refused } : {}) };
           continue;
         }
         ctx.log(agent, `step ${at} (${step.do}) ok` +

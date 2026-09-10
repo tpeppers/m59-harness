@@ -482,7 +482,13 @@ const arrivalReport = (s) => {
       other: v.objects.filter(o => !has(o, 'attack') && !has(o, 'get') && !has(o, 'buy') && !o.is_player).length,
       scenery: v.scenery?.total ?? 0,
     },
-    exits: v.exits.length,
+    // NULL IS AN ANSWER AND ZERO IS A LIE. A keeper snapshot carries no tactical exits --
+    // `keeperView` sets `exits: []` unconditionally, because they need the live World that
+    // lives in the keeper process -- so this line reported `0` for EVERY keeper-backed
+    // character, which is every character in a running fleet. West Jasper declares thirty-five
+    // ways out. `null` plus a note naming the instruments that CAN answer is the honest shape.
+    exits: v.exits_unknown ? null : v.exits.length,
+    ...(v.exits_unknown ? { exits_note: v.exits_note ?? 'not measurable from a snapshot' } : {}),
     note: 'arrival summary — call look for the full contents, or look with minimap:true for the picture',
   };
 };

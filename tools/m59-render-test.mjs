@@ -9,6 +9,7 @@
 //
 // Run: node tools/m59-render-test.mjs
 
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { keeperView, renderProjection } from './m59-render-projection.mjs';
 
@@ -254,7 +255,34 @@ is(composed.objects.filter(o => has(o, 'attack') && !o.is_player).length, 0,
 is(composed.objects.filter(o => o.is_player).length, 1, 'one other fleet member');
 is(composed.objects.filter(o => has(o, 'get')).length, 1, 'one thing on the floor');
 is(composed.objects.filter(o => has(o, 'buy')).length, 1, 'one merchant');
-is(composed.exits.length, 0, 'and the exit count reads as zero rather than throwing');
+is(composed.exits.length, 0, 'the exits array is empty rather than absent, so nothing throws');
+
+// AND THE EMPTY ARRAY HAS TO SAY IT IS AN ABSENCE. This assertion used to stop at "reads as
+// zero rather than throwing" — which was the worry at the time, and blessed the zero.
+// `arrivalReport` read `v.exits.length` with no guard, so every keeper-backed arrival report
+// said the room had no exits; West Jasper declares thirty-five. An instrument that cannot
+// produce the value which would show the problem must say so, not answer 0.
+is(composed.exits_unknown, true,
+  'the projection FLAGS that it has no World to ask, so no reader can turn empty into a count');
+is(/m59-exits\.mjs/.test(composed.exits_note ?? ''), true,
+  'and the note names an instrument that CAN answer, rather than only apologising');
+
+// THE READER THAT TURNS IT INTO A SCALAR, PINNED STRUCTURALLY RATHER THAN BY IMPORT.
+//
+// `arrivalReport` lives in m59-game.mjs, and importing that module here would make this suite
+// depend on whatever is in the shared checkout — it currently imports an untracked file, so a
+// clean clone cannot load it at all. Matching the CALL in the source is the honest compromise:
+// it cannot prove the behaviour, and it does prove the guard has not been deleted. Match the
+// code, never the prose: every comment line is stripped first, because an assertion that
+// matched a comment explaining a removal has passed for the wrong reason in this repository
+// twice.
+{
+  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8')
+    .split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  is(/exits: v\.exits_unknown \? null : v\.exits\.length/.test(src), true,
+    'arrivalReport reports null, not a zero it never measured');
+  is(/exits_note/.test(src), true, 'and carries the note that says where to ask instead');
+}
 
 // ---------------------------------------------------------------- two clocks disagreeing
 

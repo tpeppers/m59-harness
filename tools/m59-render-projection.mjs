@@ -224,6 +224,26 @@ export function keeperView(state, roomView, mapRoomFor = () => null) {
     // The tactical scene's exits need a World, which lives in the keeper process. ALWAYS an
     // array: `arrivalReport` reads `v.exits.length` without a guard.
     exits: [],
+    // AND IT HAS TO SAY THAT THE EMPTY ARRAY IS AN ABSENCE, NOT A MEASUREMENT.
+    //
+    // `arrivalReport` turned this into `exits: 0` — a NUMBER, which reads as a count somebody
+    // took. Read off the code rather than from a sighting: this line is unconditional, and
+    // `arrivalReport` did `exits: v.exits.length` with no guard, so EVERY keeper-backed arrival
+    // report — which is every character in a running fleet — said a room had no exits. West
+    // Jasper declares thirty-five.
+    //
+    // (A session did report seeing exactly that on 2026-09-10 and then WITHDREW it, having
+    // traced its own reading to a broken helper. The withdrawal is why the citation here is the
+    // code path and not their observation — but the defect is in the two lines, so it stands
+    // whether or not anyone had seen it yet.)
+    //
+    // Same family as the instrument failures that filled that day: one that cannot produce the
+    // value which would show the problem produces a confident wrong one instead. So the absence
+    // is FLAGGED, and every reader that turns this into a scalar has to check it.
+    exits_unknown: true,
+    exits_note: 'the broker holds a keeper SNAPSHOT and tactical exits need the live World — ' +
+                'ask the keeper (/action look), or `node tools/m59-exits.mjs <room>` for every ' +
+                'way in and out of the room with its provenance',
     scenery: { total: 0 },
     as_of_ms: s.as_of_ms ?? null,
     ...(rv && !agrees
