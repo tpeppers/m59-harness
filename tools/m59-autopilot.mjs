@@ -17790,7 +17790,7 @@ export class Autopilot {
     // to the back and stays there.
     //
     // A real most-wounded pick needs the health the BROKER already has for every character,
-    // so it belongs in a driver outside the keeper — which is what m59-karmapump.mjs does when
+    // so it belongs in a driver outside the keeper — which is what m59-shalille-train.mjs does when
     // it chooses its patient. Written down rather than faked.
     this._unhurtUntil ||= new Map();
     this._provenWholeAt ||= new Map();
