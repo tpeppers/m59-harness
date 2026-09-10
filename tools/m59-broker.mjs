@@ -1971,6 +1971,49 @@ class KeeperProxy {
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
+
+      // THE GUILD SURFACE. ON THE CLIENT LITERAL, WHICH IS WHAT `c` ACTUALLY IS.
+      //
+      // Every guild verb used to be called straight on this object and none of them existed
+      // here, so `guild action=status` answered `c.requestGuildInfo is not a function` and
+      // the whole surface — founding, inviting, promoting, renting a hall — was unreachable
+      // fleet-wide. `M59Client` has had all seventeen since the protocol work
+      // (m59-client.mjs:1238-1292); they were simply on the wrong side of a process boundary,
+      // exactly like `buyItems` and `sellOne` before them.
+      //
+      // I ADDED THEM TO THE SESSION FIRST AND PROD STAYED BROKEN. KeeperProxy is the session;
+      // `c` is this literal, built inside it — the comment above it says so in as many words.
+      // The test I wrote asserted the session had them, went green, and the fleet was exactly
+      // as broken as before. A test that names the wrong object is worse than no test,
+      // because it answers the question you meant to ask with a different one.
+      //
+      // `_guildAct` stays on the proxy because the ROSTER has to outlive this literal: the
+      // object is rebuilt per read, so a guild cached on it would vanish between the send and
+      // the readback, and `c.guild` would answer null for a character that had just founded.
+      requestGuildInfo: () => proxy._guildAct('info'),
+      requestGuildList: () => proxy._guildAct('list'),
+      guildCreate: (plan = {}) => proxy._guildAct('create', {
+        name: plan.name, titles: plan.titles, secret: !!plan.secret }),
+      guildInvite: (id) => proxy._guildAct('invite', { id }),
+      guildExile: (id) => proxy._guildAct('exile', { id }),
+      guildRenounce: () => proxy._guildAct('renounce'),
+      guildAbdicate: (id) => proxy._guildAct('abdicate', { id }),
+      guildVote: (id) => proxy._guildAct('vote', { id }),
+      guildDisband: () => proxy._guildAct('disband'),
+      guildAlly: (id) => proxy._guildAct('ally', { id }),
+      guildEndAlliance: (id) => proxy._guildAct('end_alliance', { id }),
+      guildDeclareWar: (id) => proxy._guildAct('declare_war', { id }),
+      guildMakePeace: (id) => proxy._guildAct('make_peace', { id }),
+      guildAbandonHall: () => proxy._guildAct('abandon_hall'),
+      guildSetPassword: (pw) => proxy._guildAct('set_password', { password: pw ?? '' }),
+      guildSetRank: (id, rank) => proxy._guildAct('set_rank', { id, rank }),
+      guildRentHall: (hallId, password = '') =>
+        proxy._guildAct('rent_hall', { hall_id: hallId, password }),
+      // The roster the last round trip returned. NOT a cache with a TTL: a rank change by
+      // somebody else is invisible until asked for, and acting on a stale bitmask is the
+      // exact failure the guild tool exists to prevent.
+      get guild() { return proxy._guild ?? null; },
+
       stats: () => null,
       // ABSENCE OF EVIDENCE, IN THE SHAPE EVERY CALLER READS. This resolved `null`, and
       // eighty-odd call sites in this file do `const { events } = await c.waitFor(...)` or
@@ -2534,28 +2577,10 @@ class KeeperProxy {
     if (r && !r.error && 'guild' in r) this._guild = r.guild;
     return r;
   }
-  get guild() { return this._guild ?? null; }
-  async requestGuildInfo()      { return this._guildAct('info'); }
-  async requestGuildList()      { return this._guildAct('list'); }
-  async guildCreate(plan = {})  { return this._guildAct('create', {
-                                    name: plan.name, titles: plan.titles,
-                                    secret: !!plan.secret }); }
-  async guildInvite(id)         { return this._guildAct('invite', { id }); }
-  async guildExile(id)          { return this._guildAct('exile', { id }); }
-  async guildRenounce()         { return this._guildAct('renounce'); }
-  async guildAbdicate(id)       { return this._guildAct('abdicate', { id }); }
-  async guildVote(id)           { return this._guildAct('vote', { id }); }
-  async guildDisband()          { return this._guildAct('disband'); }
-  async guildAlly(id)           { return this._guildAct('ally', { id }); }
-  async guildEndAlliance(id)    { return this._guildAct('end_alliance', { id }); }
-  async guildDeclareWar(id)     { return this._guildAct('declare_war', { id }); }
-  async guildMakePeace(id)      { return this._guildAct('make_peace', { id }); }
-  async guildAbandonHall()      { return this._guildAct('abandon_hall'); }
-  async guildSetPassword(pw)    { return this._guildAct('set_password', { password: pw ?? '' }); }
-  async guildSetRank(id, rank)  { return this._guildAct('set_rank', { id, rank }); }
-  async guildRentHall(hallId, password = '') {
-    return this._guildAct('rent_hall', { hall_id: hallId, password });
-  }
+  // The 17 public forwards used to sit HERE, on the session, where `c` never looks. They
+  // are on the client literal now (search "THE GUILD SURFACE"). Only the store and the one
+  // function that crosses the process boundary belong on the proxy, because the roster has
+  // to outlive the per-read literal.
 
   // THE TWO HALVES OF SHOPPING THAT MUST TOUCH THE WIRE, forwarded to the process that owns
   // it. `buy` and `buyItems` are mutations and the emulated client is a snapshot, so faking

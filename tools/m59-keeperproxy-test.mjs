@@ -62,12 +62,36 @@ const proxyBody = classBody(broker, 'KeeperProxy');
 ok('KeeperProxy is still a class in m59-broker.mjs', !!proxyBody,
    'the brace matcher found nothing — this test is blind until that is fixed');
 
-// Method and getter names the proxy defines.
-const proxyMethods = new Set();
-if (proxyBody) {
+// THE OBJECT UNDER TEST IS THE CLIENT LITERAL, NOT THE SESSION, and getting that wrong is
+// the whole reason this comment exists. `KeeperProxy` is the SESSION; `c` — what every tool
+// in the broker calls its wire methods on — is the plain object literal built inside it,
+// whose own comment says "the literal below is a plain object, so `this` inside its methods
+// is the CLIENT".
+//
+// The first version of this test checked the SESSION. It went green, I deployed, and prod
+// answered `c.requestGuildInfo is not a function` exactly as before. A test that names the
+// wrong object is worse than no test: it answers the question you meant to ask with a
+// different one, in the affirmative.
+const literalStart = broker.indexOf('const client = {');
+const literalBody = literalStart < 0 ? null
+  : broker.slice(literalStart, broker.indexOf('\n    };', literalStart));
+ok('the emulated client literal is still findable', !!literalBody,
+   "no `const client = {` in m59-broker.mjs — this test is blind until that is fixed");
+
+// TWO OBJECTS, TWO SETS, AND THE DIFFERENCE IS NOT COSMETIC. Some capabilities are called
+// on the SESSION (`s.walkTo(...)`, `s.shopList(...)`) and some on the CLIENT
+// (`c.guildCreate(...)`, `c.attack(...)`). Checking a name against the wrong one is how the
+// first version of this test passed while prod was broken, so they are kept apart and each
+// assertion below names which it means.
+const clientMethods = new Set();          // the literal: what `c.foo()` reaches
+if (literalBody)
+  for (const m of literalBody.matchAll(/^\s{6}(?:get\s+)?([A-Za-z_$][\w$]*)\s*[:(]/gm))
+    clientMethods.add(m[1]);
+
+const sessionMethods = new Set();         // the class: what `s.foo()` reaches
+if (proxyBody)
   for (const m of proxyBody.matchAll(/^\s{2}(?:async\s+)?(?:get\s+)?([A-Za-z_$][\w$]*)\s*\(/gm))
-    proxyMethods.add(m[1]);
-}
+    sessionMethods.add(m[1]);
 
 console.log('\nthe guild surface — seventeen verbs, all of which were unreachable');
 {
@@ -81,8 +105,8 @@ console.log('\nthe guild surface — seventeen verbs, all of which were unreacha
   ok('the client still declares a guild surface to forward',
      clientGuild.size >= 15, `found ${clientGuild.size}`);
 
-  const missing = [...clientGuild].filter(n => !proxyMethods.has(n)).sort();
-  ok(`all ${clientGuild.size} guild verb(s) are forwarded by KeeperProxy`,
+  const missing = [...clientGuild].filter(n => !clientMethods.has(n)).sort();
+  ok(`all ${clientGuild.size} guild verb(s) are forwarded by the client literal`,
      missing.length === 0,
      missing.length
        ? `NOT forwarded, so each throws "c.<name> is not a function" on a keeper-backed `
@@ -93,7 +117,7 @@ console.log('\nthe guild surface — seventeen verbs, all of which were unreacha
   // would report every character guildless, which reads as a clean "no guild" rather than
   // as a fault.
   ok('and the roster itself is exposed, so `c.guild` is not silently undefined',
-     proxyMethods.has('guild'), 'KeeperProxy needs a `guild` getter');
+     clientMethods.has('guild'), 'the client literal needs a `guild` getter');
 }
 
 console.log('\nthe verbs that had this bug BEFORE, kept as regressions');
@@ -106,17 +130,19 @@ console.log('\nthe verbs that had this bug BEFORE, kept as regressions');
     ['walkTo',     'movement has always had to be keeper-side'],
     ['fight',      'as has fighting'],
     ['travel',     'and journeys'],
-  ]) ok(`${name} is forwarded (${incident})`, proxyMethods.has(name));
+  ]) ok(`${name} is forwarded by the SESSION (${incident})`, sessionMethods.has(name));
 }
 
 console.log('\nthe forward has to REACH the keeper, not merely exist');
 {
-  // A method that returns a plausible object without touching keeperAction would satisfy
-  // the name check above and still send no packet — which is precisely the failure mode
-  // this whole file is about, reintroduced one level down. So the guild forwards must
-  // actually go through the one function that crosses the process boundary.
-  const act = proxyBody?.match(/_guildAct\s*\([\s\S]{0,400}?keeperAction\(/);
-  ok('the guild forwards go through keeperAction', !!act,
+  // The literal's forwards delegate to the proxy's `_guildAct`, which is the ONE function
+  // that crosses the process boundary. A forward that returned a plausible object without
+  // reaching it would satisfy every name check above, send no packet, and report success —
+  // this same bug one level down.
+  ok('the client forwards delegate to the proxy', /proxy\._guildAct\(/.test(literalBody || ''),
+     'the client literal must call proxy._guildAct, not fake a reply locally');
+  const act = proxyBody?.match(/_guildAct\s*\([\s\S]{0,600}?keeperAction\(/);
+  ok('and _guildAct reaches the keeper', !!act,
      '_guildAct must call keeperAction — a local stub would send nothing and report success');
 
   // And the keeper must actually implement the op it is sent.
