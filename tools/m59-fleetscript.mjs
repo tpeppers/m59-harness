@@ -908,6 +908,23 @@ export const rest = (opts = {}) => ({ do: 'rest', ...opts });
  * reads them. The wrong ORDER does not error; it gives every woman in the guild a man's
  * title for the life of the guild.
  */
+/**
+ * MAKE SURE THE CHARACTER IS ACTUALLY CARRYING `amount`, AND THAT IT GETS TO KEEP IT.
+ *
+ * `carryAtLeast(5000)` — withdraws the shortfall at a teller, then reads the purse back.
+ *
+ * The second half is the part that is not obvious. A keeper banks anything above its own
+ * `bank_above` and leaves `walking_money`, and THAT POLICY IS NOT SUSPENDED BY A COMMANDER
+ * HOLD. So an errand can withdraw exactly what it needs, report success, and have the money
+ * deposited straight back by the character it is driving — which is what happened to Gonzo
+ * on 2026-09-10: purse 1546, withdrew 6000, landed at 7546 against `bank_above: 7000`, and
+ * the keeper put 6546 back before he could spend it.
+ *
+ * So this refuses outright when the ceiling is below what is being asked for, rather than
+ * withdrawing into a bucket with a hole in it.
+ */
+export const carryAtLeast = (amount, opts = {}) => ({ do: 'carry_at_least', amount, ...opts });
+
 export const foundGuild = (name, opts = {}) => ({ do: 'found_guild', name, ...opts });
 
 export const learn = (teacher, ability, opts = {}) =>
@@ -1364,6 +1381,57 @@ async function runStep(ctx, agent, step, state) {
       return { ok: !r?.error, outcome: 'rested_after_moving',
                at: nowIn.at ?? null, can_reach_you: target.can_reach_you ?? null,
                why: r?.error };
+    }
+
+    case 'carry_at_least': {
+      const want = Number(step.amount);
+      if (!(want > 0)) return { ok: true, skipped: 'nothing to carry' };
+      // Headroom over the ask, so that spending it is not a photo finish.
+      const margin = Number(step.margin ?? 200);
+
+      const readPurse = async () => {
+        const inv = await call('inventory', { agent }, 45_000).catch(() => null);
+        return inv ? purseOf(inv.items ?? []) : null;
+      };
+      const before = await readPurse();
+      if (before == null)
+        return { ok: false, outcome: 'purse_unreadable',
+                 why: 'could not read the pack, and an unreadable purse is not an empty one — ' +
+                      'refusing rather than withdrawing blind' };
+      if (before >= want) return { ok: true, outcome: 'already_carrying', purse: before };
+
+      // THE CEILING THE KEEPER WILL ENFORCE THE MOMENT IT HAS ECONOMY BACK. A commander hold
+      // does not suspend it, and it is the character's own policy rather than ours.
+      const st = await call('autopilot', { agent, action: 'status' }, 45_000).catch(() => null);
+      const pol = st?.policy ?? {};
+      const ceiling = Number(pol.bankAbove ?? pol.bank_above);
+      const need = want + margin;
+      if (Number.isFinite(ceiling) && ceiling > 0 && ceiling < need)
+        return { ok: false, outcome: 'bank_above_too_low',
+                 purse: before, needs: need, bank_above: ceiling,
+                 why: `this character banks anything over ${ceiling} and would deposit the ` +
+                      `${need} straight back — a commander hold does NOT suspend that. Raise ` +
+                      `bank_above above ${need} for the duration, or send a character whose ` +
+                      'ceiling is already higher.' };
+
+      const short = need - before;
+      const r = await call('bank', { agent, action: 'withdraw', amount: short }, 60_000)
+        .catch(e => ({ error: e.message }));
+      const said = String(r?.banker_said ?? r?.error ?? '');
+
+      // READ THE PURSE BACK. The banker answers in PROSE and "You can't check any balance
+      // here!" is what a character standing in the wrong room gets — a sentence, not an
+      // error — so the withdrawal reporting no error says nothing at all about the money.
+      const after = await readPurse();
+      if (after != null && after >= want)
+        return { ok: true, outcome: 'withdrew', purse: after, took: short,
+                 said: said.slice(0, 120) };
+      return { ok: false, outcome: 'still_short', purse: after, needs: want,
+               asked: short, said: said.slice(0, 160),
+               why: after != null && after <= before
+                 ? 'the purse did not go up. Either this room has no teller — only Tos (54) ' +
+                   'and Jasper (376) do, never Barloque — or the balance is short. Read `said`.'
+                 : 'withdrew something and it was not enough' };
     }
 
     case 'found_guild': {

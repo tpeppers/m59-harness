@@ -24,7 +24,7 @@
 // `guild action=create` answered `c.requestGuildInfo is not a function` and founding was
 // impossible fleet-wide. The seventeen verbs are now forwarded to the keeper that owns the
 // socket; `m59-keeperproxy-test.mjs` is the guard that keeps them forwarded.
-import { walk, bank, foundGuild, verify } from '../m59-fleetscript.mjs';
+import { walk, carryAtLeast, foundGuild } from '../m59-fleetscript.mjs';
 
 const TOS_BANK = 54;          // a teller. Jasper (376) is the other one.
 const GUILDMASTER_HALL = 700; // Frular, in Barloque.
@@ -42,11 +42,12 @@ export const script = {
     effect: 'Creates a guild with the named character as its master. Verified by reading the ' +
             'roster back off the world, never from the absence of an error — the entire ' +
             'guild command space refuses in TOTAL SILENCE (user.kod:4848).',
-    run: 'found-guild agents=<slot> [withdraw=<n>] — the NAME is a script default, because ' +
+    run: 'found-guild agents=<slot> [margin=<n>] — the NAME is a script default, because ' +
          'the REPL does not support quoting and a guild name has spaces in it',
     needs: ['5,000 shillings IN THE PURSE at the moment of founding',
             'the character not already in a guild — renounce or disband first',
-            'a route to 700; the fee is withdrawn at Tos (54) because Barloque has no teller'],
+            'a route to 700; the fee is withdrawn at Tos (54) because Barloque has no teller',
+            'bank_above ABOVE the fee — the keeper re-deposits anything over it, hold or no hold'],
     cost: { time: '5-20 minutes, nearly all of it road',
             money: `${PRICE} shillings, non-refundable and unrenameable`,
             risk: 'the roads are what kills this fleet; the money is on the character for ' +
@@ -64,27 +65,28 @@ export const script = {
     agents: { type: 'agents', required: true, describe: 'who founds it — becomes guild master' },
     name: { type: 'string', default: 'The Second Swines',
             describe: 'the guild name. PERMANENT: there is no rename, only disband and pay again' },
-    withdraw: { type: 'number', default: 6000,
-                describe: 'what to draw at Tos. More than the fee on purpose — arriving short ' +
-                          'means paying for the whole crossing twice' },
+    margin: { type: 'number', default: 200,
+              describe: 'headroom over the fee. Kept small on purpose: overshooting trips the ' +
+                        "character's own bank_above and the keeper deposits it straight back" },
   },
 
-  async steps({ name, withdraw }) {
+  async steps({ name }) {
     return [
-      // THE MONEY FIRST, AND MORE THAN THE PRICE. The banker names the balance when it
-      // refuses and the `bank` step takes what it named, so asking high is free.
+      // THE MONEY FIRST, AND SIZED SO THE KEEPER LETS HIM KEEP IT.
+      //
+      // The first run of this errand failed here and the failure is worth the comment. It
+      // withdrew a flat 6,000 onto a purse of 1,546, landing at 7,546 — and Gonzo's own
+      // policy is `bank_above: 7000, walking_money: 1000`, so his keeper deposited 6,546
+      // straight back. A COMMANDER HOLD DOES NOT SUSPEND BANKING, the same way it does not
+      // suspend resting: economy is held, but the ceiling is the character's own policy and
+      // the keeper applies it the moment it has economy again.
+      //
+      // `carryAtLeast` withdraws the SHORTFALL rather than a flat sum, refuses outright when
+      // `bank_above` is below what is being asked for, and reads the purse back afterwards
+      // because the banker answers in prose and "You can't check any balance here!" is a
+      // sentence rather than an error.
       walk(TOS_BANK, { why: 'the fee comes from the purse and Barloque has no teller' }),
-      bank('withdraw', withdraw,
-           { why: 'founding is paid from what the character is CARRYING (system.kod:243)' }),
-
-      verify(async ({ call, agent }) => {
-        const inv = await call('inventory', { agent }, 45_000).catch(() => null);
-        const purse = (inv?.items ?? [])
-          .filter(o => /shilling/i.test(o.name ?? ''))
-          .reduce((t, o) => t + (o.amount || 1), 0);
-        return purse >= PRICE;
-      }, `carrying at least ${PRICE} before setting out — a short purse is refused by a ` +
-         'sentence, not an error, and only after the whole crossing has been paid for'),
+      carryAtLeast(PRICE, { why: 'founding is paid from what the character is CARRYING' }),
 
       walk(GUILDMASTER_HALL, { why: 'Frular only founds guilds in his own hall' }),
 
