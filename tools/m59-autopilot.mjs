@@ -14192,6 +14192,31 @@ export class Autopilot {
       // off in place three times, which is a different move with a different cost and does
       // not drop the connection at all. Two events, two counters.
       this.tally.breakoffs = (this.tally.breakoffs || 0) + 1;
+      // LOG OFF. DO NOT MERELY STOP SWINGING.
+      //
+      // Operator, 2026-09-10: "not swinging without the logoff is similarly sub optimal, the
+      // logoff trick makes the enemy immediately stop attacking, waiting and hoping can let
+      // the enemy continue attacking for up to dozens of seconds."
+      //
+      // This rung used to stop swinging and stand there, on the reasoning below — that a
+      // proven wall means "nothing can hit us unless we swing first". The rung immediately
+      // above already plays dead in exactly this state when `doomed`, so the only thing that
+      // distinguished them was how bad it had got, and the cheaper response was the worse one.
+      //
+      // THE PREMISE WAS TOO STRONG. `sheltered` is `holdWorks()`, a wall the BOOK has
+      // confirmed — and the book records room 39 with 132 squares tested and ZERO that held
+      // without later failing, with 78% of its failure rows being the fleet crowding onto its
+      // own shelter, "recorded as walls that leak". A confirmed wall is a wall that has held
+      // BEFORE, which is not the same as one that is holding now. Standing still bets the
+      // character on that difference and gives the room dozens of seconds to settle it.
+      //
+      // The logoff does not bet: it ends the attack at once, and on a wall that does hold it
+      // also heals to full, because the character turns in place to re-arm regeneration while
+      // the room mills about outside its reach. `playDead` keeps its own guard, so a spot that
+      // does not hold still refuses and we fall through to the old behaviour rather than
+      // freezing in the open — the refusal is the safe direction.
+      if (await this.playDead(`at ${Math.round(hp * 100)}% with ${near.length} adjacent, ` +
+                              'behind a wall that holds').catch(() => false)) return HANDLED;
       this.note('breaking off without moving', {
         health: Math.round(hp * 100) + '%', crowd: near.length,
         where: { col: this.hold.col, row: this.hold.row },

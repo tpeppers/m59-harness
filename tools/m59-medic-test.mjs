@@ -32,6 +32,18 @@ const ok = (what, cond) => {
 
 const SRC = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
 
+// SLICE THE FUNCTION, NOT A FIXED NUMBER OF CHARACTERS. The first version took
+// `SRC.slice(i, i + 5200)` and two assertions silently fell outside the window the moment
+// medic() grew by twenty lines of comment — reporting a regression in code that had not
+// changed. A test whose scope drifts with unrelated edits is worse than no test.
+const bodyOf = (name) => {
+  const i = SRC.indexOf(`async ${name}(`);
+  if (i < 0) return '';
+  const next = SRC.indexOf(String.fromCharCode(10) + '  async ', i + 1);
+  return SRC.slice(i, next > 0 ? next : SRC.length);
+};
+
+
 console.log('');
 console.log('the heal ladder is declared, ordered, and priced');
 {
@@ -63,7 +75,7 @@ console.log('the heal ladder is declared, ordered, and priced');
 console.log('');
 console.log('medic() walks the ladder instead of matching one name');
 {
-  const body = SRC.slice(SRC.indexOf('async medic()'), SRC.indexOf('async medic()') + 4200);
+  const body = bodyOf('medic');
   ok('the old level-1-only match is gone',
      !/\/\^\(minor heal\|heal\)\$\/i/.test(body));
   ok('it iterates the ladder', /for \(const h of Autopilot\.HEALS\)/.test(body));
@@ -77,7 +89,7 @@ console.log('medic() walks the ladder instead of matching one name');
 console.log('');
 console.log('a full-health target is a no-op, and is recorded as one');
 {
-  const body = SRC.slice(SRC.indexOf('async medic()'), SRC.indexOf('async medic()') + 5200);
+  const body = bodyOf('medic');
   ok('mana is read before the cast', /const manaBefore = /.test(body));
   ok('and the spend is what decides whether anything happened',
      /const landed = !\(spent === 0\)/.test(body));
