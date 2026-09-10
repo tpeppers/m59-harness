@@ -142,7 +142,18 @@ export function summarise(rows, { rule = SAFE_WALL_RULE } = {}) {
     };
   }
   const counts = Object.fromEntries(OUTCOMES.map(o => [o, rows.filter(r => r.outcome === o).length]));
-  return { rows: rows.length, usable: usable.length, rule, counts, predicates: per,
+  // HAS ANYTHING ACTUALLY BEEN TESTED? A population in which NOTHING EVER HAPPENED cannot
+  // falsify a safety rule, however many rows it has: every one is clean by construction.
+  //
+  // Measured 2026-09-10 — 2,270 rows, zero damage, zero violations — and it reads as a
+  // vindication of the definition. It was 2,270 rests in INNS, where nothing can reach you
+  // whatever the geometry says. `exposed` is how many rows the character could have been
+  // hit in at all, and it is the denominator that matters. A row count is not evidence.
+  const exposed = rows.filter(r => (r.damage || 0) > 0 || r.swung || r.ailing).length;
+  const rooms = {};
+  for (const r of rows) rooms[r.room] = (rooms[r.room] || 0) + 1;
+  return { rows: rows.length, usable: usable.length, rule, counts, predicates: per, exposed,
+           rooms: Object.entries(rooms).sort((a, b) => b[1] - a[1]).slice(0, 6),
            violations: usable.filter(r => r.outcome === 'violation') };
 }
 
@@ -194,5 +205,22 @@ if (import.meta.url === `file://${process.argv[1]}`.replace(/\\/g, '/')
     }
     if (s.usable < 30)
       console.log('\n  TOO EARLY TO CONCLUDE ANYTHING. A day of fleet resting is a few hundred rows.');
+
+    // THE DENOMINATOR THAT MATTERS, AND THE ONE A ROW COUNT HIDES.
+    if (!s.exposed) {
+      console.log('\n  *** NOTHING HERE HAS TESTED THE DEFINITION. ***');
+      console.log(`  All ${s.rows} row(s) are rests in which the character took no damage, threw`);
+      console.log('  no swing and carried no ailment — so every one is clean BY CONSTRUCTION,');
+      console.log('  and not one of them could have been a violation. A rest in an inn is safe');
+      console.log('  whatever the geometry says. Read the zero above as "not yet measured",');
+      console.log('  never as "the rule holds".');
+      console.log('  Where the rows came from: '
+        + s.rooms.map(([r, n]) => `room ${r} x${n}`).join(', '));
+      console.log('  To test it the fleet has to rest somewhere something could reach it —');
+      console.log('  a field rest at a wall, not a town trip.');
+    } else {
+      console.log(`\n  ${s.exposed} of ${s.rows} row(s) had something happen — damage, a swing`);
+      console.log('  or an ailment. That is the population that can falsify the rule.');
+    }
   }
 }

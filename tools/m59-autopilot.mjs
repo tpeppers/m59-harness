@@ -35,8 +35,13 @@ import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { verdictFromRow, safeWallVerdict } from './m59-safewall.mjs';
+import { RoomGeometry } from './m59-roo.mjs';
 import { recordRest } from './m59-restwatch.mjs';
-import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH }
+// `exposureAt` is the FORMULA for a safe wall and `RoomGeometry` says which grid the monster
+// uses. Imported so the survival ladder can ask the geometry directly instead of asking the
+// safe-spot book what used to work -- see wallHere().
+import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH,
+         exposureAt }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
 import { beginPullProgress, samplePullProgress } from './m59-pull-progress.mjs';
@@ -2863,6 +2868,33 @@ export class Autopilot {
   // The bar is now "am I on a wall", which is the question every caller thought it was asking.
   holdWorks() { return !!this.hold; }
 
+  // DOES THE SQUARE I AM ON SHELTER ME — ASKED OF THE GEOMETRY, NEVER OF THE LEDGER.
+  //
+  // Operator, 2026-09-10: "do *not* consult the safe spot ledger regarding safe walls, use the
+  // formula". This is that formula, and it is the same one `safeWalls` uses and the debug client
+  // paints red: a square the coarse grid admits, from which no square inside a monster's reach
+  // has coarse line of sight to us -- `attackers === 0`. The two grids disagreeing about one
+  // square is the whole mechanism.
+  //
+  // Why this is not `holdWorks()`: that asks whether we hold a spot the BOOK proved, which is a
+  // fact about history. A wall that held before is not a wall that holds now, and the book's own
+  // rows say so -- 78% of room 39's failures are the fleet crowding onto its own shelter. This
+  // asks the only question that matters at the moment of asking, and it needs no file.
+  wallHere() {
+    const geo = this.s?.world?.geometry, me = this.s?.client?.self;
+    if (!geo || !me) return null;      // unreadable geometry is not a wall, and not a refusal
+    const row = me.row ?? me.y ?? null, col = me.col ?? me.x ?? null;
+    if (row == null || col == null) return null;
+    try {
+      const los = this.s?.world?.room?.los ?? 0;
+      const ex = exposureAt(geo, Math.round(row), Math.round(col),
+                            { fine: RoomGeometry.monsterUsesFine(los) });
+      if (!ex) return null;
+      return { ok: (ex.attackers ?? 0) === 0, attackers: ex.attackers ?? null,
+               free_shots: ex.free_shots ?? null, row: Math.round(row), col: Math.round(col) };
+    } catch { return null; }
+  }
+
   // IS THERE A WEAPON IN OUR HAND — asked of the server, never of our own intentions.
   //
   // plUsing is the only authority (see equipment()): "the last use we sent was not
@@ -3145,7 +3177,7 @@ export class Autopilot {
           // 11% were recorded before the character arrived. This row is the same event
           // recorded under the four qualifiers that make it mean something, and nothing that
           // chooses a square may ever read it. See tools/m59-restwatch.mjs.
-          this.recordRestOutcome({ damage: lost, settledMs, swung: false });
+          this.recordRestOutcome({ damage: lost, settledMs, since: prev?.at ?? null });
           this.note('THIS IS NOT A SAFE SPOT', {
             where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
             lost_health: lost, attackers: company, was_proven: wasProven,
@@ -3180,7 +3212,8 @@ export class Autopilot {
             // THE CASE THE DEFINITION PREDICTS: things stood next to us for PROOF_MS and not
             // one of them landed a blow. Recorded so `clean` has a denominator — a rule with
             // no violations and no observations says nothing at all.
-            this.recordRestOutcome({ damage: 0, settledMs: this.hold.quietMs, swung: false });
+            this.recordRestOutcome({ damage: 0, settledMs: this.hold.quietMs,
+                                     since: this.hold.takenAt ?? null });
             this.note('this safe spot works', {
               where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
               quiet_for_s: Math.round(this.hold.quietMs / 1000), attackers: this.hold.mostAttackers,
@@ -3224,9 +3257,22 @@ export class Autopilot {
   // `ailing` is asked HERE rather than passed in, so the poison exclusion cannot be
   // forgotten by a future caller — a poison tick drains through any wall ever built and
   // says nothing about the square.
-  recordRestOutcome({ damage = 0, settledMs = 0, swung = false } = {}) {
+  recordRestOutcome({ damage = 0, settledMs = 0, since = null, swung = null } = {}) {
     try {
       const ailing = (this.s.client?.ailments?.() ?? []).length > 0;
+      // SWUNG IS COMPUTED HERE, NOT ASSERTED BY THE CALLER.
+      //
+      // Both call sites passed a literal `false`, which made `swung` UNREACHABLE — an entire
+      // outcome category that could never occur. After 2,270 rows the ledger read
+      // `swung 0, settling 0, ailing 0` and I nearly read that as a clean fleet rather than
+      // as three buckets with no path into them. `this.swungAt` has been on the keeper the
+      // whole time (it is what `swung_in_window` upstairs is built from), so the honest
+      // answer is a comparison against the window, exactly as `ailing` is asked rather than
+      // passed. A caller may still override deliberately.
+      const windowStart = Number.isFinite(since) ? since
+        : Date.now() - Math.max(0, Number(settledMs) || 0);
+      const didSwing = swung != null ? !!swung
+        : (Number(this.swungAt) > 0 && this.swungAt >= windowStart);
       let verdict = null, room = null;
       if (this.hold) {
         room = this.hold.room ?? null;
@@ -3256,7 +3302,7 @@ export class Autopilot {
       }
       recordRest({
         agent: this.s.name ?? null, room, verdict,
-        damage, swung, ailing, rested_ms: Math.max(0, settledMs),
+        damage, swung: didSwing, ailing, rested_ms: Math.max(0, settledMs),
       });
     } catch { /* a ledger may never take a character down */ }
   }
@@ -5627,7 +5673,14 @@ export class Autopilot {
       // Retained in the legacy value for non-target/tie ranking. closestToToward below is
       // the hard primary order whenever a quarry exists.
       fromFightWeight: nearQuarry ? 3 : 0.3,
-      book: this.book, room: room.num, quarryReach, strictQuarryReach, los,
+      // THE LEDGER IS NOT CONSULTED ABOUT WALLS. Operator, 2026-09-10: "do *not* consult the
+      // safe spot ledger regarding safe walls, use the formula". It never decided CANDIDACY --
+      // `safeWalls` does that from the two grids disagreeing -- but it ranked them, so a square
+      // the geometry likes could be ordered behind one the book had merely seen work. A wall
+      // that held before is not a wall that holds now: room 39 has 132 squares tested and zero
+      // that held without later failing, 78% of the failures being the fleet crowding onto its
+      // own shelter. Ordering is now geometric, which is the same authority as selection.
+      book: null, room: room.num, quarryReach, strictQuarryReach, los,
       // Combat chooses the quarry first. Once eligibility is established, its distance
       // is the primary order; proof and defensibility only break equal-distance ties.
       closestToToward: !!quarry,
@@ -6176,7 +6229,9 @@ export class Autopilot {
         // next corner. The verdict is tagged `failed_by.travel` so the travel-only
         // rejections can be fished back out. See docs/m59-safe-travel-plan.md.
         const onward = this.onwardExit(at.room?.num ?? null, at.destination ?? null);
-        spot = nearestSafeSpot(geo, me, { book: this.book, room: at.room?.num ?? null,
+        // book: null -- see the note at the shelter selector. The formula answers this, not
+        // the ledger, and that is the operator's instruction rather than an optimisation.
+        spot = nearestSafeSpot(geo, me, { book: null, room: at.room?.num ?? null,
                                           unreachable: this.unreachableIn(at.room?.num ?? null),
                                           reach: this.reachTest(),
                                           // The cap is the operator's if set; otherwise the
@@ -13589,15 +13644,16 @@ export class Autopilot {
           // actually does when it sits down happens here.
           //
           // Damage is the health DROP across the window; a rise is a rest working and is
-          // not evidence about the square. `swung: false` is honest for this branch — it is
-          // the sit-for-mana path and nothing is being attacked deliberately — and if that
-          // ever stops being true, classify() files it as `swung` and it stops counting,
+          // not evidence about the square. `swung` is COMPUTED from `this.swungAt` against
+          // the window start rather than asserted here: this branch is the sit-for-mana path
+          // and usually nothing is being attacked, but "usually" is not a thing to hard-code.
+          // When it is wrong, classify() files the row as `swung` and it stops counting,
           // which is the safe direction.
           const healthNow = c.vitals?.()?.health?.value ?? null;
           const lost = (healthNow != null && this.restWatch.health != null)
             ? Math.max(0, this.restWatch.health - healthNow) : 0;
           this.recordRestOutcome({ damage: lost, settledMs: now - this.restWatch.at,
-                                   swung: false });
+                                   since: this.restWatch.at });
           const gained = manaNow != null && this.restWatch.mana != null
             ? manaNow - this.restWatch.mana : null;
           if (gained !== null && gained <= 0 && !this.restNotPayingAt) {
@@ -14150,144 +14206,78 @@ export class Autopilot {
     // the character can turn in place — which sets PFLAG_MOVED_SINCE_ENTRY without giving
     // up the square — and heal back to full while the room mills about outside its reach.
     //
-    // Out in the open with something adjacent, there is no version of standing still that
-    // ends well. The only thing that changes the situation is distance: run for the
-    // nearest town, become combat-ready, come back. townTripIfCornered already knows how
-    // to find it.
+    // Out in the open with something adjacent, this used to say the only thing that changes the
+    // situation is DISTANCE -- run for the nearest town, become combat-ready, come back -- and
+    // that is the sentence the operator overturned on 2026-09-10. Distance is dozens of seconds
+    // of being hit on the way out, through the rooms that were already killing us. The logoff is
+    // immediate. Kept as a comment because the reasoning is the thing that changed, and the code
+    // it describes is gone.
+    // DOOMED: ONE ANSWER, NO BRANCH. Operator, 2026-09-10: fall through to the singular correct
+    // behaviour, which is play_dead, and "log out/in if the danger is immediate".
+    //
+    // THIS USED TO BE A FORK and the fork is what the operator is removing. Sheltered, it played
+    // dead; unsheltered, it ran for a town via townTripIfCornered, on the reasoning that "the only
+    // thing that changes the situation is distance". That reasoning is wrong about this game: a
+    // logoff makes the attacker stop AT ONCE, while a run for a town is dozens of seconds of
+    // being hit on the way out, through the rooms that were already killing us. The fleet's own
+    // corpus says which one the roads are: 274 of the deaths on record are trolls and 423 are in
+    // Ukgoth alone, most of them on journeys.
+    //
+    // So there is no sheltered/unsheltered question here any more. Being cornered and nearly dead
+    // is exactly the state the logoff is for, and having no wall does not make it worse -- it
+    // makes it the only thing left. Camilla and Rizzo both died in this state with
+    // `at_a_safe_wall: null`, which is the branch that used to send them running.
+    //
+    // The town trip is NOT deleted as a capability -- it is still the right errand for a
+    // character that wants a smith, a teller or a bed. It is no longer a SURVIVAL strategy, and
+    // `withdrawForFood` and the shop journeys keep it for what it is good at.
     if (doomed && this.policy.panicLogoff !== false) {
-      if (sheltered) {
-        if (await this.playDead('at ' + v.health.value + ' health with ' + near.length +
-                                ' adjacent, behind a wall that holds')) return HANDLED;
-      } else {
-        this.note('hurt in the open — running for a town rather than playing dead', {
-          health: v.health.value, adjacent: near.length, worst_single_hit: worstHit,
-          why: 'a freeze recovers no health and leaves us exactly where we were, in reach ' +
-               'of everything that put us here. Only distance changes this fight' });
-        this.doing = 'travelling';
-        if (await this.townTripIfCornered().catch(() => false)) return HANDLED;
-
-        // AND WHEN THERE IS NO TOWN TO RUN TO, IT STILL DOES NOT FREEZE. REVERSED
-        // 2026-08-21, by measurement, and the history is kept because it is the argument.
-        //
-        // This line used to call playDead() as a last resort. The reasoning was that
-        // across a whole prod session playDead fired ZERO times while five of seven deaths
-        // happened in the open — `sheltered` is holdWorks(), which wants a wall the book
-        // has CONFIRMED, so the gate above was false at the moment of every death and the
-        // verb could not run. Kermit sat at 5 of 36 for three pulses and died there. The
-        // conclusion drawn was that a freeze which sometimes works beats a fall-through
-        // that demonstrably did not.
-        //
-        // The freeze does not sometimes work. Once it could fire, it was measured firing:
-        // shadow fleet, Twisted Wood corridor, three characters froze in the open at 4, 10
-        // and 13 health with twelve to fifteen monsters in the room, and all three died.
-        // A freeze recovers vigor and never health, so in the open it is not a worse
-        // option among good ones — it is a way of standing still for thirteen seconds
-        // somewhere that kills you for standing still. Kermit's death was evidence that
-        // falling through here is bad; it was never evidence that freezing here is good.
-        //
-        // So the answer to "no wall and no town" is the thing below that MOVES. playDead()
-        // now refuses off a proven spot on its own account, so this is belt and braces:
-        // the call is gone AND the verb would have said no.
-        // NOT A LOGOFF HERE, AND THE REASON IS WHAT A LOGOFF IS FOR. Considered and
-        // rejected 2026-09-02, written down because it is an attractive wrong answer.
-        //
-        // Floyd died wedged in this exact state — 113 seconds on one square, `gross_squares:
-        // 0`, ten monsters in the room — and a reconnect looks like the escape that is not
-        // movement-shaped, since logging off takes the body out of the world entirely.
-        //
-        // It is not an escape, because a logoff trick only pays when the character comes
-        // BACK somewhere it can heal: return to a safe spot, rotate, recover. That is the
-        // whole point of the manoeuvre and it is what `breakOut` is doing when it reconnects
-        // before stepping off a wall it already holds. Logging off from a wedge returns the
-        // character to the SAME square, at the same health, with the same crowd — it buys
-        // the entry grace period and spends it standing in the place that was killing it.
-        // Doing that on a timer, or immediately, is the manoeuvre's shape without its
-        // substance.
-        //
-        // The wedge is the bug. It is fixed by not packing the room onto one wall
-        // (max_bots_per_safe_spot) rather than by a cleverer way to die there.
-        this.note('no wall and no town — withdrawing rather than freezing', {
-          health: v.health.value, adjacent: near.length,
-          why: 'freezing off a proven spot recovers vigor and never health; it spends the ' +
-               'seconds we have and leaves us where we were. Moving is the only thing left.',
-        });
+      const wall = this.wallHere();
+      if (await this.playDead('at ' + v.health.value + ' health with ' + near.length +
+                              ' adjacent' + (wall?.ok ? ', behind a wall the geometry confirms'
+                                                      : ', in the open and out of better options'))
+            .catch(() => false)) return HANDLED;
+      // playDead only answers no when we have ALREADY frozen at this spot and not yet acted --
+      // freezing again would clear PFLAG_MOVED_SINCE_ENTRY and undo the regeneration the last
+      // one bought. There is nothing better to reach for in that state, so say so and let the
+      // stages below mend rather than inventing a third strategy here.
+      this.note('cornered and cannot freeze again yet', {
+        health: v.health.value, adjacent: near.length,
+        wall_here: wall ? { attackers: wall.attackers, ok: wall.ok } : null,
+        why: 'the logoff is the only thing that stops an attack outright, and it has just been ' +
+             'used here; re-freezing would clear the moved-since-entry flag and stop the ' +
+             'healing it bought',
+      });
+    }
+    // AND THE SAME ANSWER, EARLIER: THERE IS NO FLEE RUNG AT ALL ANY MORE, ONLY THIS ONE.
+    //
+    // `flee_below` used to be a separate strategy and then, on 2026-09-10, was made identical
+    // to play_dead at the operator's instruction: "make sure it's identical to play_dead, such
+    // that there's no real point in having flee_below". It is now literally the same call the
+    // doomed rung above makes, at a higher health, which is the whole of what the key selects:
+    // a MOMENT, never a behaviour.
+    //
+    // WHY EARLIER IS BETTER, and it is the reason this rung is kept rather than folded away.
+    // The logoff ends the attack outright, so reaching for it at 40% costs a freeze and saves
+    // the 27 health between there and `doomed`. Camilla crossed this threshold at 40 of 60 and
+    // was still alive for another thirty-one minutes of being hit; nothing reached for the one
+    // verb that would have stopped it.
+    //
+    // no LESSER PATH LEFT: there is no note-and-stand, no withdrawal to open floor, and no run
+    // for a town below this. If playDead declines -- which it now only does when we have just
+    // frozen here and not yet acted -- the pass falls through to the resting stage below, which
+    // is the one thing that is strictly better in that exact state because it actually heals.
+    if (!doomed && this.policy.panicLogoff !== false) {
+      const frac = v.health?.max ? v.health.value / v.health.max : null;
+      const fleeAt = this.safety().fleeAt;
+      if (frac !== null && fleeAt != null && frac < fleeAt && near.length) {
+        const wall = this.wallHere();
+        if (await this.playDead(`at ${Math.round(frac * 100)}% with ${near.length} adjacent` +
+                                (wall?.ok ? ', behind a wall the geometry confirms'
+                                          : ', in the open — the logoff is what stops the attack'))
+              .catch(() => false)) return HANDLED;
       }
     }
-
-    // WITHDRAWING IS FOR THE OPEN FLOOR. Walking away is the only thing a plain
-    // character can do about a fight it is losing — out in the open. In a working
-    // safe spot it is the single worst available move: it costs the wall, hands every
-    // camped monster its attacks back, and spends several seconds being hit to reach
-    // a square that is no safer than the one it left. Staying put and not swinging
-    // stops the damage immediately and for free.
-    // THERE IS NO FLEE RUNG AT ALL ANY MORE.
-    //
-    // It went in two steps and the second is the operator's call rather than a measurement.
-    // First for monsters, because running does not work on one: vision is 4 + difficulty/2
-    // squares (monster.kod:1676) and they follow, so a withdrawal spends several seconds
-    // being hit to reach a square no safer than the one it left. Then for people too.
-    //
-    // What is left is the set of answers that actually change a situation: a wall a creature
-    // cannot path to, resting behind it, PLAYING DEAD when already sheltered (it used to break
-    // and carrying on to where we were going. Walking away was never one of them — it buys
-    // seconds and spends them going nowhere, and in a room that is the danger it spends them
-    // going AWAY FROM THE DOOR.
-    //
-    // The threshold itself is untouched and still does the things that are not flight: when
-    // to stop swinging (`disengageAt`), when a wall outranks a journey, and when the watchdog
-    // interrupts a blind walk so the ladder can think with fresh numbers.
-    //
-    // A JOURNEY IS SEPARATE, and deliberately so. `passTravelling` still ends one when a
-    // PLAYER is emptying the bar, because dying to a troll costs the walk back and dying to a
-    // person costs everything carried — see rung 5 there. That is about abandoning an
-    // objective, not about running away from a room.
-    if (hp !== null && hp < this.policy.fleeBelow && near.length && sheltered) {
-      // NOT a mulligan. This counter used to be shared with the play-dead reconnect, which
-      // made it useless for the only question anybody asks it: DID PLAYING DEAD FIRE. A
-      // character showing mulligans=3 logoffs=0 had never played dead once — it had broken
-      // off in place three times, which is a different move with a different cost and does
-      // not drop the connection at all. Two events, two counters.
-      this.tally.breakoffs = (this.tally.breakoffs || 0) + 1;
-      // LOG OFF. DO NOT MERELY STOP SWINGING.
-      //
-      // Operator, 2026-09-10: "not swinging without the logoff is similarly sub optimal, the
-      // logoff trick makes the enemy immediately stop attacking, waiting and hoping can let
-      // the enemy continue attacking for up to dozens of seconds."
-      //
-      // This rung used to stop swinging and stand there, on the reasoning below — that a
-      // proven wall means "nothing can hit us unless we swing first". The rung immediately
-      // above already plays dead in exactly this state when `doomed`, so the only thing that
-      // distinguished them was how bad it had got, and the cheaper response was the worse one.
-      //
-      // THE PREMISE WAS TOO STRONG. `sheltered` is `holdWorks()`, a wall the BOOK has
-      // confirmed — and the book records room 39 with 132 squares tested and ZERO that held
-      // without later failing, with 78% of its failure rows being the fleet crowding onto its
-      // own shelter, "recorded as walls that leak". A confirmed wall is a wall that has held
-      // BEFORE, which is not the same as one that is holding now. Standing still bets the
-      // character on that difference and gives the room dozens of seconds to settle it.
-      //
-      // The logoff does not bet: it ends the attack at once, and on a wall that does hold it
-      // also heals to full, because the character turns in place to re-arm regeneration while
-      // the room mills about outside its reach. `playDead` keeps its own guard, so a spot that
-      // does not hold still refuses, and the pass then falls through to the rest rung below
-      // rather than freezing in the open — the refusal is the safe direction.
-      //
-      // AND THERE IS NO LESSER PATH LEFT, WHICH IS THE POINT. Operator, 2026-09-10: make
-      // this "identical to play_dead, such that there's no real point in having
-      // flee_below". It is now exactly that — the same verb the `doomed` rung calls, in the
-      // same state, with the same guard. `flee_below` therefore no longer selects a
-      // BEHAVIOUR, only an earlier moment to reach for the one behaviour that works, and
-      // the argument for deleting the key is now visible in the code rather than asserted
-      // in a comment.
-      //
-      // The `breaking off without moving` note that used to sit here is gone rather than
-      // demoted. Keeping it as a fallback would have preserved the thing the operator
-      // objected to for exactly the case where it is most dangerous: a wall that has begun
-      // to leak, which is when `playDead` refuses.
-      if (await this.playDead(`at ${Math.round(hp * 100)}% with ${near.length} adjacent, ` +
-                              'behind a wall that holds').catch(() => false)) return HANDLED;
-    }
-
     // SIT DOWN PROPERLY THE MOMENT WE ARRIVE SOMEWHERE SAFE.
     //
     // Not when the resting eventually starts — on entry. The walk to a clear patch of
@@ -14582,10 +14572,22 @@ export class Autopilot {
       // "Somewhere I can heal" is an inn, not a wall in the same monster room. The
       // wall version left us inside the vision of everything that was already hitting
       // us, healing at a rate that damage cancelled out.
-      const went = await this.retreatToSafety({
-        because: 'hurt, no wall here, and too much vigor for waiting to be worth anything',
-        vigor: vigorNow2, monsters_in_room: hostiles.length,
-      });
+      // THE INN RETREAT IS GONE. IT IS THE LOGOFF. Operator, 2026-09-10: "Remove all other code
+      // that attempts other survival strategies (especially never resting in the open: use SAFE
+      // WALLS, and log out/in if the danger is immediate)".
+      //
+      // This is precisely the state the instruction describes: hurt, NO WALL HERE, monsters in
+      // the room, and resting cannot help because vigor is already above the resting ceiling.
+      // The old answer was to walk to an inn -- across the rooms that were already hitting us --
+      // and the record on that is four deaths (issue #51, JohnsSlave 2026-09-03/04, every one
+      // `in_safe_spot:false`, `at_a_safe_wall:null`, the last at 0.0 squares per second for the
+      // whole 31-second window) plus the fact that `retreat_to_inn` has been switched OFF since
+      // 2026-08-27, so the call returned `{arrived:false}` having moved nothing while five
+      // callers reported progress for it.
+      //
+      // The logoff needs no walk, no destination and no wall: it stops the attack outright.
+      const went = await this.playDead('hurt with no wall here and vigor above the rest ceiling')
+        .catch(() => false);
       // A RETREAT THAT WAS REFUSED IS NOT A RETREAT, AND MUST NOT END THE PASS.
       //
       // This called progress() and returned HANDLED whatever came back — and what comes
@@ -19794,40 +19796,40 @@ export class Autopilot {
   async playDead(why) {
     const s = this.s;
 
-    // A FREEZE IS ONLY A TACTIC ON A SAFE SPOT. ANYWHERE ELSE IT IS A WAY OF DYING.
+    // THE LOGOFF IS THE ANSWER, AND IT NO LONGER ASKS PERMISSION. Operator, 2026-09-10:
     //
-    // Enforced HERE, in the verb, rather than only at the call site that used to decide
-    // it — because this rule has already been got wrong twice in opposite directions, and
-    // a rule that lives in one branch of one caller is a rule the next caller does not
-    // have. The refusal is the safe direction: the worst case is a character that walks
-    // when it could have frozen.
+    //   "implement fall throughs to the singular correct behavior that would have saved any
+    //    character that died in this window: the preexisting play_dead() -- it is universally the
+    //    best survival mechanism available... everything else in our codebase is wrong about how
+    //    to get monsters to stop attacking you. There is truly only one way: The play_dead."
     //
-    // WHAT A FREEZE ACTUALLY BUYS. Logging off keeps the monsters off by not acting, and
-    // the same flag keeps HealthTimer off with it — so it recovers VIGOR and never health.
-    // On a proven wall that is fine: nothing can reach the square, the character turns in
-    // place to re-arm regeneration and heals to full while the room mills about outside
-    // its reach. In the open it is inert: the character comes back with the health it went
-    // down with, in reach of everything that put it there, having spent the only seconds
-    // it had.
+    // WHAT THIS REPLACED, and the argument is kept because it is the reason the refusal existed.
+    // This verb used to require `holdWorks()` -- a hold, which came from the safe-spot BOOK -- on
+    // the reasoning that a freeze recovers VIGOR and never health (the logoff flag stops
+    // HealthTimer with everything else), so off a wall it hands the room several free seconds and
+    // changes nothing. The measurement behind it was real: 2026-08-21, shadow fleet, Twisted Wood
+    // corridor, three characters froze at 4, 10 and 13 health in rooms of twelve to fifteen
+    // monsters and all three died.
     //
-    // MEASURED, 2026-08-21, shadow fleet in the Twisted Wood corridor: three characters
-    // froze at 4, 10 and 13 health in rooms holding twelve to fifteen monsters, each for
-    // about thirteen seconds, and all three died. Their own journal line said it —
-    // "recovering vigor; health needs us to move again first".
-    if (!this.holdWorks()) {
-      this.note('refusing to play dead — not on a spot that holds', {
-        health: s.client?.vitals?.()?.health?.value ?? null,
-        room: s.world?.room?.num ?? null,
-        hold: this.hold ? { col: this.hold.col, row: this.hold.row, proven: !!this.hold.proven } : null,
-        asked_because: why,
-        why: 'a freeze recovers vigor and NEVER health, so off a proven wall it hands the ' +
-             'room several free seconds and changes nothing. Only distance or a wall does.',
-      });
-      recordEvent(this.who(), 'play_dead_refused_no_spot',
-                  { room: s.world?.room?.num ?? null, proven: !!this.hold?.proven });
-      return false;      // the caller falls through to withdrawing, which at least moves
-    }
-
+    // WHY THAT ARGUMENT IS STILL TRUE AND STILL THE WRONG CONCLUSION. It compares a freeze
+    // against a rescue, and the character does not have one. The logoff makes the attacker STOP
+    // AT ONCE -- the operator, on the alternative: "waiting and hoping can let the enemy continue
+    // attacking for up to dozens of seconds". So the choice off a wall is not between healing
+    // and not healing, it is between an attack that ends now and an attack that continues. The
+    // three that died in the corridor were not killed by freezing; they were characters with no
+    // way out either way, and the refusal that was written from their deaths then spent two more
+    // characters tonight: Camilla and Rizzo died in Ukgoth with `at_a_safe_wall: null`, which is
+    // exactly the state in which this verb answered no.
+    //
+    // AND THE LEDGER IS OUT OF IT ENTIRELY. Operator, same message: "do *not* consult the safe
+    // spot ledger regarding safe walls, use the formula". A hold proved from the book is a claim
+    // that a square held BEFORE, which is not a claim that it holds now -- room 39 has 132 squares
+    // tested and zero that held without later failing. Whether a square shelters is geometry, and
+    // geometry is answered by `safeWalls`/`exposureAt` at the moment of asking.
+    //
+    // The one guard that remains is below and is about our OWN state, not about permission: a
+    // reconnect clears PFLAG_MOVED_SINCE_ENTRY, so freezing again from a spot we have already
+    // come back to and armed would undo the only thing making the last freeze worth anything.
     // WE ARE ALREADY BEHIND THE WALL WITH THE CLOCK RUNNING. DO NOT STOP IT.
     //
     // A reconnect clears PFLAG_MOVED_SINCE_ENTRY, so freezing again from a spot we have
