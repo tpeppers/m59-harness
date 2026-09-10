@@ -13,6 +13,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
+import { installIntentObservers,setIntentTarget,withIntent } from './m59-intent-observations.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -1648,7 +1649,7 @@ class Session {
     // foreground one has to be able to await the same work WITHOUT a second code path,
     // because "there is another way to run a travel" is exactly how one of the two ways
     // ended up with no busy check at all — see the travel tool.
-    job.promise = fn(generation).then(
+    job.promise = withIntent(this,null,()=>fn(generation)).then(
       r => { job.result = r; return r; },
       e => { job.error = e.message; throw e; })
       .finally(() => { job.done = true; job.finishedAt = Date.now(); });
@@ -11139,6 +11140,7 @@ class Session {
                                    'uncurse spell, and makes you easier to hit. Leave it.' });
     for (const o of cands) {
       if (cancelled()) { wasCancelled = true; break; }
+      setIntentTarget(this,{kind:'pickup',object_id:o.id});
       const name = c.rsc.get(o.nameRsc);
       const me = c.self;
       // UserGet measures MANHATTAN distance and refuses past 7, so only walk when
@@ -11171,6 +11173,7 @@ class Session {
       if (got) taken.push({ id: o.id, name, amount: o.amount || undefined });
       else refused.push({ id: o.id, name, why: ev.events.filter(e => e.text).map(e => e.text).join('; ') || 'no reply' });
     }
+    setIntentTarget(this,null);
     if (!wasCancelled) {
       await this.pacer.submit('read', () => c.requestInventory());
       await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
@@ -12345,4 +12348,5 @@ class Session {
 // then grep this file's source to check it was still here, which pins the text and not the
 // behaviour — and it silently omitted the `ok.size === asked -> null` rule that is the most
 // consequential line in doorsLandingNear.
+installIntentObservers(Session.prototype);
 export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode, doorsLandingNear, doorsLandingOnward };

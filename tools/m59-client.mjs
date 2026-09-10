@@ -25,6 +25,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { loadResources } from './m59-rsc.mjs';
 import { EnchantmentObservations } from './m59-enchantment-observations.mjs';
+import { AudioObservations } from './m59-audio-observations.mjs';
 import {
   Reader, objId, MAX_ANGLE, KOD_FINENESS, OF,
   parseRoomContents, parseCreate, parseRemove, parseMove, parseTurn, parseChange,
@@ -345,6 +346,7 @@ export class M59Client {
     // object's id, which is what BP_REMOVE_ENCHANTMENT names. See parseAddEnchantment.
     this.enchantmentsById = new Map();
     this.enchantmentObservations = new EnchantmentObservations();
+    this.audioObservations = new AudioObservations();
     this.events = [];                               // recent world events, newest last
     this.maxEvents = 500;
     this.evSeq = 0;
@@ -799,6 +801,7 @@ export class M59Client {
   }
 
   _connectionClosed() {
+    this.audioObservations.reset();
     this.log('connection closed');
     this.state = 'closed';
     this.stopKeepalive();
@@ -1379,6 +1382,11 @@ export class M59Client {
   // ---------------------------------------------------------- game mode
 
   onGameMessage(op, body) {
+    if ([170,171,172].includes(op)) {
+      try { if(this.audioObservations.receive(op,body,this.rsc))this.emit('audio',{}); }
+      catch(e) { this.log('audio packet rejected: '+e.message); }
+      return;
+    }
     const r = new Reader(body);
     switch (op) {
       // The server does not start streaming the world on its own. It sends
@@ -1422,6 +1430,7 @@ export class M59Client {
       // carries it, and the server rejects a move whose room does not match.
       case BP.PLAYER: {
         const p = parsePlayer(body);
+        this.audioObservations.enter(p.id,p.roomId,p.roomRsc,p.security);
         this.enchantmentObservations.enter(p.id,p.roomId,Date.now());
         this.selfId = p.id;
         this.room.id = p.roomId;
