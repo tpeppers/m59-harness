@@ -184,3 +184,50 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Things the wire, the server or the sou
   `node tools/m59-grudge-test.mjs` (48) is the contract test, and the DM assertion in it
   should never be deleted.
 
+
+## DID THE CAST EVEN START? THE REAGENT ANSWERS; THE REPLY DOES NOT
+
+A cast has three outcomes and the harness's replies collapse them into one. The keeper's
+`/action {name:'cast'}` returns `{sent: true, spell, targets}` whether the spell landed,
+missed its roll, or was refused before it began, and the broker's `cast` tool on a
+keeper-backed character reports `cast: true` off a snapshot. Neither is evidence.
+
+**`CanPayCosts` takes the reagent and the mana UP FRONT, before `BeginCastingTrance`
+(`spell.kod:1820`), and only the effect arrives at the far end.** So the reagent count is
+the test for whether a cast BEGAN, and it separates the two failures that look identical:
+
+| observation | what happened |
+|---|---|
+| reagent count **unchanged** | the cast never started — refused up front |
+| reagent **gone**, no effect | it started, then missed the roll or was interrupted |
+
+The commonest reason for the first row is **the character was already casting**, and the
+server says so with `"You find yourself unable to cast a spell."` — a sentence to the room,
+not an error on the wire. Measured 2026-09-09/10: five `identify` attempts on Loial the
+Ogier returned `sent: true` with his orc-tooth count frozen at 16, and the cause was this
+session's own karma pump casting hospice on the same character throughout. Two independent
+sessions each spent about an hour on it, and one of them (mine) concluded from the silence
+that **the harness could not cast at an inventory item at all** and wrote that down. It can:
+`{spell: 'identify', target: <object id>}` works — the spell wants a NAME and the handler
+reads `target` SINGULAR (`m59-keeper-process.mjs:3593`), so `targets: [id]` is dropped and a
+targeted spell with an empty list is refused with no message.
+
+Two further traps on the same path:
+
+- **`holdMs` may be inert.** The keeper freezes its tick loop only when `session._tickLoop`
+  exists; where it does not, the option is accepted and does nothing, and the reply says so
+  by omission — no `frozenMs`, no `timedOut`. A reply of exactly `{sent, spell, targets}`
+  means nothing was frozen.
+- **A trance is longer than it looks.** `identify` is `viCast_time` 15000 scaled by
+  `(150 - spellpower)%`, up to ~22s. Retrying inside that window is your own casts breaking
+  each other, and the server calls it
+  `"Your concentration is broken and the identify spell fizzles."` Poll for at least ~32s.
+
+And the effect itself may not be a message: `identify` arrives as a **LOOK event carrying the
+object id**, so polling `/state` sees nothing at all. `substrate/hooks/identify-loot/errand.mjs`
+has a `castAndRead()` that tells the three outcomes apart.
+
+**The general rule this keeps re-teaching is the one in CLAUDE.md: read the value that must
+change, not the instrument's own account of itself.** The reagent is that value for a cast,
+the room number is that value for an edge crossing, and max mana is that value for a mana
+node.
