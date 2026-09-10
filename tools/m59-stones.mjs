@@ -95,8 +95,25 @@ export const STONES = Object.freeze({
               where: 'An ancient place, its origin forgotten' },
   sentinel: { room: 589,  node: 'NODE_H9',       row: 45, col: 32,
               where: 'Under the shadow of the Sentinel' },
+  // THE MELD IS BEHIND A YETI AND A TWO-SECOND CEILING. Operator, 2026-09-10: "the Dreaded
+  // Caves of Ice node requires killing the Yeti to get access... the goal should actually just
+  // be to walk to within a few coarse squares away from the mana node (in the dreaded caves
+  // this means the biggest room)." The kod is more specific than that and worse:
+  //
+  //   SomethingKilled: if IsClass(victim,&yeti) -> setsector MANA_DOOR ANIMATE_CEILING_LIFT
+  //                                               height=510, then LowerManaDoorTimer at 2000ms
+  //
+  // So a yeti kill lifts a ceiling sector for TWO SECONDS — and not at all if the node's own
+  // attack made the kill (icecave1.kod SomethingKilled). That is a kill and a two-second
+  // window, not a walk, so the errand here is the APPROACH and the meld is a separate question
+  // for somebody who means to fight for it.
   ice:      { room: 750,  node: 'NODE_ICECAVE1', row: 25, col: 23,
-              where: 'The Dreaded Caves of Ice' },
+              where: 'The Dreaded Caves of Ice',
+              objective: 'approach', approach_within: 5,
+              gate: 'killing a yeti lifts the MANA_DOOR ceiling sector for 2s ' +
+                    '(icecave1.kod), and not at all if a node attack made the kill',
+              note: 'the approach target is the big chamber — the room bakes as one region ' +
+                    'holding 2114 of its 2115 walkable squares' },
 
   // ---- the Underworld's own, which every character visits by dying
   corpse:   { room: 1,    node: 'NODE_CORPSENODE', row: 16, col: 16, where: 'The Underworld',
@@ -122,20 +139,47 @@ export const STONES = Object.freeze({
               where: 'Ukgoth, Holy Land of Trolls', exempt: 'operator, 2026-09-10',
               appears: 'only while the game hour is 0 (i9.kod RecalcLightAndWeather) — the room ' +
                        'deletes it for the rest of the day' },
+  // AN APPROACH RATHER THAN AN ATTEMPT, on the same ruling as the ice cave: the stone is the
+  // prize for a faction war and is not there to be walked up to, but the WALK is still a walk.
   fey:      { room: 532,  node: 'NODE_FAERIE',   row: 23, col: 30,
-              where: 'The Vale of Sorrows', exempt: 'operator, 2026-09-10',
+              where: 'The Vale of Sorrows',
+              objective: 'approach', approach_within: 5,
+              gate: "the room's karma has to reach KVERY_GOOD or KVERY_EVIL before the stone " +
+                    'appears at all (c2.kod AppearNode) — planning or coordination across ' +
+                    'several people, not an errand',
               appears: "only when the room's karma reaches KVERY_GOOD or KVERY_EVIL — the " +
                        'prize for a faction war (c2.kod AppearNode), and a FeyNode rather than ' +
                        'a plain ManaNode' },
 
   // And the one the game itself calls unattainable, on the enum line in blakston.khd.
   mausoleum:{ room: 1006, node: 'NODE_GUEST',    row: 35, col:  5, where: 'Mausoleum',
-              rooms: [1006, 1016], guest_demo: true, exempt: 'by design — operator, 2026-09-10',
+              rooms: [1006, 1016], guest_demo: true, never: 'by design — operator, 2026-09-10',
               appears: 'for GUEST players, as a demonstration — unreachable by design' },
 });
 
+/**
+ * MAY ANYTHING BE SENT TO THIS STONE, AND WHAT WOULD SUCCESS BE?
+ *
+ * Three answers, not two, because "do not try to meld it" and "do not go there" are different
+ * instructions and collapsing them cost the Ice Caves a run: the stone was on nobody's list at
+ * all, when the useful errand was always to walk to it and stop.
+ *
+ *   'meld'      walk, stand in the 5x5 box, activate, and prove MAX MANA rose
+ *   'approach'  walk to within `approach_within` coarse squares and stop. The meld is behind
+ *               something that is not a walk — a yeti and a two-second ceiling, a faction war
+ *   null        do not send anybody: exempt by the operator's ruling, conditional on a lever
+ *               or a clock, or unreachable by the design of the game
+ */
+export function objectiveFor(s) {
+  if (!s || s.never || s.exempt || s.conditional) return null;
+  return s.objective === 'approach' ? 'approach' : 'meld';
+}
+
 /** Is this a stone anything should be SENT to? */
-export const attemptable = (s) => !!s && !s.exempt && !s.conditional;
+export const attemptable = (s) => objectiveFor(s) !== null;
+
+/** How close counts, in coarse squares. The meld box is +/-2; an approach is looser. */
+export const approachWithin = (s) => Number(s?.approach_within ?? 2);
 /** A stone by key or by any name a previous list used for it. */
 export function stoneKeyed(name) {
   const k = String(name ?? '').toLowerCase();

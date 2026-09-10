@@ -32,7 +32,8 @@
 //     instrument punishing the fix it exists to prompt.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { STONES, attemptable, stoneKeyed, stonesInSource, nodeEnum, nodeClasses, stones, drift,
+import { STONES, attemptable, objectiveFor, approachWithin, stoneKeyed, stonesInSource,
+         nodeEnum, nodeClasses, stones, drift,
          nodesFromRunner, nodesFromFleetscript, KOD_ROOT } from './m59-stones.mjs';
 
 let pass = 0, fail = 0;
@@ -51,20 +52,40 @@ console.log('THE TABLE — thirteen stones, and which of them are errands');
   // The operator's two rulings, and the game's own. A stone that is exempt must never be
   // ATTEMPTED, and the reason travels with it so nobody re-litigates it at 02:00.
   ok('Ukgoth is exempt from attempt', !!STONES.ukgoth.exempt);
-  ok('the Fey stone is exempt from attempt', !!STONES.fey.exempt);
-  ok('the guest demonstration stone is exempt', !!STONES.mausoleum.exempt);
-  ok('and each exemption says who said so',
-     [STONES.ukgoth, STONES.fey, STONES.mausoleum].every(s => /operator|design/.test(s.exempt)));
+  ok('the guest demonstration stone is never attempted', !!STONES.mausoleum.never);
+  ok('and each refusal says who said so',
+     /operator/.test(STONES.ukgoth.exempt) && /design/.test(STONES.mausoleum.never));
+  // THREE ANSWERS, NOT TWO. Operator, 2026-09-10: "the Dreaded Caves of Ice node requires
+  // killing the Yeti to get access... so while we can include it in 'the walk', for both the
+  // Fey Node and the Yeti Cave, the goal should actually just be to walk to within a few coarse
+  // squares away from the mana node." So "do not try to meld it" and "do not go there" are
+  // separate instructions — collapsing them is what left the Ice Caves off every list when the
+  // useful errand was always to walk to it and stop.
+  ok('the ice cave is an APPROACH errand, not a meld', objectiveFor(STONES.ice) === 'approach');
+  ok('and so is the Fey stone', objectiveFor(STONES.fey) === 'approach');
+  ok('both are still worth SENDING somebody to',
+     attemptable(STONES.ice) && attemptable(STONES.fey));
+  ok('an ordinary stone is a meld errand', objectiveFor(STONES.victoria) === 'meld');
+  ok('and each gated stone says what the meld is behind',
+     /yeti/i.test(STONES.ice.gate ?? '') && /karma/i.test(STONES.fey.gate ?? ''));
+  ok('the ice gate cites the kod, not a memory', /icecave1\.kod/.test(STONES.ice.gate ?? ''));
+  ok('an approach is looser than the meld box, and says how much',
+     approachWithin(STONES.ice) === 5 && approachWithin(STONES.victoria) === 2);
+  // The guest stone is a THIRD thing: not gated, not exempt by ruling — not there for us.
+  ok('the guest stone has no objective at all', objectiveFor(STONES.mausoleum) === null);
+  ok('and Ukgoth still has none either, on the operator\'s ruling',
+     objectiveFor(STONES.ukgoth) === null);
   ok('the lever and the timed swing are CONDITIONAL, not exempt — a different claim',
      STONES.martyr.conditional === true && STONES.avar.conditional === true &&
      !STONES.martyr.exempt && !STONES.avar.exempt);
-  ok('attemptable() refuses both kinds',
-     !attemptable(STONES.ukgoth) && !attemptable(STONES.fey) &&
-     !attemptable(STONES.mausoleum) && !attemptable(STONES.martyr) && !attemptable(STONES.avar));
+  ok('attemptable() refuses every kind that has no objective',
+     !attemptable(STONES.ukgoth) && !attemptable(STONES.mausoleum) &&
+     !attemptable(STONES.martyr) && !attemptable(STONES.avar));
   ok('and permits an ordinary walk-and-stand stone',
      attemptable(STONES.ice) && attemptable(STONES.victoria) && attemptable(STONES.badlands));
-  ok('every non-static stone says what makes it appear',
-     Object.values(STONES).filter(s => s.exempt || s.conditional).every(s => !!s.appears));
+  ok('every stone that is not a plain walk says what makes it appear',
+     Object.values(STONES).filter(s => s.exempt || s.never || s.conditional)
+       .every(s => !!s.appears));
 
   // THE KEY COLLISION THAT MADE A DOSSIER UNFINDABLE. Room 515 was `peak` to the errand and
   // `seafarer` to the circuit, so the critic reported `no_dossier` for a stone whose dossier

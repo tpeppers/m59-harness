@@ -1,10 +1,51 @@
 # ice — NODE_ICECAVE1, room 750, stone at r25c23
 
-**The stone is INSIDE the meld box by walking, and it needed no new mechanics at any point.**
-The retired two-row table in `SKILL.md` filed this one under "NOT reachable — needs new jumping
-mechanics". It is one square off the walking flood and the entry square can reach it.
+**THE ERRAND HERE IS THE APPROACH, NOT THE MELD.** Operator, 2026-09-10: *"the Dreaded Caves of
+Ice node requires killing the Yeti to get access... so while we can include it in 'the walk',
+for both the Fey Node and the Yeti Cave, the goal should actually just be to walk to within a
+few coarse squares away from the mana node (in the dreaded caves this means the biggest room)."*
 
-## Why nobody had got it
+So success for this stone is **within 5 coarse squares of r25c23**, and the meld is a separate
+question for somebody who means to fight for it. `objective: 'approach'` in
+`tools/m59-stones.mjs` is that, and `m59-node-run.mjs` judges the leg on it.
+
+## What the geometry says, and why it is not the whole answer
+
+**The walking flood reaches the stone.** That is true and it was the first thing measured here,
+and on its own it is misleading — which is worth keeping written down, because it is the exact
+shape of a confident wrong answer. The retired two-row table in `SKILL.md` filed this stone
+under "NOT reachable — needs new jumping mechanics"; the flood says it is one square off. Both
+of those are statements about the BAKE.
+
+**The kod gates it with a ceiling that moves** (`icecave1.kod`):
+
+```
+MANA_DOOR = 2            MANA_DOOR_TIME = 2000
+
+SomethingKilled(what, victim)
+   if IsClass(victim,&yeti)
+      % Don't open the door if the Yeti was killed by a node attack.
+      setsector MANA_DOOR ANIMATE_CEILING_LIFT height=510
+      ptManaDoor_Timer = CreateTimer(self,@LowerManaDoorTimer,MANA_DOOR_TIME)
+
+LowerManaDoorTimer()   -> setsector MANA_DOOR height=380
+```
+
+A yeti kill lifts the sector to 510 for **two seconds** and then it drops back to 380 — and it
+does not lift at all if the node's own attack made the kill. So the meld is a kill plus a
+two-second window, and a claim that the square is "reachable" is a claim about one frame of an
+animated sector.
+
+**AND THAT IS A GENERAL GAP, NOT A DETAIL ABOUT THIS ROOM.** `substrate/m59-map.json` bakes
+sector heights once. 44 kod room files call `setsector ... ANIMATE_`, and
+`MUTABLE_GEOMETRY` in `tools/m59-mutable.mjs` lists ten rooms, nine of them from an operator
+recalling them in one afternoon. Among the 44 and not on that list: `i9.kod` — **Ukgoth, room
+599**, the gutter every Castle Victoria run crosses — and four of the node rooms
+(`icecave1`, `cave2`, `h9`, `canyon2`). Whether each belongs in that table is a judgement about
+how OFTEN the geometry moves, which is why this is written here as a question rather than
+committed as a list.
+
+## Why nobody had even walked to it
 
 Not the terrain. **The circuit could not be asked for it.** `m59-node-run.mjs` kept its own
 hand-written list of six stones and this was not on it, while `fleetscripts/mana-node.mjs` kept
@@ -68,8 +109,11 @@ nothing able to move it — false at the moment of printing.
 
 ## What to do next here
 
-- The walk is the whole errand. If a run comes up short, the useful question is which square it
-  stopped on relative to r46c25 → r25c23, not what mechanic is missing.
+- The walk is the whole errand, and it is now declared that way. If a run comes up short, the
+  useful question is which square it stopped on relative to r46c25 → r25c23, not what mechanic
+  is missing — and a failed leg now prints that itself (the FRONTIER line).
+- **Do not read a successful approach as a meld.** Max mana is the only observable, and it will
+  not move: the stone is behind the yeti.
 - **The room's name is the only warning worth keeping**: it is the Dreaded Caves of Ice and it
   is a monster room. A 20-health body is at the max-health floor, so a death costs nothing
   permanent (`piMax_health` is bound below at 20, `player.kod:5930`), but a corpse run costs the

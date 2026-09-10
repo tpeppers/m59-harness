@@ -64,7 +64,7 @@ import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { takeRunLock, inspectRunLock, releaseRunLock,
          exitWhenOutputIsGone } from './m59-runlock.mjs';
 // THE STONES THEMSELVES, from the one tracked table that is checked against the kod.
-import { STONES } from './m59-stones.mjs';
+import { STONES, objectiveFor, approachWithin } from './m59-stones.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -140,7 +140,12 @@ const NODES = Object.entries(STONES).map(([key, s]) => ({
   ...(s.appears ? { appears: s.appears } : {}),
   ...(s.guest_demo ? { guest_demo: true } : {}),
   ...(s.exempt ? { exempt: s.exempt } : {}),
+  ...(s.never ? { never: s.never } : {}),
   ...(s.conditional ? { conditional: true } : {}),
+  // WHAT SUCCESS IS FOR THIS STONE. An approach leg is finished when the body is within a few
+  // coarse squares, because the meld is behind something that is not a walk.
+  objective: objectiveFor(s), within: approachWithin(s),
+  ...(s.gate ? { gate: s.gate } : {}),
   ...(s.alias ? { alias: s.alias } : {}),
 }));
 const byKey = k => NODES.find(n => n.key === k || String(n.room) === String(k) ||
@@ -291,6 +296,9 @@ if (has('list')) {
     else if (n.conditional)
       console.log(`             CONDITIONAL — there is nothing to stand on until it appears`);
     if (n.appears) console.log(`             appears ${n.appears}`);
+    if (n.objective === 'approach')
+      console.log(`             APPROACH ONLY — success is within ${n.within} coarse squares. ` +
+                  `The meld is gated: ${n.gate}`);
     if (n.entry) console.log(`             enter through room ${n.entry.via} ` +
                              `(${n.entry.viaName}) at r${n.entry.trigger.row}c${n.entry.trigger.col}, ` +
                              `landing r${n.entry.lands.row}c${n.entry.lands.col}`);
@@ -377,8 +385,11 @@ const atNode = (pos, node) =>
 // A road is worth walking whether or not the stone at the end of it is reachable. So the
 // circuit carries on from any room it arrives in, and only a death, a refusal or a timeout
 // ends the walk. `--stop-short` restores the old behaviour for somebody sweeping one node.
-const reachedNode = rec => rec.ended === 'at node';
-const reachedRoom = rec => rec.ended === 'at node' || rec.ended === 'in room';
+// AN APPROACH LEG THAT APPROACHED IS A LEG THAT SUCCEEDED. Counting it as a near miss would
+// report the two gated stones as failures for ever, which is how a list stops being read.
+const reachedNode = rec => rec.ended === 'at node' || rec.ended === 'approached';
+const reachedRoom = rec => rec.ended === 'at node' || rec.ended === 'approached' ||
+                           rec.ended === 'in room';
 const legOk = rec => (APPROACH && !STOP_SHORT) ? reachedRoom(rec)
                    : STOP_SHORT ? reachedNode(rec) : reachedRoom(rec);
 
@@ -478,11 +489,14 @@ if (!rows.length) { console.error('node-run: no characters matched.'); process.e
 // to say you know: a run that means to test the Ukgoth stone at midnight is a real errand and
 // this must not be the thing that stops it.
 {
-  const barred = CIRCUIT.filter(n => n.exempt || n.conditional);
+  // A STONE WITH NO OBJECTIVE AT ALL. An APPROACH stone is not barred — walking to it is the
+  // errand — so this refuses only the ones nothing should be sent to.
+  const barred = CIRCUIT.filter(n => n.objective === null);
   if (barred.length && !has('force')) {
     for (const n of barred)
       console.error(`node-run: REFUSING ${n.key} (room ${n.room}) — ` +
-                    `${n.exempt ? `exempt from attempt: ${n.exempt}` : 'conditional'}. ` +
+                    `${n.never ? `not obtainable: ${n.never}`
+                      : n.exempt ? `exempt from attempt: ${n.exempt}` : 'conditional'}. ` +
                     `It appears ${n.appears}`);
     console.error('          Pass --force if this run is deliberately going after one.');
     process.exit(2);
@@ -906,6 +920,14 @@ async function runLeg(r, node, { from, place, heal, next = null } = {}) {
     closest = w.closest;
     if (pos?.room === UNDERWORLD) { died = true; ended = 'DIED'; }
     else if (atNode(pos, node.node)) { ended = 'at node'; approachWhy = null; }
+    // AND THE APPROACH VERDICT, which is the whole errand for a gated stone. Chebyshev, in
+    // coarse squares, because the meld box is per-axis and so is this.
+    else if (node.objective === 'approach' && pos?.room === node.room &&
+             Number.isFinite(pos.row) && Number.isFinite(pos.col) &&
+             Math.max(Math.abs(pos.row - node.node.row),
+                      Math.abs(pos.col - node.node.col)) <= node.within) {
+      ended = 'approached'; approachWhy = null;
+    }
     sawNode = pos?.node ?? null;
   }
   if (!pos) pos = await where(r.agent).catch(() => null);
