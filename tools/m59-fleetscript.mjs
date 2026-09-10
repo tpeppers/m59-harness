@@ -27,6 +27,54 @@
 // that is a boundary the mover cannot cross rather than a route it cannot find. Expected,
 // and not worth debugging as an errand fault.
 //
+// MEASURED 2026-09-10, AND THE TWO ROWS ABOVE ARE WRONG IN BOTH DIRECTIONS. The table was
+// a claim about which stones a character had got to; this is a measurement of how close the
+// MOVER gets, taken offline against the bake in play with
+//
+//     node tools/m59-exitreport.mjs <room> --to <rNcM> --box 2
+//
+// `--box 2` because the meld is `abs(drow) < 3 AND abs(dcol) < 3` per axis
+// (mananode.kod:177) — a 5x5 BOX, not the stone's own square, which is frequently not
+// standable BECAUSE THE STONE IS ON IT. Distances are Chebyshev, the metric the server
+// range-tests with, measured from the square a body actually lands on coming in:
+//
+//   39   Castle Victoria   REACHABLE — but only from the EAST doorway. Room 39 is split:
+//                          arriving at r8c28 (door r2c19/r1c19 in 38) reaches the stone;
+//                          arriving at r8c23 (door r2c17/r1c17) is 22 squares off and
+//                          cannot cross. The router's own choice is r2c19, which is right.
+//   750  Ice Caves         REACHABLE. Nearest square is 1 off, inside the box. Filed above
+//                          as needing new jumping mechanics; it needs none.
+//   589  Sentinel          reachable ONLY across the declared fall r35c16 -> r38c19
+//                          (operator, 2026-09-03), and only when entered from 599. By
+//                          walking alone it is 9 squares off from either entrance.
+//   45   Badlands          3 off — ONE square outside the box, from r60c46.
+//   27   Icky Cave         4 off BY WALKING, and reached anyway — see the retraction below.
+//   515  Seafarer's Peak   5 off.
+//   1006 Mausoleum         10 off, and no route to the room from Tos anyway.
+//
+// EVERY "off" ABOVE IS A STATEMENT ABOUT WALKING AND NOTHING ELSE. `reachableFrom` floods
+// with `moverStepLands` one square at a time; a fall is not a step, so a stone across one
+// reads as unreachable at whatever distance the flood happens to stop. The report says "no
+// DECLARED fall in this room bridges the gap" when `substrate/m59-falljumps.json` has no
+// entry for the room — which is true, and reads as though it settles something. It does not.
+//
+// RETRACTED 2026-09-10, the same day, BY THE OPERATOR: room 27 IS reachable and Loial's meld
+// on 2026-09-09 is confirmed — he went back for that node and found it already taken. So the
+// four measurements behind "4 off" were all correct and none of them meant what they were
+// read to mean: the mover cannot WALK there, and the route is a jump this repository has
+// never declared.
+//
+// AND THE OPERATOR NAMES THE MECHANISM FOR THE INCONSISTENCY: A MONSTER STANDING IN A JUMP
+// BLOCKS IT, and that is the commonest cause of "it worked yesterday and refuses today" he
+// has seen. Monster collision is height-agnostic, so a body on the take-off, in the arc or on
+// the landing refuses the move exactly like a wall — and room 27 carried six orcs on the night
+// it refused. **A single afternoon's refusal is evidence about where the monsters were
+// standing, not about the ground.** Two identical refusals inside one visit is not a finding;
+// two across visits with the room in different states is.
+//
+// `750 Ice Caves` in the NOT-reachable row is still wrong — it is one square off, inside the
+// meld box, by walking alone. See .claude/skills/node-runner/nodes/cave.md.
+//
 // What actually stands between us and the other four is not this file. It is exact .roo
 // geometry, monster POSITIONS (collision is height-agnostic, so a body under a ledge blocks
 // a hop over it), and jumps from location to location. Getting them needs enhancements to
@@ -843,6 +891,30 @@ export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts 
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
 
 /**
+ * WALK TO A SQUARE INSIDE THE ROOM YOU ARE ALREADY IN, and judge it on the world rather
+ * than on the reply.
+ *
+ * `walkTo(53, 23)` — positional `(col, row)`, matching every other movement helper here and
+ * the `walk_to` tool's own named fields. See docs/m59-coordinates.md.
+ *
+ * Options:
+ *   within       squares of slack. 0 means the exact square. The mana-node meld box is 2 on
+ *                each axis, so `within: 2` is the honest tolerance for a stone.
+ *   room         the room this walk happens in. Defaults to wherever the body is standing.
+ *   leaveRoom    the destination is a TRIGGER: arriving on it is the failure and being moved
+ *                out of the room is the success. Room 587 r16c4 is one — h7.kod teleports
+ *                the body into the Icky Cave from under the walk.
+ *   deadlineMs   how long the whole thing may take. Default four minutes.
+ *   stallMs      how long without moving before ONE re-issue. Default 45s.
+ *
+ * Use this rather than `act('walk_to', ...)`: the broker caps its own RPC to the keeper at
+ * 60 seconds and the keeper goes on walking, so `act` turns any walk longer than a minute
+ * into a step failure and hands the body back mid-errand. See the `walk_to` case in
+ * `runStep` for the incident.
+ */
+export const walkTo = (col, row, opts = {}) => ({ do: 'walk_to', col, row, ...opts });
+
+/**
  * Buy one skill or spell from the teacher who sells it, and prove the character holds it.
  *
  * THE VERB `shop` CANNOT BE. See the ability-table section above: `shop` is judged on the
@@ -1440,21 +1512,44 @@ async function runStep(ctx, agent, step, state) {
       const short = need - before;
       const r = await call('bank', { agent, action: 'withdraw', amount: short }, 60_000)
         .catch(e => ({ error: e.message }));
-      const said = String(r?.banker_said ?? r?.error ?? '');
+      const said = [].concat(r?.banker_said ?? r?.error ?? []).join(' ').trim();
 
-      // READ THE PURSE BACK. The banker answers in PROSE and "You can't check any balance
-      // here!" is what a character standing in the wrong room gets — a sentence, not an
-      // error — so the withdrawal reporting no error says nothing at all about the money.
-      const after = await readPurse();
+      // THE BANKER'S OWN WORDS ARE THE FIRST SIGNAL, and they are a REFUSAL long before the
+      // purse could show it. "You can't withdraw anything here!" is what a character outside
+      // a bank gets: prose, not an error, and it settles the question immediately.
+      if (/can't|cannot|only have|no bank/i.test(said))
+        return { ok: false, outcome: 'banker_refused', purse: before, asked: short, said,
+                 why: `the banker refused: "${said.slice(0, 140)}"` };
+
+      // AND THE PURSE IS POLLED, NOT SAMPLED ONCE.
+      //
+      // The broker caches keeper state for two seconds (`_stateTtl`), and this whole step ran
+      // in ONE on 2026-09-10 — so the read-back returned the very same cached snapshot the
+      // step had started from and reported "the purse did not go up" about a withdrawal it
+      // could not yet have seen. `fresh: false` was right there in the state and nothing was
+      // reading it. Poll until the money appears or the window closes.
+      const deadline = Date.now() + Number(step.settleMs ?? 12_000);
+      let after = before;
+      while (Date.now() < deadline) {
+        await new Promise(res => setTimeout(res, 1500));
+        const now = await readPurse();
+        if (now != null) { after = now; if (now >= want) break; }
+      }
       if (after != null && after >= want)
         return { ok: true, outcome: 'withdrew', purse: after, took: short,
                  said: said.slice(0, 120) };
       return { ok: false, outcome: 'still_short', purse: after, needs: want,
-               asked: short, said: said.slice(0, 160),
-               why: after != null && after <= before
-                 ? 'the purse did not go up. Either this room has no teller — only Tos (54) ' +
-                   'and Jasper (376) do, never Barloque — or the balance is short. Read `said`.'
-                 : 'withdrew something and it was not enough' };
+               asked: short, said: said.slice(0, 200),
+               // THE BANKER'S SENTENCE, IN THE FAILURE LINE ITSELF. The first version put a
+               // GUESS here ("either this room has no teller, or the balance is short") and
+               // the guess is what got logged, so three runs were diagnosed from a hypothesis
+               // while the actual answer sat unread in a field.
+               why: said
+                 ? `the purse is ${after} of ${want} after asking for ${short}. The banker `
+                   + `said: "${said.slice(0, 140)}"`
+                 : `the purse is ${after} of ${want} after asking for ${short}, and the banker `
+                   + 'said NOTHING AT ALL — which is not silence-as-refusal here but a reply '
+                   + 'that never arrived. Check the character is beside the banker.' };
     }
 
     case 'found_guild': {
@@ -1821,6 +1916,87 @@ async function runStep(ctx, agent, step, state) {
       const r = await call(step.tool, { agent, ...step.args }, step.timeoutMs ?? 120_000)
         .catch(e => ({ error: e.message }));
       return { ok: !r?.error, result: r, why: r?.error };
+    }
+
+    // GUARANTEE 5, INSIDE ONE ROOM. `walk` already refuses to re-issue a journey while one
+    // is walking; this is the same rule for the walk that happens after you arrive.
+    //
+    // WHAT IT COST, 2026-09-10 06:18:57Z. Marco Polo (20 max health) was walked across room
+    // 587 with `act('walk_to', ...)`, and it came back
+    //
+    //     { error: "The operation was aborted due to timeout", timed_out_after_ms: 60000 }
+    //
+    // The 60 seconds is the BROKER's cap on its own RPC to the keeper — not fleetScript's
+    // (`act` passes 120s and `call` defaults to 180s) and not the walk's budget. The keeper
+    // was still walking; only the answer had stopped. `act` scored it as a step failure, the
+    // script unwound, and the lease went back to the keeper in the middle of the Twisted
+    // Wood. He was unheld and down to 12 of 20 inside the minute.
+    //
+    // So the reply is not the outcome, which is the oldest rule in this repository: no error
+    // has never meant success, and an error has never meant failure either. This issues the
+    // walk ONCE and then reads the world back.
+    case 'walk_to': {
+      const within = step.within ?? 0;
+      const deadline = Date.now() + (step.deadlineMs ?? 240_000);
+      const stallMs = step.stallMs ?? 45_000;
+      const square = () => call('status', { agent, brief: true }, 30_000).catch(() => null);
+      const posOf = s => ({ row: s?.you?.row ?? null, col: s?.you?.col ?? null,
+                            room: Number(s?.where?.num ?? s?.room?.num ?? s?.room_num ?? NaN) });
+      const issue = () => call('walk_to', { agent, col: step.col, row: step.row,
+                                            arrive_within: step.arriveWithin ?? 6 },
+                               step.timeoutMs ?? 120_000).catch(() => {});
+      const start = posOf(await square());
+      // `leaveRoom: true` says the destination is a TRIGGER SQUARE — somewhere that moves the
+      // body somewhere else — so arriving on it is the failure and leaving is the success.
+      // Room 587's cave trigger is one; nothing else about the walk changes.
+      const wantRoom = step.room ?? start.room;
+      issue();
+      let last = null, lastMoved = Date.now(), reissued = 0;
+      for (;;) {
+        await sleep(step.pollMs ?? 5000);
+        const p = posOf(await square());
+        const at = `r${p.row}c${p.col} in ${p.room}`;
+        if (Number.isFinite(p.room) && Number.isFinite(wantRoom) && p.room !== wantRoom)
+          return step.leaveRoom
+            ? { ok: true, outcome: 'left_the_room', room: p.room, at }
+            : { ok: false, outcome: 'left_the_room', room: p.room,
+                why: `the walk ended in room ${p.room}, not ${wantRoom} — something moved the body` };
+        if (p.row != null && Math.abs(p.row - step.row) <= within
+                          && Math.abs(p.col - step.col) <= within)
+          return step.leaveRoom
+            ? { ok: false, outcome: 'arrived', at,
+                why: `stood on r${step.row}c${step.col} and was NOT moved — the trigger did not fire` }
+            : { ok: true, outcome: 'arrived', at, reissued };
+        if (!last || last.row !== p.row || last.col !== p.col) { last = p; lastMoved = Date.now(); }
+        else if (Date.now() - lastMoved > stallMs) {
+          // ONE RE-ISSUE, AND NOT TWO. A second identical stall is the signal to stop moving
+          // the body and start measuring the ground; proving the same refusal a third time is
+          // the failure mode the node-runner skill exists to stop.
+          if (reissued >= 1)
+            return { ok: false, outcome: 'stalled', at, reissued,
+                     why: `no movement at ${at} across two attempts — measure the ground ` +
+                          `(node tools/m59-exitreport.mjs ${p.room}) rather than asking again` };
+          reissued++; lastMoved = Date.now();
+          ctx.log(agent, `walk_to r${step.row}c${step.col}: still at ${at} — cancelling, standing up, re-issuing once`);
+          // CANCEL THE ONE THAT IS STILL WALKING BEFORE ISSUING ANOTHER. A `walk_to` whose
+          // RPC has timed out is NOT a walk that has stopped — the keeper is still moving the
+          // body — so a second order arrives on top of the first and the two fight for it.
+          // Measured in room 39 on 2026-09-10: a re-plan read the body's square, the previous
+          // order moved it two squares while the new route was being computed, and the first
+          // waypoint of that route was then unreachable from where the body actually was.
+          // Three rounds of that, each one planning from a position that had already expired.
+          await call('cancel_movement', { agent, why: 'walkTo re-issue' }, 30_000).catch(() => {});
+          // A RESTING CHARACTER CANNOT MOVE: player.kod:1162 sets PFLAG_NO_MOVE together with
+          // PFLAG_NO_FIGHT and PFLAG_NO_MAGIC. Recovery is one of the four protected
+          // faculties a commander hold deliberately leaves with the keeper, so the keeper can
+          // sit the body down in the middle of an errand and nothing reports an error.
+          await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+          issue();
+        }
+        if (Date.now() > deadline)
+          return { ok: false, outcome: 'out_of_time', at, reissued,
+                   why: `did not reach r${step.row}c${step.col} within the budget; last seen ${at}` };
+      }
     }
 
     case 'verify': {

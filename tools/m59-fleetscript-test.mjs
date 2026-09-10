@@ -17,7 +17,7 @@ process.env.M59_RUNLOCK_DIR = LOCK_DIR;
 process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';   // never actually reached
 
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
-const { fleetScript, walk, shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
+const { fleetScript, walk, walkTo, shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
         foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf } =
   await import('./m59-fleetscript.mjs');
 
@@ -38,6 +38,12 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // an object carrying `works`, and every candidate square carries the
                       // book's verdict as `tested`.
                       safeNow = false, safeSpots = [], walkLands = true,
+                      // WHERE EACH BODY IS STANDING, and what a `walk_to` does to it. The
+                      // square matters because `walkTo` judges the walk on the world rather
+                      // than on the reply — see the `walk_to` case in runStep. `onWalkTo` is
+                      // handed {agent, col, row, positions, rooms} and may move the body,
+                      // move it somewhere else entirely, or do nothing at all (a stall).
+                      positions = {}, onWalkTo = null,
                       // Rooms the router cannot get to. Room 114 — the Barloque vaultman's
                       // office — was one of these for two of three couriers on 2026-09-02.
                       unreachable = new Set(),
@@ -77,7 +83,7 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       payload = { where: { num: rooms[agent], name: dead.has(agent) ? 'The Underworld' : 'room' },
                   // Production returns null here — the money is a `shilling` stack in the
                   // pack, not a scalar on the character. Mirroring that is the point.
-                  hp, gold: null };
+                  hp, gold: null, you: positions[agent] ?? null };
     } else if (name === 'travel') {
       // A refused destination leaves the character where it was, which is what the real
       // thing does: travel is a request, and arriving is a separate observation.
@@ -97,7 +103,17 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       refused: [], stored: [].concat(a.items ?? []).length, vaultman_said: [] };
     else if (name === 'safe_spots') payload = { room: { num: rooms[agent] ?? 39, name: 'room' },
       in_a_safe_spot_now: safeNow, spots: safeSpots };
-    else if (name === 'walk_to') { if (walkLands) safeNow = { at: { col: a.col, row: a.row }, works: true }; payload = { arrived: walkLands }; }
+    else if (name === 'walk_to') {
+      if (walkLands) safeNow = { at: { col: a.col, row: a.row }, works: true };
+      if (onWalkTo) {
+        // THE REPLY AND THE BODY ARE TWO DIFFERENT THINGS. `onWalkTo` may throw to model
+        // the broker's 60-second RPC cap, which is what production does on any in-room walk
+        // longer than a minute while the keeper goes on walking.
+        const r = onWalkTo({ agent, col: a.col, row: a.row, positions, rooms });
+        if (r && r.throws) throw new Error('The operation was aborted due to timeout');
+      }
+      payload = { arrived: walkLands };
+    }
     else if (name === 'rest_up') { rested.push(agent); payload = { ok: true }; }
     // The portal, as the server behaves: it moves the character out of 1011-1018, or it
     // does not and says so. `leftRaza: false` models a portal that did not take.
@@ -962,6 +978,133 @@ console.log('leaving the newbie zone is a step, not a travel');
     steps: [leaveRaza()], onLog: quiet });
   ok('a character already outside Raza is skipped', r.results.a1.ok === true);
   ok('and the portal is not touched at all', !sent.some(x => x.name === 'leave_raza'));
+}
+
+// ---------------------------------------------------------------- walkTo
+//
+// THE INCIDENT, 2026-09-10 06:18:57Z. Marco Polo (20 max health) was walked across room 587
+// with `act('walk_to', ...)` and it came back
+//
+//     { error: "The operation was aborted due to timeout", timed_out_after_ms: 60000 }
+//
+// The 60 seconds is the BROKER's cap on its own RPC to the keeper — not fleetScript's, and
+// not the walk's budget. The keeper was still walking. `act` scored it as a step failure,
+// the script unwound, the lease went back, and a fragile caster was unheld in the Twisted
+// Wood inside the minute. Every case below is that failure, or the ones next to it.
+console.log('\nwalkTo judges the walk on the world, not on the reply');
+{
+  // The body moves one square per poll while the RPC has already given up.
+  const positions = { a1: { row: 30, col: 40 } };
+  const sent = fakeBroker({
+    rooms: { a1: 587 }, positions,
+    onWalkTo: ({ agent }) => {
+      const toward = (from, to, by) => from > to ? Math.max(to, from - by)
+                                                 : Math.min(to, from + by);
+      const step = () => {
+        const p = positions[agent];
+        if (!p) return;
+        p.row = toward(p.row, 16, 4);
+        p.col = toward(p.col, 4, 8);
+        if (p.row !== 16 || p.col !== 4) setTimeout(step, 5).unref?.();
+      };
+      setTimeout(step, 5).unref?.();
+      return { throws: true };          // the broker's 60s cap, faithfully
+    },
+  });
+  const r = await fleetScript({ name: 'walkto', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(4, 16, { pollMs: 20, deadlineMs: 8000 })], onLog: quiet });
+  ok('an RPC that times out is not a failed walk', r.results.a1.ok === true);
+  ok('and the step reports arrival, read off the world',
+     r.results.a1.state['0:walk_to'].outcome === 'arrived');
+  ok('the walk was issued exactly once',
+     sent.filter(x => x.name === 'walk_to').length === 1,
+     `${sent.filter(x => x.name === 'walk_to').length} walk_to calls`);
+}
+
+console.log('\nwalkTo takes the slack it is given, and no more');
+{
+  // Two squares off on both axes. That is inside the mana-node meld box, which is a 5x5
+  // BOX and not a radius: abs(drow) < 3 AND abs(dcol) < 3, per axis (mananode.kod:177).
+  const positions = { a1: { row: 25, col: 51 } };
+  fakeBroker({ rooms: { a1: 27 }, positions });
+  const r = await fleetScript({ name: 'slack', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(53, 23, { within: 2, pollMs: 20, deadlineMs: 3000 })], onLog: quiet });
+  ok('two squares off on both axes is inside a within:2 walk', r.results.a1.ok === true);
+
+  fakeBroker({ rooms: { a1: 27 }, positions: { a1: { row: 25, col: 51 } } });
+  const exact = await fleetScript({ name: 'exact', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(53, 23, { pollMs: 20, deadlineMs: 900, stallMs: 200 })], onLog: quiet });
+  ok('and the same square is NOT an arrival when no slack was asked for',
+     exact.results.a1.ok === false);
+}
+
+console.log('\na stall is re-issued once and then measured, never asked a third time');
+{
+  const sent = fakeBroker({ rooms: { a1: 599 }, positions: { a1: { row: 4, col: 63 } } });
+  const r = await fleetScript({ name: 'stall', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(27, 1, { pollMs: 20, stallMs: 100, deadlineMs: 8000 })], onLog: quiet });
+  ok('a body that never moves fails the step', r.results.a1.ok === false);
+  ok('and it is reported as a stall rather than as a timeout',
+     r.results.a1.state['0:walk_to'].outcome === 'stalled');
+  ok('exactly two walk_to calls — the first and ONE re-issue',
+     sent.filter(x => x.name === 'walk_to').length === 2,
+     `${sent.filter(x => x.name === 'walk_to').length} walk_to calls`);
+  ok('the re-issue stands the character up first, because a resting body cannot move',
+     sent.some(x => x.name === 'rest' && x.stand === true));
+  // A `walk_to` whose RPC timed out is NOT a walk that stopped. Issuing another on top of it
+  // makes two orders fight for one body, and a re-plan then computes a route from a square
+  // the body has already left. Room 39, 2026-09-10: three rounds of exactly that.
+  ok('and it CANCELS the walk that is still running before issuing another',
+     sent.some(x => x.name === 'cancel_movement'));
+  ok('the cancel comes before the second walk_to, not after it', (() => {
+    const cancel = sent.findIndex(x => x.name === 'cancel_movement');
+    const walks = sent.map((x, i) => [x.name, i]).filter(([n]) => n === 'walk_to').map(([, i]) => i);
+    return cancel > walks[0] && cancel < walks[1];
+  })());
+  ok('and the refusal names the tool that measures the ground instead of guessing',
+     /m59-exitreport/.test(r.results.a1.state['0:walk_to'].why ?? ''));
+}
+
+console.log('\na trigger square is a walk whose SUCCESS is leaving the room');
+{
+  // Room 587 rows 15-17 x cols 1-6: h7.kod's SomethingMoved puts the body in room 27 at
+  // r57c46. Arriving on the square and staying there is the failure case.
+  const positions = { a1: { row: 20, col: 20 } };
+  const rooms = { a1: 587 };
+  fakeBroker({ rooms, positions,
+    onWalkTo: ({ agent }) => { setTimeout(() => { rooms[agent] = 27; positions[agent] = { row: 57, col: 46 }; }, 30).unref?.(); },
+  });
+  const r = await fleetScript({ name: 'trigger', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(4, 16, { leaveRoom: true, room: 587, pollMs: 20, deadlineMs: 4000 })],
+    onLog: quiet });
+  ok('being moved out of the room is the success', r.results.a1.ok === true);
+  ok('and it says so rather than claiming an arrival',
+     r.results.a1.state['0:walk_to'].outcome === 'left_the_room');
+
+  // The same square, with nothing happening. A trigger that does not fire must not read as
+  // a completed walk — that is the difference between "the door is gone" and "I arrived".
+  fakeBroker({ rooms: { a1: 587 }, positions: { a1: { row: 16, col: 4 } } });
+  const dud = await fleetScript({ name: 'dud trigger', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(4, 16, { leaveRoom: true, room: 587, pollMs: 20, deadlineMs: 2000 })],
+    onLog: quiet });
+  ok('standing on a trigger that does not fire is a FAILURE, not an arrival',
+     dud.results.a1.ok === false &&
+     /did not fire/.test(dud.results.a1.state['0:walk_to'].why ?? ''));
+}
+
+console.log('\nand an ordinary walk that ends in a different room is a failure');
+{
+  const positions = { a1: { row: 20, col: 20 } };
+  const rooms = { a1: 587 };
+  fakeBroker({ rooms, positions,
+    onWalkTo: ({ agent }) => { setTimeout(() => { rooms[agent] = 27; }, 30).unref?.(); },
+  });
+  const r = await fleetScript({ name: 'wandered', fleet: 'testfleet', agents: ['a1'],
+    steps: [walkTo(4, 16, { room: 587, pollMs: 20, deadlineMs: 4000 })], onLog: quiet });
+  ok('a body that ended up somewhere else did not do what was asked',
+     r.results.a1.ok === false);
+  ok('and the reason names the room it actually ended in',
+     /room 27/.test(r.results.a1.state['0:walk_to'].why ?? ''));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
