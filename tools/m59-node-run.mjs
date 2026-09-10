@@ -63,6 +63,8 @@ import http from 'node:http';
 import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { takeRunLock, inspectRunLock, releaseRunLock,
          exitWhenOutputIsGone } from './m59-runlock.mjs';
+// THE STONES THEMSELVES, from the one tracked table that is checked against the kod.
+import { STONES } from './m59-stones.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -83,27 +85,32 @@ const MANANODE_RANGE = 3;
 //   node   the square the stone stands on, from that room's Create(&ManaNode,...) call
 //   entry  absent for a room the router can plan into; present for 27, which it cannot
 //
-// The list is the six BASIC nodes. mananode.kod has more — Ukgoth's Heart of Zjiria and the
-// Vale of Sorrows among them — and they are deliberately not here.
-const NODES = [
-  { key: 'ancient',  room: 579, name: 'An ancient place, its origin forgotten',
-    node: { row: 52, col: 30 },
+// THE LIST IS NOT WRITTEN HERE ANY MORE. It said "the six BASIC nodes ... mananode.kod has more
+// ... deliberately not here", and that was true of two of them and wrong about the rest: the kod
+// places TEN stones, and `node tools/m59-stones.mjs --diff` showed this list missing four of
+// them — 47 (NODE_Q), 599 (NODE_i9), 750 (the Ice Caves) and the guest Mausoleum. Room 750 is
+// the one that matters: its stone is INSIDE the meld box by walking, from the square a body
+// lands on entering from 526, and nobody could be sent to it because it was not on this list.
+//
+// So the stones come from `m59-stones.mjs` (tracked, and checked against the kod by
+// `--check`), and what stays here is the part that is genuinely this file's: how to APPROACH
+// each one. `seafarer` still resolves, because it was this file's name for room 515 while the
+// errand called it `peak` — the collision that made `nodes/<key>.md` unfindable from one side.
+const APPROACH_NOTES = {
+  ancient: {
     src: 'g9.kod NODE_g9',
     // THE LEDGE ROOM. The broker's own `walk_to` comment is about this room: 21 of 49 sampled
     // points inside r40c52 are standable and the CENTRE IS NOT ONE OF THEM, and a character
     // walking that climb square by square stepped off after nine waypoints. It is why the
     // approach below is fine-movement by default.
     hard: 'a ledge room — square centres are not reliably standable' },
-  { key: 'sentinel', room: 589, name: 'Under the shadow of the Sentinel',
-    node: { row: 45, col: 32 },
+  sentinel: {
     src: 'objroom/h9.kod NODE_H9',
     hard: 'reached over the Cragged Mountains, or south from Ukgoth' },
-  { key: 'victoria', room: 39,  name: 'Upstairs in Castle Victoria',
-    node: { row: 13, col: 46 },
+  victoria: {
     src: 'castle1b.kod NODE_VICTORIA',
     hard: 'every inbound link is a DOOR from room 38, not an edge — four of them' },
-  { key: 'cave',     room: 27,  name: 'A Deep, Dark, Spooky, Icky Cave',
-    node: { row: 23, col: 53 },
+  cave: {
     src: 'objroom/cave2.kod NODE_ORCCAVES',
     entry: { via: 587, viaName: 'Western border of the Twisted Wood',
              // The middle of the rows 15-17 x cols 1-6 box, so a step either way is still in it.
@@ -111,18 +118,33 @@ const NODES = [
              lands: { row: 57, col: 46 },
              src: 'h7.kod SomethingMoved' },
     hard: 'NO ROOM HAS AN EXIT INTO IT — entered by a movement trigger in room 587' },
-  { key: 'badlands', room: 45,  name: 'The Badlands',
-    node: { row: 63, col: 46 },
+  badlands: {
     src: 'badland1.kod NODE_BADLANDS',
     // Room 615 is ALSO called "The Badlands". Selecting this one by name would have been a
     // coin toss; RID_BADLAND1 = 45 is the one holding the node.
     hard: 'two rooms share this name — 45 has the node, 615 does not' },
-  { key: 'seafarer', room: 515, name: "Seafarer's Peak",
-    node: { row: 20, col: 17 },
+  peak: {
     src: 'a5.kod NODE_A5',
     hard: 'twelve hops from Tos, the longest approach of the six' },
-];
-const byKey = k => NODES.find(n => n.key === k || String(n.room) === String(k));
+};
+
+// EVERY STONE, with this file's approach notes where it has them. A stone with no approach
+// note is still runnable — the walk and the 5x5 box test do not need one, and pretending
+// otherwise is what kept 750 out of reach.
+const NODES = Object.entries(STONES).map(([key, s]) => ({
+  node_num: s.node,
+  key, room: s.room, name: s.where, node: { row: s.row, col: s.col },
+  ...(APPROACH_NOTES[key] ?? {}),
+  // A stone that is not there until something happens, and the one that is not meant to be
+  // got at all, are carried so `--list` can SAY so rather than omitting them.
+  ...(s.appears ? { appears: s.appears } : {}),
+  ...(s.guest_demo ? { guest_demo: true } : {}),
+  ...(s.exempt ? { exempt: s.exempt } : {}),
+  ...(s.conditional ? { conditional: true } : {}),
+  ...(s.alias ? { alias: s.alias } : {}),
+}));
+const byKey = k => NODES.find(n => n.key === k || String(n.room) === String(k) ||
+                                   (n.alias ?? []).includes(String(k).toLowerCase()));
 
 const PORT  = Number(flag('port', 8971));
 const FLEET = flag('fleet', 'shadow');
@@ -258,8 +280,17 @@ if (has('list')) {
   for (const n of NODES) {
     console.log(`  ${n.key.padEnd(9)} room ${String(n.room).padStart(3)}  ` +
                 `node at r${n.node.row}c${n.node.col}  ${n.name}`);
-    console.log(`             ${n.src}`);
+    console.log(`             ${n.src ?? n.node_num ?? ''}`.trimEnd());
     if (n.hard)  console.log(`             ${n.hard}`);
+    // A STONE THAT IS NOT AN ERRAND SAYS SO IN THE LIST, rather than being quietly absent from
+    // it. Two are exempt by the operator's ruling and one by the design of the game; two more
+    // are conditional — a lever and a timed faction swing. Omitting them is how this list came
+    // to be missing four stones in the first place.
+    if (n.exempt)
+      console.log(`             EXEMPT FROM ATTEMPT (${n.exempt}) — not casually obtainable`);
+    else if (n.conditional)
+      console.log(`             CONDITIONAL — there is nothing to stand on until it appears`);
+    if (n.appears) console.log(`             appears ${n.appears}`);
     if (n.entry) console.log(`             enter through room ${n.entry.via} ` +
                              `(${n.entry.viaName}) at r${n.entry.trigger.row}c${n.entry.trigger.col}, ` +
                              `landing r${n.entry.lands.row}c${n.entry.lands.col}`);
