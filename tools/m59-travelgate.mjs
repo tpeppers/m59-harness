@@ -74,7 +74,8 @@ export const REASONS = Object.freeze({
  * @returns {{ok: boolean, code: string, why: string, floor: number|null, health: number|null}}
  */
 export function mayStartJourney({ health = null, floor = null, from = null, to = null,
-                                  homeRoom = null, waiver = null } = {}) {
+                                  homeRoom = null, waiver = null,
+                                  floorFrom = null } = {}) {
   const pct = (x) => (x == null ? 'unreadable' : Math.round(x * 100) + '%');
   const out = (ok, code, why) => ({ ok, code, why, floor, health });
 
@@ -126,10 +127,16 @@ export function mayStartJourney({ health = null, floor = null, from = null, to =
                `at ${pct(health)}, below the ${pct(floor)} floor, but travelling to its own ` +
                `home room ${homeRoom} — which is where it gets better`);
 
+  // The flee-line argument is only made when the floor came FROM the flee line. `floorFrom` is
+  // optional so a caller that does not know can simply not claim.
+  const because = floorFrom === 'the flee line'
+    ? `A body that would flee a fight at ${pct(floor)} has no business starting a journey at ` +
+      `${pct(health)}. `
+    : (floorFrom ? `That floor came from ${floorFrom}. ` : '');
   return out(false, REASONS.TOO_HURT,
              `at ${pct(health)}, below the ${pct(floor)} floor this character sets out at. ` +
-             `A body that would flee a fight at ${pct(floor)} has no business starting a ` +
-             `journey at ${pct(health)} — rest first, send it home, or pass a waiver with a reason`);
+             because +
+             'Rest first, send it home, or pass a waiver with a reason');
 }
 
 /**
@@ -140,6 +147,12 @@ export function mayStartJourney({ health = null, floor = null, from = null, to =
  * `?? 1` the autopilot uses for its own resume checks. `fallback` is the last resort for a
  * character whose policy could not be read at all.
  */
+// Set by `floorFor` and read by `floorSource()`. Module-level rather than returned alongside
+// the number because every existing caller destructures a bare number, and a shape change
+// there would be a silent one -- `const floor = floorFor(...)` would become an object and
+// every comparison against it would quietly read NaN.
+let lastSource = 'nothing';
+
 export function floorFor({ explicit = null, travelStartHealth = null, fleeBelow = null,
                            fallback = 0.35 } = {}) {
   // AN EXPLICIT ZERO IS A DELIBERATE "OFF" AND MUST NOT FALL THROUGH.
@@ -152,14 +165,26 @@ export function floorFor({ explicit = null, travelStartHealth = null, fleeBelow 
   //
   // So the two OPERATOR-SET keys are read first and their 0 is honoured; only when both are
   // absent does the flee line, and then the fallback, apply.
-  for (const c of [explicit, travelStartHealth]) {
+  for (const [c, src] of [[explicit, 'the caller'], [travelStartHealth, 'travel_start_health']]) {
     if (c == null) continue;
     const n = Number(c);
-    if (Number.isFinite(n)) return n > 0 ? n : 0;
+    if (Number.isFinite(n)) { lastSource = src; return n > 0 ? n : 0; }
   }
   // `fleeBelow` of 0 means "never flee", which is not a statement about travelling, so it
   // falls through to the fallback rather than switching the floor off.
-  for (const c of [fleeBelow, fallback])
-    if (Number(c) > 0) return Number(c);
+  for (const [c, src] of [[fleeBelow, 'the flee line'], [fallback, 'the fallback']])
+    if (Number(c) > 0) { lastSource = src; return Number(c); }
+  lastSource = 'nothing';
   return 0;
 }
+
+// WHERE THE LAST FLOOR CAME FROM, so a refusal can say it instead of assuming.
+//
+// The refusal used to end "a body that would flee a fight at N% has no business starting a
+// journey at M%" unconditionally -- which is a true and useful sentence when the floor IS the
+// flee line, and a false one the moment a caller passes `health_floor` explicitly. Measured on
+// the first live call after deploy-2026-09-10-15: `health_floor: 1` produced "a body that would
+// flee a fight at 100%", which describes no character in this game. A refusal that misstates
+// where its own number came from is the class of thing that gets deleted by the next person in
+// a hurry, so the sentence is now conditional on the source.
+export const floorSource = () => lastSource;
