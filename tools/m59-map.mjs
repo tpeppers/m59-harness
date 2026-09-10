@@ -967,6 +967,32 @@ export const AVOID_IN_TRANSIT = new Set([534]);
 export const NEVER_ENTER = new Map([
   [555, 'The Forest Shrine — acid gas puzzle, kills outright (e5.kod:452 PunishPlayer); ' +
         'the safe row is random and moves, and is only learnable by asking LadyPheonix'],
+  // ROOM 40 KILLS BY A FIGHT, NOT BY A RULE — AND IT IS HERE ANYWAY, ON THE ARITHMETIC.
+  //
+  // The note above draws the line at "a corridor full of monsters is survivable", and that
+  // is the right line. This room is on the wrong side of it for THIS fleet, and the reason
+  // is a number rather than a judgement: a tusked skeleton is level 100
+  // (kod/object/active/holder/nomoveon/battler/monster/skel/tuskskel.kod:48) and the
+  // engagement ceiling is maxHealth * 1.5, which tops out at 90 on the strongest character
+  // here. Nobody in this fleet can win that fight at any health, so crossing is not a risk
+  // being taken, it is a fixed number of steps — which is the same shape as 555 even though
+  // the mechanism is teeth instead of gas.
+  //
+  // Measured 2026-09-10: Floyd died here, post_mortem Floyd-2026-09-10T09-32-46-508Z.json,
+  // `doing: "travelling"`, `moving: false`, `swinging: false`, `ms_since_moved: 112565`.
+  // Threats at the end were five tusked skeletons and a zombie with `most_at_once: 10, "a
+  // true count"`. He entered from room 38 — the castle main hall the fleet is stationed in —
+  // so this is one door off a room we deliberately post characters to, and no route needs it:
+  // 2 -> 38 is one hop and 38 <-> 39 is one hop, measured against the live router.
+  //
+  // Operator, 2026-09-10: "Block access to 40, the throne room for now." The "for now" is
+  // theirs and is the honest scope — a fleet that outgrows level 100, or one escorted by a
+  // healer, could revisit this. Until then the origin exception above is what matters: a
+  // character somehow standing in 40 can still walk out.
+  [40, 'The Throne Room of Victoria Castle — tusked skeletons at level 100 ' +
+       '(tuskskel.kod:48), up to 10 at once, against a fleet whose engagement ceiling ' +
+       'tops out at 90. One door off room 38; Floyd died crossing it. Blocked on operator ' +
+       'instruction 2026-09-10 ("for now")'],
 ]);
 export const hazardReason = (room) => NEVER_ENTER.get(Number(room)) ?? null;
 
