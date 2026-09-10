@@ -2208,8 +2208,18 @@ class Session {
       }
       replaced = pick ? { id: pick.id, name: pick.name } : null;
       const user = userField ?? pick?.id ?? 0;
+      // THE FACE, WHICH USED TO BE OMITTED AND THEREFORE ALWAYS THE SAME MAN.
+      //
+      // Sending no faceparts is not "no preference" to this server: a list whose length is
+      // not exactly five is its "hacking the protocol" branch, which stamps the default
+      // male face and says nothing (player.kod:1997). So every character this repository
+      // has ever created came out identical. `planCharacter` now resolves an appearance —
+      // randomising when nobody chose — and it is passed here. See m59-appearance.mjs.
       c.newCharInfo({
-        user, name: plan.name, gender: plan.gender ?? 1,
+        user, name: plan.name, gender: plan.appearance?.gender ?? plan.gender ?? 1,
+        faceparts: plan.appearance?.faceparts ?? [],
+        hair: plan.appearance?.hair ?? 0,
+        skin: plan.appearance?.skin ?? 0,
         stats: plan.stat_list, spells: plan.spell_nums, skills: plan.skills ?? [],
       });
     };
