@@ -180,6 +180,40 @@ export const ENTRIES = Object.freeze([
       'fall-through, which is exactly what the operator could not tell from the outside.',
   },
   {
+    id: 'cast-declined-is-not-a-cast-failure',
+    rooms: [],
+    asked: 2,
+    symptom: 'A caster looks perfect and is doing nothing. Its success rate is 100%, its error ' +
+             'count is zero, and the spell has not landed in a day. Camilla read 679 blesses ' +
+             'ok and zero failures while actually refusing four thousand times.',
+    answer:
+      'The refusals are not FAILED casts, they are DECLINED ones -- `kind: "cast_declined"` ' +
+      'rather than `kind: "cast"`. buffAllies checks reagents BEFORE casting and logs the ' +
+      'shortfall by name, so nothing ever enters the cast stream to fail. Any tally keyed on ' +
+      'cast events therefore sees a caster with a flawless record. The row says everything: ' +
+      '{"spell":"bless","why":"out of reagents","times_so_far":3767,"missing":"sapphire (have 0 of 2)"}.',
+    measured:
+      'Reported by the session prod-deploy-16, 2026-09-09/10. Bunsen bless 111 / super strength ' +
+      '140, Camilla bless 106 / ss 132, Robin bless 106 / ss 126, and t9 alone at 3767 declines. ' +
+      'Super strength is starving on ORC TOOTH the same way, so it is one cause with two ' +
+      'reagents. The fleet holds ~122 sapphire in total and nearly all of it sits in ' +
+      'NON-casters (Animal 31, Beaker 46, Pepe 18, Janice 13) -- about 61 casts across four ' +
+      'casters, under a day at their old rate.',
+    fix: 'NOT DONE, and it is two separate fixes. (1) `buyReagentsInTown()` is hardcoded to ' +
+         'elderberry and herb at the apothecary, so a loadout floor naming sapphire or mushroom ' +
+         'is declared by the loadout and bought by NOBODY -- the trip reports success and the ' +
+         'want is still unmet. Sapphires are buyable (Jasper, Barloque, Tos) but not by that ' +
+         'function. (2) Any rate or health report keyed on `cast` must also read ' +
+         '`cast_declined` and surface `times_so_far`, or this class stays invisible.',
+    state: 'open',
+    robustness:
+      'THE LESSON IS BIGGER THAN THE REAGENT. A success rate computed over attempts that were ' +
+      'never made is not wrong, it just stops being about anything -- the caster really did ' +
+      'succeed every time it tried, and it tried four thousand times fewer than it looked. ' +
+      'Same family as `taking_hits` reading false while health fell 17 points, and as a counter ' +
+      'that cannot come down: the instrument cannot produce the value that would show the ' +
+      'problem. When a rate looks perfect, ask what it is a rate OVER.',
+  },  {
     id: 'castle-victoria-only-road',
     rooms: [2, 38, 39, 599],
     asked: 2,
