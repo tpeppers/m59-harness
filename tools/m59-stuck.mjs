@@ -143,6 +143,43 @@ export const ENTRIES = Object.freeze([
                 'where all three of these were lost.',
   },
   {
+    id: 'wedged-traveller-dies-awake',
+    rooms: [599, 39, 578, 598],
+    asked: 3,
+    symptom: 'A character dies somewhere dangerous having apparently just SAT THERE. It did not ' +
+             'move, did not fight back, and its keeper looks perfectly healthy. Operator: ' +
+             "both of them just kinda sat there and died... didn't really move or fight back -- not that fighting back would've helped, but it would've shown a sign that it's not a fall-through (broken, logged out, etc.)",
+    answer:
+      'It is NOT a fall-through -- check `during_keeper_outage` in the postmortem, which will be ' +
+      'null, and the frames, which keep arriving to the end. It is a WEDGED JOURNEY: `doing: ' +
+      '"travelling"` with `ms_since_moved` in the hundreds of thousands. A journey deliberately ' +
+      'suppresses work, so the body will not swing (`swung_ms: null`) -- that is the absence of ' +
+      'fight-back, and it is by design, not a symptom of breakage. The survival ladder stays ' +
+      'armed but needs a proven safe wall to play dead, and `at_a_safe_wall: null` in these ' +
+      'rooms means it has nothing to reach for.',
+    measured:
+      'Rizzo and Camilla, room 599, 2026-09-10, 83 seconds apart, both to trolls, both at r50-51 ' +
+      'in the gutters with 15 threats. Camilla: `ms_since_moved: 2029414` -- THIRTY-FOUR MINUTES ' +
+      'on one square -- health 20 -> 15 -> 16 -> 11 -> 7 -> 3, and no rescue and no note ever ' +
+      'fired. Rizzo WAS rescued at `was_inert_for_s: 74` because something still held his ' +
+      'movement. Same room, same trolls, same code.',
+    fix: 'BOTH CAUSES FIXED 2026-09-10. (1) `taking_hits` was `last.health < prev.health` -- one ' +
+         'adjacent pair -- so the 15 -> 16 regen tick read as "not being attacked" and the rescue ' +
+         'gated on it never fired; it is now the trend across the wedge episode. (2) The rescue ' +
+         'AND the note both required `wedge.inert`, which is set only when the keeper stood ' +
+         'itself down or another driver holds movement -- so an ordinary self-driven journey ' +
+         'could never qualify. Dropped from both gates; the marker is still recorded as evidence.',
+    state: 'partial',
+    since: '2026-09-10',
+    robustness:
+      'STILL OPEN, and named so it is not forgotten: a wedged traveller being eaten does not ' +
+      'SWING. The journey suppresses work ("it will not hunt, roam, shop or pick a room while ' +
+      'the journey owns the" body) while CLAUDE.md says a hurt body that cannot move swings ' +
+      'instead. Those two are in tension and nobody has resolved it. Fighting six trolls would ' +
+      'not have saved either character -- but it is the difference between a decision and a ' +
+      'fall-through, which is exactly what the operator could not tell from the outside.',
+  },
+  {
     id: 'castle-victoria-only-road',
     rooms: [2, 38, 39, 599],
     asked: 2,

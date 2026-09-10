@@ -10580,10 +10580,34 @@ export class Autopilot {
     // ONE EPISODE, NOT ONE PER TICK. The alert is raised once when it starts and carries
     // its own duration afterwards, so a five-minute wedge is one thing that happened for
     // five minutes rather than three hundred identical notes.
-    const takingHits = prev.health != null && last.health != null && last.health < prev.health;
+    // AM I UNDER ATTACK IS A TREND, NOT A DIFFERENCE BETWEEN TWO SAMPLES.
+    //
+    // This read `last.health < prev.health` -- one adjacent pair -- and the whole wedge rescue
+    // below is gated on it. Health regenerates between blows and a sample can land in the gap,
+    // so a character being eaten reads as safe on any pair where the tick went up.
+    //
+    // MEASURED, prod 2026-09-10. Camilla, wedged in Ukgoth while `doing: travelling`, health
+    // trail 20 -> 15 -> 16 -> 11 -> 7 -> 3 with fifteen threats and six trolls adjacent. The
+    // 15 -> 16 step is an INCREASE, so `taking_hits` read FALSE through 20 -> 15 -> 16 -> 11 -> 7
+    // and only flipped true at 3 of 60 -- one pass before she died. She lost seventeen health
+    // while the thing that decides whether she was being attacked said she was not.
+    //
+    // The episode already knows when it began, so ask the question over the episode: is health
+    // below where it was when this wedge started? That is monotonic evidence and one regen tick
+    // cannot erase it. The adjacent pair is kept as an OR, because it is what catches the first
+    // blow of a brand-new wedge before there is any history to trend.
+    const hitNow = prev.health != null && last.health != null && last.health < prev.health;
+    const startedAt = w.wedged?.health_at_start;
+    const takingHits = hitNow ||
+      (startedAt != null && last.health != null && last.health < startedAt);
     if (w.wedged) {
       w.wedged.for_ms = now - w.wedged.since;
       if (takingHits) w.wedged.taking_hits = true;
+      // How much this episode has cost, so the rescue can say what it saw rather than just
+      // that a flag was set. Camilla's postmortem showed `taking_hits: false` beside a
+      // health trail that had fallen 17 points, and the two were impossible to reconcile.
+      if (w.wedged.health_at_start != null && last.health != null)
+        w.wedged.health_lost = Math.max(0, w.wedged.health_at_start - last.health);
       return w.wedged;
     }
     w.wedges++;
@@ -10614,6 +10638,9 @@ export class Autopilot {
     w.wedged = { since: prev.at, for_ms: now - prev.at, doing,
                  at: { col: last.col, row: last.row, room: last.room },
                  taking_hits: takingHits,
+                 // The baseline for the trend above. Without it the episode can only ever
+                 // compare two adjacent samples, which is the bug that killed Camilla.
+                 health_at_start: last.health ?? null,
                  ...(drivenByOther ? { inert: drivenByOther } : {}) };
     this.tally.pulse_wedges = (this.tally.pulse_wedges || 0) + 1;
     // A frame, because this is the moment a post-mortem will want and the ring is
@@ -10721,7 +10748,13 @@ export class Autopilot {
     // An ERRAND is a different case and keeps its rescue: something else is driving, it has
     // stopped moving the body, and there is no destination being thrown away by stepping in.
     const travelling = !!this.inert?.travelling;
-    if (travelling && wedge?.inert && wedge.taking_hits
+    // SAME GATE CHANGE, AND THIS HALF IS THE OBSERVABILITY. This is the note that says a wedge
+    // was SEEN and the journey is deliberately standing. It was gated on `inert` too, so
+    // Camilla's thirty-four-minute wedge in Ukgoth produced no note at all -- the postmortem
+    // has forty-eight position pulses and not one line saying she was stuck while travelling.
+    // A decision not to act still has to be recorded, or the absence of a rescue is
+    // indistinguishable from the absence of a problem.
+    if (travelling && wedge && wedge.taking_hits
         && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes
         && !w.saidTravelWedge) {
       w.saidTravelWedge = true;
@@ -10757,7 +10790,30 @@ export class Autopilot {
     // is kept in `suspendedJourney` and `resumeSuspendedJourney` puts the character back on
     // the same line once it is well enough to walk it — the trip is interrupted, not ended,
     // exactly as a travel-guard take-back interrupts one.
-    if (travelling && wedge?.inert && wedge.taking_hits
+    // AND `inert` IS NO LONGER PART OF THE GATE. THIRD TIME THIS CLAUSE HAS PRODUCED A CORPSE.
+    //
+    // The note above already records the first two corrections: the marker was set only when
+    // the KEEPER had stood itself down, then extended to cover another driver holding movement.
+    // Neither covers a journey the keeper is running ITSELF with nobody holding anything -- and
+    // that is the commonest journey there is.
+    //
+    // MEASURED, prod 2026-09-10. Camilla died in Ukgoth `doing: travelling`, at r51c19, with
+    // fifteen threats and six trolls adjacent, `ms_since_moved: 2029414` -- THIRTY-FOUR MINUTES
+    // on one square -- health falling 20 -> 15 -> 16 -> 11 -> 7 -> 3, and no rescue ever fired.
+    // Her faculties had been released minutes earlier when a fleet errand refused her, so
+    // `this.inert` was null and `facultyHeld('movement')` was false: the clause could not be
+    // true, so the other three never got asked. Rizzo died 83 seconds earlier in the same room
+    // and WAS rescued (`was_inert_for_s: 74`) because something still held his movement. Same
+    // room, same trolls, same code -- and the one that nobody was driving is the one that had
+    // no mechanism.
+    //
+    // The remaining three conditions are not weak. A character that is TRAVELLING, has not
+    // moved for INERT_RESCUE_MS, is LOSING HEALTH across the episode, and is BELOW ITS OWN FLEE
+    // LINE is not an ambiguous state, and who happens to own its movement does not change what
+    // should be done about it. `inert` is still recorded on the wedge, because knowing which
+    // driver was holding a dying character is worth having in the postmortem -- it is just not
+    // a precondition for saving it.
+    if (travelling && wedge && wedge.taking_hits
         && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
       const frac = pct(hp);
       if (frac !== null && frac < this.safety().fleeAt) {
