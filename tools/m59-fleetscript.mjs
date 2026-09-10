@@ -496,19 +496,36 @@ export const KNOWN_TRAPS = Object.freeze({
   599: 'Ukgoth, Holy Land of Trolls — leaving northward to Castle Victoria needs a Relic of ' +
        'Qor and a spoken phrase. The baked map offers three exits and only the SOUTH one ' +
        '(to 589) is real for us; a plan through the north exit walks for ever.',
-  // 2026-09-09, and learned the way 599 was — by stranding two characters in it. Loial the
-  // Ogier and Beaker walked IN from 593 on a route to the Badlands node, and then could not
-  // leave in any direction: 6 attempts to 45, 2 to 39 and 3 back to 593, across two
-  // characters, every one refused with the router insisting 49 -> 45 was a single direct hop.
-  // `look` reports `exits: []` and ONE object in the room, so it is not a crowd blocking a
-  // boundary — there is nothing there. Blink was cast to move the body to the room's place of
-  // power on the chance it was wedged against geometry; it moved him and changed nothing.
-  // Entering worked and leaving does not, which is the signature of a bake that has the
-  // inbound edge and no usable outbound one.
-  49: "Kardde's Canyon - characters walk IN and cannot walk OUT. Eleven refused " +
-      "departures across two characters and three destinations, with `exits: []` and " +
-      "an empty room, so this is not a crowd. Reached on the way to the Badlands " +
-      "node (45), which is itself not reachable with the current mover.",
+  // CORRECTED 2026-09-10, THE SAME NIGHT IT WAS ADDED, AND THE FIRST VERSION WAS WRONG.
+  //
+  // I entered this as "characters walk IN and cannot walk OUT" after eleven refused
+  // departures. They were refused because I aimed at the wrong squares: my own closure
+  // measurement said the reachable rim was rows 1-2 at columns 19-22 and rows 24-26 at
+  // columns 12-17, and I then probed c12, c22, c23, r0 and r13c0 and concluded the room was
+  // sealed. The operator said "he was right at the exit last I saw", and he was.
+  //
+  // WHAT IS ACTUALLY TRUE. Room 49 has two edge exits — LEAVE_NORTH to 593 and LEAVE_SOUTH
+  // to 45, anchored at r1c21 and r27c20. The NORTH one works: a body walks the whole rim
+  // r1c19..r1c22 in one step each. The SOUTH one is unreachable and that is real geometry
+  // rather than a defect — the anchor sits at floor 6016 on the rim while the ground a body
+  // can reach below it is 3840, against a 384 climb cap. Directed reachability, measured:
+  // from the body you cannot reach the south anchor; from the south anchor you can reach the
+  // body. It is a one-way drop.
+  //
+  // So the hazard is not the room, it is the DESTINATION BEHIND ITS SOUTH EDGE: room 45,
+  // the Badlands mana node, which the operator has independently said the current mover
+  // cannot reach. Kept as an entry because a journey planned through 49's south exit walks
+  // for ever exactly as 599's north one does, and removing it entirely would invite that
+  // again — but it no longer claims the room keeps you.
+  //
+  // What made the eleven refusals unreadable was a separate bug, now fixed in 2de4001
+  // (#movement): walk_to's fallback used a 1.5-square arrival tolerance, so stepping one
+  // square outward to cross a boundary reported `arrived: true, steps: 0` without moving.
+  49: "Kardde's Canyon - leavable NORTH to 593 (anchor r1c21, and the whole rim " +
+      "r1c19..r1c22 walks in one step). Its SOUTH exit to 45, the Badlands node, is " +
+      "unreachable from the room body: the anchor is on a 6016 rim above ground at " +
+      "3840 against a 384 climb cap, so it is a one-way drop in. Plan through the " +
+      "south edge and the walk never ends.",
 });
 
 /**
