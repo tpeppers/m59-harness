@@ -1707,6 +1707,66 @@ async function runStep(ctx, agent, step, state) {
     case 'bank': {
       const amount = typeof step.amount === 'function' ? step.amount(state) : step.amount;
       if (!(amount > 0)) return { ok: true, skipped: 'nothing to move' };
+
+      // RULE 6 REACHES THE COUNTER TOO: THE PURSE IS THE RECEIPT, NOT THE SENTENCE.
+      //
+      // This step used to answer `ok` from the banker's PROSE alone — "Yevitan tells you,
+      // 'Here are your 2500 shillings.'" — and never looked at whether the character was
+      // carrying them afterwards. Shillings arrive on an event, exactly like a shop load, so
+      // a read straight after the counter is a read of the past.
+      //
+      // Measured 2026-09-10, Loial at the Royal Bank of Jasper: the banker said the sentence
+      // above and his purse read 0 for THIRTY SECONDS before showing 2500. Any caller that
+      // withdrew and then sized a purchase against what it was carrying saw an empty purse
+      // and concluded the withdrawal had failed. The same evening a resupply reported
+      // `step 4 (shop) failed: nothing entered the pack`, honestly, because its courier
+      // really did reach the merchant with three shillings — the bank leg had been skipped
+      // and nothing checked.
+      //
+      // So wait for the EVIDENCE: first read that moves wins, and the timeout is only
+      // reached when nothing is ever coming. The identical shape the shop step uses, for the
+      // identical reason. A false negative unwinds a working errand; a false POSITIVE walks
+      // a courier to a merchant it cannot pay, which is the more expensive of the two.
+      // NOT `pack()`, DELIBERATELY. That helper swallows its own failure and answers `[]`,
+      // which `purseOf` then reads as a purse of ZERO — the "null is not zero" trap this file
+      // already carries a paragraph about, one layer down. An unreadable pack has to be
+      // distinguishable from an empty one here or the guard below fires on a deposit whose
+      // only sin was that the inventory call timed out.
+      const purseNow = async () => {
+        const inv = await call('inventory', { agent }, 60_000).catch(() => null);
+        return Array.isArray(inv?.items) ? purseOf(inv.items) : null;
+      };
+      const purseBefore = await purseNow();
+      // A WITHDRAWAL RAISES THE PURSE AND A DEPOSIT LOWERS IT, so the evidence is a MOVE in
+      // the declared direction rather than a rise. Depositing and then reporting "the purse
+      // never went up" would be a guard that fires on every correct deposit.
+      const wantsMore = /withdraw/i.test(String(step.action));
+      const settled = async (asked) => {
+        if (purseBefore == null)
+          // UNREADABLE IS NOT DISPROVEN. If the pack could not be read before the call there
+          // is nothing to compare against, and calling that a failure would unwind an errand
+          // over a missing instrument. Say so instead, and let the banker's sentence stand.
+          return { ok: true, amount: asked, verified: false,
+                   note: 'the purse could not be read, so the banker’s word is all there is' };
+        const until = Date.now() + (ctx.packSettleMs ?? 15_000);
+        let now = purseBefore;
+        while (Date.now() < until) {
+          const seen = await purseNow();
+          if (seen != null) {
+            now = seen;
+            if (wantsMore ? now > purseBefore : now < purseBefore) break;
+          }
+          await sleep(Math.min(1500, ctx.pollMs));
+        }
+        const moved = wantsMore ? now - purseBefore : purseBefore - now;
+        if (moved <= 0)
+          return { ok: false, amount: asked, verified: false, purse: now,
+                   outcome: 'counter_moved_nothing',
+                   why: `the banker said yes and the purse did not move in ` +
+                        `${Math.round((ctx.packSettleMs ?? 15_000) / 1000)}s ` +
+                        `(${purseBefore} -> ${now}). Treat the sentence as unproven.` };
+        return { ok: true, amount: asked, verified: true, moved, purse: now };
+      };
       const ask = async n => {
         const r = await call('bank', { agent, action: step.action, amount: n }, 60_000)
           .catch(e => ({ error: e.message }));
@@ -1730,13 +1790,15 @@ async function runStep(ctx, agent, step, state) {
           ctx.log(agent, `the banker refused ${amount} and named ${affordable} — taking that`);
           const retry = await ask(affordable);
           if (!retry.refused)
-            return { ok: true, said: retry.said.slice(0, 120), amount: affordable,
+            return { ...(await settled(affordable)), said: retry.said.slice(0, 120),
                      asked: amount, note: 'withdrew the balance the banker named' };
           out = retry;
         }
       }
-      return { ok: !out.refused, said: out.said.slice(0, 120), amount,
-               why: out.refused ? `banker refused: ${out.said.slice(0, 80)}` : undefined };
+      if (out.refused)
+        return { ok: false, said: out.said.slice(0, 120), amount,
+                 why: `banker refused: ${out.said.slice(0, 80)}` };
+      return { ...(await settled(amount)), said: out.said.slice(0, 120) };
     }
 
     case 'rest': {

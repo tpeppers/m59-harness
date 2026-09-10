@@ -322,6 +322,52 @@ console.log('\na banker refusal is prose, not an error');
   ok('a refusal spoken as a sentence is caught as a failure', r.results.a1.ok === false);
 }
 
+console.log('\nTHE PURSE IS THE RECEIPT, NOT THE BANKER\u2019S SENTENCE');
+{
+  // Measured 2026-09-10 at the Royal Bank of Jasper: "Yevitan tells you, 'Here are your 2500
+  // shillings.'" and the purse read 0 for THIRTY SECONDS afterwards. A caller that withdrew
+  // and then sized a purchase against what it was carrying saw an empty purse, concluded the
+  // withdrawal had failed, and walked to the merchant with three shillings.
+  const withPurse = (creditsAfter) => {
+    let calls = 0;
+    const inv = { a1: [] };
+    fakeBroker({ rooms: { a1: 54 }, inventory: inv });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (u, o) => {
+      if (!o || o.method !== 'POST') return realFetch(u, o);
+      const b = JSON.parse(o.body);
+      if (b.params.name === 'bank') {
+        calls = 0;
+        return { json: async () => ({ result: { content: [{ text: JSON.stringify(
+          { banker_said: ["Yevitan tells you, \"Here are your 2500 shillings.\""] }) }] } }) };
+      }
+      if (b.params.name === 'inventory') {
+        // The pack arrives on an event: empty for the first N reads, then credited.
+        const items = (creditsAfter != null && calls++ >= creditsAfter)
+          ? [{ name: 'shilling', amount: 2500 }] : [];
+        return { json: async () => ({ result: { content: [{ text: JSON.stringify({ items }) }] } }) };
+      }
+      return realFetch(u, o);
+    };
+    return () => { globalThis.fetch = realFetch; };
+  };
+
+  let restore = withPurse(2);
+  let r = await fleetScript({ name: 'slowpurse', fleet: 'testfleet', agents: ['a1'],
+    steps: [bank('withdraw', 2500)], onLog: quiet, packSettleMs: 8000, pollMs: 200 });
+  restore();
+  ok('a withdrawal the purse eventually shows is a PASS, not a timeout', r.results.a1.ok === true);
+
+  restore = withPurse(null);            // the purse never moves
+  r = await fleetScript({ name: 'nopurse', fleet: 'testfleet', agents: ['a1'],
+    steps: [bank('withdraw', 2500)], onLog: quiet, packSettleMs: 1500, pollMs: 200 });
+  restore();
+  ok('a banker who says yes while the purse never moves is NOT a success',
+     r.results.a1.ok === false);
+  ok('and the outcome names what was actually observed',
+     JSON.stringify(r.results.a1).includes('counter_moved_nothing'));
+}
+
 console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
 {
   // Waldorf, 2026-09-08: four deaths in one day, every one `strategy: fieldrest`, three with
