@@ -183,6 +183,59 @@ export function lockFileFor(name, env = process.env) {
   return stateFileFor(name, env) + '.lock';
 }
 
+// WHICH BROKER A SCRIPT TALKS TO, AND WHY THIS CHECKOUT REFUSES TO GUESS.
+//
+// `M59_CONTROL_URL` names the broker. It has always defaulted to `http://127.0.0.1:8901/`,
+// which is correct for a machine running ONE fleet and is a landmine on a machine running
+// several: 8901 is production here, so a script that names another fleet, takes that
+// fleet's run lock and logs "fleet shadow" on every line still sends every call to prod.
+// That is not hypothetical — it happened on 2026-09-09, and it was harmless only because
+// the agent name did not exist on the other side.
+//
+// The fix is NOT to remove the default from the code. A clone with one fleet should keep
+// working exactly as it does, and a stranger who has never heard of any of this should not
+// have to set a variable to run a script. So the default stays committed, and this
+// CHECKOUT's opinion lives in a gitignored file beside the fleet default — the same
+// arrangement, for the same reason, as `substrate/fleet-default`:
+//
+//   substrate/control-url        require            -> no default; naming one is mandatory
+//   substrate/control-url        http://…:8971/     -> this checkout's broker, not 8901
+//   (absent)                     http://127.0.0.1:8901/, as it always was
+//
+// The operator's argument for `require` here, which is worth writing down because it
+// generalises: a development environment full of one-off prototypes produces mistakes at a
+// much higher rate than a production one, so the person who owns it needs STRICTER data
+// segmentation than the people who merely use it — not looser. A default is a convenience
+// that spends its safety margin on whoever has the most fleets.
+export const CONTROL_URL_FILE = join(REPO, 'substrate', 'control-url');
+export const DEFAULT_CONTROL_URL = 'http://127.0.0.1:8901/';
+
+export function resolveControlUrl(env = process.env) {
+  if (env.M59_CONTROL_URL) return { url: env.M59_CONTROL_URL, source: 'M59_CONTROL_URL' };
+  const path = env.M59_CONTROL_URL_FILE || CONTROL_URL_FILE;
+  let recorded = '';
+  if (existsSync(path)) {
+    try {
+      for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+        const t = line.trim();
+        if (t && !t.startsWith('#')) { recorded = t; break; }
+      }
+    } catch { /* unreadable is the same as absent — never fail a tool over it */ }
+  }
+  // REFUSING IS AN ANSWER, and it has to be one this returns rather than throws, so the
+  // caller can say which fleet it was about to drive when it refused.
+  if (/^(require|none|no-default)$/i.test(recorded))
+    return {
+      url: null, source: 'substrate/control-url',
+      why: `this checkout requires M59_CONTROL_URL to be named explicitly (substrate/control-url ` +
+           `says "${recorded}"). There is no default here on purpose: this machine runs more than ` +
+           `one fleet, and 8901 is production. Name the broker that holds the fleet you mean:\n` +
+           `  M59_CONTROL_URL=http://127.0.0.1:<port>/ ...`,
+    };
+  if (recorded) return { url: recorded, source: 'substrate/control-url' };
+  return { url: DEFAULT_CONTROL_URL, source: 'the built-in default' };
+}
+
 // The set, resolved together, for the common case. `source` is carried through so a
 // tool can print where the name came from without resolving it twice.
 export function resolveFleet(argv = process.argv.slice(2), env = process.env) {
