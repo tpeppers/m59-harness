@@ -4,6 +4,7 @@
 //   node tools/m59-rotate.mjs plan    t1                     # what would happen. Changes nothing
 //   node tools/m59-rotate.mjs lend    t1 --for 6h --apply    # rotate to a temporary password
 //   node tools/m59-rotate.mjs reclaim t1 --apply             # bump the borrower, rotate back
+//   node tools/m59-rotate.mjs secure  t1 --apply             # replace a known password with a generated one
 //   node tools/m59-rotate.mjs list                           # what is currently lent, and until when
 //   node tools/m59-rotate.mjs due --apply                    # reclaim everything past its deadline
 //
@@ -215,6 +216,45 @@ if (cmd === 'list') {
     : `HOLDS ANOTHER FLEET (${pb.holding}) — will not be told`}`);
   console.log('\nlend    rotates to a fresh temporary password and prints it ONCE');
   console.log('reclaim logs in on the temporary password, bumping the borrower, and rotates back');
+
+} else if (cmd === 'secure') {
+  // TURN A KNOWN PASSWORD INTO ONE NOBODY HAS SEEN.
+  //
+  // `lend` and `reclaim` are about handing a credential out and taking it back. This is the
+  // other reason to rotate: an account arrived with a password somebody typed into a chat
+  // window, an issue, or an agent transcript — `hk1/hk1` — and it should not stay that way.
+  // It is the same crash-safe write order, without the lending bookkeeping.
+  //
+  // THE NEW PASSWORD IS NEVER PRINTED AND NEVER TAKEN ON THE COMMAND LINE. It is generated
+  // here, written to the roster (which is the only place it will ever exist), and the
+  // account is left holding it. That is the operator's "standard proper form": a command
+  // line is readable by every process on the machine and lands in shell history and in the
+  // transcript of whatever agent ran it.
+  const agent = argv[1];
+  const roster = readRoster();
+  const c = roster[agent]?.credentials;
+  if (!c) { console.error(`no such agent ${agent} in ${ROSTER}`); process.exit(2); }
+  if (c.rotation?.lent_to) {
+    console.error(`${agent} is lent to "${c.rotation.lent_to}" — reclaim it before securing it.`);
+    process.exit(2);
+  }
+  const to = tempPassword();
+  if (!APPLY) {
+    console.log(`would secure ${agent} (${c.character}) on ${c.host}:${c.port}`);
+    console.log('  rotate to a freshly generated password, recorded ONLY in the roster');
+    console.log(`  roster: ${ROSTER}`);
+    console.log('  the new password is never printed and never passed on a command line');
+    console.log('\nnothing was changed. Add --apply.');
+    process.exit(0);
+  }
+  console.log(`securing ${agent} (${c.character})`);
+  await rotate(agent, c.password, to);
+  console.log(`\n  account   ${c.account}`);
+  console.log('  password  <generated; written to the roster, not shown>');
+  console.log(`  roster    ${ROSTER}`);
+  console.log('\nThat file is the ONLY record of it — there is no reset and no email on the');
+  console.log('account. The previous password is kept under `previous_password` for one cycle,');
+  console.log('because a rotation that went wrong is discovered by trying the other one.');
 
 } else if (cmd === 'lend') {
   const agent = argv[1];

@@ -27,6 +27,9 @@ import { fileURLToPath } from 'node:url';
 
 // Group 2, slots 1..6 (m59-parse.mjs STAT_NAMES). Order is the wire order; slot 7 is
 // karma, which is not allocated at creation.
+import { resolveAppearance, checkAppearance, describeAppearance, isDefaultFace }
+  from './m59-appearance.mjs';
+
 export const STAT_ORDER = ['might', 'intellect', 'stamina', 'agility', 'mysticism', 'aim'];
 export const STAT_BUDGET = 200;
 export const STAT_MIN = 1;
@@ -99,10 +102,93 @@ export const abilityCost = level => (level > 1 ? COST_HIGHER : COST_LEVEL_1);
 // Every check here exists because the server does NOT do it and does not complain: an
 // invalid request is accepted and quietly replaced. This is the only place the mistake
 // can still be caught.
+// WHAT THE SERVER WILL ACTUALLY GRANT AT CREATION, read off its own source.
+//
+// This used to be a warning that said "a spell above level 1 was silently dropped when this
+// was last tried". That was one observation and it named the wrong boundary. The rule is in
+// the kod, it is exact, and it is worth having exactly:
+//
+//   player.kod:2173   if iPoints > 45  ->  "% they hacked their char.dll"  and the whole
+//                     else-branch is skipped: EVERY spell AND skill is discarded, not
+//                     trimmed. Over budget does not cost you the last one, it costs you all
+//                     of them.
+//   player.kod:2185   a spell is added only if `OfferToNewCharacters` AND level <= 2
+//   player.kod:2209   a skill is added only if level <= 2 (no offer check on skills)
+//
+//   spell.kod:2261    OfferToNewCharacters: FALSE unless enabled and accessible; FALSE if
+//                     level > 2; TRUE for Shal'ille, Qor, Kraanan and Faren; FALSE for
+//                     everything else — so no Riija or Jala spell can ever be chosen at
+//                     creation, whatever its level.
+//
+// Nine spells additionally override it to FALSE. They are PK and utility spells and the
+// server treats asking for one as cheating.
+const NOT_OFFERED = new Set([
+  'fade', 'cloak', 'eagle eyes', 'eavesdrop', 'free action',
+  'resist evil', 'resist good', 'resist poison', 'bramble wall',
+]);
+const OFFERED_SCHOOLS = new Set(['shal’ille', "shal'ille", 'qor', 'kraanan', 'faren']);
+const MAX_INITIAL_LEVEL = 2;
+
+// WILL THE SERVER GRANT THIS ONE? The whole point is that it does not say so either way —
+// a refused spell is simply absent from a character that otherwise looks fine, and the
+// points are spent regardless.
+export function grantableAtCreation(sp) {
+  const school = String(sp?.school_name ?? sp?.school ?? '').toLowerCase();
+  if (!sp) return { ok: false, why: 'no such spell' };
+  if (Number(sp.level) > MAX_INITIAL_LEVEL)
+    return { ok: false, why: `level ${sp.level}; the server adds a spell only at level ` +
+             `${MAX_INITIAL_LEVEL} or below (player.kod:2188). It must be LEARNED from a teacher` };
+  if (NOT_OFFERED.has(String(sp.name ?? '').toLowerCase()))
+    return { ok: false, why: 'the spell itself refuses new characters (OfferToNewCharacters ' +
+             '-> FALSE); the server treats asking for it as cheating' };
+  if (school && !OFFERED_SCHOOLS.has(school))
+    return { ok: false, why: `${sp.school_name} is never offered at creation — only ` +
+             `Shal'ille, Qor, Kraanan and Faren are (spell.kod:2276)` };
+  return { ok: true };
+}
+
+// THE WAIVER, PARSED THE WAY FLEETSCRIPT PARSES ITS OWN.
+//
+// A reason is MANDATORY and is enforced here rather than at the call site, so a malformed
+// waiver surfaces when the plan is made and not with a character already created. "I know
+// this spell will be dropped" and "I forgot" have to look different on the page — that is
+// the entire argument, and it is m59-fleetscript.mjs's, borrowed intact.
+export const CREATION_GUARANTEES = Object.freeze({
+  spellsGranted: 'every spell asked for is one the server will actually grant at creation',
+  fullBudget: 'the whole 45-point ability budget is spent, since points do not carry',
+});
+
+export function parseCreationWaiver(unsafe) {
+  if (unsafe == null) return new Set();
+  const reason = typeof unsafe.reason === 'string' ? unsafe.reason.trim() : '';
+  if (!reason)
+    throw new Error('unsafe creation needs a `reason` — a waiver nobody can read is just a hole');
+  const named = unsafe.waives === '*' || (Array.isArray(unsafe.waives) && unsafe.waives.includes('*'))
+    ? Object.keys(CREATION_GUARANTEES)
+    : (Array.isArray(unsafe.waives) ? unsafe.waives : []);
+  const unknown = named.filter(w => !(w in CREATION_GUARANTEES));
+  if (unknown.length)
+    throw new Error(`unknown creation waiver(s): ${unknown.join(', ')}. ` +
+      `Known: ${Object.keys(CREATION_GUARANTEES).join(', ')}, or '*' for all of them.`);
+  return new Set(named);
+}
+
 export function planCharacter({
   name, stats = 'melee', loadout = 'selfSufficient', skills = [], gender = 1,
   spellsFile = null,
+  // FLEETSCRIPT'S SHAPE, because the operator asked for it and because it is the right
+  // one: a named waiver with a MANDATORY reason, never a boolean. `waives: ['*']` is the
+  // total waiver and is deliberately ugly to type. A creation that is deliberately
+  // suboptimal and one that is a mistake have to look different on the page.
+  unsafe = null,
+  // NOTHING CHOSEN MEANS A RANDOM FACE, not the same man again. See m59-appearance.mjs:
+  // a face-part list that is not exactly five long is the server's "hacking the protocol"
+  // branch, which stamps the default male face — so every character this repository has
+  // ever made has been identical, because nobody passed one and the silence read as a
+  // preference. `appearance: 'default'` asks for the old face deliberately.
+  appearance = null, rng = Math.random,
 } = {}) {
+  const waived = parseCreationWaiver(unsafe);
   const problems = [];
   // REPORTED, NEVER REFUSED. A problem means the request is illegal and the server would
   // quietly replace the character; a warning means the request is legal and something about
@@ -144,31 +230,21 @@ export function planCharacter({
   for (const n of (want?.spells ?? [])) {
     const sp = cat.find(x => x.name === n);
     if (!sp) { problems.push(`no spell called "${n}" in the catalogue`); continue; }
-    // A SPELL ABOVE LEVEL 1 MAY NOT SURVIVE CREATION, AND THE SERVER WILL NOT SAY SO.
-    //
-    // Observed once, 2026-09-09, on the shadow server: a character asked for
-    // `identify` (Shal'ille level 3, 25 of the 45 ability points) plus two level-1
-    // spells. The request was within budget and was accepted. The two level-1 spells
-    // arrived; identify did not, and nothing anywhere reported a refusal - the
-    // character simply came back holding the level-1s and the server's own free
-    // `blink`. That is this game's standard failure mode ("no error has never meant
-    // success here"), so the cost is charged against the budget for a spell that may
-    // never be granted.
-    //
-    // WARNED, NOT REFUSED. One observation is not a rule, and the ability budget's
-    // arithmetic for higher levels (COST_HIGHER) came from somewhere. Whoever next
-    // asks for one should read this, check the result, and either promote it to a
-    // refusal or delete it - see the reproduction standard in CLAUDE.md.
-    if (sp.level > 1)
-      warnings.push(`"${n}" is level ${sp.level}; a spell above level 1 was silently ` +
-        'DROPPED at creation when this was last tried (2026-09-09), while its points were ' +
-        'still spent. Prefer level-1 spells at creation and LEARN the rest from a teacher. ' +
-        'If you mean to try anyway, read the character back afterwards and check.');
+    // REFUSED, NOT WARNED. The operator's instruction: error rather than create the
+    // nerfed character. A spell the server will silently drop still costs its points, so
+    // the character comes back both missing the ability AND having paid for it — the
+    // worst of the two outcomes, and invisible until somebody tries to cast.
+    const grant = grantableAtCreation(sp);
+    if (!grant.ok && !waived.has('spellsGranted'))
+      problems.push(`"${n}" will NOT be granted: ${grant.why}. It still costs `+
+        `${abilityCost(sp.level)} of the ${ABILITY_BUDGET} ability points. Drop it, or waive `+
+        `\`spellsGranted\` with a reason if you mean to spend them anyway.`);
+    else if (!grant.ok) warnings.push(`"${n}" will not be granted (${grant.why}) — waived`);
     const c = abilityCost(sp.level);
     picked.push({ num: sp.num, name: sp.name, level: sp.level, cost: c,
                   school: sp.school_name, mana: sp.mana,
                   required_karma: sp.required_karma,
-                  castable_when_new: !sp.required_karma,
+                  castable_when_new: (sp.required_karma ?? 0) <= 0,
                   reagents: (sp.reagents || []).map(r => `${r.count}x${r.item}`) });
     cost += c;
   }
@@ -176,9 +252,38 @@ export function planCharacter({
   // repository yet — the server reports skills by session object id, which is not the
   // same thing — so this cannot name-check them the way it does spells.
   for (const n of skills) cost += COST_LEVEL_1;
-  if (cost > ABILITY_BUDGET)
+  // POINTS DO NOT CARRY AND ABILITIES CANNOT BE ADDED LATER FOR FREE, so an under-spent
+  // budget is the same permanent loss as an under-spent stat budget — which this file
+  // already refuses. It was silent about the ability half.
+  if (cost < ABILITY_BUDGET && !waived.has('fullBudget'))
+    problems.push(`abilities cost ${cost} of ${ABILITY_BUDGET}, leaving ${ABILITY_BUDGET - cost} `+
+      `unspent. They do not carry. Add another level-1 spell or skill (10 points each), or `+
+      `waive \`fullBudget\` with a reason.`);
+  else if (cost < ABILITY_BUDGET) warnings.push(`${ABILITY_BUDGET - cost} ability point(s) left unspent — waived`);
+    if (cost > ABILITY_BUDGET)
     problems.push(`abilities cost ${cost}, over the budget of ${ABILITY_BUDGET} — ` +
-                  'the server would silently discard all of them');
+                  'the server would silently discard all of them — player.kod:2173 skips the whole ' +
+                  'branch that adds spells AND skills, so going over does not cost you the last ' +
+                  'one, it costs you every one');
+
+  // THE SCHOOL YOU PICK SETS YOUR STARTING KARMA, so `castable_when_new` cannot be read
+  // off the spell alone. player.kod:2233 — choosing a Shal'ille spell and no Qor one
+  // starts you at piKarma = 2000 (which the client shows as 20 on its -100..100 scale);
+  // choosing Qor and no Shal'ille starts you at -2000. Picking both, or neither, leaves
+  // it at 0. Without this the plan told you a level-1 Shal'ille spell was uncastable on a
+  // character the server was about to hand exactly enough karma to cast it.
+  const schools = new Set(picked.map(x => String(x.school ?? '').toLowerCase()));
+  const shal = [...schools].some(x => x.includes('shal'));
+  const qor = schools.has('qor');
+  const startingKarma = shal && !qor ? 20 : qor && !shal ? -20 : 0;
+  for (const x of picked) x.castable_when_new = (x.required_karma ?? 0) <= startingKarma;
+
+  const face = resolveAppearance(appearance, gender, rng);
+  const faceCheck = checkAppearance(face, gender);
+  for (const why of faceCheck.problems) problems.push(why);
+  if (isDefaultFace(face.faceparts) && appearance !== 'default')
+    warnings.push('this is the default face every character here already has — pass ' +
+      'appearance to choose, or leave it out to randomise');
 
   return {
     ok: problems.length === 0,
@@ -192,6 +297,9 @@ export function planCharacter({
     spell_nums: picked.map(p => p.num),
     skills,
     ability_cost: cost, ability_budget: ABILITY_BUDGET,
+    starting_karma: startingKarma,
+    appearance: face,
+    appearance_text: describeAppearance(face),
     why: want?.why,
     uncastable_at_first: picked.filter(p => !p.castable_when_new).map(p => p.name),
   };

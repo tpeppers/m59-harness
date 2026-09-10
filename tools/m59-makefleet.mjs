@@ -169,7 +169,8 @@ function parseStats(value) {
 
 function parseArgs(argv) {
   const a = { count: 10, prefix: 'fleet', broker: 8901, loadout: 'selfSufficient',
-              dryRun: false, stats: null, name: null, account: null, spells: null };
+              dryRun: false, stats: null, name: null, account: null, spells: null,
+              look: null, hair: null, skin: null, waive: null, reason: null };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === '--count' || v === '-n') a.count = Number(argv[++i]);
@@ -186,6 +187,15 @@ function parseArgs(argv) {
     // copy rots. Every guard still applies: the plan is checked before the account is made,
     // because the server accepts an illegal request and silently stamps 3/1/4/1/5/9 on it.
     else if (v === '--name') a.name = argv[++i];
+    // APPEARANCE. Omitted means RANDOM, which is the point: every character made here
+    // before today was the identical default man, because nobody passed a face and the
+    // server reads an absent one as a request for its default. `--look default` asks for
+    // that old face on purpose; `--hair`/`--skin` name a colour from m59-appearance.mjs.
+    else if (v === '--look') a.look = argv[++i];
+    else if (v === '--hair') a.hair = argv[++i];
+    else if (v === '--skin') a.skin = argv[++i];
+    else if (v === '--waive') a.waive = String(argv[++i]).split(',').map(x => x.trim()).filter(Boolean);
+    else if (v === '--reason') a.reason = argv[++i];
     else if (v === '--account') a.account = argv[++i];
     else if (v === '--spells') a.spells = String(argv[++i]).split(',').map(x => x.trim()).filter(Boolean);
     else if (v === '--dry-run' || v === '-d') a.dryRun = true;
@@ -250,10 +260,16 @@ async function main() {
       (s ? ` mig ${s.might} int ${s.intellect} sta ${s.stamina} agi ${s.agility} mys ${s.mysticism} aim ${s.aim}` : ''));
     // CHECKED BEFORE ANY ACCOUNT EXISTS, because past here the server accepts whatever it
     // is sent and says nothing at all about what it did with it.
-    const check = planCharacter({ name: p.name, stats: p.stats, loadout: a.loadout });
+    const appearance = a.look === 'default' ? 'default'
+      : (a.hair || a.skin || a.look) ? { hair: a.hair, skin: a.skin } : null;   // null = randomise
+    const unsafe = a.waive ? { reason: a.reason ?? '', waives: a.waive } : null;
+    const check = planCharacter({ name: p.name, stats: p.stats, loadout: a.loadout,
+                                  appearance, unsafe });
+    p.plan = check;
     for (const why of check.problems) console.log(`    ! ${why}`);
     for (const why of check.warnings ?? []) console.log(`    ~ ${why}`);
     if (!check.ok) { console.error('refusing: fix the above. Nothing was created.'); return 2; }
+    console.log(`    look  ${check.appearance_text}`);
     for (const sp of check.spells ?? [])
       console.log(`    spell ${String(sp.name).padEnd(14)} ${sp.school} lvl ${sp.level}, ${sp.cost}pts` +
         (sp.castable_when_new ? '' : `  - NOT castable when new: needs karma ${sp.required_karma}`));
