@@ -3394,10 +3394,12 @@ const server = createServer(async (req, res) => {
               mode: wantMode, by: writtenBy, ...fields } = body;
       const applied = [];
       let modeChange = null;
-      // THE PAIRING INVARIANT, ON THE RECEIVING SIDE TOO. The broker coerces before it
-      // pushes, but a push can arrive from anything holding this port, and `Object.assign`
-      // below will merge whatever it is handed. `requireSafeWall` without `useSafeSpots`
-      // asks this keeper to refuse a fight for the want of a wall it is not looking for.
+      // THE SPOT INVARIANT, ON THE RECEIVING SIDE TOO. The broker coerces before it pushes,
+      // but a push can arrive from anything holding this port, and `Object.assign` below
+      // will merge whatever it is handed. Two things happen here: `useSafeSpots` is forced
+      // true (it is the always-on non-combat facility, not a choice), and a legacy
+      // `requireSafeWall` is adopted into `pullToSafeWall` so a push written before the
+      // 2026-09-10 rename keeps meaning what it said.
       const coercedSpots = coerceSpotPair(fields);
       // The boot orders move with the live ones. See the `let policy` / `let mode`
       // declarations: without this the push survives only until the next rejoin.
