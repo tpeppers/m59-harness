@@ -525,7 +525,17 @@ export function fineRouter(roomNum, {
              trace, ms: Date.now() - t0 };
   }
 
-  return { plan, closure, footing, floorAt, standAt, declared, geo, room };
+  // HAND OUT THE KEY, BECAUSE EVERY CONSUMER THAT RE-DERIVED IT GOT IT WRONG.
+  //
+  // `closure` returns a Map keyed by QUANTISED position — `((x/step)|0)+'|'+((y/step)|0)`,
+  // with `step` the flood resolution, not a fixed constant. A caller asking "is this point in
+  // the closure" has to reproduce both the arithmetic and the separator, and m59-gap.mjs's
+  // first version used `x >> 5` with a comma: every membership test answered FALSE, including
+  // for the closure's own start point, and the report confidently said a reachable square was
+  // unreachable. An undefined-shaped lookup that cannot fail loudly is the commonest bug in
+  // this repository, so the key is part of the API now.
+  return { plan, closure, footing, floorAt, standAt, declared, geo, room, key, step,
+           inClosure: (set, x, y) => set.has(key(x, y)) };
 }
 
 // ---------------------------------------------------------------- CLI
