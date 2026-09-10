@@ -44,7 +44,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describeWhen, deadWhen, ambiguousWhen, exitsFor, inboundFor, unifiedRoom, inboundVerdict,
+import { describeWhen, deadWhen, ambiguousWhen, exitsFor, inboundFor, unifiedRoom, inboundVerdict, isUnresolved,
          mayArrive,
          KINDS } from './m59-exits.mjs';
 import { loadMap, movementMapFile, findPath } from './m59-map.mjs';
@@ -360,5 +360,49 @@ console.log('   and BOTH callers really do ask it — the structural claim, not 
      /reachable: \{/.test(fs) && /waived\.has\('reachable'\)/.test(fs));
 }
 
-console.log('');console.log(`${pass} passed, ${fail} failed`);
+console.log('');
+console.log('5. AN UNRESOLVED DOOR IS ITS OWN KIND — and it is where the orphans came from');
+{
+  ok('a real room number is resolved', isUnresolved(382) === false);
+  ok('the bake\'s unresolved marker is not', isUnresolved(-1) === true);
+  ok('and neither is a missing or non-numeric one',
+     isUnresolved(null) && isUnresolved(undefined) && isUnresolved('door'));
+  ok('zero is not a room either', isUnresolved(0) === true);
+
+  // West Jasper is the worked example: 33 declared ways out, 15 of which go nowhere the graph
+  // knows. Counted as `declared` they made the room look better connected than it is.
+  const out382 = exitsFor(map, 382, { telemetry: false });
+  const unresolved = out382.filter(e => e.kind === 'unresolved');
+  ok('West Jasper holds doors the bake could not resolve', unresolved.length > 0);
+  ok('and every one of them is separated from the routable exits',
+     unresolved.every(e => isUnresolved(e.to)) &&
+     out382.filter(e => e.kind === 'declared').every(e => !isUnresolved(e.to)));
+  ok('the summary counts them as their own kind',
+     (unifiedRoom(map, 382).summary.out_by_kind.unresolved ?? 0) === unresolved.length);
+
+  // THE ORPHANS ARE THEIR SHADOW. Old Granary's only way out is into West Jasper, and a door
+  // is two-sided -- so the way in is one of West Jasper's unresolved doors rather than an
+  // undeclared trigger. Getting that advice right is the difference between resolving 362 doors
+  // and hand-writing seventeen triggers that may not exist.
+  const granary = inboundVerdict(map, 351);
+  ok('nothing arrives at the Old Granary', granary.code === 'nothing_arrives');
+  ok('and the verdict names the neighbour to look in',
+     (granary.unresolved_doors_next_door ?? []).some(x => x.room === 382 && x.doors > 0),
+     JSON.stringify(granary.unresolved_doors_next_door));
+  ok('the sentence says a door is two-sided rather than telling you to write a trigger',
+     /door is two-sided/.test(granary.why) && !/add it to m59-codeexits/.test(granary.why),
+     granary.why);
+  // A room with no way out at all gets the OTHER advice, because there is no door to resolve.
+  const sealed = Object.keys(map.rooms).map(Number).find(n =>
+    inboundVerdict(map, n).code === 'nothing_arrives' &&
+    exitsFor(map, n, { telemetry: false }).length === 0);
+  if (sealed != null)
+    ok('a room with no way out either is told to look for a trigger',
+       /trigger nobody has declared/.test(inboundVerdict(map, sealed).why),
+       inboundVerdict(map, sealed).why);
+  else ok('a room with no way out either is told to look for a trigger', false, 'no such room');
+}
+
+console.log('');
+console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

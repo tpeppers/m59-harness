@@ -694,6 +694,7 @@ answer there is still to move, not to thread.
 ```bash
 node tools/m59-exits.mjs 48            # every way in and out of one room, with provenance
 node tools/m59-exits.mjs 48 --json     # the same, for a script
+node tools/m59-exits.mjs --orphans     # every room no route can end at, and where to look
 node tools/m59-exits-test.mjs          # 64, offline
 ```
 
@@ -707,6 +708,7 @@ There is no single file that says how a room connects. There are five, and until
 | `substrate/m59-codeexits.json` | kod triggers — a room class hands you to a neighbour when you walk onto a region of floor | the router, and nothing else |
 | `substrate/m59-falljumps.json` | intra-room affordances a person has made | the mover |
 | `substrate/hoptests.json` | what has actually been crossed, and how often | the ledgers |
+| a door in the bake with `to: -1` | a declared door whose DESTINATION the bake could not resolve — 362 of them, in 50 rooms | nobody, and it was counted as an ordinary exit |
 
 **What that cost.** `m59-exitreport.mjs` printed `NOTHING IN THE WORLD GRAPH ARRIVES HERE`
 about room 48, the Temple of Shal'ille — a room the router was planning fifteen-hop journeys
@@ -756,6 +758,36 @@ written, neither of which any single source could show:
     room 6 into the temple — and the mover would have refused before sending a packet. Writing a
     new shape into a data file without teaching the evaluator is the same class of failure as
     the one above, pointed the other way.
+### THE 25 ROOMS NOTHING ARRIVES AT ARE MOSTLY ONE BUG, AND IT IS NOT A MISSING TRIGGER
+
+`node tools/m59-exits.mjs --orphans` is the work list. 25 of 264 rooms have nothing arriving in
+any source, so no route the mover could take ends in one — and **17 of them have a way OUT**,
+which is evidence a person got in.
+
+The first version of that list said "the missing affordance is a trigger nobody has written down",
+and that was a guess dressed as advice. **A door is two-sided**, so the place to look is the room
+an orphan LEAVES into — and those rooms are full of doors the bake could not resolve:
+
+```
+  351  Old Granary          leaves by d->382   <- look in 382 (15 unresolved door(s))
+  352  Icehouse             leaves by d->382   <- look in 382
+  ... twelve more, all of them leaving into West Jasper
+   42  Chamber of the Forgotten Heroes  d->850  <- look in 850 (5 unresolved door(s))
+  203  The home of the elder            d->200  <- look in 200 (4 unresolved door(s))
+```
+
+West Jasper (382) declares 33 ways out and **15 of them are `{ to: -1, locked: true }`** — the
+bake's marker for a door whose destination it could not work out. Fourteen orphan buildings leave
+into 382. That is the same fifteen doors seen from the other side, and it means the fix is
+resolving 362 door destinations rather than hand-writing seventeen triggers that may not exist.
+
+So `unresolved` is now its own exit kind in the view (`isUnresolved`), because counted as
+`declared` it made rooms look better connected than they are, and `inboundVerdict` names the
+neighbour and the door count in its refusal. **A room with no way out either gets the other
+advice**, since there is no door to resolve — 1, 3, 43, 901, 902, 903, 9000 and 9001 are rooms the
+bake knows the shape of and nothing else, and none of that is evidence of anything until somebody
+stands in one.
+
 ### `mayArrive()` — and why BOTH the broker and fleetScript ask it
 
 `inboundVerdict(map, room)` answers "is there any way in at all, and what did you consult?",

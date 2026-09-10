@@ -3,6 +3,8 @@
 //   import { unifiedRoom, exitsFor, inboundFor } from './m59-exits.mjs';
 //   node tools/m59-exits.mjs 48          # what the unified view says about one room
 //   node tools/m59-exits.mjs 48 --json
+//   node tools/m59-exits.mjs --orphans        every room no route can end at, and what leaves
+//                                             it — the missing-affordance work list
 //
 // WHY THIS EXISTS. Asked for by the operator, 2026-09-10: "is there a reason we don't have
 // synthetic exits w/debugging/telemetry attached, generated for this to create a single unified
@@ -59,7 +61,17 @@ const readJson = (p, fallback) => {
 // ---------------------------------------------------------------- the record
 
 /** Every kind of way through a boundary this repository knows about. */
-export const KINDS = Object.freeze(['declared', 'inferred', 'trigger', 'fall']);
+// A FIFTH KIND, AND IT IS THE ONE THAT EXPLAINS THE ORPHANS. The bake writes a door it could
+// not resolve as `{ to: -1, locked: true }` -- 362 of them across 50 rooms. Counted as
+// `declared`, they make a room look better connected than it is: West Jasper (382) reports 33
+// ways out and 15 of them go nowhere the graph knows. Counted as themselves, they are a work
+// list -- and the shadow of that list is the 17 leavable rooms nothing arrives at. Fourteen of
+// those seventeen leave into 382, which has 15 unresolved doors. That is not a coincidence and
+// it is not a missing trigger: it is the same doors, seen from the other side.
+export const KINDS = Object.freeze(['declared', 'unresolved', 'inferred', 'trigger', 'fall']);
+
+/** A destination the bake could not resolve. Never a room number, so never routable. */
+export const isUnresolved = (to) => !Number.isFinite(Number(to)) || Number(to) <= 0;
 
 // ---------------------------------------------------------------- trigger predicates
 //
@@ -166,7 +178,7 @@ export function exitsFor(map, roomNum, { telemetry = true } = {}) {
   // took the whole report down. A diagnostic must survive the shapes a debugger hands it.
   for (const e of (room ? exitsOf({ ...room, edgeExits: room.edgeExits ?? [],
                                     goExits: room.goExits ?? [] }) : []))
-    add({ to: Number(e.to), kind: 'declared', directed: 'out',
+    add({ to: Number(e.to), kind: isUnresolved(e.to) ? 'unresolved' : 'declared', directed: 'out',
           direction: e.direction ?? e.dir ?? null,
           stand_on: e.stand_on ?? null, arrive: null, trigger: null,
           provenance: { source: 'bake.edgeExits/goExits', cite: null } });
@@ -275,12 +287,32 @@ export function inboundVerdict(map, roomNum) {
              consulted: [] };
   const inbound = inboundFor(map, num, { telemetry: false });
   const consulted = ['bake.edgeExits/goExits', 'inferred', 'substrate/m59-codeexits.json'];
-  if (!inbound.length)
+  if (!inbound.length) {
+    // WHERE TO LOOK, NOT JUST WHAT IS MISSING. A door is two-sided, so if this room's only way
+    // OUT is into room Y, the way IN is a door in Y -- and Y usually has doors the bake could
+    // not resolve. Naming them turns "write a trigger" (which may be wrong) into "resolve one of
+    // these 15 doors" (which is where the answer actually is).
+    const neighbours = [...new Set(exitsFor(map, num, { telemetry: false })
+      .map(e => Number(e.to)).filter(t => !isUnresolved(t)))];
+    const unresolvedNear = neighbours
+      .map(t => ({ room: t, name: map.rooms[t]?.name ?? map.rooms[String(t)]?.name ?? null,
+                   doors: exitsFor(map, t, { telemetry: false })
+                     .filter(e => e.kind === 'unresolved').length }))
+      .filter(x => x.doors > 0);
+    const hint = unresolvedNear.length
+      ? ` This room LEAVES into ${unresolvedNear.map(x => `${x.room} (${x.name})`).join(', ')}, ` +
+        `and ${unresolvedNear.length === 1 ? 'that room has' : 'those rooms have'} ` +
+        `${unresolvedNear.reduce((n, x) => n + x.doors, 0)} door(s) the bake could not resolve ` +
+        `(\`to: -1\`). A door is two-sided, so the way in is very likely one of THOSE rather ` +
+        `than an undeclared trigger — resolve them and this room stops being an orphan.`
+      : ` If the game has a way in, it is a trigger nobody has declared: add it to ` +
+        `m59-codeexits.json.`;
     return { ok: false, code: 'nothing_arrives', consulted,
+             ...(unresolvedNear.length ? { unresolved_doors_next_door: unresolvedNear } : {}),
              why: `nothing in the unified exit view arrives at room ${num}. All of ` +
                   `${consulted.join(', ')} were consulted, so this is not one tool's blind ` +
-                  `spot — it is a room with no recorded way in. If the game has one, it is a ` +
-                  `trigger nobody has declared: add it to m59-codeexits.json.` };
+                  `spot — it is a room with no recorded way in.${hint}` };
+  }
   // A DEAD TRIGGER IS REACHABLE ON PAPER AND UNREACHABLE IN FACT, and this is the one place
   // that can tell the difference. If every way in is a predicate nothing can satisfy, the
   // honest answer is 'no way in' -- and the refusal names the file and the entry, because the
@@ -351,6 +383,69 @@ const IS_ENTRY = !!process.argv[1] &&
 
 if (IS_ENTRY) {
   const argv = process.argv.slice(2);
+
+  // THE WORK LIST: every room no route can end at, and what leaves it.
+  //
+  // A room a person can LEAVE is a room a person got into, so a leavable room with nothing
+  // arriving is not a fact about the world — it is a missing affordance, and this is the list of
+  // them. Printed as a list rather than a count because a count is the kind of finding that
+  // sits in a commit message and dies there; the standing rule is to name the missing
+  // affordance or name the tool that would find it, and this is that tool.
+  if (argv.includes('--orphans')) {
+    const map = loadMap(movementMapFile());
+    const rows = [];
+    for (const key of Object.keys(map.rooms)) {
+      const n = Number(key);
+      const v = inboundVerdict(map, n);
+      if (v.ok) continue;
+      const out = exitsFor(map, n, { telemetry: false });
+      rows.push({ room: n, name: map.rooms[key]?.name ?? null, code: v.code,
+                  leaves: out.filter(e => e.kind !== 'unresolved')
+                            .map(e => `${e.kind[0]}->${e.to}`),
+                  near: v.unresolved_doors_next_door ?? [] });
+    }
+    // Leavable first: those are the ones with evidence that a way in exists.
+    rows.sort((a, b) => b.leaves.length - a.leaves.length || a.room - b.room);
+    if (argv.includes('--json')) { console.log(JSON.stringify(rows, null, 1)); process.exit(0); }
+    console.log('');
+    console.log(`${rows.length} of ${Object.keys(map.rooms).length} rooms: NOTHING ARRIVES, in any ` +
+                `of the five sources. No route the mover could take ends in one of these.`);
+    console.log('');
+    const leavable = rows.filter(r => r.leaves.length);
+    console.log(`  ${leavable.length} of them HAVE A WAY OUT — so a person got in, and there is`);
+    console.log(`  an affordance nobody has written down. Where to look is on the right:`);
+    for (const r of leavable)
+      console.log(`    ${String(r.room).padStart(5)}  ${String(r.name).slice(0, 32).padEnd(33)}` +
+                  `leaves by ${r.leaves.join(', ')}` +
+                  `${r.near.length ? `   <- look in ${r.near.map(x => `${x.room} (${x.doors} ` +
+                    `unresolved door(s))`).join(', ')}` : ''}`);
+    const sealed = rows.filter(r => !r.leaves.length);
+    if (sealed.length) {
+      console.log('');
+      console.log(`  ${sealed.length} with no way out either — a room the bake knows the shape of`);
+      console.log(`  and nothing else. Not evidence of anything until somebody stands in one:`);
+      console.log('    ' + sealed.map(r => r.room).join(', '));
+    }
+    console.log('');
+    const doors = rows.reduce((n, r) => n + r.near.reduce((m, x) => m + x.doors, 0), 0);
+    if (doors) {
+      let holders = 0, total = 0;
+      for (const key of Object.keys(map.rooms)) {
+        const u = exitsFor(map, Number(key), { telemetry: false })
+          .filter(e => e.kind === 'unresolved').length;
+        if (u) { holders++; total += u; }
+      }
+      console.log('');
+      console.log(`  MOST OF THIS IS ONE BUG, NOT ${leavable.length}. The bake writes a door it`);
+      console.log('  could not resolve as `to: -1, locked: true`, and a door is two-sided — so');
+      console.log('  the way into these rooms is very likely one of those doors rather than an');
+      console.log(`  undeclared trigger. Map-wide there are ${total} of them, in ${holders} rooms.`);
+    }
+    console.log('');    console.log('  See docs/m59-routing.md. fleetScript and the broker both REFUSE a journey to');
+    console.log('  any of these, waivable with a reason — that waiver is how you go and look.');
+    process.exit(0);
+  }
+
   const num = Number(argv.find(a => /^\d+$/.test(a)));
   if (!Number.isFinite(num)) {
     console.log(readFileSync(new URL(import.meta.url), 'utf8')
