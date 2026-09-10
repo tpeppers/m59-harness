@@ -448,17 +448,53 @@ if (!LOOPBACK.has(rostered.host.toLowerCase())) {
                 `Running only: ${named.join(', ')}. Everyone else is untouched.`);
 }
 
+// THE DM TOOLS ARE LOOPBACK-ONLY BY DESIGN, SO ON A SHARED SERVER THEY ARE OFF — not tried,
+// not caught, OFF, and said out loud.
+//
+// MEASURED 2026-09-10, sending Marco Polo to the Ice Caves on prod: the run printed its whole
+// header, printed the results table's header, and then died with
+// `Error: connect ECONNREFUSED 127.0.0.1:19998` before walking a single step. The maintenance
+// port is unauthenticated and pointing it at a shared server is not a configuration choice —
+// `m59-dm.mjs` is right to refuse — so the first thing this tool did on a shared server was an
+// operation that server forbids.
+//
+// The crash was one missing `.catch` next to two calls that have one: `dm.relocate` and
+// `dm.heal` were both guarded and `dm.resolve` was not. But a catch would have been the wrong
+// fix on its own, because it would have left the run silently pretending it had placed and
+// healed a character it had not. What the leg needs to know is that it starts WHERE THE BODY
+// IS STANDING, and the header now says so.
+const DM_OK = LOOPBACK.has(rostered.host.toLowerCase());
+
 const fleet = await call('fleet', {});
 let rows = (fleet.fleet ?? []).filter(r => r.agent && r.character);
 if (ONLY) rows = rows.filter(r => ONLY.includes(r.agent) || ONLY.includes(r.character));
 rows.sort((a, b) => a.agent.localeCompare(b.agent, 'en', { numeric: true }));
 if (!rows.length) { console.error('node-run: no characters matched.'); process.exit(1); }
 
+// A STONE THAT IS EXEMPT FROM ATTEMPT IS REFUSED HERE, before anything walks. Two are the
+// operator's ruling — "The Ukgoth nodes and Fey nodes should also be exempt from attempt, because
+// they're not casually obtainable (usually take planning or coordination across multiple
+// people)" — and the guest stone is unreachable by the design of the game. `--force` is the way
+// to say you know: a run that means to test the Ukgoth stone at midnight is a real errand and
+// this must not be the thing that stops it.
+{
+  const barred = CIRCUIT.filter(n => n.exempt || n.conditional);
+  if (barred.length && !has('force')) {
+    for (const n of barred)
+      console.error(`node-run: REFUSING ${n.key} (room ${n.room}) — ` +
+                    `${n.exempt ? `exempt from attempt: ${n.exempt}` : 'conditional'}. ` +
+                    `It appears ${n.appears}`);
+    console.error('          Pass --force if this run is deliberately going after one.');
+    process.exit(2);
+  }
+}
+
 console.log(`fleet "${FLEET}" -> ${rostered.host}:${rostered.port}`);
 console.log(`${rows.length} character(s), ` +
             (RANDOM ? `${LEGS} node(s) each drawn by lot from ${CIRCUIT.length} (seed ${SEED})`
                     : `the circuit ${CIRCUIT.map(n => n.key).join(' -> ')}`) +
-            `, first leg from room ${FROM}, ${TIMEOUT / 1000}s per road`);
+            `, ${DM_OK ? `first leg from room ${FROM}` : 'first leg from wherever each body is ' +
+              'standing (no DM placement on a shared server)'}, ${TIMEOUT / 1000}s per road`);
 console.log('nodes: ' + CIRCUIT.map(n => `${n.key}=${n.room}@r${n.node.row}c${n.node.col}`).join('  '));
 console.log(APPROACH
   ? `approach: walk to the stone, ${APPROACH_MODES[0] ? 'fine' : 'coarse'} then ` +
@@ -468,6 +504,11 @@ console.log(APPROACH
 console.log(`shelter: travel_wall_below ${WALL ?? '(unchanged)'}, travel_hold_below ${HOLD ?? '(unchanged)'}`);
 console.log(BROADCAST ? 'arrivals at a stone are broadcast to the whole server'
                       : 'arrivals are NOT announced in game (--no-broadcast)');
+console.log(DM_OK
+  ? 'DM: placement and top-up are available (loopback server)'
+  : 'DM: OFF — the maintenance port is loopback-only, so no teleport to the start line and no ' +
+    'healing between legs. Every road here is walked from where the body already is, at ' +
+    'whatever health it already has.');
 console.log('');
 if (DRY) {
   for (const r of rows)
@@ -684,9 +725,13 @@ async function runLeg(r, node, { from, place, heal, next = null } = {}) {
   await call('cancel_movement', { agent: r.agent }, 20000).catch(() => null);
   await call('autopilot', { agent: r.agent, action: 'cancel' }, 20000).catch(() => null);
   await sleep(1500);
-  if (place) await dm.relocate([r.character], from, { verify: false }).catch(() => null);
-  const ids = await dm.resolve([r.character]);
-  if (heal && ids[r.character] != null) {
+  if (place && DM_OK)
+    await dm.relocate([r.character], from, { verify: false }).catch(() => null);
+  // GUARDED LIKE ITS NEIGHBOURS. Not because a shared server reaches this — it does not, DM_OK
+  // is false there — but because a LOOPBACK server whose maintenance port happens to be down
+  // must degrade rather than take the run down with it.
+  const ids = DM_OK ? await dm.resolve([r.character]).catch(() => ({})) : {};
+  if (heal && DM_OK && ids[r.character] != null) {
     // ALL THREE VITALS, because the recovery hold asks for all three and because vigor is the
     // one that decides how long the character is standing in the room being hit. `dm.heal`
     // fills health and mana to their real ceilings and vigor to MAX_VIGOR — resting stops at
