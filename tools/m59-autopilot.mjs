@@ -34,7 +34,7 @@ import { sameRoomIslandBridgePlan } from './m59-world.mjs';
 import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { recordTactic } from './m59-tactics.mjs';
-import { verdictFromRow } from './m59-safewall.mjs';
+import { verdictFromRow, safeWallVerdict } from './m59-safewall.mjs';
 import { recordRest } from './m59-restwatch.mjs';
 import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH }
   from './m59-safespots.mjs';
@@ -1598,6 +1598,26 @@ export class Autopilot {
 
       // FIGHT FROM A WALL WHENEVER THE FIGHT IS WORTH ANYTHING. See holdWorthwhile().
       useSafeSpots: true,
+
+      // WHERE YOU STOP IS NOT THE SAME QUESTION AS HOW YOU FIGHT, AND CONFLATING THEM COST
+      // FOUR DEATHS.
+      //
+      // `useSafeSpots` governs the FIGHTING posture, and the fleet turns it off for a real
+      // reason: in the Valley of Ileria `takeSafeSpot -> returnToSpot` oscillated and
+      // produced hours of "travelling / NOT MOVING" with prey in reach and zero kills. That
+      // ruling stands and this does not touch it.
+      //
+      // But it also silently governed where a character SITS DOWN, so switching the fighting
+      // posture off switched off the shelter you rest in — and resting is the one activity
+      // whose entire premise is that nothing can reach you. Waldorf died four times on
+      // 2026-09-08 resting in the open with the survival ladder quiet, because a rest
+      // presupposes you already walked somewhere unhittable.
+      //
+      // So resting seeks a safe wall on its OWN default, whatever the fighting posture is.
+      // `restAnywhere: true` is the deliberate order to sit wherever you stand — per
+      // character, off unless somebody asks for it. Operator's rule, 2026-09-10: never
+      // arrive at an unsafe stop by default; you may always arrive at one on purpose.
+      restAnywhere: false,
       // ALWAYS TAKE THE FIGHT FROM FULL, when we are somewhere that lets us choose.
       //
       // Out in the open, health is spent capital: recovering it means disengaging,
@@ -3206,17 +3226,36 @@ export class Autopilot {
   // says nothing about the square.
   recordRestOutcome({ damage = 0, settledMs = 0, swung = false } = {}) {
     try {
-      if (!this.hold) return;
       const ailing = (this.s.client?.ailments?.() ?? []).length > 0;
-      recordRest({
-        agent: this.s.name ?? null,
-        room: this.hold.room ?? null,
-        verdict: verdictFromRow({
+      let verdict = null, room = null;
+      if (this.hold) {
+        room = this.hold.room ?? null;
+        verdict = verdictFromRow({
           col: this.hold.col, row: this.hold.row,
           can_reach_you: this.hold.canReachYou, free_shots: this.hold.freeShots,
           refused_approaches: this.hold.refusedApproaches,
           offered_approaches: this.hold.offeredApproaches,
-        }),
+        });
+      } else {
+        // NO HOLD IS THE CASE THAT ACTUALLY KILLS, AND IT WAS THE ONE NOT BEING RECORDED.
+        //
+        // The first version of this returned early without a hold, so the ledger only ever
+        // saw rests taken IN a safe wall — it recorded the case that was already working
+        // and missed the one that killed Waldorf, whose four deaths were all `fieldrest`
+        // with `in_safe_spot: false`. Measured on prod 2026-09-10: 22 keepers up, ZERO
+        // holding a wall, and a ledger that would therefore have read empty for ever while
+        // looking perfectly healthy.
+        //
+        // So measure the square actually being sat on. `is_wall: false` rows are the point
+        // of the experiment, not noise in it: they are how "we rested somewhere things
+        // could reach us, and here is what it cost" becomes a number instead of a memory.
+        const geo = this.s.world?.geometry, me = this.s.client?.self;
+        if (!geo || !Number.isInteger(me?.row) || !Number.isInteger(me?.col)) return;
+        room = this.s.world?.room?.num ?? null;
+        verdict = safeWallVerdict(geo, me.row, me.col);
+      }
+      recordRest({
+        agent: this.s.name ?? null, room, verdict,
         damage, swung, ailing, rested_ms: Math.max(0, settledMs),
       });
     } catch { /* a ledger may never take a character down */ }
@@ -4330,6 +4369,53 @@ export class Autopilot {
     const s = this.s, c = s.client;
     const geo = s.world?.geometry, me = c?.self;
     if (!geo || !me) return null;
+
+    // A SAFE WALL FIRST. SITTING SOMEWHERE THINGS CAN REACH YOU IS AN ORDER, NOT A DEFAULT.
+    //
+    // Everything below this block picks a CORNER — two of four orthogonal neighbours
+    // blocked, scored on the coarse grid — and a corner is not a safe wall. The distinction
+    // is the whole argument of m59-safespots.mjs, in its own words: "a flat wall blocks
+    // three of eight neighbours and scores as a 62% improvement, while leaving twenty of
+    // the twenty-eight squares that can really reach you completely open." Melee reach is a
+    // DISC OF RADIUS 3 filtered by line of sight, not the ring of squares you are touching.
+    //
+    // So the old default sat characters somewhere that merely LOOKED sheltered, and the
+    // journal recorded `seat: 'corner'` while `in_safe_spot` was false. That is exactly
+    // how Waldorf died four times on 2026-09-08 — every one `strategy: fieldrest`, three
+    // with `in_safe_spot: false`, at 5-10 health of 51 with six hostiles in the room, the
+    // survival ladder quiet because resting presupposes you walked somewhere unhittable
+    // first. The presupposition was never enforced. This enforces it.
+    //
+    // Operator's rule, 2026-09-10: safe-wall behaviour is ALWAYS the default, and stopping
+    // somewhere that is not a safe wall has to be something you deliberately asked for.
+    // `restAnywhere` is that order, it is per-character, and it defaults to false — so the
+    // unsafe case is reachable, named, and never arrived at by accident.
+    // `this.policy?` — restingSquare is callable on a bare instance with no policy (that is
+    // how m59-rest-test drives it), and a hard `this.policy.` threw there. Absent policy
+    // means the DEFAULT, and the default is to look for a wall: an unreadable setting must
+    // never be the thing that decides to sit in the open.
+    if (this.policy?.restAnywhere !== true) {
+      try {
+        const wall = nearestSafeSpot(geo, me, {
+          within,
+          room: s.world?.room?.num ?? null,
+          // Squares this session already failed to WALK to. A different fact from a square
+          // that failed to hold, and the only history consulted here — the safe-spot book
+          // is retired and its failure column is inverted (see m59-safewall.mjs).
+          unreachable: this.unreachableSpots ?? null,
+        });
+        if (wall && Number.isInteger(wall.col) && Number.isInteger(wall.row)) {
+          const steps = Math.max(Math.abs(wall.col - me.col), Math.abs(wall.row - me.row));
+          return { col: wall.col, row: wall.row, steps,
+                   clearance: null, value: Infinity, seat: 'a safe wall', wall: true,
+                   can_reach_you: wall.can_reach_you ?? null,
+                   free_shots: wall.free_shots ?? null,
+                   refused_approaches: wall.refused_approaches ?? null,
+                   offered_approaches: wall.offered_approaches ?? null };
+        }
+      } catch { /* geometry could not answer; the corner heuristic is still better than
+                   sitting where we stand, so fall through rather than refusing to rest */ }
+    }
     const others = [...c.room.objects.values()].filter(o => o.id !== c.selfId);
     const gap = (col, row) => others.length
       ? Math.min(...others.map(o => Math.hypot(o.col - col, o.row - row))) : 99;
@@ -4387,7 +4473,12 @@ export class Autopilot {
         // corner with somebody already sitting in it, and both beat the middle of the room.
         const nook = corner(col, row);
         const value = Math.min(space, 6) * 2 + nook * 3 - (p?.steps ?? d) * 0.3;
+        // `wall: false` SAYS THIS IS NOT A SAFE WALL, and it is carried rather than inferred.
+        // A corner is a coarse-grid shape; a safe wall is a fact about the melee disc and
+        // line of sight. Callers that need to know which one they got — the journal, and the
+        // rest ledger — must not have to re-derive it from the word "corner".
         const cand = { col, row, steps: p?.steps ?? d, clearance: +space.toFixed(1), value,
+                       wall: false,
                        seat: nook === 2 ? 'corner' : nook === 1 ? 'against a wall' : 'open floor' };
         if (p?.reachable) { if (!best || value > best.value) best = cand; }
         else if (!byFine || value > byFine.value) byFine = { ...cand, viaFine: true };
@@ -13410,7 +13501,11 @@ export class Autopilot {
           this.sittingFor = now;
           // Baseline, so the next pass can answer the only question that matters about a
           // rest: is it paying? See restWatch below.
-          this.restWatch = { at: now, mana: c.vitals?.()?.mana?.value ?? null };
+          // Health too, not only mana. The mana reading answers "is this rest paying";
+          // the health reading answers "is this square safe to be paid on", which is a
+          // different question and the one the rest ledger exists for.
+          this.restWatch = { at: now, mana: c.vitals?.()?.mana?.value ?? null,
+                             health: c.vitals?.()?.health?.value ?? null };
           this.note('sitting down anywhere to regain mana', {
             mana: c.vitals?.()?.mana?.value ?? null, needs: 15,
             why: 'settle() found nowhere it liked, and standing regenerates mana far too ' +
@@ -13430,6 +13525,23 @@ export class Autopilot {
         // and re-entering this branch does.
         if (this.restWatch && now - this.restWatch.at > 8_000) {
           const manaNow = c.vitals?.()?.mana?.value ?? null;
+          // ONE LEDGER ROW PER WINDOW OF SITTING, WHEREVER WE ARE SITTING.
+          //
+          // This is the open-rest half of the safe-wall experiment, and it is the half that
+          // matters: a rest taken IN a wall was already recorded by the hold path, and on
+          // prod that path fires for nobody — 22 keepers, zero holds. Everything the fleet
+          // actually does when it sits down happens here.
+          //
+          // Damage is the health DROP across the window; a rise is a rest working and is
+          // not evidence about the square. `swung: false` is honest for this branch — it is
+          // the sit-for-mana path and nothing is being attacked deliberately — and if that
+          // ever stops being true, classify() files it as `swung` and it stops counting,
+          // which is the safe direction.
+          const healthNow = c.vitals?.()?.health?.value ?? null;
+          const lost = (healthNow != null && this.restWatch.health != null)
+            ? Math.max(0, this.restWatch.health - healthNow) : 0;
+          this.recordRestOutcome({ damage: lost, settledMs: now - this.restWatch.at,
+                                   swung: false });
           const gained = manaNow != null && this.restWatch.mana != null
             ? manaNow - this.restWatch.mana : null;
           if (gained !== null && gained <= 0 && !this.restNotPayingAt) {
@@ -13449,33 +13561,59 @@ export class Autopilot {
           } else if (gained > 0) {
             this.restNotPayingAt = null;     // it is paying; stop watching this window
           }
-          this.restWatch = { at: now, mana: manaNow };
+          this.restWatch = { at: now, mana: manaNow,
+                             health: c.vitals?.()?.health?.value ?? null };
         }
       }
       // WAITING FOR MANA IS THE PLAN, NOT A STALL. Churning the keeper restarts the
       // decision, not the wait, and that is why it never used to finish.
       const manaNow = c.vitals?.()?.mana?.value ?? 0;
       const vigorLeft = vigorOf(c.vitals?.()) ?? 0;
-      // LAST RESORT: SIT ANYWAY, BECAUSE VIGOR DOES NOT COME BACK STANDING.
+      // NEVER SIT WHERE YOU STAND. DELETED 2026-09-10 AT THE OPERATOR'S INSTRUCTION.
       //
-      // `rests: 0` across 3.6 hours is what this exists for. settle() declines in a room
-      // that spawns, and the sit-anywhere fallback above is gated on sanctuary(), so an
-      // unarmed character in the Valley ended EVERY pass still on its feet — in the one
-      // posture that recovers nothing. If nothing is near enough to reach us, sitting is
-      // strictly better than what this branch used to do, which was nothing at all.
+      // What used to be here: if vigor was too low to cast and settle() had declined, the
+      // keeper sat down on the spot, gated only on a threat snapshot reporting nothing near
+      // or adjacent. It was added for a real problem — `rests: 0` across 3.6 hours, an
+      // unarmed character in the Valley ending every pass on its feet in the one posture
+      // that recovers nothing — and it fixed that problem by creating a worse one.
+      //
+      // "Nothing can reach us RIGHT NOW" is not "this is a safe place to be still". It is a
+      // sample, taken once, of a room that spawns; and a rest lasts minutes. This is the
+      // posture Waldorf died in four times on 2026-09-08 — `strategy: fieldrest`,
+      // `in_safe_spot: false`, health 5-10 of 51 with six hostiles, the survival ladder
+      // quiet throughout because resting presupposes you already walked somewhere
+      // unhittable. The presupposition was the thing that was never enforced.
+      //
+      // THE ORDER IS: RUN TO A SAFE WALL, LOG OFF AND BACK ON, ROTATE. Sitting in the open
+      // is not on the list, and the vigor is not worth it.
       if (vigorLeft < SPELL_EXERTION_VIGOR && !sat?.settled && !this.sanctuary()) {
-        const t = this.threat?.() ?? {};
-        if (!(t.near?.length) && !(t.adjacent?.length)) {
-          const sitAt = Date.now();
-          if (!this.sittingFor || sitAt - this.sittingFor > 60_000) {
-            await s.pacer.submit('rest', () => c.rest()).catch(() => {});
-            this.sittingFor = sitAt;
-            this.note('sitting where it stands for the vigor a cast needs', {
-              vigor: vigorLeft, needs: SPELL_EXERTION_VIGOR, could_reach_us: 0,
-              why: 'unarmed, too tired to conjure, and nothing is close enough to reach ' +
-                   'us. This branch used to end the pass standing, which is why vigor sat ' +
-                   'at 1 while the keeper waited for mana it already had' });
-          }
+        // ROTATE. settle() has already tried this room once and marked it done; clearing
+        // that is what lets the next pass look again — and since 2026-09-10 it looks for a
+        // real safe wall before it will accept a corner (see restingSquare). A room whose
+        // occupancy has changed can offer a wall it could not a minute ago, and the Valley
+        // holds 20 characters against 8 walls, so "no wall" is very often "no wall YET".
+        this.settledIn = null;
+        this.settleTries = 0;
+
+        // LOG OFF AND BACK ON — but through playDead, which REFUSES unless we are on a wall
+        // that holds, and that refusal is not mine to route around. It carries three deaths:
+        // shadow fleet, Twisted Wood, 2026-08-21, three characters frozen at 4, 10 and 13
+        // health in rooms of twelve to fifteen monsters, all three dead, their own journals
+        // reading "recovering vigor; health needs us to move again first". A freeze recovers
+        // vigor and never health, so off a wall it spends the only seconds you had. Letting
+        // the verb decide means this caller cannot be the one that gets it wrong.
+        if (await this.playDead('no wall to sit at, and the vigor a cast needs')
+                      .catch(() => false)) return HANDLED;
+
+        if (!this.sittingFor || Date.now() - this.sittingFor > 60_000) {
+          this.sittingFor = Date.now();
+          this.note('will NOT sit in the open for vigor', {
+            vigor: vigorLeft, needs: SPELL_EXERTION_VIGOR,
+            why: 'there is no safe wall we can reach and a freeze is refused off one. ' +
+                 'Sitting here would be the fieldrest posture that killed Waldorf four ' +
+                 'times, and vigor is not worth it',
+            doing: 'rotating — the room seat is given up so the next pass hunts a wall again',
+          });
         }
       }
       // WHICH PRECONDITION IS ACTUALLY MISSING. The two have different remedies and only

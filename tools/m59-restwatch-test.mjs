@@ -183,6 +183,93 @@ console.log('\nthe ledger writes, and never takes a character down');
   rmSync(file, { force: true });
 }
 
+console.log('\nWHERE A CHARACTER SITS DOWN — a wall by default, the open only on request');
+{
+  // Operator's rule, 2026-09-10: safe-wall behaviour is always the default, and stopping
+  // somewhere that is not a safe wall must be something you deliberately asked for.
+  //
+  // The old default picked a CORNER off the coarse grid — two of four orthogonal
+  // neighbours blocked — which is not a safe wall, and m59-safespots.mjs names that exact
+  // error in its own header: a flat wall blocks three of eight neighbours and scores as a
+  // 62% improvement while leaving twenty of the twenty-eight squares that can really reach
+  // you wide open. That gap is how Waldorf died four times resting with in_safe_spot false.
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+
+  // REAL GEOMETRY, NOT A FAKE ONE. A first attempt built a sealed pocket in a 9x9 fake and
+  // every assertion failed — correctly: a perfectly sealed square is not WALKABLE TO, and
+  // nearestSafeSpot rightly refuses to send a character somewhere it cannot go. A safe wall
+  // has to be reachable and unreachable at once (by us and by them respectively), and that
+  // is a property of real rooms rather than something convenient to fake.
+  //
+  // Room 39, Upstairs in Castle Victoria, measured 2026-09-09: 578 walkable squares, 185 of
+  // them safe walls under the rule in force. The fleet's own home room, so if the default
+  // does not find a wall HERE it will not find one anywhere.
+  const { loadMap } = await import('./m59-map.mjs');
+  const { geometryFor } = await import('./m59-safespots.mjs');
+  const rooms = (() => { const m = loadMap(); const r = m.rooms ?? m;
+                         return Array.isArray(r) ? r : Object.values(r); })();
+  const room39 = rooms.find(r => r && (r.num === 39 || r.id === 39));
+  const geo39 = room39 ? geometryFor(room39) : null;
+
+  const build = (policy) => {
+    const k = Object.create(Autopilot.prototype);
+    // A square the fleet actually stands on in 39, and NOT itself a wall, so the default
+    // has somewhere to walk to rather than trivially already being right.
+    const me = { id: 0, col: 30, row: 8 };
+    k.policy = policy;
+    k.s = {
+      client: { selfId: 0, self: me, room: { objects: new Map([[0, me]]) } },
+      world: {
+        room: { num: 39 }, geometry: geo39,
+        reach: (col, r) => ({ reachable: true,
+                              steps: Math.max(Math.abs(col - me.col), Math.abs(r - me.row)) }),
+      },
+    };
+    return k;
+  };
+
+  if (!geo39) {
+    // The map is a build artefact and a fresh clone may not have baked it. Skipping is
+    // honest; pretending to pass is not.
+    console.log('  --   substrate/m59-map.json has no room 39, so the sit-down cases were '
+              + 'SKIPPED (run `node tools/setup.mjs routes`). This is not a pass.');
+  } else {
+
+  const def = build({});
+  ok('with no policy set at all, it goes looking for a real safe wall',
+     def.restingSquare()?.wall === true, JSON.stringify(def.restingSquare()));
+  // THE PROPERTY, NOT THE COORDINATE. Asserting a particular square would pin this test to
+  // one bake of one room and break the day the map is re-baked for an unrelated reason.
+  // What matters is that nothing can reach the square it chose.
+  const chosen = def.restingSquare();
+  ok('and the square it picks is one nothing can reach — which is what a safe wall IS',
+     chosen?.can_reach_you === 0, JSON.stringify(chosen));
+  ok('and it is somewhere we can actually walk to, not merely somewhere unreachable',
+     Number.isFinite(chosen?.steps) && chosen.steps >= 0, JSON.stringify(chosen));
+  ok('and it says so, so the journal and the ledger need not infer it from the word corner',
+     def.restingSquare()?.seat === 'a safe wall');
+
+  // THE ESCAPE HATCH, AND IT HAS TO BE ASKED FOR BY NAME.
+  const anywhere = build({ restAnywhere: true });
+  const seat = anywhere.restingSquare();
+  ok('restAnywhere: true is the deliberate order to take the old corner behaviour',
+     seat && seat.wall === false, JSON.stringify(seat));
+
+  // AN UNREADABLE SETTING MUST NOT BE THE THING THAT DECIDES TO SIT IN THE OPEN. A hard
+  // `this.policy.restAnywhere` threw here, which m59-rest-test caught — it drives
+  // restingSquare on a bare instance with no policy at all.
+  const bare = Object.create(Autopilot.prototype);
+  bare.s = def.s;
+  ok('a missing policy object is the DEFAULT, not a crash and not the open floor',
+     bare.restingSquare()?.wall === true, JSON.stringify(bare.restingSquare()));
+
+  // Anything false-y other than an explicit true keeps the wall.
+  for (const v of [false, undefined, null, 0, 'true'])
+    ok(`restAnywhere: ${JSON.stringify(v)} still seeks a wall — only a literal true opts out`,
+       build({ restAnywhere: v }).restingSquare()?.wall === true);
+  }
+}
+
 console.log('\nTHE LEDGER MAY NOT BE READ BY ANYTHING THAT CHOOSES A SQUARE');
 {
   // This is the guarantee the last book did not have, and losing it is exactly how that book
