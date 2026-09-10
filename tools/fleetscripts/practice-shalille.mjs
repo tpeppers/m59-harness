@@ -307,7 +307,7 @@ export const hospice = ({ casts = 20, maxMana = 65, patient = null } = {}) => ({
     : [verify(() => false,
         'hospice refuses a target already at full health before it sends anything ' +
         '(hospice.kod:88), so a run without a named wounded partner reports casts it never ' +
-        'made. Pass patient=<who>, or let m59-karmapump.mjs drive it — that one keeps the ' +
+        'made. Pass patient=<who>, or let m59-shalille-train.mjs drive it — that one keeps the ' +
         'patient hurt on purpose and checks the healer could answer BEFORE the next self-harm.')],
 });
 

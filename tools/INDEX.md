@@ -137,7 +137,6 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `jumpfinder` | WHERE A ROOM IS SEVERED, AND WHAT WOULD BRIDGE IT — FOUND RATHER THAN DESCRIBED. |
 | `jumptest` | THE UKGOTH JUMP, ON ITS OWN, AS MANY TIMES AS YOU LIKE. |
 | `jumptrial` | LEARN THE UKGOTH JUMP BY DOING IT TWO HUNDRED TIMES AND WRITING DOWN WHAT HAPPENED. |
-| `karmapump` | TRAIN A SHAL'ILLE CASTER BY HEALING SOMEBODY WHO HURTS HIMSELF ON PURPOSE. |
 | `keeper-bt` | the behavior-tree keeper: a dedicated driver for a |
 | `keeper-goap` | THE GOAP KEEPER. A planner-driven loop that replaces |
 | `keeper-process` | One process per character. Runs the GOAP loop |
@@ -257,6 +256,7 @@ searches it. If what you need is here, use it; if it is nearly here, extend it.
 | `service` | THE BROKER'S LIFECYCLE, OWNED BY SOMETHING THAT IS NOT A CHAT SESSION. |
 | `session-readiness` | Small, offline-testable session lifecycle helpers for m59-broker. |
 | `session` | Session and Pacer for Meridian 59 game connections. |
+| `shalille-train` | TRAIN A SHAL'ILLE CASTER ON SOMEBODY WHO HURTS HIMSELF ON PURPOSE — AND THAT SOMEBODY MAY |
 | `sheet` | WHAT EACH CHARACTER IS, WRITTEN DOWN WHERE LOSING THE SERVER CANNOT TAKE IT. |
 | `shelter-quartermaster` | Same-room redistribution for a fleet shelter. This file deliberately has no |
 | `shelter` | RUNNING FOR COVER: THE DECISION, THE WALL IT PICKED, AND WHETHER IT HELPED. |

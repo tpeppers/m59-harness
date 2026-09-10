@@ -14,13 +14,13 @@ export const recipes = [
   {
     name: 'master-shalille',
     fleetscript: false,
-    backed_by: 'tools/m59-karmapump.mjs',
+    backed_by: 'tools/m59-shalille-train.mjs',
     recipe: {
       effect: 'Raises a healer through the Shal\'ille ladder by healing a high-karma patient ' +
               'who hurts himself on purpose with an Amulet of Shadows. Earns the KARMA the ' +
               'school gates on at the same time, which is the reason to do it this way rather ' +
               'than by buying spells alone.',
-      run: 'node tools/m59-karmapump.mjs --healer <agent> --patient <agent> --room <room> ' +
+      run: 'node tools/m59-shalille-train.mjs --healer <agent> --patient <agent> --room <room> ' +
            '--mode heal --gather --apply --stop-when-learnable "<ability>"',
       needs: [
         'a patient with HIGH karma holding an Amulet of Shadows (Beaker, karma 70)',

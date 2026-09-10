@@ -1,17 +1,41 @@
 #!/usr/bin/env node
-// TRAIN A SHAL'ILLE CASTER BY HEALING SOMEBODY WHO HURTS HIMSELF ON PURPOSE.
+// TRAIN A SHAL'ILLE CASTER ON SOMEBODY WHO HURTS HIMSELF ON PURPOSE — AND THAT SOMEBODY MAY
+// BE THE CASTER.
 //
-//   node tools/m59-karmapump.mjs --healer hk1 --patient t6 --room 48        # plans, sends nothing
-//   node tools/m59-karmapump.mjs --healer hk1 --patient t6 --room 48 --apply
-//   node tools/m59-karmapump.mjs ... --apply --until-karma 50 --max-casts 200
+//   node tools/m59-shalille-train.mjs --healer hk1 --room 370                  # SOLO, plans only
+//   node tools/m59-shalille-train.mjs --healer hk1 --room 370 --apply
+//   node tools/m59-shalille-train.mjs --healer hk1 --patient t6 --room 370 --apply
+//   node tools/m59-shalille-train.mjs --healer hk1 --patient t6 --apply --until-karma 50
 //
-// THE MECHANIC, from the operator: karma comes from HEALING a high-karma character, not
-// from killing evil things — which is far slower. So a character with karma to spare
-// (Beaker, 70) carries an Amulet of Shadows and toggles it: putting it ON curses him,
-// trying to take it OFF hurts him. Either way he becomes something to heal, and each heal
-// moves the healer's karma. That is the whole loop, and it is the shortest road to the
-// karma gates on the Shal'ille ladder — 30 for hospice and rescue, 40 for forces of light,
-// 50 for the one we actually want, Reveal.
+// THE ENGINE, and it is the same in both shapes: an Amulet of Shadows. Putting it ON curses
+// the wearer and does no damage; trying to take it OFF hurts him. Either way he becomes
+// something to heal, and healing is the only thing that moves a Shal'ille spell's ability.
+// `--mode curse` drills remove curse (level 2) and cannot hurt anybody; `--mode heal` drills
+// the heal ladder — minor heal at level 1, holy touch at 2, hospice at 3 — and is the one the
+// health floors exist for, because the server refuses a heal on somebody with nothing to heal.
+//
+// TWO SHAPES, AND THE DIFFERENCE IS KARMA RATHER THAN TRAINING.
+//
+//   SOLO   (no --patient) the caster wears the amulet, pulls at it, and heals himself. Trains
+//          the spell exactly as well as the pair, and needs no second body, no co-location
+//          and no hand-over. IT CANNOT PUMP KARMA — see below.
+//
+//   PAIRED (--patient <agent>) a second character wears the amulet and hurts himself; the
+//          caster heals him. Trains the spell AND moves the caster's karma, provided the
+//          patient's karma is the higher of the two.
+//
+// WHY SOLO CANNOT EVER PUMP KARMA. Healing awards karma on the DIFFERENCE between the
+// target's karma and the caster's. In solo the target IS the caster, so that difference is
+// zero by construction — not because the partner was badly chosen or the run was unlucky.
+// This file therefore refuses `--until-karma` in solo rather than accepting a threshold it
+// could never reach, and its banner says which of the two things the run is buying.
+//
+// WHY SOLO IS USUALLY THE ONE YOU WANT ANYWAY. Every failure the paired rig suffered on
+// 2026-09-10 came from the SECOND character rather than from the healing: a herb courier
+// wedged 382->370 three times, a patient whose deaths and keeper restarts kept knocking the
+// loop over, and two hand-overs that left a body inert with the symptom surfacing later as an
+// unrelated call failing. Measured the same evening: solo carried hospice 62 -> 71 in an hour,
+// roughly triple the paired rate, on one body that never left the inn.
 //
 // THE THREE THINGS THAT CAN GO WRONG, AND WHAT EACH ONE COSTS.
 //
@@ -20,17 +44,21 @@
 //    the floor is checked BEFORE each self-harm and it is checked against the worst case,
 //    not the current one: if the healer could not heal right now, the patient does not take
 //    another hit. A dead farmer costs a point of maximum health for ever (m59-combat.md).
+//    In SOLO the patient and the healer are one body, so this floor is also what stops the
+//    caster killing himself — the same check, doing double duty.
 //
 // 2. THE PATIENT WALKING AWAY MID-LOOP. He is a farming character with `mode: farm`,
 //    `hunt: [battered skeleton, zombie]` and an assigned room, and a DUM bot re-decides him
 //    about every thirty seconds. `busy` will not stop either of them — it is broker-side
 //    only, which this repository has already paid to learn. The only thing that holds him
 //    is a commander lease on WORK and MOVEMENT, heartbeated for the whole run, and it is
-//    released on the way out so he goes back to farming.
+//    released on the way out so he goes back to farming. Solo skips this entirely, which is
+//    most of why it is steadier.
 //
 // 3. THE HEALER DYING. He is a level-1 caster with twenty hit points. Nothing in this loop
-//    hurts him, but the room might, so the run refuses to start anywhere the fleet fights
-//    and stops if his health moves at all.
+//    hurts him — except in SOLO, where the amulet is his own — so the run refuses to start
+//    anywhere the fleet fights and stops if his health moves in a way the amulet cannot
+//    explain.
 //
 // IDENTITY, MORTALITY, SURVIVAL AND RECOVERY STAY WITH BOTH KEEPERS. The lease takes work,
 // movement and economy and nothing else, so a patient held here still runs from something
@@ -44,10 +72,30 @@ const has = n => argv.includes(`--${n}`);
 const die = (m, c = 1) => { console.error(m); process.exit(c); };
 
 const HEALER = arg('healer') || die('--healer is required (the agent learning Shal’ille)');
-const PATIENT = arg('patient') || die('--patient is required (the agent carrying the amulet)');
+// ONE UNIT OR TWO, AND THE DIFFERENCE IS KARMA — NOT WHETHER IT TRAINS.
+//
+// Omit `--patient` and the healer is his own patient: he pulls at the amulet himself and
+// heals himself. That trains the spell exactly as well as the paired loop, and needs no
+// second body, no co-location and no hand-over — worth saying plainly, because every failure
+// the paired rig suffered on 2026-09-10 came from the SECOND character rather than from the
+// healing. A herb courier wedged 382->370 three times, a patient whose deaths and keeper
+// restarts kept knocking the loop over, and two hand-overs that left a body inert. Measured
+// the same evening: solo took hospice 62 -> 71 in an hour, roughly triple the paired rate.
+//
+// WHAT SOLO CANNOT DO, EVER, IS PUMP KARMA. Healing awards karma in proportion to how much
+// higher the TARGET's karma is than the caster's, and in solo the target IS the caster — the
+// difference is zero by construction, not by bad luck or a badly chosen partner. So solo is
+// a spell trainer and nothing else, and this file refuses to imply otherwise: `--until-karma`
+// is rejected in solo rather than silently never being reached.
+const PATIENT = arg('patient') || HEALER;
+const SOLO = PATIENT === HEALER;
 const ROOM = Number(arg('room') || 0) || null;
 const APPLY = has('apply');
 const UNTIL_KARMA = Number(arg('until-karma') || 0) || null;
+if (SOLO && UNTIL_KARMA)
+  die('--until-karma is meaningless in solo mode: the target is the caster, so the karma ' +
+      'difference is always zero and the threshold could never be reached. Give a second ' +
+      'character with --patient to pump karma, or drop --until-karma to train the spell.');
 const MAX_CASTS = Number(arg('max-casts') || 200);
 const EVERY_MS = Math.max(1500, Number(arg('every') || 3) * 1000);
 
@@ -280,7 +328,12 @@ console.log(`healer   ${HEALER}  room ${healer0.room} ${healer0.roomName}`);
 console.log(`         karma ${healer0.karma}  mana ${healer0.mana?.value}/${healer0.mana?.max}  hp ${healer0.hp?.value}/${healer0.hp?.max}`);
 console.log(`         spells: ${healer0.spells.join(', ')}`);
 console.log(`         herbs ${countOf(pack0, /herb/i)}  emerald ${countOf(pack0, /emerald/i)}`);
-console.log(`patient  ${PATIENT}  room ${patient0.room} ${patient0.roomName}`);
+console.log(SOLO
+  ? `patient  ${PATIENT} (SOLO — he is his own patient)`
+  : `patient  ${PATIENT}  room ${patient0.room} ${patient0.roomName}`);
+console.log(SOLO
+  ? '         trains the spell; earns NO karma — the target is the caster, so the difference is zero'
+  : `         trains the spell AND pumps karma while the patient's karma is the higher`);
 console.log(`         karma ${patient0.karma}  hp ${patient0.hp?.value}/${patient0.hp?.max}`);
 console.log(`         amulet: ${amulet ? `#${amulet.id} ${amulet.name}` : 'NOT IN HIS PACK'}`);
 console.log(`floors   patient never takes a hit below ${Math.round(FLOOR * 100)}%; run aborts below ${Math.round(ABORT * 100)}%`);
@@ -295,12 +348,20 @@ if (!healer0.spells.some(s => HEALS.some(h => h.name === s) || s === CURE.name))
 const GATHER = has('gather');
 if (!GATHER) {
   if (ROOM && healer0.room !== ROOM) problems.push(`${HEALER} is in ${healer0.room}, not ${ROOM} (pass --gather to walk them)`);
-  if (ROOM && patient0.room !== ROOM) problems.push(`${PATIENT} is in ${patient0.room}, not ${ROOM} (pass --gather to walk them)`);
-  if (healer0.room !== patient0.room)
+  // Both vacuous in solo: one body is always in the same room as itself.
+  if (!SOLO && ROOM && patient0.room !== ROOM) problems.push(`${PATIENT} is in ${patient0.room}, not ${ROOM} (pass --gather to walk them)`);
+  if (!SOLO && healer0.room !== patient0.room)
     problems.push(`they are in different rooms (${healer0.room} vs ${patient0.room}) — a heal needs the same room`);
 }
-if ((patient0.karma ?? 0) < 30)
+// PAIRED MODE ONLY. Karma is awarded on the DIFFERENCE between the target's and the
+// caster's, so a low-karma patient makes a poor pump — but in solo that difference is zero
+// by construction and complaining about it would be refusing a character for being himself.
+// Solo is a spell trainer; it never claimed the karma.
+if (!SOLO && (patient0.karma ?? 0) < 30)
   problems.push(`${PATIENT} karma is ${patient0.karma}; healing a LOW-karma character is not the pump`);
+if (!SOLO && (patient0.karma ?? 0) <= (healer0.karma ?? 0))
+  console.log(`  note: ${PATIENT} karma ${patient0.karma} is not above ${HEALER}'s ${healer0.karma}, ` +
+              `so this run trains the spell but will not move karma`);
 for (const p of problems) console.log(`  ! ${p}`);
 
 if (problems.length) die('\nrefusing: fix the above.', 2);
@@ -315,7 +376,7 @@ if (!kport) die(`no keeper answered for ${PATIENT} — the amulet is toggled thr
 console.log(`\npatient keeper on ${kport.port} (pid ${kport.pid}, ${kport.character})`);
 
 const health = await (await fetch(`${BROKER}health`)).json();
-const owner = `karmapump:${process.pid}`;
+const owner = `shalille-train:${process.pid}`;
 let lease = null;
 async function claim() {
   const out = await call('commander_lease', {
