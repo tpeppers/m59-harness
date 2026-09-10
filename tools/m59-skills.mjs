@@ -18,6 +18,9 @@
 // the state was when it stopped.
 
 import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-parse.mjs';
+// A ROOM REFERENCE CARRIES ITS SPACE — the client's room `.id` is an OBJECT ID and the bake's
+// key is a ROOM NUMBER, and both are small integers. See tools/m59-roomref.mjs.
+import { roomFields } from './m59-roomref.mjs';
 // The Underworld's exits, and which city is nearest to any room. As a namespace,
 // because escapeUnderworld re-exports most of it and a bare import would shadow.
 import * as UW from './m59-underworld.mjs';
@@ -2711,7 +2714,13 @@ async function stepOnto(s, o) {
   const entered = arr.events.find(e => e.kind === 'room-entered');
   const now = { id: c.room.id, name: c.roomNameRsc ? c.rsc.get(c.roomNameRsc) : null };
   if (entered || now.id !== wasIn)
-    return { left: true, arrived_in: entered?.roomName ?? now.name, room: now.id };
+    // `now.id` IS AN OBJECT ID, NOT A ROOM NUMBER, and this used to return it as `room`.
+    // Reported twice on 2026-09-10 to two different readers, who both took it for a room
+    // number because it is called `room` and it is a small integer: `room: 94` for Familiars
+    // (which is room 52) and `room: 413` for the Cibilo Creek Inn (which is 153). One of them
+    // then set a keeper's `assignedRoom` to 413, a room that does not exist, which is how a
+    // body is told to walk to nowhere for ever.
+    return { left: true, arrived_in: entered?.roomName ?? now.name, ...roomFields(now.id) };
   if (isTerminalMovementReason(walk.reason))
     return { left: false, terminal: true, reason: walk.reason, note: walk.note,
              why: walk.note ?? walk.reason };
@@ -2766,7 +2775,9 @@ async function ripOut(s, rip, { maxSeconds = 60 } = {}) {
     const entered = arr.events.find(e => e.kind === 'room-entered');
     const now = { id: c.room.id, name: c.roomNameRsc ? c.rsc.get(c.roomNameRsc) : null };
     if (entered || now.id !== wasIn)
-      return { left: true, arrived_in: entered?.roomName ?? now.name, room: now.id, attempts };
+      // The object id again — see the note on the direct-walk return above.
+      return { left: true, arrived_in: entered?.roomName ?? now.name, ...roomFields(now.id),
+               attempts };
     await sleep(1200);
   }
   return { left: false, attempts,
@@ -2950,7 +2961,11 @@ export async function escapeUnderworld(s, { city = null, nearestTo = null,
       // another finds out here rather than after walking the wrong way for ten minutes.
       const landed = Object.entries(UW.CITY_INNS)
         .find(([, v]) => v.inn === now.id || (arrivedIn && v.innName === arrivedIn))?.[0] ?? null;
-      return { left: true, stood_up: true, arrived_in: arrivedIn, room: now.id, via: name,
+      // THE THIRD OBJECT ID IN A FIELD CALLED `room` — this is the one both sightings on
+      // 2026-09-10 actually came through. `UW.CITY_INNS` compares `v.inn === now.id` just
+      // above, which is correct: those are ids compared to ids. The REPLY is the boundary.
+      return { left: true, stood_up: true, arrived_in: arrivedIn, ...roomFields(now.id),
+               via: name,
                ...(landed ? { city: landed } : {}), tried,
                ...(wanted ? {
                  wanted, chosen_because: chosenBecause,
