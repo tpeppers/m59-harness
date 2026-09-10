@@ -45,6 +45,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { describeWhen, deadWhen, ambiguousWhen } from './m59-codeexits.mjs';
 import { exitsOf, inferredExits, codeExits, loadMap, movementMapFile, hazardReason,
          AVOID_IN_TRANSIT } from './m59-map.mjs';
 
@@ -62,42 +63,26 @@ export const KINDS = Object.freeze(['declared', 'inferred', 'trigger', 'fall']);
 
 // ---------------------------------------------------------------- trigger predicates
 //
-// A kod trigger is a CONJUNCTION OF CONDITIONS and a condition may itself be a DISJUNCTION:
-// `((new_row = 17) or (new_row = 18)) and (new_col = 12)`. m59-codeexits.json stored that as a
-// flat list, which every reader joins with AND -- so the predicate became `row == 17 and row ==
-// 18 and col == 12`, which nothing can satisfy, and the trigger was dead while looking healthy.
-// SIX OF TWENTY-FOUR ENTRIES were in that state, including a second way into the Temple of
-// Shal'ille and one into Marion. `values: [...]` is the repaired shape and means "any of".
-
-const condText = (c) => Array.isArray(c.values)
-  ? `${c.axis} ${c.op} ${c.values.join(' or ')}`
-  : `${c.axis} ${c.op} ${c.value}`;
-
-export const describeWhen = (when) => (when ?? []).map(condText).join(' and ');
-
-/**
- * Why this predicate can never be true, or null when it can.
- *
- * Only the case that actually occurred is detected -- two different `==` values required on one
- * axis at once. A general satisfiability checker would be a bigger thing that this file cannot
- * justify, and a checker that reports MORE than it can prove is worse than none: it would send
- * readers to hunt a defect that is not there. See the standing rule about a refusal that cannot
- * say why it fired.
- */
-export function unsatisfiableWhen(when) {
-  const eq = new Map();
-  for (const c of when ?? []) {
-    if (c.op !== '==' || Array.isArray(c.values)) continue;
-    if (!eq.has(c.axis)) eq.set(c.axis, new Set());
-    eq.get(c.axis).add(c.value);
-  }
-  for (const [axis, vals] of eq)
-    if (vals.size > 1)
-      return `${axis} is required to equal ${[...vals].sort((a, b) => a - b).join(' and ')} at ` +
-             `once. That is a kod OR flattened into an AND; it should be ` +
-             `{ axis: '${axis}', op: '==', values: [${[...vals].sort((a, b) => a - b)}] }`;
-  return null;
-}
+// NOT DECIDED HERE. `m59-codeexits.mjs` owns the predicate language -- parsing, evaluating and
+// writing down a kod trigger condition -- and this file asks it, for the same reason the router
+// and the mover ask it: a diagnostic that forms its own opinion about a predicate is a second
+// opinion rather than a look at the one in play.
+//
+// THIS IS A CORRECTION OF MY OWN FIRST ATTEMPT, hours old. I wrote a syntactic checker here
+// that saw two `==` conditions on one axis, declared the trigger UNSATISFIABLE, and called six
+// of twenty-four entries dead. The evaluator sitting in m59-codeexits.mjs -- the one
+// `World.exits()` uses to find the square to stand on -- had always read same-axis equalities
+// as ALTERNATIVES, with the reason in its comment. So those triggers were being crossed by the
+// fleet while three separate renderers printed them as impossibilities, and my checker made it
+// four. The defect was in the SENTENCE, not in the world: exactly the mistake this repository
+// names as its own axiom -- "'unreachable' is a fact about the file, not about the world" -- and I
+// made it about a predicate instead of a jump.
+//
+// What survives: `values: [...]` is still worth writing, because a shape two readers disagree
+// about is a defect even when one of them is right (`ambiguousWhen` reports it). And DEADNESS
+// is now measured the only way that cannot disagree with the mover: ask `inRegion` whether any
+// square of a room that size satisfies it.
+export { describeWhen, deadWhen, ambiguousWhen } from './m59-codeexits.mjs';
 // ---------------------------------------------------------------- telemetry
 
 let hopCache = null;
@@ -197,10 +182,14 @@ export function exitsFor(map, roomNum, { telemetry = true } = {}) {
           direction: null, stand_on: null,
           arrive: e.arrive ?? null,
           trigger: describeWhen(e.when) || null,
-          // A TRIGGER WHOSE PREDICATE CANNOT BE SATISFIED IS A DEAD CONNECTION, and it looks
-          // exactly like a live one to anything that does not check. Reported rather than
-          // silently carried -- this is the debugging half the operator asked for.
-          unsatisfiable: unsatisfiableWhen(e.when),
+          // A TRIGGER NO SQUARE OF THIS ROOM CAN SATISFY IS A DEAD CONNECTION, and it looks
+          // exactly like a live one to anything that does not check. Measured against the room
+          // the trigger is IN -- its condition is about this room's coordinates -- with the
+          // mover's own evaluator, so this cannot disagree with what the mover will do.
+          unsatisfiable: deadWhen(e.when, { rows: room?.rows ?? 64, cols: room?.cols ?? 64 }),
+          // And a shape two readers read differently, which is a defect even though `inRegion`
+          // is the one that is right. Six of twenty-four entries; reported, never a refusal.
+          ambiguous: ambiguousWhen(e.when),
           trigger_targets: e.trigger_targets ?? null,
           provenance: { source: 'substrate/m59-codeexits.json', cite: e.rid ?? null,
                         // The name a person would use for the room they are standing in. The
@@ -262,6 +251,10 @@ export function unifiedRoom(map, roomNum) {
       // reachable on paper and unreachable in fact.
       dead_triggers_in: inbound.filter(e => e.unsatisfiable).length,
       dead_triggers_out: out.filter(e => e.unsatisfiable).length,
+      // Separately counted, because it is a defect in the DATA rather than in the world: the
+      // trigger works and the file says it in a shape half its readers get wrong.
+      ambiguous_triggers_in: inbound.filter(e => e.ambiguous).length,
+      ambiguous_triggers_out: out.filter(e => e.ambiguous).length,
       hazard: hazardReason(num) ?? null,
       avoid_in_transit: AVOID_IN_TRANSIT.has(num),
     },
@@ -373,7 +366,7 @@ if (IS_ENTRY) {
     (e.trigger ? `[${e.trigger}] ` : '') +
     (e.telemetry ? `(${e.telemetry.ok}/${e.telemetry.tries} crossed)` : '(never measured)') +
     (e.hazard ? '  HAZARD' : '') + (e.avoid_in_transit ? '  avoid-in-transit' : '') +
-    (e.unsatisfiable ? '  DEAD TRIGGER' : '');
+    (e.unsatisfiable ? '  DEAD TRIGGER' : '') + (e.ambiguous ? '  AMBIGUOUS SHAPE' : '');
 
   console.log(`\nroom ${u.room} — ${u.name ?? '(unnamed)'}`);
   console.log(`\n  OUT (${u.out.length})`);

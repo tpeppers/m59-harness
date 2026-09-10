@@ -24,7 +24,7 @@
      "col": 46
     },
     "from_name": "The Deep Dark Woods of Tos",
-    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
+    "when_why": "The kod condition here is an OR. This file used to store it as a flat list of same-axis `==` conditions, which `inRegion` (m59-codeexits.mjs) has always read correctly as ALTERNATIVES -- it is the evaluator World.exits() uses -- while every place that PRINTED a predicate joined the list with AND and so described this doorway as the impossible `row == 17 and row == 18 and col == 12`. THE TRIGGER ALWAYS WORKED; the sentence about it did not. Rewritten 2026-09-10 as `values: [...]` meaning \"any of\", which no reader can misread. Six of twenty-four entries were flat, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the disjunction through, and whoever adds another condition shape must teach `satisfies` in the same commit -- an unknown shape evaluates false for every square, which empties the region and stops the mover finding anywhere to stand."
    },
    {
     "to": 28,
@@ -71,7 +71,7 @@
      "col": 56
     },
     "from_name": "The Deep Dark Woods of Tos",
-    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
+    "when_why": "The kod condition here is an OR. This file used to store it as a flat list of same-axis `==` conditions, which `inRegion` (m59-codeexits.mjs) has always read correctly as ALTERNATIVES -- it is the evaluator World.exits() uses -- while every place that PRINTED a predicate joined the list with AND and so described this doorway as the impossible `row == 17 and row == 18 and col == 12`. THE TRIGGER ALWAYS WORKED; the sentence about it did not. Rewritten 2026-09-10 as `values: [...]` meaning \"any of\", which no reader can misread. Six of twenty-four entries were flat, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the disjunction through, and whoever adds another condition shape must teach `satisfies` in the same commit -- an unknown shape evaluates false for every square, which empties the region and stops the mover finding anywhere to stand."
    }
   ],
   "6": [
@@ -119,7 +119,7 @@
      "col": 65
     },
     "from_name": "The Deep Dark Woods of Marion",
-    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
+    "when_why": "The kod condition here is an OR. This file used to store it as a flat list of same-axis `==` conditions, which `inRegion` (m59-codeexits.mjs) has always read correctly as ALTERNATIVES -- it is the evaluator World.exits() uses -- while every place that PRINTED a predicate joined the list with AND and so described this doorway as the impossible `row == 17 and row == 18 and col == 12`. THE TRIGGER ALWAYS WORKED; the sentence about it did not. Rewritten 2026-09-10 as `values: [...]` meaning \"any of\", which no reader can misread. Six of twenty-four entries were flat, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the disjunction through, and whoever adds another condition shape must teach `satisfies` in the same commit -- an unknown shape evaluates false for every square, which empties the region and stops the mover finding anywhere to stand."
    },
    {
     "to": 48,
@@ -144,7 +144,7 @@
      "col": 31
     },
     "from_name": "The Deep Dark Woods of Marion",
-    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
+    "when_why": "The kod condition here is an OR. This file used to store it as a flat list of same-axis `==` conditions, which `inRegion` (m59-codeexits.mjs) has always read correctly as ALTERNATIVES -- it is the evaluator World.exits() uses -- while every place that PRINTED a predicate joined the list with AND and so described this doorway as the impossible `row == 17 and row == 18 and col == 12`. THE TRIGGER ALWAYS WORKED; the sentence about it did not. Rewritten 2026-09-10 as `values: [...]` meaning \"any of\", which no reader can misread. Six of twenty-four entries were flat, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the disjunction through, and whoever adds another condition shape must teach `satisfies` in the same commit -- an unknown shape evaluates false for every square, which empties the region and stops the mover finding anywhere to stand."
    }
   ],
   "26": [
@@ -255,7 +255,7 @@
      "col": 47
     },
     "from_name": "The Forests of Meridian",
-    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
+    "when_why": "The kod condition here is an OR. This file used to store it as a flat list of same-axis `==` conditions, which `inRegion` (m59-codeexits.mjs) has always read correctly as ALTERNATIVES -- it is the evaluator World.exits() uses -- while every place that PRINTED a predicate joined the list with AND and so described this doorway as the impossible `row == 17 and row == 18 and col == 12`. THE TRIGGER ALWAYS WORKED; the sentence about it did not. Rewritten 2026-09-10 as `values: [...]` meaning \"any of\", which no reader can misread. Six of twenty-four entries were flat, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the disjunction through, and whoever adds another condition shape must teach `satisfies` in the same commit -- an unknown shape evaluates false for every square, which empties the region and stops the mover finding anywhere to stand."
    }
   ],
   "28": [
@@ -282,7 +282,7 @@
      "col": 49
     },
     "from_name": "The Forests of Meridian",
-    "when_why": "The kod condition here is an OR and this file used to store it as a flat list that every reader joins with AND, which made the predicate UNSATISFIABLE and the trigger dead. Corrected 2026-09-10 to `values: [...]` meaning \"any of\". Six of twenty-four entries were in this state, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the OR through, or all six come back."
+    "when_why": "The kod condition here is an OR. This file used to store it as a flat list of same-axis `==` conditions, which `inRegion` (m59-codeexits.mjs) has always read correctly as ALTERNATIVES -- it is the evaluator World.exits() uses -- while every place that PRINTED a predicate joined the list with AND and so described this doorway as the impossible `row == 17 and row == 18 and col == 12`. THE TRIGGER ALWAYS WORKED; the sentence about it did not. Rewritten 2026-09-10 as `values: [...]` meaning \"any of\", which no reader can misread. Six of twenty-four entries were flat, including a second way into the Temple of Shal'ille and one into Marion. WHOEVER REGENERATES THIS FILE must carry the disjunction through, and whoever adds another condition shape must teach `satisfies` in the same commit -- an unknown shape evaluates false for every square, which empties the region and stops the mover finding anywhere to stand."
    }
   ],
   "35": [
@@ -592,5 +592,5 @@
   "rooms_with_code_exits": 11,
   "unmatched_classes": []
  },
- "note": "534->48 (RID_TEMPLE) removed by hand 2026-08-07: 9 successes against 1645 failures in the transit record, and it was the destination of 82% of every failed hop in the fleet. The kod condition (row<18 AND col<13) is real but no square in that region reliably fires it. Regenerating this file will bring it back. | 2026-09-10: 534->48 RESTORED with an explicit trigger_target at r15c11, the measured reachable frontier, which satisfies the kod predicate. Regenerating this file will drop the aim and reintroduce the 1645-failure behaviour -- keep the trigger_targets field. | 2026-09-10: six entries had a kod OR flattened into an unsatisfiable AND and now use `values: [...]`. The generator has the same bug; regenerating without fixing it reintroduces all six."
+ "note": "534->48 (RID_TEMPLE) removed by hand 2026-08-07: 9 successes against 1645 failures in the transit record, and it was the destination of 82% of every failed hop in the fleet. The kod condition (row<18 AND col<13) is real but no square in that region reliably fires it. Regenerating this file will bring it back. | 2026-09-10: six entries stored a kod OR as a flat list of same-axis `==` conditions and now use `values: [...]`. They were never broken in play -- `inRegion` read them correctly -- but three separate renderers described them as impossibilities. m59-codeexits.mjs now owns rendering as well as evaluation (describeWhen/deadWhen/ambiguousWhen) and everything else asks it. A regeneration must carry the disjunction through; tools/m59-exits-test.mjs is the canary."
 }

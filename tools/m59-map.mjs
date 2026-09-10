@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRoo, RoomGeometry, sharedRoomGeometry, DEFAULT_ROO_DIRS } from './m59-roo.mjs';
 import { lazyRoomTopology } from './m59-room-artifacts.mjs';
 import { attachLabExitAtlas, labExitApproaches } from './m59-exit-atlas.mjs';
-import { loadCodeExits } from './m59-codeexits.mjs';
+import { loadCodeExits, describeWhen } from './m59-codeexits.mjs';
 import {
   CHECKED_MAP_FILE, LOCAL_MAP_FILE, movementMapFile,
   geometryOutputFile, geometryRefreshBaseFile,
@@ -925,15 +925,12 @@ export function codeExits(roomNum) {
     // check, which is how a hand-removal of the 534 -> 48 entry survived a month.
     ...(e.rid ? { rid: e.rid } : {}),
     ...(e.from_name ? { from_name: e.from_name } : {}),
-    // A CONDITION MAY BE AN OR. `values: [17, 18]` means "any of", and rendering it as
-    // `row == 17 and row == 18` -- which is what a flat list joined with AND produces -- states
-    // an impossible predicate. Six of twenty-four entries were stored that way, and the
-    // unified exit view is what made it visible: room 6 -> 48 read
-    // `[row == 17 and row == 18 and col == 12]`, which nothing can satisfy.
-    how: 'walk into the part of this room where ' +
-         e.when.map(c => Array.isArray(c.values)
-           ? `${c.axis} ${c.op} ${c.values.join(' or ')}`
-           : `${c.axis} ${c.op} ${c.value}`).join(' and ') +
+    // SAID BY THE FILE THAT OWNS THE PREDICATE LANGUAGE. This used to join the whole condition
+    // list with ' and ', which contradicted `inRegion` -- the evaluator the mover actually uses,
+    // which reads same-axis equalities as ALTERNATIVES. So the two-square doorway into the
+    // Temple of Shal'ille was printed as `row == 17 and row == 18 and col == 12`: an
+    // impossibility, about a trigger the mover was crossing perfectly well.
+    how: 'walk into the part of this room where ' + describeWhen(e.when) +
          ' — the room moves you across by itself, there is nothing to press',
   }));
 }

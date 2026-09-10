@@ -26,7 +26,7 @@ import { sharedRoomGeometry, roomHasDeclaredFallJump, protocolToClient } from '.
 import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { exitsOf, findPath, inferredExits, codeExits, edgeExitsOf, edgeCandidatesOf, LEAVE,
          AVOID_IN_TRANSIT, selectedEdgeAt, routingRevision } from './m59-map.mjs';
-import { inRegion } from './m59-codeexits.mjs';
+import { inRegion, describeWhen } from './m59-codeexits.mjs';
 import { affordances, OF, isTeleporter, KOD_FINENESS } from './m59-parse.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { observedCrossings } from './m59-crossings.mjs';
@@ -1096,7 +1096,11 @@ export class World {
         how: best?.reachable
           ? `walk_to {"col":${best.col},"row":${best.row}} (r${best.row}c${best.col}) — the room moves you across as you arrive`
           : ce.how,
-        trigger: ce.when.map(x => `${x.axis} ${x.op} ${x.value}`).join(' and '),
+        // ONE RENDERER, OWNED BY THE FILE THAT OWNS `inRegion` two lines up. Joining the
+        // condition list with ' and ' here described the region as an impossibility for every
+        // trigger with a two-square doorway -- while the scan directly above it, using the
+        // correct semantics, was finding walkable squares in that same region.
+        trigger: describeWhen(ce.when),
       });
     }
 

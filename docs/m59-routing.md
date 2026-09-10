@@ -724,16 +724,38 @@ written, neither of which any single source could show:
   report now answers "which doors can I take from where I landed" in a trigger-entered room
   without `--at`, which used to be the only form that worked there.
 
-- **A kod `OR` had been flattened into an unsatisfiable `AND`.** The kod condition for the
-  temple is `((new_row = 17) or (new_row = 18)) and (new_col = 12)`; the file stored the three
-  as a flat list, and every reader joins a flat list with AND. The predicate became
-  `row == 17 and row == 18 and col == 12`, which nothing can satisfy, and **the trigger was dead
-  while looking healthy on the page**. Six of twenty-four entries were in that state, including
-  a second way into the temple and one into Marion. `values: [17, 18]` is the repaired shape and
-  means "any of"; `unsatisfiableWhen()` is the check that finds the next one.
-  **THE GENERATOR STILL HAS THIS BUG** — regenerating `m59-codeexits.json` without carrying the
-  OR through reintroduces all six, and `m59-exits-test.mjs` is the canary that fails when it does.
+- **A kod `OR` was stored in a shape half the readers got wrong** — and, corrected the same day,
+  **the defect was in the SENTENCE and not in the world.** The kod condition for the temple is
+  `((new_row = 17) or (new_row = 18)) and (new_col = 12)`. The file stored those three as a flat
+  list, and `inRegion` in [`tools/m59-codeexits.mjs`](../tools/m59-codeexits.mjs) has always read
+  same-axis equalities as ALTERNATIVES — with the reason in its own comment, and it is the
+  evaluator `World.exits()` uses to find the square to stand on. **So the trigger worked.** What
+  was wrong is that THREE separate places that PRINTED a predicate joined the whole list with
+  `and`, describing the two-square doorway as `row == 17 and row == 18 and col == 12`: an
+  impossibility, about a crossing the fleet was making. The unified view's first version made it
+  four readers, and went further — it called six of twenty-four triggers dead.
 
+  **A description that contradicts the evaluator is worse than no description**, because it sends
+  the reader hunting a defect in the world instead of in the sentence. That is this repository's
+  own axiom ("'unreachable' is a fact about the file, not about the world") arriving as a fact about
+  a predicate rather than a jump. So:
+
+  - `m59-codeexits.mjs` **owns the predicate language** — parse, evaluate (`inRegion`), render
+    (`describeWhen`), and judge (`deadWhen`, `ambiguousWhen`). `m59-map.mjs`, `m59-world.mjs` and
+    the unified view all ask it. A renderer of its own is how three copies drifted apart.
+  - **Deadness is MEASURED, not inferred**: `deadWhen` asks `inRegion` whether any square of a
+    room that size satisfies the predicate. It therefore cannot disagree with the mover, and it
+    catches the case a syntactic checker misses — inequalities on one axis DO conjoin, so
+    `row < 5 and row > 9` is a region nothing can be in.
+  - **The flat shape is reported as AMBIGUOUS**, which is a defect in the data and not in the
+    world: `ambiguousWhen` names both readings and the shape to write instead. `values: [17, 18]`
+    is that shape, and all six entries now use it.
+  - **`satisfies` had to learn `values` in the same commit that wrote it into the data.** It did
+    not, for about an hour: `v === c.value` against an absent `value` is false for every square,
+    so `World.exits()` would have found no square to stand on for six LIVE triggers — including
+    room 6 into the temple — and the mover would have refused before sending a packet. Writing a
+    new shape into a data file without teaching the evaluator is the same class of failure as
+    the one above, pointed the other way.
 ### `mayArrive()` — and why BOTH the broker and fleetScript ask it
 
 `inboundVerdict(map, room)` answers "is there any way in at all, and what did you consult?",

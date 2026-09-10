@@ -89,8 +89,17 @@ export function codeExitsFor(src, rids) {
   return out;
 }
 
+// A CONDITION MAY CARRY `values: [a, b]` MEANING "ANY OF", and this evaluator has to accept it,
+// because the file now uses that shape to say explicitly what the flat form said only by
+// convention. Added 2026-09-10 WITH THE SHAPE: writing `values` into the data without teaching
+// this function would have emptied the region for every trigger that used it -- `v === c.value`
+// against an absent `value` is false for every square, so `World.exits()` would have found no
+// walkable square for the trigger and the mover would have refused before sending a packet.
+// That is the whole failure this file's own comment below is about, arriving from the other side.
 const satisfies = (c, row, col) => {
   const v = c.axis === 'row' ? row : col;
+  if (Array.isArray(c.values)) return c.values.some(x => satisfies({ ...c, values: null, value: x },
+                                                                   row, col));
   return c.op === '<' ? v < c.value : c.op === '>' ? v > c.value
        : c.op === '<=' ? v <= c.value : c.op === '>=' ? v >= c.value : v === c.value;
 };
@@ -111,6 +120,87 @@ export const inRegion = (when, row, col) => {
   }
   return true;
 };
+
+// ---------------------------------------------------------------- saying it in English
+//
+// THIS FILE OWNS THE PREDICATE LANGUAGE: how a trigger condition is parsed, how it is
+// evaluated, and how it is written down. Everything else asks.
+//
+// It has to, because the three had drifted apart. `inRegion` above reads same-axis equalities
+// as ALTERNATIVES -- correctly, and with the reason in its comment -- while every place that
+// PRINTED a predicate joined the whole list with ' and ', so the two-square doorway into the
+// Temple of Shal'ille was rendered `row == 17 and row == 18 and col == 12`. Nothing can satisfy
+// that, and it was printed by m59-map.mjs, m59-world.mjs and the unified exit view -- three
+// readers stating an impossibility about a trigger the mover was crossing perfectly well.
+//
+// A description that contradicts the evaluator is worse than no description: it sends a reader
+// hunting a defect in the world instead of in the sentence. See the standing rule about a
+// debugging view that computes its own geometry being a second opinion rather than a look.
+
+const groupWhen = (when) => {
+  const out = [];
+  for (const c of when ?? []) {
+    if (c.op !== '==') { out.push(c); continue; }
+    const vals = Array.isArray(c.values) ? c.values : [c.value];
+    const prior = out.find(x => x.axis === c.axis && x.op === '==');
+    if (prior) prior.values = [...new Set([...prior.values, ...vals])].sort((a, b) => a - b);
+    else out.push({ axis: c.axis, op: '==', values: [...vals] });
+  }
+  return out;
+};
+
+// A GROUP OF ALTERNATIVES IS BRACKETED, because `row == 17 or 18 and col == 12` reads as though
+// the `or` might reach across the `and` -- and the whole reason this function exists is that a
+// reader was misreading a predicate. `(row == 17 or row == 18) and col == 12` cannot be misread.
+export const describeWhen = (when) => groupWhen(when).map((c) => {
+  if (!Array.isArray(c.values)) return `${c.axis} ${c.op} ${c.value}`;
+  if (c.values.length === 1) return `${c.axis} ${c.op} ${c.values[0]}`;
+  return `(${c.values.map(v => `${c.axis} ${c.op} ${v}`).join(' or ')})`;
+}).join(' and ');
+
+/**
+ * Why NO SQUARE OF A ROOM THIS SIZE can satisfy this predicate, or null when one can.
+ *
+ * Asked of `inRegion` -- the evaluator the mover's own `World.exits()` uses -- rather than by
+ * reasoning about the conditions. A syntactic checker is how the last wrong answer happened: it
+ * saw two `==` values on one axis, called the trigger dead, and was contradicted by the
+ * evaluator standing next to it. If this ever disagrees with the mover, it is because the mover
+ * changed its mind, which is the only kind of disagreement worth reporting.
+ */
+export function deadWhen(when, { rows = 64, cols = 64 } = {}) {
+  if (!(when ?? []).length) return null;
+  for (let r = 1; r <= rows; r++)
+    for (let c = 1; c <= cols; c++)
+      if (inRegion(when, r, c)) return null;
+  return `no square in a ${rows}x${cols} room satisfies ${describeWhen(when)} -- evaluated with ` +
+         `inRegion, the same predicate the mover's own exit scan uses`;
+}
+
+/**
+ * Why this predicate's SHAPE is ambiguous, or null when it is not.
+ *
+ * Two `==` conditions on one axis mean "either" to `inRegion` and "both at once" to anything
+ * that joins the list with AND. That is not a dead trigger -- the mover crosses it -- but it is
+ * a sentence two readers disagree about, and six of twenty-four entries were written that way.
+ * `values: [...]` says the same thing in a shape nobody can misread.
+ */
+export function ambiguousWhen(when) {
+  const eq = new Map();
+  for (const c of when ?? []) {
+    if (c.op !== '==' || Array.isArray(c.values)) continue;
+    if (!eq.has(c.axis)) eq.set(c.axis, new Set());
+    eq.get(c.axis).add(c.value);
+  }
+  for (const [axis, vals] of eq)
+    if (vals.size > 1) {
+      const list = [...vals].sort((a, b) => a - b);
+      return `${axis} carries ${list.length} separate == conditions (${list.join(', ')}). ` +
+             `inRegion reads those as ALTERNATIVES and every reader that joins the list with ` +
+             `AND reads them as an impossibility. Write it as ` +
+             `{ axis: '${axis}', op: '==', values: [${list}] } instead.`;
+    }
+  return null;
+}
 
 function walk(dir, out = []) {
   for (const e of readdirSync(dir)) {

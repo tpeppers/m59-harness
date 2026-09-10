@@ -687,11 +687,13 @@ the records it describes.
   against the walls are kept because they are the safe-spot signal, and that an exit a bake
   cannot reach is still OFFERED — a bake must never be the reason a doorway disappears, and
   that the clearance preference routes further from the walls while never removing a route) and
-  `node tools/m59-exits-test.mjs` (64 — **the five sources of "an exit", and the one view that
-  unions them**: that a kod `OR` stored as a flat condition list becomes an unsatisfiable AND and
-  is REPORTED rather than carried (six of twenty-four entries were dead that way, including a
-  second way into the Temple of Shal'ille, and the room-48 case is the canary for the generator
-  that still has the bug); that the room `m59-exitreport.mjs` called "NOTHING IN THE WORLD GRAPH
+  `node tools/m59-exits-test.mjs` (79 — **the five sources of "an exit", and the one view that
+  unions them**: that the evaluator and the sentence agree about a trigger predicate, in both the
+  flat and the `values: [...]` shape — six of twenty-four entries were written flat, three
+  renderers described them as impossibilities, and the fleet was crossing them the whole time, so
+  DEADNESS is measured by asking `inRegion` (the mover's own evaluator) whether any square
+  satisfies it and the flat shape is reported separately as AMBIGUOUS; that the room
+  `m59-exitreport.mjs` called "NOTHING IN THE WORLD GRAPH
   ARRIVES HERE" has two inbound triggers with provenance and a landing square; that every room
   the inbound verdict refuses, `findPath` refuses too — asserted over the WHOLE map, because
   that equivalence is the only thing that makes it honest for fleetScript and the broker to
