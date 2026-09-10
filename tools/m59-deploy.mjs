@@ -34,6 +34,8 @@ const HARNESS = process.env.M59_HARNESS || process.cwd();
 const PROD = process.env.M59_PROD_DEPLOY || 'C:/code/m59-lab/prod-deploy';
 const TRUNK = process.env.M59_TRUNK || 'main';
 
+import { nextDeployTag } from './m59-deploytag.mjs';
+
 const git = (repo, ...args) => {
   try {
     // stderr ignored: several of these are ASKS, not assertions — `describe --exact-match`
@@ -223,9 +225,30 @@ if (mode === '--cut') {
     process.exit(1);
   }
   const day = new Date().toISOString().slice(0, 10);
-  let tag = `deploy-${day}`;
-  for (let n = 2; git(HARNESS, 'rev-parse', '-q', '--verify', `refs/tags/${tag}`); n++)
-    tag = `deploy-${day}-${n}`;
+  // THE SUFFIX IS MAX+1, NOT THE FIRST FREE SLOT.
+  //
+  // This used to walk n upward until it found a name nothing was using, which fills GAPS. On
+  // 2026-09-10 the tags were deploy-2026-09-10, -1, -2, -4, -5, -6 with prod sitting on -6 and
+  // -3 deleted, and the old loop proposed cutting -3 at a commit six AHEAD of -6. A tag whose
+  // number is lower than the running one but whose content is newer inverts the only thing a
+  // deploy tag has to mean, and the way you find that out is a rollback that rolls forward.
+  //
+  // Numeric max, not lexical, and the decision lives in m59-deploytag.mjs so it can be tested
+  // without cutting a deploy -- this file runs on import, so nothing here is reachable from a
+  // test. m59-deploytag-test.mjs carries the gap case that caused this.
+  // A FAILED LOOKUP IS NOT AN EMPTY DAY. `git()` returns null when the command fails, and
+  // `|| ''` would turn that into "no tags today" -- which proposes the day's FIRST name on a
+  // day that may already have six. `git tag -a` would then refuse it, so it fails safe rather
+  // than quietly, but the message would be about a name collision instead of about git not
+  // answering, and that is a wrong signpost during a deploy.
+  const existing = git(HARNESS, 'tag', '-l', `deploy-${day}*`);
+  if (existing === null) {
+    console.error(`refusing to cut a deploy: could not list existing deploy-${day} tags.`);
+    console.error('Without them the next number cannot be chosen, and guessing it risks');
+    console.error('naming a tag below the one production is running.');
+    process.exit(1);
+  }
+  const tag = nextDeployTag(existing, day);
   // Tag the ref that ANSWERED, not the constant. When the local trunk was stale and held by a
   // worktree, `main` here still points at the old commit — tagging it would name a version of
   // the code nobody asked to deploy, and the tag would look perfectly correct.
