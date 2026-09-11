@@ -19,7 +19,7 @@
 import assert from 'node:assert/strict';
 import { reagentWants, canEnterHall, sourcePlan, savingsOf, stockpileLedger,
          paysForHall, outsiderPlan, stockpileKeepTest, StockpileBook,
-         REAGENTS } from './m59-stockpile.mjs';
+         reagentFloorFor, REAGENTS } from './m59-stockpile.mjs';
 import { RANK } from './m59-guild.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -68,12 +68,16 @@ const ok = (what, cond) => { assert.ok(cond, what); n++; };
   ok('and a character OVER its floor wants nothing',
      !w.get('elderberry').by.some(b => b.agent === 't2'));
   ok('a character with no floor declares no want', !w.get('elderberry').by.some(b => b.agent === 't9'));
-  ok('THE MENAGERIE IS COUNTED FOR STORAGE', w.get('herbs').want === 10);
+  ok('THE MENAGERIE IS COUNTED FOR STORAGE', w.get('herb').want === 10);
+  // BOTH SPELLINGS ARE ONE ITEM. The loadout said 'herbs' and it lands on 'herb', because
+  // every name goes through the game's own fold -- which is what stops a tally keyed on the
+  // raw string reading zero on rows that are perfectly correct.
+  ok('a plural spelling folds onto the canonical key', !w.has('herbs') && w.has('herb'));
   ok('and is flagged as menagerie, because it cannot fetch for itself',
-     w.get('herbs').by[0].menagerie === true);
+     w.get('herb').by[0].menagerie === true);
   ok('an out-of-game character is skipped',
      reagentWants({ characters: [{ ...characters[0], in_game: false }] }).size === 0);
-  ok('the two reagents are the default set', REAGENTS.join(',') === 'elderberry,herbs');
+  ok('the default set uses CANONICAL spellings', REAGENTS.join(',') === 'elderberry,herb');
 }
 
 // ---------------------------------------------------------------- take, or buy
@@ -241,6 +245,42 @@ const ok = (what, cond) => { assert.ok(cond, what); n++; };
     ok('fulfilling something nobody asked for changes nothing',
        book.fulfil({ agent: 'nobody', item: 'herbs', gave: 5, by: 't2' }).requests.length === 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------- the floor has two homes
+//
+// `loadout.carry[].min` is the curated floor contributionPlan protects; `policy.reagentTarget`
+// is what actually drives buying. On this fleet they disagree completely — eighteen of
+// nineteen loadouts carry min 0 for both reagents while the buy targets are live — so reading
+// the loadout alone would have made the whole feature inert on the fleet it was written for.
+//
+// Operator, 2026-09-11: "we want this wide, better to store stuff we later sell, no real cost
+// to it until the chests all fill up". Storing a reagent nobody needs costs a slot in a
+// 24,000-bulk pool. NOT storing one costs the spread twice.
+{
+  const loadoutOnly = { loadout: { carry: [{ item: 'elderberry', min: 20 }] } };
+  const policyOnly  = { loadout: { carry: [{ item: 'herb', min: 0 }] },
+                        policy: { reagentTarget: 40 } };
+  const both        = { loadout: { carry: [{ item: 'herb', min: 60 }] },
+                        policy: { reagentTarget: 40 } };
+  const perItem     = { policy: { reagentTarget: { elderberry: 15, herb: 5 } } };
+
+  ok('a loadout floor alone counts', reagentFloorFor(loadoutOnly, 'elderberry') === 20);
+  ok('A POLICY TARGET ALONE COUNTS — the case that would have made this inert',
+     reagentFloorFor(policyOnly, 'herb') === 40);
+  ok('and the WIDER of the two wins', reagentFloorFor(both, 'herb') === 60);
+  ok('a scalar target means that many of EACH reagent',
+     reagentFloorFor(policyOnly, 'elderberry') === 40);
+  ok('a per-item target is read per item', reagentFloorFor(perItem, 'elderberry') === 15);
+  ok('and the plural key is accepted there too',
+     reagentFloorFor({ policy: { reagentTarget: { herbs: 7 } } }, 'herb') === 7);
+  ok('no floor anywhere is zero', reagentFloorFor({}, 'elderberry') === 0);
+
+  // THE KEEP RULE READS THE SAME UNION. Reading the keep from the loadout while the want
+  // comes from the policy is how a character sells what it is about to be sent to buy.
+  const keep = stockpileKeepTest({ characters: [policyOnly] });
+  ok('an item wanted only by POLICY is still kept from the merchant', keep('herb') === true);
+  ok('and the plural spelling is the same item', keep('herbs') === true);
 }
 
 console.log(`\n${n} passed, 0 failed\n`);

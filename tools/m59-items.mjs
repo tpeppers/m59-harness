@@ -301,6 +301,83 @@ const itemWord = word => ITEM_IRREGULAR[word]
 export const itemNameKey = name => String(name || '').toLowerCase()
   .split(/[^a-z0-9]+/).filter(Boolean).map(itemWord).join(' ');
 
+// DID YOU MEAN — because "does not resolve" is true and useless on its own.
+//
+// The refusal used to say only that the name was wrong, and a wrong item name is one of the
+// quietest faults here: a single unresolvable entry rejects the WHOLE autopilot order, so
+// one typo threw away every station change, hunt list and weapon ban computed for sixteen
+// of twenty-one characters in a night — the symptom being bans that were visibly correct in
+// the orders and never reached a single hand. The name that did it was "magic wand", and the
+// item is called "wand".
+//
+// Scored, cheapest signal first, because the mistakes people actually make are not random
+// strings: a plural or a spacing slip (`herbs` -> `herb`, `elder berry`), a qualifier nobody
+// dropped (`magic wand` -> `wand`), or an abbreviation (`nerudite` -> `nerudite sword`).
+// Levenshtein is the last resort and is bounded, so it never proposes something unrelated
+// merely because nothing else scored.
+const editDistance = (a, b) => {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++)
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1,
+                        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = row;
+  }
+  return prev[b.length];
+};
+
+export function suggestItemName(name, { file = ITEMS_FILE, limit = 3 } = {}) {
+  const raw = String(name ?? '').trim();
+  const key = itemNameKey(raw);
+  if (!key) return [];
+  const table = loadItems(file);
+  if (!table?.items) return [];
+  const words = key.split(' ').filter(Boolean);
+  const scored = [];
+  for (const item of Object.values(table.items)) {
+    const cand = itemNameKey(item.name);
+    if (!cand) continue;
+    let score = null;
+    if (cand === key) score = 0;
+    else if (cand.split(' ').some(w => words.includes(w))) {
+      // A SHARED WHOLE WORD IS THE STRONGEST HINT THERE IS. "magic wand" and "wand" share
+      // one, and no edit distance would ever have ranked them together.
+      score = 1 + Math.abs(cand.length - key.length) / 100;
+    } else if (cand.startsWith(key) || key.startsWith(cand)) score = 2;
+    else {
+      const d = editDistance(cand, key);
+      // Bounded: a third of the name may differ, no more. Without this the suggester
+      // confidently proposes an unrelated item simply because nothing else scored at all,
+      // which is worse than saying nothing.
+      if (d <= Math.max(1, Math.floor(Math.max(cand.length, key.length) / 3))) score = 3 + d;
+    }
+    if (score !== null) scored.push({ name: item.name, score });
+  }
+  return scored.sort((a, b) => a.score - b.score || a.name.localeCompare(b.name))
+               .slice(0, limit).map(x => x.name);
+}
+
+/** Check a name without throwing — for a sweep over config that should report, not die. */
+export function checkItemName(name, { file = ITEMS_FILE } = {}) {
+  const raw = String(name ?? '').trim();
+  if (!raw) return { name: raw, ok: false, why: 'empty item name', suggestions: [] };
+  try {
+    const canonical = resolveItemName(raw, file);
+    return { name: raw, ok: true, canonical,
+             // A name that RESOLVES but is not spelled the canonical way is not an error and
+             // must not be reported as one — `herbs` is a correct way to say `herb`. It is
+             // still worth surfacing, because two spellings of one item in one directory is
+             // how a reader concludes there are two items.
+             renamed: canonical.toLowerCase() !== raw.toLowerCase() ? canonical : null,
+             suggestions: [] };
+  } catch (e) {
+    return { name: raw, ok: false, why: e.message, suggestions: suggestItemName(raw, { file }) };
+  }
+}
+
 export function resolveItemName(name, file = ITEMS_FILE) {
   const raw = String(name ?? '').trim();
   const key = itemNameKey(raw);
@@ -309,9 +386,12 @@ export function resolveItemName(name, file = ITEMS_FILE) {
   if (!table?.items) throw new Error(`local item datastore is unavailable (${file})`);
   const matches = Object.values(table.items).filter(item => itemNameKey(item.name) === key);
   if (matches.length === 1) return matches[0].name;
-  if (!matches.length)
+  if (!matches.length) {
+    const near = suggestItemName(raw, { file });
     throw new Error(`item "${raw}" does not resolve to an item in the local datastore; ` +
-                    'choose one complete item name, without abbreviating it');
+                    'choose one complete item name, without abbreviating it' +
+                    (near.length ? ` — did you mean ${near.map(n => `"${n}"`).join(', ')}?` : ''));
+  }
   throw new Error(`item "${raw}" is ambiguous: ${matches.map(item => item.name).join(', ')}`);
 }
 
