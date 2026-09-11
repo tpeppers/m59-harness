@@ -588,3 +588,35 @@ at a fine lattice yet, and until somebody does its verdict is not safe either.
 **The rule to take from this: a "0 of N" from a fine flood is a statement about the LATTICE
 until it has been run at two resolutions and agreed.** Every such number on this page above
 this section was single-resolution, and the one that mattered was wrong.
+
+## Postscript: the rail is built and CANNOT BE DRIVEN, because `walk_to` hangs on x/y
+
+The badlands rail exists (`substrate/badlands-path.json`, 650 waypoints; `substrate/rail-49.json`,
+163 more across Kardde's Canyon) and every leg is a straight line the mover's own trace has
+already accepted. Driving it needs `walk_to`'s `x`/`y` arguments, because the whole point is
+sub-square precision that `col`/`row` cannot express.
+
+**`walk_to` with `x`/`y` hangs.** Reproduced eight times against a freshly restarted, in-game,
+connected keeper:
+
+```
+walk_to { agent, x: 678, y: 1406, arrive_within: 6, max_steps: 200 }
+  -> { "error": "The operation was aborted due to timeout", "timed_out_after_ms": 60000 }
+```
+
+while the same keeper, in the same second, answers `col`/`row` normally:
+
+```
+walk_to { agent, col: 10, row: 21, max_steps: 60 }
+  -> { arrived: false, blocked_at: { col: 14, row: 17 }, steps: 53, refused_edges: 12,
+       note: "kept ending up somewhere other than the planned square" }
+```
+
+53 steps taken, so the keeper is healthy and the square path works. It is specifically the fine
+path that never returns. The coordinates are right — `protocol = round(client/16 + 64)` matches
+`standPointWire` exactly, and the target square resolves correctly in both spaces.
+
+So the badlands stone is now blocked on a **third** thing, and it is ours rather than the
+world's: the terrain permits the walk, the collision layer permits the walk, we have the line —
+and the one tool that can follow a line does not come back. That is the next thing to fix, and
+it is a keeper-side bug rather than a movement one.
