@@ -63,8 +63,15 @@ const has = n => argv.includes(`--${n}`);
 const die = (m, c = 1) => { console.error(m); process.exit(c); };
 
 const AGENT = arg('agent') || die('--agent is required (the caster)');
-const SPELL = (arg('spell') || die('--spell is required')).toLowerCase();
-const TARGET = arg('target');
+// COMMA SEPARATED, TRIED IN ORDER. `--spell "forces of light,cure disease"` drills both in
+// one loop; `--target` takes one per spell in the same order, and the word `self` resolves to
+// this character own name.
+const SPELLS = String(arg('spell') || die('--spell is required')).split(',')
+  .map(x => x.trim().toLowerCase()).filter(Boolean);
+// POSITIONAL, AND AN EMPTY SLOT IS MEANINGFUL. `--target ",self"` means the first spell
+// takes no target and the second takes this character. Dropping the empties instead shifted
+// every later target one place left and refused a perfectly good invocation.
+const TARGETS = String(arg('target') ?? '').split(',').map(x => x.trim() || null);
 const APPLY = has('apply');
 const FLEET = arg('fleet') || null;
 const MAX_CASTS = Number(arg('max-casts') || 300);
@@ -109,32 +116,54 @@ const countIn = (items, want) => (items ?? [])
   .filter(i => norm(i.name) === norm(want))
   .reduce((s, i) => s + (i.amount ?? 1), 0);
 
-// ---------------------------------------------------------------- what the spell costs
+// ---------------------------------------------------------------- what the spells cost
+//
+// MORE THAN ONE SPELL, BECAUSE SOME CANNOT BE CAST ON DEMAND. `cure disease` needs a target
+// that is ALREADY diseased — cdisease.kod's CanPayCosts wants exactly one target, a User, and
+// `IsEnchanted #byClass=&Disease` — so a drill that knows only that spell spends its whole run
+// refusing while it waits to catch something. Paired with a spell that is always castable the
+// waiting costs nothing: try each in order and take whichever actually spends reagents.
 const book = await call('spells', { agent: AGENT });
-const row = (book.spells ?? []).find(s => String(s.name).toLowerCase() === SPELL)
-         ?? (book.spells ?? []).find(s => String(s.name).toLowerCase().includes(SPELL));
-if (!row)
-  die(`${AGENT} does not know a spell matching "${SPELL}". Knows: ` +
-      (book.spells ?? []).map(s => s.name).join(', '));
+const me0 = await call('status', { agent: AGENT }).catch(() => null);
+const SELF = me0?.character ?? null;
 
-// A SINGLE-TARGET SPELL CAST AT NOTHING IS A SILENT NO-OP. `dazzle` and `mark of dishonor`
-// both report targets: 1, the server answers a targetless cast with nothing at all, and the
-// loop would read as practice while spending an emerald a round.
-if (row.targets > 0 && !TARGET)
-  die(`"${row.name}" needs a target (targets: ${row.targets}) and a targetless cast is ` +
-      'silent rather than refused — it would look exactly like practice. Pass --target <who>, ' +
-      'or drill a self-targeted spell (targets: 0).');
-
-// `["2 x Elderberry", "1 x Emerald"]` is how the spells tool prints the cost.
-const COST = (row.reagents ?? []).map(t => {
-  const m = /^\s*(\d+)\s*x\s*(.+?)\s*$/i.exec(String(t));
-  return m ? { n: Number(m[1]), item: m[2] } : { n: 1, item: String(t) };
+const ROWS = SPELLS.map((want, idx) => {
+  const found = (book.spells ?? []).find(s => String(s.name).toLowerCase() === want)
+             ?? (book.spells ?? []).find(s => String(s.name).toLowerCase().includes(want));
+  if (!found)
+    die(`${AGENT} does not know a spell matching "${want}". Knows: ` +
+        (book.spells ?? []).map(s => s.name).join(', '));
+  const raw = TARGETS[idx] ?? (SPELLS.length === 1 ? TARGETS[0] : null) ?? null;
+  const target = raw && /^self$/i.test(raw) ? SELF : raw;
+  // A SINGLE-TARGET SPELL CAST AT NOTHING IS A SILENT NO-OP. `dazzle` and `mark of dishonor`
+  // report targets: 1, the server answers a targetless cast with nothing at all, and the loop
+  // would read as practice while spending a reagent a round.
+  if (found.targets > 0 && !target)
+    die(`"${found.name}" needs a target (targets: ${found.targets}) and a targetless cast is ` +
+        'silent rather than refused — it would look exactly like practice. Pass --target ' +
+        '<who>, or --target self, or drill a spell that takes none.');
+  const cost = (found.reagents ?? []).map(t => {
+    const m = /^\s*(\d+)\s*x\s*(.+?)\s*$/i.exec(String(t));
+    return m ? { n: Number(m[1]), item: m[2] } : { n: 1, item: String(t) };
+  });
+  return { row: found, target, cost };
 });
+const row = ROWS[0].row;
 
-console.log(`${row.name} — school ${row.school}, level ${row.level}, ${row.mana} mana, ` +
-            `targets ${row.targets}, karma ${row.required_karma ?? '-'}`);
-console.log(`per cast: ${COST.map(c => `${c.n} x ${c.item}`).join(' + ') || 'no reagents'}`);
+// EVERY REAGENT ANY OF THEM NEEDS, merged by name — this is what the run stops on and what
+// the preflight reports. Two spells that share elderberry must not each be measured as if it
+// had the stack to itself.
+const COST = [...new Map(ROWS.flatMap(r => r.cost)
+  .map(c => [c.item.toLowerCase(), c])).values()];
 
+for (const { row: sp, target, cost } of ROWS)
+  console.log(`${sp.name} — school ${sp.school}, level ${sp.level}, ${sp.mana} mana, ` +
+              `targets ${sp.targets}${target ? ` (${target})` : ''}, ` +
+              `karma ${sp.required_karma ?? '-'} | ` +
+              `${cost.map(c => `${c.n} x ${c.item}`).join(' + ') || 'no reagents'}`);
+
+const scoreOfNamed = (a, nm) => (a?.spells ?? [])
+  .find(s => String(s.name).toLowerCase() === String(nm).toLowerCase())?.ability ?? null;
 const scoreOf = (a) => (a?.spells ?? [])
   .find(s => String(s.name).toLowerCase() === String(row.name).toLowerCase())?.ability ?? null;
 const before = await call('abilities', { agent: AGENT });
@@ -144,9 +173,16 @@ const inv0 = await call('inventory', { agent: AGENT });
 for (const c of COST)
   console.log(`  carrying ${countIn(inv0.items, c.item)} ${c.item} — ` +
               `${Math.floor(countIn(inv0.items, c.item) / c.n)} cast(s)`);
-const affordable = COST.length
-  ? Math.min(...COST.map(c => Math.floor(countIn(inv0.items, c.item) / c.n)))
+// THE BEST ANY ONE SPELL CAN DO, not the worst across all of them. Taking the minimum over
+// the MERGED reagent list lets a second spell the character cannot currently afford zero out
+// a first spell it can: with 109 elderberry, 23 emerald and no herbs, `forces of light` has
+// fifty-four casts in hand and `cure disease` none, and the merged minimum called that zero
+// and refused the run. A drill stops when NOTHING is castable, not when something is not.
+const castsFor = (r) => r.cost.length
+  ? Math.min(...r.cost.map(c => Math.floor(countIn(inv0.items, c.item) / c.n)))
   : MAX_CASTS;
+for (const r of ROWS) console.log(`  ${r.row.name}: ${castsFor(r)} cast(s) in the pack`);
+const affordable = Math.max(...ROWS.map(castsFor));
 console.log(`reagents allow ${affordable} cast(s); capped at ${MAX_CASTS}, paced at ${EVERY_MS / 1000}s`);
 
 if (!APPLY) { console.log('\n--apply to run it. Nothing was cast.'); process.exit(0); }
@@ -155,7 +191,7 @@ if (affordable < 1) die('\nnot enough reagents for a single cast — buy them fi
 // ---------------------------------------------------------------- one driver per character
 const health = await (await fetch(`${BROKER}health`)).json();
 const fleet = FLEET ?? health.fleet;
-const held = takeAgentLocks(fleet, [AGENT], { label: `spelldrill ${row.name} [${AGENT}]`, force: has('force') });
+const held = takeAgentLocks(fleet, [AGENT], { label: `spelldrill ${SPELLS.join('+')} [${AGENT}]`, force: has('force') });
 if (!held.ok) {
   console.error(`REFUSING — ${AGENT} is already being driven by pid ${held.holder?.pid} ` +
                 `(${held.holder?.label}). Wait for it, stop that pid, or pass --force.`);
@@ -226,6 +262,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await sto
 // ---------------------------------------------------------------- the loop
 let cast = 0, refused = 0, waited = 0, beats = 0, blindRounds = 0;
 let ringAt = 0, roomRefusals = 0;
+const perSpell = new Map();
 const started = Date.now();
 for (let round = 0; cast < MAX_CASTS; round++) {
   if (lease && ++beats % 3 === 0) await leaseCall('heartbeat', { lease_token: lease });
@@ -294,8 +331,24 @@ for (let round = 0; cast < MAX_CASTS; round++) {
   // and its keeper's restBelow was 0.95 on the night this was written, so it is sitting down
   // almost all the time. Standing costs one call and is idempotent.
   await call('rest', { agent: AGENT, stand: true }).catch(() => null);
-  const r = await call('cast', { agent: AGENT, spell: row.name, ...(TARGET ? { target: TARGET } : {}) })
-    .catch(e => ({ cast: false, reason: e.message }));
+
+  // EACH SPELL IN TURN, STOPPING AT THE FIRST THAT SPENDS ANYTHING. The reagent check below
+  // is the only honest test of whether a cast happened, so it runs per spell rather than once
+  // for the round — otherwise a `cure disease` that refused would be credited with the
+  // elderberry a `forces of light` spent, and vice versa: they share the berry.
+  let r = null, castSpell = null, spent = false;
+  for (const attempt of ROWS) {
+    r = await call('cast', { agent: AGENT, spell: attempt.row.name,
+                             ...(attempt.target ? { target: attempt.target } : {}) })
+      .catch(e => ({ cast: false, reason: e.message }));
+    castSpell = attempt;
+    for (let i = 0; i < (ROWS.length > 1 ? 4 : 8) && !spent; i++) {
+      await sleep(900);
+      const now = await call('inventory', { agent: AGENT }).catch(() => null);
+      spent = !!now && attempt.cost.some(c => countIn(now.items, c.item) < countIn(inv.items, c.item));
+    }
+    if (spent || (r?.cast && (r.mana_spent ?? 0) > 0)) break;
+  }
 
   // THE REAGENTS ARE THE RECEIPT — NOT `cast`, AND NOT `mana_spent`.
   //
@@ -310,17 +363,15 @@ for (let round = 0; cast < MAX_CASTS; round++) {
   // The window is generous because the pack arrives on an EVENT: a 2.8s window still filed
   // real casts as refusals on the run this was measured on, with the reagents showing up a
   // moment later. First read that shows a drop wins, so a fast reply costs nothing.
-  let spent = false;
-  for (let i = 0; i < 8 && !spent; i++) {
-    await sleep(900);
-    const now = await call('inventory', { agent: AGENT }).catch(() => null);
-    spent = !!now && COST.some(c => countIn(now.items, c.item) < countIn(inv.items, c.item));
-  }
+  // (The loop above does this per spell; `spent` and `castSpell` carry its verdict here.)
   if (spent || (r?.cast && (r.mana_spent ?? 0) > 0)) {
     cast++;
+    perSpell.set(castSpell.row.name, (perSpell.get(castSpell.row.name) ?? 0) + 1);
     if (cast === 1 || cast % 10 === 0) {
       const a = await call('abilities', { agent: AGENT }).catch(() => null);
-      console.log(`  ${cast} cast(s), ability ${a ? (scoreOf(a) ?? 'null') : '?'}, ` +
+      const scores = ROWS.map(x => `${x.row.name} ${scoreOfNamed(a, x.row.name) ?? '?'}`).join(', ');
+      console.log(`  ${cast} cast(s) [${[...perSpell].map(([k, v]) => `${k} x${v}`).join(', ')}] ` +
+                  `| ${scores} | ` +
                   COST.map(c => `${countIn(inv.items, c.item)} ${c.item}`).join(', '));
     }
   } else {
@@ -364,5 +415,8 @@ for (let round = 0; cast < MAX_CASTS; round++) {
 const after = await call('abilities', { agent: AGENT }).catch(() => null);
 console.log(`\n${cast} cast(s), ${refused} refused, ${waited} mana wait(s) in ` +
             `${Math.round((Date.now() - started) / 60000)} min`);
-console.log(`${row.name}: ${scoreOf(before) ?? 'null'} -> ${after ? (scoreOf(after) ?? 'null') : '?'}`);
+for (const x of ROWS)
+  console.log(`${x.row.name}: ${scoreOfNamed(before, x.row.name) ?? 'null'} -> ` +
+              `${after ? (scoreOfNamed(after, x.row.name) ?? 'null') : '?'}` +
+              ` (${perSpell.get(x.row.name) ?? 0} cast)`);
 await stop();
