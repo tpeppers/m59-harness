@@ -40,6 +40,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sharedRoomGeometry, CLIENT_FINENESS as F, MAX_STEP_HEIGHT } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
+import { reachFor, fallenBy, maxSpan } from './m59-falljump-physics.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -191,19 +192,10 @@ function closure(start) {
 // travel, so it is short by nearly three squares — and a character sent to try it walked to
 // the edge and stopped dead, six legs and a hundred and fifty steps without moving. The
 // geometry said yes and the arithmetic said no, and the arithmetic was right.
-const FALL_V0 = F * 2 / 3;            // downward, units/sec, positive here for readability
-const GRAVITY = 5 * F;                // units/sec/sec
-const RUN_SPEED = Number(flag('run-speed', 5)) * F;   // units/sec
-
-/** Seconds of air for a given drop. */
-function airTime(drop) {
-  if (drop <= 0) return 0;
-  return (-FALL_V0 + Math.sqrt(FALL_V0 * FALL_V0 + 4 * (GRAVITY / 2) * drop)) / (2 * (GRAVITY / 2));
-}
-/** How far forward you get before the ground arrives. */
-const reachFor = drop => RUN_SPEED * airTime(drop);
-/** Height of the body t seconds after leaving, relative to the take-off. */
-const fallenBy = t => FALL_V0 * t + (GRAVITY / 2) * t * t;
+// THE ARITHMETIC LIVES IN ONE PLACE NOW. This file and `m59-fineroute.mjs` each carried a
+// hand-written copy, and both had the same bug in the same branch — see
+// `m59-falljump-physics.mjs` for the constants, their citations, and what the branch cost.
+const RUN_SPEED = Number(flag('run-speed', 5)) * F;   // units/sec, overridable for experiments
 
 // YOU CANNOT JUMP THROUGH A CLIFF, AND CHECKING ONLY THE ENDS SAYS YOU CAN.
 //
@@ -221,13 +213,33 @@ const fallenBy = t => FALL_V0 * t + (GRAVITY / 2) * t * t;
 function clearBetween(a, b, hFrom, hTo) {
   const span = Math.hypot(b.x - a.x, b.y - a.y);
   const drop = hFrom - hTo;
-  // 1. CAN THE BODY EVEN GET THERE. A level or upward hop has no air time at all — it is a
-  //    step or it is nothing — and a fall reaches exactly as far as gravity allows.
-  if (drop <= MAX_STEP_HEIGHT) {
-    if (span > F * 1.5) return false;   // no drop, no flight: this is a step's worth or bust
-  } else if (span > reachFor(drop) + F / 2) {
-    return false;                       // short by more than half a square
-  }
+  // 1. CAN THE BODY EVEN GET THERE.
+  //
+  // ONE LINE, BECAUSE THE CLIENT'S RULE IS ONE EXPRESSION. A landing is legal when the body
+  // has not fallen further than the landing is below it, plus the step it may still climb:
+  //
+  //     fallenBy(t) <= drop + MAX_STEP_HEIGHT
+  //
+  // so the furthest a run can carry you is `reachFor(drop + MAX_STEP_HEIGHT)` — the same
+  // formula for a level hop, a small rise and a long fall, with no branch and no fudge.
+  //
+  // CORRECTED 2026-09-10. This used to be two cases with two magic constants — `F * 1.5` for
+  // anything not falling further than a step, and `reachFor(drop) + F / 2` beyond — and BOTH
+  // were wrong, in opposite directions, which is why neither looked wrong:
+  //
+  //   drop:        0     96    192    288    384    512   1024   2048
+  //   old cap:     1536  1536  1536   1536   1536   2219  3139   4459
+  //   true:        1415  1637  1840   2028   2204   2422  3175   4354
+  //   error (sq): +0.12 -0.10 -0.30  -0.48  -0.65  -0.20 -0.04  +0.10
+  //
+  // At dead level it was PERMISSIVE by 0.12 squares — the true level reach is 1.38 squares,
+  // not 1.5, because a running body starts falling the instant it leaves and has 384 units to
+  // give away. At the top of the same branch it was RESTRICTIVE BY 0.65 SQUARES, and that half
+  // is the expensive one: a candidate the tool never offers is a gap nobody knows is crossable.
+  // The `+ F / 2` fudge made the second branch restrictive across the mid range too.
+  //
+  // Found by the m59-research session reading `clientd3d/moveobj.c` against this file.
+  if (span > maxSpan(drop, { speed: RUN_SPEED })) return false;
   // 2. AND DOES IT CLEAR WHAT IS IN THE WAY, along the arc rather than the straight line.
   const n = Math.max(2, Math.ceil(span / (F / 4)));
   for (let i = 1; i < n; i++) {

@@ -56,14 +56,9 @@ const REPO = join(HERE, '..');
 
 // The client's own fall physics — clientd3d/move.h. Repeated here rather than imported so this
 // module keeps working if m59-falljump.mjs's exports move; the constants are the game's.
-const FALL_V0 = F * 2 / 3;          // units/sec downward the moment you leave a ledge
-const GRAVITY = 5 * F;              // units/sec/sec
-const RUN_SPEED = 5 * F;            // 5 squares a second at a run
-
-const airTime = drop => drop <= 0 ? 0
-  : (-FALL_V0 + Math.sqrt(FALL_V0 * FALL_V0 + 4 * (GRAVITY / 2) * drop)) / (2 * (GRAVITY / 2));
-const reachFor = drop => RUN_SPEED * airTime(drop);
-const fallenBy = t => FALL_V0 * t + (GRAVITY / 2) * t * t;
+// The fall arithmetic is shared with `m59-jumpfinder.mjs` — both files used to carry their
+// own copy and both had the same bug. See m59-falljump-physics.mjs.
+import { RUN_SPEED, reachFor, fallenBy, maxSpan } from './m59-falljump-physics.mjs';
 
 /**
  * A planner bound to one room. Built once and reused: the floor cache is the expensive part
@@ -310,8 +305,11 @@ export function fineRouter(roomNum, {
   function clearBetween(a, b, hFrom, hTo) {
     const span = Math.hypot(b.x - a.x, b.y - a.y);
     const drop = hFrom - hTo;
-    if (drop <= MAX_STEP_HEIGHT) { if (span > F * 1.5) return false; }
-    else if (span > reachFor(drop) + F / 2) return false;
+    // ONE LINE, because the client's rule is one expression: `fallenBy(t) <= drop + step`.
+    // This was the same two-branch cap `m59-jumpfinder.mjs` carried, permissive by 0.12
+    // squares at dead level and RESTRICTIVE BY 0.65 at a one-step drop — and the restrictive
+    // half hides real routes silently. See m59-falljump-physics.mjs. Corrected 2026-09-10.
+    if (span > maxSpan(drop)) return false;
     const n = Math.max(2, Math.ceil(span / (F / 4)));
     for (let i = 1; i < n; i++) {
       const f = i / n;
