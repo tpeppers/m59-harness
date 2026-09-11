@@ -84,6 +84,53 @@ export function advanced(fromIndex, toIndex, { onShelf = true } = {}) {
   return Number.isFinite(fromIndex) && Number.isFinite(toIndex) && toIndex > fromIndex;
 }
 
+/**
+ * Perpendicular distance from a point to the segment a-b, in the same units.
+ * A rail is segments, not dots; a body can sit exactly ON a line and be nowhere near a vertex.
+ */
+export function distanceToSegment(p, a, b) {
+  const vx = b.x - a.x, vy = b.y - a.y;
+  const len2 = vx * vx + vy * vy;
+  if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy));
+}
+
+/**
+ * HOW FAR IS THIS BODY FROM THIS LINE — the question to ask when CHOOSING between rails.
+ *
+ * `nearestWaypoint` answers a different question, and using it to pick a rail is biased by
+ * SAMPLING DENSITY. Measured 2026-09-11: room 49 has two rails across it, a 163-waypoint climb
+ * from the canyon floor and a 6-waypoint walk along the rim. Marco stood at r22c21 on the 6144
+ * rim — exactly on the rim rail's long leg from r2c21 to r26c21 — and the chooser sent him to
+ * the climb rail every time, because 163 dense vertices always produce a nearer vertex than 6
+ * sparse ones. He then oscillated between four squares five rows short of the exit, aiming at a
+ * waypoint 2858 units away, and the run was scored as a stall.
+ *
+ * A 6-waypoint rail is 5 long segments. Judge it by those.
+ */
+export function distanceToRail(waypoints, point, { floor = null, step = MAX_STEP_HEIGHT } = {}) {
+  if (!Array.isArray(waypoints) || waypoints.length === 0)
+    return { d: Infinity, empty: true, onShelf: false };
+  if (waypoints.length === 1) {
+    const w = waypoints[0];
+    return { d: Math.hypot(w.x - point.x, w.y - point.y), i: 0,
+             onShelf: onSameShelf(w.f, floor, step) };
+  }
+  let best = Infinity, bestI = -1, bestOn = false;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const a = waypoints[i], b = waypoints[i + 1];
+    // A segment is walkable only if BOTH ends are on the body's shelf — half a segment on
+    // another shelf is the ledge case, and riding it is the fall this module exists to stop.
+    const on = onSameShelf(a.f, floor, step) && onSameShelf(b.f, floor, step);
+    const d = distanceToSegment(point, a, b) + (on ? 0 : OFF_SHELF_PENALTY);
+    if (d < best) { best = d; bestI = i; bestOn = on; }
+  }
+  return { d: best >= OFF_SHELF_PENALTY ? best - OFF_SHELF_PENALTY : best,
+           i: bestI, onShelf: bestOn, floorKnown: floor != null };
+}
+
 /** Default gap, in waypoints, that separates rejoining the line from wobbling on it. */
 export const REJOIN_BEHIND = 20;
 
