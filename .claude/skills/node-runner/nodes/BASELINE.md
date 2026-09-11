@@ -1,5 +1,19 @@
 # The seven stones: what is missing from OUR MAP, per node
 
+> **THIS FILE IS MAINTAINED ON `main`, AND A SECOND COPY EXISTS ON THE PROD DEPLOY LINE.**
+> They have diverged and the prod copy is the SMALLER and OLDER of the two — measured
+> 2026-09-11: `main` 38,120 bytes against `deploy-2026-09-11-2/-3` at 33,798, with the prod
+> copy missing the `walk_to` x/y defect, the `maxDescend` ledge work and the corrections that
+> follow them. The prod copy is a CHECKOUT SNAPSHOT and has not been edited since; nothing is
+> authored there.
+>
+> So **when the two lines are reconciled, take `main`'s copy of this file wholesale.** A
+> three-way merge here is not worth attempting: every paragraph is a measurement that was
+> expensive to produce and cheap to lose, and a clean auto-merge that silently drops one is
+> exactly the failure this repository already has on record twice tonight — once deleting a
+> bank step, once nearly deleting this. If you are resolving and you are not sure which side
+> you are on, the larger file is the one with the work in it.
+
 > **A JUMP BUYS NO HEIGHT — see the LAST section.** `move.c:549` gates walking and falling
 > with the identical test and a falling body has a LOWER z, so a jump is strictly worse at
 > gaining height. Every "needs a CLIMB" row below is therefore a staircase question or a
