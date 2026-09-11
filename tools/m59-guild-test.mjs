@@ -38,7 +38,8 @@ import {
   RANK_QUOTA, rankRoom, SELF_SUSTAINING_RANK,
 } from './m59-guild.mjs';
 import { parseGuildInfo, parseGuildAsk, parseGuildList, parseGuildHalls } from './m59-parse.mjs';
-import { isObjectId, sessionObjectId, ourSessionsById } from './m59-session-identity.mjs';
+import { isObjectId, sessionObjectId, ourSessionsById,
+         rememberObjectId } from './m59-session-identity.mjs';
 import { ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying,
          looksLikeHallRoomNumber } from './m59-guild.mjs';
 import * as tithe from './m59-tithe.mjs';
@@ -634,6 +635,65 @@ console.log('\na hall room number is not a hall id');
   ok('a non-integer is not flagged',        !looksLikeHallRoomNumber(714.5));
   ok('null is not flagged',                 !looksLikeHallRoomNumber(null));
   ok('and neither is a name',               !looksLikeHallRoomNumber('Bookmaker'));
+}
+
+// A SNAPSHOT THAT FORGOT WHO YOU ARE IS NOT A CHARACTER THAT LEFT.
+//
+// The object id comes from the keeper's state snapshot, and snapshots sometimes arrive
+// without `you`. Every reader then concludes the session has no character: /health drops the
+// agent, ourSessionsById stops seeing it, and the guild tool loses an inviter it had a second
+// ago. Measured on a HEALTHY fleet 2026-09-11: 150 samples at 2s, TEN of twenty-two agents
+// dropped and returned, twenty-four transitions, always in pairs. Asked directly, not one had
+// moved — t9 "left and rejoined" three times at connection_revision 1 with uptime unbroken.
+//
+// The revision is the invalidation key because a genuine rejoin is the one thing that changes
+// the id, and it is exactly what moves that counter.
+console.log('\nremembering who a session is across an incomplete snapshot');
+{
+  // A good snapshot answers from itself and seeds the cache.
+  let r = rememberObjectId(null, { id: 4463, revision: 1 });
+  ok('a complete snapshot answers with its own id', r.id === 4463);
+  ok('and it is not "remembered"',                  r.remembered === false);
+  ok('it seeds the cache with the revision',        r.cache.id === 4463 && r.cache.revision === 1);
+
+  // THE BUG THIS EXISTS FOR: same connection, no `you`.
+  const held = rememberObjectId(r.cache, { id: undefined, revision: 1 });
+  ok('A SNAPSHOT WITHOUT `you` KEEPS THE ID on the same connection', held.id === 4463);
+  ok('and says it was remembered rather than seen', held.remembered === true);
+
+  // THE CASE THAT MUST NOT BE CACHED. A rejoin changes the id, so the old one now names
+  // somebody else — on a shared server that is the mistake that matters.
+  const rejoined = rememberObjectId(r.cache, { id: undefined, revision: 2 });
+  ok('A REJOIN DROPS THE CACHE — the id really did change', rejoined.id === null);
+  ok('and the stale cache is not carried forward',          rejoined.cache === null);
+
+  // A new id on a new connection simply replaces it.
+  const fresh = rememberObjectId(r.cache, { id: 9001, revision: 2 });
+  ok('a new id on a new revision is taken', fresh.id === 9001 && fresh.cache.revision === 2);
+
+  // UNKNOWN IS NOT A MATCH. A snapshot too degraded to say which connection it describes
+  // cannot vouch for an id either.
+  ok('an unknown revision refuses the cache',
+     rememberObjectId(r.cache, { id: undefined, revision: null }).id === null);
+  ok('and a cache with no revision cannot be matched',
+     rememberObjectId({ id: 4463, revision: null }, { id: undefined, revision: 1 }).id === null);
+
+  // Junk never survives, cached or not.
+  ok('a junk id is not cached', rememberObjectId(null, { id: -1, revision: 1 }).id === null);
+  ok('and a junk cache is not served',
+     rememberObjectId({ id: 0, revision: 1 }, { id: undefined, revision: 1 }).id === null);
+  ok('no cache and no id is simply unknown',
+     rememberObjectId(null, { id: undefined, revision: 1 }).id === null);
+
+  // The measured sequence, end to end: three phantom drops at one revision.
+  let cache = null, ids = [];
+  for (const snap of [{ id: 4471, revision: 1 }, { revision: 1 }, { id: 4471, revision: 1 },
+                      { revision: 1 }, { revision: 1 }, { id: 4471, revision: 1 }]) {
+    const out = rememberObjectId(cache, { id: snap.id, revision: snap.revision });
+    cache = out.cache; ids.push(out.id);
+  }
+  ok('t9\'s six samples now read as ONE continuous character',
+     ids.every(x => x === 4471));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

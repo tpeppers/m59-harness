@@ -131,7 +131,8 @@ import { RANK, RANK_NAME, COMMANDS, mayI, commandsIn, validateGuild,
          parseRentLine, parseRentHours, fundingPlan, rankRoom, RANK_QUOTA,
          SELF_SUSTAINING_RANK, CANNOT_REJOIN_MINUTES,
          ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying } from './m59-guild.mjs';
-import { isObjectId, sessionObjectId, ourSessionsById } from './m59-session-identity.mjs';
+import { isObjectId, sessionObjectId, ourSessionsById,
+         rememberObjectId } from './m59-session-identity.mjs';
 import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops } from './m59-spawns.mjs';
 // The shelter helpers. `safeSpotBook` is deliberately NOT imported: the book is retired and
@@ -1841,6 +1842,27 @@ class KeeperProxy {
     // Both names are needed: `proxy` to reach the keeper, `act` to reach it the one way.
     const proxy = this;
     const act = (name, args) => keeperAction(proxy.name, proxy._index, name, args);
+
+    // WHO THIS SESSION IS, HELD ACROSS A SNAPSHOT THAT FORGOT TO SAY.
+    //
+    // A keeper state snapshot occasionally arrives without `you`, and every reader of the id
+    // then concludes the session has no character: /health drops the agent out of
+    // session_object_ids, `ourSessionsById` stops seeing it, and the guild tool loses an
+    // inviter it had a moment ago. Measured on a HEALTHY fleet 2026-09-11 — ten of
+    // twenty-two agents, twenty-four transitions in five minutes, and asked directly not one
+    // of them had moved: same pid, same connection_revision, uptime running straight through.
+    //
+    // The connection revision is the invalidation key and it is exactly the right one: an
+    // object id changes when a character genuinely rejoins, and a genuine rejoin is what
+    // moves that counter. So the id is remembered only while the counter says nothing could
+    // have changed it, and dropped the instant it moves — because THAT is when serving the
+    // remembered id would address a character that no longer exists under that number. The
+    // rule and its reasoning are in m59-session-identity.mjs.
+    const seen = rememberObjectId(proxy._objectIdCache,
+                                  { id: s.you?.id, revision: s.connection_revision });
+    proxy._objectIdCache = seen.cache;
+    const selfObjectId = seen.id;
+
     const client = {
       get state() { return proxy.inGame ? 'game' : 'none'; },
       // THE OBJECT ID BELONGS HERE TOO, NOT ONLY ON `selfId`. This returned a name and
@@ -1852,8 +1874,7 @@ class KeeperProxy {
       // `induct` and `promote` were blind the same way. See m59-session-identity.mjs.
       get me() {
         if (!proxy.character) return null;
-        const id = s.you?.id;
-        return { name: proxy.character, ...(isObjectId(id) ? { id } : {}) };
+        return { name: proxy.character, ...(isObjectId(selfObjectId) ? { id: selfObjectId } : {}) };
       },
       get roomNameRsc() { return s.room ? s.room.name : null; },
       vitals() {
@@ -2174,7 +2195,9 @@ class KeeperProxy {
       // publish it, which is where it was before and no worse.
       self: s.you ? { col: s.you.col, row: s.you.row, x: s.you.x, y: s.you.y,
                       id: s.you.id ?? -1, flags: 0, facing: s.you.facing ?? null } : null,
-      selfId: s.you ? (s.you.id ?? -1) : null,
+      // Remembered across an incomplete snapshot, never across a rejoin. -1 remains the
+      // "in game but I do not know who I am yet" answer for a session with no id at all.
+      selfId: isObjectId(selfObjectId) ? selfObjectId : (s.you ? -1 : null),
       // AND THE ROOM THEY ARE STANDING IN, because giving `self` a value without this
       // CRASHED THE BROKER on resume. Every caller that reads `c.self` goes on to read
       // `c.room.objects` a line later — `threat()` does exactly that — and the emulated

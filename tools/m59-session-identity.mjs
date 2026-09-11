@@ -70,3 +70,43 @@ export function ourSessionsById(sessions) {
   }
   return out;
 }
+
+
+// A SNAPSHOT THAT FORGOT WHO YOU ARE IS NOT A CHARACTER THAT LEFT.
+//
+// The id above resolves from the keeper's state snapshot (`you.id`). Snapshots sometimes land
+// WITHOUT `you` — and when one does, every reader concludes the session has no character:
+// `/health` drops the agent out of session_object_ids, `ourSessionsById` stops seeing it, and
+// anything gating on "is this agent in game" gets a false negative.
+//
+// MEASURED 2026-09-11 on a healthy fleet: 150 samples at 2s, TEN of twenty-two agents dropped
+// and returned, twenty-four transitions in five minutes, always in pairs two to three seconds
+// apart. Asked directly, the keepers had never moved — t9 "left and rejoined" three times
+// while its connection sat at revision 1 with the same pid and uptime running straight
+// through. Not one of the twenty-four happened.
+//
+// THE CONNECTION REVISION IS THE RIGHT KEY, and it is the only one. An object id changes when
+// a character genuinely rejoins, and a genuine rejoin is exactly what moves
+// `connection_revision` — so holding the last known id while that counter is unchanged is not
+// a guess, it is the statement "nothing has happened that could have changed this". The
+// moment the counter moves the cache is worthless and is dropped, because THAT is when the id
+// really is different and serving the old one would address a character that no longer exists
+// under that number. On a shared server that is the mistake that matters.
+//
+// An UNKNOWN revision is treated as a rejoin, not as a match. A snapshot too degraded to say
+// which connection it describes cannot vouch for an id either.
+export function rememberObjectId(cache, observed = {}) {
+  const id = observed.id;
+  const revision = observed.revision;
+  const known = revision !== null && revision !== undefined;
+
+  if (isObjectId(id))
+    return { id, cache: known ? { id, revision } : null, remembered: false };
+
+  // No id in this snapshot. The cache stands only if we can prove the connection is the same
+  // one it was taken from.
+  if (cache && known && cache.revision === revision && isObjectId(cache.id))
+    return { id: cache.id, cache, remembered: true };
+
+  return { id: null, cache: null, remembered: false };
+}
