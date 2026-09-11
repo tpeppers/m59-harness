@@ -635,6 +635,14 @@ What survives, reproduced eight times with and without `fine`, `hold_shelf` and 
 **`walk_to` with x/y never returns, while col/row on the same keeper takes 29 real steps.**
 That is the defect. Whether it also damages the keeper is unproven.
 
+**And it did NOT wedge the prod broker, which I had wondered aloud about.** Cleared by two
+independent measurements: that broker's first MCP read of the session returned a 119-second-stale
+keeper snapshot within six minutes of boot — about thirty minutes before my first x/y call — and
+in its log the first `keeper liveness is unavailable but its recorded PID is alive` lands 81 lines
+into a 667-line run, with 260 such lines in 667. **39% of everything that broker logged was a
+failure to see a keeper**, from near boot, while every keeper answered its own port in
+milliseconds. A starved broker event loop, independent of anyone's calls.
+
 THE RAIL IS NOT THE PROBLEM, and this was checked rather than assumed. The operator's advice —
 *"find/write a tool that treats falls like walls and then apply that while pathing to the
 south exit"* — is now in `floodClimb` as `maxDescend` (default `Infinity`, so nothing else
