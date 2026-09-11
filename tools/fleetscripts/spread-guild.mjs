@@ -118,9 +118,17 @@ export const script = {
             'run with several inviters is much faster than the first.',
     notes: ['Promote to LORD (3), never lieutenant (4). Lieutenant is capped at 2 guild-wide and ' +
             'the refusal is silent and goes to the promoter.',
-            'The broker\'s `guild action=spread` reported in_guild 0 of 23 on 2026-09-10 while ' +
-            '`action=status` reported 2 members and named them — its membership read went stale ' +
-            'across a broker restart. Trust `status`, and re-read it after this runs.'],
+            'CORRECTED 2026-09-10: this note used to say that `guild action=spread` reporting ' +
+            'in_guild 0 of 23, while `action=status` read a fresh roster naming two members, was ' +
+            'a membership read going STALE ACROSS A BROKER RESTART. It is neither stale nor ' +
+            'about a restart, and reasoning from that would have sent the next person to look ' +
+            'at rejoin timing. The roster read is correct; the INTERSECTION with our own ' +
+            'sessions is what failed. The keeper proxy built client.me as { name } with no id ' +
+            '(m59-broker.mjs `get me()`), and the guild tool decides who is ours by me.id — so ' +
+            'oursById was empty for every keeper-backed character and the tool could not see a ' +
+            'single one of its own. induct and promote read the same field, so THIS SCRIPT was ' +
+            'blind in the same way. Fixed in m59-session-identity.mjs, pinned by ' +
+            'm59-guild-test.mjs; against the old code the test fails five ways.'],
   },
   params: {
     agents: { type: 'agents', required: false, describe: 'the cohort; omitted means every ' +
