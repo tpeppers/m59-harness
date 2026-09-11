@@ -118,12 +118,74 @@ export const purseAmount = c => (c.inventory || [])
   .filter(i => (c.rsc.get(i.nameRsc) || '').toLowerCase() === 'shilling')
   .reduce((n, i) => n + (i.amount ?? 1), 0);
 
+// FRULAR CANNOT HEAR YOU FROM ACROSS THE ROOM, AND THE SERVER SAYS NOTHING ABOUT IT.
+//
+// `Holder.SomeoneSaid` (holder.kod:585) does not broadcast speech to a monster unconditionally
+// — it gates every hearer on `SayRangeCheck` (holder.kod:604), and for a USER talking to a
+// MONSTER that is not `IsFullTalk` it drops the message entirely when
+// `SquaredDistanceTo > SAY_RADIUS`. SAY_RADIUS is 50 (blakston.khd:1299) and it is compared
+// against a SQUARED distance, so the real reach is about seven squares. Frular's attributes
+// are `MOB_NOMOVE | MOB_NOFIGHT | MOB_LISTEN | MOB_RECEIVE` (gcreator.kod:74) — no
+// MOB_FULL_TALK — so he is range-limited like any other monster.
+//
+// Dropped speech is not refused speech. Nothing is sent back, the word is not echoed to him,
+// and from this side it is indistinguishable from Frular having no answer. THAT is why the
+// rent balance has never once been read on this fleet: `credit_after` is null on all eleven
+// tithes in the book, from 2026-08-12 onward, and a guildmaster standing in room 700 on
+// 2026-08-12 said "rent" twice and got only his own echo. Measured again 2026-09-11 on a
+// guild that HAD a hall and a large credit, where a real answer was due: Gonzo asked from
+// twelve squares away (squared 148, against a limit of 50) and heard nothing.
+//
+// AND THE TITHE ITSELF IS NOT AFFECTED, which is exactly what made this so hard to see. An
+// offer is a trade, not speech, and `ReqOffer` has only a same-room check (gcreator.kod:331).
+// So paying works from anywhere in the room and reading the balance does not — the money
+// moves, the question vanishes, and the record says the payment succeeded with an unknown
+// balance. Every time.
+export const SAY_RADIUS = 50;          // blakston.khd:1299 — compared against SQUARED distance
+
+export const squaredDistance = (a, b) =>
+  (a == null || b == null || a.col == null || b.col == null) ? null
+    : (a.col - b.col) ** 2 + (a.row - b.row) ** 2;
+
+// Can this speaker be HEARD by that monster? Null positions answer null — unknown, not yes.
+export function withinSayRange(speaker, hearer, radius = SAY_RADIUS) {
+  const d2 = squaredDistance(speaker, hearer);
+  return d2 === null ? null : d2 <= radius;
+}
+
 async function askRent(s, c) {
+  // STAND CLOSE ENOUGH TO BE HEARD FIRST. Without this the say is swallowed by SayRangeCheck
+  // and the caller records "no answer" as though it were a fact about the guild's rent.
+  const frular = [...(c.room?.objects?.values() ?? [])]
+    .find(o => (c.rsc.get(o.nameRsc) || '') === FRULAR_NAME);
+  const me = c.self ?? null;
+  let approached = null;
+  if (frular && withinSayRange(me, frular) === false) {
+    const near = s.world?.approachSquare?.(frular.col, frular.row);
+    if (near) {
+      approached = await s.walkTo(near.col, near.row, { maxSteps: near.steps + 8 })
+        .catch(error => ({ arrived: false, reason: error.message }));
+    } else {
+      approached = { arrived: false, reason: 'no approach square to Frular' };
+    }
+  }
+
   const before = c.evSeq;
   await s.pacer.submit('say', () => c.say('rent'));
   const { events } = await c.waitFor({ since: before, timeoutMs: 4000 });
   const said = events.filter(e => e.text).map(e => String(e.text));
-  return { said, rent: parseRentLine(said), hours_left: parseRentHours(said) };
+
+  // SAY WHY IT WAS SILENT, rather than reporting silence as an answer. A reading taken from
+  // out of earshot is a question nobody asked, and it must not be filed as "no rent due".
+  const heardFrom = frular ? withinSayRange(c.self ?? me, frular) : null;
+  const out_of_earshot = heardFrom === false;
+  return { said, rent: parseRentLine(said), hours_left: parseRentHours(said),
+           ...(approached ? { approached } : {}),
+           ...(out_of_earshot ? { out_of_earshot: true,
+             why: `too far from ${FRULAR_NAME} to be heard — SayRangeCheck drops a user's ` +
+                  `speech to a non-MOB_FULL_TALK monster beyond SAY_RADIUS ${SAY_RADIUS} ` +
+                  `(squared, holder.kod:604). Silence here is NOT evidence about the rent.` }
+            : {}) };
 }
 
 export async function guildRentStatus(s) {

@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TitheBook, parseRentHours, parseRentLine, tithePaymentPlan } from './m59-tithe.mjs';
+import { TitheBook, parseRentHours, parseRentLine, tithePaymentPlan,
+         SAY_RADIUS, squaredDistance, withinSayRange } from './m59-tithe.mjs';
 
 const full = tithePaymentPlan({ dailyAmount: 2_000, paidToday: 0,
   saleProceeds: 3_000, purse: 4_000, walkingMoney: 1_000 });
@@ -40,4 +41,37 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 
-console.log('10 passed, 0 failed');
+// FRULAR CANNOT HEAR YOU FROM ACROSS THE ROOM, AND SILENCE IS NOT AN ANSWER.
+//
+// Holder.SomeoneSaid gates every hearer on SayRangeCheck (holder.kod:604): a USER talking to
+// a MONSTER that is not IsFullTalk is DROPPED when SquaredDistanceTo > SAY_RADIUS. The
+// constant is 50 (blakston.khd:1299) and it is compared against a SQUARED distance, so the
+// reach is about seven squares — and Frular is MOB_NOMOVE|MOB_NOFIGHT|MOB_LISTEN|MOB_RECEIVE
+// with no MOB_FULL_TALK (gcreator.kod:74).
+//
+// This is why the rent balance has never been read on this fleet: every one of the eleven
+// tithes in the book records credit_after null. Measured 2026-09-11: Gonzo at col 5 row 17,
+// Frular at col 7 row 5 — squared 148 against a limit of 50 — asked "rent" and heard nothing,
+// on a guild that had a hall and a large credit and therefore owed a real answer.
+assert.equal(SAY_RADIUS, 50, 'SAY_RADIUS is 50, blakston.khd:1299');
+
+assert.equal(squaredDistance({ col: 5, row: 17 }, { col: 7, row: 5 }), 148,
+  'the measured 2026-09-11 geometry: Gonzo to Frular');
+assert.equal(withinSayRange({ col: 5, row: 17 }, { col: 7, row: 5 }), false,
+  'and it is OUT of earshot — this exact stance produced the silence');
+
+assert.equal(withinSayRange({ col: 7, row: 6 }, { col: 7, row: 5 }), true,
+  'standing next to him is heard');
+assert.equal(withinSayRange({ col: 7, row: 12 }, { col: 7, row: 5 }), true,
+  'seven squares away is 49, just inside');
+assert.equal(withinSayRange({ col: 7, row: 13 }, { col: 7, row: 5 }), false,
+  'eight squares is 64, just outside — the boundary is SQUARED, not linear');
+
+// UNKNOWN IS NOT YES. A missing position must never read as "close enough", or the caller
+// says the word, hears nothing, and files that as a fact about the guild's rent.
+assert.equal(withinSayRange(null, { col: 7, row: 5 }), null, 'no speaker position is unknown');
+assert.equal(withinSayRange({ col: 1, row: 1 }, null), null, 'no hearer position is unknown');
+assert.equal(squaredDistance({ col: null, row: null }, { col: 7, row: 5 }), null,
+  'a null coordinate is unknown, not zero');
+
+console.log('20 passed, 0 failed');
