@@ -532,6 +532,18 @@ export function abilitiesTargetedBy(lines = []) {
   return [...new Set(hits)];
 }
 
+/**
+ * ONE PLACE THAT KNOWS WHERE HEALTH LIVES. A keeper-backed character reports `hp`, a
+ * broker-held one reports `vitals.health`, and a reader that knows only one of them turns a
+ * perfectly readable 20/20 into "health is unreadable". Exported because `crawl_to` and the
+ * `rest` guard both ask the same question and must not grow their own answers.
+ */
+export const vitalsOf = s => s?.hp ?? s?.vitals?.health ?? null;
+export function healthFractionOf(s) {
+  const vit = vitalsOf(s);
+  return vit && Number.isFinite(vit.value) && vit.max > 0 ? vit.value / vit.max : null;
+}
+
 export async function observe(agent) {
   const s = await call('status', { agent }, 40_000).catch(() => null);
   // HEALTH LIVES UNDER TWO DIFFERENT KEYS AND ONLY ONE OF THEM WAS READ.
@@ -546,8 +558,8 @@ export async function observe(agent) {
   // whose keeper has died) and it was firing on a character sitting at a perfectly readable
   // 20/20. Measured on prod 2026-09-09 with Loial, whose fleet row showed `health: "20/20"`
   // in the same breath as the script refusing to move him.
-  const vit = s?.hp ?? s?.vitals?.health ?? null;
-  const hp = vit && Number.isFinite(vit.value) && vit.max > 0 ? vit.value / vit.max : null;
+  const vit = vitalsOf(s);
+  const hp = healthFractionOf(s);
   const roomName = s?.where?.name ?? s?.room?.name ?? '';
   return {
     ok: Boolean(s),
@@ -1078,6 +1090,66 @@ export const verify = (fn, why) => ({ do: 'verify', fn, why });
 export const walkTo = (col, row, opts = {}) => ({ do: 'walk_to', col, row, ...opts });
 
 /**
+ * CRAWL TO A SQUARE ONE HOP AT A TIME, WAITING OUT WHATEVER IS STANDING IN THE WAY.
+ *
+ * `crawlTo(46, 13, { within: 2, healBelow: 0.5 })` — positional `(col, row)`.
+ *
+ * WHY NOT `walkTo`. `walk_to` PLANS, on the coarse grid, which in some rooms believes in
+ * ground the mover refuses. Asked for the square NEXT DOOR in room 39 it routed a one-square
+ * step as a forty-square loop back across the room: one step east from r13c40 put the body at
+ * r4c27, with `connection_revision` unchanged — nothing logged it off, that was the planner.
+ * `short_hop` moves the body and does not plan, so every step here is one of those.
+ *
+ * AND A MONSTER IN THE WAY IS NOT THE GROUND REFUSING. Collision is height-agnostic, so a
+ * body blocks a step exactly like a wall — and it is the operator's own diagnosis of the
+ * commonest inconsistency here. The keeper's `/movecheck` tells them apart:
+ *
+ *   object_blocked   WAIT. The orc moves. Re-ask, up to `bodyRetries`.
+ *   geometry_blocked THIS ROW DOES NOT CROSS. Sidestep; never re-ask.
+ *
+ * Options: `within`, `room`, `healBelow`/`healTo`, `bodyWaitMs`, `bodyRetries`, `deadlineMs`,
+ * `maxSteps`.
+ */
+export const crawlTo = (col, row, opts = {}) => ({ do: 'crawl_to', col, row, ...opts });
+
+/** Chebyshev — the metric the server's own range tests use, per axis. */
+const chebyshev = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
+
+/**
+ * THE WHOLE DECISION, AS A PURE FUNCTION, so it can be tested without a keeper.
+ * Returns `{ move, verdict, bodies, ground }` — verdict 'step' | 'body' | 'sidestep' | 'boxed'.
+ */
+export function crawlChoice({ neighbours = [], at, goal, avoid = [] } = {}) {
+  const here = chebyshev(at, goal);
+  const closer = n => chebyshev(n, goal) < here;
+  const shunned = n => avoid.some(a => a.row === n.row && a.col === n.col);
+  const open = neighbours.filter(n => n.blocked === false);
+  const blocked = neighbours.filter(n => n.blocked === true);
+
+  // A REASON WE DO NOT RECOGNISE IS NOT A BODY. Waiting for a wall to walk away burns the
+  // budget and reports nothing, so anything not explicitly an object is treated as ground.
+  const isBody = n => /object/i.test(String(n.reason ?? ''));
+  const bodies = blocked.filter(n => isBody(n) && closer(n));
+  const ground = blocked.filter(n => !isBody(n) && closer(n));
+
+  const improving = open.filter(closer).sort((a, b) => chebyshev(a, goal) - chebyshev(b, goal));
+  if (improving.length) return { move: improving[0], verdict: 'step', bodies, ground };
+  if (bodies.length) return { move: null, verdict: 'body', bodies, ground };
+
+  const sideways = open.filter(n => !shunned(n));
+  if (sideways.length) return { move: sideways[0], verdict: 'sidestep', bodies, ground };
+
+  // NOTHING OPEN AT ALL — AND STILL NOT BOXED IF ONE OF THE WALLS BREATHES. Measured on prod
+  // 2026-09-10 at r10c27: E/W/N geometry_blocked, S object_blocked. South was an ORC. The
+  // verdict looked for bodies only among directions that IMPROVE, so the one direction that
+  // was not stone counted as boxed in.
+  const anyBody = blocked.filter(isBody);
+  if (anyBody.length)
+    return { move: null, verdict: 'body', bodies: anyBody, ground, onlyWayOut: true };
+  return { move: null, verdict: 'boxed', bodies, ground };
+}
+
+/**
  * Buy one skill or spell from the teacher who sells it, and prove the character holds it.
  *
  * THE VERB `shop` CANNOT BE. See the ability-table section above: `shop` is judged on the
@@ -1559,20 +1631,35 @@ const KEEPER_LEASE_MS = 30_000;        // the keeper's own ceiling; asking for m
 const KEEPER_BEAT_MS = 10_000;
 
 let keeperPortsPromise = null;
+let keeperPortsAt = 0;
 /**
  * Which port is whose. SCANNED, never computed: a keeper can be re-allocated off its default
  * slot, and a broker that guesses a port and commands whoever answers is a failure this
  * repository has already paid for. Every keeper names itself on `/live`, and the write path
  * refuses an order addressed to a different agent, so a wrong guess is refused rather than obeyed.
  */
-async function keeperPorts(fleet) {
-  if (keeperPortsPromise) return keeperPortsPromise;
+async function keeperPorts(fleet, { wantAgent = null, maxAgeMs = 30_000 } = {}) {
+  // A SCAN CACHED FOR EVER IS A MAP OF A FLEET THAT HAS MOVED ON. Keepers restart about once
+  // a minute and each comes back with a NEW PID, so a driver that scanned once at startup is
+  // addressing pids that are gone — and `addressedToUs` compares agent AND character AND pid,
+  // so every write it sends is refused silently. Worse: one of those refused writes is the
+  // ROUTE request, whose caller falls back to `walking without a trap check on the path`.
+  const fresh = keeperPortsAt && Date.now() - keeperPortsAt < maxAgeMs;
+  if (keeperPortsPromise && fresh) {
+    const map = await keeperPortsPromise;
+    if (!wantAgent || map.has(String(wantAgent))) return map;
+  }
+  keeperPortsAt = Date.now();
   keeperPortsPromise = (async () => {
     const found = new Map();
     let band;
     try {
       const mod = await import('./runtime/keeper-bands.mjs');
-      band = mod.lookupKeeperBand(fleet);
+      // A CHECKOUT MAY HOLD ITS OWN REGISTRY. `substrate/keeper-bands.json` is this machine's
+      // answer; a lab tree, or a suite that must not scan a live band, points somewhere else.
+      // Absent, `registryPath(undefined)` is the default, so this changes nothing by itself.
+      band = mod.lookupKeeperBand(fleet,
+        { registryPath: process.env.M59_KEEPER_BAND_REGISTRY || undefined });
     } catch { return found; }
     if (!band) return found;
     const probes = [];
@@ -1593,6 +1680,27 @@ async function keeperPorts(fleet) {
   return keeperPortsPromise;
 }
 
+/**
+ * ASK THE MOVER WHAT IT THINKS OF ITS OWN NEXT STEP. `/movecheck` runs `validateFineTarget`
+ * for the four cardinals and reports the refusal reason per direction — the only thing in
+ * this stack that has been right about a contested room.
+ *
+ * KNOWN LIMIT: FOUR CARDINALS ONLY, from where the body already is. Diagonals cannot be asked.
+ */
+async function keeperMovecheck(who) {
+  const q = new URLSearchParams({ agent: who.agent, character: who.character ?? '',
+                                  keeper_pid: String(who.pid ?? '') });
+  const r = await fetch(`http://127.0.0.1:${who.port}/movecheck?${q}`,
+                        { signal: AbortSignal.timeout(20_000) });
+  const j = await r.json().catch(() => ({}));
+  if (!Array.isArray(j?.neighbors)) return null;
+  return j.neighbors.map(n => ({
+    dir: n.dir, row: n.to?.row, col: n.to?.col,
+    blocked: n.validation ? !!n.validation.blocked : null,
+    reason: n.validation?.reason ?? null,
+  }));
+}
+
 async function keeperCall(who, name, args) {
   const r = await fetch(`http://127.0.0.1:${who.port}/action`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1611,7 +1719,10 @@ async function keeperCall(who, name, args) {
  * release function that is safe to call twice.
  */
 export async function holdKeeper(ctx, agent, fleet) {
-  const ports = await keeperPorts(fleet);
+  // `wantAgent`: a keeper that restarted since the last scan is on a NEW pid, and a claim
+  // addressed to the old one is refused rather than obeyed — which reads as "the keeper would
+  // not yield" and is really "we asked a ghost".
+  const ports = await keeperPorts(fleet, { wantAgent: agent });
   const entry = ports.get(agent);
   const who = entry && { ...entry, agent };
   if (!who) {
@@ -1622,10 +1733,16 @@ export async function holdKeeper(ctx, agent, fleet) {
                    'broker shell alone, so the keeper cannot be steering');
     return { ok: false, cancelJourney: async () => {}, release: async () => {} };
   }
+  // A KEEPER THAT STOPS ANSWERING BETWEEN THE SCAN AND THE CLAIM IS NOT AN ERRAND-KILLING
+  // EXCEPTION. Keepers restart about once a minute, so that window genuinely contains keeper
+  // deaths — and an uncaught `fetch` rejection here took the WHOLE agent out with a bare
+  // `connection refused`, naming neither the character nor what was attempted. The branch
+  // below already has an honest answer for a keeper we cannot lease from; this routes into it.
   const claim = await keeperCall(who, 'commander_claim', {
     faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}`,
     lease_ms: KEEPER_LEASE_MS, why: `fleet errand: ${ctx.name}`,
-  });
+  }).catch(e => ({ error: `keeper :${who.port} did not answer the claim (${e.message}) — ` +
+                          `it has probably restarted since the port scan` }));
   const got = Object.keys(claim?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
   if (claim?.error || !got.length) {
     ctx.log(agent, `the keeper would not yield work/movement/economy: ${claim?.error ?? 'refused'}`);
@@ -1747,66 +1864,6 @@ async function runStep(ctx, agent, step, state) {
     case 'bank': {
       const amount = typeof step.amount === 'function' ? step.amount(state) : step.amount;
       if (!(amount > 0)) return { ok: true, skipped: 'nothing to move' };
-
-      // RULE 6 REACHES THE COUNTER TOO: THE PURSE IS THE RECEIPT, NOT THE SENTENCE.
-      //
-      // This step used to answer `ok` from the banker's PROSE alone — "Yevitan tells you,
-      // 'Here are your 2500 shillings.'" — and never looked at whether the character was
-      // carrying them afterwards. Shillings arrive on an event, exactly like a shop load, so
-      // a read straight after the counter is a read of the past.
-      //
-      // Measured 2026-09-10, Loial at the Royal Bank of Jasper: the banker said the sentence
-      // above and his purse read 0 for THIRTY SECONDS before showing 2500. Any caller that
-      // withdrew and then sized a purchase against what it was carrying saw an empty purse
-      // and concluded the withdrawal had failed. The same evening a resupply reported
-      // `step 4 (shop) failed: nothing entered the pack`, honestly, because its courier
-      // really did reach the merchant with three shillings — the bank leg had been skipped
-      // and nothing checked.
-      //
-      // So wait for the EVIDENCE: first read that moves wins, and the timeout is only
-      // reached when nothing is ever coming. The identical shape the shop step uses, for the
-      // identical reason. A false negative unwinds a working errand; a false POSITIVE walks
-      // a courier to a merchant it cannot pay, which is the more expensive of the two.
-      // NOT `pack()`, DELIBERATELY. That helper swallows its own failure and answers `[]`,
-      // which `purseOf` then reads as a purse of ZERO — the "null is not zero" trap this file
-      // already carries a paragraph about, one layer down. An unreadable pack has to be
-      // distinguishable from an empty one here or the guard below fires on a deposit whose
-      // only sin was that the inventory call timed out.
-      const purseNow = async () => {
-        const inv = await call('inventory', { agent }, 60_000).catch(() => null);
-        return Array.isArray(inv?.items) ? purseOf(inv.items) : null;
-      };
-      const purseBefore = await purseNow();
-      // A WITHDRAWAL RAISES THE PURSE AND A DEPOSIT LOWERS IT, so the evidence is a MOVE in
-      // the declared direction rather than a rise. Depositing and then reporting "the purse
-      // never went up" would be a guard that fires on every correct deposit.
-      const wantsMore = /withdraw/i.test(String(step.action));
-      const settled = async (asked) => {
-        if (purseBefore == null)
-          // UNREADABLE IS NOT DISPROVEN. If the pack could not be read before the call there
-          // is nothing to compare against, and calling that a failure would unwind an errand
-          // over a missing instrument. Say so instead, and let the banker's sentence stand.
-          return { ok: true, amount: asked, verified: false,
-                   note: 'the purse could not be read, so the banker’s word is all there is' };
-        const until = Date.now() + (ctx.packSettleMs ?? 15_000);
-        let now = purseBefore;
-        while (Date.now() < until) {
-          const seen = await purseNow();
-          if (seen != null) {
-            now = seen;
-            if (wantsMore ? now > purseBefore : now < purseBefore) break;
-          }
-          await sleep(Math.min(1500, ctx.pollMs));
-        }
-        const moved = wantsMore ? now - purseBefore : purseBefore - now;
-        if (moved <= 0)
-          return { ok: false, amount: asked, verified: false, purse: now,
-                   outcome: 'counter_moved_nothing',
-                   why: `the banker said yes and the purse did not move in ` +
-                        `${Math.round((ctx.packSettleMs ?? 15_000) / 1000)}s ` +
-                        `(${purseBefore} -> ${now}). Treat the sentence as unproven.` };
-        return { ok: true, amount: asked, verified: true, moved, purse: now };
-      };
       const ask = async n => {
         const r = await call('bank', { agent, action: step.action, amount: n }, 60_000)
           .catch(e => ({ error: e.message }));
@@ -1830,15 +1887,13 @@ async function runStep(ctx, agent, step, state) {
           ctx.log(agent, `the banker refused ${amount} and named ${affordable} — taking that`);
           const retry = await ask(affordable);
           if (!retry.refused)
-            return { ...(await settled(affordable)), said: retry.said.slice(0, 120),
+            return { ok: true, said: retry.said.slice(0, 120), amount: affordable,
                      asked: amount, note: 'withdrew the balance the banker named' };
           out = retry;
         }
       }
-      if (out.refused)
-        return { ok: false, said: out.said.slice(0, 120), amount,
-                 why: `banker refused: ${out.said.slice(0, 80)}` };
-      return { ...(await settled(amount)), said: out.said.slice(0, 120) };
+      return { ok: !out.refused, said: out.said.slice(0, 120), amount,
+               why: out.refused ? `banker refused: ${out.said.slice(0, 80)}` : undefined };
     }
 
     case 'rest': {
@@ -1859,6 +1914,22 @@ async function runStep(ctx, agent, step, state) {
         recordEvent(agent, 'rest_unsafe', { reason: String(reason).slice(0, 200), room: state.room ?? null });
         return { ok: !r?.error, outcome: 'rested_unsafe', waived: String(reason).slice(0, 200),
                  why: r?.error };
+      }
+
+      // A CHARACTER THAT IS NOT HURT DOES NOT NEED A WALL, AND WALKING IT TO ONE COSTS MORE
+      // THAN THE REST WOULD HAVE GAINED. This step walked to a safe spot BEFORE asking whether
+      // there was anything to heal: hk2 was standing at r8c28 in room 39 — the east doorway,
+      // the ONE landing in that split room from which the mana node is reachable at all — and
+      // a leading rest walked him to r2c4, into the crowd. Dead in four seconds.
+      //
+      // The order matters: this sits AFTER the waiver is judged, because `unsafe: true` with
+      // no reason is a SHAPE error that must be refused whatever the body's health is.
+      if (want.vigor == null) {
+        const before = await observe(agent);
+        if (before.ok && before.health != null && before.health >= want.health)
+          return { ok: true, outcome: 'already_rested', at: before.hpText,
+                   note: `${before.hpText} is already at or above the ${want.health} floor — ` +
+                         `not walking to a wall for nothing` };
       }
 
       const look = await call('safe_spots', { agent, reachable_only: true }, 60_000)
@@ -2450,6 +2521,173 @@ async function runStep(ctx, agent, step, state) {
       }
     }
 
+    // See `crawlTo` above. Short version: `short_hop` moves and does not plan, `/movecheck`
+    // says whether a refusal is a BODY or the GROUND, and those want opposite responses.
+    case 'crawl_to': {
+      const goal = { row: step.row, col: step.col };
+      const within = step.within ?? 0;
+      const healBelow = step.healBelow ?? 0.5;
+      const bodyWaitMs = step.bodyWaitMs ?? 6000;
+      const bodyRetries = step.bodyRetries ?? 8;
+      const deadline = Date.now() + (step.deadlineMs ?? 300_000);
+      const maxSteps = step.maxSteps ?? 120;
+
+      const ports = await keeperPorts(ctx.fleet, { wantAgent: agent });
+      const entry = ports.get(agent);
+      if (!entry)
+        return { ok: false, outcome: 'no_keeper',
+                 why: `no keeper process answered for ${agent} on this fleet's band — ` +
+                      `crawl_to needs one, because /movecheck and short_hop both live there` };
+      let who = { ...entry, agent };
+
+      const posOf = s => ({ row: s?.you?.row ?? null, col: s?.you?.col ?? null,
+                            room: Number(s?.where?.num ?? s?.room?.num ?? s?.room_num ?? NaN) });
+      const read = async () => posOf(await call('status', { agent, brief: true }, 30_000)
+        .catch(() => null));
+      const start = await read();
+      const wantRoom = step.room ?? start.room;
+
+      let waited = 0, healed = 0, sidesteps = 0, hops = 0, probed = 0, readdressed = 0;
+      const recent = [];
+      let lastGround = [];
+
+      // A KEEPER CAN RESTART MID-CRAWL AND THEN THE TUPLE WE ADDRESS IS A GHOST. Measured on
+      // prod 2026-09-10: the crawl resolved the keeper once at the top, and fifty seconds in
+      // /movecheck went silent — while the same call by hand, with the pid read fresh from
+      // /health, returned all four neighbours at once. So an empty movecheck is a QUESTION
+      // about the address before it is an answer about the ground.
+      const askNeighbours = async () => {
+        const first = await keeperMovecheck(who).catch(() => null);
+        if (first) return first;
+        const rescanned = await keeperPorts(ctx.fleet, { wantAgent: agent, maxAgeMs: 0 });
+        const now = rescanned.get(agent);
+        if (!now || now.pid === who.pid) return null;
+        ctx.log(agent, `crawl_to: keeper moved from pid ${who.pid} to ${now.pid} — re-addressing`);
+        who = { ...now, agent };
+        readdressed++;
+        return keeperMovecheck(who).catch(() => null);
+      };
+
+      for (let i = 0; i < maxSteps; i++) {
+        if (Date.now() > deadline) {
+          const p = await read();
+          return { ok: false, outcome: 'out_of_time', hops, waited, healed, readdressed,
+                   at: `r${p.row}c${p.col}`, away: chebyshev(p, goal),
+                   why: `ran out of time ${chebyshev(p, goal)} square(s) from r${goal.row}c${goal.col}` };
+        }
+
+        const st = await call('status', { agent, brief: true }, 30_000).catch(() => null);
+        const p = posOf(st);
+        if (Number.isFinite(p.room) && Number.isFinite(wantRoom) && p.room !== wantRoom)
+          return { ok: false, outcome: 'left_the_room', room: p.room,
+                   why: `the crawl ended in room ${p.room}, not ${wantRoom}` };
+        if (p.row != null && chebyshev(p, goal) <= within)
+          return { ok: true, outcome: 'arrived', at: `r${p.row}c${p.col}`,
+                   hops, waited, healed, sidesteps, probed, readdressed };
+
+        // HEAL WHEREVER IT BECOMES NECESSARY, not once at the top. `rest` walks to a safe wall
+        // and refuses the open; "nowhere here is safe" is a true answer and is not fatal.
+        const health = healthFractionOf(st);
+        if (health != null && health < healBelow) {
+          ctx.log(agent, `crawl_to: ${Math.round(health * 100)}% health — resting at a safe wall first`);
+          const r = await runStep(ctx, agent,
+            { do: 'rest', health: step.healTo ?? 0.9, unsafe: step.restUnsafe }, state);
+          healed++;
+          if (!r.ok) ctx.log(agent, `crawl_to: could not rest safely (${r.why}) — carrying on hurt`);
+          continue;
+        }
+
+        const neighbours = await askNeighbours();
+        if (!neighbours)
+          return { ok: false, outcome: 'no_movecheck', at: `r${p.row}c${p.col}`,
+                   hops, waited, healed, readdressed,
+                   why: `the keeper would not answer /movecheck even after re-addressing ` +
+                        `(pid ${who.pid}), so there is no way to tell a body in the way from ` +
+                        `ground that does not cross` };
+
+        const choice = crawlChoice({ neighbours, at: p, goal, avoid: recent });
+        lastGround = choice.ground;
+
+        if (choice.verdict === 'body') {
+          // THE ORC. The one refusal in this game that fixes itself, so it is waited out
+          // rather than reported — but COUNTED, because a body that never moves is a
+          // different finding from one that does.
+          if (waited >= bodyRetries)
+            return { ok: false, outcome: 'body_will_not_move', at: `r${p.row}c${p.col}`,
+                     away: chebyshev(p, goal), hops, waited, healed, readdressed,
+                     blockers: choice.bodies.map(b => `${b.dir}->r${b.row}c${b.col}`),
+                     why: `something has been standing in the way for ${bodyRetries} tries at ` +
+                          `r${p.row}c${p.col} — ${choice.bodies.map(b => b.dir).join(', ')} ` +
+                          `blocked by a BODY, not by the ground. Clear it or come back.` };
+          waited++;
+          ctx.log(agent, `crawl_to: r${p.row}c${p.col} — a body blocks ` +
+                         `${choice.bodies.map(b => b.dir).join(', ')}; waiting ${bodyWaitMs}ms ` +
+                         `(${waited}/${bodyRetries})`);
+          await sleep(bodyWaitMs);
+          continue;
+        }
+        if (choice.verdict === 'boxed') {
+          // FOUR REFUSED CARDINALS IS NOT FOUR WALLS — /movecheck cannot be asked about a
+          // diagonal at all. Measured by hand in room 39 before this verb existed: boxed on
+          // all four cardinals at r13c40, and a blind NE hop moved the body.
+          const diagonals = [[-1, 1], [1, 1], [1, -1], [-1, -1]]
+            .map(([dr, dc]) => ({ dir: `${dr < 0 ? 'N' : 'S'}${dc > 0 ? 'E' : 'W'}`,
+                                  row: p.row + dr, col: p.col + dc }))
+            .sort((a, b) => chebyshev(a, goal) - chebyshev(b, goal));
+          let escaped = null;
+          for (const d of diagonals) {
+            await call('cancel_movement', { agent, why: 'diagonal probe' }, 20_000).catch(() => {});
+            await call('short_hop', { agent, to_col: d.col, to_row: d.row }, 40_000).catch(() => {});
+            hops++;
+            await sleep(step.settleMs ?? 1200);
+            const now = await read();
+            if (now.row === d.row && now.col === d.col) { escaped = d; break; }
+          }
+          if (escaped) {
+            probed++;
+            ctx.log(agent, `crawl_to: no cardinal out of r${p.row}c${p.col} — ` +
+                           `${escaped.dir} diagonal took it to r${escaped.row}c${escaped.col}`);
+            recent.push({ row: p.row, col: p.col });
+            if (recent.length > (step.memory ?? 4)) recent.shift();
+            continue;
+          }
+          return { ok: false, outcome: 'boxed_in', at: `r${p.row}c${p.col}`,
+                   away: chebyshev(p, goal), hops, waited, healed, probed, readdressed,
+                   why: `every direction out of r${p.row}c${p.col} is refused, diagonals ` +
+                        `included: ` +
+                        neighbours.map(n => `${n.dir} ${n.blocked ? (n.reason ?? 'blocked') : 'open'}`)
+                                  .join(', ') + '; all four diagonals probed and none moved the body' };
+        }
+        if (choice.verdict === 'sidestep') sidesteps++;
+
+        const to = choice.move;
+        await call('cancel_movement', { agent, why: 'crawl step' }, 20_000).catch(() => {});
+        const hop = await call('short_hop', { agent, to_col: to.col, to_row: to.row }, 40_000)
+          .catch(e => ({ error: e.message }));
+        hops++;
+        await sleep(step.settleMs ?? 1200);
+        const after = await read();
+        if (after.row === to.row && after.col === to.col) {
+          recent.push({ row: p.row, col: p.col });
+          if (recent.length > (step.memory ?? 4)) recent.shift();
+          ctx.log(agent, `crawl_to: ${to.dir} -> r${after.row}c${after.col} ` +
+                         `(${chebyshev(after, goal)} from r${goal.row}c${goal.col})`);
+        } else {
+          // The hop was sent and the body did not move. `short_hop` cannot say why; the reason
+          // comes from asking /movecheck again on the next pass, which is where the split is.
+          ctx.log(agent, `crawl_to: ${to.dir} did not take` +
+                         (hop?.reason ? ` (${hop.reason})` : hop?.error ? ` (${hop.error})` : ''));
+          recent.push({ row: to.row, col: to.col });
+          if (recent.length > (step.memory ?? 4)) recent.shift();
+        }
+      }
+      const end = await read();
+      return { ok: false, outcome: 'out_of_steps', at: `r${end.row}c${end.col}`,
+               away: chebyshev(end, goal), hops, waited, healed, sidesteps, probed, readdressed,
+               ground: lastGround.map(g => `${g.dir}->r${g.row}c${g.col}`),
+               why: `${maxSteps} hops and still ${chebyshev(end, goal)} square(s) out` };
+    }
+
     case 'verify': {
       const v = await step.fn({ agent, observe, call, state });
       return { ok: Boolean(v), why: v ? undefined : (step.why || 'verification failed') };
@@ -2978,6 +3216,34 @@ They are driven by tools/m59-menagerie.mjs and ` +
             }
             // The purse died with the body, so anything sized against it has to be re-read.
             state.purse = back.purse;
+
+            // A STEP THAT KILLED THE CHARACTER IS NOT A STEP TO REPEAT. Retrying is right for
+            // a shop or a bank — the counter did not kill anybody and the errand is still
+            // affordable. It is wrong for a WALK, because the thing that killed the body is
+            // the road, and the road has not changed while the corpse was being walked out of
+            // the Underworld. The second attempt sets out on the same road, more hurt than the
+            // first, and dies faster.
+            //
+            // Measured on prod 2026-09-10 with hk2, twice in one night: died at 11:54:50 on
+            // `walk(39)`, revived, retried the identical walk, died again at 12:11:23. Same on
+            // the Ice Caves road. Two of the five deaths that night were this line.
+            //
+            // `deathsPerStep` BOUNDS it rather than forbidding it, and the bound is ONE retry:
+            // a single death is a bad road on a bad day and the existing guarantee — a death
+            // loses the cargo, not the errand — depends on that retry happening. A SECOND death
+            // on the same step is the road itself, and a third attempt is just a third corpse.
+            state.deathsPerStep = state.deathsPerStep ?? {};
+            const key = `${at}:${step.do}`;
+            state.deathsPerStep[key] = (state.deathsPerStep[key] ?? 0) + 1;
+            if (step.do === 'walk' && state.deathsPerStep[key] > (ctx.walkDeathsAllowed ?? 1)) {
+              failure = { at, step: step.do, dead: true, diedTwice: true,
+                          why: `died on the way to room ${step.to} and did not retry: the road ` +
+                               `is what killed it, and it has not changed. Send an escort, a ` +
+                               `tougher character, or a different route.` };
+              ctx.log(agent, `step ${at} (walk): died en route to ${step.to} — NOT retrying the ` +
+                             `same road. ${state.deathsPerStep[key]} death(s) on this step.`);
+              break;
+            }
             i = at - 1;          // retry the step that was interrupted, now alive
             continue;
           }

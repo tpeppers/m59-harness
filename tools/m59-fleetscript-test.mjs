@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 //
 // Each case here is a mistake a real ad-hoc script made against the prod fleet on
 // 2026-09-02. If one of these fails, that mistake is available again.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,9 +16,23 @@ import { fileURLToPath } from 'node:url';
 const LOCK_DIR = mkdtempSync(join(tmpdir(), 'm59-fs-'));
 process.env.M59_RUNLOCK_DIR = LOCK_DIR;
 process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';   // never actually reached
+// A KEEPER BAND THAT DOES NOT EXIST ON THIS MACHINE. `crawl_to` scans a band for `/live` to
+// find whose port is whose, and the default registry names REAL ports that a live fleet is
+// using. This suite must never touch one, so it points the lookup at a throwaway registry
+// whose single fleet lives on a port nothing serves — every probe is then answered by the
+// fake fetch below, or by nobody.
+// ITS OWN DIRECTORY, because LOCK_DIR is deleted part-way through this file and the crawl
+// cases run after that — a registry that vanishes mid-suite makes the band lookup answer
+// null and every crawl case fails with "no keeper", which is a true sentence about the wrong
+// thing.
+const BAND_DIR = mkdtempSync(join(tmpdir(), 'm59-band-'));
+writeFileSync(join(BAND_DIR, 'keeper-bands.json'), JSON.stringify({ testfleet: 19900 }));
+process.env.M59_KEEPER_BAND_REGISTRY = join(BAND_DIR, 'keeper-bands.json');
+const KEEPER_PORT = 19900;
 
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
-const { fleetScript, walk, walkTo, shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
+const { fleetScript, walk, walkTo, crawlTo, crawlChoice, healthFractionOf, rest,
+        shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
         foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure } =
   await import('./m59-fleetscript.mjs');
 
@@ -45,6 +59,10 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // handed {agent, col, row, positions, rooms} and may move the body,
                       // move it somewhere else entirely, or do nothing at all (a stall).
                       positions = {}, onWalkTo = null,
+                      // `crawl_to` moves with short_hop and never with walk_to, because
+                      // walk_to PLANS and its planner believes in ground the mover refuses.
+                      // `onShortHop` is handed {agent, to_col, to_row} and may move the body.
+                      onShortHop = null, onRestUp = null,
                       // Rooms the router cannot get to. Room 114 — the Barloque vaultman's
                       // office — was one of these for two of three couriers on 2026-09-02.
                       unreachable = new Set(),
@@ -115,7 +133,18 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       }
       payload = { arrived: walkLands };
     }
-    else if (name === 'rest_up') { rested.push(agent); payload = { ok: true }; }
+    else if (name === 'rest_up') { rested.push(agent); onRestUp?.({ agent }); payload = { ok: true }; }
+    else if (name === 'short_hop') {
+      const before = { ...(positions[agent] ?? {}) };
+      onShortHop?.({ agent, to_col: a.to_col, to_row: a.to_row, positions });
+      const now = positions[agent] ?? {};
+      const moved = now.row !== before.row || now.col !== before.col;
+      // The keeper's own shape: it reports whether the BODY moved, and it cannot say why not
+      // — which is exactly why crawl_to asks /movecheck for the reason instead.
+      payload = moved ? { hopped: true, landed: { ...now } }
+                      : { hopped: false, reason: 'the hop was sent and the body did not move' };
+    }
+    else if (name === 'cancel_movement') payload = { cancelled: true };
     // The portal, as the server behaves: it moves the character out of 1011-1018, or it
     // does not and says so. `leftRaza: false` models a portal that did not take.
     else if (name === 'leave_raza') {
@@ -431,7 +460,7 @@ console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
   const trip = (steps, name) => fleetScript({ name, fleet: 'testfleet', agents: ['a1'],
     steps, pollMs: 30, healMs: 400, onLog: quiet });
 
-  let sent = fakeBroker({ rooms: { a1: 39 }, safeNow: { at: { col: 21, row: 7 }, works: true } });
+  let sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: { at: { col: 21, row: 7 }, works: true } });
   let r = await trip([rest()], 'rest-here');
   ok('a character already in a working spot rests where it stands',
      r.results.a1.ok === true && r.results.a1.state['0:rest'].outcome === 'rested_in_place',
@@ -446,7 +475,7 @@ console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
   // retaliation (`failed_via: "fight"` on 5,187 of 6,652 events) and fleet crowding, so the
   // promotion preferred whichever square twenty-one characters piled onto in August and the
   // filter hid sound walls. `safe_spots` no longer publishes `tested` at all.
-  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [
+  sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: false, safeSpots: [
     { col: 5, row: 5, can_reach_you: 0 }, { col: 21, row: 7, can_reach_you: 0 } ] });
   r = await trip([rest()], 'rest-move');
   ok('a character in the open walks to a spot before resting',
@@ -459,21 +488,21 @@ console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
   // A square carrying the retired book's worst verdict is now an ordinary candidate, because
   // that verdict was never evidence about the wall. What still refuses a rest is an EMPTY
   // list — the geometry offering nothing — which is the real "nowhere safe" and is below.
-  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false,
+  sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: false,
     safeSpots: [{ col: 9, row: 9, tested: 'does not work', can_reach_you: 0 }] });
   r = await trip([rest()], 'rest-stale-verdict');
   ok('a square the retired book condemned is taken on its geometry anyway',
      r.results.a1.state['0:rest'].outcome === 'rested_after_moving',
      JSON.stringify(r.results.a1.state['0:rest']));
 
-  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [] });
+  sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: false, safeSpots: [] });
   r = await trip([rest()], 'rest-bad');
   ok('a room the geometry offers NO wall in refuses the rest',
      r.results.a1.ok === false && r.results.a1.state['0:rest'].outcome === 'nowhere_safe_to_rest',
      JSON.stringify(r.results.a1.state['0:rest']));
   ok('and nothing sat down', !sent.rested.length);
 
-  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, walkLands: false,
+  sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: false, walkLands: false,
     safeSpots: [{ col: 21, row: 7, can_reach_you: 0 }] });
   r = await trip([rest()], 'rest-miss');
   ok('a walk that did not land leaves the character standing, not resting',
@@ -481,13 +510,13 @@ console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
      JSON.stringify(r.results.a1.state['0:rest']));
   ok('and still nothing sat down', !sent.rested.length);
 
-  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [] });
+  sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: false, safeSpots: [] });
   r = await trip([rest({ unsafe: true })], 'rest-bare');
   ok('unsafe: true without a reason is refused',
      r.results.a1.state['0:rest'].outcome === 'unsafe_needs_reason',
      JSON.stringify(r.results.a1.state['0:rest']));
 
-  sent = fakeBroker({ rooms: { a1: 39 }, safeNow: false, safeSpots: [] });
+  sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 12, max: 50 } }, safeNow: false, safeSpots: [] });
   r = await trip([rest({ unsafe: { reason: 'pulling a body out of 599; nowhere here is safe' } })], 'rest-waived');
   ok('a reasoned waiver rests anyway, and says what it waived',
      r.results.a1.ok === true && /599/.test(r.results.a1.state['0:rest'].waived || ''),
@@ -1276,6 +1305,390 @@ console.log('\nand an ordinary walk that ends in a different room is a failure')
   ok('and the reason names the room it actually ended in',
      /room 27/.test(r.results.a1.state['0:walk_to'].why ?? ''));
 }
+
+// ---------------------------------------------------------------- crawlTo
+//
+// THE DECISION, PURE. Everything `crawl_to` does when it cannot move is decided in
+// `crawlChoice`, and it turns on the distinction the operator named: A MONSTER STANDING IN
+// THE WAY IS NOT THE GROUND REFUSING. Monster collision is height-agnostic, so a body blocks
+console.log('\na second death on the same road is the ROAD, and is not retried again');
+{
+  // Measured on prod 2026-09-10 with hk2 (20 max health), twice in one night: died on
+  // `walk(39)` at 11:54:50, revived, retried the IDENTICAL walk, died again at 12:11:23. Same
+  // shape on the Ice Caves road. The thing that killed the body is the road, and the road has
+  // not changed while the corpse was being walked out of the Underworld — so the second
+  // attempt sets out more hurt than the first and dies faster.
+  //
+  // The bound is ONE retry, not zero: the guarantee above ("death loses the cargo, not the
+  // errand") depends on that retry happening, and a single death really is a bad day.
+  // `observe()` calls a character dead when its room NAME says Underworld, which is what the
+  // fake's own `dead` set drives — so the death has to be expressed through that, not by
+  // setting a room number the fake will still call "room".
+  let deaths = 0;
+  const rooms = { a1: 53 };
+  const dead = new Set();
+  fakeBroker({ rooms, dead });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    if (!o || o.method !== 'POST') return realFetch(u, o);
+    const b = JSON.parse(o.body);
+    // Every travel to 544 kills the character on the way — a road that is simply lethal.
+    const res = await realFetch(u, o);
+    // AFTER the fake has handled it: its own `travel` moves the body to the destination, so
+    // the death has to land on top of that or the walk reports a perfectly good arrival.
+    if (b.params?.name === 'travel' && b.params.arguments.to === 544) {
+      deaths++; dead.add('a1'); rooms.a1 = 53;    // killed on the way, not arrived
+    }
+    // Recovery is `autopilot action=revive`, NOT escape_underworld — the fake has to clear
+    // the flag on the call the runner actually makes.
+    if (b.params?.name === 'autopilot' && b.params.arguments.action === 'revive')
+      { dead.delete('a1'); rooms.a1 = 53; }
+    return res;
+  };
+  const r = await fleetScript({ name: 'lethal road', fleet: 'testfleet', agents: ['a1'],
+    steps: [walk(544)], pollMs: 30, healMs: 200, reviveMs: 20_000, onLog: quiet });
+  globalThis.fetch = realFetch;
+  ok('it stops rather than feeding the road corpses', r.results.a1.ok === false);
+  ok('and it says the ROAD is what killed it, not the errand',
+     /the road is what killed it/.test(r.results.a1.why ?? ''), String(r.results.a1.why).slice(0, 140));
+  ok('it tried exactly twice — one death, one retry, then stop',
+     deaths <= 2, `${deaths} attempts`);
+  ok('and it recommends what to change rather than just refusing',
+     /escort|tougher|different route/.test(r.results.a1.why ?? ''));
+}
+
+
+// a step exactly like a wall — and it is the commonest cause of "it worked yesterday and
+console.log('\na rest does not walk a character that is not hurt');
+{
+  // Measured on prod 2026-09-10, and it cost the character. hk2 was standing at r8c28 in room
+  // 39 — the east doorway, the ONE landing in that split room from which the mana node is
+  // reachable at all — and a leading `rest({health: 0.99})` walked him to r2c4 on the west
+  // side, into the seven-to-eleven undead the room carries, before deciding there was nowhere
+  // to sit down. Dead in four seconds at 20 max health. The step walked first and asked
+  // whether there was anything to heal second.
+  const sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 50, max: 50 } },
+                            safeNow: false, safeSpots: [{ col: 4, row: 2 }] });
+  const r = await fleetScript({ name: 'no-need', fleet: 'testfleet', agents: ['a1'],
+    steps: [rest({ health: 0.9 })], onLog: quiet });
+  ok('a character at full health does not rest', r.results.a1.ok === true);
+  ok('and it says so rather than pretending it rested',
+     r.results.a1.state['0:rest'].outcome === 'already_rested');
+  ok('NOTHING WALKED — this is the whole point',
+     !sent.some(x => x.name === 'walk_to') && !sent.some(x => x.name === 'safe_spots'));
+  ok('and it did not sit down either', !sent.rested.length);
+}
+
+console.log('\nbut the guard never swallows a malformed waiver');
+{
+  // `unsafe: true` with no reason is a SHAPE error and must be refused whatever the body's
+  // health is, or a bad waiver stops being caught on the day it is handed a healthy
+  // character. The guard belongs after the waiver is judged and before anything walks.
+  fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 50, max: 50 } } });
+  const r = await fleetScript({ name: 'healthy-bad-waiver', fleet: 'testfleet', agents: ['a1'],
+    steps: [rest({ health: 0.9, unsafe: true })], onLog: quiet });
+  ok('a reasonless waiver is refused even on a character that needs no rest',
+     r.results.a1.ok === false &&
+     r.results.a1.state['0:rest'].outcome === 'unsafe_needs_reason',
+     JSON.stringify(r.results.a1.state['0:rest']).slice(0, 120));
+}
+
+console.log('\nand a vigor rest is not short-circuited by health');
+{
+  // Vigor has its own reason to walk: resting alone tops out at 80 of 200 and everything
+  // above that has to be eaten, so a full-health character can still have a vigor errand.
+  const sent = fakeBroker({ rooms: { a1: 39 }, health: { a1: { value: 50, max: 50 } },
+                            safeNow: { at: { col: 21, row: 7 }, works: true } });
+  await fleetScript({ name: 'vigor', fleet: 'testfleet', agents: ['a1'],
+    steps: [rest({ health: 0.9, vigor: 120 })], onLog: quiet });
+  ok('asking for vigor still looks for a spot even at full health',
+     sent.some(x => x.name === 'safe_spots'));
+}
+
+
+// refuses today". The two want opposite responses, and collapsing them is how a crawl either
+// gives up on a road that clears ten seconds later, or hammers a wall for ever.
+const N = (dir, row, col, blocked, reason = null) => ({ dir, row, col, blocked, reason });
+const HERE = { row: 10, col: 10 };
+const GOAL = { row: 10, col: 20 };          // due east, so E improves and W does not
+
+console.log('\ncrawlChoice: an orc in the way is a WAIT, a wall is a SIDESTEP');
+{
+  const open = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, false), N('W', 10, 9, false), N('N', 9, 10, false), N('S', 11, 10, false)] });
+  ok('an open improving direction is simply taken',
+     open.verdict === 'step' && open.move.dir === 'E');
+
+  const orc = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'object_blocked'), N('W', 10, 9, false),
+    N('N', 9, 10, true, 'object_blocked'), N('S', 11, 10, false)] });
+  ok('a BODY in the only improving direction is a wait, not a failure',
+     orc.verdict === 'body');
+  ok('and only the bodies that are actually IN THE WAY are counted',
+     orc.bodies.length === 1 && orc.bodies[0].dir === 'E',
+     'N does not improve, so a body standing there is not what is stopping us');
+
+  const wall = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'geometry_blocked'), N('W', 10, 9, false),
+    N('N', 9, 10, false), N('S', 11, 10, false)] });
+  ok('GROUND that refuses is never waited on — it sidesteps',
+     wall.verdict === 'sidestep' && wall.move !== null);
+  ok('and the refusing ground is reported rather than swallowed',
+     wall.ground.length === 1 && wall.ground[0].dir === 'E');
+}
+
+console.log('\ncrawlChoice: told apart by REASON, and an unknown reason is ground');
+{
+  // Waiting for a wall to walk away burns the whole budget and reports nothing, so anything
+  // not explicitly an object is treated as the ground. The safe default is the impatient one.
+  const odd = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'room_security_unknown'), N('S', 11, 10, false)] });
+  ok('an unrecognised refusal is treated as ground, not as a body',
+     odd.verdict === 'sidestep' && odd.ground.length === 1 && odd.bodies.length === 0);
+  const mixed = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'object_blocked'), N('N', 9, 11, true, 'geometry_blocked')] });
+  ok('a body and a wall in one reading are both reported, and the body wins the verdict',
+     mixed.verdict === 'body' && mixed.bodies.length === 1 && mixed.ground.length === 1);
+  ok('a null validation is neither open nor blocked, and is simply not offered',
+     crawlChoice({ at: HERE, goal: GOAL,
+                   neighbours: [N('E', 10, 11, null), N('S', 11, 10, false)] }).move.dir === 'S');
+}
+
+console.log('\ncrawlChoice: a sidestep does not undo the last one');
+{
+  // Without a memory the crawl oscillates: sidestep north, meet the same wall, sidestep
+  // south, for ever. `avoid` is where the body has just been.
+  const c = crawlChoice({ at: HERE, goal: GOAL, avoid: [{ row: 9, col: 10 }], neighbours: [
+    N('E', 10, 11, true, 'geometry_blocked'), N('N', 9, 10, false), N('S', 11, 10, false)] });
+  ok('a square we have just left is not where we sidestep to',
+     c.verdict === 'sidestep' && c.move.dir === 'S');
+  const boxed = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'geometry_blocked'), N('W', 10, 9, true, 'geometry_blocked'),
+    N('N', 9, 10, true, 'geometry_blocked'), N('S', 11, 10, true, 'geometry_blocked')] });
+  ok('nothing open at all is BOXED, which is a finding and not a wait',
+     boxed.verdict === 'boxed' && boxed.move === null);
+}
+
+console.log('\ncrawlChoice: a wall that BREATHES is not a wall');
+{
+  // Measured on prod 2026-09-10, room 39, the first live run of this verb:
+  //   crawl_to: r10c27 — a body blocks E; waiting 6000ms (1/8)
+  //   step failed: every direction out of r10c27 is refused:
+  //                E geometry_blocked, W geometry_blocked, N geometry_blocked, S object_blocked
+  // South was an ORC. The verdict looked for bodies only among the directions that IMPROVE,
+  // so the one direction that was not stone counted as boxed in, and the errand gave up on a
+  // room it could have walked out of ten seconds later.
+  const orcBehind = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'geometry_blocked'), N('W', 10, 9, true, 'geometry_blocked'),
+    N('N', 9, 10, true, 'geometry_blocked'), N('S', 11, 10, true, 'object_blocked')] });
+  ok('a body in the ONLY unblocked-by-rock direction is a wait, even facing backwards',
+     orcBehind.verdict === 'body', String(orcBehind.verdict));
+  ok('and it says the body is the only way out, not merely in the way',
+     orcBehind.onlyWayOut === true);
+  ok('the body it names is the one that was actually there',
+     orcBehind.bodies.length === 1 && orcBehind.bodies[0].dir === 'S');
+
+  // And the genuine case still reports boxed: four walls, no bodies anywhere.
+  const stone = crawlChoice({ at: HERE, goal: GOAL, neighbours: [
+    N('E', 10, 11, true, 'geometry_blocked'), N('W', 10, 9, true, 'geometry_blocked'),
+    N('N', 9, 10, true, 'geometry_blocked'), N('S', 11, 10, true, 'geometry_blocked')] });
+  ok('four walls and no bodies is still BOXED, which is a finding',
+     stone.verdict === 'boxed' && !stone.onlyWayOut);
+}
+
+
+console.log('\nhealthFractionOf reads both shapes, because a keeper and the broker disagree');
+{
+  ok('a keeper-backed character reports hp',
+     healthFractionOf({ hp: { value: 10, max: 20 } }) === 0.5);
+  ok('a broker-held one reports vitals.health',
+     healthFractionOf({ vitals: { health: { value: 5, max: 20 } } }) === 0.25);
+  ok('unreadable stays null rather than becoming a confident zero',
+     healthFractionOf({}) === null && healthFractionOf(null) === null);
+}
+
+// ---------------------------------------------------------------- crawl_to, end to end
+//
+// A fake keeper on a port nothing serves, so the plumbing runs without a live fleet: /live so
+// the band scan can find it, /movecheck for the oracle, and short_hop through the fake broker
+// to move the body.
+function fakeKeeper({ world, character = 'Tester' }) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    const url = String(u);
+    if (url.includes(':' + KEEPER_PORT + '/live'))
+      return { ok: true, json: async () => ({ agent: 'a1', character, pid: 4242 }) };
+    if (url.includes(':' + KEEPER_PORT + '/movecheck')) {
+      const me = world.at;
+      const dirs = [['E', 0, 1], ['W', 0, -1], ['N', -1, 0], ['S', 1, 0]];
+      return { ok: true, json: async () => ({ neighbors: dirs.map(([dir, dr, dc]) => {
+        const to = { row: me.row + dr, col: me.col + dc };
+        const reason = world.refuse(to);
+        return { dir, to, validation: { blocked: Boolean(reason), reason: reason ?? null } };
+      }) }) };
+    }
+    // A REAL KEEPER ALSO ANSWERS THE LEASE. `holdKeeper` claims work/movement/economy over
+    // /action and CANCELS the in-flight journey over /cancel before any step runs; a fake
+    // that refuses those makes the whole errand die with a bare "connection refused" before
+    // the crawl is reached.
+    if (url.includes(':' + KEEPER_PORT + '/action'))
+      return { ok: true, json: async () => ({ faculties: { work: {}, movement: {}, economy: {} } }) };
+    if (url.includes(':' + KEEPER_PORT + '/cancel'))
+      return { ok: true, json: async () => ({ cancelled: true }) };
+    if (/127\.0\.0\.1:19\d\d\d\//.test(url)) throw new Error('connection refused');
+    return realFetch(u, o);
+  };
+  return () => { globalThis.fetch = realFetch; };
+}
+
+console.log('\ncrawl_to waits an orc out and then walks past it');
+{
+  // E is blocked by a BODY for the first two readings and clear afterwards — an orc that
+  // wanders off, which is the case this whole verb is written for.
+  let readings = 0;
+  const world = {
+    at: { row: 10, col: 10 },
+    refuse(to) {
+      if (to.col > this.at.col) { readings++; return readings <= 2 ? 'object_blocked' : null; }
+      return null;
+    },
+  };
+  // ORDER MATTERS: fakeBroker REPLACES globalThis.fetch, so the keeper fake must be
+  // installed second and delegate to it for everything that is not a keeper port.
+  const sent = fakeBroker({ rooms: { a1: 39 }, positions: { a1: world.at },
+    onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(13, 10, { bodyWaitMs: 5, deadlineMs: 20000, settleMs: 5, maxSteps: 20 })],
+    onLog: quiet });
+  restore();
+  ok('it reaches the square', r.results.a1.ok === true,
+     JSON.stringify(r.results.a1).slice(0, 200));
+  ok('and it reports how many times it waited for a body',
+     r.results.a1.state['0:crawl_to'].waited >= 1);
+  ok('it moved with short_hop and never with walk_to — walk_to PLANS',
+     sent.some(x => x.name === 'short_hop') && !sent.some(x => x.name === 'walk_to'));
+  ok('and it cancels whatever is still walking before each hop',
+     sent.filter(x => x.name === 'cancel_movement').length >= 1);
+}
+
+console.log('\ncrawl_to gives up on a body that never moves, and SAYS it was a body');
+{
+  const world = { at: { row: 10, col: 10 },
+                  refuse(to) { return to.col > this.at.col ? 'object_blocked' : null; } };
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: world.at },
+    onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl-stuck', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(20, 10, { bodyWaitMs: 2, bodyRetries: 3, deadlineMs: 20000,
+                              settleMs: 5, maxSteps: 30 })],
+    onLog: quiet });
+  restore();
+  const out = r.results.a1.state['0:crawl_to'];
+  ok('it fails rather than waiting for ever', r.results.a1.ok === false);
+  ok('and the outcome names a BODY, not the geometry',
+     out.outcome === 'body_will_not_move', String(out.outcome));
+  ok('it waited exactly the number of times it was told to', out.waited === 3, String(out.waited));
+  ok('and it says which direction the thing was standing in',
+     (out.blockers ?? []).some(b => b.startsWith('E')));
+}
+
+console.log('\ncrawl_to rests at a safe wall the moment it gets hurt, mid-crawl');
+{
+  const world = { at: { row: 10, col: 10 }, refuse: () => null };
+  // Hurt at the start; the fake heals on rest_up, so the crawl should stop, rest, and resume.
+  const health = { a1: { value: 4, max: 20 } };
+  const sent = fakeBroker({ rooms: { a1: 39 }, positions: { a1: world.at }, health,
+    safeNow: { at: { col: 10, row: 10 }, works: true },
+    onRestUp: () => { health.a1 = { value: 19, max: 20 }; },
+    onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl-hurt', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(12, 10, { healBelow: 0.5, deadlineMs: 20000, settleMs: 5, maxSteps: 20 })],
+    onLog: quiet });
+  restore();
+  ok('it heals before it finishes', sent.some(x => x.name === 'rest_up'));
+  ok('and it looked for a SAFE WALL rather than sitting down where it stood',
+     sent.some(x => x.name === 'safe_spots'));
+  ok('the crawl then completes', r.results.a1.ok === true,
+     JSON.stringify(r.results.a1).slice(0, 200));
+  ok('and it reports that it stopped to heal', r.results.a1.state['0:crawl_to'].healed >= 1);
+}
+
+console.log('\ncrawl_to probes DIAGONALS before believing it is boxed in');
+{
+  // /movecheck answers for N/S/E/W and nothing else, so "every direction is refused" is a
+  // statement about the instrument as much as about the ground. Measured by hand in room 39
+  // before this verb existed: boxed on all four cardinals at r13c40, and a blind NE hop moved
+  // the body. The only way to ask about a diagonal is to try it.
+  const world = {
+    at: { row: 10, col: 10 },
+    // Cardinals are rock for the first square only; the diagonal is not, and everything is
+    // open once the body is off it.
+    refuse(to) {
+      if (this.at.row !== 10 || this.at.col !== 10) return null;
+      const dr = to.row - this.at.row, dc = to.col - this.at.col;
+      return (dr === 0 || dc === 0) ? 'geometry_blocked' : null;
+    },
+  };
+  const sent = fakeBroker({ rooms: { a1: 39 }, positions: { a1: world.at },
+    // Only the diagonal actually moves the body; a cardinal hop is refused by the world.
+    onShortHop: ({ to_col, to_row, positions }) => {
+      const p = positions.a1;
+      const straight = to_row === p.row || to_col === p.col;
+      if (p.row === 10 && p.col === 10 && straight) return;
+      p.row = to_row; p.col = to_col;
+    } });
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl-diag', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(13, 10, { deadlineMs: 20000, settleMs: 5, maxSteps: 20 })], onLog: quiet });
+  restore();
+  ok('a diagonal gets it off a square with no legal cardinal exit',
+     r.results.a1.ok === true, JSON.stringify(r.results.a1).slice(0, 220));
+  ok('and the probe is counted, so a room that needs them is visible afterwards',
+     r.results.a1.state['0:crawl_to'].probed >= 1);
+  ok('the diagonal was tried with short_hop like every other step',
+     sent.some(x => x.name === 'short_hop' && x.to_row !== 10 && x.to_col !== 10));
+}
+
+console.log('\ncrawl_to still reports boxed_in when the diagonals are rock too');
+{
+  const world = { at: { row: 10, col: 10 }, refuse: () => 'geometry_blocked' };
+  const sent = fakeBroker({ rooms: { a1: 39 }, positions: { a1: world.at },
+    onShortHop: () => {} });          // nothing moves the body, ever
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl-boxed', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(13, 10, { deadlineMs: 20000, settleMs: 5, maxSteps: 20 })], onLog: quiet });
+  restore();
+  const out = r.results.a1.state['0:crawl_to'];
+  ok('it fails', r.results.a1.ok === false);
+  ok('and the verdict is boxed_in', out.outcome === 'boxed_in', String(out.outcome));
+  ok('it says the diagonals were tried, so nobody re-runs it to check',
+     /diagonals probed/.test(out.why ?? ''), String(out.why).slice(0, 120));
+  ok('all four diagonals were actually attempted',
+     sent.filter(x => x.name === 'short_hop' && x.to_row !== 10 && x.to_col !== 10).length === 4);
+}
+
+
+console.log('\ncrawl_to refuses honestly when there is no keeper to ask');
+{
+  // Nothing on the band answers /live. The step must say WHY it cannot run rather than
+  // quietly degrading into the walk_to whose planner it exists to avoid.
+  // fakeBroker REPLACES globalThis.fetch, so it has to go first and the stub second.
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 1, col: 1 } } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    if (/127\.0\.0\.1:19\d\d\d\//.test(String(u))) throw new Error('connection refused');
+    return realFetch(u, o);
+  };
+  const r = await fleetScript({ name: 'crawl-nokeeper', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(5, 5, { deadlineMs: 5000, settleMs: 5 })], onLog: quiet });
+  globalThis.fetch = realFetch;
+  ok('a crawl with no keeper is refused, not attempted', r.results.a1.ok === false);
+  ok('and it names what it needed the keeper FOR',
+     /movecheck|short_hop/.test(r.results.a1.why ?? ''), String(r.results.a1.why));
+}
+
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
