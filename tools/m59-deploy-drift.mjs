@@ -32,6 +32,25 @@
 // quietly pass. That rule is in docs/m59-git-process.md because breaking it is how the
 // pre-commit hook sat silently inert for an afternoon while reporting nothing wrong.
 
+// AND `git cherry` IS NOT THE LAST WORD EITHER, BECAUSE A PATCH-ID IS STILL A HASH.
+//
+// `git cherry` compares patch-ids, which is a real improvement on comparing commit ids — but a
+// patch-id is computed from the diff, and a diff rebased onto different surrounding lines is a
+// DIFFERENT diff. So a commit that was rebased and landed hours ago still reads `+`.
+//
+// MEASURED 2026-09-11, an hour after the first fix. Seven commits sat only on local `main` and
+// `git cherry` called all seven genuinely missing. Comparing SUBJECT LINES against origin --
+// which is what docs/m59-git-process.md rule 5 actually prescribes, from the night 27 of 29
+// commits turned out to be duplicates -- showed **five of the seven were already on origin**
+// under other hashes. Cherry-picking the first of them hit a conflict, which is what landing an
+// already-landed change looks like from the inside.
+//
+// So `subjectSeen` is a second opinion over anything `cherry` still calls missing. It is an
+// OPTIONAL narrowing and never a widening: it can only take a commit off the stranded list, and
+// a `null` from it (cannot say) leaves that commit on the list. Subjects here are long, written
+// sentences -- collision is not a practical concern, and the direction of any error is toward
+// refusing.
+
 /**
  * Which of prod's commits carry a change no trunk ref has.
  *
@@ -42,9 +61,13 @@
  * @param {string|null} o.trunkRef  the NAME of trunkHead, so we can tell it from remoteRef
  * @param {(base: string, head: string) => string|null} o.cherry
  *        runs `git cherry base head`; returns its stdout, or null if it could not run
+ * @param {((sha: string) => boolean|null)} [o.subjectSeen]
+ *        optional: is this commit's SUBJECT already on a trunk ref? Catches the rebase that a
+ *        patch-id comparison misses. `null` means cannot say, and keeps the commit stranded.
  * @returns {string[]|null} the stranded shas, [] when nothing is stranded, null when unevaluable
  */
-export function strandedCommits({ prodHead, trunkHead, remoteRef = null, trunkRef = null, cherry }) {
+export function strandedCommits({ prodHead, trunkHead, remoteRef = null, trunkRef = null,
+                                  cherry, subjectSeen = null }) {
   const missingAgainst = (base) => {
     const out = cherry(base, prodHead);
     if (out === null || out === undefined) return null;
@@ -54,17 +77,22 @@ export function strandedCommits({ prodHead, trunkHead, remoteRef = null, trunkRe
       .filter(Boolean);
   };
 
+  // Narrow by subject last, so it applies however the refs above worked out. Only ever removes.
+  const bySubject = (shas) => subjectSeen
+    ? shas.filter(sha => subjectSeen(sha) !== true)
+    : shas;
+
   const vsTrunk = missingAgainst(trunkHead);
   if (vsTrunk === null) return null;          // cannot say — the caller keeps refusing
   if (!vsTrunk.length) return [];             // the whole gap is other people's rebases
 
   // Only one ref to consult, or both names denote the same one.
-  if (!remoteRef || remoteRef === trunkRef) return vsTrunk;
+  if (!remoteRef || remoteRef === trunkRef) return bySubject(vsTrunk);
 
   // Two refs that disagree. Stranded means absent from BOTH; anything origin already has is
   // safe however the local branch looks. An unevaluable second opinion does not clear the
   // first one — it leaves the alarm exactly where it was.
   const vsRemote = missingAgainst(remoteRef);
-  if (vsRemote === null) return vsTrunk;
-  return vsTrunk.filter(sha => vsRemote.includes(sha));
+  if (vsRemote === null) return bySubject(vsTrunk);
+  return bySubject(vsTrunk.filter(sha => vsRemote.includes(sha)));
 }

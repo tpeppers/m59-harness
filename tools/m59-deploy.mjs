@@ -199,11 +199,27 @@ function survey({ fetch = true } = {}) {
   // how the tag-picker shipped a rollback that rolled forward.
   let strandedShas = null;
   if (known && ahead > 0) {
+    const remoteRef = git(HARNESS, 'rev-parse', '-q', '--verify', `refs/remotes/origin/${TRUNK}`)
+      ? `origin/${TRUNK}` : null;
     strandedShas = strandedCommits({
-      prodHead, trunkHead, trunkRef,
-      remoteRef: git(HARNESS, 'rev-parse', '-q', '--verify', `refs/remotes/origin/${TRUNK}`)
-        ? `origin/${TRUNK}` : null,
+      prodHead, trunkHead, trunkRef, remoteRef,
       cherry: (base, head) => git(HARNESS, 'cherry', base, head),
+      // THE THIRD OPINION, AND THE ONE RULE 5 ACTUALLY PRESCRIBES. A patch-id is still a hash:
+      // rebase a change onto different surrounding lines and `git cherry` calls it missing. Five
+      // of seven commits read as genuinely unpushed that way on 2026-09-11 and were already on
+      // origin under other subjects-identical hashes. `--fixed-string` because these subjects
+      // are prose full of regex metacharacters -- backticks, parentheses, question marks.
+      subjectSeen: (sha) => {
+        const subject = git(HARNESS, 'log', '--format=%s', '-1', sha);
+        if (!subject) return null;                 // cannot say: leaves the commit stranded
+        for (const ref of [trunkRef, remoteRef].filter(Boolean)) {
+          const hit = git(HARNESS, 'log', '--format=%h', '--fixed-strings',
+                          `--grep=${subject}`, '-1', ref);
+          if (hit === null) return null;
+          if (hit) return true;
+        }
+        return false;
+      },
     });
   }
   // WHAT THIS CUT WOULD NEWLY SHIP, and whether any of it asks not to be shipped.

@@ -117,6 +117,54 @@ console.log('\nparsing what git actually prints');
                        cherry: () => '- a\n- b\n- c' }), []);
 }
 
+console.log('\nand a patch-id is STILL a hash, so subjects get the last word');
+{
+  // MEASURED AN HOUR AFTER THE FIRST FIX. `git cherry` compares patch-ids, and a patch rebased
+  // onto different surrounding lines has a different patch-id -- so a commit that landed hours
+  // ago still reads `+`. Seven commits sat only on local `main`, cherry called all seven
+  // missing, and comparing SUBJECTS against origin (rule 5's own prescription, from the night 27
+  // of 29 turned out to be duplicates) showed FIVE were already there. Cherry-picking the first
+  // hit a conflict, which is what re-landing a landed change looks like from the inside.
+  const seen = new Set(['a', 'c']);
+  eq('a rebased commit whose subject is already on origin is not stranded',
+     strandedCommits({
+       prodHead: 'prod', trunkHead: 'main', trunkRef: 'main', remoteRef: null,
+       cherry: cherryFrom({ main: '+ a\n+ b\n+ c' }),
+       subjectSeen: (sha) => seen.has(sha),
+     }), ['b']);
+
+  // IT ONLY EVER NARROWS. A subject nobody has seen cannot ADD a commit to the list, and the
+  // refs above still decide what is a candidate at all.
+  eq('it cannot widen: a commit cherry called present stays off the list',
+     strandedCommits({
+       prodHead: 'prod', trunkHead: 'main', trunkRef: 'main', remoteRef: null,
+       cherry: cherryFrom({ main: '- a\n- b' }),
+       subjectSeen: () => false,
+     }), []);
+
+  // `null` = cannot say. Same rule as everywhere else here: it does not clear the alarm.
+  eq('an unevaluable subject check leaves the commit stranded',
+     strandedCommits({
+       prodHead: 'prod', trunkHead: 'main', trunkRef: 'main', remoteRef: null,
+       cherry: cherryFrom({ main: '+ a' }),
+       subjectSeen: () => null,
+     }), ['a']);
+
+  eq('omitting it entirely behaves exactly as before',
+     strandedCommits({
+       prodHead: 'prod', trunkHead: 'main', trunkRef: 'main', remoteRef: null,
+       cherry: cherryFrom({ main: '+ a' }),
+     }), ['a']);
+
+  // And it applies after the two-ref intersection, not instead of it.
+  eq('it narrows the result of the both-refs intersection too',
+     strandedCommits({
+       prodHead: 'prod', trunkHead: 'localmain', trunkRef: 'main', remoteRef: 'origin/main',
+       cherry: cherryFrom({ localmain: '+ a\n+ b', 'origin/main': '+ a\n+ b' }),
+       subjectSeen: (sha) => sha === 'a',
+     }), ['b']);
+}
+
 console.log('\nthe tool is wired to this module rather than keeping its own copy');
 {
   const src = await import('node:fs').then(fs =>
@@ -125,6 +173,8 @@ console.log('\nthe tool is wired to this module rather than keeping its own copy
   ok('and calls it', /strandedCommits\(\{/.test(src));
   ok('and no longer counts raw rev-list output as stranded work',
      !/prod is \$\{s\.ahead\} commit\(s\) AHEAD/.test(src));
+  // A second opinion nothing calls is not a second opinion.
+  ok('and the subject second opinion is actually connected', /subjectSeen:/.test(src));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
