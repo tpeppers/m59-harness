@@ -142,11 +142,50 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
   // What IS real is the per-transaction ceiling. An oversized line is not refused — it goes
   // out and buys nothing, the same silence a malformed id list produces.
   ok('a large order is split into chunks', /Math\.min\(left, SHOP_MAX_PER_BUY\)/.test(tool));
+  // ONE HOME FOR THE NUMBER. It lived here and nowhere else, so the KEEPER — which does its
+  // own buying and never imported it — went on sending one bare id at a time.
   ok('the cap is a named, overridable constant',
-     /const SHOP_MAX_PER_BUY = Number\(process\.env\.M59_SHOP_MAX_PER_BUY \|\| 50\);/.test(broker));
+     /export const SHOP_MAX_PER_BUY = Number\(process\.env\.M59_SHOP_MAX_PER_BUY \|\| 50\);/
+       .test(readFileSync(join(HERE, 'm59-parse.mjs'), 'utf8')));
+  ok('and the broker imports it rather than declaring a second one',
+     /SHOP_MAX_PER_BUY \} from '\.\/m59-parse\.mjs'/.test(broker) &&
+     !/const SHOP_MAX_PER_BUY = Number/.test(broker));
   // Hammering a counter that has already said no is how a town trip runs for ever.
   ok('and it stops at the first chunk that brings nothing',
      /if \(!arrived\.length\) \{/.test(tool) && /brought nothing/.test(tool));
+}
+
+console.log('\nA STACKABLE BOUGHT AS A BARE ID BUYS NOTHING, SILENTLY');
+{
+  // UserBuyItems (user.kod:5804) pairs each id with the next count off the PARALLEL number
+  // list encodeIdList writes only for `{id, amount}` elements. A bare id leaves that list
+  // empty, the merchant's Buy has no quantity to pair with the item, and the only complaint
+  // is a Debug() line no player ever sees. Every reagent this fleet buys is a stackable.
+  const { buyLines, SHOP_MAX_PER_BUY } = await import('./m59-parse.mjs');
+
+  ok('every line carries a count — no bare ids reach the wire',
+     buyLines([7, 7, 7]).every(l => typeof l === 'object' && l.amount > 0));
+  ok('units of the same item merge into ONE line',
+     JSON.stringify(buyLines([7, 7, 7, 9])) === JSON.stringify([{ id: 7, amount: 3 }, { id: 9, amount: 1 }]),
+     JSON.stringify(buyLines([7, 7, 7, 9])));
+  ok('an explicit amount is honoured, not counted as one',
+     buyLines([{ id: 7, amount: 40 }])[0].amount === 40);
+  ok('and an order past the per-transaction ceiling is chunked rather than sent oversized',
+     JSON.stringify(buyLines([{ id: 7, amount: 120 }], { max: 50 }))
+       === JSON.stringify([{ id: 7, amount: 50 }, { id: 7, amount: 50 }, { id: 7, amount: 20 }]));
+  ok('the ceiling is the shared one', SHOP_MAX_PER_BUY === 50);
+  ok('rubbish in the list is dropped rather than sent as NaN',
+     JSON.stringify(buyLines([null, undefined, 'x', { amount: 3 }, 7]))
+       === JSON.stringify([{ id: 7, amount: 1 }]));
+
+  // THE KEEPER DOES ITS OWN BUYING, AND IT WAS THE HALF THAT COULD NOT WORK. Both of
+  // m59-autopilot's counters sent `[entry.id]` — bare — once per unit in a sleep loop.
+  const autopilot = readFileSync(join(HERE, 'm59-autopilot.mjs'), 'utf8');
+  ok('the keeper no longer sends a bare id to a merchant',
+     !/buyItems\([^)]*\[\s*(entry|it)\.id\s*\]/.test(autopilot),
+     'a bare id is still going to a counter — stackables will buy nothing');
+  ok('and it builds its lines with the shared helper',
+     /buyLines\(/.test(autopilot) && /buyLines,?\s*$|buyLines,/.test(autopilot.slice(0, 4000)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

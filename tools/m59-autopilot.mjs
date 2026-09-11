@@ -23,7 +23,7 @@
 import * as skills from './m59-skills.mjs';
 import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
-import { OF, affordances, dropSpec as dropSpecFor,
+import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem } from './m59-items.mjs';
@@ -18925,13 +18925,24 @@ export class Autopilot {
     for (const kind of kinds) {
       if (!need[kind]) continue;
       const entry = (shop.items || []).find(item => this.matchesKind(item.name, kind));
+      // `entry.amount` IS NOT STOCK. It is the quantity the counter offers by default —
+      // every apothecary lists "Herbs x4" and none of them runs out — so how many we buy is
+      // decided by `need` and the purse, never by the listed number.
       if (!entry) { unstocked.push(kind); continue; }
-      for (let n = 0; n < need[kind] && purse - (entry.cost || 0) >= floor; n++) {
-        await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [entry.id]));
+      const unit = entry.cost || 0;
+      const affordable = unit > 0 ? Math.max(0, Math.floor((purse - floor) / unit)) : need[kind];
+      const take = Math.min(need[kind], affordable);
+      // ONE LINE WITH A COUNT. A bare id buys nothing at all for a stackable — the server's
+      // parallel number list arrives empty and the merchant's Buy has no quantity to pair
+      // with the item (see buyLines in m59-parse.mjs). Every reagent this loop exists to
+      // fetch is a stackable, so the unit-at-a-time version could not have worked.
+      for (const line of buyLines([{ id: entry.id, amount: take }])) {
+        await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
         await new Promise(resolve => setTimeout(resolve, 700));
-        purse -= entry.cost || 0;
-        this.recordPurchase(entry.name, entry.cost, { item_kind: kind,
-          from: c.rsc.get(pick.seller.nameRsc) ?? null, why: `farm delivery for room ${p.room}` });
+        purse -= unit * line.amount;
+        for (let n = 0; n < line.amount; n++)
+          this.recordPurchase(entry.name, entry.cost, { item_kind: kind,
+            from: c.rsc.get(pick.seller.nameRsc) ?? null, why: `farm delivery for room ${p.room}` });
       }
     }
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
@@ -20731,15 +20742,29 @@ export class Autopilot {
                                      .map(it => `${it.name} @${it.cost}`).slice(0, 6) });
       return [];
     }
+    // ONE LINE PER ITEM, CARRYING A COUNT — never the same bare id sent N times.
+    //
+    // `wanted` holds one entry per UNIT, which is the natural way to build a shopping list
+    // and the wrong way to send one. A bare id leaves the server's parallel number list
+    // empty, so for a stackable — herbs, elderberry, sapphire, mushroom, every reagent this
+    // loop exists to buy — the merchant's Buy has no quantity to pair with the item and buys
+    // NOTHING, silently. See buyLines in m59-parse.mjs for the kod citation. The loop also
+    // slept 700ms per unit, so forty herbs was half a minute at the counter with the keeper
+    // trying to drag the character back to what it was doing.
     const got = [];
-    for (const it of wanted) {
-      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [it.id]));
+    const byId = new Map(wanted.map(it => [Number(it.id), it]));
+    for (const line of buyLines(wanted)) {
+      const it = byId.get(line.id);
+      if (!it) continue;
+      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
       await new Promise(r => setTimeout(r, 700));
-      got.push(`${it.name} @${it.cost}`);
-      this.recordPurchase(it.name, it.cost, { kind: skills.shareKind(it.name) || (isFood(it.name) ? 'food' : null),
-        // seller may be a bare id — the signature accepts both — so do not assume an object.
-        from: seller?.nameRsc ? (c.rsc.get(seller.nameRsc) ?? null) : null,
-        why: isFood(it.name) ? 'food bought at a counter we were already standing at — the only way past the vigor-80 resting cap' : 'reagent top-up at a counter we were already standing at, to keep create food castable' });
+      for (let n = 0; n < line.amount; n++) {
+        got.push(`${it.name} @${it.cost}`);
+        this.recordPurchase(it.name, it.cost, { kind: skills.shareKind(it.name) || (isFood(it.name) ? 'food' : null),
+          // seller may be a bare id — the signature accepts both — so do not assume an object.
+          from: seller?.nameRsc ? (c.rsc.get(seller.nameRsc) ?? null) : null,
+          why: isFood(it.name) ? 'food bought at a counter we were already standing at — the only way past the vigor-80 resting cap' : 'reagent top-up at a counter we were already standing at, to keep create food castable' });
+      }
     }
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
     if (got.length) this.note('restocked reagents', { bought: got, had: have, target: want,

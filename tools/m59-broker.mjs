@@ -44,7 +44,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
-import { describeObject, affordances, OF, blocksMovement, prepareActTarget } from './m59-parse.mjs';
+import { describeObject, affordances, OF, blocksMovement, prepareActTarget,
+         SHOP_MAX_PER_BUY } from './m59-parse.mjs';
 import { World, spreadEdges, boundedSilentGo, boundedRegionEntry,
          doorSettleMs, remainingDoorSettle } from './m59-world.mjs';
 import { keeperView } from './m59-render-projection.mjs';
@@ -576,7 +577,11 @@ const EDGE_NUDGE_WITHIN = Number(process.env.M59_EDGE_NUDGE_WITHIN || 16);
 // but one exchange carries at most this many, so a bigger order is split into chunks.
 // Sending one oversized line does not error; it goes out and buys nothing, which is the
 // same silence a malformed id list produces and just as hard to read from outside.
-const SHOP_MAX_PER_BUY = Number(process.env.M59_SHOP_MAX_PER_BUY || 50);
+// SHOP_MAX_PER_BUY now lives beside encodeIdList in m59-parse.mjs, with the rest of the
+// rule it belongs to: the listed quantity is not stock, a stackable bought as a bare id
+// buys nothing at all, and one exchange carries at most this many. Two homes for one
+// number is how the keeper went on buying a unit at a time while this file chunked
+// properly — and the keeper was the half that could not work.
 const EDGE_NUDGE_MAX_STEPS = Number(process.env.M59_EDGE_NUDGE_MAX_STEPS || 6);
 
 // ---------------------------------------------------------------- pacing

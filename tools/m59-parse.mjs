@@ -568,6 +568,64 @@ export function dropSpec(o, want = null) {
   return { id: o.id, amount: want == null ? (o.amount ?? 1) : want };
 }
 
+// THE QUANTITY A MERCHANT LISTS IS NOT ITS STOCK, AND A BUY LINE NEEDS A COUNT.
+//
+// Two rules that only bite together, so they live in one place.
+//
+// FIRST: `amount` on an offer is a SUGGESTED quantity. Every apothecary in the world lists
+// "Herbs x4" and none of them runs out — the shelf behind the counter is effectively
+// bottomless. Only a handful of NPCs can genuinely be emptied (mostly the ones that travel),
+// and a caller that reads the listed number as stock concludes the fleet can never buy more
+// than four herbs from anyone. Operator, 2026-09-11: "you can buy more than the amount shows
+// when they offer... only a few NPCs can actually run out."
+//
+// SECOND: a stackable bought as a BARE id buys NOTHING, silently. UserBuyItems
+// (user.kod:5804) pairs each id with the next count off the PARALLEL number list that
+// encodeIdList writes only for `{id, amount}` elements; a bare id leaves that list empty, the
+// merchant's Buy has no quantity to pair, and the kod's only complaint is a Debug() line no
+// player ever sees. Same mechanism as `dropSpec` above, on the other side of the counter.
+//
+// So the loop that looks safest — buy one, wait, buy one, wait, until we have enough — is the
+// one that cannot work at all for herbs, elderberry, sapphires or mushrooms. It is also forty
+// lines on the wire where one would do, slow enough that the keeper starts dragging the
+// character back to what it was doing mid-purchase, and long enough to risk the server's own
+// INCOMING_PACKET_THROTTLE (user.kod:50) discarding the tail in silence.
+//
+// The only real ceiling is per TRANSACTION: SHOP_MAX_PER_BUY items in one exchange. Ask for
+// more than that in a single line and it goes out and quietly does nothing, exactly like a
+// malformed id list — so a larger order is split into chunks instead.
+export const SHOP_MAX_PER_BUY = Number(process.env.M59_SHOP_MAX_PER_BUY || 50);
+
+/**
+ * Turn "these units, some of them the same item" into the fewest wire lines that can
+ * actually buy them: merged by id, every line carrying a count, and split at the
+ * per-transaction ceiling.
+ *
+ * Accepts bare ids, `{id, amount}`, or shop rows repeated once per unit — which is how
+ * every caller in this repository happened to express a quantity.
+ */
+export function buyLines(items, { max = SHOP_MAX_PER_BUY } = {}) {
+  const merged = new Map();
+  for (const it of [].concat(items ?? [])) {
+    const isObj = typeof it === 'object' && it !== null;
+    // `Number(null)` is 0 and 0 is finite, so a null in the list would otherwise become a
+    // line asking to buy object zero. Object ids are positive.
+    const id = Number(isObj ? it.id : it);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const amount = Math.max(1, Number(isObj ? (it.amount ?? 1) : 1) || 1);
+    merged.set(id, (merged.get(id) ?? 0) + amount);
+  }
+  const lines = [];
+  for (const [id, total] of merged) {
+    for (let left = total; left > 0;) {
+      const take = Math.min(left, Math.max(1, max));
+      lines.push({ id, amount: take });
+      left -= take;
+    }
+  }
+  return lines;
+}
+
 // Validate the public `act` contract before anything reaches the wire. Kept outside
 // m59-broker so the exact behavior can be exercised without starting a broker or
 // opening a game session.

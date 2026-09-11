@@ -2179,12 +2179,29 @@ async function runStep(ctx, agent, step, state) {
       // as failed is a purchase something will retry, and the sale takes the money whether
       // or not the skill was added (monster.kod:3873). `expectsPack: false` hands the
       // verdict to whatever check the caller actually wrote.
+      // A SHORT ORDER IS NOT A SHORT SHELF, AND THIS STEP USED TO HIDE WHICH IT WAS.
+      //
+      // The broker cuts every line to what the purse, the weight ceiling and the bulk ceiling
+      // allow, and says so under `clamped` with `limited_by`. This step reported only
+      // `+21/200` and threw the reason away — so "asked for 200 sapphires and got 21" read as
+      // a merchant that had run out, and the operator was told exactly that on 2026-09-11. It
+      // was a full pack. The remedies are opposite: shed the pack, or go to another counter.
+      //
+      // AND THE LISTED QUANTITY IS NOT STOCK EITHER. Every apothecary offers "Herbs x4" and
+      // none of them runs out; only a handful of NPCs can genuinely be emptied, mostly the
+      // ones that travel. Nothing here should ever clamp an order to the number on the shelf.
+      const clamped = Array.isArray(r?.clamped) ? r.clamped : [];
+      if (clamped.length)
+        ctx.log(agent, 'the order was cut by THIS CHARACTER, not by the shelf: ' +
+          clamped.map(c => `${c.name ?? c.id} ${c.asked_for}->${c.buying} ` +
+                           `(${(c.limited_by ?? []).join('+') || 'unstated'})`).join(', '));
       if (step.expectsPack === false)
-        return { ok: true, gained, note: r?.note ?? r?.error,
+        return { ok: true, gained, ...(clamped.length ? { clamped } : {}), note: r?.note ?? r?.error,
                  bought: anything ? 'and something entered the pack too'
                    : 'nothing entered the pack, which is what an ability purchase looks ' +
                      'like — the caller’s own verification decides whether it worked' };
-      return { ok: anything, gained, note: r?.note ?? r?.error,
+      return { ok: anything, gained, ...(clamped.length ? { clamped } : {}),
+               note: r?.note ?? r?.error,
                why: anything ? undefined : 'nothing entered the pack' };
     }
 
