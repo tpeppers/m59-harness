@@ -5,6 +5,15 @@
 //   node tools/m59-itemcheck.mjs --warn     # report, always exit 0
 //   node tools/m59-itemcheck.mjs --strict   # ALSO fail on names that resolve but are not
 //                                           # spelled canonically (herbs -> herb)
+//   node tools/m59-itemcheck.mjs --fix      # rewrite ONLY the unambiguous repairs, in place
+//
+// `--fix` APPLIES REPAIRS, NEVER SUGGESTIONS, and the difference is the whole safety of it.
+// A suggestion is ranked by nearness and its top answer for "gold shield" is "gold sword" — a
+// different item. A repair is offered only when the two names are the SAME WORDS once filler
+// is dropped ("heat scroll" -> "scroll of heat") or identical without spacing ("yrxlsap" ->
+// "yrxl sap"), and never when two items could both match. Everything else is left exactly as
+// it is and printed, because what the operator MEANT is not something this can know. A name
+// that visibly fails is better than a name quietly changed to the wrong item.
 //
 // A WRONG ITEM NAME IS THE QUIETEST FAULT IN THIS REPOSITORY, because it is not rejected
 // where it is written — it is rejected where it is USED, and it takes everything around it
@@ -21,14 +30,21 @@
 // and looks exactly like a fleet with no reagents. That is why `--strict` exists.
 //
 // This checks the FILES, not the fleet: it opens no socket and needs no broker.
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkItemName } from './m59-items.mjs';
+import { checkItemName, repairItemName } from './m59-items.mjs';
 
-const SUBSTRATE = fileURLToPath(new URL('../substrate/', import.meta.url));
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
+// WHICH substrate. Config is per-checkout and machine-local, so the one that matters is not
+// always the one beside this file — the fleet reads prod-deploy's while development happens
+// elsewhere, and they are different files with different contents.
+const flag = (f, fallback) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback; };
+// Normalised to this platform's separators: a flag typed with forward slashes must strip
+// from paths built with backslashes, or every file silently fails to be found again.
+const SUBSTRATE = resolve(flag('--substrate',
+  fileURLToPath(new URL('../substrate/', import.meta.url)))) + sep;
 
 // WHERE A NAME CAN BE WRITTEN. Each source says how to pull item names out of its own shape,
 // because a loadout, a guild plan and a policy all spell "a list of items" differently and
@@ -55,6 +71,20 @@ const SOURCES = [
 
 const rows = [];
 const readJson = (p) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
+
+// A rewrite walks the SAME parsed object the check walked, so the two can never disagree
+// about which strings are item names — the alternative is a regex over the file, which would
+// happily rewrite a name inside a `why` note or a character's own name.
+function rewriteNames(node, repair, log) {
+  if (Array.isArray(node)) { for (const v of node) rewriteNames(v, repair, log); return; }
+  if (!node || typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'item' && typeof v === 'string') {
+      const r = repair(v);
+      if (r) { node[k] = r.to; log.push({ from: v, to: r.to, confidence: r.confidence }); }
+    } else rewriteNames(v, repair, log);
+  }
+}
 
 for (const src of SOURCES) {
   const files = src.dir
@@ -110,6 +140,43 @@ if (renamed.length) {
 
 if (!bad.length && !renamed.length) console.log('every item name resolves, and every one is canonical.');
 else if (!bad.length) console.log('every item name resolves.');
+
+if (has('--fix')) {
+  const files = [...new Set(bad.map(r => r.file))];
+  let fixed = 0, left = 0;
+  for (const rel of files) {
+    const full = join(SUBSTRATE, rel);
+    const j = readJson(full);
+    if (!j) { console.log(`  ${rel}: could not be parsed, left alone`); continue; }
+    const log = [];
+    rewriteNames(j, (name) => {
+      const c = checkItemName(name);
+      return c.ok ? null : repairItemName(name);
+    }, log);
+    if (log.length) {
+      // The backup is not optional: this rewrites a file the fleet reads, and the previous
+      // contents are the only record of what was asked for before anyone guessed.
+      const backup = `${full}.before-itemfix-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
+      if (!existsSync(backup)) writeFileSync(backup, readFileSync(full));
+      writeFileSync(full, JSON.stringify(j, null, 2) + '\n');
+      console.log(`\n${rel}: ${log.length} repaired (backup ${backup.replace(SUBSTRATE, '')})`);
+      for (const e of log) console.log(`  "${e.from}" -> "${e.to}"  [${e.confidence}]`);
+      fixed += log.length;
+    }
+  }
+  left = bad.length - fixed;
+  console.log(`\n${fixed} repaired, ${left} left alone — those need a person, not a rule.`);
+  if (left) {
+    console.log('still unresolved:');
+    for (const r of bad) {
+      const c = checkItemName(r.name);
+      if (!c.ok && !repairItemName(r.name))
+        console.log(`  ${r.file} [${r.at}] "${r.name}"` +
+          (r.suggestions?.length ? `  — candidates: ${r.suggestions.map(x => `"${x}"`).join(', ')}` : ''));
+    }
+  }
+  process.exit(0);
+}
 
 const failing = bad.length || (has('--strict') && renamed.length);
 process.exit(has('--warn') ? 0 : (failing ? 1 : 0));

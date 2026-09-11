@@ -62,6 +62,9 @@ import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
 import { StorageCache, BOOKMAKERS_HALL_ROOM } from './m59-storage.mjs';
+import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
+         canEnterHall, REAGENTS } from './m59-stockpile.mjs';
+import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as party from './m59-party.mjs';
 import { mayShareSpot } from './m59-party.mjs';
@@ -3575,11 +3578,38 @@ export class Autopilot {
       // the plan is met. Without the release half, a full hall would mean a fleet that
       // could never sell anything again.
       ...this.guildWantedNames(),
+      ...this.stockpileKeptNames(),
     ].map(String).filter(Boolean))];
   }
 
   // Cheap on the common path: no plan, or the flag off, returns [] without touching disk
   // beyond the mtime stat `guildPlan` already does.
+  // WHAT THE FLEET USES, KEPT FROM THE MERCHANT — on top of what the guild plan is short of.
+  //
+  // `guildKeepTest` alone keeps an item only while a chest target is unmet, so the moment the
+  // target is reached the next character sells its elderberry and the fleet buys it back at
+  // the spread a day later. A want is a moment; a use is a standing fact. This adds the
+  // standing half: anything ANY character in the fleet declares a floor for — in its loadout
+  // or in its reagentTarget policy — is never sold while there is a chest to hold it.
+  stockpileKeptNames() {
+    if (!this.policy.guildWants?.enabled) return [];
+    try {
+      const store = new StorageCache();
+      const chests = store.allChests();
+      // The same availability gate the deposit half uses: with no usable store this must get
+      // out of the way rather than fill every pack with unsellable herbs.
+      const available = chests.some(ch => ch && !ch.never_opened);
+      const characters = listLoadouts()
+        .filter(l => l.loadout)
+        .map(l => ({ loadout: l.loadout }));
+      // This character's own policy target counts too — it is the signal that actually drives
+      // buying, and on this fleet most loadout floors are zero while the targets are live.
+      characters.push({ loadout: this.loadout() ?? { carry: [] }, policy: this.policy });
+      const test = stockpileKeepTest({ characters, available });
+      return [...(test.inUse ?? new Set())];
+    } catch { return []; }
+  }
+
   guildWantedNames() {
     if (!this.policy.guildWants?.enabled) return [];
     const plan = guildPlan();
@@ -19644,13 +19674,112 @@ export class Autopilot {
   // The reagent half, at the counter that actually stocks them. Runs after the food leg
   // because a character with nothing to eat now needs bread now; reagents are for the next
   // hour. Both are one trip and the walk between them is a single room.
+  // TAKE WHAT THE FLEET ALREADY OWNS BEFORE BUYING MORE OF IT.
+  //
+  // This is the half the chests never had. The outbound side has worked for a while —
+  // `guildKeepTest` marks an item the guild is short of as keep-not-sell and
+  // `contributeGuildWants` deposits it — but nothing ever consulted a chest before walking to
+  // the apothecary, so a character needing elderberry walked past three hundred of them and
+  // bought more. Every unit moved chest -> pack instead of merchant -> pack saves the SPREAD:
+  // the buy price avoided AND the sell price forgone, which is the number the 12,000-a-day
+  // hall has to be paid for in.
+  //
+  // Returns what it managed to take, so the caller buys only the remainder.
+  async withdrawFromStockpile(need = []) {
+    if (!need.length) return { took: [], saved: 0 };
+    const store = new StorageCache();
+    const chests = store.allChests();
+    const available = chests.some(ch => ch && !ch.never_opened);
+    const plan = sourcePlan({ need, chests, available,
+                              why: 'no chest has ever been opened, so what they hold is unknown' });
+    if (!plan.fromChest.length) return { took: [], saved: 0, why: plan.why };
+
+    // THE DOOR IS RANK, NOT MEMBERSHIP. CanEnter (ghall.kod:1039) admits members and allies at
+    // rank >= SIR and refuses apprentices by name, so a character that has just been inducted
+    // would walk to Barloque and be turned away with no message at all. Check before walking.
+    const g = this.s.client?.guild ?? null;
+    const door = canEnterHall({ guildId: g?.id ?? null, rank: g?.rank ?? null,
+                                hallGuildId: g?.id ?? null });
+    if (!door.ok) { this.note('cannot use the stockpile', { why: door.why }); return { took: [], saved: 0 }; }
+
+    this.doing = 'travelling';
+    const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { maxHops: 14 })
+      .catch(error => ({ arrived: false, reason: error.message }));
+    if (!trip.arrived) {
+      this.note('could not reach the stockpile', { why: trip.reason || 'travel refused' });
+      return { took: [], saved: 0 };
+    }
+
+    this.doing = 'trading';
+    const s = this.s, c = s.need();
+    await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
+    await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
+    const inRoom = new Map([...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || ''))
+      .map(o => [o.id, o]));
+
+    const book = new StockpileBook({ fleet: TITHE_FLEET });
+    const took = [];
+    let saved = 0;
+    for (const want of plan.fromChest) {
+      const cached = chests.find(x => x.slot === want.slot);
+      const target = cached?.object_id != null ? inRoom.get(cached.object_id) : null;
+      if (!target) continue;                     // named by the deposit half for the same reason
+
+      const before0 = c.evSeq;
+      await s.pacer.submit('read', () => c.contents(target.id)).catch(() => {});
+      const reply = await c.waitFor({ since: before0, kinds: ['container', 'message'],
+                                      timeoutMs: 5000 }).catch(() => null);
+      const box = (reply?.events ?? []).find(e => e.kind === 'container');
+      const inside = (box?.items ?? []).filter(o => norm(o.name) === norm(want.item));
+      let left = want.amount;
+      for (const item of inside) {
+        if (left <= 0) break;
+        const had = this.reagentCount();
+        await s.pacer.submit('trade', () => c.get(item.id)).catch(() => {});
+        await new Promise(r => setTimeout(r, 400));
+        await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+        await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        // WHAT ARRIVED IN THE PACK, not what the get was asked for. A container refusal here
+        // is a sentence spoken to the room and never an error on the wire, so a `get` that
+        // reports nothing is not a `get` that worked — the same rule the deposit half follows.
+        const now = this.reagentCount();
+        const key = norm(want.item) === 'elderberry' ? 'elderberry' : 'herbs';
+        const moved = Math.max(0, (now[key] || 0) - (had[key] || 0));
+        if (!moved) break;                       // it refused; stop hammering the chest
+        left -= moved;
+        // PRICES ARE OBSERVED, NEVER ASSUMED — a missing one contributes zero rather than a
+        // guess, because a ledger that guessed would always justify the hall it is judging.
+        const entry = savingsOf({ item: want.item, amount: moved,
+                                  buyPrice: this.policy.reagentBuyPrice ?? null,
+                                  sellPrice: this.policy.reagentSellPrice ?? null });
+        book.record({ ...entry, to: this.name ?? s.name, from: `chest ${want.slot}` });
+        saved += entry.saved;
+        took.push({ item: want.item, amount: moved, slot: want.slot });
+      }
+    }
+    if (took.length) this.note('took reagents from the guild stockpile instead of buying', {
+      took, saved, note: 'saved = buy price avoided + sell price forgone' });
+    return { took, saved };
+  }
+
   async buyReagentsInTown() {
     if (!purchaseEnabled(this.policy, 'reagents')) return;
     const s = this.s, c = s.need();
     const wantEb = reagentTargetFor('elderberry', this.policy.reagentTarget);
     const wantHb = reagentTargetFor('herb', this.policy.reagentTarget);
     const want = wantEb;
-    const have = this.reagentCount();
+    let have = this.reagentCount();
+
+    // THE CHESTS FIRST. Only the shortfall that survives the stockpile is worth a merchant.
+    if (this.policy.guildWants?.enabled && (have.elderberry < wantEb || have.herbs < wantHb)) {
+      await this.withdrawFromStockpile([
+        { item: 'elderberry', amount: Math.max(0, wantEb - have.elderberry) },
+        { item: 'herb', amount: Math.max(0, wantHb - have.herbs) },
+      ].filter(n => n.amount > 0)).catch(error =>
+        this.note('stockpile withdrawal failed', { why: error.message }));
+      have = this.reagentCount();
+    }
     // Only the shortfall that stops a cast. Being deep in elderberry and out of herbs is
     // the normal state here, and it is exactly as unable to cook as having neither.
     if (have.elderberry >= wantEb && have.herbs >= wantHb) return;
