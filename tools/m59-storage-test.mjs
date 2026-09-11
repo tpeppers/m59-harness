@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StorageCache, packFullness, bulkFullness, vaultFullness, chestFullness,
          packMax, PACK_BASE, VAULT_BULK_MAX, CHEST_BULK_MAX, STOREBOX_BULK_MAX,
-         GUILD_CHEST_SLOTS, BOOKMAKERS_CHESTS } from './m59-storage.mjs';
+         GUILD_CHEST_SLOTS, BOOKMAKERS_CHESTS , chestSlotsByPosition } from './m59-storage.mjs';
 
 let n = 0;
 const ok = (c, why) => { assert.ok(c, why); n++; };
@@ -103,5 +103,91 @@ try {
   cache.writeRent({ due: null, in_guild: true, said: 'something nobody parsed' });
   eq(cache.readRent().due, null, 'and an unparsed answer is null, never zero');
 } finally { rmSync(dir, { recursive: true, force: true }); }
+
+
+// ---------------------------------------------------------------- addressing a chest
+//
+// BY SQUARE, NEVER BY OBJECT ID. An id is a handle the server recycles -- 23% of stored ids
+// named a different object three days later -- and prod proved the consequence: three chest
+// readings thirty days old, naming a hall the guild no longer owns, and both chest legs
+// skipping every slot in silence because no recorded id was in the room.
+//
+// A chest cannot move: Chest is StorageBox is Holder, viObject_flags = CONTAINER_YES with no
+// GETTABLE flag, so GETTABLE_NO (blakston.khd:62). The square is its durable name.
+{
+  const at = (id, row, col) => ({ id, row, col });
+  // guildh14.kod:518-522 builds three, at r20c4, r18c2 and r18c6.
+  const room = [at(2578, 18, 2), at(2576, 18, 6), at(2577, 20, 4)];
+
+  // LEARNING, from a complete reading. Row-then-column: arbitrary but stable, and stability
+  // is the whole requirement because the slot number is our label rather than the game's.
+  const fresh = chestSlotsByPosition({ objects: room, known: [], expected: 3 });
+  n += 3;
+  assert.equal(fresh.complete, true);
+  assert.equal(fresh.learned, 3);
+  assert.deepEqual([...fresh.slots.keys()].sort(), [1, 2, 3]);
+  n += 3;
+  assert.equal(fresh.slots.get(1).id, 2578);   // r18c2
+  assert.equal(fresh.slots.get(2).id, 2576);   // r18c6
+  assert.equal(fresh.slots.get(3).id, 2577);   // r20c4
+
+  // THE WHOLE POINT: every id changes after a restart and the mapping still holds, because
+  // nothing was keyed on an id.
+  const known = [{ slot: 1, row: 18, col: 2 }, { slot: 2, row: 18, col: 6 },
+                 { slot: 3, row: 20, col: 4 }];
+  const rebooted = [at(9001, 18, 2), at(9002, 18, 6), at(9003, 20, 4)];
+  const after = chestSlotsByPosition({ objects: rebooted, known, expected: 3 });
+  n += 3;
+  assert.equal(after.slots.get(1).id, 9001);
+  assert.equal(after.slots.get(2).id, 9002);
+  assert.equal(after.slots.get(3).id, 9003);
+
+  // A SHORT READING MUST NOT BE ORDERED. This is the hazard the id-matching code warned
+  // about and it survives the change: ordering two chests would file r18c6 as slot 1 and
+  // r20c4 as slot 2, quietly recording one chest's contents under another chest's slot.
+  const partial = chestSlotsByPosition({ objects: [at(9002, 18, 6), at(9003, 20, 4)],
+                                         known: [], expected: 3 });
+  n += 3;
+  assert.equal(partial.complete, false);
+  assert.equal(partial.learned, 0, 'a short reading must teach nothing');
+  assert.equal(partial.slots.size, 0, 'and must address nothing it has not been taught');
+  n += 1;
+  assert.match(partial.why, /never assigned by order/);
+
+  // BUT A SHORT READING IS STILL USABLE FOR WHAT IT DOES SHOW. A slot whose chest is visible
+  // stays addressable even when its neighbours are missing from the packet -- otherwise one
+  // dropped object would stop the whole errand.
+  const partialKnown = chestSlotsByPosition({ objects: [at(9003, 20, 4)], known, expected: 3 });
+  n += 3;
+  assert.equal(partialKnown.slots.size, 1);
+  assert.equal(partialKnown.slots.get(3).id, 9003);
+  assert.equal(partialKnown.complete, false);
+
+  // A CHEST ON AN UNKNOWN SQUARE IS REPORTED, NOT ADOPTED.
+  const stranger = chestSlotsByPosition({ objects: [...rebooted, at(9004, 5, 5)],
+                                          known, expected: 3 });
+  n += 2;
+  assert.equal(stranger.slots.size, 3);
+  assert.deepEqual(stranger.unplaced, [{ id: 9004, row: 5, col: 5 }]);
+
+  // An object with no position cannot be placed and must not be counted as one that can.
+  const noPos = chestSlotsByPosition({ objects: [{ id: 7 }], known, expected: 3 });
+  n += 2;
+  assert.equal(noPos.slots.size, 0);
+  assert.equal(noPos.complete, false);
+
+  // And the square survives a round trip through the cache, or the next visit has nothing
+  // to match on.
+  const dir2 = mkdtempSync(join(tmpdir(), 'm59-chestpos-'));
+  try {
+    const cache = new StorageCache({ dir: dir2 });
+    cache.writeChest(1, { object_id: 2578, room: 714, row: 18, col: 2,
+                          items: [{ name: 'elderberry', amount: 300 }], by: 'Fozzie' });
+    const back = cache.readChest(1);
+    n += 2;
+    assert.equal(back.row, 18);
+    assert.equal(back.col, 2);
+  } finally { rmSync(dir2, { recursive: true, force: true }); }
+}
 
 console.log(`storage: ${n} assertions passed`);
