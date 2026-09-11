@@ -27,6 +27,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
 | read a ledger, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
+| commit, merge, push, cut a deploy, or work alongside another session | [`docs/m59-git-process.md`](docs/m59-git-process.md) |
 | interpret, log, serialize, or compare a coordinate | [`docs/m59-coordinates.md`](docs/m59-coordinates.md) |
 | run or extend the offline tests | [`docs/m59-tests.md`](docs/m59-tests.md) |
 

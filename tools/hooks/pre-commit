@@ -1,0 +1,75 @@
+#!/bin/sh
+# A DEPLOY IS NOT A PLACE TO COMMIT.
+#
+#   git config core.hooksPath tools/hooks      # once per clone; hooks are shared by every worktree
+#
+# WHAT THIS REFUSES: a commit made in a worktree whose HEAD is detached at a `deploy-*` tag.
+# That is what a production checkout looks like, and committing there is how a deploy ends up
+# AHEAD of the trunk — work that exists only in the deploy, reachable from nothing, and silently
+# discarded the next time the worktree is moved onto a tag.
+#
+# MEASURED 2026-09-11. Prod went ahead of the trunk THREE times in one night:
+#   * twice by an agent outside the session graph committing straight into prod-deploy
+#     (`codex/tactical-backend-repair`, `codex/audio-intent-capture`), each time leaving two
+#     commits reachable only from a detached HEAD;
+#   * once by a session cutting `deploy-2026-09-11-3` from a local trunk line that had never
+#     been pushed.
+# All three were caught by `m59-deploy.mjs --verify` AFTER the fact, and each cost a manual
+# adoption to get the work back onto main.
+#
+# WHY A HOOK RATHER THAN A RULE. CLAUDE.md has said "never check a branch out in the prod
+# worktree" for months and it is the right rule. It is also unenforceable against a committer
+# that cannot read it: the agent that did this twice is not a Claude session, does not appear in
+# ListAgents, and cannot be messaged. A hook is the only instruction such a party receives.
+#
+# WHY THE TAG AND NOT THE PATH. Keying on "is this prod-deploy" would protect one directory and
+# miss the next deploy worktree somebody makes. Standing on a `deploy-*` tag IS the definition of
+# a deploy artifact, so the guard travels with the state rather than the location.
+#
+# THE ESCAPE HATCH IS DELIBERATE AND LOUD. `git commit --no-verify` still works, because a hook
+# that cannot be bypassed gets uninstalled by the first person it blocks at 02:00. What this
+# removes is committing there BY ACCIDENT, which is every one of the three incidents above.
+
+head_ref=$(git symbolic-ref -q HEAD 2>/dev/null)
+if [ -n "$head_ref" ]; then
+  exit 0        # on a branch: an ordinary working checkout, nothing to say
+fi
+
+tag=$(git describe --tags --exact-match HEAD 2>/dev/null)
+case "$tag" in
+  deploy-*)
+    root=$(git rev-parse --show-toplevel 2>/dev/null)
+    cat >&2 <<EOF
+
+REFUSING A COMMIT IN A DEPLOY CHECKOUT.
+
+  worktree   $root
+  HEAD       detached at $tag
+
+A deploy is a versioned, read-only checkout of the trunk. A commit here is reachable from
+nothing but this worktree's HEAD: it is invisible to main, it makes the deploy AHEAD of the
+trunk, and it is discarded the next time this worktree is moved onto a tag.
+
+What to do instead:
+
+  1. commit the change on main, in your own worktree
+         git worktree add ../work-<name> -b <branch> origin/main
+  2. push it
+  3. cut a new tag and move this worktree onto it
+         node tools/m59-deploy.mjs --cut
+
+If you have already made changes here, they are still in the working tree. Copy them out
+before anyone moves this checkout — nothing else will preserve them.
+
+  git -C "$root" diff > /tmp/deploy-wip.patch
+
+If you genuinely mean it, \`git commit --no-verify\` is not blocked. Prod going ahead of the
+trunk happened three times on 2026-09-11 and cost a hand adoption each time, so please do not
+mean it by accident.
+
+EOF
+    exit 1
+    ;;
+esac
+
+exit 0

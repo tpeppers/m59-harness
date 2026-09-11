@@ -96,7 +96,11 @@ function resolveTrunk({ fetch = true } = {}) {
   if (git(HARNESS, 'merge-base', '--is-ancestor', local, remote) === null) {
     note.push(`local ${TRUNK} has commit(s) origin/${TRUNK} does not. Comparing against the ` +
               `local ref; push it before cutting a deploy or the tag names a commit nobody else has.`);
-    return { head: local, ref: TRUNK, note };
+    // AND IT IS A PROBLEM, NOT A NOTE. See `problems()` — this line has been advisory since the
+    // tool was written, and on 2026-09-11 three sessions independently walked up to it and only
+    // two stopped. The note is exactly right and is read past, because everything either side of
+    // it is routine and the commands to run are printed underneath it.
+    return { head: local, ref: TRUNK, note, unpushed: true };
   }
 
   // Strictly behind — the case that produced the false drift.
@@ -121,7 +125,7 @@ function survey({ fetch = true } = {}) {
   const prodHead = git(PROD, 'rev-parse', 'HEAD');
   const trunk = resolveTrunk({ fetch });
   const trunkHead = trunk.head;
-  const trunkRef = trunk.ref, trunkNote = trunk.note;
+  const trunkRef = trunk.ref, trunkNote = trunk.note, trunkUnpushed = !!trunk.unpushed;
   if (!prodHead || !trunkHead) return { error: 'not a git checkout, or no such ref' };
 
   // Ask the DEVELOPMENT repo about both commits. If it has never heard of prod's HEAD, that
@@ -155,7 +159,8 @@ function survey({ fetch = true } = {}) {
   });
   const runtime = all.length - dirty.length;
   const tag = git(PROD, 'describe', '--tags', '--exact-match') || null;
-  return { prodHead, trunkHead, trunkRef, trunkNote, known, ahead, behind, ref, dirty, runtime, tag };
+  return { prodHead, trunkHead, trunkRef, trunkNote, trunkUnpushed,
+           known, ahead, behind, ref, dirty, runtime, tag };
 }
 
 function report(s) {
@@ -192,6 +197,29 @@ function problems(s) {
   if (s.dirty.length)
     bad.push(`prod has ${s.dirty.length} uncommitted file(s). Whatever they are, they are ` +
              'running in production and are in no repository:\n      ' + s.dirty.join('\n      '));
+  // A TAG MUST NAME A COMMIT SOMEBODY ELSE CAN FETCH.
+  //
+  // This was an advisory note for as long as the tool has existed, and the note says the whole
+  // thing -- "push it before cutting a deploy or the tag names a commit nobody else has". It is
+  // read past anyway, because it sits between routine lines with the commands to run printed
+  // directly underneath it.
+  //
+  // MEASURED 2026-09-11, and it is why this is a refusal now. `--cut` proposed tagging LOCAL
+  // main while that ref was seven commits BEHIND origin and carrying ten unpushed commits
+  // belonging to a different session. The proposed tag would have shipped prod WITHOUT the
+  // conjure-loop fix the roll existed for, and it fails silently in both directions: the tag
+  // cuts cleanly, prod checks out cleanly, and the broker comes up healthy running the wrong
+  // tree. Three sessions walked up to this in one night and only two of them stopped.
+  //
+  // UNPUSHED IS NOT STALE, which is why resolveTrunk compares against the local ref rather than
+  // origin -- a deploy cut from it WOULD be real, just unfetchable by anyone else. The right
+  // answer is to refuse and let a person push, not to quietly prefer the other ref and ship
+  // something nobody asked for.
+  if (s.trunkUnpushed)
+    bad.push(`local ${TRUNK} has commit(s) origin/${TRUNK} does not, so a tag cut here would ` +
+             'name a commit nobody else can fetch -- and on a machine with many worktrees that ' +
+             'work is usually somebody else\'s. Push it first: ' +
+             `git -C "${HARNESS}" push origin ${TRUNK}`);
   return bad;
 }
 
@@ -218,7 +246,7 @@ if (mode === '--status' || mode === '--verify') {
 if (mode === '--cut') {
   // REFUSE BEFORE ACTING. Cutting a deploy while prod is ahead would bury the stranded work
   // rather than land it, which is the failure this tool exists to make impossible.
-  const bad = problems(s).filter(b => /AHEAD|never seen|uncommitted/.test(b));
+  const bad = problems(s).filter(b => /AHEAD|never seen|uncommitted|nobody else can fetch/.test(b));
   if (bad.length) {
     console.error('refusing to cut a deploy:\n');
     for (const b of bad) console.error(`  * ${b}\n`);
