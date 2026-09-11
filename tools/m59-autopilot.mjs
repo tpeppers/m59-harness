@@ -4435,8 +4435,52 @@ export class Autopilot {
     const v = this.s.client?.vitals?.();
     const hp = pct(v?.health), mp = pct(v?.mana), vig = vigorPct(v);
     const armed = this.armedForSure();
+
+    // UNKNOWN VITALS ARE NOT A REASON TO STAY, WHEN THERE IS SOMEWHERE TO BE.
+    //
+    // This is the case at the top of m59-sanctuary-test.mjs, and it has been RED — the
+    // behaviour the file was written to protect was not in the code. JayB and Lee sat in
+    // room 1016 with `assignedRoom: 586` and null vitals and never came out.
+    //
+    // WHY IT READS AS EMPTY. A resume logs twenty-one characters in at once and the bars
+    // take several seconds to arrive, so `pct(null)` is the ORDINARY state after a restart
+    // rather than a rare one. `whole` below defaults health to 0 on a null — deliberately,
+    // because a character with nowhere to be should wait for real numbers — and the effect
+    // is that a keeper that has just come up cannot leave anywhere it happens to be safe.
+    // Given how often this fleet restarts, "just after a restart" is a lot of the time.
+    //
+    // AND THE REFUSAL COULD NOT SAY WHY, which is how it survived. `whole` defaults health
+    // to 0 while `blocked` below defaults it to 1, so a blind keeper was held with an EMPTY
+    // reason list: no weapon complaint, no health complaint, nothing. Both halves are fixed
+    // — this rung lets it go, and `blocked` now names an unknown bar when it holds.
+    //
+    // `armed()` RATHER THAN `armedForSure()`, and the difference is the whole point. After
+    // a restart the equipment list is unknown too, and `armedForSure` answers false to no
+    // evidence — so requiring it would re-break exactly this case for exactly this reason.
+    // `armed()` is the optimistic twin: it refuses only when the list is KNOWN and holds no
+    // weapon, which is a real reason to stay in a safe room.
+    const blind = hp === null;
+    const assigned = this.policy.assignedRoom;
+    const here = this.s.world?.room?.num ?? null;
+    const elsewhereToBe = assigned != null && here != null
+      && Number(assigned) !== Number(here);
+    if (blind && elsewhereToBe && this.armed()) {
+      this.sanctuaryHoldSince = null;
+      this.sanctuaryHoldNoted = false;
+      this.note('leaving on unknown vitals — there is somewhere else to be', {
+        going_to, assigned_room: assigned, here,
+        why: 'the bars have not arrived yet, which is the ordinary state for several ' +
+             'seconds after a resume. A character with an assignment it is not standing ' +
+             'in has a reason to move, and waiting for numbers that may be minutes away ' +
+             'is how a keeper gets retired into a room by accident',
+      });
+      return true;
+    }
+
     // A null reading is "no such bar", not "empty" — blocking on one would be the
-    // retirement this is careful about everywhere else.
+    // retirement this is careful about everywhere else. Health is the exception and
+    // defaults to 0: with nowhere else to be, waiting for a real number is right, and
+    // the rung above is what keeps that from becoming permanent.
     const whole = (hp ?? 0) >= 0.95 && (mp ?? 1) >= 0.95 && (vig ?? 1) >= REST_VIGOR_CAP;
     if (armed && whole) {
       this.sanctuaryHoldSince = null;
@@ -4446,6 +4490,9 @@ export class Autopilot {
 
     const blocked = [
       !armed ? 'no weapon in the use list' : null,
+      // NAMED, because a hold with an empty reason list is unarguable. This is the half
+      // that let the bug above go unnoticed.
+      blind ? 'vitals have not arrived yet' : null,
       (hp ?? 1) < 0.95 ? 'health' : null,
       (mp ?? 1) < 0.95 ? 'mana' : null,
       (vig ?? 1) < REST_VIGOR_CAP ? 'vigor' : null,
