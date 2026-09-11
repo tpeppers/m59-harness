@@ -38,6 +38,8 @@ import {
   RANK_QUOTA, rankRoom, SELF_SUSTAINING_RANK,
 } from './m59-guild.mjs';
 import { parseGuildInfo, parseGuildAsk, parseGuildList, parseGuildHalls } from './m59-parse.mjs';
+import { isObjectId, sessionObjectId, ourSessionsById } from './m59-session-identity.mjs';
+import { ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying } from './m59-guild.mjs';
 import * as tithe from './m59-tithe.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -536,6 +538,80 @@ console.log('\nrank names, which are what a board prints');
      Object.values(COMMANDS).every(s => /\.kod:\d+/.test(s.cite)));
   ok('every command bit is distinct',
      new Set(Object.values(COMMANDS).map(s => s.gcid)).size === Object.keys(COMMANDS).length);
+}
+
+// WHO IS OURS -- the boundary that keeps an invitation off a stranger, and the one that was
+// open for a whole fleet. Every guild action that addresses another character decides
+// membership by OBJECT ID against this broker's own sessions. On 2026-09-10 that map was
+// EMPTY on prod: the keeper proxy's `client.me` carried only a name, so `me.id` was undefined
+// for all twenty-three characters while `selfId` was right the whole time. `spread` answered
+// `in_guild: 0 of 23` and named the guild's own master as still out, seconds after reading a
+// fresh roster that listed him. This is the rule asked offline so it cannot go quiet again.
+console.log('\nwhose character is this -- the id that decides who may be invited');
+{
+  const inProcess   = { state: 'game', me: { name: 'Piggy', id: 4476 }, selfId: 4476 };
+  const keeperProxy = { state: 'game', me: { name: 'Fozzie' }, selfId: 4474 };   // no me.id
+  const joining     = { state: 'none', me: null, selfId: null };
+  const unknownSelf = { state: 'game', me: { name: 'Lew' }, selfId: -1 };
+
+  ok('an in-process session answers with its own id',   sessionObjectId(inProcess) === 4476);
+  ok('A KEEPER PROXY ANSWERS TOO -- the whole bug',      sessionObjectId(keeperProxy) === 4474);
+  ok('a session still joining answers null',            sessionObjectId(joining) === null);
+  ok('selfId -1 is "I do not know yet", not an id',     sessionObjectId(unknownSelf) === null);
+  ok('a null client is not a character',                sessionObjectId(null) === null);
+
+  ok('0 is never an object id',          !isObjectId(0));
+  ok('a negative is never an object id', !isObjectId(-1));
+  ok('undefined is never an object id',  !isObjectId(undefined));
+  ok('a positive integer is',             isObjectId(4474));
+  ok('a float is not',                   !isObjectId(4474.5));
+
+  const ours = ourSessionsById(new Map([
+    ['t14', { client: inProcess }],
+    ['t12', { client: keeperProxy }],
+    ['t3',  { client: joining }],
+    ['t20', { client: unknownSelf }],
+  ]));
+  ok('a keeper-backed fleet is visible at all', ours.size === 2);
+  ok('and keyed by the id the server gave it',  ours.get(4474)?.agent === 't12');
+  ok('a session still joining is not in it',    ours.size === 2 && !ours.has(null));
+  ok('AND NO JUNK ID IS EVER A KEY, because a lookup that matches on one matches a stranger',
+     !ours.has(-1) && !ours.has(0) && !ours.has(undefined));
+
+  // The regression itself, stated as the number that must never read zero again.
+  const guildRoster = [{ id: 4474, rank: RANK.LIEUTENANT }, { id: 4480, rank: RANK.MASTER }];
+  const inviters = [...ours.keys()]
+    .filter(id => guildRoster.some(m => m.id === id && m.rank >= RANK.LORD));
+  ok('a guild of keeper-backed members finds its inviters', inviters.length === 1);
+}
+
+// A ROSTER READ HAS THREE ANSWERS AND ONE OF THEM IS "NOTHING ANSWERED".
+//
+// UC_GUILDINFO replies with a roster packet, or with PROSE (`user_no_guild`,
+// user.kod:1974) and no packet, or -- on a keeper-backed session, where the read is a round
+// trip through the keeper -- with neither. The third was being filed as the second, so
+// `status` answered in_guild:false for a lost packet and `spread` answered "the inviter is
+// not in a guild" and stopped. Measured 2026-09-10 04:04:50: a spread loop stopped on that
+// while Fozzie was a serving lieutenant and said so on the next three reads.
+console.log('\nwhat a roster read said, including when it said nothing');
+{
+  const packet = { guild: { id: 8267, name: 'The Second Swines' }, said: [] };
+  const prose  = { guild: null, said: ['Thou belongest to no guild.'] };
+  const silence = { guild: null, said: [] };
+
+  ok('a roster packet means in the guild',   rosterReadOutcome(packet) === ROSTER_READ.GUILD);
+  ok('prose with no packet means NO guild',  rosterReadOutcome(prose) === ROSTER_READ.NONE);
+  ok('NEITHER means nothing answered',       rosterReadOutcome(silence) === ROSTER_READ.UNANSWERED);
+  ok('and unanswered is NOT the same as no guild',
+     rosterReadOutcome(silence) !== rosterReadOutcome(prose));
+  ok('a missing argument is unanswered, not no-guild',
+     rosterReadOutcome() === ROSTER_READ.UNANSWERED);
+  ok('prose ALONGSIDE a packet is still the guild -- the packet is the answer',
+     rosterReadOutcome({ guild: { id: 1 }, said: ['chatter'] }) === ROSTER_READ.GUILD);
+
+  ok('ONLY the non-answer is worth asking again', rosterReadWorthRetrying(silence));
+  ok('a guildless answer is an ANSWER and is not re-asked', !rosterReadWorthRetrying(prose));
+  ok('and neither is a roster we already have',   !rosterReadWorthRetrying(packet));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

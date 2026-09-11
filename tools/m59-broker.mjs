@@ -128,7 +128,9 @@ import { RANK, RANK_NAME, COMMANDS, mayI, commandsIn, validateGuild,
          DEFAULT_RANK_TITLES, maturityWait, inductionPlan, INVITATION_MS,
          WAR_LOSS_PENALTY, MINIMUM_MEMBERS, FRULAR_ROOM, FRULAR_NAME, KNOWN_HALLS,
          parseRentLine, parseRentHours, fundingPlan, rankRoom, RANK_QUOTA,
-         SELF_SUSTAINING_RANK, CANNOT_REJOIN_MINUTES } from './m59-guild.mjs';
+         SELF_SUSTAINING_RANK, CANNOT_REJOIN_MINUTES,
+         ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying } from './m59-guild.mjs';
+import { isObjectId, sessionObjectId, ourSessionsById } from './m59-session-identity.mjs';
 import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops } from './m59-spawns.mjs';
 // The shelter helpers. `safeSpotBook` is deliberately NOT imported: the book is retired and
@@ -1840,7 +1842,18 @@ class KeeperProxy {
     const act = (name, args) => keeperAction(proxy.name, proxy._index, name, args);
     const client = {
       get state() { return proxy.inGame ? 'game' : 'none'; },
-      get me() { return proxy.character ? { name: proxy.character } : null; },
+      // THE OBJECT ID BELONGS HERE TOO, NOT ONLY ON `selfId`. This returned a name and
+      // nothing else, and `me.id` is what the whole guild tool uses to decide which
+      // characters are OURS — the boundary that keeps an invitation off a stranger on a
+      // shared server. Undefined for every keeper-backed character, so `oursById` was empty
+      // and `guild action=spread` answered `in_guild: 0 of 23`, listing the guild's own
+      // master among those still out, seconds after reading a fresh roster that named him.
+      // `induct` and `promote` were blind the same way. See m59-session-identity.mjs.
+      get me() {
+        if (!proxy.character) return null;
+        const id = s.you?.id;
+        return { name: proxy.character, ...(isObjectId(id) ? { id } : {}) };
+      },
       get roomNameRsc() { return s.room ? s.room.name : null; },
       vitals() {
         return {
@@ -12730,7 +12743,7 @@ const TOOLS = [
       // round trip, not a cache read: a rank change by somebody else is invisible until
       // asked for, and acting on a stale bitmask is exactly the failure this tool exists
       // to stop.
-      const readRoster = async () => {
+      const readRosterOnce = async () => {
         const before = c.evSeq;
         await s.pacer.submit('guild', () => c.requestGuildInfo());
         const { events } = await c.waitFor({ since: before, kinds: ['guild'], timeoutMs: 4000 });
@@ -12739,6 +12752,31 @@ const TOOLS = [
         // `user_no_guild` as prose and no packet at all, so `this.guild` staying null with
         // a message present is the guildless case rather than a lost reply.
         return { guild: c.guild ?? null, said };
+      };
+
+      // ...BUT NOTHING AT ALL IS NEITHER OF THOSE, AND IT WAS BEING FILED AS "NO GUILD".
+      //
+      // The comment above names the discriminator and the code did not use it. When the read
+      // comes back with no packet AND no prose, nothing answered — on a keeper-backed session
+      // this is a round trip through the keeper and it can simply miss the 4s window. Every
+      // caller then treats a lost reply as the fact that this character has no guild:
+      // `status` answers `in_guild: false`, and `spread` answers "the inviter is not in a
+      // guild" and stops.
+      //
+      // Measured 2026-09-10, 04:04:50: a spread loop stopped on exactly that, reporting
+      // Fozzie as guildless. Fozzie was a LIEUTENANT of The Second Swines and said so on each
+      // of the next three reads. It is the same silent-failure shape as `accept` reporting a
+      // successful join as a failure, and the same fix: ask twice before believing nothing.
+      //
+      // The retry is only on the EMPTY answer. A read that returned prose has answered — that
+      // is the genuinely-guildless case — and is not re-asked, so this costs nothing on the
+      // path that is working.
+      const readRoster = async () => {
+        const first = await readRosterOnce();
+        if (!rosterReadWorthRetrying(first)) return first;
+        await new Promise(r => setTimeout(r, 1000));
+        const second = await readRosterOnce();
+        return { ...second, reread: true };
       };
 
       const describeGuild = g => g && ({
@@ -12794,20 +12832,31 @@ const TOOLS = [
       // of a live session is the server's own answer to "is this a character this broker is
       // driving". Built fresh on every call, because a rejoin changes the id and a stale map
       // could carry one that now belongs to someone else entirely.
-      const oursById = new Map();
-      for (const [name, sess] of sessions) {
-        const id = sess.client?.me?.id;
-        if (sess.client?.state === 'game' && id) oursById.set(id, { agent: name, session: sess });
-      }
+      // One rule, in m59-session-identity.mjs, asked the same way here and by
+      // `liveSessionIdentity`. Reading only `me.id` here — while /health read only `selfId` —
+      // is what left this map empty for every keeper-backed character.
+      const oursById = ourSessionsById(sessions);
 
       switch (a.action) {
         case 'status': {
-          const { guild, said } = await readRoster();
-          return guild
-            ? { in_guild: true, guild: describeGuild(guild) }
-            : { in_guild: false, messages: said,
-                note: 'no guild. To found one: carry 5,000 shillings, stand next to Frular in room ' +
-                      '700 (The Guildmaster\'s Hall, Barloque), then action=create.' };
+          const { guild, said, reread } = await readRoster();
+          if (guild) return { in_guild: true, ...(reread ? { roster_reread: true } : {}),
+                              guild: describeGuild(guild) };
+          // SAY WHICH KIND OF "NO" THIS IS. Prose back is the server answering
+          // `user_no_guild`; nothing back twice is two reads that did not land, and the
+          // honest report of that is not `in_guild: false` on its own. A caller that stops on
+          // a bare false stops on a lost packet -- which is what happened at 04:04:50 on
+          // 2026-09-10, with a serving LIEUTENANT reported as guildless.
+          const answered = rosterReadOutcome({ guild, said }) === ROSTER_READ.NONE;
+          return { in_guild: false, messages: said, roster_read: rosterReadOutcome({ guild, said }),
+                   ...(reread ? { roster_reread: true } : {}),
+                   ...(answered ? {} : { read_unanswered: true }),
+                   note: answered
+                     ? 'no guild. To found one: carry 5,000 shillings, stand next to Frular in ' +
+                       'room 700 (The Guildmaster\'s Hall, Barloque), then action=create.'
+                     : 'NOTHING ANSWERED on two reads -- no roster packet and no prose. This is ' +
+                       'not evidence that the character has no guild; treat it as a question and ' +
+                       'ask again, or ask another member, before acting on it.' };
         }
 
         case 'may': {
@@ -12920,14 +12969,40 @@ const TOOLS = [
           const before = c.evSeq;
           await s.pacer.submit('guild', () => c.use(inv.id));
           const { events } = await c.waitFor({ since: before, timeoutMs: 4000 });
-          const after = (await readRoster()).guild;
-          return { ok: !!after, used: inv.id,
+
+          // READ IT BACK OFF THE WORLD -- AND READ IT TWICE BEFORE CALLING IT A FAILURE.
+          //
+          // This roster is the INVITEE's, asked the instant after it joined, and on a
+          // keeper-backed session `requestGuildInfo` is a round trip through the keeper. A
+          // slow one answers after the wait has already given up, so `c.guild` is still null
+          // for a character that is now a member -- and this reported `ok: false` on a join
+          // that had plainly worked.
+          //
+          // Measured 2026-09-10: Waldorf came back `ok: false` while the events in the SAME
+          // reply carried "Please welcome the newest member of the The Second Swines,
+          // Waldorf." A caller that believes the flag skips the promotion that follows a
+          // join, leaving a member at apprentice who can never recruit -- which is what
+          // happened, and it had to be caught up by hand afterwards.
+          //
+          // The retry lives in `readRoster` -- it re-asks when a read comes back with neither
+          // a packet nor prose, which is the shape of a lost reply rather than of an answer --
+          // so this is ONE read here and not a second mechanism racing it. It is always a
+          // second READ and never a second `use`: using the scroll twice is not idempotent and
+          // the scroll is already gone. And the prose is not promoted to evidence -- "no error
+          // has never meant success here" cuts both ways, so a spoken welcome is a reason to
+          // look again, not a reason to believe.
+          const roster = await readRoster();
+          const after = roster.guild;
+          return { ok: !!after, used: inv.id, ...(roster.reread ? { roster_reread: true } : {}),
                    messages: events.filter(e => e.text).map(e => String(e.text)),
                    guild: describeGuild(after),
                    ...(after ? {} : { note:
-                     'still no guild. The two refusals here are spoken: under max health 30 gives ' +
-                     '"you may not join a guild until you are more experienced" (PFLAG_PKILL_ENABLE, ' +
-                     'invitat.kod:174), and an existing guild gives "renounce your old guild ties".' }) };
+                     'still no guild, on two reads a second apart. The two refusals here are ' +
+                     'spoken: under max health 30 gives "you may not join a guild until you are ' +
+                     'more experienced" (PFLAG_PKILL_ENABLE, invitat.kod:174), and an existing ' +
+                     'guild gives "renounce your old guild ties". If the messages above instead ' +
+                     'welcome a new member, the join LANDED and only the read is behind -- ' +
+                     'confirm against the INVITER\'s roster, which is a different session.' }) };
         }
 
         case 'exile': {
@@ -13320,11 +13395,25 @@ const TOOLS = [
                 await them.pacer.submit('guild', () => tc.use(scroll.id));
                 const used = await tc.waitFor({ since: b2, timeoutMs: 4000 });
 
-                // The roster is the only evidence, and it is the INVITEE's roster.
-                const b3 = tc.evSeq;
-                await them.pacer.submit('guild', () => tc.requestGuildInfo());
-                await tc.waitFor({ since: b3, kinds: ['guild'], timeoutMs: 4000 }).catch(() => {});
-                const joined = tc.guild?.id === c.guild?.id;
+                // The roster is the only evidence, and it is the INVITEE's roster -- READ
+                // TWICE before a join is called a failure. On a keeper-backed session this is
+                // a round trip through the keeper, and one that answers after the wait gives
+                // up leaves `tc.guild` null on a character that has just joined. The cost of
+                // believing that is not a wrong line in a report: `joined` false skips the
+                // promotion below, so the member stays an apprentice and can never recruit --
+                // and the next round sees it as already-a-member and never comes back for it.
+                // Measured 2026-09-10 through `action=accept`, which had the identical race.
+                const readJoined = async () => {
+                  const b3 = tc.evSeq;
+                  await them.pacer.submit('guild', () => tc.requestGuildInfo());
+                  await tc.waitFor({ since: b3, kinds: ['guild'], timeoutMs: 4000 }).catch(() => {});
+                  return tc.guild?.id === c.guild?.id;
+                };
+                let joined = await readJoined();
+                if (!joined) {
+                  await new Promise(r => setTimeout(r, 1000));
+                  joined = await readJoined();
+                }
 
                 // Promote, so this one can invite and promote in turn. Done by whoever just
                 // invited, which needs set_rank (LIEUTENANT) — an inviter that is only a
@@ -16346,9 +16435,9 @@ function liveSessionIdentity(readiness) {
     const active = sessions.get(agent);
     const client = active?.client ?? null;
     const character = client?.me?.name ?? active?.character ?? null;
-    const objectId = client?.selfId ?? null;
+    const objectId = sessionObjectId(client);
     if (typeof character === 'string' && character) sessionCharacters[agent] = character;
-    if (Number.isSafeInteger(objectId) && objectId > 0) sessionObjectIds[agent] = objectId;
+    if (objectId !== null) sessionObjectIds[agent] = objectId;
   }
   return { session_characters: sessionCharacters, session_object_ids: sessionObjectIds };
 }

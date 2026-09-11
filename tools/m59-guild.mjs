@@ -516,3 +516,36 @@ export function inductionPlan({ inviter, inviterRank = null, inviterFlags = null
     blocked: steps.filter(s => s.blockers.length).map(s => ({ character: s.character, blockers: s.blockers })),
   };
 }
+
+
+// WHAT A ROSTER READ ACTUALLY SAID -- and the third answer, which was being thrown away.
+//
+// `UC_GUILDINFO` has two legitimate replies and one non-reply, and only two of them were
+// ever distinguished. A roster packet means the character is in that guild. PROSE with no
+// packet means the server answered `user_no_guild` (UserGuildSendInfo, user.kod:1974) -- a
+// real answer, and the character has no guild. NOTHING AT ALL means nothing answered: on a
+// keeper-backed session the read is a round trip through the keeper and it can simply miss
+// its window.
+//
+// The third was being reported as the second. `guild action=status` answered `in_guild:
+// false` for a lost packet exactly as for a guildless character, and `spread` answered "the
+// inviter is not in a guild" and stopped. Measured 2026-09-10, 04:04:50: a spread loop
+// stopped on that line while Fozzie was a serving LIEUTENANT of The Second Swines, and said
+// so on each of the next three reads.
+//
+// This is the same shape as m59-which.mjs's INDETERMINATE: a port that does not answer is a
+// question, not a fleet. An unanswered read is a question, not a fact about a character.
+export const ROSTER_READ = Object.freeze({
+  GUILD: 'guild',              // a roster packet came back: this character is in that guild
+  NONE: 'none',                // prose came back: the server said `user_no_guild`
+  UNANSWERED: 'unanswered',    // neither: nothing landed, and that is not evidence of anything
+});
+
+export function rosterReadOutcome({ guild = null, said = [] } = {}) {
+  if (guild) return ROSTER_READ.GUILD;
+  return (said && said.length) ? ROSTER_READ.NONE : ROSTER_READ.UNANSWERED;
+}
+
+// Whether a read is worth asking again. Only the non-answer is: a read that returned prose
+// HAS answered, so re-asking it costs a round trip on the path that is already working.
+export const rosterReadWorthRetrying = r => rosterReadOutcome(r) === ROSTER_READ.UNANSWERED;
