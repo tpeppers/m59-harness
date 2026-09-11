@@ -413,6 +413,65 @@ console.log('\ntradeInPlaceIfWedged — hurt, wedged, something in reach: swing,
      /holdPosition: true/.test(fip.slice(0, 600)) && /disengageAt: 0/.test(fip.slice(0, 600)));
 }
 
+// --------------------------------------------- 3b. kill_and_continue, the blocker rung
+//
+// Every assertion here is a thing the prod tactics ledger could not tell us on 2026-09-11. Five
+// kill_and_continue rows existed, all in room 39, every one reading "9 round(s), still standing
+// there" — and not one of them said whether a blow had ever been struck, because the caller kept
+// only `killed` from a result that also carries `fought`, `out_of_reach`, `reason`, `rounds`,
+// `landed_hits` and `damage_dealt`. `hp_lost` is OUR health delta, so it reads 0 both when
+// nothing hit us and when nothing happened at all.
+//
+// Meanwhile the rung could not fire in the room where the wedges actually happen: Robin stood
+// 101 seconds at r35c34 in The Flatlands with a spider at r35c32 — two squares up the line,
+// blocking the route, never once the NEXT SQUARE, which was the only square this looked at.
+console.log('\nkill_and_continue — the blocker rung, and whether its ledger row can be believed');
+{
+  const GAME = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  const at = GAME.indexOf('// A BLOCKER IS ANYTHING ON THE NEXT FEW SQUARES');
+  ok('the rung is present in the walk loop', at > 0);
+  const rung = GAME.slice(at);
+  const head = rung.slice(0, 4000);
+
+  // THE BROADENING.
+  ok('it considers more than the next square',
+     head.includes('const ahead = [next, ...queue.slice(0, AHEAD - 1)]'));
+  ok('...up to three squares of the path', head.includes('const AHEAD = 3;'));
+  ok('and only swings at a blocker already within melee reach, because holdPosition cannot walk',
+     head.includes('MELEE_REACH') && head.includes('reachable(o)'));
+  ok('melee reach matches the autopilot REACH of 3', head.includes('const MELEE_REACH = 3;'));
+  ok('the nearest square on the line is taken first, not the furthest',
+     head.indexOf('for (const sqr of ahead)') > 0
+     && head.slice(head.indexOf('for (const sqr of ahead)')).includes('break;'));
+  ok('players are still never fought as a blocker', head.includes('!(o.flags & OF.PLAYER)'));
+
+  // THE ONE-ATTEMPT GUARD HAD TO MOVE WITH IT, or the single attempt is spent on the wrong body.
+  ok('the one-attempt guard is keyed on the BLOCKER square, not the one we stand against',
+     head.includes('const killKey = blockerAt ?')
+     && head.includes('killTried.has(killKey)') && head.includes('killTried.add(killKey)'));
+
+  // THE ACCOUNTING — the half that makes the next incident readable instead of ambiguous.
+  const bi = rung.indexOf('let lastWhy = null');
+  ok('the bout loop keeps its own bookkeeping', bi > 0);
+  const bout = rung.slice(bi, bi + 2600);
+  ok('rounds are counted ONLY when a fight actually happened', bout.includes('if (f?.fought) {'));
+  ok('...and never as an assumed three per bout', !bout.includes('rounds += 3;'));
+  ok('the round count comes from the result', bout.includes('rounds += Number(f.rounds ?? 0)'));
+  ok('landed hits and damage are kept, so "did not work" can name WHICH kind of not working',
+     bout.includes('landed_hits') && bout.includes('damage_dealt'));
+  ok('the refusal reason is kept rather than discarded', bout.includes('lastWhy = f.reason'));
+  ok('out_of_reach is not retried with identical inputs — that is the wedge lesson',
+     bout.includes('if (f?.out_of_reach) break;'));
+  ok('the still-standing check follows the blocker, not a stale next square',
+     bout.includes('o.col === blockerAt.col && o.row === blockerAt.row'));
+
+  const ni = rung.indexOf('NO SWING SENT');
+  ok('a row with no swing says NO SWING SENT instead of a round count', ni > 0);
+  const note = rung.slice(ni - 400, ni + 900);
+  ok('a row that swung and failed reports hits and damage', note.includes('hit(s) landed for'));
+  ok('a blocker further up the line says how far up it was', note.includes('square(s) up the line'));
+}
+
 // ------------------------------------------------------------------ 4. the call sites
 
 console.log('\nthe call sites — a rung that is never reached is the second incident');

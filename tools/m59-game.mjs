@@ -13,7 +13,6 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
-import { installIntentObservers,setIntentTarget,withIntent } from './m59-intent-observations.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -718,7 +717,8 @@ class Pacer {
     this.prodTimes.push(Date.now());
     if (!this.prodByKind.has(kind)) this.prodByKind.set(kind, []);
     this.prodByKind.get(kind).push(Date.now());
-    const job = { kind, fn: bindPacketScope(kind, fn), minGapForKind, resolve: null, reject: null, queuedAt: Date.now() };
+    const job = { kind, fn: bindPacketScope(kind, fn), minGapForKind,
+                  resolve: null, reject: null, queuedAt: Date.now() };
     // PRIORITY: attack packets are time-critical (server cooldown = 1s). They jump
     // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
     // of movement packets. Without this, a busy mover (move+turn every ~270ms) pushes
@@ -7420,13 +7420,43 @@ class Session {
           // square is tried again when it falls or moves. Never a player, never above the
           // flee line, never twice for the same square, and every attempt is a
           // kill_and_continue row: what stood there, how many rounds, whether it cleared.
-          if (!killTried.has(stuckKey)) {
-            const blocker = [...(c.room?.objects?.values?.() ?? [])].find(o =>
-              o.id !== c.selfId && o.col === next.col && o.row === next.row
-              && blocksMovement(o.flags ?? 0) && !(o.flags & OF.PLAYER));
+          // A BLOCKER IS ANYTHING ON THE NEXT FEW SQUARES, NOT ONLY THE VERY NEXT ONE.
+          //
+          // This looked at `next` alone, and on a tight path that is the wrong question: the
+          // thing wedging you is often two squares up the line, not one. Measured on prod
+          // 2026-09-11, Robin stood at r35c34 in The Flatlands for 101 seconds with spider
+          // #16980 at r35c32 — blocking the ROUTE and never once being the NEXT SQUARE, so this
+          // search returned null and the rung was unreachable. That is the known "584 row-35
+          // pipe wedge", and it is why the tactics ledger has five kill_and_continue rows, all
+          // in room 39, and none in the room where the wedges actually happen.
+          //
+          // `queue` still holds the steps after `next`, so the upcoming squares are already
+          // here. Melee is a disc of 2-3 squares and `holdPosition` means we will not walk, so
+          // a blocker is only worth swinging at if it is ALREADY within reach — otherwise
+          // `fight` correctly answers out_of_reach and the bout is wasted.
+          const MELEE_REACH = 3;                       // matches the autopilot's REACH
+          const AHEAD = 3;                             // next + the two after it
+          const ahead = [next, ...queue.slice(0, AHEAD - 1)];
+          const me4 = c.self;
+          const reachable = (o) => !me4
+            || Math.hypot((o.col ?? 0) - me4.col, (o.row ?? 0) - me4.row) <= MELEE_REACH;
+          const bodies = [...(c.room?.objects?.values?.() ?? [])].filter(o =>
+            o.id !== c.selfId && blocksMovement(o.flags ?? 0) && !(o.flags & OF.PLAYER));
+          // Nearest square on the line first, so we clear the thing in front before the thing
+          // beyond it rather than swinging past a body we are touching.
+          let blocker = null, blockerAt = null;
+          for (const sqr of ahead) {
+            const hit = bodies.find(o => o.col === sqr.col && o.row === sqr.row && reachable(o));
+            if (hit) { blocker = hit; blockerAt = sqr; break; }
+          }
+          // KEYED ON THE BLOCKER'S SQUARE, not on `next`. Keying the one-attempt guard to the
+          // square we are standing against would burn the single attempt on the wrong body when
+          // the real obstruction is further up the line.
+          const killKey = blockerAt ? `${blockerAt.row},${blockerAt.col}` : stuckKey;
+          if (!killTried.has(killKey)) {
             const pilot = blocker ? autopilotIfAny(this.name) : null;
             if (blocker && pilot && typeof pilot.fightInPlace === 'function') {
-              killTried.add(stuckKey);
+              killTried.add(killKey);
               const name = c.rsc?.get?.(blocker.nameRsc) ?? blocker.name ?? null;
               const who3 = this.client?.me?.name ?? this.name ?? null;
               const roomNum3 = Number(this.world?.room?.num ?? 0);
@@ -7440,22 +7470,58 @@ class Session {
                                      (refusal ? `not fightable — ${refusal.why}` : `health ${Math.round((hpFrac() ?? 0) * 100)}% is under the flee line`) });
               } else {
                 const t0 = Date.now(), hp0 = c.vitals?.()?.health?.value ?? null;
-                let rounds = 0, killed = false, cleared = false;
+                let rounds = 0, killed = false, cleared = false, bouts = 0;
+                // WHY THE SWING DID OR DID NOT HAPPEN, KEPT. `fight` answers
+                // `{fought, out_of_reach, reason, nearest}` and this loop kept only `killed`,
+                // so a refusal — "holding position and nothing matching is within reach" —
+                // was recorded as a fight that failed to kill. Five rows in the prod ledger
+                // read "9 round(s), still standing there" and NOT ONE of them says whether a
+                // blow was ever struck. `hp_lost` is our own health delta, so it is 0 both
+                // when nothing hit us and when nothing happened at all.
+                // `fight` returns `landed_hits` and `damage_dealt` on every fought pass, which is
+                // the difference between "swung and missed", "swung and it is too tough" and
+                // "never swung". Without them the only honest reading of a failed row was
+                // "something did not work".
+                let lastWhy = null, everFought = false, outOfReach = false, hits = 0, dmg = 0;
                 for (let bout = 0; bout < 3; bout++) {
                   if (this.movementWasCancelled(movementGeneration, controlToken)) break;
-                  const f = await pilot.fightInPlace(blocker, name).catch(e => ({ killed: false, note: e.message }));
-                  rounds += 3;
+                  const f = await pilot.fightInPlace(blocker, name).catch(e => ({ fought: false, killed: false, reason: e.message }));
+                  bouts++;
+                  // ROUNDS ARE COUNTED ONLY WHEN A FIGHT HAPPENED. `rounds += 3` ran
+                  // unconditionally, so "9 round(s)" was three bouts times an ASSUMED three
+                  // rounds and never a measurement. A counter that cannot come down is a
+                  // monument; one that counts work nobody did is worse.
+                  if (f?.fought) {
+                    everFought = true;
+                    rounds += Number(f.rounds ?? 0);
+                    hits += Number(f.landed_hits ?? 0);
+                    dmg += Number(f.damage_dealt ?? 0);
+                  }
+                  if (f?.out_of_reach) outOfReach = true;
+                  if (f?.reason) lastWhy = f.reason;
                   killed = !!f?.killed;
-                  const still = [...(c.room?.objects?.values?.() ?? [])].some(o => o.id === blocker.id && o.col === next.col && o.row === next.row);
+                  const still = [...(c.room?.objects?.values?.() ?? [])].some(o =>
+                    o.id === blocker.id && o.col === blockerAt.col && o.row === blockerAt.row);
                   cleared = killed || !still;
                   if (cleared || (hpFrac() ?? 0) < fleeAt) break;
+                  // A refusal will not fix itself by being repeated with identical inputs —
+                  // that is the wedge lesson. Stop after the first out_of_reach rather than
+                  // spending two more bouts on it.
+                  if (f?.out_of_reach) break;
                 }
                 const hp1 = c.vitals?.()?.health?.value ?? null;
                 recordTactic({ character: who3, room: roomNum3, tactic: 'kill_and_continue', trigger: 'blocked_by_monster',
                                worked: cleared, ms: Date.now() - t0, attempted: true,
                                hp_lost: (hp0 != null && hp1 != null) ? Math.max(0, hp0 - hp1) : 0,
-                               note: `${name ?? 'a monster'} on ${next.row},${next.col}: ${rounds} round(s), ` +
-                                     (killed ? 'killed it' : cleared ? 'it moved off the square' : 'still standing there') });
+                               note: `${name ?? 'a monster'} on ${blockerAt.row},${blockerAt.col}` +
+                                     (blockerAt === next ? '' : ` (${ahead.indexOf(blockerAt)} square(s) up the line)`) +
+                                     `: ${everFought ? `${rounds} round(s)` : 'NO SWING SENT'}` +
+                                     `${bouts === 1 ? '' : ` over ${bouts} bout(s)`}, ` +
+                                     (killed ? 'killed it'
+                                      : cleared ? 'it moved off the square'
+                                      : outOfReach ? `out of reach — ${lastWhy ?? 'no reason given'}`
+                                      : !everFought ? `no fight — ${lastWhy ?? 'no reason given'}`
+                                      : `still standing there (${hits} hit(s) landed for ${dmg} damage)`) });
                 if (cleared) {
                   pulled = null; stalledOn = null; stalledTimes = 0;
                   queue.unshift(next);
@@ -12350,3 +12416,5 @@ class Session {
 // consequential line in doorsLandingNear.
 installIntentObservers(Session.prototype);
 export { Session, Recorder, Pacer, readAbilitiesOnce, loadMonsterLevels, monsterKarmaByName, monsterLevelByName, arrivalReport, orderExits, geometryStartupMode, doorsLandingNear, doorsLandingOnward };
+
+import {installIntentObservers,setIntentTarget,withIntent} from './m59-intent-observations.mjs';
