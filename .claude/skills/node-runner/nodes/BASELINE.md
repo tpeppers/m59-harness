@@ -1,5 +1,11 @@
 # The seven stones: what is missing from OUR MAP, per node
 
+> **A JUMP BUYS NO HEIGHT — see the LAST section.** `move.c:549` gates walking and falling
+> with the identical test and a falling body has a LOWER z, so a jump is strictly worse at
+> gaining height. Every "needs a CLIMB" row below is therefore a staircase question or a
+> defect in our own flood, never a jump. Two heights below are also wrong: badlands' stone
+> is 3230 units BELOW reachable ground, not above it, and peak is +1952 rather than +4640.
+>
 > **ROOM 27 IS SOLVED — a three-jump route, see the LAST section of this page.** The "level jump we cannot write down" below is withdrawn: the gap is real (no walk reaches it at square OR fine resolution, from any of its six arrivals) and it is three ordinary falls. The jump cap in `m59-jumpfinder.mjs` was short by 0.65 squares.
 >
 > **CORRECTED TWICE MORE BELOW.** Read
@@ -393,3 +399,84 @@ Two things that will bite that run:
   standing in the gully beneath it. Room 27 generates Orcs and Spiders from thirteen generators.
 - **A fall is confirmed by the SERVER, not by the reply.** The reply is pessimistic by
   construction and the body is still on the take-off if you read it immediately. Wait ~3s.
+
+
+---
+
+# FIFTH: A JUMP BUYS NO HEIGHT AT ALL, AND TWO OF THE HEIGHTS ON THIS PAGE ARE WRONG
+
+## The structural fact, and it retires "declare a bigger jump" permanently
+
+`clientd3d/move.c:549-556` is the whole gate, for walking and falling alike:
+
+```c
+if ((sidedef->below_bmap == NULL ||
+     (sidedef->below_bmap != NULL && (wall->z1 - below_height - z) <= MAX_STEP_HEIGHT)) && ...
+```
+
+`z` is the body's current height. **A falling body has a LOWER z than a standing one**, so
+`z1 - below_height - z` is larger and the identical test is strictly harder to pass. Therefore:
+
+> **A jump can never gain height that a walk could not. All it buys is horizontal traversal
+> over ground you cannot stand on.**
+
+The ceiling on one jump's height gain is `MAX_STEP_HEIGHT` plus the landing sector's wading
+depth — 384 dry, 998 into the deepest water (`sector_depths[] = {0, 204, 409, 614}`,
+`draw3d.c:80`) — and that is a bound, not an estimate. So a stone thousands of units above the
+reachable floor is **not a jump problem at any `--max-jumps`**, and raising the search bound is
+wasted time. Note also that `below_bmap == NULL` **short-circuits the limit entirely**: an
+untextured riser has no step limit at all and is climbable at any height.
+
+That leaves exactly two possibilities for a high stone, and they want different tools:
+
+- **(a)** the climb crosses walls that HAVE below textures — then it needs a *staircase*, a
+  monotone chain of treads each inside 384, which is `SKILL.md` backlog item 3 and
+  `tools/m59-staircase.mjs`, and which no jump finder will ever produce; or
+- **(b)** it crosses somewhere with no below texture or no wall — then **it is a WALK today**,
+  and if our flood did not find it, our flood is stricter than the client and the defect is
+  ours.
+
+Deciding between them is a one-query check on the riser wall's facing sidedef, not a search.
+
+## Two heights on this page are wrong, and badlands inverts
+
+Measured with `sampleFloor` + `floodClimb` on a 256-unit lattice, the mover's own
+`traceFineMoveClient` as the edge test, seeded from each room's real arrivals:
+
+| node | stone floor | highest floor the flood reaches | this page said | actually |
+|---|---|---|---|---|
+| **badlands 45** | 4096 | **7326** | +1280 ABOVE | **3230 BELOW** |
+| **peak 515** | 10848 | 8896 | +4640 above | +1952 above |
+
+**Badlands is not a climb.** There is reachable ground 3230 units ABOVE its stone, and descent
+is unbounded — so what it needs is horizontal traversal over ground nobody can stand on, which
+is precisely and only what a jump buys. It is the one remaining stone where a jump search is
+the right instrument.
+
+**Peak at +1952 needs six dry hops at the theoretical maximum gain**, each of which would have
+to have near-zero horizontal span to achieve it — at which point it is a step and not a jump.
+By the rule above it is case (a) or (b), never a jump. Its `no route to 20,17 within 6 jump(s)`
+is a **bound artifact and is not evidence about the terrain.**
+
+## The bounded measurement, which is the thing to trust
+
+A jump search's "no route" is a statement about `--branch` and `--max-jumps`. A fine flood's
+zero is a statement about the room. All three, from every real arrival:
+
+| node | occupiable fine samples in the meld box | reached |
+|---|---|---|
+| cave 27 | 361 | **0** |
+| peak 515 | 366 | **0** |
+| badlands 45 | 400 | **0** |
+
+## And a bug in the measurement that produced the room 27 figure
+
+`RoomGeometry` is **1-BASED**: `inBounds` is `row >= 1 && row <= rows`, and `standPoint` uses
+`(row - 1) * CLIENT_FINENESS`. The first version of the fine-flood script sampled at
+`r * CLIENT_FINENESS`, so every square it read was shifted one row and one column — seeds and
+box alike. Re-run correctly, room 27 goes from 57 seeds to 87 and from 14,804 samples reached
+to 14,795, and the box result is unchanged at **0 of 361**.
+
+The conclusion survived; the measurement did not deserve to be believed until it was redone.
+This is the third coordinate-space error in this file's history and the rule in `CLAUDE.md` is
+in capitals for a reason: **a coordinate needs its space and its axis order.**
