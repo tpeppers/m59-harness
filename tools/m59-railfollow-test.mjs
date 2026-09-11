@@ -83,6 +83,33 @@ ok(onSameShelf(1024, null), 'and neither can a body whose floor could not be rea
   ok(got.onShelf, 'and is reported reachable');
 }
 
+// ---- THE BODY LEFT THE ROOM. Marco, the Badlands, 2026-09-11. -------------------------
+{
+  const rail = [{ x: 0, y: 0, f: 1664 }, { x: 1000, y: 0, f: 1664 }];
+  const got = nearestWaypoint(rail, { x: 0, y: 0 },
+                              { floor: 3840, railRoom: 45, bodyRoom: 1 });
+  eq(got.i, -1, 'a body in another room is nowhere on this line');
+  ok(got.wrongRoom, 'and the answer SAYS so rather than naming a waypoint');
+  eq([got.railRoom, got.bodyRoom], [45, 1], 'naming both rooms, so the caller can log which');
+  ok(!got.floorKnown, 'a floor measured in the wrong room is not knowledge');
+}
+{
+  // The same room still answers normally — the guard must not fire on the happy path.
+  const rail = [{ x: 0, y: 0, f: 1664 }];
+  const got = nearestWaypoint(rail, { x: 0, y: 0 }, { floor: 1664, railRoom: 45, bodyRoom: 45 });
+  eq(got.i, 0, 'the same room answers normally');
+  ok(!got.wrongRoom, 'and does not flag a room problem');
+}
+{
+  // Unknown rooms must not be treated as a mismatch, or every caller that cannot read a room
+  // number is refused an answer it could have had.
+  const rail = [{ x: 0, y: 0, f: 1664 }];
+  ok(!nearestWaypoint(rail, { x: 0, y: 0 }, { railRoom: 45, bodyRoom: null }).wrongRoom,
+     'an unknown body room is not a mismatch');
+  ok(!nearestWaypoint(rail, { x: 0, y: 0 }, { railRoom: null, bodyRoom: 1 }).wrongRoom,
+     'and neither is an undeclared rail room');
+}
+
 // ---- progress ---------------------------------------------------------------------------
 ok(advanced(10, 11), 'a higher index on the same shelf is progress');
 ok(!advanced(11, 10), 'going backwards is not');
