@@ -36,6 +36,7 @@ const TRUNK = process.env.M59_TRUNK || 'main';
 
 import { nextDeployTag } from './m59-deploytag.mjs';
 
+import { strandedCommits } from './m59-deploy-drift.mjs';
 const git = (repo, ...args) => {
   try {
     // stderr ignored: several of these are ASKS, not assertions — `describe --exact-match`
@@ -94,6 +95,41 @@ function resolveTrunk({ fetch = true } = {}) {
   // Local has commits origin does not: unpushed work, which is NOT staleness. Compare against
   // the local ref — a deploy cut from it would be real — and say it needs pushing.
   if (git(HARNESS, 'merge-base', '--is-ancestor', local, remote) === null) {
+    // BUT "AHEAD" AND "DIVERGED" ARE DIFFERENT FACTS, AND ONLY ONE OF THEM IS LOST WORK.
+    //
+    // Strictly ahead means somebody committed and has not pushed: the local ref is the real
+    // trunk and the note below is exactly right. DIVERGED — ahead AND behind — is usually the
+    // other thing entirely on a machine with twenty-two worktrees: the same work, rebased onto
+    // origin by another session, so the local branch is a DUPLICATE LINE of commits that are
+    // already pushed under different hashes. `git cherry` is the arbiter, because it compares
+    // patches rather than hashes: `-` means origin already has this change.
+    //
+    // Measured 2026-09-11: local main was 31 ahead and 46 behind, every one of the 31
+    // cherry-equivalent to something on origin, and comparing prod against that line reported
+    // **"prod is 37 commits AHEAD of main"** — an emergency about stranded production work, when
+    // prod was 2 ahead of origin/main and both of those were cherry-equivalent too. Nothing was
+    // stranded and nothing was lost. A check that reports a false emergency is worse than one
+    // that stays quiet, because the next real one reads identically and gets waved past; the
+    // whole argument for `#movement` epochs is that a counter which cannot come down is a
+    // monument rather than a measurement, and this is the same failure in the deploy check.
+    const behindOrigin = git(HARNESS, 'merge-base', '--is-ancestor', remote, local) === null;
+    if (behindOrigin) {
+      const cherry = git(HARNESS, 'cherry', `origin/${TRUNK}`, TRUNK) || '';
+      const missing = cherry.split('\n').filter(l => l.startsWith('+'));
+      if (!missing.length) {
+        // A duplicate line. Origin holds every change, so origin IS the trunk to compare against.
+        note.push(`local ${TRUNK} has diverged from origin/${TRUNK}, but every commit on it is ` +
+                  `already on origin under a different hash (git cherry: nothing missing) — a ` +
+                  `duplicate line, most likely another session's rebase of the same work. ` +
+                  `Compared against origin/${TRUNK}. Reset this checkout when it is quiet: ` +
+                  `git -C "${HARNESS}" reset --hard origin/${TRUNK}`);
+        return { head: remote, ref: `origin/${TRUNK}`, note, duplicateLine: true };
+      }
+      note.push(`local ${TRUNK} has DIVERGED from origin/${TRUNK} and ${missing.length} of its ` +
+                `commit(s) are on neither — not a rebase, genuinely unpushed work on a branch ` +
+                `that is also behind. Compared against the local ref.`);
+      return { head: local, ref: TRUNK, note, unpushed: true };
+    }
     note.push(`local ${TRUNK} has commit(s) origin/${TRUNK} does not. Comparing against the ` +
               `local ref; push it before cutting a deploy or the tag names a commit nobody else has.`);
     // AND IT IS A PROBLEM, NOT A NOTE. See `problems()` — this line has been advisory since the
@@ -140,6 +176,35 @@ function survey({ fetch = true } = {}) {
       behind = b;   // commits main has that prod does not — fine, that is main running ahead
     }
   }
+
+  // AHEAD BY HASH IS NOT AHEAD BY WORK, AND ONLY ONE OF THEM IS AN EMERGENCY.
+  //
+  // The whole point of this check is "does prod hold a change nothing else holds" — work that
+  // dies the next time somebody moves the worktree onto a tag. `rev-list` answers a narrower
+  // question: does prod hold a COMMIT OBJECT the trunk ref cannot reach. Those differ every
+  // time anybody rebases, and on this machine somebody always has: measured 2026-09-11, this
+  // said **"prod is 37 commit(s) AHEAD of main"** with 35 of the 37 cherry-equivalent to
+  // commits already on origin and the other 2 equivalent as well. Nothing was stranded.
+  //
+  // So ask `git cherry`, which compares PATCHES. And ask it against origin as well as the local
+  // ref, because when the two have diverged neither one alone is the trunk: a change is only
+  // stranded if it is absent from BOTH. The raw count is still printed — a big gap is a real
+  // signal that the worktree wants moving — but the refusal now fires on lost work alone.
+  //
+  // The decision lives in `m59-deploy-drift.mjs` and not here, for the reason `nextDeployTag`
+  // does: THIS FILE RUNS ON IMPORT — it reads argv at the top level and calls process.exit at
+  // the bottom — so a test that imported it would execute the modes that move production. A
+  // pure decision buried in an un-importable script is a decision nobody can check, which is
+  // how the tag-picker shipped a rollback that rolled forward.
+  let strandedShas = null;
+  if (known && ahead > 0) {
+    strandedShas = strandedCommits({
+      prodHead, trunkHead, trunkRef,
+      remoteRef: git(HARNESS, 'rev-parse', '-q', '--verify', `refs/remotes/origin/${TRUNK}`)
+        ? `origin/${TRUNK}` : null,
+      cherry: (base, head) => git(HARNESS, 'cherry', base, head),
+    });
+  }
   const ref = git(PROD, 'rev-parse', '--abbrev-ref', 'HEAD');
   // RUNTIME STATE IS NOT DRIFT. The fleet rewrites its own learning continuously —
   // safespots, sector readings, ledgers — so counting those as a problem makes this check
@@ -160,7 +225,7 @@ function survey({ fetch = true } = {}) {
   const runtime = all.length - dirty.length;
   const tag = git(PROD, 'describe', '--tags', '--exact-match') || null;
   return { prodHead, trunkHead, trunkRef, trunkNote, trunkUnpushed,
-           known, ahead, behind, ref, dirty, runtime, tag };
+           known, ahead, behind, stranded: strandedShas, ref, dirty, runtime, tag };
 }
 
 function report(s) {
@@ -175,6 +240,9 @@ function report(s) {
     return;
   }
   console.log(`        ${s.ahead} commit(s) main does not have, ${s.behind} commit(s) behind main`);
+  if (s.ahead > 0 && Array.isArray(s.stranded))
+    console.log(`        of those ${s.ahead}, ${s.stranded.length} carr${s.stranded.length === 1 ? 'ies' : 'y'} ` +
+                `a change no trunk ref has (the rest are the same work under other hashes)`);
   if (s.dirty.length) console.log(`        ${s.dirty.length} uncommitted file(s)`);
   if (s.runtime) console.log(`        ${s.runtime} runtime state file(s) (expected, not drift)`);
 }
@@ -185,8 +253,12 @@ function problems(s) {
   if (!s.known)
     bad.push('prod is running commits main has never seen. Land them on main first: ' +
              `git -C "${HARNESS}" fetch "${PROD}" ${s.ref} && git -C "${HARNESS}" merge --ff-only FETCH_HEAD`);
+  // Ahead by hash and by nothing else: a rebase somewhere else, seen from here. Not a problem,
+  // and the status block above has already said so in as many words — pushing a "problem" that
+  // resolves to "nothing is stranded" is how the next REAL one gets waved past.
+  else if (s.ahead > 0 && Array.isArray(s.stranded) && !s.stranded.length) { /* nothing to refuse */ }
   else if (s.ahead > 0)
-    bad.push(`prod is ${s.ahead} commit(s) AHEAD of ${TRUNK}. A deploy is never ahead of the ` +
+    bad.push(`prod is ${Array.isArray(s.stranded) ? s.stranded.length : s.ahead} commit(s) AHEAD of ${TRUNK}. A deploy is never ahead of the ` +
              'trunk — that work is stranded until somebody notices and adopts it by hand.');
   if (s.ref !== 'HEAD')
     bad.push(`prod is on BRANCH "${s.ref}". A deploy should be a detached checkout of a TAG; ` +

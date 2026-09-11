@@ -749,6 +749,25 @@ the records it describes.
   every assertion here stayed green. Both constants are read out of the source rather than
   copied, and the pattern that reads them uses `[0-9]` rather than an escape because it
   lives in a template literal, which eats the backslash before RegExp sees it) and
+  `node tools/m59-deploy-drift-test.mjs` (14 — **ahead by HASH is not ahead by WORK, and the
+  deploy check must be able to come down**. `--verify` is what stands between a `--cut` and
+  burying somebody's work, and on 2026-09-11 it announced *"prod is 37 commit(s) AHEAD of main …
+  that work is stranded until somebody notices and adopts it by hand"* on a tree where nothing
+  was stranded and nothing had ever been lost. `rev-list --left-right` answers "does prod hold a
+  commit OBJECT this ref cannot reach"; the question worth asking is "does prod hold a CHANGE
+  nothing else holds", and on a machine with twenty-two worktrees and several sessions rebasing
+  the same work onto origin at once those come apart daily — always in the direction that cries
+  wolf. A refusal that fires on a healthy tree every day is one people learn to type past, and
+  the next real one reads identically: the same argument the `#movement` epoch rule makes about
+  a counter that cannot come down. So it asks `git cherry`, which compares PATCHES, and asks
+  BOTH refs when the local trunk and origin have diverged — neither one alone is the trunk then,
+  and a change is stranded only if it is missing from both. Pinned in all three directions: the
+  measured false alarm reports nothing stranded, a commit absent from both refs is still an
+  emergency, and **an unevaluable `git cherry` returns `null` rather than `[]`** so the caller
+  keeps refusing — a guarantee that cannot be evaluated must refuse, which is the rule the
+  pre-commit hook broke by sitting silently inert for an afternoon. The decision is a pure
+  function in its own module for the reason `nextDeployTag` is: `m59-deploy.mjs` RUNS ON IMPORT,
+  so a test that imported it would execute the modes that move production) and
   `node tools/m59-whowrote-test.mjs` (12 — **the attribution tool, against fixtures in a fake
   home**, so it reads none of this machine's real transcripts. It exists because the tool's own
   first version answered the question CONFIDENTLY AND WRONGLY: run from a worktree it derived the
