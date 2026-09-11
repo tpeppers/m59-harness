@@ -263,16 +263,102 @@ export function buildItemTable(koddbFile = KODDB) {
     if (name) weapons[name.toLowerCase()] = { name, cls: cls.name };
   }
 
+  // DOES IT SURVIVE A VAULT? READ THE TIMER, NEVER THE WORD "WAND".
+  //
+  // Only a SpellItem carries piGoBadTime, and it rots on it: the base is GO_BAD_TIME =
+  // 86,400,000ms, one day (spelitem.kod:83), and THE TIMER KEEPS RUNNING IN THE VAULT.
+  // That is why the temporary attributes -- shrouded, enchanted, glowing -- are worth
+  // selling rather than storing. Wand and Scroll override it to -1 (wand.kod:69,
+  // scroll.kod:62) and are the only SpellItems that keep for ever.
+  //
+  // Anything OUTSIDE the SpellItem tree never had the property at all, so it never
+  // spoils. That includes two the operator named: "gnarled staff" (StaffOfJolting is
+  // SpecialWand is PassiveItem) and "relic of Qor" (Scepter is PassiveItem) -- wands in
+  // every sense a player cares about, and neither one a SpellItem. Matching the word
+  // "wand" would have got the staff right by luck and the relic wrong. Reading the chain
+  // gets both, which is the whole reason this is derived rather than typed.
+  //
+  // WHAT THIS COST WITHOUT IT: VAULT_KEEP listed 'wand' and 'scroll' and explained in its
+  // own comment that the families keep for ever -- but the keep predicate is EXACT
+  // canonical identity, so it protected the two items literally named "wand" and "scroll"
+  // (the unidentified ones) and sold the twenty and sixteen identified ones, including
+  // the four wands of striking the guild plan is trying to collect.
+  //
+  // AND READ WHAT THIS NUMBER IS BEFORE TRUSTING IT: **it is 0 for every one of the 249
+  // named items**, and that is the correct answer rather than a broken one. The timer is
+  // per-INSTANCE and is gated on `labelled` -- spelitem.kod:115-118 skips StartGoBadTimer
+  // outright for a labelled item, "so it's in a sales list. We don't want labelled objects
+  // to go bad". An item only HAS a display name here once it is labelled, so every item
+  // this table can name is one whose timer never started. The 29 Potion classes, which do
+  // inherit the live 24h default, carry vrLabelName and no vrName and so are absent from
+  // the table entirely -- the blind spot recorded in m59-itemcheck.mjs's header.
+  //
+  // Kept anyway, as the CLASS-level floor: it is cheap, it is derived, and it fires the day
+  // somebody adds a class with a live timer and a name. It is not a licence to store
+  // anything -- the enchantment decay that actually empties vaults (shrouded, glowing,
+  // enchanted: 1-24h, and the clock runs inside the vault) is an instance property this
+  // table never sees.
+  //
+  // The one thing it settles, and it settles it in our favour: a DISTILLED potion is created
+  // #labelled=TRUE with iGoBadTime = -1 and the comment "% Potion never goes bad"
+  // (distill.kod:293-296). Potions we make ourselves keep for ever, so a guild chest full of
+  // them is not a chest full of sludge in a day.
+  for (const entry of byName.values()) {
+    const cls = byClassName.get(entry.cls);
+    if (!cls) continue;
+    if (!(cls.chain || []).some(x => String(x).toLowerCase() === 'spellitem')) continue;
+    const ms = propOf(cls, 'piGoBadTime');
+    entry.spoils_ms = (typeof ms === 'number' && ms > 0) ? ms : 0;
+  }
+
+  // THE WAND AND SCROLL FAMILIES -- AND "WAND" IS THREE DIFFERENT BRANCHES OF THE TREE.
+  //
+  // Kept as its own section for the same reason `food` and `weapons` are: a caller wanting
+  // "the wand family" should not have to re-derive it and get a slightly different answer.
+  //
+  // Recognised by chain OR by name, because NEITHER ALONE GETS ALL OF THEM:
+  //
+  //   SlitherWand    -> Wand -> SpellItem -> PassiveItem     "wand of striking"
+  //   HealWand       -> SpecialWand -> PassiveItem           "wand of healing"
+  //   MysteryWand    -> PassiveItem                          "mysterious wand"
+  //   StaffOfJolting -> SpecialWand -> PassiveItem           "gnarled staff"
+  //
+  // Three parents and one word. Chain alone misses the MysteryWand hanging straight off
+  // PassiveItem; name alone misses the gnarled staff, which is a wand that does not say so.
+  // The guild plan is actively collecting four of the five, so a family that drops any of
+  // them is a family that sells them.
+  //
+  // The never-spoils property is then VERIFIED off the timer rather than assumed -- if one
+  // of these ever carries a live go-bad timer it drops out of the list instead of rotting
+  // in a vault. `also` is checked too: two classes can share a display name, and the
+  // protocol cannot tell us which one is in the pack, so a name is only safe to keep when
+  // EVERY class wearing it is safe.
+  const WAND_PARENTS = new Set(['wand', 'scroll', 'specialwand']);
+  const keeps = {};
+  for (const entry of byName.values()) {
+    if (entry.spoils_ms) continue;                    // its clock is running; do not store it
+    const cls = byClassName.get(entry.cls);
+    const chain = (cls?.chain || []).map(x => String(x).toLowerCase());
+    const byChain = chain.some(x => WAND_PARENTS.has(x));
+    const byLabel = /\b(wands?|scrolls?|staff|staves)\b/i.test(entry.name);
+    if (!byChain && !byLabel) continue;
+    keeps[entry.name.toLowerCase()] = {
+      name: entry.name, cls: entry.cls, by: byChain ? 'chain' : 'name',
+    };
+  }
+
   return {
     builtAt: null,                              // stamped by the caller; see build()
     source: 'compendium/data/koddb.json',
     defaults: { weight: DEFAULT_WEIGHT, bulk: DEFAULT_BULK, from: 'item.kod:66-67' },
     capacity_formula: '1700 + might * 20, for weight AND bulk (player.kod:10456, :10461)',
     counts: { item_classes: considered, distinct_names: byName.size, used_defaults: defaulted,
-              foods: Object.keys(food).length, weapons: Object.keys(weapons).length },
+              foods: Object.keys(food).length, weapons: Object.keys(weapons).length,
+              keeps: Object.keys(keeps).length },
     items: Object.fromEntries([...byName.entries()].sort()),
     food,
     weapons,
+    keeps,
   };
 }
 
@@ -568,6 +654,41 @@ function foodIndex(t) {
 export function allFoodNames(file = ITEMS_FILE) {
   const t = loadItems(file);
   return Object.keys(t?.food ?? {}).sort();
+}
+
+// EVERY WAND AND SCROLL, for a keep list that means the FAMILY and not the one item whose
+// name happens to be the family's word. See the derivation in buildItemTable: recognised by
+// class chain or by name, because a "wand" sits on three different branches of the tree, and
+// then filtered to the ones whose go-bad timer will never fire -- everything else is still
+// running its clock inside the vault.
+//
+// Returned as DISPLAY names because that is what the protocol hands us and what the keep
+// predicate compares. An empty answer means the table has not been rebuilt since this
+// section was added, and a caller spreading it into a list will simply get the list it
+// had before -- silence means the behaviour that was already there.
+export function allWandAndScrollNames(file = ITEMS_FILE) {
+  const t = loadItems(file);
+  return Object.values(t?.keeps ?? {}).map(k => k.name).sort();
+}
+
+// How long until this item's CLASS says it rots, in ms. 0 means never. NULL MEANS THE TABLE
+// DOES NOT KNOW, which is not the same answer and must not be read as "safe to store" -- an
+// unknown item is one the extractor never saw, and guessing "never" about it is how a
+// decaying item ends up in a vault it will die in.
+//
+// Currently 0 for every named item, for the reason argued in buildItemTable: a named item is
+// a labelled one and a labelled one never starts its timer. So this answers a question about
+// the CLASS and not about the object in the pack -- the enchantment decay that actually
+// empties vaults is per-instance and invisible from here.
+export function spoilsInMs(name, file = ITEMS_FILE) {
+  const t = loadItems(file);
+  if (!t?.items) return null;
+  const key = itemNameKey(name);
+  if (!key) return null;
+  for (const entry of Object.values(t.items))
+    if (itemNameKey(entry.name) === key)
+      return typeof entry.spoils_ms === 'number' ? entry.spoils_ms : 0;
+  return null;
 }
 
 export function foodValue(name, file = ITEMS_FILE) {
