@@ -150,6 +150,31 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
   ok("the keeper's /action handles a 'guild' case", /case 'guild':/.test(keeper),
      "m59-keeper-process.mjs has no `case 'guild':`, so every forward would 404");
 
+  // THE HALL LIST, WHICH WAS MISSING AT ALL THREE LEVELS AT ONCE AND SO COULD NOT BE NOTICED
+  // BY ANY ONE OF THEM. `askFrular` was absent from the client literal, `halls` was absent
+  // from the keeper's guild ops, and `guildHalls` was absent from the proxy — so
+  // `guild action=halls` answered `c.askFrular is not a function` and buying a guild hall was
+  // impossible for every character this fleet has. Measured 2026-09-11: Gonzo carried 33,330
+  // shillings across the world for a 25,000 hall and was refused at the counter.
+  //
+  // It is a SHOPPING request and not a guild request — there is no UC_GUILD_HALLS to send
+  // (gcreator.kod:250) — which is exactly why it was the one guild verb nobody forwarded.
+  ok('askFrular is forwarded by the client literal',
+     /askFrular\s*:/.test(literalBody || ''),
+     'the emulated client has no askFrular, so `guild action=halls` throws and no hall can be bought');
+  ok('and it goes through _guildAct like every other guild verb',
+     /askFrular\s*:\s*\([\s\S]{0,120}?proxy\._guildAct\(/.test(literalBody || ''),
+     'askFrular must cross the process boundary, not fake a list locally');
+  ok("the keeper implements the 'halls' op it is sent",
+     /case 'halls':/.test(keeper),
+     "m59-keeper-process.mjs has no `case 'halls':`, so the forward 404s and the list never arrives");
+  ok('the keeper answers with the parsed hall list',
+     /guild_halls\s*:/.test(keeper),
+     'the keeper must return guild_halls, or the broker has nothing to populate c.guildHalls from');
+  ok('and the proxy holds it, because the client literal is rebuilt per read',
+     /_guildHalls/.test(proxyBody || '') || /_guildHalls/.test(read('m59-broker.mjs')),
+     'the hall list must live on the proxy like the roster does, or it dies with the literal');
+
   // SILENCE IS THE REFUSAL HERE, so the reply must always carry what was said. A guild
   // command the caller lacks the bit for produces no message, no packet, and only a
   // Debug() line in the SERVER log (user.kod:4848) — so a caller that reads "no error" as
