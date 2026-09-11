@@ -37,6 +37,7 @@
 // with a successful call underneath them, so this reads the event stream afterwards and
 // reports what the server actually said rather than what the activate was asked to do.
 import process from 'node:process';
+import { meldVerdict } from './m59-nodecheck.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (flag, fallback) => {
@@ -88,13 +89,42 @@ const inRange = (a, b) => Math.abs(a.row - b.row) < 3 && Math.abs(a.col - b.col)
 
 // WHAT THE SERVER SAID, which is the only evidence that a meld happened. Matched on the
 // text of the resources rather than on a code, because none of these carry one.
+//
+// ======================= THIS FUNCTION REPORTED SUCCESS ON A DEAD STONE =======================
+//
+// CORRECTED 2026-09-10. The line that decided a meld had happened was
+//
+//     if (/trancelike state and reach out to bind/i.test(t))    return 'MELDED';
+//
+// and that phrase is in the SHARED PREFIX. `mananode_meld` and `mananode_failed_meld` are the
+// same sentence for 116 characters — both describe closing your eyes and reaching out, and only
+// the tail says whether anything answered ("Reality expands ..." against "You are disappointed
+// when nothing seems to happen."). There was no case for the failure message at all, so a node
+// in state NODE_DEAD returned 'MELDED'.
+//
+// A FALSE SUCCESS IS THE WORST ANSWER THIS TOOL CAN GIVE. A stone reported melded is crossed off
+// and never revisited, while a stone reported failed gets another night. And the refusal is not
+// exotic: `piState = NODE_DEAD` is checked at `mananode.kod:168`, BEFORE the range test, so it
+// fires with the character standing on top of the node — exactly where a runner is most inclined
+// to believe a success.
+//
+// The verdict now lives in ONE place, `m59-nodecheck.mjs`, keyed on each message's DISTINGUISHING
+// TAIL and returning `ambiguous` rather than a guess when only the shared prefix arrived. This
+// wrapper keeps the old vocabulary so its callers and logs do not move.
 function readOutcome(text) {
-  const t = String(text || '');
-  if (/already bonded with this mana node/i.test(t))        return 'already';
-  if (/not close enough to meld/i.test(t))                  return 'out of range';
-  if (/node rejects your attempt/i.test(t))                 return 'rejected (karma)';
-  if (/trancelike state and reach out to bind/i.test(t))    return 'MELDED';
-  return null;
+  const { verdict } = meldVerdict(text);
+  switch (verdict) {
+    case 'melded':       return 'MELDED';
+    case 'dead':         return 'dead node';
+    case 'already':      return 'already';
+    case 'not_in_range': return 'out of range';
+    case 'karma':        return 'rejected (karma)';
+    // Neither a verdict nor nothing: the meld was attempted and the reply was cut off before
+    // the half that says which way it went. Reading max mana inside the session settles it;
+    // calling it either way is how the bug above happened.
+    case 'ambiguous':    return 'ambiguous — read max mana';
+    default:             return null;
+  }
 }
 
 async function meldOne(agent, character) {
