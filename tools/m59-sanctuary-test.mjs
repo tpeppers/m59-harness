@@ -121,6 +121,44 @@ function keeper({ assignedRoom, currentRoom, vitalsValue = null }) {
      `got ${JSON.stringify(r)}`);
 }
 
+// 6. BLIND, SOMEWHERE TO BE, AND KNOWN TO BE UNARMED: stay. This is the safety property of
+//    using `armed()` rather than `armedForSure()` at that rung, and it is the one that gets
+//    lost if somebody "tidies" the two into one. No evidence about the weapon must let the
+//    character go (case 1, where equipment is unknown after a resume); POSITIVE evidence of
+//    an empty use list must hold it, because walking out bare is the thing the whole gate is
+//    for. The two look identical through `armedForSure`, which answers false to both.
+{
+  const bare = {
+    selfId: 99, room: { id: 1016, objects: new Map() }, rsc: { get: () => '' },
+    vitals: () => null,
+    equipment: () => ({ known: true, equipped: [] }),   // KNOWN, and holding nothing
+    inventory: [],
+  };
+  const s = { name: 'test', live: true, client: bare,
+              world: { room: { num: 1016, name: 'Mausoleum' }, geometry: null } };
+  const ap = new Autopilot(s, { mode: 'farm', policy: { hunt: 'giant rat' } });
+  ap.policy.assignedRoom = 586;
+  const r = await ap.readyToLeaveSanctuary('back to work');
+  ok('blind + somewhere to be + KNOWN unarmed -> stay put', r === false,
+     `got ${JSON.stringify(r)}`);
+}
+
+// 7. AND THE HOLD HAS TO SAY WHY. The bug in case 1 survived because the refusal listed no
+//    reason at all: `whole` defaulted a null health to 0 while `blocked` defaulted it to 1,
+//    so a blind keeper was held with an empty complaint. An unarguable refusal is one nobody
+//    can find.
+{
+  const notes = [];
+  const ap = keeper({ assignedRoom: null, currentRoom: 1016, vitalsValue: null });
+  ap.note = (what, detail) => notes.push({ what, detail });
+  await ap.readyToLeaveSanctuary('anywhere');
+  const held = notes.find(n => n.what === 'not leaving safety yet');
+  ok('a blind hold is announced at all', !!held, JSON.stringify(notes.map(n => n.what)));
+  ok('and it names the unknown bar as the reason',
+     !!held && (held.detail?.short_of || []).some(x => /vitals/i.test(String(x))),
+     JSON.stringify(held?.detail?.short_of));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE OTHER DEPARTURE GATE: HURT, IN THE OPEN, AND HOLDING NOTHING.
 //
