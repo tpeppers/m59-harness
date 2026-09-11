@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import { BP, M59Client } from './m59-client.mjs';
 import { depositInVault, itemIsProtected, itemNameMatches } from './m59-skills.mjs';
-import { resolveItemNames } from './m59-items.mjs';
+import { resolveItemNames, loadItems, allWandAndScrollNames } from './m59-items.mjs';
+import { VAULT_KEEP } from './m59-fleetscript.mjs';
 
 assert.equal(itemNameMatches('Inky-cap mushroom', 'inky cap mushrooms'), true);
 assert.equal(itemNameMatches('dark angel feather', 'Dark Angel Feathers'), true);
@@ -69,4 +70,46 @@ const refused = await depositInVault(session, { vaultman: 9001, items: ['dark an
 assert.equal(refused.verified, false);
 assert.deepEqual(refused.deposited, []);
 assert.deepEqual(refused.refused, ['dark angel feather']);
-console.log('vault: inventory removal and singleton refusals verified');
+// ---------------------------------------------------------------- VAULT_KEEP means something
+//
+// EVERY ENTRY MUST PROTECT A REAL ITEM. Five of the original seventeen did not, and the list
+// read perfectly well: `itemNameMatches` is exact canonical identity -- on purpose, so that a
+// configured "mushroom" protects the item named mushroom rather than all five of this world's
+// mushrooms -- so a family name protects one item and a wrong spelling protects none.
+//
+//   'inky'          -> nothing        the item is "Inky-cap mushroom"
+//   'dragon scale'  -> nothing        the item is "blue dragon scale"
+//   'angel feather' -> nothing        the item is "dark angel feather"
+//   'wand'          -> 1 of 21        the UNIDENTIFIED one, literally named "wand"
+//   'scroll'        -> 1 of 17        likewise
+//
+// Nothing threw, nothing logged, and twenty wands went over a counter. So the assertion is
+// against the live predicate and the real names, never against the literal list.
+{
+  const names = Object.values(loadItems().items).map(i => i.name);
+  const dead = VAULT_KEEP.filter(k => !names.some(n => itemIsProtected(n, [k])));
+  assert.deepEqual(dead, [], `VAULT_KEEP entries that protect NOTHING: ${dead.join(', ')}`);
+
+  // THE FAMILIES, not the one item wearing the family's word.
+  for (const n of ['wand of striking', 'wand of healing', 'wand of vampiric shock',
+                   'mysterious wand', 'scroll of flash', 'scroll of Martyrs Battleground'])
+    assert.equal(itemIsProtected(n, VAULT_KEEP), true, `${n} must survive a sell_all`);
+
+  // THE OPERATOR ASKED FOR THIS ONE BY NAME, and it is the case that proves the family is
+  // read off the class tree rather than the string: StaffOfJolting is a SpecialWand, so the
+  // chain claims "gnarled staff" even though a player never sees the word "wand" in it.
+  assert.equal(itemIsProtected('gnarled staff', VAULT_KEEP), true,
+               'gnarled staff must be kept -- it is a SpecialWand with no go-bad timer');
+
+  // A wand is three different branches of the tree. If this ever drops below the full set,
+  // the derivation has narrowed and somebody is selling wands again.
+  assert.ok(allWandAndScrollNames().length >= 40,
+            `expected the whole wand+scroll family, got ${allWandAndScrollNames().length}`);
+
+  // AND IT MUST STILL SELL THINGS. A keep list that protects everything is a fleet that
+  // never earns, which is the opposite failure and just as quiet.
+  for (const n of ['plate armor', 'long sword', 'chain armor'])
+    assert.equal(itemIsProtected(n, VAULT_KEEP), false, `${n} must remain sellable`);
+}
+
+console.log('vault: inventory removal, singleton refusals and a live VAULT_KEEP verified');

@@ -164,7 +164,7 @@ import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { SAY_RADIUS, squaredDistance, withinSayRange,
          sayApproachSquare } from './m59-sayrange.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
-import { foodValue, allFoodNames } from './m59-items.mjs';
+import { foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -1044,11 +1044,35 @@ export const shop = (seller, lines, opts = {}) => ({ do: 'shop', seller, lines, 
 // while worn; gems stack and cost one shilling a point to vault. The temporary attributes —
 // shrouded, enchanted, glowing, holy/unholy/fiery/icy/shock/acid — are deliberately NOT here:
 // they expire on a 1-24h timer that keeps running in the vault, so they are worth selling.
+//
+// FIVE OF THE SEVENTEEN ENTRIES HERE USED TO DO NOTHING, and the comment above was why
+// nobody noticed: it argues correctly that the wand and scroll FAMILIES keep for ever, and
+// the list then named them 'wand' and 'scroll'. But `itemNameMatches` is exact canonical
+// identity -- deliberately, so that a configured "mushroom" protects the item named
+// mushroom rather than all five of this world's mushrooms -- so 'wand' protected the single
+// UNIDENTIFIED item literally called "wand" and sold the other twenty, including the four
+// wands of striking the guild plan is trying to collect. 'scroll' sold sixteen of
+// seventeen. And 'inky', 'dragon scale' and 'angel feather' matched nothing at all: the
+// items are "Inky-cap mushroom", "blue dragon scale" and "dark angel feather".
+//
+// So the two halves are now written differently, because they are different KINDS of claim:
+//
+//   JUDGEMENT -- typed, one name per line, each the canonical spelling. Whether a thing is
+//   worth more in a vault than in a purse is not a fact the class tree carries.
+//
+//   FAMILY -- derived, never typed. Same discipline as FOOD_KEEP above and for the same
+//   reason: a hand-written list of wands would be wrong within a patch, and this one was
+//   wrong from the day it was written.
 export const VAULT_KEEP = Object.freeze([
-  'herb', 'elderberry', 'inky', 'flask',
-  'wand', 'scroll', 'rose', 'ring of invisibility', 'mystic sword', 'true lute',
-  'dragon scale', 'angel feather', 'shrunken head',
+  'herb', 'elderberry', 'Inky-cap mushroom', 'flask',
+  'rose', 'ring of invisibility', 'mystic sword', 'true lute',
+  'blue dragon scale', 'dark angel feather', 'shrunken head',
   'emerald', 'sapphire', 'diamond', 'ruby',
+  // Every wand and every scroll -- 40 of them, and the operator asked for one by name.
+  // "gnarled staff" is in here without being typed: StaffOfJolting is a SpecialWand, so
+  // the chain claims it even though the word "wand" never appears in what a player sees.
+  // That is the case a name-matching list gets wrong, which is why this one reads the tree.
+  ...allWandAndScrollNames(),
 ]);
 
 // `{ noVault: true }` acknowledges that this trip cannot or will not vault, and is
