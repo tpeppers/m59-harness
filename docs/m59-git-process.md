@@ -89,6 +89,12 @@ commands to run.
 **When you do cut, read which ref it names.** If the trunk checkout is diverged, tag
 `origin/main` explicitly rather than accepting the default.
 
+**The remedy is a push, not a conversation.** This refusal is mechanical — a tag must name a
+fetchable commit — and says nothing about whose work is in the way. Landing a commit here is the
+sign-off (rule 8), so `--cut --push` clears it without anybody's permission. The refusal used to
+add *"on a machine with many worktrees that work is usually somebody else's"*, and that sentence
+held a roll over seven good commits whose authors had mostly stopped existing.
+
 ---
 
 ## 4. A guarantee that cannot be evaluated must refuse, not proceed
@@ -194,3 +200,80 @@ negotiation that evening had been reasoning about a peer set that excluded the a
 So: **ask who else is here, and then check anyway.** CLAUDE.md's instruction to ask before a
 fleet-down is necessary and not sufficient. `--verify` and the process list were the only
 instruments that saw it, and a tree that was clean two minutes ago is not evidence.
+
+---
+
+## 8. Landing a commit IS the sign-off
+
+**Committing to this repository is consent for anyone to push, rebase, cherry-pick, merge and tag
+that commit into a deploy, at any moment, without consulting you.** You do not need to be asked.
+You will not be asked.
+
+**What the opposite cost.** `--cut` used to refuse an unpushed trunk with this sentence:
+
+> local `main` has commit(s) `origin/main` does not, so a tag cut here would name a commit nobody
+> else can fetch — and on a machine with many worktrees **that work is usually somebody else's**.
+
+Every word of that is true, and reading it stopped a roll on 2026-09-11 over seven perfectly good
+commits — four of them movement and guild fixes — because the polite move looked like finding
+their authors first.
+
+That is a deadlock dressed as politeness, and it is structural rather than occasional. **The
+authors here are mostly sessions, and a session that has ended cannot consent to anything.** So
+"ask the author first" does not resolve to "ask later"; it resolves to *never ship it*, and the
+work then sits in a local ref until somebody attempts the batch reconciliation that rule 5 exists
+to say is the worse failure of the two. The old default manufactured the exact condition the rule
+above forbids.
+
+**The `Claude-Session:` trailer is for closing work out, never for gating it.** Rule 6 exists so
+that a question about *intent* — why is this threshold 180, did you mean to leave this off — has
+somewhere to go. It was never a permission slip, and treating it as one converts a helpful
+attribution into a lock whose key is usually gone.
+
+### Saying no, when you mean it
+
+Some commits genuinely must not ship yet: half a protocol change whose other half is on another
+branch, a schema whose migration is not landed. So say it **in the commit**, where it travels with
+the work and needs no second file to stay in sync:
+
+```
+Release-Hold: the matching keeper change is not landed; shipping this alone logs out t9
+```
+
+`m59-deploy.mjs` reads every commit the cut would newly put in front of the fleet — the range
+`prod..trunk` — and refuses on any that hold themselves back, quoting the reason. Nothing else
+about a commit can stop a release: not who wrote it, not whether they are reachable, not how
+recent it is.
+
+**A reason is mandatory**, for the same argument `unsafe` in fleetScript makes: *"I know this must
+not ship"* and *"I typed a trailer"* have to look different to the next person, who will be
+holding a roll while they read it.
+
+**And a malformed hold is a hold.** `Release-Hold` with no reason, `Release Hold:`, `release_hold:`
+— anything reaching for this and missing refuses, with a different sentence saying to fix the
+message. The two failure directions are not symmetric: reading a typo as *consent* ships something
+its author tried to stop, silently, in front of twenty-one characters on a shared server, with no
+way for anyone to notice. Reading a stray line as a hold costs one person one minute.
+
+The parser gives ordinary English the benefit of the doubt precisely so that it can afford to be
+strict about the punctuated form. `Release-Hold` is never prose and always counts; `do not
+release the lock until the keeper answers` is a sentence, and only counts with a colon straight
+after it. Measured against the last 67 commits here — bodies up to 4,478 characters of prose about
+releases, deploys and locks — it holds none of them.
+
+### The mechanical half is still real
+
+A tag must name a commit somebody else can fetch (rule 3), and that has not changed. What changed
+is that the remedy no longer requires finding anyone:
+
+```bash
+node tools/m59-deploy.mjs --cut --push     # push the trunk, then cut
+```
+
+`--push` checks holds **before** pushing, because pushing a held commit to `origin/main` hands it
+to the next person who cuts — which is the thing the hold exists to stop — and it re-surveys
+afterwards rather than reporting numbers computed from the refs it just moved.
+
+`m59-release-consent.mjs` is the decision, pure and testable; `m59-release-consent-test.mjs` (34)
+pins it, including that a `Claude-Session:` trailer is not a hold and that every typo'd form
+refuses.

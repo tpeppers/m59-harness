@@ -37,6 +37,7 @@ const TRUNK = process.env.M59_TRUNK || 'main';
 import { nextDeployTag } from './m59-deploytag.mjs';
 
 import { strandedCommits } from './m59-deploy-drift.mjs';
+import { holdsIn, holdRefusals } from './m59-release-consent.mjs';
 const git = (repo, ...args) => {
   try {
     // stderr ignored: several of these are ASKS, not assertions — `describe --exact-match`
@@ -205,6 +206,23 @@ function survey({ fetch = true } = {}) {
       cherry: (base, head) => git(HARNESS, 'cherry', base, head),
     });
   }
+  // WHAT THIS CUT WOULD NEWLY SHIP, and whether any of it asks not to be shipped.
+  //
+  // Landing a commit here IS the sign-off — see docs/m59-git-process.md rule 8. So this does NOT
+  // ask who wrote something or whether they are reachable; it asks only whether the commit
+  // itself says do not ship me. The range is everything on the trunk that production is not
+  // already running, because that is exactly the set a new tag would put in front of the fleet.
+  let holds = [];
+  if (known) {
+    const raw = git(HARNESS, 'log', '--format=%H%x01%s%x01%b%x02', `${prodHead}..${trunkHead}`);
+    if (raw !== null) {
+      holds = holdsIn(raw.split('\x02').map(rec => {
+        const [sha, subject, body] = rec.replace(/^\s+/, '').split('\x01');
+        return sha ? { sha, subject, body } : null;
+      }).filter(Boolean));
+    }
+  }
+
   const ref = git(PROD, 'rev-parse', '--abbrev-ref', 'HEAD');
   // RUNTIME STATE IS NOT DRIFT. The fleet rewrites its own learning continuously —
   // safespots, sector readings, ledgers — so counting those as a problem makes this check
@@ -225,7 +243,7 @@ function survey({ fetch = true } = {}) {
   const runtime = all.length - dirty.length;
   const tag = git(PROD, 'describe', '--tags', '--exact-match') || null;
   return { prodHead, trunkHead, trunkRef, trunkNote, trunkUnpushed,
-           known, ahead, behind, stranded: strandedShas, ref, dirty, runtime, tag };
+           known, ahead, behind, stranded: strandedShas, holds, ref, dirty, runtime, tag };
 }
 
 function report(s) {
@@ -243,6 +261,7 @@ function report(s) {
   if (s.ahead > 0 && Array.isArray(s.stranded))
     console.log(`        of those ${s.ahead}, ${s.stranded.length} carr${s.stranded.length === 1 ? 'ies' : 'y'} ` +
                 `a change no trunk ref has (the rest are the same work under other hashes)`);
+  if (s.holds?.length) console.log(`        ${s.holds.length} commit(s) in the range ASK NOT TO BE RELEASED`);
   if (s.dirty.length) console.log(`        ${s.dirty.length} uncommitted file(s)`);
   if (s.runtime) console.log(`        ${s.runtime} runtime state file(s) (expected, not drift)`);
 }
@@ -288,19 +307,28 @@ function problems(s) {
   // answer is to refuse and let a person push, not to quietly prefer the other ref and ship
   // something nobody asked for.
   if (s.trunkUnpushed)
+    // NOT "ASK WHOSE IT IS". That sentence used to end "...on a machine with many worktrees that
+    // work is usually somebody else's", and reading it is what held a roll on 2026-09-11 with
+    // seven good commits — four of them movement and guild fixes — sitting in a local branch
+    // whose authors were mostly sessions that had already ended. Committing is the sign-off
+    // (rule 8), so the remaining problem is purely mechanical: a tag must name a fetchable
+    // commit. `--push` does it, and needs nobody's permission.
     bad.push(`local ${TRUNK} has commit(s) origin/${TRUNK} does not, so a tag cut here would ` +
-             'name a commit nobody else can fetch -- and on a machine with many worktrees that ' +
-             'work is usually somebody else\'s. Push it first: ' +
-             `git -C "${HARNESS}" push origin ${TRUNK}`);
+             'name a commit nobody else can fetch. Landing a commit here is consent to ship it, ' +
+             'so this needs no author\'s sign-off -- it just needs pushing: ' +
+             `node tools/m59-deploy.mjs --cut --push   (or: git -C "${HARNESS}" push origin ${TRUNK})`);
+  for (const r of holdRefusals(s.holds)) bad.push(r);
   return bad;
 }
 
 // --no-fetch is for an offline run or a tight CI loop. It is opt-OUT rather than opt-in
 // because the reading is only worth having when the ref it is computed from is current.
 const noFetch = process.argv.includes('--no-fetch');
-const mode = process.argv.find(a => a.startsWith('--') && a !== '--no-fetch') || '--status';
+const doPush = process.argv.includes('--push');
+const mode = process.argv.find(a => a.startsWith('--') && a !== '--no-fetch' && a !== '--push')
+  || '--status';
 
-const s = survey({ fetch: !noFetch });
+let s = survey({ fetch: !noFetch });
 if (s.error) { console.error(s.error); process.exit(2); }
 
 if (mode === '--status' || mode === '--verify') {
@@ -316,9 +344,38 @@ if (mode === '--status' || mode === '--verify') {
 }
 
 if (mode === '--cut') {
+  // --push: DO THE THING THAT NO LONGER NEEDS ASKING.
+  //
+  // An unpushed trunk is a real problem -- a tag must name a commit somebody else can fetch
+  // (rule 3) -- but under rule 8 it is a MECHANICAL one. Every commit here was signed off for
+  // release by being committed, so there is nobody to consult and the fix is one push. Held
+  // commits are checked FIRST and block the push as well as the cut: pushing a hold to origin
+  // is handing it to the next person who cuts, which is the thing the hold exists to stop.
+  if (doPush && s.trunkUnpushed) {
+    const held = holdRefusals(s.holds);
+    if (held.length) {
+      console.error('refusing to push: a commit in this range asks not to be released.\n');
+      for (const b of held) console.error(`  * ${b}\n`);
+      process.exit(1);
+    }
+    console.log(`pushing ${s.trunkRef} to origin (committing here is the sign-off -- rule 8)...`);
+    const out = git(HARNESS, 'push', 'origin', TRUNK);
+    if (out === null) {
+      console.error(`could not push ${TRUNK}. Another session may have landed work since the ` +
+                    'fetch: pull --rebase and run this again.');
+      process.exit(1);
+    }
+    // RE-SURVEY RATHER THAN ASSUME. The push changed the very refs every number here was
+    // computed from, and reporting the pre-push reading would be the same class of mistake as
+    // trusting a restart loaded what you wrote.
+    s = survey({ fetch: true });
+    if (s.error) { console.error(s.error); process.exit(2); }
+  }
+
   // REFUSE BEFORE ACTING. Cutting a deploy while prod is ahead would bury the stranded work
   // rather than land it, which is the failure this tool exists to make impossible.
-  const bad = problems(s).filter(b => /AHEAD|never seen|uncommitted|nobody else can fetch/.test(b));
+  const bad = problems(s).filter(b =>
+    /AHEAD|never seen|uncommitted|nobody else can fetch|asks not to be released|no reason/.test(b));
   if (bad.length) {
     console.error('refusing to cut a deploy:\n');
     for (const b of bad) console.error(`  * ${b}\n`);

@@ -749,6 +749,25 @@ the records it describes.
   every assertion here stayed green. Both constants are read out of the source rather than
   copied, and the pattern that reads them uses `[0-9]` rather than an escape because it
   lives in a template literal, which eats the backslash before RegExp sees it) and
+  `node tools/m59-release-consent-test.mjs` (34 — **landing a commit IS the sign-off, and this
+  pins what may still stop a release**. `--cut` used to refuse an unpushed trunk with *"on a
+  machine with many worktrees that work is usually somebody else's"* — true, and a deadlock
+  dressed as politeness: the authors here are mostly SESSIONS, and a session that has ended
+  cannot consent to anything, so "ask the author first" resolves to *never ship it*. On
+  2026-09-11 it held a roll over seven good commits, four of them movement and guild fixes. The
+  work then waits for the batch reconciliation that rule 5 exists to call the worse failure, so
+  the old default manufactured the condition the other rule forbids. The default is now inverted
+  — silence is consent — and the only thing that stops a release is the commit saying so itself,
+  with a mandatory reason the refusal quotes. **THE ASYMMETRY IS THE DESIGN**: reading a typo'd
+  hold as CONSENT ships something its author tried to stop, silently, in front of twenty-one
+  characters on a shared server; reading a stray line as a hold costs one person a minute. So
+  every near-miss spelling refuses, with a DIFFERENT sentence saying to fix the message rather
+  than argue with it. The parser gives ordinary English the benefit of the doubt exactly so it
+  can be strict about the punctuated form — `Release-Hold` is never prose and always counts,
+  `do not release the lock until the keeper answers` needs a colon — and against the last 67
+  real commits, bodies up to 4,478 characters of prose about releases and deploys, it holds none.
+  Also pins that a `Claude-Session:` trailer is NOT a hold, since rule 6 exists to let somebody
+  ask what you meant and would become a lock whose key is gone if it gated shipping) and
   `node tools/m59-deploy-drift-test.mjs` (14 — **ahead by HASH is not ahead by WORK, and the
   deploy check must be able to come down**. `--verify` is what stands between a `--cut` and
   burying somebody's work, and on 2026-09-11 it announced *"prod is 37 commit(s) AHEAD of main …
