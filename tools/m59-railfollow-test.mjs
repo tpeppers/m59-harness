@@ -5,7 +5,7 @@
 // The central case is the real one, with the real numbers: room 49's r25c17 holds four floors
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
 import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
-         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail } from './m59-railfollow.mjs';
+         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -164,6 +164,47 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
   eq(distanceToRail([], { x: 0, y: 0 }, { floor: 0 }).empty, true, 'an empty rail is empty');
   eq(Math.round(distanceToRail([{ x: 300, y: 0, f: 1 }], { x: 0, y: 0 }, { floor: 1 }).d), 300,
      'a one-waypoint rail falls back to the point distance');
+}
+
+// ---- A STRIDE IN WAYPOINTS IS MEANINGLESS ON A SPARSE RAIL. Marco, room 49. --------------
+{
+  // The real rim rail: 6 waypoints, one leg 24 squares long.
+  const rim = [
+    { x: 20544, y:    64, f: 6144 },   // 0  r1c21
+    { x: 20544, y:  1280, f: 6144 },   // 1  r2c21
+    { x: 20544, y:  1642, f: 6144 },   // 2  r2c21
+    { x: 20544, y: 25962, f: 6144 },   // 3  r26c21   <- 24320 units from wp 2
+    { x: 20544, y: 26415, f: 6016 },   // 4  r26c21
+    { x: 19520, y: 27136, f: 6016 },   // 5  r27c20
+  ];
+  // Standing on segment 2, nearest vertex 3. A stride of 12 waypoints resolves to the last one.
+  eq(Math.min(3 + 12, rim.length - 1), 5, 'stride 12 on a 6-waypoint rail means "aim at the end"');
+  const aim = aimAhead(rim, 2);
+  eq(aim.i, 3, 'the distance budget aims at the NEXT waypoint when the segment is long');
+  eq(aim.spanned, 1, 'spanning exactly one waypoint');
+  ok(aim.dist > 3 * 1024, 'even though that one leg already exceeds the budget');
+  ok(!aim.atEnd, 'and it is not pretending to be at the end of the rail');
+
+  // Near the end the short legs let it span more than one.
+  const tail = aimAhead(rim, 3);
+  ok(tail.i > 3, 'from waypoint 3 it still advances');
+  ok(tail.i <= 5, 'and never past the end');
+  eq(aimAhead(rim, 5).atEnd, true, 'from the last waypoint it reports the end');
+  eq(aimAhead(rim, 99).i, 5, 'an index past the end clamps to the end');
+  eq(aimAhead(rim, -4).i >= 1, true, 'and a negative one clamps to the start, then advances');
+}
+{
+  // A DENSE rail must still stride many waypoints, or a 650-waypoint rail becomes 650 legs.
+  const dense = [];
+  for (let k = 0; k < 200; k++) dense.push({ x: k * 64, y: 0, f: 1024 });
+  const aim = aimAhead(dense, 0);
+  eq(aim.i, 48, 'on 64-unit legs the budget spans 48 waypoints');
+  ok(aim.dist <= 3 * 1024, 'without exceeding the budget');
+  ok(aimAhead(dense, 0, { budget: 1024 }).i === 16, 'and the budget is honoured when changed');
+}
+{
+  eq(aimAhead([], 0).i, -1, 'an empty rail aims nowhere');
+  eq(aimAhead([{ x: 0, y: 0, f: 1 }], 0).atEnd, true, 'a one-waypoint rail is already at its end');
 }
 
 // ---- the high-water mark, and the run it aborted -----------------------------------------

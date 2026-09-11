@@ -131,6 +131,40 @@ export function distanceToRail(waypoints, point, { floor = null, step = MAX_STEP
            i: bestI, onShelf: bestOn, floorKnown: floor != null };
 }
 
+/** How far along the line to aim in one leg, in client units. Three squares. */
+export const AIM_BUDGET = 3 * 1024;
+
+/**
+ * WHICH WAYPOINT TO AIM AT, MEASURED IN DISTANCE RATHER THAN IN WAYPOINTS.
+ *
+ * A follower strides "every Nth waypoint", which is a sensible unit on a 650-waypoint rail whose
+ * legs are 64 units apart and meaningless on a 6-waypoint rail whose legs are 24,000. Measured
+ * 2026-09-11: on room 49's rim rail, stride 12 of 6 waypoints resolves to the LAST one, so a body
+ * at r22c21 aimed at r27c20 — cutting the corner diagonally off the rim — instead of at r26c21,
+ * straight south along the column it was standing on. Seven legs, zero refusals, one column of
+ * movement, and the run scored as a stall.
+ *
+ * So: walk forward accumulating segment lengths and stop at the budget. Always at least one
+ * waypoint ahead, because aiming at the one you are already standing on is a no-op that reads as
+ * a refusal.
+ */
+export function aimAhead(waypoints, fromIndex, { budget = AIM_BUDGET } = {}) {
+  if (!Array.isArray(waypoints) || waypoints.length === 0) return { i: -1, dist: 0 };
+  const last = waypoints.length - 1;
+  const from = Math.max(0, Math.min(Number(fromIndex) || 0, last));
+  if (from >= last) return { i: last, dist: 0, atEnd: true };
+  let i = from, acc = 0;
+  while (i < last) {
+    const a = waypoints[i], b = waypoints[i + 1];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    // Take the first segment unconditionally — one waypoint ahead is the floor — then keep
+    // going only while the budget still covers the next one.
+    if (i > from && acc + seg > budget) break;
+    acc += seg; i++;
+  }
+  return { i, dist: acc, spanned: i - from, atEnd: i >= last };
+}
+
 /** Default gap, in waypoints, that separates rejoining the line from wobbling on it. */
 export const REJOIN_BEHIND = 20;
 
