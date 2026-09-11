@@ -117,16 +117,30 @@ export const script = {
       // the failure it guards is the one that costs money: the sale subtracts the price
       // whether or not AddSkill did anything (monster.kod:3866-3874) and says nothing either
       // way, so the ability list is the only evidence a purchase happened at all.
+      //
+      // BOTH LISTS. `abilities` answers {skills, spells} and this asked only for `skills`, so
+      // for a SPELL the answer could never be yes however long it polled. Measured 2026-09-11:
+      // Statler bought minor heal at Priestess Xiana, the `learn` step's own poll saw it and
+      // reported ok, and this step then declared "charged and never appeared in the skill
+      // list" twenty-eight seconds later. It was in his spell list the whole time -- and the
+      // sentence this failure prints tells an operator to go and spend the price again. A
+      // belt-and-braces check that contradicts the step it is doubling is worse than no check.
+      //
+      // AND IT LAGS IN MINUTES, NOT SECONDS. The window was fourteen seconds; the Scooter case
+      // on 2026-09-08 read `ability: null` for several minutes after a purchase that had
+      // plainly worked. A slow yes costs patience, a false no costs the price.
       verify(async ({ agent, call }) => {
-        for (let i = 0; i < 6; i++) {
-          await new Promise(r => setTimeout(r, i === 0 ? 1500 : 2500));
-          const a = await call('abilities', { agent, kind: 'skills', refresh: i > 0 }, 60_000)
+        const until = Date.now() + 180_000;
+        for (let i = 0; Date.now() < until; i++) {
+          await new Promise(r => setTimeout(r, i === 0 ? 1500 : 5000));
+          const a = await call('abilities', { agent, kind: 'both', refresh: i > 0 }, 60_000)
                             .catch(() => null);
-          if ((a?.skills || []).some(s => rx.test(String(s.name || '')))) return true;
+          if ([...(a?.skills ?? []), ...(a?.spells ?? [])]
+                .some(s => rx.test(String(s?.name ?? '')))) return true;
         }
         return false;
-      }, `the purse was charged for "${skill}" and it never appeared in the skill list — ` +
-         'do NOT retry in a loop, each attempt costs the price again'),
+      }, `the purse was charged for "${skill}" and it never appeared in the skill or spell ` +
+         'list — do NOT retry in a loop, each attempt costs the price again'),
 
       // ALWAYS. A purchase that fails must still bring the character home; without this the
       // failure strands it wherever the teacher stands.

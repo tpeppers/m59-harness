@@ -77,6 +77,10 @@ process.setMaxListeners(64);
 const { fleetScript, walk, bank, shop, learn, verify, KNOWN_TRAPS,
         abilityNames, isAbilityName, abilitiesTargetedBy } =
   await import('./m59-fleetscript.mjs');
+const { stateFileFor } = await import('./m59-fleetpath.mjs');
+// One name, used by every case AND by the fake's /health answer — they have to agree or
+// guarantee 11 refuses the run as the wrong broker.
+const TEST_FLEET = 'learnskilltest';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -112,6 +116,13 @@ function fakeWorld({
   let abilityPolls = 0;
   const skills = alreadyHeld ? [{ name: shelf[0]?.name }] : [];
   globalThis.fetch = async (_url, opts) => {
+    // GUARANTEE 11's BROKER-IDENTITY PROBE IS A BODYLESS GET, and this fake assumed every
+    // request carried a JSON body. `JSON.parse(undefined)` threw, the probe's catch turned
+    // that into `"undefined" is not valid JSON`, and the whole suite died at its first case
+    // with "cannot tell whether the broker is holding fleet" — on a test that opens no socket
+    // at all. A broker is ours only when its /health STATE PATH is our roster file, so the
+    // fake answers with this fleet's own.
+    if (!opts?.body) return { json: async () => ({ state: stateFileFor(TEST_FLEET) }) };
     const body = JSON.parse(opts.body);
     const { name, arguments: a } = body.params;
     sent.push({ name, ...a });
@@ -419,6 +430,24 @@ if (!LIVE) {
       ok('and the walk home runs even when the purchase failed',
          steps.filter(s => s.do === 'walk').at(-1)?.always === true,
          'the last walk is not `always`, so a failed purchase abandons the character');
+
+      // A SPELL IS AN ABILITY TOO, AND THE VERIFY COULD NOT SEE ONE.
+      //
+      // It asked `abilities` for `kind: 'skills'` and read only `a.skills`, so for a spell the
+      // answer could never be yes however long it polled. Measured 2026-09-11: Statler bought
+      // minor heal at Priestess Xiana, the `learn` step's own poll saw it and reported ok, and
+      // this verify then declared "charged and never appeared in the skill list" — a sentence
+      // that tells an operator to go and spend the price a second time. The callback is run
+      // directly here against a broker that answers spells-only, because the shape of the
+      // question is the whole bug.
+      const v = steps.find(s => s.do === 'verify');
+      const spellOnly = async (tool) =>
+        tool === 'abilities' ? { skills: [], spells: [{ name: 'punch', ability: null }] } : {};
+      ok('a verify that only reads `skills` cannot see a SPELL, so it must read both',
+         (await v.fn({ agent: 'a1', call: spellOnly })) === true,
+         'the purchase verify still asks only for skills — a spell reads as charged-and-not-delivered');
+      ok('and it asks the broker for BOTH lists rather than filtering one',
+         /kind:\s*'both'/.test(String(v.fn)));
     }
   }
 
