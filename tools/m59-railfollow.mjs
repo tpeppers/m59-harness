@@ -43,7 +43,24 @@ export const OFF_SHELF_PENALTY = 1e6;
  * result degrades to the 2D answer, reporting `floorKnown: false` so a caller can say so rather
  * than believing a guard that did not run.
  */
-export function nearestWaypoint(waypoints, point, { floor = null, step = MAX_STEP_HEIGHT } = {}) {
+export function nearestWaypoint(waypoints, point, {
+  floor = null, step = MAX_STEP_HEIGHT, railRoom = null, bodyRoom = null,
+} = {}) {
+  // A POSITION IN ANOTHER ROOM IS NOT A POSITION ON THIS LINE AT ALL.
+  //
+  // Measured 2026-09-11: Marco died in the Badlands, the server put him in the Underworld
+  // (room 1), and the follower drove on for SIX MINUTES — asking room 45's geometry for the
+  // floor under a body in room 1, getting numbers, and steering by them. `r24c10 … floor 3840
+  // … room 1 … aiming wp 256`. Nothing errored. The stall detector eventually stopped it,
+  // which is the wrong guard catching the right problem far too late.
+  //
+  // Coordinates are only meaningful inside the room they were measured in, so this refuses to
+  // answer rather than answering about the wrong room — the caller has to stop, and a follower
+  // that cannot tell "off the line" from "not in the building" will always mistake one for the
+  // other.
+  if (railRoom != null && bodyRoom != null && railRoom !== bodyRoom)
+    return { i: -1, d: Infinity, onShelf: false, floorKnown: false,
+             wrongRoom: true, railRoom, bodyRoom };
   if (!Array.isArray(waypoints) || !waypoints.length)
     return { i: -1, d: Infinity, onShelf: false, floorKnown: floor != null, empty: true };
   let i = -1, best = Infinity, onShelf = false;
