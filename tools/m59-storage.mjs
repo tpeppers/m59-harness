@@ -114,6 +114,86 @@ const writeJson = (path, value) => {
  * thing that can answer later, and every reading carries WHEN and WHO so a stale one can
  * be told from a fresh one. Nothing here is ever presented as current.
  */
+// ---------------------------------------------------------------- WHICH CHEST IS WHICH
+//
+// A GUILD CHEST IS ADDRESSED BY WHERE IT STANDS, NEVER BY ITS OBJECT ID.
+//
+// An object id is a handle the server hands out and recycles. This repository has measured
+// 23% of stored ids naming a different object three days later, so a slot->id cache is a
+// slot->something-else cache on a long enough timeline. Prod demonstrated it exactly: three
+// chest readings taken thirty days ago, naming a hall the guild no longer owns, and both the
+// deposit and the withdraw leg skipping every slot because no recorded id was in the room.
+//
+// A chest cannot move. `Chest is StorageBox is Holder` sets viObject_flags = CONTAINER_YES
+// and declares no GETTABLE flag, so it is GETTABLE_NO (blakston.khd:62): it cannot be picked
+// up, and nothing relocates it. The hall builds its chests at fixed squares when it is
+// created (guildh14.kod:518-522). So the square IS the chest's durable name -- and it is the
+// name a person would use, which is the point.
+//
+// ORDER IS FOR LEARNING, NEVER FOR ADDRESSING. The id-matching code this replaces carried a
+// warning worth keeping: falling back to the order chests appear in the room "would be a
+// guess that silently files chest 3's contents into chest 1". So ordering assigns slots ONLY
+// from a reading that shows every chest the hall should have; any shorter reading is matched
+// against what was already learned, and anything that cannot be placed is skipped and named.
+//
+// The ordering itself is row-then-column, which is arbitrary but STABLE -- and stability is
+// the whole requirement, because the slot number is our own label rather than the game's.
+export const BOOKMAKERS_CHEST_SQUARES = Object.freeze([
+  { row: 18, col: 2 }, { row: 18, col: 6 }, { row: 20, col: 4 },
+]);
+
+export const sameSquare = (a, b) =>
+  !!a && !!b && Number(a.row) === Number(b.row) && Number(a.col) === Number(b.col);
+
+/**
+ * Map guild-chest slots onto the chests actually standing in this room.
+ *
+ * @param objects  room objects already filtered to chests: { id, row, col }
+ * @param known    what each slot's square is believed to be: [{ slot, row, col }]
+ * @param expected how many chests this hall builds (BOOKMAKERS_CHESTS)
+ * @returns { slots: Map<slot, object>, learned, unplaced, complete, why }
+ */
+export function chestSlotsByPosition({ objects = [], known = [], expected = null } = {}) {
+  const placed = objects.filter(o => Number.isFinite(Number(o?.row)) && Number.isFinite(Number(o?.col)));
+  const slots = new Map();
+  const usedIds = new Set();
+
+  // 1. ANYTHING WE ALREADY KNOW THE SQUARE OF WINS, whatever else is in the room. This is
+  //    what makes a short read safe: a slot whose chest is visible is still addressable even
+  //    when its neighbours are missing from the packet.
+  for (const k of known) {
+    if (k?.row == null || k?.col == null) continue;
+    const hit = placed.find(o => !usedIds.has(o.id) && sameSquare(o, k));
+    if (hit) { slots.set(Number(k.slot), hit); usedIds.add(hit.id); }
+  }
+
+  // 2. ORDERING ONLY FROM A COMPLETE READING. Assigning by order when a chest is missing is
+  //    precisely how slot 3's contents get filed as slot 1.
+  const complete = expected == null ? placed.length > 0 : placed.length === Number(expected);
+  let learned = 0;
+  if (complete && slots.size < placed.length) {
+    const ordered = [...placed].sort((a, b) => (a.row - b.row) || (a.col - b.col));
+    for (let i = 0; i < ordered.length; i++) {
+      const slot = i + 1;
+      if (slots.has(slot) || usedIds.has(ordered[i].id)) continue;
+      slots.set(slot, ordered[i]);
+      usedIds.add(ordered[i].id);
+      learned++;
+    }
+  }
+
+  const unplaced = placed.filter(o => !usedIds.has(o.id)).map(o => ({ id: o.id, row: o.row, col: o.col }));
+  return {
+    slots, learned, unplaced, complete,
+    why: complete
+      ? undefined
+      : `saw ${placed.length} chest(s) with a position` +
+        (expected == null ? '' : ` where the hall builds ${expected}`) +
+        ' — slots are matched against known squares only, never assigned by order, because ' +
+        'ordering a short reading files one chest\'s contents under another chest\'s slot',
+  };
+}
+
 export class StorageCache {
   constructor({ dir = STORAGE_DIR, now = () => Date.now() } = {}) {
     this.dir = resolve(dir);
@@ -154,11 +234,19 @@ export class StorageCache {
   // where it stands: two chests in one room are two ids and the room cannot tell them
   // apart. A slot nobody has opened is absent rather than empty, because "nobody looked"
   // and "there is nothing in it" are opposite facts about a guild's stores.
-  writeChest(slot, { object_id = null, room = null, items = [], by = null, at = null } = {}) {
+  // `row`/`col` are the DURABLE name — see chestSlotsByPosition. `object_id` is still
+  // recorded because it is useful for one visit and for spotting a recycle, but nothing
+  // addresses a chest by it any more.
+  writeChest(slot, { object_id = null, room = null, items = [], by = null, at = null,
+                     row = null, col = null } = {}) {
     const n = Number(slot);
     if (!(n >= 1 && n <= GUILD_CHEST_SLOTS))
       throw new Error(`chest slot must be 1..${GUILD_CHEST_SLOTS}, got ${slot}`);
     return writeJson(this.chestPath(n), { slot: n, object_id, room,
+      // THE SQUARE IS WHAT THE NEXT VISIT MATCHES ON. Written as null rather than omitted
+      // when unknown, so a reading taken before this field existed is distinguishable from
+      // one where the position genuinely could not be read.
+      row: row == null ? null : Number(row), col: col == null ? null : Number(col),
       items: items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 })),
       opened_by: by ?? null, observed_at: Number(at) || this.now() });
   }
