@@ -93,7 +93,9 @@ export function sampleFloor(geo, rows, cols, { step = 256 } = {}) {
  * `prev` is kept so a chain can be reconstructed — a reachability answer with no path in it
  * is the same unhelpful "no route" this repository keeps paying for.
  */
-export function floodClimb(grid, seeds, { maxStep = MAX_STEP_HEIGHT, canStep = null } = {}) {
+export function floodClimb(grid, seeds,
+                           { maxStep = MAX_STEP_HEIGHT, maxDescend = Infinity,
+                             canStep = null } = {}) {
   const { floor, w, h } = grid;
   const seen = new Int32Array(w * h).fill(-1);       // index of predecessor, -2 for a seed
   const queue = [];
@@ -112,8 +114,25 @@ export function floodClimb(grid, seeds, { maxStep = MAX_STEP_HEIGHT, canStep = n
       if (seen[j] !== -1) continue;
       const to = floor[j];
       if (Number.isNaN(to)) continue;
-      // THE ONE RULE. Up is capped; down is free.
+      // THE ONE RULE. Up is capped; down is free BY DEFAULT.
       if (to - from > maxStep) continue;
+      // ...AND A FALL IS A WALL WHEN YOU ASK FOR IT. Descent being unbounded is the truth
+      // about what a body CAN do and the wrong rule for a route it has to walk: a flood that
+      // may drop at will finds lines that step off a ledge, and a body following one does not
+      // end up where the line says. The operator's account of Kardde's Canyon and of the
+      // Badlands node is the same sentence both times — "you can reach it by walking along
+      // the wall" — and walking along a wall means NEVER DESCENDING.
+      //
+      // So `maxDescend` caps the drop the same way `maxStep` caps the climb. Infinity is the
+      // old behaviour and stays the default. Zero carves the LEDGE: what remains of a room
+      // when falling is forbidden, which is exactly `m59-jumpfinder.mjs`'s `closure()` and
+      // `m59-fineroute.mjs`'s own `maxDescend` — both of which had this before this file did,
+      // and neither of which runs on a lattice fine enough for these rooms.
+      //
+      // A small non-zero value is usually what you want rather than a hard zero: sampled
+      // floors wobble by a few units across a sloped or split square, and a strict rule reads
+      // that wobble as a cliff. `m59-jumpfinder` uses a 64-unit tolerance for the same reason.
+      if (from - to > maxDescend) continue;
       // AND A HEIGHT TEST IS NOT A WALK. The first version of this flood knew only about
       // floors, so it happily climbed THROUGH walls: on its first run against room 579 it
       // produced an eleven-tread chain of which the mover refused SIX with
