@@ -1486,9 +1486,31 @@ export class RoomGeometry {
       // them adds +0 samples to a 54,849-sample flood, and room 45's meld box stays at 0 of
       // 400. So the bug is real, located, and not load-bearing for any stone measured so far.
       //
-      // It duplicates a rule the client already applies. Where the duplicate diverges it has
-      // been caught doing so exactly once, and fixing it would not have moved a single node.
-      // The reason these stones are unreachable is therefore still open, and it is NOT this.
+      // AND IN ROOM 45 IT REFUSES TWO CROSSINGS THE CLIENT ALLOWS, at the exact boundary the
+      // OPERATOR pointed at. Square (42,21) is SPLIT — one square holding fine floors of 1536,
+      // 1792, 2048 and 3328 — and the crossings west into (42,20) are:
+      //
+      //     y=42112  1792 -> 2560  (+768)  default step_too_high   esh:false ARRIVED
+      //     y=42368  2048 -> 2944  (+896)  default step_too_high   esh:false ARRIVED
+      //     y=42624  2048 -> 2944  (+896)  geometry_blocked either way — a real wall
+      //     y=42880  3328 -> 2944  (-384)  ARRIVED either way — a descent
+      //
+      // Two of four are ungated risers this rule refuses and `canCrossWallAt` permits. So the
+      // duplicate IS load-bearing, and the square-pair census above could not see it because
+      // the divergence lives INSIDE a split square, below square resolution.
+      //
+      // IT STILL COSTS NOTHING THERE, FOR A DIFFERENT REASON. A 256-unit fine flood from both
+      // of room 45's real arrivals, run with this rule OFF, returns an identical 54,849
+      // samples and still reaches 0 of 400 samples in the meld box. The take-off column
+      // x=20608 is not reachable at any of those four rows; the flood gets to x=20864 —
+      // a quarter square east, same floors — and the level step west is refused
+      // `geometry_blocked`. A WALL, correctly refused, at every row. The crossings this rule
+      // wrongly refuses are behind it.
+      //
+      // So: the duplicate rule demonstrably refuses legal ground, it has coordinates now, and
+      // turning it off opens no mana node measured so far. Both halves matter — the first is
+      // why it should be fixed, the second is why doing it tonight to chase a stone would have
+      // been the wrong trade.
       //
       // An earlier version of this comment said the blunt rule "silently overrules the first
       // everywhere the first would have said yes". That was measured with a segment
