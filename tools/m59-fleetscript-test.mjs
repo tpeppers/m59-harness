@@ -655,6 +655,73 @@ console.log('\nvault before sell, checked before anything walks');
   ok('and holds a weapon and a spare back', call.max_weapons === 2);
 }
 
+console.log('\nA PLAN THAT BUYS SOMETHING AND THEN SELLS IT IS A ROUND TRIP TO NOWHERE');
+{
+  // GUARANTEE 16. Measured 2026-09-11: eighty-five sapphires were bought at Herbutte's
+  // counter in Barloque to keep four bless casters supplied, and the fleet's sell circuit
+  // sold them back — eighteen to the SAME MERCHANT, ninety minutes later, in the same room.
+  // Both steps report success and the purse goes UP, so the only evidence is a caster that
+  // quietly stops casting an hour later.
+  const buy = (m, n) => ({ do: 'shop', seller: 'Herbutte', lines: [{ match: m, amount: n }] });
+  // Herbutte's actual shelf, so a plan that reaches the counter finds what it asked for —
+  // otherwise every case here fails at the shop step for a reason that is not the guarantee.
+  const GEMS = [{ id: 41, name: 'sapphire' }, { id: 42, name: 'mushroom' }, { id: 43, name: 'emerald' }];
+  // THE QUESTION IS WHETHER THE GUARANTEE FIRED, not whether the errand succeeded. The fake
+  // counter completes the handshake and hands nothing over, so every plan that reaches it
+  // fails at the shop step — which is a different refusal, from a different guarantee, and
+  // asserting `ok === true` would test the fixture rather than the check.
+  const refusedByGuarantee = (r) => /sells what step/.test(r.results.a1.why ?? '');
+
+  // MUSHROOM IS THE ONE THAT BITES, and the hole is in the committed floor rather than in
+  // any one script: it is not in VAULT_KEEP at all, so a plan that buys mushrooms and sells
+  // afterwards sheds them by default. Deliberately NOT fixed by adding it to VAULT_KEEP — a
+  // bare `mushroom` entry holds all five of this world's mushrooms, and the coloured ones are
+  // ordinary sell fodder characters loot by the dozen. The script says what it needs instead.
+  ok('mushroom really is absent from the standing floor — this is the hole, not a straw man',
+     !VAULT_KEEP.includes('mushroom'));
+
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  let r = await fleetScript({ name: 'sells what it bought', fleet: 'testfleet', agents: ['a1'],
+    steps: [buy(/^mushroom$/i, 40), sell('Joguer', { noVault: true })], onLog: quiet });
+  ok('a plan that buys mushrooms and then sells is REFUSED', r.results.a1.ok === false);
+  ok('and it names both steps rather than just complaining',
+     /step 1 sells what step 0 bought/.test(r.results.a1.why ?? ''), r.results.a1.why);
+  ok('and it refuses BEFORE anything walks',
+     r.results.a1.at === 1 && r.results.a1.step === 'sell');
+
+  // The test is the KEEP LIST, not the word: sapphire is already on the standing floor, so
+  // the same shape is fine. The two must be able to disagree or the check is just a grep.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'buys something protected', fleet: 'testfleet', agents: ['a1'],
+    steps: [buy(/^sapphire$/i, 40), sell('Joguer', { noVault: true })], onLog: quiet });
+  ok('buying something the standing floor already protects is allowed', !refusedByGuarantee(r),
+     JSON.stringify(r.results.a1).slice(0, 160));
+
+  // And a script may say what it needs.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'says what it needs', fleet: 'testfleet', agents: ['a1'],
+    steps: [buy(/^mushroom$/i, 40), sell('Joguer', { keep: ['mushroom'], noVault: true })],
+    onLog: quiet });
+  ok('naming it on the sell step lifts the refusal', !refusedByGuarantee(r),
+     JSON.stringify(r.results.a1).slice(0, 160));
+
+  // Order matters: selling and THEN buying is a supply run, which is the normal shape.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'sell then buy', fleet: 'testfleet', agents: ['a1'],
+    steps: [sell('Joguer', { noVault: true }), buy(/^mushroom$/i, 40)], onLog: quiet });
+  ok('selling first and buying after is the ordinary supply run, not a round trip',
+     !refusedByGuarantee(r), JSON.stringify(r.results.a1).slice(0, 160));
+
+  // AND IT IS WAIVABLE, because some errands really do buy to resell.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'trader', fleet: 'testfleet', agents: ['a1'],
+    unsafe: { reason: 'buying low and selling high is the whole errand',
+              waives: ['buyThenSell'] },
+    steps: [buy(/^mushroom$/i, 40), sell('Joguer', { noVault: true })], onLog: quiet });
+  ok('and a deliberate trader can waive it', !refusedByGuarantee(r),
+     JSON.stringify(r.results.a1).slice(0, 160));
+}
+
 {
   // NOT EVERY TRIP CAN VAULT — the vaults are in Barloque and Ko'catan only, so a Tos errand
   // physically cannot, and that is a fine thing to do. What is not fine is doing it by

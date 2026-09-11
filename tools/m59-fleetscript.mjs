@@ -887,6 +887,18 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'but only AFTER the lock is taken and the other characters have started ' +
               'walking. Refused here instead, before anything moves',
   },
+  buyThenSell: {
+    what: 'refusal to run a plan that BUYS something and then SELLS the same thing, because ' +
+          'the sell step\'s keep list does not cover what the shop step fetched',
+    since: '2026-09-11',
+    incident: 'eighty-five sapphires were bought at Herbutte\'s counter in Barloque to keep ' +
+              'four bless casters supplied, and the fleet\'s sell circuit sold them back — ' +
+              'eighteen of them to the same merchant, ninety minutes later, in the same room. ' +
+              'bless costs 2 mushroom + 2 sapphire and `mushroom` is not in VAULT_KEEP at all, ' +
+              'so a plan that buys mushrooms and sells afterwards sheds them by default. From ' +
+              'outside this is invisible: both steps report success, the purse goes up, and ' +
+              'the only evidence is a caster that quietly stops casting an hour later',
+  },
   trapCheck: {
     what: 'refusal to walk into — or THROUGH — a room KNOWN_TRAPS says keeps characters',
     since: '2026-09-03',
@@ -3212,6 +3224,51 @@ They are driven by tools/m59-menagerie.mjs and ` +
         ctx.log(agent, `plan refused: ${why}`);
         results[agent] = { ok: false, at: unacknowledged, step: 'sell', why, state: state.results };
         return;
+      }
+
+      // AND A PLAN THAT BUYS SOMETHING AND THEN SELLS IT IS A ROUND TRIP TO NOWHERE.
+      //
+      // GUARANTEE 16. Measured 2026-09-11: eighty-five sapphires were bought at Herbutte's
+      // counter in Barloque to keep four bless casters supplied, and the sell circuit sold
+      // them back — eighteen to the SAME MERCHANT, ninety minutes later, in the same room.
+      // From outside it is invisible: the shop step reports success, the sell step reports
+      // success, the purse goes UP, and the only evidence is a caster that quietly stops
+      // casting an hour later.
+      //
+      // The test is not "did somebody write the same word twice" — it is whether the sell
+      // step's EFFECTIVE keep list covers what the shop step fetched. That list is
+      // `VAULT_KEEP` merged with the step's own `keep`, and the hole this found is in the
+      // committed floor rather than in any one script: `mushroom` is not in VAULT_KEEP, so
+      // every plan that buys mushrooms and sells afterwards sheds them by default. Sapphire
+      // IS in it, which is why this refuses on the merged list rather than on VAULT_KEEP
+      // alone — the two must be able to disagree.
+      //
+      // A shop line carries a RegExp rather than a name, so the question is asked the only
+      // way it can be: does any name on the keep list satisfy the pattern that was bought.
+      if (!waived.has('buyThenSell')) {
+        const bought = [];
+        let clash = null;
+        for (const [i, step] of plan.entries()) {
+          if (step.do === 'shop') {
+            for (const line of step.lines ?? [])
+              if (line?.match instanceof RegExp) bought.push({ at: i, match: line.match });
+            continue;
+          }
+          if (step.do !== 'sell' || !bought.length) continue;
+          const keep = [...new Set([...VAULT_KEEP, ...(step.keep ?? [])])];
+          const unprotected = bought.find(b => !keep.some(k => b.match.test(String(k))));
+          if (unprotected) { clash = { buy: unprotected, sell: i, keep }; break; }
+        }
+        if (clash) {
+          const why = `step ${clash.sell} sells what step ${clash.buy.at} bought: nothing on ` +
+                      `that sell's keep list matches ${String(clash.buy.match)}, so the errand ` +
+                      'would hand back the goods it crossed the world for. Add the item to ' +
+                      "sell(merchant, { keep: [...] }), or waive `buyThenSell` if selling it " +
+                      'is the point';
+          ctx.log(agent, `plan refused: ${why}`);
+          results[agent] = { ok: false, at: clash.sell, step: 'sell', why, state: state.results };
+          return;
+        }
       }
 
       // THE PLAN RUNS IN LEGS, AND AN ABANDONED ERRAND STILL COMES HOME.
