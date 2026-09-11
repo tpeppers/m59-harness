@@ -15,7 +15,7 @@
 //   * `#height` is found even though the animation argument sits between it and `#sector`.
 
 import { sectorsInSource, groupsInSource, gatesMovement, headroomRisk,
-         parseRoomIds, claimedRoomId,
+         parseRoomIds, claimedRoomId, gateRisk,
          MAX_STEP_HEIGHT, PLAYER_HEIGHT } from './m59-varsectors.mjs';
 
 let pass = 0, fail = 0;
@@ -244,6 +244,40 @@ console.log('\nA ROOM WE CANNOT NUMBER IS A ROOM WITH NO DOORS, AND THAT IS INVI
   ok('a room that claims nothing is still null', claimedRoomId('no room number here') === null);
   ok('and an unknown id resolves to nothing rather than a wrong room',
      ids.get(claimedRoomId('piRoom_num = RID_nosuchroom')) === undefined);
+}
+
+
+console.log('\ngateRisk asks how far a floor TRAVELS, in one unit, which is the answerable question');
+{
+  // `#height=` is in KOD units; MAX_STEP_HEIGHT is in CLIENT units, sixteen times larger.
+  // gatesMovement compares them directly and is kept only because fixing the unit in place
+  // would unflag every door in the world — see the note above it.
+  ok('a floor that moves less than one step is never a gate',
+     gateRisk([24, 40]) === false,
+     '16 kod is 256 client, inside the 384 step');
+  ok('a floor that moves exactly one step is not a gate either',
+     gateRisk([24, 48]) === false, '24 kod is exactly 384 client, and the cap is inclusive');
+  ok('a floor that moves further than a step is a QUESTION for the bake',
+     gateRisk([24, 56]) === true, '32 kod is 512 client');
+  ok('room 27 sector 1 travels over four steps', gateRisk([24, 128]) === true);
+  ok('and room 589 QOR_DOOR travels 960 client units', gateRisk([290, 350]) === true);
+  ok('a ceiling is still not judged here', gateRisk([24, 500], 'ceiling') === false,
+     'a ceiling gates on headroom, which needs the floor beneath it — headroomRisk');
+  ok('one height is not a movement', gateRisk([24]) === false);
+  ok('and three heights use the extremes', gateRisk([100, 104, 200]) === true);
+
+  // THE UNIT BUG, PINNED AS THE THING IT IS. Every currently-flagged sector sits in the
+  // narrow band where a KOD height happens to straddle 384 when misread as CLIENT units.
+  ok('gatesMovement fires on the Duke\'s feast hall', gatesMovement([356, 420]) === true);
+  ok('and gateRisk agrees that one is worth baking', gateRisk([356, 420]) === true,
+     'the old test gets this right, for the wrong reason');
+  ok('BUT gatesMovement IS BLIND TO ROOM 27, WHICH MOVES A FLOOR 1664 CLIENT UNITS',
+     gatesMovement([24, 128]) === false && gateRisk([24, 128]) === true,
+     'this is the illusion staircase, and nothing downstream ever asked about it');
+  ok('and blind to the Qor door at 960',
+     gatesMovement([290, 350]) === false && gateRisk([290, 350]) === true);
+  ok('everything gatesMovement flags, gateRisk flags too — it is a strict superset',
+     [[356, 420], [340, 440], [120, 464]].every(h => !gatesMovement(h) || gateRisk(h)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
