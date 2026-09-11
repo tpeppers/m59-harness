@@ -139,10 +139,45 @@ Git attributes everything on this machine to one author, and the interesting sta
 own transcripts for the `Edit` call that wrote it and matching the timestamp against
 `ListAgents`. Two sessions — including this one — guessed first and guessed wrong.
 
-* **Commits** should carry a `Claude-Session:` trailer. That is attribution for anything in git.
+* **Commits** should carry a `Claude-Session:` trailer. That already works: **39 of the last 40
+  commits carry one**, so for anything in git the answer is usually written down already.
 * **Machine-local order files** should carry an `_owner` field. `doctrines/local/*.jsonc` already
-  carries a `_` field for its own explanation, so the shape exists; there is nowhere else for the
-  answer to live.
+  carries a `_` field for its own explanation, so the shape exists.
+
+**And there is a tool, because neither of the above reaches everything:**
+
+```bash
+node tools/m59-whowrote.mjs doctrines/local/prod-weaponcraft-training.jsonc
+node tools/m59-whowrote.mjs --term "SELL_KEEP" --since 6h
+```
+
+It answers in two halves. The git half reads the `Claude-Session:` trailer off the commits that
+touched a path. The disk half searches the transcripts both agent systems leave behind —
+`~/.claude/projects/<slug>/*.jsonl` and `~/.codex/sessions/**` — because a transcript that
+mentions a path is a session that touched it. That is the method a peer used by hand to settle
+the doctrine's ownership; the tool only makes it repeatable.
+
+**It is the only thing here that can see Codex.** Asked about `tools/m59-tactical-job.mjs`, git
+reports the commit with **NO SESSION TRAILER** — Codex does not write them — while the disk half
+reports **2,293 mentions in a Codex rollout** against 2 to 37 in the Claude sessions that merely
+discussed it. The mention count is what separates an author from a bystander, and it is the
+difference between "somebody was told about this" and "somebody wrote this".
+
+**It prints metadata and never content, deliberately.** These transcripts carry whatever passed
+through a session, which on this machine includes `substrate/fleets/prod.json` — the only copy of
+twenty-three account passwords, with no reset and no email on the account. A tool that echoed
+matching lines would be a credential dump wearing a helpful name.
+
+**Recency is a reachability hint, not an answer.** A `claude` row minutes old is worth a
+`SendMessage` — ask `ListAgents` for the name, which is the only authority on who is live. A
+`codex` row cannot be messaged at all: read the transcript, or expect that work to keep arriving
+unannounced.
+
+Its own first version is the warning attached to it. It derived the project slug from
+`basename(REPO)`, which from a worktree is the *worktree's* name — so it found the Codex sessions,
+reported **zero** Claude ones for a file six Claude transcripts mention, and looked entirely
+healthy doing it. The repository's name now comes from `--git-common-dir`. An attribution tool
+that is confidently wrong is worse than no tool, because its answer gets acted on.
 
 ---
 
