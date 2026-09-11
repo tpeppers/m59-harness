@@ -645,9 +645,27 @@ from a misaddressed-order diagnostic sitting UNCOMMITTED in prod-deploy's
 x/y call, and treated adjacency as cause. The test that settles it holds the keeper pid
 constant across all three calls; the broker went deaf while I was running it, so it is open.
 
-What survives, reproduced eight times with and without `fine`, `hold_shelf` and `stride`:
-**`walk_to` with x/y never returns, while col/row on the same keeper takes 29 real steps.**
-That is the defect. Whether it also damages the keeper is unproven.
+**AND "NEVER RETURNS" IS ITSELF WRONG — CORRECTED 2026-09-11 ON A HEALTHY BROKER.** Re-run with
+the keeper pid held constant across three calls (29356 throughout), one x/y call came back in
+**55 seconds** with a real result, a position and a step log: `{ arrived:false, reason:"ran out
+of steps", position:{col:14,row:18} }`. It is not hanging. Measured across the whole session:
+
+| | observed durations |
+|---|---|
+| `walk_to` col/row | 4s, 8s, 12s, 30s, 48s |
+| `walk_to` x/y | **55s, 60s+, 63s, 66s, 67s, 72s** |
+
+So the fine path is **an order of magnitude slower than the square path and straddles the
+broker's own 60-second RPC cap** — the one call under the line returned, every call over it was
+cut off and reported as a timeout. That is why it looked like a hang, and why it looked
+intermittent.
+
+Which changes what the fix is. Nothing is deadlocked; the fine walk is simply too slow to
+survive its own transport. And it changes what the rail costs: at ~60s a waypoint, badlands'
+650 waypoints plus the canyon's 163 is over thirteen hours of wall clock, so **the rail cannot
+be driven through this interface at this speed** even when every call succeeds. Making the fine
+walk fast, or raising the cap, is the thing standing between a computed route and a melded
+stone.
 
 **And it did NOT wedge the prod broker, which I had wondered aloud about.** Cleared by two
 independent measurements: that broker's first MCP read of the session returned a 119-second-stale
