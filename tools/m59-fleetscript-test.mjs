@@ -32,7 +32,7 @@ const KEEPER_PORT = 19900;
 
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk, walkTo, crawlTo, crawlChoice, healthFractionOf, rest,
-        shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
+        shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza, say,
         foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf } =
   await import('./m59-fleetscript.mjs');
 
@@ -81,8 +81,15 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // no error, which is what fourteen guild verbs look like when the
                       // caller lacks the bit (user.kod:4848).
                       guildReply = null,
+                      // WHO ELSE IS STANDING IN THE ROOM, so a `say` aimed at an NPC has
+                      // something to measure a distance to. `onSay` is handed {agent, text,
+                      // heardBy} and returns the lines that come back — so a case can model
+                      // the thing that matters here: speech that is DISCARDED sends nothing,
+                      // and looks exactly like an NPC with no answer.
+                      npcs = [], onSay = null,
                       healthState = undefined } = {}) {
-  const sent = [], rested = [];
+  const sent = [], rested = [], saidLines = [];
+  const chatLog = [];
   globalThis.fetch = async (_url, opts) => {
     // GUARANTEE 11 asks the broker which roster it is holding, before anything else. A
     // fleetScript run that could not answer that question refuses, so the fake has to be a
@@ -133,6 +140,30 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       }
       payload = { arrived: walkLands };
     }
+    else if (name === 'look') {
+      const at = positions[agent] ?? { col: 0, row: 0 };
+      payload = { room: { num: rooms[agent] ?? 39, name: 'room' },
+                  you: { col: at.col, row: at.row },
+                  objects: npcs.map(n => ({ id: n.id ?? 1, name: n.name, col: n.col, row: n.row,
+                                            is_player: false })) };
+    }
+    else if (name === 'say') {
+      saidLines.push({ agent, text: a.text });
+      // The echo is ALWAYS produced, heard or not — that is the trap the step exists for.
+      chatLog.push({ agent, seq: chatLog.length + 1, name: agent, self: true,
+                     text: `You say, "${a.text}"` });
+      const at = positions[agent] ?? { col: 0, row: 0 };
+      const heardBy = npcs.filter(n =>
+        ((at.col - n.col) ** 2 + (at.row - n.row) ** 2) <= 50);
+      for (const line of (onSay?.({ agent, text: a.text, heardBy }) ?? []))
+        chatLog.push({ agent, seq: chatLog.length + 1, name: line.name, self: false,
+                       text: line.text });
+      payload = { spoken: a.text };
+    }
+    else if (name === 'chat') {
+      payload = { seq: { [agent]: chatLog.length },
+                  messages: chatLog.filter(m => m.agent === agent) };
+    }
     else if (name === 'rest_up') { rested.push(agent); onRestUp?.({ agent }); payload = { ok: true }; }
     else if (name === 'short_hop') {
       const before = { ...(positions[agent] ?? {}) };
@@ -159,6 +190,7 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
     return { json: async () => ({ result: { content: [{ text: JSON.stringify(payload) }] } }) };
   };
   sent.rested = rested;
+  sent.said = saidLines;
   return sent;
 }
 const quiet = () => {};
@@ -1591,6 +1623,84 @@ console.log('\ncrawl_to refuses honestly when there is no keeper to ask');
      /movecheck|short_hop/.test(r.results.a1.why ?? ''), String(r.results.a1.why));
 }
 
+
+// SPEECH TO AN NPC IS RANGE-LIMITED, AND BEING OUT OF RANGE IS SILENT.
+//
+// SayRangeCheck (holder.kod:604) DISCARDS a user's speech to a monster that is not
+// IsFullTalk when the SQUARED distance exceeds SAY_RADIUS 50 (blakston.khd:1299) — about
+// seven squares. Nothing comes back when it is dropped, so an unheard question and an NPC
+// with no answer are the same event from here.
+//
+// That is not hypothetical: the guild rent balance was recorded as unreadable for a month
+// (credit_after null on all eleven tithes from 2026-08-12) because the asker was standing
+// across the hall. Measured 2026-09-11 — squared 148 against a limit of 50.
+{
+  const trip = (steps, name) => fleetScript({ name, fleet: 'testfleet', agents: ['a1'],
+    steps, pollMs: 30, healMs: 400, onLog: quiet });
+  const frular = [{ id: 36, name: 'Frular', col: 7, row: 5 }];
+  const answers = ({ heardBy, text }) =>
+    (heardBy.length && text === 'rent')
+      ? [{ name: 'Frular', text: 'Frular tells you, "The Second Swines has a positive balance of 13440."' }]
+      : [];
+
+  // The exact 2026-09-11 stance: squared 148, far out of earshot.
+  let sent = fakeBroker({ rooms: { a1: 700 }, npcs: frular, onSay: answers,
+                          positions: { a1: { col: 5, row: 17 } },
+                          onWalkTo: ({ agent, col, row, positions }) => { positions[agent] = { col, row }; } });
+  let r = await trip([say('rent', { to: 'Frular' })], 'say-approach');
+  ok('a say aimed at an NPC out of earshot WALKS into range first',
+     r.results.a1.ok === true && sent.filter(x => x.name === 'walk_to').length === 1,
+     JSON.stringify(r.results.a1.state['0:say']));
+  ok('and it is then actually heard and answered',
+     r.results.a1.state['0:say'].outcome === 'answered' &&
+     /positive balance of 13440/.test(JSON.stringify(r.results.a1.state['0:say'].replies)));
+  ok('the reply excludes our own echo, which is not an answer',
+     r.results.a1.state['0:say'].replies.every(x => !/You say/.test(x.text)));
+
+  // A walk that does not land must NOT be followed by speaking anyway.
+  sent = fakeBroker({ rooms: { a1: 700 }, npcs: frular, onSay: answers,
+                      positions: { a1: { col: 5, row: 17 } }, onWalkTo: () => {} });
+  r = await trip([say('rent', { to: 'Frular' })], 'say-blocked');
+  ok('a walk that does not land REFUSES rather than speaking into the void',
+     r.results.a1.ok === false && r.results.a1.state['0:say'].outcome === 'out_of_earshot',
+     JSON.stringify(r.results.a1.state['0:say']));
+  ok('and nothing was said, because an unheard say is indistinguishable from no answer',
+     !sent.said.length);
+  ok('the refusal carries the measurement and the citation',
+     r.results.a1.state['0:say'].squared_distance === 148 &&
+     /holder\.kod:604/.test(r.results.a1.state['0:say'].why));
+
+  // Already close enough: speak, do not walk.
+  sent = fakeBroker({ rooms: { a1: 700 }, npcs: frular, onSay: answers,
+                      positions: { a1: { col: 7, row: 8 } } });
+  r = await trip([say('rent', { to: 'Frular' })], 'say-close');
+  ok('a speaker already in earshot does not move',
+     r.results.a1.ok === true && !sent.filter(x => x.name === 'walk_to').length);
+  ok('and it still gets the answer', r.results.a1.state['0:say'].outcome === 'answered');
+
+  // The NPC is not here at all.
+  sent = fakeBroker({ rooms: { a1: 700 }, npcs: [], positions: { a1: { col: 7, row: 8 } } });
+  r = await trip([say('rent', { to: 'Frular' })], 'say-absent');
+  ok('an absent NPC is named as absent, not spoken past',
+     r.results.a1.ok === false && r.results.a1.state['0:say'].outcome === 'not_here');
+  ok('and again nothing was said', !sent.said.length);
+
+  // SILENCE FROM INSIDE EARSHOT IS A REAL ANSWER, and must be reported as one.
+  sent = fakeBroker({ rooms: { a1: 700 }, npcs: frular, onSay: () => [],
+                      positions: { a1: { col: 7, row: 8 } } });
+  r = await trip([say('rent', { to: 'Frular' })], 'say-silent');
+  ok('no reply from INSIDE earshot succeeds and says the silence is about the NPC',
+     r.results.a1.ok === true && r.results.a1.state['0:say'].outcome === 'no_reply' &&
+     /fact about Frular/.test(r.results.a1.state['0:say'].note),
+     JSON.stringify(r.results.a1.state['0:say']));
+
+  // No addressee: ordinary speech, no range requirement, no walking.
+  sent = fakeBroker({ rooms: { a1: 700 }, npcs: frular, positions: { a1: { col: 5, row: 17 } } });
+  r = await trip([say('hello')], 'say-plain');
+  ok('a say with no addressee has no range requirement and moves nobody',
+     r.results.a1.ok === true && !sent.filter(x => x.name === 'walk_to').length &&
+     sent.said.length === 1);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

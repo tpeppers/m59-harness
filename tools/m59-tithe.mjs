@@ -8,6 +8,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetName } from './m59-fleetpath.mjs';
+import { SAY_RADIUS, squaredDistance, withinSayRange,
+         sayApproachSquare } from './m59-sayrange.mjs';
 
 // WHICH FLEET'S BOOK, ANSWERED ONCE.
 //
@@ -141,17 +143,10 @@ export const purseAmount = c => (c.inventory || [])
 // So paying works from anywhere in the room and reading the balance does not — the money
 // moves, the question vanishes, and the record says the payment succeeded with an unknown
 // balance. Every time.
-export const SAY_RADIUS = 50;          // blakston.khd:1299 — compared against SQUARED distance
-
-export const squaredDistance = (a, b) =>
-  (a == null || b == null || a.col == null || b.col == null) ? null
-    : (a.col - b.col) ** 2 + (a.row - b.row) ** 2;
-
-// Can this speaker be HEARD by that monster? Null positions answer null — unknown, not yes.
-export function withinSayRange(speaker, hearer, radius = SAY_RADIUS) {
-  const d2 = squaredDistance(speaker, hearer);
-  return d2 === null ? null : d2 <= radius;
-}
+// The rule itself lives in m59-sayrange.mjs, because FleetScript's `say` step needs the
+// same one and a game rule with two homes is how one of them goes quietly wrong.
+// Re-exported so existing callers and m59-tithe-test.mjs keep their import.
+export { SAY_RADIUS, squaredDistance, withinSayRange, sayApproachSquare };
 
 async function askRent(s, c) {
   // STAND CLOSE ENOUGH TO BE HEARD FIRST. Without this the say is swallowed by SayRangeCheck

@@ -161,6 +161,8 @@ import { takeAgentLocks } from './m59-runlock.mjs';
 import { declaredControl, controlViolation } from './m59-control-guard.mjs';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
+import { SAY_RADIUS, squaredDistance, withinSayRange,
+         sayApproachSquare } from './m59-sayrange.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
 import { foodValue, allFoodNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
@@ -1017,6 +1019,30 @@ export const leaveRaza = (opts = {}) => ({ do: 'leave_raza', ...opts });
 
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
+
+/**
+ * SAY SOMETHING, AND — WHEN IT IS AIMED AT AN NPC — STAND CLOSE ENOUGH TO BE HEARD FIRST.
+ *
+ *   say('rent', { to: 'Frular' })          walk into earshot, speak, return what came back
+ *   say('hello')                            plain speech, no addressee, no range requirement
+ *   say('rent', { to: 'Frular', approach: false })   refuse rather than move
+ *
+ * SPEECH TO A MONSTER IS RANGE-LIMITED AND THE LIMIT IS SILENT. `SayRangeCheck`
+ * (holder.kod:604) drops a user's speech to a monster that is not `IsFullTalk` when the
+ * SQUARED distance exceeds SAY_RADIUS 50 (blakston.khd:1299) — about seven squares. Nothing
+ * is sent back when it is dropped, so from a script's side an unheard question and an NPC
+ * with no answer are the same event.
+ *
+ * That cost this repository a month of a wrong fact. The guild rent balance was recorded as
+ * unreadable — `credit_after` null on all eleven tithes since 2026-08-12, a guildmaster
+ * asking twice and hearing only his own echo — and the cause was that he was standing across
+ * the hall. Measured 2026-09-11: squared 148 against a limit of 50.
+ *
+ * So a `say` with a `to` is a MOVEMENT step as much as a speech one, and it fails loudly when
+ * it cannot get into earshot rather than returning an empty reply the script would read as an
+ * answer. Mark it `optional: true` if silence is genuinely acceptable.
+ */
+export const say = (text, opts = {}) => ({ do: 'say', text, ...opts });
 
 /**
  * WALK TO A SQUARE INSIDE THE ROOM YOU ARE ALREADY IN, and judge it on the world rather
@@ -2629,6 +2655,81 @@ async function runStep(ctx, agent, step, state) {
                away: chebyshev(end, goal), hops, waited, healed, sidesteps, probed, readdressed,
                ground: lastGround.map(g => `${g.dir}->r${g.row}c${g.col}`),
                why: `${maxSteps} hops and still ${chebyshev(end, goal)} square(s) out` };
+    }
+
+    case 'say': {
+      const text = String(step.text ?? '').trim();
+      if (!text) return { ok: false, why: 'say needs something to say' };
+      const wantHeard = step.to ?? null;
+      const radius = step.radius ?? SAY_RADIUS;
+
+      // WHO IS IN THE ROOM AND WHERE, read fresh. A cached room list is how a script talks to
+      // somebody who left, and the whole point here is a measurement.
+      const seen = async () => {
+        const look = await call('look', { agent }, 30_000).catch(() => null);
+        const me = look?.you ? { col: look.you.col, row: look.you.row } : null;
+        const npc = wantHeard
+          ? (look?.objects ?? []).find(o =>
+              String(o.name ?? '').toLowerCase().includes(String(wantHeard).toLowerCase()))
+          : null;
+        return { look, me, npc };
+      };
+
+      let { me, npc } = await seen();
+      if (wantHeard && !npc)
+        return { ok: false, outcome: 'not_here',
+                 why: `${wantHeard} is not in this room, so nothing said here can reach them` };
+
+      // MOVE INTO EARSHOT. Aimed along the line rather than at the NPC's own square: walking
+      // onto a monster is not a thing, and asking for its square is how a walker shuffles
+      // against it until a stall detector fires.
+      let approached = null;
+      if (npc && withinSayRange(me, npc, radius) === false && step.approach !== false) {
+        const target = sayApproachSquare(me, npc, { leave: step.leave ?? 2 });
+        if (target && !target.already) {
+          ctx.log(agent, `say "${text}": ${wantHeard} is out of earshot ` +
+                         `(squared ${squaredDistance(me, npc)} > ${radius}) — closing to ` +
+                         `r${target.row}c${target.col} first`);
+          approached = await call('walk_to',
+            { agent, col: target.col, row: target.row, arrive_within: step.arriveWithin ?? 3 },
+            step.timeoutMs ?? 120_000).catch(error => ({ error: error.message }));
+          ({ me, npc } = await seen());
+        }
+      }
+
+      // MEASURE AGAIN BEFORE SPEAKING, because the walk may have been refused by geometry and
+      // a walk that reports steps is not a walk that arrived.
+      const heard = npc ? withinSayRange(me, npc, radius) : true;
+      const d2 = npc ? squaredDistance(me, npc) : null;
+      if (heard === false)
+        return { ok: false, outcome: 'out_of_earshot', squared_distance: d2, radius, approached,
+                 why: `still ${d2} squared from ${wantHeard}, past SAY_RADIUS ${radius} — ` +
+                      `SayRangeCheck (holder.kod:604) DISCARDS this speech and sends nothing ` +
+                      `back, so speaking anyway would look exactly like an NPC with no answer` };
+      if (heard === null)
+        return { ok: false, outcome: 'position_unknown', approached,
+                 why: `cannot read both positions, so cannot tell whether ${wantHeard} would ` +
+                      `hear this. Unknown is not close enough` };
+
+      const before = await call('chat', { agent }, 30_000).catch(() => null);
+      const beforeSeq = Number(before?.seq?.[agent] ?? 0);
+      const spoken = await call('say', { agent, text }, 30_000)
+        .catch(error => ({ error: error.message }));
+      await sleep(step.listenMs ?? 3000);
+      const after = await call('chat', { agent }, 30_000).catch(() => null);
+
+      // WHAT CAME BACK IS WHAT SOMEBODY ELSE SAID — never our own echo, which is the thing a
+      // naive reader mistakes for a reply.
+      const replies = (after?.messages ?? [])
+        .filter(m => Number(m.seq ?? 0) > beforeSeq && !m.self)
+        .map(m => ({ name: m.name ?? null, text: String(m.text ?? '') }));
+
+      return { ok: true, outcome: replies.length ? 'answered' : 'no_reply',
+               said: text, to: wantHeard, squared_distance: d2, approached,
+               spoken_ok: !spoken?.error, replies,
+               ...(replies.length ? {} : { note:
+                 `in earshot (squared ${d2} <= ${radius}) and nothing came back — THIS one is ` +
+                 `a fact about ${wantHeard ?? 'the room'}, not about the distance` }) };
     }
 
     case 'verify': {
