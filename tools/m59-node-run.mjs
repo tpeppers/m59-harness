@@ -64,7 +64,8 @@ import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { takeRunLock, inspectRunLock, releaseRunLock,
          exitWhenOutputIsGone } from './m59-runlock.mjs';
 // THE STONES THEMSELVES, from the one tracked table that is checked against the kod.
-import { STONES, objectiveFor, approachWithin } from './m59-stones.mjs';
+import { STONES, objectiveFor, approachWithin, requiredItem,
+         holdsRequired } from './m59-stones.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -146,6 +147,9 @@ const NODES = Object.entries(STONES).map(([key, s]) => ({
   // coarse squares, because the meld is behind something that is not a walk.
   objective: objectiveFor(s), within: approachWithin(s),
   ...(s.gate ? { gate: s.gate } : {}),
+  // A KEY THE RUNNER HAS TO BE CARRYING, and the words that spend it.
+  ...(requiredItem(s) ? { requires: s.requires, say: s.say ?? null,
+                          door_open_ms: s.door_open_ms ?? null } : {}),
   ...(s.alias ? { alias: s.alias } : {}),
 }));
 const byKey = k => NODES.find(n => n.key === k || String(n.room) === String(k) ||
@@ -296,6 +300,11 @@ if (has('list')) {
     else if (n.conditional)
       console.log(`             CONDITIONAL — there is nothing to stand on until it appears`);
     if (n.appears) console.log(`             appears ${n.appears}`);
+    if (n.requires)
+      console.log(`             NEEDS THE ${n.requires.item.toUpperCase()} CARRIED` +
+                  `${n.requires.consumed ? ' (consumed by the door — one opening)' : ''}` +
+                  `${n.say ? `, then say "${n.say}" in the room` : ''}` +
+                  `${n.door_open_ms ? ` — ${Math.round(n.door_open_ms / 1000)}s of open floor` : ''}`);
     if (n.objective === 'approach')
       console.log(`             APPROACH ONLY — success is within ${n.within} coarse squares. ` +
                   `The meld is gated: ${n.gate}`);
@@ -780,7 +789,49 @@ const results = [];
 //   refused     `travel` would not start, and the reason is printed underneath
 //   timed out   the road ran past its budget
 //   rested out  the road ran past its budget and most of it was spent healing
+// DOES THIS BODY CARRY WHAT THE DOOR WANTS? Asked of the live pack, per leg, because it is the
+// only place the answer exists — and asked BEFORE the road, because the point of the skip is
+// not to walk somebody across the world to a door that will not open for them.
+async function carriesKey(r, node) {
+  if (!node.requires) return { ok: true };
+  const inv = await call('inventory', { agent: r.agent }, 40000).catch(() => null);
+  const items = inv?.items ?? inv?.inventory ?? null;
+  if (!Array.isArray(items))
+    return { ok: false, unknown: true,
+             why: `could not read ${r.character}'s pack, so whether the ` +
+                  `${node.requires.item} is in it is unknown` };
+  if (holdsRequired(STONES[node.key] ?? node, items)) return { ok: true };
+  return { ok: false,
+           why: `${r.character} is not carrying the ${node.requires.item}` +
+                `${node.requires.consumed ? ', which the door consumes — one relic, one ' +
+                  'opening, so this is not a walk to make on spec' : ''}` };
+}
+
 async function runLeg(r, node, { from, place, heal, next = null } = {}) {
+  // A LOCKED STONE IS SKIPPED BEFORE THE ROAD, NOT FAILED AFTER IT. Operator, 2026-09-10:
+  // "let's make it 'skip' when we run the node run unless the runner has the item." Asked first,
+  // because the whole value of the skip is not walking a body across the world to a door that
+  // will not open for it — and for Ukgoth the key is CONSUMED, so a speculative trip spends a
+  // one-use relic on a walk that could not have arrived.
+  if (node.requires) {
+    const key = await carriesKey(r, node);
+    if (!key.ok) {
+      const rec = { character: r.character, node: node.key, room: node.room,
+                    ended: key.unknown ? 'key unknown' : 'skipped', roadSecs: 0, apprSecs: 0,
+                    triggerSecs: 0, restSecs: 0, died: false, low: null,
+                    endedIn: null, endedAt: null, skipped_why: key.why, rooms: [], perRoom: {},
+                    ailments: [], activity: [] };
+      results.push(rec);
+      console.log(`  ${String(r.character).padEnd(12)} ${node.key.padEnd(9)} ` +
+                  `${rec.ended.padEnd(11)}    -     -      -  ->    -`.padEnd(40));
+      console.log(`               ${key.why}`);
+      if (node.say)
+        console.log(`               with it: stand in room ${node.room} and say "${node.say}" — ` +
+                    `the floor lifts for ${Math.round((node.door_open_ms ?? 0) / 1000)}s and the ` +
+                    `relic is spent`);
+      return rec;
+    }
+  }
   // BEFORE the first thing that changes them.
   await keepOrders(r.agent);
   // Same starting conditions for every one of them, or the run measures who went first.
@@ -890,6 +941,30 @@ async function runLeg(r, node, { from, place, heal, next = null } = {}) {
   const roadSecs = Math.round((Date.now() - started) / 1000);
   const restSecs = Math.round(restedMs / 1000);
 
+  // ------------------------------------------------- the words, for a door that wants them
+  //
+  // SAID IN THE ROOM, AND ONLY ONCE WE ARE IN IT. `SomeoneSaid` is the room's own handler and
+  // it reads the SPEAKER's pack, so the words are worth nothing said anywhere else — and they
+  // spend the relic, so they are said after arriving rather than hopefully on the way.
+  //
+  // WHAT IS NOT KNOWN HERE, and is the next real question for this stone: where SECTOR_DOOR
+  // actually is in room 599. The floor lifts 440 -> 340 for ten seconds and this run does not
+  // know which squares that opens, so it says the words, records the window, and lets the
+  // ordinary approach try. If it comes up short the FRONTIER line will say where it stopped,
+  // which is the measurement somebody needs before this can be timed properly.
+  let saidWords = null;
+  if (node.say && (ended === 'in room' || ended === 'at node')) {
+    const at = Date.now();
+    const r2 = await call('say', { agent: r.agent, type: 'say', text: node.say }, 20000)
+      .catch(e => ({ error: e?.message ?? String(e) }));
+    saidWords = { text: node.say, at, error: r2?.error ?? null,
+                  window_ms: node.door_open_ms ?? null };
+    console.log(`               said "${node.say}" in room ${node.room}` +
+                `${r2?.error ? ` — the say FAILED: ${r2.error}` : ''}` +
+                `${node.door_open_ms ? `; the floor is open for ` +
+                  `${Math.round(node.door_open_ms / 1000)}s and the relic is spent` : ''}`);
+  }
+
   // ------------------------------------------------- through the trigger, if there is one
   let triggerSecs = 0, triggered = null, triggerWhy = null, triggerMode = null;
   let pos = ended === 'in room' ? await where(r.agent) : null;
@@ -949,6 +1024,7 @@ async function runLeg(r, node, { from, place, heal, next = null } = {}) {
                 roadSecs, apprSecs, triggerSecs, restSecs, died, low,
                 endedIn: pos?.room ?? null, endedAt: pos ? { col: pos.col, row: pos.row } : null,
                 sawNode, approachWhy, triggerWhy, approachMode, triggerMode, closest,
+                ...(saidWords ? { said: saidWords } : {}),
                 rooms: [...rooms], perRoom,
                 ailments: [...ailments], activity };
   results.push(rec);

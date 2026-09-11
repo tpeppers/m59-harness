@@ -135,8 +135,26 @@ export const STONES = Object.freeze({
   // Operator, 2026-09-10: "The Ukgoth nodes and Fey nodes should also be exempt from attempt,
   // because they're not casually obtainable (usually take planning or coordination across
   // multiple people)."
+  // A KEY, A PASSWORD, A TEN-SECOND FLOOR AND A CLOCK. Operator, 2026-09-10: "Ukgoth requires
+  // a 'Relic of Qor' to get it, let's make it 'skip' when we run the node run unless the runner
+  // has the item. If the runner does have the relic they should go at that time and say the
+  // words to open the door." The kod says exactly how (i9.kod SomeoneSaid):
+  //
+  //   i9_qor = "Qor the Vile"                  the words, matched with StringEqual
+  //   for each object in the SPEAKER's pack:      the key must be carried, not in the room
+  //     if IsClass(each_obj,&Scepter)             `relic of Qor` (scepter.kod:19)
+  //        SetSector SECTOR_DOOR ANIMATE_FLOOR_LIFT height=340 speed=16
+  //        CreateTimer(DoorCloseTimer, DOORWAY_DELAY)   10 seconds, then back to 440
+  //        Send(each_obj,@Delete)                 THE RELIC IS CONSUMED
+  //
+  // The relic's own inscription is the errand: "The true servant shall bring this to the barren
+  // place and speak my name." (scepter.kod). One relic opens the floor once, for ten seconds,
+  // and only for whoever is holding it — so a run that sets out without one cannot arrive, and
+  // a run that sets out with one and mistimes the hour has spent it.
   ukgoth:   { room: 599,  node: 'NODE_I9',       row: 27, col: 61,
-              where: 'Ukgoth, Holy Land of Trolls', exempt: 'operator, 2026-09-10',
+              where: 'Ukgoth, Holy Land of Trolls',
+              requires: { item: 'relic of Qor', kod_class: 'Scepter', consumed: true },
+              say: 'Qor the Vile', door_open_ms: 10_000,
               appears: 'only while the game hour is 0 (i9.kod RecalcLightAndWeather) — the room ' +
                        'deletes it for the rest of the day' },
   // AN APPROACH RATHER THAN AN ATTEMPT, on the same ruling as the ice cave: the stone is the
@@ -173,6 +191,30 @@ export const STONES = Object.freeze({
 export function objectiveFor(s) {
   if (!s || s.never || s.exempt || s.conditional) return null;
   return s.objective === 'approach' ? 'approach' : 'meld';
+}
+
+/**
+ * WHAT THIS STONE NEEDS CARRIED, or null. A key is not an exemption: the errand is real and it
+ * is conditional on the pack, which is a question only a live character can answer.
+ *
+ * Ukgoth's relic is CONSUMED by the door, so the difference between "skip" and "try" here is the
+ * difference between keeping a one-use key and burning it on a walk that was never going to
+ * arrive.
+ */
+export const requiredItem = (s) => s?.requires?.item ?? null;
+
+/** Does this pack hold the key? `items` is whatever the inventory tool returned. */
+export function holdsRequired(s, items) {
+  const want = requiredItem(s);
+  if (!want) return true;
+  const names = (Array.isArray(items) ? items : [])
+    .map(i => String(i?.name ?? i?.item ?? i ?? '').toLowerCase());
+  // MATCHED ON THE GAME'S OWN NAME, loosely on case and on the article. The kod tests the
+  // CLASS (&Scepter) and we cannot see a class over the wire, so the name is the best
+  // available proxy — and it is worth saying that out loud rather than implying the check is
+  // as strong as the server's.
+  const w = want.toLowerCase();
+  return names.some(n => n === w || n.includes(w) || n.includes('relic of qor'));
 }
 
 /** Is this a stone anything should be SENT to? */

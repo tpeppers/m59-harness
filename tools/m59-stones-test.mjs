@@ -32,7 +32,8 @@
 //     instrument punishing the fix it exists to prompt.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { STONES, attemptable, objectiveFor, approachWithin, stoneKeyed, stonesInSource,
+import { STONES, attemptable, objectiveFor, approachWithin, requiredItem, holdsRequired,
+         stoneKeyed, stonesInSource,
          nodeEnum, nodeClasses, stones, drift,
          nodesFromRunner, nodesFromFleetscript, KOD_ROOT } from './m59-stones.mjs';
 
@@ -49,12 +50,16 @@ console.log('THE TABLE — thirteen stones, and which of them are errands');
   ok('every one names a room, a node number and a square',
      Object.values(STONES).every(s => Number.isFinite(s.room) && /^NODE_/.test(s.node) &&
                                       Number.isFinite(s.row) && Number.isFinite(s.col)));
-  // The operator's two rulings, and the game's own. A stone that is exempt must never be
-  // ATTEMPTED, and the reason travels with it so nobody re-litigates it at 02:00.
-  ok('Ukgoth is exempt from attempt', !!STONES.ukgoth.exempt);
+  // A RULING THAT WAS SUPERSEDED THE SAME DAY, and the test has to move with it. Ukgoth was
+  // 'exempt from attempt' at 2026-09-10 because the stone is not casually obtainable; the
+  // operator then said HOW it is obtainable: "Ukgoth requires a 'Relic of Qor' to get it, let's
+  // make it 'skip' when we run the node run unless the runner has the item." That is a KEY, not
+  // an exemption — a real errand, conditional on the pack, which only a live character can
+  // answer. So the refusal moved from the table into the leg.
+  ok('Ukgoth is no longer exempt — it is keyed', !STONES.ukgoth.exempt);
+  ok('and it is a meld errand again', objectiveFor(STONES.ukgoth) === 'meld');
   ok('the guest demonstration stone is never attempted', !!STONES.mausoleum.never);
-  ok('and each refusal says who said so',
-     /operator/.test(STONES.ukgoth.exempt) && /design/.test(STONES.mausoleum.never));
+  ok('and that refusal says who said so', /design/.test(STONES.mausoleum.never));
   // THREE ANSWERS, NOT TWO. Operator, 2026-09-10: "the Dreaded Caves of Ice node requires
   // killing the Yeti to get access... so while we can include it in 'the walk', for both the
   // Fey Node and the Yeti Cave, the goal should actually just be to walk to within a few coarse
@@ -71,16 +76,14 @@ console.log('THE TABLE — thirteen stones, and which of them are errands');
   ok('the ice gate cites the kod, not a memory', /icecave1\.kod/.test(STONES.ice.gate ?? ''));
   ok('an approach is looser than the meld box, and says how much',
      approachWithin(STONES.ice) === 5 && approachWithin(STONES.victoria) === 2);
-  // The guest stone is a THIRD thing: not gated, not exempt by ruling — not there for us.
+  // The guest stone is a THIRD thing: not gated, not keyed — not there for us.
   ok('the guest stone has no objective at all', objectiveFor(STONES.mausoleum) === null);
-  ok('and Ukgoth still has none either, on the operator\'s ruling',
-     objectiveFor(STONES.ukgoth) === null);
   ok('the lever and the timed swing are CONDITIONAL, not exempt — a different claim',
      STONES.martyr.conditional === true && STONES.avar.conditional === true &&
      !STONES.martyr.exempt && !STONES.avar.exempt);
   ok('attemptable() refuses every kind that has no objective',
-     !attemptable(STONES.ukgoth) && !attemptable(STONES.mausoleum) &&
-     !attemptable(STONES.martyr) && !attemptable(STONES.avar));
+     !attemptable(STONES.mausoleum) && !attemptable(STONES.martyr) &&
+     !attemptable(STONES.avar));
   ok('and permits an ordinary walk-and-stand stone',
      attemptable(STONES.ice) && attemptable(STONES.victoria) && attemptable(STONES.badlands));
   ok('every stone that is not a plain walk says what makes it appear',
@@ -95,6 +98,38 @@ console.log('THE TABLE — thirteen stones, and which of them are errands');
   ok('an unknown name is null, not a guess', stoneKeyed('nowhere') === null);
   ok('the instanced Mausoleum carries both of its baked rooms',
      JSON.stringify(STONES.mausoleum.rooms) === '[1006,1016]');
+}
+
+console.log('');
+console.log('A KEY IS NOT AN EXEMPTION — the skip belongs in the leg, against a live pack');
+{
+  ok('Ukgoth names the item it needs carried', requiredItem(STONES.ukgoth) === 'relic of Qor');
+  ok('and says the door consumes it, which is why a speculative trip is worse than a skip',
+     STONES.ukgoth.requires.consumed === true);
+  ok('and carries the words, exactly as the kod matches them',
+     STONES.ukgoth.say === 'Qor the Vile');
+  ok('and how long the floor stays open', STONES.ukgoth.door_open_ms === 10000);
+  ok('and the kod class, because the server tests a CLASS and we can only see a name',
+     STONES.ukgoth.requires.kod_class === 'Scepter');
+  ok('an ordinary stone needs nothing carried', requiredItem(STONES.victoria) === null);
+
+  // The pack test. Loose on case and on the article, because the wire gives a display name
+  // and the kod tests `IsClass(each_obj,&Scepter)` — a proxy, and it is worth being honest
+  // that it is weaker than the server's own check.
+  ok('an empty pack does not hold it', holdsRequired(STONES.ukgoth, []) === false);
+  ok('nor does a pack of other things',
+     holdsRequired(STONES.ukgoth, [{ name: 'herb' }, { name: 'shilling' }]) === false);
+  ok('the game\'s own name holds it',
+     holdsRequired(STONES.ukgoth, [{ name: 'relic of Qor' }]) === true);
+  ok('case does not matter',
+     holdsRequired(STONES.ukgoth, [{ name: 'RELIC OF QOR' }]) === true);
+  ok('nor does a longer name that contains it',
+     holdsRequired(STONES.ukgoth, [{ name: 'a battered relic of Qor' }]) === true);
+  ok('a bare string list works too, since inventory shapes vary',
+     holdsRequired(STONES.ukgoth, ['relic of qor']) === true);
+  ok('an unreadable pack is not a false yes', holdsRequired(STONES.ukgoth, null) === false);
+  ok('and a stone with no requirement is satisfied by any pack',
+     holdsRequired(STONES.victoria, []) === true);
 }
 
 console.log('');
