@@ -549,3 +549,19 @@ export function rosterReadOutcome({ guild = null, said = [] } = {}) {
 // Whether a read is worth asking again. Only the non-answer is: a read that returned prose
 // HAS answered, so re-asking it costs a round trip on the path that is already working.
 export const rosterReadWorthRetrying = r => rosterReadOutcome(r) === ROSTER_READ.UNANSWERED;
+
+
+// A HALL IS ADDRESSED BY OBJECT ID ON THE WIRE AND BY ROOM NUMBER EVERYWHERE ELSE.
+//
+// `KNOWN_HALLS` is keyed by ROOM — that is how every document, every map and every person
+// names a guild hall. `UC_GUILD_RENT` resolves its argument as an OBJECT (user.kod:1827),
+// and the list the server pushes is built from the hall objects themselves (user.kod:5776).
+// The two namespaces are both small integers, so a room number sent as a hall id addresses
+// nothing and the server answers `user_no_guildhall_broke` — "come back when you have enough
+// money" — which reads as a purse problem and is not one.
+//
+// Measured 2026-09-11: 33,330 shillings carried across the world for a 25,000 hall, refused
+// at the counter, because 714 is the Bookmaker's ROOM. Object ids are not stable across
+// server saves either, so there is no constant to hard-code — the list is the only source.
+export const looksLikeHallRoomNumber = n =>
+  Number.isInteger(n) && Object.prototype.hasOwnProperty.call(KNOWN_HALLS, n);

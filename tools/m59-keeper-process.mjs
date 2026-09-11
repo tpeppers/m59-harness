@@ -2426,6 +2426,27 @@ const server = createServer(async (req, res) => {
           // `Debug(...)` in the SERVER log (user.kod:4848). So `said` is the entire
           // diagnosis and is always returned, and a caller must never read "no error" as
           // "it worked". `guild` comes back so the broker can populate `c.guild`.
+          //
+          // THE HALL LIST IS NOT A REQUEST — IT IS A HOOK ON A SHOPPING REQUEST, and that is
+          // why the `halls` op below sends `askFrular` rather than asking for a list.
+          //
+          // There is no UC_GUILD_HALLS to send: merintr.c lists it incoming and NOT in
+          // user_msg_table, and user.kod has no branch for it, so asking reaches "got unknown
+          // UserCommand". What produces the dialog is GuildCreator.GetForSale, whose own
+          // docstring calls itself hacky — "UserBuy() aborts if it gets $ returned from here,
+          // so we can use it as a hook" (gcreator.kod:250). `askFrular` is exactly that `buy`.
+          //
+          // That op did not exist, and its absence made buying a guild hall impossible
+          // fleet-wide: every character here is keeper-backed, the broker's emulated client
+          // has no `askFrular`, and `guild action=halls` died with `c.askFrular is not a
+          // function` — while `rent_hall` fell back to treating whatever number it was handed
+          // as a hall id. On 2026-09-11 that took Gonzo across the world with 33,330
+          // shillings to be refused at the counter as though he were broke.
+          //
+          // AND THE IDS IN THAT LIST ARE OBJECT IDS, NOT ROOM NUMBERS. user.kod:5776 sends
+          // `AddPacket(4, i, ...)` where `i` is the hall OBJECT, and it omits every hall whose
+          // GetPurchaseValue is -1 — so the list is the only source of both the id and of
+          // whether this character may rent it at all.
           case 'guild': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }
@@ -2457,6 +2478,18 @@ const server = createServer(async (req, res) => {
                 case 'set_rank':    await send(() => c.guildSetRank(id(), Number(args.rank))); break;
                 case 'rent_hall':   await send(() => c.guildRentHall(Number(args.hall_id),
                                                                     String(args.password ?? ''))); break;
+
+                // A hook on a SHOPPING request, not a request. See above `case 'guild':`.
+                case 'halls': {
+                  const frularId = Number(args.frular_id);
+                  if (!Number.isFinite(frularId) || frularId <= 0) {
+                    json({ error: 'halls needs frular_id: the GuildCreator in this room' }, 400);
+                    return;
+                  }
+                  await send(() => c.askFrular(frularId));
+                  break;
+                }
+
                 default: json({ error: `unknown guild op: ${op}` }, 400); return;
               }
             } catch (e) { json({ error: String(e?.message || e), op }, 500); return; }
@@ -2468,6 +2501,10 @@ const server = createServer(async (req, res) => {
               // UserGuildSendInfo (user.kod:1974) sends `user_no_guild` as prose and no
               // packet at all, so null-with-a-message is the guildless case.
               guild: c.guild ?? null,
+              // The hall list the client parsed, so the broker side can hold one too. Sent on
+              // every guild op rather than only on `halls`, for the same reason `guild` is:
+              // the caller that needs it is not always the caller that asked for it.
+              guild_halls: c.guildHalls ?? null,
               guild_list: (events ?? []).find(e => e.kind === 'guild_list')?.guilds ?? null,
               said: (events ?? []).map(e => e.text).filter(Boolean),
               timed_out: !!timedOut,

@@ -39,7 +39,8 @@ import {
 } from './m59-guild.mjs';
 import { parseGuildInfo, parseGuildAsk, parseGuildList, parseGuildHalls } from './m59-parse.mjs';
 import { isObjectId, sessionObjectId, ourSessionsById } from './m59-session-identity.mjs';
-import { ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying } from './m59-guild.mjs';
+import { ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying,
+         looksLikeHallRoomNumber } from './m59-guild.mjs';
 import * as tithe from './m59-tithe.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -612,6 +613,27 @@ console.log('\nwhat a roster read said, including when it said nothing');
   ok('ONLY the non-answer is worth asking again', rosterReadWorthRetrying(silence));
   ok('a guildless answer is an ANSWER and is not re-asked', !rosterReadWorthRetrying(prose));
   ok('and neither is a roster we already have',   !rosterReadWorthRetrying(packet));
+}
+
+// A HALL ID AND A HALL ROOM ARE DIFFERENT NAMESPACES OF SMALL INTEGERS.
+//
+// The wire addresses a hall as an OBJECT (user.kod:1827) and the pushed list is built from
+// hall objects (user.kod:5776), while KNOWN_HALLS — and every human — names halls by ROOM.
+// Sending the room number is answered "come back when you have enough money", which reads as
+// a purse problem and is not one. Measured 2026-09-11 at a cost of one world crossing with
+// 33,330 shillings in hand for a 25,000 hall.
+console.log('\na hall room number is not a hall id');
+{
+  ok('KNOWN_HALLS is keyed by ROOM number',
+     Object.entries(KNOWN_HALLS).every(([k, h]) => Number(k) === h.room));
+  ok('714 is the Bookmaker\'s ROOM and is caught', looksLikeHallRoomNumber(714));
+  ok('the Bookmaker\'s costs 25,000', KNOWN_HALLS[714].purchase === 25_000);
+  ok('and its rent is its OWN doubling, 12,000 a day not 6,000',
+     KNOWN_HALLS[714].rent_daily === 12_000 && KNOWN_HALLS[714].rent_hourly === 500);
+  ok('a plausible object id is NOT flagged', !looksLikeHallRoomNumber(8249));
+  ok('a non-integer is not flagged',        !looksLikeHallRoomNumber(714.5));
+  ok('null is not flagged',                 !looksLikeHallRoomNumber(null));
+  ok('and neither is a name',               !looksLikeHallRoomNumber('Bookmaker'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

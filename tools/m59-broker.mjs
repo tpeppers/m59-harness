@@ -126,6 +126,7 @@ import { TitheBook, guildRentStatus, payGuildTithe, titheFleet } from './m59-tit
 import { RANK, RANK_NAME, COMMANDS, mayI, commandsIn, validateGuild,
          DEFAULT_RANK_TITLES, maturityWait, inductionPlan, INVITATION_MS,
          WAR_LOSS_PENALTY, MINIMUM_MEMBERS, FRULAR_ROOM, FRULAR_NAME, KNOWN_HALLS,
+         looksLikeHallRoomNumber,
          parseRentLine, parseRentHours, fundingPlan, rankRoom, RANK_QUOTA,
          SELF_SUSTAINING_RANK, CANNOT_REJOIN_MINUTES,
          ROSTER_READ, rosterReadOutcome, rosterReadWorthRetrying } from './m59-guild.mjs';
@@ -2028,6 +2029,15 @@ class KeeperProxy {
       guildSetRank: (id, rank) => proxy._guildAct('set_rank', { id, rank }),
       guildRentHall: (hallId, password = '') =>
         proxy._guildAct('rent_hall', { hall_id: hallId, password }),
+      // THE ONE GUILD VERB THAT IS A SHOPPING REQUEST. `askFrular` is a `buy` aimed at the
+      // GuildCreator, because the hall list is pushed by GetForSale as a hook on UserBuy
+      // (gcreator.kod:250) and there is no request that asks for it directly. It was missing
+      // here entirely, so `guild action=halls` answered `c.askFrular is not a function` on
+      // every character this fleet has, and a guild hall could not be bought at all.
+      askFrular: (frularId) => proxy._guildAct('halls', { frular_id: frularId }),
+      // The hall list the last round trip returned, same store-on-the-proxy reason as the
+      // roster: it has to outlive this per-read client literal.
+      get guildHalls() { return proxy._guildHalls ?? null; },
       // The roster the last round trip returned. NOT a cache with a TTL: a rank change by
       // somebody else is invisible until asked for, and acting on a stale bitmask is the
       // exact failure the guild tool exists to prevent.
@@ -2669,6 +2679,10 @@ class KeeperProxy {
   async _guildAct(op, args = {}) {
     const r = await keeperAction(this.name, this._index, 'guild', { op, ...args });
     if (r && !r.error && 'guild' in r) this._guild = r.guild;
+    // ONLY OVERWRITE WITH AN ANSWER. Every guild op carries `guild_halls`, and most of them
+    // carry it as null because nothing asked Frular — storing that would erase a list the
+    // caller just fetched, one unrelated roster read later.
+    if (r && !r.error && r.guild_halls) this._guildHalls = r.guild_halls;
     return r;
   }
   // The 17 public forwards used to sit HERE, on the session, where `c` never looks. They
@@ -13041,6 +13055,31 @@ const TOOLS = [
           //
           // Resolving by NAME still needs the list, because the name only exists there.
           const byId = /^\d+$/.test(wanted) ? Number(wanted) : null;
+
+          // A ROOM NUMBER IS NOT A HALL ID, AND THE TWO LOOK IDENTICAL ON A COMMAND LINE.
+          //
+          // UC_GUILD_RENT resolves argument 2 as an OBJECT (user.kod:1827), and the list the
+          // server sends is built from the hall objects themselves (user.kod:5776). Room
+          // numbers are the other namespace — the one KNOWN_HALLS is keyed by, the one every
+          // document calls a hall by, and the one a person will type. Handing a room number
+          // over the wire addresses either nothing or something else, and the server's answer
+          // is `user_no_guildhall_broke`: "come back when you have enough money". It reads as
+          // a purse problem and is not one.
+          //
+          // Measured 2026-09-11: Gonzo carried 33,330 shillings — more than the 25,000 the
+          // hall costs — across the world to Frular and was told he was too poor, because
+          // `714` was the Bookmaker's ROOM. Nothing was spent (the cost is subtracted only
+          // when ClaimGuildHall returns TRUE), so it cost a crossing rather than the money.
+          if (looksLikeHallRoomNumber(byId))
+            return { ok: false, reason:
+              `${byId} is the ROOM NUMBER of ${KNOWN_HALLS[byId].name}, not a hall id`,
+              room: byId, hall: KNOWN_HALLS[byId],
+              note: 'UC_GUILD_RENT addresses the hall as an OBJECT (user.kod:1827) and object ' +
+                    'ids are not room numbers and are not stable across server saves. Ask ' +
+                    'Frular for the list — `guild action=halls`, standing in room ' +
+                    `${FRULAR_ROOM} — and pass the id it gives, or pass the NAME and let this ` +
+                    'resolve it. Sending the room number is answered with ' +
+                    '"come back when you have enough money", which is not a purse problem.' };
           if (byId === null && !c.guildHalls) {
             const frular = [...(c.room?.objects?.values() ?? [])]
               .find(o => (c.rsc.get(o.nameRsc) || '') === FRULAR_NAME);
