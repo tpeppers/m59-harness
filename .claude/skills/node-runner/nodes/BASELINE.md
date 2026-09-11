@@ -696,3 +696,36 @@ So the badlands stone is now blocked on a **third** thing, and it is ours rather
 world's: the terrain permits the walk, the collision layer permits the walk, we have the line —
 and the one tool that can follow a line does not come back. That is the next thing to fix, and
 it is a keeper-side bug rather than a movement one.
+
+
+## Postscript 2: the rail DRIVES, and it ends at "right square, wrong shelf"
+
+The follower works. Marco Polo was driven from Tos, through Kardde's Canyon, to **one square
+from the Badlands entrance** at full health — **19 legs, 0 refusals**, waypoint 25 to 153 of
+163. Two things had to be fixed to get that far and both are worth keeping:
+
+- **A timeout is not a failure here.** The broker aborts a fine walk at 60s (`keeperAction`'s
+  default, which the fine path never asked to raise) but the abort is BROKER-side: the keeper
+  walks on and the body arrives. Three legs that all reported `timed_out_after_ms: 60000` moved
+  him eleven squares. **The position is the receipt.**
+- **An open-loop follower is not a follower.** The first version advanced the waypoint index
+  blindly; it drove all 163 canyon waypoints with 0 refusals and left the body at r16c15
+  instead of the exit at r27c20, having wandered NEAR the line the whole way. Re-localising to
+  the nearest waypoint before every leg is what turned that into real progress.
+
+### Where it stops, and it is a defect this repository already has on record
+
+`r25c17` holds **FOUR floors: 3840, 6016, 6144 and 6400.** The rail crosses it at 6016
+(waypoint 153, client 16928,24608) and the body is standing on the **3840** shelf — same
+square, 2176 units below, with every remaining waypoint on the rim above it. Ten waypoints
+walked one at a time at `arrive_within: 4` moved him between r25c17 and r26c17 and no further.
+
+`walk_to` reports position BY SQUARE, so `r25c17` reads as arrival while the body is on a
+shelf the route never uses. That is the same failure the fine-climb work hit on 2026-09-03 —
+*"walkFine reaches the right square and the wrong shelf inside it; a smaller stride does not
+change it. THAT is the next thing."* It is still the next thing, and it is now the single
+defect between a computed, verified, drivable rail and a melded stone.
+
+**What would close it:** the follower needs to aim at a fine point AND verify it landed on the
+right FLOOR, retrying or side-stepping when it lands on the wrong shelf of a split square —
+the shelf check `holdShelf` already does for jumps, applied to an ordinary fine walk.
