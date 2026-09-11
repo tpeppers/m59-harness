@@ -32,6 +32,9 @@
 // which is a case worth naming because nothing announces it. Sub-30-max-health characters
 // are excluded transitively rather than directly: they cannot be guild members at all
 // (PFLAG_PKILL_ENABLE, invitat.kod:174), so they fail the membership half, not a door check.
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { RANK } from './m59-guild.mjs';
 import { CHEST_BULK_MAX } from './m59-storage.mjs';
 
@@ -68,6 +71,51 @@ export function reagentWants({ characters = [], reagents = REAGENTS } = {}) {
     }
   }
   return wants;
+}
+
+// ---------------------------------------------------------------- keep, or sell
+//
+// EVERYTHING THE FLEET USES, NOT EVERYTHING IT IS SHORT OF THIS AFTERNOON.
+//
+// `guildKeepTest` (m59-guildwants.mjs:219) keeps an item only while the guild plan is SHORT
+// of it: the moment a chest target is met the shortfall goes to zero and the next character
+// through town sells its elderberry to a merchant. Then somebody's floor dips, the stockpile
+// is empty, and the fleet buys the same elderberry back at the buy price having sold it at
+// the sell price. The spread is lost in both directions, which is worse than never having
+// had a chest.
+//
+// A want is a MOMENT and a use is a STANDING FACT. If any character in the fleet — or the
+// menagerie — declares a floor for an item, that item is in circulation and must never be
+// sold to a merchant while a guild chest exists to hold it. Being currently well stocked is
+// the reason to DEPOSIT it, not the reason to sell it.
+//
+// So this flags by USE, and the shortfall question is left to whoever is deciding how much
+// to move rather than whether to keep it at all. `contributionPlan` still protects the
+// donor's own floor, so "never sell" does not mean "give everything away".
+export function stockpileKeepTest({ characters = [], reagents = REAGENTS,
+                                    available = true } = {}) {
+  // A CHEST THAT CANNOT BE USED IS NOT A REASON TO HOARD. With no hall, or a hall in
+  // arrears, there is nowhere to put the surplus — so the ordinary sell behaviour is right
+  // and this must get out of the way rather than fill every pack with unsellable herbs.
+  if (!available) {
+    const off = () => false;
+    off.inUse = new Set();
+    off.why = 'the guild store is unavailable, so the ordinary sell rules apply';
+    return off;
+  }
+  const inUse = new Set();
+  for (const c of characters) {
+    for (const row of (c?.loadout?.carry ?? [])) {
+      const item = norm(row.item);
+      if (!item) continue;
+      if (reagents.length && !reagents.includes(item)) continue;
+      if ((Number(row.min) || 0) > 0) inUse.add(item);
+    }
+  }
+  const test = (name) => inUse.has(norm(name));
+  test.inUse = inUse;
+  test.why = 'kept because somebody in the fleet uses it, not because anyone is short today';
+  return test;
 }
 
 // ---------------------------------------------------------------- may this one open it
@@ -245,3 +293,109 @@ export function outsiderPlan({ requests = [], couriers = [], chests = [],
 }
 
 export { CHEST_BULK_MAX };
+
+
+// ---------------------------------------------------------------- the book on disk
+//
+// TWO THINGS THAT HAVE TO SURVIVE A RESTART, and they are the two the feature is judged on.
+//
+// The SAVINGS are the whole argument for a hall that costs 12,000 a day, and a keeper
+// restarts about once a minute — a tally that lives on the keeper is not a tally. The
+// OUTSIDER QUEUE is worse: a request from somebody who cannot open the door is by definition
+// a request nobody is standing next to, so it has to wait somewhere durable for whoever is
+// next in town.
+//
+// Written the way TitheBook writes: one file per fleet, whole-file read, atomic rename, and
+// only VERIFIED movement recorded. An intended transfer is not a transfer.
+const STOCKPILE_DIR = process.env.M59_STOCKPILE_DIR ||
+  fileURLToPath(new URL('../substrate/stockpile/', import.meta.url));
+const safeName = (v) => String(v ?? '').replace(/[^A-Za-z0-9._-]/g, '_') || 'default';
+const dayKey = (at) => new Date(at).toISOString().slice(0, 10);
+
+export class StockpileBook {
+  constructor({ fleet = 'default', dir = STOCKPILE_DIR } = {}) {
+    this.fleet = safeName(fleet);
+    this.dir = resolve(dir);
+    this.path = join(this.dir, `${this.fleet}.json`);
+  }
+
+  read() {
+    if (!existsSync(this.path)) return { fleet: this.fleet, moves: [], requests: [] };
+    try {
+      const v = JSON.parse(readFileSync(this.path, 'utf8'));
+      return { fleet: this.fleet, moves: [], requests: [], ...v };
+    } catch {
+      // A FILE THAT WILL NOT PARSE IS NOT AN EMPTY FILE. Returning {} here would silently
+      // restart the savings tally at zero and quietly justify re-buying everything.
+      return { fleet: this.fleet, moves: [], requests: [], unreadable: true };
+    }
+  }
+
+  #write(all) {
+    mkdirSync(this.dir, { recursive: true });
+    const tmp = `${this.path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(all, null, 2) + '\n');
+    renameSync(tmp, this.path);
+    return all;
+  }
+
+  /** Record a transfer that ACTUALLY happened. `amount` is what moved, not what was planned. */
+  record(entry, { at = Date.now() } = {}) {
+    const all = this.read();
+    if (all.unreadable) return all;                 // never append onto a file we cannot read
+    const amount = Math.max(0, Math.floor(Number(entry?.amount) || 0));
+    if (!amount) return all;
+    all.moves.push({ at, day: dayKey(at), item: norm(entry.item), amount,
+                     buy_avoided: Number(entry.buy_avoided) || 0,
+                     sell_forgone: Number(entry.sell_forgone) || 0,
+                     saved: Number(entry.saved) || 0,
+                     unpriced: !!entry.unpriced,
+                     to: entry.to ?? null, from: entry.from ?? null,
+                     for: entry.for ?? null });
+    return this.#write(all);
+  }
+
+  /** The figure the hall is judged on, over a window. */
+  totals({ sinceMs = null } = {}) {
+    const moves = this.read().moves
+      .filter(m => sinceMs == null || Number(m.at) >= sinceMs);
+    const led = stockpileLedger(moves);
+    const days = new Set(moves.map(m => m.day)).size || 1;
+    return { ...led, days, ...paysForHall({ saved: led.saved, days }) };
+  }
+
+  // ------------------------------------------------ Help_Outsider
+  //
+  // A request is OPEN until somebody hands the goods over in person. It is not closed by the
+  // withdrawal: taking elderberry out of a chest for Loial and then dying on the road has
+  // moved the reagents further from Loial than when they started.
+  request({ agent, character = null, item, amount, why = null }, { at = Date.now() } = {}) {
+    const all = this.read();
+    if (all.unreadable) return all;
+    const n = Math.max(0, Math.floor(Number(amount) || 0));
+    if (!n) return all;
+    const key = `${safeName(agent)}:${norm(item)}`;
+    const open = all.requests.find(r => r.key === key && !r.done_at);
+    if (open) { open.amount = n; open.at = at; return this.#write(all); }
+    all.requests.push({ key, agent, character, item: norm(item), amount: n, why,
+                        at, done_at: null, by: null, gave: 0 });
+    return this.#write(all);
+  }
+
+  openRequests() { return this.read().requests.filter(r => !r.done_at); }
+
+  /** Closed only by a hand-over that was read back, and a partial stays OPEN for the rest. */
+  fulfil({ agent, item, gave, by }, { at = Date.now() } = {}) {
+    const all = this.read();
+    if (all.unreadable) return all;
+    const key = `${safeName(agent)}:${norm(item)}`;
+    const r = all.requests.find(x => x.key === key && !x.done_at);
+    if (!r) return all;
+    const n = Math.max(0, Math.floor(Number(gave) || 0));
+    r.gave = (r.gave || 0) + n;
+    r.by = by ?? r.by;
+    if (r.gave >= r.amount) { r.done_at = at; }
+    else { r.amount = r.amount - n; r.gave = 0; }   // the rest is still wanted
+    return this.#write(all);
+  }
+}

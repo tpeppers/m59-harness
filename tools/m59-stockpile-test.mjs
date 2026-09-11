@@ -18,8 +18,12 @@
 //      two ways is how a fleet ships elderberry back and forth for ever.
 import assert from 'node:assert/strict';
 import { reagentWants, canEnterHall, sourcePlan, savingsOf, stockpileLedger,
-         paysForHall, outsiderPlan, REAGENTS } from './m59-stockpile.mjs';
+         paysForHall, outsiderPlan, stockpileKeepTest, StockpileBook,
+         REAGENTS } from './m59-stockpile.mjs';
 import { RANK } from './m59-guild.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let n = 0;
 const ok = (what, cond) => { assert.ok(cond, what); n++; };
@@ -165,6 +169,78 @@ const ok = (what, cond) => { assert.ok(cond, what); n++; };
 
   ok('no couriers at all is stated plainly',
      /no couriers offered/.test(outsiderPlan({ requests, couriers: [], chests }).why));
+}
+
+// ---------------------------------------------------------------- keep by USE, not by want
+//
+// The rule guildKeepTest gets wrong for a stockpile: it keeps only what the plan is SHORT
+// of, so the moment a target is met the next character sells its elderberry to a merchant
+// and the fleet buys it back later at the spread. A want is a moment; a use is a standing
+// fact. Being well stocked is the reason to DEPOSIT, never the reason to sell.
+{
+  const characters = [
+    { agent: 't6', loadout: { carry: [{ item: 'elderberry', min: 20 }] },
+      pack: [{ name: 'elderberry', amount: 400 }] },           // twenty times its floor
+    { agent: 'hk1', menagerie: true, loadout: { carry: [{ item: 'herbs', min: 10 }] } },
+    { agent: 't9', loadout: { carry: [{ item: 'elderberry', min: 0 }] } },
+  ];
+  const keep = stockpileKeepTest({ characters });
+  ok('AN ITEM IN USE IS KEPT EVEN WHEN NOBODY IS SHORT OF IT', keep('elderberry') === true);
+  ok('the menagerie counts as use', keep('herbs') === true);
+  ok('an item nobody uses is still sellable', keep('sapphire') === false);
+  ok('a declared floor of ZERO is not a use', !keep.inUse.has('nothing'));
+  ok('the reason is about use, not shortage', /uses it/.test(keep.why));
+  ok('case and spacing do not matter', stockpileKeepTest({ characters })('  Elderberry ') === true);
+
+  // A CHEST THAT CANNOT BE USED IS NOT A REASON TO HOARD.
+  const off = stockpileKeepTest({ characters, available: false });
+  ok('with no usable store the ordinary sell rules apply', off('elderberry') === false);
+  ok('and it says why', /unavailable/.test(off.why));
+}
+
+// ---------------------------------------------------------------- the book on disk
+{
+  const dir = mkdtempSync(join(tmpdir(), 'm59-stock-'));
+  try {
+    const book = new StockpileBook({ fleet: 'testfleet', dir });
+    ok('an empty book has no moves and no requests',
+       book.read().moves.length === 0 && book.openRequests().length === 0);
+
+    book.record({ item: 'elderberry', amount: 20, buy_avoided: 240, sell_forgone: 80,
+                  saved: 320, to: 't6' });
+    book.record({ item: 'herbs', amount: 5, buy_avoided: 0, sell_forgone: 20, saved: 20,
+                  unpriced: true, to: 't2' });
+    const t = book.totals();
+    ok('the savings survive a new handle',
+       new StockpileBook({ fleet: 'testfleet', dir }).totals().saved === 340);
+    ok('and the units', t.units === 25);
+    ok('unpriced moves are counted so a total can be discounted', t.unpriced_moves === 1);
+    ok('it states the verdict against the real rent', t.rent_per_day === 12_000);
+    ok('340 a day does not cover the hall', t.covers === false);
+
+    // A MOVE THAT DID NOT MOVE IS NOT RECORDED.
+    book.record({ item: 'elderberry', amount: 0, saved: 999 });
+    ok('a zero-amount transfer is not recorded', book.totals().moves === 2);
+
+    // Help_Outsider queue
+    book.request({ agent: 'hk1', character: 'Loial', item: 'elderberry', amount: 20 });
+    ok('a request is open until somebody hands it over', book.openRequests().length === 1);
+    book.request({ agent: 'hk1', character: 'Loial', item: 'elderberry', amount: 30 });
+    ok('re-requesting the same item UPDATES rather than duplicating',
+       book.openRequests().length === 1 && book.openRequests()[0].amount === 30);
+
+    // A PARTIAL HAND-OVER LEAVES THE REST WANTED. The chest rarely holds the whole ask.
+    book.fulfil({ agent: 'hk1', item: 'elderberry', gave: 12, by: 't2' });
+    ok('a partial hand-over does NOT close the request', book.openRequests().length === 1);
+    ok('and the remainder is what is still wanted', book.openRequests()[0].amount === 18);
+    book.fulfil({ agent: 'hk1', item: 'elderberry', gave: 18, by: 't2' });
+    ok('completing it closes the request', book.openRequests().length === 0);
+    ok('and records who did it',
+       book.read().requests[0].by === 't2' && book.read().requests[0].done_at !== null);
+
+    ok('fulfilling something nobody asked for changes nothing',
+       book.fulfil({ agent: 'nobody', item: 'herbs', gave: 5, by: 't2' }).requests.length === 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 console.log(`\n${n} passed, 0 failed\n`);
