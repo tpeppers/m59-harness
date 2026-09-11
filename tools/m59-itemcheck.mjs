@@ -29,6 +29,20 @@
 // keyed `herbs` against a loadout saying `herb` reads undefined -> 0 on all twenty-one rows
 // and looks exactly like a fleet with no reagents. That is why `--strict` exists.
 //
+// THE TABLE IS NOT THE GAME, AND THIS TOOL CANNOT SEE THE DIFFERENCE.
+//
+// substrate/m59-items.json holds 249 items and the kod holds more. The clearest gap is
+// potions: the table carries THREE (brown, mysterious, potion of forgetfulness) while
+// object/item/passitem/spelitem/potion/ has TWENTY-NINE classes. The missing twenty-six are
+// made by players with the Distil spell rather than dropped by monsters, so nothing has ever
+// observed one and written it down -- and unidentified ones carry a fake name until
+// identified anyway (DenialPotion_fake_name_rsc).
+//
+// So "does not resolve" means "not in the local table", NEVER "not in the game". A real
+// haste potion reported here is a gap in the table, not a typo in the config. Do not rename
+// one to something that does resolve: that would trade a name nothing can match for a name
+// matching the WRONG item, which is the only outcome worse than the original.
+//
 // This checks the FILES, not the fleet: it opens no socket and needs no broker.
 import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
