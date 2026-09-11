@@ -238,9 +238,18 @@ Same errand, a tenth of the exposure. So: `walk(576)`, rest there because it is 
   arrivals reaches 0 of 400 occupiable samples inside the meld box.
 - **`route_fine` offered ZERO jump candidates** (`"after":[]` at jumps 0, 16450 points / 1309
   squares searched, 82s). Not because there are none — `m59-jumpfinder` finds a three-jump route
-  in six seconds — but because the RUNNING BROKER has the old cap at
+  in six seconds. At the time of that run the deployed tree carried the old cap at
   `prod-deploy/tools/m59-fineroute.mjs:313`, `if (drop <= MAX_STEP_HEIGHT) { if (span > F * 1.5) }`,
   which is short by 0.65 squares at a one-step drop. The corrected one-line cap is on main.
 
-**So the stone is blocked on a DEPLOY, not on a discovery.** The route exists, the physics is
-fixed and pushed, and the broker is running code from before it.
+**AND THAT ATTRIBUTION IS NOT RE-VERIFIED.** The corrected cap reached prod-deploy with
+`deploy-2026-09-11-2`, and the currently-running broker loaded it at boot — so the
+zero-candidates reading is CONSISTENT with the old cap only because it predates that deploy.
+It is not a controlled before/after and I never ran one. I also told the deploying session
+that their tag `-3` shipped the fix; it does not (`git diff --name-only 1b995b1
+deploy-2026-09-11-3 -- tools/m59-fineroute.mjs` is empty). I grepped a working tree and
+concluded a tag shipped something.
+
+Their sentence is the one to keep: **a restart that changes nothing is the cheapest way to get
+a false positive.** The re-test is one `route_fine` call against a broker known to carry the
+fix. Until that lands, "the deploy unblocks room 27" is a hypothesis and not a result.
