@@ -537,3 +537,54 @@ the terrain and not our code. Per the operator, the errand is the stone and not 
 it can get to the node in Badlands that's good enough, it doesn't need to find any hidden jumps
 if they're not required"* — so there is nothing further to spend here until someone finds an
 entrance our two arrivals are not.
+
+---
+
+# SEVENTH, AND IT OVERTURNS THE PAGE: BADLANDS IS WALKABLE TODAY
+
+**The 45 stone is reachable on foot, right now, with no jump and every mover option at its
+default.** Sections two and six of this page — "needs a CLIMB past the step cap" and "a mesa,
+measured and closed" — are both withdrawn. So is every "0 of N occupiable fine samples"
+conclusion on this page that was measured at a 256-unit lattice.
+
+## The blocker was our LATTICE, not our code
+
+Fine flood, `traceFineMoveClient` as the edge test, default options, seeded at arrival r1c53:
+
+| lattice | samples | meld box |
+|---|---|---|
+| 256 | 54,849 | **0 / 400** |
+| 128 | 258,252 | **1600 / 1600** |
+| 64 | 1,031,780 | **6400 / 6400** — all 25 squares |
+
+Same code, same options, same room. **Only the step size differs.** Independently reproduced
+by m59-research at 64 (1,031,495 samples, node reached) from a different seed.
+
+The reason is the split squares the operator pointed at. The route climbs a staircase in
+columns 16-18 whose treads live INSIDE single squares — (13,18) spans 3456..4096, (15,18)
+spans 3200..4096, (42,21) spans 1536..3328 — and a quarter-square lattice cannot land on
+them, so the flood stops at the bottom and reports a mesa.
+
+## Which makes the real finding a PLANNER gap, not a terrain one
+
+`moverStepLands` plans square to square aiming at `standPoint`. (42,21)'s standPoint is 2048;
+the route uses its 3328 shelf. **The collision layer permits the walk and the planner has no
+vocabulary for it.** That is the same defect as "the flood's state is a square" on the
+vertical axis, now on the horizontal.
+
+`substrate/badlands-path.json` is the answer to it: 650 waypoints decimated out of the
+64-unit flood's parent chain, one per direction change or floor change, so every leg is a
+straight line the trace has already accepted. Its square sequence runs through the operator's
+own landmarks — the c16-c18 staircase, then (42,20), (57,11), (74,18), down to r63c46.
+`substrate/fleetscripts/badlands-node.mjs` drives it. This is the first real customer for the
+"rail" that `CLIP_STEPS`' own comment in `m59-roo.mjs` describes as designed and never built.
+
+## What survives the re-test, and what does not
+
+Rooms **27** and **515** were re-run at 128 and 64 and stayed at **0** — their verdicts hold,
+and room 27 really does need its three jumps. Room **45** does not. Nobody has re-run **589**
+at a fine lattice yet, and until somebody does its verdict is not safe either.
+
+**The rule to take from this: a "0 of N" from a fine flood is a statement about the LATTICE
+until it has been run at two resolutions and agreed.** Every such number on this page above
+this section was single-resolution, and the one that mattered was wrong.
