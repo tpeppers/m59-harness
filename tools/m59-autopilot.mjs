@@ -2570,9 +2570,44 @@ export class Autopilot {
     }
     const eq = await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
     this.tally.weapons_conjured = (this.tally.weapons_conjured || 0) + 1;
-    this.recordCast('create weapon', { ok: true, why, made: made.map(o => c.rsc.get(o.nameRsc)),
+    const madeNames = made.map(o => c.rsc.get(o.nameRsc));
+    this.recordCast('create weapon', { ok: true, why, made: madeNames,
       mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
-    this.note('conjured a weapon', { made: made.map(o => c.rsc.get(o.nameRsc)),
+
+    // A WEAPON IN THE PACK IS NOT A WEAPON IN THE HAND, AND THIS SAID IT WAS.
+    //
+    // `progress('armed itself')` fired on the CAST succeeding, never on the wield. When the
+    // thing it conjured is on the character's own ban list, `equipBest` correctly refuses it,
+    // the character is still empty-handed, and the next pass conjures another one — a loop
+    // that cannot terminate because the ban does not change and the spell keeps producing the
+    // same kind of weapon.
+    //
+    // Measured on prod 2026-09-11. Bunsen and Robin ban long sword, short sword, mace, axe,
+    // scimitar and six more; `create weapon` was making long swords. They shed 16 and 204
+    // items when the pack was finally emptied by hand, and a pack that full answers
+    // `receiver_full` to every `supply` — which is what actually stalled the Kraanan cohort
+    // all evening, four unblockings in one night. The board meanwhile read
+    // `UNARMED_NO_DONOR — waiting for mana`, so it looked like a mana problem throughout.
+    const banned = this.bannedWeaponsNow();
+    const blockedByBan = !eq?.wielding && banned?.length &&
+      madeNames.some(nm => banned.some(b => String(nm ?? '').toLowerCase()
+                                               .includes(String(b).toLowerCase())));
+    if (!eq?.wielding) {
+      this.note('conjured a weapon it cannot hold', {
+        made: madeNames, mana_left: c.vitals?.()?.mana?.value,
+        banned_weapons: blockedByBan ? banned : undefined,
+        why: blockedByBan
+          ? 'create weapon made something this character\'s own ban list forbids, so ' +
+            'equipBest refused it — and the next pass will conjure another one. The loop ' +
+            'cannot end while the ban and the spell disagree'
+          : 'the weapon was made but nothing would wield it',
+        doing: blockedByBan
+          ? 'not counting this as armed — un-ban what create weapon produces, or give this ' +
+            'character a weapon it is allowed to hold'
+          : 'not counting this as armed' });
+      return false;
+    }
+    this.note('conjured a weapon', { made: madeNames,
       now_wielding: eq?.wielding, mana_left: c.vitals?.()?.mana?.value,
       caveat: 'a made weapon is temporary — it buys this fight and the walk to a shop' });
     this.progress('armed itself');
