@@ -55,9 +55,10 @@
 // four separate measurements, and `BASELINE.md` said "there is no line anyone could add to
 // that file today that would fix room 27" — with this rule in place `m59-jumpfinder.mjs`
 // finds a three-jump route to it in six seconds. Under `F * 1.5` the last of those three
-// jumps missed by 666 units. It clears the closed form by only 1.57 — but see the discrete
-// section at the bottom: against the client's OWN integration it clears by 31 to 202
-// depending on frame rate, because the closed form is the conservative one here.
+// jumps missed by 666 units — which is 0.65 squares and not a rounding question, so the fix
+// is right whatever becomes of that particular jump. It clears the closed form by only 1.57,
+// and the discrete section at the bottom says that margin is INSIDE the client's own
+// quantisation at every frame rate: a candidate for a body to settle, not arithmetic.
 //
 // Derived by the m59-research session from `clientd3d/moveobj.c`; the correction to this
 // repository's copies is theirs.
@@ -104,65 +105,127 @@ export const maxSpan = (drop, { speed = RUN_SPEED, step = MAX_STEP_HEIGHT } = {}
 export const heightAfter = (takeOffFloor, span, speed = RUN_SPEED) =>
   takeOffFloor - fallenBy(span / speed);
 
-// ======================= AND THE CLOSED FORM IS NOT THE CLIENT =======================
+// =================== AND THE CLOSED FORM IS NOT THE CLIENT ===================
 //
 // Everything above is the continuous solution. The client integrates FORWARD EULER, in
-// integers, every frame, and the two are not the same number:
+// integers, once per frame, and moves in whole frames of horizontal:
 //
 //   moveobj.c:293   int dz = dt * m->v_z / 1000;                       <- INTEGER division
 //   moveobj.c:295   m->z += (int)((double)dz * gravityAdjust);
 //   moveobj.c:316   m->v_z += (int)(gravityAdjust * (double)(GRAVITY_ACCELERATION*dt/1000));
+//   move.c:266      num_steps = max(1, min(20, 200 * dt / 1000));
+//   move.c:268      xinc = dx / num_steps;                             <- INTEGER division
 //   move.c:213-221  dt <  MOVE_DELAY -> gravityAdjust 1, horizontal scaled by dt/MOVE_DELAY
 //                   dt >= MOVE_DELAY -> gravityAdjust = MOVE_DELAY/dt, horizontal unscaled
 //
-// Position is advanced with the velocity from the START of each step, so an accelerating
-// fall is systematically UNDER-counted: the body falls slower than the closed form says and
-// therefore travels FURTHER before it runs out of height.
+// ======================= THE FALL HAPPENS FIRST =======================
 //
-// WHICH MAKES THE CLOSED FORM A CONSERVATIVE ESTIMATE, UP TO A POINT. Measured against the
-// integration above at 8/16/33/100 ms per frame:
+// CORRECTED 2026-09-10, AND THE FIRST VERSION OF THIS FILE HAD IT BACKWARDS. The order
+// inside one frame is not a modelling choice, it is in the game loop:
 //
-//   drop     0    384   1024   2048   3072  |  4096   6144  10240
-//   margin +33.0 +31.2 +24.7  +12.8   +3.7  |  -4.8  -20.2  -45.1
+//   statgame.c:385   void GameIdle(void) {
+//   statgame.c:387      MoveUpdateServer();
+//   statgame.c:388      AnimationTimerProc(hMain, 0);   // the FALL
+//   statgame.c:389      HandleKeys();                   // the MOVE
 //
-// so `maxSpan` never offers a jump the client refuses while the drop is under ~3517 client
-// units (3.43 squares), and past that it over-reaches by up to 45 units — 0.46%, a twentieth
-// of a square, and still worth knowing before anyone declares a very long fall.
+// `AnimationTimerProc` reaches `ObjectsMove(dt)` (animate.c:128) and thence
+// `MoveSingleVertically` (moveobj.c:254); `HandleKeys` reaches `UserMovePlayer`, which reads
+// `z = max(player_obj->motion.z, GetFloorBase(last_x, last_y))` (move.c:286). So **motion.z
+// has already dropped for this frame before any wall is tested.** And `UserMovePlayer` never
+// writes `motion.z` at all — it sets only `dest_z` and `v_z` (move.c:408-421) — so every
+// sub-step of a frame shares one z.
+//
+// Assuming move-then-fall flatters every candidate by about one frame of horizontal. This
+// file did exactly that for one commit, and it turned "too close to call" into "clears
+// comfortably" for the first candidate it was ever asked about.
+//
+// ======================= SO THE ANSWER IS A BRACKET, NOT A NUMBER =======================
+//
+// Because z changes once per frame and the body then moves a whole frame's worth, the reach
+// is quantised: the last legal position is the end of the last frame whose post-fall z still
+// permits the landing, and everything in the next frame is already too low. `spanBracket`
+// returns that `[lo, hi]`, and a span landing INSIDE it is one the arithmetic cannot decide.
+//
+// Against the closed form, with the ordering right, there is no clean boundary — it sits
+// below the bracket at some drops, inside it at others, and drifts above it for long falls:
+//
+//   drop       0     384    1024    2048    3072    4096    6144   10240
+//   closed  1415    2204    3175    4354    5305    6125    7522    9770
+//   dt=8   [1440   [2200   [3200   [4360   [5280   [6120   [7480   [9720
+//           1480]   2240]   3240]   4400]   5320]   6160]   7520]   9760]
+//           below  INSIDE   below   below  INSIDE  INSIDE   ABOVE   ABOVE
+//
+// An earlier version of this comment claimed the closed form was a conservative lower bound
+// up to a drop of ~3517. That was measured with the ordering backwards and it is withdrawn.
+//
+// WHICH IS WHY maxSpan STAYS THE PLANNER'S GATE. It is a single, stable, frame-rate-free
+// number in the right neighbourhood, and a proposer wants exactly that. The discrete model's
+// job is not to replace it but to say when a candidate is too close to trust — and then the
+// answer is a body, not more arithmetic.
 //
 // NOTE THAT gravityAdjust MAKES THE ARC FRAME-RATE INVARIANT, which is what it is for: at
 // dt >= MOVE_DELAY both the per-frame fall and the per-frame gravity carry a 100/dt that
-// cancels the dt in them, and below MOVE_DELAY the horizontal is scaled instead, so the
-// RATIO is flat either way. A slow client does not jump further. What DOES move with frame
-// rate is the Euler error above, and it moves the reach by about 170 units across 5-125 fps
-// — in the permissive direction, at every rate.
+// cancels, and below MOVE_DELAY the horizontal is scaled instead. A slow client does not jump
+// further. What moves with frame rate is the Euler error and the quantisation, and the
+// bracket is how wide that is.
 
-/**
- * The client's own reach, integrated the way the client does it, truncation included.
- *
- * `dt` is the frame time in milliseconds. Use it to check a candidate whose margin under
- * `maxSpan` is thin, or any declaration with a drop over ~3517 where the closed form starts
- * to over-reach.
- */
-export function maxSpanDiscrete(drop, { dt = 16, step = MAX_STEP_HEIGHT } = {}) {
+/** One frame's horizontal advance, with move.c's two integer divisions. */
+function frameAdvance(dt) {
   const MOVE_DELAY = 100, MOVEUNITS = CLIENT_FINENESS >> 2;
-  const limit = drop + step;
-  if (!(limit > 0)) return 0;
-  const gravityAdjust = dt < MOVE_DELAY ? 1.0 : MOVE_DELAY / dt;
-  const move = dt < MOVE_DELAY
+  const dx = dt < MOVE_DELAY
     ? Math.trunc(2 * MOVEUNITS * dt / MOVE_DELAY)
     : 2 * MOVEUNITS;
-  if (move <= 0) return 0;
-  // C integer arithmetic throughout: FALL_VELOCITY_0 is `-FINENESS * 2 / 3` in ints = -682.
-  let z = 0, vz = Math.trunc(-CLIENT_FINENESS * 2 / 3), x = 0;
+  const numSteps = Math.max(1, Math.min(20, Math.trunc(200 * dt / 1000)));
+  const xinc = Math.trunc(dx / numSteps);          // move.c:268
+  return { perFrame: xinc * numSteps, numSteps, xinc };
+}
+
+/**
+ * THE BRACKET THE CLIENT'S OWN ARITHMETIC PUTS THE LANDING IN, at frame time `dt`.
+ *
+ * `lo` is the end of the last frame whose post-fall z still permits the landing; `hi` is the
+ * end of the frame after it, every position in which is already too low. A span at or below
+ * `lo` is legal at this frame rate, a span above `hi` is not, and a span BETWEEN them is
+ * undecidable from here — that is the honest output and the reason this returns two numbers.
+ */
+export function spanBracket(drop, { dt = 16, step = MAX_STEP_HEIGHT } = {}) {
+  const limit = drop + step;
+  const MOVE_DELAY = 100;
+  if (!(limit > 0)) return { lo: 0, hi: 0, dt };
+  const gravityAdjust = dt < MOVE_DELAY ? 1.0 : MOVE_DELAY / dt;
+  const { perFrame } = frameAdvance(dt);
+  if (perFrame <= 0) return { lo: 0, hi: 0, dt };
+  let z = 0, vz = Math.trunc(-CLIENT_FINENESS * 2 / 3), x = 0, lastLegal = 0;
   for (let i = 0; i < 100_000; i++) {
-    const dz = Math.trunc(dt * vz / 1000);
-    const zNext = z + Math.trunc(dz * gravityAdjust);
-    if (-zNext > limit) {
-      const f = (limit - -z) / (-zNext - -z);       // where inside this frame it crossed
-      return x + f * move;
-    }
-    z = zNext; x += move;
+    // 1. AnimationTimerProc: the frame falls first (statgame.c:388).
+    z += Math.trunc(Math.trunc(dt * vz / 1000) * gravityAdjust);
     vz += Math.trunc(gravityAdjust * Math.trunc(-5 * CLIENT_FINENESS * dt / 1000));
+    // 2. HandleKeys: then it moves, every sub-step sharing this z (move.c:286).
+    if (-z > limit) return { lo: lastLegal, hi: x + perFrame, dt };
+    x += perFrame; lastLegal = x;
   }
-  return x;
+  return { lo: lastLegal, hi: lastLegal, dt };
+}
+
+/**
+ * The client's own reach at one frame rate — the bracket's LOWER edge, which is the last
+ * position actually known to be legal. Use `spanBracket` when the margin matters.
+ */
+export const maxSpanDiscrete = (drop, opts = {}) => spanBracket(drop, opts).lo;
+
+/**
+ * Is this candidate too close for the arithmetic to call? Checks the span against the bracket
+ * at a spread of plausible frame times, and says `needsBody` when any of them straddles it.
+ */
+export function jumpConfidence(drop, span, { rates = [8, 16, 33, 66, 100] } = {}) {
+  const brackets = rates.map(dt => spanBracket(drop, { dt }));
+  const clears = brackets.every(b => span <= b.lo);
+  const fails = brackets.every(b => span > b.hi);
+  return {
+    brackets, clears, fails,
+    needsBody: !clears && !fails,
+    verdict: clears ? 'clears at every frame rate'
+           : fails ? 'refused at every frame rate'
+           : 'INSIDE the bracket — the arithmetic cannot decide this one, walk it',
+  };
 }
