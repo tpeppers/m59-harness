@@ -166,17 +166,52 @@ console.log('\nthe guard: what a journey leaves switched on');
   //
   // The last line is the change. Pinned as an explicit map rather than "all of them", because
   // "every faculty is true" is exactly the assertion that cannot express a doctrine.
-  ok('the guard permits a PERSON and a rate, and nothing a monster can cause',
+  // AMENDED 2026-09-11, AND THE OLD RULE WAS TOO BROAD RATHER THAN WRONG.
+  //
+  // What stood here was "nothing a monster can cause", pinned as an exact five-key map. The
+  // operator walked into the case it could not express: "a traffic jam of ~3 bots in The
+  // Flatlands that were piled up because of a few spiders and ants clogging the needle..
+  // everyone there was capable of killing them but nobody was attacking the low level monsters
+  // that were blocking their paths."
+  //
+  // The 37 road deaths this rule was written from are all deaths of ABANDONMENT: a monster made
+  // a journey stop being a journey, and the character died in the road it had stopped in. THAT
+  // is what must never happen for a monster, and it is still true of every faculty here.
+  //
+  // `clear_path` abandons nothing. It cancels the current WALK so the pass can swing — exactly
+  // what `fight_back` already does for a person — and the destination survives. It also needs
+  // no ground: melee reach is 2-3 squares, so anything blocking a step is already in range,
+  // which is why it is affordable mid-hop where the shelter rung was not.
+  //
+  // So the invariant is restated rather than dropped, and it is narrower and more defensible:
+  // A MONSTER MAY INTERRUPT A WALK. A MONSTER MAY NOT END A JOURNEY.
+  ok('the guard permits a PERSON, a rate, and now a BLOCKER',
      JSON.stringify(TRAVEL_GUARD_DEFAULTS) ===
-       JSON.stringify({ flee: true, fight_back: true, arm: false, rest: true, safe_spot: true }),
+       JSON.stringify({ flee: true, fight_back: true, arm: false, rest: true, safe_spot: true,
+                        clear_path: true }),
      JSON.stringify(TRAVEL_GUARD_DEFAULTS));
-  ok('and there are still exactly five of them', TRAVEL_GUARD_KEYS.length === 5,
+  ok('and there are now exactly six of them', TRAVEL_GUARD_KEYS.length === 6,
      JSON.stringify(TRAVEL_GUARD_KEYS));
-  // THE RULE BEHIND THE MAP, so a faculty added later has to answer this question too: can
-  // this fire because of a MONSTER? If it can, it does not default on.
-  ok('nothing that a monster alone can trigger is on by default',
+  // THE RULE BEHIND THE MAP, restated so a faculty added later has to answer the sharper
+  // question: can a MONSTER make this ABANDON the objective? If it can, it does not default on.
+  // `arm` remains the worked example of a no; `clear_path` is the worked counter-example —
+  // monster-triggered, on by default, and structurally incapable of giving a destination up.
+  ok('nothing a monster alone can trigger ABANDONS a journey by default',
      TRAVEL_GUARD_DEFAULTS.arm === false,
      'arm cancels at full health on a fact about the pack, in rooms that kill in nine seconds');
+  // AND THE NEW ONE PROVES IT RATHER THAN BEING TRUSTED. `abandon` is the only thing in the
+  // file that gives a destination up, and the rung must never reach one.
+  {
+    const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+    const rung = src.slice(src.indexOf('clearPathCheck(w, hp, now) {'),
+                           src.indexOf('refuseEngagement(name) {'));
+    ok('clear_path never abandons — no takeBack and no abandon in the whole rung',
+       rung.length > 200 && !/takeBack|abandon/.test(rung), `rung ${rung.length} chars`);
+    ok('and it arms the EXISTING fight-back path rather than growing a second',
+       /fightBackDue\s*=/.test(rung) && /reason: 'blocked'/.test(rung));
+    ok('and it is gated on covering no ground, not on being hurt',
+       /pinnedSince/.test(rung) && /CLEAR_PATH_MS/.test(rung));
+  }
   ok('and every one of them says which clock it is on',
      TRAVEL_GUARD_KEYS.every(key => ['mid-hop', 'hop boundary', 'both'].includes(TRAVEL_GUARD_CLOCK[key])),
      JSON.stringify(TRAVEL_GUARD_CLOCK));
@@ -245,9 +280,51 @@ console.log('\nthe guard: what a journey leaves switched on');
   // The split is what keeps "only one thing drives a body" true, so it is pinned rather
   // than left to a comment: the four that CANCEL a journey and the two that PAUSE it.
   const midHop = TRAVEL_GUARD_KEYS.filter(key => TRAVEL_GUARD_CLOCK[key] === 'mid-hop');
-  ok('the three that interrupt a journey are the mid-hop ones',
-     JSON.stringify(midHop.sort()) === JSON.stringify(['arm', 'fight_back', 'flee']),
+  // FOUR NOW, AND THE FOURTH INTERRUPTS A WALK WITHOUT INTERRUPTING THE JOURNEY. `clear_path`
+  // is mid-hop because a swing needs no ground — the blocker is already inside melee reach of
+  // a body that cannot get past it — so unlike the other three it costs the crossing nothing
+  // but the seconds spent killing what was in the way.
+  ok('the four that interrupt a walk are the mid-hop ones',
+     JSON.stringify(midHop.sort()) === JSON.stringify(['arm', 'clear_path', 'fight_back', 'flee']),
      JSON.stringify(midHop));
+  // ------------------------------------------------------------------ clear_path targets
+  //
+  // A POLITE BUMP ON THE ROAD MUST NOT START A WAR. Operator, 2026-09-11: "make sure players
+  // (non-murderer / non-outlaw players, at least) aren't valid targets for clearing_path,
+  // otherwise a polite bump into another player on the road might lead to bloodshed".
+  //
+  // This fleet runs twenty-one characters on a SHARED server with real people on it, and the
+  // whole rung is armed by "something is in my way" — which is exactly what another player
+  // standing in a doorway looks like. The protection is structural rather than a check the
+  // rung performs: `inReachOfUs()` filters `!(o.flags & OF.PLAYER)`, so a player can neither
+  // ARM this nor be CHOSEN by it, and that holds for murderers too — stricter than asked,
+  // which is the safe direction. Pinned behaviourally because a structural guarantee nobody
+  // tests is one somebody deletes while tidying.
+  {
+    const pinned = k => { k.watch.pinnedSince = Date.now() - 10_000; return k; };
+    const hp = { value: 30, max: 37 };
+
+    const crowdOfPeople = pinned(keeper({ players: 3, adjacent: 0 }));
+    ok('three PLAYERS in reach do not arm clear_path',
+       crowdOfPeople.clearPathCheck(crowdOfPeople.watch, hp, Date.now()) === null);
+    ok('and nothing was cancelled on their account',
+       !crowdOfPeople.notes.some(n => /covered no ground/.test(n.what)));
+
+    const oneMonster = pinned(keeper({ adjacent: 1, players: 0 }));
+    const due = oneMonster.clearPathCheck(oneMonster.watch, hp, Date.now());
+    ok('but ONE monster in reach does arm it', !!due && due.reason === 'blocked');
+
+    // The mixed case is the one the operator actually walked into: bots and monsters jammed
+    // together. The people must be invisible to it even while the spider is not.
+    const both = pinned(keeper({ adjacent: 1, players: 3 }));
+    ok('a jam of players AND a blocker still arms only on the blocker',
+       !!both.clearPathCheck(both.watch, hp, Date.now()));
+
+    const notPinned = keeper({ adjacent: 1 });
+    ok('and covering ground is not a jam, however crowded',
+       notPinned.clearPathCheck(notPinned.watch, hp, Date.now()) === null);
+  }
+
   const boundary = TRAVEL_GUARD_KEYS.filter(key => TRAVEL_GUARD_CLOCK[key] === 'hop boundary');
   ok('and resting is the one that only ever pauses',
      JSON.stringify(boundary.sort()) === JSON.stringify(['rest']),

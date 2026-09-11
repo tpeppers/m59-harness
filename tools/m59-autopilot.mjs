@@ -554,12 +554,40 @@ export const TRAVEL_GUARD_DEFAULTS = Object.freeze({
   // ---- at a hop boundary: the journey pauses and nothing is contended
   rest: true,        // sit in a sanctuary until health AND vigor are as high as sitting takes them
   safe_spot: true,   // hold a defensible wall part-way through — see travelHold
+  // ---- mid-hop, and the ONLY faculty here that may swing at a MONSTER.
+  //
+  // KILL THE THING STANDING IN THE PIPE. Operator, 2026-09-11, having walked into it: "a
+  // traffic jam of ~3 bots in The Flatlands that were piled up because of a few spiders and
+  // ants clogging the needle.. everyone there was capable of killing them but nobody was
+  // attacking the low level monsters that were blocking their paths."
+  //
+  // WHY NOTHING ALREADY COVERED IT, which took three wrong guesses to establish:
+  //   fight_back   sounds exactly like this and is not. Gated on `worthEnding` — a PERSON —
+  //                and armed only by `lost > 0`, i.e. BEING HIT. A spider that merely stands
+  //                in the corridor never arms it, and standing there is the whole problem.
+  //   capBlockers  computes `clearable`, but for the SPAWN CAP, not the path: it returns
+  //                early on `!status.full`. Three spiders in a pipe do not fill a cap.
+  //   the needle   solves AROUND bodies on a 400ms clock and cannot conceive of removing one.
+  //
+  // So N travellers each re-plan around bodies that will not move, none of them permitted to
+  // swing, and none registering as stuck — they ARE moving, just not arriving, which is the
+  // two-square shuffle that defeats every stillness detector in this file.
+  //
+  // AND IT DOES NOT CANCEL A CROSSING TO DO IT, which is what makes it affordable where the
+  // mid-hop SHELTER rung was not. That rung was retired because the only thing it could do
+  // was cancel: the mover has the body and a wall cannot be reached without taking the body
+  // off the line. A SWING NEEDS NO GROUND. Melee reach is a disc of 2-3 squares, so anything
+  // blocking a step is already inside it, and the keeper answers without contending for the
+  // body at all. It arms the fight-back path that already exists rather than growing a second.
+  clear_path: true,  // a creature is blocking the walk and we have covered no ground
 });
 export const TRAVEL_GUARD_KEYS = Object.freeze(Object.keys(TRAVEL_GUARD_DEFAULTS));
 // Which clock each one is on. Reported by `travel_guard` so an operator turning one off
 // knows whether they have disabled an interruption or a pause.
 export const TRAVEL_GUARD_CLOCK = Object.freeze({
   flee: 'mid-hop', fight_back: 'mid-hop', arm: 'mid-hop',
+  // MID-HOP AND PROUD OF IT: a swing needs no ground, so this one costs the crossing nothing.
+  clear_path: 'mid-hop',
   rest: 'hop boundary',
   // BOTH CLOCKS, and it had to be. At a boundary the journey pauses and the character rests
   // at a wall to full. MID-HOP it hands back so the ordinary ladder can take one, because a
@@ -843,6 +871,17 @@ const FIGHT_BACK_GAP_MS = Number(process.env.M59_FIGHT_BACK_GAP_MS || 6_000);
 // A fight-back the watchdog asked for and no pass has answered within this long is stale:
 // the situation it described is gone, and acting on it would be swinging at a memory.
 const FIGHT_BACK_STALE_MS = 30_000;
+// HOW LONG A JOURNEY MAY COVER NO GROUND BEFORE A CREATURE IN REACH COUNTS AS BLOCKING IT.
+// Deliberately longer than a slide and shorter than a stall: the needle solver is on a 400ms
+// clock and a healthy crossing re-anchors constantly, so six seconds of zero displacement
+// with something inside melee reach is not slow progress, it is a body that will not move.
+// Below WATCHDOG_PINNED_MS (20s) on purpose — the healthy-wedge arm is about a stuck ROUTE
+// and this is about a stuck CORRIDOR, which is cheaper to answer and worth answering sooner.
+const CLEAR_PATH_MS = Number(process.env.M59_CLEAR_PATH_MS || 6_000);
+// The same four states m59-watchdog.mjs calls GOING. Imported rather than retyped would be
+// better still; this file already has a second copy at `goingSomewhere` and a third would be
+// how they drift apart.
+const GOING_STATES = watchdog.GOING;
 
 // THE POSITION PULSE — "IS THE CHARACTER MOVING", ASKED OF THE CHARACTER.
 //
@@ -8107,6 +8146,83 @@ export class Autopilot {
     return this.fightBackDue;
   }
 
+  // A CREATURE STANDING IN THE WALK IS A REASON TO SWING, AND IT IS THE ONLY ONE.
+  //
+  // The sibling of `fightBackCheck` above, and it exists because that one is armed by DAMAGE.
+  // See `clear_path` in TRAVEL_GUARD_DEFAULTS for the operator's report and for why neither
+  // `fight_back`, `capBlockers` nor the needle covers this.
+  //
+  // THE TRIGGER IS COVERING NO GROUND, NOT BEING HURT. `w.pinnedSince` is already maintained
+  // by the watchdog — displacement from an anchor, which is the measure that survives a
+  // two-square shuffle where stillness does not — so this asks a question the file can
+  // already answer and adds no new bookkeeping.
+  //
+  // FIVE GATES, AND EVERY ONE OF THEM IS HERE TO STOP THIS BECOMING "FIGHT EVERYTHING ON THE
+  // ROAD", which is the doctrine this repository has spent months removing:
+  //   * only while a JOURNEY is what is moving us — GOING, never standing at a counter;
+  //   * only once the body has been pinned for CLEAR_PATH_MS, so a creature we walked past
+  //     is not a blocker and a momentary slide is not a jam;
+  //   * only ABOVE the flee line — below it, running is the answer and the ladder owns it;
+  //   * only something in MELEE REACH, which is what "in the way" means to a mover that
+  //     cannot get past it;
+  //   * and the target is chosen by `passFightBack`, which already applies the engagement
+  //     band and the refusal list. This rung picks nothing; it only says "now".
+  //
+  // It hands to `fightBackDue` on purpose: one consumer, one target chooser, one set of
+  // safety rules. A second path would drift from the first, which is how this file grew two
+  // height rules and four copies of the fall physics.
+  clearPathCheck(w, hp, now) {
+    if (!w) return null;
+    if (!this.travelAllows('clear_path')) return null;
+    if (!GOING_STATES.includes(this.doing ?? null)) return null;
+    // Already swinging is not a jam; an errand owns the body; once per pass.
+    if (this.doing === 'fighting' || this.inert) return null;
+    if (w.clearPathPass === this.passes) return null;
+    const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
+    if (pinnedFor < CLEAR_PATH_MS) return null;
+    const frac = pct(hp);
+    if (frac === null || frac < this.safety().fleeAt) return null;
+    // A POLITE BUMP ON THE ROAD MUST NOT START A WAR, and this is the line that guarantees it.
+    //
+    // `inReachOfUs()` filters `!(o.flags & OF.PLAYER)`, so a person can neither ARM this rung
+    // nor be chosen by it — including a murderer, which is stricter than the operator asked for
+    // and is the safe direction. It matters because the trigger is "something is in my way",
+    // and on a shared server with real people that is exactly what another player standing in a
+    // doorway looks like. Twenty-one characters deciding to clear a person out of a corridor is
+    // not a mistake anybody gets to take back afterwards.
+    //
+    // Do NOT "simplify" this to room.objects: the player exclusion is the entire safety case,
+    // and m59-travelling-test pins it behaviourally — three players in reach must not arm it.
+    const near = this.inReachOfUs?.() ?? [];
+    if (!near.length) return null;
+
+    w.clearPathPass = this.passes;
+    this.tally.clear_path_interrupts = (this.tally.clear_path_interrupts || 0) + 1;
+    // `reason` is what lets passFightBack tell this apart from the damage edict — it must run
+    // for a blocked character whose `fight_back_after_s` is 0, because the two are different
+    // permissions and an operator may want one without the other.
+    this.fightBackDue = { since: w.pinnedSince, hits: 0, lost: 0, at: now, reason: 'blocked' };
+    // END THE BLIND AWAIT so the next pass can answer. Identical to the fight-back edict's
+    // single action, and for the identical reason: a pass inside a walk cannot decide.
+    const blocked = this.passStartedAt ? now - this.passStartedAt : 0;
+    let broke = null;
+    if (blocked >= PULSE_MS) {
+      try { broke = this.s.cancelMovement(null, 'a creature is blocking the walk — clear_path'); }
+      catch (e) { broke = { cancelled: false, why: e.message }; }
+    }
+    this.note('WATCHDOG — covered no ground for ' + Math.round(pinnedFor / 1000) +
+              's with something in reach', {
+      pinned_for_s: Math.round(pinnedFor / 1000),
+      in_reach: near.length,
+      health: hp ? `${hp.value}/${hp.max}` : null, doing: this.doing ?? null,
+      pass_blocked_for_s: Math.round(blocked / 1000), interrupted: broke?.interrupted ?? null,
+      why: 'a journey that is covering no ground with a creature inside melee reach is being ' +
+           'BLOCKED, not merely travelling slowly. The walk is cancelled so the next pass can ' +
+           'kill what is in the way — this keeper picks no target and decides nothing here',
+    });
+    return this.fightBackDue;
+  }
+
   refuseEngagement(name) {
     const key = String(name || '').toLowerCase();
     if (!key) return null;
@@ -10917,6 +11033,10 @@ export class Autopilot {
 
     // 1b'. THE FIGHT-BACK EDICT — under attack, not swinging, and told to. See fightBackCheck.
     this.fightBackCheck(w, hp, now, lostThisTick);
+
+    // 1b''. THE PATH-CLEARING EDICT — covering no ground with something in reach. Runs AFTER
+    // the damage edict on purpose: being hit is the stronger signal and should win the pass.
+    this.clearPathCheck(w, hp, now);
 
     // 1c. TAKE THE CHARACTER BACK FROM A DRIVER THAT HAS STOPPED DRIVING IT.
     //
@@ -14454,7 +14574,11 @@ export class Autopilot {
   async passFightBack(ctx) {
     const { s, c, room, v, hp } = ctx;
     const edict = this.fightBackAfterMs();
-    if (!edict) return CONTINUE;
+    // A BLOCKED DUE IS NOT THE DAMAGE EDICT AND MUST NOT BE GATED ON IT. `fight_back_after_s: 0`
+    // says "do not swing back when hit"; it says nothing about a creature standing in the
+    // walk, which is a different permission with its own faculty (`clear_path`). Gating both
+    // on one number is how a switch comes to mean two things.
+    if (!edict && this.fightBackDue?.reason !== 'blocked') return CONTINUE;
     const w = this.watch, a = w?.attack ?? null;
     const now = Date.now();
     // Either the watchdog asked, or the episode is old enough that it would have on its next
