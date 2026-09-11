@@ -5,7 +5,7 @@
 // The central case is the real one, with the real numbers: room 49's r25c17 holds four floors
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
 import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
-         rejoinedBehind, REJOIN_BEHIND } from './m59-railfollow.mjs';
+         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -118,6 +118,53 @@ ok(!advanced(10, 10), 'standing still is not');
 ok(!advanced(10, 90, { onShelf: false }), 'a huge jump OFF the shelf is not progress — ' +
    'this is the follower that rode 163 waypoints to the wrong place');
 ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
+
+// ---- CHOOSING A RAIL IS A SEGMENT QUESTION. Marco, room 49, 2026-09-11. -----------------
+{
+  // A dot on a segment: 100 units off a line that has no vertex within 5000.
+  const sparse = [{ x: 0, y: 0, f: 6144 }, { x: 10000, y: 0, f: 6144 }];
+  eq(Math.round(distanceToSegment({ x: 5000, y: 100 }, sparse[0], sparse[1])), 100,
+     'a point beside the middle of a segment is 100 from the LINE');
+  eq(Math.round(nearestWaypoint(sparse, { x: 5000, y: 100 }, { floor: 6144 }).d), 5001,
+     '...and 5001 from the nearest vertex — which is why vertices cannot choose a rail');
+
+  // Past the end of a segment clamps to the endpoint rather than projecting off it.
+  eq(Math.round(distanceToSegment({ x: 12000, y: 0 }, sparse[0], sparse[1])), 2000,
+     'beyond the end, the distance is to the endpoint');
+  eq(Math.round(distanceToSegment({ x: -500, y: 0 }, sparse[0], sparse[1])), 500,
+     'and before the start, to the start');
+  eq(distanceToSegment({ x: 5, y: 0 }, { x: 3, y: 0, f: 1 }, { x: 3, y: 0, f: 1 }), 2,
+     'a degenerate zero-length segment is just the point');
+
+  // THE REAL CHOICE. Marco at r22c21 on the 6144 rim: dense climb rail vs sparse rim rail.
+  const body = { x: 20 * 1024 + 512, y: 21 * 1024 + 512 };     // r22c21 in client units
+  const rim = [{ x: 20 * 1024 + 512, y: 1 * 1024 + 512, f: 6144 },
+               { x: 20 * 1024 + 512, y: 25 * 1024 + 512, f: 6144 }];   // the long leg 2
+  const climb = [];
+  for (let k = 0; k < 163; k++)                        // dense, and 3 squares to the west
+    climb.push({ x: 17 * 1024 + 512, y: (k % 27) * 1024 + 512, f: 6016 });
+
+  const byVertex = [['rim', nearestWaypoint(rim, body, { floor: 6144 }).d],
+                    ['climb', nearestWaypoint(climb, body, { floor: 6144 }).d]]
+                   .sort((a, b) => a[1] - b[1])[0][0];
+  const bySegment = [['rim', distanceToRail(rim, body, { floor: 6144 }).d],
+                     ['climb', distanceToRail(climb, body, { floor: 6144 }).d]]
+                    .sort((a, b) => a[1] - b[1])[0][0];
+  eq(byVertex, 'climb', 'nearest VERTEX picks the dense rail — the bug');
+  eq(bySegment, 'rim', 'nearest SEGMENT picks the line the body is standing on — the fix');
+  ok(distanceToRail(rim, body, { floor: 6144 }).d === 0,
+     'and it correctly says the body is ON the rim line, distance 0');
+}
+{
+  // A segment with one end on another shelf is not a segment this body may ride.
+  const ledge = [{ x: 0, y: 0, f: 6144 }, { x: 10000, y: 0, f: 1024 }];
+  const r = distanceToRail(ledge, { x: 5000, y: 0 }, { floor: 6144 });
+  ok(!r.onShelf, 'a segment that leaves the shelf halfway is flagged off-shelf');
+  ok(r.d < OFF_SHELF_PENALTY, 'and the reported distance still has the penalty stripped off');
+  eq(distanceToRail([], { x: 0, y: 0 }, { floor: 0 }).empty, true, 'an empty rail is empty');
+  eq(Math.round(distanceToRail([{ x: 300, y: 0, f: 1 }], { x: 0, y: 0 }, { floor: 1 }).d), 300,
+     'a one-waypoint rail falls back to the point distance');
+}
 
 // ---- the high-water mark, and the run it aborted -----------------------------------------
 {
