@@ -100,15 +100,11 @@ if (!Number.isFinite(ROOM)) {
   process.exit(1);
 }
 
-// The client's own fall physics — clientd3d/move.h. Repeated rather than imported for the
-// same reason m59-fineroute.mjs repeats them: the constants are the game's, and this module
-// should keep working if that one's private helpers move.
-const FALL_V0 = F * 2 / 3;
-const GRAVITY = 5 * F;
-const RUN_SPEED = 5 * F;
-const airTime = drop => (drop <= 0 ? 0
-  : (-FALL_V0 + Math.sqrt(FALL_V0 * FALL_V0 + 4 * (GRAVITY / 2) * drop)) / (2 * (GRAVITY / 2)));
-const reachFor = drop => RUN_SPEED * airTime(drop);
+// The client's own fall physics. This used to be repeated here — "the constants are the
+// game's, and this module should keep working if that one's private helpers move" — and the
+// repetition is exactly what went wrong: FOUR files carried a copy and three of them capped
+// a jump short. Now imported. Corrected 2026-09-10; see m59-falljump-physics.mjs.
+import { maxSpan } from './m59-falljump-physics.mjs';
 
 let R;
 try {
@@ -333,16 +329,27 @@ function backwards({ step = 256, limit = 14 } = {}) {
         q.push({ x: nx, y: ny });
         continue;
       }
-      // Could it FALL to it? Any height above, inside the client's fall reach.
+      // Could it FALL to it? TWO THINGS WERE WRONG HERE and both lost candidates.
+      //
+      //   * `drop > MAX_STEP_HEIGHT` meant a LEVEL hop was never even considered. A body
+      //     running off an edge is airborne whether or not the landing is below it — the
+      //     level reach is 1.38 squares, not zero — so every level and short-drop crossing
+      //     was invisible to this search. Room 27's stone is level with its take-off.
+      //   * `reachFor(drop)` forgets the step the body may still climb on arrival. The
+      //     client's rule is `fallenBy(t) <= drop + MAX_STEP_HEIGHT`, so the reach is
+      //     `maxSpan(drop)` — larger at every drop, by a third of a square near level.
+      //
+      // `judgeStep` above has already claimed anything that is an ordinary walk, so there is
+      // no need to gate on the drop at all: what reaches here is what walking refused.
       const drop = hn - hc;
-      if (drop > MAX_STEP_HEIGHT) {
+      {
         const gap = Math.hypot(nx - cur.x, ny - cur.y);
-        if (gap <= reachFor(drop)) {
+        if (gap <= maxSpan(drop)) {
           seen.set(k, { x: nx, y: ny, kind: 'fall', from: key(cur.x, cur.y) });
           q.push({ x: nx, y: ny });
           dropIns.push({ from: cellName(nx, ny), onto: cellName(cur.x, cur.y),
                          drop, squares: +(gap / F).toFixed(2),
-                         reach_squares: +(reachFor(drop) / F).toFixed(2) });
+                         reach_squares: +(maxSpan(drop) / F).toFixed(2) });
         }
       }
     }

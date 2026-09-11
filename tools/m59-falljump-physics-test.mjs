@@ -10,7 +10,7 @@
 // crossable, and that failure is SILENT — the tool simply offers one fewer route and the room
 // reads as severed. Room 27's mana node was called unreachable by four separate measurements
 // and BASELINE.md concluded no declaration could ever fix it; the only thing wrong was the cap.
-import { fallenBy, airTime, reachFor, maxSpan, heightAfter,
+import { fallenBy, airTime, reachFor, maxSpan, maxSpanDiscrete, heightAfter,
          FALL_V0, GRAVITY, RUN_SPEED, WALK_SPEED, MAX_STEP_HEIGHT, CLIENT_FINENESS as F }
   from './m59-falljump-physics.mjs';
 
@@ -81,7 +81,10 @@ console.log('\nTHE BRANCHED CAP THAT SHIPPED, pinned as the thing it was');
   ok('and that is the half that hides routes', !shipped(2202, 384) && truth(2202, 384));
 
   // The exact jump that closed room 27: 25,44 -> 23,44, span 2202, drop 384.
-  ok('ROOM 27 JUMP 3 IS LEGAL BY 1.6 CLIENT UNITS OUT OF 2203',
+  // Its margin under the CLOSED FORM is 1.57 units, which is thin enough to be worth
+  // distrusting — so it is checked against the client's own integration below rather than
+  // claimed from this number.
+  ok('room 27 jump 3 is legal under the closed form, but only just',
      truth(2202, 384) && maxSpan(384) - 2202 < 5 && maxSpan(384) - 2202 > 0,
      `margin ${(maxSpan(384) - 2202).toFixed(2)}`);
   ok('and the old cap missed it by 666', !shipped(2202, 384) && (2202 - F * 1.5) === 666);
@@ -95,6 +98,41 @@ console.log('\nheightAfter is the carried z a step predicate throws away');
   ok('at the take-off the body is at the take-off floor', heightAfter(5000, 0) === 5000);
   ok('one square out it has fallen 239 units', near(heightAfter(5000, F), 5000 - 239, 1));
   ok('and it keeps falling', heightAfter(5000, 3 * F) < heightAfter(5000, 2 * F));
+}
+
+
+console.log('\nthe CLIENT integrates forward Euler in integers, and that is not the closed form');
+{
+  // moveobj.c advances z with the velocity from the START of each frame, so an accelerating
+  // fall is UNDER-counted: the body falls slower than the closed form and travels further.
+  ok('the client reaches further than the closed form at a 384 drop',
+     maxSpanDiscrete(384, { dt: 16 }) > maxSpan(384));
+  ok('and at dead level too', maxSpanDiscrete(0, { dt: 16 }) > maxSpan(0));
+
+  ok('ROOM 27 JUMP 3 CLEARS THE CLIENT\'S OWN ARITHMETIC BY OVER 30 UNITS, NOT 1.6',
+     [8, 16, 33, 100].every(dt => maxSpanDiscrete(384, { dt }) - 2202 > 30),
+     'the 1.57-unit margin is an artifact of the closed form, which is the conservative one');
+  ok('and so do the other two room 27 drops',
+     maxSpanDiscrete(1280, { dt: 8 }) > 3501 && maxSpanDiscrete(1536, { dt: 8 }) > 3804);
+
+  // gravityAdjust exists to make the ARC frame-rate invariant; what moves with frame rate is
+  // the Euler error, and it moves in the permissive direction at every rate.
+  const across = [5, 8, 16, 33, 66, 100, 200].map(dt => maxSpanDiscrete(384, { dt }));
+  ok('every frame rate from 5 to 200ms is more permissive than the closed form',
+     across.every(v => v > maxSpan(384)),
+     'so maxSpan never offers a short-drop jump the client would refuse');
+  ok('and the spread across frame rates is small — under 200 units',
+     Math.max(...across) - Math.min(...across) < 200);
+}
+
+console.log('\nwhere the closed form STOPS being conservative, so a long declaration is checked');
+{
+  ok('at a 3072 drop it is still conservative', maxSpanDiscrete(3072, { dt: 8 }) > maxSpan(3072));
+  ok('BUT past ~3517 it over-reaches', maxSpanDiscrete(4096, { dt: 8 }) < maxSpan(4096),
+     'a very long declared fall wants maxSpanDiscrete, not maxSpan');
+  ok('and the over-reach stays under half a percent',
+     (maxSpan(10240) - maxSpanDiscrete(10240, { dt: 8 })) / maxSpan(10240) < 0.005);
+  ok('a zero-or-negative limit reaches nothing', maxSpanDiscrete(-MAX_STEP_HEIGHT) === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
