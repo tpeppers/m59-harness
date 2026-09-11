@@ -4,7 +4,8 @@
 //
 // The central case is the real one, with the real numbers: room 49's r25c17 holds four floors
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
-import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY } from './m59-railfollow.mjs';
+import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
+         rejoinedBehind, REJOIN_BEHIND } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -117,6 +118,33 @@ ok(!advanced(10, 10), 'standing still is not');
 ok(!advanced(10, 90, { onShelf: false }), 'a huge jump OFF the shelf is not progress — ' +
    'this is the follower that rode 163 waypoints to the wrong place');
 ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
+
+// ---- the high-water mark, and the run it aborted -----------------------------------------
+{
+  // Marco, room 49, 2026-09-11: mark at 137 on the rim, rejoined at 3 on the canyon floor.
+  const r = rejoinedBehind(137, 3);
+  ok(r.reset, 'rejoining 134 waypoints behind resets the progress measure');
+  eq([r.from, r.to, r.behindBy], [137, 3, 134], 'and reports the jump so it can be logged');
+
+  ok(!rejoinedBehind(137, 130).reset, 'wobbling 7 waypoints back is not a rejoin');
+  ok(!rejoinedBehind(137, 117).reset, 'exactly the threshold is still a wobble');
+  ok(rejoinedBehind(137, 116).reset, 'one past it is a rejoin');
+  ok(!rejoinedBehind(3, 51).reset, 'moving FORWARD is never a rejoin');
+  ok(!rejoinedBehind(-1, 0).reset, 'the initial unset mark does not trigger one');
+}
+{
+  // Bounded: a body falling back to the same place for ever IS stuck, and the detector must
+  // still be able to say so rather than resetting itself indefinitely.
+  const r = rejoinedBehind(137, 3, { rejoins: 3, maxRejoins: 3 });
+  ok(!r.reset, 'the budget is finite — a repeated fall is a real stall');
+  ok(r.exhausted, 'and it says the budget is what stopped it, not the distance');
+  ok(rejoinedBehind(137, 3, { rejoins: 2, maxRejoins: 3 }).reset, 'the last rejoin is allowed');
+}
+{
+  ok(!rejoinedBehind(null, 3).reset, 'a missing mark cannot trigger a reset');
+  ok(!rejoinedBehind(137, undefined).reset, 'nor a missing position');
+  ok(REJOIN_BEHIND === 20, 'the default gap is 20 waypoints, comfortably over a 12-waypoint leg');
+}
 
 console.log(`\nm59-railfollow: ${pass} assertion(s) passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;
