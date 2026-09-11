@@ -80,6 +80,31 @@ function trunkCheckedOutIn() {
   return null;
 }
 
+// IS THIS COMMIT'S CHANGE ALREADY ON ONE OF THESE REFS, UNDER ANOTHER HASH?
+//
+// Used by BOTH divergence questions here -- "is the local trunk a duplicate line" and "is
+// production holding anything stranded" -- because they are the same question about different
+// pairs of refs, and two copies of it would drift.
+//
+// Subject comparison is what docs/m59-git-process.md rule 5 prescribes, and it catches what
+// `git cherry` cannot: a patch-id is computed from the diff, so rebasing a change onto different
+// surrounding lines makes it look brand new. Five of seven commits read as genuinely unpushed
+// that way on 2026-09-11 and were already on origin.
+//
+// `--fixed-strings` because these subjects are prose full of regex metacharacters -- backticks,
+// parentheses, question marks. `null` means the question could not be answered, and every caller
+// treats that as "still missing" rather than as an all-clear.
+function subjectAlreadyOn(sha, refs) {
+  const subject = git(HARNESS, 'log', '--format=%s', '-1', sha);
+  if (!subject) return null;
+  for (const ref of refs.filter(Boolean)) {
+    const hit = git(HARNESS, 'log', '--format=%h', '--fixed-strings', `--grep=${subject}`, '-1', ref);
+    if (hit === null) return null;
+    if (hit) return true;
+  }
+  return false;
+}
+
 function resolveTrunk({ fetch = true } = {}) {
   const note = [];
   // `--quiet` and no refspec write: this updates refs/remotes/origin/<trunk> and nothing else.
@@ -116,7 +141,12 @@ function resolveTrunk({ fetch = true } = {}) {
     const behindOrigin = git(HARNESS, 'merge-base', '--is-ancestor', remote, local) === null;
     if (behindOrigin) {
       const cherry = git(HARNESS, 'cherry', `origin/${TRUNK}`, TRUNK) || '';
-      const missing = cherry.split('\n').filter(l => l.startsWith('+'));
+      // Patch-id first, then subject -- see subjectAlreadyOn. Without the second pass this
+      // reports a rebased duplicate line as "genuinely unpushed work" for ever, which is the
+      // cry-wolf failure one level up from the one it was written to fix.
+      const missing = cherry.split('\n').filter(l => l.startsWith('+'))
+        .map(l => l.slice(1).trim()).filter(Boolean)
+        .filter(sha => subjectAlreadyOn(sha, [`origin/${TRUNK}`]) !== true);
       if (!missing.length) {
         // A duplicate line. Origin holds every change, so origin IS the trunk to compare against.
         note.push(`local ${TRUNK} has diverged from origin/${TRUNK}, but every commit on it is ` +
@@ -204,22 +234,8 @@ function survey({ fetch = true } = {}) {
     strandedShas = strandedCommits({
       prodHead, trunkHead, trunkRef, remoteRef,
       cherry: (base, head) => git(HARNESS, 'cherry', base, head),
-      // THE THIRD OPINION, AND THE ONE RULE 5 ACTUALLY PRESCRIBES. A patch-id is still a hash:
-      // rebase a change onto different surrounding lines and `git cherry` calls it missing. Five
-      // of seven commits read as genuinely unpushed that way on 2026-09-11 and were already on
-      // origin under other subjects-identical hashes. `--fixed-string` because these subjects
-      // are prose full of regex metacharacters -- backticks, parentheses, question marks.
-      subjectSeen: (sha) => {
-        const subject = git(HARNESS, 'log', '--format=%s', '-1', sha);
-        if (!subject) return null;                 // cannot say: leaves the commit stranded
-        for (const ref of [trunkRef, remoteRef].filter(Boolean)) {
-          const hit = git(HARNESS, 'log', '--format=%h', '--fixed-strings',
-                          `--grep=${subject}`, '-1', ref);
-          if (hit === null) return null;
-          if (hit) return true;
-        }
-        return false;
-      },
+      // THE THIRD OPINION, AND THE ONE RULE 5 ACTUALLY PRESCRIBES -- see subjectAlreadyOn.
+      subjectSeen: (sha) => subjectAlreadyOn(sha, [trunkRef, remoteRef]),
     });
   }
   // WHAT THIS CUT WOULD NEWLY SHIP, and whether any of it asks not to be shipped.

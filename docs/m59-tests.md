@@ -768,7 +768,7 @@ the records it describes.
   real commits, bodies up to 4,478 characters of prose about releases and deploys, it holds none.
   Also pins that a `Claude-Session:` trailer is NOT a hold, since rule 6 exists to let somebody
   ask what you meant and would become a lock whose key is gone if it gated shipping) and
-  `node tools/m59-deploy-drift-test.mjs` (14 — **ahead by HASH is not ahead by WORK, and the
+  `node tools/m59-deploy-drift-test.mjs` (20 — **ahead by HASH is not ahead by WORK, and the
   deploy check must be able to come down**. `--verify` is what stands between a `--cut` and
   burying somebody's work, and on 2026-09-11 it announced *"prod is 37 commit(s) AHEAD of main …
   that work is stranded until somebody notices and adopts it by hand"* on a tree where nothing
@@ -786,7 +786,14 @@ the records it describes.
   keeps refusing — a guarantee that cannot be evaluated must refuse, which is the rule the
   pre-commit hook broke by sitting silently inert for an afternoon. The decision is a pure
   function in its own module for the reason `nextDeployTag` is: `m59-deploy.mjs` RUNS ON IMPORT,
-  so a test that imported it would execute the modes that move production) and
+  so a test that imported it would execute the modes that move production. **AND A PATCH-ID IS
+  STILL A HASH** — `git cherry` computes it from the diff, so a change rebased onto different
+  surrounding lines reads as brand new. An hour after the first fix, seven commits sat only on
+  local `main` and cherry called all seven missing; comparing SUBJECTS against origin, which is
+  what rule 5 actually prescribes, showed **five were already there**, and cherry-picking the
+  first hit a conflict — what re-landing a landed change looks like from the inside. So
+  `subjectSeen` is a third opinion, pinned as a NARROWING ONLY: it can take a commit off the
+  stranded list and never add one, and a `null` from it leaves the commit stranded) and
   `node tools/m59-whowrote-test.mjs` (12 — **the attribution tool, against fixtures in a fake
   home**, so it reads none of this machine's real transcripts. It exists because the tool's own
   first version answered the question CONFIDENTLY AND WRONGLY: run from a worktree it derived the
