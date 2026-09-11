@@ -749,6 +749,20 @@ the records it describes.
   every assertion here stayed green. Both constants are read out of the source rather than
   copied, and the pattern that reads them uses `[0-9]` rather than an escape because it
   lives in a template literal, which eats the backslash before RegExp sees it) and
+  `node tools/m59-whowrote-test.mjs` (12 — **the attribution tool, against fixtures in a fake
+  home**, so it reads none of this machine's real transcripts. It exists because the tool's own
+  first version answered the question CONFIDENTLY AND WRONGLY: run from a worktree it derived the
+  Claude project slug from `basename(REPO)` — the WORKTREE's name, `land-codex-a3` — which matches
+  no project directory, so it found the Codex sessions, reported ZERO Claude ones for a file six
+  Claude transcripts mention, and printed a tidy healthy-looking table. An attribution answer gets
+  acted on: a wrong one was relayed to the wrong session twice in one night, about a file driving
+  twenty-one characters on a shared server. So the two things that can silently go wrong are
+  pinned — WHICH directories it looks in (the slug still resolves to `m59-harness` when the test
+  itself is run from a worktree, which is the regression), and whether it ever carries CONTENT
+  out. That second one is a safety rule rather than a style choice: these transcripts hold
+  whatever passed through a session, including the roster that is the only copy of twenty-three
+  account passwords, so a row is asserted to be exactly `file,hits,mtime,session,system` and the
+  planted secret is asserted absent from the whole serialized result) and
   `node tools/m59-roo-test.mjs` (74, with raw-room checks skipping without a copy of the game's
   `resource/rooms`). The rest need a live server —
   `m59-autopilot-test`, `m59-skills-test` and `m59-coop-test` all want a broker on
