@@ -1462,9 +1462,26 @@ export class RoomGeometry {
       //     room  27    588                                    0 accepted
       //
       // Zero out of 11,949, every refusal `step_too_high`. So the harness has TWO height rules
-      // where the game has one, and the second one silently overrules the first everywhere the
-      // first would have said yes. Every "the stone is above ground we can reach" verdict in
-      // `.claude/skills/node-runner/nodes/BASELINE.md` was produced under this rule.
+      // where the game has one, and the blunt one answers first.
+      //
+      // BUT IT IS COSTING NOTHING IN THESE ROOMS, AND THAT MATTERS. Asked of every pair it
+      // refuses — does the move cross a wall that would have gated it anyway? — the answer is
+      // that almost all of them do:
+      //
+      //     room 515   991 refused   886 cross a TEXTURED riser   0 ungated   0 wall-less
+      //     room 589   470           180                          0           7
+      //     room  27    15            15                          0           0
+      //
+      // So it is a LATENT bug rather than an active one: it duplicates a rule the client
+      // already applies, and in these four rooms it has not been found refusing anything the
+      // client would allow. No free climb has been demonstrated in any of them. The reason
+      // these stones are unreachable is therefore still open, and it is NOT this.
+      //
+      // An earlier version of this comment said the blunt rule "silently overrules the first
+      // everywhere the first would have said yes". That was measured with a segment
+      // intersection test that required a PROPER crossing, so 801 pairs whose endpoint lands
+      // exactly ON a wall were counted as crossing none. A 256-unit lattice on geometry whose
+      // vertices sit at square boundaries hits that case constantly. Withdrawn.
       //
       // IT IS STILL ON, DELIBERATELY, AND THAT IS NOT AN ENDORSEMENT. Turning it off re-opens
       // every cliff it exists to close, and the routing consequences are fleet-wide; the fix is
