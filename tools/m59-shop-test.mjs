@@ -152,7 +152,19 @@ console.log('\nthe tool branches on the session, and keeps the arithmetic');
      !/const SHOP_MAX_PER_BUY = Number/.test(broker));
   // Hammering a counter that has already said no is how a town trip runs for ever.
   ok('and it stops at the first chunk that brings nothing',
-     /if \(!arrived\.length\) \{/.test(tool) && /brought nothing/.test(tool));
+     /if \(!delivered\) \{/.test(tool) && /brought nothing/.test(tool));
+
+  // BUT "BROUGHT NOTHING" MUST MEAN THE PACK DID NOT MOVE, NOT THAT A FRAME WAS LATE.
+  //
+  // Measured 2026-09-11 at Herbutte's counter: three buys of 10, 25 and 50 sapphires each
+  // answered `got: []` and this tool said "nothing arrived and nothing was said" every time,
+  // while the pack went 0 -> 10 -> 35 -> 85. Paired with the stop-early rule above, an order
+  // big enough to be split bought ONE chunk and then declared itself refused.
+  ok('a late `got` frame is not a refusal — the pack is asked before giving up',
+     /delivered without a \\?`got\\?` frame/.test(tool) && /const countOwn = async/.test(tool),
+     'the chunk loop still believes `got` alone');
+  ok('and it counts by NAME, because a purchase never lands as the shelf id',
+     /wantNames/.test(tool) && !/now\.get\(id\)/.test(tool));
 }
 
 console.log('\nA STACKABLE BOUGHT AS A BARE ID BUYS NOTHING, SILENTLY');

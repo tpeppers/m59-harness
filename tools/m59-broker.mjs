@@ -9174,8 +9174,45 @@ const TOOLS = [
           left -= take;
         }
       }
+      // A `got` EVENT IS NOT THE ONLY EVIDENCE, AND ON A KEEPER IT IS OFTEN ABSENT.
+      //
+      // Measured 2026-09-11 at Herbutte's counter in Barloque: three separate buys of 10, 25
+      // and 50 sapphires each answered `got: []` — this tool reported "nothing arrived and
+      // nothing was said" every time — while the character's pack went 0 -> 10 -> 35 -> 85.
+      // The items arrive; the `got` frame does not always arrive inside the four seconds the
+      // keeper waits for it.
+      //
+      // That false negative is not cosmetic, because of the rule below it: the chunk loop
+      // stops at the first chunk that brought nothing. So an order big enough to be split
+      // bought one chunk and then declared itself refused — which is what "+21/200" and
+      // "+36/200" looked like from the outside all evening, and why they read as empty
+      // shelves rather than as a loop giving up.
+      //
+      // So the PACK decides, the way it does for every other exchange in this repository, and
+      // `got` stays as the fast path. Counting only the ids in the order, because a keeper is
+      // looting and eating the whole time and the pack moves for reasons that are not ours.
+      // COUNTED BY NAME, NOT BY ID. A purchase does not land as the merchant's object — it
+      // arrives as a new object, or merges into a stack the character already carries — so
+      // the shelf id is never in the pack afterwards and counting by it would always read
+      // zero. The offer's names are what carry over.
+      const wantNames = new Set(rounds.map(r => (offer.get(r.id)?.name ?? '').toLowerCase())
+                                      .filter(Boolean));
+      const countOwn = async () => {
+        try {
+          await s.pacer.submit('read', () => c.requestInventory());
+          await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
+          const by = new Map();
+          for (const o of (c.inventory ?? [])) {
+            const nm = String(c.rsc?.get?.(o.nameRsc) ?? '').toLowerCase();
+            if (!wantNames.has(nm)) continue;
+            by.set(nm, (by.get(nm) ?? 0) + (Number(o.amount) || 1));
+          }
+          return by;
+        } catch { return null; }
+      };
       const got = [], messages = [];
       let refusedAfter = null;
+      let held = await countOwn();
       for (const [n, line] of rounds.entries()) {
         let arrived = [], said = '';
         if (proxied) {
@@ -9194,7 +9231,24 @@ const TOOLS = [
         // STOP ON THE FIRST CHUNK THAT BRINGS NOTHING. Whatever ended it — the purse, a
         // full pack, a merchant that has stopped answering — will end the next one too, and
         // hammering a counter that has already said no is how a town trip runs for ever.
-        if (!arrived.length) {
+        // But "brought nothing" has to mean the PACK did not move, not that a frame was late.
+        let delivered = arrived.length > 0;
+        if (!delivered && held) {
+          const now = await countOwn();
+          const grew = now
+            ? [...wantNames].filter(nm => (now.get(nm) ?? 0) > (held.get(nm) ?? 0))
+                            .map(nm => `${nm} +${(now.get(nm) ?? 0) - (held.get(nm) ?? 0)}`)
+            : [];
+          if (grew.length) {
+            delivered = true;
+            // Said as what it is, rather than inventing item rows the wire never sent.
+            messages.push(`chunk ${n + 1} delivered without a \`got\` frame (${grew.join(', ')})`);
+          }
+          held = now ?? held;
+        } else if (delivered) {
+          held = (await countOwn()) ?? held;
+        }
+        if (!delivered) {
           refusedAfter = `chunk ${n + 1} of ${rounds.length} brought nothing`;
           break;
         }
