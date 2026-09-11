@@ -13898,9 +13898,45 @@ export class Autopilot {
       if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON' ||
           this.waitingOn?.code === 'VIGOR_FOR_CREATE_WEAPON') this.doneWaiting?.();
     }
-    // Ahead of the danger and rest branches on purpose: being unarmed is WHY the fight
-    // is going badly, and the shortest way out is to be holding something.
-    if (!skills.isArmed(this.s.client)) {
+    // AHEAD OF THE DANGER AND REST BRANCHES ON PURPOSE — BUT NOT BELOW THE FLEE LINE.
+    //
+    // Being unarmed is WHY a fight is going badly, and the shortest way out is usually to be
+    // holding something. That is true of a character that is losing. It is not true of one
+    // that is dying: at 5 of 52 the answer is to leave, and every second spent conjuring is a
+    // second the thing hitting you gets for free.
+    //
+    // THE ORDERING IS THE BUG. This rung sits 654 lines and twenty-two possible `return`s
+    // ahead of `escapeIfWedgedAndHurt`, the survival rung below the flee line — so a hurt
+    // character ran the whole arming ladder and the pass ENDED before survival was ever
+    // asked. Measured across prod's postmortems: five deaths at 3-6% health, every one of
+    // them with a weapon in the pack its own ban list forbade, so the ladder could not even
+    // succeed. Sweetums spent its last thirteen passes over 13.9 seconds on "unarmed and in
+    // a room that spawns — leaving to regain mana", at 3 of 49, with a battered skeleton
+    // hitting it and a mace it was not allowed to hold.
+    //
+    // `fleeAt` is the same line `escapeIfWedgedAndHurt`, the flee rung and the trade rung all
+    // use, so this hands the pass over at exactly the point the survival half starts caring.
+    // A character hurt but SAFE still arms: it heals above the line in a sanctuary and the
+    // next pass runs this normally — which is the common case, and the one that must not
+    // regress into "never arms again".
+    const armVitals = this.s.client?.vitals?.();
+    const armHealth = armVitals?.health?.max > 0
+      ? armVitals.health.value / armVitals.health.max : null;
+    const tooHurtToArm = armHealth !== null && armHealth < this.safety().fleeAt;
+    if (tooHurtToArm && !skills.isArmed(this.s.client)) {
+      // Said once a minute rather than every pass: a body below the flee line is having a
+      // bad enough second without its own journal being the loudest thing in the room.
+      if (Date.now() - (this._lastArmDeferAt ?? 0) > 60_000) {
+        this._lastArmDeferAt = Date.now();
+        this.note('unarmed, but too hurt to stop and fix it', {
+          health: armVitals?.health ? `${armVitals.health.value}/${armVitals.health.max}` : null,
+          flee_at: Math.round(this.safety().fleeAt * 100) + '%',
+          why: 'the arming ladder ends the pass, and below the flee line the rungs that ' +
+               'matter are the survival ones further down',
+          doing: 'handing the pass to survival — it arms again once it is back above the line' });
+      }
+    }
+    if (!tooHurtToArm && !skills.isArmed(this.s.client)) {
       // A shattered weapon still occupies the room needed for its replacement.
       // The ordinary farm sweep is below this stage and cannot run while it is
       // blocked here. Keep the same drop policy and sweep rate when rearming.

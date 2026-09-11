@@ -142,6 +142,35 @@ console.log('\nA REFUSAL THAT SURVIVES BEING SATISFIED IS A LIE ON THE BOARD');
      /MANA_FOR_CREATE_WEAPON' \|\|[\s\S]{0,140}VIGOR_FOR_CREATE_WEAPON'\) this\.doneWaiting/.test(auto));
 }
 
+console.log('\nA DYING CHARACTER DOES NOT STOP TO ARM ITSELF');
+{
+  // THE ORDERING IS THE BUG. The arming rung sat 654 lines and twenty-two possible `return`s
+  // ahead of `escapeIfWedgedAndHurt`, the survival rung below the flee line — so a hurt
+  // character ran the whole arming ladder and the pass ENDED before survival was ever asked.
+  // Five deaths at 3-6% health across prod's postmortems, every one carrying a weapon its own
+  // ban list forbade so the ladder could not even succeed. Sweetums spent its last thirteen
+  // passes over 13.9 seconds on "unarmed and in a room that spawns — leaving to regain mana",
+  // at 3 of 49, with a battered skeleton hitting it.
+  ok('the arming ladder is gated on health, not entered unconditionally',
+     /const tooHurtToArm = armHealth !== null && armHealth < this\.safety\(\)\.fleeAt;/.test(auto),
+     'the unarmed branch still runs at any health');
+  ok('and it is the SAME line the survival rung uses, not a second opinion',
+     /tooHurtToArm[\s\S]{0,600}?safety\(\)\.fleeAt/.test(auto) &&
+     /frac >= this\.safety\(\)\.fleeAt\) return false;/.test(auto));
+  ok('the ladder only runs above it',
+     /if \(!tooHurtToArm && !skills\.isArmed\(this\.s\.client\)\) \{/.test(auto),
+     'the ladder is not actually gated on the flee line');
+  // THE REGRESSION THIS MUST NOT BECOME is "hurt once, unarmed for ever": a character that is
+  // hurt but SAFE has to keep arming, or it heals in an inn and walks back out empty-handed.
+  ok('the gate is health, never danger — so a hurt but safe body still arms once it heals',
+     !/tooHurtToArm[\s\S]{0,400}?(crowded\(\)|near\.length|threat)/.test(auto),
+     'the gate has picked up a danger term, which would leave a safe hurt character unarmed');
+  ok('and the deferral says so out loud rather than passing in silence',
+     /unarmed, but too hurt to stop and fix it/.test(auto));
+  ok('but not once a second — a dying body should not be the loudest thing in its own journal',
+     /_lastArmDeferAt[\s\S]{0,80}60_000/.test(auto));
+}
+
 console.log('');
 console.log('and the blocker that is actually biting is named, not guessed');
 {
