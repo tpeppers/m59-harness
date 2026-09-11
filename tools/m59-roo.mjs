@@ -3974,6 +3974,34 @@ export function canCrossWall(wall, z = 0, side = 'pos', { playerHeight = PLAYER_
 // IntersectNode uses the wall's endpoint-0 z1/z2 values even for slopes and bowties.
 // Preserve that quirk for exact client compatibility; sampling a nicer contact-point
 // height can authorize a climb the stock client refuses.
+//
+// ============ "IS THIS WALL CROSSABLE" HAS NO ANSWER WITHOUT A SIDE ============
+//
+// `side` is not a detail. move.c:530-539 picks the sidedef FACING the body, so the
+// below-texture short-circuit — the thing that removes the step limit entirely — is a property
+// of ONE SIDE, not of the wall. `other_sector` flips with it, so the wading-depth allowance is
+// directional too. A wall can therefore be free to climb one way and capped at MAX_STEP_HEIGHT
+// coming back, structurally rather than by accident.
+//
+// THIS IS COMMON, NOT EXOTIC. Two-sided walls whose below texture is present on one side and
+// absent on the other, measured across the node rooms:
+//
+//     room  27   33 of 385      room 515   57 of 949      room 579   19 of 458
+//     room  45   36 of 885      room 589   13 of 204      room 750    9 of 336
+//     room  39   68 of 86  (79%)
+//
+// 235 of 3303, 7.1% overall — and Castle Victoria's upstairs is FOUR FIFTHS of its two-sided
+// walls. Room 45 carries the measured instance: `(47616,56832)-(48128,58368)` is ungated on the
+// approach and `belowType=1` coming back.
+//
+// SO A SYMMETRIC REACHABILITY MODEL IS WRONG AT ONE WALL IN FOURTEEN, and wrong in the worst
+// direction: it calls a room connected when the return leg does not exist. Same hazard as a
+// one-way fall, arriving by a different mechanism. Flood DIRECTED, from where a body actually
+// enters, and never infer `b -> a` from `a -> b`.
+//
+// Note also that `z` DEFAULTS TO 0 below, which is not a neutral choice: at z=0 almost any
+// elevated wall reads as over-cap. Pass the floor the body is actually standing on, or the
+// answer is about a body at the bottom of the world.
 export function canCrossWallAt(wall, _x, _y, z = 0, side = 'pos',
                                { playerHeight = PLAYER_HEIGHT } = {}) {
   const sd = side === 'pos' ? wall.posSidedefRec : wall.negSidedefRec;
