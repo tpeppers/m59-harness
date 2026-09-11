@@ -2642,8 +2642,33 @@ class KeeperProxy {
   // Mutation methods — proxy to keeper.
   // COORDINATE CONTRACT: square movement is `(col,row)`; fine movement is named
   // `(x,y)` in 64-units-per-square kod wire space.
+  // A FINE WALK IS AN ORDER OF MAGNITUDE SLOWER THAN A SQUARE ONE, AND STRADDLES THE 60s
+  // DEFAULT. This is `keeperAction`'s own lesson arriving a second time: "the default stays
+  // 60s for everything that has not thought about it", and the fine path had not thought
+  // about it. Measured 2026-09-11 on a healthy broker with the keeper pid held constant:
+  //
+  //     walk_to col/row     4s,  8s, 12s, 30s, 48s
+  //     walk_to x/y        55s, 63s, 66s, 67s, 72s
+  //
+  // One call under the line returned a real result with a position and a step log; every
+  // call over it was aborted at sixty seconds and surfaced as
+  // `{ error: "aborted due to timeout", timed_out_after_ms: 60000 }`. So it read as a HANG,
+  // and as an intermittent one, when it was neither — the same disguise the foreground
+  // `travel` bug wore, and for the same reason.
+  //
+  // What it cost: a fine rail computed for room 45's mana node — 650 waypoints the mover's
+  // own trace had already accepted — could not be driven a single leg, and the defect was
+  // written up three times as a hang, a keeper wedge and a broker wedge before it was
+  // measured.
+  //
+  // Five minutes, not travel's twenty: a leg is one short line and anything approaching this
+  // is pathological rather than slow. And the caller's own timeout should still be the
+  // binding one — two timeouts racing with the wrong one winning silently is this bug again.
   async walkTo(col, row, opts = {}) {
-    return keeperAction(this.name, this._index, 'walk', { col, row, ...opts });
+    const fine = opts.fine === true
+      || Number.isFinite(opts.x) || Number.isFinite(opts.y);
+    return keeperAction(this.name, this._index, 'walk', { col, row, ...opts },
+                        fine ? { timeoutMs: 5 * 60_000 } : undefined);
   }
   async step(col, row, opts = {}) {
     return keeperAction(this.name, this._index, 'walk', { col, row, steps: 1, ...opts });
