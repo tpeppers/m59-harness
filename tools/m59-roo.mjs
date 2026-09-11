@@ -1472,10 +1472,23 @@ export class RoomGeometry {
       //     room 589   470           180                          0           7
       //     room  27    15            15                          0           0
       //
-      // So it is a LATENT bug rather than an active one: it duplicates a rule the client
-      // already applies, and in these four rooms it has not been found refusing anything the
-      // client would allow. No free climb has been demonstrated in any of them. The reason
-      // these stones are unreachable is therefore still open, and it is NOT this.
+      // IN ROOM 45 IT IS ACTIVE, AND HERE IS THE INSTANCE. Wall
+      // `(47616,56832)-(48128,58368)`, z0=2464 z1=2912 — a 448-unit rise, over the cap. Its
+      // approach-side sidedef has `belowType=0` and is passable, so the client short-circuits
+      // and imposes NO limit; `canCrossWallAt` at the real standing floor of 2464 agrees and
+      // says CROSSABLE; and `traceFineMoveClient` then refuses it `step_too_high`. That is
+      // this rule overruling the correct one, with coordinates, seven refused pairs of them.
+      // (The far side carries `belowType=1`, so the climb is one-way — which is exactly the
+      // shape that makes a room look severed.)
+      //
+      // AND IT COSTS NOTHING THERE EITHER, WHICH IS THE PART TO CARRY. The take-offs are in
+      // the arrival flood and all three landings are ALREADY REACHED by another route: seeding
+      // them adds +0 samples to a 54,849-sample flood, and room 45's meld box stays at 0 of
+      // 400. So the bug is real, located, and not load-bearing for any stone measured so far.
+      //
+      // It duplicates a rule the client already applies. Where the duplicate diverges it has
+      // been caught doing so exactly once, and fixing it would not have moved a single node.
+      // The reason these stones are unreachable is therefore still open, and it is NOT this.
       //
       // An earlier version of this comment said the blunt rule "silently overrules the first
       // everywhere the first would have said yes". That was measured with a segment
