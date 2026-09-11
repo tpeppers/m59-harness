@@ -283,4 +283,57 @@ const ok = (what, cond) => { assert.ok(cond, what); n++; };
   ok('and the plural spelling is the same item', keep('herbs') === true);
 }
 
+
+// ---------------------------------------------------------------- the INBOUND half
+//
+// The book recorded withdrawals and nothing else, so "what has the hall absorbed" had no
+// durable answer at all -- only `tally.guild_contributed` on a keeper that restarts about
+// once a minute.
+//
+// THE ASSERTION THAT MATTERS IS THE SEPARATION. `totals()` is the figure a 12,000-a-day hall
+// is judged on, and the saving is realised at WITHDRAWAL -- so a unit that goes in and comes
+// out again must be counted once. If deposits ever land in `moves`, the volume doubles while
+// the money stays right: honest about shillings and wrong about units, which is the shape of
+// statistic nobody catches.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'm59-stockin-'));
+  try {
+    const book = new StockpileBook({ fleet: 'testfleet', dir });
+
+    book.deposit({ item: 'elderberry', amount: 40, slot: 1, by: 'Fozzie' });
+    book.deposit({ item: 'herb', amount: 25, slot: 1, by: 'Fozzie' });
+    book.deposit({ item: 'elderberry', amount: 10, slot: 1, by: 'Gonzo' });
+
+    const dep = book.depositTotals();
+    ok('every verified deposit is recorded', dep.deposits === 3);
+    ok('units are summed', dep.units === 75);
+    ok('and split by item', dep.by_item.elderberry === 50 && dep.by_item.herb === 25);
+    ok('and attributed to whoever carried them',
+       dep.by_character.Fozzie === 65 && dep.by_character.Gonzo === 10);
+
+    // ONLY VERIFIED MOVEMENT, exactly as `record` does it. An intended deposit is not one.
+    book.deposit({ item: 'elderberry', amount: 0, slot: 1, by: 'Waldorf' });
+    ok('a zero deposit is not an event', book.depositTotals().deposits === 3);
+
+    // THE SEPARATION.
+    ok('deposits do not appear as moves', book.totals().moves === 0);
+    ok('and contribute nothing to the saving', book.totals().saved === 0);
+    ok('so a hall with only deposits is NOT yet paying for itself',
+       book.totals().covers === false);
+
+    // A withdrawal still lands where it always did, and does not disturb the inbound tally.
+    book.record({ ...savingsOf({ item: 'elderberry', amount: 10,
+                                 buyPrice: 12, sellPrice: 4 }), to: 'Kermit', from: 'chest 1' });
+    ok('a withdrawal is a move', book.totals().moves === 1);
+    ok('carrying the spread', book.totals().saved === 160);
+    ok('while the deposit tally is untouched', book.depositTotals().units === 75);
+
+    // AND IT SURVIVES A RESTART, which is the entire reason the book is on disk: a keeper
+    // tally would have reset about four times during the walk to Barloque.
+    const reopened = new StockpileBook({ fleet: 'testfleet', dir });
+    ok('both halves survive being reopened',
+       reopened.depositTotals().units === 75 && reopened.totals().moves === 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 console.log(`\n${n} passed, 0 failed\n`);

@@ -15,6 +15,8 @@ import { economy, SHORT_BELOW , foodHeld} from './m59-economy.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore } from './m59-dashboard.mjs';
 import { esc, ago, num, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
+import { StockpileBook } from './m59-stockpile.mjs';
+import { titheFleet } from './m59-tithe.mjs';
 import { StorageCache, packFullness, GUILD_CHEST_SLOTS, VAULT_BULK_MAX, CHEST_BULK_MAX,
          BOOKMAKERS_CHESTS } from './m59-storage.mjs';
 
@@ -473,6 +475,67 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
              opened ${esc(ago(ch.observed_at))}${ch.opened_by ? ' by ' + esc(ch.opened_by) : ''}</div>
            ${itemList(ch.items, 'empty')}</div>`).join('')}
   </div>
+
+  ${(() => {
+    // DOES THE HALL PAY FOR ITSELF? The question the stockpile exists to answer, and until
+    // now the ledger that answers it had no reader anywhere in the repository.
+    //
+    // IN and OUT are deliberately two figures. Units IN is volume the hall absorbed; units
+    // OUT is the only half that carries money, because the saving is realised when somebody
+    // takes a reagent instead of buying one. Adding them would make the stockpile look
+    // twice as productive as it is.
+    let out, dep;
+    try {
+      // THE SAME KEY THE WRITER USES, never a second opinion about the fleet's name.
+      // The book is written with `titheFleet()`; deriving the name a different way here
+      // would read a different file on any machine where the two disagree, and render an
+      // empty stockpile over a ledger that is filling up perfectly well.
+      const book = new StockpileBook({ fleet: titheFleet() });
+      out = book.totals(); dep = book.depositTotals();
+    } catch { return ''; }
+    if (!out.moves && !dep.deposits)
+      return `<h3>Stockpile</h3>
+        <div class="sub" style="margin-top:-.4rem">Nothing has moved through the chests yet —
+        no deposit and no withdrawal has been recorded. That is not the same as a stockpile
+        that is not working: it is the state before the first town trip runs with
+        <code>guildWants</code> enabled.</div>`;
+    const spread = out.unpriced_moves
+      ? `<div class="caveat"><b>${num(out.unpriced_moves)} of ${num(out.moves)} withdrawal(s)
+           had no observed price.</b> A missing price contributes ZERO to the saving rather
+           than a guess — an optimistic ledger would always justify the hall it is meant to be
+           judging — so the figure below is a FLOOR, never an estimate.</div>`
+      : '';
+    return `<h3>Stockpile</h3>
+      <div class="sub" style="margin-top:-.4rem">Every unit moved chest &rarr; pack instead of
+        merchant &rarr; pack saves the spread: the buy price avoided <em>and</em> the sell price
+        forgone. Measured over ${num(out.days)} day(s) against rent of
+        ${num(out.rent_per_day)}/day.</div>
+      <div class="panel" style="padding:.5rem .75rem">
+        <table><thead><tr><th></th><th class="num">units</th><th class="num">moves</th>
+          <th class="num">buy avoided</th><th class="num">sell forgone</th>
+          <th class="num">saved</th></tr></thead>
+        <tbody>
+          <tr><td>in (deposited)</td><td class="num">${num(dep.units)}</td>
+              <td class="num">${num(dep.deposits)}</td>
+              <td class="num dim" colspan="3">no money moves on the way in — the saving is
+                realised when somebody takes one instead of buying one</td></tr>
+          <tr><td>out (withdrawn)</td><td class="num">${num(out.units)}</td>
+              <td class="num">${num(out.moves)}</td>
+              <td class="num">${num(out.buy_avoided)}</td>
+              <td class="num">${num(out.sell_forgone)}</td>
+              <td class="num"><b>${num(out.saved)}</b></td></tr>
+        </tbody></table>
+        <p style="font-size:.82rem;margin:.5rem 0 0">
+          ${out.covers
+            ? `<b>The stockpile covers the rent</b> — ${num(out.per_day)}/day saved against
+               ${num(out.rent_per_day)}/day of rent.`
+            : `<b>Not yet paying for itself.</b> ${num(out.per_day)}/day saved against
+               ${num(out.rent_per_day)}/day of rent — short by
+               ${num(out.shortfall_per_day)}/day.`}
+        </p>
+      </div>
+      ${spread}`;
+  })()}
 
   <h2>Every character</h2>
   <div class="sub">Rows tinted orange are under ${SHORT_BELOW} of a reagent and cannot cast
