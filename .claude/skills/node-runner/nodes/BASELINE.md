@@ -616,6 +616,35 @@ walk_to { agent, col: 10, row: 21, max_steps: 60 }
 path that never returns. The coordinates are right — `protocol = round(client/16 + 64)` matches
 `standPointWire` exactly, and the target square resolves correctly in both spaces.
 
+**And the A/B is cleaner than that, on one keeper in one minute** (pid 31716, `in_game: true`):
+
+```
+col/row : 48s  { arrived:false, steps:29, replans:8, reason:"no_ground_gained" }   <- 29 steps TAKEN
+x/y     : 63s  { error:"The operation was aborted due to timeout", timed_out_after_ms:60000 }
+col/row :  8s  { error:"hk2: keeper identity could not be verified; refusing write" }
+```
+
+The third line is the part that makes this more than slow: **the x/y call leaves the keeper
+wedged**, so the next ordinary write is refused on identity. A caller that retries the fine
+path therefore degrades the keeper rather than just failing.
+
+THE RAIL IS NOT THE PROBLEM, and this was checked rather than assumed. The operator's advice —
+*"find/write a tool that treats falls like walls and then apply that while pathing to the
+south exit"* — is now in `floodClimb` as `maxDescend` (default `Infinity`, so nothing else
+moves; `m59-fineroute.mjs` and `m59-jumpfinder.mjs`'s `closure()` both had the idea first, and
+neither runs on a lattice fine enough for these rooms). Room 49, from r22c11 to the south exit:
+
+| maxDescend | samples | exit square |
+|---|---|---|
+| 0 / 64 / 128 | 1,635 | 0 / 256 |
+| 384 | 45,548 | 0 / 256 |
+| **768** | **47,243** | **192 / 256** |
+| Infinity | 48,195 | 192 / 256 |
+
+So a ledge walk *does* reach it, at a descent cap of 768 — and the resulting path is
+**identical, waypoint for waypoint**, to the one the free-descent flood found. The line was
+already hugging the wall. Nothing about the rail needs fixing.
+
 So the badlands stone is now blocked on a **third** thing, and it is ours rather than the
 world's: the terrain permits the walk, the collision layer permits the walk, we have the line —
 and the one tool that can follow a line does not come back. That is the next thing to fix, and
