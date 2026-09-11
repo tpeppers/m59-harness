@@ -83,3 +83,34 @@ export function advanced(fromIndex, toIndex, { onShelf = true } = {}) {
   if (!onShelf) return false;
   return Number.isFinite(fromIndex) && Number.isFinite(toIndex) && toIndex > fromIndex;
 }
+
+/** Default gap, in waypoints, that separates rejoining the line from wobbling on it. */
+export const REJOIN_BEHIND = 20;
+
+/**
+ * A HIGH-WATER MARK IS NOT A PROGRESS MEASURE ON GROUND YOU CAN FALL OFF.
+ *
+ * A follower judges progress by "did my waypoint index beat the furthest I have reached", which
+ * is right on a line you stay on and wrong the moment you leave it. Measured 2026-09-11: Marco
+ * localised at waypoint 137 on room 49's 6144 rim, left the shelf, landed on the canyon floor,
+ * honestly re-joined the line at waypoint 3, then climbed 3 -> 15 -> 27 -> 39 -> 51 with every
+ * leg 0 units off the line — and the stall detector stopped him at the seventh leg for "no
+ * progress past waypoint 137". Climbing from the bottom can never beat a mark set at the top, so
+ * a run that was working was aborted as stuck.
+ *
+ * Falling and rejoining lower down restarts the journey, so it restarts the measure. Bounded,
+ * because a body that falls back to the same place for ever IS stuck and saying so is the whole
+ * job of a stall detector.
+ *
+ * Returns whether the mark should be reset, so the caller can log it — a progress measure that
+ * silently restarts itself is how a stall becomes invisible.
+ */
+export function rejoinedBehind(furthest, current, { behind = REJOIN_BEHIND, rejoins = 0,
+                                                    maxRejoins = 3 } = {}) {
+  if (!Number.isFinite(furthest) || !Number.isFinite(current)) return { reset: false };
+  if (rejoins >= maxRejoins)
+    return { reset: false, exhausted: true, behindBy: Math.max(0, furthest - current) };
+  const behindBy = furthest - current;
+  if (behindBy <= behind) return { reset: false, behindBy };
+  return { reset: true, behindBy, from: furthest, to: current };
+}
