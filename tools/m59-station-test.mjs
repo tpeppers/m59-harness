@@ -137,6 +137,23 @@ console.log('\na foreground travel waits for the journey, not for an acknowledge
      BROKER.includes('timeoutMs: foreground ? 20 * 60_000 : 60_000'));
   // An abort has to be distinguishable from a refusal, which it was not.
   ok('and an abort says it was an abort', BROKER.includes('timed_out_after_ms: timeoutMs'));
+
+  // AND A THIRD LAYER, 2026-09-11, which is the same lesson arriving a third time: the 60s
+  // default is right for everything that has thought about it, and the FINE walk had not.
+  // Measured on a healthy broker with the keeper pid held constant, `walk_to` col/row runs
+  // 4-48s while the same call with x/y runs 55-72s — straddling the cap, so one call under
+  // the line returned a real result and every call over it was aborted and surfaced as a
+  // timeout. It read as a HANG, and as an intermittent one, and was neither.
+  //
+  // What it cost: a 650-waypoint fine rail to room 45's mana node, every leg already
+  // accepted by the mover's own trace, could not be driven a single leg — and the defect was
+  // written up three times (a keeper wedge, a broker wedge, a hang) before it was measured.
+  ok('a FINE walk asks for longer than the 60s default',
+     BROKER.includes('fine ? { timeoutMs: 5 * 60_000 } : undefined'));
+  ok('...and recognises a fine walk by its x/y, not only by the flag',
+     BROKER.includes('Number.isFinite(opts.x) || Number.isFinite(opts.y)'));
+  ok('...while a square walk still takes the short default',
+     BROKER.includes("keeperAction(this.name, this._index, 'walk', { col, row, ...opts },"));
 }
 
 // ------------------------------------------------ a pull is a lap of the melee in a crowd
