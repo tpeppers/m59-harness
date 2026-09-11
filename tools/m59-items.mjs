@@ -360,6 +360,49 @@ export function suggestItemName(name, { file = ITEMS_FILE, limit = 3 } = {}) {
                .slice(0, limit).map(x => x.name);
 }
 
+// A REPAIR IS NOT A SUGGESTION, AND MOST SUGGESTIONS MUST NEVER BE APPLIED.
+//
+// `suggestItemName` ranks by nearness, which is right for a human reading a refusal and
+// WRONG for a machine rewriting a config. Its top answer for "gold shield" is "gold sword" —
+// a different item, confidently proposed — and for "heat scroll" it is "generic scroll" while
+// the real item is "scroll of heat". Applying the first suggestion would quietly change what
+// the fleet is asking for, which is worse than leaving a name that visibly fails.
+//
+// So a repair is only offered when the two names are the SAME WORDS, and the confidence says
+// which rule earned it:
+//
+//   exact    the word sets match once the filler ("of", "the", "a") is dropped.
+//            "heat scroll" -> "scroll of heat", "ore chunk" -> "chunk of ore".
+//   joined   they are identical with the punctuation and spacing taken out.
+//            "knightshield" -> "knight's shield", "yrxlsap" -> "yrxl sap".
+//
+// Everything else — a dropped adjective, an extra noun, a near-miss spelling — is left alone
+// and reported. Those are decisions about what the operator MEANT, and this cannot know.
+const FILLER = new Set(['of', 'the', 'a', 'an']);
+const bagOf = (key) => key.split(' ').filter(w => w && !FILLER.has(w)).sort().join(' ');
+const joined = (key) => key.split(' ').join('');
+
+export function repairItemName(name, { file = ITEMS_FILE } = {}) {
+  const raw = String(name ?? '').trim();
+  const key = itemNameKey(raw);
+  if (!key) return null;
+  const table = loadItems(file);
+  if (!table?.items) return null;
+  const wantBag = bagOf(key), wantJoined = joined(key);
+  const exact = [], same = [];
+  for (const item of Object.values(table.items)) {
+    const cand = itemNameKey(item.name);
+    if (!cand || cand === key) continue;
+    if (bagOf(cand) === wantBag) exact.push(item.name);
+    else if (joined(cand) === wantJoined) same.push(item.name);
+  }
+  // AMBIGUITY IS A REFUSAL. Two items with the same words is not a repair, it is a choice.
+  if (exact.length === 1) return { to: exact[0], confidence: 'exact', why: 'the same words' };
+  if (!exact.length && same.length === 1)
+    return { to: same[0], confidence: 'joined', why: 'identical without spacing or punctuation' };
+  return null;
+}
+
 /** Check a name without throwing — for a sweep over config that should report, not die. */
 export function checkItemName(name, { file = ITEMS_FILE } = {}) {
   const raw = String(name ?? '').trim();
