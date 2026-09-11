@@ -15,6 +15,7 @@
 //   * `#height` is found even though the animation argument sits between it and `#sector`.
 
 import { sectorsInSource, groupsInSource, gatesMovement, headroomRisk,
+         parseRoomIds, claimedRoomId,
          MAX_STEP_HEIGHT, PLAYER_HEIGHT } from './m59-varsectors.mjs';
 
 let pass = 0, fail = 0;
@@ -212,6 +213,37 @@ console.log('\nthe states this world sets TOGETHER, which are branches and not m
       Send(self,@SetSector,#sector=8,#animation=ANIMATE_FLOOR_LIFT,#height=100,#speed=0);
    }
 `).length === 0);
+}
+
+
+console.log('\nA ROOM WE CANNOT NUMBER IS A ROOM WITH NO DOORS, AND THAT IS INVISIBLE');
+{
+  // kod identifiers are CASE-INSENSITIVE and the world's authors used both spellings. The
+  // header declares every room id upper case; two room files claim theirs lower case, and
+  // cave3.kod refers to `RID_CAVE2` upper case four lines from writing its own lower case.
+  const header = [
+    '   RID_CAVE2 = 27',
+    '   RID_CAVE3 = 5',
+    '   RID_GUEST6 = 1006',
+  ].join('\n');
+  const ids = parseRoomIds(header);
+  ok('the header parses', ids.get('RID_CAVE2') === 27);
+  ok('RID_CAVE3 is room 5', ids.get('RID_CAVE3') === 5);
+  ok('RID_GUEST6 is room 1006', ids.get('RID_GUEST6') === 1006);
+
+  ok('an upper-case claim resolves', claimedRoomId('   piRoom_num = RID_CAVE2') === 'RID_CAVE2');
+  ok('A LOWER-CASE CLAIM RESOLVES TOO', claimedRoomId('   piRoom_num = RID_cave3') === 'RID_CAVE3',
+     'cave3.kod and guest6.kod both write theirs lower case; the old regex matched neither');
+  ok('and a mixed-case one', claimedRoomId('   piRoom_num = RID_Guest6') === 'RID_GUEST6');
+
+  // The join both halves exist for, and the one that actually failed.
+  ok('a lower-case claim finds its number through the upper-case table',
+     ids.get(claimedRoomId('piRoom_num = RID_guest6')) === 1006,
+     'room 1006 could never enter the variable-sector table, so no door mask was ever baked ' +
+     'for SECTOR_NODE1/NODE2 — the floor the Mausoleum mana node rides 500 units up');
+  ok('a room that claims nothing is still null', claimedRoomId('no room number here') === null);
+  ok('and an unknown id resolves to nothing rather than a wrong room',
+     ids.get(claimedRoomId('piRoom_num = RID_nosuchroom')) === undefined);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
