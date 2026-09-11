@@ -4,6 +4,7 @@
 //   node tools/m59-spelldrill.mjs --agent hk1 --spell "forces of light"            # plan only
 //   node tools/m59-spelldrill.mjs --agent hk1 --spell "forces of light" --apply
 //   node tools/m59-spelldrill.mjs --agent hk1 --spell purify --apply --max-casts 400
+//   node tools/m59-spelldrill.mjs --agent hk1 --spell "forces of light" --apply \n//        --rooms 370,373,376,372            # a ROOM enchantment needs a circuit, not a chair
 //
 // WHY THIS IS NOT m59-shalille-train.mjs. That tool drills the HEAL ladder, and a heal needs
 // somebody with a wound — which is the whole reason it carries an Amulet of Shadows, two
@@ -32,6 +33,12 @@
 //     the refusal is silent: the broker answers `cast: true, mana_spent: 0`. A caster parked
 //     in an inn with restBelow 0.95 is sitting down almost all the time, so this is the
 //     normal case rather than a corner of it.
+//   * THE ROOM, for a RoomEnchantment. `forces of light` enchants the ROOM and its
+//     CanPayCosts refuses while that room already holds it, silently — `cast: true,
+//     mana_spent: 0, messages: []`. A caster standing still therefore gets ONE cast per
+//     expiry cycle and burns the rest of the hour on refusals that read like being asleep.
+//     `--rooms` walks a circuit instead; the ring self-sizes, because a room that refuses
+//     twice is one we have already lit.
 //   * THE ANTI-BOT CAP. ADVANCEMENT_LIMIT is 10 improvements per random 15-22 minute window,
 //     spells and skills together (player.kod:66-68). Casting faster than that raises nothing
 //     and spends reagents for it, so `--every` defaults to 8s rather than to as fast as the
@@ -63,6 +70,10 @@ const FLEET = arg('fleet') || null;
 const MAX_CASTS = Number(arg('max-casts') || 300);
 const EVERY_MS = Math.max(2000, Number(arg('every') || 8) * 1000);
 const BROKER = `http://127.0.0.1:${Number(arg('broker') || 8901)}/`;
+// THE ROOMS TO WALK BETWEEN, for a spell that enchants a ROOM rather than a body. Comma
+// separated; omit it and the drill stands still, which is right for a spell that does not
+// care where it is cast and wrong for every RoomEnchantment. See the refusal branch below.
+const RING = String(arg('rooms') || '').split(',').map(x => Number(x.trim())).filter(Boolean);
 
 let seq = 0;
 async function call(name, args = {}, ms = 60_000) {
@@ -213,7 +224,8 @@ const stop = async () => {
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await stop(); process.exit(130); });
 
 // ---------------------------------------------------------------- the loop
-let cast = 0, refused = 0, waited = 0, beats = 0;
+let cast = 0, refused = 0, waited = 0, beats = 0, blindRounds = 0;
+let ringAt = 0, roomRefusals = 0;
 const started = Date.now();
 for (let round = 0; cast < MAX_CASTS; round++) {
   if (lease && ++beats % 3 === 0) await leaseCall('heartbeat', { lease_token: lease });
@@ -238,7 +250,27 @@ for (let round = 0; cast < MAX_CASTS; round++) {
     await sleep(1500);
     inv = await readPack();
   }
-  if (!inv) { console.log('could not read the pack — stopping rather than casting blind'); break; }
+  // AN UNREADABLE PACK IS A REASON TO WAIT, NOT A REASON TO STOP.
+  //
+  // Keepers restart about once a minute on this fleet, and each restart leaves a window where
+  // `inventory` answers empty. Two bad reads a second and a half apart is well inside one of
+  // those windows — and this used to end an hour-long run on it: measured 2026-09-11, the
+  // drill exited after three casts with ninety-seven elderberries in the pack and the caster
+  // parked safely in an inn. Nothing was wrong except the timing of two reads.
+  //
+  // So a bad read costs a round, not the run. It still gives up eventually, because a body
+  // that has been unreadable for two solid minutes is a body something else has taken.
+  if (!inv) {
+    if (++blindRounds >= 12) {
+      console.log(`the pack has been unreadable for ${blindRounds} rounds — stopping rather ` +
+                  'than casting blind');
+      break;
+    }
+    if (blindRounds === 1) console.log('  pack unreadable — waiting rather than stopping');
+    await sleep(EVERY_MS);
+    continue;
+  }
+  blindRounds = 0;
   let short = COST.find(c => countIn(inv.items, c.item) < c.n);
   if (short) {
     await sleep(1500);
@@ -295,6 +327,35 @@ for (let round = 0; cast < MAX_CASTS; round++) {
     refused++;
     const why = r?.reason ?? r?.what_the_mana_says ?? 'no reason given';
     if (refused % 5 === 1) console.log(`  refused (${refused}): ${String(why).slice(0, 130)}`);
+
+    // A ROOM ENCHANTMENT CANNOT BE CAST TWICE IN THE SAME ROOM, AND SAYS SO IN SILENCE.
+    //
+    // `forces of light` is a RoomEnchantment (kod/object/passive/spell/roomench/forceslt.kod)
+    // and its CanPayCosts refuses outright while the room already holds it:
+    //
+    //     if Send(oRoom,@IsEnchanted,#what=self)
+    //        { Send(who,@MsgSendUser,#message_rsc=forcesoflight_already_enchanted);
+    //          return FALSE; }
+    //
+    // The refusal never reaches the wire as anything readable — measured 2026-09-11, three
+    // casts in a row answered `cast: true, mana_spent: 0, messages: []`. So a caster standing
+    // in one room gets ONE cast per expiry cycle and silently burns the rest of the hour on
+    // refusals, which is exactly what this drill did from 16 to 50 with hundreds of them in
+    // the log. The operator spotted it from the outside: an area spell wants a circuit.
+    //
+    // The ring self-sizes rather than hard-coding a duration: a room that refuses twice is
+    // one we have already lit, so move on. By the time the ring comes round it has expired.
+    if (RING.length > 1 && ++roomRefusals >= 2) {
+      roomRefusals = 0;
+      ringAt = (ringAt + 1) % RING.length;
+      const to = RING[ringAt];
+      console.log(`  this room is already enchanted — moving to ${to} ` +
+                  `(${ringAt + 1} of ${RING.length})`);
+      const t = await call('travel', { agent: AGENT, to }, 600_000).catch(e => ({ error: e.message }));
+      if (t?.arrived) console.log(`  arrived at ${to}`);
+      else console.log(`  did not reach ${to}: ${String(t?.why ?? t?.error ?? 'unknown').slice(0, 90)}`);
+      continue;                       // the walk is the round; do not also sleep out a tick
+    }
     if (refused > 40 && cast === 0) { console.log('forty refusals and nothing cast — stopping'); break; }
   }
   await sleep(EVERY_MS);
