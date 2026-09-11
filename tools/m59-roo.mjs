@@ -1436,15 +1436,41 @@ export class RoomGeometry {
       // the bar for a genuine climb from level ground — it only stops a fall being
       // mistaken for one.
       //
-      // WHY IT IS OFF. Switched on it gets room 578 exactly right — the north exit can no
-      // longer reach the southern ones, the southern ones still walk to it in 54 steps,
-      // and the room splits into 13 regions, which is the operator's own account of the
-      // place. It also costs more than that buys: 3 controls in m59-collision-test and 1
-      // in m59-impossible-test break, all of them LEGITIMATE moves it now refuses —
-      // Ukgoth's boundary crossings and the checked-in sloped-step case — and room 578's
-      // routing view fragments to 146 pieces. Those are slopes, and a slope is a
-      // continuous legal climb that this blanket per-microstep test cannot tell from a
-      // face.
+      // ===================== THIS FLAG IS ON, AND THIS COMMENT SAID IT WAS OFF =====================
+      //
+      // CORRECTED 2026-09-10. The paragraphs below began "WHY IT IS OFF" and described the
+      // costs of switching it on. `enforceStepHeight = true` is the DEFAULT (see the option
+      // list above), and the costs it names are gone: m59-collision-test is 404/404 and
+      // m59-impossible-test 132/132 with it on. A comment that tells a reader a load-bearing
+      // mover rule is not running, when it is, is worse than no comment — this one is kept
+      // rather than deleted because the ARGUMENT in it is still the right argument, and
+      // because what it costs is now measured rather than predicted.
+      //
+      // WHAT IT COSTS, MEASURED. This is a FLOOR-TO-FLOOR comparison, and the client does not
+      // have one. The client's only height rule is at a wall, and it is SKIPPED ENTIRELY when
+      // the facing sidedef has no below bitmap (`move.c:549` short-circuits on
+      // `below_bmap == NULL`): an untextured riser is climbable at any height. `canCrossWallAt`
+      // mirrors that correctly — `!sd.belowType || ...` — and it works: asked directly, it calls
+      // every ungated, passable, over-cap wall crossable, 37 of them in room 515 alone, all at
+      // `z1 = 10848`, which is exactly the floor the mana node stands on.
+      //
+      // And then this test refuses them anyway, because it compares floors and cannot see a
+      // sidedef. Measured across three node rooms on a 256-unit lattice:
+      //
+      //     room 589   1892 adjacent pairs rise past the cap,  0 accepted
+      //     room 515   9469                                    0 accepted
+      //     room  27    588                                    0 accepted
+      //
+      // Zero out of 11,949, every refusal `step_too_high`. So the harness has TWO height rules
+      // where the game has one, and the second one silently overrules the first everywhere the
+      // first would have said yes. Every "the stone is above ground we can reach" verdict in
+      // `.claude/skills/node-runner/nodes/BASELINE.md` was produced under this rule.
+      //
+      // IT IS STILL ON, DELIBERATELY, AND THAT IS NOT AN ENDORSEMENT. Turning it off re-opens
+      // every cliff it exists to close, and the routing consequences are fleet-wide; the fix is
+      // the one the next paragraph already describes — find the crossing properly and gate on
+      // the sidedef, the way `canCrossWallAt` does — not a flip of this boolean at the end of
+      // somebody's session. Until then the consequence is known, bounded, and now counted.
       //
       // WHAT A REAL FIX NEEDS. The stock client checks height when you cross BETWEEN
       // SECTORS, and a slope lies inside one sector, so the distinction is already the
