@@ -624,9 +624,16 @@ x/y     : 63s  { error:"The operation was aborted due to timeout", timed_out_aft
 col/row :  8s  { error:"hk2: keeper identity could not be verified; refusing write" }
 ```
 
-The third line is the part that makes this more than slow: **the x/y call leaves the keeper
-wedged**, so the next ordinary write is refused on identity. A caller that retries the fine
-path therefore degrades the keeper rather than just failing.
+**THE THIRD LINE IS WITHDRAWN AS A CAUSAL CLAIM.** I read it as the x/y call leaving the
+keeper wedged. `m59-harness-88` points out that "keeper identity could not be verified" comes
+from a misaddressed-order diagnostic sitting UNCOMMITTED in prod-deploy's
+`m59-keeper-process.mjs`, not from anything the fine path does — and I saw it once, after an
+x/y call, and treated adjacency as cause. The test that settles it holds the keeper pid
+constant across all three calls; the broker went deaf while I was running it, so it is open.
+
+What survives, reproduced eight times with and without `fine`, `hold_shelf` and `stride`:
+**`walk_to` with x/y never returns, while col/row on the same keeper takes 29 real steps.**
+That is the defect. Whether it also damages the keeper is unproven.
 
 THE RAIL IS NOT THE PROBLEM, and this was checked rather than assumed. The operator's advice —
 *"find/write a tool that treats falls like walls and then apply that while pathing to the
