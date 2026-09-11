@@ -154,6 +154,21 @@ console.log('\na foreground travel waits for the journey, not for an acknowledge
      BROKER.includes('Number.isFinite(opts.x) || Number.isFinite(opts.y)'));
   ok('...while a square walk still takes the short default',
      BROKER.includes("keeperAction(this.name, this._index, 'walk', { col, row, ...opts },"));
+
+  // AND THE SIBLING, WHICH WAS MISSED THE FIRST TIME AND COST ANOTHER NIGHT.
+  //
+  // The fix above was applied to `walkTo` only. `KeeperProxy.walkFine` is the path the walk_to
+  // TOOL takes whenever x/y are given — every fine walk issued in coordinates — and it was left
+  // on the 60s default, so it had the identical ceiling for another day. Measured on prod
+  // 2026-09-11 driving the Kardde's Canyon rim rail: six legs of seven aborted at 60, 63, 72,
+  // 61, 60 and 62 seconds with `arrived` undefined and no reason given, while the same line
+  // hand-stepped accepted 62 of 62 traces. Fixing an instance is not fixing the class, and this
+  // assertion exists so the next person fixing one of these timeouts finds both.
+  const wf = BROKER.slice(BROKER.indexOf('  async walkFine(x, y, opts = {})'));
+  ok('walkFine — the tool\'s x/y path — asks for the same five minutes as walkTo\'s fine branch',
+     wf.length > 0 && wf.slice(0, 400).includes('timeoutMs: 5 * 60_000'));
+  ok('...and it is the SAME allowance, so the two cannot drift apart',
+     (BROKER.match(/timeoutMs: 5 \* 60_000/g) ?? []).length >= 2);
 }
 
 // ------------------------------------------------ a pull is a lap of the melee in a crowd
