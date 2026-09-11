@@ -1,5 +1,13 @@
 # The seven stones: what is missing from OUR MAP, per node
 
+> **CORRECTED TWICE, AND THE SECOND CORRECTION IS AT THE BOTTOM OF THE PAGE.** Read
+> "THIRD CORRECTION" at the end before acting on anything here: three of these rooms CHANGE
+> SHAPE at runtime, the bake holds one frame, and both the table below and the fine-grid
+> section that overturned it measured a still from an animation. Ice (750) is NOT the easy
+> node — it is behind a ceiling that only a yeti kill opens. Room 27's illusion staircase is
+> real and is NOT what gates its stone: measured in both states, all 25 meld-box squares are
+> standable and sit in the same 93%-of-the-room body either way.
+>
 > **CORRECTED THE SAME DAY, AND THE CORRECTION IS BIGGER THAN THE REPORT.** Everything below
 > was measured at SQUARE resolution and concluded that five stones need an affordance we
 > cannot declare — three a CLIMB, one a LEVEL JUMP, one a ramp or trigger. Then
@@ -176,3 +184,137 @@ body can cross it; what cannot plan it is the square grid. The options, cheapest
 2. **Let the router fall back to fine resolution** when a square-level plan fails, which is
    what `route_fine` already does per-room and what the last twelve squares of every node run
    has needed.
+
+
+---
+
+# THIRD CORRECTION, SAME DAY: SOME OF THESE ROOMS CHANGE SHAPE, AND THE BAKE HOLDS ONE FRAME
+
+Everything above — both the square-resolution table AND the fine-grid section that overturned
+it — treats each room's geometry as a fixed thing to be measured more carefully. For at least
+three of these rooms that premise is wrong. **The room moves.** `SetSector` changes floor and
+ceiling heights at runtime, `substrate/m59-map.json` carries the authored `.roo` state, and a
+reachability measurement taken against it is a measurement of one frame of an animation.
+
+`node tools/m59-varsectors.mjs` has listed these all along. Nobody joined it to the stones.
+
+| node | room | what moves | so |
+|---|---|---|---|
+| **ice** | 750 | `MANA_DOOR` **ceiling** 380 ↔ 510 | a **kill gate**, not a walk |
+| **mausoleum** | 1006 | `SECTOR_NODE1` 500→105, `SECTOR_NODE2` 519→124 | the stone **rides a column down** when the chamber is cleared |
+| **cave** | 27 | five sectors, flat 24 ↔ 128/56/48/40/32 | an **illusion staircase** |
+| sentinel | 589 | `QOR_DOOR` floor 290 ↔ 350 | travels 960 client units |
+| martyr | 47 | `SECTOR_DOOR` floor 340 ↔ 440 | gates |
+| ukgoth | 599 | `SECTOR_DOOR` floor 340 ↔ 440 | gates |
+
+## Ice (750) is NOT the tractable node, and this page said it was
+
+The recommendation above — *"prefer ice, because Victoria's room kills fragile characters"* —
+is withdrawn. `icecave1.kod` seals the node chamber with a **ceiling**, and the only thing that
+opens it is killing a yeti:
+
+- `SomethingKilled` lifts `MANA_DOOR` to **510 at speed 64**, then `LowerManaDoorTimer` fires
+  after `MANA_DOOR_TIME = 2000` ms and returns it to **380 at speed 1**.
+- It does **not** lift if the node's own attack made the kill (`GetAttackedNode` is compared
+  against the victim's owner first).
+- `YetiGenTimer` re-seals it to 380 every time it spawns a fresh yeti, hourly.
+
+**Two things this repository already had written down about it are wrong.** The note in
+`tools/fleetscripts/mana-node.mjs` says the ceiling lifts "for TWO SECONDS" — but the lift is at
+speed 64 and the drop at **speed 1**, so the window is two seconds *plus* a slow creep from 510
+back to 380, and a body fits through while it is still descending. The window is longer than
+anyone assumed and nobody has measured it. And the gap analysis above called the room
+**gap 0, reachable today** — because a floor-based reachability flood cannot see a ceiling at
+all. `_occupiable` deliberately stopped requiring `ceiling - floor >= PLAYER_HEIGHT`
+(`m59-roo.mjs`, step-mask v5) and that decision is *correct* — the client tests headroom at a
+wall's above-texture, not against the sector you stand under — but it means **a ceiling gate is
+invisible to every reachability number on this page.**
+
+Marco Polo has 20 max health. Killing a yeti is not on the table for him. Ice is not the easy
+one; it may be the hardest.
+
+## Room 27: the illusion staircase is REAL, and it is NOT what gates the stone
+
+`cave2.kod` really does carry two geometries, switched by the Dispel Illusion spell
+(`dispillu.kod`):
+
+```
+ReplaceIllusions()   sectors 1-5 -> 128, 56, 48, 40, 32   marble textures
+DispelIllusions()    sectors 1-5 -> 24, 24, 24, 24, 24    cave stone, then a 30s timer restores
+```
+
+Sectors 2-5 at 56/48/40/32 are treads **8 kod apart** — 128 client units, a third of the step
+limit. Sector 1 at 128 is **72 kod (1152 client) above sector 2**, a cliff.
+
+**AND IT MAKES NO DIFFERENCE TO THE MANA NODE.** Both states were built with
+`geometryWithSectorHeights` off `cave2.roo` and flooded through `moverStepLands`:
+
+| state | standable squares in the meld box | box's connected body |
+|---|---|---|
+| as baked | 25 of 25 | 1469 squares |
+| illusion UP | 25 of 25 | 1469 squares |
+| illusion DISPELLED | 25 of 25 | **1541** squares |
+
+All twenty-five squares of the 5x5 box are standable in every state, and in every state they
+sit in the room's single largest body — **1469 of the room's 1582 standable squares, 92.9% of
+it.** Dispelling the illusion grows that body by 72 squares and never touches the box. So the
+staircase is somewhere else in the room, and the hypothesis that it explains the room 27
+paradox is **dead.** Worth recording precisely because it was a good hypothesis: it had the
+right shape, the right room, and the operator's own account of walking there, and it is still
+wrong.
+
+**WHAT THIS DOES NOT SETTLE, and the distinction matters.** That flood is SYMMETRIC — it joins
+two squares when the mover accepts the step between them. `reachableFrom`, which `m59-nodegap.mjs`
+uses for the `gap 4` figure at the top of this page, is DIRECTED and starts from the square a
+body actually lands on coming in. Descent is free and climbing is capped, so a directed flood
+from an arrival square can be far smaller than the symmetric body containing its target. The
+two measurements are not in contradiction; they answer different questions.
+
+So the open question for room 27 is now sharp, and it is not about illusions:
+**is room 27's arrival square inside that 1469-square body, or on the 7% outside it?** The
+baked room entry (`edgeExits`, `goExits`) does not carry inbound arrival squares — arrival is
+set by the SOURCE room's exit, which is the "exits are not doors and are not 1:1" trap in
+`docs/m59-routing.md` — so answering it means walking the inbound edges from room 19/30, not
+reading room 27. That is one afternoon and it is the last thing standing between this stone
+and a directed reachability answer.
+
+## Why the door baker never asked: a unit bug in `gatesMovement`
+
+`gatesMovement` compares the kod's `#height=` (KOD units) against `MAX_STEP_HEIGHT` (384 CLIENT
+units) — sixteen times larger. It fires only for heights that happen to straddle 384 when
+misread, so every flagged sector sits in a 290-544 band. **66 of 71 moving floors travel further
+than one step; the table calls 12 of them gating.** Room 27 moves a floor 1664 client units and
+is not among them.
+
+Fixing the unit in place makes it strictly worse — `lo < 24 AND hi >= 24` is false for every
+door in the world, so all twelve would go dark. `gateRisk` (travel, in one unit) is committed
+beside it as the honest question, deliberately **not** wired into the baker, because that takes
+the bake from 12 sectors to 66 and changes how a live fleet routes.
+
+## What to do next, in order
+
+1. **Walk room 27's inbound edges and find the arrival square** (from rooms 19 and 30), then
+   run the DIRECTED `reachableFrom` to the box. The symmetric flood above says the box is in
+   93% of the room; the `gap 4` at the top of this page says a directed flood from arrival
+   cannot get there. Only one of those is about the errand, and nobody has measured it.
+   Baking room 27's illusion states is DONE and the answer was no — do not redo it.
+2. **Bake room 1006's column down** (`SECTOR_NODE1@105 + SECTOR_NODE2@124`) and route to that
+   state. The peer's read of `guest6.kod` says the column drops when the final chamber holds no
+   monsters and at least one player. Both sectors are now in the variable-sector table, which
+   they were not this morning — they were invisible because `RID_guest6` is written lower case.
+3. **Measure the ice door's real window** with `speed=1` on the close. If it is ten seconds
+   rather than two, ice becomes an errand for a character who can kill a yeti, which is not
+   Marco.
+4. **Stop treating badlands (45) and peak (515) as the same problem as these.** Neither has a
+   lever, a timer or a `NodeAppear` — `badland1.kod` has three handlers and `a5.kod` seven, none
+   of them geometry. Those two are pure terrain and the fine-grid/basin work above still stands
+   for them.
+
+## And one thing that costs no movement at all
+
+`node tools/m59-nodecheck.mjs --agent <name>` reads the stone's own state off the wire — the
+animation carries it (`ANIMATE_CYCLE 150ms groups 1-5` normal, `250ms groups 6-7` cursed,
+`ANIMATE_NONE group 8` **dead**) — and `piState = NODE_DEAD` refuses the meld at
+`mananode.kod:168`, **before** the range test. Run it on arrival, always. Until today
+`m59-mananode.mjs` matched the meld message on a phrase that `mananode_meld` and
+`mananode_failed_meld` SHARE for 116 characters, and reported `MELDED` on a dead stone.
