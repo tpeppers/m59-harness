@@ -1,6 +1,8 @@
 # The seven stones: what is missing from OUR MAP, per node
 
-> **CORRECTED TWICE, AND THE SECOND CORRECTION IS AT THE BOTTOM OF THE PAGE.** Read
+> **ROOM 27 IS SOLVED — a three-jump route, see the LAST section of this page.** The "level jump we cannot write down" below is withdrawn: the gap is real (no walk reaches it at square OR fine resolution, from any of its six arrivals) and it is three ordinary falls. The jump cap in `m59-jumpfinder.mjs` was short by 0.65 squares.
+>
+> **CORRECTED TWICE MORE BELOW.** Read
 > "THIRD CORRECTION" at the end before acting on anything here: three of these rooms CHANGE
 > SHAPE at runtime, the bake holds one frame, and both the table below and the fine-grid
 > section that overturned it measured a still from an animation. Ice (750) is NOT the easy
@@ -318,3 +320,76 @@ animation carries it (`ANIMATE_CYCLE 150ms groups 1-5` normal, `250ms groups 6-7
 `mananode.kod:168`, **before** the range test. Run it on arrival, always. Until today
 `m59-mananode.mjs` matched the meld message on a phrase that `mananode_meld` and
 `mananode_failed_meld` SHARE for 116 characters, and reported `MELDED` on a dead stone.
+
+
+---
+
+# FOURTH AND LAST FOR THIS SESSION: ROOM 27 HAS A ROUTE, AND EVERY EARLIER MEASUREMENT OF IT WAS RIGHT
+
+The open question two sections up — *is room 27's arrival square inside that 1469-square body?*
+— is answered, and so is the "level jump we cannot write down" at the top of this page.
+
+## The arrivals: six, not one, and none of them reaches the stone
+
+Exhaustive from `grep -rn RID_CAVE2` over the whole kod:
+
+| source | kind | arrives at |
+|---|---|---|
+| `cave3.kod:79` | `plExits` door | **(19,30)** |
+| `orccave1.kod:73` | `plEdge_Exits` LEAVE_EAST | (11,1) |
+| `forest2.kod:103` | region | (55,35) |
+| `h7.kod:78` | region | (57,46) |
+| `nest1.kod:118` | region | (53,14) |
+| `nest1.kod:130` | region | (50,25) |
+
+A directed flood over `moverStepLands` from **every one of them**, in all three illusion
+states, reaches the meld box from **none**. And the fine grid does not rescue it: a
+quarter-square lattice flooded with the mover's own `traceFineMoveClient` as the edge test
+reaches 14,804 samples and **0 of the 361 occupiable fine samples inside the box.**
+
+So the `gap 4` figure at the top of this page was correct, the fine-grid section's "square
+resolution cannot see it" was NOT true of this room, and the illusion staircase is irrelevant.
+**Room 27 is a real gap.** The box sits at floor 1536, dead level with the nearest
+arrival-reachable square r26c57 at 1536, four squares away, with nothing standable between.
+
+*A region arrival is a HINT, not a landing.* All three region exits go through
+`UtilGoNearSquare` (`kod/util.kod:20`), an expanding Chebyshev ring search that takes the
+first square where `UtilGoToSquare` succeeds. Normally you land on the named square; with
+something standing there you do not, and nothing tells you.
+
+## And it was always jumpable — the cap was short
+
+`clearBetween` in both `m59-jumpfinder.mjs` and `m59-fineroute.mjs` capped a hop at `F * 1.5`
+whenever the drop was within one step. The client's real limit is `reachFor(drop + 384)`,
+which at a 384-unit drop is **2203** rather than 1536. With that corrected,
+`m59-jumpfinder.mjs` finds a three-jump route to the stone in six seconds:
+
+```
+jump  49,52 -> 48,53   fine 53120,50048 -> 53744,48156   down 1536
+jump  36,47 -> 35,48   fine 47531,36676 -> 48384,34944   down 1280
+jump  25,44 -> 23,44   fine 44032,25472 -> 44696,23372   down 384
+```
+
+The last one spans **2202 units against a cap of 2203.57** — legal by one and a half units,
+and missed by 666 under `F * 1.5`. Stashing the one-line change and re-running the identical
+search finds nothing in six jumps, so it is the cap and not the branching factor.
+
+**So strike "a level jump has no drop to declare, and there is no line anyone could add to
+that file today that would fix room 27" from the top of this page.** The route is three
+ordinary falls. The format was never the problem.
+
+## What is still owed
+
+These are **candidates**. Geometry says the hops are possible; only a character arriving says
+they are real, and `m59-falljumps.json` gets nothing until one does. The confirmation run is:
+walk to `r49c52`, jump, walk, jump, walk, jump, then `m59-nodecheck.mjs` for the receipt —
+and **read max mana before and after inside ONE session**, because `ComputeMaxMana` rebuilds
+from the bitmask at login.
+
+Two things that will bite that run:
+
+- **A monster standing under an arc blocks it.** Monster collision is height-agnostic — every
+  monster is effectively infinitely tall — so a geometrically clear jump is refused by anything
+  standing in the gully beneath it. Room 27 generates Orcs and Spiders from thirteen generators.
+- **A fall is confirmed by the SERVER, not by the reply.** The reply is pessimistic by
+  construction and the body is still on the take-off if you read it immediately. Wait ~3s.
