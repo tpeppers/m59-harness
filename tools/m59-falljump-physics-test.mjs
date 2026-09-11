@@ -10,7 +10,8 @@
 // crossable, and that failure is SILENT — the tool simply offers one fewer route and the room
 // reads as severed. Room 27's mana node was called unreachable by four separate measurements
 // and BASELINE.md concluded no declaration could ever fix it; the only thing wrong was the cap.
-import { fallenBy, airTime, reachFor, maxSpan, maxSpanDiscrete, heightAfter,
+import { fallenBy, airTime, reachFor, maxSpan, maxSpanDiscrete, spanBracket,
+         jumpConfidence, heightAfter,
          FALL_V0, GRAVITY, RUN_SPEED, WALK_SPEED, MAX_STEP_HEIGHT, CLIENT_FINENESS as F }
   from './m59-falljump-physics.mjs';
 
@@ -101,38 +102,57 @@ console.log('\nheightAfter is the carried z a step predicate throws away');
 }
 
 
-console.log('\nthe CLIENT integrates forward Euler in integers, and that is not the closed form');
+console.log('\nTHE FALL HAPPENS FIRST, and assuming otherwise flatters every candidate');
 {
-  // moveobj.c advances z with the velocity from the START of each frame, so an accelerating
-  // fall is UNDER-counted: the body falls slower than the closed form and travels further.
-  ok('the client reaches further than the closed form at a 384 drop',
-     maxSpanDiscrete(384, { dt: 16 }) > maxSpan(384));
-  ok('and at dead level too', maxSpanDiscrete(0, { dt: 16 }) > maxSpan(0));
-
-  ok('ROOM 27 JUMP 3 CLEARS THE CLIENT\'S OWN ARITHMETIC BY OVER 30 UNITS, NOT 1.6',
-     [8, 16, 33, 100].every(dt => maxSpanDiscrete(384, { dt }) - 2202 > 30),
-     'the 1.57-unit margin is an artifact of the closed form, which is the conservative one');
-  ok('and so do the other two room 27 drops',
-     maxSpanDiscrete(1280, { dt: 8 }) > 3501 && maxSpanDiscrete(1536, { dt: 8 }) > 3804);
-
-  // gravityAdjust exists to make the ARC frame-rate invariant; what moves with frame rate is
-  // the Euler error, and it moves in the permissive direction at every rate.
-  const across = [5, 8, 16, 33, 66, 100, 200].map(dt => maxSpanDiscrete(384, { dt }));
-  ok('every frame rate from 5 to 200ms is more permissive than the closed form',
-     across.every(v => v > maxSpan(384)),
-     'so maxSpan never offers a short-drop jump the client would refuse');
-  ok('and the spread across frame rates is small — under 200 units',
-     Math.max(...across) - Math.min(...across) < 200);
+  // statgame.c:388-389 — AnimationTimerProc (the fall) then HandleKeys (the move). The first
+  // version of the module had this backwards and it moved jump 3 from "too close to call" to
+  // "clears comfortably" — the one candidate it was ever asked about.
+  const b = spanBracket(384, { dt: 16 });
+  ok('a bracket is two numbers, not one', b.lo < b.hi);
+  ok('and one frame of horizontal wide', b.hi - b.lo === 81,
+     `dt=16 advances 27*3 = 81 units a frame (move.c:266,268)`);
+  ok('maxSpanDiscrete is the LOWER edge — the last position known legal',
+     maxSpanDiscrete(384, { dt: 16 }) === b.lo);
+  ok('a bigger drop brackets further out', spanBracket(2048).lo > spanBracket(384).lo);
+  ok('nothing to reach with no height to give', spanBracket(-MAX_STEP_HEIGHT).hi === 0);
 }
 
-console.log('\nwhere the closed form STOPS being conservative, so a long declaration is checked');
+console.log('\nROOM 27 JUMP 3 IS UNDECIDABLE FROM ARITHMETIC, AND THAT IS THE FINDING');
 {
-  ok('at a 3072 drop it is still conservative', maxSpanDiscrete(3072, { dt: 8 }) > maxSpan(3072));
-  ok('BUT past ~3517 it over-reaches', maxSpanDiscrete(4096, { dt: 8 }) < maxSpan(4096),
-     'a very long declared fall wants maxSpanDiscrete, not maxSpan');
-  ok('and the over-reach stays under half a percent',
-     (maxSpan(10240) - maxSpanDiscrete(10240, { dt: 8 })) / maxSpan(10240) < 0.005);
-  ok('a zero-or-negative limit reaches nothing', maxSpanDiscrete(-MAX_STEP_HEIGHT) === 0);
+  const c = jumpConfidence(384, 2202);
+  ok('it does not clear at every frame rate', !c.clears);
+  ok('and it does not fail at every frame rate', !c.fails);
+  ok('SO IT NEEDS A BODY', c.needsBody,
+     '2202 lands inside the bracket at 8, 16, 33, 66 and 100ms — the client’s own ' +
+     'quantisation is wider than the margin, so no amount of further arithmetic settles it');
+  ok('and the verdict says so in words', /cannot decide/.test(c.verdict));
+
+  // The two things that ARE decided, and they are what the fix rests on.
+  ok('the OLD cap missed it by 666 units, which is 0.65 squares and not a rounding question',
+     2202 - 1024 * 1.5 === 666);
+  ok('a hop well inside every bracket clears outright', jumpConfidence(384, 1900).clears);
+  ok('and one well outside every bracket is refused outright',
+     jumpConfidence(384, 4000).fails);
+}
+
+console.log('\nthe closed form has NO clean relation to the bracket — the old claim is withdrawn');
+{
+  // An earlier version asserted "conservative lower bound up to a drop of ~3517". That was
+  // measured with the ordering backwards. With it right, the closed form sits below the
+  // bracket at some drops, inside it at others, and above it for long falls.
+  const rel = drop => {
+    const b = spanBracket(drop, { dt: 8 }), c = maxSpan(drop);
+    return c < b.lo ? 'below' : c > b.hi ? 'above' : 'inside';
+  };
+  ok('below the bracket at a 1024 drop', rel(1024) === 'below');
+  ok('INSIDE it at a 384 drop', rel(384) === 'inside');
+  ok('and ABOVE it for a long fall', rel(10240) === 'above',
+     'so there is no drop below which maxSpan is guaranteed conservative');
+  ok('which is why maxSpan stays the planner gate and the bracket is only a tie-break',
+     maxSpan(384) > spanBracket(384, { dt: 8 }).lo - 1024 &&
+     maxSpan(384) < spanBracket(384, { dt: 8 }).hi + 1024,
+     'it is a stable frame-rate-free number in the right neighbourhood, which is what a ' +
+     'proposer wants');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
