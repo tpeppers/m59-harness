@@ -19,7 +19,7 @@ process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';   // never actually reached
 
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk, walkTo, shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza,
-        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf } =
+        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -367,6 +367,58 @@ console.log('\nTHE PURSE IS THE RECEIPT, NOT THE BANKER\u2019S SENTENCE');
   ok('and the outcome names what was actually observed',
      JSON.stringify(r.results.a1).includes('counter_moved_nothing'));
 }
+
+console.log('\nA DROPPED SOCKET IS NOT AN ANSWER, AND ONLY A READ MAY BE ASKED TWICE');
+{
+  // 2026-09-11: three runs of the same errand died at step 0 with "could not read the
+  // character" while an identical `status` from another process answered 200 throughout.
+  // Node hands out keep-alive sockets the broker has already closed and does not retry a
+  // POST, so the reset arrives in seven milliseconds — and `observe()` catches everything
+  // and answers null, which the walk step reports as an unreadable body.
+  const reset = () => Object.assign(new TypeError('fetch failed'),
+                                    { cause: new Error('read ECONNRESET') });
+  ok('a reset socket is a transport failure', isTransportFailure(reset()));
+  ok('so is a hang-up', isTransportFailure(new TypeError('socket hang up')));
+  ok('a TIMEOUT is not — the broker had the question, and asking twice spends the budget twice',
+     !isTransportFailure(Object.assign(new Error('timed out'), { name: 'TimeoutError' })));
+  ok('nor is an abort',
+     !isTransportFailure(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+  ok('nor is an ordinary refusal spoken by the broker',
+     !isTransportFailure(new Error('unknown tool "t7"')));
+
+  // AND THE RETRY IS A READ’S PRIVILEGE. A reset cannot say whether the request was
+  // delivered, so a repeated withdrawal is a second withdrawal, not a retry. The fake
+  // broker stays underneath: only the RPC POSTs are made to fail, so guarantee 11's
+  // bodyless /health probe still answers and the script gets as far as the counter.
+  const calls = [];
+  fakeBroker({ rooms: { a1: 54 }, inventory: { a1: [{ name: 'shilling', amount: 2500 }] } });
+  const base = globalThis.fetch;
+  const flaky = (failFirst) => {
+    let n = 0;
+    globalThis.fetch = async (u, o) => {
+      if (!o || o.method !== 'POST') return base(u, o);
+      calls.push(JSON.parse(o.body).params.name);
+      if (n++ < failFirst)
+        throw Object.assign(new TypeError('fetch failed'), { cause: new Error('read ECONNRESET') });
+      return base(u, o);
+    };
+  };
+
+  flaky(2);
+  let r = await fleetScript({ name: 'flakyread', fleet: 'testfleet', agents: ['a1'],
+    steps: [walk(54)], onLog: quiet });
+  ok('a walk survives two reset sockets, because a read may be asked again',
+     r.results.a1.ok === true, JSON.stringify(r.results.a1));
+
+  calls.length = 0;
+  flaky(1);
+  r = await fleetScript({ name: 'flakybank', fleet: 'testfleet', agents: ['a1'],
+    steps: [bank('withdraw', 10)], onLog: quiet, packSettleMs: 800, pollMs: 200 });
+  ok('a BANK call is never repeated after a reset — a second withdrawal is not a retry',
+     calls.filter(c => c === 'bank').length <= 1,
+     `bank calls: ${calls.filter(c => c === 'bank').length}`);
+}
+
 
 console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
 {

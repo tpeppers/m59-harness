@@ -287,16 +287,56 @@ const RPC = () => {
 };
 let seq = 0;
 
+// A DROPPED SOCKET IS NOT AN ANSWER, AND ONLY A READ MAY BE ASKED TWICE.
+//
+// Node reuses keep-alive sockets and does not retry a POST, so a connection the broker closed
+// while idle comes back as `TypeError: fetch failed / read ECONNRESET` in single-digit
+// milliseconds — indistinguishable, to every caller in this file, from the broker saying no.
+// `observe()` swallows it (`.catch(() => null)`) and the walk step reports "could not read
+// the character", which ends the errand with the body standing there perfectly readable.
+// Measured 2026-09-11: fund-loial-for-shalille-4 died at step 0 three runs in a row while an
+// identical `status` from another process answered 200 in 2.9s throughout.
+//
+// THE RETRY IS FOR READS AND NOTHING ELSE. A reset socket cannot tell you whether the request
+// reached the broker, so retrying `bank` is a second withdrawal, `shop` a second purchase and
+// `supply` a second hand-over. Those have to fail loudly. This list is therefore an ALLOW
+// list — a tool nobody has thought about is not retried.
+const RETRYABLE_READS = Object.freeze(new Set([
+  'status', 'inventory', 'equipment', 'abilities', 'fleet', 'look', 'map', 'merchants',
+]));
+const TRANSPORT_FAILURE = /econnreset|socket hang up|fetch failed|other side closed|econnrefused/i;
+export const isTransportFailure = (e) =>
+  !!e && e.name !== 'TimeoutError' && e.name !== 'AbortError' &&
+  (e.name === 'TypeError' || TRANSPORT_FAILURE.test(String(e?.message ?? '')) ||
+   TRANSPORT_FAILURE.test(String(e?.cause?.message ?? '')));
+
 /** One broker call. Kept private so a step cannot bypass the pacing or the timeout. */
 async function call(name, args = {}, ms = 180_000) {
-  const r = await fetch(RPC(), {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: 'tools/call',
-                           params: { name, arguments: args } }),
-    signal: AbortSignal.timeout(ms),
-  });
-  const d = await r.json();
-  try { return JSON.parse(d.result.content[0].text); } catch { return d.result?.content?.[0]?.text ?? d; }
+  // A buy is a buy however it is spelled: `shop` is not on the list above, but naming the
+  // condition here means a read that later grows a mutating argument cannot slip through.
+  const mutates = !RETRYABLE_READS.has(name) || Array.isArray(args?.buy_ids) && args.buy_ids.length;
+  const tries = mutates ? 1 : 4;
+  let last;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const r = await fetch(RPC(), {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: 'tools/call',
+                               params: { name, arguments: args } }),
+        signal: AbortSignal.timeout(ms),
+      });
+      const d = await r.json();
+      try { return JSON.parse(d.result.content[0].text); } catch { return d.result?.content?.[0]?.text ?? d; }
+    } catch (e) {
+      last = e;
+      // A TIMEOUT IS AN ANSWER — the broker had the request and took too long, and asking
+      // again just spends the budget twice. Only a socket that never carried the question
+      // is worth repeating.
+      if (!isTransportFailure(e) || attempt + 1 >= tries) throw e;
+      await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
+  }
+  throw last;
 }
 // THE SAME DECISION THE BROKER USES. This file's health floor was the ONLY one in the
 // repository, which is exactly the problem the operator named: a script refused to set out
