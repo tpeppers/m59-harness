@@ -302,6 +302,22 @@ function jumpsFrom(seen) {
 }
 
 const startFooting = FROM ? footing(FROM.row, FROM.col) : null;
+// A SEARCH WITH NO START IS A CRASH, AND IT USED TO BE ONE. Without `--from` this fell
+// through to `key(node.at.x, ...)` with `node.at` null and died with a TypeError pointing at
+// line 327, which says nothing about the argument that was missing. A tool that refuses has
+// to say what it wants.
+if (!FROM) {
+  console.error('jumpfinder: --from is required — the search starts from where a body STANDS.');
+  console.error('  The arrival square is set by the SOURCE room exit, not by this room, so');
+  console.error('  find it with: grep -rn "RID_<thisroom>" kod/ --include=*.kod');
+  console.error('  e.g. node tools/m59-jumpfinder.mjs 27 --from 19,30 --to 23,53');
+  process.exit(2);
+}
+if (!startFooting) {
+  console.error(`jumpfinder: no floor anywhere inside r${FROM.row}c${FROM.col} — ` +
+                'is that square in this room, and is it standable?');
+  process.exit(2);
+}
 if (FROM && !startFooting) { console.error(`no footing anywhere inside ${FROM.row},${FROM.col}`); process.exit(1); }
 
 console.log(`room ${ROOM} — ${room.name}   ${room.rows}x${room.cols}`);
