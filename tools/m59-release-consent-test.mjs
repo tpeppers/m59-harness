@@ -58,8 +58,8 @@ console.log('\nand a hold is a sentence, not a checkbox');
      parseHold('release-hold:   still waiting on the schema').reason === 'still waiting on the schema');
   ok('the other obvious spelling works too',
      parseHold('Do-Not-Release: half a protocol change').held);
-  ok('indented in a body still counts',
-     parseHold('subject\n\n    Release-Hold: indented by somebody quoting it back').held);
+  ok('flush left is what counts',
+     parseHold('subject\n\nRelease-Hold: written at column 0, the way git reads a trailer').held);
   ok('the first well-formed reason wins over a later bare one',
      parseHold('Release-Hold: the real reason\nRelease-Hold:').reason === 'the real reason');
 }
@@ -79,6 +79,31 @@ console.log('\nreaching for it and missing REFUSES — the asymmetry');
   // THE DIRECTION THAT MATTERS. If any of the above were read as consent, the commit ships.
   ok('none of those parse as releasable',
      ['subject\n\nRelease-Hold:', 'subject\n\nRelease Hold:'].every(m => parseHold(m).held));
+}
+
+console.log('\nan EXAMPLE is not a decision — the commit that held itself');
+{
+  // THIS HAPPENED, TEN MINUTES AFTER THE FEATURE LANDED. The commit introducing holds quoted the
+  // trailer in its own message to explain it, and `--verify` immediately refused to release that
+  // commit — correctly, by the rule as written. Left alone, every commit that documents this
+  // would block itself, and a refusal that fires on a healthy tree is one people learn to type
+  // past, which is the failure this entire file exists to avoid.
+  //
+  // Git's own convention settles it: a trailer is flush left. Somebody holding a commit writes
+  // it at column 0; somebody quoting it indents or fences it, without being taught to.
+  ok('an indented example does not hold the commit',
+     !parseHold('subject\n\n    Release-Hold: the keeper half is not landed\n').held);
+  ok('nor does a tab-indented one',
+     !parseHold('subject\n\n\tRelease-Hold: quoted in a mail reply').held);
+  ok('nor one inside a fenced block',
+     !parseHold('subject\n\n```\nRelease-Hold: shown as an example\n```\n').held);
+  // The real one, in the same message as the example, must still win.
+  ok('a real flush-left hold alongside an indented example still holds',
+     parseHold('subject\n\n    Release-Hold: an example\n\nRelease-Hold: the actual reason\n')
+       .reason === 'the actual reason');
+  // And the prose case from above must not have regressed while fixing this.
+  ok('prose is still not a hold',
+     !parseHold('Do not release the lock until the keeper answers').held);
 }
 
 console.log('\nover a range of commits');

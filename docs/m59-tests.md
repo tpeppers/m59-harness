@@ -749,7 +749,7 @@ the records it describes.
   every assertion here stayed green. Both constants are read out of the source rather than
   copied, and the pattern that reads them uses `[0-9]` rather than an escape because it
   lives in a template literal, which eats the backslash before RegExp sees it) and
-  `node tools/m59-release-consent-test.mjs` (34 — **landing a commit IS the sign-off, and this
+  `node tools/m59-release-consent-test.mjs` (39 — **landing a commit IS the sign-off, and this
   pins what may still stop a release**. `--cut` used to refuse an unpushed trunk with *"on a
   machine with many worktrees that work is usually somebody else's"* — true, and a deadlock
   dressed as politeness: the authors here are mostly SESSIONS, and a session that has ended
@@ -767,7 +767,11 @@ the records it describes.
   `do not release the lock until the keeper answers` needs a colon — and against the last 67
   real commits, bodies up to 4,478 characters of prose about releases and deploys, it holds none.
   Also pins that a `Claude-Session:` trailer is NOT a hold, since rule 6 exists to let somebody
-  ask what you meant and would become a lock whose key is gone if it gated shipping) and
+  ask what you meant and would become a lock whose key is gone if it gated shipping. And that an
+  EXAMPLE is not a decision, which cost ten minutes to learn: the commit introducing holds quoted
+  the trailer in its own message and `--verify` promptly refused to release it, correctly, by the
+  rule as written — so a hold must be FLUSH LEFT, git's own convention for a trailer, with fenced
+  blocks skipped) and
   `node tools/m59-deploy-drift-test.mjs` (20 — **ahead by HASH is not ahead by WORK, and the
   deploy check must be able to come down**. `--verify` is what stands between a `--cut` and
   burying somebody's work, and on 2026-09-11 it announced *"prod is 37 commit(s) AHEAD of main …

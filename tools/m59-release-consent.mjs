@@ -35,6 +35,18 @@
 // The failure directions are not symmetric: reading a typo as CONSENT ships something its author
 // tried to stop, silently and with no way to notice, while reading it as a hold costs one person
 // one minute and a clearer commit message. Rule 4: a guarantee that cannot be evaluated refuses.
+//
+// BUT AN EXAMPLE IS NOT A DECISION, AND THAT COST TEN MINUTES TO LEARN. The very commit that
+// introduced this feature quoted the trailer in its own message to explain it — and `--verify`
+// immediately refused to release it, correctly, by its own rule. Left alone, every commit that
+// documents this would block itself, and "a refusal that fires on a healthy tree is one people
+// learn to type past" is the argument this whole file is built on.
+//
+// So a hold must be FLUSH LEFT, which is git's own convention for a trailer, and lines inside a
+// fenced block are skipped entirely. Somebody genuinely holding a commit writes the trailer at
+// column 0; somebody quoting it indents it or fences it, the way that commit did. That is a
+// distinction the writer makes naturally without being taught it, which is the only kind of
+// convention worth relying on.
 
 // TWO FORMS, AND THEY GET DIFFERENT BENEFIT OF THE DOUBT — because commit messages here are
 // long prose that discusses releases constantly, and a parser that seizes a roll over the
@@ -45,9 +57,20 @@
 //   SPACED      `Release Hold`, `Do not release` — ordinary English, so these count only when
 //               a colon immediately follows, which is somebody writing a trailer on purpose.
 //
-// Both are anchored to the start of a line (leading whitespace allowed, for a quoted body).
-const HOLD_PUNCTUATED = /^[ \t]*(?:release[-_]hold|do[-_]not[-_]release|donotrelease)[ \t]*:?(.*)$/gim;
-const HOLD_SPACED = /^[ \t]*(?:release[ ]hold|do[ ]not[ ]release)[ \t]*:(.*)$/gim;
+// Both are anchored FLUSH LEFT — no leading whitespace — because an indented line is somebody
+// quoting the trailer, not writing one. See the note above about the commit that held itself.
+const HOLD_PUNCTUATED = /^(?:release[-_]hold|do[-_]not[-_]release|donotrelease)[ \t]*:?(.*)$/gim;
+const HOLD_SPACED = /^(?:release[ ]hold|do[ ]not[ ]release)[ \t]*:(.*)$/gim;
+
+// Lines inside a ``` fence are quoted material. Blanked rather than removed so that nothing
+// downstream depends on line numbers shifting.
+function stripFences(text) {
+  let inFence = false;
+  return text.split('\n').map(line => {
+    if (/^\s*```/.test(line)) { inFence = !inFence; return ''; }
+    return inFence ? '' : line;
+  }).join('\n');
+}
 
 /**
  * Does this commit message hold itself back from a release?
@@ -60,7 +83,7 @@ const HOLD_SPACED = /^[ \t]*(?:release[ ]hold|do[ ]not[ ]release)[ \t]*:(.*)$/gi
  *   refused for the same reason, and reported differently so it can be fixed.
  */
 export function parseHold(body) {
-  const text = String(body ?? '');
+  const text = stripFences(String(body ?? ''));
   let best = null;
   for (const re of [HOLD_PUNCTUATED, HOLD_SPACED]) {
     re.lastIndex = 0;

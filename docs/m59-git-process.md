@@ -258,8 +258,17 @@ way for anyone to notice. Reading a stray line as a hold costs one person one mi
 The parser gives ordinary English the benefit of the doubt precisely so that it can afford to be
 strict about the punctuated form. `Release-Hold` is never prose and always counts; `do not
 release the lock until the keeper answers` is a sentence, and only counts with a colon straight
-after it. Measured against the last 67 commits here — bodies up to 4,478 characters of prose about
+after it. Measured against the last 88 commits here — bodies up to 4,478 characters of prose about
 releases, deploys and locks — it holds none of them.
+
+**A hold must be flush left, and an example is not a decision.** This is git's own convention for
+a trailer, and it was learned ten minutes after the feature landed: **the commit introducing holds
+quoted the trailer in its own message to explain it, and `--verify` promptly refused to release
+that commit** — correctly, by the rule as written. Left alone, every commit documenting this would
+have blocked itself, which is precisely the cry-wolf failure the rest of this file is built to
+avoid. So an indented line is somebody quoting the trailer, a fenced block is skipped entirely,
+and column 0 is somebody writing one. Writers already make that distinction without being taught
+it, which is the only kind of convention worth depending on.
 
 ### The mechanical half is still real
 
@@ -274,6 +283,6 @@ node tools/m59-deploy.mjs --cut --push     # push the trunk, then cut
 to the next person who cuts — which is the thing the hold exists to stop — and it re-surveys
 afterwards rather than reporting numbers computed from the refs it just moved.
 
-`m59-release-consent.mjs` is the decision, pure and testable; `m59-release-consent-test.mjs` (34)
-pins it, including that a `Claude-Session:` trailer is not a hold and that every typo'd form
-refuses.
+`m59-release-consent.mjs` is the decision, pure and testable; `m59-release-consent-test.mjs` (39)
+pins it, including that a `Claude-Session:` trailer is not a hold, that every typo'd form refuses,
+and that an indented or fenced example does not hold the commit that explains it.
