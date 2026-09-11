@@ -480,3 +480,60 @@ to 14,795, and the box result is unchanged at **0 of 361**.
 The conclusion survived; the measurement did not deserve to be believed until it was redone.
 This is the third coordinate-space error in this file's history and the rule in `CLAUDE.md` is
 in capitals for a reason: **a coordinate needs its space and its axis order.**
+
+---
+
+# SIXTH: BADLANDS IS A MESA, AND MY "3230 BELOW" WAS TRUE AND IRRELEVANT
+
+Two sections up I withdrew this page's original "badlands +1280 ABOVE" and replaced it with
+"the stone is 3230 units BELOW reachable ground, so it is a descent problem and the one stone
+where a jump search is the right instrument." **That is withdrawn in turn. The original was
+right.**
+
+Both halves of my measurement were true: the stone is at floor 4096 and the fine flood does
+reach 7326. What I did not check is whether that high ground is anywhere NEAR the stone.
+**"Below some reachable ground" and "reachable by descending" are different claims**, and this
+room is precisely where they come apart.
+
+## The mesa, measured from the two real arrivals
+
+Directed flood over `moverStepLands` from `r1c53` (badland2) and `r3c80` (k5):
+
+| | |
+|---|---|
+| the plateau the stone stands on | **516 squares**, all at floor 4096 |
+| arrival-reachable squares | 3408 |
+| plateau squares that are arrival-reachable | **0** |
+| reachable squares ADJACENT to the plateau and ABOVE it | **0** |
+| cheapest genuine climb onto it | **+1024**, from r61c59 (3072), against a 384 cap |
+
+The third and fourth rows are what close it. Descent is free, so a reachable square adjacent to
+the plateau and above it would be a way in — a body would simply walk off the edge onto the
+mesa. **There is not one.** There are 17,797 squares above the plateau within six of it, and
+every single one is unreachable; counting *standable* squares instead of *reachable* ones is
+what produced my wrong answer, and it is the same error as measuring "below reachable ground"
+without asking where that ground is.
+
+## So all three ways in are closed, by results established today
+
+- **A walk cannot climb 1024** — the cap is 384 and this is the cheapest boundary anywhere on a
+  516-square perimeter.
+- **A jump gains no height at all** (`move.c:549`, same gate for walking and falling, and a
+  falling body has the lower z). So no jump at any `--max-jumps` reaches a mesa top.
+- **A fall-jump needs a take-off above the landing and within range.** Zero reachable squares
+  are above the plateau at all.
+- **And it is not a trigger.** `badland1.kod` has three handlers: no lever, no timer, no
+  `NodeAppear`.
+
+## And the r60c46 lead is explained rather than open
+
+This page once recorded badlands as "3 squares outside the box, from r60c46", which raised the
+question of what ever thought a body could stand there. **r60c46 is floor 2432** — not on the
+plateau, which is at 4096. So that figure was a gap measured from ground BELOW the mesa, which
+is consistent with everything here and is not evidence of a way up.
+
+**Record badlands as measured-and-closed**, beside 515: the second stone where the obstacle is
+the terrain and not our code. Per the operator, the errand is the stone and not the jump — *"if
+it can get to the node in Badlands that's good enough, it doesn't need to find any hidden jumps
+if they're not required"* — so there is nothing further to spend here until someone finds an
+entrance our two arrivals are not.
