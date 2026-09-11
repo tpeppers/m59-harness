@@ -119,6 +119,29 @@ console.log('\nthe unarmed branch names the blocker it is actually waiting on');
      !/needs 15 to make one`/.test(branch) || /blocker/.test(branch));
 }
 
+console.log('\nA REFUSAL THAT SURVIVES BEING SATISFIED IS A LIE ON THE BOARD');
+{
+  // Measured on prod 2026-09-11: Clifford was WIELDING a mace and Scooter a short sword, and
+  // both still carried a blocking UNARMED_NO_DONOR. `blocking: true` makes every stall reader
+  // step over them for ever. A clear existed, but it lived deep inside the branch that runs
+  // only when a pass has already found prey, and it asked whether a weapon was in the PACK —
+  // `weaponsOf(...).length` — while the refusal is raised on `isArmed`, which is the server's
+  // use list. Carrying a weapon it may not wield is exactly the state this fleet is in, so
+  // the pack is the wrong evidence for the question.
+  ok('the clear asks the same question the refusal was raised on',
+     /if \(skills\.isArmed\(this\.s\.client\)\) \{\s*\n\s*this\.clearRefusal\('UNARMED_NO_DONOR'\);/.test(auto),
+     'nothing clears UNARMED_NO_DONOR on isArmed');
+  ok('and no clear is left gated on what is merely CARRIED',
+     !/weaponsOf\(this\.s\.client\)\.length\) \{[\s\S]{0,400}?clearRefusal\('UNARMED_NO_DONOR'\)/.test(auto),
+     'a pack-gated clear is still there — it cannot fire for a character holding a banned weapon');
+  // It has to run on a quiet pass too: a character with nothing to fight is exactly the one a
+  // reader is looking at when it wonders why nothing is happening.
+  ok('the clear runs before anything branches on prey',
+     auto.indexOf("clearRefusal('UNARMED_NO_DONOR')") < auto.indexOf("this.refuse('UNARMED_NO_DONOR'"));
+  ok('and the matching wait is ended too, for both blockers',
+     /MANA_FOR_CREATE_WEAPON' \|\|[\s\S]{0,140}VIGOR_FOR_CREATE_WEAPON'\) this\.doneWaiting/.test(auto));
+}
+
 console.log('');
 console.log('and the blocker that is actually biting is named, not guessed');
 {

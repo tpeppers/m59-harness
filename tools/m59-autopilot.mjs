@@ -13881,6 +13881,23 @@ export class Autopilot {
     // Rowlf, Gonzo and Animal once each. An empty hand still swings and still reports
     // fighting, so it never reads as broken from outside.
     //
+    // A REFUSAL THAT SURVIVES BEING SATISFIED IS A LIE ON THE BOARD.
+    //
+    // UNARMED_NO_DONOR was cleared in exactly one place, deep inside the branch that runs
+    // only when a pass has already found prey, and gated on `weaponsOf(...).length` — on
+    // CARRYING a weapon — while the refusal is raised on `isArmed`, which is about the
+    // server's use list. Two different questions, and a character can answer them
+    // differently: measured on prod 2026-09-11, Clifford was WIELDING a mace and Scooter a
+    // short sword, and both still carried a blocking UNARMED_NO_DONOR. `blocking: true`
+    // makes every stall reader step over them for ever.
+    //
+    // So it is cleared here instead: the same predicate that raises it, on every pass,
+    // before anything branches on prey.
+    if (skills.isArmed(this.s.client)) {
+      this.clearRefusal('UNARMED_NO_DONOR');
+      if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON' ||
+          this.waitingOn?.code === 'VIGOR_FOR_CREATE_WEAPON') this.doneWaiting?.();
+    }
     // Ahead of the danger and rest branches on purpose: being unarmed is WHY the fight
     // is going badly, and the shortest way out is to be holding something.
     if (!skills.isArmed(this.s.client)) {
@@ -16803,12 +16820,11 @@ export class Autopilot {
       // into punching — and the server reports neither. `create food` and `create
       // weapon` are carried by every character here, so the first question when either
       // is missing is whether we can simply make one.
-      if (skills.weaponsOf(this.s.client).length) {
-        // Armed again: the refusal and the wait are over. A refusal nobody clears is
-        // worse than none, because a reader steps over the character for ever.
-        this.clearRefusal('UNARMED_NO_DONOR');
-        if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON') this.doneWaiting();
-      }
+      // The clear that used to be here asked whether a weapon was in the PACK, which is not
+      // the question the refusal was raised on and left it standing on characters that were
+      // demonstrably armed. It is done on `isArmed`, every pass, at the top of the arming
+      // stage — see the note there. Carrying one it may not wield is exactly the state this
+      // fleet is in, so the pack is the wrong evidence.
       if (!skills.weaponsOf(this.s.client).length) {
         const armed = await this.armSelf().catch(() => false);
         if (!armed) {
