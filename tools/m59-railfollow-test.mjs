@@ -5,7 +5,7 @@
 // The central case is the real one, with the real numbers: room 49's r25c17 holds four floors
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
 import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
-         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET } from './m59-railfollow.mjs';
+         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET, aimPoint } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -205,6 +205,58 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
 {
   eq(aimAhead([], 0).i, -1, 'an empty rail aims nowhere');
   eq(aimAhead([{ x: 0, y: 0, f: 1 }], 0).atEnd, true, 'a one-waypoint rail is already at its end');
+}
+
+// ---- AIM AT A POINT ON THE LINE. "ran out of steps", Marco, 2026-09-11. -----------------
+{
+  // The rim rail again. Body at r22c21 on the long segment; wp 3 is 3946 units further south.
+  const rim = [
+    { x: 20544, y:    64, f: 6144 },
+    { x: 20544, y:  1280, f: 6144 },
+    { x: 20544, y:  1642, f: 6144 },
+    { x: 20544, y: 25962, f: 6144 },
+    { x: 20544, y: 26415, f: 6016 },
+    { x: 19520, y: 27136, f: 6016 },
+  ];
+  const body = { x: 20544, y: 22016 };
+
+  // What the old aim asked for, and why 60 steps could not do it.
+  const toWp3 = Math.hypot(rim[3].x - body.x, rim[3].y - body.y);
+  eq(Math.round(toWp3), 3946, 'the next waypoint is 3946 units away');
+  ok(Math.ceil(toWp3 / 64) > 60, `which needs ${Math.ceil(toWp3 / 64)} steps against a budget of 60`);
+
+  const aim = aimPoint(rim, body, { floor: 6144 });
+  eq(aim.dist, 3 * 1024, 'the aim point is exactly one budget along the line');
+  eq(aim.x, 20544, 'still on the rail column');
+  ok(aim.y > body.y && aim.y < rim[3].y, 'between the body and the next waypoint');
+  eq(aim.stepsNeeded, 48, 'and it says how many steps it needs, so the caller stops guessing');
+  ok(!aim.atEnd, 'not the end of the rail');
+  eq(aim.i, 2, 'and it names the segment it lies on');
+
+  // Short remaining distance: it clamps to the final waypoint rather than overshooting.
+  const nearEnd = aimPoint(rim, { x: 19600, y: 27000 }, { floor: 6016 });
+  ok(nearEnd.atEnd, 'close to the end, it reports the end');
+  eq([nearEnd.x, nearEnd.y], [19520, 27136], 'and aims exactly at the last waypoint');
+}
+{
+  // A dense rail gets the same treatment and the same budget — one leg, not 48 legs.
+  const dense = [];
+  for (let k = 0; k < 200; k++) dense.push({ x: k * 64, y: 0, f: 1024 });
+  const aim = aimPoint(dense, { x: 0, y: 0 }, { floor: 1024 });
+  eq(aim.dist, 3 * 1024, 'the budget is the budget regardless of sampling density');
+  eq(aim.x, 3072, 'and the point is 3072 units along');
+  eq(aim.stepsNeeded, 48, 'needing 48 steps');
+}
+{
+  ok(aimPoint([], { x: 0, y: 0 }) === null, 'an empty rail has no aim point');
+  const one = aimPoint([{ x: 500, y: 0, f: 1 }], { x: 0, y: 0 }, { floor: 1 });
+  eq([one.x, one.y], [500, 0], 'a one-waypoint rail aims at that waypoint');
+  ok(one.atEnd, 'and reports the end');
+  // A body off the line still gets an aim ON it, which is the point of projecting.
+  const off = aimPoint([{ x: 0, y: 0, f: 1 }, { x: 10000, y: 0, f: 1 }], { x: 5000, y: 900 },
+                       { floor: 1, budget: 1024 });
+  eq(off.y, 0, 'the aim lands on the line, not beside it');
+  eq(off.x, 6024, 'one budget along from the projection');
 }
 
 // ---- the high-water mark, and the run it aborted -----------------------------------------

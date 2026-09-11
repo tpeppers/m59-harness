@@ -3166,7 +3166,25 @@ class KeeperProxy {
   setPolicy() { return null; }
   // COORDINATE CONTRACT: `(x,y)` is a fine point in kod wire units.
   async stepFine(x, y) { return keeperAction(this.name, this._index, 'step_fine', { x, y }); }
-  async walkFine(x, y, opts = {}) { return keeperAction(this.name, this._index, 'walk_fine', { x, y, ...opts }); }
+  // A FINE WALK NEEDS THE SAME FIVE MINUTES `walkTo` WAS GIVEN, AND THIS SIBLING WAS MISSED.
+  //
+  // `keeperAction` defaults to 60 seconds. `walkTo`'s fine branch was raised to `5 * 60_000`
+  // because a fine walk covers roughly 64 units a step and legs are thousands of units long —
+  // and `walkFine`, which is the path the `walk_to` TOOL takes whenever x/y are given, was left
+  // on the default. So every fine walk issued in coordinates has had a one-minute ceiling.
+  //
+  // Measured on prod 2026-09-11, a rail follower crossing Kardde's Canyon: six legs of seven
+  // aborted at 60s, 63s, 72s, 61s, 60s and 62s, with `arrived` undefined and no reason, while
+  // the body stayed on the same square. The caller could not tell an abort from a refusal from
+  // a wall, and the ground was innocent — the same line hand-stepped accepted 62 of 62 traces.
+  //
+  // The abort is BROKER-side, so the keeper walks on and the body does sometimes arrive
+  // afterwards; that is why this presented as "walks that report nothing and move nobody"
+  // rather than as an error. One ceiling, in one place, matching its sibling.
+  async walkFine(x, y, opts = {}) {
+    return keeperAction(this.name, this._index, 'walk_fine', { x, y, ...opts },
+                        { timeoutMs: 5 * 60_000 });
+  }
 }
 
 // Wrap KeeperProxy instances with a Proxy that returns null for any

@@ -165,6 +165,56 @@ export function aimAhead(waypoints, fromIndex, { budget = AIM_BUDGET } = {}) {
   return { i, dist: acc, spanned: i - from, atEnd: i >= last };
 }
 
+/**
+ * WHERE TO AIM, AS A POINT ON THE LINE — because a waypoint can be further than one leg.
+ *
+ * `aimAhead` picks a WAYPOINT, and on a sparse rail the next waypoint may be 24,320 units away.
+ * A fine walk covers roughly 64 units a step, so that leg needs about 380 steps and the caller
+ * asks for 60. Measured 2026-09-11: Marco aimed from r22c21 at wp 3 (r26c21), 3,946 units off,
+ * needing 62 steps against a `max_steps: 60`, and every leg came back `ran out of steps` — two
+ * steps short, five times running, read as a refusal. Stepping the same line by hand accepted
+ * all 62, so the ground was never the problem.
+ *
+ * A rail is a continuous line. Aim at a point on it, at most `budget` units along, and let the
+ * waypoints be the shape of the line rather than the only places a body may aim.
+ *
+ * Returns the point, the segment it lies on, and `stepsNeeded` so a caller can size its own step
+ * budget instead of guessing — the guess is what failed.
+ */
+export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
+                                             step = MAX_STEP_HEIGHT, unitsPerStep = 64 } = {}) {
+  if (!Array.isArray(waypoints) || waypoints.length === 0) return null;
+  if (waypoints.length === 1) {
+    const w = waypoints[0];
+    return { x: w.x, y: w.y, i: 0, dist: Math.hypot(w.x - point.x, w.y - point.y),
+             atEnd: true, stepsNeeded: Math.ceil(Math.hypot(w.x - point.x, w.y - point.y) / unitsPerStep) };
+  }
+  // Which segment are we on, and where does the body project onto it?
+  const seg = distanceToRail(waypoints, point, { floor, step });
+  let i = Math.max(0, Math.min(seg.i, waypoints.length - 2));
+  const a = waypoints[i], b = waypoints[i + 1];
+  const vx = b.x - a.x, vy = b.y - a.y, len2 = vx * vx + vy * vy;
+  let t = len2 === 0 ? 0 : ((point.x - a.x) * vx + (point.y - a.y) * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+
+  // Walk forward along the line spending the budget.
+  let left = budget, px = a.x + t * vx, py = a.y + t * vy;
+  while (i < waypoints.length - 1) {
+    const p = waypoints[i], q = waypoints[i + 1];
+    const remain = Math.hypot(q.x - px, q.y - py);
+    if (remain > left) {
+      const k = left / remain;
+      return { x: Math.round(px + (q.x - px) * k), y: Math.round(py + (q.y - py) * k),
+               i, dist: budget, atEnd: false,
+               stepsNeeded: Math.ceil(budget / unitsPerStep) };
+    }
+    left -= remain; px = q.x; py = q.y; i++;
+  }
+  const d = Math.hypot(px - point.x, py - point.y);
+  return { x: Math.round(px), y: Math.round(py), i: waypoints.length - 2, dist: d, atEnd: true,
+           stepsNeeded: Math.ceil(d / unitsPerStep) };
+}
+
 /** Default gap, in waypoints, that separates rejoining the line from wobbling on it. */
 export const REJOIN_BEHIND = 20;
 
