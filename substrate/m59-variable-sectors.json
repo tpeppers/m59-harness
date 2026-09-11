@@ -1,8 +1,196 @@
 {
  "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
  "max_step_height": 384,
- "built_at": "2026-09-04T18:09:19.446Z",
+ "built_at": "2026-09-11T01:52:46.375Z",
  "rooms": [
+  {
+   "room": 5,
+   "rid": "RID_CAVE3",
+   "file": "object/active/holder/room/cave3.kod",
+   "sectors": [
+    {
+     "sector": 12,
+     "name": "SECTOR_DOOR",
+     "kind": "floor",
+     "heights": [
+      260,
+      336
+     ],
+     "cite_lines": [
+      183,
+      218
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 6,
+     "name": "SECTOR_TEMPLE1",
+     "kind": "floor",
+     "heights": [
+      208,
+      300
+     ],
+     "cite_lines": [
+      187,
+      222
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 7,
+     "name": "SECTOR_TEMPLE2",
+     "kind": "floor",
+     "heights": [
+      208,
+      308
+     ],
+     "cite_lines": [
+      189,
+      224
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 8,
+     "name": "SECTOR_TEMPLE3",
+     "kind": "floor",
+     "heights": [
+      208,
+      444
+     ],
+     "cite_lines": [
+      191,
+      226
+     ],
+     "gates": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 9,
+     "name": "SECTOR_TEMPLE4",
+     "kind": "floor",
+     "heights": [
+      208,
+      372
+     ],
+     "cite_lines": [
+      193,
+      228
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 10,
+     "name": "SECTOR_TEMPLE5",
+     "kind": "floor",
+     "heights": [
+      208,
+      332
+     ],
+     "cite_lines": [
+      195,
+      230
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 11,
+     "name": "SECTOR_TEMPLE6",
+     "kind": "floor",
+     "heights": [
+      208,
+      324
+     ],
+     "cite_lines": [
+      197,
+      232
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 1,
+     "name": "SECTOR_STAIR1",
+     "kind": "floor",
+     "heights": [
+      208,
+      244
+     ],
+     "cite_lines": [
+      201,
+      236
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_STAIR2",
+     "kind": "floor",
+     "heights": [
+      208,
+      260
+     ],
+     "cite_lines": [
+      203,
+      238
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_STAIR3",
+     "kind": "floor",
+     "heights": [
+      208,
+      276
+     ],
+     "cite_lines": [
+      205,
+      240
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 4,
+     "name": "SECTOR_STAIR4",
+     "kind": "floor",
+     "heights": [
+      208,
+      292
+     ],
+     "cite_lines": [
+      207,
+      242
+     ],
+     "gates": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_STAIR5",
+     "kind": "floor",
+     "heights": [
+      208,
+      300
+     ],
+     "cite_lines": [
+      209,
+      244
+     ],
+     "gates": false,
+     "headroom_risk": false
+    }
+   ],
+   "groups": []
+  },
   {
    "room": 27,
    "rid": "RID_CAVE2",
@@ -1577,6 +1765,97 @@
    ]
   },
   {
+   "room": 1006,
+   "rid": "RID_GUEST6",
+   "file": "object/active/holder/room/monsroom/guest6.kod",
+   "sectors": [
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      84,
+      128,
+      172
+     ],
+     "cite_lines": [
+      406,
+      413,
+      430,
+      451
+     ],
+     "gates": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 4,
+     "name": "SECTOR_NODE1",
+     "kind": "floor",
+     "heights": [
+      105,
+      500
+     ],
+     "cite_lines": [
+      484,
+      515
+     ],
+     "gates": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_NODE2",
+     "kind": "floor",
+     "heights": [
+      124,
+      519
+     ],
+     "cite_lines": [
+      486,
+      517
+     ],
+     "gates": true,
+     "headroom_risk": false
+    }
+   ],
+   "groups": [
+    {
+     "line": 476,
+     "states": [
+      {
+       "sector": 4,
+       "height": 500,
+       "name": "SECTOR_NODE1",
+       "kind": "floor"
+      },
+      {
+       "sector": 5,
+       "height": 519,
+       "name": "SECTOR_NODE2",
+       "kind": "floor"
+      }
+     ]
+    },
+    {
+     "line": 512,
+     "states": [
+      {
+       "sector": 4,
+       "height": 105,
+       "name": "SECTOR_NODE1",
+       "kind": "floor"
+      },
+      {
+       "sector": 5,
+       "height": 124,
+       "name": "SECTOR_NODE2",
+       "kind": "floor"
+      }
+     ]
+    }
+   ]
+  },
+  {
    "room": 2151,
    "rid": "RID_TEMPLE_RIIJA",
    "file": "object/active/holder/room/temprii.kod",
@@ -1986,285 +2265,6 @@
     }
    ],
    "groups": []
-  },
-  {
-   "room": null,
-   "rid": null,
-   "file": "object/active/holder/room/cave3.kod",
-   "sectors": [
-    {
-     "sector": 12,
-     "name": "SECTOR_DOOR",
-     "kind": "floor",
-     "heights": [
-      260,
-      336
-     ],
-     "cite_lines": [
-      183,
-      218
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 6,
-     "name": "SECTOR_TEMPLE1",
-     "kind": "floor",
-     "heights": [
-      208,
-      300
-     ],
-     "cite_lines": [
-      187,
-      222
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 7,
-     "name": "SECTOR_TEMPLE2",
-     "kind": "floor",
-     "heights": [
-      208,
-      308
-     ],
-     "cite_lines": [
-      189,
-      224
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 8,
-     "name": "SECTOR_TEMPLE3",
-     "kind": "floor",
-     "heights": [
-      208,
-      444
-     ],
-     "cite_lines": [
-      191,
-      226
-     ],
-     "gates": true,
-     "headroom_risk": false
-    },
-    {
-     "sector": 9,
-     "name": "SECTOR_TEMPLE4",
-     "kind": "floor",
-     "heights": [
-      208,
-      372
-     ],
-     "cite_lines": [
-      193,
-      228
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 10,
-     "name": "SECTOR_TEMPLE5",
-     "kind": "floor",
-     "heights": [
-      208,
-      332
-     ],
-     "cite_lines": [
-      195,
-      230
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 11,
-     "name": "SECTOR_TEMPLE6",
-     "kind": "floor",
-     "heights": [
-      208,
-      324
-     ],
-     "cite_lines": [
-      197,
-      232
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 1,
-     "name": "SECTOR_STAIR1",
-     "kind": "floor",
-     "heights": [
-      208,
-      244
-     ],
-     "cite_lines": [
-      201,
-      236
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 2,
-     "name": "SECTOR_STAIR2",
-     "kind": "floor",
-     "heights": [
-      208,
-      260
-     ],
-     "cite_lines": [
-      203,
-      238
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 3,
-     "name": "SECTOR_STAIR3",
-     "kind": "floor",
-     "heights": [
-      208,
-      276
-     ],
-     "cite_lines": [
-      205,
-      240
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 4,
-     "name": "SECTOR_STAIR4",
-     "kind": "floor",
-     "heights": [
-      208,
-      292
-     ],
-     "cite_lines": [
-      207,
-      242
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 5,
-     "name": "SECTOR_STAIR5",
-     "kind": "floor",
-     "heights": [
-      208,
-      300
-     ],
-     "cite_lines": [
-      209,
-      244
-     ],
-     "gates": false,
-     "headroom_risk": false
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": null,
-   "rid": null,
-   "file": "object/active/holder/room/monsroom/guest6.kod",
-   "sectors": [
-    {
-     "sector": 3,
-     "name": "SECTOR_DOOR",
-     "kind": "ceiling",
-     "heights": [
-      84,
-      128,
-      172
-     ],
-     "cite_lines": [
-      406,
-      413,
-      430,
-      451
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 4,
-     "name": "SECTOR_NODE1",
-     "kind": "floor",
-     "heights": [
-      105,
-      500
-     ],
-     "cite_lines": [
-      484,
-      515
-     ],
-     "gates": true,
-     "headroom_risk": false
-    },
-    {
-     "sector": 5,
-     "name": "SECTOR_NODE2",
-     "kind": "floor",
-     "heights": [
-      124,
-      519
-     ],
-     "cite_lines": [
-      486,
-      517
-     ],
-     "gates": true,
-     "headroom_risk": false
-    }
-   ],
-   "groups": [
-    {
-     "line": 476,
-     "states": [
-      {
-       "sector": 4,
-       "height": 500,
-       "name": "SECTOR_NODE1",
-       "kind": "floor"
-      },
-      {
-       "sector": 5,
-       "height": 519,
-       "name": "SECTOR_NODE2",
-       "kind": "floor"
-      }
-     ]
-    },
-    {
-     "line": 512,
-     "states": [
-      {
-       "sector": 4,
-       "height": 105,
-       "name": "SECTOR_NODE1",
-       "kind": "floor"
-      },
-      {
-       "sector": 5,
-       "height": 124,
-       "name": "SECTOR_NODE2",
-       "kind": "floor"
-      }
-     ]
-    }
-   ]
   }
  ]
 }

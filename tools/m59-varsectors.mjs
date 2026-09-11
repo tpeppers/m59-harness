@@ -53,12 +53,38 @@ const KOD_ROOT = process.env.M59_ROOT
   ? join(process.env.M59_ROOT, 'kod')
   : 'C:/code/Meridian59/kod';
 
-/** RID_* -> room number, out of the game's own header. */
-export function readRoomIds(kodRoot = KOD_ROOT) {
-  const src = readFileSync(join(kodRoot, 'include/blakston.khd'), 'utf8');
+/**
+ * RID_* -> room number, out of the game's own header.
+ *
+ * KEYED UPPERCASE, BECAUSE KOD IDENTIFIERS ARE CASE-INSENSITIVE AND THE GAME USES BOTH.
+ * `blakston.khd` declares `RID_CAVE3 = 5` and `RID_GUEST6 = 1006`; the room files that claim
+ * those numbers write `piRoom_num = RID_cave3` and `RID_guest6` in lower case, and `cave3.kod`
+ * itself refers to `RID_CAVE2` upper case four lines away. The compiler does not care.
+ *
+ * This function and its caller both used `RID_[A-Z0-9_]+`, so neither the declaration lookup
+ * nor the claim matched, and both rooms reported their number as `?`. A room with no number
+ * cannot be joined to a bake, so it can never enter `m59-variable-sectors.json` and no door
+ * mask is ever baked for it — silently, because "we could not number it" and "it has no doors"
+ * look identical downstream. It hid FIFTEEN moving sectors: room 5's five-tread SECTOR_STAIR
+ * chain, and room 1006's SECTOR_NODE1/NODE2, which are the floor the Mausoleum's mana node
+ * rides 500 units up until the chamber is cleared.
+ */
+export function parseRoomIds(src) {
   const out = new Map();
-  for (const m of src.matchAll(/^\s*(RID_[A-Z0-9_]+)\s*=\s*(\d+)/gm)) out.set(m[1], Number(m[2]));
+  for (const m of src.matchAll(/^\s*(RID_[A-Za-z0-9_]+)\s*=\s*(\d+)/gm))
+    out.set(m[1].toUpperCase(), Number(m[2]));
   return out;
+}
+
+/** The same, off the game's header. Split so the parsing can be tested without a kod tree. */
+export function readRoomIds(kodRoot = KOD_ROOT) {
+  return parseRoomIds(readFileSync(join(kodRoot, 'include/blakston.khd'), 'utf8'));
+}
+
+/** The `RID_*` a room file claims as its own number, case-folded to match `parseRoomIds`. */
+export function claimedRoomId(src) {
+  const m = /piRoom_num\s*=\s*(RID_[A-Za-z0-9_]+)/.exec(src);
+  return m ? m[1].toUpperCase() : null;
 }
 
 const kodFiles = (dir) => {
@@ -237,12 +263,14 @@ export function scan(kodRoot = KOD_ROOT) {
     if (!/@setsector/i.test(src)) continue;
     const sectors = sectorsInSource(src);
     if (!sectors.length) continue;
-    const m = /piRoom_num\s*=\s*(RID_[A-Z0-9_]+)/.exec(src);
+    // Case-insensitive on BOTH sides — see parseRoomIds. `RID_cave3` and `RID_guest6` are
+    // written lower case by the rooms that claim them.
+    const claimed = claimedRoomId(src);
     rooms.push({
       // A room we cannot number is still reported — it is a door somebody should look at —
       // but it cannot be matched to a bake, and saying so is the point.
-      room: m ? (rid.get(m[1]) ?? null) : null,
-      rid: m ? m[1] : null,
+      room: claimed ? (rid.get(claimed) ?? null) : null,
+      rid: claimed,
       file: relative(kodRoot, file).replace(/\\/g, '/'),
       sectors: sectors.map(s => ({ ...s, gates: gatesMovement(s.heights, s.kind),
                                     headroom_risk: headroomRisk(s.heights, s.kind) })),
