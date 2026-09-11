@@ -216,3 +216,84 @@ asking. `/movecheck` answers four cardinals from wherever the body happens to st
 diagonals cannot be asked at all and were probed blind. A report that floods to the boundary
 and prints the refusing predicate per frontier cell would have produced the "row 9 crosses,
 rows 3/6/10/11/12 do not" table in one command instead of an hour of walking.
+
+## IT IS A VERB NOW: `crawlTo`, AND `mana-node` IS THE SCRIPT
+
+Everything the section above says to do by hand is a fleetScript step:
+
+```
+node tools/m59-fleet-repl.mjs
+> mana-node agents=hk2 node=victoria minHealth=0.4 bodyRetries=15
+```
+
+`crawlTo(col, row, { within: 2, healBelow, bodyRetries })` in `m59-fleetscript.mjs` does the
+last squares. Three things it does that a `walk_to` cannot:
+
+- **Hops, never plans.** Every step is a `short_hop`, because `walk_to`'s planner uses the
+  coarse grid and in this room routes one square east as forty squares west.
+- **Tells an ORC from a WALL, and waits out the orc.** The keeper's own `/movecheck` answers
+  `object_blocked` for a body and `geometry_blocked` for the floor. A body is the one refusal
+  in this game that fixes itself, so it is waited on (`bodyWaitMs`, `bodyRetries`) rather than
+  reported; ground is never waited on, it sidesteps to try another row. Giving up on a body
+  after N tries is reported as `body_will_not_move` and NAMES the direction — which is a
+  different finding from `boxed_in` and wants a different response.
+- **Heals mid-crawl.** At `healBelow` it runs the ordinary `rest` step — safe wall, refuses
+  the open — and then carries on from wherever that left the body.
+
+**AND THE FIRST LIVE RUN IMMEDIATELY FOUND A HOLE IN IT**, which is the best argument for
+having built it. At `r10c27`:
+
+```
+crawl_to: r10c27 — a body blocks E; waiting 6000ms (1/8)
+step failed: every direction out of r10c27 is refused:
+             E geometry_blocked, W geometry_blocked, N geometry_blocked, S object_blocked
+```
+
+South was an **orc**, not rock. The verdict looked for bodies only among the directions that
+*improve*, so the single direction that was not stone counted as boxed in and the errand gave
+up on a room it could have walked out of ten seconds later. **A wall that breathes is not a
+wall**: a body anywhere is now a reason to wait, because when everything else is rock it is
+the only door there is. Pinned by four assertions in `m59-fleetscript-test.mjs`.
+
+## THE ROOM KILLS hk2 FASTER THAN ANY CRAWL CAN CROSS IT, AND THE FAILURE PATH IS WHY
+
+Three deaths on 2026-09-10, and the third one names the defect.
+
+```
+11:49:51  step 4 (crawl_to) failed: the keeper would not answer /movecheck
+          -> lease handed back. Body left standing at r8c28, room 39.
+11:54:46  next run starts. step 0 (rest) walks him toward r2c4.
+11:54:50  step 2 (walk): DIED                     <- four seconds later
+12:11:23  revive, retry the same walk, DIED again
+```
+
+**A failed fleetScript releases the body where it stands.** For most of the fleet that is
+fine. For a 20-max-health caster standing in a room that carries seven to eleven undead, the
+five minutes between one run failing and the next one starting is lethal — he was killed
+between 11:49:51 and 11:54:46 with nothing driving him, and the second run's `walk` step
+found a corpse rather than causing one.
+
+So the deaths are not the crawl failing. **The crawl never got to run.** Two of the three
+deaths happened while no script held him at all, and the third was the revive path retrying
+into the same room.
+
+**Two repairs this argues for, neither made yet because both are judgement calls:**
+
+1. **An errand that fails on a fragile character in a hostile room should walk it out before
+   releasing**, not hand it back in place. "Out" is the hard part — the nearest door, the room
+   it came from, an inn — and getting it wrong strands somebody somewhere worse.
+2. **`reviveMs` retries the same walk into the same room.** After a death caused by the
+   destination, retrying the destination is how you get the second death. A revive should
+   re-decide, not resume.
+
+**And one that WAS made, because it was unambiguous.** The leading `rest` walked a character
+that did not need to rest: it looked for a safe spot BEFORE asking whether there was anything
+to heal, so hk2 was dragged from `r8c28` — the east doorway, the only landing in this split
+room from which the stone is reachable at all — to `r2c4` on the west side, into the crowd.
+`rest` now returns `already_rested` and walks nothing when health is at or above the floor,
+after the waiver is judged so a malformed `unsafe` is still refused. Six assertions.
+
+**What this means for the node.** hk2 cannot hold room 39 long enough to cross twelve squares
+under fire. Either he arrives with an escort that can hold the undead off, or the errand has
+to finish inside one uninterrupted run — because every failure costs a death and a nine-hop
+walk back through the road that kills him too.

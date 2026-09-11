@@ -1,8 +1,208 @@
 {
  "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
  "max_step_height": 384,
- "built_at": "2026-09-04T18:09:19.446Z",
+ "built_at": "2026-09-11T02:00:44.032Z",
  "rooms": [
+  {
+   "room": 5,
+   "rid": "RID_CAVE3",
+   "file": "object/active/holder/room/cave3.kod",
+   "sectors": [
+    {
+     "sector": 12,
+     "name": "SECTOR_DOOR",
+     "kind": "floor",
+     "heights": [
+      260,
+      336
+     ],
+     "cite_lines": [
+      183,
+      218
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 6,
+     "name": "SECTOR_TEMPLE1",
+     "kind": "floor",
+     "heights": [
+      208,
+      300
+     ],
+     "cite_lines": [
+      187,
+      222
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 7,
+     "name": "SECTOR_TEMPLE2",
+     "kind": "floor",
+     "heights": [
+      208,
+      308
+     ],
+     "cite_lines": [
+      189,
+      224
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 8,
+     "name": "SECTOR_TEMPLE3",
+     "kind": "floor",
+     "heights": [
+      208,
+      444
+     ],
+     "cite_lines": [
+      191,
+      226
+     ],
+     "gates": true,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 9,
+     "name": "SECTOR_TEMPLE4",
+     "kind": "floor",
+     "heights": [
+      208,
+      372
+     ],
+     "cite_lines": [
+      193,
+      228
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 10,
+     "name": "SECTOR_TEMPLE5",
+     "kind": "floor",
+     "heights": [
+      208,
+      332
+     ],
+     "cite_lines": [
+      195,
+      230
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 11,
+     "name": "SECTOR_TEMPLE6",
+     "kind": "floor",
+     "heights": [
+      208,
+      324
+     ],
+     "cite_lines": [
+      197,
+      232
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 1,
+     "name": "SECTOR_STAIR1",
+     "kind": "floor",
+     "heights": [
+      208,
+      244
+     ],
+     "cite_lines": [
+      201,
+      236
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_STAIR2",
+     "kind": "floor",
+     "heights": [
+      208,
+      260
+     ],
+     "cite_lines": [
+      203,
+      238
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_STAIR3",
+     "kind": "floor",
+     "heights": [
+      208,
+      276
+     ],
+     "cite_lines": [
+      205,
+      240
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 4,
+     "name": "SECTOR_STAIR4",
+     "kind": "floor",
+     "heights": [
+      208,
+      292
+     ],
+     "cite_lines": [
+      207,
+      242
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_STAIR5",
+     "kind": "floor",
+     "heights": [
+      208,
+      300
+     ],
+     "cite_lines": [
+      209,
+      244
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    }
+   ],
+   "groups": []
+  },
   {
    "room": 27,
    "rid": "RID_CAVE2",
@@ -21,6 +221,7 @@
       114
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -36,6 +237,7 @@
       115
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -51,6 +253,7 @@
       116
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": false
     },
     {
@@ -66,6 +269,7 @@
       117
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": false
     },
     {
@@ -81,6 +285,7 @@
       118
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": false
     }
    ],
@@ -104,6 +309,7 @@
       140
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -127,6 +333,7 @@
       105
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -142,6 +349,7 @@
       107
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": false
     }
    ],
@@ -167,6 +375,7 @@
       582
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -184,6 +393,7 @@
       552
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -201,6 +411,7 @@
       584
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -218,6 +429,7 @@
       546
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -235,6 +447,7 @@
       527
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -252,6 +465,7 @@
       539
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -267,6 +481,7 @@
       594
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -282,6 +497,7 @@
       595
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -305,6 +521,7 @@
       204
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -320,6 +537,7 @@
       206
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -335,6 +553,7 @@
       208
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -350,6 +569,7 @@
       210
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -365,6 +585,7 @@
       212
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -380,6 +601,7 @@
       214
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -395,6 +617,7 @@
       232
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -410,6 +633,7 @@
       234
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -425,6 +649,7 @@
       236
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -440,6 +665,7 @@
       238
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -498,6 +724,7 @@
       100
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -521,6 +748,7 @@
       86
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -544,6 +772,7 @@
       136
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -567,6 +796,7 @@
       137
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -582,6 +812,7 @@
       163
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -597,6 +828,7 @@
       165
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -620,6 +852,7 @@
       232
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -635,6 +868,7 @@
       243
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -650,6 +884,7 @@
       254
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -665,6 +900,7 @@
       264
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -680,6 +916,7 @@
       274
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -695,6 +932,7 @@
       284
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -710,6 +948,7 @@
       294
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -725,6 +964,7 @@
       312
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -748,6 +988,7 @@
       303
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -763,6 +1004,7 @@
       312
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -778,6 +1020,7 @@
       321
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -793,6 +1036,7 @@
       330
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -816,6 +1060,7 @@
       231
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -831,6 +1076,7 @@
       241
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -846,6 +1092,7 @@
       251
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -861,6 +1108,7 @@
       284
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -876,6 +1124,7 @@
       286
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -891,6 +1140,7 @@
       288
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -906,6 +1156,7 @@
       290
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -921,6 +1172,7 @@
       292
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -936,6 +1188,7 @@
       294
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": false
     }
    ],
@@ -959,6 +1212,7 @@
       226
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -974,6 +1228,7 @@
       228
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -989,6 +1244,7 @@
       230
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1004,6 +1260,7 @@
       296
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1019,6 +1276,7 @@
       298
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1034,6 +1292,7 @@
       382
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1049,6 +1308,7 @@
       391
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1064,6 +1324,7 @@
       401
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1079,6 +1340,7 @@
       370
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1094,6 +1356,7 @@
       372
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -1117,6 +1380,7 @@
       138
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1132,6 +1396,7 @@
       161
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -1155,6 +1420,7 @@
       165
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1170,6 +1436,7 @@
       167
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1185,6 +1452,7 @@
       247
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1200,6 +1468,7 @@
       255
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1215,6 +1484,7 @@
       263
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1230,6 +1500,7 @@
       271
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1245,6 +1516,7 @@
       279
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1260,6 +1532,7 @@
       239
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1275,6 +1548,7 @@
       297
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -1298,6 +1572,7 @@
       134
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1313,6 +1588,7 @@
       157
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -1336,6 +1612,7 @@
       150
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1351,6 +1628,7 @@
       152
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1366,6 +1644,7 @@
       175
      ],
      "gates": false,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -1390,6 +1669,7 @@
       194
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -1405,6 +1685,7 @@
       160
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -1428,6 +1709,7 @@
       128
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -1451,6 +1733,7 @@
       195
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     }
    ],
@@ -1474,6 +1757,7 @@
       176
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1489,6 +1773,7 @@
       174
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1504,6 +1789,7 @@
       134
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -1519,6 +1805,7 @@
       132
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -1577,607 +1864,8 @@
    ]
   },
   {
-   "room": 2151,
-   "rid": "RID_TEMPLE_RIIJA",
-   "file": "object/active/holder/room/temprii.kod",
-   "sectors": [
-    {
-     "sector": 2,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      408,
-      536,
-      544
-     ],
-     "cite_lines": [
-      229,
-      238,
-      301,
-      310
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 3,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      536,
-      544
-     ],
-     "cite_lines": [
-      230,
-      239,
-      302,
-      311
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 4,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      408,
-      536,
-      544
-     ],
-     "cite_lines": [
-      231,
-      240,
-      303,
-      312
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 5,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      480,
-      536,
-      544
-     ],
-     "cite_lines": [
-      232,
-      241,
-      304,
-      313
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 6,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      408,
-      472,
-      504
-     ],
-     "cite_lines": [
-      233,
-      242,
-      305,
-      314
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 7,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      408,
-      488,
-      536
-     ],
-     "cite_lines": [
-      234,
-      243,
-      306,
-      315
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 8,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      408,
-      488,
-      536
-     ],
-     "cite_lines": [
-      235,
-      244,
-      307,
-      316
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 9,
-     "name": null,
-     "kind": "both",
-     "heights": [
-      392,
-      480,
-      488,
-      536
-     ],
-     "cite_lines": [
-      236,
-      245,
-      308,
-      317
-     ],
-     "gates": false,
-     "headroom_risk": true
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": 2500,
-   "rid": "RID_ORC_CAVE1",
-   "file": "object/active/holder/room/monsroom/orccave1.kod",
-   "sectors": [
-    {
-     "sector": 1,
-     "name": null,
-     "kind": "floor",
-     "heights": [
-      1492,
-      1608
-     ],
-     "cite_lines": [
-      100,
-      115,
-      124
-     ],
-     "gates": false,
-     "headroom_risk": false
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": 2507,
-   "rid": "RID_ORC_PIT_A",
-   "file": "object/active/holder/room/monsroom/orcpita.kod",
-   "sectors": [
-    {
-     "sector": 2,
-     "name": "DOORSECTOR",
-     "kind": "ceiling",
-     "heights": [
-      500,
-      600
-     ],
-     "cite_lines": [
-      80,
-      102
-     ],
-     "gates": false,
-     "headroom_risk": true
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": 2508,
-   "rid": "RID_ORC_PIT_B",
-   "file": "object/active/holder/room/monsroom/orcpitb.kod",
-   "sectors": [
-    {
-     "sector": 2,
-     "name": "DOORSECTOR",
-     "kind": "ceiling",
-     "heights": [
-      500,
-      600
-     ],
-     "cite_lines": [
-      175,
-      188
-     ],
-     "gates": false,
-     "headroom_risk": true
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": 2600,
-   "rid": "RID_MAR_CRYPT1",
-   "file": "object/active/holder/room/monsroom/marcryp1.kod",
-   "sectors": [
-    {
-     "sector": 4,
-     "name": "SECTOR_NECRO1",
-     "kind": "both",
-     "heights": [
-      424,
-      458,
-      484
-     ],
-     "cite_lines": [
-      292,
-      302,
-      336,
-      346
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 5,
-     "name": "SECTOR_NECRO2",
-     "kind": "both",
-     "heights": [
-      434,
-      468,
-      494
-     ],
-     "cite_lines": [
-      294,
-      304,
-      338,
-      348
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 3,
-     "name": "SECTOR_DOOR",
-     "kind": "ceiling",
-     "heights": [
-      84,
-      128,
-      172
-     ],
-     "cite_lines": [
-      394,
-      489,
-      499
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 6,
-     "name": "SECTOR_EXIT1",
-     "kind": "ceiling",
-     "heights": [
-      200,
-      273
-     ],
-     "cite_lines": [
-      582,
-      592
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 7,
-     "name": "SECTOR_EXIT2",
-     "kind": "ceiling",
-     "heights": [
-      88,
-      161
-     ],
-     "cite_lines": [
-      584,
-      594
-     ],
-     "gates": false,
-     "headroom_risk": true
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": 2601,
-   "rid": "RID_MAR_CRYPT2",
-   "file": "object/active/holder/room/monsroom/marcryp2.kod",
-   "sectors": [
-    {
-     "sector": 5,
-     "name": "SECTOR_DOOR_CRYPT3A",
-     "kind": "ceiling",
-     "heights": [
-      1045,
-      1098
-     ],
-     "cite_lines": [
-      204,
-      215
-     ],
-     "gates": false,
-     "headroom_risk": true
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": 2602,
-   "rid": "RID_MAR_CRYPT3A",
-   "file": "object/active/holder/room/monsroom/marcry3a.kod",
-   "sectors": [
-    {
-     "sector": 1,
-     "name": "SECTOR_DOOR_TRAP1",
-     "kind": "floor",
-     "heights": [
-      1824,
-      1864
-     ],
-     "cite_lines": [
-      278,
-      474
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 2,
-     "name": "SECTOR_DOOR_TRAP2A",
-     "kind": "ceiling",
-     "heights": [
-      1910,
-      1958
-     ],
-     "cite_lines": [
-      300,
-      497
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 3,
-     "name": "SECTOR_DOOR_TRAP2B",
-     "kind": "ceiling",
-     "heights": [
-      1816,
-      1864
-     ],
-     "cite_lines": [
-      303,
-      500
-     ],
-     "gates": false,
-     "headroom_risk": true
-    },
-    {
-     "sector": 5,
-     "name": "SECTOR_DOOR_TRAP3",
-     "kind": "ceiling",
-     "heights": [
-      1960,
-      2022
-     ],
-     "cite_lines": [
-      329,
-      529
-     ],
-     "gates": false,
-     "headroom_risk": true
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": null,
-   "rid": null,
-   "file": "object/active/holder/room/cave3.kod",
-   "sectors": [
-    {
-     "sector": 12,
-     "name": "SECTOR_DOOR",
-     "kind": "floor",
-     "heights": [
-      260,
-      336
-     ],
-     "cite_lines": [
-      183,
-      218
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 6,
-     "name": "SECTOR_TEMPLE1",
-     "kind": "floor",
-     "heights": [
-      208,
-      300
-     ],
-     "cite_lines": [
-      187,
-      222
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 7,
-     "name": "SECTOR_TEMPLE2",
-     "kind": "floor",
-     "heights": [
-      208,
-      308
-     ],
-     "cite_lines": [
-      189,
-      224
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 8,
-     "name": "SECTOR_TEMPLE3",
-     "kind": "floor",
-     "heights": [
-      208,
-      444
-     ],
-     "cite_lines": [
-      191,
-      226
-     ],
-     "gates": true,
-     "headroom_risk": false
-    },
-    {
-     "sector": 9,
-     "name": "SECTOR_TEMPLE4",
-     "kind": "floor",
-     "heights": [
-      208,
-      372
-     ],
-     "cite_lines": [
-      193,
-      228
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 10,
-     "name": "SECTOR_TEMPLE5",
-     "kind": "floor",
-     "heights": [
-      208,
-      332
-     ],
-     "cite_lines": [
-      195,
-      230
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 11,
-     "name": "SECTOR_TEMPLE6",
-     "kind": "floor",
-     "heights": [
-      208,
-      324
-     ],
-     "cite_lines": [
-      197,
-      232
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 1,
-     "name": "SECTOR_STAIR1",
-     "kind": "floor",
-     "heights": [
-      208,
-      244
-     ],
-     "cite_lines": [
-      201,
-      236
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 2,
-     "name": "SECTOR_STAIR2",
-     "kind": "floor",
-     "heights": [
-      208,
-      260
-     ],
-     "cite_lines": [
-      203,
-      238
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 3,
-     "name": "SECTOR_STAIR3",
-     "kind": "floor",
-     "heights": [
-      208,
-      276
-     ],
-     "cite_lines": [
-      205,
-      240
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 4,
-     "name": "SECTOR_STAIR4",
-     "kind": "floor",
-     "heights": [
-      208,
-      292
-     ],
-     "cite_lines": [
-      207,
-      242
-     ],
-     "gates": false,
-     "headroom_risk": false
-    },
-    {
-     "sector": 5,
-     "name": "SECTOR_STAIR5",
-     "kind": "floor",
-     "heights": [
-      208,
-      300
-     ],
-     "cite_lines": [
-      209,
-      244
-     ],
-     "gates": false,
-     "headroom_risk": false
-    }
-   ],
-   "groups": []
-  },
-  {
-   "room": null,
-   "rid": null,
+   "room": 1006,
+   "rid": "RID_GUEST6",
    "file": "object/active/holder/room/monsroom/guest6.kod",
    "sectors": [
     {
@@ -2196,6 +1884,7 @@
       451
      ],
      "gates": false,
+     "gate_risk": false,
      "headroom_risk": true
     },
     {
@@ -2211,6 +1900,7 @@
       515
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     },
     {
@@ -2226,6 +1916,7 @@
       517
      ],
      "gates": true,
+     "gate_risk": true,
      "headroom_risk": false
     }
    ],
@@ -2265,6 +1956,438 @@
      ]
     }
    ]
+  },
+  {
+   "room": 2151,
+   "rid": "RID_TEMPLE_RIIJA",
+   "file": "object/active/holder/room/temprii.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      408,
+      536,
+      544
+     ],
+     "cite_lines": [
+      229,
+      238,
+      301,
+      310
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      536,
+      544
+     ],
+     "cite_lines": [
+      230,
+      239,
+      302,
+      311
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 4,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      408,
+      536,
+      544
+     ],
+     "cite_lines": [
+      231,
+      240,
+      303,
+      312
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 5,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      480,
+      536,
+      544
+     ],
+     "cite_lines": [
+      232,
+      241,
+      304,
+      313
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 6,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      408,
+      472,
+      504
+     ],
+     "cite_lines": [
+      233,
+      242,
+      305,
+      314
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 7,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      408,
+      488,
+      536
+     ],
+     "cite_lines": [
+      234,
+      243,
+      306,
+      315
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 8,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      408,
+      488,
+      536
+     ],
+     "cite_lines": [
+      235,
+      244,
+      307,
+      316
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 9,
+     "name": null,
+     "kind": "both",
+     "heights": [
+      392,
+      480,
+      488,
+      536
+     ],
+     "cite_lines": [
+      236,
+      245,
+      308,
+      317
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2500,
+   "rid": "RID_ORC_CAVE1",
+   "file": "object/active/holder/room/monsroom/orccave1.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": null,
+     "kind": "floor",
+     "heights": [
+      1492,
+      1608
+     ],
+     "cite_lines": [
+      100,
+      115,
+      124
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2507,
+   "rid": "RID_ORC_PIT_A",
+   "file": "object/active/holder/room/monsroom/orcpita.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "DOORSECTOR",
+     "kind": "ceiling",
+     "heights": [
+      500,
+      600
+     ],
+     "cite_lines": [
+      80,
+      102
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2508,
+   "rid": "RID_ORC_PIT_B",
+   "file": "object/active/holder/room/monsroom/orcpitb.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "DOORSECTOR",
+     "kind": "ceiling",
+     "heights": [
+      500,
+      600
+     ],
+     "cite_lines": [
+      175,
+      188
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2600,
+   "rid": "RID_MAR_CRYPT1",
+   "file": "object/active/holder/room/monsroom/marcryp1.kod",
+   "sectors": [
+    {
+     "sector": 4,
+     "name": "SECTOR_NECRO1",
+     "kind": "both",
+     "heights": [
+      424,
+      458,
+      484
+     ],
+     "cite_lines": [
+      292,
+      302,
+      336,
+      346
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_NECRO2",
+     "kind": "both",
+     "heights": [
+      434,
+      468,
+      494
+     ],
+     "cite_lines": [
+      294,
+      304,
+      338,
+      348
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      84,
+      128,
+      172
+     ],
+     "cite_lines": [
+      394,
+      489,
+      499
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 6,
+     "name": "SECTOR_EXIT1",
+     "kind": "ceiling",
+     "heights": [
+      200,
+      273
+     ],
+     "cite_lines": [
+      582,
+      592
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 7,
+     "name": "SECTOR_EXIT2",
+     "kind": "ceiling",
+     "heights": [
+      88,
+      161
+     ],
+     "cite_lines": [
+      584,
+      594
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2601,
+   "rid": "RID_MAR_CRYPT2",
+   "file": "object/active/holder/room/monsroom/marcryp2.kod",
+   "sectors": [
+    {
+     "sector": 5,
+     "name": "SECTOR_DOOR_CRYPT3A",
+     "kind": "ceiling",
+     "heights": [
+      1045,
+      1098
+     ],
+     "cite_lines": [
+      204,
+      215
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2602,
+   "rid": "RID_MAR_CRYPT3A",
+   "file": "object/active/holder/room/monsroom/marcry3a.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "SECTOR_DOOR_TRAP1",
+     "kind": "floor",
+     "heights": [
+      1824,
+      1864
+     ],
+     "cite_lines": [
+      278,
+      474
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 2,
+     "name": "SECTOR_DOOR_TRAP2A",
+     "kind": "ceiling",
+     "heights": [
+      1910,
+      1958
+     ],
+     "cite_lines": [
+      300,
+      497
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": "SECTOR_DOOR_TRAP2B",
+     "kind": "ceiling",
+     "heights": [
+      1816,
+      1864
+     ],
+     "cite_lines": [
+      303,
+      500
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 5,
+     "name": "SECTOR_DOOR_TRAP3",
+     "kind": "ceiling",
+     "heights": [
+      1960,
+      2022
+     ],
+     "cite_lines": [
+      329,
+      529
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
   }
  ]
 }

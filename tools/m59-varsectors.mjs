@@ -53,12 +53,38 @@ const KOD_ROOT = process.env.M59_ROOT
   ? join(process.env.M59_ROOT, 'kod')
   : 'C:/code/Meridian59/kod';
 
-/** RID_* -> room number, out of the game's own header. */
-export function readRoomIds(kodRoot = KOD_ROOT) {
-  const src = readFileSync(join(kodRoot, 'include/blakston.khd'), 'utf8');
+/**
+ * RID_* -> room number, out of the game's own header.
+ *
+ * KEYED UPPERCASE, BECAUSE KOD IDENTIFIERS ARE CASE-INSENSITIVE AND THE GAME USES BOTH.
+ * `blakston.khd` declares `RID_CAVE3 = 5` and `RID_GUEST6 = 1006`; the room files that claim
+ * those numbers write `piRoom_num = RID_cave3` and `RID_guest6` in lower case, and `cave3.kod`
+ * itself refers to `RID_CAVE2` upper case four lines away. The compiler does not care.
+ *
+ * This function and its caller both used `RID_[A-Z0-9_]+`, so neither the declaration lookup
+ * nor the claim matched, and both rooms reported their number as `?`. A room with no number
+ * cannot be joined to a bake, so it can never enter `m59-variable-sectors.json` and no door
+ * mask is ever baked for it — silently, because "we could not number it" and "it has no doors"
+ * look identical downstream. It hid FIFTEEN moving sectors: room 5's five-tread SECTOR_STAIR
+ * chain, and room 1006's SECTOR_NODE1/NODE2, which are the floor the Mausoleum's mana node
+ * rides 500 units up until the chamber is cleared.
+ */
+export function parseRoomIds(src) {
   const out = new Map();
-  for (const m of src.matchAll(/^\s*(RID_[A-Z0-9_]+)\s*=\s*(\d+)/gm)) out.set(m[1], Number(m[2]));
+  for (const m of src.matchAll(/^\s*(RID_[A-Za-z0-9_]+)\s*=\s*(\d+)/gm))
+    out.set(m[1].toUpperCase(), Number(m[2]));
   return out;
+}
+
+/** The same, off the game's header. Split so the parsing can be tested without a kod tree. */
+export function readRoomIds(kodRoot = KOD_ROOT) {
+  return parseRoomIds(readFileSync(join(kodRoot, 'include/blakston.khd'), 'utf8'));
+}
+
+/** The `RID_*` a room file claims as its own number, case-folded to match `parseRoomIds`. */
+export function claimedRoomId(src) {
+  const m = /piRoom_num\s*=\s*(RID_[A-Za-z0-9_]+)/.exec(src);
+  return m ? m[1].toUpperCase() : null;
 }
 
 const kodFiles = (dir) => {
@@ -195,6 +221,40 @@ export function groupsInSource(src) {
  * can always climb, a floor that ripples. One that crosses the limit is a door, whatever
  * it is called, and a bake that catches it on the wrong side is a wall that does not exist.
  */
+// ====================== THIS PREDICATE COMPARES TWO DIFFERENT UNITS ======================
+//
+// MEASURED 2026-09-10, NOT FIXED IN THE SAME COMMIT, AND THE REASON IS BELOW.
+//
+// `heights` are the numbers the kod writes in `#height=`, and those are KOD units — the same
+// units as `MAX_STEP_HEIGHT_KOD = 24`, sixteen client units each. `MAX_STEP_HEIGHT` here is
+// 384 CLIENT units. So the comparison is off by a factor of sixteen, and two independent
+// checks say so rather than one reading of a constant:
+//
+//   * `m59-doorbake.mjs:161` applies these very numbers as `heightKodToClient(want.height)`.
+//     The baker already treats them as kod units; only this predicate does not.
+//   * Room 27's kod sets its five illusion sectors to 24/32/40/48/56/128, and the BAKED .roo
+//     for room 27 holds sector floors of 384/512/640/768/896/2048 — six distinct values, all
+//     at exactly 16x. The units are not in doubt.
+//
+// WHAT THAT MEANS FOR THE LIST. The test only ever fires for heights that happen to land
+// near 384 when read as if they were client units, which is why every flagged sector in the
+// table sits in the 290-544 band. Room 27's illusion staircase moves a floor 1664 client
+// units — over four steps — and is not flagged. Room 589's QOR_DOOR moves 960 and is not
+// flagged.
+//
+// AND FIXING THE UNIT IN PLACE WOULD MAKE IT STRICTLY WORSE. Read correctly, `lo < 24 AND
+// hi >= 24` is false for every door in the world — 599's [340,440], 47's [340,440] and the
+// Duke's feast hall [356,420] all have `lo` far above 24 — so all twelve currently-flagged
+// sectors would go dark. The absolute-height test is not a test with a unit bug; it is
+// incoherent, and it produces a plausible list only BECAUSE of the bug.
+//
+// SO THE REPLACEMENT IS `gateRisk`, AND IT IS NOT WIRED UP YET. The honest question a kod
+// height can answer is how far the floor TRAVELS, not where it ends up — see below. On this
+// world that flags 56 of 61 moving floors against the current 12, and `doorStates` in
+// `m59-doorbake.mjs` bakes a variant mask per gating sector. Switching the baker over is a
+// routing change for a live fleet, so it is a decision with its own commit and its own
+// before/after, not a tail-end edit. Until then this stays exactly as it was, wrong and
+// documented, because a silently changed routing input is the worse failure.
 export function gatesMovement(heights, kind = 'floor') {
   if (!Array.isArray(heights) || heights.length < 2) return false;
   const lo = Math.min(...heights), hi = Math.max(...heights);
@@ -208,6 +268,32 @@ export function gatesMovement(heights, kind = 'floor') {
   if (kind === 'ceiling') return false;
   return lo < MAX_STEP_HEIGHT && hi >= MAX_STEP_HEIGHT;
 }
+
+/**
+ * HOW FAR DOES THIS FLOOR TRAVEL, against the step a character can climb — in ONE unit.
+ *
+ * This is the question a kod height can actually answer. Where a floor ENDS UP says nothing
+ * about whether it gates, because gating is a fact about the floor and its NEIGHBOUR: a door
+ * at 420 is only a wall if what you are standing on is more than a step below it. Travel is
+ * different — a floor that moves further than a step can turn a crossable edge into an
+ * uncrossable one, and a floor that moves less than a step never can, whatever it is beside.
+ *
+ * It is deliberately a RISK and not a verdict, the same shape as `headroomRisk`: the thing
+ * it cannot see is the neighbour, and the neighbour may move with it. Room 27 is exactly
+ * that case — its five illusion sectors rise together to 32/40/48/56, consecutive treads
+ * 8 kod apart, a staircase anyone can climb — while sector 1 goes to 128 and leaves a
+ * 72-kod cliff above the fourth tread. Travel flags all five; only the last one is a wall.
+ * Which is why the answer belongs to the bake, and this only says where to look.
+ */
+export function gateRisk(heights, kind = 'floor') {
+  if (!Array.isArray(heights) || heights.length < 2) return false;
+  if (kind === 'ceiling') return false;
+  const travel = Math.max(...heights) - Math.min(...heights);
+  return heightKodToClient(travel) > MAX_STEP_HEIGHT;
+}
+
+/** kod height -> client, restated here with its citation. m59-roo.mjs shifts by 4. */
+export const heightKodToClient = kod => kod * 16;
 
 /**
  * A moving ceiling MIGHT gate, and only the bake can say.
@@ -237,14 +323,17 @@ export function scan(kodRoot = KOD_ROOT) {
     if (!/@setsector/i.test(src)) continue;
     const sectors = sectorsInSource(src);
     if (!sectors.length) continue;
-    const m = /piRoom_num\s*=\s*(RID_[A-Z0-9_]+)/.exec(src);
+    // Case-insensitive on BOTH sides — see parseRoomIds. `RID_cave3` and `RID_guest6` are
+    // written lower case by the rooms that claim them.
+    const claimed = claimedRoomId(src);
     rooms.push({
       // A room we cannot number is still reported — it is a door somebody should look at —
       // but it cannot be matched to a bake, and saying so is the point.
-      room: m ? (rid.get(m[1]) ?? null) : null,
-      rid: m ? m[1] : null,
+      room: claimed ? (rid.get(claimed) ?? null) : null,
+      rid: claimed,
       file: relative(kodRoot, file).replace(/\\/g, '/'),
       sectors: sectors.map(s => ({ ...s, gates: gatesMovement(s.heights, s.kind),
+                                    gate_risk: gateRisk(s.heights, s.kind),
                                     headroom_risk: headroomRisk(s.heights, s.kind) })),
       // Only groups in which at least two GATING sectors move together are worth a mask —
       // a message that also nudges a bit of scenery is still one door as far as the bake
@@ -266,7 +355,7 @@ if (isMain || process.argv[1]?.endsWith('m59-varsectors.mjs')) {
   const argv = process.argv.slice(2);
   const rooms = scan();
   const gatingOnly = argv.includes('--gating');
-  let gating = 0, moving = 0, headroom = 0;
+  let gating = 0, moving = 0, headroom = 0, atRisk = 0, floors = 0;
 
   console.log('room   file                        sector                      kind     heights                 gates?');
   for (const r of rooms) {
@@ -274,7 +363,9 @@ if (isMain || process.argv[1]?.endsWith('m59-varsectors.mjs')) {
       moving++;
       if (s.gates) gating++;
       if (s.headroom_risk) headroom++;
-      if (gatingOnly && !s.gates && !s.headroom_risk) continue;
+      if (s.kind !== 'ceiling') floors++;   // the same set gateRisk judges
+      if (s.gate_risk) atRisk++;
+      if (gatingOnly && !s.gates && !s.headroom_risk && !s.gate_risk) continue;
       console.log(
         String(r.room ?? '?').padEnd(6),
         r.file.split('/').pop().padEnd(27),
@@ -282,13 +373,21 @@ if (isMain || process.argv[1]?.endsWith('m59-varsectors.mjs')) {
         (s.kind ?? '?').padEnd(8),
         JSON.stringify(s.heights).padEnd(23),
         s.gates ? 'GATES — a floor across the step limit'
-          : s.headroom_risk ? 'headroom — the bake must decide' : '');
+          : s.headroom_risk ? 'headroom — the bake must decide'
+          : s.gate_risk ? 'travels further than a step — the bake must decide (gateRisk)' : '');
     }
   }
   console.log('');
   console.log(`${rooms.length} room(s) move a sector, ${moving} sector(s) in total: ` +
               `${gating} floor(s) cross the ${MAX_STEP_HEIGHT}-unit step limit and definitely gate, ` +
               `and ${headroom} moving ceiling(s) may gate on headroom — only the bake can say.`);
+  console.log(`AND ${atRisk} of the ${floors} moving floor(s) TRAVEL further than one step ` +
+              `(gateRisk), against the ${gating} that this table calls gating.`);
+  console.log('That gap is a unit bug, measured and deliberately not yet fixed — see the note');
+  console.log('above gatesMovement. The kod writes heights in KOD units and the threshold here');
+  console.log('is in CLIENT units, sixteen times larger, so only doors that happen to sit near');
+  console.log('384 when misread are flagged at all. Switching the door baker to gateRisk is a');
+  console.log('routing change for a live fleet and wants its own commit and its own before/after.');
   console.log('A gating sector baked on the wrong side is a wall that does not exist, and ' +
               'nothing downstream can tell.');
 

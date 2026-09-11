@@ -194,3 +194,53 @@ INTERMITTENTLY blocked by whatever is standing in it.** What to do about it, in 
    identical refusals *across visits with the room in different states* is.
 3. **Say which of the two a refusal was.** A tool that cannot distinguish "the ground refuses"
    from "something is standing on it" will keep producing this write-up.
+
+---
+
+## THE ROAD TO ROOM 27, MEASURED 2026-09-10 — and `travel` cannot take it
+
+**`travel` reports SUCCESS while leaving the body in another room.** Asked to walk 202 -> 27 it
+returned ok with Marco Polo standing in 587. Room 27 has SIX inbound edges and only two are
+things the router understands; the other four are REGION EXITS — a `SomethingMoved` handler
+that fires when you step on a trigger square and calls `UtilGoNearSquare`. No door, no edge,
+nothing in the bake. So the router plans as far as it can and stops, and the arrival check is
+what catches it.
+
+**The doormat is `h7.kod:75`:**
+
+```
+if (new_row < 18) and (new_col < 7) and (new_row > 14)
+   UtilGoNearSquare(RID_CAVE2, new_row=57, new_col=46, ANGLE_NORTH)
+```
+
+so **rows 15-17, cols 1-6 of room 587** is a doormat, and stepping anywhere on it lands you in
+room 27. It works: Marco crossed it at r15c2 and arrived at full health.
+
+### ENTER 587 FROM THE WEST. IT COST TWO DEATHS TO LEARN.
+
+**Room 587 is "Western border of the Twisted Wood"** and it is full of spiders. Its EAST edges
+(c67) face Tos, so `walk(587)` from town enters at r9c67 — and the doormat is at col 1-6, so a
+body has to cross SIXTY-FOUR COLUMNS of wood to reach it. Marco died doing exactly that, twice,
+at 20 max health.
+
+Its WEST edge (r5c1) comes from The King's Way (576) and lands **ten rows** from the doormat.
+Same errand, a tenth of the exposure. So: `walk(576)`, rest there because it is quiet, then
+`walk(587)`, then straight onto the doormat. Marco crossed untouched on the first try that way.
+
+### WHAT IS TRUE ONCE YOU ARE INSIDE
+
+- **The stone is ALIVE.** Read off the wire as its animation — `ANIMATE_CYCLE 150ms groups 1-5`
+  is `NODE_NORMAL` (`mananode.kod:245`). Stone #1668 at r23c53. So the meld is not what is
+  failing; `tools/m59-nodecheck.mjs` is the one-line check and it costs no movement.
+- **The gap is real and the body confirms it.** `crawlTo` walked to **r23c37** — the stone's own
+  row, sixteen columns west — and then refused N, S, E and W for five minutes at full health.
+  That is the offline measurement reproduced by a body: a directed fine flood from all six
+  arrivals reaches 0 of 400 occupiable samples inside the meld box.
+- **`route_fine` offered ZERO jump candidates** (`"after":[]` at jumps 0, 16450 points / 1309
+  squares searched, 82s). Not because there are none — `m59-jumpfinder` finds a three-jump route
+  in six seconds — but because the RUNNING BROKER has the old cap at
+  `prod-deploy/tools/m59-fineroute.mjs:313`, `if (drop <= MAX_STEP_HEIGHT) { if (span > F * 1.5) }`,
+  which is short by 0.65 squares at a one-step drop. The corrected one-line cap is on main.
+
+**So the stone is blocked on a DEPLOY, not on a discovery.** The route exists, the physics is
+fixed and pushed, and the broker is running code from before it.

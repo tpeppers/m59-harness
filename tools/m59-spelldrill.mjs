@@ -170,12 +170,38 @@ const gs = health.game_server ?? {};
 if (!gs.host || !gs.port)
   console.log('WARNING: /health names no game server — the commander will refuse the lease');
 const me = await call('status', { agent: AGENT }).catch(() => null);
-const acquired = await leaseCall('acquire', {
-  agents: [{ agent: AGENT, character: me?.character }],
-  server_host: gs.host, server_port: gs.port });
-lease = acquired?.lease_id ?? acquired?.lease_token ?? acquired?.token ?? null;
-console.log(lease ? `holding ${AGENT} (lease ${String(lease).slice(0, 12)})`
-                  : `WARNING: no lease (${acquired?.error ?? 'refused'}) — the keeper may steer mid-drill`);
+
+// A LEASE REFUSED ONCE IS USUALLY A LEASE HELD BY A PROCESS THAT HAS JUST DIED.
+//
+// Leases run 30s and the previous holder's does not vanish when its process is killed — it
+// lapses. So restarting this drill inside that window is refused, and the first version
+// shrugged: it printed a warning and then drove an UNHELD body for as long as the run lasted.
+// Measured 2026-09-11, restarting minutes after a prod roll. The character this matters most
+// for is exactly the one it was running on — a 20-max-HP body whose keeper walks it into open
+// country the moment nothing is holding it.
+const takeLease = async () => {
+  const r = await leaseCall('acquire', {
+    agents: [{ agent: AGENT, character: me?.character }],
+    server_host: gs.host, server_port: gs.port });
+  return { id: r?.lease_id ?? r?.lease_token ?? r?.token ?? null, why: r?.error ?? 'refused' };
+};
+let why = null;
+for (let i = 0; i < 8 && !lease; i++) {
+  const got = await takeLease();
+  lease = got.id; why = got.why;
+  if (!lease && i + 1 < 8) {
+    if (i === 0) console.log(`lease refused (${why}) — waiting out the previous holder's 30s`);
+    await sleep(5000);
+  }
+}
+if (!lease) {
+  // NOT A WARNING. Driving a body nothing is holding is the failure this tool exists beside,
+  // and an hour of casting is long enough for a keeper to take the character anywhere.
+  held.release?.();
+  die(`refusing to drill an UNHELD ${AGENT}: the commander would not grant a lease after ` +
+      `eight tries (${why}). Whatever is holding it has to let go first.`, 3);
+}
+console.log(`holding ${AGENT} (lease ${String(lease).slice(0, 12)})`);
 
 let stopped = false;
 const stop = async () => {
@@ -192,9 +218,34 @@ const started = Date.now();
 for (let round = 0; cast < MAX_CASTS; round++) {
   if (lease && ++beats % 3 === 0) await leaseCall('heartbeat', { lease_token: lease });
 
-  const inv = await call('inventory', { agent: AGENT }).catch(() => null);
+  // AN EMPTY PACK READ IS NOT AN EMPTY PACK.
+  //
+  // A keeper that has just restarted answers `inventory` with `items: []` for a few seconds
+  // before the server has pushed it anything. Measured 2026-09-11, minutes after a prod roll:
+  // this loop read one of those, concluded "out of Elderberry after 0 cast(s)" and exited —
+  // while the character stood in the inn holding fifteen. Same family as every other trap in
+  // this repository: a read that could not answer is not a fact about the world.
+  //
+  // So an empty list is treated as unreadable, and a shortage has to survive a second look
+  // before it ends the run. A real shortage says so twice a second apart; a cold snapshot
+  // does not.
+  const readPack = async () => {
+    const r = await call('inventory', { agent: AGENT }).catch(() => null);
+    return Array.isArray(r?.items) && r.items.length ? r : null;
+  };
+  let inv = await readPack();
+  if (!inv) {
+    await sleep(1500);
+    inv = await readPack();
+  }
   if (!inv) { console.log('could not read the pack — stopping rather than casting blind'); break; }
-  const short = COST.find(c => countIn(inv.items, c.item) < c.n);
+  let short = COST.find(c => countIn(inv.items, c.item) < c.n);
+  if (short) {
+    await sleep(1500);
+    const again = await readPack();
+    short = again ? COST.find(c => countIn(again.items, c.item) < c.n) : short;
+    if (again) inv = again;
+  }
   if (short) { console.log(`out of ${short.item} after ${cast} cast(s)`); break; }
 
   const st = await call('status', { agent: AGENT }).catch(() => null);

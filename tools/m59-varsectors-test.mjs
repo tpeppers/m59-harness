@@ -15,6 +15,7 @@
 //   * `#height` is found even though the animation argument sits between it and `#sector`.
 
 import { sectorsInSource, groupsInSource, gatesMovement, headroomRisk,
+         parseRoomIds, claimedRoomId, gateRisk,
          MAX_STEP_HEIGHT, PLAYER_HEIGHT } from './m59-varsectors.mjs';
 
 let pass = 0, fail = 0;
@@ -212,6 +213,71 @@ console.log('\nthe states this world sets TOGETHER, which are branches and not m
       Send(self,@SetSector,#sector=8,#animation=ANIMATE_FLOOR_LIFT,#height=100,#speed=0);
    }
 `).length === 0);
+}
+
+
+console.log('\nA ROOM WE CANNOT NUMBER IS A ROOM WITH NO DOORS, AND THAT IS INVISIBLE');
+{
+  // kod identifiers are CASE-INSENSITIVE and the world's authors used both spellings. The
+  // header declares every room id upper case; two room files claim theirs lower case, and
+  // cave3.kod refers to `RID_CAVE2` upper case four lines from writing its own lower case.
+  const header = [
+    '   RID_CAVE2 = 27',
+    '   RID_CAVE3 = 5',
+    '   RID_GUEST6 = 1006',
+  ].join('\n');
+  const ids = parseRoomIds(header);
+  ok('the header parses', ids.get('RID_CAVE2') === 27);
+  ok('RID_CAVE3 is room 5', ids.get('RID_CAVE3') === 5);
+  ok('RID_GUEST6 is room 1006', ids.get('RID_GUEST6') === 1006);
+
+  ok('an upper-case claim resolves', claimedRoomId('   piRoom_num = RID_CAVE2') === 'RID_CAVE2');
+  ok('A LOWER-CASE CLAIM RESOLVES TOO', claimedRoomId('   piRoom_num = RID_cave3') === 'RID_CAVE3',
+     'cave3.kod and guest6.kod both write theirs lower case; the old regex matched neither');
+  ok('and a mixed-case one', claimedRoomId('   piRoom_num = RID_Guest6') === 'RID_GUEST6');
+
+  // The join both halves exist for, and the one that actually failed.
+  ok('a lower-case claim finds its number through the upper-case table',
+     ids.get(claimedRoomId('piRoom_num = RID_guest6')) === 1006,
+     'room 1006 could never enter the variable-sector table, so no door mask was ever baked ' +
+     'for SECTOR_NODE1/NODE2 — the floor the Mausoleum mana node rides 500 units up');
+  ok('a room that claims nothing is still null', claimedRoomId('no room number here') === null);
+  ok('and an unknown id resolves to nothing rather than a wrong room',
+     ids.get(claimedRoomId('piRoom_num = RID_nosuchroom')) === undefined);
+}
+
+
+console.log('\ngateRisk asks how far a floor TRAVELS, in one unit, which is the answerable question');
+{
+  // `#height=` is in KOD units; MAX_STEP_HEIGHT is in CLIENT units, sixteen times larger.
+  // gatesMovement compares them directly and is kept only because fixing the unit in place
+  // would unflag every door in the world — see the note above it.
+  ok('a floor that moves less than one step is never a gate',
+     gateRisk([24, 40]) === false,
+     '16 kod is 256 client, inside the 384 step');
+  ok('a floor that moves exactly one step is not a gate either',
+     gateRisk([24, 48]) === false, '24 kod is exactly 384 client, and the cap is inclusive');
+  ok('a floor that moves further than a step is a QUESTION for the bake',
+     gateRisk([24, 56]) === true, '32 kod is 512 client');
+  ok('room 27 sector 1 travels over four steps', gateRisk([24, 128]) === true);
+  ok('and room 589 QOR_DOOR travels 960 client units', gateRisk([290, 350]) === true);
+  ok('a ceiling is still not judged here', gateRisk([24, 500], 'ceiling') === false,
+     'a ceiling gates on headroom, which needs the floor beneath it — headroomRisk');
+  ok('one height is not a movement', gateRisk([24]) === false);
+  ok('and three heights use the extremes', gateRisk([100, 104, 200]) === true);
+
+  // THE UNIT BUG, PINNED AS THE THING IT IS. Every currently-flagged sector sits in the
+  // narrow band where a KOD height happens to straddle 384 when misread as CLIENT units.
+  ok('gatesMovement fires on the Duke\'s feast hall', gatesMovement([356, 420]) === true);
+  ok('and gateRisk agrees that one is worth baking', gateRisk([356, 420]) === true,
+     'the old test gets this right, for the wrong reason');
+  ok('BUT gatesMovement IS BLIND TO ROOM 27, WHICH MOVES A FLOOR 1664 CLIENT UNITS',
+     gatesMovement([24, 128]) === false && gateRisk([24, 128]) === true,
+     'this is the illusion staircase, and nothing downstream ever asked about it');
+  ok('and blind to the Qor door at 960',
+     gatesMovement([290, 350]) === false && gateRisk([290, 350]) === true);
+  ok('everything gatesMovement flags, gateRisk flags too — it is a strict superset',
+     [[356, 420], [340, 440], [120, 464]].every(h => !gatesMovement(h) || gateRisk(h)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

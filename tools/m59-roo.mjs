@@ -1436,15 +1436,93 @@ export class RoomGeometry {
       // the bar for a genuine climb from level ground — it only stops a fall being
       // mistaken for one.
       //
-      // WHY IT IS OFF. Switched on it gets room 578 exactly right — the north exit can no
-      // longer reach the southern ones, the southern ones still walk to it in 54 steps,
-      // and the room splits into 13 regions, which is the operator's own account of the
-      // place. It also costs more than that buys: 3 controls in m59-collision-test and 1
-      // in m59-impossible-test break, all of them LEGITIMATE moves it now refuses —
-      // Ukgoth's boundary crossings and the checked-in sloped-step case — and room 578's
-      // routing view fragments to 146 pieces. Those are slopes, and a slope is a
-      // continuous legal climb that this blanket per-microstep test cannot tell from a
-      // face.
+      // ===================== THIS FLAG IS ON, AND THIS COMMENT SAID IT WAS OFF =====================
+      //
+      // CORRECTED 2026-09-10. The paragraphs below began "WHY IT IS OFF" and described the
+      // costs of switching it on. `enforceStepHeight = true` is the DEFAULT (see the option
+      // list above), and the costs it names are gone: m59-collision-test is 404/404 and
+      // m59-impossible-test 132/132 with it on. A comment that tells a reader a load-bearing
+      // mover rule is not running, when it is, is worse than no comment — this one is kept
+      // rather than deleted because the ARGUMENT in it is still the right argument, and
+      // because what it costs is now measured rather than predicted.
+      //
+      // WHAT IT COSTS, MEASURED. This is a FLOOR-TO-FLOOR comparison, and the client does not
+      // have one. The client's only height rule is at a wall, and it is SKIPPED ENTIRELY when
+      // the facing sidedef has no below bitmap (`move.c:549` short-circuits on
+      // `below_bmap == NULL`): an untextured riser is climbable at any height. `canCrossWallAt`
+      // mirrors that correctly — `!sd.belowType || ...` — and it works: asked directly, it calls
+      // every ungated, passable, over-cap wall crossable, 37 of them in room 515 alone, all at
+      // `z1 = 10848`, which is exactly the floor the mana node stands on.
+      //
+      // And then this test refuses them anyway, because it compares floors and cannot see a
+      // sidedef. Measured across three node rooms on a 256-unit lattice:
+      //
+      //     room 589   1892 adjacent pairs rise past the cap,  0 accepted
+      //     room 515   9469                                    0 accepted
+      //     room  27    588                                    0 accepted
+      //
+      // Zero out of 11,949, every refusal `step_too_high`. So the harness has TWO height rules
+      // where the game has one, and the blunt one answers first.
+      //
+      // BUT IT IS COSTING NOTHING IN THESE ROOMS, AND THAT MATTERS. Asked of every pair it
+      // refuses — does the move cross a wall that would have gated it anyway? — the answer is
+      // that almost all of them do:
+      //
+      //     room 515   991 refused   886 cross a TEXTURED riser   0 ungated   0 wall-less
+      //     room 589   470           180                          0           7
+      //     room  27    15            15                          0           0
+      //
+      // IN ROOM 45 IT IS ACTIVE, AND HERE IS THE INSTANCE. Wall
+      // `(47616,56832)-(48128,58368)`, z0=2464 z1=2912 — a 448-unit rise, over the cap. Its
+      // approach-side sidedef has `belowType=0` and is passable, so the client short-circuits
+      // and imposes NO limit; `canCrossWallAt` at the real standing floor of 2464 agrees and
+      // says CROSSABLE; and `traceFineMoveClient` then refuses it `step_too_high`. That is
+      // this rule overruling the correct one, with coordinates, seven refused pairs of them.
+      // (The far side carries `belowType=1`, so the climb is one-way — which is exactly the
+      // shape that makes a room look severed.)
+      //
+      // AND IT COSTS NOTHING THERE EITHER, WHICH IS THE PART TO CARRY. The take-offs are in
+      // the arrival flood and all three landings are ALREADY REACHED by another route: seeding
+      // them adds +0 samples to a 54,849-sample flood, and room 45's meld box stays at 0 of
+      // 400. So the bug is real, located, and not load-bearing for any stone measured so far.
+      //
+      // AND IN ROOM 45 IT REFUSES TWO CROSSINGS THE CLIENT ALLOWS, at the exact boundary the
+      // OPERATOR pointed at. Square (42,21) is SPLIT — one square holding fine floors of 1536,
+      // 1792, 2048 and 3328 — and the crossings west into (42,20) are:
+      //
+      //     y=42112  1792 -> 2560  (+768)  default step_too_high   esh:false ARRIVED
+      //     y=42368  2048 -> 2944  (+896)  default step_too_high   esh:false ARRIVED
+      //     y=42624  2048 -> 2944  (+896)  geometry_blocked either way — a real wall
+      //     y=42880  3328 -> 2944  (-384)  ARRIVED either way — a descent
+      //
+      // Two of four are ungated risers this rule refuses and `canCrossWallAt` permits. So the
+      // duplicate IS load-bearing, and the square-pair census above could not see it because
+      // the divergence lives INSIDE a split square, below square resolution.
+      //
+      // IT STILL COSTS NOTHING THERE, FOR A DIFFERENT REASON. A 256-unit fine flood from both
+      // of room 45's real arrivals, run with this rule OFF, returns an identical 54,849
+      // samples and still reaches 0 of 400 samples in the meld box. The take-off column
+      // x=20608 is not reachable at any of those four rows; the flood gets to x=20864 —
+      // a quarter square east, same floors — and the level step west is refused
+      // `geometry_blocked`. A WALL, correctly refused, at every row. The crossings this rule
+      // wrongly refuses are behind it.
+      //
+      // So: the duplicate rule demonstrably refuses legal ground, it has coordinates now, and
+      // turning it off opens no mana node measured so far. Both halves matter — the first is
+      // why it should be fixed, the second is why doing it tonight to chase a stone would have
+      // been the wrong trade.
+      //
+      // An earlier version of this comment said the blunt rule "silently overrules the first
+      // everywhere the first would have said yes". That was measured with a segment
+      // intersection test that required a PROPER crossing, so 801 pairs whose endpoint lands
+      // exactly ON a wall were counted as crossing none. A 256-unit lattice on geometry whose
+      // vertices sit at square boundaries hits that case constantly. Withdrawn.
+      //
+      // IT IS STILL ON, DELIBERATELY, AND THAT IS NOT AN ENDORSEMENT. Turning it off re-opens
+      // every cliff it exists to close, and the routing consequences are fleet-wide; the fix is
+      // the one the next paragraph already describes — find the crossing properly and gate on
+      // the sidedef, the way `canCrossWallAt` does — not a flip of this boolean at the end of
+      // somebody's session. Until then the consequence is known, bounded, and now counted.
       //
       // WHAT A REAL FIX NEEDS. The stock client checks height when you cross BETWEEN
       // SECTORS, and a slope lies inside one sector, so the distinction is already the
@@ -3918,6 +3996,34 @@ export function canCrossWall(wall, z = 0, side = 'pos', { playerHeight = PLAYER_
 // IntersectNode uses the wall's endpoint-0 z1/z2 values even for slopes and bowties.
 // Preserve that quirk for exact client compatibility; sampling a nicer contact-point
 // height can authorize a climb the stock client refuses.
+//
+// ============ "IS THIS WALL CROSSABLE" HAS NO ANSWER WITHOUT A SIDE ============
+//
+// `side` is not a detail. move.c:530-539 picks the sidedef FACING the body, so the
+// below-texture short-circuit — the thing that removes the step limit entirely — is a property
+// of ONE SIDE, not of the wall. `other_sector` flips with it, so the wading-depth allowance is
+// directional too. A wall can therefore be free to climb one way and capped at MAX_STEP_HEIGHT
+// coming back, structurally rather than by accident.
+//
+// THIS IS COMMON, NOT EXOTIC. Two-sided walls whose below texture is present on one side and
+// absent on the other, measured across the node rooms:
+//
+//     room  27   33 of 385      room 515   57 of 949      room 579   19 of 458
+//     room  45   36 of 885      room 589   13 of 204      room 750    9 of 336
+//     room  39   68 of 86  (79%)
+//
+// 235 of 3303, 7.1% overall — and Castle Victoria's upstairs is FOUR FIFTHS of its two-sided
+// walls. Room 45 carries the measured instance: `(47616,56832)-(48128,58368)` is ungated on the
+// approach and `belowType=1` coming back.
+//
+// SO A SYMMETRIC REACHABILITY MODEL IS WRONG AT ONE WALL IN FOURTEEN, and wrong in the worst
+// direction: it calls a room connected when the return leg does not exist. Same hazard as a
+// one-way fall, arriving by a different mechanism. Flood DIRECTED, from where a body actually
+// enters, and never infer `b -> a` from `a -> b`.
+//
+// Note also that `z` DEFAULTS TO 0 below, which is not a neutral choice: at z=0 almost any
+// elevated wall reads as over-cap. Pass the floor the body is actually standing on, or the
+// answer is about a body at the bottom of the world.
 export function canCrossWallAt(wall, _x, _y, z = 0, side = 'pos',
                                { playerHeight = PLAYER_HEIGHT } = {}) {
   const sd = side === 'pos' ? wall.posSidedefRec : wall.negSidedefRec;
