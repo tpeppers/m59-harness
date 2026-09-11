@@ -36,11 +36,22 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RANK } from './m59-guild.mjs';
+import { itemNameKey } from './m59-items.mjs';
 import { CHEST_BULK_MAX } from './m59-storage.mjs';
 
-export const REAGENTS = Object.freeze(['elderberry', 'herbs']);
+// CANONICAL SPELLINGS, as the game's own item table folds them: the item is 'herb'.
+// 'herbs' still works everywhere here because every name goes through norm() first.
+export const REAGENTS = Object.freeze(['elderberry', 'herb']);
 
-const norm = (s) => String(s ?? '').trim().toLowerCase();
+// ONE ITEM, ONE KEY — through the game's own folding, not ours.
+//
+// `herb` and `herbs` are the same item and BOTH resolve: itemNameKey folds the plural
+// (m59-items.mjs). substrate/loadouts/ currently holds both spellings for it, and a tally
+// keyed on the raw string therefore reads zero on rows that are perfectly correct — which is
+// exactly how a fleet with reagents looked like a fleet with none. Every name that enters
+// this module goes through the same fold, so the two spellings cannot become two items.
+// `node tools/m59-itemcheck.mjs` is the sweep that finds them in the files.
+const norm = (s) => itemNameKey(s) || String(s ?? '').trim().toLowerCase();
 const countIn = (items, item) => (items ?? [])
   .filter(i => norm(i.name ?? i.item) === norm(item))
   .reduce((n, i) => n + (Number(i.amount ?? i.count ?? 1) || 0), 0);
@@ -51,14 +62,35 @@ const countIn = (items, item) => (items ?? [])
 // `loadout.carry[].min`, which is exactly what `contributionPlan` protects when it decides
 // what a donor may part with. Reading it the same way on both sides is the only thing
 // stopping a donor giving away the elderberry it is about to want back.
+// A CHARACTER'S REAGENT FLOOR HAS TWO HOMES AND THE WIDER ONE WINS.
+//
+// `loadout.carry[].min` is the curated floor `contributionPlan` already protects, and
+// `policy.reagentTarget` is what actually drives buying today (`reagentTargetFor`, used by
+// buyReagentsInTown). They disagree constantly: on this fleet eighteen of nineteen loadouts
+// carry min 0 for both reagents while the buy targets are live, so reading the loadout alone
+// would have made this whole feature inert on the fleet it was written for.
+//
+// So: the UNION, deliberately. Operator, 2026-09-11 — "we want this wide, better to store
+// stuff we later sell, no real cost to it until the chests all fill up". Storing a reagent
+// somebody turns out not to need costs a slot in a 24,000-bulk pool; NOT storing one costs
+// the spread twice, once selling it and once buying it back.
+export function reagentFloorFor(character, item) {
+  const key = norm(item);
+  const fromLoadout = Number(
+    (character?.loadout?.carry ?? []).find(r => norm(r.item) === key)?.min ?? 0) || 0;
+  const t = character?.policy?.reagentTarget;
+  const fromPolicy = Number(
+    typeof t === 'object' && t !== null ? (t[key] ?? t[`${key}s`] ?? t.each ?? 0) : (t ?? 0)) || 0;
+  return Math.max(0, fromLoadout, fromPolicy);
+}
+
 export function reagentWants({ characters = [], reagents = REAGENTS } = {}) {
   const wants = new Map();
   for (const c of characters) {
     if (c?.in_game === false) continue;
     for (const item of reagents) {
       const key = norm(item);
-      const floor = Math.max(0, Number(
-        (c.loadout?.carry ?? []).find(r => norm(r.item) === key)?.min ?? 0) || 0);
+      const floor = reagentFloorFor(c, key);
       if (!floor) continue;
       const have = countIn(c.pack, key);
       const short = Math.max(0, floor - have);
@@ -103,13 +135,19 @@ export function stockpileKeepTest({ characters = [], reagents = REAGENTS,
     off.why = 'the guild store is unavailable, so the ordinary sell rules apply';
     return off;
   }
+  // THE SAME UNION AS THE WANT, because a use and a want are one quantity from two ends.
+  // Reading the keep rule from the loadout while the want comes from the policy is how a
+  // character sells the elderberry it is about to be sent to buy.
   const inUse = new Set();
+  const canon = reagents.map(norm);
   for (const c of characters) {
+    for (const item of canon)
+      if (reagentFloorFor(c, item) > 0) inUse.add(item);
+    // Anything else the loadout names with a real floor counts too, so a third reagent
+    // added to a loadout is kept without this module having to be told about it.
     for (const row of (c?.loadout?.carry ?? [])) {
       const item = norm(row.item);
-      if (!item) continue;
-      if (reagents.length && !reagents.includes(item)) continue;
-      if ((Number(row.min) || 0) > 0) inUse.add(item);
+      if (item && (Number(row.min) || 0) > 0) inUse.add(item);
     }
   }
   const test = (name) => inUse.has(norm(name));
