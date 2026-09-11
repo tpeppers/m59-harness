@@ -65,6 +65,7 @@ import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs
 import { StorageCache, BOOKMAKERS_HALL_ROOM } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
+import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
 import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as party from './m59-party.mjs';
@@ -19908,6 +19909,103 @@ export class Autopilot {
   // vaults a side effect of an observability toggle: turn the toggle off and the contents
   // silently stopped being cached while the deposits carried on. The detail EVENT is still
   // gated — that is a log — but the cache is not.
+  // SAY THE WORD THAT OPENS THE WALL IN FRONT OF THE CHESTS.
+  //
+  // A guild hall keeps its chests behind a secret door and the door is a SPOKEN key: the room
+  // itself listens, and `StringEqual(string, GetPassword())` opens a sector
+  // (ghall.kod:963-970). Four conditions, and THREE OF THEM FAIL WITHOUT A WORD OF
+  // EXPLANATION -- in the foyer, as an emote, or when it is already open. So each is decided
+  // here, before the say, rather than guessed at from a chest that is not reachable after it.
+  //
+  // IT SHUTS AGAIN IN FIVE SECONDS (DOOR_DELAY = 5000, guildh14.kod:43). Saying it is
+  // therefore not "unlock the hall", it is "start a five-second window", and anything that
+  // needs to be through the wall has to already be standing next to it. That is why this
+  // returns the moment of the say rather than a boolean: the caller's next move is the part
+  // that is timed.
+  //
+  // THE WORD NEVER ENTERS A LOG LINE. The hall is a public room, the say is audible to
+  // whoever else is standing in it, and a transcript is a place this word must not be.
+  async sayHallPassword() {
+    const word = hallPassword(TITHE_FLEET);
+    if (!word) {
+      this.note('no hall password recorded for this fleet', {
+        why: 'the chests sit behind a secret door that only opens for a spoken password, and ' +
+             'none is recorded. Record it with: node tools/m59-hallsecret.mjs set ' +
+             '--fleet <name> --password <word>. Until then every chest read finds nothing ' +
+             'and looks exactly like an empty hall.' });
+      return { ok: false, why: 'no password recorded' };
+    }
+    const c = this.s.need();
+    const me = this.s?.client?.self ?? null;
+    const row = me?.row ?? me?.y ?? null, col = me?.col ?? me?.x ?? null;
+    const foyer = inFoyer(row, col);
+    if (foyer === true) {
+      // REFUSED IN SILENCE, and doubly so: the foyer is also the hall's silence area, so the
+      // say would not even be heard by anyone inside. Better to say why than to speak the
+      // password into a room where it can be overheard and cannot work.
+      this.note('standing in the guild hall foyer, where the password does nothing', {
+        at: `r${row}c${col}`,
+        why: 'InFoyer (ghall.kod:896) refuses the door for anyone in the foyer box and muffles ' +
+             'speech across it — move into the hall proper before saying it' });
+      return { ok: false, why: 'in the foyer', at: { row, col } };
+    }
+    // `foyer === null` means the position is unreadable. Saying it anyway is the right call:
+    // the cost of a wasted say is one packet, and refusing on an unknown position would strand
+    // the errand every time a snapshot arrived thin.
+    await this.s.pacer.submit('say', () => c.say(word, 1)).catch(() => {});
+    this.note(SAID_NOTE, {
+      at: row == null ? null : `r${row}c${col}`,
+      position_known: foyer !== null,
+      why: 'opens the secret door for FIVE SECONDS (guildh14.kod:43) — whatever needs to be ' +
+           'through the wall has to be beside it already' });
+    return { ok: true, said_at: Date.now() };
+  }
+
+  // READ THE CHEST BACK AND WRITE IT DOWN, because nothing else ever will.
+  //
+  // `StorageCache.writeChest` had ONE caller in the repository: the broker's `container`
+  // tool, invoked by hand with an explicit slot. So every automated deposit and withdrawal
+  // left the board showing a reading somebody took by hand at some point, over a timestamp
+  // that makes it look like a current fact. The vault half has always done this properly --
+  // `refreshVaultCache` runs straight after the deposit -- and the chests never got it.
+  //
+  // Chest contents are NOT pushed by the server. There is no event, no subscription and no
+  // way to learn them except asking while standing there, which is exactly why the one
+  // moment a character IS standing there is the moment that must not be wasted.
+  //
+  // Never allowed to break the errand. A cache is a convenience; the reagents are the job.
+  async refreshChestCache(chest, slot, { store = null, why = null } = {}) {
+    const c = this.s.need();
+    try {
+      const since = c.evSeq;
+      await this.s.pacer.submit('read', () => c.contents(chest.id));
+      const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 })
+        .catch(() => ({ events: [] }));
+      const box = (reply.events ?? []).find(e => e.kind === 'container' && e.id === chest.id)
+               ?? (reply.events ?? []).find(e => e.kind === 'container');
+      if (!box) {
+        // A CONTAINER ANSWERS THIS AND ANYTHING ELSE SAYS WHY OUT LOUD. Recording an empty
+        // list here would turn "it would not tell us" into "the chest is empty", which is
+        // the single worst thing this cache could claim: the stockpile reads it to decide
+        // whether to walk to a merchant.
+        this.note('could not read a guild chest back after touching it', { slot,
+          said: (reply.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 3),
+          why: 'no contents came back — the cache keeps its previous reading rather than ' +
+               'recording an empty one, because "it would not say" is not "it is empty"' });
+        return null;
+      }
+      const items = (box.items ?? []).map(o => ({ id: o.id, name: o.name, amount: o.amount || 1 }));
+      (store ?? new StorageCache()).writeChest(slot, {
+        object_id: chest.id, room: this.s.world?.room?.num ?? c.room?.id ?? null,
+        items, by: c.me?.name ?? this.name ?? this.s.name });
+      this.note('refreshed the guild chest cache', { slot, stacks: items.length, why });
+      return items;
+    } catch (error) {
+      this.note('could not refresh the guild chest cache', { slot, why: error.message });
+      return null;
+    }
+  }
+
   async refreshVaultCache(vaultman) {
     const settings = detailSettings(this.policy, 'vault_accumulation');
     const c = this.s.need();
@@ -20033,6 +20131,11 @@ export class Autopilot {
 
     this.doing = 'trading';
     const s = this.s, c = s.need();
+    // THE WALL COMES BEFORE THE CHESTS. Room contents list what is IN the room, so a chest
+    // behind a shut secret door still appears here — which is exactly why this is not
+    // optional and not conditional on "can I see a chest". The reachability, not the
+    // visibility, is what the password buys.
+    await this.sayHallPassword().catch(() => {});
     await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
     const inRoom = new Map([...(c.room?.objects?.values?.() ?? [])]
@@ -20045,7 +20148,19 @@ export class Autopilot {
     for (const want of plan.fromChest) {
       const cached = chests.find(x => x.slot === want.slot);
       const target = cached?.object_id != null ? inRoom.get(cached.object_id) : null;
-      if (!target) continue;                     // named by the deposit half for the same reason
+      if (!target) {
+        // THIS USED TO BE A BARE `continue` -- the one branch that said nothing at all.
+        // A stale object id is the normal state after a hall changes hands or a restart
+        // recycles ids, and it disables the slot completely: the character walks to
+        // Barloque, finds no chest it recognises, and buys from the merchant anyway while
+        // three hundred elderberry sit a metre away.
+        this.note('a guild chest slot has no chest here', { slot: want.slot,
+          recorded_object_id: cached?.object_id ?? null,
+          chests_in_room: [...inRoom.keys()],
+          why: 'the recorded object id is not in this room — re-record it with ' +
+               'container slot=' + want.slot });
+        continue;
+      }
 
       const before0 = c.evSeq;
       await s.pacer.submit('read', () => c.contents(target.id)).catch(() => {});
@@ -20078,6 +20193,12 @@ export class Autopilot {
         saved += entry.saved;
         took.push({ item: want.item, amount: moved, slot: want.slot });
       }
+      // WHAT IS LEFT IN THERE, read back now rather than guessed at by subtraction. The
+      // reading taken above is already stale -- we have just emptied part of it -- and
+      // subtracting what we took would quietly diverge from the chest every time another
+      // character deposited between the two moments.
+      if (took.some(t => t.slot === want.slot))
+        await this.refreshChestCache(target, want.slot, { store, why: 'withdrew' });
     }
     if (took.length) this.note('took reagents from the guild stockpile instead of buying', {
       took, saved, note: 'saved = buy price avoided + sell price forgone' });
@@ -20439,6 +20560,11 @@ export class Autopilot {
 
     this.doing = 'trading';
     const s = this.s, c = s.need();
+    // THE WALL COMES BEFORE THE CHESTS. Room contents list what is IN the room, so a chest
+    // behind a shut secret door still appears here — which is exactly why this is not
+    // optional and not conditional on "can I see a chest". The reachability, not the
+    // visibility, is what the password buys.
+    await this.sayHallPassword().catch(() => {});
     await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
 
@@ -20449,6 +20575,7 @@ export class Autopilot {
     const inRoom = new Map([...(c.room?.objects?.values?.() ?? [])]
       .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || ''))
       .map(o => [o.id, o]));
+    const book = new StockpileBook({ fleet: TITHE_FLEET });
     const done = [];
     let contributed = 0;
     for (const chest of want.chests) {
@@ -20456,10 +20583,19 @@ export class Autopilot {
       const cached = chests.find(x => x.slot === chest.slot);
       const target = cached?.object_id != null ? inRoom.get(cached.object_id) : null;
       if (!target) {
+        // SAY IT LOUDLY, not just into the return value. An id that no longer names a chest
+        // in this room is the EXPECTED state after a hall is bought or a server restart
+        // recycles ids, and the fix is one `container agent=… target=… slot=N` per chest.
+        this.note('a guild chest slot has no chest here', { slot: chest.slot,
+          recorded_object_id: cached?.object_id ?? null,
+          chests_in_room: [...inRoom.keys()],
+          why: 'the recorded object id is not in this room — object ids recycle, so a stale ' +
+               'reading silently disables this slot. Re-record it: container slot=' + chest.slot });
         done.push({ slot: chest.slot, put: 0,
           why: 'no chest in this room matches the object id recorded for that slot' });
         continue;
       }
+      let intoThisChest = 0;
       for (const give of chest.give) {
         if (!give.amount) continue;
         const held = (c.inventory || []).filter(o =>
@@ -20481,12 +20617,22 @@ export class Autopilot {
             .filter(x => norm(x.name) === give.item)
             .reduce((t, x) => t + (x.amount || 1), 0);
           const moved = Math.max(0, before - after);
-          left -= moved; contributed += moved;
+          left -= moved; contributed += moved; intoThisChest += moved;
+          // THE INBOUND HALF OF THE LEDGER, and only the verified pack delta. Kept out of
+          // `moves` on purpose: the saving is realised when somebody WITHDRAWS, so counting
+          // a unit here and again there would double the volume the hall is judged on.
+          if (moved) book.deposit({ item: give.item, amount: moved, slot: chest.slot,
+                                    by: this.name ?? s.name });
           if (!moved) break;                      // it refused; stop hammering the chest
         }
         done.push({ slot: chest.slot, item: give.item, wanted: give.amount,
                     put: give.amount - Math.max(0, left) });
       }
+      // ONE READING PER CHEST, not one per stack: the character is standing here, the
+      // contents just changed, and this is the only moment anything can learn them.
+      if (intoThisChest)
+        await this.refreshChestCache(target, chest.slot,
+          { store, why: `deposited ${intoThisChest}` });
     }
     this.tally.guild_contributed = (this.tally.guild_contributed || 0) + contributed;
     this.note('contributed to the guild chests', { contributed, planned: want.total, done });

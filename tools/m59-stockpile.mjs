@@ -358,14 +358,15 @@ export class StockpileBook {
   }
 
   read() {
-    if (!existsSync(this.path)) return { fleet: this.fleet, moves: [], requests: [] };
+    const empty = { fleet: this.fleet, moves: [], deposits: [], requests: [] };
+    if (!existsSync(this.path)) return { ...empty };
     try {
       const v = JSON.parse(readFileSync(this.path, 'utf8'));
-      return { fleet: this.fleet, moves: [], requests: [], ...v };
+      return { ...empty, ...v };
     } catch {
       // A FILE THAT WILL NOT PARSE IS NOT AN EMPTY FILE. Returning {} here would silently
       // restart the savings tally at zero and quietly justify re-buying everything.
-      return { fleet: this.fleet, moves: [], requests: [], unreadable: true };
+      return { ...empty, unreadable: true };
     }
   }
 
@@ -391,6 +392,42 @@ export class StockpileBook {
                      to: entry.to ?? null, from: entry.from ?? null,
                      for: entry.for ?? null });
     return this.#write(all);
+  }
+
+  // THE INBOUND HALF. What the hall has actually absorbed, which had no durable answer at
+  // all: the deposit path verified its pack delta, said so in a note, and added to
+  // `tally.guild_contributed` -- a counter on a keeper that restarts about once a minute.
+  //
+  // KEPT OUT OF `moves` DELIBERATELY. `totals()` is the number the 12,000-a-day hall is
+  // judged on and it is a saving realised at WITHDRAWAL, so a unit that goes in and comes
+  // out later must be counted once, not twice. Putting deposits in `moves` would inflate
+  // `moves` and `units` with rows carrying saved: 0 -- honest about the money and wrong
+  // about the volume, which is the shape of statistic nobody catches.
+  //
+  // Same rule as everything else here: only VERIFIED movement. `amount` is the pack delta.
+  deposit(entry, { at = Date.now() } = {}) {
+    const all = this.read();
+    if (all.unreadable) return all;
+    const amount = Math.max(0, Math.floor(Number(entry?.amount) || 0));
+    if (!amount) return all;
+    all.deposits.push({ at, day: dayKey(at), item: norm(entry.item), amount,
+                        by: entry.by ?? null,
+                        slot: entry.slot == null ? null : Number(entry.slot) });
+    return this.#write(all);
+  }
+
+  /** What went IN over a window: units per item, and who carried them. */
+  depositTotals({ sinceMs = null } = {}) {
+    const rows = this.read().deposits
+      .filter(d => sinceMs == null || Number(d.at) >= sinceMs);
+    const out = { deposits: rows.length, units: 0, by_item: {}, by_character: {},
+                  days: new Set(rows.map(d => d.day)).size || 1 };
+    for (const d of rows) {
+      out.units += d.amount || 0;
+      out.by_item[d.item] = (out.by_item[d.item] || 0) + (d.amount || 0);
+      if (d.by) out.by_character[d.by] = (out.by_character[d.by] || 0) + (d.amount || 0);
+    }
+    return out;
   }
 
   /** The figure the hall is judged on, over a window. */
