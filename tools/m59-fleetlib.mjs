@@ -187,6 +187,17 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
     agents,
     steps: agent => script.steps({ ...withDefaults, agent, agents }),
     minHealth: withDefaults.minHealth,
+    // AND THE FRAGILE FLOOR, FOR THE SAME REASON AND WITH A SHARPER EDGE. `fragileBody`
+    // refuses a journey for a body under a MAXIMUM-health floor, which is right on a road and
+    // wrong for an errand that never leaves a town — the bank and the counter in Tos are two
+    // hops apart inside a city, and the guarantee refused a 20-max-health caster walking
+    // between them on 2026-09-12.
+    //
+    // Without this the only way out is `waives: ['fragileBody']`, which turns the floor off for
+    // the WHOLE errand including any cross-country leg it might grow later. A floor that cannot
+    // be lowered for a town trip is a floor that gets waived entirely, and then it is not a
+    // floor. So a script states its own, the same way it states its health floor.
+    fragileBelow: withDefaults.fragileBelow,
     // A script's waiver travels with the script. Passing it from here rather than letting
     // the caller supply one is the point: the exception belongs to the errand that needs
     // it, not to whoever happened to invoke the errand today.

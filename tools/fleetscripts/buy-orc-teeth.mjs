@@ -97,6 +97,13 @@ export const script = {
     // batch size, which is the misreading this script was rewritten to remove.
     teeth: { type: 'number', default: 20, describe: 'how many teeth to buy, in one transaction' },
     price: { type: 'number', default: 650, describe: 'cost PER TOOTH (Paddock 650, Marion ~88)' },
+    // THIS ERRAND NEVER LEAVES A TOWN, so the fragile floor is lowered rather than waived.
+    // The bank is room 54 and the counter is room 52 — two hops inside Tos, no open country at
+    // any point — and the caster this exists to supply is a 20-max-health body that
+    // `fragileBody` refuses on the road, correctly. Raise it back if you point `room` at a
+    // merchant outside a city.
+    fragileBelow: { type: 'number', default: 0,
+                    describe: 'max-health floor for this errand; 0 because it stays inside Tos' },
     bankRoom: { type: 'number', default: 54, describe: 'First Royal Bank of Tos, for a short purse' },
     carrying: { type: 'number', default: 0, describe: 'shillings already in the pack' },
     home: { type: 'number', required: true, describe: 'the room to return to afterwards' },
