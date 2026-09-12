@@ -46,6 +46,7 @@ export const SCRATCH = process.env.M59_SCRATCH_DIR || join(HERE, '..', 'substrat
 const FINE = () => join(SCRATCH, 'fine');
 const KEEP = () => join(SCRATCH, 'keep');
 const AGGREGATES = () => join(SCRATCH, 'aggregates.jsonl');
+const WATERMARK = () => join(SCRATCH, 'rolled-to.json');
 
 export const DEFAULT_HOURS = 24;
 
@@ -107,6 +108,15 @@ export function read(id) {
  * the disk is a scratch that quietly threw away the recording somebody was about to read.
  */
 export function prune({ hours = DEFAULT_HOURS, dry = false, now = Date.now() } = {}) {
+  // NOTHING IS DELETED BEFORE IT HAS BEEN COUNTED -- see `m59-grinds.mjs --roll`, which is the
+  // other half of this. The retention split only works if the roll-up actually happens, and a
+  // roll-up that depends on somebody remembering to run it does not happen: the 24-hour window
+  // would quietly discard everything, the permanent record would stay empty, and the whole
+  // point of keying aggregates to a movement epoch would be lost without a single error.
+  //
+  // This function cannot do the roll itself without importing the reader and the detector,
+  // which would make the scratch depend on what is being recorded INTO it. So it refuses
+  // instead: an unrolled window is a reason not to delete, and saying so is cheap.
   const cutoff = now - hours * 3600_000;
   const doomed = list({ keep: false }).filter(r => r.mtime < cutoff);
   let bytes = 0;
@@ -134,12 +144,26 @@ export function prune({ hours = DEFAULT_HOURS, dry = false, now = Date.now() } =
  * parent repository, where nothing is edited in place because the record of how the
  * understanding moved IS the finding.
  */
-export function roll(buckets = [], { at = Date.now() } = {}) {
+export function roll(buckets = [], { at = Date.now(), watermark = null } = {}) {
   if (!buckets.length) return { written: 0 };
   ensure(SCRATCH);
   const lines = buckets.map(b => JSON.stringify({ at, ...b })).join('\n') + '\n';
   appendFileSync(AGGREGATES(), lines);
-  return { written: buckets.length, file: AGGREGATES() };
+  // THE WATERMARK IS WHAT STOPS A PERMANENT RECORD BECOMING A RUMOUR. Without it, running the
+  // roll-up twice over overlapping windows counts the same episodes again -- silently, in the
+  // half that is kept for ever and compared across versions of the mover. Written AFTER the
+  // append: a crash between the two re-rolls a window, which double-counts once; a crash the
+  // other way round would lose the window entirely and nothing would ever notice.
+  if (watermark != null) {
+    try { writeFileSync(WATERMARK(), JSON.stringify({ at, watermark })); } catch { /* not fatal */ }
+  }
+  return { written: buckets.length, file: AGGREGATES(), watermark };
+}
+
+/** The newest episode timestamp already rolled up, or 0 when nothing has been. */
+export function rollWatermark() {
+  try { return Number(JSON.parse(readFileSync(WATERMARK(), 'utf8')).watermark) || 0; }
+  catch { return 0; }
 }
 
 /** Every roll-up ever written, optionally for one epoch. */

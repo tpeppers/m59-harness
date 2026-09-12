@@ -22,7 +22,7 @@ import { join } from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'm59-scratch-test-'));
 process.env.M59_SCRATCH_DIR = dir;
-const { save, list, read, prune, roll, aggregates, byEpoch, DEFAULT_HOURS } =
+const { save, list, read, prune, roll, aggregates, byEpoch, rollWatermark, DEFAULT_HOURS } =
   await import('./m59-scratch.mjs');
 
 let pass = 0, fail = 0;
@@ -112,6 +112,30 @@ console.log('\nwhat was measured, per version of the movement code');
   // number was ever allowed to span the commit between them.
   const b = rows.find(r => r.epoch === 'bbb2222');
   ok('the other epoch is separate, not averaged in', b.count === 1 && b.ms_total === 1000);
+}
+
+console.log('\nthe watermark, because a record that can be run twice is a rumour');
+{
+  // `--roll` APPENDS. Run it twice over overlapping windows and the same episodes are counted
+  // again -- silently, in the half that is kept for ever and compared across versions of the
+  // mover. Nothing downstream could tell a real doubling of wall contact from a second
+  // invocation of the report, which is the worst kind of wrong number: plausible.
+  eq('nothing rolled yet means a zero watermark', rollWatermark(), 0);
+
+  roll([{ epoch: 'ddd4444', kind: 'shuffle', room: 1, row: 1, col: 1, count: 2, ms_total: 10 }],
+       { watermark: 5_000 });
+  eq('the watermark is remembered', rollWatermark(), 5_000);
+
+  // The caller is what filters on it -- see m59-grinds.mjs -- but the store has to REPORT it
+  // honestly or the filter has nothing to stand on.
+  roll([{ epoch: 'ddd4444', kind: 'shuffle', room: 1, row: 1, col: 1, count: 1, ms_total: 5 }],
+       { watermark: 9_000 });
+  eq('and it advances', rollWatermark(), 9_000);
+
+  // A roll with no watermark must not RESET one. Rolling a hand-made bucket for a one-off
+  // analysis would otherwise re-open the whole history to being counted again.
+  roll([{ epoch: 'ddd4444', kind: 'shuffle', room: 2, row: 2, col: 2, count: 1, ms_total: 1 }]);
+  eq('a roll without a watermark leaves the mark alone', rollWatermark(), 9_000);
 }
 
 console.log('\nrobustness, because a scratch that throws is a scratch nobody runs');

@@ -446,6 +446,11 @@ const PULSE_MOVEMENT_SAMPLES = 3;
 // treated as an abandonment, short enough that these characters — 20 to 56 max health
 // against four ants at about half a point a second — are still alive at the end of it.
 const INERT_RESCUE_MS = Number(process.env.M59_INERT_RESCUE_MS || 4_000);
+// Grind rows one character may write per hour before short episodes start being counted
+// rather than written, and the length above which an episode is written regardless.
+// 12/hour/character is 1.7 MB/day across 23 characters at 250 bytes a row.
+const GRIND_ROWS_PER_HOUR = Number(process.env.M59_GRIND_ROWS_PER_HOUR || 12);
+const GRIND_ALWAYS_MS = Number(process.env.M59_GRIND_ALWAYS_MS || 120_000);
 
 // ==================== TRAVELLING: STOOD DOWN WITHOUT STANDING THERE ====================
 //
@@ -1875,6 +1880,24 @@ export class Autopilot {
     // them back. NOTHING IS EMITTED UNTIL AN EPISODE ENDS, because an episode without a
     // duration is the point event this exists to replace.
     this.grind = makeGrindTracker();
+    // AN HOURLY BUDGET, SO A WEDGED CHARACTER CANNOT FILL THE DISK WITH ITS OWN MISERY.
+    //
+    // Measured cost: one episode row is 250 bytes, and the fleet is 23 characters. At 60
+    // episodes per character per hour that is 8.3 MB/day against a ledger already at 131 MB --
+    // it would roughly double it in a fortnight. At 300/hour it is 41 MB/day, which is the
+    // ballooning the operator asked to avoid.
+    //
+    // The pathological case is NOT the one that costs the most, which is worth knowing: a
+    // character grinding for six hours produces ONE long episode, because the episode stays
+    // open while it continues. The expensive shape is repeated bump-and-recover, and the
+    // hundredth identical bounce at the same square tells nobody anything the first twelve did
+    // not.
+    //
+    // So the budget SUPPRESSES rows but never hides them: the overflow is counted and reported
+    // as a single `grind_suppressed` row per hour. A cap that silently dropped evidence would
+    // make the totals wrong in the direction of "everything is fine", which is the one
+    // direction this repository keeps getting burned by.
+    this.grindBudget = { hour: null, written: 0, suppressed: 0 };
     // The mover's own refusal, parked here by `terminalMovement` and consumed by the next
     // pulse. One field rather than a queue: the pulse is a second wide and the question is
     // "was this sample refused", not "how many times" -- the episode counts those.
@@ -10907,9 +10930,29 @@ export class Autopilot {
         refused, destination: going.includes(doing) ? (at.room ?? true) : null,
       });
     } catch { return; }   // instrumentation must never cost the keeper a pass
+    const hour = Math.floor(Date.now() / 3600_000);
+    const b = this.grindBudget;
+    if (b.hour !== hour) {
+      // Report what the previous hour swallowed, once, before resetting. Without this line the
+      // suppression is invisible and every total downstream is quietly short.
+      if (b.suppressed > 0) {
+        try {
+          recordEvent(this.who(), 'grind_suppressed',
+                      { hour: b.hour, suppressed: b.suppressed, written: b.written,
+                        why: `over the ${GRIND_ROWS_PER_HOUR}/hour budget` });
+        } catch { /* never the keeper's problem */ }
+      }
+      b.hour = hour; b.written = 0; b.suppressed = 0;
+    }
     for (const e of closed) {
       // Sub-second episodes are rounding, not evidence.
       if (!(e.ms >= 1000)) continue;
+      // A LONG EPISODE IS ALWAYS WRITTEN, whatever the budget says. The budget exists to stop
+      // a thousand two-second bounces, and the whole question is "is anything grinding for
+      // HOURS" -- suppressing the answer to save 250 bytes would be the instrument defeating
+      // its own purpose.
+      if (b.written >= GRIND_ROWS_PER_HOUR && e.ms < GRIND_ALWAYS_MS) { b.suppressed += 1; continue; }
+      b.written += 1;
       try {
         recordEvent(this.who(), e.kind, {
           room: e.room, row: e.row, col: e.col, ms: e.ms, samples: e.samples,
