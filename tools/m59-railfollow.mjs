@@ -27,6 +27,7 @@
 // line in the first place. This decides only WHERE ON THE LINE a body is, which is the question
 // asked once per leg and answered wrong for free.
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
+import { MIN_MOVER_STEP } from './m59-steptrace.mjs';
 
 /** A waypoint is off-shelf when no single step could reach the body's floor from it. */
 export const onSameShelf = (waypointFloor, bodyFloor, step = MAX_STEP_HEIGHT) =>
@@ -322,7 +323,8 @@ function aimPointRaw(waypoints, point, { floor = null, budget = AIM_BUDGET,
  * because the honest answer at the end of a rail is "this last hop cannot be walked", not a silent
  * request the mover will answer with a lie.
  */
-export const MIN_AIM = 128;
+/** The mover's minimum step. ONE definition, in m59-steptrace; this is the alias callers know. */
+export const MIN_AIM = MIN_MOVER_STEP;
 
 export function enforceAimFloor(aim, waypoints, point, { min = MIN_AIM } = {}) {
   if (!aim || !(aim.dist < min)) return aim;
