@@ -192,6 +192,58 @@ const arg = (flag, fallback) => {
 const HOST = arg('--host', process.env.M59_BROKER_HOST || '127.0.0.1');
 const PORT = Number(arg('--port', process.env.M59_BROKER_PORT || 8901));
 
+// WHERE A CHARACTER IS FROM, WHICH IS ALSO WHERE `rescue` WILL PUT IT.
+//
+// The home room is the DEFAULT destination of the rescue spell — `DoRescue` falls through to
+// `AdminGoToSafety` unless a guild hall in the same region, Ko'catan or the orc caves claims it
+// first (rescue.kod:114-167). So "where is this character from" and "where does rescue drop it"
+// are the same question, and the answer was only ever available as English prose.
+//
+// The server never sends the room id. What it sends, when you look at a player, is one of nine
+// hand-written sentences chosen straight off `GetHomeRoom()` (player.kod:1590-1640), and EACH
+// ONE IS WORDED DIFFERENTLY — "has been a Barloquan", "hailed from Cor Noth", "has called Jasper
+// home". There is no shared phrase to match on, which is why searching the kod for "resident of"
+// finds nothing and why this has to be a table rather than a regex.
+//
+// Matching is on the distinctive fragment rather than the whole resource, because the sentence
+// is assembled around it: the pronoun is prepended and a tenure clause is appended, so the live
+// text reads "He has been a Barloquan less than a year."
+//
+// A HOMETOWN IS ASSIGNED AT RANDOM ON LEAVING RAZA and is changeable afterwards at the Hall of
+// Genealogy — `SetRandomHomeroom` (user.kod:7001) rolls 1-10 and picks Marion, Jasper or Cor
+// Noth ONLY, so any character reading Barloque, Tos or Ko'catan was moved there deliberately. A
+// negative `piHomeroom` means locked and unchangeable (user.kod:7039-7046); nothing on the wire
+// reports that, so it is not inferable here.
+export const HOMETOWNS = Object.freeze([
+  { match: 'Barloquan',        town: 'Barloque', room: 106 },   // RID_BAR_INN
+  { match: 'citizen of Tos',   town: 'Tos',      room: 52 },    // RID_TOS_INN
+  { match: 'hailed from Cor Noth', town: 'Cor Noth', room: 153 },// RID_COR_INN
+  { match: 'called Jasper home', town: 'Jasper', room: 370 },   // RID_JAS_INN
+  { match: 'Marionite',        town: 'Marion',   room: 202 },   // RID_MAR_INN
+  { match: 'is of Raza',       town: 'Raza',     room: 1011 },  // RID_NEWB1
+  { match: 'is of Hazar',      town: 'Hazar',    room: 1001 },  // RID_GUEST1
+  { match: "lived in Ko'catan", town: "Ko'catan", room: 2001 }, // RID_KOC_INN
+  // " has wandered" is the server's own fallback for a home room it does not recognise. It is a
+  // real answer and not a parse failure, so it gets a row with no room rather than being left to
+  // read as "we could not tell".
+  { match: 'has wandered',     town: null,       room: null },
+]);
+
+/**
+ * The hometown out of the prose the server sends with a player look.
+ *
+ * Returns null when the text carries no residency sentence at all — a DM, or a look that did not
+ * come back — which is a different answer from `{ town: null }`, the server saying it does not
+ * recognise the room. Unknown must not read the same as wandering.
+ */
+export function hometownFrom(extra) {
+  const text = String(extra ?? '');
+  if (!text) return null;
+  const hit = HOMETOWNS.find(h => text.includes(h.match));
+  if (!hit) return null;
+  return { town: hit.town, room: hit.room, said: hit.match };
+}
+
 export async function callTool(name, args, { host = HOST, port = PORT } = {}) {
   const res = await fetch(`http://${host}:${port}/`, {
     method: 'POST',

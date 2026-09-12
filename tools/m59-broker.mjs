@@ -103,6 +103,7 @@ import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
 import { resolveItemNames, weighItem, rarityName, isUnidentified } from './m59-items.mjs';
+import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
          factionOfferAllowed, FACTION_SOLDIER, factionFromProfile,
          visibleTokenFromProfile, isCouncilToken, soldierAssignment,
@@ -6404,7 +6405,15 @@ const TOOLS = [
                // description change for this object from us, which is how the real client
                // decides whether to unlock the edit box.
                ...(hit.player ? { is_player: true, editable: hit.editable,
-                                  extra: hit.extra, url: hit.url || undefined } : {}) };
+                                  extra: hit.extra, url: hit.url || undefined,
+                                  // WHERE THIS ONE IS FROM, AS A ROOM RATHER THAN A SENTENCE.
+                                  // It is carried in `extra` already, in one of nine differently
+                                  // worded lines, and it is the destination `rescue` defaults to
+                                  // — so a caller planning a journey for a fragile character can
+                                  // finally ask it instead of casting to find out. null means no
+                                  // residency line was sent; { town: null } means the server said
+                                  // "has wandered", which is an answer.
+                                  hometown: hometownFrom(hit.extra) || undefined } : {}) };
     },
   },
   {
