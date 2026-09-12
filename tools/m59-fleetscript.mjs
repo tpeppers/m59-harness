@@ -595,6 +595,69 @@ export async function pack(agent) {
   return inv.items ?? [];
 }
 
+// #unreliable — A KEEPER ANSWERS BEFORE IT KNOWS ANYTHING, AND THE ANSWER LOOKS LIKE A FACT.
+//
+// TAGGED FOR REPAIR, NOT FOR LIVING WITH. This is a workaround at the caller's end for a
+// defect in the harness: `inventory` and `status` on a keeper-backed character return a
+// well-formed answer built from a /state snapshot the keeper has not populated yet, and
+// nothing in the reply distinguishes "the pack is empty" from "I do not know yet". The real
+// fix belongs in the broker — a snapshot with no inventory frame should answer INDETERMINATE
+// the way m59-which.mjs does, not `items: []`. Grep this repository for `#unreliable` to find
+// every place a caller is papering over that, and delete them when it is fixed.
+//
+// WHAT IT COST, all on 2026-09-11 and all within an hour of a keeper restart:
+//
+//   * A drill exited with "out of Elderberry after 0 cast(s)" while the character stood in an
+//     inn holding ninety-seven of them.
+//   * Its preflight refused to start at all: "not enough reagents for a single cast — 0
+//     Elderberry, 0 Emerald, ability null", against a pack of 33/34 and an ability of 47.
+//   * A fleet report said two casters were carrying "0 items". Both were holding a weapon,
+//     their reagents and over a thousand shillings. It was reported to the operator twice
+//     before anyone re-read it.
+//   * A walk refused with "health is unreadable, so this is not a body we know is fit to
+//     travel" on a character at 14/20.
+//
+// Every one of those is a read that could not answer being filed as an observation. The shape
+// of the fix is always the same: ask again, and believe it only when two reads AGREE.
+//
+// `same` decides agreement — default is a shallow equality on the JSON, which is right for a
+// count and wrong for a whole pack, so callers comparing packs should pass their own. `empty`
+// names the answer that is suspicious; an answer that is not suspicious is returned on the
+// first read, because most reads are fine and a blanket double-read doubles every script's
+// call count for nothing.
+export async function readTwice(read, { gapMs = 6000, tries = 3,
+                                        same = (a, b) => JSON.stringify(a) === JSON.stringify(b),
+                                        empty = (v) => v == null ||
+                                          (Array.isArray(v) && v.length === 0) } = {}) {
+  let last = await read();
+  if (!empty(last)) return { value: last, agreed: true, reads: 1 };
+  for (let i = 1; i < Math.max(2, tries); i++) {
+    await sleep(gapMs);
+    const next = await read();
+    // TWO SUSPICIOUS READS THAT AGREE ARE AN OBSERVATION. A pack that reads empty twice, six
+    // seconds apart, really is empty — a cold snapshot fills in well under that.
+    if (same(last, next)) return { value: next, agreed: true, reads: i + 1 };
+    if (!empty(next)) return { value: next, agreed: true, reads: i + 1 };
+    last = next;
+  }
+  // Still suspicious and still disagreeing: hand back the last answer AND the fact that it is
+  // not trustworthy, rather than picking one. A caller that ignores `agreed` is no worse off
+  // than it was; a caller that reads it can refuse instead of acting on a guess.
+  return { value: last, agreed: false, reads: Math.max(2, tries) };
+}
+
+/** #unreliable — `pack()` with the double-read above. Use this anywhere a decision turns on
+ *  the pack being EMPTY: "out of reagents", "nothing to sell", "carrying nothing". */
+export async function packConfirmed(agent, opts = {}) {
+  return readTwice(() => pack(agent), {
+    // Two packs agree when they carry the same names in the same counts. Object ids recycle
+    // and are not evidence of sameness; amounts are what every caller is actually asking about.
+    same: (a, b) => JSON.stringify((a ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort())
+                 === JSON.stringify((b ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort()),
+    ...opts,
+  });
+}
+
 // ---------------------------------------------------------------- rooms that keep characters
 //
 // A COLLISION MAP CANNOT SEE A LOCK. Every trap here is a room our geometry says is fine and

@@ -33,7 +33,7 @@ const KEEPER_PORT = 19900;
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk, walkTo, crawlTo, crawlChoice, healthFractionOf, rest,
         shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza, say,
-        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure } =
+        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure, readTwice, packConfirmed } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -427,6 +427,45 @@ console.log('\nTHE PURSE IS THE RECEIPT, NOT THE BANKER\u2019S SENTENCE');
      r.results.a1.ok === false);
   ok('and the outcome names what was actually observed',
      JSON.stringify(r.results.a1).includes('counter_moved_nothing'));
+}
+
+console.log('\n#unreliable — A KEEPER ANSWERS BEFORE IT KNOWS, AND EMPTY IS NOT A FACT');
+{
+  // Every case below is a real read from 2026-09-11, within an hour of a keeper restart, that
+  // was acted on as an observation: "out of Elderberry after 0 cast(s)" with 97 in the pack,
+  // a preflight refusing on "0 Elderberry, 0 Emerald, ability null" against 33/34, and a fleet
+  // report of "0 items" for two casters holding a weapon, their reagents and 1,800 shillings.
+  const feed = (...answers) => { let i = 0; return async () => answers[Math.min(i++, answers.length - 1)]; };
+  const fast = { gapMs: 5, tries: 3 };
+
+  let r = await readTwice(feed([{ name: 'herb', amount: 3 }]), fast);
+  ok('an answer that is not suspicious is returned on the FIRST read',
+     r.reads === 1 && r.agreed === true, JSON.stringify(r));
+
+  r = await readTwice(feed([], [{ name: 'herb', amount: 97 }]), fast);
+  ok('an empty read followed by a real one takes the real one',
+     r.value.length === 1 && r.agreed === true, JSON.stringify(r));
+
+  r = await readTwice(feed([], []), fast);
+  ok('two empty reads that AGREE are an observation, not a doubt',
+     r.value.length === 0 && r.agreed === true && r.reads === 2);
+
+  // The honest third answer, and the reason this returns a shape rather than a value: a caller
+  // that ignores `agreed` is no worse off, and one that reads it can refuse instead of guess.
+  r = await readTwice(feed([], null, []), { gapMs: 5, tries: 3, same: () => false });
+  ok('reads that keep disagreeing come back NOT agreed rather than picking one',
+     r.agreed === false, JSON.stringify(r));
+
+  // packConfirmed compares by NAME AND COUNT. Object ids recycle within hours, so two reads of
+  // the same pack can carry different ids for the same stack — comparing those calls a settled
+  // pack unsettled for ever.
+  const a = [{ id: 1, name: 'herb', amount: 40 }, { id: 2, name: 'Emerald', amount: 3 }];
+  const b = [{ id: 9, name: 'emerald', amount: 3 }, { id: 8, name: 'HERB', amount: 40 }];
+  const samePack = (x, y) =>
+    JSON.stringify((x ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort())
+ === JSON.stringify((y ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort());
+  ok('the same pack with recycled ids and different order still compares equal', samePack(a, b));
+  ok('and a pack that really changed does not', !samePack(a, [{ id: 1, name: 'herb', amount: 39 }]));
 }
 
 console.log('\nA DROPPED SOCKET IS NOT AN ANSWER, AND ONLY A READ MAY BE ASKED TWICE');
