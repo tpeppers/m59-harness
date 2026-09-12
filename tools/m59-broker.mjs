@@ -2161,8 +2161,15 @@ class KeeperProxy {
         // `icon_rsc` and `translation` come through under the names the parsed object uses,
         // because every reader downstream — the `inventory` tool included — is written
         // against a real client object and must not be able to tell which side produced it.
+        // `rarity` travels with them for the reason stated directly above: a reader must not
+        // be able to tell which side produced the object. It was added to both item
+        // serializers and NOT to this rebuild, so `m59-reveal.mjs sweep` answered "nothing in
+        // the fleet reads unidentified" while the keeper's own /state showed Rizzo holding an
+        // unidentified wand and an unidentified mace. Every prod character is keeper-backed,
+        // so the field was live everywhere except the one path anything actually asks.
         ? s.items.map(o => ({ id: o.id, nameRsc: o.name, amount: o.amount ?? 0,
                               tag: o.tag ?? null, flags: o.flags ?? 0,
+                              rarity: o.rarity ?? null,
                               iconRsc: o.icon_rsc ?? null, translation: o.translation ?? 0 }))
         : [
             ...(s.equipment ?? []).map(name => ({ nameRsc: name, amount: 1, flags: 0x04 })),
