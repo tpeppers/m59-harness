@@ -154,9 +154,38 @@ async function askRent(s, c) {
   // and the caller records "no answer" as though it were a fact about the guild's rent.
   const frular = [...(c.room?.objects?.values() ?? [])]
     .find(o => (c.rsc.get(o.nameRsc) || '') === FRULAR_NAME);
-  const me = c.self ?? null;
+
+  // OUR OWN POSITION, READ WHEN IT IS USED AND WAITED FOR IF IT IS NOT THERE YET.
+  //
+  // On a keeper-backed session `c` is rebuilt from each /state snapshot — "a picture, not a
+  // wire" — so `c.self` is null whenever the snapshot in hand lacks `you`, and non-null a
+  // moment later. Reading it once at the top and holding it is the same thin-snapshot trap
+  // that made object ids flap.
+  //
+  // AND IT COLLAPSED A THREE-VALUED TEST INTO THE WRONG BRANCH. `withinSayRange` answers
+  // true / false / null and the approach is gated on `=== false`; a null `me` answered null,
+  // the walk was skipped, and by the time earshot was judged a few lines later `c.self` had
+  // refreshed and answered false. Prod returned "out of earshot" twice with no `approached`
+  // field at all, because neither branch of the approach had run.
+  const readSelf = async () => {
+    for (let i = 0; i < 6; i++) {
+      const here = c.self ?? null;
+      if (Number.isFinite(here?.col) && Number.isFinite(here?.row)) return here;
+      await new Promise(r => setTimeout(r, 250));
+    }
+    return null;
+  };
+  const me = await readSelf();
+
   let approached = null;
-  if (frular && withinSayRange(me, frular) === false) {
+  if (frular && !me) {
+    // UNKNOWN IS NOT "IN RANGE", and it is not "too far" either. Saying which one it is
+    // matters: one is fixed by walking and the other by finding out why the body cannot be
+    // located.
+    approached = { arrived: false,
+                   reason: 'our own position never arrived in a state snapshot, so there was ' +
+                           'nothing to walk from' };
+  } else if (frular && withinSayRange(me, frular) === false) {
     // TWO WAYS TO FIND A SQUARE WITHIN EARSHOT, AND THE GOOD ONE IS USUALLY ABSENT.
     //
     // `s.world.approachSquare` knows about walls and is the right answer when it exists. It
