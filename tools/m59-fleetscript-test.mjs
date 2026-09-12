@@ -59,6 +59,8 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // handed {agent, col, row, positions, rooms} and may move the body,
                       // move it somewhere else entirely, or do nothing at all (a stall).
                       positions = {}, onWalkTo = null,
+                      // Handed every supply call; return a refusal payload to model one.
+                      onSupply = null,
                       // `crawl_to` moves with short_hop and never with walk_to, because
                       // walk_to PLANS and its planner believes in ground the mover refuses.
                       // `onShortHop` is handed {agent, to_col, to_row} and may move the body.
@@ -117,6 +119,40 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       payload = { started: true };
     }
     else if (name === 'travel_estimate') payload = { ms: 1000, hops: 2 };
+    // A HAND-OVER THAT ACTUALLY MOVES THE GOODS, because the whole question about `supply` is
+    // whether the RECEIVER ends up holding them — a fake that only answers `supplied: true`
+    // would pass the exact bug this step exists to prevent. `onSupply` lets a case refuse
+    // instead: `receiver_full` is the commonest real answer and has to be a normal outcome.
+    else if (name === 'supply') {
+      const lines = [].concat(a.what ?? []);
+      const refusal = onSupply ? onSupply({ ...a, lines }) : null;
+      if (refusal) payload = refusal;
+      else {
+        const from = inventory[a.from] ?? (inventory[a.from] = []);
+        const to = inventory[a.to] ?? (inventory[a.to] = []);
+        const moved = [];
+        for (const l of lines) {
+          const want = typeof l === 'object' ? Number(l.amount) || 1 : 1;
+          const id = typeof l === 'object' ? l.id : l;
+          const src = from.find(i => i.id === id);
+          if (!src) continue;
+          const take = Math.min(want, src.amount ?? 1);
+          src.amount = (src.amount ?? 1) - take;
+          if (src.amount <= 0) from.splice(from.indexOf(src), 1);
+          const dst = to.find(i => i.name === src.name);
+          if (dst) dst.amount = (dst.amount ?? 1) + take;
+          // A NEW ID ON THE RECEIVER'S SIDE, because that is what the server does — the
+          // stack is a different object over there, and a caller caching the giver's id
+          // across a hand-over is the mistake the step's comment is about.
+          else to.push({ id: 90000 + to.length, name: src.name, amount: take });
+          moved.push({ name: src.name, asked: want, received: take, giver_lost: take });
+        }
+        payload = moved.length
+          ? { supplied: true, from: a.from, to: a.to, amounts: moved,
+              reason: "delivered: every item asked for rose in the receiver's own count" }
+          : { supplied: false, reason: 'the offer never reached them' };
+      }
+    }
     else if (name === 'inventory') payload = { items: inventory[agent] ?? [] };
     else if (name === 'shop') payload = a.buy_ids ? { bought: [] } : { items: shopItems };
     else if (name === 'bank') payload = { banker_said: ['Skivlat hands it over.'] };
@@ -253,6 +289,99 @@ console.log('\nthe body is held for the whole errand');
 }
 
 
+
+console.log('\nsupply: the step that did not exist, and the four ways it was hand-rolled wrong');
+{
+  const { supply } = await import('./m59-fleetscript.mjs');
+
+  // A BARE NAME MOVED TWO. `what: 'orc tooth'` against a stack of forty answered
+  // `asked: 2, received: 2` — a true success and a useless one — because the tool's default
+  // amount is two. The step asks for what is actually spare.
+  {
+    const inventory = { a1: [{ id: 11, name: 'orc tooth', amount: 40 }], a2: [] };
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory });
+    const r = await fleetScript({ name: 'teeth', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth', { keep: 10 })],
+      onLog: quiet });
+    ok('the whole spare stack moves, not the default two', r.ok === true,
+       JSON.stringify(r.results?.a1));
+    ok('and the keep floor stays with the giver',
+       inventory.a1[0].amount === 10, 'giver left with ' + JSON.stringify(inventory.a1));
+    ok('the receiver holds the rest, counted off its own pack',
+       inventory.a2[0]?.amount === 30, 'receiver ' + JSON.stringify(inventory.a2));
+  }
+
+  // ONE BIG OFFER FAILS WHERE SEVERAL SMALL ONES DO NOT. 172 slices of pork answered "the
+  // offer never reached them"; the same pork in bites of 60 went through three times out of
+  // three. So the step bites, and `rounds` bounds it.
+  {
+    const inventory = { a1: [{ id: 12, name: 'slice of pork', amount: 202 }], a2: [] };
+    const offers = [];
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: ({ lines }) => {
+        offers.push(lines[0].amount);
+        return lines[0].amount > 60 ? { supplied: false, reason: 'the offer never reached them' } : null;
+      } });
+    const r = await fleetScript({ name: 'pork', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'slice of pork', { keep: 30, bite: 60 })],
+      onLog: quiet });
+    ok('no single offer exceeds the bite', Math.max(...offers) <= 60, 'offers ' + offers.join(','));
+    ok('and it keeps going until the floor is reached',
+       inventory.a1[0].amount === 30, 'giver left with ' + JSON.stringify(inventory.a1));
+    ok('the run succeeds on what the receiver gained', r.ok === true,
+       JSON.stringify(r.results?.a1));
+  }
+
+  // THE STACK IS RE-RESOLVED EVERY ROUND. A hand-over SPLITS the giver's stack, so an id or
+  // an amount cached outside the loop is wrong from the second offer onwards — and ids are
+  // renumbered on every save and recycle within hours, which is why `act` (whose arguments
+  // are frozen when the step list compiles) cannot express this at all.
+  {
+    const inventory = { a1: [{ id: 13, name: 'red mushroom', amount: 75 },
+                             { id: 14, name: 'blue mushroom', amount: 37 }], a2: [] };
+    const ids = [];
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: ({ lines }) => { ids.push(lines[0].id); return null; } });
+    await fleetScript({ name: 'mush', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'mushroom', { keep: 20, bite: 40 })],
+      onLog: quiet });
+    ok('the family match walks EVERY mushroom stack, not just the one named exactly — five ' +
+       'of this world\'s mushrooms are separate stacks and all are valid reagents',
+       new Set(ids).size > 1, 'ids offered: ' + ids.join(','));
+    const left = (inventory.a1 ?? []).reduce((n, i) => n + i.amount, 0);
+    ok('and it stops at the floor across the whole family', left === 20, 'left ' + left);
+  }
+
+  // A RECEIVER THAT CANNOT RECEIVE IS A TRUE ANSWER ABOUT THE RECEIVER, and the commonest one:
+  // every caster on prod was at its bulk ceiling with 120-200 slices of pork aboard. It must
+  // fail the step, and it must say which side the problem is on.
+  {
+    const inventory = { a1: [{ id: 15, name: 'orc tooth', amount: 30 }], a2: [] };
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: () => ({ supplied: false, reason_code: 'receiver_full',
+                         reason: 'receiver_full: the receiver cannot hold it' }) });
+    const r = await fleetScript({ name: 'full', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth')], onLog: quiet });
+    ok('a full receiver FAILS the step rather than reporting a hand-over',
+       r.ok === false, JSON.stringify(r.results.a1));
+    ok('and the reply names the receiver as the problem',
+       /receiver_full/.test(JSON.stringify(r.results.a1)));
+    ok('nothing left the giver', inventory.a1[0].amount === 30);
+  }
+
+  // NOTHING TO MOVE IS NOT A FAILURE TO REPORT AS A REFUSAL, but it is not a success either:
+  // the receiver gained nothing, and a caller that goes on to cast is owed that.
+  {
+    const inventory = { a1: [], a2: [] };
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory });
+    const r = await fleetScript({ name: 'empty', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth')], onLog: quiet });
+    ok('a giver with none of it fails, saying the receiver is no better off',
+       r.ok === false && /no more orc tooth than before/.test(JSON.stringify(r.results.a1)),
+       JSON.stringify(r.results.a1));
+  }
+}
+
 console.log('\na verify that returns an object is judged on its `ok`, not on being an object');
 {
   // AN OBJECT IS TRUTHY. `Boolean(v)` therefore passed every `{ok:false, why:...}` ever
@@ -272,7 +401,7 @@ console.log('\na verify that returns an object is judged on its `ok`, not on bei
 
   const r2 = await fleetScript({ name: 'obj-true', fleet: 'testfleet', agents: ['a1'],
     steps: [verify(async () => ({ ok: true, teeth: 30 }))], onLog: quiet });
-  ok('an {ok:true} passes', r2.ok === true);
+  ok('an {ok:true} passes', r2.ok === true, JSON.stringify(r2).slice(0, 300));
   ok('AND WHAT IT MEASURED IS REPORTED. A verify that counted something was returning only ' +
      '`ok`, so a run could not say what it had seen',
      /30/.test(JSON.stringify(r2.results.a1)));
