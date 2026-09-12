@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { fleetName } from './m59-fleetpath.mjs';
 import { SAY_RADIUS, squaredDistance, withinSayRange,
          sayApproachSquare } from './m59-sayrange.mjs';
+import { StorageCache } from './m59-storage.mjs';
 
 // WHICH FLEET'S BOOK, ANSWERED ONCE.
 //
@@ -191,9 +192,42 @@ export async function guildRentStatus(s) {
     go_to: FRULAR_ROOM,
     note: `travel to ${FRULAR_ROOM} (The Guildmaster's Hall, Barloque)` };
   const r = await askRent(s, c);
+
+  // WRITE IT DOWN, because until this line nothing ever did.
+  //
+  // `guildStoreAvailable` gates the entire guild stockpile on a cached rent reading, and
+  // `StorageCache.writeRent` had exactly one caller in the repository: its own test. So the
+  // gate asked for a fact no production path could produce, and every character's
+  // `guildWants` sat enabled and inert behind "nobody has asked Frular about the guild yet".
+  // Same shape as the chest cache, and invisible for the same reason — the feature does not
+  // fail, it declines.
+  //
+  // ONLY A LINE WE ACTUALLY PARSED. `askRent` argues at length that silence from out of
+  // earshot is not evidence about the rent; caching that silence would promote a question
+  // nobody heard into a durable fact, and the gate would read it as an answer for ever. An
+  // unparsed reply is the same case: Frular said something we do not understand, which is
+  // not a rent.
+  if (r.rent && !r.out_of_earshot) {
+    try {
+      new StorageCache().writeRent({
+        due: r.rent.due, credit: r.rent.credit, in_guild: r.rent.in_guild,
+        hours_left: r.hours_left, said: r.rent.said,
+        by: c.me?.name ?? s.name ?? null,
+      });
+    } catch { /* the record is a convenience; never let it interrupt the errand */ }
+  }
+
   return { action: 'status', room, purse: purseAmount(c), due: r.rent?.due ?? null,
     credit: r.rent?.credit ?? null, hours_until_arrears: r.hours_left,
-    frular_said: r.said };
+    frular_said: r.said,
+    // SAY WHETHER IT WAS RECORDED, so a caller can tell "asked and cached" from "asked and
+    // the answer was unusable" without re-reading the file.
+    recorded: !!(r.rent && !r.out_of_earshot),
+    ...(r.out_of_earshot ? { out_of_earshot: true, why: r.why } : {}),
+    ...(!r.rent && !r.out_of_earshot
+      ? { why: 'nothing in the reply parsed as a rent line, so nothing was cached — ' +
+               'an answer we cannot read is not an answer about the rent' }
+      : {}) };
 }
 
 export async function payGuildTithe(s, { amount = 0, all = false } = {}) {

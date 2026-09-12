@@ -765,3 +765,15 @@ export const rarityName = (r) => {
 // already had its attributes revealed and there is nothing left to uncover. Treating it as
 // work would burn teeth on every cursed weapon in the fleet, for ever.
 export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIFIED;
+
+// AND THE SAME GRADE ANSWERS "CAN THIS EVER BE PUT DOWN". `ITEM_RARITY_GRADE_CURSED` (200)
+// is what the stock client colours red (color.c:583, dialog.c:701), so cursed is not an
+// inference here — it is the server's own word, on the same field `reveal` already reads.
+//
+// Worth its own export because the consequence is unique in this game: a cursed weapon
+// CANNOT be unwielded. It is the one irreversible mistake, so "is the thing in this
+// character's hand cursed" is a question that has to be answerable, and until the
+// equipment snapshot carried `rarity` it was not. Rizzo stalled 56 passes on one and three
+// separate checks I wrote could not see it — they tested a refusals list that a keeper
+// restart clears, then an equipment reply with no such field in it.
+export const isCursed = (o) => Number(o?.rarity) === ITEM_RARITY.CURSED;
