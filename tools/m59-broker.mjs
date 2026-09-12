@@ -2093,6 +2093,21 @@ class KeeperProxy {
       // secret door opens on `type <> SAY_EMOTE` (ghall.kod:967), so an emote would be
       // refused in silence.
       say: (text, type = 1) => act('say', { text, kind: type }),
+      // HANDING SOMETHING OVER — the fifth verb the proxy never forwarded, found the same
+      // way as the other four: by an errand dying on "c.offer is not a function" after it had
+      // already done the expensive part.
+      //
+      // Measured on prod 2026-09-12: Robin and Floyd each withdrew 35,000 at the Tos bank and
+      // walked it to Barloque, and the payment failed at Frular's feet. Both were left
+      // standing in the Guildmaster's Hall holding the cash.
+      //
+      // PAYING GUILD RENT IS AN OFFER THAT THE SERVER DELIBERATELY CANCELS. GuildCreator's
+      // ReqOffer (gcreator.kod:325) takes the money, credits the guild, thanks you and returns
+      // FALSE — so the trade closing with nothing handed back is what success looks like, and
+      // `cancelOffer` is the ordinary end of the exchange rather than an error path. Both
+      // halves have to cross the process boundary or neither is any use.
+      offer: (toId, items) => act('trade', { op: 'offer', to_id: toId, items }),
+      cancelOffer: () => act('trade', { op: 'cancel' }),
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
