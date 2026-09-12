@@ -3,7 +3,7 @@
 //   node tools/m59-finepos-test.mjs
 //
 // Every case is one of the four ways "where is this body" answered wrongly on 2026-09-11/12.
-import { finePosition, keeperPortFor, movedBetween, protocolToClient, clientToProtocol,
+import { finePosition, settledPosition, keeperPortFor, movedBetween, protocolToClient, clientToProtocol,
          squareCentreClient } from './m59-finepos.mjs';
 
 let pass = 0, fail = 0;
@@ -75,8 +75,12 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
 {
   const r = await finePosition('hk2', { port: 9533,
     fetchState: async () => ({ self: { x: 1167, y: 1519, row: 23, col: 18 },
-                               room: { num: 49 }, character: 'Marco Polo' }) });
+                               room: { num: 49 }, character: 'Marco Polo', pid: 1452 }) });
   ok(r.ok, 'a keeper with a position answers');
+  // THE PORT IS THE BAND AND THE PID IS THE BUILD, and a caller with only the port reaches for it as
+  // a build stamp. m59-stepbench's compareBenches did exactly that and answered SAME BUILD? on both
+  // sides of a real keeper respawn — a guard that could only ever abstain.
+  eq(r.pid, 1452, 'the keeper\'s PID comes back, because a restart changes it and the port does not');
   eq(r.protocol, { x: 1167, y: 1519 }, 'protocol units as the keeper gave them');
   eq(r.client, { x: 17648, y: 23280 }, 'and client units converted once');
   eq(r.square, { row: 23, col: 18 }, 'with the square for talking to humans');
@@ -89,6 +93,37 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
   const r = await finePosition('hk2', { port: 9533,
     fetchState: async () => ({ you: { x: 1167, y: 1519, row: 23, col: 18 } }) });
   ok(r.ok, 'the `you` shape is read too');
+  // A KEEPER THAT DID NOT SAY MUST NOT BE GIVEN A PLAUSIBLE PID. null is checkable; the port is not.
+  eq(r.pid, null, 'a state without a pid reports null rather than substituting the port');
+}
+
+// ---- settledPosition: a read of a MOVING body is not a position ------------------------
+{
+  // The shape that caused it: 426 units recorded for a 128-unit step, because the body was still
+  // in flight when `after` was read.
+  const track = [{ x: 1100, y: 1100 }, { x: 1108, y: 1100 }, { x: 1116, y: 1100 },
+                 { x: 1116, y: 1100 }, { x: 1116, y: 1100 }];
+  let i = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { ...track[Math.min(i++, track.length - 1)], row: 23, col: 18 },
+                               pid: 1452 }) });
+  ok(r.ok && r.settled, 'it waits for the body to stop and then answers');
+  eq(r.protocol, { x: 1116, y: 1100 }, 'and the answer is where it STOPPED, not where it was passing');
+  eq(r.reads, 4, 'having read until two consecutive reads agreed');
+}
+{
+  // A body that never stops must not be reported as though it had.
+  let n = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, maxMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { x: 1100 + 8 * n++, y: 1100, row: 23, col: 18 } }) });
+  eq(r.settled, false, 'a body still in flight is NOT reported as settled');
+  ok(/in flight, not a place/.test(r.why), '...and says so, rather than handing back the last read');
+}
+{
+  // The failures finePosition already distinguishes have to survive the wrapper.
+  const r = await settledPosition('hk2', { port: 9533, fetchState: async () => null });
+  ok(!r.ok && r.settled === false, 'a keeper that does not answer stays a failure');
+  eq(r.reads, 1, 'and it did not retry a dead keeper into a timeout');
 }
 
 // ---- movedBetween: the receipt, because `arrived` is not one ----------------------------

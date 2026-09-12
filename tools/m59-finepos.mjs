@@ -52,7 +52,11 @@ const getJson = (port, path, timeoutMs = 9000) => new Promise((res) => {
 });
 
 /** Which keeper port is this agent on? Discovered, never assumed. */
-export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060], [9111, 9160]],
+// 9411 is lab-canary-eff's band — the one-character clean room this repository keeps for movement
+// experiments. Listed explicitly rather than scanned, because a probe that sweeps unknown ports is
+// how one fleet's tooling ends up talking to another fleet's keepers.
+export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060],
+                                                      [9111, 9160], [9411, 9460]],
                                              probe = probeRange } = {}) {
   for (const [lo, hi] of bands) {
     const occ = await probe(lo, hi).catch(() => []);
@@ -85,6 +89,14 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
   const client = protocolToClient({ x: you.x, y: you.y });
   return {
     ok: true, port: p, agent,
+    // THE PORT IS THE BAND; THE PID IS THE BUILD. A keeper restart changes the pid and keeps the
+    // port, which is the whole reason `port` cannot stand in for it — and `/state` has carried the
+    // pid all along. Omitting it here made a caller reach for `port` as the nearest thing to a
+    // build stamp, so `m59-stepbench`'s compareBenches saw 9411 on both sides of a genuine keeper
+    // respawn and answered SAME BUILD? for ever. A guard that can only abstain is not a guard, and
+    // it fails in the direction nobody checks: it never fires falsely, so nobody notices it never
+    // fires at all. Eighth instance of two shapes for one idea.
+    pid: Number.isFinite(j.pid) ? j.pid : null,
     protocol: { x: you.x, y: you.y },
     client,
     square: { row: you.row, col: you.col },
@@ -94,7 +106,49 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
       client.y - squareCentreClient(you.row, you.col).y)),
     room: j.room?.num ?? null,
     character: j.character ?? null,
+    // HOW OLD THIS READ IS, AS THE KEEPER ITSELF RECKONS IT. `/state` has carried `as_of_ms` and
+    // `fresh` all along and every caller here ignored them, which is how a position read gets
+    // treated as a fact about now rather than a fact about some moment.
+    asOfMs: Number.isFinite(j.as_of_ms) ? j.as_of_ms : null,
+    fresh: j.fresh ?? null,
   };
+}
+
+/**
+ * THE BODY'S POSITION ONCE IT HAS STOPPED MOVING — read until two consecutive reads agree.
+ *
+ * A single read straight after a walk returns is a read of a body that may still be in flight, and
+ * the error is not small. MEASURED, room 576, 2026-09-12: a bench cell that asked for a 128-unit
+ * step recorded 426 units of movement, which ONE step cannot produce — walkFine sizes a step
+ * `max(8, min(stride, remaining))`, so 128 units in is 128 units out. The position pair was racing
+ * the body, and the same race is what made 44% of cells read as "did not move".
+ *
+ * DELIBERATELY NOT A STALENESS THRESHOLD. Every threshold in this toolchain has been wrong once —
+ * seven of them tonight — because a threshold encodes a guess about a scale that later changes.
+ * "Has it stopped?" is OBSERVABLE: read twice and compare. Exact equality is the right test, because
+ * protocol coordinates are integers and a stationary body reports the same pair for ever.
+ *
+ * AND IT SAYS WHEN IT DID NOT SETTLE, rather than returning the last read as though it had. A body
+ * the keeper is still recovering never settles, and a caller that cannot tell will average a moving
+ * body into its measurement.
+ */
+export async function settledPosition(agent, { gapMs = 120, maxMs = 3000, sleep = null,
+                                               ...opts } = {}) {
+  const nap = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const started = Date.now();
+  let prev = await finePosition(agent, opts);
+  if (!prev.ok) return { ...prev, settled: false, reads: 1 };
+  for (let reads = 2; ; reads++) {
+    if (Date.now() - started >= maxMs)
+      return { ...prev, settled: false, reads: reads - 1, waitedMs: Date.now() - started,
+               why: `still moving after ${maxMs}ms — this position is a body in flight, not a place` };
+    await nap(gapMs);
+    const next = await finePosition(agent, opts);
+    if (!next.ok) return { ...next, settled: false, reads };
+    if (next.protocol.x === prev.protocol.x && next.protocol.y === prev.protocol.y)
+      return { ...next, settled: true, reads, waitedMs: Date.now() - started };
+    prev = next;
+  }
 }
 
 /** Did the body actually move between two reads? The receipt, since `arrived` is not one. */
