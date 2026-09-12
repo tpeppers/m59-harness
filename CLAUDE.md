@@ -510,6 +510,7 @@ Wire, kod and the shape of a reply — [`docs/m59-protocol-traps.md`](docs/m59-p
 - The weapon proficiencies are called "mace fighting", "fencing" and "wielding", not what you would guess.
 - `emit(kind, data)` spreads `data` over the event, so a payload field called `kind` silently wins.
 - Looking at a player is `UC_LOOK_PLAYER`, not `BP_LOOK`; a packet nobody parses looks exactly like one nobody sends.
+- An object id is a HANDLE: renumbered on every save, recycled within hours, and `look_at` sometimes answers with the previous call's object carrying its own wrong id.
 - A description REPLACES the look text, clearing is not undoing, and the wire is Latin-1.
 - `PF_*` is an ENUM, not a bitmask: `flags & PF.KILLER` is true for every Dungeon Master.
 - The server's own safety flag already refuses ordinary players and allows murderers — leave it on.
@@ -821,6 +822,46 @@ is the only arrangement in which two people can both use this repository.
   rescued off the prod branch the day before and appeared in this file zero times. The index
   is GENERATED from the header comment every tool already has, so it cannot drift.
   `node tools/m59-index.mjs` rewrites it; `--check` fails a stale one.
+
+- **AN OBJECT ID IS A TEMPORARY HANDLE, NOT A NAME. DO NOT TRUST ONE, ANYWHERE.**
+  Every id the server hands out — an item, a room, a monster, a player — names a *handle to a
+  thing* rather than the thing. Operator, 2026-09-12: *"object IDs are better thought of as
+  temporary handles. They don't even survive a system save."* Four separate ways this has cost
+  us, and they fail in four different directions:
+
+  **They are RENUMBERED on every system save**, alongside garbage collection. `c.room.id` is a
+  live object id, so a post-mortem keyed on `1589` becomes unreadable the moment the server
+  saves: an audit of stall decisions came back grouped as `{6: 29, 1581: 5, 1589: 12}`, which
+  names no room anybody can go and look at. Use `world.room.num` — the map's own number, which
+  does not move.
+
+  **They are COMPARED, and a renumbering reads as movement.** `prev.room === last.room` is half
+  the "has this character moved" test, so a mid-session renumber makes one room look like two,
+  which silently resets the wedge detector — the same shape as the stillness bug that killed
+  Cccc, arriving by a different door.
+
+  **They RECYCLE within hours.** Measured over three days, 23% of stored ids named a DIFFERENT
+  object by the end. A stale id does not merely fail to resolve; it can resolve to somebody
+  else's property, which is worse than an error and looks exactly like success.
+
+  **And a reply can carry the WRONG id in its own `id` field.** Measured on prod 2026-09-12,
+  three rounds of `look_at` against one character's own pack:
+
+      round 1:  ok 8325->8325      ok 8268->8268      ok 8334->8334
+      round 2:  MISMATCH 8325->8334   ok 8268->8268   ok 8334->8334
+      round 3:  ok 8325->8325      MISMATCH 8268->8325   ok 8334->8334
+
+  Each mismatch returned the object the PREVIOUS call ended on — a request/reply correlation
+  race, reproduced independently by two sessions with different items. Two calls in nine, and a
+  single call looks perfectly fine. Anything that reads a description and does not re-check the
+  id it got back is reading another item.
+
+  **So: prefer a name to an id, re-read before you act, and check the id that comes back.** A
+  room is `world.room.num`; a character is its name; an item is a row re-read from `inventory`
+  immediately before use. And an id resolved BEFORE the thing exists names nothing at all —
+  `act` freezes its arguments when a fleetscript's step list is compiled, so a shilling stack
+  id resolved before the withdrawal leg is a reference to an object that does not yet exist.
+  That is what `verify` is for: it is handed `call` at RUN time.
 
 - **A COORDINATE CARRIES ITS UNIT. THERE ARE THREE SPACES AND `FINENESS` NAMES TWO OF THEM.**
   `FINENESS` is **64** in kod (`blakston.khd:1163`) and **1024** in the client
