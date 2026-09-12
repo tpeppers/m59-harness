@@ -28,7 +28,7 @@
 //
 // Nothing here does any I/O. The cache is `m59-storage.mjs`, the choreography is the
 // keeper's town trip, and `m59-guildwants-test.mjs` pins this.
-import { CHEST_BULK_MAX, GUILD_CHEST_SLOTS, chestFullness } from './m59-storage.mjs';
+import { CHEST_BULK_MAX, GUILD_CHEST_SLOTS, chestFullness, parseChestKey, BOOKMAKERS_CHEST_SQUARES } from './m59-storage.mjs';
 import { weighPack } from './m59-items.mjs';
 
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -105,9 +105,16 @@ export function normalisePlan(raw) {
   const problems = [];
   const chests = new Map();
   for (const [key, entry] of Object.entries(raw?.chests ?? {})) {
-    const slot = Number(key);
-    if (!Number.isInteger(slot) || slot < 1 || slot > GUILD_CHEST_SLOTS) {
-      problems.push(`chest ${key} is outside 1..${GUILD_CHEST_SLOTS} and was dropped`);
+    // A CHEST IS NAMED BY ITS SQUARE, like "r18c6". It used to be a slot number 1..4, which
+    // implied a mapping from number to chest — and a mapping has to be learned, can be
+    // learned from too short a reading, and then files one chest's contents under another
+    // chest's name. The square is read off the object every visit, so there is nothing to
+    // learn and nothing to get wrong. GUILD_CHEST_SLOTS survives as a fact about how many
+    // chests a hall may hold; it is no longer an index into anything.
+    const slot = String(key);
+    if (!parseChestKey(slot)) {
+      problems.push(`chest "${key}" is not a square like "r18c6" and was dropped — ` +
+                    `the Bookmaker's hall builds its chests at ${BOOKMAKERS_CHEST_SQUARES.join(', ')}`);
       continue;
     }
     const items = [];
