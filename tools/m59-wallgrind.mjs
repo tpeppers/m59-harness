@@ -16,6 +16,19 @@
 //   CONTACT   The mover asks for a step, the geometry refuses it, and the character stays put.
 //             Repeated against the same square this is a wall being leaned on.
 //
+//             AND IT IS CURRENTLY NEARLY BLIND, WHICH THE READER MUST BE TOLD RATHER THAN LEFT
+//             TO INFER FROM A ZERO. Six hours of prod produced 330 shuffles and ZERO contacts.
+//             That is not a clean road. `m59-roo.mjs` returns `{ blocked: true, slid: moved }`
+//             — the stock client SLIDES along the first blocking wall rather than refusing —
+//             and this detector is fed from `terminalMovement`, which sees only the
+//             collision-contract class. A SLIDE IS NOT A REFUSAL, so ordinary wall contact
+//             never reaches the hook. The rail session measured mean slide fractions of 0.86
+//             on a bad aim against 0.06 on a good one, which is the scale of what is invisible.
+//
+//             Fixing it means a hook at the mover's step result rather than at the terminal
+//             seam. Until then `wall_contact: 0` means NOT MEASURED, and `m59-grinds.mjs` says
+//             so in the report rather than letting the number speak.
+//
 //   SHUFFLE   The character alternates between two or three squares, for ever, going nowhere.
 //             CLAUDE.md has carried the warning for months — *"a stall detector that requires
 //             STILLNESS misses the commonest way to stand still: a two-square shuffle against a
