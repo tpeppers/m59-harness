@@ -10960,6 +10960,9 @@ export class Autopilot {
       closed = this.grind.push({
         at: at.at, room: at.room, row: at.row, col: at.col,
         refused, destination: going.includes(doing) ? (at.room ?? true) : null,
+        // The keeper's own word for what it is up to, so an episode can name the intent it
+        // interrupted rather than only the place. See the note in m59-wallgrind.mjs.
+        doing: doing ?? null,
       });
     } catch { return; }   // instrumentation must never cost the keeper a pass
     const hour = Math.floor(Date.now() / 3600_000);
@@ -10989,6 +10992,7 @@ export class Autopilot {
         recordEvent(this.who(), e.kind, {
           room: e.room, row: e.row, col: e.col, ms: e.ms, samples: e.samples,
           reason: e.reason, squares: e.squares, began: e.began, ended: e.ended,
+          doing: e.doing ?? null,
         });
       } catch { /* a ledger write must never cost the errand */ }
     }

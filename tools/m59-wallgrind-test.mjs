@@ -27,8 +27,8 @@ const eq = (label, got, want) =>
   ok(label, JSON.stringify(got) === JSON.stringify(want), `got ${JSON.stringify(got)}`);
 
 // A sample generator: t is seconds, and every sample is TRAVELLING unless told otherwise.
-const S = (t, row, col, { refused = null, destination = 39, room = 578 } = {}) =>
-  ({ at: t * 1000, room, row, col, refused, destination });
+const S = (t, row, col, { refused = null, destination = 39, room = 578, doing = 'travelling' } = {}) =>
+  ({ at: t * 1000, room, row, col, refused, destination, doing });
 
 console.log('\na wall leaned on, and how long for');
 {
@@ -137,6 +137,40 @@ console.log('\nmoving between walls is two episodes, not one');
   const contacts = out.filter(e => e.kind === 'wall_contact');
   eq('two squares, two episodes', contacts.length, 2);
   eq('and they are the right squares', contacts.map(c => c.col), [1, 2]);
+}
+
+console.log('\nan episode names the intent it interrupted');
+{
+  // WHY THIS FIELD EXISTS. Six hours of prod produced 330 shuffles, 54 of 57 minutes inside the
+  // two farm rooms — and the worst square, 39 r7c27, is geometrically perfect: one floor level
+  // uniform across 256 samples, all eight headings accepted at 64, 256 and 512 units. Not a
+  // cliff, not a ledge, not a wall. The instrument could say WHERE and for HOW LONG and could
+  // not say what the character was trying to do, which is the difference between a description
+  // and a bug report.
+  const tr = makeTracker();
+  for (let t = 0; t < 12; t++) tr.push(S(t, 27, 40 + (t % 2), { doing: 'converging' }));
+  const done = tr.flush(12_000);
+  const sh = done.find(e => e.kind === 'shuffle');
+  eq('a shuffle carries the intent', sh?.doing, 'converging');
+
+  // EVERY INTENT IN THE WINDOW, NOT JUST THE LAST. A loop alternating between two decisions is
+  // the hypothesis the field exists to test, and keeping only the final one would hide it —
+  // which would make the instrument agree with whichever guess the reader arrived with.
+  const tr2 = makeTracker();
+  for (let t = 0; t < 12; t++)
+    tr2.push(S(t, 27, 40 + (t % 2), { doing: t % 2 ? 'converging' : 'travelling' }));
+  const alt = tr2.flush(12_000).find(e => e.kind === 'shuffle');
+  eq('an alternating loop shows BOTH', alt?.doing, 'converging+travelling');
+
+  // Contact episodes carry it too, and take the intent they opened on.
+  const tr3 = makeTracker();
+  for (let t = 0; t < 6; t++) tr3.push(S(t, 3, 3, { refused: 'wall', doing: 'pulling' }));
+  eq('a wall contact carries it', tr3.flush(6_000)[0]?.doing, 'pulling');
+
+  // A sample with no intent must not invent one.
+  const tr4 = makeTracker();
+  for (let t = 0; t < 12; t++) tr4.push(S(t, 27, 40 + (t % 2), { doing: null }));
+  eq('no intent recorded is null, never a guess', tr4.flush(12_000).find(e => e.kind === 'shuffle')?.doing, null);
 }
 
 console.log('\na gap in the samples is a new stream, not a long episode');
