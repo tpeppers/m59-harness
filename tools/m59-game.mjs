@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
-import { describeObject, affordances, OF, blocksMovement, prepareActTarget } from './m59-parse.mjs';
+import { describeObject, affordances, OF, blocksMovement, prepareActTarget, readHealth } from './m59-parse.mjs';
 import { World, spreadEdges, distinctStagesFirst, boundedSilentGo, boundedRegionEntry,
          doorSettleMs, remainingDoorSettle , sameRoomDoorPlan} from './m59-world.mjs';
 import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPath, buildReverseEdges }
@@ -10105,8 +10105,7 @@ class Session {
         // the Twisted Wood on 2026-09-12, and the operator's standing axiom that a non-PVP
         // travel death is a coding defect. This was the defect.
         const vit = c.vitals?.() ?? {};
-        const hp = vit.health?.value ?? vit.health;
-        const max = vit.health?.max ?? vit.maxHealth;
+        const { hp, max } = readHealth(vit);
         if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp / max < restBelow) {
           const before = hp;
           const restStarted = Date.now();
@@ -10125,8 +10124,7 @@ class Session {
             // Same `{ value, max }` read as above. Left as a bare `.health` this broke out of
             // the wait on its first pass, so even a fixed entry condition would have rested
             // for exactly one tick.
-            const hv = c.vitals?.()?.health;
-            const h = hv?.value ?? hv;
+            const { hp: h } = readHealth(c.vitals?.());
             if (!Number.isFinite(h)) break;
             if (h / max >= restBelow) break;
             // LOSING health means something is hitting us and this is not shelter after
@@ -10141,7 +10139,9 @@ class Session {
               ? false : c.stand()).catch(() => null);
           if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
           if (leftTheRoom()) return roomChanged({ late_room_change: true });
-          if ((c.vitals?.()?.health ?? before) > before) {
+          // WAS `(c.vitals()?.health ?? before) > before` — an OBJECT against a number,
+          // so this never fired and every shelter rest reported as no rest at all.
+          if ((readHealth(c.vitals?.()).hp ?? before) > before) {
             rested++;
             restedMs += Date.now() - restStarted;
           }
@@ -11539,7 +11539,7 @@ class Session {
     const healAtAWall = async () => {
       const c = this.need();
       const v = c.vitals?.() ?? {};
-      const hp = v.health?.value ?? v.health, max = v.health?.max ?? v.maxHealth;
+      const { hp, max } = readHealth(v);
       if (!Number.isFinite(hp) || !Number.isFinite(max) || max <= 0) return false;
       if (hp / max >= healBelow) return false;
       const geo = this.world?.geometry;
