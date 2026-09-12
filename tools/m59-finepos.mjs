@@ -131,21 +131,54 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
  * AND IT SAYS WHEN IT DID NOT SETTLE, rather than returning the last read as though it had. A body
  * the keeper is still recovering never settles, and a caller that cannot tell will average a moving
  * body into its measurement.
+ *
+ * ===================================================================================================
+ * AGREEMENT IS NOT ENOUGH: A STALE SNAPSHOT IS STABLE. `fresh` IS THE GATE.
+ *
+ * The first version of this compared two reads and believed them, and a DM teleport walks straight
+ * through that — the keeper keeps serving the PRE-teleport position, unchanged, so two reads agree
+ * perfectly and the body is not there.
+ *
+ * MEASURED, 2026-09-12, teleporting Alfa from r87c59 to r80c51 and polling the keeper:
+ *
+ *     +0ms     r87c59   as_of_ms=128    fresh=false      <- the square it has LEFT
+ *     +100ms   r87c59   as_of_ms=409    fresh=false
+ *     +250ms   r87c59   as_of_ms=803    fresh=false
+ *     +850ms   r87c59   as_of_ms=1397   fresh=false
+ *     +1850ms  r80c51   as_of_ms=0      fresh=true       <- caught up
+ *
+ * So the stale window is over a second, the position in it is rock steady, and the keeper says
+ * `fresh: false` throughout. What it cost: the step bench staged a body, read the old square as its
+ * origin, and asked walkFine for a step relative to it — and walkFine works off the same stale
+ * `c.self`, so the heading was computed from a position the body was no longer at. 86% of cells
+ * "did not move" and one came back with a deflection of PI, having gone exactly opposite to the
+ * heading requested. That is not a mover defect; it is a body aimed from where it used to be.
+ *
+ * Two shapes for one idea again, and the ninth tonight: "the same twice" and "current" are not the
+ * same claim, and only one of them is what a caller means by "where is it".
  */
-export async function settledPosition(agent, { gapMs = 120, maxMs = 3000, sleep = null,
-                                               ...opts } = {}) {
+export async function settledPosition(agent, { gapMs = 120, maxMs = 8000, sleep = null,
+                                               requireFresh = true, ...opts } = {}) {
   const nap = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const started = Date.now();
+  // `fresh` is only a gate when the keeper actually reports it; an older keeper that omits the field
+  // must not be treated as permanently stale, or this never returns against it.
+  const stale = (p) => requireFresh && p.fresh === false;
   let prev = await finePosition(agent, opts);
   if (!prev.ok) return { ...prev, settled: false, reads: 1 };
   for (let reads = 2; ; reads++) {
     if (Date.now() - started >= maxMs)
       return { ...prev, settled: false, reads: reads - 1, waitedMs: Date.now() - started,
-               why: `still moving after ${maxMs}ms — this position is a body in flight, not a place` };
+               why: stale(prev)
+                 ? `the keeper's snapshot is still stale after ${maxMs}ms (as_of_ms ${prev.asOfMs}, ` +
+                   `fresh false) — this is the position it USED to hold, not where the body is`
+                 : `still moving after ${maxMs}ms — this position is a body in flight, not a place` };
     await nap(gapMs);
     const next = await finePosition(agent, opts);
     if (!next.ok) return { ...next, settled: false, reads };
-    if (next.protocol.x === prev.protocol.x && next.protocol.y === prev.protocol.y)
+    // A stale read cannot settle anything, however many times it repeats itself.
+    if (!stale(prev) && !stale(next) &&
+        next.protocol.x === prev.protocol.x && next.protocol.y === prev.protocol.y)
       return { ...next, settled: true, reads, waitedMs: Date.now() - started };
     prev = next;
   }

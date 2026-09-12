@@ -125,6 +125,45 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
   ok(!r.ok && r.settled === false, 'a keeper that does not answer stays a failure');
   eq(r.reads, 1, 'and it did not retry a dead keeper into a timeout');
 }
+{
+  // THE DM-TELEPORT CASE, AND IT IS THE ONE THAT MATTERS. After a teleport the keeper serves the
+  // PRE-teleport position, unchanged, for over a second — measured: r87c59 with as_of_ms climbing
+  // 128 -> 409 -> 803 -> 1397 and `fresh: false`, then r80c51 with as_of_ms 0. Two reads of that
+  // stale window agree perfectly, so agreement alone declared a body settled on a square it had
+  // already left, and every step measured from it was aimed from the wrong origin.
+  const frames = [
+    { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 128, fresh: false },
+    { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 409, fresh: false },
+    { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 803, fresh: false },
+    { self: { x: 1020, y: 1010, row: 80, col: 51 }, as_of_ms: 0, fresh: true },
+    { self: { x: 1020, y: 1010, row: 80, col: 51 }, as_of_ms: 0, fresh: true },
+  ];
+  let i = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
+    fetchState: async () => frames[Math.min(i++, frames.length - 1)] });
+  ok(r.settled, 'it waits through the stale window and settles on the FRESH position');
+  eq(r.square, { row: 80, col: 51 }, '...which is where the body actually is, not where it was');
+  ok(r.reads >= 4, 'having refused to settle on three identical stale reads');
+}
+{
+  // A snapshot that never goes fresh must be reported as stale, and named as such — "still moving"
+  // would send the reader looking for a body in flight when nobody is updating the record at all.
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, maxMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { x: 1100, y: 1100, row: 87, col: 59 },
+                               as_of_ms: 4000, fresh: false }) });
+  eq(r.settled, false, 'a permanently stale snapshot never settles');
+  ok(/USED to hold/.test(r.why), '...and the reason says it is the position it used to hold');
+  ok(!/still moving/.test(r.why), '...and does NOT call a stale record a moving body');
+}
+{
+  // An older keeper that does not report `fresh` must not be treated as permanently stale, or this
+  // would never return against it.
+  let n = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { x: 1100, y: 1100, row: 87, col: 59 }, pid: 7 }) });
+  ok(r.settled, 'a keeper that omits `fresh` still settles on agreement');
+  eq(r.fresh, null, '...with the field reported as unknown rather than invented');
+}
 
 // ---- movedBetween: the receipt, because `arrived` is not one ----------------------------
 {
