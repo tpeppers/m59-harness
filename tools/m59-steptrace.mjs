@@ -42,10 +42,20 @@ export function analyseLeg(reply, { requested = null, from = null } = {}) {
   if (from) points.push({ step: -1, ...from });
   for (const e of log) if (e?.to && Number.isFinite(e.to.x)) points.push({ step: e.step, ...e.to });
 
+  // THE LOG IS SAMPLED, SO A GAP BETWEEN ENTRIES IS NOT ONE STEP.
+  //
+  // walkFine logs notable steps, not every step: a real reply reads `step 0, step 2, step 4`. So
+  // the distance between consecutive ENTRIES covers as many steps as their numbers are apart, and
+  // judging it against one step's worth of travel invents teleports. Measured 2026-09-12: the
+  // first live run of this analyser reported TELEPORTED on four of seven legs, all of them
+  // ordinary walking, because of exactly that. `spanned` is how many steps an entry accounts for.
   const steps = [];
   for (let i = 1; i < points.length; i++) {
     const d = dist(points[i - 1], points[i]);
-    steps.push({ step: points[i].step, gained: Math.round(d),
+    const a = Number(points[i - 1].step), b = Number(points[i].step);
+    const spanned = Number.isFinite(a) && Number.isFinite(b) ? Math.max(1, b - a) : 1;
+    steps.push({ step: points[i].step, gained: Math.round(d), spanned,
+                 perStep: Math.round(d / spanned),
                  slid: Number(log.find((e) => e.step === points[i].step)?.slid ?? 0) || 0,
                  at: { x: points[i].x, y: points[i].y, col: points[i].col, row: points[i].row } });
   }
@@ -60,7 +70,8 @@ export function analyseLeg(reply, { requested = null, from = null } = {}) {
     seen.set(k, (seen.get(k) ?? 0) + 1);
   }
   const revisits = [...seen.values()].filter((n) => n > 1).reduce((n, v) => n + v - 1, 0);
-  const teleports = steps.filter((s) => s.gained > MAX_PLAUSIBLE_STEP);
+  // Judged PER STEP, not per log entry — see the note on sampling above.
+  const teleports = steps.filter((s) => s.perStep > MAX_PLAUSIBLE_STEP);
 
   return {
     arrived: reply?.arrived ?? null, reason: reply?.reason ?? null,
@@ -87,8 +98,8 @@ export function verdictOf(a, { blockedTravelled = 128, grindWaste = 256, slowAbo
     return { verdict: 'unknown', why: 'the reply carried no usable step log — nothing to read' };
   if (a.teleports.length)
     return { verdict: 'TELEPORTED', why: `${a.teleports.length} step(s) covered more than ` +
-             `${MAX_PLAUSIBLE_STEP} client units, which a walk cannot: a fall, or another writer ` +
-             `moved the body mid-leg` };
+             `${MAX_PLAUSIBLE_STEP} client units EACH, which a walk cannot: a fall, or another ` +
+             `writer moved the body mid-leg` };
   // ORDER MATTERS AND THE TESTS SETTLED IT. `BLOCKED` means the body COULD NOT MOVE — travelled
   // almost nothing, whatever its efficiency ratio says. `GRINDING` means it moved plenty and
   // arrived nowhere. The first cut checked efficiency first, so an out-and-back leg that covered

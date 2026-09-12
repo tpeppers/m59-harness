@@ -76,6 +76,28 @@ eq(PROTOCOL_TO_CLIENT, 16, 'protocol to client is x16');
   ok(a.steps[0].gained > MAX_PLAUSIBLE_STEP, 'because the gain exceeds one tick of run pace');
 }
 {
+  // A SAMPLED LOG IS NOT A TELEPORT. walkFine logs notable steps only — a real reply reads
+  // `step 0, 2, 4` — so the gap between entries covers several steps. The first live run of this
+  // analyser called four of seven ordinary walking legs TELEPORTED for exactly this reason.
+  const a = analyseLeg({ log: [{ step: 0, slid: 0.35, to: at(1000, 1000) },
+                               { step: 20, slid: 0.35, to: at(1200, 1000) }] },
+                       { requested: 4096, from: at(1000, 1000) });
+  eq(a.steps[1].spanned, 20, 'the entry accounts for twenty steps');
+  eq(a.steps[1].gained, 3200, 'which covered 3200 client units in total');
+  eq(a.steps[1].perStep, 160, '...that is 160 per step — well inside run pace');
+  eq(a.teleports.length, 0, 'so it is NOT a teleport');
+  ok(verdictOf(a).verdict !== 'TELEPORTED', 'and the verdict says something useful instead');
+}
+{
+  // ...but a genuine jump inside ONE step still is.
+  const a = analyseLeg({ log: [{ step: 0, slid: 0, to: at(1000, 1000) },
+                               { step: 1, slid: 0, to: at(1100, 1000) }] },
+                       { requested: 512, from: at(1000, 1000) });
+  eq(a.steps[1].spanned, 1, 'one step');
+  ok(a.steps[1].perStep > MAX_PLAUSIBLE_STEP, 'that covered more than run pace allows');
+  eq(verdictOf(a).verdict, 'TELEPORTED', 'is still a teleport');
+}
+{
   // BLOCKED needs BOTH low efficiency and little net movement, or a long messy-but-productive
   // leg would be mislabelled.
   const log = [];

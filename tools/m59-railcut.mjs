@@ -98,6 +98,82 @@ export function cutRail(body, goal, { edge, bounds, floorAt, lattice = LATTICE }
 }
 
 /**
+ * THE FURTHEST WAYPOINT WHOSE STRAIGHT CHORD FROM HERE IS ACTUALLY WALKABLE.
+ *
+ * A walker sent to an aim point travels in a STRAIGHT LINE. The rail is a sequence of validated
+ * lattice steps, which says nothing about whether the chord across several of them is walkable — and
+ * on real ground it usually is not. So `maxDeviation` heuristics are guessing at a question the
+ * geometry can simply be asked.
+ *
+ * MEASURED, and this is why it matters. Seven legs on room 49's rail, aims bounded by a 256-unit
+ * chord-deviation heuristic: 29,497 client units travelled for 4,607 net — EIGHTY-FOUR PER CENT
+ * wasted — 136 revisited points, and a mean of 0.86 of every step SLIDING. move.c slides along the
+ * first blocker rather than refusing, so a slid step is the body scraping a wall. The lattice path
+ * was legal at every step and the chords across it were not.
+ *
+ * Asking costs one trace per candidate and the candidates are few, against a leg that costs six
+ * seconds and can waste 84% of its travel.
+ *
+ * Binary search would be wrong here: walkability along a rail is not monotonic — a chord to
+ * waypoint 20 can be clear while the chord to 12 is blocked — so this walks outward and keeps the
+ * last CONTIGUOUSLY reachable one, which is the only claim it can honestly make.
+ */
+/**
+ * IS THIS STRAIGHT LINE WALKABLE — asked by STEPPING it, because one long call is not an answer.
+ *
+ * MEASURED 2026-09-12, and it invalidated the first version of `furthestTraceable` entirely. From
+ * (17584,23296) in room 49, a 3300-unit chord to the south-east:
+ *
+ *     whole-line traceFineMoveClient(from, to)   ACCEPT
+ *     the same line stepped in 64-unit pieces    1 of 51 accepted, refused at piece 2
+ *
+ * So a single trace over a long span does not examine the middle, and every "traceable chord" the
+ * first version claimed was vacuous — which is exactly why the mover could not walk chords this
+ * tool had approved. The mover steps; so must the check.
+ *
+ * The cost is one trace per lattice-length piece, microseconds each, against a leg that takes six
+ * seconds and can waste 84% of its travel.
+ */
+export function chordWalkable(a, b, { edge, lattice = LATTICE } = {}) {
+  const d = Math.hypot(b.x - a.x, b.y - a.y);
+  const n = Math.max(1, Math.ceil(d / lattice));
+  for (let k = 1; k <= n; k++) {
+    const p = { x: a.x + (b.x - a.x) * (k - 1) / n, y: a.y + (b.y - a.y) * (k - 1) / n };
+    const q = { x: a.x + (b.x - a.x) * k / n,       y: a.y + (b.y - a.y) * k / n };
+    if (!edge(p, q)) return { ok: false, refusedAt: k, of: n, distance: Math.round(d) };
+  }
+  return { ok: true, of: n, distance: Math.round(d) };
+}
+
+export function furthestTraceable(waypoints, body, { edge, fromIndex = 0, maxAhead = 64,
+                                                     budget = Infinity, lattice = LATTICE } = {}) {
+  if (!Array.isArray(waypoints) || waypoints.length === 0 || typeof edge !== 'function') return null;
+  const last = waypoints.length - 1;
+  const start = Math.max(0, Math.min(fromIndex, last));
+  let best = null;
+  for (let i = start + 1; i <= Math.min(last, start + maxAhead); i++) {
+    const w = waypoints[i];
+    const d = Math.hypot(w.x - body.x, w.y - body.y);
+    if (d > budget) break;
+    // STEPPED, not a single call over the whole chord — see chordWalkable.
+    if (!chordWalkable(body, w, { edge, lattice }).ok) break;   // contiguity: stop at the first gap
+    best = { i, x: w.x, y: w.y, f: w.f, dist: Math.round(d), spanned: i - start };
+  }
+  // Nothing ahead is chord-reachable. The next waypoint is one validated lattice step, so it is the
+  // honest fallback — and saying WHY matters, because "the chord to the next waypoint is blocked"
+  // is a much stronger statement than "the leg was short".
+  if (!best) {
+    const i = Math.min(start + 1, last);
+    const w = waypoints[i];
+    return { i, x: w.x, y: w.y, f: w.f, spanned: i - start,
+             dist: Math.round(Math.hypot(w.x - body.x, w.y - body.y)),
+             fallback: true,
+             why: 'no chord from here to any waypoint ahead is walkable; aiming one lattice step' };
+  }
+  return best;
+}
+
+/**
  * Verify a rail AT THE GRANULARITY THE FLOOD USED, never finer.
  *
  * A leg that IS one lattice step was already validated by the flood. Splitting it into two 45-unit
