@@ -31,6 +31,20 @@
 // `say(..., { to })` is a movement step for exactly this reason — it walks into earshot first.
 // That fact cost this repository a month on the guild rent balance; it is not going to cost it
 // an evening on teeth.
+// HE RUNS OUT, AND SIX TEETH IS THE WHOLE VISIT. Measured on prod 2026-09-12, first live
+// run: Gonzo said the word and bought at rounds 1, 2 and 3 — `+2/2` each — and round 4
+// answered "nothing entered the pack". 1,950 shillings for six teeth, and then the counter is
+// dry however many more times you say it.
+//
+// So `rounds` is a CEILING and not an order, and the stopping is the ordinary step failure
+// rather than anything clever: the empty round fails its `shop` check, the errand unwinds, and
+// only the `always` steps run — which is why the walk home is one of them. An operator asking
+// for 10,000 shillings of teeth (about thirty, at 325 each) cannot have them from one visit.
+//
+// THAT IS THE ARGUMENT FOR FARMING THEM. An orc drops one on a 40% roll (orctres.kod:32) and
+// room 27 is half orcs, so a station there out-supplies every counter in the world put
+// together — see the orc school in prod-weaponcraft-training.jsonc. Buying is the bootstrap
+// that gets the first casts done; it is not the supply.
 import { walk, bank, shop, say, verify } from '../m59-fleetscript.mjs';
 
 export const script = {
