@@ -671,16 +671,40 @@ export async function packConfirmed(agent, opts = {}) {
 //
 // Keyed by room number; the value is what an operator needs to hear.
 export const KNOWN_TRAPS = Object.freeze({
-  // 2026-09-04: three characters spent hours shuffling two squares here on the castle
-  // patrol's route. The baked map offers three ways out (south 589, east 598, north 2 to
-  // Outside Castle Victoria) and a region flood from their square says all three are
-  // reachable. Their own keepers reported ONE — `exits: [{to: 589, direction: "south"}]` —
-  // and the operator's word is that going back up needs a Relic of Qor and a spoken phrase.
-  // So the north exit our router kept planning through does not exist for us, and a walk
-  // aimed at it never ends.
-  599: 'Ukgoth, Holy Land of Trolls — leaving northward to Castle Victoria needs a Relic of ' +
-       'Qor and a spoken phrase. The baked map offers three exits and only the SOUTH one ' +
-       '(to 589) is real for us; a plan through the north exit walks for ever.',
+  // ROOM 599 WAS THE FIRST ENTRY IN THIS LIST AND HAS BEEN REMOVED, 2026-09-12, because it
+  // was wrong on its own terms.
+  //
+  // What it claimed: "leaving northward to Castle Victoria needs a Relic of Qor and a spoken
+  // phrase ... a plan through the north exit walks for ever." Two things stand against that
+  // and neither is an opinion:
+  //
+  //   * THE NORTH EXIT WORKS, AND IT IS A JUMP. It is declared in our own
+  //     substrate/m59-falljumps.json — 599 r36c16 -> r38c10, kind `fall`, requires running,
+  //     noted there as "the notorious Ukgoth cliff jump ... the ONLY doorway to Outside
+  //     Castle Victoria is at row 1, col 27, on the cliff top this reaches". The Relic is for
+  //     climbing back after MISSING the jump, not for taking it. The entry above was written
+  //     against a keeper that reported one exit, which is a fact about what that keeper could
+  //     see, not about the room.
+  //   * Operator, 2026-09-12: Ukgoth is navigable, always, including by a 20-max-health mule.
+  //
+  // AND THE CATEGORY ITSELF IS SUSPECT, WHICH MATTERS MORE THAN THE ENTRY.
+  //
+  // `unreachable` is already inadmissible as a verdict in this repository, because it is a
+  // fact about m59-falljumps.json rather than about the world. A NON-PVP "trap" is the same
+  // move one level up: it takes a defect in our routing or our travel rules and writes it
+  // down as geography, and once it is geography nobody looks for the defect again.
+  //
+  // Measured the day this was removed: eleven deaths in fifteen minutes, four of them in 599
+  // to five and six trolls, WHILE THIS ENTRY WAS IN FORCE. The list did not save anybody. It
+  // just stopped the question being asked. The actual cause was a shelter-rest in rideTrack
+  // that had never once executed — it read vitals as two numbers when they are `{value,max}`
+  // — so a hurt character crossing troll country simply kept walking. That is fixed in
+  // m59-game.mjs, and it is the mechanism the operator means by "monsters can always be
+  // outsmarted if the routing and travel rules are correct".
+  //
+  // THE BAR FOR A NEW NON-PVP ENTRY HERE: name the mechanism, show it is about the WORLD and
+  // not about our model of it, and say what would falsify it. PVP is different and always
+  // was — a person choosing to camp a room is not a routing bug and cannot be fixed by one.
   // CORRECTED 2026-09-10, THE SAME NIGHT IT WAS ADDED, AND THE FIRST VERSION WAS WRONG.
   //
   // I entered this as "characters walk IN and cannot walk OUT" after eleven refused

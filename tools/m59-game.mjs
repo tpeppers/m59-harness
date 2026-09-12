@@ -10083,8 +10083,30 @@ class Session {
         // feature a silent no-op. Polled rather than slept through, because the reason to
         // be here is that something may be hitting us: it stops the moment health stops
         // climbing, and stands up before walking on so the next leg is not crawled.
+        // VITALS ARE `{ value, max }`, NOT TWO NUMBERS — and reading them as two numbers is
+        // how this entire block sat here doing nothing since the day it was written.
+        //
+        // It used to be `const hp = vit.health, max = vit.maxHealth`. `vit.health` is an
+        // OBJECT, so `Number.isFinite(hp)` is false; `vit.maxHealth` does not exist at all,
+        // so `max` was undefined. The `if` below could therefore never be true, the rest
+        // never happened, and the loop's own `c.vitals()?.health` read had the same fault and
+        // would have broken on its first pass had it ever got there. `onTrackRest` hangs off
+        // this, so the fleet's travel-shelter telemetry has been honestly reporting zero.
+        //
+        // The correct read is thirty lines away in this same file (`v.health?.value ??
+        // v.health`), which is what makes this the expensive kind of bug: nothing was
+        // missing, the two halves simply never met. Same shape as the `status` two-shapes
+        // trap in CLAUDE.md.
+        //
+        // WHY IT MATTERS MORE THAN IT LOOKS. This is the mechanism that makes a travel death
+        // unnecessary: stand on a square something measured as hard to reach, sit, let health
+        // come back, stand up and walk on. With it dead, a hurt character crossing troll
+        // country simply keeps walking — which is 11 deaths in 15 minutes through Ukgoth and
+        // the Twisted Wood on 2026-09-12, and the operator's standing axiom that a non-PVP
+        // travel death is a coding defect. This was the defect.
         const vit = c.vitals?.() ?? {};
-        const hp = vit.health, max = vit.maxHealth;
+        const hp = vit.health?.value ?? vit.health;
+        const max = vit.health?.max ?? vit.maxHealth;
         if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp / max < restBelow) {
           const before = hp;
           const restStarted = Date.now();
@@ -10100,7 +10122,11 @@ class Session {
             await new Promise(r => setTimeout(r, 2000));
             if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
             if (leftTheRoom()) return roomChanged({ late_room_change: true });
-            const h = c.vitals?.()?.health;
+            // Same `{ value, max }` read as above. Left as a bare `.health` this broke out of
+            // the wait on its first pass, so even a fixed entry condition would have rested
+            // for exactly one tick.
+            const hv = c.vitals?.()?.health;
+            const h = hv?.value ?? hv;
             if (!Number.isFinite(h)) break;
             if (h / max >= restBelow) break;
             // LOSING health means something is hitting us and this is not shelter after
