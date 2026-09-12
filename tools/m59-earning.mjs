@@ -106,23 +106,40 @@ export function ledger(fleet = 'prod', { root = 'substrate/history', days = 3 } 
 /**
  * WHAT ONE CHARACTER HAS EARNED, AND WHAT IT HAS LOST.
  *
- * `net_levels` is the number this was built for. A character that dies a lot and climbs back is
- * a different emergency from one whose max health only ever goes down, and nothing on any board
- * distinguishes them — both show deaths.
+ * `net_levels` is the number this was built for. A character that dies a lot and climbs back
+ * is a different emergency from one whose max health only ever goes down, and nothing on any
+ * board distinguishes them — both show deaths.
  *
- * AN ESTABLISHED CHARACTER LOSES ONE LEVEL PER DEATH, AND THAT SENTENCE NEEDS ITS ADJECTIVE.
- * `Killed()` sets piDeathCost to 100 every death and the roll sits in the branch taken when
- * PFLAG_TUTORIAL is SET — which means GRADUATED, not "in the tutorial" — so for a grown
- * character the dice are decorative at the default rate. The recent ledger agrees exactly:
- * 36 deaths and 36 level losses across the valley cohort on 2026-09-11.
+ * A `level_lost` ROW IS A SAMPLED DIFF, NOT A DEATH, AND THAT DECIDES HOW IT MAY BE USED.
  *
- * IT IS NOT UNIVERSAL AND THIS FILE MUST NOT IMPLY THAT IT IS. Parsed across the whole ledger
- * rather than a recent window the ratio moves: 2026-09-01 is 49 deaths against 9 level losses,
- * consistent with the ungraduated branch (piDeathCost/3, losing nothing) but NOT tested. Some
- * days also run ABOVE 1.0, which deaths alone cannot produce — either level_lost has a second
- * source or a day boundary splits a death from its row. Both are open questions, so net_levels
- * is reported as what it is, a count of two row kinds, and the verdict says "max health only
- * goes down for this one" rather than claiming to know why. Peer correction, 2026-09-12.
+ * There is exactly one emitter (m59-ledger.mjs:186) and it consults nothing about dying:
+ *
+ *     if (now.level !== was.level)
+ *       recordEvent(name, now.level > was.level ? 'level_up' : 'level_lost', {from, to, room})
+ *
+ * Level IS base max health, so the loss is real — but the TIMESTAMP is when the sampler
+ * noticed, not when it happened. Measured across 718 rows: 63% have a death within 5 minutes,
+ * 80% within an hour, and the median lag is 5.0 minutes, which is exactly the sample interval.
+ * The row is systematically one poll behind. The p90 is 704 minutes, because a character
+ * nobody polls — keeper down, logged out — has its diff land whenever sampling resumes.
+ *
+ * TWO THINGS THAT WOULD HAVE MADE THIS UNUSABLE AND ARE MEASURED NOT TO BE. Sampler flicker:
+ * zero — not one level_lost is followed by a level_up within five minutes, so these are real
+ * losses and not noise bouncing back. Fleet-wide recomputation: two windows in the whole
+ * ledger have four or more characters, 10 rows, 4% — not the story either. 7% of rows have no
+ * death within six hours and are unexplained; candidates are a `died` row that failed to
+ * write, a max-health change from something other than death, or a long unsampled gap.
+ *
+ * SO: COUNT THEM PER CHARACTER, NEVER JOIN THEM BY TIME. `levels_lost` and `levels_gained`
+ * are whole-ledger totals on purpose — a row landing one poll late still lands on the right
+ * character with the right magnitude, so netting survives the lag. Putting them in a window
+ * would not: a death near midnight writes its row into the NEXT day's file, which is exactly
+ * what produced per-day death:loss ratios above 1.0 and sent two sessions looking for a second
+ * source that does not exist. Do not correlate a level loss with what the character was doing
+ * when the row was written, and do not attribute one to a window narrower than a few hours.
+ * `deaths_by_window` IS windowed, and may be, because `died` rows are written in real time.
+ *
+ * Peer measurement, 2026-09-12.
  */
 export function earningFor(rows, who, { now = Date.now(), windows = [1, 6, 12, 24] } = {}) {
   const mine = rows.filter(r => rowIsFor(r, who));
@@ -144,6 +161,9 @@ export function earningFor(rows, who, { now = Date.now(), windows = [1, 6, 12, 2
     // Null, not Infinity, and not 0. "Never killed anything in this window" and "killed
     // something a moment ago" must not both round to a number an alert can compare.
     hours_since_kill: lastKill ? +((now - lastKill) / HOUR).toFixed(2) : null,
+    // WHOLE-LEDGER TOTALS, NOT WINDOWED, AND THAT IS NOT AN OVERSIGHT — see the note above.
+    // These rows are sampled diffs whose timestamps lag the event by a poll (median 5.0m, p90
+    // 704m), so they are sound per character and unsound per time window.
     levels_lost: lost.length,
     levels_gained: up.length,
     net_levels: up.length - lost.length,

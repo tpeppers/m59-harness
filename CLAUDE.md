@@ -863,6 +863,28 @@ is the only arrangement in which two people can both use this repository.
   id resolved before the withdrawal leg is a reference to an object that does not yet exist.
   That is what `verify` is for: it is handed `call` at RUN time.
 
+- **ADDING A FIELD TO A PAYLOAD IS A THREE-FILE CHANGE, BECAUSE `KeeperProxy` REBUILDS
+  RATHER THAN SERIALIZES.** Two places turn a client object into a tool's reply — the
+  broker's own serializer and `m59-keeper-process.mjs` — and a third, `KeeperProxy` in
+  `m59-broker.mjs`, RECONSTRUCTS a client object out of the keeper's `/state` snapshot by
+  naming each field explicitly. Anything not named there is dropped, silently.
+
+  **Every character on prod is keeper-backed, so that rebuild is the path `inventory`,
+  `status`, `equipment` and `abilities` actually take for all twenty-three of them.** A
+  field added to the two serializers and not to the rebuild is therefore live in the two
+  places nothing reads and absent from the one place everything does. 2026-09-12: `rarity`
+  — the grade that says an item is unidentified — was added to both serializers, and
+  `m59-reveal.mjs sweep` answered "nothing in the fleet reads unidentified" while the
+  keeper's own `/state`, read thirty seconds earlier, showed an unidentified wand and mace
+  in Rizzo's pack. The comment directly above the rebuild already states the invariant —
+  *"every reader downstream is written against a real client object and must not be able to
+  tell which side produced it"* — and the field list under it had not kept up with it.
+
+  So: **verify a new field through the BROKER on a keeper-backed character, never only
+  through the keeper.** Reading it back from `/state` proves the half that was never in
+  doubt. This is the same family as [`status` having two shapes](docs/m59-keeper.md) and as
+  an object id that names a different object: a value that looks present and is not.
+
 - **A COORDINATE CARRIES ITS UNIT. THERE ARE THREE SPACES AND `FINENESS` NAMES TWO OF THEM.**
   `FINENESS` is **64** in kod (`blakston.khd:1163`) and **1024** in the client
   (`clientd3d/drawdefs.h:42`) — the same identifier, 16x apart. The wire also subtracts one
