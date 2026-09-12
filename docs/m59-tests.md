@@ -812,6 +812,40 @@ the records it describes.
   whatever passed through a session, including the roster that is the only copy of twenty-three
   account passwords, so a row is asserted to be exactly `file,hits,mtime,session,system` and the
   planted secret is asserted absent from the whole serialized result) and
+  `node tools/m59-wallgrind-test.mjs` (36 — **grinding against a wall, as EPISODES rather than
+  ticks**. Operator: *"are units just grinding against walls for hours?"* — and nothing in 651
+  tools could answer it, because everything recorded about being stuck is a POINT EVENT.
+  `m59-stucks.mjs` counts `stuck_backed_up` firings per square, which is "how often"; forty
+  bounces in a minute and forty minutes of unbroken contact produce the same count and want
+  completely different fixes. **The shuffle half is the one nothing could see at all**: CLAUDE.md
+  has warned for months that "a stall detector that requires STILLNESS misses the commonest way
+  to stand still: a two-square shuffle against a wall resets it on every sample", and a search of
+  every tool for "oscillat" returned ZERO — a documented blind spot with no instrument. Two of
+  these assertions were written against defects the suite then found. **Distinct squares is the
+  WRONG discriminator**: a character moving one square every three samples shows two or three in
+  any six-sample window, exactly like a shuffle, so honest slow progress was flagged; the test is
+  now REVISITS, since a simple path through k squares has exactly k-1 transitions and every
+  return adds one. And **a gap in the samples is a new stream**, found by the end-to-end check
+  rather than a unit test — keepers restart about once a minute and passes block for twenty
+  seconds, and carrying the ring across the silence dated a ninety-second shuffle as FIFTY
+  MINUTES, in the one number the tool exists to produce. Also pins that a character with no
+  destination is RESTING and never grinding, because an inn and a wedge look identical to a
+  position sampler and flagging the inn is how an instrument earns its way into being switched
+  off) and
+  `node tools/m59-scratch-test.mjs` (26 — **FleetScratch's retention contract, which is the half
+  that can silently destroy evidence**. Every other defect here shows up as a missing number;
+  this one shows up as a recording that is not there, at the moment somebody goes looking, with
+  no way to tell pruned from never-written. So the three rules are asserted rather than
+  documented: `--dry` deletes NOTHING, the `keep/` half survives a year-old prune, and the
+  aggregates survive a total one. **The retention split is the whole design and it argues with
+  the operator's own brief**: fine data expiring at 24h is right, but the stated goal was to
+  "look back at historical movement code through newer analysis lenses", and a window that drops
+  everything after a day cannot answer a question asked next month. So aggregates never expire
+  and every one is keyed by the `#movement` epoch that produced it — the same mechanism the
+  exit-gap book uses, because a counter spanning a rewrite of the mover is a monument rather
+  than a measurement. The epoch is stamped at WRITE time, since reading it later would label old
+  evidence with today's mover, silently, in the direction that makes two incomparable things
+  look comparable) and
   `node tools/m59-roo-test.mjs` (74, with raw-room checks skipping without a copy of the game's
   `resource/rooms`). The rest need a live server —
   `m59-autopilot-test`, `m59-skills-test` and `m59-coop-test` all want a broker on

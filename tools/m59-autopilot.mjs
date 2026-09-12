@@ -52,6 +52,7 @@ import { arenaCall } from './m59-chatter.mjs';
 import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
 import { detailSettings, recordStrategyStat, saveVaultSnapshot }
@@ -1865,6 +1866,19 @@ export class Autopilot {
     // wound without a second poll.
     this.lastError = null;
     this.lastErrorAt = null;
+    // ARE WE GRINDING AGAINST A WALL, AND FOR HOW LONG. Fed from `pulsePosition` so it sees the
+    // same samples every other movement question here sees -- two instruments describing two
+    // different walks is the failure `trackSinceFull` is commented against, and this would be
+    // a third walk if it sampled on its own timer.
+    //
+    // Closed episodes go to the ledger as `wall_contact` / `shuffle`; `m59-grinds.mjs` reads
+    // them back. NOTHING IS EMITTED UNTIL AN EPISODE ENDS, because an episode without a
+    // duration is the point event this exists to replace.
+    this.grind = makeGrindTracker();
+    // The mover's own refusal, parked here by `terminalMovement` and consumed by the next
+    // pulse. One field rather than a queue: the pulse is a second wide and the question is
+    // "was this sample refused", not "how many times" -- the episode counts those.
+    this.grindRefusal = null;
     // Where the pass last gave up walking from, and until when. See `answerWedge`.
     this.wedgeHold = null;
     // Was the session live when it threw? `false` during a breakout window is the
@@ -8978,6 +8992,13 @@ export class Autopilot {
   // and surface the recovery action to the controller.
   terminalMovement(result, context, detail = {}) {
     if (!isTerminalMovementReason(result?.reason)) return null;
+    // EVERY KEEPER MOVEMENT PATH COMES THROUGH HERE, which is why the grind tracker is fed
+    // from this seam rather than from each caller. It sees the TERMINAL class only -- the
+    // collision-contract refusals -- so `wall_contact` today means "the geometry said no",
+    // not "any step that failed". Ordinary refusals (a body in the way, a door wanting the
+    // exact square) do not pass through this function and are not yet counted; the shuffle
+    // half needs no refusal at all and sees everything.
+    this.grindRefusal = result.reason;
     this.stalledSince ??= Date.now();
     this.stalledWhy = `${context} stopped: ${result.reason}`;
     // This writes the stall directly rather than through noProgress, so it has to name its
@@ -10864,6 +10885,40 @@ export class Autopilot {
     return Number.isFinite(now) && Number.isFinite(before) && now < before;
   }
 
+  // ONE SAMPLE INTO THE GRIND TRACKER, AND THE TWO JUDGEMENT CALLS IT MAKES.
+  //
+  // `destination` is what separates grinding from resting. A character in an inn, or holding a
+  // safe wall on purpose, is stationary and CORRECT -- both look identical to a position
+  // sampler, and flagging them is how an instrument earns its way into being switched off. The
+  // keeper already knows the difference and calls it `doing`, so that is what is used: the
+  // GOING states mean it is trying to get somewhere, anything else means it is not.
+  //
+  // The refusal is CONSUMED, not merely read. Leaving it set would make one refused step look
+  // like an unbroken contact for as long as the character stood there, turning a two-second
+  // scrape into an hour-long episode -- the exact over-reporting that would make the report
+  // worthless for the question it was built for.
+  trackGrind(at, doing, going) {
+    if (!this.grind) return;
+    const refused = this.grindRefusal; this.grindRefusal = null;
+    let closed = [];
+    try {
+      closed = this.grind.push({
+        at: at.at, room: at.room, row: at.row, col: at.col,
+        refused, destination: going.includes(doing) ? (at.room ?? true) : null,
+      });
+    } catch { return; }   // instrumentation must never cost the keeper a pass
+    for (const e of closed) {
+      // Sub-second episodes are rounding, not evidence.
+      if (!(e.ms >= 1000)) continue;
+      try {
+        recordEvent(this.who(), e.kind, {
+          room: e.room, row: e.row, col: e.col, ms: e.ms, samples: e.samples,
+          reason: e.reason, squares: e.squares, began: e.began, ended: e.ended,
+        });
+      } catch { /* a ledger write must never cost the errand */ }
+    }
+  }
+
   pulsePosition(now, hp) {
     const w = this.watch, c = this.s?.client, me = c?.self;
     if (!w) return null;
@@ -10900,6 +10955,7 @@ export class Autopilot {
       // Fed from the same sample rather than from its own timer: this has to agree with the
       // pulses exactly, or two instruments will describe two different walks.
       this.trackSinceFull(at, hp);
+      this.trackGrind(at, doing, GOING);
     }
 
     // A DRIVER THAT HAS STOPPED MOVING THE CHARACTER IS NOT DRIVING IT.

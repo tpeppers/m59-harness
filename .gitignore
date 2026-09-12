@@ -648,3 +648,15 @@ _verify2.mjs
 # This machine's tally of what the fleet keeps getting stuck on — an observation
 # about THIS fleet, not a fact about the game. m59-stuck.mjs appends to it.
 /substrate/stuck-tally.jsonl
+
+# FLEETSCRATCH — recordings of THIS machine's fleet, and never the repository's.
+#
+# Position traces, wall-grind episodes and jam captures all name characters and describe one
+# afternoon on one server, which is the same argument that keeps `substrate/loadouts/` out:
+# a clone that carried it would be handing a stranger somebody else's fleet. The aggregates
+# beside them are small but keyed to this machine's rooms, so they go too.
+#
+# A recording worth keeping for ever is REDACTED and promoted into `tools/fixtures/` by hand —
+# `m59-recordjam.mjs` already does exactly that, turning every player into `player A` so the
+# file becomes a test case rather than a diary.
+/substrate/scratch/
