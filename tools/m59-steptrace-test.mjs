@@ -107,6 +107,58 @@ eq(PROTOCOL_TO_CLIENT, 16, 'protocol to client is x16');
   ok(verdictOf(a).verdict !== 'BLOCKED', 'is not called BLOCKED just because its steps slid');
 }
 
+// ---- AN EMPTY LOG WITH REFUSALS IS THE GUARD SPEAKING ----------------------------------
+{
+  // The real shape, twenty of twenty-two legs on 2026-09-12: no log at all, and seventy-plus
+  // shelf refusals. Scoring that as "unknown" discards the loudest signal in the reply.
+  const a = analyseLeg({ arrived: false, reason: 'ran out of steps', log: [],
+                         shelf_refusals: 72, dest_floor: 6144 },
+                       { requested: 3399, from: at(1170, 1520, 18, 23) });
+  eq(a.stepsMeasured, 0, 'nothing was measured, because no step was taken');
+  eq(a.shelfRefusals, 72, 'but the refusal count is there');
+  const v = verdictOf(a);
+  eq(v.verdict, 'GUARD-REFUSED', 'so the verdict names the guard, not ignorance');
+  ok(/the AIM is what needs fixing/.test(v.why), 'and points at the aim rather than the mover');
+}
+{
+  // No log AND no refusals really is unknown — the distinction has to survive.
+  const a = analyseLeg({ arrived: false, reason: 'ran out of steps', log: [] }, { requested: 1024 });
+  eq(verdictOf(a).verdict, 'unknown', 'an empty log with no refusals stays unknown');
+}
+{
+  // Zero refusals explicitly reported is still not a guard refusal.
+  const a = analyseLeg({ log: [], shelf_refusals: 0 }, { requested: 1024 });
+  eq(verdictOf(a).verdict, 'unknown', 'shelf_refusals: 0 is not the guard speaking');
+}
+
+// ---- BLOCKED IS RELATIVE TO THE REQUEST ------------------------------------------------
+{
+  // A STEP-MODE LEG. It asked for 64 client units and travelled 35 of them — slow and scraping,
+  // but not "could not move at all". An absolute 128-unit floor called 39 of 49 such legs BLOCKED.
+  const a = analyseLeg({ arrived: true, log: [{ step: 0, slid: 0.35, to: at(1000, 1000) },
+                                              { step: 1, slid: 0.35, to: at(1002, 1000) }] },
+                       { requested: 64, from: at(1000, 1000) });
+  eq(a.travelled, 32, 'it travelled 32 client units');
+  ok(verdictOf(a).verdict !== 'BLOCKED',
+     'against a 64-unit request that is not BLOCKED — half the leg is not immobility');
+}
+{
+  // The SAME 32 units against a 3400-unit request IS blocked.
+  const a = analyseLeg({ arrived: false, reason: 'ran out of steps',
+                         log: [{ step: 0, slid: 0.35, to: at(1000, 1000) },
+                               { step: 1, slid: 0.35, to: at(1002, 1000) }] },
+                       { requested: 3400, from: at(1000, 1000) });
+  eq(verdictOf(a).verdict, 'BLOCKED', 'the same travel against a long request is BLOCKED');
+  ok(/against 3400 requested/.test(verdictOf(a).why), 'and the reason names both numbers');
+}
+{
+  // With no request to compare against, the absolute floor still applies — it is the only
+  // information available, and abstaining entirely would be worse.
+  const a = analyseLeg({ log: [{ step: 0, slid: 0.35, to: at(1000, 1000) },
+                               { step: 1, slid: 0.35, to: at(1001, 1000) }] }, {});
+  eq(verdictOf(a).verdict, 'BLOCKED', 'no request falls back to the absolute floor');
+}
+
 // ---- abstaining is a real answer -------------------------------------------------------
 {
   const a = analyseLeg({ arrived: false, reason: 'ran out of steps' }, { requested: 1024 });

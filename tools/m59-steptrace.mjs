@@ -94,7 +94,19 @@ export function analyseLeg(reply, { requested = null, from = null } = {}) {
  * returned rather than guessed — a verdict that cannot abstain will label noise.
  */
 export function verdictOf(a, { blockedTravelled = 128, grindWaste = 256, slowAbove = 0.8 } = {}) {
-  if (!a || a.stepsMeasured === 0)
+  if (!a) return { verdict: 'unknown', why: 'no analysis to read' };
+  // AN EMPTY LOG WITH REFUSALS IS NOT "UNKNOWN" — IT IS THE GUARD SPEAKING.
+  //
+  // walkFine logs steps it took, so a leg where every heading was refused logs NOTHING. Scoring
+  // that as unknown throws away the loudest signal in the reply. Measured 2026-09-12: twenty legs
+  // of twenty-two came back with `log: 0 entries` and `shelf_refusals: 70..72`, which is not an
+  // absence of data — it is the shelf guard refusing seventy headings because the aim was across
+  // off-shelf ground. The aim was wrong; the guard was right; the log was empty for a reason.
+  if (a.stepsMeasured === 0 && (a.shelfRefusals ?? 0) > 0)
+    return { verdict: 'GUARD-REFUSED', why: `no step was taken and the shelf guard refused ` +
+             `${a.shelfRefusals} heading(s) — the aim crosses ground off the destination's shelf, ` +
+             `so the guard is right and the AIM is what needs fixing` };
+  if (a.stepsMeasured === 0)
     return { verdict: 'unknown', why: 'the reply carried no usable step log — nothing to read' };
   if (a.teleports.length)
     return { verdict: 'TELEPORTED', why: `${a.teleports.length} step(s) covered more than ` +
@@ -106,10 +118,18 @@ export function verdictOf(a, { blockedTravelled = 128, grindWaste = 256, slowAbo
   // 3200 client units of real ground was labelled BLOCKED because its NET was zero, and the
   // genuinely immobile case fell through to MIXED because travelled:0 makes efficiency null.
   // Those are different bugs wanting different fixes, so they get different tests.
-  if (a.travelled <= blockedTravelled)
+  // BLOCKED IS RELATIVE TO WHAT WAS ASKED FOR, NOT AN ABSOLUTE. A constant floor of 128 client
+  // units labelled every step-mode leg BLOCKED — 39 of 49 — because a leg that REQUESTS 64 units
+  // and travels 35 of them trips an absolute threshold designed for legs requesting thousands.
+  // That is the fifth threshold this repository has had stop meaning what it meant when a scale
+  // changed around it (the stall high-water mark, cross-track as a fraction of the budget,
+  // arrive_within, the 64-unit movement floor, and this). A threshold has to name what it is
+  // relative to, or it silently becomes a different test.
+  const floor = a.requested != null ? Math.min(blockedTravelled, a.requested * 0.4) : blockedTravelled;
+  if (a.travelled <= floor)
     return { verdict: 'BLOCKED', why: `${a.slid} of ${a.stepsLogged} step(s) slid and the body ` +
-             `travelled ${a.travelled} client units in total — it could not move at all, so the ` +
-             `heading is wrong, not the budget` };
+             `travelled ${a.travelled} client units against ${a.requested ?? '?'} requested — it ` +
+             `barely moved, so the heading is wrong, not the budget` };
   if (a.waste >= grindWaste && a.revisits > 0)
     return { verdict: 'GRINDING', why: `${a.waste} client units of travel gained nothing and the ` +
              `body revisited ${a.revisits} point(s) — this is the shuffle, and a stillness-based ` +
