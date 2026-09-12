@@ -157,12 +157,33 @@ async function askRent(s, c) {
   const me = c.self ?? null;
   let approached = null;
   if (frular && withinSayRange(me, frular) === false) {
-    const near = s.world?.approachSquare?.(frular.col, frular.row);
-    if (near) {
-      approached = await s.walkTo(near.col, near.row, { maxSteps: near.steps + 8 })
+    // TWO WAYS TO FIND A SQUARE WITHIN EARSHOT, AND THE GOOD ONE IS USUALLY ABSENT.
+    //
+    // `s.world.approachSquare` knows about walls and is the right answer when it exists. It
+    // does not exist on a keeper-backed session — the World lives in the keeper process and
+    // the broker holds a snapshot whose world offers `room`, `route` and `exits` and nothing
+    // else. Since every character in a running fleet is keeper-backed, that is always.
+    //
+    // And it failed SILENTLY, which is why this survived: the call is optional-chained, so it
+    // returned undefined rather than throwing, `near` was null, and the character stood
+    // exactly where it was and said "rent" into the void. Measured on prod 2026-09-12 —
+    // Rowlf in room 700 with Frular in it, "You say, \"rent\"" echoed, out of earshot,
+    // nothing learned.
+    //
+    // `sayApproachSquare` answers the same question with arithmetic instead of a World: walk
+    // the line toward the hearer, stop two squares short. FleetScript's `say` step already
+    // uses it for this exact purpose, so this makes two callers share one rule rather than
+    // inventing a third.
+    const near = s.world?.approachSquare?.(frular.col, frular.row)
+              ?? sayApproachSquare(me, frular);
+    if (near && !near.already) {
+      approached = await s.walkTo(near.col, near.row,
+                                  { maxSteps: (near.steps ?? 0) + 8 })
         .catch(error => ({ arrived: false, reason: error.message }));
-    } else {
-      approached = { arrived: false, reason: 'no approach square to Frular' };
+    } else if (!near) {
+      // No position for one of them. Not "too far" — unknown, and the caller must be able to
+      // tell those apart, because one is a walk and the other is a broken reading.
+      approached = { arrived: false, reason: 'no readable position for Frular or for us' };
     }
   }
 
