@@ -10259,6 +10259,16 @@ const TOOLS = [
           description: 'Cheapest kinds it may put on the floor to make room. Default mushroom.' },
         min_bulk_free: { type: 'number', description: 'Shed below this much free bulk. Default 40.' },
       }, description: 'accept reagents a FLEETMATE offers, without negotiating: reply with an empty counteroffer and accept. Turns a two-sided handover into a one-sided one -- the donor walks over, pushes the goods across and leaves, and nobody agrees a moment. Refuses a stranger, refuses a pile containing anything not on the list, and cancels rather than leaving the window open. null disables it' },
+      room_enchant: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        spells: { type: 'array', items: { type: 'string' },
+          description: 'Which room enchantments to keep up. Defaults to all known.' },
+        margin_ms: { type: 'number',
+          description: 'Recast this far BEFORE the duration runs out. Default 8000.' },
+        mana_floor: { type: 'number', description: 'Do not cast below this much mana.' },
+        assume_ability: { type: 'number',
+          description: 'Ability to assume until the server has told us the real one. Default 20.' },
+      }, description: 'STAND STILL AND KEEP A ROOM ENCHANTMENT UP. `forces of light` makes everyone in the room miss less, which is what feeds the 75-swing improvement counter — so one posted caster raises the earning rate of every farmer standing with it, and it covers whoever walks in next. NOT buff_allies: that casts AT a player and stops when the room is empty, this casts at the ROOM (no target at all) and must keep going when it empties, because the enchantment is what the farmers walk back INTO. It never moves the caster. Reagents come from the caster own pack — forces of light is 2 elderberry AND 1 emerald per cast (forceslt.kod:57-58), so a caster holding 32 emeralds and 24 elderberries gets TWELVE casts and the elderberries are what bind. null disables it' },
       buff_allies: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         spells: { type: 'array', items: { type: 'string' },
@@ -10992,6 +11002,34 @@ const TOOLS = [
             ...(sheds ? { drop_for_space: sheds } : {}),
             min_bulk_free: Math.max(0, Math.min(1000,
               Math.floor(Number(value.min_bulk_free) || 40))) };
+        }
+      }
+      // KEEP A ROOM ENCHANTMENT STANDING. Same null-is-off, must-say-enabled shape as the
+      // rest, for a sharper version of the same reason: `forces of light` costs 2 elderberry
+      // AND 1 emerald a throw (forceslt.kod:57-58), and a caster left running unattended
+      // will spend the operator's whole gem supply keeping a room lit for nobody.
+      //
+      // NOT buff_allies. That one casts AT a player and needs a recipient; this casts at the
+      // ROOM and must keep going when the room empties, because the enchantment is what the
+      // farmers walk back into. See Autopilot.ROOM_ENCHANTS.
+      if (a.room_enchant !== undefined) {
+        if (a.room_enchant == null) p.policy.roomEnchant = null;
+        else {
+          const value = a.room_enchant;
+          if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
+            throw new Error('room_enchant must be null or an enabled settings object');
+          const spells = Array.isArray(value.spells)
+            ? value.spells.map(x => String(x).trim().toLowerCase()).filter(Boolean)
+            : undefined;
+          p.policy.roomEnchant = { enabled: true,
+            ...(spells && spells.length ? { spells } : {}),
+            // Shaves the recast window so a lapse is re-covered rather than waited out.
+            margin_ms: Math.max(0, Math.min(60_000, Math.floor(Number(value.margin_ms) || 8000))),
+            ...(Number.isFinite(Number(value.mana_floor))
+              ? { mana_floor: Math.max(0, Math.floor(Number(value.mana_floor))) } : {}),
+            ...(Number.isFinite(Number(value.assume_ability))
+              ? { assume_ability: Math.max(0, Math.floor(Number(value.assume_ability))) } : {}),
+          };
         }
       }
       // SAME SHAPE AS farm_cleanup ABOVE: null is off, and an object must say `enabled`

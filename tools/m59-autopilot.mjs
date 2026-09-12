@@ -16119,6 +16119,14 @@ export class Autopilot {
     if (this.policy.buffAllies) await this.buffAllies().catch(error =>
       this.note('buff pass failed', { why: error.message }));
 
+    // AND KEEP THE ROOM ENCHANTMENT UP. Separate from buffAllies on purpose: that one casts
+    // AT a person and returns early when the room is empty, this one casts at the ROOM and
+    // must keep going when it empties, because the enchantment is what the farmers walk back
+    // INTO. Same gating style — a policy key rather than a strategy, so one character can be
+    // posted as the room's caster without changing anything else about how it behaves.
+    if (this.policy.roomEnchant) await this.roomEnchant().catch(error =>
+      this.note('room enchantment pass failed', { why: error.message }));
+
     // HIBERNATING IS NOT DOING NOTHING. A keeper with no job still has a bar to fill,
     // and vigor is what a character walks out of an inn with — it sets the health
     // regeneration rate and it is what swinging spends. Standing about at 30 of 200
@@ -18589,6 +18597,38 @@ export class Autopilot {
   ];
 
   /**
+   * ROOM ENCHANTMENTS ARE A DIFFERENT ANIMAL FROM THE BUFFS ABOVE, and conflating the two is
+   * the mistake this table exists to prevent.
+   *
+   *   A BUFF IS CAST AT A PERSON.  `c.cast(spell.id, [target.id])`, one recipient, and
+   *                               `buffAllies` tracks who is still inside the window.
+   *   AN ENCHANTMENT IS CAST AT THE ROOM.  `c.cast(spell.id, [])` with NO target at all --
+   *                               forceslt.kod:94 calls `RoomStartEnchantment` on oRoom --
+   *                               and it covers everyone standing there, including people
+   *                               who walk in afterwards.
+   *
+   * Pointing `buffAllies` at one would send a targeted cast for an untargeted spell, which
+   * is the shape of the bug that made every keeper-proxied buff land on the caster.
+   *
+   * DURATION DOES NOT RANDOMISE HERE, unlike the personal buffs. forceslt.kod:160 is
+   * `6 * (power/3 + 1)` seconds handed straight to RoomStartEnchantment, with no
+   * `Random(d/2, d)` wrapper -- so the full duration is promised and the recast timer does
+   * not need halving. That is why `holdMs` below is not divided by two and `buffFloorMs` is.
+   *
+   * Reagents are the operator's, out of the caster's own pack, and the pairing matters:
+   * 2 elderberry AND 1 emerald per cast (forceslt.kod:57-58). A caster holding 32 emeralds
+   * and 24 elderberries gets TWELVE casts, not thirty-two -- the elderberries bind first,
+   * which is the opposite of what the gem count suggests, so it is worth saying out loud
+   * when the supply runs down.
+   */
+  static ROOM_ENCHANTS = [
+    { name: 'forces of light', mana: 15,
+      reagents: [['elderberry', 2], ['emerald', 1]],
+      // forceslt.kod:160. Power is about half the ability percent (spell.kod:2066).
+      durationMs: (power) => 6 * (Math.floor(Math.max(0, power) / 3) + 1) * 1000 },
+  ];
+
+  /**
    * The GUARANTEED remaining life of a cast, in ms — `Random(d/2, d)` means only d/2 is
    * promised, so that is what a recast timer may assume. Spell power is about half the
    * skill percent (spell.kod:2066), which is the only input we can read locally.
@@ -18615,6 +18655,88 @@ export class Autopilot {
       if (nm.includes(want)) n += Number(o.amount ?? 1) || 1;
     }
     return n;
+  }
+
+  /**
+   * KEEP A ROOM ENCHANTMENT STANDING, for as long as the reagents last.
+   *
+   * The job is one sentence: stand still, and recast when it lapses. `forces of light` makes
+   * everyone in the room miss less, which is what feeds the 75-swing improvement counter, so
+   * one posted caster raises the earning rate of every farmer standing with it.
+   *
+   * THREE THINGS THIS DELIBERATELY DOES NOT DO.
+   *
+   *   IT DOES NOT MOVE. No target to approach and no reason to leave; the caller posts the
+   *   character on a safe square and the whole value is that it stays there. Nothing here
+   *   calls a walker.
+   *
+   *   IT DOES NOT NEED AN AUDIENCE. `buffAllies` returns early when nobody else is in the
+   *   room, because a personal buff needs a recipient. A room enchantment does not -- it
+   *   covers whoever walks in next, and a caster that stopped when the room emptied would
+   *   drop the enchantment precisely as the farmers came back from a town trip.
+   *
+   *   IT DOES NOT GUESS THAT THE CAST LANDED. The room's own enchantment state is not on the
+   *   wire in a form this can read, so the recast timer is driven from OUR last successful
+   *   cast plus the kod duration. That is an assumption and it is a conservative one: a
+   *   `margin_ms` shaves the window so a lapse is re-covered rather than left to the operator
+   *   to notice. The failure it cannot see is a cast the server refused silently, which is
+   *   why reagents and mana are both checked BEFORE sending rather than inferred after.
+   */
+  async roomEnchant() {
+    const cfg = this.policy.roomEnchant;
+    if (!cfg || cfg.enabled === false) return;
+    const s = this.s, c = s.need();
+
+    const wanted = [].concat(cfg.spells ?? Autopilot.ROOM_ENCHANTS.map(e => e.name))
+      .map(x => String(x).toLowerCase());
+    this._enchantedAt ||= new Map();        // `${roomId}:${spell}` -> when we last cast it
+
+    for (const ench of Autopilot.ROOM_ENCHANTS) {
+      if (!wanted.includes(ench.name)) continue;
+      const spell = (c.spells || [])
+        .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === ench.name);
+      if (!spell) continue;                                    // not a caster of this one
+
+      // STILL STANDING? Keyed on the ROOM, because walking into a different room means the
+      // enchantment we are tracking is not the one over our head any more.
+      const roomId = c.room?.id ?? c.room?.num ?? 'unknown';
+      const ability = c.abilities?.get?.(spell.id)?.ability ?? cfg.assume_ability ?? 20;
+      const power = Math.floor(Number(ability || 0) / 2);
+      const margin = Number(cfg.margin_ms) >= 0 ? Number(cfg.margin_ms) : 8000;
+      const holdMs = Math.max(5000, ench.durationMs(power) - margin);
+      const last = this._enchantedAt.get(`${roomId}:${ench.name}`);
+      if (last && Date.now() - last < holdMs) continue;        // still up, by our own clock
+
+      const mana = c.vitals()?.mana;
+      const floor = Number(cfg.mana_floor) >= 0 ? Number(cfg.mana_floor) : ench.mana + 4;
+      if (mana && mana.value < floor)
+        return this.declinedCast(ench.name, 'not enough mana',
+          { mana: mana.value, needs: floor });
+
+      // REAGENTS BEFORE THE CAST. A cast that cannot pay is refused server-side and is
+      // silent from here -- indistinguishable from one that worked. Report which one ran
+      // out and how many are left, because the pair is unbalanced in practice and the
+      // scarce half is not the one anybody watches.
+      const short = ench.reagents.filter(([n, k]) => this.reagentOnHand(n) < k);
+      if (short.length) {
+        const have = ench.reagents.map(([n, k]) => `${n} ${this.reagentOnHand(n)}/${k}`).join(', ');
+        const casts = Math.min(...ench.reagents.map(([n, k]) => Math.floor(this.reagentOnHand(n) / k)));
+        this.declinedCast(ench.name, 'out of reagents',
+          { have, casts_left: casts,
+            note: 'a donation of the SHORT reagent extends this; the other half is not the limit' });
+        continue;
+      }
+
+      this._enchantedAt.set(`${roomId}:${ench.name}`, Date.now());
+      // NO TARGET. This is the whole difference from buffAllies -- see ROOM_ENCHANTS.
+      await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+      await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+      this.tally.room_enchants = (this.tally.room_enchants || 0) + 1;
+      const left = Math.min(...ench.reagents.map(([n, k]) => Math.floor(this.reagentOnHand(n) / k)));
+      this.note('room enchantment cast', { spell: ench.name, room: roomId,
+        holds_for_ms: holdMs, casts_left: left });
+      return;                                  // one cast a pass; the rest can wait a tick
+    }
   }
 
   async buffAllies() {
