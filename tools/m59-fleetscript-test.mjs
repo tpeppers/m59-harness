@@ -252,6 +252,53 @@ console.log('\nthe body is held for the whole errand');
      sent.some(c => c.name === 'autopilot' && c.action === 'free'));
 }
 
+
+console.log('\na verify that returns an object is judged on its `ok`, not on being an object');
+{
+  // AN OBJECT IS TRUTHY. `Boolean(v)` therefore passed every `{ok:false, why:...}` ever
+  // returned — the shape every script on disk uses — so the one step whose job is reading
+  // the result back out of the world was the one step that could not fail. This suite missed
+  // it for the most ordinary reason available: it only ever tested booleans, and booleans
+  // work either way.
+  const a = fakeBroker({ rooms: { a1: 39 } });
+  const r1 = await fleetScript({ name: 'obj-false', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => ({ ok: false, why: 'receiver_full' }), 'fallback')], onLog: quiet });
+  ok('an {ok:false} FAILS the run', r1.ok === false);
+  ok('and its own `why` survives into the result, because the caller measured something the ' +
+     'step description could not know',
+     /receiver_full/.test(JSON.stringify(r1.results.a1)));
+  ok('a failed object verify still frees the body',
+     a.some(c => c.name === 'autopilot' && c.action === 'free'));
+
+  const r2 = await fleetScript({ name: 'obj-true', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => ({ ok: true, teeth: 30 }))], onLog: quiet });
+  ok('an {ok:true} passes', r2.ok === true);
+  ok('AND WHAT IT MEASURED IS REPORTED. A verify that counted something was returning only ' +
+     '`ok`, so a run could not say what it had seen',
+     /30/.test(JSON.stringify(r2.results.a1)));
+
+  // BOTH CONVENTIONS ARE LIVE. Booleans predate the object form and several callers return a
+  // bare payload with no `ok` at all, meaning "it answered, so it passed" — widening the
+  // check to "any object with a falsy ok" would have broken those instead.
+  const r3 = await fleetScript({ name: 'bare-obj', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => ({ room: 52 }))], onLog: quiet });
+  ok('an object with NO `ok` still means "it answered", which is what bare payloads rely on',
+     r3.ok === true);
+
+  const r4 = await fleetScript({ name: 'bool-true', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => true)], onLog: quiet });
+  const r5 = await fleetScript({ name: 'bool-false', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => false, 'deliberate')], onLog: quiet });
+  ok('and a boolean still means exactly what it always meant',
+     r4.ok === true && r5.ok === false);
+
+  // `undefined` is what a callback that forgot to return produces. It is falsy, so it fails,
+  // and that is the right direction: a check that returned nothing has not checked anything.
+  const r6 = await fleetScript({ name: 'undef', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => undefined, 'returned nothing')], onLog: quiet });
+  ok('a callback that returns nothing FAILS rather than passing by omission', r6.ok === false);
+}
+
 console.log('\na journey has a health floor, and a hurt character WAITS at it');
 {
   // A HURT CHARACTER IS EARLY, NOT DISQUALIFIED. The first version refused anything below

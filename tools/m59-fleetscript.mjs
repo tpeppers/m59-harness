@@ -3041,7 +3041,39 @@ async function runStep(ctx, agent, step, state) {
 
     case 'verify': {
       const v = await step.fn({ agent, observe, call, state });
-      return { ok: Boolean(v), why: v ? undefined : (step.why || 'verification failed') };
+      // AN OBJECT IS TRUTHY, AND THIS USED TO BE `Boolean(v)`.
+      //
+      // So a verify returning `{ ok: false, why: '...' }` — the shape every script on disk
+      // and in this file's own documentation uses — was recorded as a PASS. The step that
+      // exists to read the result back out of the world was the one step that could not
+      // fail, unless its callback returned a falsy primitive or threw.
+      //
+      // The offline suite never caught it because it only ever exercised
+      // `verify(async () => true)` and `verify(async () => false)`. Booleans work either
+      // way; the convention actually in use did not.
+      //
+      // What it hid, 2026-09-12: `fund-loial.mjs` returns `true` on success and an
+      // `{ok:false}` carrying "CHECK THE RECEIVER'S PURSE BEFORE RE-RUNNING" on failure —
+      // a message that could never print. `buy-orc-teeth.mjs` ends with "are there teeth
+      // aboard, and how many" and would have passed with none. And in one session I wrote
+      // four checks that reported success over a failed outcome and went looking for the
+      // fault in the game: a `supply` that answered `receiver_full` for both casters
+      // returned `{ok:false,...}` and the run said `step 0 (verify) ok`.
+      //
+      // A BOOLEAN STILL MEANS WHAT IT MEANT. Both conventions are live, so honour `ok` when
+      // the callback returns an object that HAS one, and fall back to truthiness otherwise —
+      // an object with no `ok` (a bare `{room: 52}`) keeps meaning "it answered, so it
+      // passed", which is what several callers rely on.
+      const said = v !== null && typeof v === 'object' && 'ok' in v;
+      const ok = said ? Boolean(v.ok) : Boolean(v);
+      // AND CARRY WHAT IT SAID. `why` on a failure and the rest of the object on a pass:
+      // a verify that measured something ("teeth: 30") was reporting only `ok`, so the run
+      // result could not tell an operator what it had actually seen.
+      const extra = (v !== null && typeof v === 'object') ? { ...v } : {};
+      delete extra.ok; delete extra.why;
+      return ok
+        ? { ok: true, ...extra }
+        : { ok: false, why: (said && v.why) || step.why || 'verification failed', ...extra };
     }
 
     default:
