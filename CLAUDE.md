@@ -899,6 +899,39 @@ is the only arrangement in which two people can both use this repository.
   doubt. This is the same family as [`status` having two shapes](docs/m59-keeper.md) and as
   an object id that names a different object: a value that looks present and is not.
 
+- **A TOLERANCE CARRIES ITS UNIT TOO, AND A TOLERANCE LARGER THAN THE DISTANCE IS A REQUEST
+  SATISFIED BY DOING NOTHING.** `arrive_within` is in KOD units — 64 to a square — so the
+  broker's own schema default of **40 is 640 CLIENT units, two thirds of a square**, and the
+  schema says so in as many words. What makes it a trap is that omitting a parameter is the
+  commonest thing a caller does, and on a ledge, a jump take-off or a fine rail, two thirds of a
+  square is the difference between the route and the drop.
+
+  **Measured 2026-09-12 on a fine rail.** A 93-client-unit aim passed with `arrive_within: 8`
+  (128 client units) produced **sixteen consecutive legs of `arrived: true` with the body
+  stationary**, 96% of travel wasted and 64 revisited points. Independently, in the same
+  session's step capture, **5 of 76 legs report `arrived: true` having moved less than one
+  square**. The mover is behaving correctly throughout: it was asked for something it had
+  already achieved.
+
+  This is the SECOND instance of a shape already written down — `walk_to`'s fallback once had a
+  1.5-square tolerance, so stepping one square out to cross an edge reported arrived with zero
+  steps. Two instances make it a class rather than a bug: **scale the tolerance to the leg**, or
+  a short final approach does nothing and says it worked.
+
+  **The fleetscript constants are a hazard rather than a demonstrated defect, and the
+  distinction is worth keeping.** `m59-fleetscript.mjs` passes `arriveWithin ?? 6` (96 client)
+  and `?? 3` (48), and `m59-fineclimb.mjs` a constant 6. For a square-to-square walk the target
+  is about 1024 client units away, so those are a tenth of the distance and fine. They bite only
+  where the approach is shorter than the tolerance, and nobody has shown that fleetscript walks
+  that short. The acute instance was a caller passing 8 against a 93-unit aim.
+
+  **The durable fix is a refusal, not this paragraph.** A walk whose tolerance exceeds its own
+  distance should say so before it sends — which is a guarantee in `m59-fleetscript.mjs`, per
+  this file's own rule that a repeated operational failure becomes a check rather than another
+  note. It is unwritten because that file was being edited by several sessions the night this
+  was found, and a core-file conflict costs more than the fix saves. Worth doing when the tree
+  is quiet.
+
 - **A COORDINATE CARRIES ITS UNIT. THERE ARE THREE SPACES AND `FINENESS` NAMES TWO OF THEM.**
   `FINENESS` is **64** in kod (`blakston.khd:1163`) and **1024** in the client
   (`clientd3d/drawdefs.h:42`) — the same identifier, 16x apart. The wire also subtracts one
