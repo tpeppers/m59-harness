@@ -858,8 +858,13 @@ is the only arrangement in which two people can both use this repository.
 
   **AND SOME IDS ARE NOT IDS AT ALL.** On the keeper-backed path — which is every character on
   prod — `equipment` does not report the server's ids. It REBUILDS the equipped list from names
-  alone and synthesises an id as a negative counter (`m59-broker.mjs:1897`,
-  `equipped: (s.equipment ?? []).map((name, i) => ({ id: -1 - i, ... }))`). Measured live
+  alone and synthesises an id as a negative counter — `m59-broker.mjs`, `KeeperProxy`'s
+  `equipment()`: `equipped: (s.equipment ?? []).map((name, i) => ({ id: -1 - i, ... }))`.
+  (CITE THE SYMBOL, NOT THE LINE. Two sessions cited this same code as `:1892` and `:1897` and
+  both were right — one read the trunk checkout, one read prod-deploy, and the checkouts had
+  diverged. A kod citation is stable because a report pins `repo_commit`; a harness-to-harness
+  line number is pinned to nothing and rots the moment two trees differ, which is always. A
+  symbol survives a rebase.) Measured live
   2026-09-12: every equipped item on prod answers `id: -1`. A negative id is an ARRAY INDEX
   wearing an id's field name, so handing one to another tool addresses nothing — and it reads
   back perfectly, because it is a number in a field called `id`. Treat a negative id as a
