@@ -31,8 +31,13 @@
 // `bank` reporting a short withdrawal is how the record gets corrected.
 import { walk, bank, verify, act } from '../m59-fleetscript.mjs';
 
+// THE BANK IS ONE SYSTEM WITH TELLERS IN TWO TOWNS, so where a character BANKED does not
+// constrain where it withdraws. Operator: "one shared banking system, tellers only at Tos 54
+// and Jasper 376". Barloque has none, and a courier sent there for money comes back with
+// nothing and no error.
+const TOS_BANK = 54;          // First Royal Bank of Tos
 const JASPER_BANK = 376;      // The Royal Bank of Jasper — Yevitan
-const JASPER_INN = 370;       // Yonder Inn of Jasper — where Loial is parked
+const FAMILIARS = 52;         // Paddock's bar in Tos — see below for why this is the default meet
 const FEAST_HALL = 953;       // The Duke's Feast Hall. 951 is Blackstone Keep, which is the
                               // DOOR the door-states file keys — an easy and costly conflation.
 
@@ -48,8 +53,9 @@ export const script = {
             'reads back that the RECEIVER holds it, then feeds the courier and returns it ' +
             'to its station. The read-back is the point: a hand-over that completes the ' +
             'handshake and moves nothing is the documented failure here.',
-    run: 'fund-loial agents=<courier> to=<agent> amount=<shillings>',
-    needs: ['the sender to have the money BANKED, at Tos 54 or Jasper 376 — Barloque has none',
+    run: 'fund-loial agents=<courier> to=<agent> amount=<n> bankRoom=54 meetRoom=52',
+    needs: ['the sender to have the money BANKED — any teller pays out, at Tos 54 or Jasper 376, ' +
+              'NEVER Barloque, which has none',
             'the receiver to be somewhere the sender can walk to',
             'full health to set out; the roads are what kills this fleet'],
     cost: { time: '5-20 minutes, most of it road',
@@ -80,9 +86,28 @@ export const script = {
     // standing in an inn. Re-running the whole script to walk it home would have withdrawn a
     // SECOND 14,000. Money already moved stays moved, so the resume has to be expressible.
     fund: { type: 'boolean', default: true, describe: 'do the bank and hand-over legs at all' },
+    // WHERE THE MONEY IS AND WHERE THE MEETING IS WERE BOTH CONSTANTS, AND BOTH WENT STALE
+    // THE DAY THE RECEIVER MOVED.
+    //
+    // This script was written with Loial parked on a karma pump in the Yonder Inn of Jasper
+    // (370), banking next door at 376, and it hard-coded both. On 2026-09-11 his hometown was
+    // changed to Barloque and the karma rig was retired; on 2026-09-12 he was moved again, to
+    // Tos, to stand where the fleet's orc teeth are sold. Every one of those moves silently
+    // turned the errand into "walk to Jasper and hand 14,000 shillings to an empty room" —
+    // a walk that succeeds, a hand-over that finds nobody, and no error that names the reason.
+    //
+    // Geography belongs in the arguments for the same reason a teacher's room does in
+    // learn-skill: the room is the address, and an address that cannot be passed in is one
+    // that has to be edited under a live fleet.
+    bankRoom: { type: 'number', default: TOS_BANK,
+                describe: 'teller to withdraw from — 54 Tos or 376 Jasper, NEVER Barloque' },
+    // Familiars, because it is where the receiver now stands AND where Paddock sells the orc
+    // teeth the money is for (buy-orc-teeth). Funding him anywhere else means a second trip.
+    meetRoom: { type: 'number', default: FAMILIARS,
+                describe: 'the room to hand the money over in — where the RECEIVER is standing' },
     home: { type: 'number', default: 39, describe: 'where the courier returns to' },
   },
-  async steps({ to, amount, feast, home, fund }) {
+  async steps({ to, amount, feast, home, fund, bankRoom, meetRoom }) {
     // A BOOLEAN PARAMETER CANNOT BE TURNED OFF FROM THE REPL, SO DO NOT TRUST ONE.
     //
     // `parseArgs` in m59-fleet-repl.mjs stores every `k=v` value as a STRING and nothing
@@ -97,10 +122,10 @@ export const script = {
     feast = on(feast); fund = on(fund);
     return [
       ...(fund ? [
-      walk(JASPER_BANK),
+      walk(bankRoom),
       bank('withdraw', amount),
 
-      walk(JASPER_INN),
+      walk(meetRoom),
 
       // THE HAND-OVER, AS A `verify` RATHER THAN AN `act`, AND NOT FOR TIDINESS.
       //
