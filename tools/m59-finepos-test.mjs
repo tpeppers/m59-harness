@@ -3,7 +3,7 @@
 //   node tools/m59-finepos-test.mjs
 //
 // Every case is one of the four ways "where is this body" answered wrongly on 2026-09-11/12.
-import { finePosition, keeperPortFor, movedBetween, protocolToClient, clientToProtocol,
+import { finePosition, settledPosition, keeperPortFor, movedBetween, protocolToClient, clientToProtocol,
          squareCentreClient } from './m59-finepos.mjs';
 
 let pass = 0, fail = 0;
@@ -75,8 +75,12 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
 {
   const r = await finePosition('hk2', { port: 9533,
     fetchState: async () => ({ self: { x: 1167, y: 1519, row: 23, col: 18 },
-                               room: { num: 49 }, character: 'Marco Polo' }) });
+                               room: { num: 49 }, character: 'Marco Polo', pid: 1452 }) });
   ok(r.ok, 'a keeper with a position answers');
+  // THE PORT IS THE BAND AND THE PID IS THE BUILD, and a caller with only the port reaches for it as
+  // a build stamp. m59-stepbench's compareBenches did exactly that and answered SAME BUILD? on both
+  // sides of a real keeper respawn — a guard that could only ever abstain.
+  eq(r.pid, 1452, 'the keeper\'s PID comes back, because a restart changes it and the port does not');
   eq(r.protocol, { x: 1167, y: 1519 }, 'protocol units as the keeper gave them');
   eq(r.client, { x: 17648, y: 23280 }, 'and client units converted once');
   eq(r.square, { row: 23, col: 18 }, 'with the square for talking to humans');
@@ -89,6 +93,94 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
   const r = await finePosition('hk2', { port: 9533,
     fetchState: async () => ({ you: { x: 1167, y: 1519, row: 23, col: 18 } }) });
   ok(r.ok, 'the `you` shape is read too');
+  // A KEEPER THAT DID NOT SAY MUST NOT BE GIVEN A PLAUSIBLE PID. null is checkable; the port is not.
+  eq(r.pid, null, 'a state without a pid reports null rather than substituting the port');
+}
+
+// ---- A POSITION READ MUST BE A READ, NOT A CACHE LOOKUP --------------------------------
+{
+  // `/state` serves a coalesced projection and only re-asks the socket when a reader says so. Polled
+  // without `?fresh=1` it served the PRE-teleport square for 1.4-1.9s, rock steady — measured at the
+  // same instant: /state as_of_ms=435 fresh=false, /state?fresh=1 as_of_ms=0 fresh=true.
+  const paths = [];
+  const fetchState = async (port, path) => {
+    paths.push(path);
+    return { self: { x: 1167, y: 1519, row: 23, col: 18 }, as_of_ms: 0, fresh: true };
+  };
+  await finePosition('hk2', { port: 9533, fetchState });
+  eq(paths, ['/state?fresh=1'], 'by DEFAULT it asks the keeper to go and look');
+
+  paths.length = 0;
+  await finePosition('hk2', { port: 9533, fetchState, fresh: false });
+  eq(paths, ['/state'], 'the cheap cached read stays reachable, but only when asked for by name');
+}
+
+// ---- settledPosition: a read of a MOVING body is not a position ------------------------
+{
+  // The shape that caused it: 426 units recorded for a 128-unit step, because the body was still
+  // in flight when `after` was read.
+  const track = [{ x: 1100, y: 1100 }, { x: 1108, y: 1100 }, { x: 1116, y: 1100 },
+                 { x: 1116, y: 1100 }, { x: 1116, y: 1100 }];
+  let i = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { ...track[Math.min(i++, track.length - 1)], row: 23, col: 18 },
+                               pid: 1452 }) });
+  ok(r.ok && r.settled, 'it waits for the body to stop and then answers');
+  eq(r.protocol, { x: 1116, y: 1100 }, 'and the answer is where it STOPPED, not where it was passing');
+  eq(r.reads, 4, 'having read until two consecutive reads agreed');
+}
+{
+  // A body that never stops must not be reported as though it had.
+  let n = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, maxMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { x: 1100 + 8 * n++, y: 1100, row: 23, col: 18 } }) });
+  eq(r.settled, false, 'a body still in flight is NOT reported as settled');
+  ok(/in flight, not a place/.test(r.why), '...and says so, rather than handing back the last read');
+}
+{
+  // The failures finePosition already distinguishes have to survive the wrapper.
+  const r = await settledPosition('hk2', { port: 9533, fetchState: async () => null });
+  ok(!r.ok && r.settled === false, 'a keeper that does not answer stays a failure');
+  eq(r.reads, 1, 'and it did not retry a dead keeper into a timeout');
+}
+{
+  // THE DM-TELEPORT CASE, AND IT IS THE ONE THAT MATTERS. After a teleport the keeper serves the
+  // PRE-teleport position, unchanged, for over a second — measured: r87c59 with as_of_ms climbing
+  // 128 -> 409 -> 803 -> 1397 and `fresh: false`, then r80c51 with as_of_ms 0. Two reads of that
+  // stale window agree perfectly, so agreement alone declared a body settled on a square it had
+  // already left, and every step measured from it was aimed from the wrong origin.
+  const frames = [
+    { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 128, fresh: false },
+    { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 409, fresh: false },
+    { self: { x: 1100, y: 1100, row: 87, col: 59 }, as_of_ms: 803, fresh: false },
+    { self: { x: 1020, y: 1010, row: 80, col: 51 }, as_of_ms: 0, fresh: true },
+    { self: { x: 1020, y: 1010, row: 80, col: 51 }, as_of_ms: 0, fresh: true },
+  ];
+  let i = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
+    fetchState: async () => frames[Math.min(i++, frames.length - 1)] });
+  ok(r.settled, 'it waits through the stale window and settles on the FRESH position');
+  eq(r.square, { row: 80, col: 51 }, '...which is where the body actually is, not where it was');
+  ok(r.reads >= 4, 'having refused to settle on three identical stale reads');
+}
+{
+  // A snapshot that never goes fresh must be reported as stale, and named as such — "still moving"
+  // would send the reader looking for a body in flight when nobody is updating the record at all.
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, maxMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { x: 1100, y: 1100, row: 87, col: 59 },
+                               as_of_ms: 4000, fresh: false }) });
+  eq(r.settled, false, 'a permanently stale snapshot never settles');
+  ok(/USED to hold/.test(r.why), '...and the reason says it is the position it used to hold');
+  ok(!/still moving/.test(r.why), '...and does NOT call a stale record a moving body');
+}
+{
+  // An older keeper that does not report `fresh` must not be treated as permanently stale, or this
+  // would never return against it.
+  let n = 0;
+  const r = await settledPosition('hk2', { port: 9533, gapMs: 0, sleep: async () => {},
+    fetchState: async () => ({ self: { x: 1100, y: 1100, row: 87, col: 59 }, pid: 7 }) });
+  ok(r.settled, 'a keeper that omits `fresh` still settles on agreement');
+  eq(r.fresh, null, '...with the field reported as unknown rather than invented');
 }
 
 // ---- movedBetween: the receipt, because `arrived` is not one ----------------------------

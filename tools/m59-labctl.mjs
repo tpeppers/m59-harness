@@ -191,11 +191,31 @@ export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env
   // and inventing a second spelling of one command is how two callers drift apart.
   await dmFn([relocateCmd(obj, room, row, col)], { env });
 
-  // READ IT BACK. The whole point.
-  const where = `show name ${name}`;
+  // READ IT BACK. The whole point — and it has to be read off the OBJECT, not the name.
+  //
+  // This asked `show name <name>` and parsed row/col out of the reply. On BlakSton v2.4 that command
+  // answers with an object id and nothing else — `:< object 7466 :>` — so the regex could never match
+  // and `landed` was null on every call, for ever. The failure then read as "could not read the body
+  // back, so where it is is unknown", which sounds like a server that lost the body; the relocate had
+  // in fact worked perfectly every time, exactly as CLAUDE.md's note that `UtilGoNearSquare` never
+  // says no would predict. 72 of 72 bench cells refused on this.
+  //
+  // `show object <id>` is where a body's position lives: `piRow`, `piCol`, and the fine offset inside
+  // the square as `piFine_row`/`piFine_col` in KOD units (FINENESS 64, so 32 is dead centre). Third
+  // instance of this exact v2.4 parse problem in this file — `roomOf` had it too.
+  const where = `show object ${obj}`;
   const out = String(split(await dmFn([where], { env }), [where])[0] ?? '');
-  const rc = /row\s+(\d+).*?col\s+(\d+)/is.exec(out) ?? /\((\d+),\s*(\d+)\)/.exec(out);
-  const landed = rc ? { row: Number(rc[1]), col: Number(rc[2]) } : null;
+  const num = (field) => {
+    const m = new RegExp(`${field}\\s*=\\s*INT\\s+(-?\\d+)`, 'i').exec(out);
+    return m ? Number(m[1]) : null;
+  };
+  const [gotRow, gotCol] = [num('piRow'), num('piCol')];
+  const landed = gotRow != null && gotCol != null
+    ? { row: gotRow, col: gotCol,
+        // The fine offset is free here and it is the difference between "the right square" and "the
+        // place we asked for" — a bench that stages per cell needs to know the spread it is getting.
+        ...(num('piFine_row') != null ? { fineRow: num('piFine_row'), fineCol: num('piFine_col') } : {}) }
+    : null;
   const exact = landed && landed.row === row && landed.col === col;
   return { ok: !!landed, asked: { row, col }, landed, exact,
            why: !landed ? 'could not read the body back, so where it is is unknown'
@@ -211,12 +231,24 @@ export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env
  * Spawns off FIRST: a room that is still breeding can put a body in the square you are about to
  * move somebody onto, between the clear and the stage.
  */
+// `via` IS PART OF THIS SIGNATURE OR THE WHOLE WRAPPER FAILS. `setSpawns` and `stageAt` both need it
+// — on BlakSton v2.4 `show room <num>` is not a command, so `roomOf` can only find a room through a
+// body standing in it — and this wrapper did not accept it. A caller passing `via: 'Alfa'` had it
+// silently dropped by the destructure, `setSpawns` ran without it, and every call came back "room 576
+// was not found on this server". MEASURED 2026-09-12: 72 of 72 bench cells refused for that reason,
+// and before the bench checked the return value at all, sixteen "re-staged" lines were printed while
+// the body wandered 3,800 units. `spawnsOn` threads `via`, which is why the cleanup half worked and
+// the staging half never did — the asymmetry is what made it look like a server problem.
 export async function stageRoom(roomNum, { hold = [], place = null, spawns = 'off',
-                                           dmFn = dm, env = process.env } = {}) {
+                                           dmFn = dm, env = process.env, via = null } = {}) {
   assertLabCtl(env);
   const steps = [];
+  // THE BODY BEING STAGED IS THE `via`. A room is only findable through somebody standing in it, and
+  // when this call has a `place` it has a name in hand — making the caller pass it twice is how the
+  // argument goes missing, which is the bug above. An explicit `via` still wins.
+  const through = via ?? place?.name ?? hold[0] ?? null;
   if (spawns === 'off' || spawns === 'on') {
-    const r = await setSpawns(roomNum, spawns === 'on', { dmFn, env });
+    const r = await setSpawns(roomNum, spawns === 'on', { dmFn, env, via: through });
     steps.push({ what: `spawns ${spawns}`, ...r });
     if (!r.ok) return { ok: false, steps, why: r.why };
   }
@@ -225,7 +257,9 @@ export async function stageRoom(roomNum, { hold = [], place = null, spawns = 'of
     steps.push({ what: `hold ${hold.length}`, ...r });
   }
   if (place) {
-    const r = await stageAt(place.name, roomNum, place, { dmFn, env });
+    // `via` defaults to the body being placed: staging somebody INTO a room is the one call that
+    // always has a name for it, so requiring the caller to repeat it is how the argument gets missed.
+    const r = await stageAt(place.name, roomNum, place, { dmFn, env, via: through });
     steps.push({ what: `stage ${place.name}`, ...r });
     if (!r.ok) return { ok: false, steps, why: r.why };
   }

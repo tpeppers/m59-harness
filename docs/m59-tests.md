@@ -970,3 +970,63 @@ difference between the trunk and the deploy worktree, which each have a
 `substrate/fleets/prod.json` holding 21 characters called the Muppets, and only one of them is logged in.
 **It should fail the day the tool turns an answer back into a question, or a question into an
 answer.**
+
+## The fine-movement instruments (m59-finepos 52, m59-stepbench 62, m59-pinch 44, m59-labctl 45)
+
+These four are the measuring equipment for fine movement, and they are grouped because they failed
+as a set on 2026-09-12: a controlled experiment on `walkFine`'s heading fan could not be run, and
+each layer's defect was hidden by the one above it. Every assertion below is one of those.
+
+**`m59-finepos-test.mjs` (52) — "where is this body" is not one question.** Four sources answer it
+and three are wrong in ways that read as right; the suite keeps the failures DIFFERENT, because "no
+keeper", "keeper silent" and "keeper answered without a position" are different problems and
+conflating them throws away a working run. Three things it pins that cost a session each:
+
+* **`/state` is a CACHE and `/state?fresh=1` is a READ.** The keeper serves a coalesced projection
+  and sends no packet unless a reader asks. Measured at one instant after a teleport: `/state` gave
+  `as_of_ms=435, fresh=false`, `/state?fresh=1` gave `as_of_ms=0, fresh=true`. Read from the cache,
+  the pre-teleport square came back rock steady for 1.4–1.9 seconds, so two reads agreed and a body
+  was declared settled on a square it had already left. `fresh` is not a staleness alarm — it reports
+  whether THIS reply was refreshed — and reading the field's name instead of its definition is the
+  same error as reading `arrive_within` as client units.
+* **The PORT is the band; the PID is the build.** A keeper restart changes the pid and keeps the
+  port, so a caller stamping rows with the port gave `compareBenches` the same value either side of a
+  genuine respawn — a guard that could only ever abstain, which fails in the direction nobody checks.
+* **`settledPosition` observes rather than assumes.** Two consecutive agreeing reads, not a sleep
+  somebody tuned; and a stale read cannot settle anything however often it repeats. It says which of
+  the two it hit, because "still moving" sends a reader looking for a body in flight, which is the
+  wrong search when nobody is updating the record at all.
+
+**`m59-stepbench-test.mjs` (62) — abstaining is the point.** The bench exists to stop a mover change
+being credited with an improvement it did not make, so the cases that matter most are the ones where
+it must refuse: a shared keeper pid means no respawn happened and possibly the same build, and a
+contact-rate delta inside the noise band must be reported as NO DIFFERENCE. It also pins that the
+bench cannot ask a question the mover cannot answer:
+
+* **`checkCell` refuses a cell outside the mover's one-step range.** `walkFine` sizes a step
+  `max(8, min(stride, remaining))`, so the minimum is 8 protocol units = 128 client. 64 is one step
+  of the FLOOD LATTICE, and inheriting it here made an eighth of the matrix measure a body
+  overshooting and dithering back: 193 units of travel at 86 degrees off a 64-unit request.
+* **`stepRequest` builds the walk arguments in the same module that records the result**, because the
+  two have to agree about what a cell means and apart they did not. One step — more is a search — and
+  a tolerance strictly smaller than the aim, or walkFine returns `arrived: true` without moving.
+
+**`m59-pinch-test.mjs` (44) — an OPEN square cannot answer a question about the fan.** On open ground
+heading zero is accepted and the fan is never consulted, so a bench sited there reports a clean,
+stable, perfectly reproducible number either side of a mover change and that number is about nothing.
+It is the most convincing possible null result and it is an artefact of the site: 11,151 of 11,352
+floored squares in The King's Way refuse no heading at all, and the bench had been sited on one.
+OPEN, SEALED and NO FLOOR stay three different refusals — the first two both produce a contact rate
+of zero and are opposite in cause, one body never having to choose and the other never moving.
+
+**`m59-labctl-test.mjs` (45) — and this one was green about a protocol that does not exist.** Its fake
+admin socket answered `show name` with a position and `show room` with an object id. BlakSton v2.4
+does neither: `show name` returns an object id and nothing else, and `show room` is not a command. So
+`stageAt`'s read-back could never match, `landed` was null on every call that ever ran, and nine
+assertions passed about it — while the relocate had succeeded every time, exactly as the note that
+`UtilGoNearSquare` never says no predicts. A fake that lies is worse than no fake. It now speaks v2.4,
+keeps the legacy `show room` path covered so deleting it would fail, and pins that a `via` standing in
+a DIFFERENT room resolves nothing.
+
+**It should fail the day a position read is answered from a cache, a bench credits a change across a
+single keeper pid, or a fake starts speaking a protocol no server does.**

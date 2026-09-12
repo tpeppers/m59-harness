@@ -4,7 +4,8 @@
 //
 // The bench exists to stop a mover change being credited with an improvement it did not make, so the
 // cases that matter most here are the ones where it must ABSTAIN.
-import { stepMatrix, recordStep, summariseBench, compareBenches, formatBench, HEADINGS, DISTANCES }
+import { stepMatrix, recordStep, summariseBench, compareBenches, formatBench, HEADINGS, DISTANCES,
+         stepRequest, checkCell, cellReach, MIN_MOVER_REACH_CLIENT, MAX_MOVER_REACH_CLIENT }
   from './m59-stepbench.mjs';
 
 let pass = 0, fail = 0;
@@ -17,12 +18,61 @@ const eq = (got, want, what) =>
 {
   const m = stepMatrix({ repeats: 2 });
   eq(m.length, 8 * 3 * 2, 'eight headings x three distances x two repeats');
-  eq(m[0], { heading: 'N', dx: 0, dy: -1, distance: 64, repeat: 0 }, 'first cell is N at one step');
+  eq(m[0], { heading: 'N', dx: 0, dy: -1, distance: 128, repeat: 0 }, 'first cell is N at one step');
   const again = stepMatrix({ repeats: 2 });
   eq(JSON.stringify(m), JSON.stringify(again), 'the same matrix twice — order is not incidental');
   eq(stepMatrix({ headings: [['E', 1, 0]], distances: [64], repeats: 1 }).length, 1, 'and it narrows');
-  eq(DISTANCES, [64, 256, 512], 'the reaches match m59-ground');
+  // EVERY DEFAULT DISTANCE MUST BE ONE THE MOVER CAN ACTUALLY TRAVEL IN ONE STEP. The old first
+  // entry, 64, was below walkFine's own step floor, so an eighth of the matrix measured dither.
+  eq(DISTANCES, [128, 256, 512], 'the reaches are all inside the mover\'s one-step range');
   eq(HEADINGS.length, 8, 'all eight headings');
+}
+
+// ---- THE CELL HAS TO BE ONE THE MOVER CAN EXECUTE -----------------------------------------
+{
+  eq(cellReach({ dx: 0, dy: 1, distance: 256 }), 256, 'a cardinal cell asks for its distance');
+  ok(Math.abs(cellReach({ dx: 1, dy: -1, distance: 256 }) - 362.04) < 0.01,
+     '...and a DIAGONAL one asks for 1.41x that, on each axis');
+
+  // The defect that produced the first baseline: 64 client units is below the mover's floor.
+  const tooNear = checkCell({ heading: 'NE', dx: 1, dy: -1, distance: 45 });
+  ok(tooNear, 'a cell inside the mover\'s minimum step is refused');
+  ok(/dither/.test(tooNear), '...and says the body will dither rather than blaming geometry');
+  ok(checkCell({ heading: 'N', dx: 0, dy: -1, distance: 64 }),
+     'even a CARDINAL 64-unit cell is unmeasurable — 64 is a lattice step, not a mover step');
+  ok(!checkCell({ heading: 'N', dx: 0, dy: -1, distance: MIN_MOVER_REACH_CLIENT }),
+     'exactly at the floor is measurable');
+
+  // And past the stride it is a walk, not a step — a different measurement wearing this one's name.
+  const tooFar = checkCell({ heading: 'E', dx: 1, dy: 0, distance: MAX_MOVER_REACH_CLIENT + 64 });
+  ok(tooFar && /not a step/.test(tooFar), 'past the stride it is a walk and says so');
+  // The diagonal is the one that trips this: 512 on each axis is 724 units, still inside; 576 is not.
+  ok(!checkCell({ heading: 'SE', dx: 1, dy: 1, distance: 512 }), 'the largest default diagonal fits');
+  ok(DISTANCES.every((d) => HEADINGS.every(([h, dx, dy]) => !checkCell({ heading: h, dx, dy, distance: d }))),
+     'EVERY cell of the default matrix is measurable — including the diagonals');
+}
+
+// ---- stepRequest: the two settings that were wrong in the first baseline ------------------
+{
+  const cell = { heading: 'E', dx: 1, dy: 0, distance: 256, repeat: 0 };
+  const r = stepRequest(cell, { x: 16000, y: 16000 });
+  ok(r.ok, 'a measurable cell produces a request');
+  eq(r.args.max_steps, 1, 'ONE step — more than one is a search, not a measurement');
+  ok(r.args.arrive_within * 16 < cellReach(cell),
+     'the tolerance is strictly smaller than the aim, or walkFine arrives without moving');
+  eq(r.aimClient, { x: 16256, y: 16000 }, 'the aim is the displacement, in client units');
+  eq(r.args.x, 1080, 'and the wire gets protocol units');
+  eq(r.args.y, 1064, '...on both axes');
+  eq(r.requested, 256, 'the request states the true reach');
+
+  // hold_shelf is the thing under experiment, so it is the caller's to set — and it narrows the fan.
+  eq(stepRequest(cell, { x: 0, y: 0 }).args.hold_shelf, true, 'hold_shelf defaults on');
+  eq(stepRequest(cell, { x: 0, y: 0 }, { holdShelf: false }).args.hold_shelf, false, '...and is settable');
+
+  // AN UNMEASURABLE CELL PRODUCES NO REQUEST AT ALL. A bench cannot skip what it never asked.
+  const no = stepRequest({ heading: 'NE', dx: 1, dy: -1, distance: 45 }, { x: 0, y: 0 });
+  ok(!no.ok && /dither/.test(no.why), 'an unmeasurable cell is refused a request, with the reason');
+  eq(no.args, undefined, '...and carries no arguments to send by accident');
 }
 
 const cell = { heading: 'S', dx: 0, dy: 1, distance: 256, repeat: 0 };
@@ -121,6 +171,28 @@ const at = (x, y) => ({ x, y });
 
   eq(compareBenches(null, mk(0.3, 2)).verdict, 'unknown', 'a missing bench abstains');
   eq(compareBenches({ cells: 0 }, mk(0.3, 2)).verdict, 'unknown', 'and so does an empty one');
+
+  // ---- WHAT THE EXPERIMENT VARIED DECIDES WHICH GUARD APPLIES -----------------------------
+  // `hold_shelf` picks between walkFine's narrow five-entry fan and the full nine, so both fans are
+  // measurable against ONE build. For that comparison a shared pid is the point, not the problem —
+  // and a guard that refused it would block the cheapest honest experiment available.
+  eq(compareBenches(mk(0.72, 5), mk(0.30, 5), { differBy: 'request' }).verdict, 'BETTER',
+     'a REQUEST-arm comparison is allowed to share a keeper pid — that is what removes the build');
+  eq(compareBenches(mk(0.72, 5), mk(0.68, 5), { differBy: 'request' }).verdict, 'NO DIFFERENCE',
+     '...and the noise band still applies to it');
+
+  // And the inverse confound, which is the one that only exists for a request arm: if the keeper
+  // respawned between the two, the mover changed too and nothing can be attributed.
+  const swapped = compareBenches(mk(0.72, 5), mk(0.30, 9), { differBy: 'request' });
+  eq(swapped.verdict, 'BUILD CHANGED', 'a request arm that does NOT share a pid is refused');
+  ok(/second variable/.test(swapped.why), '...because the mover became a second variable');
+
+  eq(compareBenches(mk(0.72, 1), mk(0.30, 2), { differBy: 'build' }).verdict, 'BETTER',
+     'the build arm is unchanged by any of this');
+  // An unrecognised value must not silently pick a guard — the same rule the policy files follow.
+  const bogus = compareBenches(mk(0.72, 1), mk(0.30, 2), { differBy: 'vibes' });
+  eq(bogus.verdict, 'unknown', 'an unrecognised differBy is refused, not defaulted');
+  ok(/which guard runs/.test(bogus.why), '...and it says why defaulting would be wrong');
 }
 
 // ---- formatting --------------------------------------------------------------------------

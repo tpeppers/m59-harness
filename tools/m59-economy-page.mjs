@@ -461,8 +461,11 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   <div class="sub" style="margin-top:-.4rem">A chest is ${num(CHEST_BULK_MAX)} BULK and no
     weight limit at all (chest.kod:29) — so it is the one store in the game that a heavy
     haul does not fill. The Bookmaker's hall builds ${BOOKMAKERS_CHESTS}
-    (guildh14.kod:518,520,522); a hall may hold ${GUILD_CHEST_SLOTS}, so there are
-    ${GUILD_CHEST_SLOTS} slots here and an unused one says so rather than being hidden.</div>
+    (guildh14.kod:518,520,522) at r18c2, r18c6 and r20c4; a hall may hold ${GUILD_CHEST_SLOTS}.
+    Each is named by the SQUARE it stands on rather than by a slot number — an object id is
+    a handle the server recycles and a chest cannot move — so only chests somebody has
+    actually looked inside appear here. There is no list of every square a chest could
+    occupy, and inventing rows for the unopened ones would be inventing chests.</div>
   <div class="chests">
     ${storage.allChests().length === 0
       ? `<div class="chest empty"><h3>nothing looked in yet</h3>
