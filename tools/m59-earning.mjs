@@ -108,10 +108,21 @@ export function ledger(fleet = 'prod', { root = 'substrate/history', days = 3 } 
  *
  * `net_levels` is the number this was built for. A character that dies a lot and climbs back is
  * a different emergency from one whose max health only ever goes down, and nothing on any board
- * distinguishes them — both show deaths. Every death costs exactly one level
- * (player.kod: piDeathCost is set to 100 on every death and the roll sits in the branch taken
- * when PFLAG_TUTORIAL is SET, which means GRADUATED), so a character that is not levelling UP
- * faster than it dies is on a ratchet, and the ratchet ends at a body too small to fight.
+ * distinguishes them — both show deaths.
+ *
+ * AN ESTABLISHED CHARACTER LOSES ONE LEVEL PER DEATH, AND THAT SENTENCE NEEDS ITS ADJECTIVE.
+ * `Killed()` sets piDeathCost to 100 every death and the roll sits in the branch taken when
+ * PFLAG_TUTORIAL is SET — which means GRADUATED, not "in the tutorial" — so for a grown
+ * character the dice are decorative at the default rate. The recent ledger agrees exactly:
+ * 36 deaths and 36 level losses across the valley cohort on 2026-09-11.
+ *
+ * IT IS NOT UNIVERSAL AND THIS FILE MUST NOT IMPLY THAT IT IS. Parsed across the whole ledger
+ * rather than a recent window the ratio moves: 2026-09-01 is 49 deaths against 9 level losses,
+ * consistent with the ungraduated branch (piDeathCost/3, losing nothing) but NOT tested. Some
+ * days also run ABOVE 1.0, which deaths alone cannot produce — either level_lost has a second
+ * source or a day boundary splits a death from its row. Both are open questions, so net_levels
+ * is reported as what it is, a count of two row kinds, and the verdict says "max health only
+ * goes down for this one" rather than claiming to know why. Peer correction, 2026-09-12.
  */
 export function earningFor(rows, who, { now = Date.now(), windows = [1, 6, 12, 24] } = {}) {
   const mine = rows.filter(r => rowIsFor(r, who));
