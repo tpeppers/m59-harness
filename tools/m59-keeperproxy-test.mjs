@@ -187,5 +187,39 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
      /guild:\s*c\.guild/.test(guildCase));
 }
 
+// SPEECH — THE FOURTH TIME, and the one that switched a whole feature off.
+//
+// `M59Client.say` has existed all along (m59-client.mjs:941). The proxy had no method for it,
+// so `c.say(...)` threw "c.say is not a function" on every keeper-backed session — which is
+// every character in this fleet. Measured on prod 2026-09-12: Rowlf standing in room 700 with
+// Frular in the room, `tithe action=status` -> "c.say is not a function".
+//
+// WHAT IT COST IS NOT A BROKEN VERB. `askRent` asks Frular for the guild's rent by SAYING
+// "rent" to him. It could never work, so `rent.json` could never be written, so
+// `guildStoreAvailable` refused the entire guild stockpile with "nobody has asked Frular about
+// the guild yet" — on all 21 characters, indefinitely, while every one of them had
+// `guildWants: {enabled: true}`. A missing one-line forward, presenting as a feature that
+// merely declines.
+{
+  const keeperSrc = read('m59-keeper-process.mjs');
+  ok('say is forwarded by the client literal',
+     /(^|[^.\w])say\s*:/m.test(literalBody || ''),
+     'the emulated client has no say, so anything that talks to an NPC throws on every ' +
+     'keeper-backed session — which is the whole fleet');
+  ok('and it crosses the process boundary rather than pretending locally',
+     /say\s*:\s*\([\s\S]{0,160}?act\(\s*'say'/.test(literalBody || ''),
+     'say must be sent to the process holding the socket; a snapshot cannot speak');
+  ok("the keeper implements the 'say' op it is sent",
+     /case 'say':/.test(keeperSrc),
+     "m59-keeper-process.mjs has no `case 'say':`, so the forward 404s");
+  // ORDINARY SPEECH, NOT AN EMOTE. The guild hall's secret door opens only on
+  // `type <> SAY_EMOTE` (ghall.kod:967), and SayRangeCheck governs whether a monster hears it
+  // at all — so a forward that quietly sent an emote would open no door and answer no
+  // question, in silence, which is this game's whole failure mode.
+  ok('and it defaults to ordinary speech rather than an emote',
+     /say\s*:\s*\(text,\s*type\s*=\s*1\)/.test(literalBody || ''),
+     'kind 1 is speech; an emote is refused by the secret door and unheard by Frular');
+}
+
 console.log(`\nkeeper proxy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

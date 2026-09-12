@@ -154,15 +154,65 @@ async function askRent(s, c) {
   // and the caller records "no answer" as though it were a fact about the guild's rent.
   const frular = [...(c.room?.objects?.values() ?? [])]
     .find(o => (c.rsc.get(o.nameRsc) || '') === FRULAR_NAME);
-  const me = c.self ?? null;
+
+  // OUR OWN POSITION, READ WHEN IT IS USED AND WAITED FOR IF IT IS NOT THERE YET.
+  //
+  // On a keeper-backed session `c` is rebuilt from each /state snapshot — "a picture, not a
+  // wire" — so `c.self` is null whenever the snapshot in hand lacks `you`, and non-null a
+  // moment later. Reading it once at the top and holding it is the same thin-snapshot trap
+  // that made object ids flap.
+  //
+  // AND IT COLLAPSED A THREE-VALUED TEST INTO THE WRONG BRANCH. `withinSayRange` answers
+  // true / false / null and the approach is gated on `=== false`; a null `me` answered null,
+  // the walk was skipped, and by the time earshot was judged a few lines later `c.self` had
+  // refreshed and answered false. Prod returned "out of earshot" twice with no `approached`
+  // field at all, because neither branch of the approach had run.
+  const readSelf = async () => {
+    for (let i = 0; i < 6; i++) {
+      const here = c.self ?? null;
+      if (Number.isFinite(here?.col) && Number.isFinite(here?.row)) return here;
+      await new Promise(r => setTimeout(r, 250));
+    }
+    return null;
+  };
+  const me = await readSelf();
+
   let approached = null;
-  if (frular && withinSayRange(me, frular) === false) {
-    const near = s.world?.approachSquare?.(frular.col, frular.row);
-    if (near) {
-      approached = await s.walkTo(near.col, near.row, { maxSteps: near.steps + 8 })
+  if (frular && !me) {
+    // UNKNOWN IS NOT "IN RANGE", and it is not "too far" either. Saying which one it is
+    // matters: one is fixed by walking and the other by finding out why the body cannot be
+    // located.
+    approached = { arrived: false,
+                   reason: 'our own position never arrived in a state snapshot, so there was ' +
+                           'nothing to walk from' };
+  } else if (frular && withinSayRange(me, frular) === false) {
+    // TWO WAYS TO FIND A SQUARE WITHIN EARSHOT, AND THE GOOD ONE IS USUALLY ABSENT.
+    //
+    // `s.world.approachSquare` knows about walls and is the right answer when it exists. It
+    // does not exist on a keeper-backed session — the World lives in the keeper process and
+    // the broker holds a snapshot whose world offers `room`, `route` and `exits` and nothing
+    // else. Since every character in a running fleet is keeper-backed, that is always.
+    //
+    // And it failed SILENTLY, which is why this survived: the call is optional-chained, so it
+    // returned undefined rather than throwing, `near` was null, and the character stood
+    // exactly where it was and said "rent" into the void. Measured on prod 2026-09-12 —
+    // Rowlf in room 700 with Frular in it, "You say, \"rent\"" echoed, out of earshot,
+    // nothing learned.
+    //
+    // `sayApproachSquare` answers the same question with arithmetic instead of a World: walk
+    // the line toward the hearer, stop two squares short. FleetScript's `say` step already
+    // uses it for this exact purpose, so this makes two callers share one rule rather than
+    // inventing a third.
+    const near = s.world?.approachSquare?.(frular.col, frular.row)
+              ?? sayApproachSquare(me, frular);
+    if (near && !near.already) {
+      approached = await s.walkTo(near.col, near.row,
+                                  { maxSteps: (near.steps ?? 0) + 8 })
         .catch(error => ({ arrived: false, reason: error.message }));
-    } else {
-      approached = { arrived: false, reason: 'no approach square to Frular' };
+    } else if (!near) {
+      // No position for one of them. Not "too far" — unknown, and the caller must be able to
+      // tell those apart, because one is a walk and the other is a broken reading.
+      approached = { arrived: false, reason: 'no readable position for Frular or for us' };
     }
   }
 
@@ -207,7 +257,19 @@ export async function guildRentStatus(s) {
   // nobody heard into a durable fact, and the gate would read it as an answer for ever. An
   // unparsed reply is the same case: Frular said something we do not understand, which is
   // not a rent.
-  if (r.rent && !r.out_of_earshot) {
+  // AN ANSWER FROM FRULAR IS THE PROOF WE WERE HEARD. The position check is a fallback for
+  // SILENCE, not a veto over speech that demonstrably arrived.
+  //
+  // This refused a real reading on prod. Frular said "The The Second Swines owes 6547 coins in
+  // rent at this time.", `parseRentLine` read 6547 off it — and nothing was written, because
+  // `out_of_earshot` is computed from a position sampled AFTER the exchange, by which point
+  // the keeper had already walked the body off again. The instrument disagreed with the
+  // value, and I had let the instrument win.
+  //
+  // So a parsed line records, full stop. `out_of_earshot` stays in the reply because it
+  // explains a silence when there is one, and it is still what suppresses caching when
+  // nothing parsed.
+  if (r.rent) {
     try {
       new StorageCache().writeRent({
         due: r.rent.due, credit: r.rent.credit, in_guild: r.rent.in_guild,
@@ -222,7 +284,7 @@ export async function guildRentStatus(s) {
     frular_said: r.said,
     // SAY WHETHER IT WAS RECORDED, so a caller can tell "asked and cached" from "asked and
     // the answer was unusable" without re-reading the file.
-    recorded: !!(r.rent && !r.out_of_earshot),
+    recorded: !!r.rent,
     ...(r.out_of_earshot ? { out_of_earshot: true, why: r.why } : {}),
     ...(!r.rent && !r.out_of_earshot
       ? { why: 'nothing in the reply parsed as a rent line, so nothing was cached — ' +

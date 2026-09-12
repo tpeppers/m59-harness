@@ -117,6 +117,27 @@ console.log('\nA HEARD ANSWER REPLACES AN OLDER ONE');
   ok('a later unheard question leaves the good reading alone', rentFile().due === 0);
 }
 
+console.log('\nAN ANSWER WE HEARD COUNTS, WHEREVER THE BODY DRIFTED AFTERWARDS');
+{
+  // MEASURED ON PROD 2026-09-12, and it cost a real reading. Frular answered — "The The Second
+  // Swines owes 6547 coins in rent at this time." — and nothing was written, because
+  // `out_of_earshot` is computed from a position sampled AFTER the exchange and the keeper had
+  // already walked the body off. The instrument disagreed with the value and the instrument won.
+  //
+  // A parsed line FROM Frular is proof we were heard. The range check exists to explain a
+  // silence, not to overrule speech that demonstrably arrived.
+  clear();
+  const r = await guildRentStatus(session({
+    said: ['You say, "rent"', 'Frular says, "The The Second Swines owes 6547 coins in rent at this time."'],
+    me: { col: 5, row: 17 }, frular: { col: 7, row: 5 },   // squared distance 148 vs radius 50
+  }));
+  ok('the answer is parsed', r.due === 6547);
+  ok('the range check still reports the drift', r.out_of_earshot === true);
+  ok('AND IT IS RECORDED ANYWAY', r.recorded === true);
+  ok('the file carries the debt', rentFile()?.due === 6547);
+  ok('and the guild flag the stockpile gate reads', rentFile()?.in_guild === true);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
