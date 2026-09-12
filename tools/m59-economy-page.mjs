@@ -464,11 +464,17 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
     (guildh14.kod:518,520,522); a hall may hold ${GUILD_CHEST_SLOTS}, so there are
     ${GUILD_CHEST_SLOTS} slots here and an unused one says so rather than being hidden.</div>
   <div class="chests">
+    ${storage.allChests().length === 0
+      ? `<div class="chest empty"><h3>nothing looked in yet</h3>
+           <div class="dim" style="font-size:.8rem">no chest in the hall has been opened.
+           Chest contents are never pushed by the server, so the only record is the last
+           look — and that is not the same as the hall being empty.</div></div>`
+      : ''}
     ${storage.allChests().map(ch => ch.never_opened
-      ? `<div class="chest empty"><h3>chest ${ch.slot}</h3>
+      ? `<div class="chest empty"><h3>${esc(ch.slot)}</h3>
            <div class="dim" style="font-size:.8rem">never opened — nothing has looked inside
-           this slot. That is not the same as empty.</div></div>`
-      : `<div class="chest"><h3>chest ${ch.slot}</h3>
+           this chest. That is not the same as empty.</div></div>`
+      : `<div class="chest"><h3>${esc(ch.slot)}</h3>
            ${meter(ch.fullness.percent, `${ch.fullness.bulk} of ${CHEST_BULK_MAX} bulk`)}
            <div class="dim" style="font-size:.75rem;margin:.35rem 0">
              ${ch.items.length} stack(s) · ${ch.fullness.bulk} bulk ·

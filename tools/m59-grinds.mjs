@@ -112,6 +112,17 @@ function main(argv) {
               (room !== null ? `, room ${room}` : '') +
               `\nmovement epoch ${ep?.ref ? String(ep.ref).slice(0, 9) : 'unknown'}` +
               `${ep?.dirty ? ' (DIRTY — uncommitted movement code)' : ''}\n`);
+  // A ZERO THAT MEANS "NOT MEASURED" MUST NOT BE PRINTED AS THOUGH IT MEANT "NONE HAPPENED".
+  //
+  // The contact half is fed from `terminalMovement`, which sees only the collision-contract
+  // class. The stock client SLIDES along the first blocking wall (`m59-roo.mjs` returns
+  // `blocked: true, slid`), and a slide is not a refusal — so ordinary wall contact never
+  // reaches the hook. Six hours of prod: 330 shuffles, zero contacts. Reporting that silently
+  // would be this repository's most repeated failure committed by a tool built to catch it.
+  if (!rolled.some(b => b.kind === 'wall_contact'))
+    console.log('  NOTE: zero wall_contact episodes here means NOT MEASURED, not "no contact".\n' +
+                '  The detector hangs off the terminal-refusal seam and the mover SLIDES rather\n' +
+                '  than refusing, so ordinary contact is invisible to it. Shuffles are unaffected.\n');
   console.log('  total    worst    n   p90     kind          where            reason');
   for (const b of rolled.slice(0, Number(arg('limit', 30)))) {
     const trap = b.ms_max > b.ms_total * 0.6 && b.count > 1 ? ' <- one long one' : '';

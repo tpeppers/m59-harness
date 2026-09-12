@@ -660,3 +660,12 @@ _verify2.mjs
 # `m59-recordjam.mjs` already does exactly that, turning every player into `player A` so the
 # file becomes a test case rather than a diary.
 /substrate/scratch/
+
+# THE SCRATCHPAD CORK BOARD. <fleet>.scratchpads.json names this machine's pads, the characters
+# they claim, and the notes sessions have left each other. Orders-shaped by the loadouts
+# argument -- a pin says something is driving OUR fleet right now -- so it is not committed. It
+# does not need git to travel: the board coordinates across CHECKOUTS by living in one directory
+# both point at (M59_BOARD_DIR, falling back to M59_RUNLOCK_DIR), the same mechanism and the same
+# caveat as the run lock. Committed, a stale pin from somebody else's afternoon would look like a
+# live claim on a character.
+/substrate/*.scratchpads.json

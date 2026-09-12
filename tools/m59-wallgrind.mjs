@@ -16,6 +16,19 @@
 //   CONTACT   The mover asks for a step, the geometry refuses it, and the character stays put.
 //             Repeated against the same square this is a wall being leaned on.
 //
+//             AND IT IS CURRENTLY NEARLY BLIND, WHICH THE READER MUST BE TOLD RATHER THAN LEFT
+//             TO INFER FROM A ZERO. Six hours of prod produced 330 shuffles and ZERO contacts.
+//             That is not a clean road. `m59-roo.mjs` returns `{ blocked: true, slid: moved }`
+//             — the stock client SLIDES along the first blocking wall rather than refusing —
+//             and this detector is fed from `terminalMovement`, which sees only the
+//             collision-contract class. A SLIDE IS NOT A REFUSAL, so ordinary wall contact
+//             never reaches the hook. The rail session measured mean slide fractions of 0.86
+//             on a bad aim against 0.06 on a good one, which is the scale of what is invisible.
+//
+//             Fixing it means a hook at the mover's step result rather than at the terminal
+//             seam. Until then `wall_contact: 0` means NOT MEASURED, and `m59-grinds.mjs` says
+//             so in the report rather than letting the number speak.
+//
 //   SHUFFLE   The character alternates between two or three squares, for ever, going nowhere.
 //             CLAUDE.md has carried the warning for months — *"a stall detector that requires
 //             STILLNESS misses the commonest way to stand still: a two-square shuffle against a
@@ -77,9 +90,19 @@ const sq = s => `${s?.room}:${s?.row},${s?.col}`;
 /**
  * Feed position samples in, get episodes out.
  *
- * A sample is `{ at, room, row, col, refused, destination }`. `refused` is the mover's own
- * reason string when a step was declined and null when it was not; `destination` is the room
- * the character is trying to reach, or null when it is not trying to go anywhere.
+ * A sample is `{ at, room, row, col, refused, destination, doing }`. `refused` is the mover's
+ * own reason string when a step was declined and null when it was not; `destination` is the
+ * room the character is trying to reach, or null when it is not trying to go anywhere; `doing`
+ * is the keeper's own word for what it is up to.
+ *
+ * WHY `doing` IS CARRIED, AND IT IS THE DIFFERENCE BETWEEN DESCRIBING AND DIAGNOSING. The first
+ * version recorded where and how long and nothing else. Six hours of prod later it had 330
+ * shuffles, 54 of 57 minutes of them inside the two farm rooms — and the worst square, 39
+ * r7c27, turned out to be geometrically perfect: one floor level, uniform across 256 sample
+ * points, all eight headings accepted at 64, 256 and 512 units. So it is not a cliff, not a
+ * ledge and not a wall, and the instrument could not say what it WAS, because it never recorded
+ * what the character was trying to do. An episode that cannot name the intent it interrupted
+ * is a description; with the intent it is a bug report.
  *
  * Episodes come back as `{ kind, room, row, col, began, ended, ms, samples, reason, squares }`.
  * Nothing is emitted until an episode ENDS, because an episode without a duration is the
@@ -102,16 +125,21 @@ export function makeTracker({ window = WINDOW, shuffleMax = SHUFFLE_MAX_SQUARES,
     if (contact.refusals >= minRefusals) {
       out.push({ kind: 'wall_contact', room: contact.room, row: contact.row, col: contact.col,
                  began: contact.began, ended: at, ms: at - contact.began,
-                 samples: contact.samples, reason: contact.reason, squares: 1 });
+                 samples: contact.samples, reason: contact.reason, squares: 1,
+                 doing: contact.doing ?? null });
     }
     contact = null;
   };
 
   const closeShuffle = (at) => {
     if (!shuffle) return;
+    // EVERY INTENT SEEN DURING THE EPISODE, not just the one it ended on. A loop that
+    // alternates between two decisions is the hypothesis this field exists to test, and
+    // recording only the last one would hide exactly that.
     out.push({ kind: 'shuffle', room: shuffle.room, row: shuffle.row, col: shuffle.col,
                began: shuffle.began, ended: at, ms: at - shuffle.began,
-               samples: shuffle.samples, reason: null, squares: shuffle.squares.size });
+               samples: shuffle.samples, reason: null, squares: shuffle.squares.size,
+               doing: [...shuffle.doing].filter(Boolean).sort().join('+') || null });
     shuffle = null;
   };
 
@@ -144,7 +172,7 @@ export function makeTracker({ window = WINDOW, shuffleMax = SHUFFLE_MAX_SQUARES,
         } else {
           closeContact(at);
           contact = { key: sq(s), room: s.room, row: s.row, col: s.col, began: at,
-                      refusals: 1, samples: 1, reason: String(s.refused) };
+                      refusals: 1, samples: 1, reason: String(s.refused), doing: s.doing ?? null };
         }
       } else if (contact) {
         // A step that LANDED ends the contact, wherever it landed. Leaning on a wall and then
@@ -164,9 +192,11 @@ export function makeTracker({ window = WINDOW, shuffleMax = SHUFFLE_MAX_SQUARES,
         const moved = squares.size > 1;              // a still body is the OTHER detector's job
         const revisits = transitions > squares.size - 1;
         if (moved && revisits && squares.size <= shuffleMax) {
-          if (shuffle) { shuffle.samples += 1; for (const k of squares) shuffle.squares.add(k); }
+          if (shuffle) { shuffle.samples += 1; for (const k of squares) shuffle.squares.add(k);
+                         if (s.doing) shuffle.doing.add(s.doing); }
           else shuffle = { room: s.room, row: s.row, col: s.col, began: ring[0].at,
-                           samples: window, squares: new Set(squares) };
+                           samples: window, squares: new Set(squares),
+                           doing: new Set(ring.map(x => x.doing).filter(Boolean)) };
         } else if (shuffle) {
           closeShuffle(at);
         }

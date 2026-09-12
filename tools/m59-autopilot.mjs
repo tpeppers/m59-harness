@@ -62,8 +62,7 @@ import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telem
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
-import { StorageCache, BOOKMAKERS_HALL_ROOM, BOOKMAKERS_CHESTS,
-         chestSlotsByPosition } from './m59-storage.mjs';
+import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
 import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
@@ -10960,6 +10959,9 @@ export class Autopilot {
       closed = this.grind.push({
         at: at.at, room: at.room, row: at.row, col: at.col,
         refused, destination: going.includes(doing) ? (at.room ?? true) : null,
+        // The keeper's own word for what it is up to, so an episode can name the intent it
+        // interrupted rather than only the place. See the note in m59-wallgrind.mjs.
+        doing: doing ?? null,
       });
     } catch { return; }   // instrumentation must never cost the keeper a pass
     const hour = Math.floor(Date.now() / 3600_000);
@@ -10989,6 +10991,7 @@ export class Autopilot {
         recordEvent(this.who(), e.kind, {
           room: e.room, row: e.row, col: e.col, ms: e.ms, samples: e.samples,
           reason: e.reason, squares: e.squares, began: e.began, ended: e.ended,
+          doing: e.doing ?? null,
         });
       } catch { /* a ledger write must never cost the errand */ }
     }
@@ -19996,12 +19999,9 @@ export class Autopilot {
         return null;
       }
       const items = (box.items ?? []).map(o => ({ id: o.id, name: o.name, amount: o.amount || 1 }));
-      (store ?? new StorageCache()).writeChest(slot, {
+      // FILED UNDER THE SQUARE WE JUST READ IT AT, never under a number decided elsewhere.
+      (store ?? new StorageCache()).writeChest(chest.key ?? chestKey(chest), {
         object_id: chest.id, room: this.s.world?.room?.num ?? c.room?.id ?? null,
-        // THE SQUARE, WHICH IS WHAT THE NEXT VISIT WILL MATCH ON. Recorded from the object
-        // we actually just read, never from a table — so the mapping is learned from the
-        // world rather than asserted at it, and a hall laid out differently still works.
-        row: chest.row ?? null, col: chest.col ?? null,
         items, by: c.me?.name ?? this.name ?? this.s.name });
       this.note('refreshed the guild chest cache', { slot, stacks: items.length, why });
       return items;
@@ -20143,43 +20143,33 @@ export class Autopilot {
     await this.sayHallPassword().catch(() => {});
     await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
-    // WHICH CHEST IS WHICH, BY SQUARE. An object id is a handle the server recycles — 23% of
-    // stored ids named a different object three days later — so the slot->id cache that used
-    // to address these had silently stopped addressing anything at all. A chest is
-    // GETTABLE_NO and nothing moves it, so where it stands is its durable name, and it is
-    // also how a person would point at one.
-    const chestsHere = [...(c.room?.objects?.values?.() ?? [])]
-      .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || ''))
-      .map(o => ({ id: o.id, row: o.row, col: o.col }));
-    const placed = chestSlotsByPosition({
-      objects: chestsHere,
-      known: chests.map(ch => ({ slot: ch.slot, row: ch.row ?? null, col: ch.col ?? null })),
-      expected: BOOKMAKERS_CHESTS,
-    });
-    if (!placed.complete)
-      this.note('could not see every guild chest in this room', {
-        saw: chestsHere.length, expected: BOOKMAKERS_CHESTS, why: placed.why });
-    if (placed.unplaced.length)
-      this.note('a chest here does not match any slot we know', { unplaced: placed.unplaced,
-        why: 'it will be adopted the next time every chest is visible in one reading — ' +
-             'assigning it by order from a short read is how one chest\'s contents get ' +
-             'filed under another chest\'s slot' });
+    // EVERY CHEST IN THIS ROOM, EACH NAMED BY ITS OWN SQUARE. No mapping, no ordering and no
+    // completeness requirement: the name is read off the object, so a chest seen at r18c6 is
+    // r18c6 and a reading that shows two chests is a reading of two chests. An object id is
+    // a handle the server recycles — 23% of stored ids named a different object three days
+    // later — and nothing here uses one to address anything.
+    const here = new Map();
+    for (const o of c.room?.objects?.values?.() ?? []) {
+      if (!/chest/i.test(c.rsc.get(o.nameRsc) || '')) continue;
+      const key = chestKey(o);
+      // A chest whose position did not arrive cannot be named, and an unnamed chest must not
+      // be guessed at — that is the whole mis-filing hazard, in one branch.
+      if (!key) { this.note('a chest here has no readable position', { id: o.id }); continue; }
+      here.set(key, { id: o.id, row: o.row, col: o.col, key });
+    }
 
     const book = new StockpileBook({ fleet: TITHE_FLEET });
     const took = [];
     let saved = 0;
     for (const want of plan.fromChest) {
-      const target = placed.slots.get(Number(want.slot)) ?? null;
+      const target = here.get(String(want.slot)) ?? null;
       if (!target) {
-        // THIS USED TO BE A BARE `continue` -- the one branch that said nothing at all.
-        // A stale object id is the normal state after a hall changes hands or a restart
-        // recycles ids, and it disables the slot completely: the character walks to
-        // Barloque, finds no chest it recognises, and buys from the merchant anyway while
-        // three hundred elderberry sit a metre away.
-        this.note('a guild chest slot has no chest here', { slot: want.slot,
-          chests_in_room: chestsHere.map(o => `r${o.row}c${o.col}`),
-          why: 'no chest is standing on the square recorded for that slot, and this reading ' +
-               'was not complete enough to adopt one by order' });
+        // THIS USED TO BE A BARE `continue` -- the one branch that said nothing at all. A
+        // character walks to Barloque, finds no chest where the stockpile expected one, and
+        // buys from the merchant anyway while three hundred elderberry sit a metre away.
+        this.note('no chest stands on that square', { chest: want.slot,
+          chests_in_room: [...here.keys()],
+          why: 'the stockpile expected a chest at that square and this room has none there' });
         continue;
       }
 
@@ -20593,43 +20583,33 @@ export class Autopilot {
     // slot. Falling back to the order chests appear in the room would be a guess that
     // silently files chest 3's contents into chest 1 — so a slot whose id is not in the
     // room is skipped and named rather than substituted.
-    // WHICH CHEST IS WHICH, BY SQUARE. An object id is a handle the server recycles — 23% of
-    // stored ids named a different object three days later — so the slot->id cache that used
-    // to address these had silently stopped addressing anything at all. A chest is
-    // GETTABLE_NO and nothing moves it, so where it stands is its durable name, and it is
-    // also how a person would point at one.
-    const chestsHere = [...(c.room?.objects?.values?.() ?? [])]
-      .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || ''))
-      .map(o => ({ id: o.id, row: o.row, col: o.col }));
-    const placed = chestSlotsByPosition({
-      objects: chestsHere,
-      known: chests.map(ch => ({ slot: ch.slot, row: ch.row ?? null, col: ch.col ?? null })),
-      expected: BOOKMAKERS_CHESTS,
-    });
-    if (!placed.complete)
-      this.note('could not see every guild chest in this room', {
-        saw: chestsHere.length, expected: BOOKMAKERS_CHESTS, why: placed.why });
-    if (placed.unplaced.length)
-      this.note('a chest here does not match any slot we know', { unplaced: placed.unplaced,
-        why: 'it will be adopted the next time every chest is visible in one reading — ' +
-             'assigning it by order from a short read is how one chest\'s contents get ' +
-             'filed under another chest\'s slot' });
+    // EVERY CHEST IN THIS ROOM, EACH NAMED BY ITS OWN SQUARE. No mapping, no ordering and no
+    // completeness requirement: the name is read off the object, so a chest seen at r18c6 is
+    // r18c6 and a reading that shows two chests is a reading of two chests. An object id is
+    // a handle the server recycles — 23% of stored ids named a different object three days
+    // later — and nothing here uses one to address anything.
+    const here = new Map();
+    for (const o of c.room?.objects?.values?.() ?? []) {
+      if (!/chest/i.test(c.rsc.get(o.nameRsc) || '')) continue;
+      const key = chestKey(o);
+      // A chest whose position did not arrive cannot be named, and an unnamed chest must not
+      // be guessed at — that is the whole mis-filing hazard, in one branch.
+      if (!key) { this.note('a chest here has no readable position', { id: o.id }); continue; }
+      here.set(key, { id: o.id, row: o.row, col: o.col, key });
+    }
     const book = new StockpileBook({ fleet: TITHE_FLEET });
     const done = [];
     let contributed = 0;
     for (const chest of want.chests) {
       if (!chest.total) continue;
-      const target = placed.slots.get(Number(chest.slot)) ?? null;
+      const target = here.get(String(chest.slot)) ?? null;
       if (!target) {
-        // SAY IT LOUDLY, not just into the return value. An id that no longer names a chest
-        // in this room is the EXPECTED state after a hall is bought or a server restart
-        // recycles ids, and the fix is one `container agent=… target=… slot=N` per chest.
-        this.note('a guild chest slot has no chest here', { slot: chest.slot,
-          chests_in_room: chestsHere.map(o => `r${o.row}c${o.col}`),
-          why: 'no chest is standing on the square recorded for that slot, and this reading ' +
-               'was not complete enough to adopt one by order' });
-        done.push({ slot: chest.slot, put: 0,
-          why: 'no chest in this room stands where that slot\'s chest stands' });
+        // SAY IT LOUDLY, not just into the return value. The plan names a square and this
+        // room has no chest on it — which is a real disagreement worth seeing, not a silence.
+        this.note('no chest stands on that square', { chest: chest.slot,
+          chests_in_room: [...here.keys()],
+          why: 'the guild plan names a chest at that square and this room has none there' });
+        done.push({ slot: chest.slot, put: 0, why: 'no chest stands on that square' });
         continue;
       }
       let intoThisChest = 0;
