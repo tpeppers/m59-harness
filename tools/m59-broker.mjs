@@ -2076,6 +2076,23 @@ class KeeperProxy {
       // still threw after being 'fixed'. `c` is this object, not the KeeperProxy that built it —
       // the comment forty lines down says so in as many words.
       requestRescue: () => act('rescue', {}),
+      // SPEAKING WAS THE ONE VERB THE PROXY NEVER FORWARDED, and a guild hall is full of
+      // doors and merchants that only answer speech.
+      //
+      // The keeper has implemented `say` all along (m59-keeper-process.mjs, case 'say'); the
+      // broker-side proxy simply had no method for it, so `c.say(...)` threw
+      // "c.say is not a function" on every keeper-backed session — which is every character
+      // in the fleet. `askRent` says "rent" to Frular exactly this way, which is why the guild
+      // rent could never be read and `rent.json` could never be written, and therefore why the
+      // whole guild stockpile stayed switched off behind "nobody has asked Frular yet".
+      //
+      // Measured on prod 2026-09-12: Rowlf standing in room 700 with Frular in the room,
+      // `tithe action=status` -> "c.say is not a function".
+      //
+      // `kind` 1 is ordinary speech. It matters that this is not an emote: the guild hall's
+      // secret door opens on `type <> SAY_EMOTE` (ghall.kod:967), so an emote would be
+      // refused in silence.
+      say: (text, type = 1) => act('say', { text, kind: type }),
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
