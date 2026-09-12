@@ -67,6 +67,34 @@ import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { loadMerchants } from './m59-merchants.mjs';
 import { loadSpells, karmaAllows, requiredKarma, SCHOOLS } from './m59-spells.mjs';
+
+// THE SPELL COST TABLE, LOADED ONCE AND ALLOWED TO BE ABSENT.
+//
+// `spellReport` needs two lookups to tell a cast that happened from one that was refused for
+// free: what a spell costs in mana, and whether it is an enchantment (a free cast means the
+// target already had it) or a spell that produces something (a free cast means nothing came
+// out). Both come off the extracted table, which lives in gitignored substrate — so a fresh
+// checkout has none, and a report that invented costs would convict correct behaviour.
+// Returning {} leaves every ambiguous cast counted `unmeasured`, which is the honest answer.
+let _spellCost = null;
+function spellCostLookups() {
+  if (_spellCost === null) {
+    _spellCost = {};
+    try {
+      const mana = new Map(), kinds = new Map();
+      for (const sp of (loadSpells().spells ?? [])) {
+        if (!sp.name) continue;
+        const k = String(sp.name).toLowerCase();
+        mana.set(k, sp.mana);
+        kinds.set(k, String(sp.parent ?? sp.cls ?? ''));
+      }
+      if (mana.size) _spellCost = { manaOf: (n) => mana.get(String(n || '').toLowerCase()),
+                                    kindOf: (n) => kinds.get(String(n || '').toLowerCase()) };
+    } catch { /* no table here; the report says `unmeasured` and means it */ }
+  }
+  return _spellCost;
+}
+
 import * as skills from './m59-skills.mjs';
 import * as buyers from './m59-buyers.mjs';
 import { supplyBetween as supplyExchange } from './m59-supply.mjs';
@@ -14162,7 +14190,15 @@ const TOOLS = [
       const sinceMs = (Number(a.hours) > 0 ? Number(a.hours) : 24) * 3600 * 1000;
       // Before the per-character branch: `spells` wants the same narrowing but a
       // different report, and falling through would give the level summary instead.
-      if (a.spells) return spellReport({ sinceMs, character: a.character || null });
+      //
+      // AND IT GETS THE COST TABLE, or the report cannot tell a cast that went off from one
+      // that was refused for free. `ok` on a cast row is the caller's own judgement and a
+      // buff has nothing to diff, so without `manaOf` every already-enchanted no-op reads as
+      // a success — 14 blesses at `worked: 100%` from a caster whose mana never moved. The
+      // table is built into gitignored substrate, so a checkout without one still answers,
+      // with those casts counted `unmeasured` rather than convicted or excused.
+      if (a.spells) return spellReport({ sinceMs, character: a.character || null,
+                                         ...spellCostLookups() });
       if (a.character) {
         const { samples, events } = readLedger({ sinceMs });
         const mine = samples.filter(x => x.character?.toLowerCase() === a.character.toLowerCase());
