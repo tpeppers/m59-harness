@@ -303,23 +303,109 @@ These are pad work, in roughly this order. Building them *is* the task, not a de
    against the room's generator. **A monster standing in a jump blocks it**, height-agnostically, and
    that is the commonest cause of "it worked yesterday and refuses today". Turning spawns off removes
    the single largest source of noise in movement work.
-2. **`skipTo` / `runUntil`.** `skipTo` is not "do not run steps 0..N" — it is **establish the world
-   state those steps would have produced**, by DM fiat. A step's `verify` is therefore its skip
-   contract, and a step with no `verify` is one you cannot skip to. A checkpoint is a predicate plus a
-   way to establish it, never a saved blob:
+2. **Telemetry good enough to estimate a monster's hit points.** `captureRoom` has an `hpEstimate`
+   hook and nothing fills it, so every monster in every captured scene records `unknown`. That is
+   the honest answer and it is also the one that makes a scene least useful to replay.
+3. **A `holds` predicate for "this weapon is enchanted".** The fact is not on the wire at all,
+   which is why `establishCost: 'free'` exists — see the citation rule below. Somebody has to
+   decide whether a read is possible before that stops being a shortcut.
 
-   ```js
-   checkpoint('at the ledge', {
-     holds, establish, establishCost: 'free',   // free requires a citation; only free
-   })                                            // establishes on UNKNOWN, else it refuses
-   ```
+---
 
-   `holds` is re-evaluated on resume and never cached, never keyed on an object id (ids recycle
-   within hours), and is allowed to answer unknown.
-3. **`ScratchToScript()`** — the promotion. Lifts composites into a module, stamps `provenance`
-   (pinned at HEAD, `touches` seeded **narrow**), fills `recipe.cost.measured` from the session
-   transcript, and emits a `-test.mjs` from the recorded outcomes. It must land as a **draft** and
-   refuse to call itself finished until the blanks are filled.
+## `skipTo` / `runUntil` — BUILT
+
+```
+> dry raid-farnohl agents=t4 skipTo=armed        which steps run, and which are omitted
+> go  raid-farnohl agents=t4 skipTo=armed        run from there
+> go  raid-farnohl agents=t4 runUntil=at-the-door stop after that step, and say so
+```
+
+A **mark** is a field on a step, never a step of its own — `{ do: 'travel', to: 40, mark:
+'at-the-hall' }`. The compiler does not read it, so marking costs nothing and every existing pad
+keeps working. Composites are the extension point; new primitives are not.
+
+**`skipTo` is not "do not run steps 0..N".** The house rule at the bottom of this file says no
+auto-skip, and the reason is that the world moved between attempts — conjures evaporate, keepers
+roam and re-equip. So a skip is licensed by a checkpoint that declares which marks it puts the
+world past:
+
+```js
+checkpoint('the fleet is at the hall, armed', {
+  holds, establish: { dm, played },
+  covers: ['at-the-hall', 'armed'],     // <- the licence
+})
+```
+
+You may resume at most **one step past the furthest covered mark**. Anything further is refused,
+and the refusal lists the steps that would have been dropped with nothing to re-establish them:
+
+```
+refusing to skip to step 4 ("engaged"): the furthest covered point is step 2 ("armed", by the
+checkpoint "the fleet is at the hall, armed"), so you may resume at step 3 at the latest.
+  These would be skipped with nothing to re-establish them:
+    3. act('enchant_weapon')
+  A skip that omits work is not a skip, it is a different errand with the same name.
+```
+
+A checkpoint with no `covers` licenses nothing, which is the default and the safe one. **The skip
+is judged before the setup runs** — learning it was illegal after the DM socket turned the spawners
+off is learning it at the most expensive moment — and `dry` prints the whole list with the omitted
+steps struck through, because the question a skip raises is *what am I not doing*.
+
+`runUntil` needs no coverage: running fewer steps cannot violate a guarantee about the ones that
+do run. What it does is leave the fleet mid-errand, so the render says so — and the run is recorded
+as **partial**, which is what stops it counting as evidence at promotion.
+
+---
+
+## `ScratchToScript()` — BUILT
+
+```
+> promote raid-farnohl                what stands between this pad and a v1.0 file
+> promote raid-farnohl write=1        generate it, load it back, and only then keep it
+```
+
+Promotion changes **nothing about the steps**. A pad's only output is `steps[]` and so is a
+fleetscript's; if promotion had to rewrite an errand to make it runnable, the pad had been allowed
+to do something a fleetscript cannot and the pad stack is wrong. What changes is the claim.
+
+Five refusals, each one a way this goes wrong:
+
+| | |
+|---|---|
+| **provenance** | a fleetscript pins the code it was written against |
+| **evidence** | at least one recorded run that succeeded **and was not sliced** |
+| **prod** | a checkpoint reachable only by `dm`/`scene`/`shadow` is a lab affordance |
+| **no pad imports** | a promoted script may be loaded by a keeper; the pad stack may not travel |
+| **collision** | a name already in `tools/fleetscripts/` is never overwritten |
+
+The evidence rule is the one that ties this to the section above: a pad promoted on a
+`runUntil=step-4` run is a claim about four steps wearing the name of eleven. `substrate/
+fleetscratch-runs.jsonl` records every `go` with its slice, and `evidenceFor` counts only whole
+successful runs.
+
+The `prod` rule is the doc's own sentence made mechanical: *the deliverable is the prod walk. A
+route that only works with spawns off is not done; it is diagnosed.* A pad that cannot satisfy it
+stays a pad, which is not a failure — it is the honest state.
+
+### It is verified by re-compiling, and that is not ceremony
+
+The generated file is staged, **loaded back through the same `loadFleetScripts` the harness uses**,
+and its compiled steps are diffed against the pad's. Only then does it move into place.
+
+That check exists for one specific failure. `Function.prototype.toString()` gives a function's
+source and **not its closure**, so a `steps` that calls a helper defined beside it in the pad emits
+source referencing a name the new file has never heard of. The symptom would be a ReferenceError
+at load, weeks later; the diff turns it into *"declare that helper in `composites`"*, before
+anything is left on disk. Hence `composites: { … }` — the pad names the helpers it wants carried
+across, and they are emitted as real exported functions. That is the operator's *"internal
+functions that later get broken into their own scripts when you call ScratchToScript()"*, made
+safe to do mechanically.
+
+Two smaller things the generator gets right: it emits `export const script`, like the other files
+in `tools/fleetscripts/`, because generated code should be indistinguishable from the code around
+it; and it drops imports **nothing in the emitted body uses** — the usual one being `checkpoint`,
+which a pad imports for its setup, and the setup is exactly what promotion leaves behind.
 
 ---
 
@@ -573,10 +659,49 @@ rather than as one of the four strategies above. The whole point of a shadow fle
 we…"*, and a character standing in an empty copy of a room answers a narrower question than the one
 being asked.
 
-`shadow` is declared as a strategy and **is not wired to `m59-shadow.mjs` yet.** The shape it wants:
-`dress` becomes a scene load whose actor list is filtered to the roster, so that cloning a fleet
-*with* its surroundings is the same code path as rebuilding a room — one `holds`, one loader, two
-scopes.
+### That is now wired — `m59-shadowscene.mjs`
+
+`dress` **is** a scene load with the actor list filtered to our own characters. The diagnosis above
+was exactly right and the fix was small, because the two halves were each missing what the other
+had: `dress` had an actor list and no room, `executeLoad` had a room and no way to say *only these
+actors*.
+
+| | |
+|---|---|
+| `snapshotToScene` | a shadow snapshot **is** a scene — same schema, same `observed`/`unknown` marking, characters as actors with `mine: true` |
+| `filterActors` | the half `executeLoad` was missing: `only` / `except` / `kinds` / `mine` |
+| `dressPlan` | the pure part of `cmdDress` as DM commands, from the **same** `statCmds` / `healthCmds` it used inline — one operation, not two opinions about one |
+| `shadowRunner` | what `reach()` hands `establish: { shadow: 'prod-mirror' }` to |
+
+So the shadow fleet can clone surroundings now, which is the thing this section said it never
+could:
+
+```js
+filterActors(scene, { mine: false })   // the monsters and furniture, fleet untouched
+filterActors(scene, { mine: true })    // exactly what `dress` does
+scene                                   // the room AND the fleet standing in it
+```
+
+**`m59-shadow.mjs` itself is gitignored** (`/tools/m59-shadow.mjs`) because it reads live
+production characters, so the `cmdDress` wiring exists only on the machine that owns the
+roster. `m59-shadowscene.mjs` is committed: it is pure transformation over a snapshot it is
+handed, reads no production and opens no socket. The header there carries the three lines
+`cmdDress` needs, for a checkout that does not have the tool.
+
+`node tools/m59-shadow.mjs dress --only=hk2,hk3` dresses part of the fleet. A name in `--only`
+that matches no actor refuses the whole dress rather than quietly dressing the rest — the part that
+landed looks like the whole.
+
+Because it is a strategy now, *"the fleet is dressed like production"* is a checkpoint with a
+`holds` predicate like any other, which means it is **asked twice**, and a dress that silently
+landed somebody in the wrong room is caught by the same mechanism that catches a DM teleport
+landing on the wrong square.
+
+Two things deliberately stayed procedural, because both must ask the world before they can decide:
+the weapon phase reads the character's inventory (created unconditionally, it accumulated — five
+runs left every shadow carrying five hammers), and the placement phase verifies each relocate one
+at a time because `UtilGoNearSquare` never says no. A pure plan cannot do either. What it can do is
+take the same filtered actor list, which is what makes the two halves one operation.
 
 ## How much of this run was real — modes and the gap ledger
 
@@ -683,7 +808,8 @@ This is the worked example, and it is the shape for the Marco Polo work.
   finished typing. `watch` re-compiles and shows the diff; `go` runs.
 - **No auto-skip of steps that succeeded last attempt.** The world moved between attempts —
   conjures evaporate, keepers roam and re-equip. `skipTo` is the explicit version and it
-  *re-establishes* rather than assumes.
+  *re-establishes* rather than assumes — a checkpoint's `covers` is the licence, and a skip past
+  anything uncovered is refused by name. See the `skipTo` section above.
 - **Composites yes, primitives no. No raw `call()`.** `act` or nothing.
 - **What reloads, and what does not.** A pad's `steps[]` reload with no restart; nothing long-lived
   imports the pad stack. But **how** a step behaves is broker code (`travel`, `fight`), and substrate

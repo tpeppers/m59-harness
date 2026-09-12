@@ -159,6 +159,65 @@ console.log('\nA SETUP THAT FAILS STOPS THE ERRAND — the world is not in the d
   ok('and teardown did NOT run after a failed setup', !/TEARDOWN-RAN/.test(out), out.slice(-600));
 }
 
+console.log('\nAN UNCOVERED SKIP IS REFUSED BEFORE THE SETUP FORCES ANYTHING');
+{
+  const dir = join(root, 'skip');
+  mkdirSync(dir);
+  // The setup announces itself, so this can prove the refusal came FIRST. That ordering is the
+  // whole value of judging the slice up front: learning the skip was illegal after the DM socket
+  // has already turned the spawners off is learning it at the most expensive moment.
+  writeFileSync(join(dir, 'p.mjs'),
+    `export const script = {\n` +
+    `  name: 'skippy',\n` +
+    `  params: { agents: { type: 'agents', required: true } },\n` +
+    `  async setup() { console.log('SETUP-RAN'); },\n` +
+    `  async steps() { return [\n` +
+    `    { do: 'travel', to: 1, mark: 'one' },\n` +
+    `    { do: 'travel', to: 2 },\n` +
+    `    { do: 'travel', to: 3, mark: 'three' },\n` +
+    `  ]; },\n};\n`);
+  pin('skippy', ['zz-test-s']);
+  const { out, timedOut } = await session(dir, [
+    // A runUntil needs no coverage, so this one is ALLOWED and renders the strike-through.
+    'dry skippy agents=zz-test-s runUntil=one',
+    'dry skippy agents=zz-test-s skipTo=three',
+    'go skippy agents=zz-test-s skipTo=three',
+  ], { env: { M59_RUNLOCK_DIR: dir } });
+  ok('it did not hang', !timedOut, out.slice(0, 300));
+  // THE WHOLE LIST IS SHOWN EITHER WAY. The question a slice raises is "what am I not doing",
+  // and a render that simply starts at the resume point cannot answer it.
+  ok('dry shows the omitted steps struck through rather than hidden',
+     /~1\. travel/.test(out) && /~2\. travel/.test(out), out.slice(-1200));
+  ok('and a refused slice shows the list unstruck, because none of it was dropped',
+     / 0\. travel/.test(out), out.slice(-1200));
+  ok('and a mark is rendered beside the step that carries it', /<three>/.test(out), out.slice(-900));
+  ok('THE SKIP IS REFUSED — no checkpoint covers anything here',
+     /no checkpoint in this pad's setup covers any mark/.test(out), out.slice(-900));
+  ok('AND THE SETUP NEVER RAN', !/SETUP-RAN/.test(out), out.slice(-900));
+}
+
+console.log('\nA PAD THAT IS NOT SLICING NEVER COMPILES ITS STEPS BEFORE SETUP');
+{
+  const dir = join(root, 'noslice');
+  mkdirSync(dir);
+  // The regression this guards: the slice probe ran unconditionally, which compiled steps()
+  // ahead of the setup it may depend on, and refused a setup-only pad outright because an empty
+  // step list read as "nothing to run". Slicing is opt-in; nobody who did not ask should pay.
+  writeFileSync(join(dir, 'p.mjs'),
+    `export const script = {\n` +
+    `  name: 'setuponly',\n` +
+    `  params: { agents: { type: 'agents', required: true } },\n` +
+    `  async setup() { console.log('SETUP-RAN'); },\n` +
+    `  async steps() { console.log('STEPS-BUILT'); return []; },\n};\n`);
+  pin('setuponly', ['zz-test-n']);
+  const { out } = await session(dir, ['go setuponly agents=zz-test-n'],
+                                { env: { M59_RUNLOCK_DIR: dir } });
+  ok('the setup still runs for a pad whose steps are empty', /SETUP-RAN/.test(out), out.slice(-700));
+  ok('and it runs BEFORE the steps are compiled',
+     out.indexOf('SETUP-RAN') < (out.indexOf('STEPS-BUILT') === -1
+       ? Number.MAX_SAFE_INTEGER : out.indexOf('STEPS-BUILT')), out.slice(-700));
+}
+
 console.log('\nTEARDOWN RUNS EVEN WHEN THE ERRAND FAILS — that is what the finally is for');
 {
   const dir = join(root, 'teardown');
