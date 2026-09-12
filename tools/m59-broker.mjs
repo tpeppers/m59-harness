@@ -6392,13 +6392,51 @@ const TOOLS = [
     run: async (a) => {
       const s = session(a.agent), c = s.need();
       const t = resolveTarget(s, a.target);
+      // THE ANSWER MUST BE ABOUT THE THING THAT WAS ASKED ABOUT.
+      //
+      // This returned `events.find(e => e.id === t.id) || events[0]` — so when the reply for the
+      // requested object had not arrived, it handed back SOME OTHER OBJECT'S description, with
+      // that object's id in its own `id` field. Reproduced on prod 2026-09-12 against one
+      // character's pack, two identical rounds seconds apart:
+      //
+      //   round 1   asked 11567 -> got 11567 (hammer)   8370 -> 8370   8562 -> 8562
+      //   round 2   asked 11567 -> got 8562 (short sword)
+      //
+      // One call in three, and a single call looks perfectly fine. Anything reading item
+      // descriptions — a loot classifier, an identify hook, the compendium — was exposed.
+      //
+      // TWO FAULTS STACKED, AND THE FIRST IS WHY IT WAS INTERMITTENT. `waitFor`'s `since`
+      // defaults to `this.evSeq` READ WHEN waitFor IS CALLED, which here was after the send had
+      // been awaited. A reply that came back inside that await is already behind the cursor, so
+      // it is never matched — and then the next look event to arrive from anywhere satisfies the
+      // wait and `|| events[0]` serves it as the answer. A fast reply was the trigger.
+      //
+      // So: take the cursor BEFORE sending, and keep reading until the id we asked about shows
+      // up or the deadline passes. `waitFor` resolves on the first matching event of any kind,
+      // which for a busy room is routinely somebody else's look, so one call is not enough.
+      const since = c.evSeq;
       await s.pacer.submit('look', () => c.look(t.id));
-      const { events, timedOut } = await c.waitFor({ kinds: ['look'], timeoutMs: 4000 });
-      const hit = events.find(e => e.id === t.id) || events[0];
+      const deadline = Date.now() + 4000;
+      let cursor = since, hit = null, timedOut = false;
+      const others = [];
+      while (!hit) {
+        const left = deadline - Date.now();
+        if (left <= 0) { timedOut = true; break; }
+        const got = await c.waitFor({ since: cursor, kinds: ['look'], timeoutMs: left });
+        if (!got.events.length) { timedOut = true; break; }
+        cursor = got.seq;
+        hit = got.events.find(e => e.id === t.id) ?? null;
+        if (!hit) for (const e of got.events) others.push(e.id);
+      }
+      // AND A REPLY ABOUT SOMETHING ELSE IS NOT A FALLBACK, IT IS EVIDENCE. Naming what did
+      // arrive keeps the old failure diagnosable instead of merely absent.
       if (!hit) return { id: t.id, description: null,
-                         note: timedOut ? 'no reply — the object may not be examinable (OF_NOEXAMINE), ' +
-                                          'or it is a player in another room (user.kod:4383 refuses those)'
-                                        : 'no description' };
+                         note: timedOut && !others.length
+                           ? 'no reply — the object may not be examinable (OF_NOEXAMINE), ' +
+                             'or it is a player in another room (user.kod:4383 refuses those)'
+                           : `no description for ${t.id}. Look replies DID arrive in that window, ` +
+                             `for ${[...new Set(others)].join(', ')} — this call is not going to ` +
+                             `hand you one of those as though it were the answer` };
       return { id: hit.id, what: hit.what, description: hit.description,
                inscription: hit.inscription,
                // Only players carry these. `editable` true means the server would accept a
