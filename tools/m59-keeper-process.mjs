@@ -924,13 +924,31 @@ function state() {
     equipment_items: (() => {
       try {
         const eq = c?.equipment?.();
-        return (eq?.equipped ?? []).map(o => ({
-          name: o.name ?? c?.rsc?.get?.(o.nameRsc) ?? '',
-          nameRsc: o.nameRsc ?? null,
-          id: o.id ?? null,
-          flags: o.flags ?? null,
-          rarity: o.rarity ?? null,
-        })).filter(o => o.name);
+        // THE GRADE IS ON THE INVENTORY OBJECT, NOT ON THE USE-LIST ONE, and passing the
+        // use-list row through unchanged is why this field shipped and still answered null.
+        //
+        // Measured on prod 2026-09-12, the same object id read two ways:
+        //   equipment -> { id: 8376, name: 'mace', rarity: null }
+        //   inventory -> { id: 8376, name: 'mace', rarity: 100, unidentified: true }
+        //
+        // BP_USE_LIST carries ids and little else; the rarity arrives with ToCliInventory. So
+        // join on the id, which is safe here and nowhere else: both lists come from the SAME
+        // client in the same process at the same moment, which is the one condition under
+        // which an object id may be trusted (they are renumbered on every save and recycle
+        // within hours). `rarity` stays null when the pack has not been read yet — an absent
+        // grade must not read as a real one.
+        const byId = new Map();
+        for (const o of (c?.inventory ?? [])) if (o?.id != null) byId.set(o.id, o);
+        return (eq?.equipped ?? []).map(o => {
+          const inv = o.id != null ? byId.get(o.id) : null;
+          return {
+            name: o.name ?? c?.rsc?.get?.(o.nameRsc) ?? '',
+            nameRsc: o.nameRsc ?? null,
+            id: o.id ?? null,
+            flags: o.flags ?? inv?.flags ?? null,
+            rarity: o.rarity ?? inv?.rarity ?? null,
+          };
+        }).filter(o => o.name);
       } catch { return []; }
     })(),
     // STRUCTURED, BECAUSE `pack` IS PROSE. "elderberry (x30)" is for a human reading a

@@ -196,6 +196,65 @@ ok('a missing grade is not a clean one', () => {
 // it takes the fleet lock. This is the exact expression from m59-broker.mjs's KeeperProxy:
 // a keeper that sends `equipment_items` carries grades, one that sends only `equipment` does
 // not, and `grades_known` is what stops the second reading as "nothing is cursed".
+
+// THE GRADE IS ON THE INVENTORY OBJECT, NOT ON THE USE-LIST ONE. BP_USE_LIST carries ids and
+// little else; the rarity arrives with ToCliInventory. So the keeper's equipment serializer
+// passing its use-list rows through unchanged shipped the field and still answered null —
+// measured on prod, the same object id read two ways:
+//
+//   equipment -> { id: 8376, name: 'mace', rarity: null }
+//   inventory -> { id: 8376, name: 'mace', rarity: 100, unidentified: true }
+//
+// This is the one place an object id may be trusted: both lists come off the SAME client, in
+// one process, at one moment. Anywhere else they are renumbered by every save and recycle
+// within hours.
+console.log('\nthe equipped row takes its grade from the pack');
+{
+  const join = (equipped, inventory) => {
+    const byId = new Map();
+    for (const o of inventory) if (o?.id != null) byId.set(o.id, o);
+    return equipped.map(o => {
+      const inv = o.id != null ? byId.get(o.id) : null;
+      return { name: o.name, id: o.id ?? null,
+               flags: o.flags ?? inv?.flags ?? null,
+               rarity: o.rarity ?? inv?.rarity ?? null };
+    });
+  };
+
+  ok('an ungraded use-list row picks the grade up off the matching pack row', () => {
+    const r = join([{ id: 8376, name: 'mace' }], [{ id: 8376, name: 'mace', rarity: 100 }]);
+    assert.equal(r[0].rarity, 100);
+    assert.equal(isUnidentified(r[0]), true);
+  });
+
+  ok('a CURSED grade crosses the same way, which is the case this exists for', () => {
+    const r = join([{ id: 8380, name: 'mace' }], [{ id: 8380, name: 'mace', rarity: 200 }]);
+    assert.equal(isCursed(r[0]), true);
+  });
+
+  ok('the use-list wins when it has an opinion of its own', () => {
+    const r = join([{ id: 1, name: 'mace', rarity: 200 }], [{ id: 1, name: 'mace', rarity: 0 }]);
+    assert.equal(r[0].rarity, 200, 'not overwritten by the pack');
+  });
+
+  // AN UNREAD PACK IS NOT AN UNGRADED ITEM. The join has to leave null alone rather than
+  // invent a grade, or this becomes the same absent-reads-as-negative bug one layer down.
+  ok('no matching pack row leaves the grade null rather than guessing', () => {
+    const r = join([{ id: 8376, name: 'mace' }], []);
+    assert.equal(r[0].rarity, null);
+    assert.equal(rarityName(r[0].rarity), null, 'and null still has no name');
+    assert.equal(isCursed(r[0]), false, 'so the predicate answers false, not true');
+  });
+
+  // IDS MAY ONLY BE JOINED WITHIN ONE READ. A stale id matching a recycled object is exactly
+  // the trap CLAUDE.md documents; pinned here so the next person does not widen this join
+  // across two separate reads.
+  ok('a row with no id at all is carried through ungraded', () => {
+    const r = join([{ id: null, name: 'mace' }], [{ id: 8376, name: 'mace', rarity: 200 }]);
+    assert.equal(r[0].rarity, null, 'no id, no join — never matched by name');
+  });
+}
+
 console.log('\nthe keeper-backed rebuild keeps both shapes apart');
 {
   const rebuild = (s) => ({
