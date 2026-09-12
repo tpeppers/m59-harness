@@ -1,0 +1,147 @@
+# syntax=docker/dockerfile:1.7
+# Meridian 59 lab-only DETERMINISTIC SEED image.
+#
+# Adapted from Dockerfile.sim-clock and deliberately kept in its shape: the container
+# re-checks the same contract the wrapper checked, because a build that trusts its caller
+# is a build whose provenance labels mean nothing.
+#
+# What it adds to a stock server: a [SimSeed] config group and one srand(N) in main.c,
+# immediately after LoadConfig and before anything can draw. OFF BY DEFAULT -- a server
+# built from this image with seeding disabled behaves exactly like the stock one, which is
+# the property that lets a harness treat the patch as optional.
+
+ARG SOURCE_COMMIT
+ARG PATCH_SHA256
+ARG SIM_SEED=0
+
+# ---------------------------------------------------------------- build
+
+FROM debian:bookworm-slim AS build
+
+ARG SOURCE_COMMIT
+ARG PATCH_SHA256
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential flex bison make ca-certificates curl patch jq \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src
+COPY --from=m59_harness /server-patches/deterministic-seed/ /tmp/deterministic-seed/
+
+# The container independently checks the same contract the wrapper checked. The
+# source commit is supplied by the wrapper because the pinned source .dockerignore
+# intentionally excludes .git; every C preimage touched by the patch is content-hashed.
+RUN set -eux; \
+    test "$(jq -er '.schema' /tmp/deterministic-seed/manifest.json)" = 'm59-deterministic-seed-patch/v1'; \
+    test "$(jq -er '.seed_schema' /tmp/deterministic-seed/manifest.json)" = 'm59-server-seed/v1'; \
+    test "$(jq -er '.admin_command' /tmp/deterministic-seed/manifest.json)" = 'show simseed'; \
+    test "$(jq -er '.source.repository' /tmp/deterministic-seed/manifest.json)" = 'https://github.com/tpeppers/Meridian59-deck.git'; \
+    test "$(jq -er '.source.commit' /tmp/deterministic-seed/manifest.json)" = "$SOURCE_COMMIT"; \
+    test "$(jq -er '.patch' /tmp/deterministic-seed/manifest.json)" = '0001-deterministic-seed.patch'; \
+    test "$(jq -er '.source_hashes' /tmp/deterministic-seed/manifest.json)" = 'source.sha256'; \
+    echo "$PATCH_SHA256  /tmp/deterministic-seed/0001-deterministic-seed.patch" | sha256sum -c -; \
+    sha256sum -c /tmp/deterministic-seed/source.sha256; \
+    while read -r digest path; do sed -i 's/\r$//' "$path"; done \
+      < /tmp/deterministic-seed/source.sha256; \
+    patch --batch --forward --strip=1 --input=/tmp/deterministic-seed/0001-deterministic-seed.patch
+
+# fmtlib is absent from a plain source clone. This is identical to the ordinary
+# server image build and remains the only network input after the Debian packages.
+RUN if [ ! -f external/fmtlib/fmt/format.h ]; then \
+      mkdir -p external/fmtlib && \
+      curl -fsSL https://github.com/fmtlib/fmt/archive/refs/tags/10.2.1.tar.gz \
+        | tar -xz --strip-components=1 -C external/fmtlib fmt-10.2.1/include/fmt; \
+      mv external/fmtlib/include/fmt external/fmtlib/fmt && \
+      rm -rf external/fmtlib/include; \
+    fi
+
+RUN sed -i 's/ -Werror//' common.mak.linux
+
+RUN make -C blakcomp -f makefile.linux RELEASE=1 makedirs \
+ && make -C blakcomp -f makefile.linux RELEASE=1 -j"$(nproc)"
+
+# `rm -rf`, not `rm -f`: run/server/loadkod is a DIRECTORY in the current checkout, and the
+# clock image's `rm -f` fails on it with "Is a directory". Same line, same failure, so that
+# image cannot be rebuilt from this tree either until it is fixed there too.
+RUN rm -rf run/server/loadkod && mkdir -p run/server/loadkod && \
+    make -C kod -f makefile.linux RELEASE=1 && \
+    find kod -name '*.bof' -exec cp {} run/server/loadkod/ \;
+
+RUN make -C blakserv -f makefile.linux RELEASE=1 makedirs \
+ && make -C blakserv -f makefile.linux RELEASE=1 -j"$(nproc)"
+
+RUN find . -name blakserv -type f -perm -u+x -newer common.mak.linux \
+      -exec cp {} /tmp/blakserv \; -quit && test -x /tmp/blakserv
+
+# -------------------------------------------------------------- runtime
+
+FROM debian:bookworm-slim AS runtime
+
+ARG SOURCE_COMMIT
+ARG PATCH_SHA256
+ARG SIM_SEED
+
+LABEL org.openai.m59.sim-seed.schema="m59-server-seed/v1" \
+      org.openai.m59.sim-seed.source-commit="$SOURCE_COMMIT" \
+      org.openai.m59.sim-seed.patch-sha256="$PATCH_SHA256" \
+      org.openai.m59.sim-seed.seed="$SIM_SEED" \
+      org.openai.m59.sim-seed.lab-only="true"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libstdc++6 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 blak
+
+WORKDIR /m59
+COPY --from=build /tmp/blakserv            /m59/blakserv
+COPY --from=build /src/run/server/         /m59/
+COPY --from=build /src/resource/rooms/     /m59/rooms/
+COPY --from=build /src/kod/kodbase.txt     /m59/kod/kodbase.txt
+
+# Never bake a source checkout's world or channel history into the lab image.
+RUN rm -rf /m59/savegame/* /m59/memmap/* /m59/channel/*.txt /m59/blakserv.cfg.bak
+
+RUN set -eux; \
+    sed -i 's/\r$//' blakserv.cfg; \
+    sed -i \
+      -e 's#^Bof .*#Bof                  /m59/loadkod/#' \
+      -e 's#^Memmap .*#Memmap               /m59/memmap/#' \
+      -e 's#^Rsc .*#Rsc                  /m59/rsc/#' \
+      -e 's#^Rooms .*#Rooms                /m59/rooms/#' \
+      -e 's#^Motd .*#Motd                 /m59/#' \
+      -e 's#^Channel .*#Channel              /m59/channel/#' \
+      -e 's#^LoadSave .*#LoadSave             /m59/savegame/#' \
+      -e 's#^Forms .*#Forms                /m59/#' \
+      -e 's#^Kodbase .*#Kodbase              /m59/kod#' \
+      -e 's#^PackageFile .*#PackageFile          /m59/#' \
+      -e 's#^Filename .*blakston.*#Filename             /m59/blakston.khd#' \
+      blakserv.cfg; \
+    setkey() { \
+      sed -i "/^$2 /d" blakserv.cfg; \
+      sed -i "/^\[$1\]/a $2                $3" blakserv.cfg; \
+    }; \
+    setkey Socket MaintenancePort 9998; \
+    setkey Socket MaintenanceMask '127.0.0.1;172.0.0.0;192.168.0.0;10.0.0.0;0.0.0.0'; \
+    setkey Channel Flush Yes; \
+    setkey Channel DebugDisk Yes; \
+    setkey Channel ErrorDisk Yes; \
+    setkey Channel LogDisk Yes; \
+    test -z "$(grep '^\[SimSeed\]$' blakserv.cfg || true)"; \
+    printf '\n[SimSeed]\nEnabled              %s\nSeed                 %s\n' \
+      "$(test "$SIM_SEED" -ne 0 && echo Yes || echo No)" "$SIM_SEED" >> blakserv.cfg; \
+    grep -q '^MaintenancePort' blakserv.cfg; \
+    grep -q '^\[SimSeed\]$' blakserv.cfg; \
+    mkdir -p /m59/channel /m59/savegame /m59/memmap; \
+    chown -R blak:blak /m59
+
+USER blak
+EXPOSE 5959 9998
+
+VOLUME ["/m59/channel", "/m59/savegame"]
+
+# NO GUARD FILE, unlike the clock image, and the difference is deliberate. A mis-scaled clock
+# silently corrupts timing for everything that touches it, so that one fails closed. A seed of 0
+# is simply the stock server, so failing closed would buy nothing and cost the property that
+# makes this patch safe to carry: that an unseeded build is indistinguishable from no patch.
+CMD ["/m59/blakserv"]
