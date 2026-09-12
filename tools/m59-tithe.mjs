@@ -257,7 +257,19 @@ export async function guildRentStatus(s) {
   // nobody heard into a durable fact, and the gate would read it as an answer for ever. An
   // unparsed reply is the same case: Frular said something we do not understand, which is
   // not a rent.
-  if (r.rent && !r.out_of_earshot) {
+  // AN ANSWER FROM FRULAR IS THE PROOF WE WERE HEARD. The position check is a fallback for
+  // SILENCE, not a veto over speech that demonstrably arrived.
+  //
+  // This refused a real reading on prod. Frular said "The The Second Swines owes 6547 coins in
+  // rent at this time.", `parseRentLine` read 6547 off it — and nothing was written, because
+  // `out_of_earshot` is computed from a position sampled AFTER the exchange, by which point
+  // the keeper had already walked the body off again. The instrument disagreed with the
+  // value, and I had let the instrument win.
+  //
+  // So a parsed line records, full stop. `out_of_earshot` stays in the reply because it
+  // explains a silence when there is one, and it is still what suppresses caching when
+  // nothing parsed.
+  if (r.rent) {
     try {
       new StorageCache().writeRent({
         due: r.rent.due, credit: r.rent.credit, in_guild: r.rent.in_guild,
@@ -272,7 +284,7 @@ export async function guildRentStatus(s) {
     frular_said: r.said,
     // SAY WHETHER IT WAS RECORDED, so a caller can tell "asked and cached" from "asked and
     // the answer was unusable" without re-reading the file.
-    recorded: !!(r.rent && !r.out_of_earshot),
+    recorded: !!r.rent,
     ...(r.out_of_earshot ? { out_of_earshot: true, why: r.why } : {}),
     ...(!r.rent && !r.out_of_earshot
       ? { why: 'nothing in the reply parsed as a rent line, so nothing was cached — ' +
