@@ -4,8 +4,8 @@
 // THE FAILURE THIS EXISTS FOR, 2026-09-12. I measured that `level_lost` rows lag the death
 // that caused them by a median of 5.0 minutes, concluded there was a second source, and was
 // wrong — there is no second source and no death source either. `level_lost` is a SAMPLED
-// DIFF: `m59-ledger.mjs:186` fires it when the polled `level` field is lower than it was last
-// poll. The lag is the poll interval, and the p90 is 704 minutes because a character nobody
+// DIFF: `m59-ledger.mjs`, `recordSample()`, fires it when the polled `level` field is lower than
+// it was last poll. The lag is the poll interval, and the p90 is 704 minutes because a character nobody
 // sampled for eleven hours gets its diff whenever sampling resumes.
 //
 // I had already published "forty-nine deaths, forty-nine levels, no exceptions" off a
@@ -33,6 +33,13 @@
 // question, not a fleet — and the same shape applies here: a row whose fidelity cannot be
 // determined is `unknown`, never `observed`, because the coercion runs one way and it is the
 // expensive way.
+
+// A NOTE ON THE CITATIONS ABOVE, WHICH NAME SYMBOLS RATHER THAN LINES ON PURPOSE. Two sessions
+// cited one piece of broker code as `:1892` and `:1897` on the same night and both were correct
+// — they had read different checkouts, and the checkouts had diverged. A kod citation survives
+// because the report that carries it pins `repo_commit`; a harness-to-harness line number is
+// pinned to nothing. So: name the function. A symbol survives a rebase, a line number survives
+// nothing, and the cost of being wrong is a reader sent to unrelated code with full confidence.
 
 /** How a row came to exist. */
 export const OBSERVED = 'observed';   // the server said so; the row carries what it said
