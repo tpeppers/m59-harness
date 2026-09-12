@@ -27,6 +27,7 @@
 // line in the first place. This decides only WHERE ON THE LINE a body is, which is the question
 // asked once per leg and answered wrong for free.
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
+import { MIN_MOVER_STEP } from './m59-steptrace.mjs';
 
 /** A waypoint is off-shelf when no single step could reach the body's floor from it. */
 export const onSameShelf = (waypointFloor, bodyFloor, step = MAX_STEP_HEIGHT) =>
@@ -229,7 +230,7 @@ export function aimAhead(waypoints, fromIndex, { budget = AIM_BUDGET } = {}) {
  */
 export const MAX_CHORD_DEVIATION = 256;
 
-export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
+function aimPointRaw(waypoints, point, { floor = null, budget = AIM_BUDGET,
                                              step = MAX_STEP_HEIGHT, unitsPerStep = 64,
                                              maxDeviation = MAX_CHORD_DEVIATION } = {}) {
   if (!Array.isArray(waypoints) || waypoints.length === 0) return null;
@@ -296,6 +297,65 @@ export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
   const d = Math.hypot(px - point.x, py - point.y);
   return { x: Math.round(px), y: Math.round(py), i: waypoints.length - 2, dist: d, atEnd: true,
            stepsNeeded: Math.ceil(d / unitsPerStep) };
+}
+
+/**
+ * THE MOVER CANNOT STEP SHORTER THAN `MIN_AIM`, SO AN AIM CLOSER THAN THAT IS NOT AN INSTRUCTION.
+ *
+ * `walkFine` sizes a step `max(8, min(stride, remaining))` — 8 protocol units, 128 client — and
+ * returns `{ arrived: true, steps: 0, log: [] }` the moment the aim is already within `arriveWithin`.
+ * So an aim 64 units ahead is answered "you are already there", nothing moves, and a follower that
+ * reads `arrived` advances its index and aims 64 units further on. Every call reports success.
+ *
+ * MEASURED on Marco's 169 logged legs in room 49: FIFTY-ONE of them, 30%, took zero steps with
+ * `arrived: true`, and 41 of those asked for under 128 client units — requests of 16, 32 and 93 units,
+ * over and over, against a 4,958-unit crossing. That is the 4.5-client-units-of-net-progress-per-leg
+ * this repository has been chasing, and it is not the fan and not the geometry.
+ *
+ * THE ROOT IS A UNIT MISMATCH BETWEEN TWO MODULES HERE. `m59-railcut` floods on a 64-unit LATTICE, so
+ * "the next waypoint" is one lattice step by construction — which the `next-waypoint` fallback below
+ * relies on, and which is exactly half of what the mover can execute. Sixth and seventh cousins of the
+ * same family: a constant that is correct about one grid and applied to another.
+ *
+ * So an aim is pushed FORWARD along the rail until it clears the floor. That is not a compromise of
+ * the rail: the intermediate waypoints were validated as lattice steps by the flood, and the walker
+ * flies straight past them anyway. If the rail runs out first the aim is returned with `tooClose`,
+ * because the honest answer at the end of a rail is "this last hop cannot be walked", not a silent
+ * request the mover will answer with a lie.
+ */
+/** The mover's minimum step. ONE definition, in m59-steptrace; this is the alias callers know. */
+export const MIN_AIM = MIN_MOVER_STEP;
+
+export function enforceAimFloor(aim, waypoints, point, { min = MIN_AIM } = {}) {
+  if (!aim || !(aim.dist < min)) return aim;
+  const from = { x: point.x, y: point.y };
+  // Walk forward from the aim's own index looking for the first waypoint far enough to be a step.
+  for (let j = (aim.i ?? 0) + 1; j < waypoints.length; j++) {
+    const w = waypoints[j];
+    const d = Math.hypot(w.x - from.x, w.y - from.y);
+    if (d >= min)
+      return { ...aim, x: w.x, y: w.y, i: Math.max(0, j - 1), dist: d,
+               atEnd: j >= waypoints.length - 1,
+               bound: 'aim-floor', extendedFrom: Math.round(aim.dist),
+               stepsNeeded: Math.max(1, Math.ceil(d / (aim.stepsNeeded && aim.dist
+                 ? aim.dist / aim.stepsNeeded : 64))),
+               why: `the aim was ${Math.round(aim.dist)} units away, below the mover's ${min}-unit ` +
+                    `minimum step, so it was pushed forward to waypoint ${j} at ${Math.round(d)} units` };
+  }
+  // NOTHING AHEAD IS FAR ENOUGH. Say so. A follower can then finish, re-cut, or pick another goal —
+  // all of which are better than issuing a step the mover will answer with `arrived: true`.
+  return { ...aim, tooClose: true, bound: 'aim-floor-unreachable',
+           why: `every remaining waypoint is within ${min} client units of the body, which is below ` +
+                `the mover's minimum step — no further aim on this rail can produce a step, so this ` +
+                `rail is FINISHED rather than blocked. Re-cut from here or accept arrival.` };
+}
+
+/**
+ * Where to aim, with the mover's minimum step enforced. See `enforceAimFloor`.
+ */
+export function aimPoint(waypoints, point, opts = {}) {
+  return enforceAimFloor(aimPointRaw(waypoints, point, opts), waypoints ?? [], point,
+                         { min: opts.minAim ?? MIN_AIM });
 }
 
 /**

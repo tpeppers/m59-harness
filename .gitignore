@@ -705,3 +705,11 @@ _verify2.mjs
 # process start time), so a committed one would be a permanent notice about an afternoon that
 # ended. Claims also expire on a TTL; `m59-intent.mjs sweep` retires the dead.
 /substrate/intents.json
+
+# WHAT THIS MACHINE HAS ACTUALLY RUN. One append-only line per `go` in a fleetscratch session:
+# which pad, which characters, whether it succeeded, and whether it was SLICED (skipTo/runUntil).
+# m59-promote.mjs reads it to answer "is there evidence this errand works", and a partial run is
+# deliberately not evidence. Not committed for the same reason the keeper state files are not: it
+# is one fleet's history on one machine, and somebody else's successful run is not a reason to
+# promote a pad in this checkout.
+/substrate/fleetscratch-runs.jsonl

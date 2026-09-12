@@ -262,6 +262,29 @@ export function assertShape(tool, reply, { where = 'a world read' } = {}) {
 // So `handle()` stamps an id with when it was read and what read it, and `usableHandle()` refuses
 // one that has crossed a call boundary. A pad that holds an id across a read is doing the thing
 // that silently acts on somebody else's property; it should be refused, not trusted.
+// WHY THERE IS NO GENERAL READER-SIDE GUARD FOR A FABRICATED VALUE, and it is structural rather
+// than a gap somebody will close later. The deaths-analysis session's argument, 2026-09-12:
+//
+//   Every guard on the READING side tests for ABSENCE or SHAPE. `unknownBecause` catches the
+//   honest gap; `assertShape` catches the wrongly-typed reply; `PROXY_DROPS` catches the field a
+//   path dropped. A fabricated value has none of those properties -- it is present, correctly
+//   typed, in the right field, and internally consistent. There is nothing left for a reader to
+//   test. `usableHandle` catches the synthetic id ONLY because negative is a tell, and a
+//   synthesiser that counted upward would defeat it in one line.
+//
+//   So fabrication can only be refused at the point of MANUFACTURE. The rule is a constraint on
+//   synthesisers, not a guard for readers: CODE THAT INVENTS A VALUE INTO A FIELD WHICH NORMALLY
+//   CARRIES A SERVER VALUE MUST MARK IT AS INVENTED, OR MUST REFUSE TO FILL THE FIELD AT ALL.
+//
+// Concretely, `KeeperProxy.equipment` could return `id: null` with `synthetic: true` beside it,
+// and every absence-guard above would then work -- because the fabricated case would have been
+// converted into the absent case, which is the one class we can all detect.
+//
+// NOT PROPOSED AS A CHANGE. `armedForSure()` reads that field, every prod character takes that
+// path, and a null where a number was expected fails in the direction of walking a fleet at a
+// boss unarmed. That is an operator's call with a test behind it. It is written down here so the
+// next person who goes looking for a reader-side answer finds out why there isn't one.
+
 export const HANDLE_TTL_MS = 0;     // zero on purpose: see usableHandle
 
 let READ_EPOCH = 0;

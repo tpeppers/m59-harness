@@ -2093,6 +2093,42 @@ class KeeperProxy {
       // secret door opens on `type <> SAY_EMOTE` (ghall.kod:967), so an emote would be
       // refused in silence.
       say: (text, type = 1) => act('say', { text, kind: type }),
+      // HANDING SOMETHING OVER — the fifth verb the proxy never forwarded, found the same
+      // way as the other four: by an errand dying on "c.offer is not a function" after it had
+      // already done the expensive part.
+      //
+      // Measured on prod 2026-09-12: Robin and Floyd each withdrew 35,000 at the Tos bank and
+      // walked it to Barloque, and the payment failed at Frular's feet. Both were left
+      // standing in the Guildmaster's Hall holding the cash.
+      //
+      // PAYING GUILD RENT IS AN OFFER THAT THE SERVER DELIBERATELY CANCELS. GuildCreator's
+      // ReqOffer (gcreator.kod:325) takes the money, credits the guild, thanks you and returns
+      // FALSE — so the trade closing with nothing handed back is what success looks like, and
+      // `cancelOffer` is the ordinary end of the exchange rather than an error path. Both
+      // halves have to cross the process boundary or neither is any use.
+      offer: (toId, items) => act('trade', { op: 'offer', to_id: toId, items }),
+      cancelOffer: () => act('trade', { op: 'cancel' }),
+      // THE VERBS A SWEEP FOUND, rather than the one an errand happened to die on.
+      //
+      // Auditing every `c.<verb>(` called by the modules that run against a Session against
+      // this literal listed SEVENTEEN absent. Five of them had already been found the
+      // expensive way — one at a time, each by an errand failing after doing its expensive
+      // part — and the sixth (`contents`) stopped the guild chests being readable at all.
+      // Forwarding the batch is the only way this stops recurring.
+      //
+      // Each goes to a keeper op that already exists, except `contents` and `put`, which were
+      // added to the keeper in the same commit. Anything with no op is deliberately still
+      // absent: a method that pretends locally is worse than one that is missing loudly.
+      contents: (id) => act('contents', { id }),
+      put: (what, into) => act('put', { id: what, into }),
+      acceptOffer: () => act('trade', { op: 'accept' }),
+      counterOffer: (items = []) => act('trade', { op: 'counter', items }),
+      // Speech, in its four flavours. `say` above is kind 1; these are the rest, and they
+      // matter because a guild hall door listens for one and ignores the others.
+      yell: (text) => act('say', { text, kind: 2 }),
+      broadcast: (text) => act('say', { text, kind: 3 }),
+      sayGuild: (text) => act('say', { text, kind: 10 }),
+      sayGroup: (ids, text) => act('say', { text, to: ids }),
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
@@ -10181,6 +10217,16 @@ const TOOLS = [
           'on a proven wall (identical to the doomed rung; this only picks the moment) -- ' +
           'NOT a withdrawal, which is what this said until 2026-09-10. Default 0.4' },
       max_carry: { type: 'number', description: 'stop farming at this many items, default 14' },
+      food_reserve_fraction: { type: 'number',
+        description: 'HOW MUCH FOOD SURVIVES A PACK-CLEARING, as a fraction of carry capacity. ' +
+          'Default 0.20. Food is otherwise the LOWEST priority to keep: it is the one thing ' +
+          'this fleet gets for nothing, and an unbounded exemption is what made makeRoom shed ' +
+          'the REAGENTS instead — 37 sapphires and 15 orc teeth off one character in 75 ' +
+          'minutes, while 2,700 slices of pork sat protected across the fleet. Of CAPACITY ' +
+          'rather than of what is carried, because a fraction of the holding ratchets: ' +
+          'collect 300 and keep 60, collect 600 and keep 120, which rewards the ' +
+          'over-collection. 0.20 of a 2000 pack is about 44 slices, some 400 vigor. 0 sheds ' +
+          'all of it; 1 restores the old unbounded exemption.' },
       max_weapons: { type: ['number', 'null'],
         description: 'weapons retained after selling, including the equipped weapon. Default 2; null removes the limit' },
       buy_food: { type: 'boolean',
@@ -10880,6 +10926,12 @@ const TOOLS = [
       if (a.rest_below !== undefined) p.policy.restBelow = Number(a.rest_below);
       if (a.flee_below !== undefined) p.policy.fleeBelow = Number(a.flee_below);
       if (a.max_carry !== undefined) p.policy.maxCarry = Number(a.max_carry);
+      if (a.food_reserve_fraction !== undefined) {
+        const v = Number(a.food_reserve_fraction);
+        if (!Number.isFinite(v) || v < 0 || v > 1)
+          throw new Error('food_reserve_fraction is a fraction of carry capacity between 0 and 1');
+        p.policy.foodReserveFraction = v;
+      }
       if (a.max_weapons !== undefined)
         p.policy.maxWeapons = a.max_weapons == null
           ? null : Math.max(0, Math.floor(Number(a.max_weapons) || 0));
@@ -11939,11 +11991,20 @@ const TOOLS = [
       const graded = eq.equipped.map(e => ({
         ...e, rarity_name: rarityName(e.rarity) ?? undefined, cursed: isCursed(e) || undefined }));
       const cursed = graded.filter(e => e.cursed).map(e => e.name);
+      // `grades_known` SAYS THE STRUCTURED LIST ARRIVED. It does not say every ITEM in it
+      // carries a grade, and I wrote the note below as though it did — so a keeper that sent
+      // `equipment_items` with `rarity: null` produced "the server graded everything equipped
+      // and none of it is cursed" about Rizzo's mace while his own keeper was refusing to
+      // train, eighty passes running, because that mace is cursed and cannot be removed.
+      // The claim needs every item to have an actual grade, not merely the list to exist.
+      const ungraded = graded.filter(e => e.rarity === null || e.rarity === undefined)
+                             .map(e => e.name);
       return {
         character: c.me?.name ?? null,
         ...eq,
         equipped: graded,
         cursed: cursed.length ? cursed : null,
+        ...(ungraded.length ? { ungraded } : {}),
         cursed_note: !eq.grades_known
           ? 'this keeper does not report rarity grades yet, so "no cursed item" is NOT what ' +
             'this says — it is that nothing here can tell you. Restart the keeper to find out.'
@@ -11951,7 +12012,11 @@ const TOOLS = [
              ? 'a cursed item can NEVER be unwielded (the one irreversible mistake here). It ' +
                'comes off with a remove curse potion (Lady Aftyn, room 205), the `remove ' +
                'curse` spell cast on this character, or when the weapon breaks.'
-             : 'the server graded everything equipped and none of it is cursed'),
+             : (ungraded.length
+                ? `no grade arrived for ${ungraded.join(', ')}, so this does NOT say they are ` +
+                  'uncursed — it says nobody can tell you from here. The refusal reason ' +
+                  'on the keeper is the better witness: it names the cursed item outright.'
+                : 'the server graded everything equipped and none of it is cursed')),
         // The one derived field, and labelled as derived. Which of the equipped items is
         // the weapon is a judgement from its name; that it is equipped at all is not.
         wielding: weapons.length ? weapons.map(w => w.name) : null,
@@ -17524,6 +17589,7 @@ function heroSnapshot(name) {
       inventory: (c.inventory || []).map(o => ({
         name: c.rsc.get(o.nameRsc), amount: o.amount || undefined, can: affordances(o.flags) })),
       max_carry: st?.policy?.maxCarry ?? null,
+      food_reserve_fraction: st?.policy?.foodReserveFraction ?? null,
       max_weapons: st?.policy?.maxWeapons ?? null,
       purchases: {
         food: st?.policy?.buyFood !== false,

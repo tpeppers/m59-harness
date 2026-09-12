@@ -130,6 +130,44 @@ ok('no teeth means no work, and it says which shortage it is', () => {
 
 console.log('\ncursed is the same grade, and the hand is where it matters');
 
+// NULL IS NOT ZERO, AND ZERO IS `normal`.
+//
+// `Number(null)` is 0, so a null grade fell through to the NORMAL case and every item whose
+// rarity nobody had read came back labelled `normal`. Found on a live character the day the
+// grade first shipped: Rizzo's wielded mace reported `rarity_name: "normal"` alongside a note
+// saying nothing equipped was cursed, while his own keeper had been refusing to train for
+// eighty consecutive passes because "mace is cursed and cannot be removed". The field added to
+// answer "is this cursed" was answering "no" from an absence.
+ok('a null grade has no name — it is not `normal`', () => {
+  assert.equal(rarityName(null), null);
+  assert.equal(rarityName(undefined), null);
+  assert.equal(rarityName(''), null);
+  assert.equal(rarityName(0), 'normal', 'and ZERO still is, because zero is a real grade');
+});
+
+// The two predicates were already safe here, but by luck rather than design — `Number(null)`
+// is 0 and 0 is neither 100 nor 200 — so pin it rather than leave it to be re-derived.
+ok('and the predicates answer false for a grade nobody has read, which is the safe direction',
+   () => {
+  assert.equal(isCursed({ rarity: null }), false);
+  assert.equal(isUnidentified({ rarity: null }), false);
+  assert.equal(isCursed({}), false);
+});
+
+// `grades_known` SAYS THE LIST ARRIVED, NOT THAT EVERY ROW IN IT IS GRADED, and the note in
+// m59-broker.mjs was written as though those were the same thing. Pinned as the expression,
+// because the broker cannot be imported — importing it takes the fleet lock.
+ok('an ungraded row is reported as ungraded rather than folded into "none is cursed"', () => {
+  const equipped = [{ name: 'mace', rarity: null }, { name: 'leather armor', rarity: 0 }];
+  const ungraded = equipped.filter(e => e.rarity === null || e.rarity === undefined)
+                           .map(e => e.name);
+  assert.deepEqual(ungraded, ['mace']);
+  const cursed = equipped.filter(e => isCursed(e)).map(e => e.name);
+  assert.equal(cursed.length, 0, 'nothing READS as cursed');
+  // …and that is exactly the case where the old note asserted it was clean.
+  assert.ok(ungraded.length > 0, 'so the claim has to be withheld');
+});
+
 ok('200 is cursed, by the server\'s own word rather than an inference', () => {
   assert.equal(ITEM_RARITY.CURSED, 200);
   assert.equal(rarityName(200), 'cursed');
@@ -158,6 +196,65 @@ ok('a missing grade is not a clean one', () => {
 // it takes the fleet lock. This is the exact expression from m59-broker.mjs's KeeperProxy:
 // a keeper that sends `equipment_items` carries grades, one that sends only `equipment` does
 // not, and `grades_known` is what stops the second reading as "nothing is cursed".
+
+// THE GRADE IS ON THE INVENTORY OBJECT, NOT ON THE USE-LIST ONE. BP_USE_LIST carries ids and
+// little else; the rarity arrives with ToCliInventory. So the keeper's equipment serializer
+// passing its use-list rows through unchanged shipped the field and still answered null —
+// measured on prod, the same object id read two ways:
+//
+//   equipment -> { id: 8376, name: 'mace', rarity: null }
+//   inventory -> { id: 8376, name: 'mace', rarity: 100, unidentified: true }
+//
+// This is the one place an object id may be trusted: both lists come off the SAME client, in
+// one process, at one moment. Anywhere else they are renumbered by every save and recycle
+// within hours.
+console.log('\nthe equipped row takes its grade from the pack');
+{
+  const join = (equipped, inventory) => {
+    const byId = new Map();
+    for (const o of inventory) if (o?.id != null) byId.set(o.id, o);
+    return equipped.map(o => {
+      const inv = o.id != null ? byId.get(o.id) : null;
+      return { name: o.name, id: o.id ?? null,
+               flags: o.flags ?? inv?.flags ?? null,
+               rarity: o.rarity ?? inv?.rarity ?? null };
+    });
+  };
+
+  ok('an ungraded use-list row picks the grade up off the matching pack row', () => {
+    const r = join([{ id: 8376, name: 'mace' }], [{ id: 8376, name: 'mace', rarity: 100 }]);
+    assert.equal(r[0].rarity, 100);
+    assert.equal(isUnidentified(r[0]), true);
+  });
+
+  ok('a CURSED grade crosses the same way, which is the case this exists for', () => {
+    const r = join([{ id: 8380, name: 'mace' }], [{ id: 8380, name: 'mace', rarity: 200 }]);
+    assert.equal(isCursed(r[0]), true);
+  });
+
+  ok('the use-list wins when it has an opinion of its own', () => {
+    const r = join([{ id: 1, name: 'mace', rarity: 200 }], [{ id: 1, name: 'mace', rarity: 0 }]);
+    assert.equal(r[0].rarity, 200, 'not overwritten by the pack');
+  });
+
+  // AN UNREAD PACK IS NOT AN UNGRADED ITEM. The join has to leave null alone rather than
+  // invent a grade, or this becomes the same absent-reads-as-negative bug one layer down.
+  ok('no matching pack row leaves the grade null rather than guessing', () => {
+    const r = join([{ id: 8376, name: 'mace' }], []);
+    assert.equal(r[0].rarity, null);
+    assert.equal(rarityName(r[0].rarity), null, 'and null still has no name');
+    assert.equal(isCursed(r[0]), false, 'so the predicate answers false, not true');
+  });
+
+  // IDS MAY ONLY BE JOINED WITHIN ONE READ. A stale id matching a recycled object is exactly
+  // the trap CLAUDE.md documents; pinned here so the next person does not widen this join
+  // across two separate reads.
+  ok('a row with no id at all is carried through ungraded', () => {
+    const r = join([{ id: null, name: 'mace' }], [{ id: 8376, name: 'mace', rarity: 200 }]);
+    assert.equal(r[0].rarity, null, 'no id, no join — never matched by name');
+  });
+}
+
 console.log('\nthe keeper-backed rebuild keeps both shapes apart');
 {
   const rebuild = (s) => ({

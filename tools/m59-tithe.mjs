@@ -282,6 +282,14 @@ export async function guildRentStatus(s) {
   return { action: 'status', room, purse: purseAmount(c), due: r.rent?.due ?? null,
     credit: r.rent?.credit ?? null, hours_until_arrears: r.hours_left,
     frular_said: r.said,
+    // WHAT THE WALK INTO EARSHOT DID, which this dropped on the floor until now.
+    //
+    // `askRent` returns `approached` — walked / refused / not needed — and `guildRentStatus`
+    // built its own reply and never copied it across. So the one field that says whether the
+    // approach ran was invisible to every caller, and I spent four live attempts inferring
+    // from its ABSENCE that the approach had not fired. It was never there to see. A
+    // diagnostic that cannot be read is not a diagnostic.
+    approached: r.approached ?? null,
     // SAY WHETHER IT WAS RECORDED, so a caller can tell "asked and cached" from "asked and
     // the answer was unusable" without re-reading the file.
     recorded: !!r.rent,

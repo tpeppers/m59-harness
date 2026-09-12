@@ -1182,6 +1182,35 @@ export const vault = (vaultman, items = FLEET_KEEP, opts = {}) =>
 // this is safe to put at the head of any errand that might be given a brand-new character.
 export const leaveRaza = (opts = {}) => ({ do: 'leave_raza', ...opts });
 
+// HAND GOODS FROM ONE OF OURS TO ANOTHER, AND THE FOUR WAYS THAT GOES WRONG SILENTLY.
+//
+// There was no step for this, so every caller reached for `act('supply', …)` or a hand-rolled
+// call inside a `verify` — and in one session I wrote it four times and got it wrong four
+// different ways, each of which moved nothing and reported success:
+//
+//   1. THE ARGUMENT NAMES. The tool takes {from, to, what}. `{agent, to, items}` answers
+//      "error: no agent named — every fleet tool takes an `agent`", which reads like a bug in
+//      the harness rather than in the call. Twice.
+//   2. A BARE NAME MOVES THE DEFAULT AMOUNT, WHICH IS TWO. `what: 'orc tooth'` against a stack
+//      of forty answered `asked: 2, received: 2` — a true success and a useless one.
+//   3. A PARTIAL STACK NEEDS AN ID, AND `act` CANNOT CARRY ONE. Object ids are renumbered on
+//      every save and recycle within hours, and `act` freezes its arguments when the step list
+//      is COMPILED — so an id resolved there names something else, or nothing, by the time it
+//      runs. This resolves inside the step, immediately before the call.
+//   4. ONE BIG OFFER FAILS WHERE THREE SMALL ONES DO NOT. 172 slices of pork answered "the
+//      offer never reached them"; the same pork in bites of 60 went through three times out of
+//      three. So `bite` is a ceiling per offer, not a suggestion.
+//
+// AND THE RECEIVER'S OWN COUNT IS THE ONLY ANSWER. `trade` lies in both directions and even
+// `supply` can complete a handshake having moved nothing; the broker tool already re-reads the
+// receiver, and this reports that verdict rather than the fact that a call returned.
+//
+// `what` is a NAME here, matched across the whole family — `mushroom` covers red, blue, purple,
+// edible and Inky-cap, which are five separate stacks and all valid reagents. A regex that
+// anchored it (`/^mushroom$/`) read ONE against a pack holding sixty-four.
+export const supply = (from, to, what, opts = {}) =>
+  ({ do: 'supply', from, to, what, ...opts });
+
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
 
@@ -2712,6 +2741,65 @@ async function runStep(ctx, agent, step, state) {
         .catch(e => ({ error: e.message }));
       return { ok: !r?.error, result: r, why: r?.error };
     }
+
+    // See the `supply` step above for the four silent failures this exists to prevent.
+    case 'supply': {
+      const want = String(step.what ?? '').trim();
+      if (!want) return { ok: false, why: 'supply needs something to move' };
+      // A SUBSTRING TEST ON LOWERCASED NAMES, AND DELIBERATELY NOT A REGEX. `what` is an
+      // item name typed by a caller, so building a pattern out of it means escaping it —
+      // and the family match is the whole point: `mushroom` has to cover red, blue, purple,
+      // edible and Inky-cap, which are five stacks and all valid reagents. Anchoring it
+      // (`/^mushroom$/`) read ONE against a pack holding sixty-four.
+      const needle = want.toLowerCase();
+      const family = { test: (n) => String(n ?? '').toLowerCase().includes(needle) };
+      const countIn = (inv) => (inv?.items ?? [])
+        .filter(i => family.test(String(i.name ?? '')))
+        .reduce((n, i) => n + (i.amount || 1), 0);
+      const read = (who) => call('inventory', { agent: who }, 60_000).catch(() => null);
+
+      const before = countIn(await read(step.to));
+      const bite = Number(step.bite) > 0 ? Number(step.bite) : 60;
+      const target = step.amount == null ? Infinity : Number(step.amount);
+      let moved = 0, rounds = 0, last = null;
+
+      while (moved < target && rounds++ < (Number(step.rounds) || 6)) {
+        // RESOLVED EVERY ROUND, NOT ONCE. A hand-over SPLITS the giver's stack, so the id and
+        // the amount both change underneath a loop that cached them — and a `keep` floor has
+        // to be measured against what is actually left rather than what was there first.
+        const donor = await read(step.from);
+        if (!donor?.items) return { ok: false, why: `could not read ${step.from}'s pack`, moved };
+        const stacks = (donor.items)
+          .filter(i => family.test(String(i.name ?? '')) && i.id != null)
+          .sort((a, b) => (b.amount || 1) - (a.amount || 1));
+        const held = stacks.reduce((n, i) => n + (i.amount || 1), 0);
+        const spare = held - (Number(step.keep) || 0);
+        if (spare <= 0 || !stacks.length) break;
+        const s0 = stacks[0];
+        const send = Math.max(1, Math.min(bite, spare, target - moved, s0.amount || 1));
+        last = await call('supply', { from: step.from, to: step.to, what: [{ id: s0.id, amount: send }] },
+                          step.timeoutMs ?? 180_000).catch(e => ({ error: e.message }));
+        // A refusal here is the ordinary end of the loop, not a throw: the commonest one is
+        // `receiver_full`, which is a true and useful answer about the RECEIVER.
+        if (!last?.supplied) break;
+        moved += send;
+      }
+
+      const after = countIn(await read(step.to));
+      const received = after - before;
+      // THE RECEIVER'S COUNT DECIDES. `moved` is what was asked for and believed; `received` is
+      // what the receiver can be seen to hold.
+      //
+      // DELIBERATELY NOT CALLED `gained`. The `shop` step already returns a `gained` ARRAY of
+      // {match, got, asked}, and the run formatter maps over it — so a number under that name
+      // crashed the reporter with "r.gained.map is not a function" while the goods had moved
+      // perfectly well. A field name is part of the contract even when the step is new.
+      if (received > 0) return { ok: true, what: want, received, before, after, rounds: rounds - 1,
+                                 ...(last?.reason ? { said: last.reason } : {}) };
+      return { ok: false, what: want, before, after,
+               why: last?.reason ?? last?.error ?? `${step.to} holds no more ${want} than before` };
+    }
+
 
     // GUARANTEE 5, INSIDE ONE ROOM. `walk` already refuses to re-issue a journey while one
     // is walking; this is the same rule for the walk that happens after you arrive.

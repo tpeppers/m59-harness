@@ -71,11 +71,44 @@ export async function objectOf(name, { dmFn = dm, env = process.env } = {}) {
 }
 
 /** The room's current object. */
-export async function roomOf(num, { dmFn = dm, env = process.env } = {}) {
-  const cmd = `show room ${num}`;
-  const out = await dmFn([cmd], { env });
-  const m = /object (\d+)/i.exec(String(out));
-  return m ? Number(m[1]) : null;
+/**
+ * A room's OBJECT id from its number.
+ *
+ * `show room <num>` IS NOT A COMMAND ON THIS SERVER. Measured against BlakSton v2.4 (Aug 25 2026)
+ * on the lab server: every `show room` is answered `Unknown command; try 'help'.`, so this returned
+ * null for EVERY room — including the one the body was standing in — and `setSpawns` reported
+ * "room 49 was not found on this server". That message is honest about what it did and wrong about
+ * why: the room exists, the query does not.
+ *
+ * WHAT DOES WORK, verified end to end: `show name <character>` answers `:< object 7252 :>`, and
+ * `show object 7252` carries `poOwner = OBJECT 94` — the room object itself — whose own
+ * `piRoom_num = INT 52` confirms which room it is. So a body in the room resolves the room, and the
+ * room number is checkable rather than assumed.
+ *
+ * `via` is the character to resolve through. Without it this still tries `show room`, so an older
+ * or differently-built server keeps working — but it now says WHICH way failed, because "there is
+ * no such room" and "I have no way to ask" are different facts and only one of them is about the
+ * world.
+ */
+export async function roomOf(num, { dmFn = dm, env = process.env, via = null } = {}) {
+  const legacy = await dmFn([`show room ${num}`], { env });
+  if (!/unknown command/i.test(String(legacy))) {
+    const m = /object (\d+)/i.exec(String(legacy));
+    if (m) return Number(m[1]);
+  }
+  if (!via) return null;
+  const body = await objectOf(via, { dmFn, env });
+  if (body == null) return null;
+  const shown = String(await dmFn([`show object ${body}`], { env }));
+  const owner = /poOwner\s*=\s*OBJECT\s+(\d+)/i.exec(shown);
+  if (!owner) return null;
+  const roomObj = Number(owner[1]);
+  // VERIFY THE ROOM NUMBER. Resolving through a body is only sound if the body is in the room that
+  // was asked about, and a body moves — so this checks rather than trusting the caller.
+  const roomShown = String(await dmFn([`show object ${roomObj}`], { env }));
+  const rn = /piRoom_num\s*=\s*INT\s+(\d+)/i.exec(roomShown);
+  if (rn && Number(rn[1]) !== Number(num)) return null;
+  return roomObj;
 }
 
 /**
@@ -85,9 +118,11 @@ export async function roomOf(num, { dmFn = dm, env = process.env } = {}) {
  * silent no-op: "I muted the room" and "I could not find the room" must not look the same to a
  * pad that is about to spend twenty minutes walking into it.
  */
-export async function setSpawns(roomNum, on, { dmFn = dm, env = process.env } = {}) {
+export async function setSpawns(roomNum, on, { dmFn = dm, env = process.env, via = null } = {}) {
   assertLabCtl(env);
-  const obj = await roomOf(roomNum, { dmFn, env });
+  // `via` is a character in the room, used to resolve the room object on servers where
+  // `show room` is not a command. See roomOf.
+  const obj = await roomOf(roomNum, { dmFn, env, via });
   if (obj == null)
     return { ok: false, room: roomNum, object: null, sent: 0,
              why: `room ${roomNum} was not found on this server, so its spawners were NOT ` +
@@ -141,12 +176,13 @@ export async function holdInRoom(names = [], { dmFn = dm, env = process.env } = 
  *
  * `--at` is row,col: KOD order. See docs/m59-coordinates.md before arguing with it.
  */
-export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env = process.env } = {}) {
+export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env = process.env, via = null } = {}) {
   assertLabCtl(env);
   if (!Number.isFinite(row) || !Number.isFinite(col))
     throw new Error('stageAt needs { row, col } — and they are row,col in KOD order, not col,row');
   const obj = await objectOf(name, { dmFn, env });
-  const room = await roomOf(roomNum, { dmFn, env });
+  // The body being staged is itself in the room often enough to resolve it; `via` overrides.
+  const room = await roomOf(roomNum, { dmFn, env, via: via ?? name });
   if (obj == null || room == null)
     return { ok: false, landed: null,
              why: `${obj == null ? `character "${name}"` : `room ${roomNum}`} was not found` };
@@ -155,11 +191,31 @@ export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env
   // and inventing a second spelling of one command is how two callers drift apart.
   await dmFn([relocateCmd(obj, room, row, col)], { env });
 
-  // READ IT BACK. The whole point.
-  const where = `show name ${name}`;
+  // READ IT BACK. The whole point — and it has to be read off the OBJECT, not the name.
+  //
+  // This asked `show name <name>` and parsed row/col out of the reply. On BlakSton v2.4 that command
+  // answers with an object id and nothing else — `:< object 7466 :>` — so the regex could never match
+  // and `landed` was null on every call, for ever. The failure then read as "could not read the body
+  // back, so where it is is unknown", which sounds like a server that lost the body; the relocate had
+  // in fact worked perfectly every time, exactly as CLAUDE.md's note that `UtilGoNearSquare` never
+  // says no would predict. 72 of 72 bench cells refused on this.
+  //
+  // `show object <id>` is where a body's position lives: `piRow`, `piCol`, and the fine offset inside
+  // the square as `piFine_row`/`piFine_col` in KOD units (FINENESS 64, so 32 is dead centre). Third
+  // instance of this exact v2.4 parse problem in this file — `roomOf` had it too.
+  const where = `show object ${obj}`;
   const out = String(split(await dmFn([where], { env }), [where])[0] ?? '');
-  const rc = /row\s+(\d+).*?col\s+(\d+)/is.exec(out) ?? /\((\d+),\s*(\d+)\)/.exec(out);
-  const landed = rc ? { row: Number(rc[1]), col: Number(rc[2]) } : null;
+  const num = (field) => {
+    const m = new RegExp(`${field}\\s*=\\s*INT\\s+(-?\\d+)`, 'i').exec(out);
+    return m ? Number(m[1]) : null;
+  };
+  const [gotRow, gotCol] = [num('piRow'), num('piCol')];
+  const landed = gotRow != null && gotCol != null
+    ? { row: gotRow, col: gotCol,
+        // The fine offset is free here and it is the difference between "the right square" and "the
+        // place we asked for" — a bench that stages per cell needs to know the spread it is getting.
+        ...(num('piFine_row') != null ? { fineRow: num('piFine_row'), fineCol: num('piFine_col') } : {}) }
+    : null;
   const exact = landed && landed.row === row && landed.col === col;
   return { ok: !!landed, asked: { row, col }, landed, exact,
            why: !landed ? 'could not read the body back, so where it is is unknown'
@@ -175,12 +231,24 @@ export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env
  * Spawns off FIRST: a room that is still breeding can put a body in the square you are about to
  * move somebody onto, between the clear and the stage.
  */
+// `via` IS PART OF THIS SIGNATURE OR THE WHOLE WRAPPER FAILS. `setSpawns` and `stageAt` both need it
+// — on BlakSton v2.4 `show room <num>` is not a command, so `roomOf` can only find a room through a
+// body standing in it — and this wrapper did not accept it. A caller passing `via: 'Alfa'` had it
+// silently dropped by the destructure, `setSpawns` ran without it, and every call came back "room 576
+// was not found on this server". MEASURED 2026-09-12: 72 of 72 bench cells refused for that reason,
+// and before the bench checked the return value at all, sixteen "re-staged" lines were printed while
+// the body wandered 3,800 units. `spawnsOn` threads `via`, which is why the cleanup half worked and
+// the staging half never did — the asymmetry is what made it look like a server problem.
 export async function stageRoom(roomNum, { hold = [], place = null, spawns = 'off',
-                                           dmFn = dm, env = process.env } = {}) {
+                                           dmFn = dm, env = process.env, via = null } = {}) {
   assertLabCtl(env);
   const steps = [];
+  // THE BODY BEING STAGED IS THE `via`. A room is only findable through somebody standing in it, and
+  // when this call has a `place` it has a name in hand — making the caller pass it twice is how the
+  // argument goes missing, which is the bug above. An explicit `via` still wins.
+  const through = via ?? place?.name ?? hold[0] ?? null;
   if (spawns === 'off' || spawns === 'on') {
-    const r = await setSpawns(roomNum, spawns === 'on', { dmFn, env });
+    const r = await setSpawns(roomNum, spawns === 'on', { dmFn, env, via: through });
     steps.push({ what: `spawns ${spawns}`, ...r });
     if (!r.ok) return { ok: false, steps, why: r.why };
   }
@@ -189,7 +257,9 @@ export async function stageRoom(roomNum, { hold = [], place = null, spawns = 'of
     steps.push({ what: `hold ${hold.length}`, ...r });
   }
   if (place) {
-    const r = await stageAt(place.name, roomNum, place, { dmFn, env });
+    // `via` defaults to the body being placed: staging somebody INTO a room is the one call that
+    // always has a name for it, so requiring the caller to repeat it is how the argument gets missed.
+    const r = await stageAt(place.name, roomNum, place, { dmFn, env, via: through });
     steps.push({ what: `stage ${place.name}`, ...r });
     if (!r.ok) return { ok: false, steps, why: r.why };
   }

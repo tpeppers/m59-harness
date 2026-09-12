@@ -63,14 +63,17 @@
 // agents are worst at. The operator's guidance, and it is right: do not ask for anything that
 // is not already available.
 import { createInterface } from 'node:readline';
-import { watch, existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { watch, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fleetScript, formatGuarantees, observe, pack } from './m59-fleetscript.mjs';
 import { loadFleetScripts, applyDefaults, checkParams, asAgents,
          auditUnsafe, formatUnsafeAudit } from './m59-fleetlib.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
 import { isCheckpoint, reach, formatReach } from './m59-establish.mjs';
+import { planSlice, formatSlice, marksOf } from './m59-resume.mjs';
+import { recordRun, promote, promotionBlockers, formatBlockers,
+         formatPromotion, evidenceFor } from './m59-promote.mjs';
 import { readBoard, isPosted, formatBoard, checkBoard } from './m59-board.mjs';
 import { readIntents, nearby, formatNearby, claim, writeIntents, sweep } from './m59-intent.mjs';
 // The declaration machinery lives in its own module so that a PAD can import the helpers without
@@ -226,7 +229,8 @@ async function main() {
   say('');
   say('commands: list | board | nearby <topic> | intend <topic> | reload | watch on|off |');
   say('          describe <pad> | check <pad> k=v… | dry <pad> k=v… | go <pad> k=v… |');
-  say('          guarantees | unsafe | quit');
+  say('          promote <pad> | guarantees | unsafe | quit');
+  say('  on dry/go:  skipTo=<mark|n>   runUntil=<mark|n>   — a skip must be covered by a checkpoint');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
 
@@ -343,6 +347,44 @@ async function main() {
           if (others.hits.length) say(formatNearby(others, topic));
         }
       }
+      // ScratchToScript(). `check` half is free and says what is in the way; the write half
+      // generates, RE-LOADS what it generated, and only then leaves a file behind.
+      else if (verb === 'promote') {
+        const r = await resolve(rest);
+        if (r.why) { say(r.why); }
+        else {
+          const steps = await stepsOf(r.pad, r.params, r.agents);
+          const dryRun = r.params.write !== '1' && r.params.write !== true;
+          if (dryRun) {
+            const res = promotionBlockers(r.pad, {
+              source: r.pad.file && existsSync(r.pad.file) ? readFileSync(r.pad.file, 'utf8') : '',
+              steps });
+            say(formatBlockers(res, r.pad));
+            if (res.ok) say(`  \`promote ${r.pad.name} write=1\` to generate it.`);
+          } else {
+            // THE VERIFICATION USES THE REAL LOADER. Anything less proves nothing: the failure
+            // it catches is a helper that lived in the pad's module scope, and only an actual
+            // import of the generated file finds that.
+            const res = await promote(r.pad, {
+              steps, render: renderStep,
+              load: async (path) => {
+                try {
+                  const { scripts, problems } = await loadFleetScripts({
+                    dirs: [['promoted', dirname(path)]], only: [basename(path, '.mjs')] });
+                  // BY NAME, not "the first one". The staging file lives in the errand
+                  // directory (it has to — its imports only resolve from there), so this load
+                  // returns every committed fleetscript alongside it.
+                  const got = scripts.get(r.pad.name);
+                  if (!got) return { error: problems.map(x => x.why).join('; ') || 'it loaded nothing' };
+                  return { steps: await Promise.resolve(
+                    got.steps({ ...r.params, agent: r.agents[0], agents: r.agents })) };
+                } catch (e) { return { error: e.message }; }
+              },
+            });
+            say(formatPromotion(res, r.pad));
+          }
+        }
+      }
       else if (verb === 'guarantees') say(formatGuarantees());
       else if (verb === 'unsafe') say(formatUnsafeAudit(auditUnsafe(pads), { total: pads.size }));
       else if (verb === 'describe') {
@@ -405,10 +447,23 @@ async function main() {
         else {
           const steps = await stepsOf(r.pad, r.params, r.agents);
           say(`${r.pad.name}: ${r.agents.length} agent(s) — ${r.agents.join(', ')}`);
-          for (const [i, step] of [].concat(steps ?? []).entries())
-            say(`  ${i}. ${renderStep(step)}`);
+          // THE SLICE IS SHOWN, NOT APPLIED. `dry` prints the whole errand with the omitted
+          // steps struck through, because the question a skip raises is "what am I not doing",
+          // and a list that simply starts at step 9 cannot answer it.
+          const plan = planSlice(steps, { skipTo: r.params.skipTo, runUntil: r.params.runUntil,
+                                          setup: r.pad.setup });
+          for (const [i, step] of [].concat(steps ?? []).entries()) {
+            const inRun = !plan.ok || (i >= plan.from && i < plan.to);
+            const mark = step?.mark ? `  <${step.mark}>` : '';
+            say(`  ${inRun ? ' ' : '~'}${i}. ${renderStep(step)}${mark}`);
+          }
+          if (!plan.ok) say(`  ${formatSlice(plan)}`);
+          else {
+            const sl = formatSlice(plan, { render: renderStep, name: `"${r.pad.name}"` });
+            if (sl) say(sl);
+          }
           say('  (nothing was sent)');
-          const haz = formatActHazards(actHazards(steps));
+          const haz = formatActHazards(actHazards(plan.ok ? plan.steps : steps));
           if (haz) say(haz);
         }
       }
@@ -428,6 +483,28 @@ async function main() {
           } else {
             const unknown = rows.filter(x => x.verdict === 'unknown').length;
             if (unknown) say(`note: ${unknown} check(s) unknown — running anyway, as asked.`);
+            // THE SKIP IS JUDGED BEFORE SETUP RUNS, not inside the steps closure.
+            //
+            // fleetScript calls steps(agent) once per character, so a refusal raised in there
+            // would surface after the bodies were held and the setup had already forced the
+            // world — the most expensive possible moment to learn that the skip was not allowed.
+            // So the slice is planned once up front, against the first agent's compiled steps.
+            //
+            // AND ONLY WHEN A SLICE WAS ASKED FOR. Probing unconditionally compiled steps()
+            // before setup for every pad, which broke a setup-only pad outright (an empty list
+            // read as "nothing to run" and the errand was refused before its setup had a chance)
+            // and reordered steps() ahead of the setup it may depend on. Compiling early is a
+            // cost the author opted into by typing skipTo=; nobody else should pay it.
+            const slicing = !!(r.params.skipTo || r.params.runUntil);
+            let plan = { ok: true, partial: false, from: 0, to: null, all: [] };
+            if (slicing) {
+              const probe = await stepsOf(r.pad, r.params, r.agents);
+              plan = planSlice(probe, { skipTo: r.params.skipTo, runUntil: r.params.runUntil,
+                                        setup: r.pad.setup });
+              if (!plan.ok) { say(formatSlice(plan)); if (!closing) rl.prompt(); return; }
+              const sl = formatSlice(plan, { render: renderStep, name: `"${r.pad.name}"` });
+              if (sl) say(sl);
+            }
             // SETUP, ERRAND, TEARDOWN -- and teardown runs whatever happened.
             //
             // `setup` is NOT a step and must not become one. A pad's steps[] go to the broker;
@@ -484,12 +561,36 @@ async function main() {
                 const res = await fleetScript({
                   name: `${r.pad.name} (pad)`,
                   agents: r.agents,
-                  steps: agent => r.pad.steps({ ...r.params, agent, agents: r.agents }),
+                  // SLICED PER AGENT, because steps() is a function of the character and two
+                  // characters can compile different lists. Re-planning here rather than reusing
+                  // the probe means a mark resolves against the list this body will actually
+                  // run; the probe above is what decides whether the skip is ALLOWED at all.
+                  steps: async (agent) => {
+                    const mine = [].concat(await Promise.resolve(
+                      r.pad.steps({ ...r.params, agent, agents: r.agents })) ?? []);
+                    if (!slicing) return mine;
+                    const p = planSlice(mine, { skipTo: r.params.skipTo,
+                                                runUntil: r.params.runUntil, setup: r.pad.setup });
+                    if (!p.ok) throw new Error(`${agent}: ${p.why}`);
+                    return p.steps;
+                  },
                   minHealth: r.params.minHealth,
                   unsafe: r.pad.unsafe ?? null,
                   provenance: r.pad.provenance ?? null,
                 });
                 if (res && res.ok === false && res.why) say(res.why);
+                // WRITTEN DOWN AT THE MOMENT IT HAPPENED, and marked partial when it was.
+                // m59-promote.mjs will not promote on the strength of a sliced run, so the
+                // slice has to travel with the record rather than be reconstructed from a log.
+                recordRun({
+                  pad: r.pad.name, fleet: FLEET, agents: r.agents,
+                  ok: !(res && res.ok === false),
+                  partial: plan.partial, from: plan.from,
+                  to: plan.to ?? plan.all.length, of: plan.all.length,
+                  params: Object.fromEntries(Object.entries(r.params)
+                    .filter(([k]) => k !== 'agents').map(([k, v]) => [k, String(v)])),
+                  by: process.env.M59_SCRATCH_OPERATOR || `session (pid ${process.pid})`,
+                });
               } finally {
                 for (const td of [].concat(r.pad.teardown ?? []).filter(Boolean)) {
                   if (typeof td !== 'function') continue;

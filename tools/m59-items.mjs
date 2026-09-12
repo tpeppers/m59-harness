@@ -746,7 +746,15 @@ export const ITEM_RARITY = Object.freeze({
   NORMAL: 0, UNCOMMON: 1, RARE: 2, LEGENDARY: 4, UNIDENTIFIED: 100, CURSED: 200,
 });
 
+// NULL IS NOT ZERO, AND ZERO IS `normal`. `Number(null)` is 0, so a null grade fell through
+// to the NORMAL case and every item whose rarity nobody had read came back labelled `normal` —
+// the absent-is-not-negative conflation, in the one field that is supposed to answer "is this
+// cursed". Found 2026-09-12 on a live character: Rizzo's wielded mace reported
+// `rarity_name: "normal"` and a note saying nothing equipped was cursed, while his own keeper
+// was refusing to train, eighty passes running, because "mace is cursed and cannot be removed".
+// `undefined` already answered null; `null` has to as well, and so does an empty string.
 export const rarityName = (r) => {
+  if (r === null || r === undefined || r === '') return null;
   switch (Number(r)) {
     case ITEM_RARITY.NORMAL: return 'normal';
     case ITEM_RARITY.UNCOMMON: return 'uncommon';
@@ -776,7 +784,82 @@ export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIF
 // equipment snapshot carried `rarity` it was not. Rizzo stalled 56 passes on one and three
 // separate checks I wrote could not see it — they tested a refusals list that a keeper
 // restart clears, then an equipment reply with no such field in it.
+// Safe against a null grade by luck rather than design — `Number(null)` is 0 and 0 is
+// neither 100 nor 200 — so these answer false for 'nobody has read it', which is the
+// right direction for both. `rarityName` is the one that had to be fixed.
 export const isCursed = (o) => Number(o?.rarity) === ITEM_RARITY.CURSED;
+
+// FOOD ABOVE A RESERVE, which is the only part of a larder that may be dropped.
+//
+// Pure, and separated from the keeper's `makeRoom` for the usual reason: the decision is
+// arithmetic about a pack and a fraction, and it was unpinnable while it lived on a class
+// that needs a live session to construct.
+//
+// WHY FOOD IS DROPPABLE AT ALL. It used to be exempt outright — "the shelter's fuel and
+// redistribution stock; a low vendor value must never make them look like disposable loot",
+// which is true of a larder and false of a hoard. The Duke's tables produce hoards: measured
+// on prod 2026-09-12, 2,700 slices of pork across 23 characters, every pack at 100%, eight of
+// them between 220 and 294 slices. And the exemption was not free, because `makeRoom` still
+// has to make room: with the food untouchable it worked down the ranking and shed the
+// REAGENTS — 37 sapphires and 15 orc teeth off one character in 75 minutes, `mushroom` and
+// `orc tooth` not being in its value regex. The fleet was dropping what it cannot replace to
+// protect the one thing it gets for nothing.
+//
+// A FRACTION OF CAPACITY, NEVER OF WHAT IS CARRIED. A fraction of the holding ratchets —
+// collect 300 and keep 60, collect 600 and keep 120 — which rewards exactly the
+// over-collection this exists to stop. Of capacity it is a fixed, useful larder: 20% of a
+// 2000 pack is 400, about 44 slices at weight 9, which is some 400 vigor.
+//
+// Returns null when nothing can be said honestly. "There is surplus" is a claim that deletes
+// items, so no capacity, an inexact load, or an unweighable stack all answer null rather than
+// a guess. An unweighable food counts toward NEITHER the reserve nor the surplus: its load is
+// unknown in both directions.
+export function foodSurplusOf({ items = [], capacity = null, fraction = 0.2 } = {}) {
+  const max = Number(capacity);
+  if (!Number.isFinite(max) || max <= 0) return null;
+  const frac = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 0.2;
+  const reserve = max * frac;
+
+  // WEIGHT AND BULK ARE SEPARATE CEILINGS AND ARE NOT INTERCHANGEABLE. An earlier draft
+  // summed max(weight, bulk) per item and compared that to capacity, which is an upper bound
+  // on both and therefore a load that can exceed the pack it is measured against — 294 slices
+  // read as 2,646 of a 2,000 pack. It errs toward dropping more, so it would have quietly
+  // under-delivered the reserve it exists to hold. Track both and let the reserve bind in
+  // whichever dimension is tighter.
+  const stacks = [];
+  let weight = 0, bulk = 0;
+  for (const it of items) {
+    const name = String(it?.name ?? '');
+    if (!name || !isFood(name)) continue;
+    const unit = weighItem(name);
+    if (!unit) continue;
+    const w = Number(unit.weight) || 0, b = Number(unit.bulk) || 0;
+    if (!(w > 0) && !(b > 0)) continue;
+    const amount = Math.max(1, Number(it.amount) || 1);
+    weight += w * amount;
+    bulk += b * amount;
+    stacks.push({ id: it.id ?? null, name, w, b, amount });
+  }
+  if (!stacks.length) return null;
+
+  // Over the reserve in EITHER dimension is over the reserve.
+  const overW = weight - reserve, overB = bulk - reserve;
+  if (overW <= 0 && overB <= 0) return null;
+
+  // The heaviest stack first: the point of a drop is relief. Only as much of it as the
+  // surplus covers, so a stack far bigger than the excess does not take the reserve with it —
+  // and the SMALLER of the two dimensions' allowances, so shedding for weight cannot breach
+  // the bulk reserve or the other way about.
+  stacks.sort((a, b2) => Math.max(b2.w, b2.b) * b2.amount - Math.max(a.w, a.b) * a.amount);
+  const head = stacks[0];
+  const allow = (over, per) => (per > 0 && over > 0 ? Math.floor(over / per) : Infinity);
+  const units = Math.max(1, Math.min(head.amount,
+                                     allow(overW, head.w), allow(overB, head.b)));
+  return { id: head.id, name: head.name, units, held: head.amount,
+           surplus: Math.round(Math.max(overW, overB)), reserve: Math.round(reserve),
+           food_weight: Math.round(weight), food_bulk: Math.round(bulk), fraction: frac };
+}
+
 
 // ---------------------------------------------------------------- what the fleet does not sell
 //

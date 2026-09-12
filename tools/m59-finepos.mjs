@@ -52,7 +52,11 @@ const getJson = (port, path, timeoutMs = 9000) => new Promise((res) => {
 });
 
 /** Which keeper port is this agent on? Discovered, never assumed. */
-export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060], [9111, 9160]],
+// 9411 is lab-canary-eff's band — the one-character clean room this repository keeps for movement
+// experiments. Listed explicitly rather than scanned, because a probe that sweeps unknown ports is
+// how one fleet's tooling ends up talking to another fleet's keepers.
+export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060],
+                                                      [9111, 9160], [9411, 9460]],
                                              probe = probeRange } = {}) {
   for (const [lo, hi] of bands) {
     const occ = await probe(lo, hi).catch(() => []);
@@ -69,14 +73,36 @@ export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060]
  * "no keeper" and "keeper answered without a position" stay different facts. They are different
  * problems and conflating them is how a working run gets thrown away.
  */
+/**
+ * `/state` IS A CACHE. `/state?fresh=1` IS A READ. A position must be the second one.
+ *
+ * The keeper serves a coalesced projection and only re-asks the socket when a reader says so
+ * (`m59-keeper-process.mjs:1407` — "`?fresh=1` asks this process — the one that owns the socket — to
+ * do the read"). `as_of_ms` is that projection's age and `fresh` reports whether THIS reply was
+ * refreshed — it is not a staleness alarm, which is how it was first read here.
+ *
+ * MEASURED 2026-09-12, the same instant, immediately after teleporting Alfa:
+ *
+ *     /state           as_of_ms=435   fresh=false     <- a cache, no packet sent
+ *     /state?fresh=1   as_of_ms=0     fresh=true      <- the keeper went and looked
+ *
+ * Polled without it, the cache served the PRE-teleport square for 1.4-1.9 seconds, rock steady, so
+ * two reads agreed and a body was declared settled on a square it had already left. Every step
+ * measured from there was aimed from the wrong origin: 86% of bench cells read as "did not move" and
+ * one recorded a deflection of PI, having gone exactly opposite to the heading it was given.
+ *
+ * The cheap read stays reachable — the enriched projection is not free and a caller polling for
+ * liveness should not pay for a packet — but it is opt-in, because "where is this body" is the
+ * question that must never be answered from a cache.
+ */
 export async function finePosition(agent, { port = null, fetchState = getJson,
-                                            probe = undefined } = {}) {
+                                            fresh = true, probe = undefined } = {}) {
   // THE PROBE IS INJECTABLE OR THIS CANNOT BE TESTED OFFLINE. Its own test asked for the "no
   // keeper" case with port:null and no probe, so it fell through to the LIVE band, found Marco's
   // real keeper on 9533 and failed. A tool that cannot be isolated gets tested in production.
   const p = port ?? await keeperPortFor(agent, probe ? { probe } : {});
   if (!p) return { ok: false, why: 'no keeper answering for this agent in any known band' };
-  const j = await fetchState(p, '/state');
+  const j = await fetchState(p, fresh ? '/state?fresh=1' : '/state');
   if (!j) return { ok: false, why: `keeper on ${p} did not answer /state`, port: p };
   const you = j.self ?? j.you ?? null;
   if (!you || !Number.isFinite(you.x) || !Number.isFinite(you.y))
@@ -85,6 +111,14 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
   const client = protocolToClient({ x: you.x, y: you.y });
   return {
     ok: true, port: p, agent,
+    // THE PORT IS THE BAND; THE PID IS THE BUILD. A keeper restart changes the pid and keeps the
+    // port, which is the whole reason `port` cannot stand in for it — and `/state` has carried the
+    // pid all along. Omitting it here made a caller reach for `port` as the nearest thing to a
+    // build stamp, so `m59-stepbench`'s compareBenches saw 9411 on both sides of a genuine keeper
+    // respawn and answered SAME BUILD? for ever. A guard that can only abstain is not a guard, and
+    // it fails in the direction nobody checks: it never fires falsely, so nobody notices it never
+    // fires at all. Eighth instance of two shapes for one idea.
+    pid: Number.isFinite(j.pid) ? j.pid : null,
     protocol: { x: you.x, y: you.y },
     client,
     square: { row: you.row, col: you.col },
@@ -94,7 +128,82 @@ export async function finePosition(agent, { port = null, fetchState = getJson,
       client.y - squareCentreClient(you.row, you.col).y)),
     room: j.room?.num ?? null,
     character: j.character ?? null,
+    // HOW OLD THIS READ IS, AS THE KEEPER ITSELF RECKONS IT. `/state` has carried `as_of_ms` and
+    // `fresh` all along and every caller here ignored them, which is how a position read gets
+    // treated as a fact about now rather than a fact about some moment.
+    asOfMs: Number.isFinite(j.as_of_ms) ? j.as_of_ms : null,
+    fresh: j.fresh ?? null,
   };
+}
+
+/**
+ * THE BODY'S POSITION ONCE IT HAS STOPPED MOVING — read until two consecutive reads agree.
+ *
+ * A single read straight after a walk returns is a read of a body that may still be in flight, and
+ * the error is not small. MEASURED, room 576, 2026-09-12: a bench cell that asked for a 128-unit
+ * step recorded 426 units of movement, which ONE step cannot produce — walkFine sizes a step
+ * `max(8, min(stride, remaining))`, so 128 units in is 128 units out. The position pair was racing
+ * the body, and the same race is what made 44% of cells read as "did not move".
+ *
+ * DELIBERATELY NOT A STALENESS THRESHOLD. Every threshold in this toolchain has been wrong once —
+ * seven of them tonight — because a threshold encodes a guess about a scale that later changes.
+ * "Has it stopped?" is OBSERVABLE: read twice and compare. Exact equality is the right test, because
+ * protocol coordinates are integers and a stationary body reports the same pair for ever.
+ *
+ * AND IT SAYS WHEN IT DID NOT SETTLE, rather than returning the last read as though it had. A body
+ * the keeper is still recovering never settles, and a caller that cannot tell will average a moving
+ * body into its measurement.
+ *
+ * ===================================================================================================
+ * AGREEMENT IS NOT ENOUGH: A STALE SNAPSHOT IS STABLE. `fresh` IS THE GATE.
+ *
+ * The first version of this compared two reads and believed them, and a DM teleport walks straight
+ * through that — the keeper keeps serving the PRE-teleport position, unchanged, so two reads agree
+ * perfectly and the body is not there.
+ *
+ * MEASURED, 2026-09-12, teleporting Alfa from r87c59 to r80c51 and polling the keeper:
+ *
+ *     +0ms     r87c59   as_of_ms=128    fresh=false      <- the square it has LEFT
+ *     +100ms   r87c59   as_of_ms=409    fresh=false
+ *     +250ms   r87c59   as_of_ms=803    fresh=false
+ *     +850ms   r87c59   as_of_ms=1397   fresh=false
+ *     +1850ms  r80c51   as_of_ms=0      fresh=true       <- caught up
+ *
+ * So the stale window is over a second, the position in it is rock steady, and the keeper says
+ * `fresh: false` throughout. What it cost: the step bench staged a body, read the old square as its
+ * origin, and asked walkFine for a step relative to it — and walkFine works off the same stale
+ * `c.self`, so the heading was computed from a position the body was no longer at. 86% of cells
+ * "did not move" and one came back with a deflection of PI, having gone exactly opposite to the
+ * heading requested. That is not a mover defect; it is a body aimed from where it used to be.
+ *
+ * Two shapes for one idea again, and the ninth tonight: "the same twice" and "current" are not the
+ * same claim, and only one of them is what a caller means by "where is it".
+ */
+export async function settledPosition(agent, { gapMs = 120, maxMs = 8000, sleep = null,
+                                               requireFresh = true, ...opts } = {}) {
+  const nap = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const started = Date.now();
+  // `fresh` is only a gate when the keeper actually reports it; an older keeper that omits the field
+  // must not be treated as permanently stale, or this never returns against it.
+  const stale = (p) => requireFresh && p.fresh === false;
+  let prev = await finePosition(agent, opts);
+  if (!prev.ok) return { ...prev, settled: false, reads: 1 };
+  for (let reads = 2; ; reads++) {
+    if (Date.now() - started >= maxMs)
+      return { ...prev, settled: false, reads: reads - 1, waitedMs: Date.now() - started,
+               why: stale(prev)
+                 ? `the keeper's snapshot is still stale after ${maxMs}ms (as_of_ms ${prev.asOfMs}, ` +
+                   `fresh false) — this is the position it USED to hold, not where the body is`
+                 : `still moving after ${maxMs}ms — this position is a body in flight, not a place` };
+    await nap(gapMs);
+    const next = await finePosition(agent, opts);
+    if (!next.ok) return { ...next, settled: false, reads };
+    // A stale read cannot settle anything, however many times it repeats itself.
+    if (!stale(prev) && !stale(next) &&
+        next.protocol.x === prev.protocol.x && next.protocol.y === prev.protocol.y)
+      return { ...next, settled: true, reads, waitedMs: Date.now() - started };
+    prev = next;
+  }
 }
 
 /** Did the body actually move between two reads? The receipt, since `arrived` is not one. */

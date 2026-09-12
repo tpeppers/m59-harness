@@ -87,7 +87,8 @@ export function strategyAvailable(which, env = process.env) {
  * Declare a checkpoint. Validates at construction, because a malformed one discovered while a
  * fleet is standing in a boss room is a malformed one discovered too late.
  */
-export function checkpoint(name, { holds, establish = {}, cost = {}, citation = {} } = {}) {
+export function checkpoint(name, { holds, establish = {}, cost = {}, citation = {},
+                                   covers = [] } = {}) {
   if (!name) throw new Error('a checkpoint needs a name');
   if (typeof holds !== 'function')
     throw new Error(`checkpoint "${name}": holds must be a function — a checkpoint is a ` +
@@ -109,7 +110,15 @@ export function checkpoint(name, { holds, establish = {}, cost = {}, citation = 
                       `kod/path/file.kod:line showing the operation is refused before it costs ` +
                       `anything. Unsupported, 'free' is optimism.`);
   }
-  return Object.freeze({ __checkpoint: true, name, holds, establish, cost, citation, ways });
+  // WHICH STEPS THIS PUTS THE WORLD PAST. `covers` is how a checkpoint earns the right to let
+  // somebody SKIP work: m59-resume.mjs will not resume past the furthest step whose mark is named
+  // here, because a skip that omits work nothing re-establishes is a different errand wearing the
+  // same name. Empty is the right default and means "this checkpoint licenses no skipping".
+  const marks = [].concat(covers).filter(Boolean).map(String);
+  if (marks.length !== new Set(marks).size)
+    throw new Error(`checkpoint "${name}": covers lists the same mark twice`);
+  return Object.freeze({ __checkpoint: true, name, holds, establish, cost, citation, ways,
+                         covers: Object.freeze(marks) });
 }
 
 /** Is this a checkpoint rather than a plain setup function? */
