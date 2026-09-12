@@ -97,6 +97,24 @@ eq(squareCentreClient(23, 17), { x: 16896, y: 23040 }, 'r23c17 centres at 16896,
   eq(r.pid, null, 'a state without a pid reports null rather than substituting the port');
 }
 
+// ---- A POSITION READ MUST BE A READ, NOT A CACHE LOOKUP --------------------------------
+{
+  // `/state` serves a coalesced projection and only re-asks the socket when a reader says so. Polled
+  // without `?fresh=1` it served the PRE-teleport square for 1.4-1.9s, rock steady — measured at the
+  // same instant: /state as_of_ms=435 fresh=false, /state?fresh=1 as_of_ms=0 fresh=true.
+  const paths = [];
+  const fetchState = async (port, path) => {
+    paths.push(path);
+    return { self: { x: 1167, y: 1519, row: 23, col: 18 }, as_of_ms: 0, fresh: true };
+  };
+  await finePosition('hk2', { port: 9533, fetchState });
+  eq(paths, ['/state?fresh=1'], 'by DEFAULT it asks the keeper to go and look');
+
+  paths.length = 0;
+  await finePosition('hk2', { port: 9533, fetchState, fresh: false });
+  eq(paths, ['/state'], 'the cheap cached read stays reachable, but only when asked for by name');
+}
+
 // ---- settledPosition: a read of a MOVING body is not a position ------------------------
 {
   // The shape that caused it: 426 units recorded for a 128-unit step, because the body was still

@@ -73,14 +73,36 @@ export async function keeperPortFor(agent, { bands = [[9511, 9560], [9011, 9060]
  * "no keeper" and "keeper answered without a position" stay different facts. They are different
  * problems and conflating them is how a working run gets thrown away.
  */
+/**
+ * `/state` IS A CACHE. `/state?fresh=1` IS A READ. A position must be the second one.
+ *
+ * The keeper serves a coalesced projection and only re-asks the socket when a reader says so
+ * (`m59-keeper-process.mjs:1407` — "`?fresh=1` asks this process — the one that owns the socket — to
+ * do the read"). `as_of_ms` is that projection's age and `fresh` reports whether THIS reply was
+ * refreshed — it is not a staleness alarm, which is how it was first read here.
+ *
+ * MEASURED 2026-09-12, the same instant, immediately after teleporting Alfa:
+ *
+ *     /state           as_of_ms=435   fresh=false     <- a cache, no packet sent
+ *     /state?fresh=1   as_of_ms=0     fresh=true      <- the keeper went and looked
+ *
+ * Polled without it, the cache served the PRE-teleport square for 1.4-1.9 seconds, rock steady, so
+ * two reads agreed and a body was declared settled on a square it had already left. Every step
+ * measured from there was aimed from the wrong origin: 86% of bench cells read as "did not move" and
+ * one recorded a deflection of PI, having gone exactly opposite to the heading it was given.
+ *
+ * The cheap read stays reachable — the enriched projection is not free and a caller polling for
+ * liveness should not pay for a packet — but it is opt-in, because "where is this body" is the
+ * question that must never be answered from a cache.
+ */
 export async function finePosition(agent, { port = null, fetchState = getJson,
-                                            probe = undefined } = {}) {
+                                            fresh = true, probe = undefined } = {}) {
   // THE PROBE IS INJECTABLE OR THIS CANNOT BE TESTED OFFLINE. Its own test asked for the "no
   // keeper" case with port:null and no probe, so it fell through to the LIVE band, found Marco's
   // real keeper on 9533 and failed. A tool that cannot be isolated gets tested in production.
   const p = port ?? await keeperPortFor(agent, probe ? { probe } : {});
   if (!p) return { ok: false, why: 'no keeper answering for this agent in any known band' };
-  const j = await fetchState(p, '/state');
+  const j = await fetchState(p, fresh ? '/state?fresh=1' : '/state');
   if (!j) return { ok: false, why: `keeper on ${p} did not answer /state`, port: p };
   const you = j.self ?? j.you ?? null;
   if (!you || !Number.isFinite(you.x) || !Number.isFinite(you.y))
