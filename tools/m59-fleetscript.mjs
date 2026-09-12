@@ -2527,9 +2527,29 @@ async function runStep(ctx, agent, step, state) {
                  bought: anything ? 'and something entered the pack too'
                    : 'nothing entered the pack, which is what an ability purchase looks ' +
                      'like — the caller’s own verification decides whether it worked' };
+      // AND WHEN NOTHING ARRIVED, SAY WHICH OF THE TWO IT WAS IN THE `why` ITSELF.
+      //
+      // The clamp reason was logged above and then thrown away here: the step still failed with
+      // the bare words "nothing entered the pack". That sentence is read by whoever is unwinding
+      // the errand and by whoever reads the log afterwards, and it is indistinguishable from a
+      // merchant with an empty shelf.
+      //
+      // It cost exactly that on 2026-09-12. A courier bought orc teeth at Paddock, ran out of
+      // money on the fourth round, and the run was written up — in a commit message, in a
+      // measurement, and to the operator — as "Paddock runs dry at six teeth". He does not run
+      // dry at all; you can buy as many as you can pay for. The operator had to correct it.
+      //
+      // `limited_by` was in the reply the whole time and said `purse`.
+      const cut = clamped.filter(c => Number(c.buying) === 0);
       return { ok: anything, gained, ...(clamped.length ? { clamped } : {}),
                note: r?.note ?? r?.error,
-               why: anything ? undefined : 'nothing entered the pack' };
+               why: anything ? undefined
+                 : cut.length
+                   ? 'nothing entered the pack, and it was THIS CHARACTER that stopped it, not ' +
+                     'the shelf: ' + cut.map(c => `${c.name ?? c.id} cut to 0 by ` +
+                       `${(c.limited_by ?? []).join(' and ') || 'an unstated limit'}`).join('; ')
+                   : 'nothing entered the pack, and the order was NOT cut by purse, weight or ' +
+                     'bulk — so this is the shelf or the handshake, not this character' };
     }
 
     case 'sell': {
