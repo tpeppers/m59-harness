@@ -89,10 +89,21 @@ export const script = {
                describe: 'bank_above for the length of the run. Must exceed what is carried, ' +
                          'or the character\'s own keeper banks it back' },
     restoreCeiling: { type: 'number', default: 7000, describe: 'bank_above to put back at the end' },
+    // A RE-RUN MUST NOT WALK THE CASH BACK TO THE BANK TO FETCH IT AGAIN.
+    //
+    // The withdraw step already treats "already carrying it" as success, but the two walks to
+    // Tos happen BEFORE it — so a retry after a failure at Frular's feet would march a
+    // character holding 35,000 back across the road and return, for nothing. The road is what
+    // kills this fleet and the cash is dropped where the body falls, so the retry path skips
+    // the bank entirely. Measured: both characters were left carrying the money when the
+    // payment failed on a missing verb.
+    carrying: { type: 'boolean', default: false,
+                describe: 'the money is already in the purse — skip the bank leg entirely' },
     minHealth: { type: 'number', default: 0.85 },
   },
 
-  async steps({ agent, amount = 35_000, ceiling = 60_000, restoreCeiling = 7000 }) {
+  async steps({ agent, amount = 35_000, ceiling = 60_000, restoreCeiling = 7000,
+                carrying = false }) {
     const said = [];
 
     return [
@@ -102,15 +113,16 @@ export const script = {
         return true;
       }, `raising bank_above to ${ceiling} so the keeper does not re-deposit the rent money`),
 
-      walk(TOS_TOWN, { why: 'the bank is only routable from inside Tos itself' }),
-      walk(TOS_BANK, { why: 'rent is paid from the PURSE and Barloque has no teller' }),
+      ...(carrying ? [] : [
+        walk(TOS_TOWN, { why: 'the bank is only routable from inside Tos itself' }),
+        walk(TOS_BANK, { why: 'rent is paid from the PURSE and Barloque has no teller' })]),
 
       // ARRIVING IS A SEPARATE OBSERVATION FROM BEING SENT. A bank call made anywhere else
       // fails as PROSE — "You can't check any balance here!" — which is not an error.
-      verify(async ({ call }) => {
+      ...(carrying ? [] : [verify(async ({ call }) => {
         const st = await call('status', { agent }, 45_000).catch(() => null);
         return (st?.where?.num ?? st?.room?.num) === TOS_BANK;
-      }, `standing in room ${TOS_BANK} before asking a banker for anything`),
+      }, `standing in room ${TOS_BANK} before asking a banker for anything`)]),
 
       // THE WITHDRAWAL, SIZED TO WHAT IS THERE AND READ BACK OFF THE PURSE.
       verify(async ({ call }) => {
