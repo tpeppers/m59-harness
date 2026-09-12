@@ -10217,6 +10217,16 @@ const TOOLS = [
           'on a proven wall (identical to the doomed rung; this only picks the moment) -- ' +
           'NOT a withdrawal, which is what this said until 2026-09-10. Default 0.4' },
       max_carry: { type: 'number', description: 'stop farming at this many items, default 14' },
+      food_reserve_fraction: { type: 'number',
+        description: 'HOW MUCH FOOD SURVIVES A PACK-CLEARING, as a fraction of carry capacity. ' +
+          'Default 0.20. Food is otherwise the LOWEST priority to keep: it is the one thing ' +
+          'this fleet gets for nothing, and an unbounded exemption is what made makeRoom shed ' +
+          'the REAGENTS instead — 37 sapphires and 15 orc teeth off one character in 75 ' +
+          'minutes, while 2,700 slices of pork sat protected across the fleet. Of CAPACITY ' +
+          'rather than of what is carried, because a fraction of the holding ratchets: ' +
+          'collect 300 and keep 60, collect 600 and keep 120, which rewards the ' +
+          'over-collection. 0.20 of a 2000 pack is about 44 slices, some 400 vigor. 0 sheds ' +
+          'all of it; 1 restores the old unbounded exemption.' },
       max_weapons: { type: ['number', 'null'],
         description: 'weapons retained after selling, including the equipped weapon. Default 2; null removes the limit' },
       buy_food: { type: 'boolean',
@@ -10916,6 +10926,12 @@ const TOOLS = [
       if (a.rest_below !== undefined) p.policy.restBelow = Number(a.rest_below);
       if (a.flee_below !== undefined) p.policy.fleeBelow = Number(a.flee_below);
       if (a.max_carry !== undefined) p.policy.maxCarry = Number(a.max_carry);
+      if (a.food_reserve_fraction !== undefined) {
+        const v = Number(a.food_reserve_fraction);
+        if (!Number.isFinite(v) || v < 0 || v > 1)
+          throw new Error('food_reserve_fraction is a fraction of carry capacity between 0 and 1');
+        p.policy.foodReserveFraction = v;
+      }
       if (a.max_weapons !== undefined)
         p.policy.maxWeapons = a.max_weapons == null
           ? null : Math.max(0, Math.floor(Number(a.max_weapons) || 0));
@@ -17560,6 +17576,7 @@ function heroSnapshot(name) {
       inventory: (c.inventory || []).map(o => ({
         name: c.rsc.get(o.nameRsc), amount: o.amount || undefined, can: affordances(o.flags) })),
       max_carry: st?.policy?.maxCarry ?? null,
+      food_reserve_fraction: st?.policy?.foodReserveFraction ?? null,
       max_weapons: st?.policy?.maxWeapons ?? null,
       purchases: {
         food: st?.policy?.buyFood !== false,

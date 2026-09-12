@@ -26,7 +26,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
-import { isFood, foodValue, weighItem } from './m59-items.mjs';
+import { isFood, foodValue, weighItem, foodSurplusOf } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
@@ -21510,6 +21510,27 @@ export class Autopilot {
     return this._gearCondition ?? null;
   }
 
+  // HOW MUCH FOOD IS ABOVE THE RESERVE. A thin adapter: the arithmetic is
+  // `foodSurplusOf` in m59-items.mjs, where it is pure and pinned by m59-items-test —
+  // this half only supplies the pack and the capacity, which is all that needs a session.
+  //
+  // Food is the LOWEST priority to keep and 20% of capacity survives. Operator's call,
+  // 2026-09-12. The argument, and what the unbounded exemption cost, are at the pure end.
+  foodSurplus() {
+    const c = this.s.client;
+    if (!c) return null;
+    const cap = skills.carryCapacity(c);
+    // An inexact load is a LOWER bound, and "there is surplus" is a claim that deletes
+    // items — the same reason carryCapacity withholds room_for rather than guess.
+    if (!cap?.known || !cap.load || cap.load.exact === false) return null;
+    return foodSurplusOf({
+      items: (c.inventory || []).map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc) || '',
+                                             amount: o.amount })),
+      capacity: Math.max(Number(cap.weight_max) || 0, Number(cap.bulk_max) || 0),
+      fraction: this.policy.foodReserveFraction,
+    });
+  }
+
   async makeRoom() {
     this.doing = 'trading';
     const s = this.s, c = s.need();
@@ -21625,6 +21646,12 @@ export class Autopilot {
       const name = c.rsc.get(o.nameRsc) || '';
       const said = mineToo?.(name);
       if (said !== null && said !== undefined) return said;
+      // BELOW SELL-FODDER, ABOVE THE OPERATOR'S OWN SELL LIST. Surplus food is the cheapest
+      // thing in the pack to lose — the Duke's tables hand it out and the walk there is one
+      // the fleet already makes — so it goes before loot we are only carrying to sell. It
+      // does NOT go before something the loadout explicitly named for selling (-1): that is
+      // an instruction rather than an inference.
+      if (surplus?.id === o.id) return -0.5;
       if (mine(name)) return 2;                                          // ours, keep longest
       if (skills.interest.anyoneWants(name, { except: me })) return 1;    // somebody's, keep
       return 0;                                                          // sell-fodder, goes first
@@ -21635,15 +21662,22 @@ export class Autopilot {
     // cast with needs a way to say so — which was previously only possible by editing a
     // regex shared by twenty-one characters.
     const overrideSell = sellTest(this.loadout());
+    // Read once: it walks the pack, and the filter and the ranking both ask about it.
+    const surplus = this.foodSurplus();
     const junk = (c.inventory || [])
       .filter(o => {
         const name = c.rsc.get(o.nameRsc) || '';
         if (worn.has(o.id) || this.wontDrop?.has(o.id) ||
             skills.itemIsProtected(name, this.protectedItemNames())) return false;
         if (overrideSell?.(name)) return true;
-        // Food and create-food reagents are the shelter's fuel and redistribution
-        // stock. A low vendor value must never make them look like disposable loot.
-        if (isFood(name) || skills.shareKind(name)) return false;
+        // FOOD IS THE LOWEST PRIORITY TO KEEP, ABOVE A RESERVE — and it used to be exempt
+        // outright, which is how the fleet came to shed its reagents in order to protect
+        // 2,700 slices of free pork. `foodSurplus` picks ONE stack and says how much of it
+        // is above the 20% larder; nothing else about food is droppable.
+        if (isFood(name)) return surplus?.id === o.id;
+        // Create-food reagents stay exempt. They are not free, they are the thing a town
+        // trip exists to fetch, and they are what was being dropped instead.
+        if (skills.shareKind(name)) return false;
         return !keep.test(name);
       })
       .sort((a, b) => {
@@ -21675,7 +21709,12 @@ export class Autopilot {
     const drop = junk[0];
     const name = c.rsc.get(drop.nameRsc);
     const before = c.inventory.length;
-    await s.pacer.submit('drop', () => c.drop([this.dropSpec(drop)]));
+    // A PARTIAL DROP KEEPS THE STACK, so how much to shed has to be decided here and the
+    // success test below cannot be an item count. Only surplus food is partial; everything
+    // else goes whole, as it always did.
+    const partial = surplus?.id === drop.id ? surplus.units : null;
+    const heldBefore = Math.max(1, Number(drop.amount) || 1);
+    await s.pacer.submit('drop', () => c.drop([this.dropSpec(drop, partial)]));
     await new Promise(r => setTimeout(r, 900));
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
@@ -21683,6 +21722,25 @@ export class Autopilot {
     // from here, and makeRoom returns from the pass either way, so a refusal that repeats
     // is a character that never does anything again. Refuse to report success for a drop
     // that changed nothing, and remember the item so the next pass tries something else.
+    //
+    // FOR A PARTIAL DROP THE COUNT IS THE WRONG WITNESS. Shedding 250 of 294 slices leaves
+    // the stack in the pack, so `inventory.length` does not move and the drop that worked
+    // perfectly would be recorded as refused and the stack blacklisted in `wontDrop` — after
+    // which the surplus could never be shed again this session. Ask the STACK instead.
+    if (partial != null) {
+      const still = (c.inventory || []).find(o => o.id === drop.id);
+      const heldAfter = still ? Math.max(0, Number(still.amount) || 0) : 0;
+      if (heldAfter >= heldBefore) {
+        (this.wontDrop ??= new Set()).add(drop.id);
+        return { ok: false, did: `the server would not drop ${name}`,
+                 detail: { refused: name, wanted: partial, still_holding: heldAfter,
+                           hint: 'a stacked drop needs a positive quantity (UserDrop returns ' +
+                                 'early on number <= 0); this stack is now skipped for the session' } };
+      }
+      return { ok: true, did: `dropped ${heldBefore - heldAfter} x ${name} (surplus food)`,
+               detail: { kept: heldAfter, reserve: surplus.reserve, food_load: surplus.food_load,
+                         reserve_fraction: surplus.fraction, now_carrying: c.inventory.length } };
+    }
     if (c.inventory.length >= before) {
       (this.wontDrop ??= new Set()).add(drop.id);
       return { ok: false, did: `the server would not drop ${name}`,

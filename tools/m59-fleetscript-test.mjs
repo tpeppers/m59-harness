@@ -290,6 +290,78 @@ console.log('\nthe body is held for the whole errand');
 
 
 
+
+console.log('\nfood is the lowest priority to keep, above a 20% reserve');
+{
+  const { foodSurplusOf, weighItem } = await import('./m59-items.mjs');
+  const pork = (n, id = 1) => [{ id, name: 'slice of pork', amount: n }];
+  const unit = weighItem('slice of pork');
+  // The whole block rests on this: if the item db is absent there is nothing to measure and
+  // the function correctly declines, so say which case ran rather than passing vacuously.
+  if (!unit) {
+    ok('no item database here, so no food arithmetic was claimed',
+       foodSurplusOf({ items: pork(294), capacity: 2000 }) === null);
+  } else {
+    // 20% of a 2000 pack is 400, about 44 slices at weight 9 — a real larder, some 400 vigor.
+    const big = foodSurplusOf({ items: pork(294), capacity: 2000, fraction: 0.2 });
+    ok('a 294-slice hoard sheds down TO the reserve, not to nothing',
+       big.units === 249 && big.held - big.units === 45, JSON.stringify(big));
+    ok('and it names the reserve it is protecting, because a drop is irreversible',
+       big.reserve === 400 && big.fraction === 0.2);
+
+    ok('a pack AT the reserve sheds nothing', foodSurplusOf({ items: pork(44), capacity: 2000 }) === null);
+    ok('and one under it sheds nothing', foodSurplusOf({ items: pork(40), capacity: 2000 }) === null);
+    // The surplus, not the stack: a stack far larger than the excess must not take the
+    // reserve with it.
+    const small = foodSurplusOf({ items: pork(50), capacity: 2000, fraction: 0.2 });
+    ok('just over the reserve sheds just the excess', small.units === 5, JSON.stringify(small));
+
+    // A FRACTION OF CAPACITY, NEVER OF WHAT IS CARRIED. A fraction of the holding ratchets:
+    // collect 300 keep 60, collect 600 keep 120, which rewards the over-collection this
+    // exists to stop. So the kept amount is the SAME whatever the hoard.
+    const a = foodSurplusOf({ items: pork(294), capacity: 2000, fraction: 0.2 });
+    const b = foodSurplusOf({ items: pork(600), capacity: 2000, fraction: 0.2 });
+    ok('the amount KEPT does not grow with the amount hoarded',
+       a.held - a.units === b.held - b.units,
+       `${a.held - a.units} vs ${b.held - b.units}`);
+    // Capacity is 1700 + might*20, so a stronger character keeps a proportionally bigger one.
+    const strong = foodSurplusOf({ items: pork(294), capacity: 3000, fraction: 0.2 });
+    ok('but it DOES scale with the character, because capacity does',
+       strong.held - strong.units > a.held - a.units);
+
+    // A reserve of zero has nothing to protect, so the whole stack goes. The `max(1, …)`
+    // floor inside is not for this case — it is for a surplus so small that the per-unit
+    // division rounds to nothing, where dropping one is better than reporting a surplus and
+    // then shedding none of it.
+    ok('the fraction is a knob: a zero reserve sheds the whole stack',
+       foodSurplusOf({ items: pork(294), capacity: 2000, fraction: 0 }).units === 294);
+    ok('and it is clamped rather than obeyed out of range',
+       foodSurplusOf({ items: pork(294), capacity: 2000, fraction: 5 }).units
+         === foodSurplusOf({ items: pork(294), capacity: 2000, fraction: 1 }).units);
+
+    // "THERE IS SURPLUS" IS A CLAIM THAT DELETES ITEMS, so every unknown answers null.
+    ok('no capacity reading, no surplus', foodSurplusOf({ items: pork(294), capacity: null }) === null);
+    ok('a zero capacity is not an empty pack either',
+       foodSurplusOf({ items: pork(294), capacity: 0 }) === null);
+    ok('a pack with no food at all has no surplus',
+       foodSurplusOf({ items: [{ id: 9, name: 'sapphire', amount: 40 }], capacity: 2000 }) === null);
+    // An unweighable food counts toward NEITHER the reserve nor the surplus: its load is
+    // unknown in both directions, and guessing either way is how a larder vanishes.
+    ok('an item the db cannot weigh is not counted, in either direction',
+       foodSurplusOf({ items: [{ id: 8, name: 'sword of plot armour', amount: 999 }],
+                       capacity: 2000 }) === null);
+
+    // AND NOT THE REAGENTS. This is the whole reason the exemption was bounded: with food
+    // untouchable, makeRoom worked down the ranking and shed 37 sapphires and 15 orc teeth
+    // off one character in 75 minutes.
+    const mixed = foodSurplusOf({ items: [...pork(294), { id: 2, name: 'sapphire', amount: 37 },
+                                          { id: 3, name: 'orc tooth', amount: 15 }],
+                                  capacity: 2000, fraction: 0.2 });
+    ok('with reagents in the pack it is still the FOOD that is named', mixed.id === 1,
+       JSON.stringify(mixed));
+  }
+}
+
 console.log('\nsupply: the step that did not exist, and the four ways it was hand-rolled wrong');
 {
   const { supply } = await import('./m59-fleetscript.mjs');
