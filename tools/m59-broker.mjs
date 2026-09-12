@@ -114,7 +114,7 @@ import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
 import { FactionStatusCache } from './m59-faction-status.mjs';
 import { readAnchor, phaseAt } from './m59-dayclock.mjs';
 import { hourFromSunAngle, phaseFromSun, isFresh } from './m59-skyclock.mjs';
-import { StorageCache, GUILD_CHEST_SLOTS, chestFullness } from './m59-storage.mjs';
+import { StorageCache, chestFullness, chestKey } from './m59-storage.mjs';
 import * as uptime from './m59-uptime.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
@@ -13827,8 +13827,10 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string' },
       target: { type: ['string', 'number'], description: 'object id, or a name in this room' },
-      slot: { type: 'number',
-        description: `1..${GUILD_CHEST_SLOTS}: record this reading as that guild chest. Omit to just look.` },
+      record: { type: 'boolean',
+        description: 'record this reading as a guild chest. It is filed under the SQUARE the ' +
+          'chest stands on (r18c6) — read off the object, never a number you choose — because ' +
+          'object ids recycle and a chest cannot move. Omit to just look.' },
     }, required: ['agent', 'target'] },
     run: async a => {
       const s = session(a.agent), c = s.need();
@@ -13848,12 +13850,32 @@ const TOOLS = [
       const items = (box.items || []).map(o => ({ id: o.id, name: o.name,
         amount: o.amount || 1 }));
       const out = { ok: true, target, items, count: items.length };
-      if (a.slot !== undefined) {
-        const room = c.room?.id ?? s.world?.room?.num ?? null;
-        storage.writeChest(a.slot, { object_id: target, room, items,
-          by: c.me?.name ?? s.name });
-        out.recorded_as_chest = Number(a.slot);
-        out.fullness = chestFullness(items);
+      if (a.record) {
+        // THE NAME COMES OFF THE OBJECT WE JUST LOOKED INSIDE. A chest is GETTABLE_NO and
+        // nothing moves it, so its square is the one durable name it has; an object id is a
+        // handle the server recycles. If the room snapshot has no position for it we refuse
+        // rather than invent one — an unnamed chest filed under a guess is the mis-filing
+        // this scheme exists to make impossible.
+        const obj = c.room?.objects?.get?.(Number(target)) ?? null;
+        const key = chestKey(obj);
+        if (!key) {
+          out.recorded = false;
+          out.why = 'this room snapshot carries no position for that object, so it cannot be ' +
+                    'named — ask for room contents and try again';
+        } else {
+          const room = c.room?.id ?? s.world?.room?.num ?? null;
+          storage.writeChest(key, { object_id: target, room, items,
+            by: c.me?.name ?? s.name });
+          out.recorded_as_chest = key;
+          out.fullness = chestFullness(items);
+          // WHY THIS IS WORTH DOING BY HAND, ONCE. `guildStoreAvailable` refuses the whole
+          // guild stockpile until some chest has been opened, and the only things that open
+          // chests are the deposit and withdraw legs — which run only after it says yes. This
+          // call is the way out of that circle.
+          out.note = 'recorded. The guild stockpile needs one opened chest before it will act, ' +
+                     'and nothing in the fleet can open the first one — the legs that refresh ' +
+                     'these readings are themselves gated on a chest already being open.';
+        }
       }
       return out;
     },
