@@ -2044,6 +2044,10 @@ class KeeperProxy {
       activate: (id) => act('activate', { id }),
       stand: () => act('stand', {}),
       rest: () => act('rest', {}),
+      // ON THE LITERAL AND NOT ON THE CLASS, which is where I put it first and why the tool
+      // still threw after being 'fixed'. `c` is this object, not the KeeperProxy that built it —
+      // the comment forty lines down says so in as many words.
+      requestRescue: () => act('rescue', {}),
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
@@ -3170,10 +3174,6 @@ class KeeperProxy {
   // that removed a catch-all which "answered every unknown property and defeated every
   // guard in the file".
   async escapeUnderworld(opts = {}) { return keeperAction(this.name, this._index, 'escape_underworld', opts); }
-  // THE ONE THE `rescue` TOOL NEEDED AND NOBODY HAD WRITTEN. Without it the tool threw
-  // `c.requestRescue is not a function` on every keeper-backed character, which is all of
-  // them — see the keeper's own `rescue` case for the argument.
-  async requestRescue() { return keeperAction(this.name, this._index, 'rescue', {}); }
   estimateJourney() { return null; }
   async faceToward(target, opts = {}) { return keeperAction(this.name, this._index, 'face', { target, ...opts }); }
   hitBook() { return null; }
