@@ -102,7 +102,7 @@ import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
          isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
-import { resolveItemNames, weighItem } from './m59-items.mjs';
+import { resolveItemNames, weighItem, rarityName, isUnidentified } from './m59-items.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
          factionOfferAllowed, FACTION_SOLDIER, factionFromProfile,
          visibleTokenFromProfile, isCouncilToken, soldierAssignment,
@@ -11722,6 +11722,17 @@ const TOOLS = [
                                               // without spending a charge to find out.
                                               icon_rsc: o.iconRsc ?? null,
                                               translation: o.translation ?? 0,
+                                              // AND WHAT THE SERVER DECLINES TO SAY ABOUT IT.
+                                              // The same argument as translation above: this
+                                              // is evidence about what the thing IS. Grade 100
+                                              // is "at least one attribute is still hidden"
+                                              // (item.kod:714-730) and is the only set
+                                              // `reveal` can act on -- see ITEM_RARITY in
+                                              // m59-items.mjs. Parsed since the beginning and
+                                              // dropped here, so nothing could ask.
+                                              rarity: o.rarity ?? null,
+                                              rarity_name: rarityName(o.rarity) ?? undefined,
+                                              unidentified: isUnidentified(o) || undefined,
                                               broken: condemned.has(o.id) || undefined })),
                equipped: c.equipment().equipped.map(e => e.name ?? e.id),
                // HOW FULL, in the units the server actually refuses on. The ceiling is

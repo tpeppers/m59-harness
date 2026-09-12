@@ -718,3 +718,50 @@ export function servingsAtOnce(name, file = ITEMS_FILE) {
   if (!f) return 0;
   return Math.max(1, Math.floor(STOMACH_MAX / Math.max(1, f.filling)));
 }
+
+// ---------------------------------------------------------------- rarity grades
+//
+// WHAT THE SERVER SAYS ABOUT AN ITEM BEFORE ANYBODY LOOKS AT IT.
+//
+// Every object on the wire carries a rarity grade (`extractObject`, m59-parse.mjs:245) and
+// both item serializers used to drop it. It is the ONLY reliable answer to "is this worth an
+// identify spell", and without it the question can only be asked by casting — which costs 3
+// orc teeth a go and tells you nothing when the answer is no.
+//
+// GetRarity (item.kod:714-756) checks identification FIRST and short-circuits:
+//
+//   if NOT IsIdentified -> ITEM_RARITY_GRADE_UNIDENTIFIED   (100)
+//   if IsCursed         -> ITEM_RARITY_GRADE_CURSED         (200)
+//   then 1/2/4 by how many attributes it has, else the class's own viRarity
+//
+// So 100 does NOT mean "rare". It means the server is declining to say, because at least one
+// attribute is still hidden — which is exactly the set `reveal` can act on.
+// `RevealHiddenAttributes` returns TRUE only when something WAS hidden (item.kod:1331-1347),
+// and that return is what gates advancement in reveal.kod, so a cast at anything not graded
+// 100 spends the reagents and cannot even teach the caster anything.
+//
+// An item with NO attributes at all is `IsIdentified` TRUE (the loop is skipped), so plain
+// gear correctly reads 0 rather than 100.
+export const ITEM_RARITY = Object.freeze({
+  NORMAL: 0, UNCOMMON: 1, RARE: 2, LEGENDARY: 4, UNIDENTIFIED: 100, CURSED: 200,
+});
+
+export const rarityName = (r) => {
+  switch (Number(r)) {
+    case ITEM_RARITY.NORMAL: return 'normal';
+    case ITEM_RARITY.UNCOMMON: return 'uncommon';
+    case ITEM_RARITY.RARE: return 'rare';
+    case ITEM_RARITY.LEGENDARY: return 'legendary';
+    case ITEM_RARITY.UNIDENTIFIED: return 'unidentified';
+    case ITEM_RARITY.CURSED: return 'cursed';
+    default: return null;
+  }
+};
+
+// IS THERE ANYTHING HERE FOR `reveal` TO DO? Strictly the 100 grade and nothing else.
+//
+// Cursed (200) is deliberately NOT included even though a cursed item plainly has an
+// attribute: GetRarity tests IsIdentified before IsCursed, so anything still reading 200 has
+// already had its attributes revealed and there is nothing left to uncover. Treating it as
+// work would burn teeth on every cursed weapon in the fleet, for ever.
+export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIFIED;

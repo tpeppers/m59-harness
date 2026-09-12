@@ -1005,6 +1005,10 @@ function state() {
       flags: o.flags ?? 0,
       icon_rsc: o.iconRsc ?? null,
       translation: o.translation ?? 0,
+      // The wire's rarity grade, which both serializers used to drop. 100 means at least one
+      // attribute is still hidden and is the only thing `reveal` can act on; see ITEM_RARITY
+      // in m59-items.mjs for why cursed (200) is not in that set.
+      rarity: o.rarity ?? null,
     })).filter(o => o.name) : [],
     // Load is derived beside the live client because might and the authoritative
     // inventory both live here. The broker's KeeperProxy cannot reconstruct might;
