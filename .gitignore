@@ -697,3 +697,11 @@ _verify2.mjs
 # live claim on a character.
 /substrate/*.scratchpads.json
 
+
+# THE ACTIVE-DEVELOPMENT REGISTRY. substrate/intents.json says which agents are working on which
+# TOPICS right now -- not to lock anything, but so a session starting on "FleetScratch" learns
+# there is already somebody to talk to about it. Same directory as the cork board and the same
+# reason it is not committed: a claim is alive only while its holder's process is (pid plus
+# process start time), so a committed one would be a permanent notice about an afternoon that
+# ended. Claims also expire on a TTL; `m59-intent.mjs sweep` retires the dead.
+/substrate/intents.json

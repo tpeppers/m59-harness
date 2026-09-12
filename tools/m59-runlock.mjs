@@ -91,7 +91,10 @@ export function agentLockFiles(fleet) {
 // Duplicated from m59-which.mjs rather than imported, and deliberately: that file is a SCRIPT
 // with top-level side effects, so importing it to borrow a helper runs it. The same trap as
 // importing m59-broker.mjs to check it.
-function readProcessStartMs(pid) {
+// EXPORTED, because it is the checksum that tells a live claim from a stale number and three
+// callers now need it. It was already copied into m59-which.mjs; m59-intent.mjs would have been a
+// third copy, and a liveness test that drifts between copies is worse than one place to fix.
+export function readProcessStartMs(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     if (process.platform === 'win32') {

@@ -144,6 +144,64 @@ Two more refusals worth knowing: an unreadable board **fails closed** — "I cou
 board" is not permission, or a board outage silently turns the gate off. And a pin needs `--by`
 and `--for`, because a pin nobody can act on is the state the board exists to end.
 
+## Who else is in this — the intent registry
+
+The cork board answers *"is this pad allowed to drive?"*. It does not answer the question that
+actually cost an afternoon: **is somebody else already building this?**
+
+On 2026-09-11/12 two sessions built a tool called FleetScratch. One operator ask, both all night,
+and they found each other only because a third session happened to be talking to both. Nothing
+was locked, nothing collided, and that is the point — *what went wrong was invisibility, not
+collision.* Two sessions on one topic is frequently the RIGHT state, because that is where
+feedback comes from. So this is **a notice, not a lock**:
+
+```
+node tools/m59-intent.mjs nearby "resistance ladders and combat feedback"
+node tools/m59-intent.mjs claim  "<topic>" --by "<you>" --why "<what you are doing>"
+node tools/m59-intent.mjs release "<topic>"
+node tools/m59-intent.mjs list | check
+```
+
+and inside a session, `nearby <topic>` and `intend <topic>`, with live neighbours printed in the
+startup banner beside the board's notes. **Nothing ever refuses because of an intent.** The
+strongest thing it does is print names.
+
+It lives in the same directory as the cork board, by the same rules and for the same reason.
+
+### Why a ratio alone would have missed the case it exists for
+
+The obvious scoring is shared-terms over total. Measured against the real collision:
+
+| | |
+|---|---|
+| A | *"FleetScratch pads and the errand compiler"* |
+| B | *"FleetScratch: a REPL toolkit and debugging tools for fleet issues"* |
+| shared | `fleetscratch` — **one term**, a ratio of 0.25, under any floor worth having |
+
+The one shared word *was* the entire signal and the proportion threw it away. So there are two
+rules: the ratio, which catches paraphrases of one idea, and **any shared term that is not a
+repository-common word**, which catches two sessions reaching for the same unusual noun. `fleet`,
+`tool`, `keeper`, `harness` and friends are on the common list precisely so they cannot fire.
+Every hit prints which rule matched it, so a reader can tell a real neighbour from two long
+descriptions brushing past each other.
+
+### A claim dies two ways, and a pid is a promise
+
+A claim expires on its TTL (8 hours by default — a working day at most), **and** it dies when its
+holder does: pid plus process start time, the same checksum `m59-runlock.mjs` uses, because a pid
+alone passes a recycled number. `readProcessStartMs` is exported from the runlock rather than
+copied a third time; a liveness test that drifts between copies is worse than one place to fix.
+
+But **only a long-lived caller may offer a pid**, and that is the opposite of the obvious default.
+`claim` originally recorded `process.pid` — so `m59-intent.mjs claim "..."`, a one-shot process,
+wrote a claim and exited, and the holder check correctly called it abandoned before anybody could
+read it. A pid is a promise that something is still sitting there. The FleetScratch session passes
+its own (so quitting retires the claim without anyone remembering to `release`); a command typed at
+a prompt has nobody to offer, and lives on its TTL alone.
+
+A dead claim is still **shown**, marked with how it died — *"somebody tried this and stopped"* is
+worth knowing, and it is the one case where the render does not say "talk to them."
+
 ## The pad shape
 
 Identical to a FleetScript — `name`, `describe`, `params`, `steps(params)` — plus declarations of

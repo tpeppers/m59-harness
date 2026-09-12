@@ -15,6 +15,8 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 
 | about to | read |
 |---|---|
+| work out an errand that does not exist yet, or use a DM power in the lab | [`docs/m59-fleetscratch.md`](docs/m59-fleetscratch.md) |
+| find out whether another agent is already working on your topic | `node tools/m59-intent.mjs nearby "<topic>"` — see [`docs/m59-fleetscratch.md`](docs/m59-fleetscratch.md) |
 | move a character; edit the router, the mover, an anchor or a bake | [`docs/m59-routing.md`](docs/m59-routing.md) |
 | decide what to fight; change a threat, prey, spawn or armour rule | [`docs/m59-combat.md`](docs/m59-combat.md) |
 | debug a keeper, a death, a stall, or a rate that reads zero | [`docs/m59-keeper.md`](docs/m59-keeper.md) |
