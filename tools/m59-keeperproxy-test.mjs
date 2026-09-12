@@ -221,5 +221,62 @@ console.log('\nthe forward has to REACH the keeper, not merely exist');
      'kind 1 is speech; an emote is refused by the secret door and unheard by Frular');
 }
 
+// THE SWEEP, BECAUSE NAMING THEM ONE AT A TIME FOUND SIX AND MISSED ELEVEN.
+//
+// Every assertion above this line was written after an errand died on a specific verb. That is
+// six separate incidents — requestGuildInfo, sellOne, buyItems, askFrular, say, offer — each
+// found by a character doing the expensive part of a job and failing at the end of it. Robin
+// and Floyd withdrew 35,000 each and carried it across the road before `c.offer` turned out to
+// be missing.
+//
+// So this asks the question wholesale: of every `c.<verb>(` called by the modules that run
+// against a Session, which are absent from the proxy literal? The first run answered
+// SEVENTEEN.
+//
+// IT IS A RATCHET, NOT A WALL. Some of the remainder are legitimately absent — a verb with no
+// keeper op behind it should be missing LOUDLY rather than forwarded to nothing, and a couple
+// are not client methods at all. Failing the suite on those would make the test something
+// people delete. So the known set is pinned: anything new fails, and shrinking the list is
+// always allowed and asks you to update it.
+{
+  const literal = literalBody || '';
+  const hasVerb = (v) => new RegExp('(^|[^.a-zA-Z_$])' + v + '\\s*[:(]', 'm').test(literal);
+
+  // Modules whose code runs with a Session's client on the production path.
+  const MODULES = ['m59-tithe.mjs', 'm59-skills.mjs', 'm59-autopilot.mjs',
+                   'm59-guild.mjs', 'm59-supply.mjs'];
+
+  // KNOWN ABSENT, and each is a decision rather than an oversight. `buy`, `buyItems`,
+  // `deposit`, `withdraw` and `depositItems` have keeper ops under other names (shop,
+  // buyitem, bank, vault) and want a wrapper that maps the arguments, not a blind forward.
+  // `players`, `tell`, `armed` and `nudge` have no keeper op at all.
+  const KNOWN_ABSENT = new Set(['armed', 'buy', 'buyItems', 'deposit', 'depositItems',
+                                'nudge', 'players', 'tell', 'withdraw']);
+
+  const found = new Set();
+  for (const m of MODULES) {
+    let src;
+    try { src = read(m); } catch { continue; }
+    for (const hit of src.matchAll(/\bc\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g))
+      if (!hasVerb(hit[1])) found.add(hit[1]);
+  }
+
+  const surprises = [...found].filter(v => !KNOWN_ABSENT.has(v)).sort();
+  ok('no NEW client verb is called without the proxy forwarding it',
+     surprises.length === 0,
+     `these are called on a client and the proxy has no method for them: ${surprises.join(', ')}. ` +
+     'On a keeper-backed session — which is every character in a running fleet — each throws ' +
+     '"c.<verb> is not a function" at whatever point the errand reaches it. Forward it to a ' +
+     'keeper op, or add it to KNOWN_ABSENT with a reason.');
+
+  // AND THE LIST MUST NOT ROT. A name that has since been forwarded, or deleted from the
+  // callers, should come out — otherwise the exemption list slowly becomes the answer.
+  const stale = [...KNOWN_ABSENT].filter(v => !found.has(v)).sort();
+  ok('the known-absent list carries nothing that is no longer absent',
+     stale.length === 0,
+     `KNOWN_ABSENT still lists ${stale.join(', ')}, which no caller needs or which the proxy ` +
+     'now forwards. Remove them: an exemption nobody rechecks is how the sweep stops working.');
+}
+
 console.log(`\nkeeper proxy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

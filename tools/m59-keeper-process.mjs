@@ -2409,6 +2409,61 @@ const server = createServer(async (req, res) => {
             json({ events: w.events, seq: c.evSeq, since, timedOut: !!w.timedOut });
             return;
           }
+          // LOOKING INSIDE ONE BOX, which is a different question from what is in the
+          // room. `room_contents` is BP_SEND_ROOM_CONTENTS; this is
+          // BP_SEND_OBJECT_CONTENTS, answered by BP_OBJECT_CONTENTS, and it is the only way
+          // to learn what a guild chest holds — the server never pushes container contents.
+          //
+          // `UserObjectContents` (user.kod:3977) checks only that the target is a Holder and
+          // `IsInSameRoom`. No distance, no walls: a chest behind a shut secret door reads
+          // perfectly well from across the hall.
+          case 'contents': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const target = Number(args.id ?? args.target);
+            if (!Number.isFinite(target) || target <= 0) {
+              json({ error: 'contents needs the container id' }, 400); return;
+            }
+            const since = c.evSeq;
+            await session.pacer.submit('read', () => c.contents(target));
+            const w = await c.waitFor({ since, kinds: ['container', 'message'],
+                                        timeoutMs: Number(args.timeout_ms ?? 5000) })
+                             .catch(() => null);
+            const box = (w?.events ?? []).find(e => e.kind === 'container' && e.id === target)
+                     ?? (w?.events ?? []).find(e => e.kind === 'container');
+            // A CONTAINER ANSWERS THIS AND ANYTHING ELSE SAYS WHY OUT LOUD. Reporting an
+            // empty list for "it would not tell us" is the one answer that must never be
+            // given: the caller caches it as the chest's contents.
+            json({ target, answered: !!box,
+                   items: (box?.items ?? []).map(o => ({ id: o.id, name: o.name,
+                                                         amount: o.amount || 1 })),
+                   said: (w?.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 4) });
+            return;
+          }
+
+          // PUTTING SOMETHING IN. The other half of a chest, and the half that needs the
+          // secret door actually open — reading is allowed from anywhere in the room, moving
+          // an item is not.
+          case 'put': {
+            const c = session.client;
+            if (!c) { json({ error: 'no client' }, 409); return; }
+            const what = Number(args.id ?? args.what);
+            const where = Number(args.into ?? args.where ?? args.target);
+            if (!Number.isFinite(what) || !Number.isFinite(where)) {
+              json({ error: 'put needs id and into' }, 400); return;
+            }
+            const since = c.evSeq;
+            await session.pacer.submit('trade', () => c.put(what, where));
+            const w = await c.waitFor({ since, kinds: ['inventory', 'message'],
+                                        timeoutMs: Number(args.timeout_ms ?? 3000) })
+                             .catch(() => null);
+            // A CONTAINER REFUSAL IS A SENTENCE SPOKEN TO THE ROOM, never an error on the
+            // wire, so the caller has to be handed what was said and judge by its own delta.
+            json({ what, into: where, answered: !!w,
+                   said: (w?.events ?? []).filter(e => e.text).map(e => String(e.text)).slice(0, 4) });
+            return;
+          }
+
           case 'room_contents': {
             const c = session.client;
             if (!c) { json({ error: 'no client' }, 409); return; }

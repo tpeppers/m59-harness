@@ -2108,6 +2108,27 @@ class KeeperProxy {
       // halves have to cross the process boundary or neither is any use.
       offer: (toId, items) => act('trade', { op: 'offer', to_id: toId, items }),
       cancelOffer: () => act('trade', { op: 'cancel' }),
+      // THE VERBS A SWEEP FOUND, rather than the one an errand happened to die on.
+      //
+      // Auditing every `c.<verb>(` called by the modules that run against a Session against
+      // this literal listed SEVENTEEN absent. Five of them had already been found the
+      // expensive way — one at a time, each by an errand failing after doing its expensive
+      // part — and the sixth (`contents`) stopped the guild chests being readable at all.
+      // Forwarding the batch is the only way this stops recurring.
+      //
+      // Each goes to a keeper op that already exists, except `contents` and `put`, which were
+      // added to the keeper in the same commit. Anything with no op is deliberately still
+      // absent: a method that pretends locally is worse than one that is missing loudly.
+      contents: (id) => act('contents', { id }),
+      put: (what, into) => act('put', { id: what, into }),
+      acceptOffer: () => act('trade', { op: 'accept' }),
+      counterOffer: (items = []) => act('trade', { op: 'counter', items }),
+      // Speech, in its four flavours. `say` above is kind 1; these are the rest, and they
+      // matter because a guild hall door listens for one and ignores the others.
+      yell: (text) => act('say', { text, kind: 2 }),
+      broadcast: (text) => act('say', { text, kind: 3 }),
+      sayGuild: (text) => act('say', { text, kind: 10 }),
+      sayGroup: (ids, text) => act('say', { text, to: ids }),
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
