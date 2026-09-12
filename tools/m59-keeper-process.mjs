@@ -906,6 +906,33 @@ function state() {
         return (eq?.equipped ?? []).map(o => o.name ?? c?.rsc?.get?.(o.nameRsc) ?? '').filter(Boolean);
       } catch { return []; }
     })(),
+    // THE SAME LIST WITH THE FIELDS A NAME CANNOT CARRY, and `equipment` above stays a
+    // plain array of strings because a dozen things read it and a wrong list here is wrong
+    // everywhere the broker looks.
+    //
+    // WHY THIS EXISTS. A cursed weapon can never be put down — the one irreversible mistake
+    // in this game — and `rarity` 200 is the server's own word for cursed, the same field
+    // `reveal` reads for 100/unidentified. The broker rebuilt its emulated `equipment()`
+    // from the name strings above and manufactured `{id: -1 - i, name, nameRsc: name}`, so
+    // on every keeper-backed character — which is all of prod — the grade did not exist.
+    // Rizzo stalled 56 passes on a cursed mace and three checks in a row could not see it:
+    // a refusals list that a keeper restart clears, and then an equipment reply whose JSON
+    // has no `cursed` in it to match. The information had never left this process.
+    //
+    // Same family as `rarity` missing from the inventory rebuild, which is already in
+    // CLAUDE.md. Adding a field to a serializer is not adding it to what the broker returns.
+    equipment_items: (() => {
+      try {
+        const eq = c?.equipment?.();
+        return (eq?.equipped ?? []).map(o => ({
+          name: o.name ?? c?.rsc?.get?.(o.nameRsc) ?? '',
+          nameRsc: o.nameRsc ?? null,
+          id: o.id ?? null,
+          flags: o.flags ?? null,
+          rarity: o.rarity ?? null,
+        })).filter(o => o.name);
+      } catch { return []; }
+    })(),
     // STRUCTURED, BECAUSE `pack` IS PROSE. "elderberry (x30)" is for a human reading a
     // dashboard; a tool that wants to know whether twenty elderberry are aboard has to
     // parse English out of it. Both are kept: `pack` is unchanged for everything already

@@ -5,7 +5,7 @@
 // Paddock and there is no way to get them back, so "it cast at the wrong thing" is a bill
 // rather than a log line.
 import assert from 'node:assert/strict';
-import { ITEM_RARITY, rarityName, isUnidentified } from './m59-items.mjs';
+import { ITEM_RARITY, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
 import { REVEAL, IDENTIFY, teethIn, revealable, budget } from './m59-reveal.mjs';
 
 let n = 0;
@@ -126,5 +126,74 @@ ok('no teeth means no work, and it says which shortage it is', () => {
   assert.equal(b.affordable, 0);
   assert.match(b.paced_by, /orc teeth/);
 });
+
+
+console.log('\ncursed is the same grade, and the hand is where it matters');
+
+ok('200 is cursed, by the server\'s own word rather than an inference', () => {
+  assert.equal(ITEM_RARITY.CURSED, 200);
+  assert.equal(rarityName(200), 'cursed');
+  assert.equal(isCursed({ rarity: 200 }), true);
+});
+
+// The two grades are mutually exclusive and the reveal filter must not widen to take the
+// second. GetRarity tests IsIdentified before IsCursed, so a 200 has already been revealed —
+// counting it as work would burn three teeth per cursed weapon in the fleet, for ever.
+ok('and a cursed item is NOT revealable, which is what keeps teeth off it', () => {
+  assert.equal(isUnidentified({ rarity: 200 }), false);
+  assert.equal(isCursed({ rarity: 100 }), false);
+  assert.equal(revealable([{ name: 'mace', rarity: 200 }]).length, 0);
+});
+
+// ABSENT IS NOT NEGATIVE. A keeper too old to send the field, and a keeper reporting a clean
+// weapon, both produce `rarity: null` — and reading those the same way is the whole reason
+// three checks in a row reported Rizzo's cursed mace as clean.
+ok('a missing grade is not a clean one', () => {
+  assert.equal(isCursed({ rarity: null }), false);
+  assert.equal(isCursed({}), false);
+  assert.equal(isUnidentified({ rarity: null }), false);
+});
+
+// THE REBUILD THE BROKER DOES, PINNED HERE BECAUSE THE BROKER CANNOT BE IMPORTED — importing
+// it takes the fleet lock. This is the exact expression from m59-broker.mjs's KeeperProxy:
+// a keeper that sends `equipment_items` carries grades, one that sends only `equipment` does
+// not, and `grades_known` is what stops the second reading as "nothing is cursed".
+console.log('\nthe keeper-backed rebuild keeps both shapes apart');
+{
+  const rebuild = (s) => ({
+    known: Array.isArray(s.equipment_items) || Array.isArray(s.equipment),
+    equipped: Array.isArray(s.equipment_items)
+      ? s.equipment_items.map((o, i) => ({ id: o.id ?? -1 - i, name: o.name,
+          nameRsc: o.nameRsc ?? o.name, flags: o.flags ?? null, rarity: o.rarity ?? null }))
+      : (s.equipment ?? []).map((name, i) => ({ id: -1 - i, name, nameRsc: name,
+          flags: null, rarity: null })),
+    grades_known: Array.isArray(s.equipment_items),
+  });
+
+  ok('a keeper that sends the structured list carries the grade through', () => {
+    const eq = rebuild({ equipment: ['mace'],
+                         equipment_items: [{ name: 'mace', id: 9001, rarity: 200 }] });
+    assert.equal(eq.grades_known, true);
+    assert.equal(eq.equipped[0].rarity, 200);
+    assert.equal(isCursed(eq.equipped[0]), true);
+    assert.equal(eq.equipped[0].id, 9001);
+  });
+
+  ok('an OLDER keeper still answers, with the names and no grades — this fleet restarts ' +
+     'keepers every minute, so both shapes are live at once', () => {
+    const eq = rebuild({ equipment: ['mace'] });
+    assert.equal(eq.known, true);
+    assert.equal(eq.equipped[0].name, 'mace');
+    assert.equal(eq.equipped[0].rarity, null);
+    assert.equal(eq.grades_known, false);
+  });
+
+  ok('NO SNAPSHOT AT ALL is still not "nothing equipped"', () => {
+    const eq = rebuild({});
+    assert.equal(eq.known, false);
+    assert.equal(eq.equipped.length, 0);
+    assert.equal(eq.grades_known, false);
+  });
+}
 
 console.log(`\n${n} assertions, all offline.\n`);

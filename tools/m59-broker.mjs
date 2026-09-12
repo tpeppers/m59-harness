@@ -102,7 +102,7 @@ import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
          isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, protectedNames, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
-import { resolveItemNames, weighItem, rarityName, isUnidentified } from './m59-items.mjs';
+import { resolveItemNames, weighItem, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
 import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
          factionOfferAllowed, FACTION_SOLDIER, factionFromProfile,
@@ -1893,9 +1893,38 @@ class KeeperProxy {
       // character was unarmed. `known` is false when we have no snapshot at all, because
       // "no evidence" and "nothing equipped" are the distinction this whole file keeps
       // insisting on.
+      //
+      // AND IT TAKES EITHER SHAPE, BECAUSE THE TWO SIDES RESTART SEPARATELY. `equipment` is
+      // an array of NAMES and always was; `equipment_items` is the same list with `id`,
+      // `flags` and `rarity` on it. A keeper that predates that field sends only the names —
+      // and on this fleet keepers come and go every minute, so "the new field is deployed"
+      // is never true of all twenty-three at once. Reading whichever arrived is the whole
+      // reason a rebuild may not simply be replaced.
+      //
+      // WHAT THE MISSING FIELD COST. `rarity` 200 is the server's own word for CURSED
+      // (ITEM_RARITY_GRADE_CURSED; the stock client colours it red at color.c:583), and a
+      // cursed weapon can never be unwielded — the one irreversible mistake here. Because
+      // this rebuild manufactured `{id: -1 - i, name, nameRsc: name}`, `equipment` on a
+      // keeper-backed character could not answer whether the thing in the hand was cursed.
+      // Rizzo stalled 56 passes on one; three checks written against this reply all read
+      // clean, because there was no field for them to read.
       equipment: () => ({
-        known: Array.isArray(s.equipment),
-        equipped: (s.equipment ?? []).map((name, i) => ({ id: -1 - i, name, nameRsc: name })),
+        known: Array.isArray(s.equipment_items) || Array.isArray(s.equipment),
+        equipped: Array.isArray(s.equipment_items)
+          ? s.equipment_items.map((o, i) => ({
+              id: o.id ?? -1 - i, name: o.name, nameRsc: o.nameRsc ?? o.name,
+              flags: o.flags ?? null, rarity: o.rarity ?? null }))
+          : (s.equipment ?? []).map((name, i) => ({ id: -1 - i, name, nameRsc: name,
+              // THE TWO BRANCHES MUST PRODUCE THE SAME SHAPE. The rebuild's whole invariant
+              // is that a reader cannot tell which side built the object, and a missing key
+              // reads as `undefined` where the other branch gives `null` — so a caller that
+              // checks `rarity === null` behaves differently depending on the keeper's age.
+              // `grades_known` is the ONE field that distinguishes them, on purpose.
+              flags: null, rarity: null })),
+        // SAY WHICH SHAPE ANSWERED. Without this, a null rarity means either "not cursed"
+        // or "this keeper is too old to say", and those must not read the same — that
+        // conflation is the bug this whole block exists for.
+        grades_known: Array.isArray(s.equipment_items),
       }),
       // THE READS A TOOL ASKS FOR BEFORE IT LOOKS. On a real Session these put a request on
       // the wire and the answer arrives as an event; here the fresh snapshot has already
@@ -11814,9 +11843,25 @@ const TOOLS = [
       }
       const eq = c.equipment();
       const weapons = eq.equipped.filter(e => e.name && skills.weaponScore(e.name) > 0);
+      // THE GRADE, NAMED, AND THE ONE CONSEQUENCE THAT IS IRREVERSIBLE. A cursed item
+      // cannot be unwielded, so a caller asking "why will this character not change
+      // weapons" needs this in the answer rather than having to know to look for it.
+      const graded = eq.equipped.map(e => ({
+        ...e, rarity_name: rarityName(e.rarity) ?? undefined, cursed: isCursed(e) || undefined }));
+      const cursed = graded.filter(e => e.cursed).map(e => e.name);
       return {
         character: c.me?.name ?? null,
         ...eq,
+        equipped: graded,
+        cursed: cursed.length ? cursed : null,
+        cursed_note: !eq.grades_known
+          ? 'this keeper does not report rarity grades yet, so "no cursed item" is NOT what ' +
+            'this says — it is that nothing here can tell you. Restart the keeper to find out.'
+          : (cursed.length
+             ? 'a cursed item can NEVER be unwielded (the one irreversible mistake here). It ' +
+               'comes off with a remove curse potion (Lady Aftyn, room 205), the `remove ' +
+               'curse` spell cast on this character, or when the weapon breaks.'
+             : 'the server graded everything equipped and none of it is cursed'),
         // The one derived field, and labelled as derived. Which of the equipped items is
         // the weapon is a judgement from its name; that it is equipped at all is not.
         wielding: weapons.length ? weapons.map(w => w.name) : null,
