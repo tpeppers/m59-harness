@@ -23,7 +23,7 @@
 // It records what a step did and reduces it to rates. The judgement is `compareBenches`, which says
 // whether two matrices differ by more than their own noise, and abstains when they do not — because
 // the whole point of a bench is to stop crediting a change that did nothing.
-import { analyseLeg } from './m59-steptrace.mjs';
+import { analyseLeg, MIN_MOVER_STEP } from './m59-steptrace.mjs';
 
 export const HEADINGS = Object.freeze([
   ['N', 0, -1], ['NE', 1, -1], ['E', 1, 0], ['SE', 1, 1],
@@ -50,7 +50,7 @@ export const HEADINGS = Object.freeze([
  * Sixth threshold artefact in this codebase, same shape as the other five: a constant that stopped
  * meaning what it meant when a scale changed.
  */
-export const MIN_MOVER_REACH_CLIENT = 128;
+export const MIN_MOVER_REACH_CLIENT = MIN_MOVER_STEP;
 /** `FINE_STRIDE` (48 protocol) — the largest step the mover takes without being asked to. */
 export const MAX_MOVER_REACH_CLIENT = 768;
 

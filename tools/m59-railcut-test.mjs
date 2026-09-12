@@ -4,8 +4,11 @@
 //
 // The edge test is injected, so this exercises the cutter against synthetic worlds whose shape is
 // known exactly. Every case is a thing that went wrong on the real map on 2026-09-11/12.
-import { snap, flood, chainTo, cutRail, verifyRail, furthestTraceable, chordWalkable, LATTICE }
+import { snap, flood, chainTo, cutRail, verifyRail, furthestTraceable, chordWalkable, LATTICE,
+         MIN_MOVER_STEP }
   from './m59-railcut.mjs';
+import { MIN_AIM } from './m59-railfollow.mjs';
+import { MIN_MOVER_REACH_CLIENT } from './m59-stepbench.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, what) => { if (c) pass++; else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -180,11 +183,18 @@ ok(snap(17648) % LATTICE === 0, 'the result is always on the lattice');
   ok(!a.fallback, 'this is a real answer, not a fallback');
 }
 {
-  // NOTHING ahead is chord-reachable: the fallback is one validated lattice step, and it SAYS so.
+  // NOTHING ahead is chord-reachable: the fallback reaches to the first waypoint the MOVER can
+  // actually step to, and it SAYS so.
+  //
+  // This used to assert `a.i === 1` — the next waypoint, one lattice step, 64 client units. The
+  // mover floors a step at 128 and answers anything closer with `arrived: true, steps: 0`, so that
+  // assertion pinned a request that could never be executed. 30% of Marco's logged legs in room 49
+  // were exactly it.
   const a = furthestTraceable([{ x: 0, y: 0, f: 1 }, { x: 64, y: 0, f: 1 }, { x: 128, y: 0, f: 1 }],
                               { x: 0, y: 0 }, { edge: () => false });
   ok(a.fallback, 'a rail with no walkable chord falls back');
-  eq(a.i, 1, 'to the next waypoint');
+  eq(a.i, 2, 'to the first waypoint that clears the minimum step the MOVER can take, not merely the next');
+  ok(a.dist >= MIN_MOVER_STEP, `and the aim is executable (${a.dist} >= ${MIN_MOVER_STEP})`);
   ok(/no chord from here/.test(a.why), 'and says why, which is a stronger statement than "short leg"');
 }
 {
@@ -241,6 +251,50 @@ ok(snap(17648) % LATTICE === 0, 'the result is always on the lattice');
 {
   eq(verifyRail([], { edge: open }).legs, 0, 'an empty rail has no legs');
   eq(verifyRail([{ x: 0, y: 0 }], { edge: open }).ok, true, 'a single waypoint is trivially fine');
+}
+
+// ---- furthestTraceable's FALLBACK must clear the mover's minimum step -----------------------
+//
+// The fallback's comment used to end "aiming one lattice step", and one lattice step is 64 client
+// units against a mover that floors every step at 128 and answers anything closer with
+// `arrived: true, steps: 0`. So it issued an unexecutable request once per leg, for ever: 51 of
+// Marco's 169 logged legs (30%) took zero steps reporting arrived, 41 asking for under 128 units.
+{
+  const rail = [];
+  for (let k = 0; k <= 12; k++) rail.push({ x: k * LATTICE, y: 0, f: 1 });
+  const body = { x: 0, y: 0 };
+  const noChord = () => false;              // nothing ahead is chord-walkable: force the fallback
+
+  const f = furthestTraceable(rail, body, { edge: noChord });
+  ok(f.fallback, 'with no walkable chord it falls back');
+  ok(f.dist >= MIN_MOVER_STEP, `and the fallback aim clears the minimum step (${f.dist})`);
+  ok(f.i >= 2, '...by reaching past the next waypoint rather than at it');
+  ok(!f.tooClose, 'and it is not marked finished, because the rail had room');
+  ok(/minimum step/.test(f.why), '...saying which constraint set the distance');
+
+  // The floor is a parameter: a different stride is a different floor.
+  ok(furthestTraceable(rail, body, { edge: noChord, minAim: 448 }).dist >= 448,
+     'the floor is injectable rather than baked in');
+
+  // AT THE END OF A RAIL nothing may be far enough, and that is a FINISHED rail, not a blocked one.
+  const stub = [{ x: 0, y: 0, f: 1 }, { x: 32, y: 0, f: 1 }, { x: 64, y: 0, f: 1 }];
+  const done = furthestTraceable(stub, body, { edge: noChord });
+  ok(done.tooClose, 'a rail with nothing far enough is marked tooClose');
+  ok(/FINISHED rather than blocked/.test(done.why), '...and says finished, not blocked');
+
+  // A WALKABLE CHORD IS STILL PREFERRED — this must not turn every leg into the fallback.
+  const chord = furthestTraceable(rail, body, { edge: () => true });
+  ok(!chord.fallback, 'a walkable chord still wins');
+  ok(chord.dist >= MIN_MOVER_STEP, '...and is comfortably past the floor anyway');
+}
+
+// ---- ONE definition of the mover's minimum step, not four ----------------------------------
+{
+  // It was briefly MIN_MOVER_STEP, MIN_MOVER_REACH_CLIENT, MIN_AIM and a bare 192 in a pad. Four
+  // names for one number is the fault this whole toolchain keeps paying for.
+  eq(MIN_MOVER_STEP, 128, 'the number itself');
+  eq(MIN_AIM, MIN_MOVER_STEP, 'm59-railfollow.MIN_AIM is the same value, by import');
+  eq(MIN_MOVER_REACH_CLIENT, MIN_MOVER_STEP, 'and so is m59-stepbench.MIN_MOVER_REACH_CLIENT');
 }
 
 console.log(`\nm59-railcut: ${pass} assertion(s) passed, ${fail} failed`);

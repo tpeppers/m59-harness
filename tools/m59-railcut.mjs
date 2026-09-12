@@ -26,6 +26,11 @@
 // So: snap the seed, snap the goal, and PREPEND the body's raw position so the first leg bridges
 // the snap. `snap` is not a detail, it is the difference between a path and a false negative.
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
+// ONE HOME FOR THE MOVER'S MINIMUM STEP. It was briefly defined in four modules under four
+// names — MIN_MOVER_STEP, MIN_MOVER_REACH_CLIENT, MIN_AIM and a bare 192 in a pad — which is the
+// same 'two shapes for one idea' fault this toolchain keeps paying for, committed by the person
+// documenting it. m59-steptrace is the home because it is pure and imports nothing.
+import { MIN_MOVER_STEP } from './m59-steptrace.mjs';
 
 export const LATTICE = 64;
 
@@ -146,7 +151,8 @@ export function chordWalkable(a, b, { edge, lattice = LATTICE } = {}) {
 }
 
 export function furthestTraceable(waypoints, body, { edge, fromIndex = 0, maxAhead = 64,
-                                                     budget = Infinity, lattice = LATTICE } = {}) {
+                                                     budget = Infinity, lattice = LATTICE,
+                                                     minAim = MIN_MOVER_STEP } = {}) {
   if (!Array.isArray(waypoints) || waypoints.length === 0 || typeof edge !== 'function') return null;
   const last = waypoints.length - 1;
   const start = Math.max(0, Math.min(fromIndex, last));
@@ -159,16 +165,36 @@ export function furthestTraceable(waypoints, body, { edge, fromIndex = 0, maxAhe
     if (!chordWalkable(body, w, { edge, lattice }).ok) break;   // contiguity: stop at the first gap
     best = { i, x: w.x, y: w.y, f: w.f, dist: Math.round(d), spanned: i - start };
   }
-  // Nothing ahead is chord-reachable. The next waypoint is one validated lattice step, so it is the
-  // honest fallback — and saying WHY matters, because "the chord to the next waypoint is blocked"
-  // is a much stronger statement than "the leg was short".
+  // Nothing ahead is chord-reachable. The next waypoint is one validated lattice step — but ONE
+  // LATTICE STEP IS NOT A STEP THE MOVER CAN TAKE.
+  //
+  // `walkFine` floors every step at 8 protocol units = 128 CLIENT units, and answers an aim closer
+  // than that with `arrived: true, steps: 0` — nothing moves, and the caller reads success. The
+  // lattice is 64. So this fallback, whose comment used to end "aiming one lattice step", was
+  // issuing a request that could not be executed, once per leg, for ever.
+  //
+  // MEASURED on Marco's 169 logged legs in room 49: 51 of them (30%) took zero steps with
+  // `arrived: true`, 41 asking for under 128 client units — 16, 32 and 93, over and over, against a
+  // 4,958-unit crossing. So the fallback reaches PAST the floor: further waypoints are still
+  // flood-validated lattice steps and the walker flies straight past them regardless.
   if (!best) {
-    const i = Math.min(start + 1, last);
+    let i = Math.min(start + 1, last);
+    // Reach forward until the aim is a distance the mover can actually travel.
+    while (i < last && Math.hypot(waypoints[i].x - body.x, waypoints[i].y - body.y) < minAim) i++;
     const w = waypoints[i];
-    return { i, x: w.x, y: w.y, f: w.f, spanned: i - start,
-             dist: Math.round(Math.hypot(w.x - body.x, w.y - body.y)),
+    const dist = Math.round(Math.hypot(w.x - body.x, w.y - body.y));
+    return { i, x: w.x, y: w.y, f: w.f, spanned: i - start, dist,
              fallback: true,
-             why: 'no chord from here to any waypoint ahead is walkable; aiming one lattice step' };
+             // AND SAY SO WHEN EVEN THE END OF THE RAIL IS TOO CLOSE. That is a finished rail, not a
+             // blocked one, and issuing the short aim anyway is the failure that reports success.
+             ...(dist < minAim ? { tooClose: true } : {}),
+             why: dist < minAim
+               ? `no chord ahead is walkable and every remaining waypoint is within ${minAim} client `
+                 + `units — below the mover's minimum step, so no aim on this rail can produce a step: `
+                 + `the rail is FINISHED rather than blocked`
+               : `no chord from here to any waypoint ahead is walkable; aiming ${dist} units ahead `
+                 + `(${i - start} lattice step(s)), the nearest that clears the mover's ${minAim}-unit `
+                 + `minimum step` };
   }
   return best;
 }
@@ -198,4 +224,4 @@ export function verifyRail(waypoints, { edge, lattice = LATTICE } = {}) {
   return { ok: bad.length === 0, bad, legs: Math.max(0, waypoints.length - 1) };
 }
 
-export { MAX_STEP_HEIGHT };
+export { MAX_STEP_HEIGHT, MIN_MOVER_STEP };
