@@ -274,21 +274,35 @@ export function recordSample(rows = []) {
 
 // Read it back. `since` is a millisecond timestamp; the default of 24 hours is the
 // question this file exists to answer.
+// The ledger's own filename shape, named once so the reader and the writer cannot drift.
+const LEDGER_FILE = /^fleet-\d{4}-\d{2}-\d{2}\.jsonl$/;
+
 export function readLedger({ sinceMs = 24 * 3600 * 1000 } = {}) {
-  if (!existsSync(DIR)) return { samples: [], events: [] };
+  // AN ABSENT DIRECTORY IS NOT AN EMPTY ONE, and this used to answer the same for both.
+  //
+  // The ledger resolves its directory from the CHECKOUT it was loaded in, so a report run
+  // from a clone against the deploy's fleet reads a path that does not exist and answers
+  // "nothing cast in this window" — a confident, wrong, load-bearing reply. It cost a minute
+  // the first time m59-spellcast ran from a worktree, and the fix is not to stop making the
+  // mistake: `source` travels with every read and the CLIs print it. M59_LEDGER_DIR is how
+  // one is pointed at another fleet's history.
+  const source = { dir: DIR, exists: existsSync(DIR), files: 0, rows: 0 };
+  if (!source.exists) return { samples: [], events: [], source };
   const cutoff = Date.now() - sinceMs;
   const samples = [], events = [];
   // Two days of files covers any 24-hour window regardless of when it started.
-  const files = readdirSync(DIR).filter(f => /^fleet-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort().slice(-3);
+  const files = readdirSync(DIR).filter(f => LEDGER_FILE.test(f)).sort().slice(-3);
+  source.files = files.length;
   for (const f of files) {
     for (const line of readFileSync(join(DIR, f), 'utf8').split('\n')) {
       if (!line) continue;
       let o; try { o = JSON.parse(line); } catch { continue; }
+      source.rows++;
       if (o.t < cutoff) continue;
       (o.type === 'event' ? events : samples).push(o);
     }
   }
-  return { samples, events };
+  return { samples, events, source };
 }
 
 // KILLS IN A WINDOW, COUNTED FROM THE RECORD RATHER THAN FROM A COUNTER.
@@ -339,6 +353,42 @@ export function killsIn(ms = KILL_WINDOW_MS, maxAgeMs = 5000) {
   const { events } = readLedger({ sinceMs: ms });
   killCache = { at: now, ms, by: countKills(events, now - ms) };
   return killCache.by;
+}
+
+// THE FLEET'S OWN RATE, AND WHO CONTRIBUTED NOTHING TO IT.
+//
+// Extracted from m59-minimal so it can be pinned: it had none of its own tests, and the two
+// things it gets wrong when hand-written are both silent.
+//
+// ONE — THE PER-CHARACTER AVERAGE READS AS THE FLEET RATE. They differ by a factor of the
+// fleet size, `avg 0.13` against `3.07/min`, and a header saying "fleet 23 in game" above the
+// first is enough to make a reader take it for the second. That reached the operator.
+//
+// TWO — THE TOTAL MUST COUNT EVERYONE THE LEDGER KNOWS, not whoever is on the board at the
+// moment the question is asked. m59-minimal's comment claimed exactly that while its code
+// mapped over the live rows only, so a character that died or logged out mid-window had its
+// kills dropped from the fleet's output. The union is the honest set: a name in the kill
+// ledger earned those kills whether or not it is standing there now.
+//
+// `silent` is the actionable half and an average cannot show it — nine characters earning
+// nothing and fourteen working average out to something that looks like a mild dip.
+export function fleetKills({ kills, characters = [], minutes = 30 } = {}) {
+  const live = characters.filter(Boolean);
+  const get = (who) => Number(kills?.get?.(who) ?? 0) || 0;
+  const everyone = new Set([...(kills?.keys?.() ?? []), ...live].filter(Boolean));
+  let total = 0;
+  for (const who of everyone) total += get(who);
+  const offBoard = [...(kills?.keys?.() ?? [])].filter(w => w && !live.includes(w) && get(w) > 0);
+  return {
+    total,
+    per_minute: minutes > 0 ? total / minutes : null,
+    counted: everyone.size,
+    // Only characters that ARE on the board can be called silent. One that is absent is not a
+    // character earning nothing; it is a character nobody can ask, and reporting it as idle is
+    // the same conflation this file keeps arguing about.
+    silent: live.filter(w => get(w) === 0),
+    off_board: offBoard,
+  };
 }
 
 // THE DEATH POST-MORTEM. Not a dump of records — the point is the pattern.
@@ -403,21 +453,73 @@ export function deathReport({ sinceMs = 24 * 3600 * 1000, limit = 20 } = {}) {
 //
 // `worked` is the number to read first. A count of casts alone cannot separate forty
 // meals from forty silent refusals, and the fleet spent a while believing the first.
-export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null } = {}) {
-  const { events } = readLedger({ sinceMs });
+// `ok` IS NOT "IT HAPPENED", AND THE MANA READING IS WHAT SEPARATES THEM.
+//
+// `recordCast` sets `ok` from the caller's own judgement — an inventory diff, a stat change —
+// and for a buff there is often nothing to diff, so `ok: true` means "the call came back".
+// A PersonalEnchantment already on its target refuses in `CanPayCosts` and costs NOTHING, so
+// a keeper re-blessing an already-blessed fleet-mate writes `ok: true` for ever while spending
+// no mana and no reagents.
+//
+// `mana_cost` is the field that can tell: it is `mana_before - mana_after`, recorded only when
+// both readings were real and the value went DOWN (see recordCast), so
+//
+//   mana_cost > 0    mana definitely left the character. Something was cast.
+//   mana_cost === 0  mana WAS measured on both sides and did not move.
+//   absent           the readings were not usable. This says nothing either way.
+//
+// and a zero is only damning for a spell whose declared cost is above zero — eighteen of this
+// world's spells genuinely cost no mana, so `manaOf` is how a caller supplies that and the
+// bucket stays honest without it.
+//
+// IT IS A LOWER BOUND, NOT THE COST. Regeneration runs during the measurement, so a bless
+// (6 mana) has been recorded at 2. Treat it as "mana definitely moved", never as an amount.
+//
+// WHAT IT COST TO NOT HAVE THIS, 2026-09-12: two of the four Kraanan casters showed 14 blesses
+// each in a fifteen-minute window and `worked: 100%`. They were parked in a shop with only
+// fleet-mates present, re-buffing targets already buffed. It took two and a half minutes of
+// live polling per character — watching mana sit at 33/33 and 25/25 while the rows accumulated
+// — to see it, and a fleet-wide report of "44 blesses" went to the operator first.
+//
+// `worked` is kept because callers read it. `landed` is the one to trust.
+export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null,
+                              manaOf = null, kindOf = null } = {}) {
+  const { events, source } = readLedger({ sinceMs });
   const mine = (e) => !character || e.character?.toLowerCase() === character.toLowerCase();
   const casts = events.filter(e => e.kind === 'cast' && mine(e));
   const declines = events.filter(e => e.kind === 'cast_declined' && mine(e));
   const buys = events.filter(e => e.kind === 'bought' && mine(e));
   const buyDeclines = events.filter(e => e.kind === 'buy_declined' && mine(e));
 
+  // Which of the four a single cast row belongs in. Pure, so the test can pin it and the
+  // CLI can reuse it rather than re-deriving the rule a second time and drifting.
+  const declaredMana = (spell) => {
+    if (typeof manaOf !== 'function') return null;
+    const m = manaOf(spell);
+    return typeof m === 'number' && Number.isFinite(m) ? m : null;
+  };
+  // Returns null for a cast the caller already judged a failure: `nothing` is counted by the
+  // produced/nothing pair above and double-counting it here read 4 out of 4 in a fixture of 2.
+  const outcomeOf = (e) => {
+    if (!e.ok) return null;
+    const c = e.mana_cost;
+    if (typeof c !== 'number' || !Number.isFinite(c)) return 'unmeasured';
+    if (c > 0) return 'landed';
+    // Measured, and it did not move. Only a spell that SHOULD have cost something can be
+    // convicted on that; for a free spell, or one whose cost we do not know, it is silence.
+    const want = declaredMana(e.spell);
+    return want != null && want > 0 ? 'free' : 'unmeasured';
+  };
+
   const bySpell = new Map();
   for (const e of casts) {
     const k = e.spell || 'unknown';
     const b = bySpell.get(k) || { spell: k, cast: 0, produced: 0, nothing: 0,
+                                  landed: 0, free: 0, unmeasured: 0,
                                   mana_spent: 0, characters: new Set(), why: {} };
     b.cast++;
     if (e.ok) b.produced++; else b.nothing++;
+    const o = outcomeOf(e); if (o) b[o]++;
     b.mana_spent += Number(e.mana_cost) || 0;
     if (e.character) b.characters.add(e.character);
     if (e.why) b.why[e.why] = (b.why[e.why] || 0) + 1;
@@ -460,13 +562,15 @@ export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null } = {
   const perChar = new Map();
   const charOf = (n) => {
     let v = perChar.get(n);
-    if (!v) perChar.set(n, v = { character: n, cast: 0, produced: 0, spent: 0, bought: 0 });
+    if (!v) perChar.set(n, v = { character: n, cast: 0, produced: 0, spent: 0, bought: 0,
+                                 landed: 0, free: 0, unmeasured: 0 });
     return v;
   };
   for (const e of casts) {
     if (!e.character) continue;
     const v = charOf(e.character);
     v.cast++; if (e.ok) v.produced++;
+    const o = outcomeOf(e); if (o) v[o]++;
   }
   for (const e of buys) {
     if (!e.character) continue;
@@ -474,9 +578,40 @@ export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null } = {
     v.bought++; v.spent += Number(e.cost) || 0;
   }
 
+  const pct = (n, d) => (d ? Math.round(100 * n / d) + '%' : null);
+  const verdictFor = (b) => {
+    const kind = typeof kindOf === 'function' ? String(kindOf(b.spell) || '') : '';
+    const head = `${b.free} of ${b.cast} spent no mana at all`;
+    if (/enchant/i.test(kind))
+      return `${head} — for an enchantment that means the target ALREADY HAD IT, so the buff ` +
+             `is up and this is not a supply problem. What it does cost is improvement: the ` +
+             `ability only rolls on a cast that happens, so ${b.landed} is the rate it is ` +
+             `learning at, not ${b.cast}`;
+    if (kind)
+      return `${head} — for a spell that produces something, that is nothing coming out. ` +
+             `Check the reagents and the pack space before the caster`;
+    return `${head} — for a spell that costs some, that is a silent refusal (already ` +
+           `enchanted, or nothing here needed it), not a cast`;
+  };
   const spells = [...bySpell.values()].map(b => ({
     spell: b.spell, cast: b.cast, produced: b.produced, nothing: b.nothing,
-    worked: b.cast ? Math.round(100 * b.produced / b.cast) + '%' : null,
+    worked: pct(b.produced, b.cast),
+    // THE FOUR THAT MATTER. `landed` is mana definitely spent; `free` is mana measured and
+    // unmoved on a spell that should have cost some, which is a refusal wearing `ok: true`.
+    landed: b.landed, free: b.free || undefined, unmeasured: b.unmeasured || undefined,
+    landed_pct: pct(b.landed, b.cast),
+    // Said out loud on any row where the two disagree, because `worked: 100%` next to
+    // `landed: 0` is the whole finding and nobody should have to spot it.
+    //
+    // AND WHAT A FREE CAST MEANS DEPENDS ON THE SPELL, which is why `kindOf` exists. For an
+    // ENCHANTMENT a free cast is the target already having it — the buff is UP, the fleet has
+    // what it wanted, and the only loss is that the caster's ability does not improve
+    // (viChance_To_Increase rolls on a real cast). For a spell that makes an ITEM, a free cast
+    // is nothing coming out, which is a supply failure. Reporting both as "silent refusal"
+    // reads as a fault in the first case, and I misread my own output that way within a minute
+    // of first running it: 14 of 14 super strengths free looked like the reagent delivery had
+    // failed, when it meant every farmer already had the buff.
+    ...(b.free > 0 && b.free >= b.landed ? { verdict: verdictFor(b) } : {}),
     mana_spent: b.mana_spent || undefined,
     characters: b.characters.size,
     reasons: Object.entries(b.why).sort((a, b2) => b2[1] - a[1])
@@ -485,6 +620,8 @@ export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null } = {
 
   return {
     window_hours: +(sinceMs / 3600000).toFixed(1),
+    // WHICH HISTORY THIS IS, so an empty report cannot be read as a quiet fleet.
+    source,
     ...(character ? { character } : {}),
     by_spell: spells,
     declined: [...declineTotals.entries()].map(([key, per]) => {
@@ -507,8 +644,12 @@ export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null } = {
       why_declined: [...new Set(buyDeclines.map(e => e.why))].slice(0, 8),
     },
     by_character: [...perChar.values()]
-      .map(v => ({ ...v, worked: v.cast ? Math.round(100 * v.produced / v.cast) + '%' : null }))
-      .sort((a, b) => b.cast - a.cast),
+      .map(v => ({ ...v, worked: pct(v.produced, v.cast), landed_pct: pct(v.landed, v.cast),
+                   free: v.free || undefined, unmeasured: v.unmeasured || undefined }))
+      // WORST FIRST BY WHAT LANDED, not by what was attempted. A caster with 40 free casts
+      // and none landed is the row worth reading, and sorting by `cast` puts it at the top
+      // for the wrong reason — it looks like the busiest character in the fleet.
+      .sort((a, b) => (a.landed - b.landed) || (b.cast - a.cast)),
     recent: casts.slice(-25).reverse().map(e => ({
       at: e.iso || new Date(e.t).toISOString(), character: e.character,
       spell: e.spell, ok: e.ok, why: e.why,
@@ -516,12 +657,18 @@ export function spellReport({ sinceMs = 24 * 3600 * 1000, character = null } = {
       ...(e.reagents_before ? { reagents_before: e.reagents_before } : {}),
     })),
     read_this_way:
-      '`worked` is the percentage of casts that produced something, and it is the only ' +
-      'field that distinguishes a supply loop from a character wasting mana — neither ' +
-      'spell reports its own failure. `declined` is why a cast did NOT happen, and a ' +
-      'spell appearing there with cast: 0 means the loop never started rather than that ' +
-      'it is failing. `times` in declined is summed from each keeper\'s own running ' +
-      'count, so a broker restart resets it and the total is a floor, not an exact figure.',
+      'READ `landed`, NOT `worked`. `worked` is the share of casts whose caller judged them ' +
+      'ok, and for a buff there is usually nothing to diff — so it reads 100% for a keeper ' +
+      'blessing an already-blessed fleet-mate for ever. `landed` counts only casts where mana ' +
+      'measurably LEFT the character. `free` counts casts that measured no mana movement at ' +
+      'all on a spell that costs some: a silent refusal wearing ok:true. `unmeasured` is ' +
+      'honest ignorance — the readings were unusable, or the spell is one of the eighteen ' +
+      'that genuinely cost nothing, or no `manaOf` was supplied. mana_spent is a FLOOR, ' +
+      'because regeneration runs during the measurement and a 6-mana bless has been recorded ' +
+      'at 2: read any positive value as "mana moved", never as an amount. `declined` is why a ' +
+      'cast did NOT happen, and a spell appearing there with cast: 0 means the loop never ' +
+      'started rather than that it is failing. `times` in declined is summed from each ' +
+      'keeper\'s own running count, so a broker restart resets it and the total is a floor.',
   };
 }
 

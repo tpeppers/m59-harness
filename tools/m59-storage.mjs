@@ -114,85 +114,44 @@ const writeJson = (path, value) => {
  * thing that can answer later, and every reading carries WHEN and WHO so a stale one can
  * be told from a fresh one. Nothing here is ever presented as current.
  */
-// ---------------------------------------------------------------- WHICH CHEST IS WHICH
+// ---------------------------------------------------------------- WHAT A CHEST IS CALLED
 //
-// A GUILD CHEST IS ADDRESSED BY WHERE IT STANDS, NEVER BY ITS OBJECT ID.
+// A CHEST IS ITS SQUARE. That is the whole scheme, and everything else here follows from it.
 //
-// An object id is a handle the server hands out and recycles. This repository has measured
-// 23% of stored ids naming a different object three days later, so a slot->id cache is a
-// slot->something-else cache on a long enough timeline. Prod demonstrated it exactly: three
-// chest readings taken thirty days ago, naming a hall the guild no longer owns, and both the
-// deposit and the withdraw leg skipping every slot because no recorded id was in the room.
+// The obvious design is a slot number with a square recorded beside it, and it is wrong in a
+// way that takes a while to see: a number implies a MAPPING, a mapping has to be learned, a
+// reading can be too short to learn it, so you need an ordering rule to learn from, and an
+// ordering rule applied to a short reading files one chest's contents under another chest's
+// name. Every one of those steps exists to protect a number that carries no information.
 //
-// A chest cannot move. `Chest is StorageBox is Holder` sets viObject_flags = CONTAINER_YES
-// and declares no GETTABLE flag, so it is GETTABLE_NO (blakston.khd:62): it cannot be picked
-// up, and nothing relocates it. The hall builds its chests at fixed squares when it is
-// created (guildh14.kod:518-522). So the square IS the chest's durable name -- and it is the
-// name a person would use, which is the point.
+// So there is no number. A chest observed at row 18, column 6 is called `r18c6`, read off the
+// object itself on every visit. Nothing to learn, nothing to get out of order, nothing to
+// mis-file, and a short reading is just a reading of fewer chests.
 //
-// ORDER IS FOR LEARNING, NEVER FOR ADDRESSING. The id-matching code this replaces carried a
-// warning worth keeping: falling back to the order chests appear in the room "would be a
-// guess that silently files chest 3's contents into chest 1". So ordering assigns slots ONLY
-// from a reading that shows every chest the hall should have; any shorter reading is matched
-// against what was already learned, and anything that cannot be placed is skipped and named.
+// It is also how a person refers to one -- "the chest in the north-west corner" -- which is
+// the operator's argument and the better one.
 //
-// The ordering itself is row-then-column, which is arbitrary but STABLE -- and stability is
-// the whole requirement, because the slot number is our own label rather than the game's.
-export const BOOKMAKERS_CHEST_SQUARES = Object.freeze([
-  { row: 18, col: 2 }, { row: 18, col: 6 }, { row: 20, col: 4 },
-]);
+// A chest cannot move, which is what makes the square a name rather than a position:
+// `Chest is StorageBox is Holder` sets viObject_flags = CONTAINER_YES and declares no
+// GETTABLE flag, so it is GETTABLE_NO (blakston.khd:62). It cannot be picked up and nothing
+// in the hall relocates it.
+export const chestKey = (o) => {
+  const row = Number(o?.row), col = Number(o?.col);
+  if (!Number.isInteger(row) || !Number.isInteger(col)) return null;
+  if (row < 0 || col < 0) return null;
+  return `r${row}c${col}`;
+};
 
-export const sameSquare = (a, b) =>
-  !!a && !!b && Number(a.row) === Number(b.row) && Number(a.col) === Number(b.col);
-
-/**
- * Map guild-chest slots onto the chests actually standing in this room.
- *
- * @param objects  room objects already filtered to chests: { id, row, col }
- * @param known    what each slot's square is believed to be: [{ slot, row, col }]
- * @param expected how many chests this hall builds (BOOKMAKERS_CHESTS)
- * @returns { slots: Map<slot, object>, learned, unplaced, complete, why }
- */
-export function chestSlotsByPosition({ objects = [], known = [], expected = null } = {}) {
-  const placed = objects.filter(o => Number.isFinite(Number(o?.row)) && Number.isFinite(Number(o?.col)));
-  const slots = new Map();
-  const usedIds = new Set();
-
-  // 1. ANYTHING WE ALREADY KNOW THE SQUARE OF WINS, whatever else is in the room. This is
-  //    what makes a short read safe: a slot whose chest is visible is still addressable even
-  //    when its neighbours are missing from the packet.
-  for (const k of known) {
-    if (k?.row == null || k?.col == null) continue;
-    const hit = placed.find(o => !usedIds.has(o.id) && sameSquare(o, k));
-    if (hit) { slots.set(Number(k.slot), hit); usedIds.add(hit.id); }
-  }
-
-  // 2. ORDERING ONLY FROM A COMPLETE READING. Assigning by order when a chest is missing is
-  //    precisely how slot 3's contents get filed as slot 1.
-  const complete = expected == null ? placed.length > 0 : placed.length === Number(expected);
-  let learned = 0;
-  if (complete && slots.size < placed.length) {
-    const ordered = [...placed].sort((a, b) => (a.row - b.row) || (a.col - b.col));
-    for (let i = 0; i < ordered.length; i++) {
-      const slot = i + 1;
-      if (slots.has(slot) || usedIds.has(ordered[i].id)) continue;
-      slots.set(slot, ordered[i]);
-      usedIds.add(ordered[i].id);
-      learned++;
-    }
-  }
-
-  const unplaced = placed.filter(o => !usedIds.has(o.id)).map(o => ({ id: o.id, row: o.row, col: o.col }));
-  return {
-    slots, learned, unplaced, complete,
-    why: complete
-      ? undefined
-      : `saw ${placed.length} chest(s) with a position` +
-        (expected == null ? '' : ` where the hall builds ${expected}`) +
-        ' — slots are matched against known squares only, never assigned by order, because ' +
-        'ordering a short reading files one chest\'s contents under another chest\'s slot',
-  };
+export function parseChestKey(key) {
+  const m = /^r(\d+)c(\d+)$/.exec(String(key ?? ''));
+  return m ? { row: Number(m[1]), col: Number(m[2]) } : null;
 }
+
+// The squares the Bookmaker's hall builds its chests on (guildh14.kod:518-522). Nothing
+// MATCHES against this -- the key always comes off the object that was actually seen -- it is
+// here so a plan can be written before anybody has walked to the hall, and so a reader can
+// tell at a glance which hall a key belongs to.
+export const BOOKMAKERS_CHEST_SQUARES = Object.freeze(['r18c2', 'r18c6', 'r20c4']);
 
 export class StorageCache {
   constructor({ dir = STORAGE_DIR, now = () => Date.now() } = {}) {
@@ -201,7 +160,7 @@ export class StorageCache {
   }
 
   vaultPath(character) { return join(this.dir, 'vaults', `${safe(character)}.json`); }
-  chestPath(slot) { return join(this.dir, 'chests', `${Number(slot) || 0}.json`); }
+  chestPath(key) { return join(this.dir, 'chests', `${String(key)}.json`); }
   get rentPath() { return join(this.dir, 'rent.json'); }
 
   // ---------------------------------------------------------------- vaults
@@ -234,41 +193,48 @@ export class StorageCache {
   // where it stands: two chests in one room are two ids and the room cannot tell them
   // apart. A slot nobody has opened is absent rather than empty, because "nobody looked"
   // and "there is nothing in it" are opposite facts about a guild's stores.
-  // `row`/`col` are the DURABLE name — see chestSlotsByPosition. `object_id` is still
-  // recorded because it is useful for one visit and for spotting a recycle, but nothing
-  // addresses a chest by it any more.
-  writeChest(slot, { object_id = null, room = null, items = [], by = null, at = null,
-                     row = null, col = null } = {}) {
-    const n = Number(slot);
-    if (!(n >= 1 && n <= GUILD_CHEST_SLOTS))
-      throw new Error(`chest slot must be 1..${GUILD_CHEST_SLOTS}, got ${slot}`);
-    return writeJson(this.chestPath(n), { slot: n, object_id, room,
-      // THE SQUARE IS WHAT THE NEXT VISIT MATCHES ON. Written as null rather than omitted
-      // when unknown, so a reading taken before this field existed is distinguishable from
-      // one where the position genuinely could not be read.
-      row: row == null ? null : Number(row), col: col == null ? null : Number(col),
+  // KEYED ON THE SQUARE. `object_id` is still recorded — it is useful within a single visit
+  // and it is how a recycled id gets noticed — but nothing addresses a chest by it.
+  writeChest(where, { object_id = null, room = null, items = [], by = null, at = null } = {}) {
+    const key = typeof where === 'string' ? where : chestKey(where);
+    const at2 = parseChestKey(key);
+    if (!at2)
+      throw new Error(`a chest is named by its square, like "r18c6" — got ${JSON.stringify(where)}`);
+    return writeJson(this.chestPath(key), { slot: key, row: at2.row, col: at2.col,
+      object_id, room,
       items: items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 })),
       opened_by: by ?? null, observed_at: Number(at) || this.now() });
   }
 
-  readChest(slot) {
-    const c = readJson(this.chestPath(slot));
-    if (!c || !Array.isArray(c.items)) return null;
-    return { ...c, fullness: chestFullness(c.items) };
+  readChest(where) {
+    const key = typeof where === 'string' ? where : chestKey(where);
+    if (!parseChestKey(key)) return null;
+    const v = readJson(this.chestPath(key));
+    return v ? { ...v, fullness: chestFullness(v.items ?? []) } : null;
   }
 
-  allChests() {
-    return Array.from({ length: GUILD_CHEST_SLOTS }, (_, i) => this.readChest(i + 1))
-      .map((c, i) => c ?? { slot: i + 1, items: null, observed_at: null, opened_by: null,
-                            fullness: null, never_opened: true });
-  }
-
-  // ------------------------------------------------------------------ rent
+  // EVERY CHEST ANYONE HAS LOOKED IN, which is not the same as every chest that exists.
   //
-  // `parseRentLine` already owns the sign convention — POSITIVE IS OWED, negative is
-  // credit — and this only stores what it returned. The unparsed case is deliberately
-  // storable as null rather than zero: a sentence nobody recognised and a guild that owes
-  // nothing must not render the same, because one of them is a hall about to be lost.
+  // This used to synthesise a fixed 1..4 and mark the gaps `never_opened`, because the slots
+  // were an index. Squares are not an index: there is no list of every square a chest could
+  // be on, and inventing one would be inventing chests. So this reports what has actually
+  // been seen, and "we have never looked in the hall" is the empty list — which
+  // `guildStoreAvailable` already treats as "no evidence of a hall to fill".
+  allChests() {
+    let names = [];
+    try { names = readdirSync(join(this.dir, 'chests')); } catch { return []; }
+    return names
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.slice(0, -5))
+      // A file that is not named after a square is not a chest reading. The numeric ones
+      // this scheme replaced are exactly that, and they are skipped rather than parsed --
+      // they named a hall the guild no longer owns.
+      .filter(k => !!parseChestKey(k))
+      .map(k => this.readChest(k))
+      .filter(Boolean)
+      .sort((a, b) => (a.row - b.row) || (a.col - b.col));
+  }
+
   writeRent({ due = null, credit = null, in_guild = null, hours_left = null, said = null,
               guild = null, by = null, at = null } = {}) {
     return writeJson(this.rentPath, { due: due == null ? null : Number(due),

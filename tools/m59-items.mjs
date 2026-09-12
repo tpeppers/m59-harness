@@ -718,3 +718,98 @@ export function servingsAtOnce(name, file = ITEMS_FILE) {
   if (!f) return 0;
   return Math.max(1, Math.floor(STOMACH_MAX / Math.max(1, f.filling)));
 }
+
+// ---------------------------------------------------------------- rarity grades
+//
+// WHAT THE SERVER SAYS ABOUT AN ITEM BEFORE ANYBODY LOOKS AT IT.
+//
+// Every object on the wire carries a rarity grade (`extractObject`, m59-parse.mjs:245) and
+// both item serializers used to drop it. It is the ONLY reliable answer to "is this worth an
+// identify spell", and without it the question can only be asked by casting — which costs 3
+// orc teeth a go and tells you nothing when the answer is no.
+//
+// GetRarity (item.kod:714-756) checks identification FIRST and short-circuits:
+//
+//   if NOT IsIdentified -> ITEM_RARITY_GRADE_UNIDENTIFIED   (100)
+//   if IsCursed         -> ITEM_RARITY_GRADE_CURSED         (200)
+//   then 1/2/4 by how many attributes it has, else the class's own viRarity
+//
+// So 100 does NOT mean "rare". It means the server is declining to say, because at least one
+// attribute is still hidden — which is exactly the set `reveal` can act on.
+// `RevealHiddenAttributes` returns TRUE only when something WAS hidden (item.kod:1331-1347),
+// and that return is what gates advancement in reveal.kod, so a cast at anything not graded
+// 100 spends the reagents and cannot even teach the caster anything.
+//
+// An item with NO attributes at all is `IsIdentified` TRUE (the loop is skipped), so plain
+// gear correctly reads 0 rather than 100.
+export const ITEM_RARITY = Object.freeze({
+  NORMAL: 0, UNCOMMON: 1, RARE: 2, LEGENDARY: 4, UNIDENTIFIED: 100, CURSED: 200,
+});
+
+export const rarityName = (r) => {
+  switch (Number(r)) {
+    case ITEM_RARITY.NORMAL: return 'normal';
+    case ITEM_RARITY.UNCOMMON: return 'uncommon';
+    case ITEM_RARITY.RARE: return 'rare';
+    case ITEM_RARITY.LEGENDARY: return 'legendary';
+    case ITEM_RARITY.UNIDENTIFIED: return 'unidentified';
+    case ITEM_RARITY.CURSED: return 'cursed';
+    default: return null;
+  }
+};
+
+// IS THERE ANYTHING HERE FOR `reveal` TO DO? Strictly the 100 grade and nothing else.
+//
+// Cursed (200) is deliberately NOT included even though a cursed item plainly has an
+// attribute: GetRarity tests IsIdentified before IsCursed, so anything still reading 200 has
+// already had its attributes revealed and there is nothing left to uncover. Treating it as
+// work would burn teeth on every cursed weapon in the fleet, for ever.
+export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIFIED;
+
+// AND THE SAME GRADE ANSWERS "CAN THIS EVER BE PUT DOWN". `ITEM_RARITY_GRADE_CURSED` (200)
+// is what the stock client colours red (color.c:583, dialog.c:701), so cursed is not an
+// inference here — it is the server's own word, on the same field `reveal` already reads.
+//
+// Worth its own export because the consequence is unique in this game: a cursed weapon
+// CANNOT be unwielded. It is the one irreversible mistake, so "is the thing in this
+// character's hand cursed" is a question that has to be answerable, and until the
+// equipment snapshot carried `rarity` it was not. Rizzo stalled 56 passes on one and three
+// separate checks I wrote could not see it — they tested a refusals list that a keeper
+// restart clears, then an equipment reply with no such field in it.
+export const isCursed = (o) => Number(o?.rarity) === ITEM_RARITY.CURSED;
+
+// ---------------------------------------------------------------- what the fleet does not sell
+//
+// THE FLEET'S DEFAULT KEEP LIST, IN THE ONE MODULE BOTH SIDES OF THE SALE CAN REACH.
+//
+// This lived in m59-fleetscript.mjs as VAULT_KEEP, where only a fleetscript `sell` step could
+// see it — so it governed an errand somebody wrote and had NO BEARING on a keeper deciding to
+// sell on its own. Two sale paths, one list, and the list was on the wrong side of the fence.
+//
+// It sits here because this module already owns `allWandAndScrollNames` (which the list is
+// partly built from) and is imported by both m59-skills.mjs, where `sellAll` lives, and
+// m59-fleetscript.mjs, which re-exports it under its old name. One definition, no cycle.
+//
+// TWO KINDS OF ENTRY, and the distinction is the same one allWandAndScrollNames exists for:
+//
+//   JUDGEMENT -- typed, one name per line. Whether a thing is worth more kept than sold is not
+//   a fact the class tree carries.
+//
+//   FAMILY -- derived. A hand-written list of wands is wrong within a patch.
+//
+// Matching downstream is by SUBSTRING, so an entry must be specific enough not to catch its
+// neighbours. 'orc tooth' is safe; a bare 'orc' would not be, and it is worth saying because
+// checking this list with /orc/ matched "scroll of fORCes of light" and reported a protection
+// that was not there.
+export const FLEET_KEEP = Object.freeze([
+  'herb', 'elderberry', 'Inky-cap mushroom', 'flask',
+  'rose', 'ring of invisibility', 'mystic sword', 'true lute',
+  'blue dragon scale', 'dark angel feather', 'shrunken head',
+  'emerald', 'sapphire', 'diamond', 'ruby',
+  // THE REAGENT THE FLEET'S OWN SPELLS BURN. `reveal` costs 3 and `identify` 1
+  // (reveal.kod:55, identify.kod:51), they are 650 each at the only counter that sells them,
+  // and nothing this fleet fights drops one. On 2026-09-12 a caster was bought 40 and his
+  // keeper sold 30 on its next town trip -- correctly, because nothing protected them.
+  'orc tooth',
+  ...allWandAndScrollNames(),
+]);

@@ -82,6 +82,146 @@ write([
   ok('per-character rollup agrees', r.by_character[0].worked === '50%', 'got ' + r.by_character[0].worked);
 }
 
+
+// ---------------------------------------------------------------- ok is not "it happened"
+//
+// THE REAL FAILURE, and it is not a refusal — it is a success that cost nothing. A keeper
+// blessing a fleet-mate who is ALREADY blessed gets a free refusal out of CanPayCosts, and
+// `recordCast` sets `ok` from the caller's own judgement, which for a buff has nothing to
+// diff. Measured on prod 2026-09-12: two Kraanan casters, `worked: 100%`, fourteen blesses
+// each in fifteen minutes, mana sitting at 33/33 and 25/25 the whole time.
+//
+// `mana_cost` is the witness: `mana_before - mana_after`, written only when both readings
+// were real and the value went DOWN. A measured zero on a spell that costs mana is proof.
+const manaOf = (spell) => ({ bless: 6, 'create food': 5, smite: 0 })[spell];
+
+write([
+  // bless costs 6. Two moved mana; two measured zero; one could not be measured at all.
+  cast('Camilla', T0 + 1000, 'bless', true, { mana_cost: 6, target: 'Beaker' }),
+  cast('Camilla', T0 + 2000, 'bless', true, { mana_cost: 0, target: 'Beaker' }),
+  cast('Camilla', T0 + 3000, 'bless', true, { mana_cost: 0, target: 'Beaker' }),
+  cast('Camilla', T0 + 4000, 'bless', true, { mana_cost: 2, target: 'Kermit' }),
+  cast('Camilla', T0 + 5000, 'bless', true, { target: 'Kermit' }),
+]);
+{
+  const r = spellReport({ ...WINDOW, manaOf });
+  const f = r.by_spell.find(s => s.spell === 'bless');
+  ok('`worked` still reports what it always did, because callers read it',
+     f.worked === '100%', 'got ' + f.worked);
+  ok('but only the casts where mana MOVED are landed', f.landed === 2, 'got ' + f.landed);
+  ok('a measured zero on a spell that costs mana is `free`, not a cast',
+     f.free === 2, 'got ' + f.free);
+  ok('and a cast with no reading at all is `unmeasured` — not a pass and not a failure',
+     f.unmeasured === 1, 'got ' + f.unmeasured);
+  ok('the four buckets account for every cast',
+     f.landed + f.free + f.unmeasured + f.nothing === f.cast);
+  // THE HEADLINE HAS TO SAY IT. `worked: 100%` beside `landed: 2` is the finding, and an
+  // operator should not have to notice the second column to see it.
+  ok('a row where the frees outnumber the lands carries a verdict in words',
+     /spent no mana at all/.test(f.verdict ?? ''), 'got ' + f.verdict);
+  ok('landed_pct is against every cast, so it cannot flatter', f.landed_pct === '40%',
+     'got ' + f.landed_pct);
+}
+
+// A ZERO IS ONLY DAMNING FOR A SPELL THAT SHOULD HAVE COST SOMETHING. Eighteen of this
+// world's spells genuinely cost no mana, and convicting those would invent a fleet-wide
+// fault out of correct behaviour.
+write([
+  cast('Camilla', T0 + 1000, 'smite', true, { mana_cost: 0 }),
+  cast('Camilla', T0 + 2000, 'smite', true, { mana_cost: 0 }),
+]);
+{
+  const r = spellReport({ ...WINDOW, manaOf });
+  const f = r.by_spell.find(s => s.spell === 'smite');
+  ok('a spell that costs no mana is never convicted by a zero', f.free === undefined);
+  ok('it is unmeasured instead, which is the honest answer', f.unmeasured === 2,
+     'got ' + f.unmeasured);
+}
+
+// AND WITHOUT A COST TABLE IT MUST NOT GUESS. A caller that supplies no `manaOf` gets
+// `unmeasured`, never `free` — inventing the verdict from a missing lookup would be the
+// same class of error as the one this whole section is about.
+{
+  const r = spellReport(WINDOW);
+  const f = r.by_spell.find(s => s.spell === 'smite');
+  ok('no manaOf means no verdict, rather than a guessed one',
+     f.free === undefined && f.unmeasured === 2, 'got ' + JSON.stringify(f.free));
+}
+
+// THE PER-CHARACTER TABLE SORTS BY WHAT LANDED, WORST FIRST. Sorting by attempts puts the
+// caster who is achieving nothing at the top for the wrong reason: it looks like the
+// busiest character in the fleet.
+write([
+  cast('Camilla', T0 + 1000, 'bless', true, { mana_cost: 0 }),
+  cast('Camilla', T0 + 2000, 'bless', true, { mana_cost: 0 }),
+  cast('Camilla', T0 + 3000, 'bless', true, { mana_cost: 0 }),
+  cast('Bunsen', T0 + 4000, 'bless', true, { mana_cost: 6 }),
+]);
+{
+  const r = spellReport({ ...WINDOW, manaOf });
+  ok('the caster landing nothing is the first row even though it cast the most',
+     r.by_character[0].character === 'Camilla' && r.by_character[0].landed === 0,
+     'got ' + JSON.stringify(r.by_character.map(c => [c.character, c.landed])));
+  ok('and the one that is working is not flagged',
+     r.by_character[1].character === 'Bunsen' && r.by_character[1].landed === 1);
+}
+
+// The guidance has to name the trap, or the next person reads `worked` and stops.
+{
+  const r = spellReport(WINDOW);
+  ok('read_this_way points at `landed` rather than `worked`',
+     /READ `landed`, NOT `worked`/.test(r.read_this_way));
+  ok('and warns that mana_spent is a floor, because regeneration masks part of the drain',
+     /FLOOR/.test(r.read_this_way));
+}
+
+
+// A FREE CAST MEANS DIFFERENT THINGS FOR DIFFERENT SPELLS, and calling both a refusal reads
+// as a fault in the case where the fleet got exactly what it wanted. On a PersonalEnchantment
+// a free cast is the target ALREADY HAVING the buff; on a spell that makes an item it is
+// nothing coming out. I misread my own first run of m59-spellcast this way inside a minute:
+// 14 of 14 super strengths free looked like the reagent delivery had failed, and it meant
+// every farmer was already strengthened.
+const kindOf = (spell) => ({ bless: 'PersonalEnchantment', 'create food': 'Spell' })[spell];
+
+write([
+  cast('Camilla', T0 + 1000, 'bless', true, { mana_cost: 0 }),
+  cast('Camilla', T0 + 2000, 'bless', true, { mana_cost: 0 }),
+  cast('Camilla', T0 + 3000, 'bless', true, { mana_cost: 6 }),
+]);
+{
+  const r = spellReport({ ...WINDOW, manaOf, kindOf });
+  const f = r.by_spell.find(s => s.spell === 'bless');
+  ok('an enchantment is told it is already up, not that it refused',
+     /ALREADY HAD IT/.test(f.verdict) && !/supply/.test(f.verdict.split('not a supply')[0]),
+     'got ' + f.verdict);
+  ok('and the cost is named as IMPROVEMENT, which is the thing actually being lost',
+     /ability only rolls on a cast that happens/.test(f.verdict));
+  ok('it quotes the landed count as the learning rate, not the attempt count',
+     /so 1 is the rate it is learning at, not 3/.test(f.verdict), 'got ' + f.verdict);
+}
+
+write([
+  cast('Kermit', T0 + 1000, 'create food', true, { mana_cost: 0 }),
+  cast('Kermit', T0 + 2000, 'create food', true, { mana_cost: 0 }),
+]);
+{
+  const r = spellReport({ ...WINDOW, manaOf, kindOf });
+  const f = r.by_spell.find(s => s.spell === 'create food');
+  ok('a producing spell is told nothing came out, and where to look',
+     /nothing coming out/.test(f.verdict) && /reagents and the pack space/.test(f.verdict),
+     'got ' + f.verdict);
+}
+
+// WITHOUT `kindOf` IT MUST NOT PICK ONE. The generic wording names both possibilities rather
+// than asserting the wrong half.
+{
+  const r = spellReport({ ...WINDOW, manaOf });
+  const f = r.by_spell.find(s => s.spell === 'create food');
+  ok('no kind table means a verdict that commits to neither reading',
+     /already enchanted, or nothing here needed it/.test(f.verdict), 'got ' + f.verdict);
+}
+
 // The failure this whole file exists to prevent: every cast refused, which a count of
 // casts alone reports as a busy, healthy keeper.
 write([
@@ -209,6 +349,75 @@ write([
 // Pointed at a throwaway fleet ON PURPOSE. A guard test that exercises the failure
 // against the real directory would corrupt the record precisely when it is broken,
 // which is the one moment it must not. If the guard fails here, a junk directory
+
+
+// ---------------------------------------------------------------- the fleet's own rate
+//
+// `fleetKills` came out of m59-minimal, which had no tests of its own. Both of the things it
+// gets wrong are silent: a per-character average that reads as the fleet rate (they differ by
+// a factor of the fleet size — `avg 0.13` against `3.07/min`, and that reached the operator),
+// and a total taken over the LIVE board instead of everyone the ledger knows, which drops the
+// kills of anyone who died or logged out mid-window.
+console.log('\nthe fleet rate, and who contributed nothing to it');
+{
+  const { fleetKills } = await import('./m59-ledger.mjs');
+  const kills = new Map([['Waldorf', 36], ['Statler', 24], ['Zoot', 0], ['Ghost', 5]]);
+  const onBoard = ['Waldorf', 'Statler', 'Zoot', 'Piggy'];
+  const f = fleetKills({ kills, characters: onBoard, minutes: 30 });
+
+  ok('the total counts a character the ledger knows and the board does not — it earned ' +
+     'those kills whether or not it is standing there now',
+     f.total === 65, 'got ' + f.total);
+  ok('and says so, rather than leaving the difference to be noticed',
+     f.off_board.join() === 'Ghost', 'got ' + f.off_board.join());
+  ok('the fleet rate is the total over the window, not an average of averages',
+     f.per_minute === 65 / 30, 'got ' + f.per_minute);
+  ok('silent is only the characters actually ON the board with nothing to show',
+     f.silent.join() === 'Zoot,Piggy', 'got ' + f.silent.join());
+  ok('an absent character is NOT reported as idle — nobody can ask it, and calling that ' +
+     'zero is the same conflation as an absent ledger reading as a quiet fleet',
+     !f.silent.includes('Ghost'));
+  ok('counted is the union, so the denominator is auditable', f.counted === 5,
+     'got ' + f.counted);
+}
+{
+  const { fleetKills } = await import('./m59-ledger.mjs');
+  ok('no kills at all is zero rather than NaN',
+     fleetKills({ kills: new Map(), characters: ['a'], minutes: 30 }).per_minute === 0);
+  ok('a zero-length window answers null rather than dividing by it',
+     fleetKills({ kills: new Map([['a', 4]]), characters: ['a'], minutes: 0 }).per_minute === null);
+  ok('and it survives being handed nothing at all, because a caller with no board yet is ' +
+     'an ordinary state during a broker restart',
+     fleetKills().total === 0 && fleetKills().silent.length === 0);
+}
+
+// AN ABSENT HISTORY IS NOT A QUIET FLEET. The ledger resolves its directory from the checkout
+// it was loaded in, so a report run from a clone against another checkout's fleet reads a path
+// that is not there and used to answer "nothing cast in this window" — confidently, wrongly,
+// and with something about to be decided on it.
+{
+  const r = spellReport(WINDOW);
+  ok('every report says which directory it read', typeof r.source?.dir === 'string');
+  ok('and whether that directory exists at all', r.source.exists === true);
+  ok('and how much it actually read, so an empty answer can be told from an unread one',
+     r.source.rows > 0 && r.source.files > 0,
+     'got ' + JSON.stringify(r.source));
+}
+{
+  const { readLedger } = await import('./m59-ledger.mjs');
+  const r = readLedger({ sinceMs: 1000 });
+  ok('readLedger carries the same source, because every caller needs the distinction',
+     r.source.dir === process.env.M59_LEDGER_DIR && r.source.exists === true);
+  // `rows` counts what was ON DISK; `events` counts what survived the window. They have to be
+  // separate numbers, because "the file is empty" and "the window excluded everything" are
+  // different diagnoses and only the first is a broken ledger. (An earlier row here is written
+  // through recordEvent at the real clock, so a short window keeps some of them — which is
+  // exactly why the assertion is a comparison and not a zero.)
+  ok('rows counts what was on disk, not what survived the window',
+     r.source.rows > r.events.length + r.samples.length,
+     `rows ${r.source.rows} events ${r.events.length} samples ${r.samples.length}`);
+}
+
 // appears and is removed; nothing real is touched either way.
 {
   // spawnSync, not execFileSync: the guard REFUSES and exits 0, so the stderr we are

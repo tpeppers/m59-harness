@@ -34,11 +34,22 @@
 // It reads the same ledger everything else does and writes nothing.
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { ledgerDirFor, fleetName } from './m59-fleetpath.mjs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DIR = process.env.M59_LEDGER_DIR || join(HERE, '..', 'substrate', 'history');
+// THE LEDGER LIVES UNDER THE FLEET, AND READING ONE LEVEL TOO HIGH IS A SILENT ALL-CLEAR.
+//
+// Rows are written to `substrate/history/<fleet>/fleet-YYYY-MM-DD.jsonl`. A reader that globs
+// `substrate/history/*.jsonl` finds NOTHING -- not an error, not an empty directory warning,
+// just zero rows -- and then prints its own cheerful "none found" line.
+//
+// Measured 2026-09-11: `m59-stucks.mjs` answered "no back-ups in the last 72h. That is the good
+// answer." while the same window held 354 back-ups at 186 squares. It had been reassuring
+// everybody who ran it. `ledgerDirFor(fleetName())` is the ledger's own resolution and the only
+// one that can be right for both fleets on this machine.
+const DIR = process.env.M59_LEDGER_DIR || ledgerDirFor(fleetName());
 
 const arg = (name, dflt = null) => {
   const i = process.argv.indexOf('--' + name);

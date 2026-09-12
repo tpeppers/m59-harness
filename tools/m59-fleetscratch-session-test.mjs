@@ -43,11 +43,23 @@ const root = mkdtempSync(join(tmpdir(), 'm59-session-'));
 // is why these three lines exist rather than a flag that turns it off.
 const BOARD = join(root, 'board');
 mkdirSync(BOARD);
-const BOARD_ENV = { M59_BOARD_DIR: BOARD };
+
+// AND THE FLEET NAME HAS TO BE SAID OUT LOUD, because the board is keyed on it and the spawned
+// session resolves its own. `fleetName()` falls back to `substrate/fleet-default`, which is
+// GITIGNORED — it is this machine's answer, not the repository's. So on the checkout that has
+// that file these tests passed, and in a fresh worktree the child resolved the fleet to "" while
+// the pin was filed under "prod": seven failures, every one of them reading `"tdown" is not on
+// the scratchpad board for fleet ""`. That message names the mismatch exactly and was still easy
+// to read as a broken gate, because the gate is the thing the test is about.
+//
+// Naming it here makes the suite independent of what this machine happens to have, which is what
+// an offline test is for.
+const FLEET = 'prod';
+const BOARD_ENV = { M59_BOARD_DIR: BOARD, M59_FLEET: FLEET };
 const pin = (name, agents = []) => {
-  const b = post(readBoard('prod', BOARD_ENV),
+  const b = post(readBoard(FLEET, BOARD_ENV),
                  { name, by: 'session-test', purpose: 'a phase ordering fixture', agents });
-  writeBoard({ ...b, fleet: 'prod' }, BOARD_ENV);
+  writeBoard({ ...b, fleet: FLEET }, BOARD_ENV);
 };
 
 /** Run the session over one pad directory, feed it lines, return everything it said. */

@@ -44,7 +44,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
-import { describeObject, affordances, OF, blocksMovement, prepareActTarget } from './m59-parse.mjs';
+import { describeObject, affordances, OF, blocksMovement, prepareActTarget,
+         SHOP_MAX_PER_BUY } from './m59-parse.mjs';
 import { World, spreadEdges, boundedSilentGo, boundedRegionEntry,
          doorSettleMs, remainingDoorSettle } from './m59-world.mjs';
 import { keeperView } from './m59-render-projection.mjs';
@@ -66,6 +67,34 @@ import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { loadMerchants } from './m59-merchants.mjs';
 import { loadSpells, karmaAllows, requiredKarma, SCHOOLS } from './m59-spells.mjs';
+
+// THE SPELL COST TABLE, LOADED ONCE AND ALLOWED TO BE ABSENT.
+//
+// `spellReport` needs two lookups to tell a cast that happened from one that was refused for
+// free: what a spell costs in mana, and whether it is an enchantment (a free cast means the
+// target already had it) or a spell that produces something (a free cast means nothing came
+// out). Both come off the extracted table, which lives in gitignored substrate — so a fresh
+// checkout has none, and a report that invented costs would convict correct behaviour.
+// Returning {} leaves every ambiguous cast counted `unmeasured`, which is the honest answer.
+let _spellCost = null;
+function spellCostLookups() {
+  if (_spellCost === null) {
+    _spellCost = {};
+    try {
+      const mana = new Map(), kinds = new Map();
+      for (const sp of (loadSpells().spells ?? [])) {
+        if (!sp.name) continue;
+        const k = String(sp.name).toLowerCase();
+        mana.set(k, sp.mana);
+        kinds.set(k, String(sp.parent ?? sp.cls ?? ''));
+      }
+      if (mana.size) _spellCost = { manaOf: (n) => mana.get(String(n || '').toLowerCase()),
+                                    kindOf: (n) => kinds.get(String(n || '').toLowerCase()) };
+    } catch { /* no table here; the report says `unmeasured` and means it */ }
+  }
+  return _spellCost;
+}
+
 import * as skills from './m59-skills.mjs';
 import * as buyers from './m59-buyers.mjs';
 import { supplyBetween as supplyExchange } from './m59-supply.mjs';
@@ -100,8 +129,9 @@ import { menageriePathFor, loadMenagerie, splitRosters, hostConfig, excludedNote
 import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
          isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
-import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
-import { resolveItemNames, weighItem } from './m59-items.mjs';
+import { loadoutFor, protectedNames, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
+import { resolveItemNames, weighItem, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
+import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
          factionOfferAllowed, FACTION_SOLDIER, factionFromProfile,
          visibleTokenFromProfile, isCouncilToken, soldierAssignment,
@@ -112,7 +142,7 @@ import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
 import { FactionStatusCache } from './m59-faction-status.mjs';
 import { readAnchor, phaseAt } from './m59-dayclock.mjs';
 import { hourFromSunAngle, phaseFromSun, isFresh } from './m59-skyclock.mjs';
-import { StorageCache, GUILD_CHEST_SLOTS, chestFullness } from './m59-storage.mjs';
+import { StorageCache, chestFullness, chestKey } from './m59-storage.mjs';
 import * as uptime from './m59-uptime.mjs';
 import { autopilotFor, dropAutopilot, allAutopilots, autopilotIfAny, MODES, STRATEGIES,
          POSTMORTEM_DIR, setPilotLookup,
@@ -580,7 +610,11 @@ const EDGE_NUDGE_WITHIN = Number(process.env.M59_EDGE_NUDGE_WITHIN || 16);
 // but one exchange carries at most this many, so a bigger order is split into chunks.
 // Sending one oversized line does not error; it goes out and buys nothing, which is the
 // same silence a malformed id list produces and just as hard to read from outside.
-const SHOP_MAX_PER_BUY = Number(process.env.M59_SHOP_MAX_PER_BUY || 50);
+// SHOP_MAX_PER_BUY now lives beside encodeIdList in m59-parse.mjs, with the rest of the
+// rule it belongs to: the listed quantity is not stock, a stackable bought as a bare id
+// buys nothing at all, and one exchange carries at most this many. Two homes for one
+// number is how the keeper went on buying a unit at a time while this file chunked
+// properly — and the keeper was the half that could not work.
 const EDGE_NUDGE_MAX_STEPS = Number(process.env.M59_EDGE_NUDGE_MAX_STEPS || 6);
 
 // ---------------------------------------------------------------- pacing
@@ -1887,9 +1921,38 @@ class KeeperProxy {
       // character was unarmed. `known` is false when we have no snapshot at all, because
       // "no evidence" and "nothing equipped" are the distinction this whole file keeps
       // insisting on.
+      //
+      // AND IT TAKES EITHER SHAPE, BECAUSE THE TWO SIDES RESTART SEPARATELY. `equipment` is
+      // an array of NAMES and always was; `equipment_items` is the same list with `id`,
+      // `flags` and `rarity` on it. A keeper that predates that field sends only the names —
+      // and on this fleet keepers come and go every minute, so "the new field is deployed"
+      // is never true of all twenty-three at once. Reading whichever arrived is the whole
+      // reason a rebuild may not simply be replaced.
+      //
+      // WHAT THE MISSING FIELD COST. `rarity` 200 is the server's own word for CURSED
+      // (ITEM_RARITY_GRADE_CURSED; the stock client colours it red at color.c:583), and a
+      // cursed weapon can never be unwielded — the one irreversible mistake here. Because
+      // this rebuild manufactured `{id: -1 - i, name, nameRsc: name}`, `equipment` on a
+      // keeper-backed character could not answer whether the thing in the hand was cursed.
+      // Rizzo stalled 56 passes on one; three checks written against this reply all read
+      // clean, because there was no field for them to read.
       equipment: () => ({
-        known: Array.isArray(s.equipment),
-        equipped: (s.equipment ?? []).map((name, i) => ({ id: -1 - i, name, nameRsc: name })),
+        known: Array.isArray(s.equipment_items) || Array.isArray(s.equipment),
+        equipped: Array.isArray(s.equipment_items)
+          ? s.equipment_items.map((o, i) => ({
+              id: o.id ?? -1 - i, name: o.name, nameRsc: o.nameRsc ?? o.name,
+              flags: o.flags ?? null, rarity: o.rarity ?? null }))
+          : (s.equipment ?? []).map((name, i) => ({ id: -1 - i, name, nameRsc: name,
+              // THE TWO BRANCHES MUST PRODUCE THE SAME SHAPE. The rebuild's whole invariant
+              // is that a reader cannot tell which side built the object, and a missing key
+              // reads as `undefined` where the other branch gives `null` — so a caller that
+              // checks `rarity === null` behaves differently depending on the keeper's age.
+              // `grades_known` is the ONE field that distinguishes them, on purpose.
+              flags: null, rarity: null })),
+        // SAY WHICH SHAPE ANSWERED. Without this, a null rarity means either "not cursed"
+        // or "this keeper is too old to say", and those must not read the same — that
+        // conflation is the bug this whole block exists for.
+        grades_known: Array.isArray(s.equipment_items),
       }),
       // THE READS A TOOL ASKS FOR BEFORE IT LOOKS. On a real Session these put a request on
       // the wire and the answer arrives as an event; here the fresh snapshot has already
@@ -2009,6 +2072,27 @@ class KeeperProxy {
       activate: (id) => act('activate', { id }),
       stand: () => act('stand', {}),
       rest: () => act('rest', {}),
+      // ON THE LITERAL AND NOT ON THE CLASS, which is where I put it first and why the tool
+      // still threw after being 'fixed'. `c` is this object, not the KeeperProxy that built it —
+      // the comment forty lines down says so in as many words.
+      requestRescue: () => act('rescue', {}),
+      // SPEAKING WAS THE ONE VERB THE PROXY NEVER FORWARDED, and a guild hall is full of
+      // doors and merchants that only answer speech.
+      //
+      // The keeper has implemented `say` all along (m59-keeper-process.mjs, case 'say'); the
+      // broker-side proxy simply had no method for it, so `c.say(...)` threw
+      // "c.say is not a function" on every keeper-backed session — which is every character
+      // in the fleet. `askRent` says "rent" to Frular exactly this way, which is why the guild
+      // rent could never be read and `rent.json` could never be written, and therefore why the
+      // whole guild stockpile stayed switched off behind "nobody has asked Frular yet".
+      //
+      // Measured on prod 2026-09-12: Rowlf standing in room 700 with Frular in the room,
+      // `tithe action=status` -> "c.say is not a function".
+      //
+      // `kind` 1 is ordinary speech. It matters that this is not an emote: the guild hall's
+      // secret door opens on `type <> SAY_EMOTE` (ghall.kod:967), so an emote would be
+      // refused in silence.
+      say: (text, type = 1) => act('say', { text, kind: type }),
       look: (id) => act('look', { id }),
       face: (degrees) => act('face', { degrees }),
       roomContents: () => act('room_contents', {}),
@@ -2156,8 +2240,15 @@ class KeeperProxy {
         // `icon_rsc` and `translation` come through under the names the parsed object uses,
         // because every reader downstream — the `inventory` tool included — is written
         // against a real client object and must not be able to tell which side produced it.
+        // `rarity` travels with them for the reason stated directly above: a reader must not
+        // be able to tell which side produced the object. It was added to both item
+        // serializers and NOT to this rebuild, so `m59-reveal.mjs sweep` answered "nothing in
+        // the fleet reads unidentified" while the keeper's own /state showed Rizzo holding an
+        // unidentified wand and an unidentified mace. Every prod character is keeper-backed,
+        // so the field was live everywhere except the one path anything actually asks.
         ? s.items.map(o => ({ id: o.id, nameRsc: o.name, amount: o.amount ?? 0,
                               tag: o.tag ?? null, flags: o.flags ?? 0,
+                              rarity: o.rarity ?? null,
                               iconRsc: o.icon_rsc ?? null, translation: o.translation ?? 0 }))
         : [
             ...(s.equipment ?? []).map(name => ({ nameRsc: name, amount: 1, flags: 0x04 })),
@@ -6379,20 +6470,66 @@ const TOOLS = [
     run: async (a) => {
       const s = session(a.agent), c = s.need();
       const t = resolveTarget(s, a.target);
+      // THE ANSWER MUST BE ABOUT THE THING THAT WAS ASKED ABOUT.
+      //
+      // This returned `events.find(e => e.id === t.id) || events[0]` — so when the reply for the
+      // requested object had not arrived, it handed back SOME OTHER OBJECT'S description, with
+      // that object's id in its own `id` field. Reproduced on prod 2026-09-12 against one
+      // character's pack, two identical rounds seconds apart:
+      //
+      //   round 1   asked 11567 -> got 11567 (hammer)   8370 -> 8370   8562 -> 8562
+      //   round 2   asked 11567 -> got 8562 (short sword)
+      //
+      // One call in three, and a single call looks perfectly fine. Anything reading item
+      // descriptions — a loot classifier, an identify hook, the compendium — was exposed.
+      //
+      // TWO FAULTS STACKED, AND THE FIRST IS WHY IT WAS INTERMITTENT. `waitFor`'s `since`
+      // defaults to `this.evSeq` READ WHEN waitFor IS CALLED, which here was after the send had
+      // been awaited. A reply that came back inside that await is already behind the cursor, so
+      // it is never matched — and then the next look event to arrive from anywhere satisfies the
+      // wait and `|| events[0]` serves it as the answer. A fast reply was the trigger.
+      //
+      // So: take the cursor BEFORE sending, and keep reading until the id we asked about shows
+      // up or the deadline passes. `waitFor` resolves on the first matching event of any kind,
+      // which for a busy room is routinely somebody else's look, so one call is not enough.
+      const since = c.evSeq;
       await s.pacer.submit('look', () => c.look(t.id));
-      const { events, timedOut } = await c.waitFor({ kinds: ['look'], timeoutMs: 4000 });
-      const hit = events.find(e => e.id === t.id) || events[0];
+      const deadline = Date.now() + 4000;
+      let cursor = since, hit = null, timedOut = false;
+      const others = [];
+      while (!hit) {
+        const left = deadline - Date.now();
+        if (left <= 0) { timedOut = true; break; }
+        const got = await c.waitFor({ since: cursor, kinds: ['look'], timeoutMs: left });
+        if (!got.events.length) { timedOut = true; break; }
+        cursor = got.seq;
+        hit = got.events.find(e => e.id === t.id) ?? null;
+        if (!hit) for (const e of got.events) others.push(e.id);
+      }
+      // AND A REPLY ABOUT SOMETHING ELSE IS NOT A FALLBACK, IT IS EVIDENCE. Naming what did
+      // arrive keeps the old failure diagnosable instead of merely absent.
       if (!hit) return { id: t.id, description: null,
-                         note: timedOut ? 'no reply — the object may not be examinable (OF_NOEXAMINE), ' +
-                                          'or it is a player in another room (user.kod:4383 refuses those)'
-                                        : 'no description' };
+                         note: timedOut && !others.length
+                           ? 'no reply — the object may not be examinable (OF_NOEXAMINE), ' +
+                             'or it is a player in another room (user.kod:4383 refuses those)'
+                           : `no description for ${t.id}. Look replies DID arrive in that window, ` +
+                             `for ${[...new Set(others)].join(', ')} — this call is not going to ` +
+                             `hand you one of those as though it were the answer` };
       return { id: hit.id, what: hit.what, description: hit.description,
                inscription: hit.inscription,
                // Only players carry these. `editable` true means the server would accept a
                // description change for this object from us, which is how the real client
                // decides whether to unlock the edit box.
                ...(hit.player ? { is_player: true, editable: hit.editable,
-                                  extra: hit.extra, url: hit.url || undefined } : {}) };
+                                  extra: hit.extra, url: hit.url || undefined,
+                                  // WHERE THIS ONE IS FROM, AS A ROOM RATHER THAN A SENTENCE.
+                                  // It is carried in `extra` already, in one of nine differently
+                                  // worded lines, and it is the destination `rescue` defaults to
+                                  // — so a caller planning a journey for a fragile character can
+                                  // finally ask it instead of casting to find out. null means no
+                                  // residency line was sent; { town: null } means the server said
+                                  // "has wandered", which is an answer.
+                                  hometown: hometownFrom(hit.extra) || undefined } : {}) };
     },
   },
   {
@@ -9262,8 +9399,45 @@ const TOOLS = [
           left -= take;
         }
       }
+      // A `got` EVENT IS NOT THE ONLY EVIDENCE, AND ON A KEEPER IT IS OFTEN ABSENT.
+      //
+      // Measured 2026-09-11 at Herbutte's counter in Barloque: three separate buys of 10, 25
+      // and 50 sapphires each answered `got: []` — this tool reported "nothing arrived and
+      // nothing was said" every time — while the character's pack went 0 -> 10 -> 35 -> 85.
+      // The items arrive; the `got` frame does not always arrive inside the four seconds the
+      // keeper waits for it.
+      //
+      // That false negative is not cosmetic, because of the rule below it: the chunk loop
+      // stops at the first chunk that brought nothing. So an order big enough to be split
+      // bought one chunk and then declared itself refused — which is what "+21/200" and
+      // "+36/200" looked like from the outside all evening, and why they read as empty
+      // shelves rather than as a loop giving up.
+      //
+      // So the PACK decides, the way it does for every other exchange in this repository, and
+      // `got` stays as the fast path. Counting only the ids in the order, because a keeper is
+      // looting and eating the whole time and the pack moves for reasons that are not ours.
+      // COUNTED BY NAME, NOT BY ID. A purchase does not land as the merchant's object — it
+      // arrives as a new object, or merges into a stack the character already carries — so
+      // the shelf id is never in the pack afterwards and counting by it would always read
+      // zero. The offer's names are what carry over.
+      const wantNames = new Set(rounds.map(r => (offer.get(r.id)?.name ?? '').toLowerCase())
+                                      .filter(Boolean));
+      const countOwn = async () => {
+        try {
+          await s.pacer.submit('read', () => c.requestInventory());
+          await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
+          const by = new Map();
+          for (const o of (c.inventory ?? [])) {
+            const nm = String(c.rsc?.get?.(o.nameRsc) ?? '').toLowerCase();
+            if (!wantNames.has(nm)) continue;
+            by.set(nm, (by.get(nm) ?? 0) + (Number(o.amount) || 1));
+          }
+          return by;
+        } catch { return null; }
+      };
       const got = [], messages = [];
       let refusedAfter = null;
+      let held = await countOwn();
       for (const [n, line] of rounds.entries()) {
         let arrived = [], said = '';
         if (proxied) {
@@ -9282,7 +9456,24 @@ const TOOLS = [
         // STOP ON THE FIRST CHUNK THAT BRINGS NOTHING. Whatever ended it — the purse, a
         // full pack, a merchant that has stopped answering — will end the next one too, and
         // hammering a counter that has already said no is how a town trip runs for ever.
-        if (!arrived.length) {
+        // But "brought nothing" has to mean the PACK did not move, not that a frame was late.
+        let delivered = arrived.length > 0;
+        if (!delivered && held) {
+          const now = await countOwn();
+          const grew = now
+            ? [...wantNames].filter(nm => (now.get(nm) ?? 0) > (held.get(nm) ?? 0))
+                            .map(nm => `${nm} +${(now.get(nm) ?? 0) - (held.get(nm) ?? 0)}`)
+            : [];
+          if (grew.length) {
+            delivered = true;
+            // Said as what it is, rather than inventing item rows the wire never sent.
+            messages.push(`chunk ${n + 1} delivered without a \`got\` frame (${grew.join(', ')})`);
+          }
+          held = now ?? held;
+        } else if (delivered) {
+          held = (await countOwn()) ?? held;
+        }
+        if (!delivered) {
           refusedAfter = `chunk ${n + 1} of ${rounds.length} brought nothing`;
           break;
         }
@@ -9807,18 +9998,46 @@ const TOOLS = [
     }, required: ['agent', 'merchant'] },
     run: async (a) => {
       const s = session(a.agent);
+      // BY CHARACTER NAME, ON BOTH BRANCHES. `t1` is this checkout's word for a roster slot;
+      // the loadout belongs to the character and follows it across rosters.
+      // THREE SOURCES BECAUSE THE FIRST TWO CAN BE COLD. `client.me.name` is the in-process
+      // answer; a KeeperProxy's `character` comes from its liveness sample or its /state
+      // snapshot, and a snapshot taken seconds after a keeper restart answers null for a
+      // character that is perfectly well in game. The roster is the one that cannot be cold —
+      // it is the file this broker resumed from — so it is the floor under both.
+      const who = s.client?.me?.name ?? s.character ?? rosterEntry(a.agent)?.credentials?.character ?? null;
+      const fromLoadout = a.ignore_loadout || !who ? [] : protectedNames(loadoutFor(who));
       // keeper-backed: sell runs in the keeper process (its client has the trade packets; the
       // broker's Session-only sellOne is not on the proxy). Merchant is resolved in the keeper's room.
+      //
+      // AND THE LOADOUT HAS TO COME WITH IT. This branch used to hand the keeper `a.keep` and
+      // nothing else, so `loadoutFor` was consulted only on the in-process branch below —
+      // which no character on prod takes, because all twenty-three are keeper-backed. The tool's
+      // own description promises the loadout "decides what may be sold", and on the only path
+      // production uses it was dropped in silence.
+      //
+      // What that cost, 2026-09-12: Robin's loadout carried `keep: ["sapphire","mushroom"]`,
+      // written the day before by somebody who had already watched this happen and left the
+      // note on Camilla's carry floor — "the sell circuit sold the stock back to the merchant
+      // it was bought from". At 09:12 he sold 16 sapphires to the gem shop and at 09:14 he sold
+      // 61 mushrooms to the apothecary, walked to Castle Victoria, and spent the next quarter
+      // hour declining `bless` with "out of reagents" — 10 casts in the previous window, 0 in
+      // the one after. The keep list was correct, present, and unreachable.
+      //
+      // Same shape as `rarity` missing from the KeeperProxy rebuild: a feature live in the two
+      // places nothing reads and absent from the one place everything does. Verify a sell rule
+      // through the BROKER against a keeper-backed character, never only in process.
       if (s instanceof KeeperProxy)
-        return keeperAction(a.agent, s._index, 'sell_all', { merchant: a.merchant, keep: a.keep || [],
+        return keeperAction(a.agent, s._index, 'sell_all',
+          { merchant: a.merchant, keep: [...(a.keep || []), ...fromLoadout],
           min_price: num(a.min_price, 1), max_stack: a.max_stack == null ? null : Number(a.max_stack),
           max_weapons: a.max_weapons == null ? null : Number(a.max_weapons),
           max_offers: a.max_offers, skip_names: a.skip_names });
       const t = resolveTarget(s, a.merchant);
-      // BY CHARACTER NAME. `t1` is this checkout's word for a roster slot; the loadout
-      // belongs to the character and follows it across rosters.
-      const who = s.client?.me?.name;
-      return skills.sellAll(s, { merchant: t, keep: a.keep || [], minPrice: num(a.min_price, 1),
+      // `a.keep || []` TURNED "the caller said nothing" INTO "keep nothing", which is the one
+      // thing it must not mean now that sellAll has a fleet default. Undefined passes through so
+      // the default applies; an explicit empty array still means sell everything unprotected.
+      return skills.sellAll(s, { merchant: t, keep: a.keep ?? undefined, minPrice: num(a.min_price, 1),
                                  loadout: a.ignore_loadout || !who ? null : loadoutFor(who),
                                  maxWeapons: a.max_weapons == null ? null : Number(a.max_weapons),
                                  weaponPriority: Array.isArray(a.weapon_priority)
@@ -11663,6 +11882,17 @@ const TOOLS = [
                                               // without spending a charge to find out.
                                               icon_rsc: o.iconRsc ?? null,
                                               translation: o.translation ?? 0,
+                                              // AND WHAT THE SERVER DECLINES TO SAY ABOUT IT.
+                                              // The same argument as translation above: this
+                                              // is evidence about what the thing IS. Grade 100
+                                              // is "at least one attribute is still hidden"
+                                              // (item.kod:714-730) and is the only set
+                                              // `reveal` can act on -- see ITEM_RARITY in
+                                              // m59-items.mjs. Parsed since the beginning and
+                                              // dropped here, so nothing could ask.
+                                              rarity: o.rarity ?? null,
+                                              rarity_name: rarityName(o.rarity) ?? undefined,
+                                              unidentified: isUnidentified(o) || undefined,
                                               broken: condemned.has(o.id) || undefined })),
                equipped: c.equipment().equipped.map(e => e.name ?? e.id),
                // HOW FULL, in the units the server actually refuses on. The ceiling is
@@ -11703,9 +11933,25 @@ const TOOLS = [
       }
       const eq = c.equipment();
       const weapons = eq.equipped.filter(e => e.name && skills.weaponScore(e.name) > 0);
+      // THE GRADE, NAMED, AND THE ONE CONSEQUENCE THAT IS IRREVERSIBLE. A cursed item
+      // cannot be unwielded, so a caller asking "why will this character not change
+      // weapons" needs this in the answer rather than having to know to look for it.
+      const graded = eq.equipped.map(e => ({
+        ...e, rarity_name: rarityName(e.rarity) ?? undefined, cursed: isCursed(e) || undefined }));
+      const cursed = graded.filter(e => e.cursed).map(e => e.name);
       return {
         character: c.me?.name ?? null,
         ...eq,
+        equipped: graded,
+        cursed: cursed.length ? cursed : null,
+        cursed_note: !eq.grades_known
+          ? 'this keeper does not report rarity grades yet, so "no cursed item" is NOT what ' +
+            'this says — it is that nothing here can tell you. Restart the keeper to find out.'
+          : (cursed.length
+             ? 'a cursed item can NEVER be unwielded (the one irreversible mistake here). It ' +
+               'comes off with a remove curse potion (Lady Aftyn, room 205), the `remove ' +
+               'curse` spell cast on this character, or when the weapon breaks.'
+             : 'the server graded everything equipped and none of it is cursed'),
         // The one derived field, and labelled as derived. Which of the equipped items is
         // the weapon is a judgement from its name; that it is equipped at all is not.
         wielding: weapons.length ? weapons.map(w => w.name) : null,
@@ -13671,8 +13917,10 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string' },
       target: { type: ['string', 'number'], description: 'object id, or a name in this room' },
-      slot: { type: 'number',
-        description: `1..${GUILD_CHEST_SLOTS}: record this reading as that guild chest. Omit to just look.` },
+      record: { type: 'boolean',
+        description: 'record this reading as a guild chest. It is filed under the SQUARE the ' +
+          'chest stands on (r18c6) — read off the object, never a number you choose — because ' +
+          'object ids recycle and a chest cannot move. Omit to just look.' },
     }, required: ['agent', 'target'] },
     run: async a => {
       const s = session(a.agent), c = s.need();
@@ -13692,12 +13940,32 @@ const TOOLS = [
       const items = (box.items || []).map(o => ({ id: o.id, name: o.name,
         amount: o.amount || 1 }));
       const out = { ok: true, target, items, count: items.length };
-      if (a.slot !== undefined) {
-        const room = c.room?.id ?? s.world?.room?.num ?? null;
-        storage.writeChest(a.slot, { object_id: target, room, items,
-          by: c.me?.name ?? s.name });
-        out.recorded_as_chest = Number(a.slot);
-        out.fullness = chestFullness(items);
+      if (a.record) {
+        // THE NAME COMES OFF THE OBJECT WE JUST LOOKED INSIDE. A chest is GETTABLE_NO and
+        // nothing moves it, so its square is the one durable name it has; an object id is a
+        // handle the server recycles. If the room snapshot has no position for it we refuse
+        // rather than invent one — an unnamed chest filed under a guess is the mis-filing
+        // this scheme exists to make impossible.
+        const obj = c.room?.objects?.get?.(Number(target)) ?? null;
+        const key = chestKey(obj);
+        if (!key) {
+          out.recorded = false;
+          out.why = 'this room snapshot carries no position for that object, so it cannot be ' +
+                    'named — ask for room contents and try again';
+        } else {
+          const room = c.room?.id ?? s.world?.room?.num ?? null;
+          storage.writeChest(key, { object_id: target, room, items,
+            by: c.me?.name ?? s.name });
+          out.recorded_as_chest = key;
+          out.fullness = chestFullness(items);
+          // WHY THIS IS WORTH DOING BY HAND, ONCE. `guildStoreAvailable` refuses the whole
+          // guild stockpile until some chest has been opened, and the only things that open
+          // chests are the deposit and withdraw legs — which run only after it says yes. This
+          // call is the way out of that circle.
+          out.note = 'recorded. The guild stockpile needs one opened chest before it will act, ' +
+                     'and nothing in the fleet can open the first one — the legs that refresh ' +
+                     'these readings are themselves gated on a chest already being open.';
+        }
       }
       return out;
     },
@@ -13822,15 +14090,40 @@ const TOOLS = [
       const was = s.world?.room?.num ?? null;
       const before = c.evSeq;
       await s.pacer.submit('move', () => c.requestRescue(), MOVE_INTERVAL_MS);
-      const ev = await c.waitFor({ since: before, kinds: ['room-entered', 'message'], timeoutMs: 6000 })
+      // TWO DIFFERENT RESCUES SHARE A NAME, AND ONLY ONE OF THEM IS THIS ONE.
+      //
+      // This tool sends UC_REQ_RESCUE, which is the stuck-player command: user.kod:1930-1946
+      // calls `AdminGotoSafety` and the teleport is IMMEDIATE. The Shal'ille SPELL of the same
+      // name is a different path entirely — `CastSpell` starts a timer and the move lands 15s
+      // later plus a random 5-10s (rescue.kod:94-112, settings.kod:91) — and it is reached with
+      // `cast`, not with this.
+      //
+      // I conflated them while fixing this and briefly wrote the spell's delay into this
+      // comment. They are worth keeping apart precisely because the failure modes differ: the
+      // spell's silence usually means "not yet", and this command's silence never does.
+      //
+      // The window stays generous anyway. It costs nothing when the answer is immediate, and a
+      // room read that is one packet early is the shape of half the wrong conclusions in this
+      // file's history.
+      const ev = await c.waitFor({ since: before, kinds: ['room-entered', 'message'], timeoutMs: 30_000 })
                         .catch(() => ({ events: [] }));
       const entered = (ev.events || []).find(e => e.kind === 'room-entered');
       const now = s.world?.room?.num ?? null;
       return { asked: true, was_in: was, now_in: now, moved: now !== was || !!entered,
                arrived_in: entered?.roomName ?? null,
                messages: (ev.events || []).filter(e => e.text).map(e => e.text).slice(0, 4),
-               ...(now === was ? { note: 'the room did not change — either the server declined or ' +
-                                         'this character was already somewhere it counts as safe' } : {}) };
+               // AND THREE CAUSES, NOT TWO. The old note offered "the server declined" or
+               // "already somewhere safe" and left out the one that was actually happening.
+               ...(now === was ? { note: 'the room did not change. This command teleports ' +
+                                         'IMMEDIATELY (user.kod:1941), so a pending move is NOT ' +
+                                         'one of the explanations — that belongs to the Shalille ' +
+                                         'SPELL, which is a different path reached with `cast`. ' +
+                                         'What does look like this: the character is already in ' +
+                                         'the room this would send it to, in which case the ' +
+                                         'server answers UC_SEND_QUIT and disconnects instead of ' +
+                                         'moving (user.kod:1932-1939) — `look_at` on it reports ' +
+                                         'the hometown, so that is checkable; or it was moved ' +
+                                         'and something walked it back inside the window' } : {}) };
     },
   },
   {
@@ -13922,7 +14215,15 @@ const TOOLS = [
       const sinceMs = (Number(a.hours) > 0 ? Number(a.hours) : 24) * 3600 * 1000;
       // Before the per-character branch: `spells` wants the same narrowing but a
       // different report, and falling through would give the level summary instead.
-      if (a.spells) return spellReport({ sinceMs, character: a.character || null });
+      //
+      // AND IT GETS THE COST TABLE, or the report cannot tell a cast that went off from one
+      // that was refused for free. `ok` on a cast row is the caller's own judgement and a
+      // buff has nothing to diff, so without `manaOf` every already-enchanted no-op reads as
+      // a success — 14 blesses at `worked: 100%` from a caster whose mana never moved. The
+      // table is built into gitignored substrate, so a checkout without one still answers,
+      // with those casts counted `unmeasured` rather than convicted or excused.
+      if (a.spells) return spellReport({ sinceMs, character: a.character || null,
+                                         ...spellCostLookups() });
       if (a.character) {
         const { samples, events } = readLedger({ sinceMs });
         const mine = samples.filter(x => x.character?.toLowerCase() === a.character.toLowerCase());

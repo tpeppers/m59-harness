@@ -845,6 +845,48 @@ const countIn = (items, entry) => (items || [])
 // EVERYTHING THIS LOADOUT PROTECTS, as one test. Returns null when the loadout has nothing
 // to say, and null is the answer that means "use the behaviour that was already there" —
 // callers must not read it as "protects nothing".
+// THE SAME PROTECTION, FLATTENED TO NAMES, FOR A DOOR THAT ONLY TAKES NAMES.
+//
+// `keepTest` is a predicate and the right answer everywhere it fits. It does not fit the
+// keeper: `sell_all` on a keeper-backed character is an HTTP action whose `keep` argument is
+// an array of name fragments, and a predicate does not cross that wire. Every character on
+// prod is keeper-backed, so without this the loadout was consulted on the branch nothing uses
+// and dropped on the branch everything uses — see the incident in m59-broker.mjs.
+//
+// WHAT IS LOST, said plainly rather than discovered later: a FLOOR becomes a name. A carry
+// entry of `{item: 'sapphire', min: 24, max: 120}` protects the first 24 in `keepTest` and
+// protects every sapphire here. That is the direction `keepTest` itself already declares safe
+// when it has no inventory — "it declines to sell something it might need rather than selling
+// something it does" — and the cost is income rather than a silent caster. A `max` overflow is
+// not sold by this path either; that needs the pack, and the pack is in the keeper.
+//
+// AND THE MATCHING CHANGES HANDS AT THE SAME SEAM. `entryMatches` honours a carry entry's
+// `match: exact|contains|prefix`; the keeper tests `name.toLowerCase().includes(k)`, always a
+// substring. So an EXACT entry for `mushroom` arrives at the counter protecting `red mushroom`
+// too. That is wider than the loadout asked for and it is the direction this fleet wants —
+// four of the five mushrooms are bless reagents — but it is a real difference, not a detail:
+// `keep: ['mace']` has twice protected the thing called "broken mace" through this same rule.
+//
+// Returns [] rather than null when a loadout protects nothing by name, because the caller
+// concatenates: null would have to be handled by every one of them and [] cannot be misread.
+export function protectedNames(loadout) {
+  if (!loadout) return [];
+  const out = [];
+  for (const k of loadout.keep ?? []) out.push(k);
+  for (const w of loadout.gear?.weapon ?? []) out.push(w);
+  for (const list of Object.values(loadout.gear?.slots ?? {})) for (const g of list) out.push(g);
+  // A floor of zero is not a floor — it is the absence of one — and m59-loadout has said so
+  // since the graveyard shift zeroed nineteen of them. Only a real floor protects.
+  for (const c of loadout.carry ?? []) if (c.min > 0) out.push(c.item);
+  const seen = new Set();
+  return out.filter(n => {
+    const k = String(n).trim().toLowerCase();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 export function keepTest(loadout, items = null) {
   if (!loadout) return null;
   const rules = [];

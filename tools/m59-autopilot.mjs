@@ -23,7 +23,7 @@
 import * as skills from './m59-skills.mjs';
 import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
-import { OF, affordances, dropSpec as dropSpecFor,
+import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem } from './m59-items.mjs';
@@ -52,6 +52,7 @@ import { arenaCall } from './m59-chatter.mjs';
 import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
 import { detailSettings, recordStrategyStat, saveVaultSnapshot }
@@ -61,8 +62,7 @@ import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telem
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
-import { StorageCache, BOOKMAKERS_HALL_ROOM, BOOKMAKERS_CHESTS,
-         chestSlotsByPosition } from './m59-storage.mjs';
+import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
 import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
@@ -450,6 +450,11 @@ const PULSE_MOVEMENT_SAMPLES = 3;
 // treated as an abandonment, short enough that these characters — 20 to 56 max health
 // against four ants at about half a point a second — are still alive at the end of it.
 const INERT_RESCUE_MS = Number(process.env.M59_INERT_RESCUE_MS || 4_000);
+// Grind rows one character may write per hour before short episodes start being counted
+// rather than written, and the length above which an episode is written regardless.
+// 12/hour/character is 1.7 MB/day across 23 characters at 250 bytes a row.
+const GRIND_ROWS_PER_HOUR = Number(process.env.M59_GRIND_ROWS_PER_HOUR || 12);
+const GRIND_ALWAYS_MS = Number(process.env.M59_GRIND_ALWAYS_MS || 120_000);
 
 // ==================== TRAVELLING: STOOD DOWN WITHOUT STANDING THERE ====================
 //
@@ -559,12 +564,40 @@ export const TRAVEL_GUARD_DEFAULTS = Object.freeze({
   // ---- at a hop boundary: the journey pauses and nothing is contended
   rest: true,        // sit in a sanctuary until health AND vigor are as high as sitting takes them
   safe_spot: true,   // hold a defensible wall part-way through — see travelHold
+  // ---- mid-hop, and the ONLY faculty here that may swing at a MONSTER.
+  //
+  // KILL THE THING STANDING IN THE PIPE. Operator, 2026-09-11, having walked into it: "a
+  // traffic jam of ~3 bots in The Flatlands that were piled up because of a few spiders and
+  // ants clogging the needle.. everyone there was capable of killing them but nobody was
+  // attacking the low level monsters that were blocking their paths."
+  //
+  // WHY NOTHING ALREADY COVERED IT, which took three wrong guesses to establish:
+  //   fight_back   sounds exactly like this and is not. Gated on `worthEnding` — a PERSON —
+  //                and armed only by `lost > 0`, i.e. BEING HIT. A spider that merely stands
+  //                in the corridor never arms it, and standing there is the whole problem.
+  //   capBlockers  computes `clearable`, but for the SPAWN CAP, not the path: it returns
+  //                early on `!status.full`. Three spiders in a pipe do not fill a cap.
+  //   the needle   solves AROUND bodies on a 400ms clock and cannot conceive of removing one.
+  //
+  // So N travellers each re-plan around bodies that will not move, none of them permitted to
+  // swing, and none registering as stuck — they ARE moving, just not arriving, which is the
+  // two-square shuffle that defeats every stillness detector in this file.
+  //
+  // AND IT DOES NOT CANCEL A CROSSING TO DO IT, which is what makes it affordable where the
+  // mid-hop SHELTER rung was not. That rung was retired because the only thing it could do
+  // was cancel: the mover has the body and a wall cannot be reached without taking the body
+  // off the line. A SWING NEEDS NO GROUND. Melee reach is a disc of 2-3 squares, so anything
+  // blocking a step is already inside it, and the keeper answers without contending for the
+  // body at all. It arms the fight-back path that already exists rather than growing a second.
+  clear_path: true,  // a creature is blocking the walk and we have covered no ground
 });
 export const TRAVEL_GUARD_KEYS = Object.freeze(Object.keys(TRAVEL_GUARD_DEFAULTS));
 // Which clock each one is on. Reported by `travel_guard` so an operator turning one off
 // knows whether they have disabled an interruption or a pause.
 export const TRAVEL_GUARD_CLOCK = Object.freeze({
   flee: 'mid-hop', fight_back: 'mid-hop', arm: 'mid-hop',
+  // MID-HOP AND PROUD OF IT: a swing needs no ground, so this one costs the crossing nothing.
+  clear_path: 'mid-hop',
   rest: 'hop boundary',
   // BOTH CLOCKS, and it had to be. At a boundary the journey pauses and the character rests
   // at a wall to full. MID-HOP it hands back so the ordinary ladder can take one, because a
@@ -848,6 +881,17 @@ const FIGHT_BACK_GAP_MS = Number(process.env.M59_FIGHT_BACK_GAP_MS || 6_000);
 // A fight-back the watchdog asked for and no pass has answered within this long is stale:
 // the situation it described is gone, and acting on it would be swinging at a memory.
 const FIGHT_BACK_STALE_MS = 30_000;
+// HOW LONG A JOURNEY MAY COVER NO GROUND BEFORE A CREATURE IN REACH COUNTS AS BLOCKING IT.
+// Deliberately longer than a slide and shorter than a stall: the needle solver is on a 400ms
+// clock and a healthy crossing re-anchors constantly, so six seconds of zero displacement
+// with something inside melee reach is not slow progress, it is a body that will not move.
+// Below WATCHDOG_PINNED_MS (20s) on purpose — the healthy-wedge arm is about a stuck ROUTE
+// and this is about a stuck CORRIDOR, which is cheaper to answer and worth answering sooner.
+const CLEAR_PATH_MS = Number(process.env.M59_CLEAR_PATH_MS || 6_000);
+// The same four states m59-watchdog.mjs calls GOING. Imported rather than retyped would be
+// better still; this file already has a second copy at `goingSomewhere` and a third would be
+// how they drift apart.
+const GOING_STATES = watchdog.GOING;
 
 // THE POSITION PULSE — "IS THE CHARACTER MOVING", ASKED OF THE CHARACTER.
 //
@@ -1831,6 +1875,37 @@ export class Autopilot {
     // wound without a second poll.
     this.lastError = null;
     this.lastErrorAt = null;
+    // ARE WE GRINDING AGAINST A WALL, AND FOR HOW LONG. Fed from `pulsePosition` so it sees the
+    // same samples every other movement question here sees -- two instruments describing two
+    // different walks is the failure `trackSinceFull` is commented against, and this would be
+    // a third walk if it sampled on its own timer.
+    //
+    // Closed episodes go to the ledger as `wall_contact` / `shuffle`; `m59-grinds.mjs` reads
+    // them back. NOTHING IS EMITTED UNTIL AN EPISODE ENDS, because an episode without a
+    // duration is the point event this exists to replace.
+    this.grind = makeGrindTracker();
+    // AN HOURLY BUDGET, SO A WEDGED CHARACTER CANNOT FILL THE DISK WITH ITS OWN MISERY.
+    //
+    // Measured cost: one episode row is 250 bytes, and the fleet is 23 characters. At 60
+    // episodes per character per hour that is 8.3 MB/day against a ledger already at 131 MB --
+    // it would roughly double it in a fortnight. At 300/hour it is 41 MB/day, which is the
+    // ballooning the operator asked to avoid.
+    //
+    // The pathological case is NOT the one that costs the most, which is worth knowing: a
+    // character grinding for six hours produces ONE long episode, because the episode stays
+    // open while it continues. The expensive shape is repeated bump-and-recover, and the
+    // hundredth identical bounce at the same square tells nobody anything the first twelve did
+    // not.
+    //
+    // So the budget SUPPRESSES rows but never hides them: the overflow is counted and reported
+    // as a single `grind_suppressed` row per hour. A cap that silently dropped evidence would
+    // make the totals wrong in the direction of "everything is fine", which is the one
+    // direction this repository keeps getting burned by.
+    this.grindBudget = { hour: null, written: 0, suppressed: 0 };
+    // The mover's own refusal, parked here by `terminalMovement` and consumed by the next
+    // pulse. One field rather than a queue: the pulse is a second wide and the question is
+    // "was this sample refused", not "how many times" -- the episode counts those.
+    this.grindRefusal = null;
     // Where the pass last gave up walking from, and until when. See `answerWedge`.
     this.wedgeHold = null;
     // Was the session live when it threw? `false` during a breakout window is the
@@ -2575,9 +2650,44 @@ export class Autopilot {
     }
     const eq = await skills.equipBest(s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
     this.tally.weapons_conjured = (this.tally.weapons_conjured || 0) + 1;
-    this.recordCast('create weapon', { ok: true, why, made: made.map(o => c.rsc.get(o.nameRsc)),
+    const madeNames = made.map(o => c.rsc.get(o.nameRsc));
+    this.recordCast('create weapon', { ok: true, why, made: madeNames,
       mana_before: mana?.value ?? null, mana_after: c.vitals?.()?.mana?.value ?? null });
-    this.note('conjured a weapon', { made: made.map(o => c.rsc.get(o.nameRsc)),
+
+    // A WEAPON IN THE PACK IS NOT A WEAPON IN THE HAND, AND THIS SAID IT WAS.
+    //
+    // `progress('armed itself')` fired on the CAST succeeding, never on the wield. When the
+    // thing it conjured is on the character's own ban list, `equipBest` correctly refuses it,
+    // the character is still empty-handed, and the next pass conjures another one — a loop
+    // that cannot terminate because the ban does not change and the spell keeps producing the
+    // same kind of weapon.
+    //
+    // Measured on prod 2026-09-11. Bunsen and Robin ban long sword, short sword, mace, axe,
+    // scimitar and six more; `create weapon` was making long swords. They shed 16 and 204
+    // items when the pack was finally emptied by hand, and a pack that full answers
+    // `receiver_full` to every `supply` — which is what actually stalled the Kraanan cohort
+    // all evening, four unblockings in one night. The board meanwhile read
+    // `UNARMED_NO_DONOR — waiting for mana`, so it looked like a mana problem throughout.
+    const banned = this.bannedWeaponsNow();
+    const blockedByBan = !eq?.wielding && banned?.length &&
+      madeNames.some(nm => banned.some(b => String(nm ?? '').toLowerCase()
+                                               .includes(String(b).toLowerCase())));
+    if (!eq?.wielding) {
+      this.note('conjured a weapon it cannot hold', {
+        made: madeNames, mana_left: c.vitals?.()?.mana?.value,
+        banned_weapons: blockedByBan ? banned : undefined,
+        why: blockedByBan
+          ? 'create weapon made something this character\'s own ban list forbids, so ' +
+            'equipBest refused it — and the next pass will conjure another one. The loop ' +
+            'cannot end while the ban and the spell disagree'
+          : 'the weapon was made but nothing would wield it',
+        doing: blockedByBan
+          ? 'not counting this as armed — un-ban what create weapon produces, or give this ' +
+            'character a weapon it is allowed to hold'
+          : 'not counting this as armed' });
+      return false;
+    }
+    this.note('conjured a weapon', { made: madeNames,
       now_wielding: eq?.wielding, mana_left: c.vitals?.()?.mana?.value,
       caveat: 'a made weapon is temporary — it buys this fight and the walk to a shop' });
     this.progress('armed itself');
@@ -8151,6 +8261,83 @@ export class Autopilot {
     return this.fightBackDue;
   }
 
+  // A CREATURE STANDING IN THE WALK IS A REASON TO SWING, AND IT IS THE ONLY ONE.
+  //
+  // The sibling of `fightBackCheck` above, and it exists because that one is armed by DAMAGE.
+  // See `clear_path` in TRAVEL_GUARD_DEFAULTS for the operator's report and for why neither
+  // `fight_back`, `capBlockers` nor the needle covers this.
+  //
+  // THE TRIGGER IS COVERING NO GROUND, NOT BEING HURT. `w.pinnedSince` is already maintained
+  // by the watchdog — displacement from an anchor, which is the measure that survives a
+  // two-square shuffle where stillness does not — so this asks a question the file can
+  // already answer and adds no new bookkeeping.
+  //
+  // FIVE GATES, AND EVERY ONE OF THEM IS HERE TO STOP THIS BECOMING "FIGHT EVERYTHING ON THE
+  // ROAD", which is the doctrine this repository has spent months removing:
+  //   * only while a JOURNEY is what is moving us — GOING, never standing at a counter;
+  //   * only once the body has been pinned for CLEAR_PATH_MS, so a creature we walked past
+  //     is not a blocker and a momentary slide is not a jam;
+  //   * only ABOVE the flee line — below it, running is the answer and the ladder owns it;
+  //   * only something in MELEE REACH, which is what "in the way" means to a mover that
+  //     cannot get past it;
+  //   * and the target is chosen by `passFightBack`, which already applies the engagement
+  //     band and the refusal list. This rung picks nothing; it only says "now".
+  //
+  // It hands to `fightBackDue` on purpose: one consumer, one target chooser, one set of
+  // safety rules. A second path would drift from the first, which is how this file grew two
+  // height rules and four copies of the fall physics.
+  clearPathCheck(w, hp, now) {
+    if (!w) return null;
+    if (!this.travelAllows('clear_path')) return null;
+    if (!GOING_STATES.includes(this.doing ?? null)) return null;
+    // Already swinging is not a jam; an errand owns the body; once per pass.
+    if (this.doing === 'fighting' || this.inert) return null;
+    if (w.clearPathPass === this.passes) return null;
+    const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
+    if (pinnedFor < CLEAR_PATH_MS) return null;
+    const frac = pct(hp);
+    if (frac === null || frac < this.safety().fleeAt) return null;
+    // A POLITE BUMP ON THE ROAD MUST NOT START A WAR, and this is the line that guarantees it.
+    //
+    // `inReachOfUs()` filters `!(o.flags & OF.PLAYER)`, so a person can neither ARM this rung
+    // nor be chosen by it — including a murderer, which is stricter than the operator asked for
+    // and is the safe direction. It matters because the trigger is "something is in my way",
+    // and on a shared server with real people that is exactly what another player standing in a
+    // doorway looks like. Twenty-one characters deciding to clear a person out of a corridor is
+    // not a mistake anybody gets to take back afterwards.
+    //
+    // Do NOT "simplify" this to room.objects: the player exclusion is the entire safety case,
+    // and m59-travelling-test pins it behaviourally — three players in reach must not arm it.
+    const near = this.inReachOfUs?.() ?? [];
+    if (!near.length) return null;
+
+    w.clearPathPass = this.passes;
+    this.tally.clear_path_interrupts = (this.tally.clear_path_interrupts || 0) + 1;
+    // `reason` is what lets passFightBack tell this apart from the damage edict — it must run
+    // for a blocked character whose `fight_back_after_s` is 0, because the two are different
+    // permissions and an operator may want one without the other.
+    this.fightBackDue = { since: w.pinnedSince, hits: 0, lost: 0, at: now, reason: 'blocked' };
+    // END THE BLIND AWAIT so the next pass can answer. Identical to the fight-back edict's
+    // single action, and for the identical reason: a pass inside a walk cannot decide.
+    const blocked = this.passStartedAt ? now - this.passStartedAt : 0;
+    let broke = null;
+    if (blocked >= PULSE_MS) {
+      try { broke = this.s.cancelMovement(null, 'a creature is blocking the walk — clear_path'); }
+      catch (e) { broke = { cancelled: false, why: e.message }; }
+    }
+    this.note('WATCHDOG — covered no ground for ' + Math.round(pinnedFor / 1000) +
+              's with something in reach', {
+      pinned_for_s: Math.round(pinnedFor / 1000),
+      in_reach: near.length,
+      health: hp ? `${hp.value}/${hp.max}` : null, doing: this.doing ?? null,
+      pass_blocked_for_s: Math.round(blocked / 1000), interrupted: broke?.interrupted ?? null,
+      why: 'a journey that is covering no ground with a creature inside melee reach is being ' +
+           'BLOCKED, not merely travelling slowly. The walk is cancelled so the next pass can ' +
+           'kill what is in the way — this keeper picks no target and decides nothing here',
+    });
+    return this.fightBackDue;
+  }
+
   refuseEngagement(name) {
     const key = String(name || '').toLowerCase();
     if (!key) return null;
@@ -8859,6 +9046,13 @@ export class Autopilot {
   // and surface the recovery action to the controller.
   terminalMovement(result, context, detail = {}) {
     if (!isTerminalMovementReason(result?.reason)) return null;
+    // EVERY KEEPER MOVEMENT PATH COMES THROUGH HERE, which is why the grind tracker is fed
+    // from this seam rather than from each caller. It sees the TERMINAL class only -- the
+    // collision-contract refusals -- so `wall_contact` today means "the geometry said no",
+    // not "any step that failed". Ordinary refusals (a body in the way, a door wanting the
+    // exact square) do not pass through this function and are not yet counted; the shuffle
+    // half needs no refusal at all and sees everything.
+    this.grindRefusal = result.reason;
     this.stalledSince ??= Date.now();
     this.stalledWhy = `${context} stopped: ${result.reason}`;
     // This writes the stall directly rather than through noProgress, so it has to name its
@@ -10745,6 +10939,64 @@ export class Autopilot {
     return Number.isFinite(now) && Number.isFinite(before) && now < before;
   }
 
+  // ONE SAMPLE INTO THE GRIND TRACKER, AND THE TWO JUDGEMENT CALLS IT MAKES.
+  //
+  // `destination` is what separates grinding from resting. A character in an inn, or holding a
+  // safe wall on purpose, is stationary and CORRECT -- both look identical to a position
+  // sampler, and flagging them is how an instrument earns its way into being switched off. The
+  // keeper already knows the difference and calls it `doing`, so that is what is used: the
+  // GOING states mean it is trying to get somewhere, anything else means it is not.
+  //
+  // The refusal is CONSUMED, not merely read. Leaving it set would make one refused step look
+  // like an unbroken contact for as long as the character stood there, turning a two-second
+  // scrape into an hour-long episode -- the exact over-reporting that would make the report
+  // worthless for the question it was built for.
+  trackGrind(at, doing, going) {
+    if (!this.grind) return;
+    const refused = this.grindRefusal; this.grindRefusal = null;
+    let closed = [];
+    try {
+      closed = this.grind.push({
+        at: at.at, room: at.room, row: at.row, col: at.col,
+        refused, destination: going.includes(doing) ? (at.room ?? true) : null,
+        // The keeper's own word for what it is up to, so an episode can name the intent it
+        // interrupted rather than only the place. See the note in m59-wallgrind.mjs.
+        doing: doing ?? null,
+      });
+    } catch { return; }   // instrumentation must never cost the keeper a pass
+    const hour = Math.floor(Date.now() / 3600_000);
+    const b = this.grindBudget;
+    if (b.hour !== hour) {
+      // Report what the previous hour swallowed, once, before resetting. Without this line the
+      // suppression is invisible and every total downstream is quietly short.
+      if (b.suppressed > 0) {
+        try {
+          recordEvent(this.who(), 'grind_suppressed',
+                      { hour: b.hour, suppressed: b.suppressed, written: b.written,
+                        why: `over the ${GRIND_ROWS_PER_HOUR}/hour budget` });
+        } catch { /* never the keeper's problem */ }
+      }
+      b.hour = hour; b.written = 0; b.suppressed = 0;
+    }
+    for (const e of closed) {
+      // Sub-second episodes are rounding, not evidence.
+      if (!(e.ms >= 1000)) continue;
+      // A LONG EPISODE IS ALWAYS WRITTEN, whatever the budget says. The budget exists to stop
+      // a thousand two-second bounces, and the whole question is "is anything grinding for
+      // HOURS" -- suppressing the answer to save 250 bytes would be the instrument defeating
+      // its own purpose.
+      if (b.written >= GRIND_ROWS_PER_HOUR && e.ms < GRIND_ALWAYS_MS) { b.suppressed += 1; continue; }
+      b.written += 1;
+      try {
+        recordEvent(this.who(), e.kind, {
+          room: e.room, row: e.row, col: e.col, ms: e.ms, samples: e.samples,
+          reason: e.reason, squares: e.squares, began: e.began, ended: e.ended,
+          doing: e.doing ?? null,
+        });
+      } catch { /* a ledger write must never cost the errand */ }
+    }
+  }
+
   pulsePosition(now, hp) {
     const w = this.watch, c = this.s?.client, me = c?.self;
     if (!w) return null;
@@ -10781,6 +11033,7 @@ export class Autopilot {
       // Fed from the same sample rather than from its own timer: this has to agree with the
       // pulses exactly, or two instruments will describe two different walks.
       this.trackSinceFull(at, hp);
+      this.trackGrind(at, doing, GOING);
     }
 
     // A DRIVER THAT HAS STOPPED MOVING THE CHARACTER IS NOT DRIVING IT.
@@ -10961,6 +11214,10 @@ export class Autopilot {
 
     // 1b'. THE FIGHT-BACK EDICT — under attack, not swinging, and told to. See fightBackCheck.
     this.fightBackCheck(w, hp, now, lostThisTick);
+
+    // 1b''. THE PATH-CLEARING EDICT — covering no ground with something in reach. Runs AFTER
+    // the damage edict on purpose: being hit is the stronger signal and should win the pass.
+    this.clearPathCheck(w, hp, now);
 
     // 1c. TAKE THE CHARACTER BACK FROM A DRIVER THAT HAS STOPPED DRIVING IT.
     //
@@ -13925,9 +14182,62 @@ export class Autopilot {
     // Rowlf, Gonzo and Animal once each. An empty hand still swings and still reports
     // fighting, so it never reads as broken from outside.
     //
-    // Ahead of the danger and rest branches on purpose: being unarmed is WHY the fight
-    // is going badly, and the shortest way out is to be holding something.
-    if (!skills.isArmed(this.s.client)) {
+    // A REFUSAL THAT SURVIVES BEING SATISFIED IS A LIE ON THE BOARD.
+    //
+    // UNARMED_NO_DONOR was cleared in exactly one place, deep inside the branch that runs
+    // only when a pass has already found prey, and gated on `weaponsOf(...).length` — on
+    // CARRYING a weapon — while the refusal is raised on `isArmed`, which is about the
+    // server's use list. Two different questions, and a character can answer them
+    // differently: measured on prod 2026-09-11, Clifford was WIELDING a mace and Scooter a
+    // short sword, and both still carried a blocking UNARMED_NO_DONOR. `blocking: true`
+    // makes every stall reader step over them for ever.
+    //
+    // So it is cleared here instead: the same predicate that raises it, on every pass,
+    // before anything branches on prey.
+    if (skills.isArmed(this.s.client)) {
+      this.clearRefusal('UNARMED_NO_DONOR');
+      if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON' ||
+          this.waitingOn?.code === 'VIGOR_FOR_CREATE_WEAPON') this.doneWaiting?.();
+    }
+    // AHEAD OF THE DANGER AND REST BRANCHES ON PURPOSE — BUT NOT BELOW THE FLEE LINE.
+    //
+    // Being unarmed is WHY a fight is going badly, and the shortest way out is usually to be
+    // holding something. That is true of a character that is losing. It is not true of one
+    // that is dying: at 5 of 52 the answer is to leave, and every second spent conjuring is a
+    // second the thing hitting you gets for free.
+    //
+    // THE ORDERING IS THE BUG. This rung sits 654 lines and twenty-two possible `return`s
+    // ahead of `escapeIfWedgedAndHurt`, the survival rung below the flee line — so a hurt
+    // character ran the whole arming ladder and the pass ENDED before survival was ever
+    // asked. Measured across prod's postmortems: five deaths at 3-6% health, every one of
+    // them with a weapon in the pack its own ban list forbade, so the ladder could not even
+    // succeed. Sweetums spent its last thirteen passes over 13.9 seconds on "unarmed and in
+    // a room that spawns — leaving to regain mana", at 3 of 49, with a battered skeleton
+    // hitting it and a mace it was not allowed to hold.
+    //
+    // `fleeAt` is the same line `escapeIfWedgedAndHurt`, the flee rung and the trade rung all
+    // use, so this hands the pass over at exactly the point the survival half starts caring.
+    // A character hurt but SAFE still arms: it heals above the line in a sanctuary and the
+    // next pass runs this normally — which is the common case, and the one that must not
+    // regress into "never arms again".
+    const armVitals = this.s.client?.vitals?.();
+    const armHealth = armVitals?.health?.max > 0
+      ? armVitals.health.value / armVitals.health.max : null;
+    const tooHurtToArm = armHealth !== null && armHealth < this.safety().fleeAt;
+    if (tooHurtToArm && !skills.isArmed(this.s.client)) {
+      // Said once a minute rather than every pass: a body below the flee line is having a
+      // bad enough second without its own journal being the loudest thing in the room.
+      if (Date.now() - (this._lastArmDeferAt ?? 0) > 60_000) {
+        this._lastArmDeferAt = Date.now();
+        this.note('unarmed, but too hurt to stop and fix it', {
+          health: armVitals?.health ? `${armVitals.health.value}/${armVitals.health.max}` : null,
+          flee_at: Math.round(this.safety().fleeAt * 100) + '%',
+          why: 'the arming ladder ends the pass, and below the flee line the rungs that ' +
+               'matter are the survival ones further down',
+          doing: 'handing the pass to survival — it arms again once it is back above the line' });
+      }
+    }
+    if (!tooHurtToArm && !skills.isArmed(this.s.client)) {
       // A shattered weapon still occupies the room needed for its replacement.
       // The ordinary farm sweep is below this stage and cannot run while it is
       // blocked here. Keep the same drop policy and sweep rate when rearming.
@@ -14445,7 +14755,11 @@ export class Autopilot {
   async passFightBack(ctx) {
     const { s, c, room, v, hp } = ctx;
     const edict = this.fightBackAfterMs();
-    if (!edict) return CONTINUE;
+    // A BLOCKED DUE IS NOT THE DAMAGE EDICT AND MUST NOT BE GATED ON IT. `fight_back_after_s: 0`
+    // says "do not swing back when hit"; it says nothing about a creature standing in the
+    // walk, which is a different permission with its own faculty (`clear_path`). Gating both
+    // on one number is how a switch comes to mean two things.
+    if (!edict && this.fightBackDue?.reason !== 'blocked') return CONTINUE;
     const w = this.watch, a = w?.attack ?? null;
     const now = Date.now();
     // Either the watchdog asked, or the episode is old enough that it would have on its next
@@ -16847,12 +17161,11 @@ export class Autopilot {
       // into punching — and the server reports neither. `create food` and `create
       // weapon` are carried by every character here, so the first question when either
       // is missing is whether we can simply make one.
-      if (skills.weaponsOf(this.s.client).length) {
-        // Armed again: the refusal and the wait are over. A refusal nobody clears is
-        // worse than none, because a reader steps over the character for ever.
-        this.clearRefusal('UNARMED_NO_DONOR');
-        if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON') this.doneWaiting();
-      }
+      // The clear that used to be here asked whether a weapon was in the PACK, which is not
+      // the question the refusal was raised on and left it standing on characters that were
+      // demonstrably armed. It is done on `isArmed`, every pass, at the top of the arming
+      // stage — see the note there. Carrying one it may not wield is exactly the state this
+      // fleet is in, so the pack is the wrong evidence.
       if (!skills.weaponsOf(this.s.client).length) {
         const armed = await this.armSelf().catch(() => false);
         if (!armed) {
@@ -19004,13 +19317,24 @@ export class Autopilot {
     for (const kind of kinds) {
       if (!need[kind]) continue;
       const entry = (shop.items || []).find(item => this.matchesKind(item.name, kind));
+      // `entry.amount` IS NOT STOCK. It is the quantity the counter offers by default —
+      // every apothecary lists "Herbs x4" and none of them runs out — so how many we buy is
+      // decided by `need` and the purse, never by the listed number.
       if (!entry) { unstocked.push(kind); continue; }
-      for (let n = 0; n < need[kind] && purse - (entry.cost || 0) >= floor; n++) {
-        await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [entry.id]));
+      const unit = entry.cost || 0;
+      const affordable = unit > 0 ? Math.max(0, Math.floor((purse - floor) / unit)) : need[kind];
+      const take = Math.min(need[kind], affordable);
+      // ONE LINE WITH A COUNT. A bare id buys nothing at all for a stackable — the server's
+      // parallel number list arrives empty and the merchant's Buy has no quantity to pair
+      // with the item (see buyLines in m59-parse.mjs). Every reagent this loop exists to
+      // fetch is a stackable, so the unit-at-a-time version could not have worked.
+      for (const line of buyLines([{ id: entry.id, amount: take }])) {
+        await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
         await new Promise(resolve => setTimeout(resolve, 700));
-        purse -= entry.cost || 0;
-        this.recordPurchase(entry.name, entry.cost, { item_kind: kind,
-          from: c.rsc.get(pick.seller.nameRsc) ?? null, why: `farm delivery for room ${p.room}` });
+        purse -= unit * line.amount;
+        for (let n = 0; n < line.amount; n++)
+          this.recordPurchase(entry.name, entry.cost, { item_kind: kind,
+            from: c.rsc.get(pick.seller.nameRsc) ?? null, why: `farm delivery for room ${p.room}` });
       }
     }
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
@@ -19675,12 +19999,9 @@ export class Autopilot {
         return null;
       }
       const items = (box.items ?? []).map(o => ({ id: o.id, name: o.name, amount: o.amount || 1 }));
-      (store ?? new StorageCache()).writeChest(slot, {
+      // FILED UNDER THE SQUARE WE JUST READ IT AT, never under a number decided elsewhere.
+      (store ?? new StorageCache()).writeChest(chest.key ?? chestKey(chest), {
         object_id: chest.id, room: this.s.world?.room?.num ?? c.room?.id ?? null,
-        // THE SQUARE, WHICH IS WHAT THE NEXT VISIT WILL MATCH ON. Recorded from the object
-        // we actually just read, never from a table — so the mapping is learned from the
-        // world rather than asserted at it, and a hall laid out differently still works.
-        row: chest.row ?? null, col: chest.col ?? null,
         items, by: c.me?.name ?? this.name ?? this.s.name });
       this.note('refreshed the guild chest cache', { slot, stacks: items.length, why });
       return items;
@@ -19822,43 +20143,33 @@ export class Autopilot {
     await this.sayHallPassword().catch(() => {});
     await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
-    // WHICH CHEST IS WHICH, BY SQUARE. An object id is a handle the server recycles — 23% of
-    // stored ids named a different object three days later — so the slot->id cache that used
-    // to address these had silently stopped addressing anything at all. A chest is
-    // GETTABLE_NO and nothing moves it, so where it stands is its durable name, and it is
-    // also how a person would point at one.
-    const chestsHere = [...(c.room?.objects?.values?.() ?? [])]
-      .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || ''))
-      .map(o => ({ id: o.id, row: o.row, col: o.col }));
-    const placed = chestSlotsByPosition({
-      objects: chestsHere,
-      known: chests.map(ch => ({ slot: ch.slot, row: ch.row ?? null, col: ch.col ?? null })),
-      expected: BOOKMAKERS_CHESTS,
-    });
-    if (!placed.complete)
-      this.note('could not see every guild chest in this room', {
-        saw: chestsHere.length, expected: BOOKMAKERS_CHESTS, why: placed.why });
-    if (placed.unplaced.length)
-      this.note('a chest here does not match any slot we know', { unplaced: placed.unplaced,
-        why: 'it will be adopted the next time every chest is visible in one reading — ' +
-             'assigning it by order from a short read is how one chest\'s contents get ' +
-             'filed under another chest\'s slot' });
+    // EVERY CHEST IN THIS ROOM, EACH NAMED BY ITS OWN SQUARE. No mapping, no ordering and no
+    // completeness requirement: the name is read off the object, so a chest seen at r18c6 is
+    // r18c6 and a reading that shows two chests is a reading of two chests. An object id is
+    // a handle the server recycles — 23% of stored ids named a different object three days
+    // later — and nothing here uses one to address anything.
+    const here = new Map();
+    for (const o of c.room?.objects?.values?.() ?? []) {
+      if (!/chest/i.test(c.rsc.get(o.nameRsc) || '')) continue;
+      const key = chestKey(o);
+      // A chest whose position did not arrive cannot be named, and an unnamed chest must not
+      // be guessed at — that is the whole mis-filing hazard, in one branch.
+      if (!key) { this.note('a chest here has no readable position', { id: o.id }); continue; }
+      here.set(key, { id: o.id, row: o.row, col: o.col, key });
+    }
 
     const book = new StockpileBook({ fleet: TITHE_FLEET });
     const took = [];
     let saved = 0;
     for (const want of plan.fromChest) {
-      const target = placed.slots.get(Number(want.slot)) ?? null;
+      const target = here.get(String(want.slot)) ?? null;
       if (!target) {
-        // THIS USED TO BE A BARE `continue` -- the one branch that said nothing at all.
-        // A stale object id is the normal state after a hall changes hands or a restart
-        // recycles ids, and it disables the slot completely: the character walks to
-        // Barloque, finds no chest it recognises, and buys from the merchant anyway while
-        // three hundred elderberry sit a metre away.
-        this.note('a guild chest slot has no chest here', { slot: want.slot,
-          chests_in_room: chestsHere.map(o => `r${o.row}c${o.col}`),
-          why: 'no chest is standing on the square recorded for that slot, and this reading ' +
-               'was not complete enough to adopt one by order' });
+        // THIS USED TO BE A BARE `continue` -- the one branch that said nothing at all. A
+        // character walks to Barloque, finds no chest where the stockpile expected one, and
+        // buys from the merchant anyway while three hundred elderberry sit a metre away.
+        this.note('no chest stands on that square', { chest: want.slot,
+          chests_in_room: [...here.keys()],
+          why: 'the stockpile expected a chest at that square and this room has none there' });
         continue;
       }
 
@@ -20272,43 +20583,33 @@ export class Autopilot {
     // slot. Falling back to the order chests appear in the room would be a guess that
     // silently files chest 3's contents into chest 1 — so a slot whose id is not in the
     // room is skipped and named rather than substituted.
-    // WHICH CHEST IS WHICH, BY SQUARE. An object id is a handle the server recycles — 23% of
-    // stored ids named a different object three days later — so the slot->id cache that used
-    // to address these had silently stopped addressing anything at all. A chest is
-    // GETTABLE_NO and nothing moves it, so where it stands is its durable name, and it is
-    // also how a person would point at one.
-    const chestsHere = [...(c.room?.objects?.values?.() ?? [])]
-      .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || ''))
-      .map(o => ({ id: o.id, row: o.row, col: o.col }));
-    const placed = chestSlotsByPosition({
-      objects: chestsHere,
-      known: chests.map(ch => ({ slot: ch.slot, row: ch.row ?? null, col: ch.col ?? null })),
-      expected: BOOKMAKERS_CHESTS,
-    });
-    if (!placed.complete)
-      this.note('could not see every guild chest in this room', {
-        saw: chestsHere.length, expected: BOOKMAKERS_CHESTS, why: placed.why });
-    if (placed.unplaced.length)
-      this.note('a chest here does not match any slot we know', { unplaced: placed.unplaced,
-        why: 'it will be adopted the next time every chest is visible in one reading — ' +
-             'assigning it by order from a short read is how one chest\'s contents get ' +
-             'filed under another chest\'s slot' });
+    // EVERY CHEST IN THIS ROOM, EACH NAMED BY ITS OWN SQUARE. No mapping, no ordering and no
+    // completeness requirement: the name is read off the object, so a chest seen at r18c6 is
+    // r18c6 and a reading that shows two chests is a reading of two chests. An object id is
+    // a handle the server recycles — 23% of stored ids named a different object three days
+    // later — and nothing here uses one to address anything.
+    const here = new Map();
+    for (const o of c.room?.objects?.values?.() ?? []) {
+      if (!/chest/i.test(c.rsc.get(o.nameRsc) || '')) continue;
+      const key = chestKey(o);
+      // A chest whose position did not arrive cannot be named, and an unnamed chest must not
+      // be guessed at — that is the whole mis-filing hazard, in one branch.
+      if (!key) { this.note('a chest here has no readable position', { id: o.id }); continue; }
+      here.set(key, { id: o.id, row: o.row, col: o.col, key });
+    }
     const book = new StockpileBook({ fleet: TITHE_FLEET });
     const done = [];
     let contributed = 0;
     for (const chest of want.chests) {
       if (!chest.total) continue;
-      const target = placed.slots.get(Number(chest.slot)) ?? null;
+      const target = here.get(String(chest.slot)) ?? null;
       if (!target) {
-        // SAY IT LOUDLY, not just into the return value. An id that no longer names a chest
-        // in this room is the EXPECTED state after a hall is bought or a server restart
-        // recycles ids, and the fix is one `container agent=… target=… slot=N` per chest.
-        this.note('a guild chest slot has no chest here', { slot: chest.slot,
-          chests_in_room: chestsHere.map(o => `r${o.row}c${o.col}`),
-          why: 'no chest is standing on the square recorded for that slot, and this reading ' +
-               'was not complete enough to adopt one by order' });
-        done.push({ slot: chest.slot, put: 0,
-          why: 'no chest in this room stands where that slot\'s chest stands' });
+        // SAY IT LOUDLY, not just into the return value. The plan names a square and this
+        // room has no chest on it — which is a real disagreement worth seeing, not a silence.
+        this.note('no chest stands on that square', { chest: chest.slot,
+          chests_in_room: [...here.keys()],
+          why: 'the guild plan names a chest at that square and this room has none there' });
+        done.push({ slot: chest.slot, put: 0, why: 'no chest stands on that square' });
         continue;
       }
       let intoThisChest = 0;
@@ -21090,15 +21391,29 @@ export class Autopilot {
                                      .map(it => `${it.name} @${it.cost}`).slice(0, 6) });
       return [];
     }
+    // ONE LINE PER ITEM, CARRYING A COUNT — never the same bare id sent N times.
+    //
+    // `wanted` holds one entry per UNIT, which is the natural way to build a shopping list
+    // and the wrong way to send one. A bare id leaves the server's parallel number list
+    // empty, so for a stackable — herbs, elderberry, sapphire, mushroom, every reagent this
+    // loop exists to buy — the merchant's Buy has no quantity to pair with the item and buys
+    // NOTHING, silently. See buyLines in m59-parse.mjs for the kod citation. The loop also
+    // slept 700ms per unit, so forty herbs was half a minute at the counter with the keeper
+    // trying to drag the character back to what it was doing.
     const got = [];
-    for (const it of wanted) {
-      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [it.id]));
+    const byId = new Map(wanted.map(it => [Number(it.id), it]));
+    for (const line of buyLines(wanted)) {
+      const it = byId.get(line.id);
+      if (!it) continue;
+      await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [line]));
       await new Promise(r => setTimeout(r, 700));
-      got.push(`${it.name} @${it.cost}`);
-      this.recordPurchase(it.name, it.cost, { kind: skills.shareKind(it.name) || (isFood(it.name) ? 'food' : null),
-        // seller may be a bare id — the signature accepts both — so do not assume an object.
-        from: seller?.nameRsc ? (c.rsc.get(seller.nameRsc) ?? null) : null,
-        why: isFood(it.name) ? 'food bought at a counter we were already standing at — the only way past the vigor-80 resting cap' : 'reagent top-up at a counter we were already standing at, to keep create food castable' });
+      for (let n = 0; n < line.amount; n++) {
+        got.push(`${it.name} @${it.cost}`);
+        this.recordPurchase(it.name, it.cost, { kind: skills.shareKind(it.name) || (isFood(it.name) ? 'food' : null),
+          // seller may be a bare id — the signature accepts both — so do not assume an object.
+          from: seller?.nameRsc ? (c.rsc.get(seller.nameRsc) ?? null) : null,
+          why: isFood(it.name) ? 'food bought at a counter we were already standing at — the only way past the vigor-80 resting cap' : 'reagent top-up at a counter we were already standing at, to keep create food castable' });
+      }
     }
     await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
     if (got.length) this.note('restocked reagents', { bought: got, had: have, target: want,

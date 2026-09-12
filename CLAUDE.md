@@ -29,6 +29,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
 | read a ledger, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
+| commit, merge, push, cut a deploy, or work alongside another session | [`docs/m59-git-process.md`](docs/m59-git-process.md) |
 | interpret, log, serialize, or compare a coordinate | [`docs/m59-coordinates.md`](docs/m59-coordinates.md) |
 | run or extend the offline tests | [`docs/m59-tests.md`](docs/m59-tests.md) |
 
@@ -511,6 +512,7 @@ Wire, kod and the shape of a reply — [`docs/m59-protocol-traps.md`](docs/m59-p
 - The weapon proficiencies are called "mace fighting", "fencing" and "wielding", not what you would guess.
 - `emit(kind, data)` spreads `data` over the event, so a payload field called `kind` silently wins.
 - Looking at a player is `UC_LOOK_PLAYER`, not `BP_LOOK`; a packet nobody parses looks exactly like one nobody sends.
+- An object id is a HANDLE: renumbered on every save, recycled within hours, and `look_at` sometimes answers with the previous call's object carrying its own wrong id.
 - A description REPLACES the look text, clearing is not undoing, and the wire is Latin-1.
 - `PF_*` is an ENUM, not a bitmask: `flags & PF.KILLER` is true for every Dungeon Master.
 - The server's own safety flag already refuses ordinary players and allows murderers — leave it on.
@@ -822,6 +824,115 @@ is the only arrangement in which two people can both use this repository.
   rescued off the prod branch the day before and appeared in this file zero times. The index
   is GENERATED from the header comment every tool already has, so it cannot drift.
   `node tools/m59-index.mjs` rewrites it; `--check` fails a stale one.
+
+- **AN OBJECT ID IS A TEMPORARY HANDLE, NOT A NAME. DO NOT TRUST ONE, ANYWHERE.**
+  Every id the server hands out — an item, a room, a monster, a player — names a *handle to a
+  thing* rather than the thing. Operator, 2026-09-12: *"object IDs are better thought of as
+  temporary handles. They don't even survive a system save."* Four separate ways this has cost
+  us, and they fail in four different directions:
+
+  **They are RENUMBERED on every system save**, alongside garbage collection. `c.room.id` is a
+  live object id, so a post-mortem keyed on `1589` becomes unreadable the moment the server
+  saves: an audit of stall decisions came back grouped as `{6: 29, 1581: 5, 1589: 12}`, which
+  names no room anybody can go and look at. Use `world.room.num` — the map's own number, which
+  does not move.
+
+  **They are COMPARED, and a renumbering reads as movement.** `prev.room === last.room` is half
+  the "has this character moved" test, so a mid-session renumber makes one room look like two,
+  which silently resets the wedge detector — the same shape as the stillness bug that killed
+  Cccc, arriving by a different door.
+
+  **They RECYCLE within hours.** Measured over three days, 23% of stored ids named a DIFFERENT
+  object by the end. A stale id does not merely fail to resolve; it can resolve to somebody
+  else's property, which is worse than an error and looks exactly like success.
+
+  **And a reply can carry the WRONG id in its own `id` field.** Measured on prod 2026-09-12,
+  three rounds of `look_at` against one character's own pack:
+
+      round 1:  ok 8325->8325      ok 8268->8268      ok 8334->8334
+      round 2:  MISMATCH 8325->8334   ok 8268->8268   ok 8334->8334
+      round 3:  ok 8325->8325      MISMATCH 8268->8325   ok 8334->8334
+
+  Each mismatch returned the object the PREVIOUS call ended on — a request/reply correlation
+  race, reproduced independently by two sessions with different items. Two calls in nine, and a
+  single call looks perfectly fine. Anything that reads a description and does not re-check the
+  id it got back is reading another item.
+
+  **AND SOME IDS ARE NOT IDS AT ALL.** On the keeper-backed path — which is every character on
+  prod — `equipment` does not report the server's ids. It REBUILDS the equipped list from names
+  alone and synthesises an id as a negative counter — `m59-broker.mjs`, `KeeperProxy`'s
+  `equipment()`: `equipped: (s.equipment ?? []).map((name, i) => ({ id: -1 - i, ... }))`.
+  (CITE THE SYMBOL, NOT THE LINE. Two sessions cited this same code as `:1892` and `:1897` and
+  both were right — one read the trunk checkout, one read prod-deploy, and the checkouts had
+  diverged. A kod citation is stable because a report pins `repo_commit`; a harness-to-harness
+  line number is pinned to nothing and rots the moment two trees differ, which is always. A
+  symbol survives a rebase.) Measured live
+  2026-09-12: every equipped item on prod answers `id: -1`. A negative id is an ARRAY INDEX
+  wearing an id's field name, so handing one to another tool addresses nothing — and it reads
+  back perfectly, because it is a number in a field called `id`. Treat a negative id as a
+  refusal to answer, never as an answer.
+
+  **So: prefer a name to an id, re-read before you act, and check the id that comes back.** A
+  room is `world.room.num`; a character is its name; an item is a row re-read from `inventory`
+  immediately before use. And an id resolved BEFORE the thing exists names nothing at all —
+  `act` freezes its arguments when a fleetscript's step list is compiled, so a shilling stack
+  id resolved before the withdrawal leg is a reference to an object that does not yet exist.
+  That is what `verify` is for: it is handed `call` at RUN time.
+
+- **ADDING A FIELD TO A PAYLOAD IS A THREE-FILE CHANGE, BECAUSE `KeeperProxy` REBUILDS
+  RATHER THAN SERIALIZES.** Two places turn a client object into a tool's reply — the
+  broker's own serializer and `m59-keeper-process.mjs` — and a third, `KeeperProxy` in
+  `m59-broker.mjs`, RECONSTRUCTS a client object out of the keeper's `/state` snapshot by
+  naming each field explicitly. Anything not named there is dropped, silently.
+
+  **Every character on prod is keeper-backed, so that rebuild is the path `inventory`,
+  `status`, `equipment` and `abilities` actually take for all twenty-three of them.** A
+  field added to the two serializers and not to the rebuild is therefore live in the two
+  places nothing reads and absent from the one place everything does. 2026-09-12: `rarity`
+  — the grade that says an item is unidentified — was added to both serializers, and
+  `m59-reveal.mjs sweep` answered "nothing in the fleet reads unidentified" while the
+  keeper's own `/state`, read thirty seconds earlier, showed an unidentified wand and mace
+  in Rizzo's pack. The comment directly above the rebuild already states the invariant —
+  *"every reader downstream is written against a real client object and must not be able to
+  tell which side produced it"* — and the field list under it had not kept up with it.
+
+  So: **verify a new field through the BROKER on a keeper-backed character, never only
+  through the keeper.** Reading it back from `/state` proves the half that was never in
+  doubt. This is the same family as [`status` having two shapes](docs/m59-keeper.md) and as
+  an object id that names a different object: a value that looks present and is not.
+
+- **A TOLERANCE CARRIES ITS UNIT TOO, AND A TOLERANCE LARGER THAN THE DISTANCE IS A REQUEST
+  SATISFIED BY DOING NOTHING.** `arrive_within` is in KOD units — 64 to a square — so the
+  broker's own schema default of **40 is 640 CLIENT units, two thirds of a square**, and the
+  schema says so in as many words. What makes it a trap is that omitting a parameter is the
+  commonest thing a caller does, and on a ledge, a jump take-off or a fine rail, two thirds of a
+  square is the difference between the route and the drop.
+
+  **Measured 2026-09-12 on a fine rail.** A 93-client-unit aim passed with `arrive_within: 8`
+  (128 client units) produced **sixteen consecutive legs of `arrived: true` with the body
+  stationary**, 96% of travel wasted and 64 revisited points. Independently, in the same
+  session's step capture, **5 of 76 legs report `arrived: true` having moved less than one
+  square**. The mover is behaving correctly throughout: it was asked for something it had
+  already achieved.
+
+  This is the SECOND instance of a shape already written down — `walk_to`'s fallback once had a
+  1.5-square tolerance, so stepping one square out to cross an edge reported arrived with zero
+  steps. Two instances make it a class rather than a bug: **scale the tolerance to the leg**, or
+  a short final approach does nothing and says it worked.
+
+  **The fleetscript constants are a hazard rather than a demonstrated defect, and the
+  distinction is worth keeping.** `m59-fleetscript.mjs` passes `arriveWithin ?? 6` (96 client)
+  and `?? 3` (48), and `m59-fineclimb.mjs` a constant 6. For a square-to-square walk the target
+  is about 1024 client units away, so those are a tenth of the distance and fine. They bite only
+  where the approach is shorter than the tolerance, and nobody has shown that fleetscript walks
+  that short. The acute instance was a caller passing 8 against a 93-unit aim.
+
+  **The durable fix is a refusal, not this paragraph.** A walk whose tolerance exceeds its own
+  distance should say so before it sends — which is a guarantee in `m59-fleetscript.mjs`, per
+  this file's own rule that a repeated operational failure becomes a check rather than another
+  note. It is unwritten because that file was being edited by several sessions the night this
+  was found, and a core-file conflict costs more than the fix saves. Worth doing when the tree
+  is quiet.
 
 - **A COORDINATE CARRIES ITS UNIT. THERE ARE THREE SPACES AND `FINENESS` NAMES TWO OF THEM.**
   `FINENESS` is **64** in kod (`blakston.khd:1163`) and **1024** in the client

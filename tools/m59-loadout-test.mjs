@@ -181,6 +181,52 @@ console.log('\nthe keep test knows how to count');
      blind('rat pelt') === null);
 }
 
+console.log('\nthe same protection, flattened for a door that only takes names');
+{
+  const { loadout } = L.normalise({ character: 'x',
+    carry: [{ item: 'elderberry', min: 12, max: 24 }, { item: 'rat pelt', min: 0, max: 40 }],
+    keep: ['signet ring'], gear: { weapon: ['mace'], slots: { body: ['leather armor'] } } });
+  const names = L.protectedNames(loadout);
+
+  ok('every source of protection is represented',
+     ['signet ring', 'mace', 'leather armor', 'elderberry'].every(n => names.includes(n)));
+  // A FLOOR OF ZERO IS NOT A FLOOR. Nineteen of this fleet's loadouts were zeroed for the
+  // graveyard shift and `max` is not a guard, so a zero-floor entry must not arrive here
+  // looking like one — it would protect the whole stack and stop the fleet selling its loot.
+  ok('a floor of ZERO protects nothing, so it is not a name', !names.includes('rat pelt'));
+  ok('no duplicates, whatever the casing',
+     L.protectedNames(L.normalise({ character: 'x', keep: ['Mace', 'mace'],
+                                    gear: { weapon: ['mace'] } }).loadout).length === 1);
+
+  // AN EMPTY LOADOUT PROTECTS NOTHING BY NAME AND THAT IS NOT THE SAME AS "NO LOADOUT".
+  // Every other helper here answers null for "say nothing"; this one cannot, because its
+  // caller concatenates the result into an argument list. [] is unmisreadable; null would
+  // have to be handled at every call site and one day would not be.
+  ok('a missing loadout is an empty list rather than null, because the caller concatenates',
+     Array.isArray(L.protectedNames(null)) && L.protectedNames(null).length === 0);
+  ok('and so is one that protects nothing',
+     L.protectedNames(L.normalise({ character: 'x' }).loadout).length === 0);
+}
+
+// THE BUG THIS EXISTS FOR IS AT A CALL SITE, SO THE TEST HAS TO LOOK AT ONE.
+//
+// m59-broker.mjs cannot be imported — importing it takes the fleet lock and starts rejoin
+// timers — so this reads the source. A source assertion is a weak test and this is the case
+// that earns one: `sell_all` consulted the loadout only on its in-process branch, every
+// character on prod is keeper-backed, and so the feature was live exactly where nothing runs.
+// Nothing about the loadout FORMAT could have caught that, and Robin sold the 16 sapphires
+// and 61 mushrooms his own keep list named on 2026-09-12.
+console.log('\nthe keeper-backed branch carries the loadout too');
+{
+  const src = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const at = src.indexOf("keeperAction(a.agent, s._index, 'sell_all'");
+  ok('the keeper-backed sell_all call site is still findable', at > 0);
+  ok('sell_all hands the keeper the loadout protected names, not just the caller keep list',
+     src.slice(at, at + 400).includes('keep: [...(a.keep || []), ...fromLoadout]'));
+  ok('and it is still possible to opt out, which is what ignore_loadout is for',
+     src.includes('a.ignore_loadout || !who ? [] : protectedNames(loadoutFor(who))'));
+}
+
 console.log('\nthe sell list, and what outranks it');
 {
   const { loadout } = L.normalise({ character: 'x', sell: ['emerald', 'mace'], gear: { weapon: ['mace'] } });

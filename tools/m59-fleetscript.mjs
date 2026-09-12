@@ -164,7 +164,7 @@ import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { SAY_RADIUS, squaredDistance, withinSayRange,
          sayApproachSquare } from './m59-sayrange.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
-import { foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
+import { FLEET_KEEP, foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -289,16 +289,56 @@ const RPC = () => {
 };
 let seq = 0;
 
+// A DROPPED SOCKET IS NOT AN ANSWER, AND ONLY A READ MAY BE ASKED TWICE.
+//
+// Node reuses keep-alive sockets and does not retry a POST, so a connection the broker closed
+// while idle comes back as `TypeError: fetch failed / read ECONNRESET` in single-digit
+// milliseconds — indistinguishable, to every caller in this file, from the broker saying no.
+// `observe()` swallows it (`.catch(() => null)`) and the walk step reports "could not read
+// the character", which ends the errand with the body standing there perfectly readable.
+// Measured 2026-09-11: fund-loial-for-shalille-4 died at step 0 three runs in a row while an
+// identical `status` from another process answered 200 in 2.9s throughout.
+//
+// THE RETRY IS FOR READS AND NOTHING ELSE. A reset socket cannot tell you whether the request
+// reached the broker, so retrying `bank` is a second withdrawal, `shop` a second purchase and
+// `supply` a second hand-over. Those have to fail loudly. This list is therefore an ALLOW
+// list — a tool nobody has thought about is not retried.
+const RETRYABLE_READS = Object.freeze(new Set([
+  'status', 'inventory', 'equipment', 'abilities', 'fleet', 'look', 'map', 'merchants',
+]));
+const TRANSPORT_FAILURE = /econnreset|socket hang up|fetch failed|other side closed|econnrefused/i;
+export const isTransportFailure = (e) =>
+  !!e && e.name !== 'TimeoutError' && e.name !== 'AbortError' &&
+  (e.name === 'TypeError' || TRANSPORT_FAILURE.test(String(e?.message ?? '')) ||
+   TRANSPORT_FAILURE.test(String(e?.cause?.message ?? '')));
+
 /** One broker call. Kept private so a step cannot bypass the pacing or the timeout. */
 async function call(name, args = {}, ms = 180_000) {
-  const r = await fetch(RPC(), {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: 'tools/call',
-                           params: { name, arguments: args } }),
-    signal: AbortSignal.timeout(ms),
-  });
-  const d = await r.json();
-  try { return JSON.parse(d.result.content[0].text); } catch { return d.result?.content?.[0]?.text ?? d; }
+  // A buy is a buy however it is spelled: `shop` is not on the list above, but naming the
+  // condition here means a read that later grows a mutating argument cannot slip through.
+  const mutates = !RETRYABLE_READS.has(name) || Array.isArray(args?.buy_ids) && args.buy_ids.length;
+  const tries = mutates ? 1 : 4;
+  let last;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const r = await fetch(RPC(), {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: 'tools/call',
+                               params: { name, arguments: args } }),
+        signal: AbortSignal.timeout(ms),
+      });
+      const d = await r.json();
+      try { return JSON.parse(d.result.content[0].text); } catch { return d.result?.content?.[0]?.text ?? d; }
+    } catch (e) {
+      last = e;
+      // A TIMEOUT IS AN ANSWER — the broker had the request and took too long, and asking
+      // again just spends the budget twice. Only a socket that never carried the question
+      // is worth repeating.
+      if (!isTransportFailure(e) || attempt + 1 >= tries) throw e;
+      await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
+  }
+  throw last;
 }
 // THE SAME DECISION THE BROKER USES. This file's health floor was the ONLY one in the
 // repository, which is exactly the problem the operator named: a script refused to set out
@@ -540,6 +580,10 @@ export async function observe(agent) {
     // it was written to catch straight through. The null has to be tested first.
     gold: s?.gold == null || !Number.isFinite(Number(s.gold)) ? null : Number(s.gold),
     health: hp,
+    // THE SIZE OF THE BODY, NOT THE FRACTION OF IT THAT IS LEFT. `health` above is
+    // value/max and answers "is this one hurt"; this answers "is this one small", which is
+    // the question that killed Loial. Null rather than 0 when unreadable — see fragileBody.
+    maxHealth: Number.isFinite(vit?.max) ? Number(vit.max) : null,
     hpText: vit ? `${vit.value}/${vit.max}` : '?',
     // A character in the Underworld is dead however its hit points read on the way in.
     dead: vit?.value === 0 || /underworld/i.test(roomName),
@@ -553,6 +597,69 @@ export async function observe(agent) {
 export async function pack(agent) {
   const inv = await call('inventory', { agent }, 60_000).catch(() => ({ items: [] }));
   return inv.items ?? [];
+}
+
+// #unreliable — A KEEPER ANSWERS BEFORE IT KNOWS ANYTHING, AND THE ANSWER LOOKS LIKE A FACT.
+//
+// TAGGED FOR REPAIR, NOT FOR LIVING WITH. This is a workaround at the caller's end for a
+// defect in the harness: `inventory` and `status` on a keeper-backed character return a
+// well-formed answer built from a /state snapshot the keeper has not populated yet, and
+// nothing in the reply distinguishes "the pack is empty" from "I do not know yet". The real
+// fix belongs in the broker — a snapshot with no inventory frame should answer INDETERMINATE
+// the way m59-which.mjs does, not `items: []`. Grep this repository for `#unreliable` to find
+// every place a caller is papering over that, and delete them when it is fixed.
+//
+// WHAT IT COST, all on 2026-09-11 and all within an hour of a keeper restart:
+//
+//   * A drill exited with "out of Elderberry after 0 cast(s)" while the character stood in an
+//     inn holding ninety-seven of them.
+//   * Its preflight refused to start at all: "not enough reagents for a single cast — 0
+//     Elderberry, 0 Emerald, ability null", against a pack of 33/34 and an ability of 47.
+//   * A fleet report said two casters were carrying "0 items". Both were holding a weapon,
+//     their reagents and over a thousand shillings. It was reported to the operator twice
+//     before anyone re-read it.
+//   * A walk refused with "health is unreadable, so this is not a body we know is fit to
+//     travel" on a character at 14/20.
+//
+// Every one of those is a read that could not answer being filed as an observation. The shape
+// of the fix is always the same: ask again, and believe it only when two reads AGREE.
+//
+// `same` decides agreement — default is a shallow equality on the JSON, which is right for a
+// count and wrong for a whole pack, so callers comparing packs should pass their own. `empty`
+// names the answer that is suspicious; an answer that is not suspicious is returned on the
+// first read, because most reads are fine and a blanket double-read doubles every script's
+// call count for nothing.
+export async function readTwice(read, { gapMs = 6000, tries = 3,
+                                        same = (a, b) => JSON.stringify(a) === JSON.stringify(b),
+                                        empty = (v) => v == null ||
+                                          (Array.isArray(v) && v.length === 0) } = {}) {
+  let last = await read();
+  if (!empty(last)) return { value: last, agreed: true, reads: 1 };
+  for (let i = 1; i < Math.max(2, tries); i++) {
+    await sleep(gapMs);
+    const next = await read();
+    // TWO SUSPICIOUS READS THAT AGREE ARE AN OBSERVATION. A pack that reads empty twice, six
+    // seconds apart, really is empty — a cold snapshot fills in well under that.
+    if (same(last, next)) return { value: next, agreed: true, reads: i + 1 };
+    if (!empty(next)) return { value: next, agreed: true, reads: i + 1 };
+    last = next;
+  }
+  // Still suspicious and still disagreeing: hand back the last answer AND the fact that it is
+  // not trustworthy, rather than picking one. A caller that ignores `agreed` is no worse off
+  // than it was; a caller that reads it can refuse instead of acting on a guess.
+  return { value: last, agreed: false, reads: Math.max(2, tries) };
+}
+
+/** #unreliable — `pack()` with the double-read above. Use this anywhere a decision turns on
+ *  the pack being EMPTY: "out of reagents", "nothing to sell", "carrying nothing". */
+export async function packConfirmed(agent, opts = {}) {
+  return readTwice(() => pack(agent), {
+    // Two packs agree when they carry the same names in the same counts. Object ids recycle
+    // and are not evidence of sameness; amounts are what every caller is actually asking about.
+    same: (a, b) => JSON.stringify((a ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort())
+                 === JSON.stringify((b ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort()),
+    ...opts,
+  });
 }
 
 // ---------------------------------------------------------------- rooms that keep characters
@@ -849,6 +956,18 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'but only AFTER the lock is taken and the other characters have started ' +
               'walking. Refused here instead, before anything moves',
   },
+  buyThenSell: {
+    what: 'refusal to run a plan that BUYS something and then SELLS the same thing, because ' +
+          'the sell step\'s keep list does not cover what the shop step fetched',
+    since: '2026-09-11',
+    incident: 'eighty-five sapphires were bought at Herbutte\'s counter in Barloque to keep ' +
+              'four bless casters supplied, and the fleet\'s sell circuit sold them back — ' +
+              'eighteen of them to the same merchant, ninety minutes later, in the same room. ' +
+              'bless costs 2 mushroom + 2 sapphire and `mushroom` is not in VAULT_KEEP at all, ' +
+              'so a plan that buys mushrooms and sells afterwards sheds them by default. From ' +
+              'outside this is invisible: both steps report success, the purse goes up, and ' +
+              'the only evidence is a caster that quietly stops casting an hour later',
+  },
   trapCheck: {
     what: 'refusal to walk into — or THROUGH — a room KNOWN_TRAPS says keeps characters',
     since: '2026-09-03',
@@ -902,6 +1021,31 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'abort on damage, but on a 3s poll, and from six health one skeleton hit ' +
               'lands first. 7 of 37 fleet deaths in three days were inside a safe spot and ' +
               'the other 28 were not in one at all.',
+  },
+  fragileBody: {
+    what: 'a MAXIMUM-health floor under every journey, which is a different question from ' +
+          'the fraction that minHealth asks about',
+    since: '2026-09-12',
+    incident: 'minHealth is health/max, so a 20-of-20 character reads 1.0 and clears every ' +
+              'check in this file while being two spider bites from death. Loial is 20 max ' +
+              'health. He passed the health gate on every journey he was ever given and died ' +
+              'on one, in the Forest of Farol, which is an ordinary road room — 70% spider, ' +
+              'cap 12. Nothing refused, because nothing was asking about the size of the body: ' +
+              'the fraction was perfect. The engagement ceiling scales with max health and so ' +
+              'does the damage a road does to you, so the floor has to be absolute',
+  },
+  leaseEndsAtDeath: {
+    what: 'the faculty lease is handed back the moment the character dies, because movement ' +
+          'is the faculty the escape needs',
+    since: '2026-09-12',
+    incident: 'the heartbeat re-asserted a 30s lease every 10s with no opinion about whether ' +
+              'the body was still alive. Loial died holding one, arrived in the Underworld at ' +
+              'full health, and stood there IDLE while the beat went on taking movement away ' +
+              'from the only process that knows how to walk him to a portal. Leases fail back ' +
+              'to the keeper on LAPSE, which is the right direction and the wrong clock — a ' +
+              'long lease is a long paralysis, and the runner holding it was waiting for an ' +
+              'errand that could never finish. Survival belongs to this repository at 1s ' +
+              '(see the boundary table); a lease that outlives the body quietly takes it back',
   },
   coordUnits: {
     what: 'coordinates carry their space (square / protocol / client) instead of being bare numbers',
@@ -1011,17 +1155,14 @@ export const shop = (seller, lines, opts = {}) => ({ do: 'shop', seller, lines, 
 //   FAMILY -- derived, never typed. Same discipline as FOOD_KEEP above and for the same
 //   reason: a hand-written list of wands would be wrong within a patch, and this one was
 //   wrong from the day it was written.
-export const VAULT_KEEP = Object.freeze([
-  'herb', 'elderberry', 'Inky-cap mushroom', 'flask',
-  'rose', 'ring of invisibility', 'mystic sword', 'true lute',
-  'blue dragon scale', 'dark angel feather', 'shrunken head',
-  'emerald', 'sapphire', 'diamond', 'ruby',
-  // Every wand and every scroll -- 40 of them, and the operator asked for one by name.
-  // "gnarled staff" is in here without being typed: StaffOfJolting is a SpecialWand, so
-  // the chain claims it even though the word "wand" never appears in what a player sees.
-  // That is the case a name-matching list gets wrong, which is why this one reads the tree.
-  ...allWandAndScrollNames(),
-]);
+// VAULT_KEEP IS FLEET_KEEP, AND THE LIST MOVED RATHER THAN BEING COPIED.
+//
+// It used to be defined here, which meant only a fleetscript `sell` step could consult it — a
+// keeper selling on its own accord never saw it. It now lives in m59-items.mjs beside the item
+// knowledge it is built from, where `sellAll` can default to it as well. The old name stays
+// because it is what every existing caller and test says, and because "what we vault" and "what
+// we refuse to sell" really are the same list here.
+export { FLEET_KEEP as VAULT_KEEP } from './m59-items.mjs';
 
 // `{ noVault: true }` acknowledges that this trip cannot or will not vault, and is
 // REQUIRED when no vault() precedes the sell — see the plan check in fleetScript.
@@ -1031,7 +1172,7 @@ export const sell = (merchant, opts = {}) => ({ do: 'sell', merchant, ...opts })
 // and Ko'catan only, so a trip that does not pass one CANNOT vault — which is exactly why the
 // keep list above is the real protection and this step is the bonus. Everything a character
 // dies holding is on the floor where it fell; a vault is the only thing that is not.
-export const vault = (vaultman, items = VAULT_KEEP, opts = {}) =>
+export const vault = (vaultman, items = FLEET_KEEP, opts = {}) =>
   ({ do: 'vault', vaultman, items, ...opts });
 // LEAVE THE NEWBIE ZONE, ONCE, AND READ BACK THAT IT HAPPENED.
 //
@@ -1040,6 +1181,35 @@ export const vault = (vaultman, items = VAULT_KEEP, opts = {}) =>
 // character that then goes nowhere. Idempotent — a character already outside is skipped, so
 // this is safe to put at the head of any errand that might be given a brand-new character.
 export const leaveRaza = (opts = {}) => ({ do: 'leave_raza', ...opts });
+
+// HAND GOODS FROM ONE OF OURS TO ANOTHER, AND THE FOUR WAYS THAT GOES WRONG SILENTLY.
+//
+// There was no step for this, so every caller reached for `act('supply', …)` or a hand-rolled
+// call inside a `verify` — and in one session I wrote it four times and got it wrong four
+// different ways, each of which moved nothing and reported success:
+//
+//   1. THE ARGUMENT NAMES. The tool takes {from, to, what}. `{agent, to, items}` answers
+//      "error: no agent named — every fleet tool takes an `agent`", which reads like a bug in
+//      the harness rather than in the call. Twice.
+//   2. A BARE NAME MOVES THE DEFAULT AMOUNT, WHICH IS TWO. `what: 'orc tooth'` against a stack
+//      of forty answered `asked: 2, received: 2` — a true success and a useless one.
+//   3. A PARTIAL STACK NEEDS AN ID, AND `act` CANNOT CARRY ONE. Object ids are renumbered on
+//      every save and recycle within hours, and `act` freezes its arguments when the step list
+//      is COMPILED — so an id resolved there names something else, or nothing, by the time it
+//      runs. This resolves inside the step, immediately before the call.
+//   4. ONE BIG OFFER FAILS WHERE THREE SMALL ONES DO NOT. 172 slices of pork answered "the
+//      offer never reached them"; the same pork in bites of 60 went through three times out of
+//      three. So `bite` is a ceiling per offer, not a suggestion.
+//
+// AND THE RECEIVER'S OWN COUNT IS THE ONLY ANSWER. `trade` lies in both directions and even
+// `supply` can complete a handshake having moved nothing; the broker tool already re-reads the
+// receiver, and this reports that verdict rather than the fact that a call returned.
+//
+// `what` is a NAME here, matched across the whole family — `mushroom` covers red, blue, purple,
+// edible and Inky-cap, which are five separate stacks and all valid reagents. A regex that
+// anchored it (`/^mushroom$/`) read ONE against a pack holding sixty-four.
+export const supply = (from, to, what, opts = {}) =>
+  ({ do: 'supply', from, to, what, ...opts });
 
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
@@ -1479,6 +1649,19 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     // Numeric on both sides on purpose; see the coercion note above.
     if (Number(at.room) === to) return { ok: true, room: to };
     if (at.dead) return { ok: false, why: 'died', dead: true };
+    // GUARANTEE: IS THIS BODY BIG ENOUGH FOR A ROAD AT ALL?
+    //
+    // Asked here rather than at plan time on purpose: a fragile character standing still is
+    // perfectly safe, and it is the JOURNEY that kills it. Same placement as the health gate
+    // below, and the same remedy shape — except that this one cannot be waited out. Resting
+    // fixes a fraction; nothing raises max health inside an errand, so this refuses rather
+    // than healing and retrying.
+    if (ctx.fragileBelow > 0 && Number.isFinite(at.maxHealth) && at.maxHealth < ctx.fragileBelow)
+      return { ok: false, fragile: true,
+               why: `max health ${at.maxHealth} is under the fragile floor of ${ctx.fragileBelow} — ` +
+                    `this body does not survive an ordinary road encounter. Waive it with ` +
+                    `unsafe: { reason: '...', waives: ['fragileBody'] } and say why, or lower ` +
+                    `fragileBelow for an errand that stays inside a town` };
     // MAY THIS BODY SET OUT? Asked of m59-travelgate.mjs, which the broker's `travelJob` also
     // asks -- so a script and a bot now get the same answer to the same question. The two
     // rules this file earned are still the rules; they just live where everyone can reach
@@ -1784,12 +1967,46 @@ export async function holdKeeper(ctx, agent, fleet) {
   }).then(r => r.json()).catch(e => ({ error: e.message }));
   if (cancelled?.error) ctx.log(agent, `could not clear the journey in flight: ${cancelled.error}`);
 
+  let done = false;
+  // GUARANTEE: A DEAD BODY DOES NOT KEEP ITS LEASE.
+  //
+  // This beat used to have no opinion about whether the character was still alive — it just
+  // re-took work, movement and economy every ten seconds, for ever. Leases fail back to the
+  // keeper on LAPSE, which is the right direction on the wrong clock: a runner that is still
+  // waiting for a step to finish keeps beating, so the lapse never comes.
+  //
+  // What that costs is specific. Identity, mortality, survival and recovery are this
+  // repository's at the one-second clock and are never leased away — but LEAVING THE
+  // UNDERWORLD IS A WALK, and walking is `movement`, which is leased. So a character that
+  // dies while held arrives at full health in room 1 and stands there, with the only process
+  // that knows the way out holding no permission to move. Measured on Loial, 2026-09-12:
+  // dead in the Forest of Farol, idle in the Underworld, beat still running.
+  //
+  // Releasing is strictly better than pausing. The errand is over either way — the body it
+  // was driving is in the Underworld — and handing back early costs nothing a lapse would
+  // not have cost thirty seconds later.
+  const releaseNow = async (why) => {
+    if (done) return;
+    done = true;
+    clearInterval(beat);
+    await keeperCall(who, 'commander_release',
+      { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
+    ctx.log(agent, why ?? 'gave work, movement and economy back to the keeper');
+  };
   const beat = setInterval(() => {
-    keeperCall(who, 'commander_heartbeat',
-      { by: `fleetscript:${ctx.name}`, lease_ms: KEEPER_LEASE_MS }).catch(() => {});
+    // The read is what makes this a guard rather than a timer, so a failed read must not be
+    // mistaken for a death — an unreadable character keeps its lease and the next beat asks
+    // again. Only a positive `dead` releases.
+    observe(agent).then(at => {
+      if (at?.ok && at.dead)
+        return releaseNow('died while held — handing movement back so the keeper can leave ' +
+                          'the Underworld, which is a walk and therefore needs the faculty ' +
+                          'this lease was holding');
+      return keeperCall(who, 'commander_heartbeat',
+        { by: `fleetscript:${ctx.name}`, lease_ms: KEEPER_LEASE_MS });
+    }).catch(() => {});
   }, KEEPER_BEAT_MS);
   beat.unref?.();
-  let done = false;
   return {
     ok: true,
     /**
@@ -1809,14 +2026,7 @@ export async function holdKeeper(ctx, agent, fleet) {
       if (r?.error) ctx.log(agent, `could not cancel the journey: ${r.error}`);
       return r;
     },
-    release: async () => {
-      if (done) return;
-      done = true;
-      clearInterval(beat);
-      await keeperCall(who, 'commander_release',
-        { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
-      ctx.log(agent, 'gave work, movement and economy back to the keeper');
-    },
+    release: () => releaseNow(),
   };
 }
 
@@ -1874,6 +2084,66 @@ async function runStep(ctx, agent, step, state) {
     case 'bank': {
       const amount = typeof step.amount === 'function' ? step.amount(state) : step.amount;
       if (!(amount > 0)) return { ok: true, skipped: 'nothing to move' };
+
+      // RULE 6 REACHES THE COUNTER TOO: THE PURSE IS THE RECEIPT, NOT THE SENTENCE.
+      //
+      // This step used to answer `ok` from the banker's PROSE alone — "Yevitan tells you,
+      // 'Here are your 2500 shillings.'" — and never looked at whether the character was
+      // carrying them afterwards. Shillings arrive on an event, exactly like a shop load, so
+      // a read straight after the counter is a read of the past.
+      //
+      // Measured 2026-09-10, Loial at the Royal Bank of Jasper: the banker said the sentence
+      // above and his purse read 0 for THIRTY SECONDS before showing 2500. Any caller that
+      // withdrew and then sized a purchase against what it was carrying saw an empty purse
+      // and concluded the withdrawal had failed. The same evening a resupply reported
+      // `step 4 (shop) failed: nothing entered the pack`, honestly, because its courier
+      // really did reach the merchant with three shillings — the bank leg had been skipped
+      // and nothing checked.
+      //
+      // So wait for the EVIDENCE: first read that moves wins, and the timeout is only
+      // reached when nothing is ever coming. The identical shape the shop step uses, for the
+      // identical reason. A false negative unwinds a working errand; a false POSITIVE walks
+      // a courier to a merchant it cannot pay, which is the more expensive of the two.
+      // NOT `pack()`, DELIBERATELY. That helper swallows its own failure and answers `[]`,
+      // which `purseOf` then reads as a purse of ZERO — the "null is not zero" trap this file
+      // already carries a paragraph about, one layer down. An unreadable pack has to be
+      // distinguishable from an empty one here or the guard below fires on a deposit whose
+      // only sin was that the inventory call timed out.
+      const purseNow = async () => {
+        const inv = await call('inventory', { agent }, 60_000).catch(() => null);
+        return Array.isArray(inv?.items) ? purseOf(inv.items) : null;
+      };
+      const purseBefore = await purseNow();
+      // A WITHDRAWAL RAISES THE PURSE AND A DEPOSIT LOWERS IT, so the evidence is a MOVE in
+      // the declared direction rather than a rise. Depositing and then reporting "the purse
+      // never went up" would be a guard that fires on every correct deposit.
+      const wantsMore = /withdraw/i.test(String(step.action));
+      const settled = async (asked) => {
+        if (purseBefore == null)
+          // UNREADABLE IS NOT DISPROVEN. If the pack could not be read before the call there
+          // is nothing to compare against, and calling that a failure would unwind an errand
+          // over a missing instrument. Say so instead, and let the banker's sentence stand.
+          return { ok: true, amount: asked, verified: false,
+                   note: 'the purse could not be read, so the banker’s word is all there is' };
+        const until = Date.now() + (ctx.packSettleMs ?? 15_000);
+        let now = purseBefore;
+        while (Date.now() < until) {
+          const seen = await purseNow();
+          if (seen != null) {
+            now = seen;
+            if (wantsMore ? now > purseBefore : now < purseBefore) break;
+          }
+          await sleep(Math.min(1500, ctx.pollMs));
+        }
+        const moved = wantsMore ? now - purseBefore : purseBefore - now;
+        if (moved <= 0)
+          return { ok: false, amount: asked, verified: false, purse: now,
+                   outcome: 'counter_moved_nothing',
+                   why: `the banker said yes and the purse did not move in ` +
+                        `${Math.round((ctx.packSettleMs ?? 15_000) / 1000)}s ` +
+                        `(${purseBefore} -> ${now}). Treat the sentence as unproven.` };
+        return { ok: true, amount: asked, verified: true, moved, purse: now };
+      };
       const ask = async n => {
         const r = await call('bank', { agent, action: step.action, amount: n }, 60_000)
           .catch(e => ({ error: e.message }));
@@ -1897,13 +2167,15 @@ async function runStep(ctx, agent, step, state) {
           ctx.log(agent, `the banker refused ${amount} and named ${affordable} — taking that`);
           const retry = await ask(affordable);
           if (!retry.refused)
-            return { ok: true, said: retry.said.slice(0, 120), amount: affordable,
+            return { ...(await settled(affordable)), said: retry.said.slice(0, 120),
                      asked: amount, note: 'withdrew the balance the banker named' };
           out = retry;
         }
       }
-      return { ok: !out.refused, said: out.said.slice(0, 120), amount,
-               why: out.refused ? `banker refused: ${out.said.slice(0, 80)}` : undefined };
+      if (out.refused)
+        return { ok: false, said: out.said.slice(0, 120), amount,
+                 why: `banker refused: ${out.said.slice(0, 80)}` };
+      return { ...(await settled(amount)), said: out.said.slice(0, 120) };
     }
 
     case 'rest': {
@@ -2260,13 +2532,50 @@ async function runStep(ctx, agent, step, state) {
       // as failed is a purchase something will retry, and the sale takes the money whether
       // or not the skill was added (monster.kod:3873). `expectsPack: false` hands the
       // verdict to whatever check the caller actually wrote.
+      // A SHORT ORDER IS NOT A SHORT SHELF, AND THIS STEP USED TO HIDE WHICH IT WAS.
+      //
+      // The broker cuts every line to what the purse, the weight ceiling and the bulk ceiling
+      // allow, and says so under `clamped` with `limited_by`. This step reported only
+      // `+21/200` and threw the reason away — so "asked for 200 sapphires and got 21" read as
+      // a merchant that had run out, and the operator was told exactly that on 2026-09-11. It
+      // was a full pack. The remedies are opposite: shed the pack, or go to another counter.
+      //
+      // AND THE LISTED QUANTITY IS NOT STOCK EITHER. Every apothecary offers "Herbs x4" and
+      // none of them runs out; only a handful of NPCs can genuinely be emptied, mostly the
+      // ones that travel. Nothing here should ever clamp an order to the number on the shelf.
+      const clamped = Array.isArray(r?.clamped) ? r.clamped : [];
+      if (clamped.length)
+        ctx.log(agent, 'the order was cut by THIS CHARACTER, not by the shelf: ' +
+          clamped.map(c => `${c.name ?? c.id} ${c.asked_for}->${c.buying} ` +
+                           `(${(c.limited_by ?? []).join('+') || 'unstated'})`).join(', '));
       if (step.expectsPack === false)
-        return { ok: true, gained, note: r?.note ?? r?.error,
+        return { ok: true, gained, ...(clamped.length ? { clamped } : {}), note: r?.note ?? r?.error,
                  bought: anything ? 'and something entered the pack too'
                    : 'nothing entered the pack, which is what an ability purchase looks ' +
                      'like — the caller’s own verification decides whether it worked' };
-      return { ok: anything, gained, note: r?.note ?? r?.error,
-               why: anything ? undefined : 'nothing entered the pack' };
+      // AND WHEN NOTHING ARRIVED, SAY WHICH OF THE TWO IT WAS IN THE `why` ITSELF.
+      //
+      // The clamp reason was logged above and then thrown away here: the step still failed with
+      // the bare words "nothing entered the pack". That sentence is read by whoever is unwinding
+      // the errand and by whoever reads the log afterwards, and it is indistinguishable from a
+      // merchant with an empty shelf.
+      //
+      // It cost exactly that on 2026-09-12. A courier bought orc teeth at Paddock, ran out of
+      // money on the fourth round, and the run was written up — in a commit message, in a
+      // measurement, and to the operator — as "Paddock runs dry at six teeth". He does not run
+      // dry at all; you can buy as many as you can pay for. The operator had to correct it.
+      //
+      // `limited_by` was in the reply the whole time and said `purse`.
+      const cut = clamped.filter(c => Number(c.buying) === 0);
+      return { ok: anything, gained, ...(clamped.length ? { clamped } : {}),
+               note: r?.note ?? r?.error,
+               why: anything ? undefined
+                 : cut.length
+                   ? 'nothing entered the pack, and it was THIS CHARACTER that stopped it, not ' +
+                     'the shelf: ' + cut.map(c => `${c.name ?? c.id} cut to 0 by ` +
+                       `${(c.limited_by ?? []).join(' and ') || 'an unstated limit'}`).join('; ')
+                   : 'nothing entered the pack, and the order was NOT cut by purse, weight or ' +
+                     'bulk — so this is the shelf or the handshake, not this character' };
     }
 
     case 'sell': {
@@ -2284,7 +2593,7 @@ async function runStep(ctx, agent, step, state) {
         // step for surplus it withdrew over a stockpile cap. Dropping those names is safe
         // precisely BECAUSE the deposit ran first: the stock we mean to hold is in the vault,
         // so what carries that name in the pack now is the overflow we already decided to sell.
-        keep: [...new Set([...VAULT_KEEP, ...(step.keep ?? [])])]
+        keep: [...new Set([...FLEET_KEEP, ...(step.keep ?? [])])]
           .filter(n => !(state.sellAnyway ?? []).some(e =>
             String(e).trim().toLowerCase() === String(n).trim().toLowerCase())),
         min_price: step.minPrice ?? 1,
@@ -2432,6 +2741,65 @@ async function runStep(ctx, agent, step, state) {
         .catch(e => ({ error: e.message }));
       return { ok: !r?.error, result: r, why: r?.error };
     }
+
+    // See the `supply` step above for the four silent failures this exists to prevent.
+    case 'supply': {
+      const want = String(step.what ?? '').trim();
+      if (!want) return { ok: false, why: 'supply needs something to move' };
+      // A SUBSTRING TEST ON LOWERCASED NAMES, AND DELIBERATELY NOT A REGEX. `what` is an
+      // item name typed by a caller, so building a pattern out of it means escaping it —
+      // and the family match is the whole point: `mushroom` has to cover red, blue, purple,
+      // edible and Inky-cap, which are five stacks and all valid reagents. Anchoring it
+      // (`/^mushroom$/`) read ONE against a pack holding sixty-four.
+      const needle = want.toLowerCase();
+      const family = { test: (n) => String(n ?? '').toLowerCase().includes(needle) };
+      const countIn = (inv) => (inv?.items ?? [])
+        .filter(i => family.test(String(i.name ?? '')))
+        .reduce((n, i) => n + (i.amount || 1), 0);
+      const read = (who) => call('inventory', { agent: who }, 60_000).catch(() => null);
+
+      const before = countIn(await read(step.to));
+      const bite = Number(step.bite) > 0 ? Number(step.bite) : 60;
+      const target = step.amount == null ? Infinity : Number(step.amount);
+      let moved = 0, rounds = 0, last = null;
+
+      while (moved < target && rounds++ < (Number(step.rounds) || 6)) {
+        // RESOLVED EVERY ROUND, NOT ONCE. A hand-over SPLITS the giver's stack, so the id and
+        // the amount both change underneath a loop that cached them — and a `keep` floor has
+        // to be measured against what is actually left rather than what was there first.
+        const donor = await read(step.from);
+        if (!donor?.items) return { ok: false, why: `could not read ${step.from}'s pack`, moved };
+        const stacks = (donor.items)
+          .filter(i => family.test(String(i.name ?? '')) && i.id != null)
+          .sort((a, b) => (b.amount || 1) - (a.amount || 1));
+        const held = stacks.reduce((n, i) => n + (i.amount || 1), 0);
+        const spare = held - (Number(step.keep) || 0);
+        if (spare <= 0 || !stacks.length) break;
+        const s0 = stacks[0];
+        const send = Math.max(1, Math.min(bite, spare, target - moved, s0.amount || 1));
+        last = await call('supply', { from: step.from, to: step.to, what: [{ id: s0.id, amount: send }] },
+                          step.timeoutMs ?? 180_000).catch(e => ({ error: e.message }));
+        // A refusal here is the ordinary end of the loop, not a throw: the commonest one is
+        // `receiver_full`, which is a true and useful answer about the RECEIVER.
+        if (!last?.supplied) break;
+        moved += send;
+      }
+
+      const after = countIn(await read(step.to));
+      const received = after - before;
+      // THE RECEIVER'S COUNT DECIDES. `moved` is what was asked for and believed; `received` is
+      // what the receiver can be seen to hold.
+      //
+      // DELIBERATELY NOT CALLED `gained`. The `shop` step already returns a `gained` ARRAY of
+      // {match, got, asked}, and the run formatter maps over it — so a number under that name
+      // crashed the reporter with "r.gained.map is not a function" while the goods had moved
+      // perfectly well. A field name is part of the contract even when the step is new.
+      if (received > 0) return { ok: true, what: want, received, before, after, rounds: rounds - 1,
+                                 ...(last?.reason ? { said: last.reason } : {}) };
+      return { ok: false, what: want, before, after,
+               why: last?.reason ?? last?.error ?? `${step.to} holds no more ${want} than before` };
+    }
+
 
     // GUARANTEE 5, INSIDE ONE ROOM. `walk` already refuses to re-issue a journey while one
     // is walking; this is the same rule for the walk that happens after you arrive.
@@ -2758,7 +3126,39 @@ async function runStep(ctx, agent, step, state) {
 
     case 'verify': {
       const v = await step.fn({ agent, observe, call, state });
-      return { ok: Boolean(v), why: v ? undefined : (step.why || 'verification failed') };
+      // AN OBJECT IS TRUTHY, AND THIS USED TO BE `Boolean(v)`.
+      //
+      // So a verify returning `{ ok: false, why: '...' }` — the shape every script on disk
+      // and in this file's own documentation uses — was recorded as a PASS. The step that
+      // exists to read the result back out of the world was the one step that could not
+      // fail, unless its callback returned a falsy primitive or threw.
+      //
+      // The offline suite never caught it because it only ever exercised
+      // `verify(async () => true)` and `verify(async () => false)`. Booleans work either
+      // way; the convention actually in use did not.
+      //
+      // What it hid, 2026-09-12: `fund-loial.mjs` returns `true` on success and an
+      // `{ok:false}` carrying "CHECK THE RECEIVER'S PURSE BEFORE RE-RUNNING" on failure —
+      // a message that could never print. `buy-orc-teeth.mjs` ends with "are there teeth
+      // aboard, and how many" and would have passed with none. And in one session I wrote
+      // four checks that reported success over a failed outcome and went looking for the
+      // fault in the game: a `supply` that answered `receiver_full` for both casters
+      // returned `{ok:false,...}` and the run said `step 0 (verify) ok`.
+      //
+      // A BOOLEAN STILL MEANS WHAT IT MEANT. Both conventions are live, so honour `ok` when
+      // the callback returns an object that HAS one, and fall back to truthiness otherwise —
+      // an object with no `ok` (a bare `{room: 52}`) keeps meaning "it answered, so it
+      // passed", which is what several callers rely on.
+      const said = v !== null && typeof v === 'object' && 'ok' in v;
+      const ok = said ? Boolean(v.ok) : Boolean(v);
+      // AND CARRY WHAT IT SAID. `why` on a failure and the rest of the object on a pass:
+      // a verify that measured something ("teeth: 30") was reporting only `ok`, so the run
+      // result could not tell an operator what it had actually seen.
+      const extra = (v !== null && typeof v === 'object') ? { ...v } : {};
+      delete extra.ok; delete extra.why;
+      return ok
+        ? { ok: true, ...extra }
+        : { ok: false, why: (said && v.why) || step.why || 'verification failed', ...extra };
     }
 
     default:
@@ -2887,7 +3287,7 @@ async function runEvictionCheck(ctx, agent, step, call) {
 // `steps` may be an array, or a function of the agent so each courier can compute its own
 // (a withdrawal sized to what it already carries, say).
 export async function fleetScript({
-  name, agents, steps, fleet = fleetName(), minHealth = 1, pollMs = 8000,
+  name, agents, steps, fleet = fleetName(), minHealth = 1, fragileBelow = 25, pollMs = 8000,
   // WHICH CHARACTERS THIS SCRIPT WILL CONTROL, declared at the top of the script rather
   // than inferred from what it turns out to touch. This is the unit the lock is taken over
   // and the unit the guard enforces; see m59-control-guard.mjs for the argument. Omit it
@@ -3025,6 +3425,10 @@ They are driven by tools/m59-menagerie.mjs and ` +
   // A waived floor is zero, not "skip the check": every downstream reader keeps working,
   // and a run that waives minHealth still reports the health it set out on.
   if (waived.has('minHealth')) minHealth = 0;
+  // 25 catches the two 20-max-health host characters on this roster and nothing else: the
+  // fleet proper runs 40-62. It is a floor rather than a ban — an errand that stays inside a
+  // town can lower it, and a rescue that means to risk the body waives it and says why.
+  if (waived.has('fragileBody')) fragileBelow = 0;
   if (waived.has('trapCheck')) allowTraps = true;
   const allowUnreachable = waived.has('reachable');
   // A REASON IS MANDATORY ON A WAIVER and the refusal quotes it back, so "I know about this"
@@ -3071,7 +3475,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
         (control.declared ? (control.wildcard ? ' (declared: whole fleet)' : ' (declared)')
                           : ' (derived from agents — undeclared control is warned, not refused)'));
 
-  const ctx = { log: onLog, pollMs, minHealth, healMs, budgetFloorMs, budgetCapMs,
+  const ctx = { log: onLog, pollMs, minHealth, fragileBelow, healMs, budgetFloorMs, budgetCapMs,
                 reviveMs, packSettleMs, learnSettleMs, name,
                 // THE DECLARATION AND THE NAMES THAT COUNT AS CHARACTERS. Carried on ctx so
                 // the check happens at ONE door (runStep) rather than in each verb — the
@@ -3218,6 +3622,51 @@ They are driven by tools/m59-menagerie.mjs and ` +
         ctx.log(agent, `plan refused: ${why}`);
         results[agent] = { ok: false, at: unacknowledged, step: 'sell', why, state: state.results };
         return;
+      }
+
+      // AND A PLAN THAT BUYS SOMETHING AND THEN SELLS IT IS A ROUND TRIP TO NOWHERE.
+      //
+      // GUARANTEE 16. Measured 2026-09-11: eighty-five sapphires were bought at Herbutte's
+      // counter in Barloque to keep four bless casters supplied, and the sell circuit sold
+      // them back — eighteen to the SAME MERCHANT, ninety minutes later, in the same room.
+      // From outside it is invisible: the shop step reports success, the sell step reports
+      // success, the purse goes UP, and the only evidence is a caster that quietly stops
+      // casting an hour later.
+      //
+      // The test is not "did somebody write the same word twice" — it is whether the sell
+      // step's EFFECTIVE keep list covers what the shop step fetched. That list is
+      // `VAULT_KEEP` merged with the step's own `keep`, and the hole this found is in the
+      // committed floor rather than in any one script: `mushroom` is not in VAULT_KEEP, so
+      // every plan that buys mushrooms and sells afterwards sheds them by default. Sapphire
+      // IS in it, which is why this refuses on the merged list rather than on VAULT_KEEP
+      // alone — the two must be able to disagree.
+      //
+      // A shop line carries a RegExp rather than a name, so the question is asked the only
+      // way it can be: does any name on the keep list satisfy the pattern that was bought.
+      if (!waived.has('buyThenSell')) {
+        const bought = [];
+        let clash = null;
+        for (const [i, step] of plan.entries()) {
+          if (step.do === 'shop') {
+            for (const line of step.lines ?? [])
+              if (line?.match instanceof RegExp) bought.push({ at: i, match: line.match });
+            continue;
+          }
+          if (step.do !== 'sell' || !bought.length) continue;
+          const keep = [...new Set([...FLEET_KEEP, ...(step.keep ?? [])])];
+          const unprotected = bought.find(b => !keep.some(k => b.match.test(String(k))));
+          if (unprotected) { clash = { buy: unprotected, sell: i, keep }; break; }
+        }
+        if (clash) {
+          const why = `step ${clash.sell} sells what step ${clash.buy.at} bought: nothing on ` +
+                      `that sell's keep list matches ${String(clash.buy.match)}, so the errand ` +
+                      'would hand back the goods it crossed the world for. Add the item to ' +
+                      "sell(merchant, { keep: [...] }), or waive `buyThenSell` if selling it " +
+                      'is the point';
+          ctx.log(agent, `plan refused: ${why}`);
+          results[agent] = { ok: false, at: clash.sell, step: 'sell', why, state: state.results };
+          return;
+        }
       }
 
       // THE PLAN RUNS IN LEGS, AND AN ABANDONED ERRAND STILL COMES HOME.

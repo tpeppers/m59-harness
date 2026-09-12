@@ -906,6 +906,33 @@ function state() {
         return (eq?.equipped ?? []).map(o => o.name ?? c?.rsc?.get?.(o.nameRsc) ?? '').filter(Boolean);
       } catch { return []; }
     })(),
+    // THE SAME LIST WITH THE FIELDS A NAME CANNOT CARRY, and `equipment` above stays a
+    // plain array of strings because a dozen things read it and a wrong list here is wrong
+    // everywhere the broker looks.
+    //
+    // WHY THIS EXISTS. A cursed weapon can never be put down — the one irreversible mistake
+    // in this game — and `rarity` 200 is the server's own word for cursed, the same field
+    // `reveal` reads for 100/unidentified. The broker rebuilt its emulated `equipment()`
+    // from the name strings above and manufactured `{id: -1 - i, name, nameRsc: name}`, so
+    // on every keeper-backed character — which is all of prod — the grade did not exist.
+    // Rizzo stalled 56 passes on a cursed mace and three checks in a row could not see it:
+    // a refusals list that a keeper restart clears, and then an equipment reply whose JSON
+    // has no `cursed` in it to match. The information had never left this process.
+    //
+    // Same family as `rarity` missing from the inventory rebuild, which is already in
+    // CLAUDE.md. Adding a field to a serializer is not adding it to what the broker returns.
+    equipment_items: (() => {
+      try {
+        const eq = c?.equipment?.();
+        return (eq?.equipped ?? []).map(o => ({
+          name: o.name ?? c?.rsc?.get?.(o.nameRsc) ?? '',
+          nameRsc: o.nameRsc ?? null,
+          id: o.id ?? null,
+          flags: o.flags ?? null,
+          rarity: o.rarity ?? null,
+        })).filter(o => o.name);
+      } catch { return []; }
+    })(),
     // STRUCTURED, BECAUSE `pack` IS PROSE. "elderberry (x30)" is for a human reading a
     // dashboard; a tool that wants to know whether twenty elderberry are aboard has to
     // parse English out of it. Both are kept: `pack` is unchanged for everything already
@@ -1005,6 +1032,10 @@ function state() {
       flags: o.flags ?? 0,
       icon_rsc: o.iconRsc ?? null,
       translation: o.translation ?? 0,
+      // The wire's rarity grade, which both serializers used to drop. 100 means at least one
+      // attribute is still hidden and is the only thing `reveal` can act on; see ITEM_RARITY
+      // in m59-items.mjs for why cursed (200) is not in that set.
+      rarity: o.rarity ?? null,
     })).filter(o => o.name) : [],
     // Load is derived beside the live client because might and the authoritative
     // inventory both live here. The broker's KeeperProxy cannot reconstruct might;
@@ -1972,6 +2003,28 @@ const server = createServer(async (req, res) => {
             json(r);
             return;
           }
+          // THE SOCKET IS HERE, SO THE PACKET HAS TO BE SENT FROM HERE.
+          //
+          // `requestRescue` is a plain BP_USERCOMMAND and it lives on M59Client. The broker's
+          // `rescue` tool called it on whatever `session.need()` returned — which for a
+          // keeper-backed character is a KeeperProxy shim, and that shim had no such method.
+          // So the tool threw `c.requestRescue is not a function` for EVERY character on this
+          // fleet, since all of them are keeper-backed. Not a degraded answer: a TypeError.
+          //
+          // Nothing is verified here on purpose. The teleport is delayed 15s plus a random
+          // 5-10s (rescue.kod:94-112, settings.kod:91), which is far longer than an action
+          // round trip, so this reports that the request went out and the CALLER reads the
+          // room back afterwards. Claiming otherwise would be inventing an answer.
+          case 'rescue': {
+            // Through the pacer, like every other packet this process sends — the broker used
+            // to do this with its own `move` pacer and that pacer now lives here.
+            await session.pacer.submit('move', () => c.requestRescue());
+            json({ op: 'rescue', sent: true, seq: c.evSeq,
+                   note: 'the teleport is delayed 15-25s and lands at the guild hall, the ' +
+                         'hometown, or a region default — read the room back, do not trust this' });
+            break;
+          }
+
           case 'escape_underworld': {
             // The socket and live World belong to this keeper process. Calling an
             // optional Session method used to return {ok:true} even though Session has

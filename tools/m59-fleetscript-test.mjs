@@ -33,7 +33,7 @@ const KEEPER_PORT = 19900;
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk, walkTo, crawlTo, crawlChoice, healthFractionOf, rest,
         shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza, say,
-        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf } =
+        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure, readTwice, packConfirmed } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -59,6 +59,8 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
                       // handed {agent, col, row, positions, rooms} and may move the body,
                       // move it somewhere else entirely, or do nothing at all (a stall).
                       positions = {}, onWalkTo = null,
+                      // Handed every supply call; return a refusal payload to model one.
+                      onSupply = null,
                       // `crawl_to` moves with short_hop and never with walk_to, because
                       // walk_to PLANS and its planner believes in ground the mover refuses.
                       // `onShortHop` is handed {agent, to_col, to_row} and may move the body.
@@ -117,6 +119,40 @@ function fakeBroker({ rooms = {}, health = {}, inventory = {}, dead = new Set(),
       payload = { started: true };
     }
     else if (name === 'travel_estimate') payload = { ms: 1000, hops: 2 };
+    // A HAND-OVER THAT ACTUALLY MOVES THE GOODS, because the whole question about `supply` is
+    // whether the RECEIVER ends up holding them — a fake that only answers `supplied: true`
+    // would pass the exact bug this step exists to prevent. `onSupply` lets a case refuse
+    // instead: `receiver_full` is the commonest real answer and has to be a normal outcome.
+    else if (name === 'supply') {
+      const lines = [].concat(a.what ?? []);
+      const refusal = onSupply ? onSupply({ ...a, lines }) : null;
+      if (refusal) payload = refusal;
+      else {
+        const from = inventory[a.from] ?? (inventory[a.from] = []);
+        const to = inventory[a.to] ?? (inventory[a.to] = []);
+        const moved = [];
+        for (const l of lines) {
+          const want = typeof l === 'object' ? Number(l.amount) || 1 : 1;
+          const id = typeof l === 'object' ? l.id : l;
+          const src = from.find(i => i.id === id);
+          if (!src) continue;
+          const take = Math.min(want, src.amount ?? 1);
+          src.amount = (src.amount ?? 1) - take;
+          if (src.amount <= 0) from.splice(from.indexOf(src), 1);
+          const dst = to.find(i => i.name === src.name);
+          if (dst) dst.amount = (dst.amount ?? 1) + take;
+          // A NEW ID ON THE RECEIVER'S SIDE, because that is what the server does — the
+          // stack is a different object over there, and a caller caching the giver's id
+          // across a hand-over is the mistake the step's comment is about.
+          else to.push({ id: 90000 + to.length, name: src.name, amount: take });
+          moved.push({ name: src.name, asked: want, received: take, giver_lost: take });
+        }
+        payload = moved.length
+          ? { supplied: true, from: a.from, to: a.to, amounts: moved,
+              reason: "delivered: every item asked for rose in the receiver's own count" }
+          : { supplied: false, reason: 'the offer never reached them' };
+      }
+    }
     else if (name === 'inventory') payload = { items: inventory[agent] ?? [] };
     else if (name === 'shop') payload = a.buy_ids ? { bought: [] } : { items: shopItems };
     else if (name === 'bank') payload = { banker_said: ['Skivlat hands it over.'] };
@@ -252,6 +288,146 @@ console.log('\nthe body is held for the whole errand');
      sent.some(c => c.name === 'autopilot' && c.action === 'free'));
 }
 
+
+
+console.log('\nsupply: the step that did not exist, and the four ways it was hand-rolled wrong');
+{
+  const { supply } = await import('./m59-fleetscript.mjs');
+
+  // A BARE NAME MOVED TWO. `what: 'orc tooth'` against a stack of forty answered
+  // `asked: 2, received: 2` — a true success and a useless one — because the tool's default
+  // amount is two. The step asks for what is actually spare.
+  {
+    const inventory = { a1: [{ id: 11, name: 'orc tooth', amount: 40 }], a2: [] };
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory });
+    const r = await fleetScript({ name: 'teeth', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth', { keep: 10 })],
+      onLog: quiet });
+    ok('the whole spare stack moves, not the default two', r.ok === true,
+       JSON.stringify(r.results?.a1));
+    ok('and the keep floor stays with the giver',
+       inventory.a1[0].amount === 10, 'giver left with ' + JSON.stringify(inventory.a1));
+    ok('the receiver holds the rest, counted off its own pack',
+       inventory.a2[0]?.amount === 30, 'receiver ' + JSON.stringify(inventory.a2));
+  }
+
+  // ONE BIG OFFER FAILS WHERE SEVERAL SMALL ONES DO NOT. 172 slices of pork answered "the
+  // offer never reached them"; the same pork in bites of 60 went through three times out of
+  // three. So the step bites, and `rounds` bounds it.
+  {
+    const inventory = { a1: [{ id: 12, name: 'slice of pork', amount: 202 }], a2: [] };
+    const offers = [];
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: ({ lines }) => {
+        offers.push(lines[0].amount);
+        return lines[0].amount > 60 ? { supplied: false, reason: 'the offer never reached them' } : null;
+      } });
+    const r = await fleetScript({ name: 'pork', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'slice of pork', { keep: 30, bite: 60 })],
+      onLog: quiet });
+    ok('no single offer exceeds the bite', Math.max(...offers) <= 60, 'offers ' + offers.join(','));
+    ok('and it keeps going until the floor is reached',
+       inventory.a1[0].amount === 30, 'giver left with ' + JSON.stringify(inventory.a1));
+    ok('the run succeeds on what the receiver gained', r.ok === true,
+       JSON.stringify(r.results?.a1));
+  }
+
+  // THE STACK IS RE-RESOLVED EVERY ROUND. A hand-over SPLITS the giver's stack, so an id or
+  // an amount cached outside the loop is wrong from the second offer onwards — and ids are
+  // renumbered on every save and recycle within hours, which is why `act` (whose arguments
+  // are frozen when the step list compiles) cannot express this at all.
+  {
+    const inventory = { a1: [{ id: 13, name: 'red mushroom', amount: 75 },
+                             { id: 14, name: 'blue mushroom', amount: 37 }], a2: [] };
+    const ids = [];
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: ({ lines }) => { ids.push(lines[0].id); return null; } });
+    await fleetScript({ name: 'mush', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'mushroom', { keep: 20, bite: 40 })],
+      onLog: quiet });
+    ok('the family match walks EVERY mushroom stack, not just the one named exactly — five ' +
+       'of this world\'s mushrooms are separate stacks and all are valid reagents',
+       new Set(ids).size > 1, 'ids offered: ' + ids.join(','));
+    const left = (inventory.a1 ?? []).reduce((n, i) => n + i.amount, 0);
+    ok('and it stops at the floor across the whole family', left === 20, 'left ' + left);
+  }
+
+  // A RECEIVER THAT CANNOT RECEIVE IS A TRUE ANSWER ABOUT THE RECEIVER, and the commonest one:
+  // every caster on prod was at its bulk ceiling with 120-200 slices of pork aboard. It must
+  // fail the step, and it must say which side the problem is on.
+  {
+    const inventory = { a1: [{ id: 15, name: 'orc tooth', amount: 30 }], a2: [] };
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory,
+      onSupply: () => ({ supplied: false, reason_code: 'receiver_full',
+                         reason: 'receiver_full: the receiver cannot hold it' }) });
+    const r = await fleetScript({ name: 'full', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth')], onLog: quiet });
+    ok('a full receiver FAILS the step rather than reporting a hand-over',
+       r.ok === false, JSON.stringify(r.results.a1));
+    ok('and the reply names the receiver as the problem',
+       /receiver_full/.test(JSON.stringify(r.results.a1)));
+    ok('nothing left the giver', inventory.a1[0].amount === 30);
+  }
+
+  // NOTHING TO MOVE IS NOT A FAILURE TO REPORT AS A REFUSAL, but it is not a success either:
+  // the receiver gained nothing, and a caller that goes on to cast is owed that.
+  {
+    const inventory = { a1: [], a2: [] };
+    const sent = fakeBroker({ rooms: { a1: 39, a2: 39 }, inventory });
+    const r = await fleetScript({ name: 'empty', fleet: 'testfleet', agents: ['a1'],
+      controls: ['a1', 'a2'], steps: [supply('a1', 'a2', 'orc tooth')], onLog: quiet });
+    ok('a giver with none of it fails, saying the receiver is no better off',
+       r.ok === false && /no more orc tooth than before/.test(JSON.stringify(r.results.a1)),
+       JSON.stringify(r.results.a1));
+  }
+}
+
+console.log('\na verify that returns an object is judged on its `ok`, not on being an object');
+{
+  // AN OBJECT IS TRUTHY. `Boolean(v)` therefore passed every `{ok:false, why:...}` ever
+  // returned — the shape every script on disk uses — so the one step whose job is reading
+  // the result back out of the world was the one step that could not fail. This suite missed
+  // it for the most ordinary reason available: it only ever tested booleans, and booleans
+  // work either way.
+  const a = fakeBroker({ rooms: { a1: 39 } });
+  const r1 = await fleetScript({ name: 'obj-false', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => ({ ok: false, why: 'receiver_full' }), 'fallback')], onLog: quiet });
+  ok('an {ok:false} FAILS the run', r1.ok === false);
+  ok('and its own `why` survives into the result, because the caller measured something the ' +
+     'step description could not know',
+     /receiver_full/.test(JSON.stringify(r1.results.a1)));
+  ok('a failed object verify still frees the body',
+     a.some(c => c.name === 'autopilot' && c.action === 'free'));
+
+  const r2 = await fleetScript({ name: 'obj-true', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => ({ ok: true, teeth: 30 }))], onLog: quiet });
+  ok('an {ok:true} passes', r2.ok === true, JSON.stringify(r2).slice(0, 300));
+  ok('AND WHAT IT MEASURED IS REPORTED. A verify that counted something was returning only ' +
+     '`ok`, so a run could not say what it had seen',
+     /30/.test(JSON.stringify(r2.results.a1)));
+
+  // BOTH CONVENTIONS ARE LIVE. Booleans predate the object form and several callers return a
+  // bare payload with no `ok` at all, meaning "it answered, so it passed" — widening the
+  // check to "any object with a falsy ok" would have broken those instead.
+  const r3 = await fleetScript({ name: 'bare-obj', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => ({ room: 52 }))], onLog: quiet });
+  ok('an object with NO `ok` still means "it answered", which is what bare payloads rely on',
+     r3.ok === true);
+
+  const r4 = await fleetScript({ name: 'bool-true', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => true)], onLog: quiet });
+  const r5 = await fleetScript({ name: 'bool-false', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => false, 'deliberate')], onLog: quiet });
+  ok('and a boolean still means exactly what it always meant',
+     r4.ok === true && r5.ok === false);
+
+  // `undefined` is what a callback that forgot to return produces. It is falsy, so it fails,
+  // and that is the right direction: a check that returned nothing has not checked anything.
+  const r6 = await fleetScript({ name: 'undef', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => undefined, 'returned nothing')], onLog: quiet });
+  ok('a callback that returns nothing FAILS rather than passing by omission', r6.ok === false);
+}
+
 console.log('\na journey has a health floor, and a hurt character WAITS at it');
 {
   // A HURT CHARACTER IS EARLY, NOT DISQUALIFIED. The first version refused anything below
@@ -382,6 +558,143 @@ console.log('\na banker refusal is prose, not an error');
     steps: [bank('withdraw', 5000)], onLog: quiet });
   ok('a refusal spoken as a sentence is caught as a failure', r.results.a1.ok === false);
 }
+
+console.log('\nTHE PURSE IS THE RECEIPT, NOT THE BANKER\u2019S SENTENCE');
+{
+  // Measured 2026-09-10 at the Royal Bank of Jasper: "Yevitan tells you, 'Here are your 2500
+  // shillings.'" and the purse read 0 for THIRTY SECONDS afterwards. A caller that withdrew
+  // and then sized a purchase against what it was carrying saw an empty purse, concluded the
+  // withdrawal had failed, and walked to the merchant with three shillings.
+  const withPurse = (creditsAfter) => {
+    let calls = 0;
+    const inv = { a1: [] };
+    fakeBroker({ rooms: { a1: 54 }, inventory: inv });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (u, o) => {
+      if (!o || o.method !== 'POST') return realFetch(u, o);
+      const b = JSON.parse(o.body);
+      if (b.params.name === 'bank') {
+        calls = 0;
+        return { json: async () => ({ result: { content: [{ text: JSON.stringify(
+          { banker_said: ["Yevitan tells you, \"Here are your 2500 shillings.\""] }) }] } }) };
+      }
+      if (b.params.name === 'inventory') {
+        // The pack arrives on an event: empty for the first N reads, then credited.
+        const items = (creditsAfter != null && calls++ >= creditsAfter)
+          ? [{ name: 'shilling', amount: 2500 }] : [];
+        return { json: async () => ({ result: { content: [{ text: JSON.stringify({ items }) }] } }) };
+      }
+      return realFetch(u, o);
+    };
+    return () => { globalThis.fetch = realFetch; };
+  };
+
+  let restore = withPurse(2);
+  let r = await fleetScript({ name: 'slowpurse', fleet: 'testfleet', agents: ['a1'],
+    steps: [bank('withdraw', 2500)], onLog: quiet, packSettleMs: 8000, pollMs: 200 });
+  restore();
+  ok('a withdrawal the purse eventually shows is a PASS, not a timeout', r.results.a1.ok === true);
+
+  restore = withPurse(null);            // the purse never moves
+  r = await fleetScript({ name: 'nopurse', fleet: 'testfleet', agents: ['a1'],
+    steps: [bank('withdraw', 2500)], onLog: quiet, packSettleMs: 1500, pollMs: 200 });
+  restore();
+  ok('a banker who says yes while the purse never moves is NOT a success',
+     r.results.a1.ok === false);
+  ok('and the outcome names what was actually observed',
+     JSON.stringify(r.results.a1).includes('counter_moved_nothing'));
+}
+
+console.log('\n#unreliable — A KEEPER ANSWERS BEFORE IT KNOWS, AND EMPTY IS NOT A FACT');
+{
+  // Every case below is a real read from 2026-09-11, within an hour of a keeper restart, that
+  // was acted on as an observation: "out of Elderberry after 0 cast(s)" with 97 in the pack,
+  // a preflight refusing on "0 Elderberry, 0 Emerald, ability null" against 33/34, and a fleet
+  // report of "0 items" for two casters holding a weapon, their reagents and 1,800 shillings.
+  const feed = (...answers) => { let i = 0; return async () => answers[Math.min(i++, answers.length - 1)]; };
+  const fast = { gapMs: 5, tries: 3 };
+
+  let r = await readTwice(feed([{ name: 'herb', amount: 3 }]), fast);
+  ok('an answer that is not suspicious is returned on the FIRST read',
+     r.reads === 1 && r.agreed === true, JSON.stringify(r));
+
+  r = await readTwice(feed([], [{ name: 'herb', amount: 97 }]), fast);
+  ok('an empty read followed by a real one takes the real one',
+     r.value.length === 1 && r.agreed === true, JSON.stringify(r));
+
+  r = await readTwice(feed([], []), fast);
+  ok('two empty reads that AGREE are an observation, not a doubt',
+     r.value.length === 0 && r.agreed === true && r.reads === 2);
+
+  // The honest third answer, and the reason this returns a shape rather than a value: a caller
+  // that ignores `agreed` is no worse off, and one that reads it can refuse instead of guess.
+  r = await readTwice(feed([], null, []), { gapMs: 5, tries: 3, same: () => false });
+  ok('reads that keep disagreeing come back NOT agreed rather than picking one',
+     r.agreed === false, JSON.stringify(r));
+
+  // packConfirmed compares by NAME AND COUNT. Object ids recycle within hours, so two reads of
+  // the same pack can carry different ids for the same stack — comparing those calls a settled
+  // pack unsettled for ever.
+  const a = [{ id: 1, name: 'herb', amount: 40 }, { id: 2, name: 'Emerald', amount: 3 }];
+  const b = [{ id: 9, name: 'emerald', amount: 3 }, { id: 8, name: 'HERB', amount: 40 }];
+  const samePack = (x, y) =>
+    JSON.stringify((x ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort())
+ === JSON.stringify((y ?? []).map(i => [String(i.name).toLowerCase(), i.amount ?? 1]).sort());
+  ok('the same pack with recycled ids and different order still compares equal', samePack(a, b));
+  ok('and a pack that really changed does not', !samePack(a, [{ id: 1, name: 'herb', amount: 39 }]));
+}
+
+console.log('\nA DROPPED SOCKET IS NOT AN ANSWER, AND ONLY A READ MAY BE ASKED TWICE');
+{
+  // 2026-09-11: three runs of the same errand died at step 0 with "could not read the
+  // character" while an identical `status` from another process answered 200 throughout.
+  // Node hands out keep-alive sockets the broker has already closed and does not retry a
+  // POST, so the reset arrives in seven milliseconds — and `observe()` catches everything
+  // and answers null, which the walk step reports as an unreadable body.
+  const reset = () => Object.assign(new TypeError('fetch failed'),
+                                    { cause: new Error('read ECONNRESET') });
+  ok('a reset socket is a transport failure', isTransportFailure(reset()));
+  ok('so is a hang-up', isTransportFailure(new TypeError('socket hang up')));
+  ok('a TIMEOUT is not — the broker had the question, and asking twice spends the budget twice',
+     !isTransportFailure(Object.assign(new Error('timed out'), { name: 'TimeoutError' })));
+  ok('nor is an abort',
+     !isTransportFailure(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+  ok('nor is an ordinary refusal spoken by the broker',
+     !isTransportFailure(new Error('unknown tool "t7"')));
+
+  // AND THE RETRY IS A READ’S PRIVILEGE. A reset cannot say whether the request was
+  // delivered, so a repeated withdrawal is a second withdrawal, not a retry. The fake
+  // broker stays underneath: only the RPC POSTs are made to fail, so guarantee 11's
+  // bodyless /health probe still answers and the script gets as far as the counter.
+  const calls = [];
+  fakeBroker({ rooms: { a1: 54 }, inventory: { a1: [{ name: 'shilling', amount: 2500 }] } });
+  const base = globalThis.fetch;
+  const flaky = (failFirst) => {
+    let n = 0;
+    globalThis.fetch = async (u, o) => {
+      if (!o || o.method !== 'POST') return base(u, o);
+      calls.push(JSON.parse(o.body).params.name);
+      if (n++ < failFirst)
+        throw Object.assign(new TypeError('fetch failed'), { cause: new Error('read ECONNRESET') });
+      return base(u, o);
+    };
+  };
+
+  flaky(2);
+  let r = await fleetScript({ name: 'flakyread', fleet: 'testfleet', agents: ['a1'],
+    steps: [walk(54)], onLog: quiet });
+  ok('a walk survives two reset sockets, because a read may be asked again',
+     r.results.a1.ok === true, JSON.stringify(r.results.a1));
+
+  calls.length = 0;
+  flaky(1);
+  r = await fleetScript({ name: 'flakybank', fleet: 'testfleet', agents: ['a1'],
+    steps: [bank('withdraw', 10)], onLog: quiet, packSettleMs: 800, pollMs: 200 });
+  ok('a BANK call is never repeated after a reset — a second withdrawal is not a retry',
+     calls.filter(c => c === 'bank').length <= 1,
+     `bank calls: ${calls.filter(c => c === 'bank').length}`);
+}
+
 
 console.log('\nA REST HAPPENS IN A SAFE SPOT, OR IT DOES NOT HAPPEN');
 {
@@ -587,6 +900,73 @@ console.log('\nvault before sell, checked before anything walks');
      call.keep.includes('elderberry') && call.keep.includes('herb') &&
      call.keep.includes('ring of invisibility') && call.keep.includes('rose'));
   ok('and holds a weapon and a spare back', call.max_weapons === 2);
+}
+
+console.log('\nA PLAN THAT BUYS SOMETHING AND THEN SELLS IT IS A ROUND TRIP TO NOWHERE');
+{
+  // GUARANTEE 16. Measured 2026-09-11: eighty-five sapphires were bought at Herbutte's
+  // counter in Barloque to keep four bless casters supplied, and the fleet's sell circuit
+  // sold them back — eighteen to the SAME MERCHANT, ninety minutes later, in the same room.
+  // Both steps report success and the purse goes UP, so the only evidence is a caster that
+  // quietly stops casting an hour later.
+  const buy = (m, n) => ({ do: 'shop', seller: 'Herbutte', lines: [{ match: m, amount: n }] });
+  // Herbutte's actual shelf, so a plan that reaches the counter finds what it asked for —
+  // otherwise every case here fails at the shop step for a reason that is not the guarantee.
+  const GEMS = [{ id: 41, name: 'sapphire' }, { id: 42, name: 'mushroom' }, { id: 43, name: 'emerald' }];
+  // THE QUESTION IS WHETHER THE GUARANTEE FIRED, not whether the errand succeeded. The fake
+  // counter completes the handshake and hands nothing over, so every plan that reaches it
+  // fails at the shop step — which is a different refusal, from a different guarantee, and
+  // asserting `ok === true` would test the fixture rather than the check.
+  const refusedByGuarantee = (r) => /sells what step/.test(r.results.a1.why ?? '');
+
+  // MUSHROOM IS THE ONE THAT BITES, and the hole is in the committed floor rather than in
+  // any one script: it is not in VAULT_KEEP at all, so a plan that buys mushrooms and sells
+  // afterwards sheds them by default. Deliberately NOT fixed by adding it to VAULT_KEEP — a
+  // bare `mushroom` entry holds all five of this world's mushrooms, and the coloured ones are
+  // ordinary sell fodder characters loot by the dozen. The script says what it needs instead.
+  ok('mushroom really is absent from the standing floor — this is the hole, not a straw man',
+     !VAULT_KEEP.includes('mushroom'));
+
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  let r = await fleetScript({ name: 'sells what it bought', fleet: 'testfleet', agents: ['a1'],
+    steps: [buy(/^mushroom$/i, 40), sell('Joguer', { noVault: true })], onLog: quiet });
+  ok('a plan that buys mushrooms and then sells is REFUSED', r.results.a1.ok === false);
+  ok('and it names both steps rather than just complaining',
+     /step 1 sells what step 0 bought/.test(r.results.a1.why ?? ''), r.results.a1.why);
+  ok('and it refuses BEFORE anything walks',
+     r.results.a1.at === 1 && r.results.a1.step === 'sell');
+
+  // The test is the KEEP LIST, not the word: sapphire is already on the standing floor, so
+  // the same shape is fine. The two must be able to disagree or the check is just a grep.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'buys something protected', fleet: 'testfleet', agents: ['a1'],
+    steps: [buy(/^sapphire$/i, 40), sell('Joguer', { noVault: true })], onLog: quiet });
+  ok('buying something the standing floor already protects is allowed', !refusedByGuarantee(r),
+     JSON.stringify(r.results.a1).slice(0, 160));
+
+  // And a script may say what it needs.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'says what it needs', fleet: 'testfleet', agents: ['a1'],
+    steps: [buy(/^mushroom$/i, 40), sell('Joguer', { keep: ['mushroom'], noVault: true })],
+    onLog: quiet });
+  ok('naming it on the sell step lifts the refusal', !refusedByGuarantee(r),
+     JSON.stringify(r.results.a1).slice(0, 160));
+
+  // Order matters: selling and THEN buying is a supply run, which is the normal shape.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'sell then buy', fleet: 'testfleet', agents: ['a1'],
+    steps: [sell('Joguer', { noVault: true }), buy(/^mushroom$/i, 40)], onLog: quiet });
+  ok('selling first and buying after is the ordinary supply run, not a round trip',
+     !refusedByGuarantee(r), JSON.stringify(r.results.a1).slice(0, 160));
+
+  // AND IT IS WAIVABLE, because some errands really do buy to resell.
+  fakeBroker({ rooms: { a1: 109 }, shopItems: GEMS });
+  r = await fleetScript({ name: 'trader', fleet: 'testfleet', agents: ['a1'],
+    unsafe: { reason: 'buying low and selling high is the whole errand',
+              waives: ['buyThenSell'] },
+    steps: [buy(/^mushroom$/i, 40), sell('Joguer', { noVault: true })], onLog: quiet });
+  ok('and a deliberate trader can waive it', !refusedByGuarantee(r),
+     JSON.stringify(r.results.a1).slice(0, 160));
 }
 
 {

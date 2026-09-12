@@ -24,7 +24,7 @@ import { roomFields } from './m59-roomref.mjs';
 // The Underworld's exits, and which city is nearest to any room. As a namespace,
 // because escapeUnderworld re-exports most of it and a bare import would shadow.
 import * as UW from './m59-underworld.mjs';
-import { weighPack, isWeaponName, itemNameKey, foodValue } from './m59-items.mjs';
+import { FLEET_KEEP, weighPack, isWeaponName, itemNameKey, foodValue } from './m59-items.mjs';
 // A character's own buy/sell/keep list, when it has one. Imported for the two pure
 // predicates only — this file does not go looking for the file, because the caller knows
 // which character it is and this one does not.
@@ -3212,7 +3212,17 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
   return {identity,revision:doc?.revision??0,items:planInventory(candidates,doc),held,error};
 }
 
-export async function sellAll(s, { merchant, keep = [], protect = [], minPrice = 1,
+// `keep` DEFAULTS TO THE FLEET LIST, WHICH IS THE WHOLE POINT OF THERE BEING ONE.
+//
+// It defaulted to `[]`, and all three of the autopilot's own call sites omit it — so a keeper
+// selling on a town trip consulted the character's LOADOUT and nothing else, while the fleet's
+// list of things-not-to-sell governed only errands somebody had written by hand. A caster was
+// bought 40 orc teeth on 2026-09-12 and his keeper sold 30 of them; nothing was broken, nothing
+// was protecting them either.
+//
+// An explicit `keep: []` still means "keep nothing", so the escape hatch survives — it is the
+// ABSENCE of the argument that now means "use the fleet's answer" rather than "use no answer".
+export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], minPrice = 1,
                                    loadout = null, maxWeapons = null,
                                    weaponPriority = null } = {}) {
   const c = s.need();
