@@ -3170,6 +3170,10 @@ class KeeperProxy {
   // that removed a catch-all which "answered every unknown property and defeated every
   // guard in the file".
   async escapeUnderworld(opts = {}) { return keeperAction(this.name, this._index, 'escape_underworld', opts); }
+  // THE ONE THE `rescue` TOOL NEEDED AND NOBODY HAD WRITTEN. Without it the tool threw
+  // `c.requestRescue is not a function` on every keeper-backed character, which is all of
+  // them — see the keeper's own `rescue` case for the argument.
+  async requestRescue() { return keeperAction(this.name, this._index, 'rescue', {}); }
   estimateJourney() { return null; }
   async faceToward(target, opts = {}) { return keeperAction(this.name, this._index, 'face', { target, ...opts }); }
   hitBook() { return null; }

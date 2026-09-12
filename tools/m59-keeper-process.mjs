@@ -2003,6 +2003,28 @@ const server = createServer(async (req, res) => {
             json(r);
             return;
           }
+          // THE SOCKET IS HERE, SO THE PACKET HAS TO BE SENT FROM HERE.
+          //
+          // `requestRescue` is a plain BP_USERCOMMAND and it lives on M59Client. The broker's
+          // `rescue` tool called it on whatever `session.need()` returned — which for a
+          // keeper-backed character is a KeeperProxy shim, and that shim had no such method.
+          // So the tool threw `c.requestRescue is not a function` for EVERY character on this
+          // fleet, since all of them are keeper-backed. Not a degraded answer: a TypeError.
+          //
+          // Nothing is verified here on purpose. The teleport is delayed 15s plus a random
+          // 5-10s (rescue.kod:94-112, settings.kod:91), which is far longer than an action
+          // round trip, so this reports that the request went out and the CALLER reads the
+          // room back afterwards. Claiming otherwise would be inventing an answer.
+          case 'rescue': {
+            // Through the pacer, like every other packet this process sends — the broker used
+            // to do this with its own `move` pacer and that pacer now lives here.
+            await session.pacer.submit('move', () => c.requestRescue());
+            json({ op: 'rescue', sent: true, seq: c.evSeq,
+                   note: 'the teleport is delayed 15-25s and lands at the guild hall, the ' +
+                         'hometown, or a region default — read the room back, do not trust this' });
+            break;
+          }
+
           case 'escape_underworld': {
             // The socket and live World belong to this keeper process. Calling an
             // optional Session method used to return {ok:true} even though Session has
