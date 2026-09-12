@@ -749,6 +749,103 @@ the records it describes.
   every assertion here stayed green. Both constants are read out of the source rather than
   copied, and the pattern that reads them uses `[0-9]` rather than an escape because it
   lives in a template literal, which eats the backslash before RegExp sees it) and
+  `node tools/m59-release-consent-test.mjs` (39 — **landing a commit IS the sign-off, and this
+  pins what may still stop a release**. `--cut` used to refuse an unpushed trunk with *"on a
+  machine with many worktrees that work is usually somebody else's"* — true, and a deadlock
+  dressed as politeness: the authors here are mostly SESSIONS, and a session that has ended
+  cannot consent to anything, so "ask the author first" resolves to *never ship it*. On
+  2026-09-11 it held a roll over seven good commits, four of them movement and guild fixes. The
+  work then waits for the batch reconciliation that rule 5 exists to call the worse failure, so
+  the old default manufactured the condition the other rule forbids. The default is now inverted
+  — silence is consent — and the only thing that stops a release is the commit saying so itself,
+  with a mandatory reason the refusal quotes. **THE ASYMMETRY IS THE DESIGN**: reading a typo'd
+  hold as CONSENT ships something its author tried to stop, silently, in front of twenty-one
+  characters on a shared server; reading a stray line as a hold costs one person a minute. So
+  every near-miss spelling refuses, with a DIFFERENT sentence saying to fix the message rather
+  than argue with it. The parser gives ordinary English the benefit of the doubt exactly so it
+  can be strict about the punctuated form — `Release-Hold` is never prose and always counts,
+  `do not release the lock until the keeper answers` needs a colon — and against the last 67
+  real commits, bodies up to 4,478 characters of prose about releases and deploys, it holds none.
+  Also pins that a `Claude-Session:` trailer is NOT a hold, since rule 6 exists to let somebody
+  ask what you meant and would become a lock whose key is gone if it gated shipping. And that an
+  EXAMPLE is not a decision, which cost ten minutes to learn: the commit introducing holds quoted
+  the trailer in its own message and `--verify` promptly refused to release it, correctly, by the
+  rule as written — so a hold must be FLUSH LEFT, git's own convention for a trailer, with fenced
+  blocks skipped) and
+  `node tools/m59-deploy-drift-test.mjs` (20 — **ahead by HASH is not ahead by WORK, and the
+  deploy check must be able to come down**. `--verify` is what stands between a `--cut` and
+  burying somebody's work, and on 2026-09-11 it announced *"prod is 37 commit(s) AHEAD of main …
+  that work is stranded until somebody notices and adopts it by hand"* on a tree where nothing
+  was stranded and nothing had ever been lost. `rev-list --left-right` answers "does prod hold a
+  commit OBJECT this ref cannot reach"; the question worth asking is "does prod hold a CHANGE
+  nothing else holds", and on a machine with twenty-two worktrees and several sessions rebasing
+  the same work onto origin at once those come apart daily — always in the direction that cries
+  wolf. A refusal that fires on a healthy tree every day is one people learn to type past, and
+  the next real one reads identically: the same argument the `#movement` epoch rule makes about
+  a counter that cannot come down. So it asks `git cherry`, which compares PATCHES, and asks
+  BOTH refs when the local trunk and origin have diverged — neither one alone is the trunk then,
+  and a change is stranded only if it is missing from both. Pinned in all three directions: the
+  measured false alarm reports nothing stranded, a commit absent from both refs is still an
+  emergency, and **an unevaluable `git cherry` returns `null` rather than `[]`** so the caller
+  keeps refusing — a guarantee that cannot be evaluated must refuse, which is the rule the
+  pre-commit hook broke by sitting silently inert for an afternoon. The decision is a pure
+  function in its own module for the reason `nextDeployTag` is: `m59-deploy.mjs` RUNS ON IMPORT,
+  so a test that imported it would execute the modes that move production. **AND A PATCH-ID IS
+  STILL A HASH** — `git cherry` computes it from the diff, so a change rebased onto different
+  surrounding lines reads as brand new. An hour after the first fix, seven commits sat only on
+  local `main` and cherry called all seven missing; comparing SUBJECTS against origin, which is
+  what rule 5 actually prescribes, showed **five were already there**, and cherry-picking the
+  first hit a conflict — what re-landing a landed change looks like from the inside. So
+  `subjectSeen` is a third opinion, pinned as a NARROWING ONLY: it can take a commit off the
+  stranded list and never add one, and a `null` from it leaves the commit stranded) and
+  `node tools/m59-whowrote-test.mjs` (12 — **the attribution tool, against fixtures in a fake
+  home**, so it reads none of this machine's real transcripts. It exists because the tool's own
+  first version answered the question CONFIDENTLY AND WRONGLY: run from a worktree it derived the
+  Claude project slug from `basename(REPO)` — the WORKTREE's name, `land-codex-a3` — which matches
+  no project directory, so it found the Codex sessions, reported ZERO Claude ones for a file six
+  Claude transcripts mention, and printed a tidy healthy-looking table. An attribution answer gets
+  acted on: a wrong one was relayed to the wrong session twice in one night, about a file driving
+  twenty-one characters on a shared server. So the two things that can silently go wrong are
+  pinned — WHICH directories it looks in (the slug still resolves to `m59-harness` when the test
+  itself is run from a worktree, which is the regression), and whether it ever carries CONTENT
+  out. That second one is a safety rule rather than a style choice: these transcripts hold
+  whatever passed through a session, including the roster that is the only copy of twenty-three
+  account passwords, so a row is asserted to be exactly `file,hits,mtime,session,system` and the
+  planted secret is asserted absent from the whole serialized result) and
+  `node tools/m59-wallgrind-test.mjs` (36 — **grinding against a wall, as EPISODES rather than
+  ticks**. Operator: *"are units just grinding against walls for hours?"* — and nothing in 651
+  tools could answer it, because everything recorded about being stuck is a POINT EVENT.
+  `m59-stucks.mjs` counts `stuck_backed_up` firings per square, which is "how often"; forty
+  bounces in a minute and forty minutes of unbroken contact produce the same count and want
+  completely different fixes. **The shuffle half is the one nothing could see at all**: CLAUDE.md
+  has warned for months that "a stall detector that requires STILLNESS misses the commonest way
+  to stand still: a two-square shuffle against a wall resets it on every sample", and a search of
+  every tool for "oscillat" returned ZERO — a documented blind spot with no instrument. Two of
+  these assertions were written against defects the suite then found. **Distinct squares is the
+  WRONG discriminator**: a character moving one square every three samples shows two or three in
+  any six-sample window, exactly like a shuffle, so honest slow progress was flagged; the test is
+  now REVISITS, since a simple path through k squares has exactly k-1 transitions and every
+  return adds one. And **a gap in the samples is a new stream**, found by the end-to-end check
+  rather than a unit test — keepers restart about once a minute and passes block for twenty
+  seconds, and carrying the ring across the silence dated a ninety-second shuffle as FIFTY
+  MINUTES, in the one number the tool exists to produce. Also pins that a character with no
+  destination is RESTING and never grinding, because an inn and a wedge look identical to a
+  position sampler and flagging the inn is how an instrument earns its way into being switched
+  off) and
+  `node tools/m59-scratch-test.mjs` (26 — **FleetScratch's retention contract, which is the half
+  that can silently destroy evidence**. Every other defect here shows up as a missing number;
+  this one shows up as a recording that is not there, at the moment somebody goes looking, with
+  no way to tell pruned from never-written. So the three rules are asserted rather than
+  documented: `--dry` deletes NOTHING, the `keep/` half survives a year-old prune, and the
+  aggregates survive a total one. **The retention split is the whole design and it argues with
+  the operator's own brief**: fine data expiring at 24h is right, but the stated goal was to
+  "look back at historical movement code through newer analysis lenses", and a window that drops
+  everything after a day cannot answer a question asked next month. So aggregates never expire
+  and every one is keyed by the `#movement` epoch that produced it — the same mechanism the
+  exit-gap book uses, because a counter spanning a rewrite of the mover is a monument rather
+  than a measurement. The epoch is stamped at WRITE time, since reading it later would label old
+  evidence with today's mover, silently, in the direction that makes two incomparable things
+  look comparable) and
   `node tools/m59-roo-test.mjs` (74, with raw-room checks skipping without a copy of the game's
   `resource/rooms`). The rest need a live server —
   `m59-autopilot-test`, `m59-skills-test` and `m59-coop-test` all want a broker on
@@ -873,3 +970,63 @@ difference between the trunk and the deploy worktree, which each have a
 `substrate/fleets/prod.json` holding 21 characters called the Muppets, and only one of them is logged in.
 **It should fail the day the tool turns an answer back into a question, or a question into an
 answer.**
+
+## The fine-movement instruments (m59-finepos 52, m59-stepbench 62, m59-pinch 44, m59-labctl 45)
+
+These four are the measuring equipment for fine movement, and they are grouped because they failed
+as a set on 2026-09-12: a controlled experiment on `walkFine`'s heading fan could not be run, and
+each layer's defect was hidden by the one above it. Every assertion below is one of those.
+
+**`m59-finepos-test.mjs` (52) — "where is this body" is not one question.** Four sources answer it
+and three are wrong in ways that read as right; the suite keeps the failures DIFFERENT, because "no
+keeper", "keeper silent" and "keeper answered without a position" are different problems and
+conflating them throws away a working run. Three things it pins that cost a session each:
+
+* **`/state` is a CACHE and `/state?fresh=1` is a READ.** The keeper serves a coalesced projection
+  and sends no packet unless a reader asks. Measured at one instant after a teleport: `/state` gave
+  `as_of_ms=435, fresh=false`, `/state?fresh=1` gave `as_of_ms=0, fresh=true`. Read from the cache,
+  the pre-teleport square came back rock steady for 1.4–1.9 seconds, so two reads agreed and a body
+  was declared settled on a square it had already left. `fresh` is not a staleness alarm — it reports
+  whether THIS reply was refreshed — and reading the field's name instead of its definition is the
+  same error as reading `arrive_within` as client units.
+* **The PORT is the band; the PID is the build.** A keeper restart changes the pid and keeps the
+  port, so a caller stamping rows with the port gave `compareBenches` the same value either side of a
+  genuine respawn — a guard that could only ever abstain, which fails in the direction nobody checks.
+* **`settledPosition` observes rather than assumes.** Two consecutive agreeing reads, not a sleep
+  somebody tuned; and a stale read cannot settle anything however often it repeats. It says which of
+  the two it hit, because "still moving" sends a reader looking for a body in flight, which is the
+  wrong search when nobody is updating the record at all.
+
+**`m59-stepbench-test.mjs` (62) — abstaining is the point.** The bench exists to stop a mover change
+being credited with an improvement it did not make, so the cases that matter most are the ones where
+it must refuse: a shared keeper pid means no respawn happened and possibly the same build, and a
+contact-rate delta inside the noise band must be reported as NO DIFFERENCE. It also pins that the
+bench cannot ask a question the mover cannot answer:
+
+* **`checkCell` refuses a cell outside the mover's one-step range.** `walkFine` sizes a step
+  `max(8, min(stride, remaining))`, so the minimum is 8 protocol units = 128 client. 64 is one step
+  of the FLOOD LATTICE, and inheriting it here made an eighth of the matrix measure a body
+  overshooting and dithering back: 193 units of travel at 86 degrees off a 64-unit request.
+* **`stepRequest` builds the walk arguments in the same module that records the result**, because the
+  two have to agree about what a cell means and apart they did not. One step — more is a search — and
+  a tolerance strictly smaller than the aim, or walkFine returns `arrived: true` without moving.
+
+**`m59-pinch-test.mjs` (44) — an OPEN square cannot answer a question about the fan.** On open ground
+heading zero is accepted and the fan is never consulted, so a bench sited there reports a clean,
+stable, perfectly reproducible number either side of a mover change and that number is about nothing.
+It is the most convincing possible null result and it is an artefact of the site: 11,151 of 11,352
+floored squares in The King's Way refuse no heading at all, and the bench had been sited on one.
+OPEN, SEALED and NO FLOOR stay three different refusals — the first two both produce a contact rate
+of zero and are opposite in cause, one body never having to choose and the other never moving.
+
+**`m59-labctl-test.mjs` (45) — and this one was green about a protocol that does not exist.** Its fake
+admin socket answered `show name` with a position and `show room` with an object id. BlakSton v2.4
+does neither: `show name` returns an object id and nothing else, and `show room` is not a command. So
+`stageAt`'s read-back could never match, `landed` was null on every call that ever ran, and nine
+assertions passed about it — while the relocate had succeeded every time, exactly as the note that
+`UtilGoNearSquare` never says no predicts. A fake that lies is worse than no fake. It now speaks v2.4,
+keeps the legacy `show room` path covered so deleting it would fail, and pins that a `via` standing in
+a DIFFERENT room resolves nothing.
+
+**It should fail the day a position read is answered from a cache, a bench credits a change across a
+single keeper pid, or a fake starts speaking a protocol no server does.**
