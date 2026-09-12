@@ -1,0 +1,113 @@
+diff --git a/blakserv/adminfn.c b/blakserv/adminfn.c
+index 6071303..ca100db 100644
+--- a/blakserv/adminfn.c
++++ b/blakserv/adminfn.c
+@@ -93,6 +93,8 @@ void AdminPage(int session_id,admin_parm_type parms[],
+ 
+ void AdminShowStatus(int seFssion_id,admin_parm_type parms[],
+                      int num_blak_parm,parm_node blak_parm[]);
++void AdminShowSimSeed(int session_id,admin_parm_type parms[],
++                      int num_blak_parm,parm_node blak_parm[]);
+ void AdminShowMemory(int session_id,admin_parm_type parms[],
+                      int num_blak_parm,parm_node blak_parm[]);
+ void AdminShowCalled(int session_id,admin_parm_type parms[],
+@@ -326,6 +328,8 @@ admin_table_type admin_show_table[] =
+ 	"Show what objects or lists reference a particular data value" },
+ 	{ AdminShowResource,      {S,N}, false, A|M, NULL, 0, "resource",
+ 	"Show a resource by resource name" },
++	{ AdminShowSimSeed,       {N},   false, A|M, NULL, 0, "simseed",
++	"Show the lab deterministic seed, or 0 when unseeded" },
+ 	{ AdminShowStatus,        {N},   false, A|M, NULL, 0, "status",        "Show system status" },
+ 	{ AdminShowString,        {I,N}, false, A|M, NULL, 0, "string",        "Show one string by string id" },
+ 	{ AdminShowSysTimers,     {N},   false, A, NULL, 0, "systimers",     "Show system timers" },
+@@ -1314,6 +1318,20 @@ void AdminPage(int session_id,admin_parm_type parms[],
+ }
+ 
+ 
++/* Reports the reality this boot is running in, so a harness can ask rather than assume.
++   An UNPATCHED server does not know this command and answers with its ordinary
++   unknown-command error -- which is the whole graceful-degradation story: the caller learns
++   "unseeded" from the refusal and carries on, instead of requiring the patch to exist. */
++void AdminShowSimSeed(int session_id,admin_parm_type parms[],
++                      int num_blak_parm,parm_node blak_parm[])
++{
++	aprintf("SimSeed -----------------------------------\n");
++	if (ConfigBool(SIMSEED_ENABLED) && ConfigInt(SIMSEED_VALUE) != 0)
++		aprintf("seeded %i\n",ConfigInt(SIMSEED_VALUE));
++	else
++		aprintf("seeded 0 (unseeded: the stock rand() stream, identical every boot)\n");
++}
++
+ void AdminShowStatus(int session_id,admin_parm_type parms[],
+                      int num_blak_parm,parm_node blak_parm[])
+ {
+diff --git a/blakserv/config.c b/blakserv/config.c
+index e5f56ba..841a415 100644
+--- a/blakserv/config.c
++++ b/blakserv/config.c
+@@ -210,6 +210,10 @@ config_table_type config_table[] =
+ { WEBHOOK_ENABLED,        false, "Enabled",       CONFIG_BOOL,  "No" },
+ { WEBHOOK_PREFIX,         false, "Prefix",        CONFIG_STR,   "" },
+ 
++{ SIMSEED_GROUP,          false, "[SimSeed]",     CONFIG_GROUP, "" },
++{ SIMSEED_ENABLED,        false, "Enabled",       CONFIG_BOOL,  "No" },
++{ SIMSEED_VALUE,          false, "Seed",          CONFIG_INT,   "0" },
++
+ };
+ 
+ enum
+diff --git a/blakserv/config.h b/blakserv/config.h
+index 58fb294..5958535 100644
+--- a/blakserv/config.h
++++ b/blakserv/config.h
+@@ -107,6 +107,11 @@ enum
+    WEBHOOK_GROUP,
+    WEBHOOK_ENABLED, WEBHOOK_PREFIX,
+ 
++   /* Lab-only deterministic seed -- server-patches/deterministic-seed in the m59 harness.
++      Off by default; seed 0 means "do not seed", which is the stock server's behaviour. */
++   SIMSEED_GROUP,
++   SIMSEED_ENABLED, SIMSEED_VALUE,
++
+    NUM_CONFIG_VALUES
+ };
+ 
+diff --git a/blakserv/main.c b/blakserv/main.c
+index 969dbf0..2ca941b 100644
+--- a/blakserv/main.c
++++ b/blakserv/main.c
+@@ -67,6 +67,20 @@ void MainServer()
+ 	
+ 	InitConfig();
+ 	LoadConfig();		/* must be nearly first since channels use it */
++
++	/* DETERMINISTIC SEED, LAB ONLY.  The stock server never calls srand(), so C_Random's
++	   rand() stream is the same sequence on every boot -- there is exactly one "reality".
++	   Seeding here, immediately after config and before anything else can draw, makes that
++	   reality selectable, so one scenario can be run across many of them.
++
++	   NOTHING IS LOGGED HERE.  lprintf writes through the channel buffer and
++	   OpenDefaultChannels() has not run yet; calling it at this point segfaults the server
++	   before it can say why.  The announcement is further down, after the channels exist.
++
++	   OFF BY DEFAULT AND A NO-OP WHEN OFF.  An unseeded server keeps the stock behaviour
++	   exactly, so a harness that knows nothing about this patch sees no difference at all. */
++	if (ConfigBool(SIMSEED_ENABLED) && ConfigInt(SIMSEED_VALUE) != 0)
++		srand((unsigned int)ConfigInt(SIMSEED_VALUE));
+ 	
+ 	InitDebug();
+ 	
+@@ -75,6 +89,13 @@ void MainServer()
+ 	OpenDefaultChannels();
+ 	
+ 	lprintf("Starting %s\n",BlakServLongVersionString());
++
++	/* Announced here rather than at the seed site: see the comment above.  This is the first
++	   point in main() where the stock server itself logs, so it is the first point logging is
++	   known to work. */
++	if (ConfigBool(SIMSEED_ENABLED) && ConfigInt(SIMSEED_VALUE) != 0)
++		lprintf("SimSeed: seeded rand() with %i (lab determinism)\n",
++			ConfigInt(SIMSEED_VALUE));
+ 	
+ 	InitClass();
+ 	InitMessage();
