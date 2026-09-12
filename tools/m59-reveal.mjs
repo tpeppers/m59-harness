@@ -57,29 +57,37 @@
 // which is the thing the errand exists to change. Rule 6, on the only field that answers it.
 // ---------------------------------------------------------------- where the caster lives
 //
-// THE CASTER SHUTTLES, AND ONLY ONE DIRECTION IS WALKED.
+// THE CASTER SHUTTLES, AND ONLY ONE DIRECTION IS WALKED — BUT ONLY BECAUSE OF WHERE THIS
+// PARTICULAR CASTER HAPPENS TO LIVE.
 //
-// Reveal needs three things in one place: the caster, the item, and the teeth. They start in
-// three different towns, so the caster is the one that moves — and moving a 20-max-health body
-// is the most dangerous thing this service does. It killed him once on 2026-09-12.
+// Reveal needs the caster, the item and the teeth in one place, and they start in three
+// different towns. The caster is the one that moves, and moving a 20-max-health body is the
+// most dangerous thing this service does: it killed Loial once on 2026-09-12.
 //
-// The circuit that works, measured the same day:
+// What made it cheap for HIM is a fact about him, not a technique. `rescue` is not a general
+// way to get closer to somewhere — it is a teleport to ONE fixed destination that the caster
+// does not choose. `DoRescue` (rescue.kod:114-167) picks, in order:
 //
-//   Tos (52, Familiars)   Paddock sells the teeth, the bank is 2 hops, room 27's orc farm is 4
-//   Barloque              where `rescue` puts him, free and instant-ish, from anywhere
+//   1. the GUILD HALL, and only if the guild has one, you are not in it, and it is in the SAME
+//      REGION you are standing in
+//   2. the Ko'catan Inn, if you are in the Ko'catan region or at the Pool of Vigor
+//   3. the Pool of Vigor, if you are in the orc caves (region 2500, Ugol's Warren — NOT room 27)
+//   4. otherwise `AdminGoToSafety`: the character's own HOME ROOM
 //
-// So the RETURN leg is never walked. `rescue` lands the caster at his hometown 15-25s after
-// the cast (settings.kod:91 plus a random 5-10s) — see the reveal-service notes — which makes
-// Barloque a free teleport target and leaves only Barloque -> Tos to walk.
+// AND A HOMETOWN IS ASSIGNED AT RANDOM when a character leaves Raza. It is per-character, it
+// is visible in that character's `inspect` text, and nothing in this repository sets it. So
+// "rescue home and walk the rest" is worth checking PER CASTER and is not advice that
+// generalises: Loial's home is Barloque, which happens to sit a short corridor from Tos, and
+// another character's could be anywhere at all.
 //
-// AND THAT LEG IS THE CHEAP ONE, WHICH IS THE WHOLE POINT OF ROUTING IT THIS WAY:
+// For him, that luck is worth a lot, measured the same day:
 //
 //   Jasper 370   -> Tos 52   10 hops, 1234s p90    the trip that nearly killed him
 //   Barloque 102 -> Tos 52    7 hops,  203s p90    crossed at 20/20 without a scratch
 //
-// Six times shorter. A caster stranded anywhere should therefore `rescue` FIRST and walk
-// second, never walk the whole way — and `fragileBody` in m59-fleetscript.mjs refuses the long
-// version for exactly this reason.
+// If this fleet ever finishes its guild hall, rule 1 above starts firing and every guilded
+// character's rescue destination changes at once — including this one's. Re-measure then
+// rather than trusting these numbers.
 import { callTool, fleetRoster } from './m59-describe.mjs';
 import { ITEM_RARITY, rarityName, isUnidentified } from './m59-items.mjs';
 
