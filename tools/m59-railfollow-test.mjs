@@ -305,6 +305,51 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
   ok(aimOrBoard([], { x: 0, y: 0 }) === null, 'an empty rail still has no aim');
 }
 
+// ---- THE CHORD IS NOT THE ARC. A winding rail bounds the leg, not the timeout. -----------
+{
+  // A straight rail: the budget binds, as before.
+  const straight = [];
+  for (let k = 0; k < 200; k++) straight.push({ x: k * 64, y: 0, f: 1 });
+  const a = aimPoint(straight, { x: 0, y: 0 }, { floor: 1, budget: 3072 });
+  eq(a.bound, 'budget', 'on a straight rail the budget is what stops the aim');
+  eq(a.dist, 3072, 'and it spends all of it');
+
+  // A rail that turns a hard corner: the aim must NOT cut across it.
+  const corner = [{ x: 0, y: 0, f: 1 }];
+  for (let k = 1; k <= 40; k++) corner.push({ x: k * 64, y: 0, f: 1 });       // east 2560u
+  for (let k = 1; k <= 40; k++) corner.push({ x: 2560, y: k * 64, f: 1 });    // then south 2560u
+  const c = aimPoint(corner, { x: 0, y: 0 }, { floor: 1, budget: 5120 });
+  eq(c.bound, 'straightness', 'a corner stops the aim before the budget does');
+  ok(c.dist <= 2560 + 256, 'the aim stays on the straight run, not past the corner');
+  ok(c.y <= 256, 'and it is at most one tolerance past the corner, not across it');
+  ok(c.dist > 1024, 'while still being a useful leg, not one waypoint');
+
+  // Tighten the tolerance and the aim shortens; loosen it and it lengthens.
+  const tight = aimPoint(corner, { x: 0, y: 0 }, { floor: 1, budget: 5120, maxDeviation: 16 });
+  const loose = aimPoint(corner, { x: 0, y: 0 }, { floor: 1, budget: 5120, maxDeviation: 4096 });
+  ok(tight.dist <= c.dist, 'a tighter deviation bound never lengthens the aim');
+  ok(loose.dist >= c.dist, 'and a looser one never shortens it');
+  ok(['budget', 'end'].includes(loose.bound),
+     'with a huge tolerance straightness stops binding — here the rail simply runs out');
+}
+{
+  // A zig-zag so sharp that no chord tracks it: the aim falls back to the next waypoint, because
+  // standing still is not an option and one waypoint is one validated lattice step.
+  const zig = [{ x: 0, y: 0, f: 1 }];
+  for (let k = 1; k <= 20; k++) zig.push({ x: (k % 2) * 64, y: k * 64, f: 1 });
+  const z = aimPoint(zig, { x: 0, y: 0 }, { floor: 1, budget: 4096, maxDeviation: 8 });
+  ok(z !== null, 'a rail nothing can chord still yields an aim');
+  ok(z.dist > 0, 'and it is not the point we are standing on');
+  ok(['straightness', 'next-waypoint'].includes(z.bound), 'reporting which bound stopped it');
+}
+{
+  // The bound is REPORTED, so a log can show which constraint is actually in play — the whole
+  // reason the 5400-unit budget looked reasonable for six runs.
+  const straight = [{ x: 0, y: 0, f: 1 }, { x: 10000, y: 0, f: 1 }];
+  ok(aimPoint(straight, { x: 0, y: 0 }, { floor: 1, budget: 1024 }).bound === 'budget',
+     'and it names the budget when the budget binds');
+}
+
 // ---- the high-water mark, and the run it aborted -----------------------------------------
 {
   // Marco, room 49, 2026-09-11: mark at 137 on the rim, rejoined at 3 on the canyon floor.
