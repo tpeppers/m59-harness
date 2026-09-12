@@ -28,7 +28,8 @@ import { recordCrossing } from './m59-crossings.mjs';
 import { finePath, fineRouteDetour, pullFine, pointOfSquare, boundsAround } from './m59-finepath.mjs';
 import { isMutableGeometry, mutableBecause } from './m59-mutable.mjs';
 import { BP, M59Client } from './m59-client.mjs';
-import { MOVEON, blocksMovement, parsePlayer, OF } from './m59-parse.mjs';
+import { MOVEON, blocksMovement, parsePlayer, OF, readHealth } from './m59-parse.mjs';
+
 import {
   COND, LEAVE, edgeCandidatesOf, edgeExitsOf, findPath,
   geometryManifest, movementMapReadiness, roomResourceDirs, setGeometryProvenance,
@@ -1455,6 +1456,10 @@ let rideTrackFixture = null;
 const rideTrack = compileSessionMethod(brokerSource,
   'async rideTrack(fromRoom, toRoom, {', 'rideTrack', {
     KOD_FINENESS,
+    // Vitals are `{ value, max }`; the shelter rest reads them through this. Declared and
+    // REAL, because a stub here would hide the read whose three separate misuses inside this
+    // one method left the rest dead for as long as it existed. See m59-vitals-shape-test.
+    readHealth,
     recallTrack: () => rideTrackFixture,
     clearStrikes: () => {},
     strikeTrack: () => 1,
@@ -1514,6 +1519,12 @@ const realSidestepAround = compileSessionMethod(brokerSource,
 
 const leaveViaAny = compileSessionMethod(brokerSource,
   'async leaveViaAny(candidates, {', 'leaveViaAny', {
+    // DECLARED BECAUSE THE EXTRACTION OVER-CAPTURES, not because leaveViaAny reads vitals.
+    // `sessionMethod` brace-counts without stripping comments, and this method's span comes
+    // out ~42KB — it swallows later methods, `healAtAWall` among them, which does read
+    // health. So a symbol used anywhere in that span has to be named here or the compiled
+    // blob throws ReferenceError on a path the broker runs perfectly well.
+    readHealth,
     // The real stall clock, for the same reason walkTo gets it: the give-up ask now carries
     // whether the whole crossing has been going round in circles, not only how long this
     // boundary has refused.

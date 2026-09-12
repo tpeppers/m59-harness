@@ -1042,3 +1042,32 @@ export function describeObject(o, lookup) {
   if (can.length) bits.push(`[${can.join('/')}]`);
   return `${name} (id ${o.id})${bits.length ? ' ' + bits.join(' ') : ''}`;
 }
+
+// ── VITALS ARE `{ value, max }`. READ THEM HERE, ONCE. ──────────────────────────────────
+//
+// `client.vitals()` answers `{ health: { value, max }, mana: {...}, vigor: {...} }`. Reading
+// `v.health` as a NUMBER does not throw and does not warn — it yields an object, so
+// `Number.isFinite()` is false, `obj > n` is false, and `obj / n` is NaN. Every one of those
+// fails CLOSED and silently, which is why the same mistake landed three times inside one
+// function and survived for as long as the function existed:
+//
+//   1. the shelter-rest entry guard   — `const hp = vit.health, max = vit.maxHealth`
+//      could never be true, so the rest never ran at all (fixed in d209de3);
+//   2. its poll                       — broke out on the first pass (fixed in d209de3);
+//   3. its success counter            — `(c.vitals()?.health ?? before) > before` compares an
+//      OBJECT to a number, so `rested++` never ran. That one survived the fix, and it is the
+//      nastiest of the three: with 1 and 2 repaired the feature works and its own telemetry
+//      still reports zero, so the instrument says the fix failed.
+//
+// `maxHealth` is accepted as a fallback because some callers hand in a flat row rather than a
+// client's vitals object, and refusing those would move the breakage rather than remove it.
+// Returns nulls rather than throwing: a caller with no client yet is not an error.
+export function readHealth(vitals) {
+  const v = vitals ?? {};
+  const h = v.health;
+  const hp  = Number.isFinite(h?.value) ? h.value : (Number.isFinite(h) ? h : null);
+  const max = Number.isFinite(h?.max) ? h.max
+            : (Number.isFinite(v.maxHealth) ? v.maxHealth : null);
+  const frac = (hp != null && max != null && max > 0) ? hp / max : null;
+  return { hp, max, frac };
+}
