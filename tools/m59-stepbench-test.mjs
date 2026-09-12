@@ -171,6 +171,28 @@ const at = (x, y) => ({ x, y });
 
   eq(compareBenches(null, mk(0.3, 2)).verdict, 'unknown', 'a missing bench abstains');
   eq(compareBenches({ cells: 0 }, mk(0.3, 2)).verdict, 'unknown', 'and so does an empty one');
+
+  // ---- WHAT THE EXPERIMENT VARIED DECIDES WHICH GUARD APPLIES -----------------------------
+  // `hold_shelf` picks between walkFine's narrow five-entry fan and the full nine, so both fans are
+  // measurable against ONE build. For that comparison a shared pid is the point, not the problem —
+  // and a guard that refused it would block the cheapest honest experiment available.
+  eq(compareBenches(mk(0.72, 5), mk(0.30, 5), { differBy: 'request' }).verdict, 'BETTER',
+     'a REQUEST-arm comparison is allowed to share a keeper pid — that is what removes the build');
+  eq(compareBenches(mk(0.72, 5), mk(0.68, 5), { differBy: 'request' }).verdict, 'NO DIFFERENCE',
+     '...and the noise band still applies to it');
+
+  // And the inverse confound, which is the one that only exists for a request arm: if the keeper
+  // respawned between the two, the mover changed too and nothing can be attributed.
+  const swapped = compareBenches(mk(0.72, 5), mk(0.30, 9), { differBy: 'request' });
+  eq(swapped.verdict, 'BUILD CHANGED', 'a request arm that does NOT share a pid is refused');
+  ok(/second variable/.test(swapped.why), '...because the mover became a second variable');
+
+  eq(compareBenches(mk(0.72, 1), mk(0.30, 2), { differBy: 'build' }).verdict, 'BETTER',
+     'the build arm is unchanged by any of this');
+  // An unrecognised value must not silently pick a guard — the same rule the policy files follow.
+  const bogus = compareBenches(mk(0.72, 1), mk(0.30, 2), { differBy: 'vibes' });
+  eq(bogus.verdict, 'unknown', 'an unrecognised differBy is refused, not defaulted');
+  ok(/which guard runs/.test(bogus.why), '...and it says why defaulting would be wrong');
 }
 
 // ---- formatting --------------------------------------------------------------------------

@@ -212,14 +212,41 @@ export function summariseBench(rows) {
  * failure this whole bench exists to prevent, and a bench that always finds an improvement is a
  * press release.
  */
-export function compareBenches(before, after, { minDelta = 0.1 } = {}) {
+/**
+ * `differBy` SAYS WHAT THE EXPERIMENT VARIED, and the pid guard only applies to one answer.
+ *
+ * `'build'` (the default, and the conservative reading) means the two arms are meant to be different
+ * mover CODE. A shared keeper pid then means no respawn happened, so possibly nothing was tested, and
+ * that has to be said before any improvement is.
+ *
+ * `'request'` means the arms differ by an argument — `hold_shelf` selects between walkFine's narrow
+ * five-entry fan and the full nine-entry one, so both fans can be measured against ONE build. Sharing
+ * a pid is then not merely allowed, it is the point: it removes the build as a variable. Refusing it
+ * would make the guard block the cheapest honest experiment available, which is how a guard gets
+ * deleted by the next person in a hurry.
+ *
+ * The caller has to say which, because the two look identical in the data and only one of them is a
+ * problem.
+ */
+export function compareBenches(before, after, { minDelta = 0.1, differBy = 'build' } = {}) {
   if (!before?.cells || !after?.cells)
     return { verdict: 'unknown', why: 'one of the two benches has no cells' };
-  if (before.keeperPids?.length && after.keeperPids?.length &&
-      before.keeperPids.some((p) => after.keeperPids.includes(p)))
+  if (differBy !== 'build' && differBy !== 'request')
+    return { verdict: 'unknown', why: `differBy must be 'build' or 'request', not ${differBy} — an ` +
+             `unrecognised value is refused rather than defaulted, because defaulting it would pick ` +
+             `which guard runs` };
+  const shared = (before.keeperPids ?? []).filter((p) => (after.keeperPids ?? []).includes(p));
+  if (differBy === 'build' && shared.length)
     return { verdict: 'SAME BUILD?', why: `both benches share keeper pid(s) ` +
-             `${before.keeperPids.filter((p) => after.keeperPids.includes(p)).join(',')} — a keeper ` +
+             `${shared.join(',')} — a keeper ` +
              `respawn is what loads new mover code, so without one these may be the same build` };
+  // A REQUEST-ARM COMPARISON WANTS THE OPPOSITE: one build, so the build is not a variable. Different
+  // pids here mean the mover was replaced underneath the experiment, which is the confound.
+  if (differBy === 'request' && !shared.length)
+    return { verdict: 'BUILD CHANGED', why: `these arms were meant to differ only by a request ` +
+             `argument, but they share no keeper pid (${(before.keeperPids ?? []).join(',') || '?'} ` +
+             `vs ${(after.keeperPids ?? []).join(',') || '?'}) — the keeper respawned between them, ` +
+             `so the mover is a second variable and the difference cannot be attributed` };
   const d = +(before.contactRate - after.contactRate).toFixed(2);
   if (Math.abs(d) < minDelta)
     return { verdict: 'NO DIFFERENCE', delta: d,
