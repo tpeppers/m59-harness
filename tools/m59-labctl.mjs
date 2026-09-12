@@ -71,11 +71,44 @@ export async function objectOf(name, { dmFn = dm, env = process.env } = {}) {
 }
 
 /** The room's current object. */
-export async function roomOf(num, { dmFn = dm, env = process.env } = {}) {
-  const cmd = `show room ${num}`;
-  const out = await dmFn([cmd], { env });
-  const m = /object (\d+)/i.exec(String(out));
-  return m ? Number(m[1]) : null;
+/**
+ * A room's OBJECT id from its number.
+ *
+ * `show room <num>` IS NOT A COMMAND ON THIS SERVER. Measured against BlakSton v2.4 (Aug 25 2026)
+ * on the lab server: every `show room` is answered `Unknown command; try 'help'.`, so this returned
+ * null for EVERY room — including the one the body was standing in — and `setSpawns` reported
+ * "room 49 was not found on this server". That message is honest about what it did and wrong about
+ * why: the room exists, the query does not.
+ *
+ * WHAT DOES WORK, verified end to end: `show name <character>` answers `:< object 7252 :>`, and
+ * `show object 7252` carries `poOwner = OBJECT 94` — the room object itself — whose own
+ * `piRoom_num = INT 52` confirms which room it is. So a body in the room resolves the room, and the
+ * room number is checkable rather than assumed.
+ *
+ * `via` is the character to resolve through. Without it this still tries `show room`, so an older
+ * or differently-built server keeps working — but it now says WHICH way failed, because "there is
+ * no such room" and "I have no way to ask" are different facts and only one of them is about the
+ * world.
+ */
+export async function roomOf(num, { dmFn = dm, env = process.env, via = null } = {}) {
+  const legacy = await dmFn([`show room ${num}`], { env });
+  if (!/unknown command/i.test(String(legacy))) {
+    const m = /object (\d+)/i.exec(String(legacy));
+    if (m) return Number(m[1]);
+  }
+  if (!via) return null;
+  const body = await objectOf(via, { dmFn, env });
+  if (body == null) return null;
+  const shown = String(await dmFn([`show object ${body}`], { env }));
+  const owner = /poOwner\s*=\s*OBJECT\s+(\d+)/i.exec(shown);
+  if (!owner) return null;
+  const roomObj = Number(owner[1]);
+  // VERIFY THE ROOM NUMBER. Resolving through a body is only sound if the body is in the room that
+  // was asked about, and a body moves — so this checks rather than trusting the caller.
+  const roomShown = String(await dmFn([`show object ${roomObj}`], { env }));
+  const rn = /piRoom_num\s*=\s*INT\s+(\d+)/i.exec(roomShown);
+  if (rn && Number(rn[1]) !== Number(num)) return null;
+  return roomObj;
 }
 
 /**
@@ -85,9 +118,11 @@ export async function roomOf(num, { dmFn = dm, env = process.env } = {}) {
  * silent no-op: "I muted the room" and "I could not find the room" must not look the same to a
  * pad that is about to spend twenty minutes walking into it.
  */
-export async function setSpawns(roomNum, on, { dmFn = dm, env = process.env } = {}) {
+export async function setSpawns(roomNum, on, { dmFn = dm, env = process.env, via = null } = {}) {
   assertLabCtl(env);
-  const obj = await roomOf(roomNum, { dmFn, env });
+  // `via` is a character in the room, used to resolve the room object on servers where
+  // `show room` is not a command. See roomOf.
+  const obj = await roomOf(roomNum, { dmFn, env, via });
   if (obj == null)
     return { ok: false, room: roomNum, object: null, sent: 0,
              why: `room ${roomNum} was not found on this server, so its spawners were NOT ` +
@@ -141,12 +176,13 @@ export async function holdInRoom(names = [], { dmFn = dm, env = process.env } = 
  *
  * `--at` is row,col: KOD order. See docs/m59-coordinates.md before arguing with it.
  */
-export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env = process.env } = {}) {
+export async function stageAt(name, roomNum, { row, col } = {}, { dmFn = dm, env = process.env, via = null } = {}) {
   assertLabCtl(env);
   if (!Number.isFinite(row) || !Number.isFinite(col))
     throw new Error('stageAt needs { row, col } — and they are row,col in KOD order, not col,row');
   const obj = await objectOf(name, { dmFn, env });
-  const room = await roomOf(roomNum, { dmFn, env });
+  // The body being staged is itself in the room often enough to resolve it; `via` overrides.
+  const room = await roomOf(roomNum, { dmFn, env, via: via ?? name });
   if (obj == null || room == null)
     return { ok: false, landed: null,
              why: `${obj == null ? `character "${name}"` : `room ${roomNum}`} was not found` };
