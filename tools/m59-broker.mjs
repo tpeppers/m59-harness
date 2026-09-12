@@ -101,7 +101,7 @@ import { menageriePathFor, loadMenagerie, splitRosters, hostConfig, excludedNote
 import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
          isMenagerieCaller } from './m59-menagerie-guard.mjs';
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
-import { loadoutFor, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
+import { loadoutFor, protectedNames, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
 import { resolveItemNames, weighItem, rarityName, isUnidentified } from './m59-items.mjs';
 import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
@@ -9882,17 +9882,42 @@ const TOOLS = [
     }, required: ['agent', 'merchant'] },
     run: async (a) => {
       const s = session(a.agent);
+      // BY CHARACTER NAME, ON BOTH BRANCHES. `t1` is this checkout's word for a roster slot;
+      // the loadout belongs to the character and follows it across rosters.
+      // THREE SOURCES BECAUSE THE FIRST TWO CAN BE COLD. `client.me.name` is the in-process
+      // answer; a KeeperProxy's `character` comes from its liveness sample or its /state
+      // snapshot, and a snapshot taken seconds after a keeper restart answers null for a
+      // character that is perfectly well in game. The roster is the one that cannot be cold —
+      // it is the file this broker resumed from — so it is the floor under both.
+      const who = s.client?.me?.name ?? s.character ?? rosterEntry(a.agent)?.credentials?.character ?? null;
+      const fromLoadout = a.ignore_loadout || !who ? [] : protectedNames(loadoutFor(who));
       // keeper-backed: sell runs in the keeper process (its client has the trade packets; the
       // broker's Session-only sellOne is not on the proxy). Merchant is resolved in the keeper's room.
+      //
+      // AND THE LOADOUT HAS TO COME WITH IT. This branch used to hand the keeper `a.keep` and
+      // nothing else, so `loadoutFor` was consulted only on the in-process branch below —
+      // which no character on prod takes, because all twenty-three are keeper-backed. The tool's
+      // own description promises the loadout "decides what may be sold", and on the only path
+      // production uses it was dropped in silence.
+      //
+      // What that cost, 2026-09-12: Robin's loadout carried `keep: ["sapphire","mushroom"]`,
+      // written the day before by somebody who had already watched this happen and left the
+      // note on Camilla's carry floor — "the sell circuit sold the stock back to the merchant
+      // it was bought from". At 09:12 he sold 16 sapphires to the gem shop and at 09:14 he sold
+      // 61 mushrooms to the apothecary, walked to Castle Victoria, and spent the next quarter
+      // hour declining `bless` with "out of reagents" — 10 casts in the previous window, 0 in
+      // the one after. The keep list was correct, present, and unreachable.
+      //
+      // Same shape as `rarity` missing from the KeeperProxy rebuild: a feature live in the two
+      // places nothing reads and absent from the one place everything does. Verify a sell rule
+      // through the BROKER against a keeper-backed character, never only in process.
       if (s instanceof KeeperProxy)
-        return keeperAction(a.agent, s._index, 'sell_all', { merchant: a.merchant, keep: a.keep || [],
+        return keeperAction(a.agent, s._index, 'sell_all',
+          { merchant: a.merchant, keep: [...(a.keep || []), ...fromLoadout],
           min_price: num(a.min_price, 1), max_stack: a.max_stack == null ? null : Number(a.max_stack),
           max_weapons: a.max_weapons == null ? null : Number(a.max_weapons),
           max_offers: a.max_offers, skip_names: a.skip_names });
       const t = resolveTarget(s, a.merchant);
-      // BY CHARACTER NAME. `t1` is this checkout's word for a roster slot; the loadout
-      // belongs to the character and follows it across rosters.
-      const who = s.client?.me?.name;
       return skills.sellAll(s, { merchant: t, keep: a.keep || [], minPrice: num(a.min_price, 1),
                                  loadout: a.ignore_loadout || !who ? null : loadoutFor(who),
                                  maxWeapons: a.max_weapons == null ? null : Number(a.max_weapons),
