@@ -27,15 +27,58 @@ const REMOTE = { M59_ADMIN_HOST: '10.0.0.7' };
 // finding the command text in the stream — a fake that returns bare replies parses as "nothing
 // was found for anybody", which is a full hour of confusion if you meet it for the first time
 // inside a real test.
+// AND IT SPEAKS BLAKSTON v2.4, BECAUSE A FAKE THAT LIES IS WORSE THAN NO FAKE.
+//
+// This fake used to answer `show name <x>` with `object N <x> row R col C` and `show room <n>` with
+// an object id. The real server does neither: `show name` answers with an object id and NOTHING else,
+// and `show room` is not a command at all. So `stageAt`'s read-back — which parsed row/col out of
+// `show name` — passed nine assertions here while being incapable of ever working, and it never did
+// work: every real call returned "could not read the body back", the relocate having succeeded. The
+// test was green about a protocol that does not exist. ("Verify the value, not the instrument.")
+//
+// Positions live on the OBJECT: `piRow`, `piCol`, and the fine offset inside the square as
+// `piFine_row`/`piFine_col` in KOD units, where 32 of 64 is dead centre. A room is found only THROUGH
+// a body standing in it: body -> `poOwner` -> the room object -> `piRoom_num`.
 const fake = (world) => {
   const sent = [];
+  const objectBlock = (id, fields) =>
+    [`:< OBJECT ${id} is CLASS ${fields.class ?? 'User'}`,
+     ...Object.entries(fields).filter(([k]) => k !== 'class')
+       .map(([k, v]) => `: ${k.padEnd(20)} = ${typeof v === 'number' ? `INT ${v}` : v}`),
+     ':>'].join(NL);
+  const roomObjOf = (num) => world.rooms?.[String(num)] ?? null;
+  const nameOfObject = (id) =>
+    Object.keys(world.names ?? {}).find((n) => world.names[n] === Number(id)) ?? null;
   const reply = (c) => {
     let m = /^show name (.+)$/.exec(c);
-    if (m) return world.names?.[m[1]] != null
-      ? `object ${world.names[m[1]]} ${m[1]} row ${world.at?.[m[1]]?.row ?? 0} col ${world.at?.[m[1]]?.col ?? 0}`
-      : 'not found';
+    // The real reply: an object id, full stop. No name, no position.
+    if (m) return world.names?.[m[1]] != null ? `:< object ${world.names[m[1]]}${NL}:>` : 'not found';
     m = /^show room (\d+)$/.exec(c);
-    if (m) return world.rooms?.[m[1]] != null ? `object ${world.rooms[m[1]]} room` : 'no such room';
+    // v2.4 has no `show room` at all, so roomOf must go via a body. An older server DOES answer it,
+    // and roomOf keeps that path — both are exercised, because dropping the legacy path would be a
+    // silent capability loss on whatever server still has it.
+    if (m) return world.legacyShowRoom
+      ? (world.rooms?.[m[1]] != null ? `object ${world.rooms[m[1]]} room` : 'no such room')
+      : 'unknown command';
+    m = /^show object (\d+)$/.exec(c);
+    if (m) {
+      const id = Number(m[1]);
+      const who = nameOfObject(id);
+      if (who) {
+        const at = world.at?.[who] ?? {};
+        const owner = roomObjOf(at.room ?? Object.keys(world.rooms ?? {})[0]);
+        return objectBlock(id, {
+          self: `OBJECT ${id}`,
+          ...(owner != null ? { poOwner: `OBJECT ${owner}` } : {}),
+          piRow: at.row ?? 0, piCol: at.col ?? 0,
+          piFine_row: at.fineRow ?? 32, piFine_col: at.fineCol ?? 32,
+        });
+      }
+      // A room object: the only field roomOf wants off it, and it VERIFIES it against what was asked.
+      const num = Object.keys(world.rooms ?? {}).find((n) => world.rooms[n] === id);
+      if (num != null) return objectBlock(id, { class: 'Room', piRoom_num: Number(num) });
+      return 'not found';
+    }
     return world.refuse ? world.refuse : 'ok';
   };
   const dmFn = async (cmds) => { sent.push(...cmds); return cmds.map(c => `${c}${NL}${reply(c)}`).join(NL); };
@@ -70,9 +113,17 @@ console.log(NL + '1. A ROOM THAT COULD NOT BE FOUND IS A REFUSAL, NOT A QUIET NO
 
 console.log(NL + 'spawns off sends the supported MESSAGE, not a poke at the property');
 {
-  const f = fake({ rooms: { 45: 900 } });
-  const r = await spawnsOff(45, { dmFn: f.dmFn, env: LAB });
-  ok('it succeeds', r.ok === true);
+  // ON v2.4 THIS NEEDS A `via`, AND WITHOUT ONE IT MUST REFUSE RATHER THAN GUESS. A room is findable
+  // only through a body standing in it, so "mute room 45" with nobody named is a question this server
+  // cannot answer — and answering it anyway is what a silent no-op would be.
+  const blind = fake({ rooms: { 45: 900 }, names: { Marco: 7124 }, at: { Marco: { row: 60, col: 46, room: 45 } } });
+  const nope = await spawnsOff(45, { dmFn: blind.dmFn, env: LAB });
+  ok('with no via on a v2.4 server it refuses', nope.ok === false, JSON.stringify(nope));
+  ok('and no SetMonsterGeneration went out', !blind.sent.some(c => c.includes(GENERATION_MSG)));
+
+  const f = fake({ rooms: { 45: 900 }, names: { Marco: 7124 }, at: { Marco: { row: 60, col: 46, room: 45 } } });
+  const r = await spawnsOff(45, { dmFn: f.dmFn, env: LAB, via: 'Marco' });
+  ok('it succeeds', r.ok === true, JSON.stringify(r));
   ok('it resolved the room', r.object === 900);
   const cmd = f.sent.find(c => c.includes(GENERATION_MSG));
   ok('it sent SetMonsterGeneration', !!cmd, f.sent.join(' | '));
@@ -83,10 +134,22 @@ console.log(NL + 'spawns off sends the supported MESSAGE, not a poke at the prop
   ok('and it did NOT poke piMonster_count_max',
      !f.sent.some(c => /piMonster_count_max/.test(c)), f.sent.join(' | '));
 
-  const on = fake({ rooms: { 45: 900 } });
-  await spawnsOn(45, { dmFn: on.dmFn, env: LAB });
+  const on = fake({ rooms: { 45: 900 }, names: { Marco: 7124 }, at: { Marco: { row: 60, col: 46, room: 45 } } });
+  await spawnsOn(45, { dmFn: on.dmFn, env: LAB, via: 'Marco' });
   ok('spawnsOn is the same message with 1',
      /bValue INT 1/.test(on.sent.find(c => c.includes(GENERATION_MSG))));
+
+  // AND THE LEGACY PATH STILL WORKS WITHOUT A via, which is the only reason roomOf keeps it.
+  const old = fake({ rooms: { 45: 900 }, legacyShowRoom: true });
+  const leg = await spawnsOff(45, { dmFn: old.dmFn, env: LAB });
+  ok('on a server where `show room` IS a command, no via is needed', leg.ok === true, JSON.stringify(leg));
+  ok('...resolving the same room object', leg.object === 900);
+
+  // A body in the WRONG room must not resolve the room asked about — roomOf verifies piRoom_num.
+  const elsewhere = fake({ rooms: { 45: 900, 46: 901 },
+                           names: { Marco: 7124 }, at: { Marco: { row: 1, col: 1, room: 46 } } });
+  const wrong = await spawnsOff(45, { dmFn: elsewhere.dmFn, env: LAB, via: 'Marco' });
+  ok('a via standing in a DIFFERENT room resolves nothing', wrong.ok === false, JSON.stringify(wrong));
 }
 
 console.log(NL + 'holding a room stops the clocks of what resolved, and names what did not');
