@@ -135,6 +135,40 @@ export function distanceToRail(waypoints, point, { floor = null, step = MAX_STEP
 export const AIM_BUDGET = 3 * 1024;
 
 /**
+ * A LEG MUST FINISH INSIDE THE CALLER'S TIMEOUT, AND THAT IS A DISTANCE BUDGET.
+ *
+ * `keeperAction` defaults to 60 seconds and a fine walk covers roughly 64 units a step at
+ * roughly one step per `MOVE_DELAY`. A leg longer than the timeout can carry is not a slow leg —
+ * it is an ABORTED one, and the abort is broker-side with no reason attached, so the caller sees
+ * `arrived: undefined` and cannot tell it from a wall.
+ *
+ * Measured on prod 2026-09-11: 3072-unit legs aborted at 60, 63, 72, 61, 60 and 62 seconds with
+ * the body never moving, while 768-unit legs on the same follower completed at 0 units off the
+ * line. The broker there carries no raised allowance at all, so this is the ceiling to plan
+ * inside rather than one to wait out.
+ *
+ * `safety` leaves room for a fan that has to feel its way round something; without it a leg
+ * sized exactly to the timeout aborts the moment anything goes slightly wrong.
+ */
+export const OBSERVED_FINE_UNITS_PER_SECOND = 45;
+
+export function budgetForTimeout(timeoutMs, { unitsPerSecond = OBSERVED_FINE_UNITS_PER_SECOND,
+                                              safety = 0.4, floor = 64 } = {}) {
+  // THE RATE IS MEASURED, NOT DERIVED, AND THE DERIVED FIGURE IS TWELVE TIMES TOO FAST.
+  //
+  // The arithmetic invites `MOVEUNITS / MOVE_DELAY` — 64 units per 100ms, 640 u/s — and the
+  // first cut of this function used it, producing a 15,360-unit budget for a 60-second cap.
+  // Its own test refused that immediately, because the thing being budgeted for is a 3,072-unit
+  // leg that did NOT finish in sixty seconds. So the real end-to-end rate of a fine walk is
+  // under 51 u/s: the per-step geometry, the heading fan, the pacer and the round trip all cost
+  // more than the packet does. 45 u/s is the conservative figure taken from that pair — 3072
+  // aborted at 60s, 768 completed — and it is a MEASUREMENT, so it should be re-taken rather
+  // than reasoned about if the mover changes.
+  const secs = Math.max(0, Number(timeoutMs) || 0) / 1000;
+  return Math.max(floor, Math.floor(secs * unitsPerSecond * safety));
+}
+
+/**
  * WHICH WAYPOINT TO AIM AT, MEASURED IN DISTANCE RATHER THAN IN WAYPOINTS.
  *
  * A follower strides "every Nth waypoint", which is a sensible unit on a 650-waypoint rail whose
@@ -181,8 +215,23 @@ export function aimAhead(waypoints, fromIndex, { budget = AIM_BUDGET } = {}) {
  * Returns the point, the segment it lies on, and `stepsNeeded` so a caller can size its own step
  * budget instead of guessing — the guess is what failed.
  */
+/**
+ * How far the walker's CHORD may stray from the rail's ARC before the aim must stop short.
+ *
+ * A walker sent to an aim point travels in a STRAIGHT LINE to it. On a winding rail that is not
+ * the same journey as the rail, and the difference is exactly the ground the rail was avoiding.
+ * Measured 2026-09-12: raising the budget to 5400 units — legal once the broker's fine-walk
+ * ceiling moved to five minutes — made the aim land at the END of a 53-leg path that winds, so the
+ * mover walked a chord straight across it and came back "ran out of steps".
+ *
+ * So the leg budget is bounded by TWO things and the timeout is only one of them: how far the
+ * walker can travel, and how far the rail stays straight. This is the second.
+ */
+export const MAX_CHORD_DEVIATION = 256;
+
 export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
-                                             step = MAX_STEP_HEIGHT, unitsPerStep = 64 } = {}) {
+                                             step = MAX_STEP_HEIGHT, unitsPerStep = 64,
+                                             maxDeviation = MAX_CHORD_DEVIATION } = {}) {
   if (!Array.isArray(waypoints) || waypoints.length === 0) return null;
   if (waypoints.length === 1) {
     const w = waypoints[0];
@@ -197,22 +246,89 @@ export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
   let t = len2 === 0 ? 0 : ((point.x - a.x) * vx + (point.y - a.y) * vy) / len2;
   t = Math.max(0, Math.min(1, t));
 
-  // Walk forward along the line spending the budget.
-  let left = budget, px = a.x + t * vx, py = a.y + t * vy;
+  // Walk forward along the line spending the budget — and stop early if the CHORD from where we
+  // stand to the candidate aim would stray from the rail by more than `maxDeviation`. Every
+  // waypoint passed on the way is checked against that chord, because the walker will fly straight
+  // past all of them.
+  const start = { x: a.x + t * vx, y: a.y + t * vy };
+  let left = budget, px = start.x, py = start.y;
+  const passed = [];
+  // WHICH CONSTRAINT STOPPED US IS PART OF THE ANSWER. Reaching the end of the rail is not the
+  // same as the chord straying off it, and labelling both "straightness" hid the difference — its
+  // own test caught that: a loose tolerance with budget to spare still reported straightness when
+  // the truth was simply that the rail had run out.
+  let strayed = false;
+  const strays = (cx, cy) =>
+    passed.some((w) => distanceToSegment(w, start, { x: cx, y: cy }) > maxDeviation);
   while (i < waypoints.length - 1) {
-    const p = waypoints[i], q = waypoints[i + 1];
+    const q = waypoints[i + 1];
     const remain = Math.hypot(q.x - px, q.y - py);
     if (remain > left) {
       const k = left / remain;
-      return { x: Math.round(px + (q.x - px) * k), y: Math.round(py + (q.y - py) * k),
-               i, dist: budget, atEnd: false,
+      const cx = Math.round(px + (q.x - px) * k), cy = Math.round(py + (q.y - py) * k);
+      if (strays(cx, cy)) { strayed = true; break; }   // the budget is not what binds here
+      return { x: cx, y: cy, i, dist: budget, atEnd: false, bound: 'budget',
                stepsNeeded: Math.ceil(budget / unitsPerStep) };
     }
-    left -= remain; px = q.x; py = q.y; i++;
+    if (strays(q.x, q.y)) { strayed = true; break; }
+    left -= remain; px = q.x; py = q.y; passed.push({ x: q.x, y: q.y }); i++;
+  }
+  // Stopped by straightness rather than by budget: aim at the last point whose chord still tracks
+  // the rail, which is the previous waypoint (or the projection, if we never advanced).
+  if (i > 0 && (px !== start.x || py !== start.y)) {
+    const d = Math.hypot(px - point.x, py - point.y);
+    return { x: Math.round(px), y: Math.round(py), i, dist: d, atEnd: i >= waypoints.length - 1,
+             bound: strayed ? 'straightness' : 'end', stepsNeeded: Math.ceil(d / unitsPerStep) };
+  }
+  if (px !== start.x || py !== start.y) {
+    const d = Math.hypot(px - point.x, py - point.y);
+    return { x: Math.round(px), y: Math.round(py), i, dist: d, atEnd: false,
+             bound: strayed ? 'straightness' : 'end', stepsNeeded: Math.ceil(d / unitsPerStep) };
+  }
+  // Could not advance at all without straying: aim at the very next waypoint, because standing
+  // still is not an option and one waypoint is by construction one lattice step.
+  {
+    const q = waypoints[Math.min(i + 1, waypoints.length - 1)];
+    const d = Math.hypot(q.x - point.x, q.y - point.y);
+    return { x: q.x, y: q.y, i, dist: d, atEnd: i + 1 >= waypoints.length - 1,
+             bound: 'next-waypoint', stepsNeeded: Math.max(1, Math.ceil(d / unitsPerStep)) };
   }
   const d = Math.hypot(px - point.x, py - point.y);
   return { x: Math.round(px), y: Math.round(py), i: waypoints.length - 2, dist: d, atEnd: true,
            stepsNeeded: Math.ceil(d / unitsPerStep) };
+}
+
+/**
+ * BOARD THE LINE BEFORE FOLLOWING IT, or spend every leg doing half of each.
+ *
+ * `aimPoint` walks the budget ALONG the line from the body's projection, which is right when the
+ * body is ON the line and wrong when it is not: a body 800 units off-line is asked to travel ~880
+ * units diagonally on a budget sized for 384, never arrives, ends the leg further off, and does it
+ * again. Measured on prod 2026-09-12, 29 legs in the canyon: the body MOVED on 25 of them, drifted
+ * 101u -> 820u off the rail, oscillated between r23c17 and r23c18, and closed 624 units of 4,918 —
+ * about 21 units a leg, with the exit 200 legs away. Not wedged. Wasting the budget.
+ *
+ * So: far from the line, spend the whole budget getting ONTO it and nothing on advancing. The
+ * threshold is a fraction of the budget rather than an absolute, because "far" only means anything
+ * relative to how far one leg can travel.
+ */
+export function aimOrBoard(waypoints, point, { floor = null, budget = AIM_BUDGET,
+                                               boardWhen = 0.5, step = MAX_STEP_HEIGHT } = {}) {
+  const seg = distanceToRail(waypoints, point, { floor, step });
+  const follow = aimPoint(waypoints, point, { floor, budget, step });
+  if (!follow) return null;
+  if (!(seg.d > budget * boardWhen)) return { ...follow, mode: 'follow', offLine: seg.d };
+
+  // The projection itself: the nearest point on the line, which is where boarding aims.
+  const i = Math.max(0, Math.min(seg.i, waypoints.length - 2));
+  const a = waypoints[i], b = waypoints[i + 1];
+  const vx = b.x - a.x, vy = b.y - a.y, len2 = vx * vx + vy * vy;
+  let t = len2 === 0 ? 0 : ((point.x - a.x) * vx + (point.y - a.y) * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = Math.round(a.x + t * vx), py = Math.round(a.y + t * vy);
+  const d = Math.hypot(px - point.x, py - point.y);
+  return { x: px, y: py, i, dist: d, atEnd: false, mode: 'board', offLine: seg.d,
+           stepsNeeded: Math.ceil(d / 64) };
 }
 
 /** Default gap, in waypoints, that separates rejoining the line from wobbling on it. */

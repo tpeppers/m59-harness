@@ -5,7 +5,7 @@
 // The central case is the real one, with the real numbers: room 49's r25c17 holds four floors
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
 import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
-         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET, aimPoint } from './m59-railfollow.mjs';
+         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET, aimPoint, budgetForTimeout, aimOrBoard } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -257,6 +257,97 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
                        { floor: 1, budget: 1024 });
   eq(off.y, 0, 'the aim lands on the line, not beside it');
   eq(off.x, 6024, 'one budget along from the projection');
+}
+
+// ---- A LEG MUST FIT THE TIMEOUT. The 60s ceiling, measured. -----------------------------
+{
+  // The live prod broker caps a fine walk at keeperAction's 60s default and carries no raised
+  // allowance at all, so this is the ceiling to plan inside.
+  const b = budgetForTimeout(60_000);
+  ok(b < 3 * 1024, `a 60s leg budget (${b}u) is under the 3072u that aborted six times`);
+  ok(b >= 1024, 'but still at least a square, or the follower takes a hundred legs');
+  ok(budgetForTimeout(5 * 60_000) > b, 'a five-minute allowance buys a longer leg');
+  eq(budgetForTimeout(0), 64, 'a zero timeout still yields one step rather than zero');
+  ok(budgetForTimeout(60_000, { safety: 1 }) > budgetForTimeout(60_000, { safety: 0.4 }),
+     'the safety margin is what leaves room for a fan feeling its way round something');
+
+  // And the measured pair: 768 completed, 3072 aborted. The budget must admit the first.
+  ok(768 <= budgetForTimeout(60_000), '768u — the leg length that completed — fits the budget');
+}
+
+// ---- BOARD BEFORE FOLLOWING. The canyon oscillation, 2026-09-12. ------------------------
+{
+  const line = [{ x: 0, y: 0, f: 6144 }, { x: 0, y: 20000, f: 6144 }];   // a long north-south line
+
+  // On the line: follow, and the aim advances along it.
+  const on = aimOrBoard(line, { x: 0, y: 5000 }, { floor: 6144, budget: 1024 });
+  eq(on.mode, 'follow', 'a body on the line follows it');
+  eq([on.x, on.y], [0, 6024], 'advancing one budget along');
+
+  // Slightly off: still follow — a small offset is not worth a whole leg to correct.
+  const near = aimOrBoard(line, { x: 200, y: 5000 }, { floor: 6144, budget: 1024 });
+  eq(near.mode, 'follow', '200 units off a 1024 budget still follows');
+
+  // Far off: board. This is the canyon case — 820 units off with a 384 budget.
+  const far = aimOrBoard(line, { x: 820, y: 5000 }, { floor: 6144, budget: 384 });
+  eq(far.mode, 'board', '820 units off a 384 budget boards instead');
+  eq([far.x, far.y], [0, 5000], 'aiming at the projection — straight at the line, not along it');
+  eq(far.dist, 820, 'spending the whole leg on the 820 units that matter');
+  eq(far.offLine, 820, 'and reporting how far off it was, so a log can show the mode flipping');
+
+  // The threshold is a fraction of the budget, because "far" is only meaningful per leg.
+  eq(aimOrBoard(line, { x: 500, y: 5000 }, { floor: 6144, budget: 384 }).mode, 'board',
+     'the same 500u offset boards on a short budget');
+  eq(aimOrBoard(line, { x: 500, y: 5000 }, { floor: 6144, budget: 3072 }).mode, 'follow',
+     '...and follows on a long one');
+  ok(aimOrBoard(line, { x: 820, y: 5000 }, { floor: 6144, budget: 384, boardWhen: 5 }).mode === 'follow',
+     'and the threshold is tunable');
+  ok(aimOrBoard([], { x: 0, y: 0 }) === null, 'an empty rail still has no aim');
+}
+
+// ---- THE CHORD IS NOT THE ARC. A winding rail bounds the leg, not the timeout. -----------
+{
+  // A straight rail: the budget binds, as before.
+  const straight = [];
+  for (let k = 0; k < 200; k++) straight.push({ x: k * 64, y: 0, f: 1 });
+  const a = aimPoint(straight, { x: 0, y: 0 }, { floor: 1, budget: 3072 });
+  eq(a.bound, 'budget', 'on a straight rail the budget is what stops the aim');
+  eq(a.dist, 3072, 'and it spends all of it');
+
+  // A rail that turns a hard corner: the aim must NOT cut across it.
+  const corner = [{ x: 0, y: 0, f: 1 }];
+  for (let k = 1; k <= 40; k++) corner.push({ x: k * 64, y: 0, f: 1 });       // east 2560u
+  for (let k = 1; k <= 40; k++) corner.push({ x: 2560, y: k * 64, f: 1 });    // then south 2560u
+  const c = aimPoint(corner, { x: 0, y: 0 }, { floor: 1, budget: 5120 });
+  eq(c.bound, 'straightness', 'a corner stops the aim before the budget does');
+  ok(c.dist <= 2560 + 256, 'the aim stays on the straight run, not past the corner');
+  ok(c.y <= 256, 'and it is at most one tolerance past the corner, not across it');
+  ok(c.dist > 1024, 'while still being a useful leg, not one waypoint');
+
+  // Tighten the tolerance and the aim shortens; loosen it and it lengthens.
+  const tight = aimPoint(corner, { x: 0, y: 0 }, { floor: 1, budget: 5120, maxDeviation: 16 });
+  const loose = aimPoint(corner, { x: 0, y: 0 }, { floor: 1, budget: 5120, maxDeviation: 4096 });
+  ok(tight.dist <= c.dist, 'a tighter deviation bound never lengthens the aim');
+  ok(loose.dist >= c.dist, 'and a looser one never shortens it');
+  ok(['budget', 'end'].includes(loose.bound),
+     'with a huge tolerance straightness stops binding — here the rail simply runs out');
+}
+{
+  // A zig-zag so sharp that no chord tracks it: the aim falls back to the next waypoint, because
+  // standing still is not an option and one waypoint is one validated lattice step.
+  const zig = [{ x: 0, y: 0, f: 1 }];
+  for (let k = 1; k <= 20; k++) zig.push({ x: (k % 2) * 64, y: k * 64, f: 1 });
+  const z = aimPoint(zig, { x: 0, y: 0 }, { floor: 1, budget: 4096, maxDeviation: 8 });
+  ok(z !== null, 'a rail nothing can chord still yields an aim');
+  ok(z.dist > 0, 'and it is not the point we are standing on');
+  ok(['straightness', 'next-waypoint'].includes(z.bound), 'reporting which bound stopped it');
+}
+{
+  // The bound is REPORTED, so a log can show which constraint is actually in play — the whole
+  // reason the 5400-unit budget looked reasonable for six runs.
+  const straight = [{ x: 0, y: 0, f: 1 }, { x: 10000, y: 0, f: 1 }];
+  ok(aimPoint(straight, { x: 0, y: 0 }, { floor: 1, budget: 1024 }).bound === 'budget',
+     'and it names the budget when the budget binds');
 }
 
 // ---- the high-water mark, and the run it aborted -----------------------------------------
