@@ -4,7 +4,8 @@
 //
 // The edge test is injected, so this exercises the cutter against synthetic worlds whose shape is
 // known exactly. Every case is a thing that went wrong on the real map on 2026-09-11/12.
-import { snap, flood, chainTo, cutRail, verifyRail, LATTICE } from './m59-railcut.mjs';
+import { snap, flood, chainTo, cutRail, verifyRail, furthestTraceable, chordWalkable, LATTICE }
+  from './m59-railcut.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, what) => { if (c) pass++; else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -103,6 +104,113 @@ ok(snap(17648) % LATTICE === 0, 'the result is always on the lattice');
   ok(r.ok, 'a detour is still a path');
   ok(r.legs > 2048 / LATTICE, 'and it is longer than the straight line, because it goes round');
   ok(r.waypoints.some(w => w.x >= 2000), 'passing through the gap');
+}
+
+// ---- chordWalkable: ONE LONG CALL IS NOT AN ANSWER --------------------------------------
+{
+  // THE MEASURED CASE. An edge test that accepts a long span while refusing a piece in the middle
+  // is not a hypothetical: traceFineMoveClient did exactly this on room 49, accepting a 3300-unit
+  // chord whose second 64-unit piece it refused when asked separately.
+  const lazy = (a, b) => {
+    const d = Math.hypot(b.x - a.x, b.y - a.y);
+    if (d > 1000) return true;                 // long spans wave everything through
+    return !(a.x >= 100 && a.x < 200);         // and a short piece in the middle is refused
+  };
+  ok(lazy({ x: 0, y: 0 }, { x: 3300, y: 0 }), 'the lazy edge accepts the whole span');
+  const c = chordWalkable({ x: 0, y: 0 }, { x: 3300, y: 0 }, { edge: lazy });
+  ok(!c.ok, 'stepping it finds the refusal the long call missed');
+  eq(c.refusedAt, 3, 'naming which piece');
+  eq(c.of, 52, 'of how many');
+  eq(c.distance, 3300, 'and the distance asked about');
+}
+{
+  const c = chordWalkable({ x: 0, y: 0 }, { x: 640, y: 0 }, { edge: open });
+  ok(c.ok, 'an open chord walks');
+  eq(c.of, 10, 'in ten lattice pieces');
+  ok(c.refusedAt === undefined, 'with nothing refused');
+}
+{
+  // A chord shorter than one lattice step is still one piece, never zero.
+  const c = chordWalkable({ x: 0, y: 0 }, { x: 16, y: 0 }, { edge: open });
+  eq(c.of, 1, 'a sub-lattice chord is one piece');
+  ok(c.ok, 'and walks if the edge allows it');
+  ok(!chordWalkable({ x: 0, y: 0 }, { x: 16, y: 0 }, { edge: () => false }).ok,
+     'and does not if it does not');
+}
+{
+  // Zero length: nothing to walk, and it must not divide by zero or loop for ever.
+  const c = chordWalkable({ x: 5, y: 5 }, { x: 5, y: 5 }, { edge: open });
+  eq(c.of, 1, 'a zero-length chord is one trivial piece');
+  eq(c.distance, 0, 'of no distance');
+}
+{
+  // AND furthestTraceable NOW USES IT: a lazy edge must not produce a long false aim.
+  const lazy = (a, b) => {
+    const d = Math.hypot(b.x - a.x, b.y - a.y);
+    if (d > 1000) return true;
+    return !(a.x >= 100 && a.x < 200);
+  };
+  const rail = [];
+  for (let k = 0; k <= 60; k++) rail.push({ x: k * 64, y: 0, f: 1 });
+  const a = furthestTraceable(rail, { x: 0, y: 0 }, { edge: lazy, maxAhead: 60 });
+  ok(a.i <= 3, 'the aim stops at the real obstruction, not where the lazy long call allowed');
+  ok(a.dist <= 200, 'so the leg is honest about how far it can actually go');
+}
+
+// ---- furthestTraceable: ASK the geometry, do not estimate --------------------------------
+{
+  // A straight rail in an open world: the aim should reach as far as it is allowed to look.
+  const rail = [];
+  for (let k = 0; k <= 40; k++) rail.push({ x: k * 64, y: 0, f: 1 });
+  const a = furthestTraceable(rail, { x: 0, y: 0 }, { edge: open, maxAhead: 10 });
+  eq(a.i, 10, 'an open straight rail is chord-reachable as far as maxAhead');
+  eq(a.spanned, 10, 'spanning ten waypoints in one leg');
+  ok(!a.fallback, 'and it is not a fallback');
+}
+{
+  // A WALL, refused by POSITION rather than by chord length. Once a chord is checked by stepping
+  // it, "only short chords are walkable" stops being a meaningful fixture — every 64-unit piece is
+  // short. A real obstruction sits somewhere, and the aim must stop before it.
+  const wallAt256 = (p, q) => !(q.x > 250 && q.x < 320);
+  const rail = [];
+  for (let k = 0; k <= 40; k++) rail.push({ x: k * 64, y: 0, f: 1 });
+  const a = furthestTraceable(rail, { x: 0, y: 0 }, { edge: wallAt256, maxAhead: 20 });
+  eq(a.i, 3, 'the aim stops at the last waypoint before the wall');
+  eq(a.dist, 192, 'which is 192 units, not the 1280 maxAhead would have allowed');
+  ok(!a.fallback, 'this is a real answer, not a fallback');
+}
+{
+  // NOTHING ahead is chord-reachable: the fallback is one validated lattice step, and it SAYS so.
+  const a = furthestTraceable([{ x: 0, y: 0, f: 1 }, { x: 64, y: 0, f: 1 }, { x: 128, y: 0, f: 1 }],
+                              { x: 0, y: 0 }, { edge: () => false });
+  ok(a.fallback, 'a rail with no walkable chord falls back');
+  eq(a.i, 1, 'to the next waypoint');
+  ok(/no chord from here/.test(a.why), 'and says why, which is a stronger statement than "short leg"');
+}
+{
+  // CONTIGUITY, not the best hit. Walkability along a rail is not monotonic, so a reachable
+  // waypoint BEYOND an unreachable one must not be claimed — the body cannot skip the gap.
+  const gapAt3 = (p, q) => !(q.x === 192);
+  const rail = [];
+  for (let k = 0; k <= 10; k++) rail.push({ x: k * 64, y: 0, f: 1 });
+  const a = furthestTraceable(rail, { x: 0, y: 0 }, { edge: gapAt3, maxAhead: 10 });
+  eq(a.i, 2, 'it stops before the gap');
+  ok(!a.fallback, 'having found a real answer');
+}
+{
+  // The budget still caps it, because a leg must also fit the walker's step allowance.
+  const rail = [];
+  for (let k = 0; k <= 40; k++) rail.push({ x: k * 64, y: 0, f: 1 });
+  const a = furthestTraceable(rail, { x: 0, y: 0 }, { edge: open, maxAhead: 40, budget: 500 });
+  ok(a.dist <= 500, 'the aim respects the distance budget');
+  ok(a.i < 40, 'and stops short of the end');
+}
+{
+  eq(furthestTraceable([], { x: 0, y: 0 }, { edge: open }), null, 'an empty rail has no aim');
+  eq(furthestTraceable([{ x: 0, y: 0, f: 1 }], { x: 0, y: 0 }, { edge: open }).i, 0,
+     'a one-waypoint rail aims at itself');
+  eq(furthestTraceable([{ x: 0, y: 0 }], { x: 0, y: 0 }, {}), null,
+     'and no edge test means no answer, rather than a guess');
 }
 
 // ---- verifyRail: the granularity rule ---------------------------------------------------
