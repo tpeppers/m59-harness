@@ -746,7 +746,15 @@ export const ITEM_RARITY = Object.freeze({
   NORMAL: 0, UNCOMMON: 1, RARE: 2, LEGENDARY: 4, UNIDENTIFIED: 100, CURSED: 200,
 });
 
+// NULL IS NOT ZERO, AND ZERO IS `normal`. `Number(null)` is 0, so a null grade fell through
+// to the NORMAL case and every item whose rarity nobody had read came back labelled `normal` —
+// the absent-is-not-negative conflation, in the one field that is supposed to answer "is this
+// cursed". Found 2026-09-12 on a live character: Rizzo's wielded mace reported
+// `rarity_name: "normal"` and a note saying nothing equipped was cursed, while his own keeper
+// was refusing to train, eighty passes running, because "mace is cursed and cannot be removed".
+// `undefined` already answered null; `null` has to as well, and so does an empty string.
 export const rarityName = (r) => {
+  if (r === null || r === undefined || r === '') return null;
   switch (Number(r)) {
     case ITEM_RARITY.NORMAL: return 'normal';
     case ITEM_RARITY.UNCOMMON: return 'uncommon';
@@ -776,6 +784,9 @@ export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIF
 // equipment snapshot carried `rarity` it was not. Rizzo stalled 56 passes on one and three
 // separate checks I wrote could not see it — they tested a refusals list that a keeper
 // restart clears, then an equipment reply with no such field in it.
+// Safe against a null grade by luck rather than design — `Number(null)` is 0 and 0 is
+// neither 100 nor 200 — so these answer false for 'nobody has read it', which is the
+// right direction for both. `rarityName` is the one that had to be fixed.
 export const isCursed = (o) => Number(o?.rarity) === ITEM_RARITY.CURSED;
 
 // FOOD ABOVE A RESERVE, which is the only part of a larder that may be dropped.

@@ -11991,11 +11991,20 @@ const TOOLS = [
       const graded = eq.equipped.map(e => ({
         ...e, rarity_name: rarityName(e.rarity) ?? undefined, cursed: isCursed(e) || undefined }));
       const cursed = graded.filter(e => e.cursed).map(e => e.name);
+      // `grades_known` SAYS THE STRUCTURED LIST ARRIVED. It does not say every ITEM in it
+      // carries a grade, and I wrote the note below as though it did — so a keeper that sent
+      // `equipment_items` with `rarity: null` produced "the server graded everything equipped
+      // and none of it is cursed" about Rizzo's mace while his own keeper was refusing to
+      // train, eighty passes running, because that mace is cursed and cannot be removed.
+      // The claim needs every item to have an actual grade, not merely the list to exist.
+      const ungraded = graded.filter(e => e.rarity === null || e.rarity === undefined)
+                             .map(e => e.name);
       return {
         character: c.me?.name ?? null,
         ...eq,
         equipped: graded,
         cursed: cursed.length ? cursed : null,
+        ...(ungraded.length ? { ungraded } : {}),
         cursed_note: !eq.grades_known
           ? 'this keeper does not report rarity grades yet, so "no cursed item" is NOT what ' +
             'this says — it is that nothing here can tell you. Restart the keeper to find out.'
@@ -12003,7 +12012,11 @@ const TOOLS = [
              ? 'a cursed item can NEVER be unwielded (the one irreversible mistake here). It ' +
                'comes off with a remove curse potion (Lady Aftyn, room 205), the `remove ' +
                'curse` spell cast on this character, or when the weapon breaks.'
-             : 'the server graded everything equipped and none of it is cursed'),
+             : (ungraded.length
+                ? `no grade arrived for ${ungraded.join(', ')}, so this does NOT say they are ` +
+                  'uncursed — it says nobody can tell you from here. The refusal reason ' +
+                  'on the keeper is the better witness: it names the cursed item outright.'
+                : 'the server graded everything equipped and none of it is cursed')),
         // The one derived field, and labelled as derived. Which of the equipped items is
         // the weapon is a judgement from its name; that it is equipped at all is not.
         wielding: weapons.length ? weapons.map(w => w.name) : null,

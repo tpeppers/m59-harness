@@ -130,6 +130,44 @@ ok('no teeth means no work, and it says which shortage it is', () => {
 
 console.log('\ncursed is the same grade, and the hand is where it matters');
 
+// NULL IS NOT ZERO, AND ZERO IS `normal`.
+//
+// `Number(null)` is 0, so a null grade fell through to the NORMAL case and every item whose
+// rarity nobody had read came back labelled `normal`. Found on a live character the day the
+// grade first shipped: Rizzo's wielded mace reported `rarity_name: "normal"` alongside a note
+// saying nothing equipped was cursed, while his own keeper had been refusing to train for
+// eighty consecutive passes because "mace is cursed and cannot be removed". The field added to
+// answer "is this cursed" was answering "no" from an absence.
+ok('a null grade has no name — it is not `normal`', () => {
+  assert.equal(rarityName(null), null);
+  assert.equal(rarityName(undefined), null);
+  assert.equal(rarityName(''), null);
+  assert.equal(rarityName(0), 'normal', 'and ZERO still is, because zero is a real grade');
+});
+
+// The two predicates were already safe here, but by luck rather than design — `Number(null)`
+// is 0 and 0 is neither 100 nor 200 — so pin it rather than leave it to be re-derived.
+ok('and the predicates answer false for a grade nobody has read, which is the safe direction',
+   () => {
+  assert.equal(isCursed({ rarity: null }), false);
+  assert.equal(isUnidentified({ rarity: null }), false);
+  assert.equal(isCursed({}), false);
+});
+
+// `grades_known` SAYS THE LIST ARRIVED, NOT THAT EVERY ROW IN IT IS GRADED, and the note in
+// m59-broker.mjs was written as though those were the same thing. Pinned as the expression,
+// because the broker cannot be imported — importing it takes the fleet lock.
+ok('an ungraded row is reported as ungraded rather than folded into "none is cursed"', () => {
+  const equipped = [{ name: 'mace', rarity: null }, { name: 'leather armor', rarity: 0 }];
+  const ungraded = equipped.filter(e => e.rarity === null || e.rarity === undefined)
+                           .map(e => e.name);
+  assert.deepEqual(ungraded, ['mace']);
+  const cursed = equipped.filter(e => isCursed(e)).map(e => e.name);
+  assert.equal(cursed.length, 0, 'nothing READS as cursed');
+  // …and that is exactly the case where the old note asserted it was clean.
+  assert.ok(ungraded.length > 0, 'so the claim has to be withheld');
+});
+
 ok('200 is cursed, by the server\'s own word rather than an inference', () => {
   assert.equal(ITEM_RARITY.CURSED, 200);
   assert.equal(rarityName(200), 'cursed');
