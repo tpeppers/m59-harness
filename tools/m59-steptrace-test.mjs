@@ -5,7 +5,8 @@
 // The logs below are the shapes walkFine actually returns, including the real one from a hand call
 // on 2026-09-12 where every step slid 0.35 radians and the body did not move while the reply said
 // `arrived: true`.
-import { analyseLeg, verdictOf, summariseLegs, MAX_PLAUSIBLE_STEP, PROTOCOL_TO_CLIENT }
+import { analyseLeg, verdictOf, summariseLegs, slideShape, MIN_MOVER_STEP,
+         MAX_PLAUSIBLE_STEP, PROTOCOL_TO_CLIENT }
   from './m59-steptrace.mjs';
 
 let pass = 0, fail = 0;
@@ -200,6 +201,130 @@ eq(PROTOCOL_TO_CLIENT, 16, 'protocol to client is x16');
   eq(s.verdicts[0].verdict, 'BLOCKED', 'and the commonest verdict first');
   eq(s.verdicts[0].legs, 2, 'with its count');
   eq(summariseLegs([]).legs, 0, 'an empty run summarises to nothing rather than throwing');
+}
+
+// ---- slideShape: WHICH WAY the fan kept turning ------------------------------------------
+//
+// A slide COUNT cannot tell a zigzag from an orbit, and they are different bugs. Alternating
+// offsets cancel and still converge; same-sign offsets are a constant turn relative to a goal
+// walkFine re-aims at every step, which is a circle.
+{
+  const L = (...slids) => slids.map((slid, step) => ({ step, slid, to: { x: 1000 + step, y: 1000 } }));
+
+  const zig = slideShape(L(0.35, -0.35, 0.35, -0.35, 0.35));
+  eq(zig.slideAlternation, 1, 'a perfect zigzag alternates on every pair');
+  eq(zig.directTaken, 0, 'and never got the direct heading');
+
+  const orbit = slideShape(L(0.35, 0.35, 0.35, 0.35, 0.35));
+  eq(orbit.slideAlternation, 0, 'a constant deflection never alternates — THE ORBIT SIGNATURE');
+  eq(orbit.slideBias, { offset: 0.35, steps: 5, share: 1 }, 'and the bias names the offset it kept');
+
+  const clean = slideShape(L(0, 0, 0));
+  eq(clean.directTaken, 3, 'steps that did not slide are counted as the direct heading taken');
+  eq(clean.slideBias, null, 'with no bias to report');
+  eq(clean.slideAlternation, null, '...and no alternation, rather than a misleading zero');
+
+  eq(slideShape([]).slideBias, null, 'an empty log reports null rather than throwing');
+  eq(slideShape([]).directTaken, null, '...and does not claim the direct heading was taken');
+  // ONE slide cannot alternate with anything, and calling that 0 would read as an orbit.
+  eq(slideShape(L(0.35)).slideAlternation, null, 'a single slide has no alternation to report');
+
+  // Mixed magnitudes, same sign: still an orbit. The SIGN is what accumulates, not the size.
+  const wide = slideShape(L(0.35, 0.75, 1.2, 0.35, 0.75));
+  eq(wide.slideAlternation, 0, 'different magnitudes with one sign still never alternate');
+  eq(wide.slideBias.offset, 0.35, 'and the bias is the commonest offset');
+}
+
+// ---- ORBIT: the verdict GRINDING structurally cannot reach --------------------------------
+{
+  // Marco's shape, room 49: the body walks a long way, keeps its deflection sign, and arrives
+  // nowhere — WITHOUT revisiting an exact protocol point, which is what GRINDING requires. Before
+  // this verdict existed the worst legs in the repository fell through to MIXED.
+  // DELIBERATELY NOT A CLOSED LOOP. An orbit does not have to return to a point it has already
+  // occupied — that is exactly why GRINDING, which requires a revisited protocol point, cannot see
+  // it — so this arc stops short of closing and revisits nothing.
+  const circle = [];
+  for (let i = 0; i < 24; i++) {
+    const t = (i / 24) * 0.92 * 2 * Math.PI;          // 0.92 of a turn, radius 40 protocol units
+    circle.push({ step: i, slid: 0.35,
+                  to: { x: Math.round(1000 + 40 * Math.cos(t)), y: Math.round(1000 + 40 * Math.sin(t)) } });
+  }
+  const a = analyseLeg({ arrived: false, reason: 'out of steps', log: circle },
+                       // `from` is where the body stood BEFORE step 0, so it is deliberately not
+                       // the same point as the first log entry — passing (1040,1000) made it
+                       // identical to it and manufactured the one revisit this case must not have.
+                       { requested: 4096, from: { x: 1036, y: 998 } });
+  ok(a.travelled > 2000, 'the body covered real ground');
+  ok(a.net < 600 && a.net * 6 < a.travelled,
+     '...and ended up near where it started: 466 client units net against 3,538 travelled');
+  eq(a.revisits, 0, 'without revisiting a single protocol point — so GRINDING cannot see it');
+  const v = verdictOf(a);
+  eq(v.verdict, 'ORBIT', 'and the verdict is ORBIT');
+  ok(/KEPT their sign/.test(v.why), 'it says the deflections kept their sign');
+  ok(/constant offset is a/.test(v.why), '...and names the mechanism: a constant turn');
+  ok(/available on NONE/.test(v.why), '...and that the direct heading was never available');
+
+  // A ZIGZAG OF THE SAME EFFICIENCY MUST NOT BE CALLED AN ORBIT. Same waste, opposite cause, and
+  // the fix for one is not the fix for the other.
+  const zz = [];
+  for (let i = 0; i < 24; i++)
+    zz.push({ step: i, slid: i % 2 ? 0.35 : -0.35,
+              to: { x: 1000 + (i % 2 ? 20 : 0), y: 1000 } });
+  const zv = verdictOf(analyseLeg({ arrived: false, log: zz }, { requested: 4096, from: { x: 1000, y: 1000 } }));
+  ok(zv.verdict !== 'ORBIT', 'an alternating leg of the same efficiency is NOT an orbit');
+
+  // And an efficient same-sign leg is a CURVE, not an orbit: a constant turn that still arrives is
+  // simply a body going round a corner, which is the fan doing its job.
+  const curve = [];
+  for (let i = 0; i < 12; i++) curve.push({ step: i, slid: 0.35, to: { x: 1000 + i * 20, y: 1000 + i } });
+  const cv = verdictOf(analyseLeg({ arrived: true, log: curve }, { requested: 3520, from: { x: 1000, y: 1000 } }));
+  ok(cv.verdict !== 'ORBIT', 'a same-sign leg that MAKES PROGRESS is a curve, not an orbit');
+
+  // A body that barely moved is BLOCKED, and that must still win — it is not orbiting, it is stuck.
+  const stuck = [{ step: 0, slid: 0.35, to: { x: 1000, y: 1000 } },
+                 { step: 1, slid: 0.35, to: { x: 1001, y: 1000 } },
+                 { step: 2, slid: 0.35, to: { x: 1000, y: 1000 } },
+                 { step: 3, slid: 0.35, to: { x: 1001, y: 1000 } },
+                 { step: 4, slid: 0.35, to: { x: 1000, y: 1000 } }];
+  eq(verdictOf(analyseLeg({ arrived: false, log: stuck }, { requested: 2048, from: { x: 1000, y: 1000 } })).verdict,
+     'BLOCKED', 'a body that barely moved stays BLOCKED rather than becoming an orbit');
+}
+// ---- ALREADY-THERE: an empty log with arrived:true is the LOUDEST signal, not a missing one ----
+//
+// walkFine returns `{arrived:true, steps:0, log:[]}` the moment `remaining <= arriveWithin`. The mover
+// is neither refusing nor failing — it is being asked to walk somewhere it already stands, and the
+// CALLER is the bug. 53 of Marco's 169 legs were this, filed as `unknown` and read as missing
+// telemetry, and 41 of the 53 asked for less than the mover's own minimum step.
+{
+  const zero = { arrived: true, steps: 0, log: [], shelf_refusals: 0 };
+
+  const near = verdictOf(analyseLeg(zero, { requested: 93 }));
+  eq(near.verdict, 'ALREADY-THERE', 'zero steps with arrived:true is its own verdict');
+  ok(/already inside arriveWithin/.test(near.why), 'it says the aim was inside the tolerance');
+  ok(new RegExp(`BELOW the mover's ${MIN_MOVER_STEP}`).test(near.why),
+     '...and that 93 units is below the minimum step');
+  ok(/re-issuing it will not help/.test(near.why),
+     '...and that retrying cannot fix it, which is what the follower kept doing');
+  ok(/The AIM is the bug/.test(near.why), '...and names the caller as the thing to change');
+  ok(/skipping waypoints until it clears/.test(near.why), '...with what to do instead');
+
+  // A far aim that still took no step is a DIFFERENT problem — a tolerance set too wide — and must
+  // not be blamed on the minimum step.
+  const far = verdictOf(analyseLeg(zero, { requested: 4096 }));
+  eq(far.verdict, 'ALREADY-THERE', 'a far aim with zero steps is still ALREADY-THERE');
+  ok(!/BELOW the mover/.test(far.why), '...but is NOT blamed on the minimum step');
+  ok(/4096 client units away/.test(far.why), '...and states the distance so the tolerance is suspect');
+
+  // With no `requested` there is nothing to say about distance, and it must not invent one.
+  ok(!/client units away/.test(verdictOf(analyseLeg(zero)).why),
+     'without a requested distance it claims nothing about how far');
+
+  // THE THREE EMPTY-LOG CASES STAY DISTINCT. Refusals mean the guard spoke; arrived:true means the
+  // caller asked for nothing; neither is "no data".
+  eq(verdictOf(analyseLeg({ arrived: false, log: [], shelf_refusals: 70 })).verdict, 'GUARD-REFUSED',
+     'an empty log WITH refusals is still the guard speaking');
+  eq(verdictOf(analyseLeg({ arrived: false, log: [], shelf_refusals: 0 })).verdict, 'unknown',
+     'and an empty log with neither is genuinely unknown — which is now a much smaller set');
 }
 
 console.log(`\nm59-steptrace: ${pass} assertion(s) passed, ${fail} failed`);
