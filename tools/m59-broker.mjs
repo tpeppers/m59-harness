@@ -14042,15 +14042,35 @@ const TOOLS = [
       const was = s.world?.room?.num ?? null;
       const before = c.evSeq;
       await s.pacer.submit('move', () => c.requestRescue(), MOVE_INTERVAL_MS);
-      const ev = await c.waitFor({ since: before, kinds: ['room-entered', 'message'], timeoutMs: 6000 })
+      // THE TELEPORT IS DELAYED AND THIS WAITED SIX SECONDS FOR IT.
+      //
+      // `CastSpell` does not move anybody: it calls `StartRescueTimer` and returns, and the
+      // move happens when that timer fires — 15s base (settings.kod:91) plus a random 5-10s
+      // half the time (rescue.kod:99-107). A six-second window is SHORTER THAN THE MINIMUM, so
+      // this could essentially never see the room change, and then blamed the server for it.
+      //
+      // Measured the hard way on 2026-09-12: three casts read as "refused" from replies that
+      // had no opinion, and the character turned out to have teleported each time. 30s covers
+      // the worst case with margin; a rescue that has not landed by then really has not landed.
+      const ev = await c.waitFor({ since: before, kinds: ['room-entered', 'message'], timeoutMs: 30_000 })
                         .catch(() => ({ events: [] }));
       const entered = (ev.events || []).find(e => e.kind === 'room-entered');
       const now = s.world?.room?.num ?? null;
       return { asked: true, was_in: was, now_in: now, moved: now !== was || !!entered,
                arrived_in: entered?.roomName ?? null,
                messages: (ev.events || []).filter(e => e.text).map(e => e.text).slice(0, 4),
-               ...(now === was ? { note: 'the room did not change — either the server declined or ' +
-                                         'this character was already somewhere it counts as safe' } : {}) };
+               // AND THREE CAUSES, NOT TWO. The old note offered "the server declined" or
+               // "already somewhere safe" and left out the one that was actually happening.
+               ...(now === was ? { note: 'the room did not change within 30s. Three things look ' +
+                                         'like this and they are not the same: the teleport is ' +
+                                         'still pending (it fires 15-25s after the request, so ' +
+                                         'read the room again before concluding anything); the ' +
+                                         'server refused because a rescue was ALREADY pending, ' +
+                                         'a Token is held, or a player was attacked too recently ' +
+                                         '(rescue.kod:66-91); or this character is already in ' +
+                                         'the room the rescue would take it to, in which case ' +
+                                         'the server answers UC_SEND_QUIT and disconnects ' +
+                                         'instead — check `look_at` on it for its hometown' } : {}) };
     },
   },
   {
