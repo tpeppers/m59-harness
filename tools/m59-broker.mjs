@@ -10017,7 +10017,10 @@ const TOOLS = [
           max_weapons: a.max_weapons == null ? null : Number(a.max_weapons),
           max_offers: a.max_offers, skip_names: a.skip_names });
       const t = resolveTarget(s, a.merchant);
-      return skills.sellAll(s, { merchant: t, keep: a.keep || [], minPrice: num(a.min_price, 1),
+      // `a.keep || []` TURNED "the caller said nothing" INTO "keep nothing", which is the one
+      // thing it must not mean now that sellAll has a fleet default. Undefined passes through so
+      // the default applies; an explicit empty array still means sell everything unprotected.
+      return skills.sellAll(s, { merchant: t, keep: a.keep ?? undefined, minPrice: num(a.min_price, 1),
                                  loadout: a.ignore_loadout || !who ? null : loadoutFor(who),
                                  maxWeapons: a.max_weapons == null ? null : Number(a.max_weapons),
                                  weaponPriority: Array.isArray(a.weapon_priority)

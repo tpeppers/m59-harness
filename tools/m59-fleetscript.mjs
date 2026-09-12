@@ -164,7 +164,7 @@ import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { SAY_RADIUS, squaredDistance, withinSayRange,
          sayApproachSquare } from './m59-sayrange.mjs';
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
-import { foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
+import { FLEET_KEEP, foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -1155,17 +1155,14 @@ export const shop = (seller, lines, opts = {}) => ({ do: 'shop', seller, lines, 
 //   FAMILY -- derived, never typed. Same discipline as FOOD_KEEP above and for the same
 //   reason: a hand-written list of wands would be wrong within a patch, and this one was
 //   wrong from the day it was written.
-export const VAULT_KEEP = Object.freeze([
-  'herb', 'elderberry', 'Inky-cap mushroom', 'flask',
-  'rose', 'ring of invisibility', 'mystic sword', 'true lute',
-  'blue dragon scale', 'dark angel feather', 'shrunken head',
-  'emerald', 'sapphire', 'diamond', 'ruby',
-  // Every wand and every scroll -- 40 of them, and the operator asked for one by name.
-  // "gnarled staff" is in here without being typed: StaffOfJolting is a SpecialWand, so
-  // the chain claims it even though the word "wand" never appears in what a player sees.
-  // That is the case a name-matching list gets wrong, which is why this one reads the tree.
-  ...allWandAndScrollNames(),
-]);
+// VAULT_KEEP IS FLEET_KEEP, AND THE LIST MOVED RATHER THAN BEING COPIED.
+//
+// It used to be defined here, which meant only a fleetscript `sell` step could consult it — a
+// keeper selling on its own accord never saw it. It now lives in m59-items.mjs beside the item
+// knowledge it is built from, where `sellAll` can default to it as well. The old name stays
+// because it is what every existing caller and test says, and because "what we vault" and "what
+// we refuse to sell" really are the same list here.
+export { FLEET_KEEP as VAULT_KEEP } from './m59-items.mjs';
 
 // `{ noVault: true }` acknowledges that this trip cannot or will not vault, and is
 // REQUIRED when no vault() precedes the sell — see the plan check in fleetScript.
@@ -1175,7 +1172,7 @@ export const sell = (merchant, opts = {}) => ({ do: 'sell', merchant, ...opts })
 // and Ko'catan only, so a trip that does not pass one CANNOT vault — which is exactly why the
 // keep list above is the real protection and this step is the bonus. Everything a character
 // dies holding is on the floor where it fell; a vault is the only thing that is not.
-export const vault = (vaultman, items = VAULT_KEEP, opts = {}) =>
+export const vault = (vaultman, items = FLEET_KEEP, opts = {}) =>
   ({ do: 'vault', vaultman, items, ...opts });
 // LEAVE THE NEWBIE ZONE, ONCE, AND READ BACK THAT IT HAPPENED.
 //
@@ -2567,7 +2564,7 @@ async function runStep(ctx, agent, step, state) {
         // step for surplus it withdrew over a stockpile cap. Dropping those names is safe
         // precisely BECAUSE the deposit ran first: the stock we mean to hold is in the vault,
         // so what carries that name in the pack now is the overflow we already decided to sell.
-        keep: [...new Set([...VAULT_KEEP, ...(step.keep ?? [])])]
+        keep: [...new Set([...FLEET_KEEP, ...(step.keep ?? [])])]
           .filter(n => !(state.sellAnyway ?? []).some(e =>
             String(e).trim().toLowerCase() === String(n).trim().toLowerCase())),
         min_price: step.minPrice ?? 1,
@@ -3568,7 +3565,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
             continue;
           }
           if (step.do !== 'sell' || !bought.length) continue;
-          const keep = [...new Set([...VAULT_KEEP, ...(step.keep ?? [])])];
+          const keep = [...new Set([...FLEET_KEEP, ...(step.keep ?? [])])];
           const unprotected = bought.find(b => !keep.some(k => b.match.test(String(k))));
           if (unprotected) { clash = { buy: unprotected, sell: i, keep }; break; }
         }

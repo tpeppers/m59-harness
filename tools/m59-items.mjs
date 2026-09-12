@@ -777,3 +777,39 @@ export const isUnidentified = (o) => Number(o?.rarity) === ITEM_RARITY.UNIDENTIF
 // separate checks I wrote could not see it — they tested a refusals list that a keeper
 // restart clears, then an equipment reply with no such field in it.
 export const isCursed = (o) => Number(o?.rarity) === ITEM_RARITY.CURSED;
+
+// ---------------------------------------------------------------- what the fleet does not sell
+//
+// THE FLEET'S DEFAULT KEEP LIST, IN THE ONE MODULE BOTH SIDES OF THE SALE CAN REACH.
+//
+// This lived in m59-fleetscript.mjs as VAULT_KEEP, where only a fleetscript `sell` step could
+// see it — so it governed an errand somebody wrote and had NO BEARING on a keeper deciding to
+// sell on its own. Two sale paths, one list, and the list was on the wrong side of the fence.
+//
+// It sits here because this module already owns `allWandAndScrollNames` (which the list is
+// partly built from) and is imported by both m59-skills.mjs, where `sellAll` lives, and
+// m59-fleetscript.mjs, which re-exports it under its old name. One definition, no cycle.
+//
+// TWO KINDS OF ENTRY, and the distinction is the same one allWandAndScrollNames exists for:
+//
+//   JUDGEMENT -- typed, one name per line. Whether a thing is worth more kept than sold is not
+//   a fact the class tree carries.
+//
+//   FAMILY -- derived. A hand-written list of wands is wrong within a patch.
+//
+// Matching downstream is by SUBSTRING, so an entry must be specific enough not to catch its
+// neighbours. 'orc tooth' is safe; a bare 'orc' would not be, and it is worth saying because
+// checking this list with /orc/ matched "scroll of fORCes of light" and reported a protection
+// that was not there.
+export const FLEET_KEEP = Object.freeze([
+  'herb', 'elderberry', 'Inky-cap mushroom', 'flask',
+  'rose', 'ring of invisibility', 'mystic sword', 'true lute',
+  'blue dragon scale', 'dark angel feather', 'shrunken head',
+  'emerald', 'sapphire', 'diamond', 'ruby',
+  // THE REAGENT THE FLEET'S OWN SPELLS BURN. `reveal` costs 3 and `identify` 1
+  // (reveal.kod:55, identify.kod:51), they are 650 each at the only counter that sells them,
+  // and nothing this fleet fights drops one. On 2026-09-12 a caster was bought 40 and his
+  // keeper sold 30 on its next town trip -- correctly, because nothing protected them.
+  'orc tooth',
+  ...allWandAndScrollNames(),
+]);
