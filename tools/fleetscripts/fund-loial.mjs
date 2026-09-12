@@ -172,11 +172,27 @@ export const script = {
         // READ THE RECEIVER, NOT THE REPLY. Shillings arrive on an event exactly like a bank
         // withdrawal, so the first read can legitimately be of the past — poll rather than
         // conclude, and let the step's own failure be the timeout.
-        for (let i = 0; i < 20; i++) {
-          if (await purseOfAgent(to) >= had + amount) return true;
-          await new Promise(r2 => setTimeout(r2, 1500));
+        // THIRTY SECONDS WAS NOT ENOUGH AND THE FAILURE WAS A LIE. Measured on prod
+        // 2026-09-12: Rowlf handed Loial 25,000, this loop ran its twenty rounds, returned
+        // false, and the errand unwound — and the money was in Loial's purse the whole time
+        // (400 before, 25,400 after). A hand-over reported as failed is a hand-over somebody
+        // re-runs, which is another 25,000 out of the bank.
+        //
+        // So: a longer budget, and the observed number in the failure rather than a bare
+        // false. "Read it back and it had not arrived" and "read it back and it had arrived
+        // short" are different problems and used to print the same word.
+        const deadline = Date.now() + 180_000;
+        let seen = had;
+        while (Date.now() < deadline) {
+          seen = await purseOfAgent(to);
+          if (seen >= had + amount) return true;
+          await new Promise(r2 => setTimeout(r2, 2500));
         }
-        return false;
+        return { ok: false,
+                 why: `${to} held ${had} before and ${seen} after — expected at least ` +
+                      `${had + amount}. The money may still be in flight: CHECK THE RECEIVER'S ` +
+                      `PURSE BEFORE RE-RUNNING, because this step failing does not mean the ` +
+                      `shillings did not move` };
       }, `hand ${amount} shillings to ${to} and read it back off the RECEIVER`),
       ] : []),
 
@@ -184,7 +200,16 @@ export const script = {
       // eaten, so this is the only leg that raises the ceiling rather than refilling under it.
       ...(feast ? [walk(FEAST_HALL), act('loot', { only: 'pork', max_items: 12 })] : []),
 
-      walk(home),
+      // ALWAYS, AND THIS FILE LEARNED IT THE EXPENSIVE WAY. resupply.mjs has carried the
+      // argument for a while — "whatever went wrong upstream, the character does not get left
+      // standing in a town it did not start in" — and this script did not.
+      //
+      // On 2026-09-12 the verify above returned a false negative and the errand short-circuited,
+      // so the walk home never ran and Rowlf was left in the Yonder Inn of Jasper reading
+      // "hunting: zombie — PAYS NOTHING", nine hops from his station, after an errand that had
+      // actually succeeded. A courier stranded in a foreign room is one a keeper eventually
+      // walks home unsupervised, at a moment nobody chose, which is how this fleet loses people.
+      walk(home, { always: true }),
     ];
   },
 };
