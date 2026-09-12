@@ -58,8 +58,12 @@ ok(bad.problems.some(p => /twice/.test(p)), 'and the collision is reported, not 
 // on disk and must never be read back as chests.
 ok(!bad.chests.has(9), 'a key that is not a square is dropped');
 ok(!bad.chests.has('9'), 'and not smuggled in as a string either');
-ok(bad.problems.some(p => /is not a square/.test(p)),
+ok(bad.problems.some(p => /outside the .* chests/.test(p)),
    'and named rather than clamped onto a chest that exists');
+// A NUMBER is read as an old-style slot and refused for being out of range; a word is
+// refused for not being a square at all. Two different mistakes, two different messages.
+ok(normalisePlan({ chests: { kitchen: { items: [] } } }).problems.some(p => /is not a square/.test(p)),
+   'a key that is not a square and not a number says so');
 ok(bad.problems.some(p => /r18c2|r18c6|r20c4/.test(p)),
    'the refusal shows what a square looks like, using the ones this hall builds');
 ok(bad.problems.some(p => /no item name/.test(p)));
@@ -132,5 +136,41 @@ eq(guildKeepTest({ plan: { chests: { 'r20c4': { items: [{ item: 'herb', target: 
 
 eq(guildShortfall({ plan: PLAN, chests: chestsWith(), rent: IN_GUILD })
    .map(x => x.item).sort(), ['herb', 'inky cap mushroom']);
+
+
+// ---------------------------------------------------------------- the old numbered keys
+//
+// A CONFIG FILE AND THE CODE THAT READS IT SHIP AT DIFFERENT MOMENTS. The plan lives on the
+// machine that owns the fleet; the code arrives on a deploy tag. So a key only the new code
+// understands, written before that code shipped, empties the plan — and it does it in
+// silence, which is this game's whole failure mode carried into our own config.
+//
+// This is not hypothetical. During the change that introduced square keys, the prod plan was
+// rewritten to squares while prod was still running the numbered reader: all three chests
+// "outside 1..4 and dropped", `empty: true`, and the only trace was a problems array nobody
+// was printing. Measured, then fixed by making the reader accept both.
+{
+  const legacy = normalisePlan({ chests: {
+    1: { items: [{ item: 'herb', target: 10 }] },
+    3: { items: [{ item: 'ruby', target: 5 }] } } });
+  eq(legacy.chests.size, 2, 'a numbered plan still loads');
+  eq(legacy.chests.get('r18c2')[0].item, 'herb', 'chest 1 is the first square, row then column');
+  eq(legacy.chests.get('r20c4')[0].item, 'ruby', 'chest 3 is the third');
+  ok(legacy.problems.some(p => /old-style slot number/.test(p)),
+     'and it says the file should be renamed rather than silently accepting it for ever');
+  ok(!legacy.empty, 'the plan is NOT empty — which is the whole point');
+
+  // A number past the chests the hall builds is still refused, rather than wrapping onto one.
+  const tooMany = normalisePlan({ chests: { 9: { items: [{ item: 'herb', target: 1 }] } } });
+  eq(tooMany.chests.size, 0, 'a slot the hall does not build is dropped');
+  ok(tooMany.problems.some(p => /outside the 3 chests/.test(p)));
+
+  // Squares and numbers can coexist in one file mid-migration without colliding.
+  const mixed = normalisePlan({ chests: {
+    1: { items: [{ item: 'herb', target: 10 }] },
+    'r20c4': { items: [{ item: 'ruby', target: 5 }] } } });
+  eq(mixed.chests.size, 2, 'a half-renamed file loads both halves');
+  ok(mixed.chests.has('r18c2') && mixed.chests.has('r20c4'));
+}
 
 console.log(`guild wants: ${n} assertions passed`);

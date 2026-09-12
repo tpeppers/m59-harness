@@ -111,7 +111,31 @@ export function normalisePlan(raw) {
     // chest's name. The square is read off the object every visit, so there is nothing to
     // learn and nothing to get wrong. GUILD_CHEST_SLOTS survives as a fact about how many
     // chests a hall may hold; it is no longer an index into anything.
-    const slot = String(key);
+    //
+    // THE OLD NUMBERS ARE STILL ACCEPTED, and that is not tidiness — it is the difference
+    // between a format change and an outage. The plan file lives on the machine that owns the
+    // fleet; the code ships on a deploy tag. They change at different moments, so a key only
+    // the new code understands, written before that code shipped, empties the plan: three
+    // chests "dropped", `empty: true`, and nothing to notice it but a problems array nobody
+    // prints. That happened to prod during this very change.
+    //
+    // This is a CONFIG MIGRATION and not a chest-addressing mechanism. It translates a file a
+    // person wrote, from a declared table, in the row-then-column order the numbers already
+    // implied. It never decides which chest in a room is which — that is still read off the
+    // object, every visit.
+    let slot = String(key);
+    const legacy = /^[1-9][0-9]*$/.test(slot) ? Number(slot) : null;
+    if (legacy !== null) {
+      const square = BOOKMAKERS_CHEST_SQUARES[legacy - 1];
+      if (!square) {
+        problems.push(`chest ${key} is outside the ${BOOKMAKERS_CHEST_SQUARES.length} chests ` +
+                      `this hall builds and was dropped`);
+        continue;
+      }
+      problems.push(`chest ${key} is an old-style slot number, read as ${square} — ` +
+                    `rename it in the plan file, a chest is named by the square it stands on`);
+      slot = square;
+    }
     if (!parseChestKey(slot)) {
       problems.push(`chest "${key}" is not a square like "r18c6" and was dropped — ` +
                     `the Bookmaker's hall builds its chests at ${BOOKMAKERS_CHEST_SQUARES.join(', ')}`);
