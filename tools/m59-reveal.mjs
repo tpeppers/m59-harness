@@ -55,6 +55,31 @@
 // cast whose mana demonstrably went 65 -> 52. The reply's own before/after read races the
 // server. So nothing here believes it: a cast is judged by re-reading the ITEM's rarity grade,
 // which is the thing the errand exists to change. Rule 6, on the only field that answers it.
+// ---------------------------------------------------------------- where the caster lives
+//
+// THE CASTER SHUTTLES, AND ONLY ONE DIRECTION IS WALKED.
+//
+// Reveal needs three things in one place: the caster, the item, and the teeth. They start in
+// three different towns, so the caster is the one that moves — and moving a 20-max-health body
+// is the most dangerous thing this service does. It killed him once on 2026-09-12.
+//
+// The circuit that works, measured the same day:
+//
+//   Tos (52, Familiars)   Paddock sells the teeth, the bank is 2 hops, room 27's orc farm is 4
+//   Barloque              where `rescue` puts him, free and instant-ish, from anywhere
+//
+// So the RETURN leg is never walked. `rescue` lands the caster at his hometown 15-25s after
+// the cast (settings.kod:91 plus a random 5-10s) — see the reveal-service notes — which makes
+// Barloque a free teleport target and leaves only Barloque -> Tos to walk.
+//
+// AND THAT LEG IS THE CHEAP ONE, WHICH IS THE WHOLE POINT OF ROUTING IT THIS WAY:
+//
+//   Jasper 370   -> Tos 52   10 hops, 1234s p90    the trip that nearly killed him
+//   Barloque 102 -> Tos 52    7 hops,  203s p90    crossed at 20/20 without a scratch
+//
+// Six times shorter. A caster stranded anywhere should therefore `rescue` FIRST and walk
+// second, never walk the whole way — and `fragileBody` in m59-fleetscript.mjs refuses the long
+// version for exactly this reason.
 import { callTool, fleetRoster } from './m59-describe.mjs';
 import { ITEM_RARITY, rarityName, isUnidentified } from './m59-items.mjs';
 
