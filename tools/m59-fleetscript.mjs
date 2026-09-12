@@ -580,6 +580,10 @@ export async function observe(agent) {
     // it was written to catch straight through. The null has to be tested first.
     gold: s?.gold == null || !Number.isFinite(Number(s.gold)) ? null : Number(s.gold),
     health: hp,
+    // THE SIZE OF THE BODY, NOT THE FRACTION OF IT THAT IS LEFT. `health` above is
+    // value/max and answers "is this one hurt"; this answers "is this one small", which is
+    // the question that killed Loial. Null rather than 0 when unreadable — see fragileBody.
+    maxHealth: Number.isFinite(vit?.max) ? Number(vit.max) : null,
     hpText: vit ? `${vit.value}/${vit.max}` : '?',
     // A character in the Underworld is dead however its hit points read on the way in.
     dead: vit?.value === 0 || /underworld/i.test(roomName),
@@ -954,6 +958,31 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'abort on damage, but on a 3s poll, and from six health one skeleton hit ' +
               'lands first. 7 of 37 fleet deaths in three days were inside a safe spot and ' +
               'the other 28 were not in one at all.',
+  },
+  fragileBody: {
+    what: 'a MAXIMUM-health floor under every journey, which is a different question from ' +
+          'the fraction that minHealth asks about',
+    since: '2026-09-12',
+    incident: 'minHealth is health/max, so a 20-of-20 character reads 1.0 and clears every ' +
+              'check in this file while being two spider bites from death. Loial is 20 max ' +
+              'health. He passed the health gate on every journey he was ever given and died ' +
+              'on one, in the Forest of Farol, which is an ordinary road room — 70% spider, ' +
+              'cap 12. Nothing refused, because nothing was asking about the size of the body: ' +
+              'the fraction was perfect. The engagement ceiling scales with max health and so ' +
+              'does the damage a road does to you, so the floor has to be absolute',
+  },
+  leaseEndsAtDeath: {
+    what: 'the faculty lease is handed back the moment the character dies, because movement ' +
+          'is the faculty the escape needs',
+    since: '2026-09-12',
+    incident: 'the heartbeat re-asserted a 30s lease every 10s with no opinion about whether ' +
+              'the body was still alive. Loial died holding one, arrived in the Underworld at ' +
+              'full health, and stood there IDLE while the beat went on taking movement away ' +
+              'from the only process that knows how to walk him to a portal. Leases fail back ' +
+              'to the keeper on LAPSE, which is the right direction and the wrong clock — a ' +
+              'long lease is a long paralysis, and the runner holding it was waiting for an ' +
+              'errand that could never finish. Survival belongs to this repository at 1s ' +
+              '(see the boundary table); a lease that outlives the body quietly takes it back',
   },
   coordUnits: {
     what: 'coordinates carry their space (square / protocol / client) instead of being bare numbers',
@@ -1531,6 +1560,19 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     // Numeric on both sides on purpose; see the coercion note above.
     if (Number(at.room) === to) return { ok: true, room: to };
     if (at.dead) return { ok: false, why: 'died', dead: true };
+    // GUARANTEE: IS THIS BODY BIG ENOUGH FOR A ROAD AT ALL?
+    //
+    // Asked here rather than at plan time on purpose: a fragile character standing still is
+    // perfectly safe, and it is the JOURNEY that kills it. Same placement as the health gate
+    // below, and the same remedy shape — except that this one cannot be waited out. Resting
+    // fixes a fraction; nothing raises max health inside an errand, so this refuses rather
+    // than healing and retrying.
+    if (ctx.fragileBelow > 0 && Number.isFinite(at.maxHealth) && at.maxHealth < ctx.fragileBelow)
+      return { ok: false, fragile: true,
+               why: `max health ${at.maxHealth} is under the fragile floor of ${ctx.fragileBelow} — ` +
+                    `this body does not survive an ordinary road encounter. Waive it with ` +
+                    `unsafe: { reason: '...', waives: ['fragileBody'] } and say why, or lower ` +
+                    `fragileBelow for an errand that stays inside a town` };
     // MAY THIS BODY SET OUT? Asked of m59-travelgate.mjs, which the broker's `travelJob` also
     // asks -- so a script and a bot now get the same answer to the same question. The two
     // rules this file earned are still the rules; they just live where everyone can reach
@@ -1836,12 +1878,46 @@ export async function holdKeeper(ctx, agent, fleet) {
   }).then(r => r.json()).catch(e => ({ error: e.message }));
   if (cancelled?.error) ctx.log(agent, `could not clear the journey in flight: ${cancelled.error}`);
 
+  let done = false;
+  // GUARANTEE: A DEAD BODY DOES NOT KEEP ITS LEASE.
+  //
+  // This beat used to have no opinion about whether the character was still alive — it just
+  // re-took work, movement and economy every ten seconds, for ever. Leases fail back to the
+  // keeper on LAPSE, which is the right direction on the wrong clock: a runner that is still
+  // waiting for a step to finish keeps beating, so the lapse never comes.
+  //
+  // What that costs is specific. Identity, mortality, survival and recovery are this
+  // repository's at the one-second clock and are never leased away — but LEAVING THE
+  // UNDERWORLD IS A WALK, and walking is `movement`, which is leased. So a character that
+  // dies while held arrives at full health in room 1 and stands there, with the only process
+  // that knows the way out holding no permission to move. Measured on Loial, 2026-09-12:
+  // dead in the Forest of Farol, idle in the Underworld, beat still running.
+  //
+  // Releasing is strictly better than pausing. The errand is over either way — the body it
+  // was driving is in the Underworld — and handing back early costs nothing a lapse would
+  // not have cost thirty seconds later.
+  const releaseNow = async (why) => {
+    if (done) return;
+    done = true;
+    clearInterval(beat);
+    await keeperCall(who, 'commander_release',
+      { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
+    ctx.log(agent, why ?? 'gave work, movement and economy back to the keeper');
+  };
   const beat = setInterval(() => {
-    keeperCall(who, 'commander_heartbeat',
-      { by: `fleetscript:${ctx.name}`, lease_ms: KEEPER_LEASE_MS }).catch(() => {});
+    // The read is what makes this a guard rather than a timer, so a failed read must not be
+    // mistaken for a death — an unreadable character keeps its lease and the next beat asks
+    // again. Only a positive `dead` releases.
+    observe(agent).then(at => {
+      if (at?.ok && at.dead)
+        return releaseNow('died while held — handing movement back so the keeper can leave ' +
+                          'the Underworld, which is a walk and therefore needs the faculty ' +
+                          'this lease was holding');
+      return keeperCall(who, 'commander_heartbeat',
+        { by: `fleetscript:${ctx.name}`, lease_ms: KEEPER_LEASE_MS });
+    }).catch(() => {});
   }, KEEPER_BEAT_MS);
   beat.unref?.();
-  let done = false;
   return {
     ok: true,
     /**
@@ -1861,14 +1937,7 @@ export async function holdKeeper(ctx, agent, fleet) {
       if (r?.error) ctx.log(agent, `could not cancel the journey: ${r.error}`);
       return r;
     },
-    release: async () => {
-      if (done) return;
-      done = true;
-      clearInterval(beat);
-      await keeperCall(who, 'commander_release',
-        { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
-      ctx.log(agent, 'gave work, movement and economy back to the keeper');
-    },
+    release: () => releaseNow(),
   };
 }
 
@@ -3018,7 +3087,7 @@ async function runEvictionCheck(ctx, agent, step, call) {
 // `steps` may be an array, or a function of the agent so each courier can compute its own
 // (a withdrawal sized to what it already carries, say).
 export async function fleetScript({
-  name, agents, steps, fleet = fleetName(), minHealth = 1, pollMs = 8000,
+  name, agents, steps, fleet = fleetName(), minHealth = 1, fragileBelow = 25, pollMs = 8000,
   // WHICH CHARACTERS THIS SCRIPT WILL CONTROL, declared at the top of the script rather
   // than inferred from what it turns out to touch. This is the unit the lock is taken over
   // and the unit the guard enforces; see m59-control-guard.mjs for the argument. Omit it
@@ -3156,6 +3225,10 @@ They are driven by tools/m59-menagerie.mjs and ` +
   // A waived floor is zero, not "skip the check": every downstream reader keeps working,
   // and a run that waives minHealth still reports the health it set out on.
   if (waived.has('minHealth')) minHealth = 0;
+  // 25 catches the two 20-max-health host characters on this roster and nothing else: the
+  // fleet proper runs 40-62. It is a floor rather than a ban — an errand that stays inside a
+  // town can lower it, and a rescue that means to risk the body waives it and says why.
+  if (waived.has('fragileBody')) fragileBelow = 0;
   if (waived.has('trapCheck')) allowTraps = true;
   const allowUnreachable = waived.has('reachable');
   // A REASON IS MANDATORY ON A WAIVER and the refusal quotes it back, so "I know about this"
@@ -3202,7 +3275,7 @@ They are driven by tools/m59-menagerie.mjs and ` +
         (control.declared ? (control.wildcard ? ' (declared: whole fleet)' : ' (declared)')
                           : ' (derived from agents — undeclared control is warned, not refused)'));
 
-  const ctx = { log: onLog, pollMs, minHealth, healMs, budgetFloorMs, budgetCapMs,
+  const ctx = { log: onLog, pollMs, minHealth, fragileBelow, healMs, budgetFloorMs, budgetCapMs,
                 reviveMs, packSettleMs, learnSettleMs, name,
                 // THE DECLARATION AND THE NAMES THAT COUNT AS CHARACTERS. Carried on ctx so
                 // the check happens at ONE door (runStep) rather than in each verb — the
