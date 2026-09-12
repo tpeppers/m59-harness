@@ -14070,16 +14070,21 @@ const TOOLS = [
       const was = s.world?.room?.num ?? null;
       const before = c.evSeq;
       await s.pacer.submit('move', () => c.requestRescue(), MOVE_INTERVAL_MS);
-      // THE TELEPORT IS DELAYED AND THIS WAITED SIX SECONDS FOR IT.
+      // TWO DIFFERENT RESCUES SHARE A NAME, AND ONLY ONE OF THEM IS THIS ONE.
       //
-      // `CastSpell` does not move anybody: it calls `StartRescueTimer` and returns, and the
-      // move happens when that timer fires — 15s base (settings.kod:91) plus a random 5-10s
-      // half the time (rescue.kod:99-107). A six-second window is SHORTER THAN THE MINIMUM, so
-      // this could essentially never see the room change, and then blamed the server for it.
+      // This tool sends UC_REQ_RESCUE, which is the stuck-player command: user.kod:1930-1946
+      // calls `AdminGotoSafety` and the teleport is IMMEDIATE. The Shal'ille SPELL of the same
+      // name is a different path entirely — `CastSpell` starts a timer and the move lands 15s
+      // later plus a random 5-10s (rescue.kod:94-112, settings.kod:91) — and it is reached with
+      // `cast`, not with this.
       //
-      // Measured the hard way on 2026-09-12: three casts read as "refused" from replies that
-      // had no opinion, and the character turned out to have teleported each time. 30s covers
-      // the worst case with margin; a rescue that has not landed by then really has not landed.
+      // I conflated them while fixing this and briefly wrote the spell's delay into this
+      // comment. They are worth keeping apart precisely because the failure modes differ: the
+      // spell's silence usually means "not yet", and this command's silence never does.
+      //
+      // The window stays generous anyway. It costs nothing when the answer is immediate, and a
+      // room read that is one packet early is the shape of half the wrong conclusions in this
+      // file's history.
       const ev = await c.waitFor({ since: before, kinds: ['room-entered', 'message'], timeoutMs: 30_000 })
                         .catch(() => ({ events: [] }));
       const entered = (ev.events || []).find(e => e.kind === 'room-entered');
@@ -14089,16 +14094,16 @@ const TOOLS = [
                messages: (ev.events || []).filter(e => e.text).map(e => e.text).slice(0, 4),
                // AND THREE CAUSES, NOT TWO. The old note offered "the server declined" or
                // "already somewhere safe" and left out the one that was actually happening.
-               ...(now === was ? { note: 'the room did not change within 30s. Three things look ' +
-                                         'like this and they are not the same: the teleport is ' +
-                                         'still pending (it fires 15-25s after the request, so ' +
-                                         'read the room again before concluding anything); the ' +
-                                         'server refused because a rescue was ALREADY pending, ' +
-                                         'a Token is held, or a player was attacked too recently ' +
-                                         '(rescue.kod:66-91); or this character is already in ' +
-                                         'the room the rescue would take it to, in which case ' +
-                                         'the server answers UC_SEND_QUIT and disconnects ' +
-                                         'instead — check `look_at` on it for its hometown' } : {}) };
+               ...(now === was ? { note: 'the room did not change. This command teleports ' +
+                                         'IMMEDIATELY (user.kod:1941), so a pending move is NOT ' +
+                                         'one of the explanations — that belongs to the Shalille ' +
+                                         'SPELL, which is a different path reached with `cast`. ' +
+                                         'What does look like this: the character is already in ' +
+                                         'the room this would send it to, in which case the ' +
+                                         'server answers UC_SEND_QUIT and disconnects instead of ' +
+                                         'moving (user.kod:1932-1939) — `look_at` on it reports ' +
+                                         'the hometown, so that is checkable; or it was moved ' +
+                                         'and something walked it back inside the window' } : {}) };
     },
   },
   {
