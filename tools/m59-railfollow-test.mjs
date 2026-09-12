@@ -5,7 +5,8 @@
 // The central case is the real one, with the real numbers: room 49's r25c17 holds four floors
 // and the 2D rule picks a waypoint 2560 units above the body and calls it 304 units away.
 import { nearestWaypoint, onSameShelf, advanced, OFF_SHELF_PENALTY,
-         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET, aimPoint, budgetForTimeout, aimOrBoard } from './m59-railfollow.mjs';
+         rejoinedBehind, REJOIN_BEHIND, distanceToSegment, distanceToRail, aimAhead, AIM_BUDGET, aimPoint, budgetForTimeout, aimOrBoard, MIN_AIM,
+         enforceAimFloor } from './m59-railfollow.mjs';
 import { MAX_STEP_HEIGHT } from './m59-roo.mjs';
 
 let pass = 0, fail = 0;
@@ -340,7 +341,14 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
   const z = aimPoint(zig, { x: 0, y: 0 }, { floor: 1, budget: 4096, maxDeviation: 8 });
   ok(z !== null, 'a rail nothing can chord still yields an aim');
   ok(z.dist > 0, 'and it is not the point we are standing on');
-  ok(['straightness', 'next-waypoint'].includes(z.bound), 'reporting which bound stopped it');
+  ok(['straightness', 'next-waypoint', 'aim-floor'].includes(z.bound), 'reporting which bound stopped it');
+  // AND THE AIM CLEARS THE MOVER'S MINIMUM STEP. This assertion used to accept `next-waypoint`
+  // alone, which on a 64-unit lattice is an aim of 64 units — below walkFine's 128-unit floor, so
+  // the mover answers `arrived: true` with zero steps and the body never moves. The test was
+  // pinning the defect: 30% of Marco's logged legs in room 49 were exactly this.
+  ok(z.dist >= MIN_AIM, `the aim is at least the mover's minimum step (${z.dist} >= ${MIN_AIM})`);
+  if (z.bound === 'aim-floor')
+    ok(/below the mover/.test(z.why ?? ''), '...and an extended aim says why it was extended');
 }
 {
   // The bound is REPORTED, so a log can show which constraint is actually in play — the whole
@@ -375,6 +383,53 @@ ok(advanced(10, 90, { onShelf: true }), 'the same jump on the shelf is');
   ok(!rejoinedBehind(null, 3).reset, 'a missing mark cannot trigger a reset');
   ok(!rejoinedBehind(137, undefined).reset, 'nor a missing position');
   ok(REJOIN_BEHIND === 20, 'the default gap is 20 waypoints, comfortably over a 12-waypoint leg');
+}
+
+// ---- THE AIM FLOOR: an aim the mover cannot step to is not an instruction -------------------
+//
+// walkFine returns `{arrived:true, steps:0, log:[]}` the moment the aim is inside `arriveWithin`, and
+// it cannot take a step shorter than 128 client units. m59-railcut floods on a 64-unit LATTICE, so
+// "the next waypoint" — the fallback this module relied on — is exactly half of a step. 51 of Marco's
+// 169 logged legs in room 49 took zero steps with arrived:true, 41 of them asking for under 128 units.
+{
+  const lattice = [];
+  for (let k = 0; k <= 10; k++) lattice.push({ x: k * 64, y: 0, f: 1 });
+
+  // An aim of one lattice step is extended forward until it clears the floor.
+  const raw = { x: 64, y: 0, i: 0, dist: 64, bound: 'next-waypoint', stepsNeeded: 1 };
+  const fixed = enforceAimFloor(raw, lattice, { x: 0, y: 0 });
+  ok(fixed.dist >= MIN_AIM, `extended to at least the minimum step (${fixed.dist})`);
+  eq(fixed.bound, 'aim-floor', 'and it says the floor is what moved it');
+  eq(fixed.extendedFrom, 64, '...recording what it was before, so the extension is auditable');
+  ok(/below the mover/.test(fixed.why), '...and why');
+  ok(!fixed.tooClose, 'and it is not marked unreachable, because a further waypoint existed');
+
+  // An aim already clear of the floor is returned UNTOUCHED — this must not lengthen good aims.
+  const ok2 = { x: 512, y: 0, i: 7, dist: 512, bound: 'budget', stepsNeeded: 8 };
+  eq(enforceAimFloor(ok2, lattice, { x: 0, y: 0 }), ok2, 'an aim that already clears the floor is untouched');
+
+  // AT THE END OF A RAIL THERE MAY BE NOTHING FAR ENOUGH, and that is a real answer: the rail is
+  // FINISHED, not blocked. Issuing the short aim anyway gets `arrived: true` and no movement, which
+  // is the failure that reads as success.
+  const tail = [{ x: 0, y: 0, f: 1 }, { x: 32, y: 0, f: 1 }, { x: 64, y: 0, f: 1 }];
+  const stuck = enforceAimFloor({ x: 32, y: 0, i: 0, dist: 32, bound: 'next-waypoint', stepsNeeded: 1 },
+                                tail, { x: 0, y: 0 });
+  ok(stuck.tooClose, 'with nothing far enough ahead the aim is marked tooClose');
+  eq(stuck.bound, 'aim-floor-unreachable', '...with its own bound');
+  ok(/FINISHED rather than blocked/.test(stuck.why), '...and says the rail is finished, not blocked');
+
+  // A null aim stays null rather than becoming an object.
+  eq(enforceAimFloor(null, lattice, { x: 0, y: 0 }), null, 'a null aim passes through');
+
+  // And aimPoint applies it end to end, on the shape that caused this: a 64-unit lattice rail where
+  // the body stands on the first waypoint.
+  const a = aimPoint(lattice, { x: 0, y: 0 }, { floor: 1, budget: 96, maxDeviation: 4096 });
+  ok(a.dist >= MIN_AIM, `aimPoint never returns an aim under the floor (${a.dist})`);
+
+  // The floor is overridable, because a different stride is a different floor and hard-coding it
+  // here would repeat the mistake one layer up.
+  const custom = enforceAimFloor(raw, lattice, { x: 0, y: 0 }, { min: 384 });
+  ok(custom.dist >= 384, 'the floor is a parameter, not a constant baked into the caller');
 }
 
 console.log(`\nm59-railfollow: ${pass} assertion(s) passed, ${fail} failed`);
