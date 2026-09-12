@@ -661,6 +661,33 @@ _verify2.mjs
 # file becomes a test case rather than a diary.
 /substrate/scratch/
 
+# ERRANDS THIS MACHINE CAN BE ORDERED TO RUN. m59-fleetlib.mjs has said since it was written
+# that substrate/fleetscripts/ is "THIS MACHINE'S. Gitignored, like substrate/loadouts and
+# substrate/tuning.json" -- and there was no rule here, so `git status` reported
+# `?? substrate/fleetscripts/` and one `git add -A` would have committed them. They are the
+# strongest form of the loadouts argument: a NAMED ERRAND, listed by `list` in the fleet REPL,
+# invokable by name, and overriding the committed script of the same name on the machine that
+# receives it. The public shape lives in tools/fleetscripts/.
+/substrate/fleetscripts/
+
+# SCRATCHPADS. substrate/fleetscratch/ holds work in progress -- an errand being FOUND rather
+# than one that has been found, expected to be broken between attempts. Committing one would
+# ship an unfinished order naming our characters, and a claim about the game that has not been
+# read out of kod. The shape is committed as substrate/fleetscratch.example.mjs, BESIDE this
+# directory rather than in it, because loadPads enumerates every .mjs in here.
+/substrate/fleetscratch/
+
+# CAPTURED SCENES. substrate/scenes/ holds rooms lifted off a live server -- positions, stats,
+# inventory and, for anything we have fought, OUR ESTIMATE of its hit points. A roster with the
+# furniture, and a capture may carry account material until `m59-scene.mjs scrub` takes it out.
+# Publishing is an explicit verb that rewrites; this rule stops the raw capture going first.
+/substrate/scenes/
+
+# THE GAP LEDGER. substrate/gaps.jsonl records every shortcut taken in every simulated run and
+# the production outcome afterwards. One fleet's runs and one operator's concessions -- the
+# input to "has this shortcut ever mattered?", which is only answerable against OUR history.
+/substrate/gaps.jsonl
+
 # THE SCRATCHPAD CORK BOARD. <fleet>.scratchpads.json names this machine's pads, the characters
 # they claim, and the notes sessions have left each other. Orders-shaped by the loadouts
 # argument -- a pin says something is driving OUR fleet right now -- so it is not committed. It
@@ -669,3 +696,12 @@ _verify2.mjs
 # caveat as the run lock. Committed, a stale pin from somebody else's afternoon would look like a
 # live claim on a character.
 /substrate/*.scratchpads.json
+
+
+# THE ACTIVE-DEVELOPMENT REGISTRY. substrate/intents.json says which agents are working on which
+# TOPICS right now -- not to lock anything, but so a session starting on "FleetScratch" learns
+# there is already somebody to talk to about it. Same directory as the cork board and the same
+# reason it is not committed: a claim is alive only while its holder's process is (pid plus
+# process start time), so a committed one would be a permanent notice about an afternoon that
+# ended. Claims also expire on a TTL; `m59-intent.mjs sweep` retires the dead.
+/substrate/intents.json

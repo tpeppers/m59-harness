@@ -24,7 +24,7 @@
 // repository already documents for m59-broker.mjs and m59-supervise.mjs. So a module must
 // export a `script` object and do nothing else; `steps` is a FUNCTION of its parameters,
 // never a value computed on load.
-import { readdirSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseUnsafe, UNSAFE_GUARANTEES, guaranteeText } from './m59-fleetscript.mjs';
@@ -41,6 +41,15 @@ function listDir(dir) {
   return readdirSync(dir).filter(f => f.endsWith('.mjs') && !f.endsWith('-test.mjs'));
 }
 
+// A VERSION FOR A FILE, CHEAP ENOUGH TO ASK ON EVERY LOAD. Size as well as mtime because
+// mtime alone is only as fine as the filesystem's clock, and two saves inside one tick of it
+// would otherwise share a key and reload as the older one. An unreadable stat returns null
+// and the import falls back to the bare URL: a file we cannot stat is about to fail to import
+// anyway, and it must fail with ITS error rather than with one about versioning.
+function stamp(file) {
+  try { const st = statSync(file); return `${st.mtimeMs}-${st.size}`; } catch { return null; }
+}
+
 /**
  * Every script this machine can run, by name.
  *
@@ -49,18 +58,47 @@ function listDir(dir) {
  * a script that is not there and a script that failed to load look identical from a menu,
  * and only one of them is the operator's fault.
  */
-export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCAL_DIR } = {}) {
+export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCAL_DIR,
+                                         dirs = null } = {}) {
   const found = new Map();
   const problems = [];
 
-  for (const [source, dir] of [['public', publicDir], ['local', localDir]]) {
+  // `dirs` IS FOR A CALLER WITH A DIFFERENT PAIR OF PLACES, not a third place for errands.
+  // m59-fleetscratch.mjs passes [['pad', PAD_DIR]] so that a scratch pad gets this module's
+  // import, its cache key, its `steps` check and its load-time waiver refusal rather than a
+  // second copy of all four -- which is the failure this repository has an index to prevent.
+  // It does NOT widen where `list` looks: the default is still the two committed places, and
+  // a pad is invisible to anything that does not ask for it by name. That invisibility is the
+  // strongest of the three things keeping a half-written pad away from a keeper.
+  for (const [source, dir] of dirs ?? [['public', publicDir], ['local', localDir]]) {
     for (const file of listDir(dir)) {
       const path = join(dir, file);
       let mod;
       try {
         // pathToFileURL, NOT a bare path: on Windows the ESM loader reads `C:\...` as a URL
         // with scheme "c:" and refuses it, with an error that says nothing about scripts.
-        mod = await import(pathToFileURL(path).href);
+        //
+        // AND A QUERY ON THE END, BECAUSE RELOAD DID NOT RELOAD. Measured 2026-09-11: the
+        // ESM module cache is keyed on the URL, so re-importing an edited file returned the
+        // module from the FIRST import. `reload` in m59-fleet-repl.mjs therefore picked up
+        // NEW files and silently ignored every EDIT to an existing one -- so an author who
+        // changed a step, typed `reload`, and saw the old steps render concluded the edit was
+        // wrong. A tool that claims to reload and does not is worse than one that never
+        // offered, because it makes the stale thing look freshly confirmed.
+        //
+        // Keyed on mtime and size rather than Date.now() for the reason m59-tuning.mjs is:
+        // an UNCHANGED file must resolve to the cache it already has, so listing the scripts
+        // ten times costs one import each and a quiet `reload` allocates nothing. Only a
+        // file that actually moved gets a new key.
+        //
+        // THE INSTANCES THIS STRANDS ARE THE PRICE AND THEY ARE DELIBERATE. Node has no way
+        // to evict a module, so every edit leaves its predecessor in the loader for the life
+        // of the process. That is bounded by the number of edits in one sitting, which is the
+        // right trade for an authoring loop and is why this must not be "tidied" back to a
+        // bare href. A script is data until it is run (see the note above), so a stranded
+        // module holds no fleet state and drives nothing.
+        const v = stamp(path);
+        mod = await import(pathToFileURL(path).href + (v ? `?v=${v}` : ''));
       } catch (e) {
         problems.push({ file: path, why: `will not import: ${e.message}` });
         continue;
@@ -84,7 +122,11 @@ export async function loadFleetScripts({ publicDir = PUBLIC_DIR, localDir = LOCA
         problems.push({ file: path, why: e.message });
         continue;
       }
-      const overrides = source === 'local' && found.has(name) ? found.get(name).file : null;
+      // A LATER SOURCE OVERRIDES AN EARLIER ONE, whoever the sources are. This used to test
+      // `source === 'local'`, which meant two files in the SAME directory exporting one name
+      // had a silent winner -- the quietest form of the exact thing this field exists to
+      // report. The winner is unchanged either way; only the reporting is.
+      const overrides = found.has(name) ? found.get(name).file : null;
       found.set(name, { ...script, name, source, file: path, overrides });
     }
   }

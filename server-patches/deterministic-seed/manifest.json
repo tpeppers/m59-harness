@@ -1,0 +1,18 @@
+{
+  "schema": "m59-deterministic-seed-patch/v1",
+  "source": {
+    "repository": "https://github.com/tpeppers/Meridian59-deck.git",
+    "commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44"
+  },
+  "seed_schema": "m59-server-seed/v1",
+  "admin_command": "show simseed",
+  "reply_prefix": "seeded",
+  "config": {
+    "group": "[SimSeed]",
+    "enabled": "Enabled",
+    "seed": "Seed",
+    "off_value": 0
+  },
+  "patch": "0001-deterministic-seed.patch",
+  "source_hashes": "source.sha256"
+}

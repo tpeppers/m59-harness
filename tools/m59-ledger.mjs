@@ -355,6 +355,42 @@ export function killsIn(ms = KILL_WINDOW_MS, maxAgeMs = 5000) {
   return killCache.by;
 }
 
+// THE FLEET'S OWN RATE, AND WHO CONTRIBUTED NOTHING TO IT.
+//
+// Extracted from m59-minimal so it can be pinned: it had none of its own tests, and the two
+// things it gets wrong when hand-written are both silent.
+//
+// ONE — THE PER-CHARACTER AVERAGE READS AS THE FLEET RATE. They differ by a factor of the
+// fleet size, `avg 0.13` against `3.07/min`, and a header saying "fleet 23 in game" above the
+// first is enough to make a reader take it for the second. That reached the operator.
+//
+// TWO — THE TOTAL MUST COUNT EVERYONE THE LEDGER KNOWS, not whoever is on the board at the
+// moment the question is asked. m59-minimal's comment claimed exactly that while its code
+// mapped over the live rows only, so a character that died or logged out mid-window had its
+// kills dropped from the fleet's output. The union is the honest set: a name in the kill
+// ledger earned those kills whether or not it is standing there now.
+//
+// `silent` is the actionable half and an average cannot show it — nine characters earning
+// nothing and fourteen working average out to something that looks like a mild dip.
+export function fleetKills({ kills, characters = [], minutes = 30 } = {}) {
+  const live = characters.filter(Boolean);
+  const get = (who) => Number(kills?.get?.(who) ?? 0) || 0;
+  const everyone = new Set([...(kills?.keys?.() ?? []), ...live].filter(Boolean));
+  let total = 0;
+  for (const who of everyone) total += get(who);
+  const offBoard = [...(kills?.keys?.() ?? [])].filter(w => w && !live.includes(w) && get(w) > 0);
+  return {
+    total,
+    per_minute: minutes > 0 ? total / minutes : null,
+    counted: everyone.size,
+    // Only characters that ARE on the board can be called silent. One that is absent is not a
+    // character earning nothing; it is a character nobody can ask, and reporting it as idle is
+    // the same conflation this file keeps arguing about.
+    silent: live.filter(w => get(w) === 0),
+    off_board: offBoard,
+  };
+}
+
 // THE DEATH POST-MORTEM. Not a dump of records — the point is the pattern.
 //
 // A death costs a point of maximum health outright, which is the exact thing being
