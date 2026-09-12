@@ -350,6 +350,47 @@ write([
 // against the real directory would corrupt the record precisely when it is broken,
 // which is the one moment it must not. If the guard fails here, a junk directory
 
+
+// ---------------------------------------------------------------- the fleet's own rate
+//
+// `fleetKills` came out of m59-minimal, which had no tests of its own. Both of the things it
+// gets wrong are silent: a per-character average that reads as the fleet rate (they differ by
+// a factor of the fleet size — `avg 0.13` against `3.07/min`, and that reached the operator),
+// and a total taken over the LIVE board instead of everyone the ledger knows, which drops the
+// kills of anyone who died or logged out mid-window.
+console.log('\nthe fleet rate, and who contributed nothing to it');
+{
+  const { fleetKills } = await import('./m59-ledger.mjs');
+  const kills = new Map([['Waldorf', 36], ['Statler', 24], ['Zoot', 0], ['Ghost', 5]]);
+  const onBoard = ['Waldorf', 'Statler', 'Zoot', 'Piggy'];
+  const f = fleetKills({ kills, characters: onBoard, minutes: 30 });
+
+  ok('the total counts a character the ledger knows and the board does not — it earned ' +
+     'those kills whether or not it is standing there now',
+     f.total === 65, 'got ' + f.total);
+  ok('and says so, rather than leaving the difference to be noticed',
+     f.off_board.join() === 'Ghost', 'got ' + f.off_board.join());
+  ok('the fleet rate is the total over the window, not an average of averages',
+     f.per_minute === 65 / 30, 'got ' + f.per_minute);
+  ok('silent is only the characters actually ON the board with nothing to show',
+     f.silent.join() === 'Zoot,Piggy', 'got ' + f.silent.join());
+  ok('an absent character is NOT reported as idle — nobody can ask it, and calling that ' +
+     'zero is the same conflation as an absent ledger reading as a quiet fleet',
+     !f.silent.includes('Ghost'));
+  ok('counted is the union, so the denominator is auditable', f.counted === 5,
+     'got ' + f.counted);
+}
+{
+  const { fleetKills } = await import('./m59-ledger.mjs');
+  ok('no kills at all is zero rather than NaN',
+     fleetKills({ kills: new Map(), characters: ['a'], minutes: 30 }).per_minute === 0);
+  ok('a zero-length window answers null rather than dividing by it',
+     fleetKills({ kills: new Map([['a', 4]]), characters: ['a'], minutes: 0 }).per_minute === null);
+  ok('and it survives being handed nothing at all, because a caller with no board yet is ' +
+     'an ordinary state during a broker restart',
+     fleetKills().total === 0 && fleetKills().silent.length === 0);
+}
+
 // AN ABSENT HISTORY IS NOT A QUIET FLEET. The ledger resolves its directory from the checkout
 // it was loaded in, so a report run from a clone against another checkout's fleet reads a path
 // that is not there and used to answer "nothing cast in this window" — confidently, wrongly,
