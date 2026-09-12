@@ -72,6 +72,7 @@ import { loadFleetScripts, applyDefaults, checkParams, asAgents,
 import { fleetName } from './m59-fleetpath.mjs';
 import { isCheckpoint, reach, formatReach } from './m59-establish.mjs';
 import { readBoard, isPosted, formatBoard, checkBoard } from './m59-board.mjs';
+import { readIntents, nearby, formatNearby, claim, writeIntents, sweep } from './m59-intent.mjs';
 // The declaration machinery lives in its own module so that a PAD can import the helpers without
 // closing a cycle through this one -- see the header of m59-padcheck.mjs for what that cost.
 import { preflight, formatPreflight, checkDeclaredAbilities,
@@ -211,9 +212,21 @@ async function main() {
     for (const p of c.unanswered)
       for (const n of p.notes ?? []) say(`  note on ${p.name} · ${n.by}: ${n.text}`);
   }
+  // AND WHO ELSE IS NEAR WHAT IS ALREADY HERE. A pad author arriving at a session should learn
+  // about a neighbour before starting, not after repeating their afternoon.
+  {
+    const doc = readIntents();
+    const me = process.env.M59_SCRATCH_OPERATOR || `fleetscratch session (pid ${process.pid})`;
+    const topic = [...pads.keys()].join(' ') || 'scratchpads';
+    const near = nearby(doc, topic);
+    const others = (near.hits ?? []).filter(h => h.by !== me && h.state === 'live');
+    for (const h of others)
+      say(`  someone else is nearby: ${h.by} — ${h.topic}  (${h.matchedBy})`);
+  }
   say('');
-  say('commands: list | board | reload | watch on|off | describe <pad> | check <pad> k=v… |');
-  say('          dry <pad> k=v… | go <pad> k=v… | guarantees | unsafe | quit');
+  say('commands: list | board | nearby <topic> | intend <topic> | reload | watch on|off |');
+  say('          describe <pad> | check <pad> k=v… | dry <pad> k=v… | go <pad> k=v… |');
+  say('          guarantees | unsafe | quit');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
 
@@ -304,6 +317,32 @@ async function main() {
         } else say('not watching');
       }
       else if (verb === 'board') say(formatBoard(readBoard(FLEET)));
+      // WHO ELSE IS IN THIS. Asked before you build, answered from the registry rather than from
+      // whoever happens to be talking to you — which is how the last collision was found.
+      else if (verb === 'nearby') {
+        const topic = rest.join(' ');
+        if (!topic) say('nearby <what you are about to work on>');
+        else say(formatNearby(nearby(readIntents(), topic), topic));
+      }
+      else if (verb === 'intend') {
+        const topic = rest.filter(r => !r.startsWith('--')).join(' ');
+        const who = process.env.M59_SCRATCH_OPERATOR || `fleetscratch session (pid ${process.pid})`;
+        if (!topic) say('intend <what you are about to work on>');
+        else {
+          const swept = sweep(readIntents());
+          // THE SESSION IS THE ONE CALLER THAT CAN OFFER A PID: it is still sitting here. A
+          // claim bound this way dies when the session does, so quitting retires it without
+          // anyone having to remember to `release`.
+          const doc = claim(swept.doc, { topic, by: who, why: `pads in ${PAD_DIR}`,
+                                         pid: process.pid });
+          writeIntents(doc);
+          say(`claimed "${topic}" as ${who}`);
+          const near = nearby(doc, topic);
+          const others = { ...near, hits: near.hits.filter(h => h.by !== who) };
+          others.live = others.hits.filter(h => h.state === 'live');
+          if (others.hits.length) say(formatNearby(others, topic));
+        }
+      }
       else if (verb === 'guarantees') say(formatGuarantees());
       else if (verb === 'unsafe') say(formatUnsafeAudit(auditUnsafe(pads), { total: pads.size }));
       else if (verb === 'describe') {
