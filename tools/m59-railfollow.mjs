@@ -215,8 +215,23 @@ export function aimAhead(waypoints, fromIndex, { budget = AIM_BUDGET } = {}) {
  * Returns the point, the segment it lies on, and `stepsNeeded` so a caller can size its own step
  * budget instead of guessing — the guess is what failed.
  */
+/**
+ * How far the walker's CHORD may stray from the rail's ARC before the aim must stop short.
+ *
+ * A walker sent to an aim point travels in a STRAIGHT LINE to it. On a winding rail that is not
+ * the same journey as the rail, and the difference is exactly the ground the rail was avoiding.
+ * Measured 2026-09-12: raising the budget to 5400 units — legal once the broker's fine-walk
+ * ceiling moved to five minutes — made the aim land at the END of a 53-leg path that winds, so the
+ * mover walked a chord straight across it and came back "ran out of steps".
+ *
+ * So the leg budget is bounded by TWO things and the timeout is only one of them: how far the
+ * walker can travel, and how far the rail stays straight. This is the second.
+ */
+export const MAX_CHORD_DEVIATION = 256;
+
 export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
-                                             step = MAX_STEP_HEIGHT, unitsPerStep = 64 } = {}) {
+                                             step = MAX_STEP_HEIGHT, unitsPerStep = 64,
+                                             maxDeviation = MAX_CHORD_DEVIATION } = {}) {
   if (!Array.isArray(waypoints) || waypoints.length === 0) return null;
   if (waypoints.length === 1) {
     const w = waypoints[0];
@@ -231,18 +246,52 @@ export function aimPoint(waypoints, point, { floor = null, budget = AIM_BUDGET,
   let t = len2 === 0 ? 0 : ((point.x - a.x) * vx + (point.y - a.y) * vy) / len2;
   t = Math.max(0, Math.min(1, t));
 
-  // Walk forward along the line spending the budget.
-  let left = budget, px = a.x + t * vx, py = a.y + t * vy;
+  // Walk forward along the line spending the budget — and stop early if the CHORD from where we
+  // stand to the candidate aim would stray from the rail by more than `maxDeviation`. Every
+  // waypoint passed on the way is checked against that chord, because the walker will fly straight
+  // past all of them.
+  const start = { x: a.x + t * vx, y: a.y + t * vy };
+  let left = budget, px = start.x, py = start.y;
+  const passed = [];
+  // WHICH CONSTRAINT STOPPED US IS PART OF THE ANSWER. Reaching the end of the rail is not the
+  // same as the chord straying off it, and labelling both "straightness" hid the difference — its
+  // own test caught that: a loose tolerance with budget to spare still reported straightness when
+  // the truth was simply that the rail had run out.
+  let strayed = false;
+  const strays = (cx, cy) =>
+    passed.some((w) => distanceToSegment(w, start, { x: cx, y: cy }) > maxDeviation);
   while (i < waypoints.length - 1) {
-    const p = waypoints[i], q = waypoints[i + 1];
+    const q = waypoints[i + 1];
     const remain = Math.hypot(q.x - px, q.y - py);
     if (remain > left) {
       const k = left / remain;
-      return { x: Math.round(px + (q.x - px) * k), y: Math.round(py + (q.y - py) * k),
-               i, dist: budget, atEnd: false,
+      const cx = Math.round(px + (q.x - px) * k), cy = Math.round(py + (q.y - py) * k);
+      if (strays(cx, cy)) { strayed = true; break; }   // the budget is not what binds here
+      return { x: cx, y: cy, i, dist: budget, atEnd: false, bound: 'budget',
                stepsNeeded: Math.ceil(budget / unitsPerStep) };
     }
-    left -= remain; px = q.x; py = q.y; i++;
+    if (strays(q.x, q.y)) { strayed = true; break; }
+    left -= remain; px = q.x; py = q.y; passed.push({ x: q.x, y: q.y }); i++;
+  }
+  // Stopped by straightness rather than by budget: aim at the last point whose chord still tracks
+  // the rail, which is the previous waypoint (or the projection, if we never advanced).
+  if (i > 0 && (px !== start.x || py !== start.y)) {
+    const d = Math.hypot(px - point.x, py - point.y);
+    return { x: Math.round(px), y: Math.round(py), i, dist: d, atEnd: i >= waypoints.length - 1,
+             bound: strayed ? 'straightness' : 'end', stepsNeeded: Math.ceil(d / unitsPerStep) };
+  }
+  if (px !== start.x || py !== start.y) {
+    const d = Math.hypot(px - point.x, py - point.y);
+    return { x: Math.round(px), y: Math.round(py), i, dist: d, atEnd: false,
+             bound: strayed ? 'straightness' : 'end', stepsNeeded: Math.ceil(d / unitsPerStep) };
+  }
+  // Could not advance at all without straying: aim at the very next waypoint, because standing
+  // still is not an option and one waypoint is by construction one lattice step.
+  {
+    const q = waypoints[Math.min(i + 1, waypoints.length - 1)];
+    const d = Math.hypot(q.x - point.x, q.y - point.y);
+    return { x: q.x, y: q.y, i, dist: d, atEnd: i + 1 >= waypoints.length - 1,
+             bound: 'next-waypoint', stepsNeeded: Math.max(1, Math.ceil(d / unitsPerStep)) };
   }
   const d = Math.hypot(px - point.x, py - point.y);
   return { x: Math.round(px), y: Math.round(py), i: waypoints.length - 2, dist: d, atEnd: true,
