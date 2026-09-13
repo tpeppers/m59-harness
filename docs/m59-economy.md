@@ -41,6 +41,24 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Who buys what, what a loadout is, what
 
 ## Money: banks, purses and signet rings
 
+Shopping posts its purchase quantities, expected cost, reserve and purse shortfall before
+departure (`shopping cost posted`, and `purchase_funding` in keeper status). The same
+`purchasePlan` arithmetic sizes the withdrawal and the merchant order. Prices before a
+visit are estimates, using previously seen quotes or the known food/reagent prices;
+unpriced items are explicit. A live merchant quote is checked again before spending.
+
+A bank withdrawal is a required dependency of an underfunded purchase. The keeper routes
+to a reachable bank, asks for that account's balance, withdraws the exact shortfall, and
+verifies the resulting purse. Tos/Jasper and Ko'catan are separate accounts. A resolved
+withdrawal call alone is not success. Missing receipts, insufficient balances, survival
+interruptions and failed merchant approaches leave the shopping step pending. Selling
+loot may precede funding; depositing surplus preserves the posted purchase budget.
+
+If a quote requires more money, the keeper banks again and then reacquires the merchant
+and item IDs before buying. Reagent orders carry the full requested quantity, split into
+the protocol's bounded batches, and inventory gains confirm delivery. Offline regression:
+`node tools/m59-purchase-funding-test.mjs`.
+
 - **A BANK BALANCE IS PROSE, IT IS SENT ONCE, AND A WITHDRAWAL DOES NOT STATE IT.**
   There is no packet for the balance. The banker says it out loud — `Lm_bnkr_balance`,
   `monster.kod:136` — and never mentions it again, so the only way to *read* one is to
@@ -704,4 +722,3 @@ down needs a reproduction before anything is decided on it — is in
   subject walks away mid-experiment.** Five candidates in a row were walked out of the
   shop before a second buy. That is not a flaky test, it is the bot holding movement —
   and it is why the controlled reading has to happen on the private server.
-

@@ -167,8 +167,10 @@ console.log('\ncheckMoneyNode:');
 
 console.log('\nwithdrawFromBankNode:');
 {
+  let cash = 50;
   const keeper = {
-    withdrawForFood: async () => {},
+    purseNow: () => cash,
+    withdrawForFood: async () => { cash = 1000; return { ready: true }; },
     note: () => {}
   };
   const node = withdrawFromBankNode(keeper);
@@ -197,6 +199,13 @@ console.log('\nwithdrawFromBankNode:');
   result = node.tick(bb);
   check('second tick returns FAILURE when withdrawal fails', result === FAILURE);
   check('sets bb.withdrewMoney to false', bb.withdrewMoney === false);
+}
+for (const response of [undefined, { ready: false, pending: true }]) {
+  const node = withdrawFromBankNode({ withdrawForFood: async () => response, purseNow: () => 50 });
+  const bb = {};
+  node.tick(bb);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  check('unfunded purchase cannot pass the banking prerequisite', node.tick(bb) === FAILURE);
 }
 
 console.log('\nbuyFoodNode:');

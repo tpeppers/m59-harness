@@ -176,6 +176,8 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
 {
   const k = keeper(), services = [];
   k.money = { trips: 0 };
+  k.shoppingPlan = () => ({ lines: [], unpriced: [], required_purse: 0 });
+  k.postShoppingPlan = () => {};
   k.leaveHold = async () => ({ left: true });
   k.townTrip = { target: { room: 114, hops: 3 }, nextService: -1 };
   k.travel = async () => {
@@ -189,7 +191,7 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   k.suspendedJourney = null; k.survivalInterruptedPass = null;
   k.townTrip.nextTryAt = 0;
   const methods = ['contributeGuildWants', 'sellInTown', 'guildTitheFromSale',
-    'bankSurplus', 'withdrawForFood', 'restockInTown', 'buyFoodInTown',
+    'bankSurplus', 'ensurePurchaseFunds', 'restockInTown', 'buyFoodInTown',
     'buyReagentsInTown', 'buyFarmDeliveryCargo', 'vaultRunIfPassing'];
   let paused = false;
   for (const method of methods) k[method] = async () => {

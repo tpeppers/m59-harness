@@ -120,14 +120,15 @@ export function checkMoneyNode(keeper, minAmount = 400) {
 
 // === 4. withdrawFromBankNode ===
 // Withdraw money from the bank.
-// Returns SUCCESS if money was withdrawn, FAILURE if not.
+// Returns SUCCESS only when the posted purchase is funded, including cash already held.
 export function withdrawFromBankNode(keeper) {
   return new AsyncAction(async (bb) => {
     try {
-      await keeper.withdrawForFood();
-      bb.withdrewMoney = true;
-      keeper.note('withdrew from bank for food');
-      return SUCCESS;
+      const before = keeper.purse?.() ?? keeper.purseNow?.() ?? 0;
+      const result = await keeper.withdrawForFood();
+      bb.purchaseFunding = keeper.purchaseFunding ?? result;
+      bb.withdrewMoney = (keeper.purse?.() ?? keeper.purseNow?.() ?? 0) > before;
+      return result?.ready === true ? SUCCESS : FAILURE;
     } catch (err) {
       bb.withdrewMoney = false;
       return FAILURE;
@@ -194,14 +195,11 @@ export function eatNode(keeper) {
 //      - CastNode (create food)
 //      - EatNode
 //   3. Sequence:
-//      - CheckMoney
-//      - WithdrawFromBank (if no money)
+//      - FundPurchase (withdraw the shortfall when needed)
 //      - BuyFood
 //      - EatNode
 
 export function provisionTree(keeper) {
-  const walkingMoney = keeper.policy.walkingMoney ?? 400;
-  
   return new Selector([
     // If we have food, eat it
     new Sequence([
@@ -213,16 +211,9 @@ export function provisionTree(keeper) {
       castNode(keeper, 'create food'),
       eatNode(keeper)
     ]),
-    // If we can't cook, try to buy
-    new Sequence([
-      checkMoneyNode(keeper, walkingMoney),
-      buyFoodNode(keeper),
-      eatNode(keeper)
-    ]),
-    // If we don't have money, withdraw from bank
+    // Purchase funding is a prerequisite, including when money is already in hand.
     new Sequence([
       withdrawFromBankNode(keeper),
-      checkMoneyNode(keeper, walkingMoney),
       buyFoodNode(keeper),
       eatNode(keeper)
     ])

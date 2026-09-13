@@ -578,6 +578,10 @@ the records it describes.
   Master is never mistaken for a murderer, that a grudge and a live flag are BOTH required
   and neither alone is enough, that the hour is measured from the last blow, and that a
   fleetmate is refused before anything else is asked) and
+  `node tools/m59-purchase-funding-test.mjs` (**real shopping flow with simulated bank and
+  merchant**: posted costs and quantities, exact shortfalls, reserved cash, failed and
+  interrupted withdrawals, fresh merchant quotes after a price change, and separate bank
+  accounts) and
   `node tools/m59-townrun-test.mjs` (15 — **which counter a town trip is aimed at, and what
   the errand costs**: that a reagent shortfall goes to the apothecary and never to a market
   that cannot sell it anything, that an empty purse sends it to a bank FIRST, that a full
