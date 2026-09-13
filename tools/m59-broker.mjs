@@ -10259,6 +10259,12 @@ const TOOLS = [
           description: 'Cheapest kinds it may put on the floor to make room. Default mushroom.' },
         min_bulk_free: { type: 'number', description: 'Shed below this much free bulk. Default 40.' },
       }, description: 'accept reagents a FLEETMATE offers, without negotiating: reply with an empty counteroffer and accept. Turns a two-sided handover into a one-sided one -- the donor walks over, pushes the goods across and leaves, and nobody agrees a moment. Refuses a stranger, refuses a pile containing anything not on the list, and cancels rather than leaving the window open. null disables it' },
+      rescue_shopping: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        home_room: { type: 'number', description: 'the town room the shopping trip starts in' },
+        reserve: { type: 'number', description: 'emeralds that must survive the trip. Default 0.' },
+        wait_ms: { type: 'number', description: 'how long to poll for the landing. Default 30000.' },
+      }, description: 'START A SHOPPING TRIP BY RESCUING HOME RATHER THAN WALKING IT. The outbound town leg is where this fleet loses people, and rescue costs one emerald and deletes the road. BUT RESCUE HAS NO DESTINATION ARGUMENT: rescue.kod picks one in a fixed precedence — a guild hall in the SAME REGION first (:124-136), then Ko\'catan Inn if you are in Kocatan (:142), then the Pool of Vigor in the orc caves (:153), and only then the home room (:163). So this VERIFIES rather than predicts: it casts, polls the room for the landing (rescue is delayed 15-25s and its reply says nothing useful), and reports plainly when it landed somewhere else so the caller can walk instead. Worth knowing before enabling it fleet-wide: the day this guild gets a hall, every rescue cast in that region stops going home. null disables it' },
       room_enchant: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         spells: { type: 'array', items: { type: 'string' },
@@ -11012,6 +11018,25 @@ const TOOLS = [
       // NOT buff_allies. That one casts AT a player and needs a recipient; this casts at the
       // ROOM and must keep going when the room empties, because the enchantment is what the
       // farmers walk back into. See Autopilot.ROOM_ENCHANTS.
+      // The town trip's outbound leg, replaced by a teleport. Same null-is-off shape.
+      // `home_room` is REQUIRED when enabled: rescue has no destination argument, so the
+      // only way to know whether it worked is to say where it was supposed to land and
+      // check. See Autopilot.rescueToShop for the precedence rescue actually follows.
+      if (a.rescue_shopping !== undefined) {
+        if (a.rescue_shopping == null) p.policy.rescueShopping = null;
+        else {
+          const value = a.rescue_shopping;
+          if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
+            throw new Error('rescue_shopping must be null or an enabled settings object');
+          const home = Number(value.home_room);
+          if (!Number.isFinite(home))
+            throw new Error('rescue_shopping needs home_room — without it nothing can tell ' +
+                            'whether the rescue landed where the shopping is');
+          p.policy.rescueShopping = { enabled: true, home_room: Math.floor(home),
+            reserve: Math.max(0, Math.floor(Number(value.reserve) || 0)),
+            wait_ms: Math.max(5000, Math.min(60_000, Math.floor(Number(value.wait_ms) || 30_000))) };
+        }
+      }
       if (a.room_enchant !== undefined) {
         if (a.room_enchant == null) p.policy.roomEnchant = null;
         else {

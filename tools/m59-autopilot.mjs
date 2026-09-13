@@ -18682,6 +18682,95 @@ export class Autopilot {
    *   to notice. The failure it cannot see is a cast the server refused silently, which is
    *   why reagents and mana are both checked BEFORE sending rather than inferred after.
    */
+  /**
+   * START A SHOPPING TRIP BY RESCUING HOME INSTEAD OF WALKING IT.
+   *
+   * The operator's case, and it is a good one: the town trip is where this fleet loses
+   * people — 1,330 of 2,859 postmortems died `travelling` — and half of that road is the
+   * OUTBOUND leg. `rescue` costs one emerald and deletes it. Time saved is a bonus; the
+   * danger halved is the point.
+   *
+   * ============================================================ WHEN IT IS LEGAL
+   *
+   * RESCUE DOES NOT GO WHERE YOU ASK. It has no destination argument at all, and rescue.kod
+   * picks one in a fixed precedence that most callers never read:
+   *
+   *   1. THE GUILD HALL — if guilded, the guild HAS a hall, you are not already in it, and
+   *      it is in the SAME REGION as you (rescue.kod:124-136).
+   *   2. Ko'catan Inn — if you are in the Kocatan region, or in RID_ORC_CAVE5_EXT (:142).
+   *   3. The Pool of Vigor — if you are in the orc caves (:153).
+   *   4. ONLY THEN `AdminGoToSafety`, the home room (:163).
+   *
+   * So "rescue takes me home" is the DEFAULT BRANCH, not the rule, and three things above it
+   * silently win. The guild one matters most here: this fleet is twenty-one characters in one
+   * guild whose stated next goal is a hall. The day that hall exists, every rescue cast in its
+   * region stops going home — and a shopping trip that teleports to the guild hall instead of
+   * the market is a trip that quietly does nothing.
+   *
+   * THEREFORE THIS VERIFIES RATHER THAN PREDICTS. We cannot read guild-hall-in-region from
+   * here, so the contract is: cast, wait, and CHECK THE ROOM. If it did not land in
+   * `home_room`, say so plainly and let the caller walk. A wrong guess costs one emerald and
+   * a log line; predicting confidently would cost a shopping trip nobody notices failing.
+   *
+   * AND RESCUE IS DELAYED, NOT INSTANT. It lands 15-25 seconds after the cast, the reply
+   * carries no message, and `mana_spent` lies — so the only honest verdict is the room, read
+   * afterwards. That is already written down in this repository and is why this polls.
+   */
+  async rescueToShop() {
+    const cfg = this.policy.rescueShopping;
+    if (!cfg?.enabled) return { ok: false, why: 'rescue shopping is not enabled' };
+    const home = Number(cfg.home_room);
+    if (!Number.isFinite(home))
+      return { ok: false, why: 'rescue shopping needs home_room — the town the trip starts in' };
+
+    const s = this.s, c = s.need();
+    const here = s.world?.room?.num ?? c.room?.num ?? null;
+    if (Number(here) === home) return { ok: true, already: true, room: home };
+
+    const spell = (c.spells || [])
+      .find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === 'rescue');
+    if (!spell) return { ok: false, why: 'this character does not know rescue' };
+
+    // THE RESERVE IS WHAT MAKES THIS POSSIBLE, so it is checked here and protected elsewhere.
+    // One emerald is consumed per cast (rescue.kod:56). `reserve` is the number that must
+    // SURVIVE the trip — sells and drops are what threaten it, which is `protect_items`'
+    // job, not this one's. Here it only decides whether we can afford to go at all.
+    const reserve = Number.isFinite(Number(cfg.reserve)) ? Math.max(0, Number(cfg.reserve)) : 0;
+    const emeralds = this.reagentOnHand('emerald');
+    if (emeralds < 1 + reserve)
+      return { ok: false, why: 'no emerald to spend on the rescue',
+               have: emeralds, needs: 1 + reserve,
+               note: 'buy emeralds on the next trip that DOES walk — the reserve is what ' +
+                     'keeps this option open, and it is the first thing a sell pass takes' };
+
+    await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+
+    // POLL THE ROOM. Not the reply, which says nothing useful, and not mana, which lies.
+    const waitMs = Math.max(5000, Math.min(60_000, Number(cfg.wait_ms) || 30_000));
+    const until = Date.now() + waitMs;
+    while (Date.now() < until) {
+      await new Promise(r => setTimeout(r, 2000));
+      const at = s.world?.room?.num ?? c.room?.num ?? null;
+      if (Number(at) === home) {
+        this.tally.rescue_shopping = (this.tally.rescue_shopping || 0) + 1;
+        this.note('rescued to the shopping town instead of walking',
+          { room: home, emeralds_left: this.reagentOnHand('emerald') });
+        return { ok: true, room: home, walked: false };
+      }
+      if (at != null && Number(at) !== Number(here)) {
+        // It landed SOMEWHERE ELSE — the guild hall, Ko'catan, the Pool of Vigor. That is
+        // rescue working correctly and this rule being inapplicable, so it is reported as a
+        // fact about the world rather than as a failure.
+        this.note('rescue did not go to the shopping town', { landed_in: at, wanted: home,
+          why: 'rescue.kod prefers a guild hall in the same region, then Ko\'catan, then the ' +
+               'Pool of Vigor, and only then the home room. One of those won.' });
+        return { ok: false, landed_in: at, why: 'rescue landed somewhere that is not the shopping town' };
+      }
+    }
+    return { ok: false, why: 'rescue did not land within ' + waitMs + 'ms — it is delayed 15-25s, ' +
+                             'so this is either a slow land or a refused cast that said nothing' };
+  }
+
   async roomEnchant() {
     const cfg = this.policy.roomEnchant;
     if (!cfg || cfg.enabled === false) return;
