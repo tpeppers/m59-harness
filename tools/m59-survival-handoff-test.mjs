@@ -169,4 +169,40 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   assert.equal(withdrawals, 1);
   assert.equal(shops, 0, 'the actual stockpile fallback yields to recovery');
 }
-console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping)');
+// The entire shopping list survives two pauses, including the original approach
+// and a later reagent detour. Completed purchases are not repeated.
+{
+  const k = keeper(), services = [];
+  k.money = { trips: 0 };
+  k.leaveHold = async () => ({ left: true });
+  k.townTrip = { target: { room: 114, hops: 3 }, nextService: -1 };
+  k.travel = async () => {
+    k.survivalInterruptedPass = k.passes;
+    k.suspendedJourney = { to: 114 };
+    return { arrived: false, paused: true };
+  };
+  assert.equal(await k.bankRun(), true);
+  assert.equal(k.townTrip.nextService, -1, 'the shopping approach remains pending');
+  k.s.world.room.num = 114;
+  k.suspendedJourney = null; k.survivalInterruptedPass = null;
+  k.townTrip.nextTryAt = 0;
+  const methods = ['contributeGuildWants', 'sellInTown', 'guildTitheFromSale',
+    'bankSurplus', 'withdrawForFood', 'restockInTown', 'buyFoodInTown',
+    'buyReagentsInTown', 'buyFarmDeliveryCargo', 'vaultRunIfPassing'];
+  let paused = false;
+  for (const method of methods) k[method] = async () => {
+    services.push(method);
+    if (method === 'buyReagentsInTown' && !paused) {
+      paused = true; k.survivalInterruptedPass = k.passes;
+      k.suspendedJourney = { to: 714 };
+    }
+  };
+  await k.bankRun();
+  assert.equal(k.townTrip.nextService, 7, 'retry the interrupted purchase, not the whole trip');
+  assert.deepEqual(services, methods.slice(0, 8));
+  k.suspendedJourney = null; k.survivalInterruptedPass = null;
+  assert.equal(await k.passErrand(ctx(k)), HANDLED);
+  assert.equal(k.townTrip, null, 'shopping completes after recovery');
+  assert.deepEqual(services, [...methods.slice(0, 8), ...methods.slice(7)]);
+}
+console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping completion)');

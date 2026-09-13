@@ -11,9 +11,11 @@ These fixes address reproduced control-flow failures in those journeys:
   cancelled it, erasing the suspended destination. It now renews only its own
   unrevoked hold and retains the original movement generation.
 - A cancelled stockpile leg could immediately start an apothecary leg in the
-  same pass. Survival interruptions fence subsequent travel and end stale pass
-  continuations. Recovery retains the forward shelter plan. Each journey has
-  its own watchdog rescue allowance.
+  same pass. The shopping objective now keeps its service cursor through a
+  survival pause, retries the interrupted purchase after recovery, and finishes
+  the remaining shopping list. It is never discarded because of that pause.
+  Recovery retains the forward shelter plan. Each journey has its own watchdog
+  rescue allowance.
 - Panic reconnects could leave movement active or continue into another ladder
   stage. The mover is cancelled before reconnecting, a freeze ends the pass,
   and monster attacks preserve the destination for recovery. The independent

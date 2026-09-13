@@ -6855,7 +6855,7 @@ export class Autopilot {
     // A cancelled stockpile leg used to fall through into an apothecary leg in
     // the same awaited errand. Give the next survival pass the body first.
     if (this.travelInterrupted())
-      return { arrived: false, cancelled: true, reason: 'travel paused for survival' };
+      return { arrived: false, paused: true, cancelled: true, reason: 'travel paused for survival' };
     const movementGeneration = sessionOpts.movementGeneration ?? this.s.movementGeneration;
     // ONE GATE, BECAUSE THERE IS MORE THAN ONE DOOR AND I KEPT FINDING NEW ONES.
     //
@@ -6935,7 +6935,7 @@ export class Autopilot {
     await this.restBeforeSettingOut().catch(e => this.note('rest before setting out failed',
                                                            { why: e.message }));
     if (this.travelInterrupted() || this.s.movementWasCancelled?.(movementGeneration))
-      return { arrived: false, cancelled: true, reason: 'travel paused for survival' };
+      return { arrived: false, paused: true, cancelled: true, reason: 'travel paused for survival' };
 
     // The same primitive crosses a nearby room boundary and undertakes a journey. Those
     // are different activities: upstairs-to-downstairs patrol movement is zoning, while
@@ -9682,6 +9682,10 @@ export class Autopilot {
         trips: this.money.trips, trips_failed: this.money.trips_failed,
         carried_at_death: this.money.carried_at_death,
         why_not: this.money.why_not,
+      } : null,
+      pending_shopping_trip: this.townTrip ? {
+        to: this.townTrip.target.room, next_service: this.townTrip.nextService,
+        started_at: this.townTrip.startedAt,
       } : null,
       guild_tithe: this.policy.guildTithe?.enabled ? {
         daily_amount: this.policy.guildTithe.daily_amount,
@@ -16136,6 +16140,7 @@ export class Autopilot {
       return CONTINUE;
     }
     this.errandsStoodDown = false;
+    if (this.townTrip) { await this.continueTownTrip(); return HANDLED; }
 
     // An errand outranks farming and is outranked by everything above it: we are past
     // the death, danger and rest branches, so a runner in trouble has already dealt
@@ -19786,6 +19791,7 @@ export class Autopilot {
   }
 
   async bankRun() {
+    if (this.townTrip) return this.continueTownTrip();
     const above = this.policy.bankAbove;
     if (!above) return false;                       // 0 or null turns the trips off
     const s = this.s, c = s.need();
@@ -20093,66 +20099,67 @@ export class Autopilot {
         : (packFull || brokeWithGoods) && carried <= above
         ? 'the pack has stopped earning; Roq is the one NPC that pays for a full one'
         : 'everything carried is dropped on death and usually unrecoverable; a balance is not' });
-    if ((await this.leaveHold('walking to the bank')).refused) return true;
-    const r = await this.travel(target.room, { maxHops: Math.max(12, target.hops + 4) })
-                    .catch(e => ({ arrived: false, reason: e.message }));
-    this.money.trips++;
-    if (!r.arrived) {
-      if (this.pendingFarmDelivery?.room === room.num) {
-        releaseFarmDelivery(room.num, this.name ?? this.s.name);
-        this.pendingFarmDelivery = null;
+    // The shopping objective survives every recovery stop. Save the exact service
+    // cursor rather than relying on need thresholds and cooldowns to rediscover it.
+    this.townTrip = { target, nextService: -1, startedAt: Date.now() };
+    return this.continueTownTrip();
+  }
+
+  async continueTownTrip() {
+    const trip = this.townTrip;
+    if (!trip) return false;
+    if (this.travelInterrupted() || this.suspendedJourney || this.inert?.travelling)
+      return true; // still pending; the survival ladder owns this pass
+    if (Date.now() < (trip.nextTryAt ?? 0)) return true;
+    if (trip.nextService < 0) {
+      if ((await this.leaveHold('continuing the shopping trip')).refused) return true;
+      const alreadyThere = Number(this.s.world?.room?.num) === Number(trip.target.room);
+      const r = alreadyThere
+        ? { arrived: true }
+        : await this.travel(trip.target.room, { maxHops: Math.max(12, trip.target.hops + 4) })
+          .catch(e => ({ arrived: false, reason: e.message }));
+      if (!alreadyThere) this.money.trips++;
+      if (!r.arrived || this.travelInterrupted()) {
+        // This is a pending trip, never a discarded shopping request. Physical
+        // route failures get a short retry delay; rescues resume through the ladder.
+        trip.nextTryAt = Date.now() + 5000;
+        if (!r.paused && !r.cancelled && !this.travelInterrupted()) {
+          this.money.trips_failed++;
+          if (this.money.why_not.length < 6)
+            this.money.why_not.push({ to: trip.target.room, why: r.reason || 'did not arrive' });
+        }
+        this.note('shopping trip still pending', { to: trip.target.room,
+          why: r.reason ?? 'recovering before continuing', next_service: trip.nextService });
+        return true;
       }
-      this.money.trips_failed++;
-      if (this.money.why_not.length < 6) this.money.why_not.push({ to: target.room, why: r.reason || 'did not arrive' });
-      this.noProgress('could not reach the bank');
-      return true;                                   // the pass was spent walking either way
+      trip.nextService = 0;
     }
-    // A TOWN TRIP IS THE ONLY TIME SELLING IS FREE, AND IT WAS BEING WASTED.
-    //
-    // Selling lived in exactly one place — makeRoom(), reached when
-    // `inventory.length >= policy.maxCarry`. maxCarry defaults to 40 and the game's pack
-    // holds about fourteen STACKS, so the condition is unreachable and the keeper has
-    // never sold anything. Measured across the fleet: 1,864 units of mushroom, gem and
-    // tooth being carried, Floyd alone hauling 311, every one of them saleable and none
-    // of it wanted by anybody.
-    //
-    // The walk to the bank is already paid for, so the order is sell, bank, restock:
-    // sell first so the proceeds are bankable and spendable, bank the surplus so death
-    // cannot take it, and buy food and reagents last with the float that is left.
-    // BEFORE THE VENDOR SEES ANY OF IT. The order is pack -> the character's own floor ->
-    // the guild's chests -> sold -> banked, and it has to be that order: a mushroom sold in
-    // the first line of a town trip cannot be un-sold into a chest in the last. The keep
-    // test below is the belt to this braces, for the sell paths that do not come through
-    // here.
-    await this.contributeGuildWants().catch(error =>
-      this.note('could not contribute to the guild chests', { why: error.message }));
-    const sale = await this.sellInTown().catch(() => null);
-    await this.guildTitheFromSale(sale).catch(error =>
-      this.note('could not pay guild tithe', { why: error.message }));
-    await this.bankSurplus().catch(() => {});
-    await this.withdrawForFood().catch(() => {});
-    await this.restockInTown().catch(() => {});
-    // AND THE WHOLE POINT OF THE MONEY IS FOOD, SO GO AND GET SOME.
-    //
-    // restockInTown buys where the trip ENDED, and the two destinations sell nothing
-    // edible: Roq deals in everything but stocks nothing, and a bank is a bank. So the
-    // sell leg ran, the buy leg did not, and the fleet got rich and hungry at the same
-    // time — 67,669 shillings banked with twenty of twenty-one characters under 100
-    // vigor, which is the resting cap doing all the work.
-    //
-    // Roq is in Barloque and so is the bread: 103 The Bhrama & Falcon is a short hop,
-    // and it is the one shelf carrying cheese, meat pie, bread and apples together.
-    await this.buyFoodInTown().catch(() => {});
-    // One more hop, for the ingredients rather than the meal. Cheaper per vigor point than
-    // bread and it is what keeps the character fed in the FIELD, where no shop is.
-    await this.buyReagentsInTown().catch(() => {});
-    // Own food and reagent floors are filled first. Whatever remains above the walking
-    // reserve now buys the room's shared cargo, so helping the fleet cannot strand the
-    // courier that is carrying it.
-    await this.buyFarmDeliveryCargo().catch(() => {});
-    await this.vaultRunIfPassing().catch(() => {});
+    const steps = [
+      ['guild contribution', () => this.contributeGuildWants()],
+      ['sell', async () => { trip.sale = await this.sellInTown(); }],
+      ['guild tithe', () => this.guildTitheFromSale(trip.sale)],
+      ['bank surplus', () => this.bankSurplus()],
+      ['withdraw shopping money', () => this.withdrawForFood()],
+      ['restock here', () => this.restockInTown()],
+      ['buy food', () => this.buyFoodInTown()],
+      ['buy reagents', () => this.buyReagentsInTown()],
+      ['buy delivery cargo', () => this.buyFarmDeliveryCargo()],
+      ['vault', () => this.vaultRunIfPassing()],
+    ];
+    while (trip.nextService < steps.length) {
+      const [name, run] = steps[trip.nextService];
+      if (this.travelInterrupted() || this.suspendedJourney) return true;
+      await run().catch(e => this.note('shopping step failed', { step: name, why: e.message }));
+      if (this.travelInterrupted() || this.suspendedJourney) {
+        this.note('shopping trip paused for recovery', { step: name,
+          to: this.suspendedJourney?.to ?? null, remaining_steps: steps.length - trip.nextService });
+        return true; // retry THIS step once recovered, then continue the shopping list
+      }
+      trip.nextService++;
+    }
+    this.townTrip = null;
     this.lastTownServiceAt = Date.now();
-    this.progress('banked the takings');
+    this.progress('finished the shopping trip');
     return true;
   }
 
