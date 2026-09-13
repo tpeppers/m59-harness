@@ -14194,7 +14194,37 @@ export class Autopilot {
     //
     // So it is cleared here instead: the same predicate that raises it, on every pass,
     // before anything branches on prey.
-    if (skills.isArmed(this.s.client)) {
+    // A POSTED CASTER IS NOT AN UNARMED FIGHTER, and everything below this line exists to
+    // get a FIGHTER armed. Skip the whole apparatus for one.
+    //
+    // Measured 2026-09-12, and it is why this guard exists rather than being tidiness. Loial
+    // was posted in room 39 to keep `forces of light` standing: policy applied and confirmed
+    // at the keeper, 77 emeralds, 116 elderberries, 65 of 65 mana, holding nothing. He cast
+    // NOTHING for a hundred seconds, because this branch fires ~1,800 lines before the room
+    // enchantment pass and returned first every time, noting "unarmed and in a room that
+    // spawns — leaving to regain mana".
+    //
+    // For him that errand could never succeed on any of its four routes: he is a Shal'ille
+    // caster and does not know `create weapon` at all, so the mana it was saving up is for a
+    // spell he cannot cast. It would have walked him out of the room he was posted in, for
+    // ever, to wait for something that was never going to happen.
+    //
+    // The test is the JOB, not the hands. A character told to stand somewhere and keep an
+    // enchantment up has no business hunting a weapon: it is not going to swing, its whole
+    // value is that it does not move, and the survival ladder still belongs to the keeper if
+    // something attacks it.
+    if (this.policy.roomEnchant?.enabled && !skills.isArmed(this.s.client)) {
+      this.clearRefusal('UNARMED_NO_DONOR');
+      // Said once a minute rather than every pass: it is a standing condition, not an event.
+      if (Date.now() - (this._casterUnarmedNoteAt ?? 0) > 60_000) {
+        this._casterUnarmedNoteAt = Date.now();
+        this.note('posted as a room caster and carrying no weapon — that is the job, not a fault',
+          { room: this.s.world?.room?.num ?? null,
+            why: 'the arm-yourself errand is for fighters. This character is here to keep a ' +
+                 'room enchantment standing and must not be walked out of the room to chase ' +
+                 'a weapon it will never swing' });
+      }
+    } else if (skills.isArmed(this.s.client)) {
       this.clearRefusal('UNARMED_NO_DONOR');
       if (this.waitingOn?.code === 'MANA_FOR_CREATE_WEAPON' ||
           this.waitingOn?.code === 'VIGOR_FOR_CREATE_WEAPON') this.doneWaiting?.();
@@ -14224,7 +14254,10 @@ export class Autopilot {
     const armHealth = armVitals?.health?.max > 0
       ? armVitals.health.value / armVitals.health.max : null;
     const tooHurtToArm = armHealth !== null && armHealth < this.safety().fleeAt;
-    if (tooHurtToArm && !skills.isArmed(this.s.client)) {
+    // The same exemption as above, applied to the two branches that actually walk the
+    // character somewhere. Stated as one local so the pair cannot drift apart later.
+    const postedCaster = !!this.policy.roomEnchant?.enabled;
+    if (!postedCaster && tooHurtToArm && !skills.isArmed(this.s.client)) {
       // Said once a minute rather than every pass: a body below the flee line is having a
       // bad enough second without its own journal being the loudest thing in the room.
       if (Date.now() - (this._lastArmDeferAt ?? 0) > 60_000) {
@@ -14237,7 +14270,7 @@ export class Autopilot {
           doing: 'handing the pass to survival — it arms again once it is back above the line' });
       }
     }
-    if (!tooHurtToArm && !skills.isArmed(this.s.client)) {
+    if (!postedCaster && !tooHurtToArm && !skills.isArmed(this.s.client)) {
       // A shattered weapon still occupies the room needed for its replacement.
       // The ordinary farm sweep is below this stage and cannot run while it is
       // blocked here. Keep the same drop policy and sweep rate when rearming.
