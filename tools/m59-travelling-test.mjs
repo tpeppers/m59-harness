@@ -443,34 +443,11 @@ console.log('\nthe triggers — none of them ask whether the body is moving');
   const cccc = keeper({ health: 10, max: 37, adjacent: 6, fleeAt: 0.7,
                         guard: {}, pulses: ring({ from: 10, perSample: 0.5 }) });
   const r = await run(cccc);
-  // ============ CORRECTED 2026-08-23: A MONSTER DOES NOT STOP A JOURNEY ============
-  //
-  // These four assertions used to require that Cccc's exact situation — 27% health, six
-  // monsters adjacent, shuffling — TOOK THE CHARACTER BACK. That was the fix for his death
-  // and it was aimed at the right thing (the ladder had been switched off) and settled on
-  // the wrong remedy (stop the journey).
-  //
-  // The operator's rule, stated repeatedly and finally taken: DEATH OR A PLAYER ARE THE ONLY
-  // TWO REASONS TO STOP TRAVELLING. Everything else keeps walking, and takes its walls as
-  // WAYPOINTS on the way past.
-  //
-  // The evidence for it is a whole evening of journeys that read
-  //
-  //     legs 2, planned_legs 7      hp 33 -> 29
-  //
-  // two legs of seven, four health down, cancelled by these very rungs — and then the
-  // character stood idle in a 750-danger room and lost thirty health in eight seconds. A
-  // character that keeps walking outpaces most of what chases it. Twenty-hitpoint mules
-  // cross to Castle Victoria every day, and they do it by never stopping.
-  //
-  // What Cccc actually needed was not to have his survival ladder switched off — which is
-  // what `goInert` did and what `goTravelling` fixed — and a wall he could take without
-  // giving up the road, which is what the fuel stop does.
-  ok('six monsters and a shuffle do NOT end the crossing', !r.tookBack,
+  // A reconnect only buys safety while the mover stays cancelled.
+  ok('a panic logoff suspends the crossing before movement can wake the room', r.paused,
      JSON.stringify({ paused: r.paused, abandoned: r.abandoned }));
-  ok('and the journey is still his — nothing was handed back', cccc.inert !== null);
-  ok('and the ladder was never switched off, which is what actually killed him',
-     cccc.inert?.travelling === true);
+  ok('and the mover hands the body back to recovery', cccc.inert === null);
+  ok('and recovery asks for forward shelter', !!cccc.wantsForwardShelter);
   // SIX MONSTERS AND NO PLAYER, SO THE JOURNEY IS NOT GIVEN UP. This is the operator's
   // rule of 2026-08-21 and the reason the note names two different acts: the movement
   // stops so the ladder can put a wall at his back, and the destination is kept so he
@@ -536,12 +513,12 @@ console.log('\nthe triggers — none of them ask whether the body is moving');
                                    guard: {} });
   const rLowMon = await run(lowWithMonsters);
   ok('below the flee line with MONSTERS, the logoff fires',
-     lowWithMonsters.notes.some(n => /logged off below the flee line/.test(n.what ?? '')),
+     lowWithMonsters.notes.some(n => /logged off below the flee line/.test(n.detail?.trigger ?? '')),
      JSON.stringify(lowWithMonsters.notes.map(n => n.what)));
   ok('and the crossing is NOT abandoned for monsters -- that is the road doctrine',
      !rLowMon.abandoned, JSON.stringify(rLowMon));
   ok('and the note says why the journey was kept',
-     lowWithMonsters.notes.some(n => /outpaces most of what is chasing it/.test(
+     lowWithMonsters.notes.some(n => /keep the destination for after recovery/.test(
        JSON.stringify(n.detail ?? {}))));
   // ---- ABOVE THE FLEE LINE, BUT DYING FAST. Nothing adjacent in the room model at all,
   // so this can only fire on the rate.
@@ -567,7 +544,7 @@ console.log('\nthe triggers — none of them ask whether the body is moving');
   const bleedingMonsters = keeper({ health: 30, max: 37, adjacent: 2, fleeAt: 0.7, guard: {},
                                     pulses: ring({ from: 34, perSample: 4 }) });
   const rBleedMon = await run(bleedingMonsters);
-  ok('a bar emptying under MONSTERS now abandons the journey too', !!rBleedMon.abandoned,
+  ok('a bar emptying under MONSTERS suspends the journey for recovery', rBleedMon.paused && !rBleedMon.abandoned,
      JSON.stringify(bleedingMonsters.notes.map(n => n.detail?.trigger ?? n.msg)));
   ok('and it says monsters emptied it, so the postmortem can tell the two apart',
      bleedingMonsters.notes.some(n => n.detail?.emptied_by === 'monsters'),
@@ -682,7 +659,7 @@ console.log('\nthe wiring — the parts a rename would silently break');
      /trigger: outcome[?][.]outcome \?\? 'the travel job ended short/.test(BROKER_SRC));
   ok('while one that ARRIVED does not',
      /const arrived = outcome[?][.]arrived === true/.test(BROKER_SRC)
-     && /if [(]!arrived && dest != null/.test(BROKER_SRC));
+     && /if [(]!ours[.]cancelled && !arrived && dest != null/.test(BROKER_SRC));
   ok('travel_guard is settable from the autopilot tool', /travel_guard: \{/.test(BROKER_SRC));
   ok('and an unknown faculty is refused rather than ignored',
      /travel_guard: no such faculty/.test(BROKER_SRC));

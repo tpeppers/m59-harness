@@ -11553,12 +11553,17 @@ class Session {
                                { within: 14, room: Number(this.world?.room?.num) || null });
       } catch { spot = null; }
       if (!spot) return false;
+      const shelterRoom = this.world?.room?.num;
       const walked = await this.walkTo(spot.col, spot.row,
         { maxSteps: 40, movementGeneration, controlToken }).catch(() => null);
-      if (walked?.left_room) return false;
+      if (!walked?.arrived || walked.left_room
+          || this.movementWasCancelled(movementGeneration, controlToken)
+          || this.world?.room?.num !== shelterRoom
+          || c.self?.col !== spot.col || c.self?.row !== spot.row) return false;
       log.push({ healing_at: { row: spot.row, col: spot.col },
                  room: this.world?.room?.name ?? null, from: Math.round(100 * hp / max) + '%' });
-      await this.pacer.submit('rest', () => c.rest()).catch(() => null);
+      await this.pacer.submit('rest', () =>
+        this.movementWasCancelled(movementGeneration, controlToken) ? false : c.rest()).catch(() => null);
       const until = Date.now() + healMs;
       let last = hp, quiet = 0;
       while (Date.now() < until) {
@@ -11574,10 +11579,68 @@ class Session {
         if (now > last) quiet = 0;
         last = now;
       }
-      await this.pacer.submit('rest', () => c.stand()).catch(() => null);
+      await this.pacer.submit('rest', () =>
+        this.movementWasCancelled(movementGeneration, controlToken) ? false : c.stand()).catch(() => null);
       const after = c.vitals?.()?.health?.value ?? c.vitals?.()?.health;
       if (Number.isFinite(after) && after > hp) healed++;
       return true;
+    };
+
+    // Every completed crossing pays the same recovery checks, including tracks.
+    const finishHop = async () => {
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ log });
+      await healAtAWall().catch(() => false);
+
+      // Arriving brings a fresh BP_PLAYER, and with it the identity the world model
+      // needs; give the room contents a moment to land as well.
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ log });
+      await this.pacer.submit('read', () => this.client.roomContents());
+      await this.client.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
+
+      // THE PAUSE POINT. One per room, with the room already visible.
+      if (this.movementWasCancelled(movementGeneration, controlToken))
+        return this.cancelledMovement({ log });
+      //
+      // A p90 journey is ten of these, so this is the difference between one 87-second
+      // await nothing can reach into and ten 9-second ones with a decision between each.
+      // Whatever it does, we carry on afterwards — see the note on `onHop` above for why
+      // stopping in the middle is not the safer option it looks like.
+      //
+      // It cannot break the journey by throwing, either. A hook that fails is a hook with
+      // a bug in it, and a character halfway between two towns is the worst possible place
+      // to discover one; the failure is logged against the hop and the walk continues.
+      if (onHop) {
+        const room = this.world.room;
+        try {
+          await onHop({
+            room: room ? { num: room.num, name: room.name } : null,
+            hop: hops, hops_done: hops, destination: toRoomNum,
+            remaining: Math.max(0, (this.world.route(toRoomNum)?.hops?.length ?? 0)),
+            journey: journeyId,
+          });
+        } catch (e) {
+          log.push({ from: room?.name ?? null, onhop_failed: e.message,
+                     note: 'the between-rooms hook threw; the journey carried on regardless' });
+        }
+        // The hook can take minutes — holding a wall until health comes back is the whole
+        // point of it — so re-check cancellation before committing to another room rather
+        // than trusting the check at the top of the next iteration to be soon enough.
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return this.cancelledMovement({ log });
+      }
+
+      // The next room's clock starts once we have actually landed and can see. The settle
+      // above is charged to arriving, not to the room we just left — otherwise every
+      // room's time would carry the previous one's tail and the worst room would always
+      // look like whichever came after the real problem.
+      //
+      // AND AFTER THE HOOK, not before it: a hold at a wall is time spent in the room we
+      // are standing in, but it is not time the ROUTE cost, and charging it to the room
+      // would make every room a character rested in look like the slowest map in the game.
+      enteredAt = Date.now();
+      return null;
     };
 
     // THE ARRIVAL GUARD. ASK WHETHER WE ARE THERE BEFORE REPORTING THAT WE ARE NOT.
@@ -11958,6 +12021,8 @@ class Session {
             return arrivedIfHere({ arrived: false, log, reason: why, stumbles: totalStumbles });
           }
           hops++; stumbles = 0;
+          const interrupted = await finishHop();
+          if (interrupted) return interrupted;
           continue;
         }
         const why = 'room identity changed during track replay, but the settled logical room did not';
@@ -12373,54 +12438,8 @@ class Session {
       // session elsewhere, and a bare call there is a TypeError rather than a no-op.
       if (typeof this.stepInland === 'function') await this.stepInland().catch(() => false);
       cameFromRoom = Number.isFinite(leavingRoom) ? leavingRoom : null;
-      await healAtAWall().catch(() => false);
-
-      // Arriving brings a fresh BP_PLAYER, and with it the identity the world model
-      // needs; give the room contents a moment to land as well.
-      if (this.movementWasCancelled(movementGeneration, controlToken))
-        return this.cancelledMovement({ log });
-      await this.pacer.submit('read', () => this.client.roomContents());
-      await this.client.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
-
-      // THE PAUSE POINT. One per room, with the room already visible.
-      //
-      // A p90 journey is ten of these, so this is the difference between one 87-second
-      // await nothing can reach into and ten 9-second ones with a decision between each.
-      // Whatever it does, we carry on afterwards — see the note on `onHop` above for why
-      // stopping in the middle is not the safer option it looks like.
-      //
-      // It cannot break the journey by throwing, either. A hook that fails is a hook with
-      // a bug in it, and a character halfway between two towns is the worst possible place
-      // to discover one; the failure is logged against the hop and the walk continues.
-      if (onHop) {
-        const room = this.world.room;
-        try {
-          await onHop({
-            room: room ? { num: room.num, name: room.name } : null,
-            hop: hops, hops_done: hops, destination: toRoomNum,
-            remaining: Math.max(0, (this.world.route(toRoomNum)?.hops?.length ?? 0)),
-            journey: journeyId,
-          });
-        } catch (e) {
-          log.push({ from: room?.name ?? null, onhop_failed: e.message,
-                     note: 'the between-rooms hook threw; the journey carried on regardless' });
-        }
-        // The hook can take minutes — holding a wall until health comes back is the whole
-        // point of it — so re-check cancellation before committing to another room rather
-        // than trusting the check at the top of the next iteration to be soon enough.
-        if (this.movementWasCancelled(movementGeneration, controlToken))
-          return this.cancelledMovement({ log });
-      }
-
-      // The next room's clock starts once we have actually landed and can see. The settle
-      // above is charged to arriving, not to the room we just left — otherwise every
-      // room's time would carry the previous one's tail and the worst room would always
-      // look like whichever came after the real problem.
-      //
-      // AND AFTER THE HOOK, not before it: a hold at a wall is time spent in the room we
-      // are standing in, but it is not time the ROUTE cost, and charging it to the room
-      // would make every room a character rested in look like the slowest map in the game.
-      enteredAt = Date.now();
+      const interrupted = await finishHop();
+      if (interrupted) return interrupted;
     }
     // CHECK ARRIVAL ONE LAST TIME. The destination test lives at the TOP of the loop, so a
     // journey whose final hop is also its last permitted hop leaves the loop standing in

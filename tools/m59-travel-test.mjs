@@ -20,6 +20,7 @@
 //   4. A REAL DEAD END STILL REPORTS ITSELF. Retrying must not turn "no route" into
 //      silence — the reason survives to the caller.
 import { strict as assert } from 'node:assert';
+import { readHealth } from './m59-parse.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond) => { if (cond) pass++; else { fail++; console.log(`  FAIL ${what}`); } };
@@ -165,8 +166,9 @@ ok('and it is a whole method', travelSrc.trim().endsWith('}'));
 // has fallen behind rather than quietly testing something else. `BARRED_ON_ENTRY` is the
 // real regex, not a stub, because what it matches IS the behaviour under test.
 const BARRED_ON_ENTRY = /guardian angel holds you back/i;
-const travel = new Function('orderExits', 'BARRED_ON_ENTRY',
-  `return ({ ${travelSrc} }).travel`)((c) => c, BARRED_ON_ENTRY);
+let wallCandidate = null;
+const travel = new Function('orderExits', 'BARRED_ON_ENTRY', 'readHealth', 'nearestSafeSpot',
+  `return ({ ${travelSrc} }).travel`)((c) => c, BARRED_ON_ENTRY, readHealth, () => wallCandidate);
 
 
 // ---------------------------------------------------------------------------
@@ -287,10 +289,24 @@ console.log('a track room change never executes source-room exit candidates in t
              rested: 2, rested_ms: 6400 };
   };
   const seen = [];
-  const r = await travel.call(s, 2, { onTrackRest: stop => seen.push(stop) });
+  const hops = [];
+  const r = await travel.call(s, 2, { onTrackRest: stop => seen.push(stop),
+    onHop: hop => hops.push(hop) });
   ok('track healing stations are surfaced before the fast path returns',
      r.arrived === true && seen.length === 1 && seen[0].stops === 2 && seen[0].held_ms === 6400,
      JSON.stringify({ result: r, seen }));
+  ok('a successful track crossing runs the hop recovery hook exactly once',
+     hops.length === 1 && hops[0].room.num === 2 && hops[0].hops_done === 1);
+}
+
+{
+  const s = fakeSession({ rooms: [584, 585, 586] });
+  let rides = 0, cancelled = false;
+  s.rideTrack = async () => { rides++; s.at++; return { rode: true, left_room: true }; };
+  s.movementWasCancelled = () => cancelled;
+  const r = await travel.call(s, 586, { onHop: () => { cancelled = true; } });
+  ok('a rescue in the track hop hook prevents the next crossing',
+     r.cancelled === true && rides === 1 && s.world.room.num === 585);
 }
 
 {
@@ -320,6 +336,24 @@ console.log('a track room change never executes source-room exit candidates in t
 }
 
 // ---------------------------------------------------------------------------
+console.log('a failed refuge walk never starts a rest in the open');
+for (const arrived of [false, true]) {
+  const s = fakeSession({ rooms: [584, 585] });
+  let rests = 0, walks = 0;
+  s.need = () => s.client;
+  s.client.self = { row: 10, col: 10 };
+  s.client.vitals = () => ({ health: { value: 20, max: 50 } });
+  s.client.rest = () => { rests++; };
+  s.world.geometry = { collisionReady: true };
+  s.walkTo = async () => { walks++; return { arrived }; };
+  wallCandidate = { row: 11, col: 11 };
+  try {
+    const r = await travel.call(s, 585, {});
+    ok('rest requires both arrival and the actual shelter position (' + arrived + ')',
+       r.arrived === true && walks === 1 && rests === 0);
+  } finally { wallCandidate = null; }
+}
+
 console.log('a transient hop failure is retried rather than returned');
 {
   // Refuse the first doorway twice, then let it through. This is the case that used to

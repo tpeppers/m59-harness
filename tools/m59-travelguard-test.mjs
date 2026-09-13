@@ -37,6 +37,7 @@
 // add `goInert` beside it and pass.
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { withIntent } from './m59-intent-observations.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond) => { if (cond) pass++; else { fail++; console.log(`  FAIL ${what}`); } };
@@ -74,7 +75,7 @@ console.log('startJob is the one slot, and it can be awaited');
   ok('and it is a whole method', startJobSrc.trim().endsWith('}'));
 
   const make = () => {
-    const o = new Function(`return ({ ${startJobSrc} })`)();
+    const o = new Function('withIntent', `return ({ ${startJobSrc} })`)(withIntent);
     o.name = 'tester';
     o.movementGeneration = 0;
     o.job = null;

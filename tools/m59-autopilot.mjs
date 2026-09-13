@@ -4000,8 +4000,10 @@ export class Autopilot {
       // adversarial claim store from turning one decision into an unbounded loop.
       for (let attempt = 0; attempt < 32; attempt++) {
         for (const k of Object.keys(spotStats)) delete spotStats[k]; // stats describe LAST attempt
-        const wallsAllowed = !(source === 'travel' && this.crowded());
-        if (!wallsAllowed && attempt === 0) this.noteCrowdRefusal('a wall to retreat to');
+        // Monster count does not invalidate collision-tested cover. A crowded road is
+        // precisely where a hurt traveller needs a refuge; the geometry still decides
+        // whether the square is defensible and reachable.
+        const wallsAllowed = true;
         spot = this.searchSafeSpot(geo, me, room, {
           within, quarryReach, strictQuarryReach, los, quarry,
           stats: spotStats, shareCap, nearQuarry, exclusiveClaim,
@@ -6843,8 +6845,18 @@ export class Autopilot {
     return { rested: true, health_after: after?.health?.value ?? null };
   }
 
+  travelInterrupted() {
+    return (this.survivalInterruptedPass != null && this.survivalInterruptedPass === this.passes)
+      || (this.frozenUntil != null && Date.now() < this.frozenUntil);
+  }
+
   async travel(room, opts) {
     const { holdBetweenRooms = true, onHop, ...sessionOpts } = opts ?? {};
+    // A cancelled stockpile leg used to fall through into an apothecary leg in
+    // the same awaited errand. Give the next survival pass the body first.
+    if (this.travelInterrupted())
+      return { arrived: false, cancelled: true, reason: 'travel paused for survival' };
+    const movementGeneration = sessionOpts.movementGeneration ?? this.s.movementGeneration;
     // ONE GATE, BECAUSE THERE IS MORE THAN ONE DOOR AND I KEPT FINDING NEW ONES.
     //
     // `confineRooms` was enforced first in `retreatToSafety`, and a character left anyway —
@@ -6922,6 +6934,8 @@ export class Autopilot {
     // is crossed the character is on the road and the mid-journey hold owns the decision.
     await this.restBeforeSettingOut().catch(e => this.note('rest before setting out failed',
                                                            { why: e.message }));
+    if (this.travelInterrupted() || this.s.movementWasCancelled?.(movementGeneration))
+      return { arrived: false, cancelled: true, reason: 'travel paused for survival' };
 
     // The same primitive crosses a nearby room boundary and undertakes a journey. Those
     // are different activities: upstairs-to-downstairs patrol movement is zoning, while
@@ -7023,17 +7037,13 @@ export class Autopilot {
     if (!this.inert) {
       this.goTravelling(`travelling to ${room}`, { to: room });
       ourTravelHold = this.inert;
-      // RE-ASSERTED, BECAUSE AN INERT KEEPER WAKES ON A DEADLINE. `goTravelling` carries
-      // INERT_MAX_MS so a crashed caller cannot silence a keeper for ever, and that deadline
-      // knows nothing about a journey still being in progress. Watched live on the external
-      // path: a hold lapsed mid-walk and the character was driven by the keeper and the
-      // mover at once. Same cadence travelJob uses.
+      // Renew only this live owner's lease. Recreating a revoked hold erased the
+      // watchdog's suspended destination while the cancelled mover was unwinding.
       if (ourTravelHold) {
         holdTimer = setInterval(() => {
-          try {
-            if (!this.inert) { this.goTravelling(`travelling to ${room}`, { to: room });
-                               ourTravelHold = this.inert; }
-          } catch { /* re-asserting a hold is never worth ending a journey over */ }
+          if (this.inert === ourTravelHold && !this.travelInterrupted()
+              && !this.s.movementWasCancelled?.(movementGeneration))
+            ourTravelHold.at = Date.now();
         }, 2000);
         holdTimer.unref?.();
       }
@@ -7094,6 +7104,7 @@ export class Autopilot {
       });
       outcome = await this.s.travel(room, {
         ...sessionOpts,
+        movementGeneration,
         ...(wantSide ? { arriveNear: wantSide } : {}),
         onHop: async (at) => {
           legs++;
@@ -9856,7 +9867,9 @@ export class Autopilot {
     // And the stops that were worked out for it. A finished journey's fuel plan describes a
     // route nobody is on any more; left set, the mid-hop wall rung would offer a stop from
     // the last crossing on the next one.
-    this.s.activeShelter = null;
+    // A survival suspension still needs the forward refuges from this crossing.
+    // Ordinary completion retires them; recovery consumes them on the next pass.
+    if (!this.suspendedJourney && !this.wantsForwardShelter) this.s.activeShelter = null;
     if (!this.inert) return null;
     const held = Date.now() - this.inert.at;
     const wasTravelling = !!this.inert.travelling;
@@ -9999,7 +10012,6 @@ export class Autopilot {
           // ANY DAMAGE AT ALL — WHERE THE MAP OUTRANKS US, AND AN ORDINARY THRESHOLD ELSEWHERE.
           // See travelDivertAt: the condition is what makes the sensitive half affordable, and
           // I shipped it unconditional for one run and watched arrivals fall from 43% to 10%.
-          if (this.crowded()) { this.noteCrowdRefusal('wall on the way past'); return false; }
           return hp < this.travelDivertAt();
         },
         // AND SIT DOWN WHEN WE GET THERE, IF WE ARE NOT WHOLE.
@@ -11208,9 +11220,11 @@ export class Autopilot {
     const lostThisTick = (hp?.value != null && w.lastHealth != null && hp.value < w.lastHealth)
       ? w.lastHealth - hp.value : 0;
     w.lastHealth = hp?.value ?? null;
-
     // 1b. THE POSITION PULSE. See PULSE_MS.
     if (now - w.lastPulseAt >= PULSE_MS) { w.lastPulseAt = now; this.pulsePosition(now, hp); }
+    // Keep evidence fresh, but give no action edict a turn during a valid freeze.
+    // This clock still runs while a pass is waiting for stats or a mover to unwind.
+    if (this.checkFreeze()) return;
 
     // 1b'. THE FIGHT-BACK EDICT — under attack, not swinging, and told to. See fightBackCheck.
     this.fightBackCheck(w, hp, now, lostThisTick);
@@ -11334,10 +11348,12 @@ export class Autopilot {
     // driver was holding a dying character is worth having in the postmortem -- it is just not
     // a precondition for saving it.
     if (travelling && wedge && wedge.taking_hits
-        && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
+        && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedJourney !== this.inert) {
       const frac = pct(hp);
       if (frac !== null && frac < this.safety().fleeAt) {
         w.rescuedPass = this.passes;
+        w.rescuedJourney = this.inert;
+        this.survivalInterruptedPass = this.passes;
         w.rescues = (w.rescues ?? 0) + 1;
         this.tally.wedged_journey_rescues = (this.tally.wedged_journey_rescues || 0) + 1;
         const journey = this.travelling;
@@ -11372,6 +11388,7 @@ export class Autopilot {
       const frac = pct(hp);
       if (frac !== null && frac < this.safety().fleeAt) {
         w.rescuedPass = this.passes;
+        this.survivalInterruptedPass = this.passes;
         w.rescues = (w.rescues ?? 0) + 1;
         this.tally.inert_rescues = (this.tally.inert_rescues || 0) + 1;
         const stopped = (() => {
@@ -12438,6 +12455,23 @@ export class Autopilot {
     const s = this.s;
     if (!s.live) { this.note('not in game'); return; }
     const c = s.client;
+    this.survivalInterruptedPass = null;
+    // Before GOAP, BT, or any request that could wake the room. Read health again
+    // after the await: damage during the poll ends the freeze on this same pass.
+    if (this.checkFreeze()) {
+      this.doing = 'recovering';
+      await s.pacer.submit('read', () => c.stats(1));
+      await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
+      if (this.checkFreeze()) {
+        await s.pacer.submit('rest', () => this.checkFreeze() ? c.rest() : false);
+        if (this.checkFreeze()) {
+          this.note('frozen', { left_s: Math.round((this.frozenUntil - Date.now()) / 1000),
+            health: c.vitals()?.health?.value, vigor: c.vitals()?.vigor?.value });
+          this.progress('playing dead to avoid a death');
+          return;
+        }
+      }
+    }
     // Apply loadout policy overlay BEFORE the BT check so that useBT (and other
     // loadout-driven policy fields) are live on the first pass after a restart.
     this.applyLoadoutPolicyOverlay();
@@ -12583,27 +12617,6 @@ export class Autopilot {
       this.lastSeenPurse = c.inventory
         .filter(o => /shilling/i.test(c.rsc.get(o.nameRsc) || ''))
         .reduce((t, o) => t + (o.amount || 1), 0);
-
-    // FROZEN after a panic logoff. Do nothing that the server counts as an action:
-    // no room-contents request, no movement, no turning, no fighting. Rest, read the
-    // stats, and wait. Anything else calls NotifyMonstersOfPresence and hands back
-    // the one thing this state is for.
-    if (this.frozenUntil && Date.now() < this.frozenUntil) {
-      this.doing = 'recovering';
-      await s.pacer.submit('read', () => c.stats(1));
-      await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
-      await s.pacer.submit('rest', () => c.rest());
-      const vv = c.vitals();
-      this.note('frozen', { left_s: Math.round((this.frozenUntil - Date.now()) / 1000),
-                            health: vv?.health?.value, vigor: vv?.vigor?.value,
-                            note: 'recovering vigor; health needs us to move again first' });
-      this.progress('playing dead to avoid a death');
-      return;
-    }
-    if (this.frozenUntil) {
-      this.frozenUntil = null;
-      this.note('unfreezing', { note: 'moving again — monsters can see us from here on' });
-    }
 
     // RESYNC ON A CLOCK, NOT EVERY PASS. See decideMs/resyncMs above: room.objects is
     // maintained by pushes, so between resyncs we are deciding on a live map rather
@@ -12753,6 +12766,12 @@ export class Autopilot {
       this.passStage = stage;
       this.passStageAt = Date.now();
       const verdict = await this[stage](ctx);
+      // A watchdog can interrupt while this rung awaits a whole shopping trip.
+      // Its old context must not send the character into the next errand/farm rung.
+      if (this.travelInterrupted()) {
+        this.traceThisPass(ctx, ran, stage);
+        return stage;
+      }
       if (verdict === CONTINUE) continue;
       if (verdict !== HANDLED) {
         // A STAGE THAT ANSWERED NEITHER. Almost certainly a bare `return;` left over from
@@ -13588,7 +13607,7 @@ export class Autopilot {
       // sets it when it rescues a stalled driver — and it takes a spot FORWARD on the route
       // and mends there. Pausing for a wall is the same request, so it makes the same one.
       if (!abandon) this.wantsForwardShelter = 'the journey paused for a wall';
-      return CONTINUE;
+      return this.frozenUntil > Date.now() ? HANDLED : CONTINUE;
     };
 
     // ---- 1. THE WEAPON IS GONE.
@@ -13986,7 +14005,6 @@ export class Autopilot {
         'below the flee line at ' + Math.round(hp * 100) + '% while travelling, with ' +
         (byPlayer ? worthEnding.length + ' stranger(s) on us' : near.length + ' monster(s) on us')
       ).catch(() => false);
-      if (froze) this.tally.logoffs = (this.tally.logoffs || 0) + 1;
 
       // (b) ONLY FOR A PERSON. Unchanged, deliberately, and the detail says which happened so
       // a postmortem can tell a freeze-and-carry-on from a freeze-and-stop.
@@ -14000,16 +14018,9 @@ export class Autopilot {
                         { abandon: true });
 
       if (froze) {
-        this.note('logged off below the flee line and kept the journey', {
-          at_fraction: Math.round(hp * 100) + '%',
-          flee_at: Math.round(this.safety().fleeAt * 100) + '%',
-          monsters_near: near.length,
-          why: 'the logoff stops the attack outright, which is what being under the flee line ' +
-               'needs; the crossing is not cancelled because a character that keeps walking ' +
-               'outpaces most of what is chasing it and one that stops is surrounded by all ' +
-               'of it',
-        });
-        return HANDLED;
+        return takeBack('logged off below the flee line',
+          'movement would wake the room again; keep the destination for after recovery',
+          { monsters_near: near.length, logged_off: true });
       }
       // Could not freeze (already frozen here and not yet acted). Fall through to rung 5 and
       // the rest of the guard rather than inventing a third answer.
@@ -14068,7 +14079,6 @@ export class Autopilot {
           'dying at ' + rate + ' health/s while travelling, ' +
           Math.round(ttl / 100) / 10 + 's left'
         ).catch(() => false);
-        if (froze) this.tally.logoffs = (this.tally.logoffs || 0) + 1;
         return takeBack('dying faster than this journey can finish',
                         'health is falling at a rate that empties the bar inside ' +
                         Math.round(TRAVEL_RESCUE_TTL_MS / 1000) + ' seconds. Whether the body ' +
@@ -14084,7 +14094,7 @@ export class Autopilot {
                                         'acted); the journey is still ended so the ladder below ' +
                                         'can take a wall or rest',
                         },
-                        { abandon: true });
+                        { abandon: byPlayer });
       }
     }
 
@@ -20506,6 +20516,7 @@ export class Autopilot {
         { item: 'herb', amount: Math.max(0, wantHb - have.herbs) },
       ].filter(n => n.amount > 0)).catch(error =>
         this.note('stockpile withdrawal failed', { why: error.message }));
+      if (this.travelInterrupted()) return;
       have = this.reagentCount();
     }
     // Only the shortfall that stops a cast. Being deep in elderberry and out of herbs is
@@ -21098,6 +21109,28 @@ export class Autopilot {
   // The frozen version buys a minute of vigor. This version buys a full heal in the
   // middle of a monster room, and it is the difference between a fight we lost and a
   // fight we get to have again.
+  checkFreeze() {
+    if (!this.frozenUntil) return false;
+    const c = this.s.client, me = c?.self;
+    const sample = { health: c?.vitals?.()?.health?.value ?? null,
+      room: this.s.world?.room?.num ?? null, col: me?.col ?? null, row: me?.row ?? null };
+    const before = this.freezeSample ?? { ...sample, health: this.frozeAt ?? sample.health };
+    const hurt = sample.health != null && before.health != null && sample.health < before.health;
+    const moved = ['room', 'col', 'row'].some(k =>
+      sample[k] != null && before[k] != null && sample[k] !== before[k]);
+    const dead = sample.room === 1 || sample.health === 0;
+    const expired = Date.now() >= this.frozenUntil;
+    if (!hurt && !moved && !dead && !expired) { this.freezeSample = sample; return true; }
+    this.frozenUntil = null;
+    this.freezeSample = null;
+    const why = dead ? 'dead' : hurt ? 'damage while playing dead'
+      : moved ? 'moved while playing dead' : 'freeze deadline reached';
+    if (hurt || moved) this.wantsForwardShelter = why;
+    this.note('unfreezing', { why, before, now: sample,
+      holding: this.hold ? { room: this.hold.room, row: this.hold.row, col: this.hold.col } : null });
+    return false;
+  }
+
   async playDead(why) {
     const s = this.s;
 
@@ -21229,6 +21262,10 @@ export class Autopilot {
         : 'disconnect, wait, reconnect, and then do NOTHING that counts as an action' });
     this.tally.logoffs = (this.tally.logoffs || 0) + 1;
     this.doing = 'recovering';
+    // Invalidate the outstanding walk BEFORE reconnecting. Otherwise its next leg
+    // immediately wakes the monsters the reconnect just put to sleep.
+    this.survivalInterruptedPass = this.passes;
+    s.cancelMovement?.(null, 'playing dead to avoid dying');
 
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
@@ -21302,6 +21339,9 @@ export class Autopilot {
     // particular no room-contents request, because anything that reads as an action
     // hands the grace period back.
     this.frozenUntil = Date.now() + (this.policy.freezeMs ?? 90_000);
+    this.freezeSample = { health: s.client?.vitals?.()?.health?.value ?? null,
+      room: s.world?.room?.num ?? null,
+      col: s.client?.self?.col ?? null, row: s.client?.self?.row ?? null };
     this.note('playing dead', {
       until_s: Math.round((this.frozenUntil - Date.now()) / 1000),
       note: 'monsters cannot attack until this character acts; resting is not an action' });
