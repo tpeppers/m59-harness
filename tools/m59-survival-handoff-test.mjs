@@ -269,4 +269,36 @@ for (const [refused, via] of [[false, null], [true, null], [false, 'exit'], [tru
   assert.equal(k.townTrip.nextService, 7, 'the purchase remains pending');
   assert.equal(k.travelInterrupted(), true);
 }
-console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping completion, failed rest, wedge refuge)');
+for (const forward of [true, false]) {
+  const k = keeper();
+  k.policy.restBelow = 0.95;
+  k.policy.panicLogoff = false;
+  k.escapeIfWedgedAndHurt = k.tradeInPlaceIfWedged = k.defensiveAnswer = async () => false;
+  k.wantsForwardShelter = forward ? 'watchdog recovery' : null;
+  let attempts = 0;
+  const interruptedWalk = async () => {
+    attempts++; k.survivalInterruptedPass = k.passes; k.s.cancelMovement(); return false;
+  };
+  k.shelterForwardAndMend = interruptedWalk;
+  k.takeSafeSpot = interruptedWalk;
+  k.travel = async () => assert.fail('cancelled recovery must not fall through to an exit');
+  assert.equal(await k.passFleeAndRest(ctx(k)), HANDLED);
+  assert.equal(attempts, 1, 'one cancelled recovery does not start another walk in the same pass');
+}
+{
+  const k = keeper();
+  k.s.world.geometry = { rows: 64, cols: 64 };
+  let searches = 0;
+  k.searchSafeSpot = () => { searches++; return { kind: 'exit', row: 20, col: 21, steps_away: 1 }; };
+  k.s.travel = async () => {
+    k.s.cancelMovement(); k.s.world.room = { num: 585 };
+    return { arrived: true };
+  };
+  const result = await k.takeSafeSpot('recover across exit', null, { destination: 714 });
+  assert.equal(result.cancelled, true);
+  assert.equal(searches, 1, 'a cancelled crossing cannot start another far-side shelter walk');
+  k.survivalInterruptedPass = k.passes;
+  assert.equal((await k.takeSafeSpot('retry')).cancelled, true);
+  assert.equal(searches, 1, 'an interrupted pass cannot start another shelter attempt');
+}
+console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping, failed rest, wedge, recovery cancellation)');

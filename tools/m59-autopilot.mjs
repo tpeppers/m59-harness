@@ -3858,6 +3858,15 @@ export class Autopilot {
                                            nearestOnly = false, afterExit = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
     const s = this.s, c = s.client;
+    const movementGeneration = s.movementGeneration;
+    let claimedHere = false;
+    const interrupted = () => this.travelInterrupted()
+      || !!s.movementWasCancelled?.(movementGeneration);
+    const cancelled = () => {
+      if (claimedHere) releaseSpot(s.name);
+      return { took: false, cancelled: true, why: 'shelter movement interrupted — reassess survival' };
+    };
+    if (interrupted()) return cancelled();
     const room = s.world?.room, geo = s.world?.geometry, me = c?.self;
     if (!geo || !me || !room) return { took: false, why: 'no geometry for this room' };
     // A journey's refuge is judged against the door it is heading for. `onward` is null for
@@ -3889,6 +3898,7 @@ export class Autopilot {
       if (islandCrossings >= 1)
         return { took: false, why: 'changed rooms once but still did not land on the quarry\'s side' };
       const crossed = await this.crossSameRoomIsland(bridge);
+      if (interrupted()) return cancelled();
       if (!crossed.arrived) {
         // SAY WHY, BECAUSE THIS FAILED EIGHTEEN TIMES IN SILENCE.
         //
@@ -4012,8 +4022,10 @@ export class Autopilot {
           ? claimExclusiveSpot(this.s.name, room.num, spot.col, spot.row)
           : claimSpot(this.s.name, room.num, spot.col, spot.row,
                       { cap: shareCap, partner: this.policy.partner ?? null });
-        if (claimed)
+        if (claimed) {
+          claimedHere = true;
           break spotSearch;
+        }
         claimCollisions++;
         spot = null;                  // another process won it; refresh and search again
       }
@@ -4091,6 +4103,7 @@ export class Autopilot {
       if (this.inert) this.inert.at = Date.now();
       const crossed = await this.s.travel(hop.to, { maxHops: 1 })
                                 .catch(e => ({ arrived: false, why: e.message }));
+      if (interrupted()) return cancelled();
       if (this.inert) this.inert.at = Date.now();
       this.movedAt = Date.now();
       releaseSpot(this.s.name);
@@ -4158,6 +4171,7 @@ export class Autopilot {
         // contract for both remembered and newly-derived spots.
         : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, { maxSteps: walkBudget })
                       .catch(e => ({ arrived: false, why: e.message }));
+      if (interrupted()) return cancelled();
       this.movedAt = Date.now();
       if (!arrival.arrived) {
         releaseSpot(this.s.name);      // hand the reservation back
@@ -8072,7 +8086,9 @@ export class Autopilot {
     });
     const took = await this.takeSafeSpot(why, null, { source: 'travel' })
                            .catch(() => ({ took: false }));
-    return !!took?.took;
+    // Cancellation handled this pass too: the caller must not start a fallback
+    // walk with a fresh generation after an outside owner stopped this one.
+    return !!(took?.took || took?.cancelled);
   }
 
   // A WALL WE CANNOT PATH TO IS NOT A CANDIDATE, AND THE SELECTOR CAN BE TOLD SO.
@@ -15372,6 +15388,7 @@ export class Autopilot {
             : `ailing and down to ${Math.round(hp * 100)}% — mending before going on`);
       this.wantsForwardShelter = null;
       if (await this.shelterForwardAndMend(why).catch(() => false)) return HANDLED;
+      if (this.travelInterrupted()) return HANDLED;
     }
 
     const spawnsHere = !this.sanctuary();
@@ -15381,9 +15398,10 @@ export class Autopilot {
       const got = await this.takeSafeSpot(
         'hurt in a room that spawns monsters — a wall before a rest', near[0] ?? hostiles[0] ?? null)
         .catch(() => false);
+      if (this.travelInterrupted() || got?.cancelled) return HANDLED;
       this.note('will not rest in the open here', {
         health: hp === null ? null : Math.round(hp * 100) + '%',
-        monsters_in_room: hostiles.length, adjacent: near.length, got_a_wall: !!got,
+        monsters_in_room: hostiles.length, adjacent: near.length, got_a_wall: !!got?.took,
         room_spawns: spawnsHere, nothing_visible_yet: hostiles.length === 0 || undefined,
         why: 'resting is sitting still and not looking. Doing it where something can reach us is ' +
              'how a rest becomes a death, and an empty room that spawns is a room between spawns' });

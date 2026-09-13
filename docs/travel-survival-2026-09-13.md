@@ -33,6 +33,10 @@ These fixes address reproduced control-flow failures in those journeys:
   from the newly acquired wall. The shopping destination remains pending.
   Hop-boundary logs now record the actual reason a hold was declined instead
   of attributing every decision in a busy room to the monster count.
+- Pepe and Floyd's live postmortems exposed recovery continuing inside the same
+  pass after the watchdog cancelled its walk. Shelter walks now honour the
+  original movement generation across awaits, and interrupted recovery returns
+  immediately instead of trying another wall or an exit using stale health.
 
 `m59-survival-handoff-test.mjs` holds a real travel call open while the real
 watchdog interrupts it. It also exercises real freeze/pass and shopping
