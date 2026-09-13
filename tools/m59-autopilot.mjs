@@ -19932,8 +19932,10 @@ export class Autopilot {
       return { ...b, hops: route?.found ? route.hops.length : Infinity,
         balance: accountBalance(known, b.account) };
     }).filter(b => Number.isFinite(b.hops) && b.hops <= 30)
-      .sort((a, b) => (b.balance >= funding.shortfall ? 2 : b.balance == null ? 1 : 0)
-        - (a.balance >= funding.shortfall ? 2 : a.balance == null ? 1 : 0) || a.hops - b.hops);
+      // A known funded account is useful. An unknown account is not evidence of
+      // funds and must not pull a mainland shopper all the way to Ko'catan.
+      .sort((a, b) => Number(b.balance >= funding.shortfall)
+        - Number(a.balance >= funding.shortfall) || a.hops - b.hops);
     const bank = options[0];
     if (!bank) return pending('no reachable bank for purchase funding');
     this.purchaseFunding.bank = { room: bank.room, account: bank.account };

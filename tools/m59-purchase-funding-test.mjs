@@ -198,4 +198,12 @@ for (const scenario of [{ balance: 500 }, { refuse: true }]) {
   k.policy.buyReagents = false;
   assert.equal(k.shoppingPlan().required_purse, 0, 'no purchase does not trigger a reserve-only bank trip');
 }
+{
+  const k = keeper({ balance: 500 });
+  k.s.world.route = room => ({ found: true, hops: Array(room === 54 ? 1 : room === 376 ? 3 : 20).fill({}) });
+  await k.continueTownTrip();
+  assert.deepEqual(k.actions.filter(a => a[0] === 'travel'), [['travel', 54]],
+    'unknown island funds cannot outrank a nearby mainland bank');
+  assert.equal(k.purchaseFunding.status, 'insufficient bank funds for the posted purchase');
+}
 console.log('purchase funding integration passed: posted bill, quantities, bank dependency, verified funds, pauses, prices, accounts');
