@@ -21,6 +21,9 @@ import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
 import { resolve } from 'node:path';
 import { Session, Pacer } from './m59-session.mjs';
+// The addressing predicate, and WHY an order is not ours. Lifted out of this file so it can
+// be tested without starting a keeper — see m59-keeper-address.mjs.
+import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
 import { autopilotFor, dropAutopilot, autopilotIfAny, releaseSpot } from './m59-autopilot.mjs';
 import { TickLoop } from './m59-tick.mjs';
 import { makeDecider, DEFAULT_GOALS, intend, INTENTS } from './m59-decide.mjs';
@@ -1319,18 +1322,15 @@ const server = createServer(async (req, res) => {
   // headers so the flat JSON body remains compatible with an old keeper's policy schema;
   // direct diagnostic tools may carry the same fields in JSON. Unaddressed GET diagnostics
   // remain available on loopback, while a GET that claims an identity must claim all of it.
-  const normalizedKeeperCharacter = value => typeof value === 'string'
-    ? value.normalize('NFKC').trim().toLocaleLowerCase('en-US') : null;
-  const presentIdentityPart = value => value !== undefined && value !== null && value !== '';
-  const addressedToUs = (claimed, claimedCharacter, claimedPid, { required = true } = {}) => {
-    const supplied = [claimed, claimedCharacter, claimedPid].some(presentIdentityPart);
-    if (!supplied) return !required;
-    if (![claimed, claimedCharacter, claimedPid].every(presentIdentityPart)) return false;
-    if (String(claimed) !== String(agent)) return false;
-    if (normalizedKeeperCharacter(claimedCharacter) !== normalizedKeeperCharacter(character))
-      return false;
-    return Number(claimedPid) === process.pid;
-  };
+  // WHO WE ARE, for the addressing check. One object so the predicate can be asked the same
+  // question offline; the name-normalising and part-present helpers moved there with it,
+  // rather than being defined twice.
+  const whoWeAre = () => ({ agent, character, keeperPid: process.pid });
+  const mismatchFor = (claimed, claimedCharacter, claimedPid, opts) =>
+    addressMismatch({ agent: claimed, character: claimedCharacter, keeperPid: claimedPid },
+                    whoWeAre(), opts);
+  const addressedToUs = (claimed, claimedCharacter, claimedPid, opts) =>
+    mismatchFor(claimed, claimedCharacter, claimedPid, opts) === null;
   const addressedToUsQuery = (u) => addressedToUs(
     u.searchParams.get('agent'), u.searchParams.get('character'), u.searchParams.get('keeper_pid'),
     { required: false });
@@ -1341,14 +1341,21 @@ const server = createServer(async (req, res) => {
   });
   const requireAddressedWrite = (req, body = {}) => {
     const identity = requestIdentity(req, body);
-    if (addressedToUs(identity.agent, identity.character, identity.keeperPid)) return true;
-    refuseMisaddressed(identity.agent);
+    const mismatch = mismatchFor(identity.agent, identity.character, identity.keeperPid);
+    if (!mismatch) return true;
+    refuseMisaddressed(mismatch);
     return false;
   };
-  const refuseMisaddressed = (claimed) => {
-    console.error(`[keeper] ${agent} refused an order addressed to "${claimed}" — ` +
-                  `another broker is guessing this port`);
-    json({ error: `this keeper is "${agent}", not "${claimed}"`, agent }, 409);
+  // NAME THE PART THAT IS WRONG. This printed `this keeper is "t14", not "t14"` for three of
+  // the four ways the check can fail, because it was handed only the claimed AGENT and the
+  // agent is equal in exactly those three cases. Measured on prod 2026-09-13: every character
+  // in a fleet move logged that sentence and no journey was cancelled.
+  const refuseMisaddressed = (mismatch) => {
+    const why = describeMismatch(mismatch);
+    console.error(`[keeper] ${agent} refused an order: ${why}`);
+    json({ error: why, agent, mismatch: mismatch?.part ?? null,
+           // Kept so an older broker still reads a field it recognises.
+           claimed: mismatch?.theirs ?? null }, 409);
   };
 
   // A READ IS ADDRESSED THE SAME WAY, in the query string. `/chat` is a character's whole
@@ -1360,7 +1367,9 @@ const server = createServer(async (req, res) => {
   // Refusing those would take away the tool that resolves the confusion.
   if (req.method === 'GET' && path !== '/health' && path !== '/state' && path !== '/live' &&
       !addressedToUsQuery(url)) {
-    refuseMisaddressed(url.searchParams.get('agent'));
+    refuseMisaddressed(mismatchFor(url.searchParams.get('agent'),
+                                   url.searchParams.get('character'),
+                                   url.searchParams.get('keeper_pid'), { required: false }));
     return;
   }
 
