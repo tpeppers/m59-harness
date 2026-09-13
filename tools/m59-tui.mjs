@@ -369,7 +369,7 @@ function listView() {
         c.dim(' off ' + cut(curHeld.label ?? 'fleet work', 24))
       : c.bold(c.yellow('X')) + c.dim(' leave override');
   L.push(c.dim('  ↑↓/jk move · ⏎ open · L launch · ') + c.cyan('S swarm') + c.dim(' · ') +
-         c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') +
+         c.cyan('B board') + c.dim(' · ') + c.cyan('F field cmd') + c.dim(' · ') + c.cyan('D DBFST') + c.dim(' · ') +
          c.cyan('G geometry') +
          c.dim(' · C compendium · P plan · ') + xSays +
          c.dim(' · r refresh · q quit'));
