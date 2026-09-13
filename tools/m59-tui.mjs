@@ -479,6 +479,9 @@ async function dbfst() {
     dbfstOpen = false;
     if (stdin.isTTY) stdin.setRawMode(true);
     stdin.on('keypress', onKey);
+    // readline.close() pauses the shared input stream. Re-arm it when returning
+    // to the fleet board or its launch/quit keys will appear to stop working.
+    stdin.resume();
     alt(true); cursor(false); clear(); draw();
   }
 }
