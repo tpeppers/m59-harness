@@ -50,8 +50,12 @@ unpriced items are explicit. A live merchant quote is checked again before spend
 A bank withdrawal is a required dependency of an underfunded purchase. The keeper routes
 to a reachable bank, asks for that account's balance, withdraws the exact shortfall, and
 verifies the resulting purse. Tos/Jasper and Ko'catan are separate accounts. A resolved
-withdrawal call alone is not success. Missing receipts, insufficient balances, survival
-interruptions and failed merchant approaches leave the shopping step pending. Selling
+withdrawal call alone is not success. Missing receipts, survival interruptions and failed
+merchant approaches leave the shopping step pending. A confirmed insufficient balance
+defers the purchase and lets the bot return to its assigned farming room. Poor farming
+uses `no_food_vigor_floor` (70 by default) while preserving the fed settings. New funds
+reopen shopping; otherwise `poor_supply_retry_ms` controls the recheck interval. Setting
+`poor_farming: false` retains the mandatory waiting behavior. Selling
 loot may precede funding; depositing surplus preserves the posted purchase budget.
 
 If a quote requires more money, the keeper banks again and then reacquires the merchant

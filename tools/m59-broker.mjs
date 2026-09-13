@@ -10488,6 +10488,11 @@ const TOOLS = [
           'on purpose. (This description used to claim it set the ceiling too. It never did, and a ' +
           'reader who believed it would expect a floor of 200 to mean "eat to 200" when what it ' +
           'means is "be at 200 before swinging".)' },
+      poor_farming: { type: 'boolean', description: 'When supplies are unaffordable, continue to the assigned farming room and use the no-food vigor floor.' },
+      no_food_vigor_floor: { type: 'number', minimum: 0, maximum: 80,
+        description: 'Farming vigor floor while supplies are unaffordable. Defaults to 70; does not replace the fed floor.' },
+      poor_supply_retry_ms: { type: 'number', minimum: 1000,
+        description: 'Minimum delay before rechecking an unaffordable supply trip; new sufficient funds reopen shopping sooner.' },
       vigor_ceiling: { type: 'number', minimum: 0, maximum: 200,
         description: 'THE CEILING: keep eating until vigor reaches this. With the floor it makes a ' +
           'BAND — set out at the top of it and keep fighting down to the floor — which is the whole ' +
@@ -11400,6 +11405,17 @@ const TOOLS = [
       }
       if (a.fight_above_vigor !== undefined)
         applyFightAboveVigor(p.policy, a.fight_above_vigor);
+      if (a.poor_farming !== undefined) p.policy.poorFarming = !!a.poor_farming;
+      if (a.no_food_vigor_floor !== undefined) {
+        const n = Number(a.no_food_vigor_floor);
+        if (!Number.isFinite(n) || n < 0 || n > 80) throw new Error('no_food_vigor_floor must be between 0 and 80');
+        p.policy.noFoodVigorFloor = n;
+      }
+      if (a.poor_supply_retry_ms !== undefined) {
+        const n = Number(a.poor_supply_retry_ms);
+        if (!Number.isFinite(n) || n < 1000) throw new Error('poor_supply_retry_ms must be at least 1000');
+        p.policy.poorSupplyRetryMs = n;
+      }
       // THE CEILING IS SET SEPARATELY, AND ORDER MATTERS: after the floor, so a caller that
       // sends both gets the band it asked for rather than whichever arrived last. Refused
       // below the floor, because a ceiling under the floor is a character that must eat DOWN

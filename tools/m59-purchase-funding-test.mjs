@@ -23,7 +23,7 @@ assert.equal(foodBill.lines[0].amount, 4, 'food quantity covers the nutrition ga
 function keeper({ cash = 50, balance = 5000, herbPrice = 14, refuse = false } = {}) {
   const names = new Map([[1, 'shillings'], [2, 'elderberry'], [3, 'herbs'], [99, 'Joguer']]);
   const k = Object.assign(Object.create(Autopilot.prototype), {
-    policy: { buyFood: false, buyReagents: true, shopFloor: 100, walkingMoney: 400 },
+    policy: { buyFood: false, buyReagents: true, shopFloor: 100, walkingMoney: 400, poorFarming: false },
     passes: 1, notes: [], actions: [], tally: {},
     money: { trips: 0, trips_failed: 0, why_not: [] },
     note(what, detail) { this.notes.push({ what, detail }); }, progress() {}, tradeFact() {},
@@ -207,3 +207,29 @@ for (const scenario of [{ balance: 500 }, { refuse: true }]) {
   assert.equal(k.purchaseFunding.status, 'insufficient bank funds for the posted purchase');
 }
 console.log('purchase funding integration passed: posted bill, quantities, bank dependency, verified funds, pauses, prices, accounts');
+
+{
+  const k = keeper({ balance: 500 });
+  k.mode = 'farm'; k.policy.poorFarming = true;
+  k.policy.assignedRoom = 584; k.policy.vigorFloor = 180;
+  k.policy.vigorCeiling = 200;
+  await k.continueTownTrip();
+  assert.equal(k.townTrip, null, 'unaffordable shopping releases the farming ladder');
+  assert.equal(k.deferredShoppingTrip.target.room, 104, 'the shopping objective remains recorded');
+  assert.equal(k.fightFloor(), 70, 'poor farming overrides the elevated and global vigor floors');
+  assert.equal(k.policy.vigorFloor, 180, 'the fed setting remains intact');
+  const trips = k.actions.filter(a => a[0] === 'travel').length;
+  const unpaid = await k.ensurePurchaseFunds(k.shoppingPlan());
+  assert.equal(unpaid.unaffordable, true);
+  assert.equal(k.actions.filter(a => a[0] === 'travel').length, trips, 'do not loop through the bank while poor');
+  k.policy.noFoodVigorFloor = 65;
+  assert.equal(k.fightFloor(), 65, 'the poor floor is configurable');
+  k.balance = 5000;
+  assert.equal(k.poorFarmingActive(), false, 'new funds lift the poor mode');
+  await k.bankRun();
+  assert.equal(k.townTrip, null);
+  assert.equal(k.deferredShoppingTrip, null);
+  assert.equal(k.poorSupply, null, 'funded purchases restore ordinary farming');
+  assert.ok(k.actions.some(a => a[0] === 'buy'));
+}
+console.log('poor farming passed: release shopping, retain assignment and fed settings, restable floor, resume after income');

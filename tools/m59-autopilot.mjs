@@ -1644,6 +1644,10 @@ export class Autopilot {
       // Vigor to reach before picking a fight. Resting alone tops out at the rest
       // threshold (80 of 200); anything above it has to be eaten.
       fightAboveVigor: MIN_FIGHT_VIGOR,
+      // A confirmed supply shortfall sends the farmer back to earning at a restable floor.
+      poorFarming: true,
+      noFoodVigorFloor: 70,
+      poorSupplyRetryMs: 300000,
       // Whether to broadcast for a flask or a blade when badly hurt with nothing to heal
       // with, or unarmed after a death. OFF since 2026-08-27: a fleet on a shared server
       // does not beg in public. Declared here so `status` shows the default rather than
@@ -2104,6 +2108,7 @@ export class Autopilot {
   // engaged at 70 anyway, and the whole strategy comparison was measuring nothing.
   fightFloor(plan = STRATEGIES[this.policy.strategy] || {}) {
     const p = this.policy;
+    if (this.poorFarmingActive()) return this.poorVigorFloor();
     // fightAboveVigor was the old single knob; it still works, as the floor.
     const want = Math.max(MIN_FIGHT_VIGOR,
       p.vigorFloor ?? plan.vigorFloor ?? p.fightAboveVigor ?? plan.fightAboveVigor ?? 0);
@@ -2770,7 +2775,7 @@ export class Autopilot {
     //
     // So when nothing sets a target, eat to just clear of the cap rather than not at all.
     // A named floor or ceiling still wins; this only fills the silence.
-    const ceiling = p.vigorCeiling ?? plan.vigorCeiling
+    const ceiling = this.poorFarmingActive() ? this.poorVigorFloor() : p.vigorCeiling ?? plan.vigorCeiling
                  ?? (floor ? 0 : (p.eatToAtLeast ?? EAT_TO_AT_LEAST));
     if (!floor && !ceiling) return false;              // only if someone set it to zero on purpose
 
@@ -9731,6 +9736,11 @@ export class Autopilot {
         purchase_plan: this.townTrip.purchasePlan ?? null,
       } : null,
       purchase_funding: this.purchaseFunding ?? null,
+      poor_farming: this.poorSupply ? { ...this.poorSupply, active: this.poorFarmingActive(),
+        vigor_floor: this.poorVigorFloor() } : null,
+      deferred_shopping: this.deferredShoppingTrip ? {
+        to: this.deferredShoppingTrip.target.room, next_service: this.deferredShoppingTrip.nextService,
+      } : null,
       guild_tithe: this.policy.guildTithe?.enabled ? {
         daily_amount: this.policy.guildTithe.daily_amount,
         paid_today: new TitheBook({ agent: this.name ?? this.s.name,
@@ -19847,6 +19857,34 @@ export class Autopilot {
     return true;
   }
 
+  poorVigorFloor() {
+    const value = Number(this.policy.noFoodVigorFloor ?? 70);
+    return Number.isFinite(value) ? Math.min(80, Math.max(0, value)) : 70;
+  }
+
+  poorFarmingActive() {
+    if (!this.poorSupply || this.policy.poorFarming === false) return false;
+    // A new purse or bank receipt can reopen shopping without waiting for the retry timer.
+    const bank = accountBalance(this.s.bankKnown?.(), this.poorSupply.account);
+    const available = this.purseNow() + (bank ?? this.poorSupply.banked ?? 0);
+    return available < this.poorSupply.required_purse;
+  }
+
+  deferUnaffordableShopping(plan, bank, balance) {
+    this.poorSupply = { since: Date.now(), account: bank.account, banked: balance,
+      required_purse: plan.required_purse, retry_at: Date.now() + (this.policy.poorSupplyRetryMs ?? 300000) };
+    this.purchaseFunding = { ...this.purchaseFunding, pending: false,
+      status: 'unaffordable — returning to farming', available_banked: balance };
+    if (this.townTrip) {
+      this.deferredShoppingTrip = this.townTrip;
+      this.townTrip = null;
+    }
+    this.note('supplies unaffordable — continue farming', {
+      required_purse: plan.required_purse, purse: this.purseNow(), banked: balance,
+      assigned_room: this.policy.assignedRoom ?? null, vigor_floor: this.poorVigorFloor() });
+    return { ready: false, pending: false, unaffordable: true };
+  }
+
   purchaseRequests() {
     const have = this.reagentCount();
     const requests = new Map([
@@ -19918,13 +19956,22 @@ export class Autopilot {
       return { ready: false, pending: true, reason };
     };
     this.postShoppingPlan(plan);
+    if (this.poorFarmingActive() && Date.now() < this.poorSupply.retry_at) {
+      if (this.townTrip) { this.deferredShoppingTrip = this.townTrip; this.townTrip = null; }
+      this.purchaseFunding.pending = false;
+      this.purchaseFunding.status = 'unaffordable — returning to farming';
+      return { ready: false, pending: false, unaffordable: true };
+    }
     if (this.travelInterrupted() || this.suspendedJourney) return pending('paused for survival');
     const inventoryBefore = c.evSeq;
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ since: inventoryBefore, kinds: ['inventory'], timeoutMs: 3000 });
     const funding = this.postShoppingPlan(plan);
     if (this.travelInterrupted() || this.suspendedJourney) return pending('paused for survival');
-    if (!funding.shortfall) return { ready: true, moved: false };
+    if (!funding.shortfall) {
+      if (!this.poorFarmingActive()) this.poorSupply = null;
+      return { ready: true, moved: false };
+    }
     const known = s.bankKnown?.() ?? null;
     const options = PURCHASE_BANKS.filter(b => !this.bansDestination(b.room)).map(b => {
       const here = Number(s.world?.room?.num) === b.room;
@@ -19961,6 +20008,8 @@ export class Autopilot {
     if (!gap) return { ready: true, moved };
     if (balance < gap) {
       this.purchaseFunding.available_banked = balance;
+      if (this.policy.poorFarming !== false)
+        return this.deferUnaffordableShopping(plan, bank, balance);
       return pending('insufficient bank funds for the posted purchase');
     }
     if (this.travelInterrupted() || this.suspendedJourney) return pending('paused for survival');
@@ -19975,11 +20024,19 @@ export class Autopilot {
       asked_for: gap, purse: now.purse, required_purse: plan.required_purse,
       funded: now.shortfall === 0, account: bank.account });
     if (now.shortfall) return pending('withdrawal did not fund the purchase');
+    this.poorSupply = null;
     return { ready: true, moved };
   }
 
   async bankRun() {
     if (this.townTrip) return this.continueTownTrip();
+    if (this.deferredShoppingTrip && (!this.poorFarmingActive() || Date.now() >= this.poorSupply.retry_at)) {
+      this.townTrip = this.deferredShoppingTrip;
+      this.deferredShoppingTrip = null;
+      this.townTrip.nextTryAt = 0;
+      this.townTrip.purchasePlan = this.shoppingPlan();
+      return this.continueTownTrip();
+    }
     const above = this.policy.bankAbove;
     if (!above) return false;                       // 0 or null turns the trips off
     const s = this.s, c = s.need();
@@ -20048,8 +20105,9 @@ export class Autopilot {
     // So the trigger is separated here and routed like hunger already is: the character is
     // not poor, it is ILLIQUID, and `needsCashFirst` is the door that was built for
     // exactly that and never wired to this trigger.
-    const supplyShort = sellCall.sell && sellCall.trigger === 'supply';
-    const packFull = sellCall.sell && sellCall.trigger !== 'broke' && !supplyShort;
+    const poor = this.poorFarmingActive();
+    const supplyShort = !poor && sellCall.sell && sellCall.trigger === 'supply';
+    const packFull = sellCall.sell && !['broke', 'supply'].includes(sellCall.trigger);
 
     // AND AN EMPTY LARDER IS THE THIRD REASON, FOR EXACTLY THE REASON THE PACK WAS THE
     // SECOND: the food is in town and the only doors to town were money and a full pack.
@@ -20102,7 +20160,7 @@ export class Autopilot {
     // illiquid — and withdrawForFood() is now the thing that fixes that, at a counter.
     const balance = s.bankKnown?.()?.balance ?? 0;
     const canFetch = balance >= 200;
-    const starving = purchaseEnabled(this.policy, 'food') &&
+    const starving = !poor && purchaseEnabled(this.policy, 'food') &&
                      !this.larder(c).length && !canCook &&
                      (spendable >= 60 || canFetch) && !triedRecently;
     // AND THE SAME QUESTION FOR REAGENTS, WHICH IS THE ONE NOBODY ASKED.
@@ -20175,6 +20233,7 @@ export class Autopilot {
     // see `market` in meridian59-dum-bot. `sell_when_broke: true` restores the old
     // behaviour for anyone who wants it.
     const brokeWithGoods = sellCall.trigger === 'broke' && !soldRecently && !starving;
+    if (poor && !packFull && !brokeWithGoods) return false;
     if (brokeWithGoods && !this.notedBroke) {
       this.notedBroke = true;
       this.note('out of money with a pack worth selling — going to market', {
@@ -20307,6 +20366,7 @@ export class Autopilot {
       this.postShoppingPlan(plan);
       if (plan.required_purse > 0 && !MARKETS.some(m => m.room === Number(trip.target.room))) {
         const funded = await this.ensurePurchaseFunds(plan);
+        if (funded.unaffordable) return false;
         if (!funded.ready) return true;
       }
       if ((await this.leaveHold('continuing the shopping trip')).refused) return true;
@@ -20350,6 +20410,7 @@ export class Autopilot {
         this.note('shopping step failed', { step: name, why: e.message });
         return { pending: true };
       });
+      if (result?.unaffordable) return false;
       if (result?.pending || result?.ready === false) {
         trip.nextTryAt = Date.now() + 5000;
         return true;

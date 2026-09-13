@@ -132,6 +132,9 @@ export function blank(character, agent = null) {
 // character file that could quietly raise one is exactly the file nobody would think to
 // check after a death.
 export const POLICY_KEYS = {
+  poor_farming:           { type: 'boolean', as: 'poorFarming' },
+  no_food_vigor_floor:    { type: 'number', as: 'noFoodVigorFloor' },
+  poor_supply_retry_ms:   { type: 'number', as: 'poorSupplyRetryMs' },
   hunt:                    { type: 'string',  as: 'hunt' },
   assigned_room:           { type: 'number',  as: 'assignedRoom' },
   karma:                   { type: 'number',  as: 'karma' },
