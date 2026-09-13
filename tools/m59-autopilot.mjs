@@ -6516,9 +6516,7 @@ export class Autopilot {
       // journey and drown the ones that matter. So the ones recorded are exactly the ones
       // where the character WANTED to stop and something else refused it: hurt, mid-journey,
       // and turned away by vigor, by a fight, or by people about.
-      if (this.crowded()) this.noteCrowdRefusal('hop-boundary hold');
-      if (look.frac != null && look.frac < (this.policy.travelHoldBelow ?? 0.75) && at.remaining > 0
-          && !this.crowded())
+      if (look.frac != null && look.frac < (this.policy.travelHoldBelow ?? 0.75) && at.remaining > 0)
         this.ledgerEvent('travel_pause', {
           journey: at.journey, arm, room: at.room?.num ?? null, room_name: at.room?.name ?? null,
           hops_done: at.hops_done, remaining: at.remaining,
@@ -6905,25 +6903,38 @@ export class Autopilot {
                                && Number(this.crowdExit.room) === Number(this.s.world?.room?.num));
     if (askedByWatchdog) this.crowdExit = null;
     if (wedge?.refused || askedByWatchdog) {
-      // A WEDGE IN A CROWD IS LEFT BY THE DOOR. Refusing here means standing for the hold,
-      // and tour 14 (2026-09-02) showed what standing in a room of thirteen trolls costs:
-      // both remaining road deaths were exactly this, one of them 160 s on one square
-      // before the first blow. With walls withheld in a crowd the retreat's only candidate
-      // is the exit, so the wedge becomes one hop out and a re-plan from the far side.
+      // Escape a crowded wedge using the route's refuge search. It can now offer
+      // either a wall here or the onward exit. A wall means recovery owns the body;
+      // falling through to the journey would immediately walk away from it.
       if (this.crowded()) {
         const here = this.s.world?.room?.num ?? null;
         const onward = here != null ? this.onwardExit(here, Number(room)) : null;
-        this.noteCrowdRefusal('standing in a wedge');
-        const left = await this.takeSafeSpot('wedged in a crowd — leaving by the exit', null,
+        this.note('seeking shelter from a crowded wedge', { room: here, to: Number(room) });
+        const left = await this.takeSafeSpot('wedged in a crowd — need route shelter', null,
                                              { source: 'travel', onward, destination: Number(room) })
                                .catch(e => ({ took: false, why: e.message }));
+        if (this.travelInterrupted() || this.s.movementWasCancelled?.(movementGeneration))
+          return { arrived: false, paused: true, cancelled: true, reason: 'travel interrupted during wedge recovery' };
+        if (left?.took) {
+          const why = 'sheltering after a crowded wedge';
+          this.wedgeHold = null;
+          this.wantsForwardShelter = null;
+          this.survivalInterruptedPass = this.passes;
+          this.suspendedJourney = { to: Number(room), why: `travelling to ${room}`,
+            at: Date.now(), trigger: why, attempts: (this.inert?.attempts ?? 0) + 1,
+            deaths_at: this.tally?.deaths ?? 0 };
+          this.s.cancelMovement?.(null, why);
+          this.revive(why);
+          this.note('journey paused at the wall after a wedge', { to: Number(room) });
+          return { arrived: false, paused: true, wedged: true, sheltered: true, reason: why };
+        }
         if (left?.via === 'exit' || left?.crossed) {
           this.wedgeHold = null;
           this.note('left a wedge by the exit', { from: here, to: this.s.world?.room?.num ?? null, why: wedge?.why ?? 'the watchdog asked: wedged and taking hits in a crowd' });
           return { arrived: false, refused: false, wedged: true, left_by_exit: true,
                    why: `left the wedge in room ${here} by the exit; the journey re-plans from room ${this.s.world?.room?.num ?? '?'}` };
         }
-        this.note('could not leave the wedge by the exit', { why: left?.why ?? 'no answer' });
+        this.note('could not find shelter from the wedge', { why: left?.why ?? 'no answer' });
       }
       if (wedge?.refused) return { arrived: false, refused: true, wedged: true, gave_up: true, why: wedge.why };
     }

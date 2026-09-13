@@ -28,6 +28,11 @@ These fixes address reproduced control-flow failures in those journeys:
   squares now enter a five-minute exclusion local to that keeper, shared by
   recovery and route shelter searches. Historical ledger failures still do not
   determine the geometry verdict. A failed selection is reported as a failure.
+- A blocked traveller that finds a wall now suspends its journey there. The
+  old handler only recognised an exit crossing and could walk straight away
+  from the newly acquired wall. The shopping destination remains pending.
+  Hop-boundary logs now record the actual reason a hold was declined instead
+  of attributing every decision in a busy room to the monster count.
 
 `m59-survival-handoff-test.mjs` holds a real travel call open while the real
 watchdog interrupts it. It also exercises real freeze/pass and shopping

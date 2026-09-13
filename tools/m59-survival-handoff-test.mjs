@@ -248,4 +248,25 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   assert.ok(next.length, 'an alternative shelter is still offered');
   assert.ok(next.every(s => `${s.col},${s.row}` !== key), 'route selector skips the failed rest square');
 }
-console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping completion, failed rest)');
+for (const [refused, via] of [[false, null], [true, null], [false, 'exit'], [true, 'exit']]) {
+  const k = keeper();
+  k.crowded = () => true;
+  k.answerWedge = async () => ({ refused });
+  k.crowdExit = { at: Date.now(), room: 584 };
+  k.onwardExit = () => null;
+  k.takeSafeSpot = async () => {
+    k.hold = { room: via ? 585 : 584, row: 21, col: 21 }; return { took: true, via };
+  };
+  k.s.travel = async () => { assert.fail('a new mover must not walk away from recovery'); };
+  k.townTrip = { target: { room: 714 }, nextService: 7 };
+  k.goTravelling('shopping leg', { to: 714 });
+  const result = await k.travel(714);
+  assert.equal(result.sheltered, true);
+  assert.equal(k.inert, null);
+  assert.equal(k.suspendedJourney.to, 714);
+  assert.equal(k.suspendedJourney.deaths_at, 0);
+  assert.equal(k.hold.row, 21, 'the acquired wall remains held');
+  assert.equal(k.townTrip.nextService, 7, 'the purchase remains pending');
+  assert.equal(k.travelInterrupted(), true);
+}
+console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping completion, failed rest, wedge refuge)');
