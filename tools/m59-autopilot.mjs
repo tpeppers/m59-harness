@@ -14316,6 +14316,37 @@ export class Autopilot {
         this.stop(why);
         return HANDLED;
       }
+      // EVERYTHING BELOW THIS LINE IS ABOUT `create weapon`, AND NOT EVERY CHARACTER HAS IT.
+      //
+      // The two `!knowsCreateWeapon()` checks above are both gated on `sanctuary()`, so they
+      // only catch a character standing somewhere safe. One that does NOT know the spell and
+      // is NOT in sanctuary falls straight through to the mana wait below — which sits it
+      // down, or walks it out of the room, to save fifteen mana for a spell it cannot cast.
+      // No amount of waiting ends that.
+      //
+      // Measured 2026-09-12: Loial, a Shal'ille caster with no `create weapon` at all, posted
+      // in room 39 with 65 of 65 mana, noting "unarmed and in a room that spawns — leaving to
+      // regain mana" on every pass. Room 39 spawns, so `sanctuary()` was false, so neither
+      // check above fired. He was never going to conjure anything: the errand's own
+      // precondition was absent and nothing tested it.
+      //
+      // The other three routes to a weapon stay open — `armSelf()` above already tried them,
+      // and the purchase request still runs in sanctuary. This removes only the route that
+      // cannot work, which is the difference between a character waiting and one stuck.
+      if (!this.knowsCreateWeapon()) {
+        this.clearRefusal('UNARMED_NO_DONOR');
+        // A standing condition, not an event: said once a minute rather than every pass.
+        if (Date.now() - (this._noConjureNoteAt ?? 0) > 60_000) {
+          this._noConjureNoteAt = Date.now();
+          this.note('unarmed and cannot conjure — skipping the create-weapon errand', {
+            mana: c.vitals?.()?.mana?.value ?? null,
+            why: 'this character does not know `create weapon`, so waiting for 15 mana '
+               + 'achieves nothing and walking out of the room to wait achieves less',
+            action_needed: 'buy, receive or loot a weapon' });
+        }
+        return CONTINUE;
+      }
+
       // Not enough mana to conjure one yet. SIT DOWN — and do not let settle() decide
       // whether that happens.
       //
