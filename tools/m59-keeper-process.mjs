@@ -250,6 +250,7 @@ const session = new Session(agent);
 session.pacer; // exists from constructor
 
 let autopilot = null;
+let defaultPolicy = null;
 // The deterministic responder, held so `/state` can report whether this character can
 // actually hear -- see the attach in join(). Keeper stderr is discarded by the spawner
 // (`stdio: 'ignore'`), so a log line is not evidence of anything and the state is.
@@ -765,6 +766,7 @@ async function joinGenerationOnce(generation) {
       console.error(`[keeper] ${agent} tick driver started (10hz, watchdog on)`);
     } else {
       autopilot = autopilotFor(session);
+      defaultPolicy ??= structuredClone(autopilot.policy);
       autopilot.mode = mode;
       Object.assign(autopilot.policy, policy);
       assertJoinIntent(generation);
@@ -2994,7 +2996,7 @@ const server = createServer(async (req, res) => {
       const rows = c.chatSince(Number(q.get('since') ?? 0), {
         channels, includeSelf: q.get('include_self') !== 'false',
       });
-      json({ seq: c.chatSeq, heard_by: c.me?.name ?? null,
+      json({ pid: process.pid, seq: c.chatSeq, heard_by: c.me?.name ?? null,
              messages: rows.slice(-limit) });
       return;
     }
@@ -3051,7 +3053,7 @@ const server = createServer(async (req, res) => {
       //   3. `file_now`  - what the fleet file says RIGHT NOW (re-read live). If this differs
       //                    from `from_file`, the broker overwrote it after we started.
       //   4. `tick_running` - is the tick driver actually up (session._tickDecide) and driving?
-      let fileNow = null, fileNowErr = null;
+      let fileNow = null, fileNowErr = null, restartPolicy = null;
       try {
         const { readFileSync: rfs } = await import('node:fs');
         const fp = process.argv.includes('--fleet')
@@ -3062,12 +3064,14 @@ const server = createServer(async (req, res) => {
         const rf = resolveFleet(process.argv.slice(2));
         const now = JSON.parse(rfs(rf.stateFile, 'utf8'));
         fileNow = now?.[agent]?.autopilot?.mode ?? null;
+        restartPolicy = defaultPolicy ? { ...defaultPolicy, ...(now?.[agent]?.autopilot?.policy ?? {}) } : null;
       } catch (e) { fileNowErr = e.message; }
       json({
         agent,
         running: autopilot?.mode ?? null,
         from_file: mode,
         file_now: fileNow,
+        restart_policy: restartPolicy,
         file_now_error: fileNowErr,
         tick_running: !!(session._tickDecide),
         in_game: inGame,

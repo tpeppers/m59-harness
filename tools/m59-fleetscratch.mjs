@@ -118,6 +118,10 @@ const invokedDirectly = process.argv[1] &&
 // error instead of an exit 0 with an empty stdout.
 async function main() {
   const FLEET = fleetName();
+  if (process.argv.includes('--dum')) {
+    const { runDBFST } = await import('./m59-dbfst.mjs');
+    return runDBFST({ fleet: FLEET });
+  }
 
   // SOMEBODY HAS TO BE WATCHING. Refused rather than downgraded: a pad's freedom to take more
   // characters mid-session is only safe with a person or a working agent present, so a keeper

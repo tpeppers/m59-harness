@@ -38,6 +38,9 @@ import { nativeContextReader } from './m59-native-context-read.mjs';
 const readNativeContext = nativeContextReader();
 import os from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { PolicyControls } from './m59-policy-controls.mjs';
+import { ChatControls } from './m59-chat-controls.mjs';
+import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -3496,6 +3499,34 @@ const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
   fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
 
 const fleetState = new Map();   // agent -> { credentials, autopilot }
+let humanPolicies = null;
+const dumControllers = new Map();
+function policyControls() {
+  return humanPolicies ??= new PolicyControls({ fleet: FLEET, agents: () => [...sessions.keys()],
+    tool: () => TOOLS.find(t => t.name === 'autopilot'),
+    read: async agent => {
+      const s = session(agent);
+      if (!(s instanceof KeeperProxy)) throw new Error('live policy controls require a keeper-backed character');
+      const [state, mode] = await Promise.all([
+        keeperState(agent, s._index, { fresh: true }), keeperGet(agent, s._index, 'mode')]);
+      if (!state?.autopilot_status?.policy || !mode?.restart_policy || mode.file_now_error)
+        throw new Error(`live/restart policy unavailable for ${agent}`);
+      return { keeper_pid: state.pid, room: state.room?.num ?? state.room,
+        live: { mode: state.autopilot_status.mode, policy: state.autopilot_status.policy },
+        restart: { mode: mode.file_now, policy: mode.restart_policy },
+        poor_farming: state.autopilot_status.poor_farming ?? null };
+    },
+    write: async (agent, patch) => {
+      const s = session(agent);
+      const live = await keeperState(agent, s._index, { fresh: true });
+      const result = await TOOLS.find(t => t.name === 'autopilot').run({ agent, action: 'start',
+        mode: live.autopilot_status.mode, ...patch });
+      if (result.keeper_push?.error || result.keeper_push?.pushed !== true || result.keeper_push?.confirmed !== true)
+        throw new Error('saved orders did not reach the keeper with confirmation');
+      return result;
+    },
+  });
+}
 
 // KEEP THE LAST VERSION THAT HAD MORE IN IT.
 //
@@ -5178,7 +5209,56 @@ function routeOperatorInstruction(targetAgent, said) {
   return true;
 }
 
+let controlChatTimer = null;
+function startControlChatWatch() {
+  if (controlChatTimer) return;
+  const sinceStarted = Date.now(), cursors = new Map();
+  const chat = new ChatControls({
+    authenticate: speaker => {
+      const p = pilotedSpeaker(speaker);
+      return p ? { agent: p.agent, pid: p.pilot.pid, objectId: p.pilot.objectId } : null;
+    },
+    client: async () => {
+      const alive = [...dumControllers.values()].filter(c => pidAlive(c.pid));
+      if (alive.length !== 1) throw new Error('one verified DUM human controller must be running');
+      const binding = alive[0];
+      const h = await fetch(binding.url + '/health', { signal: AbortSignal.timeout(3000) }).then(r => r.json());
+      if (h.pid !== binding.pid || h.fleet !== FLEET || !h.human_controls) throw new Error('DUM controller changed');
+      return new ControlClient(binding);
+    },
+    reply: async (agent, speaker, text) => {
+      if (!pilotedSpeaker(speaker)) return;
+      const s = sessions.get(agent);
+      if (s instanceof KeeperProxy) await keeperAction(agent, s._index, 'say', { to: [speaker], text });
+    },
+  });
+  let polling = false;
+  controlChatTimer = setInterval(async () => {
+    if (polling || ![...piloted.keys()].some(a => pilotOf(a))) return;
+    polling = true;
+    try {
+      const rows = [...sessions.values()].filter(s => s instanceof KeeperProxy && !pilotOf(s.name));
+      for (let i = 0; i < rows.length; i += 4) await Promise.all(rows.slice(i, i + 4).map(async s => {
+        const r = await keeperGet(s.name, s._index, 'chat', { since: 0, limit: 64, include_self: 'false' });
+        if (!r || r.error) return;
+        const prev = cursors.get(s.name);
+        const since = prev?.pid === r.pid ? prev.seq : 0;
+        cursors.set(s.name, { pid: r.pid, seq: r.seq });
+        for (const line of r.messages ?? []) {
+          if (line.seq <= since || line.at < sinceStarted || Date.now() - line.at > 30000) continue;
+          if (!pilotedSpeaker(line.speaker)) continue;
+          const flat = sanitizeInbound(line.text ?? '').text;
+          chat.handle(s.name, { ...line, text: unwrapSpeech(flat).said.trim() }).catch(e => console.error('[human control] ' + e.message));
+        }
+      }));
+    } catch (e) { console.error('[human control poll] ' + e.message); }
+    finally { polling = false; }
+  }, 1500);
+  controlChatTimer.unref?.();
+}
+
 function startPilotWatch() {
+  startControlChatWatch();
   // Only ever one scan in flight. The look is asynchronous now, and a PowerShell cold
   // start can outlast a 4s tick — without this, a slow scan would have a second started
   // on top of it and the spawns would pile up, which is the failure the whole change is
@@ -10825,8 +10905,15 @@ const TOOLS = [
       // Do not do this to an in-process autopilot: loadout overlays may have legitimately
       // changed its live policy since the roster was written.
       const savedAutopilot = rosterEntry(a.agent)?.autopilot;
-      if (s instanceof KeeperProxy && savedAutopilot?.policy)
-        Object.assign(p.policy, savedAutopilot.policy);
+      if (s instanceof KeeperProxy) {
+        if (a.action === 'start') {
+          // Incremental human/DUM orders inherit the actual running policy. Seeding
+          // from disk here would silently revert unrelated live overrides on Save.
+          const live = await keeperState(a.agent, s._index, { fresh: true });
+          if (!live?.autopilot_status?.policy) throw new Error('running keeper policy is unavailable; no order was changed');
+          p.policy = { ...live.autopilot_status.policy };
+        } else if (savedAutopilot?.policy) Object.assign(p.policy, savedAutopilot.policy);
+      }
       // The running stub's mode defaults to 'survive' (Autopilot constructor), but the
       // ROSTER may have a different mode (e.g. 'tick') that the keeper is actually using.
       // When a caller does NOT explicitly set the mode, we must preserve the roster's
@@ -11550,6 +11637,31 @@ const TOOLS = [
       // without spots has to be told what it actually got.
       if (coerced.length) out.coerced = coerced;
       return keeper_push ? { ...out, keeper_push } : out;
+    },
+  },
+  {
+    name: 'policy_control',
+    description: 'Human control editors: read verified running and restart policy, or explicitly save a revision-checked patch.',
+    schema: { type: 'object', properties: { action: { enum: ['read', 'save'] }, agents: { type: 'array', items: { type: 'string' } },
+      patch: { type: 'object' }, expected_fleet: { type: 'string' }, expected_pid: { type: 'number' }, expected_revision: { type: 'string' } }, required: ['action'] },
+    run: a => a.action === 'read' ? policyControls().snapshot(a.agents) : a.action === 'save' ? policyControls().save(a) : Promise.reject(new Error('unknown control action')),
+  },
+  {
+    name: 'dum_controls',
+    description: 'Find the live DUM human controls, or register a verified loopback DUM process. Does not start any process.',
+    schema: { type: 'object', properties: { action: { enum: ['list', 'register'] }, url: { type: 'string' }, pid: { type: 'number' }, fleet: { type: 'string' } }, required: ['action'] },
+    run: async a => {
+      if (a.action === 'register') {
+        const u = new URL(a.url);
+        if (u.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) || u.username || u.password || u.pathname !== '/')
+          throw new Error('DUM control registration needs a loopback HTTP origin');
+        const h = await fetch(new URL('/health', u), { signal: AbortSignal.timeout(3000) }).then(r => r.json());
+        if (h.fleet !== FLEET || a.fleet !== FLEET || h.pid !== a.pid || !h.human_controls || !pidAlive(a.pid))
+          throw new Error('DUM fleet/process identity was not verified');
+        dumControllers.set(a.pid, { url: u.origin, pid: a.pid, fleet: FLEET });
+      } else if (a.action !== 'list') throw new Error('unknown DUM control action');
+      for (const [pid] of dumControllers) if (!pidAlive(pid)) dumControllers.delete(pid);
+      return { fleet: FLEET, controllers: [...dumControllers.values()] };
     },
   },
   {

@@ -456,13 +456,35 @@ function heroView() {
          c.bold(c.cyan('S')) + c.dim(' SWARM — launch and the fleet follows · ') +
          c.bold(c.cyan('B')) + c.dim(` BOARD — the whole ${FLEET_LABEL} fleet in the commander · `) +
          c.bold(c.cyan('F')) + c.dim(' FIELD COMMAND — the same fleet on a map, in a browser · ') +
+         c.bold(c.cyan('D')) + c.dim(' DBFST — edit live fleet orders · ') +
          (held ? c.bold(c.yellow('X')) + c.dim(' take it off ' + cut(held.label ?? 'fleet work', 22)) + c.dim(' · ') : '') +
          c.dim('r refresh'));
   if (S.status) L.push('  ' + S.status);
   return L;
 }
 
+let dbfstOpen = false;
+async function dbfst() {
+  if (dbfstOpen) return;
+  dbfstOpen = true;
+  stdin.removeListener('keypress', onKey);
+  if (stdin.isTTY) stdin.setRawMode(false);
+  cursor(true); alt(false);
+  try {
+    const { runDBFST } = await import('./m59-dbfst.mjs');
+    await runDBFST({ brokerUrl: URL_, fleet: FLEET,
+      agents: [(S.view === 'hero' ? S.hero : S.rows[S.sel])?.agent].filter(Boolean) });
+  } catch (e) { S.status = c.red(e.message); }
+  finally {
+    dbfstOpen = false;
+    if (stdin.isTTY) stdin.setRawMode(true);
+    stdin.on('keypress', onKey);
+    alt(true); cursor(false); clear(); draw();
+  }
+}
+
 function draw() {
+  if (dbfstOpen) return;
   const lines = S.loading ? [c.dim('  talking to the broker…')]
               : S.view === 'hero' ? heroView() : listView();
   const rows = stdout.rows || 40;
@@ -1141,6 +1163,7 @@ async function override(row) {
 }
 
 function onKey(str, key) {
+  if (str === 'D' || str === 'd') { dbfst(); return; }
   if (key.ctrl && key.name === 'c') return quit();
   if (S.view === 'list') {
     if (key.name === 'q' || key.name === 'escape') return quit();
