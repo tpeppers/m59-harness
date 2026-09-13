@@ -6377,6 +6377,7 @@ class Session {
         const shelter = sp?.need
           ? { spots: sheltersAlong(geo, plan.steps,
                                    { book: sp.book ?? null, room: c.room?.num ?? null,
+                                     unreachable: sp.unreachable?.(c.room?.num) ?? null,
                                      within: sp.within ?? 6 }),
               need: sp.need, maxDetour: sp.maxDetour ?? 5, onDivert: sp.onDivert ?? null,
               onArrive: sp.onArrive ?? null }
@@ -11550,7 +11551,8 @@ class Session {
       let spot = null;
       try {
         spot = nearestSafeSpot(geo, { row: me.row, col: me.col },
-                               { within: 14, room: Number(this.world?.room?.num) || null });
+                               { within: 14, room: Number(this.world?.room?.num) || null,
+                                 unreachable: this.shelterPolicy?.unreachable?.(this.world?.room?.num) ?? null });
       } catch { spot = null; }
       if (!spot) return false;
       const shelterRoom = this.world?.room?.num;

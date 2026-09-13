@@ -3306,6 +3306,7 @@ export class Autopilot {
           this.hold.quietMs = 0;
           const wasProven = this.hold.proven;
           this.hold.proven = false;
+          this.noteFailedRestSpot(this.hold.room, this.hold.col, this.hold.row);
           this.book.failed(this.hold.room, {
             col: this.hold.col, row: this.hold.row, damage: lost, attackers: company,
             settledMs, source: this.hold.source ?? 'fight' });
@@ -3326,10 +3327,8 @@ export class Autopilot {
             why: 'we were hit while standing still and not swinging, which is the one thing ' +
                  'that cannot happen in a working spot',
             caveat: 'poison is checked for above and is not this — an ailing character with ' +
-                    'nothing adjacent returns before here. This is permanent and deliberately ' +
-                    'so: see discredited() in m59-safespots.mjs, where the two-failure rule ' +
-                    'this used to describe is what left a square recommended after it killed ' +
-                    'somebody' });
+                    'nothing adjacent returns before here. This keeper temporarily skips the ' +
+                    'square while recovering; the historical ledger does not decide wall geometry' });
           // Settle the reading BEFORE letting the hold go, or the record loses the
           // very state it is a record of.
           settle(`HIT for ${lost} while standing still with ${company} adjacent — this square does not work`, true);
@@ -8136,8 +8135,19 @@ export class Autopilot {
     forRoom.set(`${col},${row}`, Date.now());
   }
 
+  // A failed rest must choose somewhere else on the next attempt. This is local,
+  // temporary recovery state, not a verdict from the historical safe-spot ledger:
+  // poison, other players, and changed room contents can all defeat a rest.
+  noteFailedRestSpot(room, col, row) {
+    if (room == null || col == null || row == null) return;
+    const per = (this.failedRestSpots ??= new Map());
+    const forRoom = per.get(room) ?? per.set(room, new Map()).get(room);
+    if (forRoom.size > 256) forRoom.clear();
+    forRoom.set(`${col},${row}`, Date.now());
+  }
+
   /**
-   * Everything the spot selector must skip this pass: squares we recently failed to reach
+   * Everything the spot selector must skip this pass: squares we recently failed to reach or rest in
    * (remembered, with a TTL) plus squares another player is standing on or next to
    * (never remembered — asked fresh every time). One set, because nearestSafeSpot takes one.
    */
@@ -8159,16 +8169,19 @@ export class Autopilot {
     return list.some(r => Number(r) === Number(room));
   }
 
-  /** The squares in this room we have failed to reach recently, as the selectors want them. */
+  /** Recently unavailable squares, including this keeper's failed rest attempts. */
   unreachableIn(room) {
-    const forRoom = this.unreachableSpots?.get(room);
-    if (!forRoom?.size) return null;
     const ttl = this.policy.unreachableSpotMs ?? UNREACHABLE_SPOT_MS;
     const now = Date.now();
     const live = new Set();
-    for (const [k, at] of forRoom) {
-      if (now - at <= ttl) live.add(k);
-      else forRoom.delete(k);
+    for (const per of [this.unreachableSpots, this.failedRestSpots]) {
+      const forRoom = per?.get(room);
+      if (!forRoom) continue;
+      for (const [k, at] of forRoom) {
+        if (now - at <= ttl) live.add(k);
+        else forRoom.delete(k);
+      }
+      if (!forRoom.size) per.delete(room);
     }
     return live.size ? live : null;
   }
@@ -9950,6 +9963,7 @@ export class Autopilot {
     if (allow.safe_spot) {
       this.s.shelterPolicy = {
         book: this.book,
+        unreachable: room => this.unreachableIn(room),
         // NO DISTANCE CAP BY DEFAULT (operator, 2026-09-01): a wall along the route that the
         // body can reach and leave for the door is shelter however far off the line it sits.
         within: this.policy.travelHoldWithin ?? Infinity,
@@ -19138,6 +19152,7 @@ export class Autopilot {
     }
     // Evidence first, while we still know which square failed.
     if (this.hold && near.length) {
+      this.noteFailedRestSpot(this.hold.room, this.hold.col, this.hold.row);
       this.book.failed(this.hold.room, {
         col: this.hold.col, row: this.hold.row, damage: 1, attackers: near.length,
         source: this.hold.source ?? 'fight' });
@@ -19147,8 +19162,8 @@ export class Autopilot {
         attackers: near.length, proven_against: this.hold.mostAttackers ?? 0,
         why: 'we were hit while resting, which is standing still and not swinging — the ' +
              'one thing that cannot happen in a working spot',
-        caveat: 'found by the rest rather than by observe(), so it is one reading like any ' +
-                'other: it demotes the square, and a second stops it being recommended' });
+        caveat: 'this keeper temporarily skips the square on its next shelter search; ' +
+                'this does not establish whether geometry or another damage source broke the rest' });
       this.releaseHold('we were hit while resting in it');
     } else if (!this.hold) {
       this.note('hit while resting in the open', { room: room?.num, attackers: near.length,
@@ -19174,7 +19189,7 @@ export class Autopilot {
     {
       const got = await this.takeSafeSpot('hit while resting — need a square that holds',
                                           near[0] ?? null).catch(() => false);
-      this.note('moving rather than resting again', { got_a_wall: !!got, shed_aggro: dropped,
+      this.note('moving rather than resting again', { got_a_wall: !!got?.took, shed_aggro: dropped,
         why: 'resting again where we were just hit is the loop that kills characters "while resting"' });
     }
     this.progress('left a square that could not be rested in');
@@ -21132,9 +21147,13 @@ export class Autopilot {
     this.freezeSample = null;
     const why = dead ? 'dead' : hurt ? 'damage while playing dead'
       : moved ? 'moved while playing dead' : 'freeze deadline reached';
+    const holding = this.hold ? { room: this.hold.room, row: this.hold.row, col: this.hold.col } : null;
     if (hurt || moved) this.wantsForwardShelter = why;
-    this.note('unfreezing', { why, before, now: sample,
-      holding: this.hold ? { room: this.hold.room, row: this.hold.row, col: this.hold.col } : null });
+    if (hurt && !moved) {
+      this.noteFailedRestSpot(before.room, before.col, before.row);
+      if (this.hold) this.releaseHold('damage while playing dead');
+    }
+    this.note('unfreezing', { why, before, now: sample, holding });
     return false;
   }
 

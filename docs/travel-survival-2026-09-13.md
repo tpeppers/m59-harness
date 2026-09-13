@@ -23,6 +23,11 @@ These fixes address reproduced control-flow failures in those journeys:
 - Successful recorded-track crossings skipped hop recovery. They now run the
   same hook as other crossings. A failed walk to a refuge cannot start a rest
   at the character's actual, exposed position.
+- Live verification caught a failed-rest loop: Bunsen released a square after
+  taking damage, then immediately chose that same square again. Failed rest
+  squares now enter a five-minute exclusion local to that keeper, shared by
+  recovery and route shelter searches. Historical ledger failures still do not
+  determine the geometry verdict. A failed selection is reported as a failure.
 
 `m59-survival-handoff-test.mjs` holds a real travel call open while the real
 watchdog interrupts it. It also exercises real freeze/pass and shopping

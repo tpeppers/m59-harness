@@ -8,6 +8,7 @@ process.env.M59_EVIDENCE_DIR = evidence;
 process.env.M59_UPTIME_FILE = path.join(evidence, 'uptime.jsonl');
 const { Autopilot, CONTINUE, HANDLED, PASS_STAGES } = await import('./m59-autopilot.mjs');
 const { OF } = await import('./m59-parse.mjs');
+const { sheltersAlong } = await import('./m59-safespots.mjs');
 
 function keeper() {
   const k = Object.assign(Object.create(Autopilot.prototype), {
@@ -118,6 +119,7 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   k.watchdogTick();
   assert.equal(k.frozenUntil, null, 'the independent watchdog ends a damaged freeze');
   assert.match(k.wantsForwardShelter, /damage/);
+  assert.ok(k.unreachableIn(584).has('20,20'), 'the damaged freeze square is skipped');
 }
 
 // Run the whole pass through a damaged stats wait, not just the freeze predicate.
@@ -205,4 +207,45 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   assert.equal(k.townTrip, null, 'shopping completes after recovery');
   assert.deepEqual(services, [...methods.slice(0, 8), ...methods.slice(7)]);
 }
-console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping completion)');
+// Bunsen's live failure: break a rest, reconnect, immediately select the same
+// geometric wall again. Recent local failure must survive that reconnect.
+{
+  const k = keeper();
+  k.s.travel = async () => { throw new Error('mover failed'); };
+  await assert.rejects(k.travel(39), /mover failed/);
+  assert.equal(k.inert, null, 'a throwing journey returns its hold in finally');
+  assert.equal(k.s.shelterPolicy, null);
+}
+{
+  const k = keeper();
+  k.hold = { room: 584, row: 20, col: 20 };
+  k.book.failed = () => {};
+  k.releaseHold = () => { k.hold = null; };
+  k.takeSafeSpot = async () => {
+    assert.ok(k.spotExclusions(584).has('20,20'));
+    assert.equal(k.unreachableIn(585), null, 'the exclusion belongs to this room');
+    return { took: false };
+  };
+  await k.restBroken(k.s.world.room, [{ id: 2 }]);
+  assert.equal(k.hold, null);
+  assert.equal(k.notes.at(-1).detail.got_a_wall, false, 'failed selection is not reported as shelter');
+  k.goTravelling('resume shopping', { to: 39 });
+  assert.ok(k.s.shelterPolicy.unreachable(584).has('20,20'), 'route planning shares recovery exclusions');
+  k.failedRestSpots.get(584).set('20,20', Date.now() - 6 * 60 * 1000);
+  assert.equal(k.unreachableIn(584), null, 'temporary failure expires');
+  assert.equal(keeper().unreachableIn(584), null, 'another keeper does not inherit the failure');
+}
+{
+  // Fine movement can cross this fake room; coarse attack LOS is blocked.
+  const geo = { rows: 5, cols: 5,
+    walkable: (r, c) => r >= 1 && r <= 5 && c >= 1 && c <= 5,
+    canMove: (_r, _c, _r2, _c2, options) => !!options?.fine };
+  const steps = [{ row: 3, col: 3 }];
+  const first = sheltersAlong(geo, steps);
+  assert.ok(first.length, 'fixture offers shelter');
+  const key = `${first[0].col},${first[0].row}`;
+  const next = sheltersAlong(geo, steps, { unreachable: new Set([key]) });
+  assert.ok(next.length, 'an alternative shelter is still offered');
+  assert.ok(next.every(s => `${s.col},${s.row}` !== key), 'route selector skips the failed rest square');
+}
+console.log('survival handoff regressions passed (travel, crowd, freeze, ladder, shopping completion, failed rest)');

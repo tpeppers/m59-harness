@@ -87,7 +87,7 @@ console.log('\nthe keeper\'s OWN travel installs the posture, which is the whole
   // ORDER: the handback must be in the `finally`, or a journey that throws leaves the keeper
   // silenced until INERT_MAX_MS lapses.
   ok('the handback is in the finally, not after the happy path',
-     body.indexOf('} finally {') < body.indexOf('this.inert === ourTravelHold'));
+     body.indexOf('} finally {') < body.indexOf('if (ourTravelHold && this.inert === ourTravelHold)'));
 }
 
 console.log('\nnesting under the external journey path is a no-op, not a double hold');

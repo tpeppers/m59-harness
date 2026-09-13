@@ -640,7 +640,7 @@ const CORNER_BONUS = 24;
  * Costs nothing at runtime: a route that never needs a stop never looks at the list.
  */
 export function sheltersAlong(geo, steps, {
-  within = 6, book = null, room = null, minBackCover = 1, limit = 24,
+  within = 6, book = null, room = null, minBackCover = 1, limit = 24, unreachable = null,
 } = {}) {
   if (!geo || !Array.isArray(steps) || !steps.length) return [];
   const out = [];
@@ -655,7 +655,7 @@ export function sheltersAlong(geo, steps, {
     let spot = null;
     try {
       spot = nearestSafeSpot(geo, { row: st.row, col: st.col },
-                             { within, book, room, minBackCover, reachable });
+                             { within, book, room, minBackCover, reachable, unreachable });
     } catch { spot = null; }
     if (!spot) continue;
     const k = `${spot.col},${spot.row}`;
