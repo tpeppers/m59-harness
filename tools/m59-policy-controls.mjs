@@ -3,13 +3,14 @@ import { createHash } from 'node:crypto';
 
 export const revisionOf = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const camel = key => key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-const aliases = { protect_items: 'protectedItems', require_safe_wall: 'pullToSafeWall' };
+const aliases = { protect_items: 'protectedItems', require_safe_wall: 'pullToSafeWall', fight_back_after_s: 'fightBackAfterMs' };
 const obsolete = new Set(['require_safe_wall', 'max_threat_over', 'use_safe_spots']);
 
 export function reflectPolicy(tool, policies = []) {
   const source = tool.run.toString();
+  const keys = [...new Set([...policies.flatMap(Object.keys), ...[...source.matchAll(/p\.policy\.([a-zA-Z0-9]+)/g)].map(m => m[1])])];
   return Object.entries(tool.schema.properties).flatMap(([key, spec]) => {
-    const policy = aliases[key] ?? camel(key);
+    const policy = aliases[key] ?? keys.find(p => p.toLowerCase() === key.replaceAll('_', '')) ?? camel(key);
     if (obsolete.has(key) || (key !== 'mode' && !policies.some(p => Object.hasOwn(p, policy)) &&
         !source.includes(`p.policy.${policy}`))) return [];
     // Controls describe standing orders, not one-shot actions/leases/debug switches.
@@ -59,7 +60,9 @@ export class PolicyControls {
     const schema = reflectPolicy(this.tool(), Object.values(rows).map(r => r.live.policy));
     for (const r of Object.values(rows)) for (const side of ['live', 'restart']) {
       r[side].values = Object.fromEntries(schema.map(s => [s.id,
-        s.id === 'mode' ? r[side].mode : r[side].policy[s.policy] ?? null]));
+        s.id === 'mode' ? r[side].mode : s.id === 'fight_back_after_s' && r[side].policy[s.policy] != null
+          ? r[side].policy[s.policy] / 1000 : r[side].policy[s.policy] ?? null]));
+      r[side].unset = schema.filter(s => s.id !== 'mode' && !Object.hasOwn(r[side].policy, s.policy)).map(s => s.id);
     }
     return { fleet: this.fleet, pid: this.pid, agents: who, schema, rows,
       revision: revisionOf({ pid: this.pid, rows: Object.fromEntries(Object.entries(rows).map(([a, r]) =>

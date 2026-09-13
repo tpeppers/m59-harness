@@ -80,7 +80,8 @@ export class ControlDraft {
     for (const agent of this.snapshot.agents) {
       const row = this.snapshot.rows[agent];
       const desired = Object.hasOwn(this.patch, f.id) ? this.patch[f.id] : row.current[f.id];
-      lines.push(`${agent}: current=${JSON.stringify(row.current[f.id])} restart=${JSON.stringify(row.restart[f.id])} desired=${this.inherit.includes(f.id) ? 'inherit' : JSON.stringify(desired)}`);
+      const observed = side => row[side + '_unset']?.includes(f.id) ? 'unset (keeper default; see description)' : JSON.stringify(row[side][f.id]);
+      lines.push(`${agent}: current=${observed('current')} restart=${observed('restart')} desired=${this.inherit.includes(f.id) ? 'inherit' : JSON.stringify(desired)}`);
     }
     return lines;
   }

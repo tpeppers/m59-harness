@@ -19870,6 +19870,15 @@ export class Autopilot {
     return available < this.poorSupply.required_purse;
   }
 
+  poorShoppingRetryReady() {
+    if (!this.poorFarmingActive()) return true;
+    // A timer alone must not recall a penniless farmer halfway home. Recheck an
+    // unchanged balance only when a bank is already here; new sufficient funds
+    // reopen the saved shopping task from anywhere.
+    return Date.now() >= this.poorSupply.retry_at &&
+      PURCHASE_BANKS.some(bank => bank.room === this.s.world?.room?.num);
+  }
+
   deferUnaffordableShopping(plan, bank, balance) {
     this.poorSupply = { since: Date.now(), account: bank.account, banked: balance,
       required_purse: plan.required_purse, retry_at: Date.now() + (this.policy.poorSupplyRetryMs ?? 300000) };
@@ -19956,7 +19965,7 @@ export class Autopilot {
       return { ready: false, pending: true, reason };
     };
     this.postShoppingPlan(plan);
-    if (this.poorFarmingActive() && Date.now() < this.poorSupply.retry_at) {
+    if (this.poorFarmingActive() && !this.poorShoppingRetryReady()) {
       if (this.townTrip) { this.deferredShoppingTrip = this.townTrip; this.townTrip = null; }
       this.purchaseFunding.pending = false;
       this.purchaseFunding.status = 'unaffordable — returning to farming';
@@ -20030,7 +20039,7 @@ export class Autopilot {
 
   async bankRun() {
     if (this.townTrip) return this.continueTownTrip();
-    if (this.deferredShoppingTrip && (!this.poorFarmingActive() || Date.now() >= this.poorSupply.retry_at)) {
+    if (this.deferredShoppingTrip && this.poorShoppingRetryReady()) {
       this.townTrip = this.deferredShoppingTrip;
       this.deferredShoppingTrip = null;
       this.townTrip.nextTryAt = 0;

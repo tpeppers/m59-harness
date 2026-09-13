@@ -10572,7 +10572,7 @@ const TOOLS = [
       no_food_vigor_floor: { type: 'number', minimum: 0, maximum: 80,
         description: 'Farming vigor floor while supplies are unaffordable. Defaults to 70; does not replace the fed floor.' },
       poor_supply_retry_ms: { type: 'number', minimum: 1000,
-        description: 'Minimum delay before rechecking an unaffordable supply trip; new sufficient funds reopen shopping sooner.' },
+        description: 'Minimum delay before rechecking an unaffordable supply trip at a bank already on the route; new sufficient funds reopen shopping from anywhere.' },
       vigor_ceiling: { type: 'number', minimum: 0, maximum: 200,
         description: 'THE CEILING: keep eating until vigor reaches this. With the floor it makes a ' +
           'BAND — set out at the top of it and keep fighting down to the floor — which is the whole ' +

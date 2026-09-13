@@ -224,6 +224,13 @@ console.log('purchase funding integration passed: posted bill, quantities, bank 
   assert.equal(k.actions.filter(a => a[0] === 'travel').length, trips, 'do not loop through the bank while poor');
   k.policy.noFoodVigorFloor = 65;
   assert.equal(k.fightFloor(), 65, 'the poor floor is configurable');
+  k.poorSupply.retry_at = 0;
+  k.s.world.room = { num: 584 };
+  assert.equal(k.poorShoppingRetryReady(), false, 'an expired retry timer cannot recall a poor farmer to the bank');
+  k.s.world.room = { num: 545 };
+  assert.equal(k.poorShoppingRetryReady(), false, 'an expired timer cannot reverse the return journey');
+  k.s.world.room = { num: 54 };
+  assert.equal(k.poorShoppingRetryReady(), true, 'a bank already on the route can refresh its balance');
   k.balance = 5000;
   assert.equal(k.poorFarmingActive(), false, 'new funds lift the poor mode');
   await k.bankRun();

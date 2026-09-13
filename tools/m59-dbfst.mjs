@@ -18,7 +18,8 @@ export async function runDBFST({ brokerUrl = process.env.M59_CONTROL_URL ?? 'htt
       `${Object.keys(draft.patch).length + draft.inherit.length} staged changes · page ${page + 1}/${Math.max(1, Math.ceil(fields.length / 8))}`);
     for (const f of sample) {
       const value = side => {
-        const values = draft.snapshot.agents.map(a => JSON.stringify(draft.snapshot.rows[a][side][f.id]));
+        const values = draft.snapshot.agents.map(a => draft.snapshot.rows[a][side + '_unset']?.includes(f.id)
+          ? 'unset (keeper default; see description)' : JSON.stringify(draft.snapshot.rows[a][side][f.id]));
         return values.every(v => v === values[0]) ? values[0] : 'mixed (show this setting to inspect each bot)';
       };
       console.log(`${f.id} — ${String(f.description ?? f.title).slice(0, 160)}\n` +
