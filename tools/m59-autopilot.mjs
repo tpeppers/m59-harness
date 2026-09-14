@@ -3959,9 +3959,13 @@ export class Autopilot {
       finishSurvivalDecision(s,d.id,'recovered','health and resting vigor restored');return false;
     }
     if (d.retry_at && Date.now()<d.retry_at) return true;
+    // A director leases movement for its entire run, while survival/recovery remain
+    // with this keeper. Only an actual handoff (busy/inert or a protected faculty)
+    // may end this recovery. A routine movement claim must not cancel it every pass.
+    const faculty=d.status==='recovering'?'recovery':'survival';
     if (this.stopping || (this.busy?.until>Date.now()) ||
-        (this.claims?.get('movement')?.until>Date.now())) {
-      chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'movement belongs to another controller',
+        (this.inert && !this.inert.travelling) || this.facultyHeld(faculty)) {
+      chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'survival control explicitly handed to another controller',
         reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
     }
     if (d.status==='recovering') {

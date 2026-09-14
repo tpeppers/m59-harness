@@ -124,6 +124,38 @@ await test('a predicted position is not proof of current shelter',()=>{
   const {k,c}=fixture({row:7,col:16});c.self.predicted=true;
   assert.equal(k.currentRecoveryWall(),null);
 });
+await test('a director movement lease cannot cancel recovery or split its episode',async()=>{
+  const {k,s,c,health,events}=fixture({row:7,col:16});
+  k.claimFaculties({faculties:['work','movement','economy'],by:'production farming director'});
+  await k.takeRecoverySpot('hurt under a director lease');
+  const d=currentSurvivalDecision(s);
+  // Use the real rest executor, completing its first cached-stat refresh.
+  c.stats=()=>{health.value=50;};
+  assert.equal(await k.continueSurvivalDecision(),true);
+  assert.equal(currentSurvivalDecision(s).id,d.id);
+  assert.equal(await k.continueSurvivalDecision(),false);
+  assert.equal(currentSurvivalDecision(s),null);
+  const report=summarizeSurvivalDecisions(events);
+  assert.equal(report.episodes,1);assert.equal(report.resolved_episodes,1);
+  assert.equal(report.strategies[0].recovered_episodes,1);
+  assert.ok(!events.some(e=>e.decision.strategy==='yield_to_controller'));
+});
+await test('pending survival keeps its protected faculty; explicit handoffs still yield',async()=>{
+  const {k,s}=fixture();
+  k.claimFaculties({faculties:['movement'],by:'production farming director'});
+  const d=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'approach interrupted'});
+  let calls=0;k.takeRecoverySpot=async()=>{calls++;return {took:true};};
+  assert.equal(await k.continueSurvivalDecision(),true);assert.equal(calls,1);
+  assert.equal(currentSurvivalDecision(s).id,d.id);
+  k.claimFaculties({faculties:['survival'],by:'explicit survival controller',mayYield:['survival']});
+  assert.equal(await k.continueSurvivalDecision(),false);
+  assert.equal(currentSurvivalDecision(s).strategy,'yield_to_controller');
+  k.releaseFaculties();
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'new recovery'});
+  k.busy={until:Date.now()+10000};
+  assert.equal(await k.continueSurvivalDecision(),false);
+  assert.equal(currentSurvivalDecision(s).strategy,'yield_to_controller');
+});
 await test('decision history and recorded paths remain bounded',()=>{
   const {s}=fixture();let d;
   for(let i=0;i<70;i++)d=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'retry'});

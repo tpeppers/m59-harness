@@ -42,8 +42,10 @@ Reaching cover and recovering there are separate outcomes.
 4. Off-wall logoff retains the existing freeze behaviour. It is a separate strategy
    because it can break engagement without restoring health. Existing freeze
    invalidation rules remain in place.
-5. Explicit cancellation, keeper stop, or another controller owning movement produces
-   `yield_to_controller`. It does not secretly restart the cancelled journey.
+5. Explicit cancellation, keeper stop, a declared busy/inert handoff, or an explicitly
+   yielded survival/recovery faculty produces `yield_to_controller`. A director's
+   routine movement lease does not yield survival or recovery. The replacement does
+   not secretly restart the cancelled journey.
 
 Automatic recovery preserves the destination and death counter. Active recovery runs
 ahead of ordinary planners, including GOAP and BT. A route handed to logoff cannot
@@ -85,6 +87,11 @@ distance and damage. A chain can include several strategies, so they share an ou
 and are not independent trials. These are associations, not estimates of lives saved.
 Compare similar starting HP, threats and routes; use controlled shadow trials to establish
 whether a strategy causes better survival.
+
+The initial rollout epoch `3171d1f45a98` incorrectly treated a director's routine movement
+lease as a survival handoff. Live verification caught repeated `yield_to_controller` /
+`rest_safe` replacements. Those counts and split episodes must not be used to rank
+strategies; retain the raw history for investigation and use the corrected epoch onward.
 
 `m59-survival-decision-test.mjs` covers atomic replacements, both cancelled mover paths,
 stale arrival, ordinary fallback, another wall after blockage, logoff/turn at a safe wall,

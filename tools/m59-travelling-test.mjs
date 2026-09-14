@@ -795,7 +795,7 @@ console.log('A REFUGE IS SOMEWHERE YOU STOP UNTIL YOU ARE WHOLE');
 
   // THE SKIP IS THE OTHER HALF OF THE RULE.
   ok('a character that is already whole walks straight past',
-     /if \(whole\) \{ settle\(\{[\s\S]{0,140}\); return false; \}/.test(AUTOPILOT_SRC));
+     /if \(whole\) \{\s*if\(decision\) finishSurvivalDecision\([^;]+;\s*settle\(\{[\s\S]{0,140}\); return false;\s*\}/.test(AUTOPILOT_SRC));
   // AND IT STILL SAYS SO ON DISK. A run that reached its wall and did not need it is the good
   // case, and without an outcome row it is indistinguishable from one that never arrived —
   // which is the fault this ledger exists to tell apart. See tools/m59-shelter.mjs.
