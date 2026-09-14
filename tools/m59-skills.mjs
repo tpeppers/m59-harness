@@ -18,6 +18,7 @@
 // the state was when it stopped.
 
 import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-parse.mjs';
+import { traceSurvivalOperation, tracePoint } from './m59-survival-trace.mjs';
 // A ROOM REFERENCE CARRIES ITS SPACE — the client's room `.id` is an OBJECT ID and the bake's
 // key is a ROOM NUMBER, and both are small integers. See tools/m59-roomref.mjs.
 import { roomFields } from './m59-roomref.mjs';
@@ -1765,8 +1766,19 @@ export async function turnInPlace(s, { degrees = null, verify = true } = {}) {
 const FINE_HANDOVER_SQUARES = Number(process.env.M59_FINE_HANDOVER_SQUARES || 3);
 
 export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = {}) {
+  return traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance },
+    () => returnToSpotObserved(s, spot, { maxSteps, tolerance }));
+}
+
+async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   const c = s.need();
   if (!spot) return { arrived: false, why: 'no spot given' };
+  let attemptNumber = 0;
+  const attempt = (kind, previous, run) => traceSurvivalOperation(s, kind, {
+    target: tracePoint(spot), attempt: ++attemptNumber,
+    fallback_after: previous ? { arrived: previous.arrived, cancelled: previous.cancelled ?? null,
+      reason: previous.reason ?? previous.why ?? null } : null,
+  }, run);
   // A normal square walk is dead-reckoned for speed. That is appropriate while
   // crossing a room, but a predicted arrival is not evidence that we regained a
   // particular safe square: a delayed server position can still replace it and leave
@@ -1841,18 +1853,21 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
     const fineOwnsIt = away <= FINE_HANDOVER_SQUARES && typeof s.approachFine === 'function';
     let w;
     if (fineOwnsIt) {
-      w = await s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y })
+      w = await attempt('approach_fine', null,
+        () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
                  .catch(e => ({ arrived: false, reason: e.message }));
       if (!w.arrived) {
-        const square = await s.walkTo(spot.col, spot.row, { maxSteps })
+        const square = await attempt('walk_to', w, () => s.walkTo(spot.col, spot.row, { maxSteps }))
                               .catch(e => ({ arrived: false, reason: e.message }));
         if (square.arrived) w = square;
         else w = { ...square, fine_tried: w.reason ?? 'fine approach did not arrive' };
       }
     } else {
-      w = await s.walkTo(spot.col, spot.row, { maxSteps }).catch(e => ({ arrived: false, reason: e.message }));
+      w = await attempt('walk_to', null, () => s.walkTo(spot.col, spot.row, { maxSteps }))
+        .catch(e => ({ arrived: false, reason: e.message }));
       if (!w.arrived && typeof s.approachFine === 'function') {
-        const fine = await s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y })
+        const fine = await attempt('approach_fine', w,
+          () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
                             .catch(e => ({ arrived: false, reason: e.message }));
         if (fine.arrived) w = fine;
         else w = { ...w, fine_tried: fine.reason ?? 'fine approach did not arrive' };
@@ -1864,7 +1879,8 @@ export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = 
     await confirmPrediction();
   }
   if (spot.x != null && s.walkFine) {
-    await s.walkFine(spot.x, spot.y, { maxSteps: 6, stride: 40, arriveWithin: tolerance })
+    await attempt('walk_fine', null,
+      () => s.walkFine(spot.x, spot.y, { maxSteps: 6, stride: 40, arriveWithin: tolerance }))
            .catch(() => null);
   }
   const d = at();

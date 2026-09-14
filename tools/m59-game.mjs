@@ -13,6 +13,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
+import { traceSurvival } from './m59-survival-trace.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -1409,6 +1410,8 @@ class Session {
     // stamp and re-asks its own question, because what counts as "hurt enough" belongs to
     // the keeper's policy and not to a packet handler.
     this.damagedAt = now;
+    traceSurvival(this, 'health_loss', { pushed_at: now, before, value, max,
+      lost: before - value }, { lane: 'damage' });
     const book = this.hitBook();
     if (!book) return;
     const me = this.client?.self;
@@ -2011,6 +2014,10 @@ class Session {
       job.cancelRequestedAt = Date.now();
       job.cancelled = true;
     }
+    traceSurvival(this, 'movement_cancelled', { why,
+      previous_generation: this.movementGeneration - 1,
+      next_generation: this.movementGeneration, token_present: !!controlToken,
+      interrupted: job ? { kind: job.kind, label: job.label } : null });
     return {
       cancelled: true,
       interrupted: job ? { kind: job.kind, label: job.label } : null,

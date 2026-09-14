@@ -21,6 +21,9 @@
 //     find itself somewhere else can find out why.
 
 import * as skills from './m59-skills.mjs';
+import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOperation,
+         tracePassContext, traceBody, traceRefuge, survivalTraceSnapshot,
+         survivalTraceSummary } from './m59-survival-trace.mjs';
 import { opensFightFromWall } from './m59-policydiff.mjs';
 import * as watchdog from './m59-watchdog.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
@@ -1451,6 +1454,7 @@ export function crowdedSquares(objects, selfId, { radius = 1, playersOnline = nu
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
+    attachSurvivalTrace(session, this);
     this.mode = mode;
     this.policy = {
       // Rest when health OR vigor falls below this and nothing is attacking us.
@@ -3861,7 +3865,15 @@ export class Autopilot {
              ...(r?.error ? { why: r.error } : {}) };
   }
 
-  async takeSafeSpot(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
+  async takeSafeSpot(why, quarry = null, options = {}) {
+    return traceSurvivalOperation(this.s, 'take_safe_spot', {
+      why, quarry: traceBody(quarry), source: options.source ?? 'fight',
+      nearest_only: options.nearestOnly ?? false, after_exit: options.afterExit ?? false,
+      near_quarry: options.nearQuarry ?? false, destination: options.destination ?? null,
+    }, () => this.takeSafeSpotObserved(why, quarry, options));
+  }
+
+  async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
     const s = this.s, c = s.client;
@@ -3904,7 +3916,9 @@ export class Autopilot {
     if (bridge) {
       if (islandCrossings >= 1)
         return { took: false, why: 'changed rooms once but still did not land on the quarry\'s side' };
-      const crossed = await this.crossSameRoomIsland(bridge);
+      const crossed = await traceSurvivalOperation(s, 'refuge_island_crossing', {
+        from_room: bridge.fromRoom, via_room: bridge.viaRoom, target: traceBody(bridge.target),
+      }, () => this.crossSameRoomIsland(bridge));
       if (interrupted()) return cancelled();
       if (!crossed.arrived) {
         // SAY WHY, BECAUSE THIS FAILED EIGHTEEN TIMES IN SILENCE.
@@ -4038,6 +4052,10 @@ export class Autopilot {
       }
       if (configuredShareCap == null) break;
     }
+    traceSurvival(s, 'refuge_selected', { selected: traceRefuge(spot), source,
+      quarry: traceBody(quarry), onward: traceRefuge(onward), nearest_only: nearestOnly,
+      after_exit: afterExit, share_cap: shareCap, claim_collisions: claimCollisions,
+      search_counts: spotStats });
     if (spot && Number.isFinite(shareCap) && shareCap > 1)
       this.note('sharing a wall rather than standing in the open', {
         with: spotOccupancy(this.s.name, room.num, spot.col, spot.row), at: { col: spot.col, row: spot.row },
@@ -4108,7 +4126,8 @@ export class Autopilot {
       // ladder can push it past its deadline, and then "reviving myself — nobody came back"
       // takes the controls back mid-hop (tour 15, the sewers). The ladder IS the keeper.
       if (this.inert) this.inert.at = Date.now();
-      const crossed = await this.s.travel(hop.to, { maxHops: 1 })
+      const crossed = await traceSurvivalOperation(s, 'refuge_exit', { destination: hop.to,
+        selected: traceRefuge(spot) }, () => this.s.travel(hop.to, { maxHops: 1 }))
                                 .catch(e => ({ arrived: false, why: e.message }));
       if (interrupted()) return cancelled();
       if (this.inert) this.inert.at = Date.now();
@@ -6384,6 +6403,8 @@ export class Autopilot {
       route: 'travelRouteStops', track: 'travelTrackStops',
     }[kind];
     if (field) this[field] = (this[field] ?? 0) + n;
+    traceSurvival(this.s, 'travel_shelter_stop', { kind, count: n, held_ms: ms,
+      journey_stops: this.travelSafeStops, journey_held_ms: this.travelShelterHeldMs });
   }
 
   // Is this a moment where a hold is even the question? Cheap, and asked at every hop
@@ -8520,6 +8541,7 @@ export class Autopilot {
       // The three things that were being kept and never joined.
       frames,
       decisions: (this.journal || []).slice(-14),
+      survival_trace: survivalTraceSnapshot(this.s),
       text: this.recentText(30),
       // WHERE THE DAMAGE ACTUALLY LANDED, which the three above cannot say.
       //
@@ -9192,6 +9214,7 @@ export class Autopilot {
   // because a caller that passed it meant something by it — see `detail_at` on the
   // retaliation note, which is the creature's name.
   note(what, detail = {}) {
+    traceSurvivalNote(this.s, what, detail);
     const e = { ...detail };
     for (const k of ['at', 'pass', 'what'])
       if (k in e) { e[`detail_${k}`] = e[k]; delete e[k]; }
@@ -9510,6 +9533,7 @@ export class Autopilot {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     return {
       running: this.running, mode: this.mode, policy: this.policy,
+      survival_trace: survivalTraceSummary(this.s),
       // Null unless a fleet update is waiting on this character. See park().
       parked: this.parkStatus(),
       // Null unless something else is driving this character. `running: true` with
@@ -11687,6 +11711,8 @@ export class Autopilot {
     // Kept rather than deleted, because a behaviour that is gone cannot be measured again.
     // `blind_walk_watchdog: true` restores it per character.
     if (this.policy.blindWalkWatchdog !== true) {
+      traceSurvival(s, 'blind_walk_watchdog_disabled', { health_fraction: frac,
+        flee_at: fleeAt, pass_blocked_ms: blockedFor }, { throttle_ms: 10_000 });
       this.progress('travelling — hurt, and the walk stands');
       return;
     }
@@ -12815,6 +12841,7 @@ export class Autopilot {
   //
   // Returns the stage that ended the tick, or null if every one of them passed.
   async runPassLadder(ctx) {
+    tracePassContext(this.s, ctx);
     // THE ONLY PLACE THAT KNOWS WHICH RUNGS GOT A TURN. Everything else reports the result
     // of this walk; `M59_KEEPER_TRACE=1` reports the walk. Free when off — `traceLadder`
     // returns on its first line — and run-length collapsed when on, so a character stuck
