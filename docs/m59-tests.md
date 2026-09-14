@@ -2,6 +2,9 @@
 
 Combat overrides: `node tools/m59-combat-mode-test.mjs` exercises preemption,
 arrival-triggered ambushes, exact player identity, sequences, expiry and survival.
+It also covers indefinite visibility waits, reacquisition, live map selection,
+stop/dispatch races, temporary PvP safety and a 1500 ms first-attack budget under
+normal server pacing. All player identities and combat packets are fixtures.
 `node tools/m59-ground-effects-test.mjs` covers hazard identity, uncertain fog,
 spore extent, safe egress, segment crossings and projection lifecycle.
 `node tools/m59-combat-integration-test.mjs` covers the real Session sender,

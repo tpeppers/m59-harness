@@ -7,15 +7,58 @@ or wait for the keeper's next normal pass. Fleet commands fan out concurrently.
 
 The operator chooses the player explicitly. Names match exactly, ignoring case;
 there is no substring targeting or automatic selection of a player. Combat
-never changes the character's game safety setting. The server can still refuse
+leaves the character's game safety setting alone for attack/ambush. An explicit
+`kill` temporarily turns safety off while engaging, restores its original on
+setting while waiting or stopping, and retains restoration across a reconnect.
+The server can still refuse
 an attack because of safety, sanctuary, PvP rules, range or line of sight. A
 safety refusal ends the order and appears in its status. Counts measure packets
 sent, not hits or kills; server outcome messages are reported separately.
+
+## Immediate chat orders
+
+Dispatch an urgent order before inspecting the fleet or writing a script:
+
+```
+node tools/m59-combat-order.mjs "Kill Morpheus" --fleet prod --room "Upstairs Castle Victoria"
+node tools/m59-combat-order.mjs status --fleet prod --command-id <receipt-id>
+node tools/m59-combat-order.mjs stop --fleet prod --command-id <receipt-id>
+node tools/m59-combat-order.mjs --check --fleet prod
+```
+
+The kill example is syntax, not a standing order. Upstairs in Castle Victoria
+is map **39**. The room alias resolves from the broker's loaded map. Each keeper
+selects itself from its own current map before touching existing behavior.
+Human-piloted characters and characters outside the selected map are skipped.
+Selected units remain in that map; they do not follow sightings into other maps.
+An absent or currently nonattackable named target produces a `waiting` receipt,
+and the same intent waits again if the player vanishes.
+
+The CLI makes one `combat_order` MCP call carrying the expected absolute roster
+path. That identity check happens before dispatch in the same request. There is
+no separate fleet/look/status preflight. Healthy keepers receive commands in
+parallel; the broker waits at most 200 ms for initial receipts. `pending` is
+unconfirmed delivery, not acceptance. Query `status` by command ID to inspect
+current keeper states, and use `stop` by that ID even if delivery is still pending.
+Commands carry an ordering revision; late older commands and stopped command
+IDs cannot resurrect an override. Transport failures are not retried.
+
+Run `--check` during setup or after deployment. It checks deployed support and
+connection state through cheap addressed keeper requests, without room snapshots.
+Broker health and keeper liveness advertise `combat_mode: 2`. Update an old
+deployment before accepting urgent instructions; deployment is not part of the
+urgent command path. The command does not restart services automatically.
+
+An offline regression with normal five-packet-per-second pacing measures roughly
+620 ms from group dispatch to the first in-range attack packet. It allows 1500 ms.
+Travel, server latency, cooldowns, health and geometry still constrain execution.
+Chat interpretation time is outside that measurement.
 
 ## FleetScratch
 
 ```
 combat attack "Player Name" agents=t1,t2
+combat kill "Player Name" room="Upstairs Castle Victoria"
 combat ambush "Player Name" agents=t1 map=38 at=r10c20
 combat ambush "Player Name" agents=t1 map=38 at=r10c20 door=r8c28 radius=1 ttl=600000
 combat status agents=t1,t2
@@ -26,7 +69,8 @@ These coordinates demonstrate the syntax; choose reachable positions and the
 actual arrival area for the door you mean. `at=r10,c20` is also accepted. Other
 movement commands keep their existing coordinate conventions.
 
-`combat` has its own input queue, so it is accepted during a running `go` errand.
+`combat` runs independently of the errand queue and other outstanding combat
+receipts, so a slow request cannot delay a stop or a new order.
 Combat orders remain in the keeper if the terminal closes, until they finish,
 are stopped, or expire. Stop explicitly to end an ambush early.
 
@@ -45,9 +89,10 @@ from the urgent order; an ambush handles its own travel and positioning.
 ## FleetScript
 
 ```js
-import { fleetCombat, attackPlayer, ambushPlayer } from './m59-fleetscript.mjs';
+import { fleetCombat, killPlayer, attackPlayer, ambushPlayer } from './m59-fleetscript.mjs';
 
 await fleetCombat({ agents: ['t1', 't2'], order: attackPlayer('Player Name') });
+await fleetCombat({ room: 'Upstairs Castle Victoria', order: killPlayer('Player Name') });
 
 await fleetCombat({
   agents: ['t1'],
@@ -76,14 +121,17 @@ identity guarantee without an extra `/health` round trip. Run from the checkout
 configured for that fleet, as with other fleet tools.
 
 The equivalent MCP tool is `combat` with `agent`, `action` and the same order
-fields. Actions are `attack`, `ambush`, `status`, `stop`. `stop` optionally takes
+fields. Actions are `kill`, `attack`, `ambush`, `status`, `stop`. `stop` optionally takes
 `order_id`, so a delayed cancellation cannot stop a newer order. Direct keeper
 requests use the existing addressed `/action` envelope with `name: 'combat'`.
 
 ## Trigger and lifecycle
 
-An attack starts against the named, visible, attackable player in the current
-map. An ambush travels to its map through the normal validated router, takes
+An attack or kill waits for the exact named player to be visible and attackable
+in the assigned current map, then starts immediately. CREATE, room contents,
+movement and appearance changes wake the controller; a 100 ms timer is the
+fallback. Numeric object IDs require a currently visible attackable player.
+An ambush travels to its map through the normal validated router, takes
 the requested square, then becomes `armed`. It fires on that player's next
 server CREATE/appearance event in this room. An optional `door` restricts the
 arrival to a radius around a named square in the destination map. The protocol
@@ -93,12 +141,14 @@ area filter, not proof of the player's route.
 An already-present player, a room-content refresh, and an arrival before the
 ambusher reaches position do not fire the ambush. The order then pursues the
 exact player in the same room, taking short validated steps and re-evaluating
-the target. It ends if the target leaves; it never follows a player through an
-unknown exit. An armed character displaced from its selected position ends the
+the target. If the target leaves, queued target-dependent packets are revoked
+and the order waits for that exact name to reappear, even under a new object ID.
+It never follows the player into another map. An armed character displaced from its selected position ends the
 ambush rather than firing from the wrong spot.
 
-Default lifetimes are 120 seconds for attack and 10 minutes for ambush; the
-maximum is 30 minutes. The default sequence repeats one attack. Sequences have
+Orders remain until stopped, replaced, completed or interrupted by survival or
+connection/room identity changes. There is no default timeout; explicit
+`ttl_ms` is 1000 through 1800000. The default sequence repeats one attack. Sequences have
 at most 16 attack/cast/wait actions; `repeat: false` finishes after one sequence.
 Only spells already known to the character may be ordered. Cast targets are
 `target`, `self`, or `none`. A cast holds the body still for `hold_ms` (default

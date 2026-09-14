@@ -28,6 +28,21 @@ Ten to fifteen minutes, mostly compiling. Every step is idempotent. Individually
 
 ## Which fleet — check this before you touch anything
 
+### Urgent player combat
+
+For an authorized immediate "Kill [player]" order, dispatch first using
+`node tools/m59-combat-order.mjs "Kill Player" --fleet prod --room "Room Name"`
+from the deployed checkout, or MCP `combat_order` with the expected absolute
+`fleet_state`. This command verifies fleet identity in the dispatch request,
+so it replaces the separate `m59-which` preflight for urgent combat only.
+Do not put fleet/look inspection, script authoring or deployment before dispatch.
+Use the selected room from the conversation; Upstairs in Castle Victoria is
+map 39. Select all automated units currently there, stay in that map, and wait
+for the exact target to become visible when absent. Never infer target absence
+means the order should be discarded. Do not take human-piloted characters.
+Check `--check` readiness during setup, before the next urgent request.
+See [combat mode](docs/m59-combat-mode.md) for receipts, stop and limitations.
+
 A fleet is a named roster, one per server, and passing the wrong one operates on the
 wrong fleet quietly. The name resolves `--fleet` → `M59_FLEET` → `substrate/fleet-default`
 (one line, gitignored, what this checkout cares about) → the unnamed

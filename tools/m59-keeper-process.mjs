@@ -1389,6 +1389,7 @@ const server = createServer(async (req, res) => {
       json({
         schema: 'm59-keeper-live/v1',
         tactical_orders: 1,
+        combat_mode: 2,
         audio_observations: 1,
         intent_observations: 1,
         ok: !!(inGame && session.live),
@@ -1489,7 +1490,7 @@ const server = createServer(async (req, res) => {
       if (!requireAddressedWrite(req, ask)) return;
       const name = String(ask?.name ?? '');
       const args = ask?.args ?? {};
-      if (name === 'combat') { try {
+      if (name === 'combat' || name === 'combat_order') { try {
         const result = session.combat.issue(args);
         if (result.accepted && errandHold) releaseKeeper('combat override accepted', errandHold.token);
         json(result);

@@ -235,7 +235,8 @@ async function main() {
   say('commands: list | board | nearby <topic> | intend <topic> | reload | watch on|off |');
   say('          describe <pad> | check <pad> k=v… | dry <pad> k=v… | go <pad> k=v… |');
   say('          promote <pad> | guarantees | unsafe | quit');
-  say('          combat attack|ambush <player> agents=t1,t2 | combat stop|status agents=t1,t2');
+  say('          combat kill|attack|ambush <player> agents=t1,t2 | combat stop|status agents=t1,t2');
+  say('          combat kill <player> room="Room Name" — select and stay in the assigned map');
   say('          combat run <pad> k=v… — immediate override, even during a running errand');
   say('          simulate <simulation.json> — isolated saved-scene trials, with timings');
   say('  on dry/go:  skipTo=<mark|n>   runUntil=<mark|n>   — a skip must be covered by a checkpoint');
@@ -250,8 +251,16 @@ async function main() {
   let chain = Promise.resolve();
   let closing = false;
   const queue = fn => { chain = chain.then(fn, fn); return chain; };
-  let combatChain = Promise.resolve();
+  const combatPending = new Set();
+  const combatPreparations = new Set();
   const urgent = line => {
+    const preparation = { cancelled: false, agents: null, room: null };
+    const beforeDispatch = agents => {
+      preparation.agents = agents;
+      if (preparation.cancelled) throw Error('order cancelled by stop while preparing');
+      combatPreparations.delete(preparation);
+    };
+    combatPreparations.add(preparation);
     const run = async () => {
       try {
         let result;
@@ -260,15 +269,27 @@ async function main() {
           if (r.why) throw new Error(r.why);
           if (r.pad.mode !== 'combat' || r.pad.setup || r.pad.teardown)
             throw new Error('combat run needs a mode: combat pad with pure steps and no setup/teardown');
-          result = await fleetCombat({ agents: r.agents, fleet: FLEET,
+          result = await fleetCombat({ agents: r.agents, fleet: FLEET, beforeDispatch,
             order: async agent => oneCombatOrder(await r.pad.steps({ ...r.params, agent, agents: r.agents })) });
-        } else result = await fleetCombat({ ...parseCombatCommand(line), fleet: FLEET });
+        } else {
+          const command = parseCombatCommand(line);
+          preparation.agents = command.agents; preparation.room = command.room;
+          if (command.order.action === 'stop') for (const pending of combatPreparations) {
+            if (pending === preparation) continue;
+            if (!pending.agents || !command.agents || command.agents.some(a => pending.agents.includes(a)))
+              pending.cancelled = true;
+          }
+          result = await fleetCombat({ ...command, fleet: FLEET, beforeDispatch });
+        }
         say(JSON.stringify(result));
       } catch (e) { say(`combat: ${e.message}`); }
+      finally { combatPreparations.delete(preparation); }
       if (!closing) rl.prompt();
     };
-    combatChain = combatChain.then(run, run);
-    return combatChain;
+    const pending = run();
+    combatPending.add(pending);
+    pending.finally(() => combatPending.delete(pending));
+    return pending;
   };
 
   // ------------------------------------------------------ the watcher: RENDER, NEVER RUN
@@ -309,7 +330,7 @@ async function main() {
   });
 
   const renderStep = (step) =>
-    ['attack', 'ambush', 'stop', 'status'].includes(step.action) && !step.do
+    ['kill', 'attack', 'ambush', 'stop', 'status'].includes(step.action) && !step.do
     ? JSON.stringify(step)
     :
     // NAME THE act VERB. `act` rendered as the bare word "act" told the author nothing about
@@ -657,7 +678,7 @@ async function main() {
     // "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)". Set a code and let the loop
     // drain -- the queue above has already waited for any running pad to finish, and
     // fleetScript frees every body it held in its own finally.
-    queue(async () => { await combatChain; say('bye'); process.exitCode = 0; });
+    queue(async () => { await Promise.allSettled([...combatPending]); say('bye'); process.exitCode = 0; });
   });
 
   rl.prompt();

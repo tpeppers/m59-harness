@@ -1644,6 +1644,7 @@ export class M59Client {
           x: o.x, y: o.y, col: o.col, row: o.row, angle: o.angle,
           appearanceRevision: ++this.appearanceRevision,
         });
+        if (o) this.emit('changed', { id: o.id });
 
         // PICKING UP A STACKABLE ITEM YOU ALREADY CARRY ARRIVES HERE, NOT AS
         // BP_INVENTORY_ADD. There is no new inventory object to add — the existing

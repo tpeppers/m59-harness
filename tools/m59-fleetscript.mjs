@@ -167,12 +167,19 @@ import { RAZA_ROOMS } from './m59-errandstate.mjs';
 import { FLEET_KEEP, foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
 import { dispatchCombatOrders, oneCombatOrder } from './m59-combat-orders.mjs';
-export { attackPlayer, ambushPlayer } from './m59-combat-orders.mjs';
+import { combatOrder } from './m59-combat-order.mjs';
+export { attackPlayer, killPlayer, ambushPlayer } from './m59-combat-orders.mjs';
+export { combatOrder } from './m59-combat-order.mjs';
 
 // Explicit urgent entry point. The broker checks roster identity in the same
 // request that dispatches the order; no health/snapshot preflight round trip.
-export async function fleetCombat({ agents, order, fleet = fleetName() } = {}) {
-  return dispatchCombatOrders({ agents, order,
+export async function fleetCombat({ agents, room, order, fleet = fleetName(), beforeDispatch = null } = {}) {
+  if (room != null) {
+    if (typeof order === 'function') throw Error('room combat needs one shared order');
+    beforeDispatch?.(agents ?? null);
+    return combatOrder({ ...order, room, ...(agents ? { agents } : {}) }, { fleet });
+  }
+  return dispatchCombatOrders({ agents, order, beforeDispatch,
     send: (agent, command) => call('combat', { ...command, agent, fleet_state: stateFileFor(fleet) }, 8000) });
 }
 

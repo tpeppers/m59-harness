@@ -33,6 +33,7 @@
 // the trade this whole file exists to make.
 
 import http from 'node:http';
+import { CombatDispatch } from './m59-combat-dispatch.mjs';
 import { mayStartJourney, floorFor, floorSource } from './m59-travelgate.mjs';
 import { nativeContextReader } from './m59-native-context-read.mjs';
 const readNativeContext = nativeContextReader();
@@ -1671,9 +1672,10 @@ async function verifiedKeeperWriteTarget(agent, index) {
 // that has not thought about it. The caller's own timeout should be the binding one — DUM's
 // sell-circuit steps allow 900s — which is why travel asks for more than that rather than
 // less: two timeouts racing, and the wrong one winning silently, is this bug again.
-async function keeperAction(agent, index, name, args, { timeoutMs = 60_000 } = {}) {
+async function keeperAction(agent, index, name, args, { timeoutMs = 60_000, beforeSend = null } = {}) {
   try {
     const target = await verifiedKeeperWriteTarget(agent, index);
+    beforeSend?.();
     const res = await fetch(`http://127.0.0.1:${target.port}/action`, {
       method: 'POST',
       headers: keeperIdentityHeaders(target.identity),
@@ -6166,12 +6168,46 @@ async function factionSpeech(s, text) {
   return c.eventsSince(before).filter(event => event.text).map(event => event.text);
 }
 
+const combatDispatch = new CombatDispatch({
+  rooms: () => worldMap.rooms,
+  candidates: () => [...sessions.keys()].filter(agent => !menagerieState.has(agent)).map(agent => ({
+    agent, unavailable: pilotOf(agent) ? 'character is human-piloted' : null,
+  })),
+  send: async (agent, command) => {
+    if (pilotOf(agent)) return { skipped: true, reason: 'character is human-piloted' };
+    const s = sessions.get(agent);
+    if (s instanceof KeeperProxy) return keeperAction(agent, s._index, 'combat_order', command, {
+      timeoutMs: 3000, beforeSend: () => { if (pilotOf(agent)) throw Error('character is human-piloted'); },
+    });
+    if (!s?.combat) return { error: 'combat controller unavailable' };
+    return s.combat.issue(command);
+  },
+});
+
 const TOOLS = [
+  {
+    name: 'combat_order',
+    description: 'URGENT group player combat: dispatch first, without fleet/look inspection. Kill or attack an exact player, selecting all automated units currently in room (name or map number), or explicit agents. Selection uses live keeper state. Stay in the assigned map and wait indefinitely for visibility when absent or lost. Kill temporarily disables game PvP safety while engaging and restores it while waiting or on stop. Status/stop can name command_id; ready checks deployed support. Receipts distinguish pending, waiting, engaging and skipped. Never infer a kill from attack counts.',
+    schema: { type: 'object', properties: {
+      fleet_state: { type: 'string', description: 'Required absolute roster path, verified before dispatch' },
+      action: { enum: ['kill', 'attack', 'ambush', 'status', 'stop', 'ready'] },
+      target: { type: 'string' }, room: { type: ['string', 'integer'], description: 'Assigned map: select units already there, then remain there' },
+      agents: { type: 'array', items: { type: 'string' } }, command_id: { type: 'string' },
+      map: { type: 'integer' }, position: { type: 'object' }, door: { type: 'object' },
+      ttl_ms: { type: 'integer' }, stop_below: { type: 'number' },
+      sequence: { type: 'array', items: { type: 'object' } }, repeat: { type: 'boolean' },
+    }, required: ['fleet_state', 'action'] },
+    run: async a => {
+      if (!a.fleet_state || resolve(a.fleet_state) !== resolve(STATE_FILE))
+        throw new Error('combat: WRONG BROKER — expected roster does not match this broker');
+      return combatDispatch.run(a);
+    },
+  },
   {
     name: 'combat',
     description: 'Immediate keeper-side behavioral override: attack an exact player, ambush a player entering a map after taking a position, stop, or status. Preempts errands, movement and fighting. No rich snapshot or script setup wait. The survival floor and server packet pacing remain active. See docs/m59-combat-mode.md.',
     schema: { type: 'object', properties: {
-      agent: { type: 'string' }, action: { enum: ['attack', 'ambush', 'stop', 'status'] },
+      agent: { type: 'string' }, action: { enum: ['kill', 'attack', 'ambush', 'stop', 'status'] },
       fleet_state: { type: 'string', description: 'Expected absolute roster path; mismatches refuse before dispatch' },
       target: { type: ['string', 'number'], description: 'Exact player name; visible object id for attack only' },
       map: { type: 'integer', description: 'Stable map number, e.g. 38' },
@@ -6184,8 +6220,12 @@ const TOOLS = [
     run: async a => {
       if (a.fleet_state && resolve(a.fleet_state) !== resolve(STATE_FILE))
         throw new Error('combat: WRONG BROKER — expected roster does not match this broker');
+      if (pilotOf(a.agent)) return { skipped: true, reason: 'character is human-piloted' };
+      a = { ...a, revision: combatDispatch.revision = Math.max(Date.now(), combatDispatch.revision + 1) };
       const s = session(a.agent);
-      if (s instanceof KeeperProxy) return keeperAction(a.agent, s._index, 'combat', a);
+      if (s instanceof KeeperProxy) return keeperAction(a.agent, s._index, 'combat', a, {
+        timeoutMs: 3000, beforeSend: () => { if (pilotOf(a.agent)) throw Error('character is human-piloted'); },
+      });
       return s.combat.issue(a);
     },
   },
@@ -16671,7 +16711,7 @@ const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 // demand split removes. Mutating keeper calls still perform their own cheap exact-identity
 // `/live` proof before writing.
 const SNAPSHOT_OPTIONAL_TOOLS = new Set([
-  'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat',
+  'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat', 'combat_order',
 ]);
 
 async function callTool(name, args, caller) {
@@ -17086,6 +17126,7 @@ function brokerHealth() {
   return {
     ok: true,
     tactical_orders: 1,
+    combat_mode: 2,
     audio_observations: 1,
     intent_observations: 1,
     pid: process.pid,

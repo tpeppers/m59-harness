@@ -5,13 +5,16 @@ import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { parseCombatCommand, dispatchCombatOrders } from './m59-combat-orders.mjs';
 import { OF } from './m59-parse.mjs';
+import { CombatDispatch, resolveCombatMap } from './m59-combat-dispatch.mjs';
+import { parseCombatCLI } from './m59-combat-order.mjs';
 
 let tests = 0;
 async function test(name, fn) { await fn(); tests++; console.log(`ok ${name}`); }
 const source = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
 const start = source.indexOf('class Pacer {'), end = source.indexOf('// ---------------------------------------------------------------- session', start);
-const Pacer = Function('bindPacketScope', 'PACKETS_PER_SECOND', 'DOOR_SETTLE_MS', 'remainingDoorSettle',
-  source.slice(start, end) + '; return Pacer;')(bindPacketScope, 100000, 300, () => 0);
+const pacerClass = rate => Function('bindPacketScope', 'PACKETS_PER_SECOND', 'DOOR_SETTLE_MS', 'remainingDoorSettle',
+  source.slice(start, end) + '; return Pacer;')(bindPacketScope, rate, 300, () => 0);
+const Pacer = pacerClass(100000);
 
 function fixture({ realPacer = false } = {}) {
   let clock = 10000;
@@ -22,6 +25,7 @@ function fixture({ realPacer = false } = {}) {
     spells: [{ id: 4, nameRsc: 4 }], hp: 100,
     vitals() { return { health: { value: this.hp, max: 100 } }; },
     stand() { sent.push('stand'); }, face() { sent.push('face'); }, attack(id) { sent.push(`attack:${id}`); },
+    safety(on) { sent.push('safety:' + on); this.self.flags = on ? OF.SAFETY : 0; },
     cast(id, targets) { sent.push(`cast:${id}:${targets.join(',')}`); } };
   c.room.objects.set(2, { id: 2, nameRsc: 2, row: 5, col: 6, flags: OF.PLAYER | OF.ATTACKABLE });
   const s = { name: 'test', client: c, live: true, combatEpoch: 0, movementGeneration: 0, fightGeneration: 0,
@@ -56,7 +60,8 @@ await test('validate complete orders and exact names before preemption', () => {
   assert.throws(() => normalizeCombatOrder({ ...attack, ttl_ms: Infinity }), /ttl_ms/);
   assert.throws(() => normalizeCombatOrder({ ...attack, sequence: [{ do: 'trade' }] }), /verbs/);
   assert.throws(() => normalizeCombatOrder({ ...attack, sequence: [{ do: 'cast', spell: 'hold', hold_ms: -1 }] }), /hold_ms/);
-  assert.throws(() => f.mode.issue({ ...attack, target: 'Exact' }), /not here/);
+  assert.equal(f.mode.issue({ ...attack, target: 'Exact' }).phase, 'waiting');
+  assert.throws(() => f.mode.issue({ ...attack, target: 999 }), /not here/);
   const r = f.mode.issue(attack);
   assert.throws(() => f.mode.issue({ ...ambush, map: 2000 }), /known map/);
   assert.equal(f.mode.status().order_id, r.order_id);
@@ -89,7 +94,7 @@ await test('door area filters other entrances; coordinates are row/col', async (
 await test('arrival while positioning does not arm early', async () => {
   const f = fixture(); f.mode.issue({ ...ambush, position: { row: 6, col: 5 } });
   f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
-  assert.deepEqual(f.sent, ['move:r6c5']); assert.equal(f.mode.status().phase, 'positioning');
+  assert.deepEqual(f.sent, ['stand', 'move:r6c5']); assert.equal(f.mode.status().phase, 'positioning');
   await f.mode.tick(); assert.equal(f.mode.status().phase, 'armed'); f.mode.stop('test');
 });
 await test('replacement invalidates queued packets and stale cancellation is scoped', async () => {
@@ -133,8 +138,8 @@ await test('old asynchronous cleanup remains invalid after combat ends', async (
   await withBodyCommand(f.s, () => f.s.pacer.submit('rest', () => f.sent.push('new keeper')));
   assert.deepEqual(f.sent, ['new keeper']);
 });
-await test('survival, target loss, room change and disconnect finish the override', async () => {
-  for (const change of [f => { f.c.hp = 40; }, f => { f.c.room.objects.delete(2); },
+await test('survival, room change and disconnect finish the override', async () => {
+  for (const change of [f => { f.c.hp = 40; },
     f => { f.c.room.id++; }, f => { f.s.live = false; }, f => { f.c.selfId++; }]) {
     const f = fixture(); f.mode.issue(attack); change(f); await f.mode.tick();
     assert.equal(f.mode.status().active, false); assert.deepEqual(f.sent, []);
@@ -144,8 +149,9 @@ await test('expiry interrupts a pending travel without waiting for it', async ()
   const f = fixture(); f.s.world.room.num = 37; let finish;
   f.s.travel = () => new Promise(r => { finish = r; });
   f.mode.issue({ ...ambush, ttl_ms: 1000 }); const pending = f.mode.tick();
+  await new Promise(r => setImmediate(r));
   f.advance(1001); await f.mode.tick(); assert.equal(f.mode.status().active, false);
-  finish({ arrived: true }); await pending; assert.deepEqual(f.sent, []);
+  finish({ arrived: true }); await pending; assert.deepEqual(f.sent, ['stand']);
 });
 await test('scripted cast, wait and attacks finish and restore ordinary behavior', async () => {
   const f = fixture(); f.mode.issue({ ...attack, repeat: false,
@@ -158,12 +164,13 @@ await test('scripted cast, wait and attacks finish and restore ordinary behavior
 await test('hazard underfoot interrupts attacks with a safe outward move', async () => {
   const f = fixture(); f.c.room.objects.set(5, { id: 5, nameRsc: 5, flags: OF.NOEXAMINE | 3, row: 5, col: 5 });
   assert.equal(await escapeGroundEffect(f.s), true);
-  assert.match(f.sent[0], /^move:/); assert.notDeepEqual(f.c.self, { row: 5, col: 5 });
+  assert.equal(f.sent[0], 'stand'); assert.match(f.sent[1], /^move:/); assert.notDeepEqual(f.c.self, { row: 5, col: 5 });
 });
 await test('names never resolve to monsters or self', () => {
   const f = fixture(); f.c.room.objects.get(2).flags = OF.ATTACKABLE;
   assert.equal(combatTarget(f.c, 'Exact Player'), null);
-  assert.throws(() => f.mode.issue(attack), /not here/);
+  assert.equal(f.mode.issue(attack).phase, 'waiting');
+  f.mode.stop('test');
 });
 await test('terminal grammar and parallel fleet dispatch preserve exact intent', async () => {
   const command = parseCombatCommand('combat ambush "Exact Player" agents=t1,t2 map=38 at=r30,c61 door=r8c28');
@@ -205,6 +212,133 @@ await test('stale connection, displaced ambush and server safety refusal stop co
   refusal.mode.event({ kind: 'message', text: 'Good thing your safety was on.' });
   assert.equal(refusal.mode.status().last_outcome.kind, 'refused');
   assert.equal(refusal.mode.status().active, false);
+});
+
+await test('unseen named target waits indefinitely and reacquires new visible object IDs', async () => {
+  const f = fixture(); const player = f.c.room.objects.get(2); f.c.room.objects.clear();
+  assert.equal(f.mode.issue(attack).phase, 'waiting');
+  assert.equal(f.mode.status().expires_at, null);
+  f.advance(3_600_000); await f.mode.tick();
+  assert.deepEqual(f.sent, []); assert.equal(f.mode.status().active, true);
+  f.c.room.objects.set(22, { ...player, id: 22 });
+  f.mode.event({ kind: 'room-contents' }); await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'attack:22');
+  f.c.room.objects.delete(22); f.mode.event({ kind: 'vanished', id: 22 }); await f.mode.tick();
+  assert.equal(f.mode.status().phase, 'waiting'); const n = f.sent.length;
+  f.advance(10000); await f.mode.tick(); assert.equal(f.sent.length, n);
+  f.c.room.objects.set(23, { ...player, id: 23 });
+  f.mode.event({ kind: 'appeared', id: 23 }); await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'attack:23');
+  f.s.world.room.num = 39; await f.mode.tick();
+  assert.match(f.mode.status().reason, /left the combat room/);
+});
+await test('nonattackable appearance waits until the exact player becomes attackable', async () => {
+  const f = fixture(); f.c.room.objects.get(2).flags = OF.PLAYER;
+  assert.equal(f.mode.issue(attack).phase, 'waiting'); await f.mode.tick();
+  assert.deepEqual(f.sent, []);
+  f.c.room.objects.get(2).flags |= OF.ATTACKABLE; f.mode.event({ kind: 'changed', id: 2 });
+  await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:2'); f.mode.stop('test');
+});
+await test('target loss revokes already queued packets without ending the waiting order', async () => {
+  const f = fixture({ realPacer: true });
+  f.s.pacer.lastSent = Date.now() + 100;
+  f.mode.issue(attack); const inFlight = f.mode.tick();
+  f.c.room.objects.delete(2); f.mode.event({ kind: 'vanished', id: 2 });
+  await inFlight; assert.deepEqual(f.sent, []); assert.equal(f.mode.status().phase, 'waiting');
+  f.mode.stop('test');
+});
+await test('map selection does not preempt outsiders and late commands cannot undo a stop', () => {
+  const f = fixture();
+  assert.equal(f.mode.issue({ ...attack, select_map: 39, revision: 10 }).skipped, true);
+  assert.equal(f.s.job.done, false);
+  f.mode.issue({ action: 'stop', order_id: 'delayed', revision: 20 });
+  assert.equal(f.mode.issue({ ...attack, command_id: 'delayed', revision: 10 }).accepted, false);
+  f.mode.issue({ ...attack, command_id: 'new', revision: 30 });
+  f.mode.issue({ action: 'stop', order_id: 'delayed', revision: 40 });
+  assert.equal(f.mode.status().order_id, 'new');
+  f.mode.issue({ action: 'stop', revision: 50 });
+  assert.equal(f.mode.issue({ ...attack, command_id: 'late', revision: 45 }).accepted, false);
+  assert.equal(f.mode.status().active, false);
+});
+await test('kill lowers game safety only while engaging and restores it on waiting and stop', async () => {
+  const f = fixture(); f.c.self.flags = OF.SAFETY;
+  const player = f.c.room.objects.get(2); f.c.room.objects.delete(2);
+  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  assert.deepEqual(f.sent, []);
+  f.c.room.objects.set(2, player); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
+  assert.deepEqual(f.sent.slice(0, 4), ['safety:false', 'stand', 'face', 'attack:2']);
+  f.c.room.objects.delete(2); f.mode.event({ kind: 'vanished', id: 2 }); await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'safety:true');
+  f.c.room.objects.set(2, player); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
+  f.mode.stop('operator stopped combat'); await new Promise(r => setImmediate(r));
+  assert.equal(f.sent.at(-1), 'safety:true'); assert.equal(f.mode.safetyLease, null);
+});
+await test('kill replacements keep the safety lease through stale cleanup', async () => {
+  const f = fixture(); f.c.self.flags = OF.SAFETY;
+  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  assert.equal(f.sent.filter(p => p === 'safety:true').length, 0);
+  f.mode.issue({ ...attack, target: 'Absent' }); await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'safety:true');
+  f.mode.stop('test');
+});
+await test('rapid reacquisition respects a safety restore whose server echo is still pending', async () => {
+  const f = fixture(); f.c.self.flags = OF.SAFETY;
+  f.c.safety = on => f.sent.push('safety:' + on); // Like the real client: no optimistic flags.
+  f.mode.issue({ ...attack, action: 'kill' }); await f.mode.tick();
+  f.c.self.flags = 0; f.mode.event({ kind: 'changed', id: 1 });
+  const target = f.c.room.objects.get(2); f.c.room.objects.delete(2);
+  f.mode.event({ kind: 'vanished', id: 2 }); await f.mode.tick();
+  assert.equal(f.mode.status().active, true);
+  f.c.room.objects.set(2, target); f.mode.event({ kind: 'appeared', id: 2 }); await f.mode.tick();
+  assert.deepEqual(f.sent.filter(x => x.startsWith('safety:')), ['safety:false', 'safety:true', 'safety:false']);
+  f.mode.stop('test'); await new Promise(r => setImmediate(r));
+});
+await test('group dispatch has bounded receipts and no dependency on stalled keepers', async () => {
+  const good = fixture(), other = fixture(), sent = [];
+  other.s.world.room.num = 39;
+  const dispatch = new CombatDispatch({
+    candidates: () => [{ agent: 'slow' }, { agent: 'good' }, { agent: 'other' },
+      { agent: 'human', unavailable: 'character is human-piloted' }],
+    rooms: () => ({ 38: { name: 'Upstairs in Castle Victoria' }, 39: { name: 'Elsewhere' } }),
+    receiptMs: 30,
+    send: async (agent, order) => {
+      sent.push(agent);
+      if (agent === 'slow') return new Promise(() => {});
+      return (agent === 'good' ? good : other).mode.issue(order);
+    },
+  });
+  const reply = await dispatch.run({ action: 'kill', target: 'Exact Player', room: 'Upstairs Castle Victoria' });
+  assert.equal(reply.pending, true); assert.ok(reply.dispatch_ms < 500);
+  assert.deepEqual(sent, ['slow', 'good', 'other']);
+  assert.equal(good.mode.status().phase, 'engaging'); assert.equal(other.s.job.done, false);
+  assert.equal(reply.results.find(r => r.agent === 'human').skipped, true);
+  const stop = await dispatch.run({ action: 'stop', command_id: reply.command_id });
+  assert.equal(good.mode.status().active, false); assert.equal(stop.pending, true);
+});
+await test('group command reaches first attack within seconds under normal server pacing', async () => {
+  const f = fixture(); f.s.pacer = new (pacerClass(5))(); f.s.pacer.authority = () => bodyAuthority(f.s);
+  f.c.self.flags = OF.SAFETY; const started = Date.now(); let first;
+  f.c.attack = id => { first = Date.now(); f.sent.push('attack:' + id); };
+  const dispatch = new CombatDispatch({ rooms: () => ({ 38: { name: 'Assigned' } }),
+    candidates: () => [{ agent: 'one' }],
+    send: (_agent, order) => { const result = f.mode.issue(order); void f.mode.tick(); return result; } });
+  const reply = await dispatch.run({ action: 'kill', target: 'Exact Player', room: 38 });
+  assert.equal(reply.results[0].accepted, true);
+  const deadline = Date.now() + 2000;
+  while (!first && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  assert.ok(first && first - started < 1500, 'first paced attack exceeded 1500ms');
+  console.log('  command-to-first-attack: ' + (first - started) + 'ms (5 packets/sec)');
+  f.mode.stop('test'); await new Promise(r => setTimeout(r, 250));
+});
+await test('CLI and assigned room aliases preserve literal kill intent', () => {
+  assert.deepEqual(parseCombatCLI(['Kill Morpheus', '--fleet', 'prod', '--room', 'Upstairs Castle Victoria']),
+    { action: 'kill', target: 'Morpheus', room: 'Upstairs Castle Victoria' });
+  assert.equal(resolveCombatMap({ 39: { name: 'Upstairs in Castle Victoria' } }, 'Upstairs Castle Victoria'), 39);
+  assert.throws(() => resolveCombatMap({ 38: { name: 'Same' }, 39: { name: 'Same' } }, 'Same'), /exactly one/);
+  assert.throws(() => parseCombatCLI(['Kill Player', '--bogus', 'true']), /invalid option/);
+  const scratch = parseCombatCommand('combat kill Morpheus room="Upstairs Castle Victoria"');
+  assert.equal(scratch.room, 'Upstairs Castle Victoria'); assert.equal(scratch.order.action, 'kill');
 });
 
 console.log(`PASS ${tests} combat mode scenarios`);

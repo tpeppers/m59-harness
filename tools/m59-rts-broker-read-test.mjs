@@ -97,7 +97,19 @@ try {
   const tools = (await listed.json()).result.tools;
   const combat = tools.find(tool => tool.name === 'combat');
   assert.deepEqual(combat.inputSchema.required, ['agent', 'action']);
-  assert.deepEqual(combat.inputSchema.properties.action.enum, ['attack', 'ambush', 'stop', 'status']);
+  assert.deepEqual(combat.inputSchema.properties.action.enum, ['kill', 'attack', 'ambush', 'stop', 'status']);
+  assert.equal(health.combat_mode, 2);
+  assert.ok(tools.some(tool => tool.name === 'combat_order'));
+  for (const fleet_state of [health.state, 'wrong-combat-roster']) {
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 200, method: 'tools/call',
+        params: { name: 'combat_order', arguments: { action: 'ready', fleet_state } } }) });
+    const result = (await response.json()).result;
+    if (fleet_state === health.state) {
+      const data = JSON.parse(result.content[0].text);
+      assert.equal(data.ok, false); assert.deepEqual(data.results, []);
+    } else assert.match(result.content[0].text, /WRONG BROKER/);
+  }
   const wrongCombatFleet = await fetch(url, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
