@@ -1,16 +1,18 @@
 # Death replay and scene reconstruction
 
-The first question is whether the original death can be reproduced. A checksum proves that a file was not changed; it does **not** prove that its scene reproduces the death. This workflow keeps those two tests separate and refuses to publish strategy comparisons after a failed baseline.
+The useful question is whether the reconstructed scenario produces repeatable failures we can investigate and improve. A death at a different time, refuge or route location may still reveal a useful flaw. Keep that evidence. Checksums, recording fidelity, failure recurrence and intervention outcomes answer different questions; none should silently replace the others.
 
 ## Standard first pass
 
-0. Select a living checkpoint, preferably immediately before the relevant intervention. Verify its file checksum, code commit/source manifest, complete visible fine positions, and absence of capture errors or dropped frames. Restore and verify the scene. Run the original behavior three times. Each baseline must reproduce the death, room, approximate timing, and survival decisions, including selected refuges and paths.
+0. Select a living checkpoint, preferably immediately before the relevant intervention. Verify the file checksum and scene setup, stamp the actual replay code, and retain capture gaps. Run the baseline three times. By default, at least two usable deaths allow intervention experiments on that reconstructed scenario. Keep every nonfatal, divergent and invalid run as well. Compare source identity, timing, room, decision sequence, selected refuges and paths with the original recording as a separate fidelity assessment.
 1. If no intervention activation was recorded, test starting a named intervention at that checkpoint. The default candidate is `nearest_refuge`. No activation is not proof that every protection was disabled. Starting an intervention immediately is also different from merely enabling a policy threshold; the case says which experiment it performs.
 2. If interventions activated, disable each recorded strategy separately, then their combination. Record whether the intended suppression actually happened. Do not count an unapplied variant as valid evidence.
 3. If an intervention was replaced before completion, test continuing the first cancelled intervention. Suppress automatic movement cancellation, replacement decisions, and competing executors while retaining explicit operator stop. A refuge arrival may still transition into safe recovery. Record actual suppressions and the resulting decision history.
 4. Keep deaths, observed recoveries, survival to the observation horizon, and invalid/unknown trials separate. Surviving the window is censored evidence, not a demonstrated life saved. Report run counts and the horizon. Repeat promising comparisons across more checkpoints and independent server realities before ranking policies.
 
-If any baseline fails, the result is `baseline_not_reproduced`; no counterfactual strategy summary is produced. Errors, incomplete loads, and source mismatches also fail closed. Reproducing a death is necessary for this first pass, but does not certify hidden state or establish causality by itself.
+Finish all requested baselines rather than stopping at the first mismatch or survivor. The default `reproducible-death` criterion accepts recurring deaths despite timing, room, decision or code differences. Report the scope as an experiment on the reconstructed scenario; a similar or identical root cause requires trace evidence, not merely two deaths. A close behavioral match supports recording fidelity without proving hidden-state identity.
+
+Failed placement/release verification, known player-state mismatches, execution errors and unknown outcomes do not count as usable deaths. Their raw rows and exclusion reasons remain in the report. Code/capture differences are fidelity caveats in the default mode. `--criterion recorded-behavior` retains the stricter recording check, including exact captured source and close timing/decision/room matches, when that is the question being asked. Neither a strict rejection nor a later error erases observed outcomes.
 
 ## Capture without waiting for disk
 
@@ -101,7 +103,15 @@ A private config selects an existing lab roster/account. It never selects a flee
 ```text
 node tools/m59-death-replay.mjs checklist BUNDLE.json
 node tools/m59-death-replay.mjs run BUNDLE.json --config PRIVATE_CONFIG.json --frame FRAME_ID --baselines 3 --trials 3 --out REPORT.json
+node tools/m59-death-replay.mjs run BUNDLE.json --config PRIVATE_CONFIG.json --baselines 8 --min-deaths 2 --horizon-ms 60000 --hypothesis "travel stalls before refuge arrival" --out LONGER_REPORT.json
+node tools/m59-death-replay.mjs run BUNDLE.json --config PRIVATE_CONFIG.json --criterion recorded-behavior --out FIDELITY_REPORT.json
 ```
+
+`--hypothesis` labels an investigation question; it never asserts that the root cause is confirmed. `--horizon-ms` applies to all cases in the experiment. Default recurrence is two deaths across three baseline runs; increase the run count/window for intermittent failures. An explicit `--baselines 1 --min-deaths 1` permits a single-observation exploratory test and labels it `single_death_observed`, never repeatable.
+
+Version 2 reports separate `validation.failure_reproduction`, `validation.recording_fidelity`, technical `trial_assessment`, and per-run `recording_match`. `validation.valid` means the selected baseline criterion qualified for comparisons; it does not certify every variant or establish a life saved. `execution` counts unusable trials. Strategy rows retain all usable observations under `observed`, and separate confirmed intervention outcomes from `unapplied` and invalid trials. Experiments choose intervention cases from protections actually activated/cancelled in the usable baselines, preserving the recording's original checklist for context.
+
+The CLI atomically saves a report after every completed trial and at the end. The default filename includes a timestamp, preserving previous reports. An explicit `--out` selects the file to update. Insufficient recurrence still produces a baseline outcome summary; later trial or cleanup failures retain earlier results and summaries.
 
 The adapter claims the roster/account before login, runs the real Session/Autopilot methods, restores the captured policy/controller state where possible, and closes its own client and leases on completion. An in-flight approach resumes toward the captured refuge; the report admits that the JavaScript stack was not restored. Lab-only variant controls cannot be enabled on production endpoints.
 
@@ -167,10 +177,10 @@ const report = await simulateScene({
 
 This is an explicit simulation API, not a production errand step; importing/compiling a FleetScript does not run it. It never chooses an implicit account. Keep scene captures, native checkpoints, roster files and detailed simulation reports in private runtime storage.
 
-Simulation reports are marked `exploratory`, with `baseline_reproduction_verified: false`. They expose intervention application so an inactive variation is not mistaken for an effective one. To ask whether an intervention saved a known death, use `m59-death-replay.mjs run` and its existing source/baseline gate. Faster loading does not waive that requirement.
+Simulation reports are marked `exploratory`, with `baseline_reproduction_verified: false`. They expose intervention application so an inactive variation is not mistaken for an effective one. Reproducible deaths are useful regardless of exact recording similarity. Use `m59-death-replay.mjs run` to measure recurrence and compare interventions while recording fidelity separately. A strategy that improves this lab scenario is evidence worth investigating, even when it cannot establish that the particular historical death would have been prevented.
 
 ## What is and is not evidence
 
-Offline tests cover corruption, incomplete frames, wrong fine offsets, missing/extra/duplicate actors, current-vs-max HP, source mismatch, failed-baseline gating, strategy suppression and worker persistence. Live measurements and repeated-run results are recorded in the implementation report for this change.
+Offline tests cover corruption, incomplete frames, wrong fine offsets, missing/extra/duplicate actors, current-vs-max HP, source/fidelity differences, recurring deaths, nonfatal/invalid trial retention, observed-strategy selection, suppression and worker persistence. Live measurements and repeated-run results are recorded in the implementation reports.
 
 Older production deaths have no retroactive complete replay bundle. Their existing traces remain useful for diagnosis, but cannot become faithful saves by filling missing state with guesses. The new workflow begins collecting prospective evidence; controlled lab fixtures demonstrate the machinery, not that any production intervention has saved lives.

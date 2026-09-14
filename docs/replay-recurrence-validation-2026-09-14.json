@@ -1,0 +1,488 @@
+{
+  "date": "2026-09-14",
+  "purpose": "Workflow validation using the retained controlled lab fixture, not a production incident",
+  "fixture": "one shadow player initially at 3/36 HP, two rats, mana node; the original recorded death was at 13594 ms",
+  "interpretation": "Separate experiments with different horizons; do not pool them into one mortality rate. Single intervention trial does not establish efficacy or shared root cause.",
+  "experiments": [
+    {
+      "evidence_file": "recurrence-report.json",
+      "horizon_ms": 10000,
+      "criterion": "reproducible-death",
+      "validation": {
+        "valid": false,
+        "status": "insufficient_baseline_evidence",
+        "criterion": "reproducible-death",
+        "comparisons_allowed": false,
+        "failure_reproduction": {
+          "requested": 3,
+          "completed": 3,
+          "usable": 3,
+          "deaths": 1,
+          "nonfatal": 2,
+          "invalid": 0,
+          "required_deaths": 2,
+          "repeatable": false
+        },
+        "recording_fidelity": {
+          "matching_runs": 0,
+          "checked_runs": 3,
+          "all_matched": false,
+          "deviations": [
+            {
+              "trial": 1,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs",
+                "death timing diverged"
+              ]
+            },
+            {
+              "trial": 2,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs",
+                "original death did not recur",
+                "death room diverged"
+              ]
+            },
+            {
+              "trial": 3,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs",
+                "original death did not recur",
+                "death room diverged"
+              ]
+            }
+          ]
+        },
+        "root_cause": "unconfirmed; recurrence alone does not establish that failures share a mechanism",
+        "scope": "intervention experiments on this reconstructed scenario; similarity to the original death is assessed separately"
+      },
+      "execution": {
+        "observations": 3,
+        "usable": 3,
+        "invalid": 0
+      },
+      "strategies": [
+        {
+          "case": "baseline",
+          "runs": 3,
+          "valid": 3,
+          "deaths": 1,
+          "recovered": 0,
+          "survived_window": 2,
+          "observed": {
+            "usable": 3,
+            "deaths": 1,
+            "recovered": 0,
+            "survived_window": 2
+          },
+          "unknown": 0,
+          "unapplied": 0,
+          "excluded": []
+        }
+      ],
+      "completed": true,
+      "actual_harness": {
+        "commit": "6a517836a2016eba0677e4804a65824b8adb14aa",
+        "source_sha256": "a52b4a0ce7d9aa261b362749eef2f0903399c304d09d0dc3a40c08a4d1d744d9",
+        "dirty": true
+      },
+      "runs": [
+        {
+          "case": "baseline",
+          "trial": 1,
+          "outcome": "died",
+          "elapsed_ms": 1081,
+          "death_room": 39,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs",
+              "death timing diverged"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "baseline",
+          "trial": 2,
+          "outcome": "survived_window",
+          "elapsed_ms": 10002,
+          "death_room": null,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs",
+              "original death did not recur",
+              "death room diverged"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "baseline",
+          "trial": 3,
+          "outcome": "survived_window",
+          "elapsed_ms": 10037,
+          "death_room": null,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs",
+              "original death did not recur",
+              "death room diverged"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        }
+      ]
+    },
+    {
+      "evidence_file": "recurrence-30s-report.json",
+      "horizon_ms": 30000,
+      "criterion": "reproducible-death",
+      "validation": {
+        "valid": true,
+        "status": "reproducible_death",
+        "criterion": "reproducible-death",
+        "comparisons_allowed": true,
+        "failure_reproduction": {
+          "requested": 5,
+          "completed": 5,
+          "usable": 5,
+          "deaths": 4,
+          "nonfatal": 1,
+          "invalid": 0,
+          "required_deaths": 2,
+          "repeatable": true
+        },
+        "recording_fidelity": {
+          "matching_runs": 0,
+          "checked_runs": 5,
+          "all_matched": false,
+          "deviations": [
+            {
+              "trial": 1,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs",
+                "death timing diverged"
+              ]
+            },
+            {
+              "trial": 2,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs",
+                "original death did not recur",
+                "survival decision sequence diverged",
+                "death timing diverged",
+                "death room diverged"
+              ]
+            },
+            {
+              "trial": 3,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs"
+              ]
+            },
+            {
+              "trial": 4,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs",
+                "death timing diverged"
+              ]
+            },
+            {
+              "trial": 5,
+              "reasons": [
+                "harness commit mismatch or unknown",
+                "loaded source manifest mismatch or unknown",
+                "attested server image differs"
+              ]
+            }
+          ]
+        },
+        "root_cause": "unconfirmed; recurrence alone does not establish that failures share a mechanism",
+        "scope": "intervention experiments on this reconstructed scenario; similarity to the original death is assessed separately"
+      },
+      "execution": {
+        "observations": 6,
+        "usable": 6,
+        "invalid": 0
+      },
+      "strategies": [
+        {
+          "case": "baseline",
+          "runs": 5,
+          "valid": 5,
+          "deaths": 4,
+          "recovered": 0,
+          "survived_window": 1,
+          "observed": {
+            "usable": 5,
+            "deaths": 4,
+            "recovered": 0,
+            "survived_window": 1
+          },
+          "unknown": 0,
+          "unapplied": 0,
+          "excluded": []
+        },
+        {
+          "case": "disable-logoff_open",
+          "runs": 1,
+          "valid": 0,
+          "deaths": 0,
+          "recovered": 0,
+          "survived_window": 0,
+          "observed": {
+            "usable": 1,
+            "deaths": 1,
+            "recovered": 0,
+            "survived_window": 0
+          },
+          "unknown": 0,
+          "unapplied": 1,
+          "excluded": [
+            {
+              "trial": 1,
+              "reasons": [
+                "intervention activation/suppression was not confirmed"
+              ]
+            }
+          ]
+        }
+      ],
+      "completed": true,
+      "actual_harness": {
+        "commit": "6a517836a2016eba0677e4804a65824b8adb14aa",
+        "source_sha256": "a52b4a0ce7d9aa261b362749eef2f0903399c304d09d0dc3a40c08a4d1d744d9",
+        "dirty": true
+      },
+      "runs": [
+        {
+          "case": "baseline",
+          "trial": 1,
+          "outcome": "died",
+          "elapsed_ms": 1088,
+          "death_room": 39,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs",
+              "death timing diverged"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "baseline",
+          "trial": 2,
+          "outcome": "survived_window",
+          "elapsed_ms": 30003,
+          "death_room": null,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs",
+              "original death did not recur",
+              "survival decision sequence diverged",
+              "death timing diverged",
+              "death room diverged"
+            ]
+          },
+          "decisions": [
+            {
+              "event": "chosen",
+              "strategy": "logoff_open",
+              "reason_code": "break_engagement",
+              "outcome": null
+            },
+            {
+              "event": "updated",
+              "strategy": "logoff_open",
+              "reason_code": "break_engagement",
+              "outcome": null
+            },
+            {
+              "event": "updated",
+              "strategy": "logoff_open",
+              "reason_code": "break_engagement",
+              "outcome": null
+            }
+          ],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "baseline",
+          "trial": 3,
+          "outcome": "died",
+          "elapsed_ms": 10268,
+          "death_room": 39,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "baseline",
+          "trial": 4,
+          "outcome": "died",
+          "elapsed_ms": 4438,
+          "death_room": 39,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs",
+              "death timing diverged"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "baseline",
+          "trial": 5,
+          "outcome": "died",
+          "elapsed_ms": 10897,
+          "death_room": 39,
+          "intervention_applied": true,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": {
+            "valid": false,
+            "reasons": [
+              "harness commit mismatch or unknown",
+              "loaded source manifest mismatch or unknown",
+              "attested server image differs"
+            ]
+          },
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        },
+        {
+          "case": "disable-logoff_open",
+          "trial": 1,
+          "outcome": "died",
+          "elapsed_ms": 23892,
+          "death_room": 39,
+          "intervention_applied": false,
+          "trial_assessment": {
+            "usable": true,
+            "reasons": []
+          },
+          "recording_match": null,
+          "decisions": [],
+          "server_attestation": {
+            "image_id": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+            "source_commit": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+            "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+          }
+        }
+      ]
+    }
+  ]
+}

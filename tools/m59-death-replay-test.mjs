@@ -89,7 +89,7 @@ await test('placement checks distinguish fine offsets, health and unexpected ext
   assert.equal(r.ok,false);assert.ok(r.mismatches.some(m=>m.field==='x'));
   assert.ok(r.mismatches.some(m=>m.why==='extra room actors'));
 });
-await test('baseline death, code, decision sequence and capture completeness are all required',()=>{
+await test('strict recording similarity checks timing/code/decisions separately from usable deaths',()=>{
   const b=bundleFixture(),f=b.frames[0],r=baselineResult();
   assert.equal(baselineVerdict({bundle:b,frame:f,result:r,expected:[],attestation:code}).valid,true);
   for(const change of [r=>r.elapsed_ms=90000,r=>r.loaded.landed.ok=false,
@@ -103,15 +103,15 @@ await test('baseline death, code, decision sequence and capture completeness are
   b.capture.dropped=0;r.decisions=[{event:'chosen',decision:{strategy:'logoff_safe'}}];
   assert.equal(baselineVerdict({bundle:b,frame:f,result:r,expected:[],attestation:code}).valid,false);
 });
-await test('a non-reproducing baseline prevents all counterfactual runs',async()=>{
+await test('all nonfatal baselines are retained and summarized without inventing a death',async()=>{
   const b=bundleFixture();let runs=0,closed=false;
   const report=await runFirstPass(b,{adapter:{attest:async()=>code,
     run:async()=>{runs++;return {...baselineResult(),outcome:'survived_window'};},close:async()=>{closed=true;}}});
-  assert.equal(runs,1);assert.equal(closed,true);assert.equal(report.validation.status,'baseline_not_reproduced');
-  assert.equal(report.strategies.length,0);
+  assert.equal(runs,3);assert.equal(closed,true);assert.equal(report.validation.status,'insufficient_baseline_evidence');
+  assert.equal(report.runs.length,3);assert.equal(report.strategies[0].survived_window,3);
 });
-await test('code mismatch is rejected before a scene is loaded',async()=>{
-  const report=await runFirstPass(bundleFixture(),{adapter:{attest:async()=>({}),run:async()=>assert.fail('mutated mismatched code')}});
+await test('strict recorded-behavior mode still rejects code mismatch before a scene is loaded',async()=>{
+  const report=await runFirstPass(bundleFixture(),{criterion:'recorded-behavior',adapter:{attest:async()=>({}),run:async()=>assert.fail('mutated mismatched code')}});
   assert.equal(report.validation.status,'code_mismatch');
 });
 await test('checklist tests activated strategies separately, jointly and the first cancellation',()=>{
@@ -127,9 +127,66 @@ await test('checklist tests activated strategies separately, jointly and the fir
 });
 await test('successful baseline repeats precede paired intervention trials',async()=>{
   const variants=[];const report=await runFirstPass(bundleFixture(),{baselineRuns:2,trials:2,
-    adapter:{attest:async()=>code,run:async({variant})=>{variants.push(variant.kind);return {...baselineResult(),outcome:variant.kind==='baseline'?'died':'survived_window'};}}});
+    adapter:{attest:async()=>code,run:async({variant})=>{variants.push(variant.kind);return {...baselineResult(),intervention_applied:true,outcome:variant.kind==='baseline'?'died':'survived_window'};}}});
   assert.deepEqual(variants,['baseline','baseline','enable','enable']);assert.equal(report.validation.valid,true);
   assert.equal(report.strategies[1].survived_window,2);
+});
+await test('different death timing, room and code remain eligible with fidelity differences recorded',async()=>{
+  const b=bundleFixture();b.capture.dropped=1;let baseline=0;
+  const report=await runFirstPass(b,{trials:1,adapter:{attest:async()=>({harness:{commit:'new',source_sha256:'new'}}),
+    run:async({variant})=>({...baselineResult(),elapsed_ms:4000,death_room:49,intervention_applied:true,
+      outcome:variant.kind==='baseline'?(++baseline===1?'survived_window':'died'):'recovered'})}});
+  assert.equal(baseline,3);assert.equal(report.validation.status,'reproducible_death');
+  assert.equal(report.validation.failure_reproduction.deaths,2);
+  assert.equal(report.validation.failure_reproduction.nonfatal,1);
+  assert.equal(report.validation.recording_fidelity.all_matched,false);
+  assert.ok(report.validation.recording_fidelity.deviations[1].reasons.includes('death timing diverged'));
+  assert.equal(report.strategies[1].recovered,1);assert.equal(report.runs.length,4);
+});
+await test('strict timing divergence keeps all baseline evidence and withholds strict comparisons',async()=>{
+  const report=await runFirstPass(bundleFixture(),{criterion:'recorded-behavior',adapter:{attest:async()=>code,
+    run:async()=>({...baselineResult(),elapsed_ms:4000})}});
+  assert.equal(report.runs.length,3);assert.equal(report.validation.valid,false);
+  assert.equal(report.validation.failure_reproduction.repeatable,true);assert.equal(report.strategies[0].deaths,3);
+});
+await test('one observed death is retained but does not satisfy the default recurrence threshold',async()=>{
+  let runs=0;const report=await runFirstPass(bundleFixture(),{adapter:{attest:async()=>code,
+    run:async()=>({...baselineResult(),outcome:++runs===1?'died':'survived_window'})}});
+  assert.equal(runs,3);assert.equal(report.validation.valid,false);assert.equal(report.strategies[0].deaths,1);
+  assert.equal(report.strategies[0].survived_window,2);
+});
+await test('invalid loads and execution failures cannot satisfy the recurrence threshold',async()=>{
+  let runs=0;const report=await runFirstPass(bundleFixture(),{adapter:{attest:async()=>code,run:async()=>{
+    runs++;if(runs===2)throw Error('failed connection');
+    return runs===1?{...baselineResult(),loaded:{ok:false}}:baselineResult();}}});
+  assert.equal(runs,3);assert.equal(report.runs.length,3);assert.equal(report.validation.valid,false);
+  assert.equal(report.validation.failure_reproduction.invalid,2);assert.equal(report.strategies[0].deaths,1);
+});
+await test('variants target protections seen in reproduced failures even when the recording differs',async()=>{
+  const cases=[],b=bundleFixture();const d={id:'new',strategy:'logoff_open',reason_code:'wedged',activated_at:11000};
+  const report=await runFirstPass(b,{trials:1,adapter:{attest:async()=>code,run:async({variant})=>{
+    cases.push(variant);return {...baselineResult(),decisions:[{event:'chosen',decision:d}],intervention_applied:true};}}});
+  assert.deepEqual(cases.map(c=>c.kind),['baseline','baseline','baseline','disable']);
+  assert.deepEqual(cases.at(-1).strategies,['logoff_open']);
+  assert.equal(report.checklist.cases[1].kind,'enable');assert.equal(report.validation.recording_fidelity.all_matched,false);
+});
+await test('a later variant error and cleanup failure never erase earlier outcomes',async()=>{
+  let variants=0;const saved=[];
+  const report=await runFirstPass(bundleFixture(),{trials:2,onResult:(_row,r)=>saved.push(structuredClone(r)),
+    adapter:{attest:async()=>code,close:async()=>{throw Error('cleanup failed');},run:async({variant})=>{
+      if(variant.kind==='baseline')return baselineResult();
+      if(++variants===2)throw Error('trial failed');
+      return {...baselineResult(),outcome:'survived_window',intervention_applied:false};}}});
+  assert.equal(report.runs.length,5);assert.equal(saved.length,5);assert.equal(report.completed,false);
+  assert.equal(report.strategies[0].deaths,3);assert.equal(report.strategies[1].observed.survived_window,1);
+  assert.equal(report.strategies[1].survived_window,0);assert.equal(report.strategies[1].unapplied,1);
+  assert.equal(report.strategies[1].unknown,1);assert.equal(report.cleanup_error,'cleanup failed');
+});
+await test('each baseline and variant receives an independent pristine scene copy',async()=>{
+  const b=bundleFixture(),count=b.frames[0].scene.actors.length,seen=[];
+  await runFirstPass(b,{trials:1,adapter:{attest:async()=>code,run:async({scene})=>{
+    seen.push(scene.actors.length);scene.actors.length=0;return {...baselineResult(),intervention_applied:true};}}});
+  assert.deepEqual(seen,[count,count,count,count]);assert.equal(b.frames[0].scene.actors.length,count);
 });
 await test('lab variants cannot be enabled on production',()=>{
   const {k,s}=fixture();s.credentials={host:'production.example',port:5959};

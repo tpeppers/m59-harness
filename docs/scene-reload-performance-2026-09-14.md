@@ -89,8 +89,9 @@ images without the completion-acknowledgement capability use cold resets.
 Neither reset reconstructs the C-library RNG stream, an old TCP session, future
 inputs of other players, or a suspended JavaScript stack. A scene reconstructed
 from production still has its recorded uncertainty. The existing baseline
-reproduction gate remains mandatory for claims about lives saved. Simulator
-reports explicitly remain exploratory.
+recurrence assessment remains necessary for comparisons about lives saved.
+Recording similarity is assessed separately: a timing mismatch does not discard
+a repeatable failure. Simulator reports explicitly remain exploratory.
 
 ## Validation and deployment
 

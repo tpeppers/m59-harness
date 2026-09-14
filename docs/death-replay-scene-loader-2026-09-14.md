@@ -14,6 +14,12 @@ The shared scene loader now reconstructs substantially more of a room, supports 
 
 ## Live evidence
 
+**Interpretation update:** the strict gate described below was the initial
+implementation, not the current definition of useful evidence. Timing divergence
+does not invalidate a repeatable failure. The [current replay workflow](m59-death-replay.md)
+assesses recording fidelity separately and permits intervention experiments on
+recurring deaths. The original measurements and report remain preserved.
+
 Tests used the isolated container at game port 17959 / maintenance 17998. Its source is Meridian commit 1fb1f51478d14a2a7fa37a2bb5899899c0115c44, with scene-hold patch SHA-256 bf6b0db8a41860d32bdab9635202af2e92b26174358fadac80120fa2ee6a8188. Image ID: sha256:c1e6dd916b78baf8d4e70732fb27cbb14f38c564f8bb03d840dff509322c967b.
 
 The controlled fixture used one shadow player at 3/36 HP and two 30-HP giant rats in room 39. The player stood at **r13c44, fine x2835/y869**. Both monsters had an explicit player target, attack state and a one-second initial behavior timer. The keeper was held in a stationary fixture state; this is a machinery test, not a recreation of a production death.
@@ -45,9 +51,9 @@ Production clients cannot observe server RNG state, exact monster HP/targets/tim
 
 Native saves preserve much more hidden state, but do not restore the C library RNG stream, TCP sessions or suspended JavaScript stacks. The hold barrier is for room monsters, not a freeze of players or the entire world. Unrelated rooms can continue consuming random numbers and running timers. Custom subclasses and enchantment/item object graphs require native checkpoint evidence beyond the portable monster scalar snapshot.
 
-The observed timing divergence is consistent with these remaining uncontrolled factors; the test does not isolate which factor caused it. Widening the acceptance tolerance merely to make this fixture pass would conceal that uncertainty.
+The observed timing divergence is consistent with these remaining uncontrolled factors; the test does not isolate which factor caused it. The current workflow retains that uncertainty as a recording-fidelity result while using recurrent deaths as experimental scenarios. There is no need to widen the timing tolerance or discard the death to do that.
 
-Known inventory, equipment or ability mismatches refuse replay. Unknown state stays unknown. Old production deaths cannot acquire faithful pre-death saves retroactively. The recorder supplies prospective evidence and exact harness source manifests; actual intervention rankings require accepted baseline replays and longer repeated counterfactual trials.
+Known inventory, equipment or ability mismatches refuse replay. Unknown state stays unknown. Old production deaths cannot acquire faithful pre-death saves retroactively. The recorder supplies prospective evidence and exact harness source manifests; intervention rankings need usable repeated scenario trials, with their scope, variation and observation horizons reported. A historical recording match is a separate, stronger claim.
 
 Usage, configuration and CLI examples are in [the replay guide](m59-death-replay.md). Examples:
 

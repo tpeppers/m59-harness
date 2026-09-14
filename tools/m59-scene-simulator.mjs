@@ -26,7 +26,7 @@ export async function simulateScene({scene,configFile,cases=[{id:'baseline'}],tr
   const report={schema:'m59-scene-simulation/v1',started_at:new Date().toISOString(),completed:false,
     scene:source.name,cases,trials,horizon_ms:horizonMs,runs,
     validation:{status:'exploratory',baseline_reproduction_verified:false},
-    interpretation:'Verified setup permits simulation, not a claim of a saved life. Use the death replay baseline gate for causal postmortem comparisons.'};
+    interpretation:'All observations are exploratory. Reproducible deaths are useful even when they differ from a recording. Use the death-replay comparison workflow to measure recurrence, recording similarity and intervention outcomes separately.'};
   try {
     report.provenance=await adapter.attest?.()??null;
     for(let trial=1;trial<=trials;trial++)for(const entry of cases) {
