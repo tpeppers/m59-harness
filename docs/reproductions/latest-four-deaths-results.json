@@ -1,0 +1,266 @@
+{
+  "scope": "offline production-method probes, not survival trials",
+  "cancelledApproach": [
+    {
+      "distance": 2,
+      "calls": [
+        {
+          "name": "approachFine",
+          "generation": 0,
+          "options": {}
+        },
+        {
+          "name": "walkTo",
+          "generation": 1,
+          "options": {
+            "maxSteps": 20
+          }
+        }
+      ],
+      "outcome": {
+        "arrived": false,
+        "why": "fallback also failed",
+        "fine_tried": "watchdog cancelled this approach"
+      },
+      "finding": "the cancelled first approach is followed by another movement call"
+    },
+    {
+      "distance": 12,
+      "calls": [
+        {
+          "name": "walkTo",
+          "generation": 0,
+          "options": {
+            "maxSteps": 20
+          }
+        },
+        {
+          "name": "approachFine",
+          "generation": 1,
+          "options": {}
+        }
+      ],
+      "outcome": {
+        "arrived": false,
+        "why": "watchdog cancelled this approach",
+        "fine_tried": "fallback also failed"
+      },
+      "finding": "the cancelled first approach is followed by another movement call"
+    }
+  ],
+  "blindWalkWatchdog": [
+    {
+      "enabled": false,
+      "cancels": [],
+      "notes": []
+    },
+    {
+      "enabled": true,
+      "cancels": [
+        "the watchdog pulling us out of a blind walk below the flee line"
+      ],
+      "notes": [
+        {
+          "what": "WATCHDOG — pulled the character out of a blind walk",
+          "detail": {
+            "health": "20/50",
+            "at_fraction": "40%",
+            "flee_at": "68%",
+            "pass_blocked_for_s": 37,
+            "interrupted": null,
+            "why": "the pass has been inside one await long enough to have stopped looking, and health crossed the withdraw threshold while it was not. The walk is cancelled so the next pass can decide with real numbers — this keeper does not decide anything itself"
+          }
+        }
+      ]
+    }
+  ],
+  "forwardSelection": {
+    "notes": [
+      {
+        "what": "taking the next wall on the route and mending there",
+        "detail": {
+          "to": {
+            "col": 22,
+            "row": 51
+          },
+          "detour": 5,
+          "why": "reproduce forward recovery",
+          "keeps": "the destination — this is a stop on the journey, not the end of one"
+        }
+      }
+    ],
+    "actualSelectorArguments": [
+      "reproduce forward recovery",
+      null,
+      {
+        "source": "travel"
+      }
+    ],
+    "finding": "the announced row/col is not passed to takeSafeSpot"
+  },
+  "geometry": [
+    {
+      "label": "Janice",
+      "room": 597,
+      "from": {
+        "row": 23,
+        "col": 16
+      },
+      "onward": {
+        "row": 50,
+        "col": 31
+      },
+      "named": {
+        "row": 24,
+        "col": 18
+      },
+      "stepMask": true,
+      "safeWalls": 112,
+      "namedIsGeometryWall": true,
+      "namedPathFound": true,
+      "namedPathSteps": 3,
+      "withExit": {
+        "row": 50,
+        "col": 31,
+        "kind": "exit",
+        "steps_away": 27,
+        "progress": 27
+      },
+      "withoutExit": {
+        "row": 49,
+        "col": 30,
+        "kind": "wall",
+        "steps_away": 26,
+        "progress": 26
+      },
+      "nearestWithoutForwardBias": {
+        "row": 21,
+        "col": 17,
+        "kind": "wall",
+        "steps_away": 2,
+        "progress": null
+      }
+    },
+    {
+      "label": "Floyd",
+      "room": 598,
+      "from": {
+        "row": 40,
+        "col": 23
+      },
+      "onward": {
+        "row": 65,
+        "col": 19
+      },
+      "named": {
+        "row": 51,
+        "col": 22
+      },
+      "stepMask": true,
+      "safeWalls": 105,
+      "namedIsGeometryWall": true,
+      "namedPathFound": true,
+      "namedPathSteps": 12,
+      "withExit": {
+        "row": 65,
+        "col": 19,
+        "kind": "exit",
+        "steps_away": 25,
+        "progress": 25
+      },
+      "withoutExit": {
+        "row": 61,
+        "col": 19,
+        "kind": "wall",
+        "steps_away": 21,
+        "progress": 21
+      },
+      "nearestWithoutForwardBias": {
+        "row": 39,
+        "col": 22,
+        "kind": "wall",
+        "steps_away": 1,
+        "progress": null
+      }
+    },
+    {
+      "label": "Gonzo",
+      "room": 598,
+      "from": {
+        "row": 31,
+        "col": 14
+      },
+      "onward": {
+        "row": 65,
+        "col": 19
+      },
+      "named": {
+        "row": 38,
+        "col": 21
+      },
+      "stepMask": true,
+      "safeWalls": 105,
+      "namedIsGeometryWall": true,
+      "namedPathFound": true,
+      "namedPathSteps": 8,
+      "withExit": {
+        "row": 65,
+        "col": 19,
+        "kind": "exit",
+        "steps_away": 34,
+        "progress": 34
+      },
+      "withoutExit": {
+        "row": 61,
+        "col": 19,
+        "kind": "wall",
+        "steps_away": 30,
+        "progress": 30
+      },
+      "nearestWithoutForwardBias": {
+        "row": 31,
+        "col": 13,
+        "kind": "wall",
+        "steps_away": 1,
+        "progress": null
+      }
+    },
+    {
+      "label": "Robin",
+      "room": 39,
+      "from": {
+        "row": 8,
+        "col": 18
+      },
+      "named": {
+        "row": 10,
+        "col": 41
+      },
+      "stepMask": true,
+      "safeWalls": 185,
+      "namedIsGeometryWall": true,
+      "namedPathFound": false,
+      "withExit": {
+        "row": 7,
+        "col": 17,
+        "kind": "wall",
+        "steps_away": 1,
+        "progress": null
+      },
+      "withoutExit": {
+        "row": 7,
+        "col": 17,
+        "kind": "wall",
+        "steps_away": 1,
+        "progress": null
+      },
+      "nearestWithoutForwardBias": {
+        "row": 7,
+        "col": 17,
+        "kind": "wall",
+        "steps_away": 1,
+        "progress": null
+      }
+    }
+  ]
+}

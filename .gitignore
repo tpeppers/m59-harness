@@ -713,3 +713,5 @@ _verify2.mjs
 # is one fleet's history on one machine, and somebody else's successful run is not a reason to
 # promote a pad in this checkout.
 /substrate/fleetscratch-runs.jsonl
+# Local forensic copies and cached runtime observations; never publish these.
+/substrate/latest-four-evidence/
