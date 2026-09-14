@@ -432,6 +432,7 @@ export function digest(file) {
     file, character: pm.character, agent: pm.agent, at: pm.at, level,
     cause, where, keeper: keeperOf(pm),
     survival_decisions: postmortemSurvivalDecisions(pm),
+    replay: pm.replay ?? null,
     was: {
       doing: pm.was?.doing ?? null, hunting: pm.was?.hunting ?? null,
       strategy: pm.was?.strategy ?? null, in_safe_spot: !!pm.was?.in_safe_spot,

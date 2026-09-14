@@ -7,3 +7,6 @@
 *.roo binary
 *.tsv text eol=lf
 substrate/m59-map.json linguist-generated=true
+
+# Embedded patches retain upstream whitespace in their context lines.
+server-patches/**/*.patch -whitespace

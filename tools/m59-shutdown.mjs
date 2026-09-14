@@ -42,12 +42,12 @@ import {
 } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {SAVE_PARTS,lastSaveStamp,saveSetFiles} from './runtime/server-save-set.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
 const ADMIN_HOST = process.env.M59_HOST || '127.0.0.1';
 const ADMIN_PORT = Number(process.env.M59_ADMIN_PORT || 9998);
-const SAVE_PARTS = ['gameuser', 'accounts', 'striings', 'dynarscs'];
 
 const c = {
   ok: s => `\x1b[32m${s}\x1b[0m`, bad: s => `\x1b[31m${s}\x1b[0m`,
@@ -116,22 +116,6 @@ function findSavegame(explicit) {
 const checkpointRoot = savegame => join(dirname(savegame), 'checkpoints');
 
 // ------------------------------------------------------------------ save sets
-
-function lastSaveStamp(savegame) {
-  const f = join(savegame, 'lastsave.txt');
-  if (!existsSync(f)) return null;
-  const m = readFileSync(f, 'utf8').match(/^LASTSAVE\s+(\d+)/m);
-  return m ? m[1] : null;
-}
-
-function saveSetFiles(savegame, stamp) {
-  const out = [];
-  for (const p of SAVE_PARTS) {
-    const f = join(savegame, `${p}.${stamp}`);
-    if (existsSync(f)) out.push(f);
-  }
-  return out;
-}
 
 // Copy a save set into its own directory, with a manifest saying what it is.
 // ABSENCE IS NOT SUCCESS: a set missing gameuser is not a save, and writing a

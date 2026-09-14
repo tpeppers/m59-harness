@@ -26,6 +26,7 @@ import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecisio
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
   observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
 import { createSurvivalDecisionRecorder } from './m59-survival-decision-log.mjs';
+import { attachReplayRecorder } from './m59-replay-recorder.mjs';
 import { epochId } from './m59-epoch.mjs';
 import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOperation,
          tracePassContext, traceBody, traceRefuge, survivalTraceSnapshot,
@@ -1460,12 +1461,14 @@ export function crowdedSquares(objects, selfId, { radius = 1, playersOnline = nu
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
+    attachReplayRecorder(session,this);
     attachSurvivalTrace(session, this);
     this.survivalRecorder = createSurvivalDecisionRecorder(session.name);
     attachSurvivalDecisions(session, { epoch:epochId('movement'),
       onCancel:(why,d) => this.replacementSurvivalChoice(why,d),
       record:row => {
         this.survivalRecorder(row);
+        session.replayRecorder?.decision(row);
         traceSurvival(session, 'survival_decision_'+row.event, {
           id:row.decision.id,strategy:row.decision.strategy,reason:row.decision.reason,
           chosen_at:row.decision.chosen_at,status:row.decision.status,
@@ -8681,6 +8684,9 @@ export class Autopilot {
       decisions: (this.journal || []).slice(-14),
       survival_trace: survivalTraceSnapshot(this.s),
       survival_decisions: survivalDecisionSnapshot(this.s),
+      replay: reason==='died' ? this.s.replayRecorder?.death({reason,character:this.s.client?.me?.name??this.s.name,
+        where:last?{room:last.num,row:last.row,col:last.col}:null,
+        survival_decisions:survivalDecisionSnapshot(this.s)})??null : null,
       text: this.recentText(30),
       // WHERE THE DAMAGE ACTUALLY LANDED, which the three above cannot say.
       //
@@ -9675,6 +9681,7 @@ export class Autopilot {
       survival_trace: survivalTraceSummary(this.s),
       survival_decisions: survivalDecisionSnapshot(this.s,{history:false}),
       survival_decision_log: this.survivalRecorder?.stats?.() ?? null,
+      replay_capture: this.s.replayRecorder?.status?.() ?? (this.s.replayCaptureError?{errors:1,last_error:this.s.replayCaptureError}:null),
       // Null unless a fleet update is waiting on this character. See park().
       parked: this.parkStatus(),
       // Null unless something else is driving this character. `running: true` with

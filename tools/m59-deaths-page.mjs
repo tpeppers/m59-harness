@@ -89,6 +89,7 @@ function renderDigest(d) {
     kv('health', '<span class="trail">' + (d.health_trail || []).join(' ') + '</span>') +
     kv('crowd', (d.threats || []).join(', ') || '<span class="dim">nothing in view</span>') +
     kv('vigor', d.was.vigor == null ? '—' : d.was.vigor) +
+    kv('replay', d.replay ? safeText(d.replay.file)+' · '+safeText(d.replay.status)+' · baseline reproduction required' : 'No replay bundle in this record') +
     (d.during_keeper_outage ? kv('caveat', '<span class="guess">nothing was driving this character' +
       ' — do not read it as evidence about the strategy</span>') : '') +
   '</div>' +

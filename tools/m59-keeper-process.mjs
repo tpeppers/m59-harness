@@ -25,6 +25,7 @@ import { Session, Pacer } from './m59-session.mjs';
 // be tested without starting a keeper — see m59-keeper-address.mjs.
 import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
 import { autopilotFor, dropAutopilot, autopilotIfAny, releaseSpot } from './m59-autopilot.mjs';
+import {captureCachedScene} from './m59-scene-capture.mjs';
 import { TickLoop } from './m59-tick.mjs';
 import { makeDecider, DEFAULT_GOALS, intend, INTENTS } from './m59-decide.mjs';
 import { Router, routeIntent } from './m59-route.mjs';
@@ -247,6 +248,7 @@ catch (error) {
 // ---------------------------------------------------------------- session
 
 const session = new Session(agent);
+session.replayCaptureEnabled = process.env.M59_REPLAY_CAPTURE !== '0';
 session.pacer; // exists from constructor
 
 let autopilot = null;
@@ -1424,6 +1426,9 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && path === '/scene-capture') {
+      json({scene:captureCachedScene(session,autopilot,{provenance:session.replayRecorder?.status()?.provenance??{pending:true}})});return;
+    }
     if (req.method === 'GET' && path === '/state') {
       // CACHED BY DEFAULT AND RE-READ ON DEMAND, WITH THE AGE SAID OUT LOUD.
       //

@@ -68,8 +68,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setProp, sendMsg, relocateCmd, statCmds, healthCmds, manaCmds,
-         isLoopbackHost, adminTarget, dm, split, rejections } from './m59-dm.mjs';
+import { setProp, sendMsg, relocateCmd, relocateFineCmd, statCmds, karmaCmd,
+         isLoopbackHost, adminTarget, dm, split, rejections, returnedObject } from './m59-dm.mjs';
 import { resolveControlUrl } from './m59-fleetpath.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -90,7 +90,7 @@ export const unknownField = () => field(null, UNKNOWN_FIELD);
 const git = (args, cwd) => {
   try {
     return execFileSync('git', args, { cwd, encoding: 'utf8',
-                                       stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+                                       stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { return null; }
 };
 
@@ -217,6 +217,14 @@ export async function captureRoom({ agent, read, name = null, ours = [], hpEstim
                                     capturedFrom = null, provenance = null } = {}) {
   if (!agent) throw new Error('captureRoom needs an agent to look through');
   if (typeof read !== 'function') throw new Error('captureRoom needs a read(tool, args) function');
+  // New keepers share the exact bounded, cache-only capture used by death replay.
+  // Old brokers retain the explicitly coarse legacy path below.
+  const cached=await read('scene_capture',{agent}).catch(()=>null);
+  if(cached?.scene?.schema==='m59-scene/v1') {
+    const scene=cached.scene;if(name)scene.name=name;
+    if(capturedFrom)scene.captured.from=capturedFrom;
+    return scene;
+  }
   const mine = new Set([agent, ...ours].map(a => String(a).toLowerCase()));
 
   const view = await read('look', { agent });
@@ -233,7 +241,7 @@ export async function captureRoom({ agent, read, name = null, ours = [], hpEstim
   actors.push({
     kind: 'player', name: self?.name ?? agent, agent, mine: true,
     at: view.you && Number.isFinite(view.you.col)
-      ? observed({ row: view.you.row, col: view.you.col }) : unknownField(),
+      ? observed({ row: view.you.row, col: view.you.col, x:view.you.x??null,y:view.you.y??null }) : unknownField(),
     vitals: {
       hp: self?.hp ? observed(self.hp) : unknownField(),
       mana: self?.mana ? observed(self.mana) : unknownField(),
@@ -252,7 +260,7 @@ export async function captureRoom({ agent, read, name = null, ours = [], hpEstim
       // (m59-dm.mjs's own second lesson), so this is a breadcrumb for the capture session and
       // never a key. `loadPlan` addresses actors by NAME for exactly that reason.
       object_at_capture: o.id ?? null,
-      at: observed({ row: o.row, col: o.col }),
+      at: observed({ row: o.row, col: o.col,x:o.x??null,y:o.y??null }),
       facing: o.facing ? observed(o.facing) : unknownField(),
       // Marked estimated because it is read off an affordance list, not told to us.
       kind_source: estimated(kind === 'item' ? 'not attackable' : (o.is_player ? 'is_player' : 'attackable')),
@@ -315,11 +323,11 @@ export function loadPlan(scene, { pause = true, roomObject = '<room>', objectFor
   // the capture session and the server renumbers objects around a save, so an executor resolves
   // names AGAIN, in the same batch it uses them, and passes the result in here. With no resolver
   // the plan addresses by name — which is what `plan` prints and what a test asserts.
-  const ref = a => (objectFor ? objectFor(a.name) ?? a.name : a.name);
+  const ref = a => (objectFor ? objectFor(a.key??a.name,a) ?? a.name : a.name);
 
   if (pause) {
     for (const a of scene.actors ?? []) {
-      if (a.kind === 'item') continue;
+      if (a.kind !== 'monster') continue;
       steps.push({ why: `hold ${a.name}`, actor: a.name, cmd: sendMsg(ref(a), HOLD_MSG) });
     }
   }
@@ -327,32 +335,53 @@ export function loadPlan(scene, { pause = true, roomObject = '<room>', objectFor
     const at = a.at?.v ?? a.at;
     if (at && at.row != null && at.col != null)
       steps.push({ why: `place ${a.name} at r${at.row}c${at.col}`, actor: a.name,
-                   cmd: relocateCmd(ref(a), roomObject, at.row, at.col) });
+                   cmd: Number.isFinite(at.x)&&Number.isFinite(at.y)
+                     ? relocateFineCmd(ref(a),roomObject,{...at,angle:a.angle?.v??null})
+                     : relocateCmd(ref(a), roomObject, at.row, at.col) });
   }
   for (const a of scene.actors ?? []) {
     const st = a.stats?.v ?? a.stats;
     if (st && Object.keys(st).length)
       for (const cmd of statCmds(ref(a), st))
         steps.push({ why: `stats for ${a.name}`, actor: a.name, cmd });
+    if(Number.isFinite(st?.karma))steps.push({why:`karma for ${a.name}`,actor:a.name,cmd:karmaCmd(ref(a),st.karma)});
     const hp = a.vitals?.hp?.v ?? a.vitals?.hp;
     if (hp?.value != null)
-      for (const cmd of healthCmds(ref(a), hp.value))
+      for (const cmd of sceneVitalCommands(ref(a),'health',hp,a.kind))
         steps.push({ why: `health for ${a.name}` +
                           (a.vitals?.hp?.how === ESTIMATED ? ' (ESTIMATED)' : ''),
                      actor: a.name, cmd, estimated: a.vitals?.hp?.how === ESTIMATED });
     const mp = a.vitals?.mana?.v ?? a.vitals?.mana;
     if (mp?.value != null)
-      for (const cmd of manaCmds(ref(a), mp.value))
+      for (const cmd of sceneVitalCommands(ref(a),'mana',mp,a.kind))
         steps.push({ why: `mana for ${a.name}`, actor: a.name, cmd });
+    const vigor=a.vitals?.vigor?.v??a.vitals?.vigor;
+    if(Number.isFinite(vigor?.value))steps.push({why:`vigor for ${a.name}`,actor:a.name,
+      cmd:setProp(ref(a),'piVigor',vigor.value)});
+    if(Number.isFinite(vigor?.rest_threshold))steps.push({why:`rest threshold for ${a.name}`,actor:a.name,
+      cmd:setProp(ref(a),'piVigor_rest_threshold',vigor.rest_threshold)});
   }
   return steps;
 }
 
+export function sceneVitalCommands(obj,kind,vital,actorKind='player') {
+  const current=kind==='health'?(actorKind==='monster'?'piHit_points':'piHealth'):'piMana';
+  const max=kind==='health'?(actorKind==='monster'?'piMax_hit_points':'piMax_Health'):'piMax_Mana';
+  const out=[];
+  if(Number.isFinite(vital.max)) {
+    if(kind==='health'&&actorKind==='player')out.push(setProp(obj,'piBase_Max_Health',vital.max));
+    out.push(setProp(obj,max,vital.max));
+  }
+  // An unknown ceiling stays unknown. A wounded 12/50 player must remain level 50.
+  if(Number.isFinite(vital.value))out.push(setProp(obj,current,vital.value));
+  return out;
+}
+
 /** The commands that start the clocks again. Separate verb, on purpose. */
 export const releasePlan = (scene, { objectFor = null } = {}) => (scene.actors ?? [])
-  .filter(a => a.kind !== 'item')
+  .filter(a => a.kind === 'monster')
   .map(a => ({ why: `release ${a.name}`, actor: a.name,
-               cmd: sendMsg(objectFor ? objectFor(a.name) ?? a.name : a.name, RELEASE_MSG) }));
+               cmd: sendMsg(objectFor ? objectFor(a.key??a.name,a) ?? a.name : a.name, RELEASE_MSG) }));
 
 /**
  * REFUSE TO REBUILD ANYWHERE BUT A LAB. The same rule m59-dm.mjs and m59-shadow.mjs enforce,
@@ -389,7 +418,20 @@ export function assertLab(env = process.env) {
  * calls the real `dm()` directly, so a caller supplying its own socket function could not reach
  * it and every test would have needed a live server. Same two commands, same parsing, injectable.
  */
-export async function resolveActors(scene, { dmFn = dm, env = process.env } = {}) {
+export async function resolveActors(scene, { dmFn = dm, env = process.env, resolveActor=null } = {}) {
+  if(resolveActor) {
+    const map=new Map(),missing=[];
+    for(const a of scene.actors??[]) {
+      const key=a.key??a.name,id=await resolveActor(a);
+      if(!Number.isInteger(id)||[...map.values()].includes(id)||map.has(key))missing.push(key);
+      else map.set(key,id);
+    }
+    return {map,missing};
+  }
+  const allNames=(scene.actors??[]).map(a=>a.name);
+  const duplicate=allNames.filter((n,i)=>allNames.indexOf(n)!==i);
+  if(duplicate.length)return {map:new Map(),missing:[...new Set(duplicate)],
+    why:'duplicate actor names require an explicit current-object resolver'};
   const names = [...new Set((scene.actors ?? []).map(a => a.name).filter(Boolean))];
   if (!names.length) return { map: new Map(), missing: [] };
   const cmds = names.map(n => `show name ${n}`);
@@ -399,17 +441,16 @@ export async function resolveActors(scene, { dmFn = dm, env = process.env } = {}
   const missing = [];
   names.forEach((n, i) => {
     const m = /object (\d+)/i.exec(blocks[i] || '');
-    if (m) map.set(n, Number(m[1])); else missing.push(n);
+    if (m) {const a=scene.actors.find(a=>a.name===n);map.set(a.key??n, Number(m[1]));} else missing.push(n);
   });
   return { map, missing };
 }
 
 /** The room's CURRENT object, resolved the same injectable way. */
 export async function resolveRoom(num, { dmFn = dm, env = process.env } = {}) {
-  const cmd = `show room ${num}`;
+  const cmd = `send object 0 FindRoomByNum num INT ${Number(num)}`;
   const out = await dmFn([cmd], { env });
-  const m = /object (\d+)/i.exec(String(out));
-  return m ? Number(m[1]) : null;
+  return returnedObject(out);
 }
 
 /**
@@ -419,9 +460,9 @@ export async function resolveRoom(num, { dmFn = dm, env = process.env } = {}) {
  * so the caller learns what actually landed rather than that the commands were accepted.
  */
 export async function executeLoad(scene, { pause = true, verify = null, dmFn = dm,
-                                           env = process.env } = {}) {
+                                           env = process.env, resolveActor=null } = {}) {
   assertLab(env);
-  const { map, missing } = await resolveActors(scene, { dmFn, env });
+  const { map, missing } = await resolveActors(scene, { dmFn, env, resolveActor });
   if (missing.length)
     return { ok: false, sent: 0, missing,
              why: `refusing to load "${scene.name}": ${missing.length} actor(s) are not on this ` +
@@ -439,16 +480,17 @@ export async function executeLoad(scene, { pause = true, verify = null, dmFn = d
 
   let landed = null;
   if (typeof verify === 'function') landed = await verify(scene, map).catch(e => ({ error: e.message }));
-  return { ok: bad.length === 0, sent: steps.length, missing: [], rejections: bad, landed,
+  return { ok: bad.length === 0 && (!verify || landed?.ok===true), sent: steps.length, missing: [], rejections: bad, landed,
            estimatedCommands: steps.filter(st => st.estimated).length,
            why: bad.length ? `${bad.length} command(s) were rejected: ${bad.slice(0, 3).join('; ')}`
-                           : null };
+                           : verify&&landed?.ok!==true?'scene verification did not confirm the requested state':null };
 }
 
 /** Start the clocks again. Separate verb, on purpose — see the note above loadPlan. */
-export async function executeRelease(scene, { dmFn = dm, env = process.env } = {}) {
+export async function executeRelease(scene, { dmFn = dm, env = process.env, resolveActor=null } = {}) {
   assertLab(env);
-  const { map, missing } = await resolveActors(scene, { dmFn, env });
+  const { map, missing } = await resolveActors(scene, { dmFn, env, resolveActor });
+  if(missing.length)return {ok:false,sent:0,missing,why:'refusing a partial scene release'};
   const steps = releasePlan(scene, { objectFor: n => map.get(n) })
     .filter(st => !missing.includes(st.actor));
   if (!steps.length) return { ok: true, sent: 0, skipped: missing };
@@ -496,9 +538,11 @@ export function sceneRunner({ dir = SCENE_DIR, env = process.env, spawn = null }
       const path = String(value).endsWith('.json') ? String(value) : join(dir, `${value}.json`);
       if (!existsSync(path)) throw new Error(`no scene at ${path}`);
       const scene = readScene(path);
-      const r = await executeLoad(scene, { env });
+      const {prepareScene}=await import('./m59-scene-staging.mjs');
+      const prepared=await prepareScene(scene,{env,options:ctx.sceneOptions??{},resolveActor:ctx.resolveActor});
+      const r = prepared.loaded;
       if (!r.ok) throw new Error(r.why ?? 'the scene did not load');
-      return r;
+      return {...r,receipt:prepared.receipt,start:prepared.start,cleanup:prepared.cleanup};
     }
     if (which === 'shadow') {
       assertLab(env);
@@ -622,7 +666,27 @@ if (invokedDirectly) {
       console.log(`${scene.name} — room ${scene.room.num}, ${scene.actors.length} actor(s)`);
       console.log(formatConfidence(sceneConfidence(scene)));
       console.log(`wrote ${f}`);
-    } else if (action === 'plan' || action === 'load' || action === 'release') {
+    } else if (action === 'load') {
+      const {prepareScene}=await import('./m59-scene-staging.mjs');
+      const prepared=await prepareScene(readScene(target),{options:{fullHp:arg('full-hp')!=null,
+        vigor:arg('vigor')==null?null:Number(arg('vigor')),noMonsters:arg('no-monsters')!=null},
+        requireNativeHold:arg('require-native-hold')!=null});
+      try {
+        const out=arg('receipt',target+'.prepared.json');writeFileSync(out,JSON.stringify(prepared.receipt,null,2));
+        if(!prepared.loaded.ok)throw Error(prepared.loaded.why);
+        const started=arg('start')!=null?await prepared.start():null;
+        console.log(JSON.stringify({receipt:out,loaded:prepared.loaded,started},null,2));
+      }catch(e){await prepared.cleanup();throw e;}
+    } else if (action === 'capture-held') {
+      const {capturePreparedScene}=await import('./m59-scene-staging.mjs');
+      const scene=await capturePreparedScene(readScene(target));
+      const out=arg('out',target+'.scene.json');
+      writeFileSync(out,JSON.stringify(scene,null,2));console.log('wrote '+out);
+    } else if (action === 'release' && readScene(target).schema==='m59-scene-prepared/v1') {
+      const {releasePreparedScene}=await import('./m59-scene-staging.mjs');
+      const result=await releasePreparedScene(readScene(target));console.log(JSON.stringify(result,null,2));
+      if(!result.ok)process.exitCode=1;
+    } else if (action === 'plan' || action === 'release') {
       const scene = readScene(target);
       const steps = action === 'release' ? releasePlan(scene)
                                          : loadPlan(scene, { pause: arg('running') == null });

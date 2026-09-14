@@ -392,6 +392,15 @@ export const relocateCmd = (obj, roomObj, row, col) =>
   `send object ${SYS} UtilGoNearSquare what OBJECT ${obj} where OBJECT ${roomObj}` +
   ` new_row INT ${row} new_col INT ${col}`;
 
+// Exact scene placement. KOD/protocol fine units (64/square), never BSP units.
+// util.kod:20 accepts fine_row/fine_col; max_distance=0 forbids a silent nearby snap.
+export function relocateFineCmd(obj, roomObj, {x,y,row,col,angle=null}) {
+  if (![x,y,row,col].every(Number.isInteger) || Math.floor(x/64)!==col || Math.floor(y/64)!==row)
+    throw Error('fine scene position must agree with its named row/col in 64-unit coordinates');
+  return relocateCmd(obj,roomObj,row,col)+` max_distance INT 0 fine_row INT ${y%64} fine_col INT ${x%64}`
+    +(Number.isInteger(angle)?` new_angle INT ${angle}`:'');
+}
+
 // Names in, one batch out. Everything is resolved in the same call that uses it, and
 // the room is resolved through the server rather than from substrate/m59-map.json,
 // because that file records the object id a room had when the index was built.

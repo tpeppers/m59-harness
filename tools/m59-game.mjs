@@ -1414,6 +1414,8 @@ class Session {
     // stamp and re-asks its own question, because what counts as "hurt enough" belongs to
     // the keeper's policy and not to a packet handler.
     this.damagedAt = now;
+    this.replayRecorder?.capture('health_loss',{before,value,max,at:now});
+    if(value===0)this.replayRecorder?.death({reason:'fatal health push',where:{room:this.world?.room?.num??null},fatal_at:now});
     traceSurvival(this, 'health_loss', { pushed_at: now, before, value, max,
       lost: before - value }, { lane: 'damage' });
     const book = this.hitBook();
@@ -2002,6 +2004,7 @@ class Session {
   // guessed attribution is worse than an admitted gap, and it now shows up in the journey
   // ledger as a named hole to go and close rather than as a plausible-looking caller.
   cancelMovement(controlToken, why = 'unattributed', survival = {}) {
+    this.replayRecorder?.capture('before_movement_cancel',{why});
     const job = this.job && !this.job.done ? this.job : null;
     this.lastMovementCancel = { why, at: Date.now(),
                                 room: this.world?.room?.num ?? null };

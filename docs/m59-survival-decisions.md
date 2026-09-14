@@ -1,5 +1,7 @@
 # Explicit survival decisions
 
+[Death replay](m59-death-replay.md) records these decisions alongside fine-position scenes and provides the baseline-first enable/disable/follow-through checklist for testing their effects.
+
 Survival intent is now runtime state shared by the keeper and movement code. A cancelled
 shelter approach no longer becomes an unlabelled retry. The fine approach, square walk,
 final fine positioning and confirmation boundaries all honour cancellation. Ordinary

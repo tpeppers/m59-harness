@@ -6258,6 +6258,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'scene_capture',
+    description: 'Read a bounded scene from the keeper cache, including fine positions and replay state. Sends no game requests.',
+    schema: {type:'object',properties:{agent:{type:'string'}},required:['agent']},
+    run: async a => {
+      const s=session(a.agent);
+      if(s._index!=null)return keeperGet(s.name,s._index,'scene-capture');
+      const {captureCachedScene}=await import('./m59-scene-capture.mjs');
+      return {scene:captureCachedScene(s,autopilotIfAny(s.name))};
+    },
+  },
+  {
     name: 'look',
     description: 'THE call to make at the start of a turn. Returns everything known about where you ' +
       'are standing, joined into one state: your position and facing; health/mana/vigor; every object ' +

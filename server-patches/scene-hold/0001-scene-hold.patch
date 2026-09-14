@@ -1,0 +1,386 @@
+--- a/kod/object/active/holder/nomoveon/battler/monster.kod
++++ b/kod/object/active/holder/nomoveon/battler/monster.kod
+@@ -272,6 +272,16 @@
+ 
+ properties:
+ 
++   % Lab scene barrier. Disabled in ordinary play; never set by a client packet.
++   pbSceneHeld = FALSE
++   piSceneBehaviorMs = -1
++   piSceneRandomMs = -1
++   piSceneSpasmMs = -1
++   piSceneOfferMs = -1
++   piSceneUnturnMs = -1
++   plSceneEnchantments = $
++
++
+    piAnimation = ANIM_NONE
+ 
+    % List of the mobs wanted items.
+@@ -346,6 +356,65 @@
+ 
+ messages:
+ 
++   ScenePauseTimer(timer = $)
++   {
++      local left;
++      if timer = $ { return -1; }
++      left = Bound(GetTimeRemaining(timer),1,200000000);
++      DeleteTimer(timer);
++      return left;
++   }
++
++   SceneHold()
++   {
++      local entry, left;
++      if pbSceneHeld { return TRUE; }
++      pbSceneHeld = TRUE;
++      piSceneBehaviorMs = Send(self,@ScenePauseTimer,#timer=ptBehavior); ptBehavior = $;
++      piSceneRandomMs = Send(self,@ScenePauseTimer,#timer=ptRandom); ptRandom = $;
++      piSceneSpasmMs = Send(self,@ScenePauseTimer,#timer=ptSpasm); ptSpasm = $;
++      piSceneOfferMs = Send(self,@ScenePauseTimer,#timer=ptCancelOffer); ptCancelOffer = $;
++      piSceneUnturnMs = Send(self,@ScenePauseTimer,#timer=ptUnturn); ptUnturn = $;
++      plSceneEnchantments = $;
++      for entry in plEnchantments
++      {
++         left = Send(self,@ScenePauseTimer,#timer=First(entry));
++         if left >= 0
++         {
++            plSceneEnchantments = Cons([entry,left],plSceneEnchantments);
++            SetNth(entry,1,$);
++         }
++      }
++      return TRUE;
++   }
++
++   SceneRelease(fresh = FALSE)
++   {
++      local entry, message;
++      if NOT pbSceneHeld { return FALSE; }
++      pbSceneHeld = FALSE;
++      if piSceneBehaviorMs >= 0
++      {
++         message = @WaitTimer;
++         if piState & STATE_ATTACK { message = @AttackTimer; }
++         if piState & STATE_CHASE { message = @ChaseTimer; }
++         if piState & STATE_MOVE { message = @MoveTimer; }
++         ptBehavior = CreateTimer(self,message,piSceneBehaviorMs);
++      }
++      else { if fresh { Send(self,@EnterStateWait,#delay=1); } }
++      if piSceneRandomMs >= 0 { ptRandom = CreateTimer(self,@RandomTimer,piSceneRandomMs); }
++      if piSceneSpasmMs >= 0 { ptSpasm = CreateTimer(self,@SpasmMonsterTimer,piSceneSpasmMs); }
++      if piSceneOfferMs >= 0 { ptCancelOffer = CreateTimer(self,@CancelOfferTimer,piSceneOfferMs); }
++      if piSceneUnturnMs >= 0 { ptUnturn = CreateTimer(self,@UnTurn,piSceneUnturnMs); }
++      for entry in plSceneEnchantments
++      {
++         SetNth(First(entry),1,CreateTimer(self,@EnchantmentTimer,Nth(entry,2)));
++      }
++      plSceneEnchantments = $;
++      return TRUE;
++   }
++
++
+    Constructor()
+    "Simple enough, we create a monster. If they are questworthy, we note it."
+    {
+@@ -684,6 +753,7 @@
+    
+    EnterStateLimbo()
+    {
++      if pbSceneHeld { return FALSE; }
+       Send(self,@ClearBehavior);
+       
+       if poTarget <> $
+@@ -704,6 +774,7 @@
+ 
+    EnterStateWait(actnow=FALSE,delay=MOB_MOVE_TIMER_WAIT)
+    {
++      if pbSceneHeld { return FALSE; }
+       if poTarget <> $
+          AND Send(poTarget,@GetOwner) = poOwner
+          AND isClass(poTarget,&user)
+@@ -732,6 +803,7 @@
+ 
+    EnterStateMove( actnow=FALSE )
+    {
++      if pbSceneHeld { return FALSE; }
+       % Note: All monsters "move" even the ones who physically can't.
+       Send(self,@SetState,#bit=STATE_MOVE);
+ 
+@@ -762,6 +834,7 @@
+ 
+    EnterStateAttack(target = $, actnow=TRUE)
+    {     
++      if pbSceneHeld { return FALSE; }
+       Send(self,@SetState,#bit=STATE_ATTACK);
+       Send(self,@ClearBehavior);
+       if actnow
+@@ -778,6 +851,7 @@
+ 
+    EnterStateChase( target = $, actnow = TRUE )
+    {
++      if pbSceneHeld { return FALSE; }
+       if poTarget <> target AND vrSound_aware <> $
+       {
+          Send(poOwner,@SomethingWaveRoom,#what=self,#wave_rsc=vrSound_aware,
+@@ -805,6 +879,7 @@
+    "Monster just entered this room. Right now, that's only possible on a "
+    "creation. So, lets pause for a few beats if we got users."
+    {
++      if pbSceneHeld { propagate; }
+       if what = $
+       {
+          Send(self,@ClearBasicTimers);
+@@ -827,6 +902,7 @@
+    "here, we have already handled the case that the user was plunked down"
+    "near a non-fighting and aggressive mob. So, let's just start our timers."
+    {
++      if pbSceneHeld { return FALSE; }
+       piWalkingEffort = 0;
+ 
+       if piState & STATE_LIMBO
+@@ -846,6 +922,7 @@
+    "set of players has to ask for them by name."
+    {
+       local i;
++      if pbSceneHeld { return FALSE; }
+ 
+       Send(self,@ClearBasicTimers);
+       piWalkingEffort = 0;
+@@ -865,6 +942,7 @@
+    SomethingMoved(what = $,new_row = $,new_col = $)
+    "Check to see if we need to change our combat plan because someone moved."
+    {
++      if pbSceneHeld { return FALSE; }
+       % If either we or our target moved, then we no longer know 
+       %  if the attack is valid.
+       if what = self OR what = poTarget
+@@ -883,6 +961,7 @@
+    "appropriate. If we are already fighting this person, this doesn't interrupt "
+    "our plans."
+    {
++      if pbSceneHeld { return FALSE; }
+       % Getting hit revitalizes my will to walk.
+       piWalkingEffort = 0;
+ 
+@@ -894,6 +973,7 @@
+ 
+    PlayerFirstMove(what=$, where = $, new_row = 0, new_col=0)
+    {
++      if pbSceneHeld { return FALSE; }
+       Send(poBrain,@PlayerFirstMove,#mob=self,#state=piState,
+            #what=what,#where=where,#new_row = new_row, #new_col=new_col);
+ 
+@@ -907,6 +987,7 @@
+    "hit someome in a room transition."
+    {
+       local oQuestNode;
++      if pbSceneHeld { return FALSE; }
+ 
+       Send(poBrain,@SomethingEntered,#mob=self,#state=piState,
+            #what=what,#where=where);
+@@ -933,6 +1014,7 @@
+    SomethingLeft(what = $, iRow=0, iCol=0)
+    "We lost someone, perhaps we need to clear our targets."
+    {
++      if pbSceneHeld { return FALSE; }
+       % Our master may have left.  If he did, and he is close by,
+       % teleport after him.
+       if poMaster <> $ AND what = poMaster
+@@ -957,6 +1039,7 @@
+    GotoMaster()
+    {
+       local oNewRoom;
++      if pbSceneHeld { return FALSE; }
+ 
+       if poMaster = $
+       {
+@@ -982,6 +1065,7 @@
+    SomethingKilled(what = $,victim = $,use_weapon = $)
+    "Someone just died, perhaps we need to clear our target."
+    {
++      if pbSceneHeld { return FALSE; }
+       Send(poBrain,@SomethingKilled,#mob=self,#state=piState,
+            #what=what,#victim=victim,#use_weapon=use_weapon);
+ 
+@@ -1011,6 +1095,7 @@
+    AttackTimer(timer = $)
+    "We were bashing on something before, and now its time to hit it again."
+    {
++      if pbSceneHeld { return FALSE; }
+       Send(self,@ClearBehavior,#timer=timer);
+ 
+       % sanity checks
+@@ -1075,6 +1160,7 @@
+    "Note that even if we can't move, we can be 'chasing'...."
+    {
+       local oVictim, bCast;
++      if pbSceneHeld { return FALSE; }
+       oVictim = poTarget;
+ 
+       Send(self,@ClearBehavior,#timer=timer);
+@@ -1144,6 +1230,7 @@
+    "someone to chase if we are the aggressive type. If we can't physically "
+    "move, then we still keep the timer open for its healing/etc."
+    {
++      if pbSceneHeld { return FALSE; }
+       Send(self,@ClearBehavior,#timer=timer);
+ 
+       % Sanity checks
+@@ -1171,6 +1258,7 @@
+   
+    WaitTimer( timer = $ )
+    {
++      if pbSceneHeld { return FALSE; }
+       Send(self,@ClearBehavior,#timer=timer);
+       Send(poBrain,@PostWaitTimer,#mob=self);
+ 
+@@ -1301,6 +1389,7 @@
+    DoRandomWalk()
+    {
+       local iNew_row, iNew_col;
++      if pbSceneHeld { return FALSE; }
+ 
+       % The bigger/tougher I am, the less likely I'm interested in milling
+       %  around.
+@@ -1370,6 +1459,7 @@
+    MoveToMaster()
+    {
+       local iRange;
++      if pbSceneHeld { return FALSE; }
+ 
+       if poMaster = $  
+       {  
+@@ -1406,6 +1496,7 @@
+    TryAttack(what=$,stroke_obj=$)
+    "Ok, we got someone to attack, lets try and hit them."
+    {
++      if pbSceneHeld { return FALSE; }
+       %% okay, NPCs and NOFIGHT mobs can't attack
+       if (piBehavior & AI_NOFIGHT) OR (piBehavior & AI_NPC)
+       {
+@@ -1532,6 +1623,7 @@
+    "Applies damage to the battler, calculating appropriate resistances."
+    {
+       local iDamage,iResist,iPercentClass,i,each_obj;
++      if pbSceneHeld { return FALSE; }
+ 
+       if (piBehavior & AI_NPC )
+       { 
+@@ -1818,6 +1910,7 @@
+    "e=0, ne=1, n=2, nw=3, w=4, sw=5, s=6, se=7"
+    {
+       local iNew_row, iNew_col, iLong_step;
++      if pbSceneHeld { return FALSE; }
+ 
+       if dir = 0  
+       {
+@@ -1913,6 +2006,7 @@
+    MoveTowards(oTarget = $, face_target=FALSE, face_away=FALSE,
+                to_master=FALSE)
+    {
++      if pbSceneHeld { return FALSE; }
+       if oTarget = $ 
+       { 
+          Debug("Bad info passed to MoveTowards!");          
+@@ -1941,6 +2035,7 @@
+ 
+    MoveAway(oTarget = $, face_target=FALSE, face_away=FALSE)
+    {
++      if pbSceneHeld { return FALSE; }
+       if oTarget = $ 
+       { 
+          Debug("Bad info passed to MoveAway!");          
+@@ -1975,6 +2070,7 @@
+    "It should probably be combined with DoRandomWalk."
+    {
+       local i, iAtan, iDir, iTry_dir, iIter;
++      if pbSceneHeld { return FALSE; }
+       
+       if poOwner=$ OR row_diff=$ OR col_diff=$
+       {
+@@ -2213,6 +2309,7 @@
+ 
+    SpasmMonsterTimer()
+    {
++      if pbSceneHeld { return FALSE; }
+       if poOwner = $ OR NOT (viAttributes & MOB_SPASM)
+       {
+          return;
+@@ -2228,6 +2325,7 @@
+ 
+    DoSpasm()
+    {
++      if pbSceneHeld { return FALSE; }
+       return;
+    }
+ 
+@@ -2916,6 +3014,7 @@
+    "Handle a random timer, and set up the next one."
+    {
+       local lAction, iNum, oTarget, i, oLibrary;
++      if pbSceneHeld { return FALSE; }
+ 
+       % Clear timer, as function has some early exits
+       if NOT test
+@@ -4241,6 +4340,7 @@
+ 
+    StartBasicTimers()
+    {
++      if pbSceneHeld { return FALSE; }
+       if IsClass(self,&Revenant)
+       {
+          return;
+--- a/kod/object/active/holder/room.kod
++++ b/kod/object/active/holder/room.kod
+@@ -188,6 +188,9 @@
+ 
+ properties:
+ 
++   pbSceneHeld = FALSE
++
++
+    piRoom_Flags = 0
+ 
+    prRoom                       % the room resource id
+@@ -270,6 +273,32 @@
+    piFaren_Bonus
+ 
+ messages:
++
++   SceneHoldRoom()
++   {
++      local entry, actor;
++      pbSceneHeld = TRUE;
++      for entry in plActive
++      {
++         actor = First(entry);
++         if IsClass(actor,&Monster) { Send(actor,@SceneHold); }
++      }
++      return TRUE;
++   }
++
++   SceneStartRoom(fresh = FALSE)
++   {
++      local entry, actor;
++      % All actors are released inside one top-level server message. Timers cannot
++      % run between the first release and the last release.
++      for entry in plActive
++      {
++         actor = First(entry);
++         if IsClass(actor,&Monster) { Send(actor,@SceneRelease,#fresh=fresh); }
++      }
++      pbSceneHeld = FALSE;
++      return TRUE;
++   }
+ 
+    Constructor()
+    {
+@@ -1769,6 +1798,7 @@
+    NewHoldObject(what = $,new_pos = $)
+    {
+       local iTimeLeft, i, each_obj;
++      if pbSceneHeld AND IsClass(what,&Monster) { Send(what,@SceneHold); }
+ 
+       % weight here just to be like normal holder
+       piBulk_hold = piBulk_hold + Send(what,@GetBulk);

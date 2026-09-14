@@ -41,6 +41,20 @@ export function attachSurvivalDecisions(s,{record,onCancel,epoch=null}={}) {
   Object.assign(state(s),{record,onCancel,epoch});
 }
 export function currentSurvivalDecision(s) { return state(s).current; }
+// Experiment-only seam. Never configurable through a production keeper policy.
+export function setSurvivalReplayControl(s,control=null) {
+  const c=s.credentials??s.client;
+  if(!['127.0.0.1','localhost','::1'].includes(c?.host)||![15959,17959].includes(Number(c?.port)))
+    throw Error('survival replay controls require the shadow game server at loopback:15959');
+  state(s).replayControl=control;
+}
+export function restoreSurvivalDecisionForReplay(s,decision,{capturedAt=Date.now()}={}) {
+  setSurvivalReplayControl(s,state(s).replayControl??null);
+  if(!decision)return;
+  const d=structuredClone(decision),delta=Date.now()-capturedAt;
+  for(const k of ['chosen_at','selected_at','activated_at','arrived_at','retry_at'])if(d[k]!=null)d[k]+=delta;
+  state(s).current=d;emit(s,state(s),'restored',d);
+}
 function make(s,t,spec,previous) {
   const now=Date.now(), obs=survivalObservation(s);
   return {version:1,id:`${process.pid}-${now}-${++t.sequence}`,episode_id:previous?.episode_id??null,
@@ -60,6 +74,10 @@ function archive(t,d) {
   if(t.history.length>MAX_HISTORY) {t.history.shift();t.dropped++;}
 }
 export function chooseSurvivalDecision(s,spec,{because='new survival choice',outcome='cancelled'}={}) {
+  const active=state(s).current;
+  if(active&&state(s).replayControl?.keepDecision?.(active,spec,because)) {
+    emit(s,state(s),'replacement_suppressed',active,{because});return active;
+  }
   const t=state(s), old=t.current, next=make(s,t,spec,old?.strategy==='yield_to_controller'?null:old);
   next.previous_decision_id=old?.id??null;
   next.episode_id??=next.id;

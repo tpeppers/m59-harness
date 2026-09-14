@@ -85,7 +85,7 @@ console.log('\n2. THE SCENE COMES UP HELD, AND EVERY HOLD PRECEDES EVERY PLACEME
   const steps = loadPlan(scene());
   const holds = steps.map((s, i) => ({ i, s })).filter(x => x.s.cmd.includes(HOLD_MSG));
   const moves = steps.map((s, i) => ({ i, s })).filter(x => /^place /.test(x.s.why));
-  ok('every animate actor is held', holds.length === 2, String(holds.length));
+  ok('monsters are held; players require their controller to be paused', holds.length === 1, String(holds.length));
   ok('the item is NOT held — it has no clocks to stop',
      !holds.some(h => /table/.test(h.s.actor)));
   ok('EVERY hold comes before EVERY placement',
@@ -99,7 +99,7 @@ console.log('\n2. THE SCENE COMES UP HELD, AND EVERY HOLD PRECEDES EVERY PLACEME
   ok('but still places everybody', running.filter(s => /^place /.test(s.why)).length === 3);
 
   const rel = releasePlan(scene());
-  ok('release is a separate plan', rel.length === 2 && rel.every(s => s.cmd.includes(RELEASE_MSG)));
+  ok('release starts only monster timers', rel.length === 1 && rel.every(s => s.cmd.includes(RELEASE_MSG)));
   ok('and it does not release the furniture', !rel.some(s => /table/.test(s.actor)));
 }
 
@@ -241,8 +241,8 @@ console.log('\nTHE READER: what a client can actually see');
   ok('and the notes say they are not a key',
      sc.notes.some(n => /not a key/.test(n)));
 
-  ok('it made exactly the four reads it needed',
-     reads.join(',') === 'look,status,inventory,equipment', reads.join(','));
+  ok('an old broker falls back after the shared capture probe',
+     reads.join(',') === 'scene_capture,look,status,inventory,equipment', reads.join(','));
 
   // The confidence counter is what makes the shallowness visible instead of silent.
   const c = sceneConfidence(sc);
@@ -311,7 +311,7 @@ console.log(NL + 'THE EXECUTOR RESOLVES NAMES AGAIN, AND NEVER ADDRESSES A CAPTU
     const n = /^show name (.+)$/.exec(c);
     if (n) return n[1] === 'Kermit' ? 'object 9001 Kermit'
          : n[1] === 'ghost' ? 'object 9002 ghost' : 'not found';
-    if (/^show room 40$/.test(c)) return 'object 9040 The Feast Hall';
+    if (/^send object 0 FindRoomByNum num INT 40$/.test(c)) return ':< return from OBJECT 0 MESSAGE FindRoomByNum\n: OBJECT 9040\n: is CLASS FeastHall';
     return 'ok';
   };
   const dmFn = async (cmds) => {
@@ -327,7 +327,7 @@ console.log(NL + 'THE EXECUTOR RESOLVES NAMES AGAIN, AND NEVER ADDRESSES A CAPTU
   // Three COMMANDS, not three estimates: healthCmds emits several for one value. The count is of
   // commands built from an estimated field, which is what the operator is being warned about.
   ok('and it counted the estimated commands so the operator sees them',
-     r.estimatedCommands === 3, String(r.estimatedCommands));
+     r.estimatedCommands === 2, String(r.estimatedCommands));
   ok('every one of them is a health command for the ghost',
      sent.filter(c => !/^show /.test(c)).filter(c => /9002/.test(c)).length >= 3);
 
@@ -373,7 +373,7 @@ console.log(NL + 'the executor refuses off a lab, before it resolves anything');
   ok('the refusal explains a rebuild is fiat', /by fiat/.test(why), why);
 }
 
-console.log(NL + 'release is its own verb and skips whoever is gone');
+console.log(NL + 'release refuses a partial scene');
 {
   const sc = makeScene({ name: 'x', room: { num: 40 },
     provenance: { harness: { commit: 'a', dirty: false } },
@@ -387,10 +387,10 @@ console.log(NL + 'release is its own verb and skips whoever is gone');
       (/^show name ghost$/.test(c) ? 'object 9002 ghost' : 'not found')).join(NL);
   };
   const r = await executeRelease(sc, { dmFn, env: { M59_ADMIN_HOST: '127.0.0.1' } });
-  ok('it releases the one it found', r.sent === 1, JSON.stringify(r));
-  ok('it reports who was skipped', r.skipped.includes('vanished'));
+  ok('it releases nothing when an actor is missing', r.ok===false&&r.sent === 0, JSON.stringify(r));
+  ok('it reports who is missing', r.missing.includes('vanished'));
   const body = sent.filter(c => !/^show /.test(c)).join(' | ');
-  ok('with the real message', /StartBasicTimers/.test(body), body);
+  ok('no timer restart was sent', !/StartBasicTimers/.test(body), body);
   ok('and it does not release the furniture', !/table/.test(body));
 }
 

@@ -714,3 +714,8 @@ _verify2.mjs
 # promote a pad in this checkout.
 /substrate/fleetscratch-runs.jsonl
 /substrate/survival-decisions/
+/substrate/replays/
+/substrate/replay-smoke/
+/substrate/replay-smoke-config.json
+/substrate/scene-build/
+/substrate/native-scenes/
