@@ -128,6 +128,8 @@ export function renderProjection(rv, mapRoom = null) {
         }
       : { note: 'the keeper has not placed this character in its room yet — it has just arrived, or it is dead' },
     objects,
+    ground_effects: rv.ground_effects ?? [],
+    combat: rv.combat ?? null,
     // Exits and reachability need a World, and a World needs the live position and geometry
     // the keeper process owns. Empty and SAID OUT LOUD rather than absent, because a
     // renderer asking for exits and quietly getting none is the failure this file exists

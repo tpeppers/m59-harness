@@ -13,6 +13,9 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
+import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
+import { CombatMode } from './m59-combat-mode.mjs';
+import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
 import { traceSurvival } from './m59-survival-trace.mjs';
 import { cancelSurvivalDecision, observeSurvivalDecision, currentSurvivalDecision,
   finishSurvivalDecision } from './m59-survival-decision.mjs';
@@ -717,10 +720,12 @@ class Pacer {
   }
 
   submit(kind, fn, minGapForKind = 0) {
+    const authority = this.authority?.();
     this.prodTimes.push(Date.now());
     if (!this.prodByKind.has(kind)) this.prodByKind.set(kind, []);
     this.prodByKind.get(kind).push(Date.now());
-    const job = { kind, fn: bindPacketScope(kind, fn), minGapForKind,
+    const job = { kind, fn: bindPacketScope(kind, authority?.bind ? authority.bind(fn) : fn), minGapForKind,
+                  guard: authority?.guard, priority: authority?.priority ?? 0,
                   resolve: null, reject: null, queuedAt: Date.now() };
     // PRIORITY: attack packets are time-critical (server cooldown = 1s). They jump
     // the queue ahead of move/turn/read packets so swings don't wait behind a backlog
@@ -738,6 +743,7 @@ class Pacer {
     return new Promise((resolve, reject) => {
       job.resolve = resolve;
       job.reject = reject;
+      this.wake?.();
       this.pump();
     });
   }
@@ -764,7 +770,15 @@ class Pacer {
     this.running = true;
     try {
       while (this.q.length) {
-        const job = this.q.shift();
+        // Drop invalidated packets before they spend a pacing slot. A sleeping
+        // low-priority packet must not hold up a newly arrived combat command.
+        this.q = this.q.filter(job => {
+          try { job.guard?.(); return true; }
+          catch (e) { job.reject(e); return false; }
+        });
+        if (!this.q.length) break;
+        this.q.sort((a, b) => b.priority - a.priority);
+        const job = this.q[0];
         const now = Date.now();
         const waitGlobal = Math.max(0, this.lastSent + this.minGapMs - now);
         const lastKind = this.lastByKind.get(job.kind) || 0;
@@ -774,8 +788,19 @@ class Pacer {
         const wait = Math.max(waitGlobal, waitKind);
         Pacer.note(job.kind, 'queued', Math.max(0, now - job.queuedAt));
         Pacer.note(job.kind, waitKind >= waitGlobal ? 'paced' : 'throttled', wait);
-        if (wait > 0) await new Promise(r => setTimeout(r, wait));
-        else await new Promise(r => setTimeout(r, 0));
+        if (wait > 0) {
+          await new Promise(resolve => {
+            const timer = setTimeout(done, wait);
+            const pacer = this;
+            function done() { clearTimeout(timer); pacer.wake = null; resolve(); }
+            this.wake = done;
+          });
+          continue;
+        }
+        await new Promise(r => setImmediate(r));
+        if (this.q[0] !== job) continue;
+        this.q.shift();
+        try { job.guard?.(); } catch (e) { job.reject(e); continue; }
         this.lastSent = Date.now();
         this.lastByKind.set(job.kind, this.lastSent);
         this.sentTimes.push(this.lastSent);
@@ -1271,6 +1296,9 @@ class Session {
   constructor(name) {
     this.name = name;
     this.pacer = new Pacer();
+    this.combatEpoch = 0;
+    this.combat = new CombatMode(this, { keeper: () => autopilotIfAny(this.name) });
+    this.pacer.authority = () => bodyAuthority(this);
     this.client = null;
     this.world = null;
     // Fleet resume and an HTTP caller can request the same slot during broker
@@ -1645,7 +1673,18 @@ class Session {
   // longest walk, in series, purely because the reply is the only way to learn the
   // outcome. So: start it, return now, and let `status` and `fleet` carry the
   // result. One job at a time per session — the character has one body.
+  runCommand(fn) { return withBodyCommand(this, fn); }
+
+  groundEffectBlock(from, to) {
+    const effect = groundEffectOnSegment(this.client, from, to);
+    return effect ? { available: true, moved: false, blocked: true,
+      reason: 'ground_effect_blocked', ground_effect: effect } : null;
+  }
+
+  hazardSquares() { return groundEffectSquares(this.client); }
+
   startJob(kind, label, fn, { controlToken = null, leaseToken = null } = {}) {
+    if (this.combat?.active) throw new Error(`${this.name}: combat override owns the body`);
     if (this.job && !this.job.done) throw new Error(`${this.name} is busy: ${this.job.label}`);
     const generation = this.movementGeneration;
     const job = { kind, label, startedAt: Date.now(), done: false, generation,
@@ -1658,7 +1697,7 @@ class Session {
     // foreground one has to be able to await the same work WITHOUT a second code path,
     // because "there is another way to run a travel" is exactly how one of the two ways
     // ended up with no busy check at all — see the travel tool.
-    job.promise = withIntent(this,null,()=>fn(generation)).then(
+    job.promise = this.runCommand(() => withIntent(this,null,()=>fn(generation))).then(
       r => { job.result = r; return r; },
       e => { job.error = e.message; throw e; })
       .finally(() => { job.done = true; job.finishedAt = Date.now(); });
@@ -2004,6 +2043,8 @@ class Session {
   // guessed attribution is worse than an admitted gap, and it now shows up in the journey
   // ledger as a named hole to go and close rather than as a plausible-looking caller.
   cancelMovement(controlToken, why = 'unattributed', survival = {}) {
+    try { bodyAuthority(this).guard(); }
+    catch { return { cancelled: false, reason: 'combat override owns this body or caller was preempted' }; }
     this.replayRecorder?.capture('before_movement_cancel',{why});
     const job = this.job && !this.job.done ? this.job : null;
     this.lastMovementCancel = { why, at: Date.now(),
@@ -2064,6 +2105,7 @@ class Session {
     this.lastHealth = null;
     this.lastCombatLine = null;
     c.onEvent = ev => {
+      this.combat?.event(ev);
       this.recorder.line('event', ev);
       if (ev.kind === 'ability') this.noteAdvancement(ev);
       if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); }
@@ -2100,6 +2142,12 @@ class Session {
       throw error;
     }
     this.client = c;
+    c.beforeGameMutation = () => bodyAuthority(this).guard();
+    c.beforeMove = target => {
+      const hazard = this.groundEffectBlock(c.self, target);
+      if (hazard) throw Object.assign(new Error('ground_effect_blocked'), {
+        code: 'GROUND_EFFECT_BLOCKED', ground_effect: hazard.ground_effect });
+    };
     this.world = new World(c, worldMap);
 
     // WRITE THE NAME DOWN. The roster records an account and a password; which CHARACTER
@@ -2349,14 +2397,14 @@ class Session {
   // the call an agent should make at the start of every turn.
   view(opts = {}) {
     this.need();
-    return this.world.snapshot(opts);
+    return { ...this.world.snapshot(opts), combat: this.combat?.status() };
   }
 
   // Raw cached perception for a renderer. Unlike view(), this never runs A* for
   // every object and exit. Keep tactical validation on view(); keep frames fast here.
   perception() {
     this.need();
-    return this.world.perception();
+    return { ...this.world.perception(), combat: this.combat?.status() };
   }
 
   // WHAT IS WORTH WALKING AROUND, AND HOW WIDE A BERTH IT IS WORTH.
@@ -3087,6 +3135,8 @@ class Session {
         const sentValidation = { ...validation, available: true, moved: true, blocked: false,
                                  offMap: true, target };
         const eventSeq = c.evSeq;
+        const hazard = this.groundEffectBlock?.(before, target);
+        if (hazard) return { sent: false, validation: hazard };
         c.moveTo(target.x, target.y, speed, roomId);
         this.recordValidatedWireMove?.({
           client: c, roomId,
@@ -3126,6 +3176,8 @@ class Session {
       if (validation.target.x === before.x && validation.target.y === before.y)
         return { sent: false, validation: { ...validation, moved: false } };
       if (typeof beforeMutation === 'function') beforeMutation('move', { x, y });
+      const hazard = this.groundEffectBlock?.(c.self, validation.target);
+      if (hazard) return { sent: false, validation: hazard };
       const eventSeq = c.evSeq;
       // BREADCRUMBS — the only record of how this character got where it is standing.
       //
@@ -6245,9 +6297,10 @@ class Session {
       };
     }
     const replan = (r, cc) => {
-      let p = geo.path(r, cc, row, col, { blockedEdges, threats, clearance, extraCost: jitterCost });
+      const avoid = new Set([...(avoidSquares ?? []), ...(this.hazardSquares?.() ?? [])]);
+      let p = geo.path(r, cc, row, col, { avoid, blockedEdges, threats, clearance, extraCost: jitterCost });
       if (!p.found && p.collision_view)
-        p = geo.path(r, cc, row, col, { blockedEdges, threats, clearance, collision: false, extraCost: jitterCost });
+        p = geo.path(r, cc, row, col, { avoid, blockedEdges, threats, clearance, collision: false, extraCost: jitterCost });
       return p;
     };
     let plan = replan(from.row, from.col);
@@ -6533,6 +6586,7 @@ class Session {
     //
     // Passed in rather than derived here, because only the caller knows which door it wants.
     for (const sq of (avoidSquares ?? [])) occupied.add(sq);
+    for (const sq of (this.hazardSquares?.() ?? [])) occupied.add(sq);
     // AND EDGES THE MOVER WILL NOT CROSS, WHICH IS A DIFFERENT FACT AND WAS NOT RECORDED
     // AT ALL. A monster moves; a wall does not. Blaming the SQUARE for a wall between two
     // squares removes a perfectly good place to stand that other neighbours still reach,

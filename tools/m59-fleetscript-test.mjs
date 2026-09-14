@@ -1261,13 +1261,17 @@ console.log('a walk to a non-room is refused before anything moves');
   const { trapCheck, KNOWN_TRAPS, TRAP_WAY_OUT,
           routeCrossesTrap: crossesTrap } = await import('./m59-fleetscript.mjs');
 
-  ok('Ukgoth is on the list, with the reason an operator needs',
-     /Relic of Qor/.test(KNOWN_TRAPS[599] ?? ''), KNOWN_TRAPS[599]);
+  // Ukgoth was removed from KNOWN_TRAPS on 2026-09-12. Keep the generic
+  // destination/advisory contract pinned against the remaining canyon entry.
+  ok('Ukgoth is no longer misclassified as a trap', !KNOWN_TRAPS[599]);
+  ok('Ukgoth remains a valid destination', trapCheck([walk(599)]) === null);
+  ok('the canyon entry names its actual south-edge limitation',
+     /SOUTH exit to 45/.test(KNOWN_TRAPS[49] ?? ''));
 
-  const why = trapCheck([walk(54), walk(599)]);
+  const why = trapCheck([walk(54), walk(49)]);
   ok('a plan that walks into it is refused', !!why, String(why));
   ok('and the refusal names the room and the mechanic',
-     /599/.test(why ?? '') && /Relic of Qor/.test(why ?? ''));
+     /49/.test(why ?? '') && /SOUTH exit to 45/.test(why ?? ''));
 
   ok('an ordinary plan is not refused', trapCheck([walk(54), walk(39)]) === null);
 
@@ -1293,14 +1297,14 @@ console.log('a walk to a non-room is refused before anything moves');
   // TRANSIT IS ADVISORY; A DESTINATION IS STILL A REFUSAL. This is the distinction the old
   // check did not draw, and it is why it grounded the fleet the hour it started working: the
   // ONLY road to Castle Victoria runs through 599, so refusing transit refuses the destination.
-  const transit = crossesTrap([{ from: 598, to: 599 }, { from: 599, to: 2 }]);
-  ok('a route through a trap is still REPORTED', !!transit && transit.room === 599);
+  const transit = crossesTrap([{ from: 593, to: 49 }, { from: 49, to: 45 }]);
+  ok('a route through a trap is still REPORTED', !!transit && transit.room === 49);
   ok('but it is marked advisory, which is what stops it being a refusal',
      transit?.advisory === true);
   ok('and a clean route still reports nothing',
      crossesTrap([{ from: 54, to: 39 }]) === null);
   ok('aiming an errand AT a trap is still refused, because that is a deliberate act',
-     !!trapCheck([walk(599)]));
+     !!trapCheck([walk(49)]));
 
   // The way out is kept as a measurement for diagnostics. It must NOT be used to pre-empt the
   // router: it is room-level, and a body on TOP of 599 is one hop from Castle Victoria, so
@@ -1324,7 +1328,7 @@ console.log('a walk to a non-room is refused before anything moves');
   // THE RESCUE HAS TO BE ABLE TO GO IN. Refusing every trip into a trap would mean the only
   // way to recover a stranded character is a hand-written script — which is the thing this
   // file exists to stop being necessary.
-  ok('a declared rescue may go in', trapCheck([walk(599)], { allowTraps: true }) === null);
+  ok('a declared rescue may go in', trapCheck([walk(49)], { allowTraps: true }) === null);
 
   // GUARANTEE 12. THE DESTINATION TEST WAS NEVER THE WHOLE TEST.
   //
@@ -1336,16 +1340,16 @@ console.log('a walk to a non-room is refused before anything moves');
   const deadly = [382, 350, 568, 567, 566, 576, 587, 597, 598, 599, 2, 38, 39];
   ok('a plan aimed at an ordinary room is still allowed by the destination test',
      trapCheck([walk(39)]) === null);
-  ok('but the ROUTE it would take is refused', routeCrossesTrap(deadly)?.room === 599);
-  ok('and the refusal carries the reason the operator needs',
-     /Relic of Qor/.test(routeCrossesTrap(deadly)?.why ?? ''));
+  ok('the old Ukgoth route no longer produces a trap advisory', routeCrossesTrap(deadly) === null);
+  ok('a canyon crossing carries the reason the operator needs',
+     /SOUTH exit to 45/.test(routeCrossesTrap([593, 49, 45])?.why ?? ''));
   ok('a clear road is not refused',
      routeCrossesTrap([382, 350, 568, 567, 566, 576, 587, 27]) === null);
 
   // The router answers in more than one shape depending on who was asked, and a check that
   // only understands one of them is a check that silently passes everything.
-  ok('hops as {room} objects are read', routeCrossesTrap([{ room: 599 }])?.room === 599);
-  ok('hops as {to} objects are read', routeCrossesTrap([{ to: 599 }])?.room === 599);
+  ok('hops as {room} objects are read', routeCrossesTrap([{ room: 49 }])?.room === 49);
+  ok('hops as {to} objects are read', routeCrossesTrap([{ to: 49 }])?.room === 49);
   ok('an unreadable route is not a trap claim', routeCrossesTrap(null) === null);
   ok('an empty route is not a trap claim', routeCrossesTrap([]) === null);
 }

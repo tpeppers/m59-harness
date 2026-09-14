@@ -21,6 +21,8 @@
 //     find itself somewhere else can find out why.
 
 import * as skills from './m59-skills.mjs';
+import { escapeGroundEffect } from './m59-combat-mode.mjs';
+import { effectsAt } from './m59-ground-effects.mjs';
 import { recoveryRefugeReach } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
@@ -10767,6 +10769,8 @@ export class Autopilot {
   static PROTECTED_FACULTIES = ['identity', 'mortality', 'survival', 'recovery'];
 
   facultyOwner(faculty) {
+    if (this.s?.combat?.active && !Autopilot.PROTECTED_FACULTIES.includes(faculty))
+      return `combat:${this.s.combat.active.id}`;
     // `inert` is the legacy whole-character claim and still answers first, so a caller
     // that never learned about faculties sees exactly what it always saw.
     if (this.inert && !Autopilot.PROTECTED_FACULTIES.includes(faculty))
@@ -11459,6 +11463,7 @@ export class Autopilot {
   watchdogTick() {
     const s = this.s, c = s?.client;
     if (!c || s.live !== true || c.state !== 'game') return;
+    if (s.combat?.active) { void s.combat.tick(); return; }
     const w = this.watch;
     w.ticks++;
     const now = Date.now();
@@ -12644,11 +12649,12 @@ export class Autopilot {
         this.passPurseStart = this.purseNow();
         this.passTrade = { earned: 0, spent: 0, banked: 0, sold: [], bought: [], deposited: [] };
         try {
-          await this.pass();
+          await (this.s.runCommand ? this.s.runCommand(() => this.pass()) : this.pass());
           this.spend(Date.now() - began);
           this.notePassSucceeded();
         } catch (e) {
           this.spend(Date.now() - began);
+          if (e.code === 'COMBAT_PREEMPTED') continue;
           // A pass that throws must not kill the keeper — the session may simply have
           // gone away underneath it, and the next pass will find out properly.
           this.notePassFailed(e);
@@ -12718,6 +12724,14 @@ export class Autopilot {
   async pass() {
     const s = this.s;
     if (!s.live) { this.note('not in game'); return; }
+    if (s.combat?.active) {
+      await s.combat.tick();
+      if (s.combat.active) { this.doing = `combat: ${s.combat.active.phase}`; return; }
+    }
+    if (effectsAt(s.client, s.client?.self).length) {
+      this.doing = await escapeGroundEffect(s) ? 'leaving a ground effect' : 'ground effect: escape blocked';
+      return;
+    }
     const c = s.client;
     this.survivalInterruptedPass = null;
     observeSurvivalDecision(s);

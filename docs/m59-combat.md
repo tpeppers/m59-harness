@@ -1,5 +1,9 @@
 # What to fight, and what it costs
 
+For immediate player orders, ambushes, scripted combat sequences and live ground
+effects, see [Combat mode](m59-combat-mode.md). Ordinary farming rules below
+continue to apply outside an explicit combat override.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). The engagement ceiling, the spawn tables, the undead clock and the armour arithmetic.
 
 - **THE ENGAGEMENT CEILING IS A PROPORTION NOW, IT HAS ONE HOME, AND IT USED TO HAVE FOUR.**

@@ -2,6 +2,9 @@
 
 Room reconstruction now uses the same [held scene loader and native save workflow](m59-death-replay.md) as death replays. A scene establishment exposes preparation, explicit start, cleanup and a receipt; held native monster snapshots can be reused by raids and postmortems.
 
+For immediate behavioral overrides while an errand is running, use the
+`combat` commands described in [Combat mode](m59-combat-mode.md).
+
 **Paste this to an agent that is about to start work on a hard problem in this repository.**
 
 FleetScratch is where you work out an errand that does not exist yet. A **pad** is a file you edit

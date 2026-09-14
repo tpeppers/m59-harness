@@ -446,6 +446,7 @@ export function pulse(host, now, hp) {
 export function tick(host) {
   const s = host.s, c = s?.client;
   if (!c || s.live !== true || c.state !== 'game') return;
+  if (s.combat?.active) { void s.combat.tick(); return; }
   const w = host.watch;
   w.ticks++;
   const now = Date.now();

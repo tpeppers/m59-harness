@@ -252,6 +252,7 @@ session.replayCaptureEnabled = process.env.M59_REPLAY_CAPTURE !== '0';
 session.pacer; // exists from constructor
 
 let autopilot = null;
+session.combat.keeper = () => autopilot;
 let defaultPolicy = null;
 // The deterministic responder, held so `/state` can report whether this character can
 // actually hear -- see the attach in join(). Keeper stderr is discarded by the spawner
@@ -380,6 +381,7 @@ function renewHold(maxMs) {
 }
 
 function holdKeeper(why, maxMs, token = null) {
+  if (session.combat?.active) return { held: false, reason: 'combat override owns the body' };
   if (errandHold) {
     if (token && token === errandHold.token) return renewHold(maxMs);
     return { held: false, ours: false, reason: `already held: ${errandHold.why}`, hold: holdReport() };
@@ -844,6 +846,7 @@ function state() {
     character: me?.name ?? character,
     pid: process.pid,
     in_game: inGame,
+    combat: session?.combat?.status(),
     connection_revision: connectionRevision,
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //
@@ -1486,8 +1489,15 @@ const server = createServer(async (req, res) => {
       if (!requireAddressedWrite(req, ask)) return;
       const name = String(ask?.name ?? '');
       const args = ask?.args ?? {};
+      if (name === 'combat') { try {
+        const result = session.combat.issue(args);
+        if (result.accepted && errandHold) releaseKeeper('combat override accepted', errandHold.token);
+        json(result);
+      }
+        catch (e) { json({ error: e.message }, 409); } return; }
       if (!inGame) { json({ error: `${agent}: not in game` }, 409); return; }
       try {
+        await session.runCommand(async () => {
         switch (name) {
           case 'rts_tactical_intent': {
             json(startTacticalJob(session, autopilot, args,
@@ -2974,6 +2984,7 @@ const server = createServer(async (req, res) => {
             actionFallthrough = { name, args };
             break;
         }
+        });
       } catch (e) {
         json({ error: e?.message ?? String(e) }, 500);
         return;
@@ -3199,6 +3210,8 @@ const server = createServer(async (req, res) => {
                      object_id: c?.selfId ?? null,
                      ...renderState(c, me) } : null,
         objects,
+        ground_effects: session.world?.groundEffects?.() ?? [],
+        combat: session.combat?.status(),
         room_name: c?.rsc?.get?.(c.roomNameRsc) ?? null,
         // The MAP room number (session.world.room.num), NOT the runtime room id
         // (c.room.id). The runtime id does not match the world map's numbering:
@@ -3738,6 +3751,7 @@ const server = createServer(async (req, res) => {
     if (actionFallthrough) {
       const { name, args } = actionFallthrough;
       try {
+        await session.runCommand(async () => {
         let result;
         switch (name) {
           case 'walk':
@@ -4350,6 +4364,7 @@ const server = createServer(async (req, res) => {
             result = { error: `unknown action: ${name}` };
         }
         json(result);
+        });
       } catch (e) {
         json({ error: e.message }, 500);
       }

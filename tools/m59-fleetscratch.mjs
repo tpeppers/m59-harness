@@ -66,7 +66,8 @@ import { createInterface } from 'node:readline';
 import { watch, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { fleetScript, formatGuarantees, observe, pack } from './m59-fleetscript.mjs';
+import { fleetScript, fleetCombat, formatGuarantees, observe, pack } from './m59-fleetscript.mjs';
+import { parseCombatCommand, oneCombatOrder } from './m59-combat-orders.mjs';
 import { loadFleetScripts, applyDefaults, checkParams, asAgents,
          auditUnsafe, formatUnsafeAudit } from './m59-fleetlib.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
@@ -234,6 +235,8 @@ async function main() {
   say('commands: list | board | nearby <topic> | intend <topic> | reload | watch on|off |');
   say('          describe <pad> | check <pad> k=v… | dry <pad> k=v… | go <pad> k=v… |');
   say('          promote <pad> | guarantees | unsafe | quit');
+  say('          combat attack|ambush <player> agents=t1,t2 | combat stop|status agents=t1,t2');
+  say('          combat run <pad> k=v… — immediate override, even during a running errand');
   say('  on dry/go:  skipTo=<mark|n>   runUntil=<mark|n>   — a skip must be covered by a checkpoint');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
@@ -246,6 +249,26 @@ async function main() {
   let chain = Promise.resolve();
   let closing = false;
   const queue = fn => { chain = chain.then(fn, fn); return chain; };
+  let combatChain = Promise.resolve();
+  const urgent = line => {
+    const run = async () => {
+      try {
+        let result;
+        if (/^combat\s+run\s/i.test(line.trim())) {
+          const r = await resolve(line.trim().split(/\s+/).slice(2), { mustBePosted: true });
+          if (r.why) throw new Error(r.why);
+          if (r.pad.mode !== 'combat' || r.pad.setup || r.pad.teardown)
+            throw new Error('combat run needs a mode: combat pad with pure steps and no setup/teardown');
+          result = await fleetCombat({ agents: r.agents, fleet: FLEET,
+            order: async agent => oneCombatOrder(await r.pad.steps({ ...r.params, agent, agents: r.agents })) });
+        } else result = await fleetCombat({ ...parseCombatCommand(line), fleet: FLEET });
+        say(JSON.stringify(result));
+      } catch (e) { say(`combat: ${e.message}`); }
+      if (!closing) rl.prompt();
+    };
+    combatChain = combatChain.then(run, run);
+    return combatChain;
+  };
 
   // ------------------------------------------------------ the watcher: RENDER, NEVER RUN
   //
@@ -285,6 +308,9 @@ async function main() {
   });
 
   const renderStep = (step) =>
+    ['attack', 'ambush', 'stop', 'status'].includes(step.action) && !step.do
+    ? JSON.stringify(step)
+    :
     // NAME THE act VERB. `act` rendered as the bare word "act" told the author nothing about
     // which tool was about to be called, which is the one thing that matters about an act step.
     `${step.do === 'act' ? `act('${step.tool}')` : step.do}` +
@@ -299,7 +325,7 @@ async function main() {
     `${step.lines ? ` [${step.lines.map(l => `${l.match} x${l.amount}`).join(', ')}]` : ''}` +
     `${step.why ? `   (${step.why})` : ''}`;
 
-  rl.on('line', (line) => queue(async () => {
+  rl.on('line', (line) => /^combat(?:\s|$)/i.test(line.trim()) ? urgent(line) : queue(async () => {
     const [verb, ...rest] = line.trim().split(/\s+/).filter(Boolean);
     try {
       if (!verb) { /* blank */ }
@@ -564,6 +590,7 @@ async function main() {
               try {
                 const res = await fleetScript({
                   name: `${r.pad.name} (pad)`,
+                  mode: r.pad.mode ?? 'errand',
                   agents: r.agents,
                   // SLICED PER AGENT, because steps() is a function of the character and two
                   // characters can compile different lists. Re-planning here rather than reusing
@@ -622,7 +649,7 @@ async function main() {
     // "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)". Set a code and let the loop
     // drain -- the queue above has already waited for any running pad to finish, and
     // fleetScript frees every body it held in its own finally.
-    queue(async () => { say('bye'); process.exitCode = 0; });
+    queue(async () => { await combatChain; say('bye'); process.exitCode = 0; });
   });
 
   rl.prompt();

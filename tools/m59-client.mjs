@@ -1008,6 +1008,7 @@ export class M59Client {
     if (!Number.isInteger(x) || x < 0 || x > 0xffff
         || !Number.isInteger(y) || y < 0 || y > 0xffff)
       throw new RangeError(`movement coordinates must be unsigned 16-bit integers, got (${x},${y})`);
+    this.beforeMove?.({ x, y });
     this.send(BP.REQ_MOVE, u16b(y), u16b(x), u8b(speed), u32(objId(room || 0)));
     // OUR OWN TRAIL, AT THE RATE WE ACTUALLY WALK IT.
     //
@@ -2359,6 +2360,11 @@ export class M59Client {
   }
 
   send(op, ...parts) {
+    // Direct tick actions and delayed tool callbacks must honor the same body
+    // owner as paced packets. Connection maintenance and observation stay free.
+    if (this.state === 'game' && (op === BP.ACTION || op === BP.USERCOMMAND ||
+        (op >= BP.REQ_MOVE && op <= BP.CHANGE_DESCRIPTION && op !== BP.REQ_LOOK && op !== BP.REQ_INVENTORY) ||
+        op === BP.REQ_DEPOSIT || op === BP.REQ_WITHDRAWAL_ITEMS)) this.beforeGameMutation?.(op);
     // WHAT WE JUST ASKED FOR. Read by the `left` event to name a cause; see REQUEST_VERB.
     const verb = REQUEST_VERB[op === BP.USERCOMMAND ? 'uc' + (parts[0]?.[0] ?? '') : op];
     if (verb) this.lastItemRequest = { verb, at: Date.now() };

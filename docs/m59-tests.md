@@ -1,5 +1,12 @@
 # The offline test suites, and what each one pins
 
+Combat overrides: `node tools/m59-combat-mode-test.mjs` exercises preemption,
+arrival-triggered ambushes, exact player identity, sequences, expiry and survival.
+`node tools/m59-ground-effects-test.mjs` covers hazard identity, uncertain fog,
+spore extent, safe egress, segment crossings and projection lifecycle.
+`node tools/m59-combat-integration-test.mjs` covers the real Session sender,
+FleetScript fast path and FleetScratch input concurrency using offline fixtures.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time; they open no socket and touch no roster.
 
 ## The one that never fails, and why it is not a contradiction

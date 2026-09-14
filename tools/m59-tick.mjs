@@ -75,6 +75,10 @@
 // is the reason it is safe: it is the collision authority, it silently refuses an
 // illegal move, and a refusal costs a tick rather than a character.
 
+import { escapeGroundEffect } from './m59-combat-mode.mjs';
+import { effectsAt } from './m59-ground-effects.mjs';
+import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
+
 const DEFAULT_HZ = 10;
 // LIVENESS: the keepalive sends an inventory request every 20s and the server
 // replies. A live in-game session therefore receives a byte from the server at
@@ -247,6 +251,7 @@ export class Actuator {
     // matter (target moved). Sending them directly keeps the swing+face pair
     // atomic and at the correct rate.
     try {
+      bodyAuthority(this.session).guard();
       c.face(degrees);
       return { kind: 'face', at: Date.now(), ok: true };
     } catch (e) {
@@ -269,6 +274,7 @@ export class Actuator {
     // ~1 attack/s + occasional moves = well under 5/s. Direct send skips
     // the queue entirely; the packet goes out on the next socket flush.
     try {
+      bodyAuthority(this.session).guard();
       c.attack(targetId);
       return { kind: 'attack', at: Date.now(), ok: true };
     } catch (e) {
@@ -382,6 +388,7 @@ export class TickLoop {
   }
 
   tick() {
+    if (this.session.combat?.active) { void this.session.combat.tick(); return; }
     // RULE 5: overrun SKIPS. A decide that is still running means the world has moved
     // under the one in progress; running a second against an older frame would build a
     // backlog of decisions about a world that is gone.
@@ -390,7 +397,7 @@ export class TickLoop {
     // turn packet we send would interrupt the cast and make it fail. While _frozen is
     // set (by the /action cast override), the tick loop does NOTHING — no decide,
     // no actuate — so the character stands perfectly still until the cast resolves.
-    if (this._frozen) { return; }
+    if (this._frozen && !effectsAt(this.session.client, this.session.client?.self).length) { return; }
     this.busy = true;
     const t0 = Date.now();
     // DIAGNOSTIC: a heartbeat so a silent stall is visible. A tick loop that has stopped
@@ -434,6 +441,12 @@ export class TickLoop {
         return;  // do not decide against a dead session
       }
       this._livenessFlagged = false;
+      if (effectsAt(c, c.self).length) {
+        if (!this._escapingGround) this._escapingGround = withBodyCommand(this.session,
+          () => escapeGroundEffect(this.session)).catch(e => { this.stats.lastError = e.message; })
+          .finally(() => { this._escapingGround = null; });
+        return;
+      }
       // POSITION RECOVERY: the character is in-game but has no position (the room
       // contents were read but our own object isn't in them, or a room change dropped
       // us, or the client lost its self reference entirely after a transition). Without
@@ -456,7 +469,7 @@ export class TickLoop {
           } catch { /* best effort */ }
         }
       }
-      const out = this.decide(frame, this.actuator, this);
+      const out = withBodyCommand(this.session, () => this.decide(frame, this.actuator, this));
       // RULE 1, ENFORCED RATHER THAN TRUSTED. A decide that returns a promise is doing
       // something asynchronous, which is the exact habit this model exists to remove.
       // It is reported and NOT awaited -- awaiting it here would quietly reintroduce

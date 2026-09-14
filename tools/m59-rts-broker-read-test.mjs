@@ -95,6 +95,19 @@ try {
   });
   assert.equal(listed.status, 200);
   const tools = (await listed.json()).result.tools;
+  const combat = tools.find(tool => tool.name === 'combat');
+  assert.deepEqual(combat.inputSchema.required, ['agent', 'action']);
+  assert.deepEqual(combat.inputSchema.properties.action.enum, ['attack', 'ambush', 'stop', 'status']);
+  const wrongCombatFleet = await fetch(url, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'combat', arguments: { agent: 'no-live-fixture', action: 'attack',
+        target: 'Nobody', fleet_state: fileURLToPath(new URL('../substrate/wrong-combat-fleet.json', import.meta.url)) } } }),
+  });
+  const wrongCombatResult = (await wrongCombatFleet.json()).result;
+  assert.equal(wrongCombatResult.isError, true);
+  assert.match(wrongCombatResult.content[0].text, /WRONG BROKER/,
+    'combat refuses a mismatched fleet before resolving or touching a character');
   const attackIntent = tools.find(tool => tool.name === 'attack_intent');
   const moveIntent = tools.find(tool => tool.name === 'move_intent');
   const jump = tools.find(tool => tool.name === 'jump');
@@ -142,10 +155,10 @@ try {
 
   const source = readFileSync(broker, 'utf8');
   assert.match(source,
-    /function brokerGameEndpoints[\s\S]*?s[.]credentials [??][?] fleetState[.]get[(]agent[)][?][.]credentials/s,
+    /function brokerGameEndpoints[\s\S]*?s[.]credentials [??][?] rosterEntry[(]agent[)][?][.]credentials/s,
     'keeper-backed health attests the exact game endpoint from the roster used to spawn the keeper');
   assert.match(source,
-    /function requireControlEndpoint[\s\S]*?s[.]credentials [??][?] fleetState[.]get[(]s[?][.]name[)][?][.]credentials/s,
+    /function requireControlEndpoint[\s\S]*?s[.]credentials [??][?] rosterEntry[(]s[?][.]name[)][?][.]credentials/s,
     'the final write boundary retains exact endpoint checks for KeeperProxy sessions');
   assert.match(source,
     /function commanderKeeper[(]agent[)][\s\S]*?s instanceof KeeperProxy [?] s : autopilotIfAny[(]agent[)]/s,

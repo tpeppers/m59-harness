@@ -226,6 +226,7 @@ export async function runNamed(name, params, { scripts, fleetScript, onLog = con
 
   return fleetScript({
     name: `${name} (${script.source})`,
+    mode: script.mode ?? 'errand',
     agents,
     steps: agent => script.steps({ ...withDefaults, agent, agents }),
     minHealth: withDefaults.minHealth,

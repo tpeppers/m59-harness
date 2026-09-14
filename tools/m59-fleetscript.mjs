@@ -166,6 +166,15 @@ import { SAY_RADIUS, squaredDistance, withinSayRange,
 import { RAZA_ROOMS } from './m59-errandstate.mjs';
 import { FLEET_KEEP, foodValue, allFoodNames, allWandAndScrollNames } from './m59-items.mjs';
 import { recordEvent, readLedger } from './m59-ledger.mjs';
+import { dispatchCombatOrders, oneCombatOrder } from './m59-combat-orders.mjs';
+export { attackPlayer, ambushPlayer } from './m59-combat-orders.mjs';
+
+// Explicit urgent entry point. The broker checks roster identity in the same
+// request that dispatches the order; no health/snapshot preflight round trip.
+export async function fleetCombat({ agents, order, fleet = fleetName() } = {}) {
+  return dispatchCombatOrders({ agents, order,
+    send: (agent, command) => call('combat', { ...command, agent, fleet_state: stateFileFor(fleet) }, 8000) });
+}
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 // ---------------------------------------------------------------- GUARANTEE 9: PROVENANCE
@@ -3312,6 +3321,7 @@ async function runEvictionCheck(ctx, agent, step, call) {
 // (a withdrawal sized to what it already carries, say).
 export async function fleetScript({
   name, agents, steps, fleet = fleetName(), minHealth = 1, fragileBelow = 25, pollMs = 8000,
+  mode = 'errand',
   // WHICH CHARACTERS THIS SCRIPT WILL CONTROL, declared at the top of the script rather
   // than inferred from what it turns out to touch. This is the unit the lock is taken over
   // and the unit the guard enforces; see m59-control-guard.mjs for the argument. Omit it
@@ -3353,6 +3363,9 @@ export async function fleetScript({
 } = {}) {
   if (!Array.isArray(agents) || !agents.length) throw new Error('fleetScript needs agents');
   if (!steps) throw new Error('fleetScript needs steps');
+  if (mode === 'combat') return fleetCombat({ agents, fleet,
+    order: async agent => oneCombatOrder(typeof steps === 'function' ? await steps(agent, {}) : steps) });
+  if (mode !== 'errand') throw new Error(`unknown FleetScript mode: ${mode}`);
 
 
   // BEFORE THE LOCK AND BEFORE ANYTHING WALKS, because the whole value of the answer is

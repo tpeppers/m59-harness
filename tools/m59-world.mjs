@@ -32,6 +32,7 @@ import { isTerminalMovementReason } from './m59-movement.mjs';
 import { observedCrossings } from './m59-crossings.mjs';
 import { activeRoutes, anchorFor, sameRegion, anchorReach } from './m59-routes.mjs';
 import { resolveRoomWire } from './m59-room-wire.mjs';
+import { groundEffects, groundEffect } from './m59-ground-effects.mjs';
 
 // Marks used on the minimap. Chosen so the picture stays readable in a terminal and
 // so the important things are the ones that stand out: you, then players, then
@@ -1158,6 +1159,8 @@ export class World {
 
   // ------------------------------------------------------------------ objects
 
+  groundEffects() { return groundEffects(this.c); }
+
   objects({ includeAppearance = false } = {}) {
     const c = this.c, me = this.self;
     const list = [...c.room.objects.values()].filter(o => o.id !== c.selfId);
@@ -1194,6 +1197,8 @@ export class World {
         ...(includeAppearance ? renderState(c, o) : {}),
       };
       if (o.amount) out.amount = o.amount;
+      const effect = groundEffect(o, id => c.rsc.get(id));
+      if (effect) out.ground_effect = effect;
       if (o.flags & OF.PLAYER) {
         // Who is safe to be near. These bits come straight from the server's own
         // view of the relationship, so they are more trustworthy than a name.
@@ -1290,6 +1295,7 @@ export class World {
       vitals: c.vitals(),
       carrying: c.inventory.length,
       objects: this.objects({ includeAppearance: true }),
+      ground_effects: this.groundEffects(),
       exits: [],
       projection: 'render',
       topology_note: 'exits and reachability belong to the tactical look/room scene, not the render hot path',
@@ -1371,6 +1377,7 @@ export class World {
       vitals: c.vitals(),
       carrying: c.inventory.length,
       objects,
+      ground_effects: this.groundEffects(),
       ...(scenery.length ? { scenery: summariseScenery(scenery) } : {}),
       exits,
       // SERIALIZED CONTRACT: these legacy square strings are `"col,row"`.

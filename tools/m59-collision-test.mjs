@@ -1461,6 +1461,8 @@ const rideTrack = compileSessionMethod(brokerSource,
     // one method left the rest dead for as long as it existed. See m59-vitals-shape-test.
     readHealth,
     recallTrack: () => rideTrackFixture,
+    // Track shelter discovery is irrelevant to these geometry fixtures.
+    sheltersAlong: () => [],
     clearStrikes: () => {},
     strikeTrack: () => 1,
   });

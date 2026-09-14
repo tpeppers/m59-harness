@@ -43,7 +43,7 @@ import { ChatControls } from './m59-chat-controls.mjs';
 import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
@@ -6167,6 +6167,28 @@ async function factionSpeech(s, text) {
 }
 
 const TOOLS = [
+  {
+    name: 'combat',
+    description: 'Immediate keeper-side behavioral override: attack an exact player, ambush a player entering a map after taking a position, stop, or status. Preempts errands, movement and fighting. No rich snapshot or script setup wait. The survival floor and server packet pacing remain active. See docs/m59-combat-mode.md.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' }, action: { enum: ['attack', 'ambush', 'stop', 'status'] },
+      fleet_state: { type: 'string', description: 'Expected absolute roster path; mismatches refuse before dispatch' },
+      target: { type: ['string', 'number'], description: 'Exact player name; visible object id for attack only' },
+      map: { type: 'integer', description: 'Stable map number, e.g. 38' },
+      position: { type: 'object', properties: { row: { type: 'integer' }, col: { type: 'integer' } }, required: ['row', 'col'] },
+      door: { type: 'object', properties: { row: { type: 'integer' }, col: { type: 'integer' }, radius: { type: 'number' } }, required: ['row', 'col'], description: 'Optional arrival area in the ambush map; omitted means any entry' },
+      ttl_ms: { type: 'integer' }, stop_below: { type: 'number' },
+      sequence: { type: 'array', items: { type: 'object' }, description: '1..16 attack/cast/wait actions' },
+      repeat: { type: 'boolean' }, order_id: { type: 'string', description: 'Optional exact order id for stopping without cancelling a replacement' },
+    }, required: ['agent', 'action'] },
+    run: async a => {
+      if (a.fleet_state && resolve(a.fleet_state) !== resolve(STATE_FILE))
+        throw new Error('combat: WRONG BROKER — expected roster does not match this broker');
+      const s = session(a.agent);
+      if (s instanceof KeeperProxy) return keeperAction(a.agent, s._index, 'combat', a);
+      return s.combat.issue(a);
+    },
+  },
   {
     name: 'join',
     description: 'Log a character into Meridian 59 and return where it is. Call this first. ' +
@@ -16649,7 +16671,7 @@ const CALLER_INTERNAL = Object.freeze({ transport: 'internal', local: true });
 // demand split removes. Mutating keeper calls still perform their own cheap exact-identity
 // `/live` proof before writing.
 const SNAPSHOT_OPTIONAL_TOOLS = new Set([
-  'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave',
+  'wait_for_event', 'chat', 'say', 'inbox', 'converse', 'pilot', 'leave', 'combat',
 ]);
 
 async function callTool(name, args, caller) {
@@ -16759,7 +16781,10 @@ async function callTool(name, args, caller) {
 
   const t0 = Date.now();
   try {
-    const out = await t.run(args || {}, caller);
+    const targetSession = args?.agent ? sessions.get(args.agent) : null;
+    const out = name !== 'combat' && targetSession?.runCommand
+      ? await targetSession.runCommand(() => t.run(args || {}, caller))
+      : await t.run(args || {}, caller);
     // Say it in the ANSWER, not only in a log nobody is tailing. The caller that got this
     // wrong is the one reading this reply.
     if (unrecognised && out && typeof out === 'object' && !Array.isArray(out))
