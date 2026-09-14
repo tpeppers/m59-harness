@@ -20,12 +20,18 @@ Read these fields together:
 | `current` | Cached state at snapshot time; this may already be the Underworld. Earlier damage snapshots retain the room and bodies seen when health fell. |
 | `limits`, `dropped`, `suppressed`, `context_errors` | Retention bounds, rows evicted, repeated notes suppressed, and failed context reads. Missing history is not proof that nothing happened. |
 
-The announced forward wall appears as a `decision` with
+In records from before the September 14 recovery fix, an announced forward wall appears as a `decision` with
 `what: "taking the next wall on the route and mending there"`. The actual
 `refuge_selected.detail.selected` is a separate fact. Its `source`, `onward`,
 search counts and sharing/collision fields explain what the selector was given.
 A null selection is retained too. This does not preserve every rejected candidate
 or reconstruct an exact historical path through moving bodies.
+
+The recovery fix removes that preview selection and its announcement. Current records
+log `taking the selected safe spot` for the square actually claimed and approached;
+`refuge_selected.detail.recovery: true` identifies the nearest-local recovery search,
+which has no quarry or forward-exit bias. Combat continues choosing its own target/wall
+pair. See [recovery routing](m59-routing.md#the-exit-is-a-wall).
 
 `take_safe_spot` contains `refuge_exit` or `refuge_island_crossing` when those
 routes run. A normal wall approach contains `return_to_spot`, then `walk_to`,

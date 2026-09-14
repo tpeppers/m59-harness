@@ -21,6 +21,7 @@
 //     find itself somewhere else can find out why.
 
 import * as skills from './m59-skills.mjs';
+import { recoveryRefugeReach } from './m59-recovery-refuge.mjs';
 import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOperation,
          tracePassContext, traceBody, traceRefuge, survivalTraceSnapshot,
          survivalTraceSummary } from './m59-survival-trace.mjs';
@@ -44,7 +45,7 @@ import { recordRest } from './m59-restwatch.mjs';
 // `exposureAt` is the FORMULA for a safe wall and `RoomGeometry` says which grid the monster
 // uses. Imported so the survival ladder can ask the geometry directly instead of asking the
 // safe-spot book what used to work -- see wallHere().
-import { nearestSafeSpot, safeSpotBook, shelterAhead, coarseCombatReachFrom, PLAYER_REACH,
+import { nearestSafeSpot, safeSpotBook, coarseCombatReachFrom, PLAYER_REACH,
          exposureAt }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
@@ -3866,15 +3867,23 @@ export class Autopilot {
   }
 
   async takeSafeSpot(why, quarry = null, options = {}) {
+    if (options.recovery) quarry = null;
     return traceSurvivalOperation(this.s, 'take_safe_spot', {
       why, quarry: traceBody(quarry), source: options.source ?? 'fight',
       nearest_only: options.nearestOnly ?? false, after_exit: options.afterExit ?? false,
       near_quarry: options.nearQuarry ?? false, destination: options.destination ?? null,
+      recovery: options.recovery ?? false,
     }, () => this.takeSafeSpotObserved(why, quarry, options));
   }
 
+  // Healing chooses the shortest clear approach to an exclusive local wall. Combat
+  // later binds a quarry to its own wall through the ordinary target-first selector.
+  async takeRecoverySpot(why, { source = 'recovery' } = {}) {
+    return this.takeSafeSpot(why, null, { source, recovery: true, nearestOnly: true });
+  }
+
   async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
-                                           nearestOnly = false, afterExit = false,
+                                           nearestOnly = false, afterExit = false, recovery = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
@@ -3892,13 +3901,13 @@ export class Autopilot {
     // a fight or a rest, and then nothing below changes.
     // `nearestOnly` is the search on the far side of a crossing: the first available wall,
     // ranked by distance alone, and never the next exit — a stopover, not the destination.
-    const onward = source === 'travel' && !nearestOnly
+    const onward = source === 'travel' && !nearestOnly && !recovery
       ? (onwardGiven ?? this.onwardExit(room.num, destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to ?? null)) : null;
     // Once several independently tested walls have all failed, continuing to scan the
     // room is research, not survival. `noWallRooms` feeds the already-bounded choice
     // below between a safe open fight and relocating; it does not block the strategic
     // goal and is cleared with the keeper process.
-    const roomWallDecision = source === 'fight' ? this.noWallRooms?.get(room.num) : null;
+    const roomWallDecision = source === 'fight' && !recovery ? this.noWallRooms?.get(room.num) : null;
     if (roomWallDecision)
       return { took: false, unreachable_terrain: true, why: roomWallDecision };
 
@@ -4009,8 +4018,8 @@ export class Autopilot {
     // — which in an uncrowded room never occurs.
     // A quarry-bound pull wall is exclusive: the user asked for a spot with no other
     // person in it, and concurrent selectors must not both reserve the same empty square.
-    // Non-combat shelter keeps the established configurable spreading/share policy.
-    const exclusiveClaim = !!quarry;
+    // Recovery also requires an unoccupied square, even when sharing is configured.
+    const exclusiveClaim = !!quarry || recovery;
     const configuredShareCap = exclusiveClaim ? 1
       : Number.isFinite(this.policy.maxBotsPerSafeSpot) && this.policy.maxBotsPerSafeSpot > 0
         ? Math.max(1, Math.floor(this.policy.maxBotsPerSafeSpot)) : null;
@@ -4036,7 +4045,7 @@ export class Autopilot {
         const wallsAllowed = true;
         spot = this.searchSafeSpot(geo, me, room, {
           within, quarryReach, strictQuarryReach, los, quarry,
-          stats: spotStats, shareCap, nearQuarry, exclusiveClaim,
+          stats: spotStats, shareCap, nearQuarry, exclusiveClaim, recovery,
           onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1, wallsAllowed });
         if (!spot) break;
         const claimed = exclusiveClaim
@@ -4055,7 +4064,7 @@ export class Autopilot {
     traceSurvival(s, 'refuge_selected', { selected: traceRefuge(spot), source,
       quarry: traceBody(quarry), onward: traceRefuge(onward), nearest_only: nearestOnly,
       after_exit: afterExit, share_cap: shareCap, claim_collisions: claimCollisions,
-      search_counts: spotStats });
+      recovery, search_counts: spotStats });
     if (spot && Number.isFinite(shareCap) && shareCap > 1)
       this.note('sharing a wall rather than standing in the open', {
         with: spotOccupancy(this.s.name, room.num, spot.col, spot.row), at: { col: spot.col, row: spot.row },
@@ -4154,6 +4163,9 @@ export class Autopilot {
     }
     if ((spot.steps_away ?? 99) > 0) {
       this.doing = 'travelling';
+      this.note('taking the selected safe spot', {
+        to: { col: spot.col, row: spot.row }, steps_away: spot.steps_away ?? null,
+        source, recovery, why });
       // THE SQUARE IS THE WHOLE MECHANIC. THERE IS NOTHING FINER TO STAND ON.
       //
       // This used to aim 24 of the 64 fine units toward the wall on the theory that the
@@ -5597,9 +5609,8 @@ export class Autopilot {
     // An inn already has a gate with a longer rule than this one, and running both would mean
     // two thresholds for one question.
     if (this.sanctuary()) return { left: false };
-    // `source: 'travel'` is deliberate: it makes the selector judge walls against the door we
-    // are heading for rather than against a fight, which is what a stopover on a journey is.
-    const took = await this.takeSafeSpot(why, null, { source: 'travel' })
+    // Recover locally before starting the journey; its destination can wait.
+    const took = await this.takeRecoverySpot(why, { source: 'travel' })
                            .catch(e => ({ took: false, why: e.message }));
     if (took?.took) {
       this.setOffHurtNoted = false;
@@ -6011,13 +6022,15 @@ export class Autopilot {
   searchSafeSpot(geo, me, room, { within, quarryReach, strictQuarryReach = false,
                                   los, quarry, stats, shareCap = 1, nearQuarry = false,
                                   exclusiveClaim = false, onward = null, forwardBias = 1,
-                                  wallsAllowed = true }) {
+                                  wallsAllowed = true, recovery = false }) {
     const s = this.s;
     // One room search can inspect hundreds of candidate squares. Reading the shared
     // claim directory for every candidate would turn that into hundreds of lock/file
     // round-trips, so take one coherent snapshot for this selector. An atomic claim after
     // selection catches the only race a snapshot can leave, and its retry takes a fresh one.
     const spotClaims = snapshotSpotClaims();
+    const recoveryReach = recovery ? recoveryRefugeReach(geo, me,
+      s.client?.room?.objects, s.client?.selfId, s.client?.playersOnline) : null;
     return nearestSafeSpot(geo, me, {
       wallsAllowed,
       // WHAT MAKES A SQUARE A CANDIDATE. `wall` asks for a wall to stand against and
@@ -6044,13 +6057,11 @@ export class Autopilot {
       // is the primary order; proof and defensibility only break equal-distance ties.
       closestToToward: !!quarry,
       onward, forwardBias,
-      // Only offer walls the router agrees we can walk to — see reachTest.
-      reach: this.reachTest(),
       // The same exclusion the other three selectors apply — a wall we have just failed
       // to walk to is not a candidate, whichever rung is asking for one.
-      // Pull combat follows the user's literal occupancy rule: exclude another person's
-      // square, while non-combat shelter selection keeps the wider approach buffer.
-      unreachable: this.spotExclusions(room.num, { playerRadius: quarry ? 0 : 1 }),
+      // Recovery and pull combat use literal occupancy. A body beside a safe wall
+      // need not block the actual route into it; the recovery path check decides that.
+      unreachable: this.spotExclusions(room.num, { playerRadius: quarry || recovery ? 0 : 1 }),
       stats,
       toward: quarry ? { col: quarry.col, row: quarry.row } : null,
       // Skip squares already at the share cap, and squares nothing can be fetched to.
@@ -6062,6 +6073,7 @@ export class Autopilot {
           : spotTakenByAnother(this.s.name, room.num, col, r2, shareCap, spotClaims);
         if (claimed)
           return { reachable: false, reason: 'occupied at this share cap' };
+        if (recoveryReach) return recoveryReach(col, r2);
         return s.world.reach(col, r2);
       },
     });
@@ -6631,7 +6643,7 @@ export class Autopilot {
 
     const t0 = Date.now();
     const hpBefore = look.health;
-    const took = await this.takeSafeSpot('resting at a wall part-way through a journey', null,
+    const took = await this.takeRecoverySpot('resting at a wall part-way through a journey',
                                           { source: 'travel' })
       .catch(e => ({ took: false, why: e.message }));
     if (!took?.took) {
@@ -6945,15 +6957,14 @@ export class Autopilot {
                                && Number(this.crowdExit.room) === Number(this.s.world?.room?.num));
     if (askedByWatchdog) this.crowdExit = null;
     if (wedge?.refused || askedByWatchdog) {
-      // Escape a crowded wedge using the route's refuge search. It can now offer
-      // either a wall here or the onward exit. A wall means recovery owns the body;
+      // Escape a crowded wedge using the nearest local recovery wall.
+      // A wall means recovery owns the body;
       // falling through to the journey would immediately walk away from it.
       if (this.crowded()) {
         const here = this.s.world?.room?.num ?? null;
-        const onward = here != null ? this.onwardExit(here, Number(room)) : null;
         this.note('seeking shelter from a crowded wedge', { room: here, to: Number(room) });
-        const left = await this.takeSafeSpot('wedged in a crowd — need route shelter', null,
-                                             { source: 'travel', onward, destination: Number(room) })
+        const left = await this.takeRecoverySpot('wedged in a crowd — need route shelter',
+                                                 { source: 'travel' })
                                .catch(e => ({ took: false, why: e.message }));
         if (this.travelInterrupted() || this.s.movementWasCancelled?.(movementGeneration))
           return { arrived: false, paused: true, cancelled: true, reason: 'travel interrupted during wedge recovery' };
@@ -8087,29 +8098,10 @@ export class Autopilot {
    * resume already waits while health is climbing and goes when it stops.
    */
   async shelterForwardAndMend(why) {
-    const planned = this.s.activeShelter;
-    if (!planned?.spots?.length) return false;
-    let ahead = null;
-    try {
-      ahead = shelterAhead(planned.spots, planned.atStep ?? 0,
-                           { maxDetour: planned.maxDetour ?? 5,
-                             unreachable: this.unreachableIn(this.s.world?.room?.num ?? null),
-                             exitable: this.exitTest(),
-                             // The same line that grants unlimited shelter grants the BEST
-                             // wall rather than the next one — one threshold, not two, so
-                             // "this is an emergency" cannot mean two different things.
-                             emergency: (() => {
-                               const v = this.s.client?.vitals?.();
-                               const hp = v?.health?.max ? v.health.value / v.health.max : null;
-                               return hp !== null && hp < (this.policy.doomedInOpenBelow ?? 0.3);
-                             })() });
-    } catch { ahead = null; }
-    if (!ahead) return false;
-    this.note('taking the next wall on the route and mending there', {
-      to: { col: ahead.col, row: ahead.row }, detour: ahead.detour, why,
-      keeps: 'the destination — this is a stop on the journey, not the end of one',
-    });
-    const took = await this.takeSafeSpot(why, null, { source: 'travel' })
+    // Legacy entry point for an interrupted journey. Select once, through the
+    // recovery selector; takeSafeSpot logs the target it actually claims and walks to.
+    // A route-adjacent preview used to announce one wall and then discard its identity.
+    const took = await this.takeRecoverySpot(why, { source: 'travel' })
                            .catch(() => ({ took: false }));
     // Cancellation handled this pass too: the caller must not start a fallback
     // walk with a fresh generation after an outside owner stopped this one.
@@ -12285,9 +12277,9 @@ export class Autopilot {
 
     // ---- 1. NOT on a wall: go to the nearest one. Nowhere else.
     if (typeof this.takeSafeSpot !== 'function') return false;
-    const took = await this.takeSafeSpot(
+    const took = await this.takeRecoverySpot(
       `at ${v?.health?.value ?? '?'} health with ${near.length} in reach — the nearest wall is ` +
-      'the only place to be', null, { source: 'defensive' }).catch(() => null);
+      'the only place to be', { source: 'defensive' }).catch(() => null);
     if (took?.took) {
       this.note('defensive answer: to the nearest safe wall', {
         health: v?.health ? `${v.health.value}/${v.health.max}` : null,
@@ -15427,7 +15419,7 @@ export class Autopilot {
     // one more second, it is to never arrive at a hard crossing unable to run at all.
     // Sitting down is the only way to get it back — vigor above REST_VIGOR_CAP has to be
     // eaten — so this asks for exactly what the health trigger asks for and gets the same
-    // answer: a spot on the route ahead, the objective kept, and a resume when it is full.
+    // answer: the nearest clear recovery spot, the objective kept, and a resume when full.
     const vigorFloor = this.policy.travelVigorFloor ?? TRAVEL_VIGOR_FLOOR;
     const spentOnTheRoad = this.tooTiredToTravel(v);
     if ((this.wantsForwardShelter || poisonedAndFading || spentOnTheRoad)
@@ -15446,8 +15438,8 @@ export class Autopilot {
     if (hurt && (combatZone || spawnsHere) && !sheltered && !testing && !this.hold
         && (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000)) {
       this.wallTriedAt = Date.now();
-      const got = await this.takeSafeSpot(
-        'hurt in a room that spawns monsters — a wall before a rest', near[0] ?? hostiles[0] ?? null)
+      const got = await this.takeRecoverySpot(
+        'hurt in a room that spawns monsters — a wall before a rest')
         .catch(() => false);
       if (this.travelInterrupted() || got?.cancelled) return HANDLED;
       this.note('will not rest in the open here', {
@@ -15671,8 +15663,8 @@ export class Autopilot {
       // Both the primary list and that fallback have to be filtered, which is why the
       // confinement is applied inside `tryOut` rather than only to `ways`.
       if (confineOut?.length && !ways.length) {
-        const took = await this.takeSafeSpot(
-          'confined to this room and hurt — a wall is the way to rest here', null,
+        const took = await this.takeRecoverySpot(
+          'confined to this room and hurt — a wall is the way to rest here',
           { source: 'confinement' }).catch(() => null);
         this.note(took?.took ? 'took a wall instead of leaving' : 'confined, hurt, and no wall yet', {
           confined_to: confineOut.map(Number), spot: took?.spot ?? null,
@@ -17456,8 +17448,8 @@ export class Autopilot {
         // A wall first, if one is going and we do not already have it — resting with
         // something adjacent is only safe behind one.
         if (!this.hold && room)
-          await this.takeSafeSpot('too tired to fight — need somewhere safe to rest',
-                                  found[0] ?? null).catch(() => {});
+          await this.takeRecoverySpot('too tired to fight — need somewhere safe to rest')
+            .catch(() => {});
         const r = await skills.restUntil(s, {
           health: 0.98, vigor: REST_VIGOR_CAP, maxSeconds: 120 }).catch(() => null);
         this.tally.rests++;
@@ -19267,8 +19259,8 @@ export class Autopilot {
     }
     // Then go and get a wall. Not resting again until we have one.
     {
-      const got = await this.takeSafeSpot('hit while resting — need a square that holds',
-                                          near[0] ?? null).catch(() => false);
+      const got = await this.takeRecoverySpot('hit while resting — need a square that holds')
+        .catch(() => false);
       this.note('moving rather than resting again', { got_a_wall: !!got?.took, shed_aggro: dropped,
         why: 'resting again where we were just hit is the loop that kills characters "while resting"' });
     }
@@ -22511,16 +22503,9 @@ export class Autopilot {
                      (!this.wallTriedAt || Date.now() - this.wallTriedAt > 30_000);
       if (mayTry) {
         this.wallTriedAt = Date.now();
-        // Not threat(), which reads names through `rsc` and is a heavier question than
-        // "what should this wall be biased toward".
-        const at = c?.self;
-        const foe = at && c?.room?.objects
-          ? [...c.room.objects.values()].find(o =>
-              o.id !== c.selfId && (o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)) ?? null
-          : null;
-        const took = await this.takeSafeSpot(
+        const took = await this.takeRecoverySpot(
           'the inn walk is off and the doctrine says a wall — taking one here',
-          foe, { source: 'retreat' }).catch(() => null);
+          { source: 'retreat' }).catch(() => null);
         if (took?.took) {
           this.note('took a wall instead of an inn', {
             room: here, spot: took.spot ?? null, ...why,
@@ -22647,12 +22632,11 @@ export class Autopilot {
       return;
     }
 
-    // Somewhere defensible to run TO. Aim it at whatever is hitting us so the square
-    // it picks is one the fight can actually be held at, and so we do not retreat into
-    // a corner the threats simply follow us into.
-    const spot = await this.takeSafeSpot(
-      'withdrawing from a fight we are losing — to a wall, not into the open',
-      threats[0] ?? null).catch(() => ({ took: false }));
+    // Withdraw to recover. The nearest clear wall wins regardless of where a future
+    // fight could be held; quarry-to-wall pairing belongs to combat after recovery.
+    const spot = await this.takeRecoverySpot(
+      'withdrawing from a fight we are losing — to a wall, not into the open')
+      .catch(() => ({ took: false }));
     if (spot.took) {
       this.tally.withdrawals_to_a_wall = (this.tally.withdrawals_to_a_wall || 0) + 1;
       this.note('withdrew to a defensible square', {
@@ -22662,75 +22646,9 @@ export class Autopilot {
       return;
     }
 
-    // NO CORNER, AND NO PERSON — SO THERE IS NOTHING HERE WORTH WALKING AWAY FOR.
-    //
-    // This branch's own comment has always said it "precedes most of the deaths", and the
-    // record finally says why. Bbbb, crossing the Cragged Mountains: the wall rung fired at
-    // 2 health, the wall could not be reached, and this fallback picked a square six away
-    // from the nearest troll WITH NO REGARD FOR WHERE THE JOURNEY WAS GOING. It walked east
-    // to 38,25 — twenty squares off a rail that runs down column 18 — and died there.
-    //
-    // Distance does not work on a monster. Vision is 4 + difficulty/2 squares
-    // (monster.kod:1676) and they follow, so this buys seconds and spends them walking
-    // AWAY from the door. Fifty seconds in that room, nine squares of net progress, against
-    // a human who crosses it in about ten. The exposure is the thing that kills, and this
-    // branch is what makes the exposure long.
-    //
-    // A person is the exception, exactly as in the flee rung: a wall says nothing about
-    // somebody who can walk to the same square, and distance is the only answer to them.
-    // So for monsters this declines and the character carries on to where it was going —
-    // which is also the only direction that ends the exposure.
-    // DURING A JOURNEY, "WITHDRAW" MEANS THE NEXT WALL FORWARD.
-    //
-    // The route already knows where the walls are: `sheltersAlong` worked them out when the
-    // crossing was planned, and `shelterAhead` returns the next one that is still IN FRONT
-    // and within a short detour. Going to that is a withdrawal and a hop of progress at the
-    // same time, which is the only kind of withdrawal that ends the exposure — the room is
-    // what is dangerous, and every square toward the exit is a square closer to leaving it.
-    //
-    // Bbbb died proving the alternative: sent six squares from the nearest troll with no
-    // regard for direction, it went east to 38,25, twenty squares off a rail running down
-    // column 18.
-    const journey = this.travelling;
-    const planned = this.s.activeShelter;
-    if (journey && planned?.spots?.length && !this.strangersInReach().length) {
-      let ahead = null;
-      try {
-        ahead = shelterAhead(planned.spots, planned.atStep ?? 0,
-                             { maxDetour: planned.maxDetour ?? 5,
-                               unreachable: this.unreachableIn(this.s.world?.room?.num ?? null) });
-      } catch { ahead = null; }
-      if (ahead) {
-        this.note('withdrawing FORWARD — the next wall on the route', {
-          to: { col: ahead.col, row: ahead.row }, detour: ahead.detour,
-          threats: threats.length,
-          why: 'the room is what is dangerous, so a withdrawal that goes backwards pays the ' +
-               'exposure twice. This one is a wall AND a hop of progress.',
-        });
-        const took = await this.takeSafeSpot('withdrawing forward to the next wall on the route',
-                                             threats[0] ?? null, { source: 'travel' })
-                               .catch(() => ({ took: false }));
-        if (took?.took) return { withdrawn: true, forward: true };
-        // Falling through is deliberate: an unreachable wall is already remembered by
-        // `takeSafeSpot`, so the next pass picks a different one or none at all.
-      }
-    }
-
-    // AND THERE IS NO WALKING AWAY LEFT. A WITHDRAWAL IS A WALL, OR IT IS FORWARD.
-    //
-    // This branch used to pick any square six from the nearest threat and walk to it. Its own
-    // comment always said it "precedes most of the deaths", and the record says why: Bbbb,
-    // crossing the Cragged Mountains at 2 health with no reachable wall, was sent EAST to
-    // 38,25 — twenty squares off a rail running down column 18 — and died there.
-    //
-    // Distance does not work on a monster, which follows; and against a person a wall says
-    // nothing anyway, which is why the answer to somebody hostile is to end the JOURNEY (see
-    // passTravelling) rather than to shuffle across the room. Either way this branch was
-    // spending the seconds that kill, in the direction that helps least.
-    //
-    // So: a wall if there is one, the next wall on the route if we are travelling, and
-    // otherwise carry on. The room is what is dangerous; the exit is the only square that
-    // ends it.
+    // The recovery search already considered every local wall. Do not select and
+    // announce another forward candidate that would be discarded by a second search.
+    // With no clear wall, leave the existing no-wandering fallback in control.
     this.note('not walking away — nowhere here is safer than here', {
       threats: threats.length,
       why: 'a monster follows, so distance buys seconds and spends them going nowhere. There ' +

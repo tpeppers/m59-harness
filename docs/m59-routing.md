@@ -1146,6 +1146,32 @@ the perp walk, the walker's blink ask and kill-and-continue, above.
 
 ## The exit is a wall
 
+**Recovery override, 2026-09-14.** Health/vigor recovery, withdrawal, and a journey
+paused to recover use `takeRecoverySpot`: no quarry, no forward-progress bonus and no
+exit candidate. The nearest canonical safe wall by passable approach length wins.
+Its square must be unoccupied and exclusively reservable; the route avoids currently
+visible players, attackable creatures and movement-blocking objects. Unlike the wider
+legacy shelter buffer, a body beside the target is not itself a refusal when a clear
+route reaches it. Geometry must offer the final step too (`goalExempt: false`). A
+walk-through corpse is not a blocker. This is a cached snapshot, not a guarantee that
+bodies will stay still during the approach.
+
+This intentionally gives up forward progress, shared-wall capacity and some optimistic
+fine-approach opportunities to reach local recovery cover. Quarry selection runs
+separately once the existing readiness gates allow combat, and binds its own closest
+valid wall. Recovery never crosses an internal partition to reach a quarry's side.
+`m59-recovery-refuge-test.mjs` exercises these distinctions against the movement
+geometry, occupancy and cross-keeper reservations.
+
+The forward-preview search in `shelterForwardAndMend` and the duplicate one in
+`withdraw` are gone. The selector logs `taking the selected safe spot` immediately
+before walking to that selected square; it does not announce a throwaway target first.
+An unsuccessful recovery search does not start another forward search in `withdraw`.
+
+The general onward-exit mechanism below remains available to callers that explicitly
+request a travel-biased safe-spot search; automatic route/track shelter callbacks retain
+their own route-adjacent selection. The recovery override is independent of those.
+
 Operator, 2026-09-01. A retreat on a journey looks for the nearest safe wall; **the room's
 onward exit is one of them**. Crossing a room boundary breaks every attack on you, which is
 the property a wall is chosen for. What the exit lacks is a place to heal, and the **first
