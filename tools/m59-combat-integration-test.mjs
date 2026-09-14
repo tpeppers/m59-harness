@@ -67,10 +67,19 @@ try {
     assert.equal(body.params.name, 'combat', 'no status, health, lease or inventory preflight');
     return { json: async () => ({ result: { content: [{ type: 'text', text: JSON.stringify({ accepted: true, order_id: 'fixture' }) }] } }) };
   };
-  const { fleetScript, attackPlayer } = await import('./m59-fleetscript.mjs');
+  const { fleetScript, attackPlayer, fleetCombat, killPlayer } = await import('./m59-fleetscript.mjs');
   const result = await fleetScript({ name: 'fast path', mode: 'combat', agents: ['a', 'b'], steps: [attackPlayer('Target')] });
   assert.equal(result.ok, true); assert.equal(calls.length, 2);
   assert.ok(calls[0].arguments.fleet_state.endsWith('combat-offline-fixture.json'));
+  globalThis.fetch = async (_url, opts) => {
+    const p = JSON.parse(opts.body).params; calls.push(p);
+    assert.equal(p.name, 'combat_order');
+    assert.equal(p.arguments.room, 'Upstairs Castle Victoria');
+    assert.equal(p.arguments.action, 'kill');
+    return {json: async () => ({result: {content: [{type:'text', text:JSON.stringify({ok:true, results:[]})}]}})};
+  };
+  await fleetCombat({room:'Upstairs Castle Victoria', order:killPlayer('Target')});
+  assert.equal(calls.length, 3, 'room selection must use one RPC, without fleet inspection');
   globalThis.fetch = async () => ({ json: async () => ({ result: { isError: true,
     content: [{ type: 'text', text: 'error: WRONG BROKER' }] } }) });
   const refusal = await fleetScript({ mode: 'combat', agents: ['a'], steps: [attackPlayer('Target')] });
@@ -106,16 +115,22 @@ try {
     const p=JSON.parse(opts.body).params;
     if(p.name!=='combat')throw Error('unexpected RPC '+p.name);
     console.log('FIXTURE_COMBAT_SENT:'+p.arguments.action);
+    if(p.arguments.action==='attack'){
+      await new Promise(r=>setTimeout(r,500));console.log('FIXTURE_ATTACK_REPLY');
+    }
     return {json:async()=>({result:{content:[{type:'text',text:JSON.stringify({accepted:true,order_id:'fixture'})}]}})};
   };`);
   child = spawn(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./m59-fleetscratch.mjs', import.meta.url))],
     { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  let output = '', sent = false;
+  let output = '', sent = false, stopped = false;
   child.stdout.on('data', chunk => {
     output += chunk;
     if (!sent && output.includes('FIXTURE_SLOW_STARTED')) {
       sent = true;
-      child.stdin.end('combat attack "Target" agents=a\ncombat run ambush agents=a\nquit\n');
+      child.stdin.write('combat attack "Target" agents=a\ncombat run ambush agents=a\n');
+    }
+    if (!stopped && output.includes('FIXTURE_COMBAT_SENT:attack') && output.includes('FIXTURE_COMBAT_SENT:ambush')) {
+      stopped = true; child.stdin.end('combat stop agents=a\nquit\n');
     }
   });
   child.stderr.on('data', chunk => { output += chunk; });
@@ -127,9 +142,11 @@ try {
   });
   assert.ok(output.includes('FIXTURE_COMBAT_SENT:attack'), output);
   assert.ok(output.includes('FIXTURE_COMBAT_SENT:ambush'), output);
+  assert.ok(output.includes('FIXTURE_COMBAT_SENT:stop'), output);
+  assert.ok(output.indexOf('FIXTURE_COMBAT_SENT:stop') < output.indexOf('FIXTURE_ATTACK_REPLY'), output);
   assert.ok(output.indexOf('FIXTURE_COMBAT_SENT:attack') < output.indexOf('FIXTURE_SLOW_FINISHED'), output);
   assert.ok(output.indexOf('FIXTURE_COMBAT_SENT:ambush') < output.indexOf('FIXTURE_SLOW_FINISHED'), output);
-  console.log('PASS real FleetScratch dispatches direct and posted-pad combat while ordinary work awaits');
+  console.log('PASS FleetScratch combat and stop bypass both ordinary work and pending combat receipts');
 } finally {
   if (child && child.exitCode === null) child.kill();
   assert.equal(dirname(resolve(root)), resolve(tmpdir()));

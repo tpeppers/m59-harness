@@ -37,7 +37,8 @@ and the same intent waits again if the player vanishes.
 The CLI makes one `combat_order` MCP call carrying the expected absolute roster
 path. That identity check happens before dispatch in the same request. There is
 no separate fleet/look/status preflight. Healthy keepers receive commands in
-parallel; the broker waits at most 200 ms for initial receipts. `pending` is
+parallel; the broker uses a 200 ms window for initial receipts. A busy broker
+event loop can extend that window, especially during startup. `pending` is
 unconfirmed delivery, not acceptance. Query `status` by command ID to inspect
 current keeper states, and use `stop` by that ID even if delivery is still pending.
 Commands carry an ordering revision; late older commands and stopped command
