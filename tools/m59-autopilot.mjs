@@ -20,6 +20,7 @@
 //   * everything it does is in the journal with a reason. An agent that comes back to
 //     find itself somewhere else can find out why.
 
+import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import * as skills from './m59-skills.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
@@ -13466,6 +13467,18 @@ export class Autopilot {
           death.note_unattended = 'nothing was driving this character when it died — ' +
             'do not read this as evidence about the hunting strategy';
         }
+        // Capture messages delivered during the wait without mixing later deaths.
+        if (this.lastDeath === death) {
+          const seen = new Set((pm.text ?? []).map(e => JSON.stringify([e.at, e.kind, e.text])));
+          for (const e of this.recentText(30)) {
+            const key = JSON.stringify([e.at, e.kind, e.text]);
+            if (!seen.has(key) && Math.abs(e.at - death.at) <= 5000) {
+              (pm.text ??= []).push(e); seen.add(key);
+            }
+          }
+        }
+        applyDeathAttribution(pm);
+        const attribution = pm.death_attribution;
         const file = this.writePostMortem(pm);
         death.post_mortem = file;
         if (this.lastDeath === death) this.lastPostMortem = pm;
@@ -13480,19 +13493,11 @@ export class Autopilot {
         // arguing with the escape. It fires on the next ordinary pass.
         const pendingDeath = {
           killed_by: death.killed_by?.[0] ?? null,
-          // THE ONE DISTINCTION A FLEET MOST LIKELY WANTS TO ACT ON DIFFERENTLY, and it
-          // is read off the ARTICLE rather than off a field, because there is no field.
-          // `system.kod` broadcasts `### X was just killed by a troll.` for a creature and
-          // `### X was just killed by Yorick.` for a person — the parser strips the
-          // article, so the raw text is the only place the difference survives.
-          //
-          // A HEURISTIC, AND LABELLED AS ONE. A proper noun with no article is the
-          // signature, and it is not proof: it is wrong about anything the game names
-          // without an article. So the playbook gets the reading and the record keeps the
-          // sentence, and nothing here reports it as though the server said it.
-          was_killed_by_player: bcast?.text
-            ? !/killed by (?:an?|the)\s/i.test(bcast.text) : null,
-          killed_by_player_is_a_guess: !!bcast?.text,
+          // Explicit murder is certain; article-based player guesses remain labelled.
+          was_killed_by_player: attribution.was_killed_by_player,
+          killed_by_player_is_a_guess: attribution.killed_by_player_is_a_guess,
+          death_kind: attribution.kind,
+          death_attribution: attribution,
           room: death.room_num ?? null,
           purse_lost: death.purse ?? null,
           level: levelAfterDeath,
@@ -13504,7 +13509,9 @@ export class Autopilot {
         if (this.lastDeath === death) this.pendingDeath = pendingDeath;
         tougher.recordDeath(this.who(), {
           at: death.at, killer: death.killed_by?.[0] ?? null,
-          observed: !!bcast?.killer,
+          observed: attribution.observed, how: attribution.how,
+          death_kind: attribution.kind, cause_observed: attribution.cause_observed,
+          attribution_sources: attribution.evidence.map(e => e.source),
           room: death.died_in, room_num: death.room_num,
           level: death.level, in_safe_spot: !!diedHolding,
         });

@@ -53,6 +53,7 @@
 // with a count, because "we do not know where 253 of these happened" is a finding and
 // silently dropping them would hide it.
 
+import { attributeDeath, deathCauseLabel } from './m59-death-attribution.mjs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -228,25 +229,7 @@ export const WATCH_MS = Number(process.env.M59_KEEPER_WATCH_MS || 8_000);
 
 // ------------------------------------------------------------------ what killed it
 
-export function causeOf(pm) {
-  const b = pm?.killed_by_broadcast;
-  if (b?.killer)
-    return { killer: b.killer, observed: true, how: b.how ?? 'killed', said: b.text ?? null,
-             why: 'the server announced it to the world' };
-  // The fallback, and it is labelled rather than dressed up. `was_nearby` is what the
-  // keeper could see at the end; the most-common member of that crowd was the real
-  // killer in 51% of the deaths where both were available.
-  const crowd = pm?.summary?.was_nearby ?? pm?.threats?.present_at_the_end ?? [];
-  if (!crowd.length)
-    return { killer: null, observed: false, how: null, said: null,
-             why: 'no broadcast reached us and nothing was in view at the end' };
-  const tally = new Map();
-  for (const c of crowd) tally.set(c, (tally.get(c) || 0) + 1);
-  const top = [...tally.entries()].sort((a, b2) => b2[1] - a[1])[0][0];
-  return { killer: top, observed: false, how: null, said: null, crowd,
-           why: 'no broadcast — this is only the commonest thing standing nearby, which ' +
-                'matches the real killer about half the time' };
-}
+export function causeOf(pm) { return attributeDeath(pm); }
 
 // ------------------------------------------------------------------ where it died
 
@@ -461,7 +444,7 @@ export function digest(file) {
     at_a_safe_wall: pm.summary?.at_a_safe_wall ?? null,
     wall_death_by_monster: (() => {
       const w = pm.summary?.at_a_safe_wall;
-      if (!w) return false;
+      if (!w || causeOf(pm).was_killed_by_player === true) return false;
       const people = (w.players_present ?? []).length > 0;
       return !people && (w.killed_by ?? []).length > 0;
     })(),
@@ -499,12 +482,34 @@ const bucket = (rows, keyOf, labelOf = keyOf) => {
   })).sort((a, b) => b.value - a.value);
 };
 
+export function causeGroups(rows, mode = 'individual') {
+  const player = c => c.was_killed_by_player === true && !c.killed_by_player_is_a_guess;
+  if (mode === 'pvp-pve') return {
+    children: bucket(rows, r => {
+      const c = r.cause;
+      if (!c.cause_observed) return 'Unknown';
+      if (player(c)) return 'PvP';
+      if (c.kind === 'environment' || c.kind === 'self_inflicted' ||
+          (c.observed && c.was_killed_by_player === false)) return 'PvE';
+      return 'Unknown';
+    }),
+    total: rows.length,
+    note: 'All deaths: PvP has player-kill evidence; PvE includes creatures, environmental deaths and own folly. Unresolved causes and nearby-actor guesses are Unknown.',
+  };
+  const confirmed = rows.filter(r => r.cause.cause_observed ?? r.cause.observed);
+  return { children: bucket(confirmed, r => mode === 'all-players' && player(r.cause)
+    ? 'All players' : deathCauseLabel(r.cause)), total: confirmed.length,
+    note: 'Server-confirmed causes. ' + (mode === 'all-players' ? 'Player killers are grouped together. ' : 'Player killers are named individually. ') +
+      'Click a source to see its victims. Nearby-actor guesses are shown separately.',
+  };
+}
+
 export function facets(rows) {
   // CAUSE splits on whether the killer was OBSERVED, at the top level, because mixing a
   // server announcement with a 51%-accurate guess produces a number that is neither.
-  const observed = rows.filter(r => r.cause.observed);
-  const guessed = rows.filter(r => !r.cause.observed && r.cause.killer);
-  const unknown = rows.filter(r => !r.cause.killer).length;
+  const observed = rows.filter(r => r.cause.cause_observed ?? r.cause.observed);
+  const guessed = rows.filter(r => !(r.cause.cause_observed ?? r.cause.observed) && r.cause.killer);
+  const unknown = rows.length - observed.length - guessed.length;
 
   // PLACE is trusted-only, by construction. This is the facet the whole trust rule
   // exists for — an unplaced death contributes to the count and to nothing else.
@@ -512,13 +517,13 @@ export function facets(rows) {
 
   return {
     cause: {
-      children: bucket(observed, r => r.cause.killer),
+      children: bucket(observed, r => deathCauseLabel(r.cause)),
       total: observed.length,
       inferred: bucket(guessed, r => r.cause.killer),
       inferred_total: guessed.length,
       unknown,
-      note: `${observed.length} of ${rows.length} deaths were announced by the server and name ` +
-            `the killer outright. ${guessed.length} are a guess from what was standing nearby, ` +
+      note: `${observed.length} of ${rows.length} deaths have server-confirmed causes, including ` +
+            `murders with an unnamed player. ${guessed.length} are a guess from what was standing nearby, ` +
             'which matches about half the time, and are kept separate for that reason' +
             (unknown ? `. ${unknown} have neither` : ''),
     },

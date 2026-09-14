@@ -13,7 +13,8 @@
 // The nav, the stylesheet and the inlined treemap used to live here and now live in
 // m59-page-chrome.mjs, because five boards carrying five copies of one tab list means a
 // sixth board is invisible from whichever copy nobody remembered to edit.
-import { loadPostmortems, facets, digest, TRUST_MS } from './m59-postmortems.mjs';
+import { deathCauseLabel } from './m59-death-attribution.mjs';
+import { loadPostmortems, facets, causeGroups, digest, TRUST_MS } from './m59-postmortems.mjs';
 import { allGains, toughSummary, allFeeds, FEED_SIZE } from './m59-tougher.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { lore, roomLink } from './m59-dashboard.mjs';
@@ -63,10 +64,14 @@ function renderDigest(d) {
   var place = w.trusted
     ? w.room + ' <span class="dim">(' + w.col + ',' + w.row + ')</span>'
     : '<span class="guess">not known — ' + w.why + '</span>';
-  var killer = c.killer
-    ? c.killer + (c.observed ? ' <span class="pill obs">announced</span>'
-                             : ' <span class="pill inf">a guess</span>')
-    : '<span class="dim">nothing named it</span>';
+  var killer = safeText(c.killer || (c.kind === 'player_murder' ? 'Unnamed player' :
+    c.kind === 'environment' ? 'Environment' : c.kind === 'self_inflicted' ? 'Own folly' : 'Unattributed')) +
+    (c.kind === 'player_murder' ? ' <span class="pill obs">player murder</span>' : '') +
+    (c.cause_observed ? ' <span class="pill obs">server-confirmed</span>' :
+      c.killer ? ' <span class="pill inf">a guess</span>' : '');
+  var evidence = (c.evidence || []).map(function(e) {
+    return '<div>' + safeText(e.source) + ': ' + safeText(e.text) + '</div>';
+  }).join('');
   var text = (d.text || []).map(function (t) {
     return '<div><span class="t">-' + (t.dt / 1000).toFixed(1) + 's</span> ' + t.text + '</div>';
   }).join('');
@@ -93,6 +98,7 @@ function renderDigest(d) {
     (d.during_keeper_outage ? kv('caveat', '<span class="guess">nothing was driving this character' +
       ' — do not read it as evidence about the strategy</span>') : '') +
   '</div>' +
+  (evidence ? '<div class="log"><b>Death attribution</b>'+evidence+'</div>' : '') +
   '<div class="log"><b>Survival decisions</b>'+survival+'</div>' +
   (text ? '<div class="log">' + text + '</div>' : '');
 }
@@ -133,7 +139,7 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
   const rows = characters ? all.filter(r => characters.has(r.character)) : all;
   const f = facets(rows);
   const placed = rows.filter(r => r.where.trusted).length;
-  const observed = rows.filter(r => r.cause.observed).length;
+  const observed = rows.filter(r => r.cause.cause_observed).length;
   const inSpot = rows.filter(r => r.in_safe_spot).length;
   const unattended = rows.filter(r => r.during_keeper_outage).length;
   const blind = rows.filter(r => r.keeper.up === true && !r.keeper.watching).length;
@@ -145,11 +151,10 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
       <td>${esc(r.character ?? '?')}</td>
       <td class="dim">${r.level ?? '—'}</td>
       <td class="keeper">${keeperCell(r.keeper)}</td>
-      <td>${r.cause.killer
-            ? `${lore(r.cause.killer)} ${r.cause.observed
-                 ? '<span class="pill obs">announced</span>'
-                 : '<span class="pill inf">a guess</span>'}`
-            : '<span class="dim">unattributed</span>'}</td>
+      <td>${esc(deathCauseLabel(r.cause))}
+        ${r.cause.kind === 'player_murder' ? '<span class="pill obs">player murder</span>' : ''}
+        ${r.cause.cause_observed ? '<span class="pill obs">server-confirmed</span>' :
+          r.cause.killer ? '<span class="pill inf">a guess</span>' : ''}</td>
       <td>${r.where.trusted
             ? roomLink(r.where.room, r.where.num)
             : `<span class="guess" title="${esc(r.where.why)}">not known</span>`}</td>
@@ -157,6 +162,8 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
                      : esc(r.hunting ? 'hunting ' + r.hunting : (r.doing ?? '—'))}</td>
     </tr>`).join('');
 
+  const CAUSE_MODES = Object.fromEntries(['individual', 'all-players', 'pvp-pve'].map(mode =>
+    [mode, { ...causeGroups(rows, mode), unit: 'deaths', empty: 'no deaths with this evidence in the window' }]));
   const FACETS = {
     cause: { ...f.cause, unit: 'deaths', empty: 'no death was announced by the server in this window' },
     place: { ...f.place, unit: 'deaths', empty: 'nothing in this window has a location we can stand behind' },
@@ -181,8 +188,8 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
   <div class="cards">
     <div class="card"><div class="k">deaths</div><div class="v">${rows.length}</div>
       <div class="n">each costs a point of max health, for ever</div></div>
-    <div class="card"><div class="k">killer announced</div><div class="v good">${observed}</div>
-      <div class="n">${rows.length ? Math.round(100 * observed / rows.length) : 0}% — the rest is inference</div></div>
+    <div class="card"><div class="k">cause confirmed</div><div class="v good">${observed}</div>
+      <div class="n">${rows.length ? Math.round(100 * observed / rows.length) : 0}% — named killers and explicit causes</div></div>
     <div class="card"><div class="k">location trusted</div><div class="v">${placed}</div>
       <div class="n">${rows.length - placed} we cannot place at all</div></div>
     <div class="card"><div class="k">died in a safe spot</div><div class="v ${inSpot ? 'bad' : 'good'}">${inSpot}</div>
@@ -201,6 +208,12 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
       <button data-facet="inferred">Guessed killers</button>
       <button id="tm-back" style="display:none">← all</button>
     </div>
+    <fieldset id="cause-grouping" style="border:0;padding:0 0 .75rem;margin:0">
+      <legend style="font-size:.82rem;margin-bottom:.35rem">Group causes</legend>
+      <label><input type="radio" name="cause-group" value="individual" checked> Individual players</label>
+      <label><input type="radio" name="cause-group" value="all-players"> All players</label>
+      <label><input type="radio" name="cause-group" value="pvp-pve"> PvP/PvE</label>
+    </fieldset>
     <svg id="tm"></svg>
     <div class="caveat" id="facet-note"></div>
   </div>
@@ -218,9 +231,23 @@ export function renderDeaths({ hours = 168, characters = null } = {}) {
 </div>
 <script>
 var FACETS = ${JSON.stringify(FACETS)};
+var CAUSE_MODES = ${JSON.stringify(CAUSE_MODES)};
 ${TREEMAP_JS}
 ${DEATH_LOG_JS}
 ${FACET_WIRING_JS}
+document.querySelectorAll('input[name="cause-group"]').forEach(function (radio) {
+  radio.addEventListener('change', function () {
+    if (!radio.checked) return;
+    FACETS.cause = CAUSE_MODES[radio.value];
+    pickFacet('cause');
+  });
+});
+document.querySelectorAll('.facets button[data-facet]').forEach(function (button) {
+  button.addEventListener('click', function () {
+    document.getElementById('cause-grouping').hidden = button.dataset.facet !== 'cause';
+  });
+});
+FACETS.cause = CAUSE_MODES.individual;
 pickFacet('cause');
 </script>
 </body></html>`;
@@ -267,8 +294,8 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
           return `<div class="good"><b>TOUGHER</b> → ${e.to ?? '?'}${
             e.creature ? ' · ' + esc(e.creature) : ''} <span class="dim">${esc(ago(e.at))}</span></div>`;
         if (e.kind === 'death')
-          return `<div class="bad">died${e.killer ? ' · ' + esc(e.killer) : ''}${
-            e.observed ? '' : ' <span class="guess">(guess)</span>'} <span class="dim">${esc(ago(e.at))}</span></div>`;
+          return `<div class="bad">${e.death_kind === 'player_murder' ? 'murdered' : 'died'}${e.killer ? ' · ' + esc(e.killer) : e.death_kind === 'player_murder' ? ' · unnamed player' : ''}${
+            e.cause_observed ?? e.observed ? '' : ' <span class="guess">(guess)</span>'} <span class="dim">${esc(ago(e.at))}</span></div>`;
         return `<div class="dim">killed ${esc(e.creature ?? '?')}${
           e.from_safe_spot ? ' <span class="pill">wall</span>' : ''} <span class="dim">${esc(ago(e.at))}</span></div>`;
       }).join('')}

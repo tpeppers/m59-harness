@@ -220,6 +220,9 @@ export function recordSample(rows = []) {
           health_trail: d.health_trail, last_health: d.last_health, last_vigor: d.last_vigor,
           killed_by: d.killed_by ? d.killed_by.join(', ') : null,
           how_died: d.how_died ?? null,
+          death_kind: d.death_kind ?? null,
+          was_killed_by_player: d.was_killed_by_player ?? null,
+          killed_by_player_is_a_guess: d.killed_by_player_is_a_guess ?? null,
           death_broadcast: d.death_broadcast ?? null,
           // What was standing nearby, kept beside the authoritative answer rather than
           // instead of it — it is still the right answer to "how outnumbered were we".

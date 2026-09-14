@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Autopilot } from './m59-autopilot.mjs';
 import { M59Client } from './m59-client.mjs';
+import { allFeeds } from './m59-tougher.mjs';
 
 const records = [], notes = [], broadcasts = [];
 const client = Object.assign(Object.create(M59Client.prototype), {
@@ -191,6 +192,31 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
   assert.match(src,
     /this\.passStage = stage;\s*\n\s*this\.passStageAt = Date\.now\(\);\s*\n\s*const verdict = await this\[stage\]\(ctx\);/,
     'runPassLadder records the stage IMMEDIATELY BEFORE awaiting it');
+}
+
+// The murder's victim-only message may arrive while the recorder awaits broadcast.
+{
+  const written = []; let text = [];
+  const murdered = Object.assign(Object.create(Autopilot.prototype), {
+    s, policy: {}, tally: { deaths: 0 }, money: { carried_at_death: 0 }, lastSeenPurse: 0,
+    passes: 1, passStartedAt: Date.now(), recent5: [],
+    who: () => 'OfflineMurderVictim', safety: () => ({ fleeAt: 0.4 }), recentText: () => text,
+    note: () => {}, writePostMortem: pm => { written.push(structuredClone(pm)); return 'offline'; },
+    awaitDeathBroadcast: async () => {
+      text = [{at: Date.now(), kind:'message', text:'You are dead, poor soul.  Go now, and take revenge on Morpheus!'}];
+      return {at: Date.now(), who:'OfflineMurderVictim', killer:null, how:'murdered by a player',
+        text:'### OfflineMurderVictim has been murdered in cold blood.'};
+    },
+  });
+  await murdered.observeDeath();
+  assert.deepEqual(written[0].summary.killed_by, ['Morpheus']);
+  assert.equal(written[0].death_attribution.kind, 'player_murder');
+  assert.equal(written[0].killed_by_broadcast.killer, null, 'raw anonymous announcement is preserved');
+  assert.equal(murdered.pendingDeath.was_killed_by_player, true);
+  assert.equal(murdered.pendingDeath.killed_by_player_is_a_guess, false);
+  const feed = allFeeds().find(f => f.character === 'OfflineMurderVictim').feed[0];
+  assert.equal(feed.killer, 'Morpheus'); assert.equal(feed.observed, true);
+  assert.equal(feed.death_kind, 'player_murder');
 }
 
 console.log('Death observation, deduplication, evidence snapshots, session ownership, ' +

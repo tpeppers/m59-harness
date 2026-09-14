@@ -32,6 +32,7 @@
 // has actually gone out, which turns an invisible failure into visible latency —
 // the trade this whole file exists to make.
 
+import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import http from 'node:http';
 import { CombatDispatch } from './m59-combat-dispatch.mjs';
 import { mayStartJourney, floorFor, floorSource } from './m59-travelgate.mjs';
@@ -15756,7 +15757,7 @@ const TOOLS = [
       'Each record joins four things that were always being kept separately — the last 30 ' +
       'lines the SERVER sent (combat text, a weapon shattering, what other players said), the ' +
       'keeper\'s last 14 DECISIONS, ~24 per-pass FRAMES carrying health/vigor/position/what it ' +
-      'was doing, and a summary naming what was standing there.\n' +
+      'was doing, and a summary separating server-confirmed killers from nearby actors.\n' +
       'READ text AND decisions SIDE BY SIDE against the timestamps. The interesting moment is ' +
       'almost always where they disagree — the server saying one thing while the keeper was ' +
       'deciding another.\n' +
@@ -15782,12 +15783,13 @@ const TOOLS = [
       }
       let files = [];
       try {
-        files = readdirSync(POSTMORTEM_DIR).filter(f => f.endsWith('.json')).sort().reverse();
+        files = readdirSync(POSTMORTEM_DIR).filter(f => f.endsWith('.json')).sort((a, b) =>
+          (b.match(/\d{4}-\d\d-\d\dT[^.]+/)?.[0] ?? b).localeCompare(a.match(/\d{4}-\d\d-\d\dT[^.]+/)?.[0] ?? a));
       } catch { files = []; }
       if (!files.length)
         return { deaths: [], note: `nothing under ${POSTMORTEM_DIR} — no character has died since ` +
                                    'this was added. Use live:true to see what a record looks like.' };
-      const read = (f) => JSON.parse(readFileSync(`${POSTMORTEM_DIR}/${f}`, 'utf8'));
+      const read = (f) => applyDeathAttribution(JSON.parse(readFileSync(`${POSTMORTEM_DIR}/${f}`, 'utf8')));
       if (a.file) {
         if (!files.includes(a.file)) throw new Error(`no such record "${a.file}"`);
         return { file: a.file, record: read(a.file) };
@@ -15813,7 +15815,8 @@ const TOOLS = [
                      died_in: r.where?.room ?? null, doing: r.was?.doing ?? null,
                      in_safe_spot: !!r.was?.in_safe_spot,
                      health_per_second: r.vitals?.health_per_second ?? null,
-                     killed_by: r.threats?.present_at_the_end ?? [] };
+                     killed_by: r.summary?.killed_by ?? [],
+                     death_attribution: r.death_attribution };
           } catch { return { file: f, unreadable: true }; }
         }),
         note: 'pass file to open one in full',

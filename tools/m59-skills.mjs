@@ -17,6 +17,8 @@
 // caller did not ask for. A skill that gives up says why, at which stage, and what
 // the state was when it stopped.
 
+import { parseDeathBroadcast } from './m59-death-attribution.mjs';
+export { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-parse.mjs';
 import { traceSurvivalOperation, tracePoint } from './m59-survival-trace.mjs';
 import { currentSurvivalDecision, cancelSurvivalDecision } from './m59-survival-decision.mjs';
@@ -3594,41 +3596,6 @@ export async function returnSignetRings(s, { max = 3 } = {}) {
 // groundworm nine times and troll four, and no soldier at all. Faction soldiers do not
 // start fights with the unaligned, which is exactly why they were there to be blamed.
 //
-// The seven forms, all from system.kod. %q is a name, %s an article.
-const DEATH_FORMS = [
-  // "### Kermit was just killed by a giant rat."
-  { re: /^###\s+(.+?)\s+was just killed by\s+(?:an?\s+|the\s+)?(.+?)\.?$/i,
-    how: 'killed', who: 1, killer: 2 },
-  // "### The notorious murderer, X, has been killed by a troll."
-  { re: /^###\s+The notorious murderer,\s*(.+?),\s*has been killed by\s+(?:an?\s+|the\s+)?(.+?)\.?$/i,
-    how: 'killed as a murderer', who: 1, killer: 2 },
-  // "### The feared outlaw, X, has just met justice at Y's hands."
-  { re: /^###\s+The feared outlaw,\s*(.+?),\s*has just met justice at\s+(?:an?\s+|the\s+)?(.+?)'s hands\.?$/i,
-    how: 'killed as an outlaw', who: 1, killer: 2 },
-  // "### X has been murdered in cold blood."  — a player killed them, and is NOT named
-  { re: /^###\s+(.+?)\s+has been murdered in cold blood\.?$/i,
-    how: 'murdered by a player', who: 1, killer: null },
-  // "### X was just slain by his own folly."
-  { re: /^###\s+(.+?)\s+was just slain by\s+\S+\s+own folly\.?$/i,
-    how: 'own folly', who: 1, killer: null },
-  // "### X met an untimely end."  — the room did it: lava, a fall, a trap
-  { re: /^###\s+(.+?)\s+met an untimely end\.?$/i,
-    how: 'the room itself', who: 1, killer: null },
-];
-
-// Parse one broadcast. Returns null for anything that is not a death — notably the
-// "lost a token to" line, which is the same ### channel and is not a death at all.
-export function parseDeathBroadcast(text) {
-  const t = String(text || '').trim();
-  if (!t.startsWith('###')) return null;
-  for (const f of DEATH_FORMS) {
-    const m = f.re.exec(t);
-    if (!m) continue;
-    return { who: m[f.who].trim(), killer: f.killer ? m[f.killer].trim() : null, how: f.how, text: t };
-  }
-  return null;
-}
-
 // The broadcast naming this character, nearest in time to when they died. Returns null
 // rather than the wrong one: a fleet of twenty-one dies often enough that "the most
 // recent ### line" is frequently about somebody else entirely.

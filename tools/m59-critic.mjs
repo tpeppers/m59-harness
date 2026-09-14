@@ -121,6 +121,7 @@
 // cites, it hands over the gates, and it refuses a verdict that does not clear them. The judging
 // is the agent's, and a judgement that names nothing is rejected on ingest.
 
+import { attributeDeath } from './m59-death-attribution.mjs';
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -344,32 +345,18 @@ export function rosterFromStore(dir, { readdir = readdirSync, read = readFileSyn
 
 // ── LENS A ────────────────────────────────────────────────────────────────────────────────
 
-// WHO THE SERVER SAID KILLED IT, AND WHETHER ANYBODY IS ENTITLED TO SAY.
-//
-// `killed_by_broadcast` is the server shouting it to the whole world and is the only killer
-// worth the name. `summary.killed_by` is what was standing next to the body at the end, which
-// `m59-postmortems.mjs` measured against the broadcasts and found right 51% of the time — a coin
-// flip. So the two never merge: `observed` says which one this is.
+// Server death evidence is authoritative; nearby actors alone are only context.
 export function killerOf(pm, monsters) {
-  const bc = pm?.killed_by_broadcast;
-  if (bc?.killer) {
-    const cls = resolveMonster(bc.killer, monsters);
-    return { name: bc.killer, observed: true, is_monster: !!cls, monster_class: cls,
-             cite: 'killed_by_broadcast.killer' };
-  }
-  const guess = (pm?.summary?.killed_by || [])[0];
-  if (guess) {
-    const cls = resolveMonster(guess, monsters);
-    return { name: guess, observed: false, is_monster: !!cls, monster_class: cls,
-             cite: 'summary.killed_by[0] (A GUESS — right 51% of the time)' };
-  }
-  return { name: null, observed: false, is_monster: false, monster_class: null, cite: null };
+  const a = attributeDeath(pm);
+  const confirmedPlayer = a.was_killed_by_player === true && !a.killed_by_player_is_a_guess;
+  const cls = confirmedPlayer ? null : resolveMonster(a.killer, monsters);
+  return { name: a.killer, observed: a.observed, is_monster: !!cls, monster_class: cls,
+           kind: a.kind, confirmed_player: confirmedPlayer, evidence: a.evidence,
+           cite: a.evidence.length ? a.evidence.map(e => e.source).join(' + ') :
+             a.killer ? 'nearby crowd (A GUESS — right about half the time)' : null };
 }
 
-// THE PVP EXEMPTION, AND IT IS THE ONLY ONE. Shown, never assumed: a NAMED non-fleet person has
-// to have been in the room. An id the resource table could not resolve answers
-// `<dynamic 1000081>`, which is truthy and is not a person — Uuuu, 2026-08-28, where counting it
-// turned six trolls into a PVP death.
+// A named non-fleet person is context even when no authoritative cause survived.
 export function strangersPresent(pm, fleet) {
   const known = fleet || new Set();
   return (pm?.threats?.players_present || [])
@@ -450,7 +437,7 @@ export function travelCandidates(records, { monsters, fleet, since = 0, characte
     // — a monster landing the last blow during a fight with somebody is still PVP, and only
     // reading the text can tell. Contested candidates are kept, flagged, and still default to
     // defect, because the fleet dying while two people fight over it is also the fleet dying.
-    const pvp = strangers.length > 0 && !(killer.is_monster && killer.observed);
+    const pvp = killer.confirmed_player || (strangers.length > 0 && !(killer.is_monster && killer.observed));
     const contested = strangers.length > 0 && !pvp;
 
     const sigs = signatures(pm);
@@ -637,7 +624,8 @@ export function gateCheck(verdict, candidate = null) {
     if (!named || /^<.*>$/.test(named))
       failures.push({ gate: 'PVP', why: 'a PVP exemption needs `person`: a resolved name, never '
                                       + 'an id the resource table could not answer for.' });
-    else if (candidate?.strangers && !candidate.strangers.includes(named))
+    else if (candidate?.strangers && !candidate.strangers.includes(named) &&
+             !(candidate.killer?.confirmed_player && candidate.killer.name === named))
       failures.push({ gate: 'PVP', why: `"${named}" was not among the non-fleet people in the room `
                                       + `(${candidate.strangers.join(', ') || 'nobody was'}).` });
   }

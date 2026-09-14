@@ -140,8 +140,10 @@ export function recordKill(character, { at = Date.now(), creature = null, room =
 
 export function recordDeath(character, { at = Date.now(), killer = null, observed = false,
                                          room = null, room_num = null, level = null,
-                                         in_safe_spot = false } = {}) {
-  return push(character, { kind: 'death', at, killer, observed, room, room_num, level, in_safe_spot });
+                                         in_safe_spot = false, how = null, death_kind = null,
+                                         cause_observed = observed, attribution_sources = [] } = {}) {
+  return push(character, { kind: 'death', at, killer, observed, room, room_num, level, in_safe_spot,
+                           how, death_kind, cause_observed, attribution_sources });
 }
 
 // THE POINT ITSELF. `to` is the new maximum health; `creature` is whatever killed for it,
