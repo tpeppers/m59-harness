@@ -1,0 +1,31 @@
+{
+  "baseline": "e1c26da82776",
+  "capturedAt": "2026-09-14T17:36:38.161Z",
+  "files": [
+    {
+      "file": "tools/m59-autopilot.mjs",
+      "sha256": "6f3081aa3d845d23a8a8ceb0936caeebc1f7f584fd272513dbab9d18f4442d3b",
+      "matchesProduction": true
+    },
+    {
+      "file": "tools/m59-game.mjs",
+      "sha256": "57e4948c67a0249e4ec095904ba289198636b49b5564006df71cc4c66ef24def",
+      "matchesProduction": true
+    },
+    {
+      "file": "tools/m59-skills.mjs",
+      "sha256": "0a6e03ac7343ffb54e10e9f68484f06bea32ebcc83b4cd62efef2e35cc19b058",
+      "matchesProduction": true
+    },
+    {
+      "file": "tools/m59-safespots.mjs",
+      "sha256": "82e5930a628035c6b41386ab1c03faaae3dec58444621df8c305670a72d4f1c6",
+      "matchesProduction": true
+    },
+    {
+      "file": "substrate/m59-map.json",
+      "sha256": "bd8ff635e23faa0c7340f0735019c7838d7c9235513e15280031c70b6b902ee6",
+      "matchesProduction": true
+    }
+  ]
+}

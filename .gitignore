@@ -722,3 +722,5 @@ _verify2.mjs
 /substrate/combat-watches/
 /substrate/attribution-backups/
 /substrate/player-evidence/
+# Local forensic copies and cached runtime observations; never publish these.
+/substrate/latest-four-evidence/
