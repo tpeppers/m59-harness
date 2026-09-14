@@ -39,6 +39,12 @@ All loaded and verified successfully; each of the eight simulator cases also
 passed known inventory/equipment/ability comparison. The short live windows were
 functional tests, not death-reproduction or strategy-efficacy experiments.
 
+The benchmark matrix used base `85a45f6` plus the simulator changes. After
+integrating concurrently published main `3c49ea7`, two additional FleetScratch
+cases passed with **3.714–3.769 seconds** of complete overhead (median
+**3.742 seconds**). Those integration checks are recorded separately from the
+13-sample comparison above.
+
 The [machine-readable measurements](scene-reload-benchmark-2026-09-14.json)
 contain phase times and setup status only; private saves and detailed traces
 remain outside git. The previous three samples and first optimized cold sample
@@ -101,7 +107,8 @@ Thirteen new offline scenarios cover reset identity, checksum corruption,
 missing acknowledgements, endpoint restrictions, response freshness, empty
 ability lists, paired-case isolation, failure reporting and timing aggregation.
 The existing death-replay, scene, FleetScript, FleetScratch and FleetScratch
-session suites were also run. Live CLI/FleetScratch runs above verify the actual
+session suites also passed: **24, 98, 301, 263 and 36** assertions/scenarios
+respectively. Live CLI/FleetScratch runs above verify the actual
 interfaces against the installed lab image.
 
 See [usage and configuration](m59-death-replay.md#fleetscript-fleetscratch-and-cli-simulator-loops).

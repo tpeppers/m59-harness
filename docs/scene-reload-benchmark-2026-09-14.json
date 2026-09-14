@@ -468,5 +468,79 @@
       }
     ]
   },
-  "interpretation": "Performance/setup evidence only; no verified baseline reproduction or intervention efficacy claim."
+  "interpretation": "Performance/setup evidence only; no verified baseline reproduction or intervention efficacy claim.",
+  "integration_verification": {
+    "main_base": "3c49ea7",
+    "harness": {
+      "commit": "c64506af978eb0d1f2c453d686f1589296e99dc7",
+      "dirty": false,
+      "source_sha256": "443898b6a2a8040af46f28b3ddcf915a66bd63bac6b4ea0258bcf4525bedfaa4"
+    },
+    "summary": {
+      "restore_to_start": {
+        "n": 2,
+        "min_ms": 3597.8115,
+        "median_ms": 3624.9829,
+        "max_ms": 3652.1542999999997
+      },
+      "complete_overhead": {
+        "n": 2,
+        "min_ms": 3714.2940999999996,
+        "median_ms": 3741.65635,
+        "max_ms": 3769.0186000000003
+      }
+    },
+    "runs": [
+      {
+        "case": "full-health",
+        "outcome": "setup_only",
+        "timing_wall_ms": 3770.5739000000003,
+        "timings": {
+          "ownership_and_attestation_ms": 175.0021,
+          "previous_cleanup_ms": 0.11220000000000141,
+          "native_restore_ms": 377.58700000000005,
+          "engine_import_ms": 236.08399999999995,
+          "login_and_initial_reads_ms": 1567.0938,
+          "ability_reads_ms": 627.4222999999997,
+          "controller_and_player_check_ms": 85.57590000000027,
+          "scene_prepare_ms": 43.60689999999977,
+          "client_scene_sync_ms": 526.3743,
+          "controller_restore_and_start_ms": 13.291600000000017,
+          "restore_to_start_ms": 3652.1542999999997,
+          "simulation_ms": 1.5552999999999884,
+          "cleanup_ms": 13.378500000000258,
+          "total_ms": 3667.091
+        },
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "case": "empty-room",
+        "outcome": "setup_only",
+        "timing_wall_ms": 3715.7879999999996,
+        "timings": {
+          "ownership_and_attestation_ms": 159.0985,
+          "previous_cleanup_ms": 0.06039999999998713,
+          "native_restore_ms": 341.18980000000005,
+          "engine_import_ms": 223.1803,
+          "login_and_initial_reads_ms": 1567.3599999999997,
+          "ability_reads_ms": 642.0910000000003,
+          "controller_and_player_check_ms": 89.83249999999998,
+          "scene_prepare_ms": 39.78369999999995,
+          "client_scene_sync_ms": 522.6617000000001,
+          "controller_restore_and_start_ms": 12.549599999999828,
+          "restore_to_start_ms": 3597.8115,
+          "simulation_ms": 1.4938999999999396,
+          "cleanup_ms": 13.13799999999992,
+          "total_ms": 3612.4474999999998
+        },
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      }
+    ]
+  }
 }
