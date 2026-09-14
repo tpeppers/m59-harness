@@ -17,6 +17,63 @@ sent, not hits or kills; server outcome messages are reported separately.
 
 ## Immediate chat orders
 
+### Farm normally and swarm on sight
+
+Use a standing farm watch when the target should interrupt farming only while
+visible:
+
+```
+node tools/m59-combat-order.mjs "Kill Morpheus" --fleet prod --maps 39,544 --when-absent farm
+```
+
+This installs one passive watch on the automated fleet for Upstairs in Castle
+Victoria (39) and the Valley of Ileria (544). It includes recipients that enter
+either map later. Farmers sharing the target's map converge on the exact player
+using the ordinary validated movement and attack pacer. Bots in other maps
+continue their normal behavior; combat does not chase the player across maps.
+
+While Morpheus is absent, normal farming keeps body ownership and its current
+jobs. Appearance or visibility changes activate the local combat override.
+Disappearance releases it, restores PvP safety when the order lowered it, and
+allows normal farming to resume without another command. Each keeper acts on
+its own current player visibility; an unseen object ID is never attacked blindly.
+
+Low health ends the current encounter but retains the watch. Normal survival
+and recovery continue, and the watch rearms after health reaches the greater of
+80% and ten percentage points above the current survival floor, capped at 99%.
+An already-hurt bot can accept a watch without fighting. Paused, held and
+nonfarming keepers stay passive. Ordinary explicit combat orders still replace
+a watch, and `stop` removes it; scoped stop accepts its `order_id`.
+
+Watch configuration is saved per character under ignored
+`substrate/combat-watches/`, bound to the exact roster, game endpoint and
+character. It survives keeper restart and reconnect. This stores no account
+credentials. Explicit stop is saved too. A server refusal or impossible approach
+blocks the current sighting rather than repeatedly interrupting farming; a new
+appearance can be tried again.
+
+Status distinguishes active combat from a passive watch:
+`active: false, watch: { enabled: true, phase: "watching" }` means normal farming
+with the conditional order armed. Other watch phases include `engaging`,
+`recovering`, `outside_map`, `paused` and `blocked`. Readiness reports whether the
+recipient is currently eligible to farm. Broker/keeper capability version 3
+includes standing farm watches.
+
+FleetScratch:
+
+```
+combat kill Morpheus maps=39,544 absent=farm
+```
+
+FleetScript:
+
+```js
+await fleetCombat({
+  rooms: [39, 544],
+  order: killPlayer('Morpheus', { when_absent: 'farm' }),
+});
+```
+
 Dispatch an urgent order before inspecting the fleet or writing a script:
 
 ```
@@ -46,7 +103,7 @@ IDs cannot resurrect an override. Transport failures are not retried.
 
 Run `--check` during setup or after deployment. It checks deployed support and
 connection state through cheap addressed keeper requests, without room snapshots.
-Broker health and keeper liveness advertise `combat_mode: 2`. Update an old
+Broker health and keeper liveness advertise `combat_mode: 3`. Update an old
 deployment before accepting urgent instructions; deployment is not part of the
 urgent command path. The command does not restart services automatically.
 

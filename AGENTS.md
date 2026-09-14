@@ -43,6 +43,14 @@ means the order should be discarded. Do not take human-piloted characters.
 Check `--check` readiness during setup, before the next urgent request.
 See [combat mode](docs/m59-combat-mode.md) for receipts, stop and limitations.
 
+For "farm normally, but attack this player on sight", use a standing watch:
+`node tools/m59-combat-order.mjs "Kill Player" --fleet prod --maps 39,544 --when-absent farm`.
+Use only the maps the operator requested. All automated recipients retain the
+watch for later arrivals; it activates only while farming in those maps. It
+survives recovery and reconnect, and disappears only when stopped, replaced or
+expired. Check `watch.enabled` as well as `active`: a passive watch intentionally
+leaves active combat false so normal farming can continue.
+
 A fleet is a named roster, one per server, and passing the wrong one operates on the
 wrong fleet quietly. The name resolves `--fleet` → `M59_FLEET` → `substrate/fleet-default`
 (one line, gitignored, what this checkout cares about) → the unnamed

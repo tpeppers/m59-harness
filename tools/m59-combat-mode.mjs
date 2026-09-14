@@ -19,7 +19,7 @@ const characterName = (s, c) => String(c?.me?.name ?? s.name).toLowerCase();
 export function normalizeCombatOrder(input) {
   demand(input && ['attack', 'kill', 'ambush'].includes(input.action), 'action must be attack, kill or ambush');
   const keys = new Set(['agent', 'fleet_state', 'action', 'target', 'map', 'position', 'door', 'ttl_ms', 'stop_below', 'sequence', 'repeat',
-    'select_map', 'command_id', 'revision']);
+    'select_map', 'command_id', 'revision', 'when_absent', 'watch_maps']);
   demand(Object.keys(input).every(key => keys.has(key)), 'unknown combat order option');
   if (input.action !== 'ambush') demand(input.map == null && input.position == null && input.door == null,
     'attack uses the current room; use ambush for a map and position');
@@ -33,6 +33,13 @@ export function normalizeCombatOrder(input) {
   demand(input.command_id == null || (typeof input.command_id === 'string' && /^[\w-]{1,100}$/.test(input.command_id)),
     'invalid command_id');
   demand(input.revision == null || (Number.isSafeInteger(input.revision) && input.revision > 0), 'invalid revision');
+  const when_absent = input.when_absent ?? 'wait';
+  demand(['wait', 'farm'].includes(when_absent), 'when_absent must be wait or farm');
+  if (when_absent === 'farm') {
+    demand(input.action !== 'ambush' && typeof input.target === 'string', 'farm watch needs an attack/kill player name');
+    demand(input.watch_maps == null || (Array.isArray(input.watch_maps) && input.watch_maps.length > 0 &&
+      input.watch_maps.length <= 32 && input.watch_maps.every(n => Number.isSafeInteger(n) && n > 1)), 'invalid watch_maps');
+  } else demand(input.watch_maps == null, 'watch_maps requires when_absent: farm');
   const stop_below = input.stop_below ?? 0.35;
   demand(Number.isFinite(stop_below) && stop_below >= 0.05 && stop_below <= 0.95,
     'stop_below must be a fraction from 0.05 through 0.95');
@@ -59,7 +66,8 @@ export function normalizeCombatOrder(input) {
   demand(actions.some(s => s.do !== 'wait'), 'sequence must contain an attack or cast');
   demand(input.repeat == null || typeof input.repeat === 'boolean', 'repeat must be boolean');
   const order = { action: input.action, target: typeof input.target === 'string' ? input.target.trim() : input.target,
-    ttl_ms, stop_below, sequence: actions, repeat: input.repeat ?? true };
+    ttl_ms, stop_below, sequence: actions, repeat: input.repeat ?? true,
+    ...(when_absent === 'farm' ? { when_absent, ...(input.watch_maps ? { watch_maps: [...new Set(input.watch_maps)] } : {}) } : {}) };
   if (input.action === 'ambush') {
     demand(Number.isSafeInteger(input.map) && input.map > 1, 'ambush needs a map number, not a room object id');
     demand(typeof order.target === 'string', 'ambush needs a player name that survives room changes');
@@ -134,11 +142,14 @@ export class CombatMode {
     this.schedule = schedule; this.unschedule = unschedule;
     this.active = null; this.last = null; this.timer = null;
     this.revision = 0; this.cancelled = new Set(); this.safetyLease = null; this.safetyRequest = null;
+    this.watch = null;
   }
 
   status() {
     const o = this.active ?? this.last;
-    if (!o) return { active: false };
+    const watch = this.watchStatus();
+    if (!o) return { active: false, ...(watch ? { watch } : {}),
+      ...(this.watchLoadError ? { watch_error: this.watchLoadError } : {}) };
     return { active: !!this.active, order_id: o.id, action: o.order.action,
       target: o.order.target, map: o.order.map ?? o.room, position: o.order.position,
       door: o.order.door, phase: o.phase, accepted_at: o.acceptedAt,
@@ -150,17 +161,19 @@ export class CombatMode {
       safety_restore_error: this.safetyRestoreError ?? null,
       last_outcome: o.lastOutcome ?? null,
       expires_at: o.expiresAt, finished_at: o.finishedAt ?? null,
-      reason: o.reason ?? null, attacks: o.attacks, casts: o.casts };
+      reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
+      ...(watch ? { watch } : {}) };
   }
 
-  issue(input) {
+  issue(input, fromWatch = null) {
     if (input.select_map != null && ['ready', 'status', 'stop'].includes(input.action) &&
         this.s.world?.room?.num !== input.select_map)
       return { skipped: true, reason: 'outside assigned map', map: this.s.world?.room?.num ?? null };
-    if (input.action === 'ready') return { ready: true, combat_mode: 2, in_game: !!this.s.live,
-      map: this.s.world?.room?.num ?? null, combat: this.status() };
+    if (input.action === 'ready') return { ready: true, combat_mode: 3, in_game: !!this.s.live,
+      map: this.s.world?.room?.num ?? null, farming: this.farmEligible(), combat: this.status() };
     if (input.action === 'status') return { ...this.status(),
-      ...(input.order_id ? { order_matches: this.status().order_id === input.order_id } : {}) };
+      ...(input.order_id ? { order_matches: this.active?.id === input.order_id ||
+        this.watch?.id === input.order_id || this.last?.id === input.order_id } : {}) };
     if (input.action === 'stop') {
       // A scoped stop can beat the original POST. Remember it without revoking
       // unrelated newer commands; late delivery must never resurrect this order.
@@ -171,18 +184,22 @@ export class CombatMode {
         if (input.revision < this.revision) return { stopped: false, reason: 'superseded stop', ...this.status() };
         this.revision = input.revision;
       }
-      if (input.order_id && input.order_id !== this.active?.id)
+      if (input.order_id && input.order_id !== this.active?.id && input.order_id !== this.watch?.id)
         return { stopped: false, reason: 'order was already replaced', ...this.status() };
-      this.stop('operator stopped combat');
+      if (!input.order_id || input.order_id === this.watch?.id) this.clearWatch();
+      if (!input.order_id || input.order_id === this.active?.id) this.stop('operator stopped combat');
       return this.status();
     }
     // Validate completely before replacing the current order.
-    const order = normalizeCombatOrder(input), s = this.s, c = s.need();
+    const order = normalizeCombatOrder(input), s = this.s;
     if (input.command_id && this.cancelled.has(input.command_id))
       return { accepted: false, skipped: true, reason: 'command already stopped' };
     if (input.command_id && input.command_id === this.active?.id) return { accepted: true, ...this.status() };
+    if (!fromWatch && input.command_id && input.command_id === this.watch?.id) return { accepted: true, ...this.status() };
     if (input.revision && input.revision <= this.revision)
       return { accepted: false, skipped: true, reason: 'superseded command' };
+    if (order.when_absent === 'farm') return this.installWatch(order, input);
+    const c = s.need();
     demand(c.self && s.world?.room?.num > 1, 'live player and map identity required');
     if (input.select_map != null && s.world.room.num !== input.select_map)
       return { accepted: false, skipped: true, reason: 'outside assigned map', map: s.world.room.num };
@@ -200,10 +217,11 @@ export class CombatMode {
       demand((c.spells ?? []).some(sp => exactName(c, sp) === step.spell.toLowerCase()), `spell is not known: ${step.spell}`);
     demand(this.healthOK(order), 'health is unknown or at/below the survival floor');
     if (input.revision) this.revision = input.revision;
+    if (!fromWatch) this.clearWatch();
     this.stop('replaced by a newer combat order');
     s.combatEpoch = (s.combatEpoch ?? 0) + 1;
     s.fightGeneration = (s.fightGeneration ?? 0) + 1;
-    s.cancelMovement(null, 'combat override accepted');
+    withBodyCommand(s, () => s.cancelMovement(null, 'combat override accepted'), input.command_id ?? 'combat-accept');
     s._router?.clear?.();
     // The old job retains its own completion promise. It no longer owns the body.
     if (s.job && !s.job.done) { s.job.cancelled = true; s.job.done = true; s.job.finishedAt = this.now(); }
@@ -218,6 +236,7 @@ export class CombatMode {
       client: c, playerId: c.selfId, room: s.world.room.num, roomObject: c.room.id,
       phase: order.action === 'ambush' ? 'positioning' : visible ? 'engaging' : 'waiting',
       phaseRevision: 0,
+      watchId: fromWatch?.id ?? null,
       targetId: target?.id ?? null, targetName: target ? exactName(c, target) : null,
       attacks: 0, casts: 0, index: 0, remaining: order.sequence[0].swings ?? 1, nextAt: 0, running: false };
     this.record('accepted', o);
@@ -226,17 +245,132 @@ export class CombatMode {
     return { accepted: true, ...this.status() };
   }
 
-  healthOK(order) {
+  healthFraction() {
     const v = this.s.client?.vitals?.()?.health, max = v?.max ?? v?.scale_max;
+    return Number.isFinite(v?.value) && Number.isFinite(max) && max > 0 ? v.value / max : null;
+  }
+
+  healthFloor(order) {
     const keeper = this.keeper();
     const computedFloor = keeper?.safety?.()?.fleeAt ?? keeper?._wdHost?.safety?.()?.fleeAt;
     const keeperFloor = Number.isFinite(computedFloor) ? computedFloor : keeper?.policy?.fleeBelow;
-    const floor = Math.max(order.stop_below, Number.isFinite(keeperFloor) ? keeperFloor : 0);
-    return Number.isFinite(v?.value) && Number.isFinite(max) && max > 0 && v.value / max > floor;
+    return Math.max(order.stop_below, Number.isFinite(keeperFloor) ? keeperFloor : 0);
+  }
+
+  healthOK(order) {
+    const fraction = this.healthFraction();
+    return fraction != null && fraction > this.healthFloor(order);
+  }
+
+  watchStatus() {
+    const w = this.watch;
+    if (!w) return null;
+    return { enabled: true, order_id: w.id, action: w.order.action, target: w.order.target,
+      maps: w.maps, when_absent: 'farm', phase: this.active?.watchId === w.id ? 'engaging' : w.phase,
+      reason: w.reason, accepted_at: w.acceptedAt, expires_at: w.expiresAt,
+      engagements: w.engagements, last_engagement: w.lastEngagement ?? null,
+      persistence_error: w.persistenceError ?? null };
+  }
+
+  farmEligible() {
+    if (this.watchEligibility) return !!this.watchEligibility();
+    const keeper = this.keeper();
+    return !!(keeper?.mode === 'farm' && keeper.running && !keeper.inert);
+  }
+
+  installWatch(order, input) {
+    const maps = order.watch_maps ?? (input.select_map ? [input.select_map] : [this.s.world?.room?.num]);
+    demand(maps.length > 0 && maps.every(n => Number.isSafeInteger(n) && n > 1), 'farm watch needs assigned maps');
+    if (this.s.world?.map?.rooms) demand(maps.every(n => this.s.world.map.rooms[String(n)]), 'unknown farm watch map');
+    const acceptedAt = this.now();
+    const w = { id: input.command_id ?? randomUUID(), order: { ...order, watch_maps: maps }, maps,
+      character: this.character?.() ?? characterName(this.s, this.s.client),
+      acceptedAt, expiresAt: order.ttl_ms == null ? null : acceptedAt + order.ttl_ms,
+      phase: 'watching', reason: 'normal behavior while waiting for target', engagements: 0, recovering: false };
+    // Durable configuration is written before reporting acceptance. No farming
+    // job or body ownership changes merely because a passive watch was installed.
+    this.saveWatch?.(w);
+    this.watchLoadError = null;
+    this.watch = w;
+    if (input.revision) this.revision = input.revision;
+    if (this.active && maps.includes(this.s.world?.room?.num)) this.stop('standing watch replaced immediate order');
+    this.evaluateWatch(); this.wake();
+    return { accepted: true, ...this.status() };
+  }
+
+  restoreWatch(saved) {
+    if (!saved) return;
+    demand(saved.character === (this.character?.() ?? characterName(this.s, this.s.client)), 'watch character changed');
+    const order = normalizeCombatOrder(saved.order);
+    demand(order.when_absent === 'farm' && order.watch_maps?.length, 'invalid saved watch');
+    demand(typeof saved.id === 'string' && Number.isFinite(saved.acceptedAt) &&
+      (saved.expiresAt == null || Number.isFinite(saved.expiresAt)), 'invalid saved watch identity');
+    if (saved.expiresAt != null && this.now() >= saved.expiresAt) { this.saveWatch?.(null); return; }
+    this.watch = { ...saved, order, maps: order.watch_maps, phase: 'watching', blockedTarget: null };
+    this.wake();
+  }
+
+  clearWatch() {
+    if (!this.watch) return;
+    // Refuse a false durable success if the stop cannot be saved.
+    this.saveWatch?.(null);
+    this.watch = null;
+    if (!this.active && this.timer) { this.unschedule(this.timer); this.timer = null; }
+  }
+
+  evaluateWatch() {
+    const w = this.watch, s = this.s, c = s.client;
+    if (!w || this.active) return;
+    const pause = (phase, reason) => { w.phase = phase; w.reason = reason; };
+    try {
+      if (w.expiresAt != null && this.now() >= w.expiresAt) { this.clearWatch(); return; }
+      if (!s.live || !c?.self || c.lastRxAt > 0 && this.now() - c.lastRxAt > 45000) {
+        pause('offline', 'waiting for a live connection'); return;
+      }
+      if ((this.character?.() ?? characterName(s, c)) !== w.character) {
+        pause('blocked', 'watch character changed'); return;
+      }
+      if (w.restoreSafety) {
+        // A process restart can happen after safety-off reached the server.
+        // Restore that obligation before farming or another encounter resumes.
+        this.safetyLease ??= { client: c, playerId: c.selfId,
+          character: characterName(s, c), watchId: w.id };
+        void this.restoreSafety();
+        pause('watching', 'restoring prior PvP safety'); return;
+      }
+      if (!w.maps.includes(s.world?.room?.num)) { pause('outside_map', 'normal behavior outside assigned maps'); return; }
+      if (!this.farmEligible()) { pause('paused', 'normal farming is paused'); return; }
+      if (!this.healthOK(w.order)) {
+        w.recovering = true; pause('recovering', 'normal recovery until healthy enough to engage'); return;
+      }
+      const resumeAbove = Math.min(0.99, Math.max(0.8, this.healthFloor(w.order) + 0.1));
+      if (w.recovering && this.healthFraction() < resumeAbove) {
+        pause('recovering', 'normal recovery until healthy enough to engage'); return;
+      }
+      w.recovering = false;
+      const target = combatTarget(c, w.order.target);
+      if (!target || !(target.flags & OF.ATTACKABLE)) {
+        w.blockedTarget = null; pause('watching', 'normal behavior while waiting for target'); return;
+      }
+      if (w.blockedTarget === target.id) { pause('blocked', w.reason); return; }
+      const { when_absent, watch_maps, ...engage } = w.order;
+      this.issue({ ...engage, command_id: w.id, select_map: s.world.room.num,
+        ...(w.expiresAt == null ? {} : { ttl_ms: Math.max(1000, w.expiresAt - this.now()) }) }, w);
+      if (this.active) {
+        // Expiry is absolute across repeated engagements.
+        this.active.expiresAt = w.expiresAt;
+        this.active.triggeredAt = this.now();
+        w.engagements++; pause('engaging', 'exact player visible in assigned map');
+      }
+    } catch (error) {
+      pause('blocked', error.message);
+      try { w.blockedTarget = combatTarget(c, w.order.target)?.id ?? null; } catch {}
+    }
   }
 
   guard(o, kind = 'read') {
     demand(this.active === o, 'order cancelled or replaced');
+    if (o.watchId) demand(this.farmEligible(), 'normal farming is paused');
     demand(this.s.client === o.client && o.client.selfId === o.playerId && this.s.live,
       'connection or character identity changed');
     demand(o.expiresAt == null || this.now() < o.expiresAt, 'order expired');
@@ -260,7 +394,7 @@ export class CombatMode {
         requested.client === this.s.client && !!(requested.client.self?.flags & OF.SAFETY) === requested.on)
       this.safetyRequest = null;
     const o = this.active;
-    if (!o) { void this.restoreSafety(); return; }
+    if (!o) { void this.restoreSafety(); this.evaluateWatch(); this.wake(); return; }
     // Only a real CREATE after arming counts as an entry. A refresh, or somebody
     // already standing in the room when the ambush was armed, does not.
     if (ev.kind === 'message' && ev.text && o.phase === 'engaging') {
@@ -283,12 +417,12 @@ export class CombatMode {
     }
     if (['appeared', 'vanished', 'changed', 'player-moved', 'moved', 'room-entered', 'room-contents', 'stat', 'disconnected'].includes(ev.kind)) {
       try { this.guard(o); this.refreshTarget(o); } catch (e) { this.stop(e.message); return; }
-      this.wake();
+      this.evaluateWatch(); this.wake();
     }
   }
 
   wake() {
-    if (!this.active) return;
+    if (!this.active && !this.watch) return;
     if (this.timer) this.unschedule(this.timer);
     this.timer = this.schedule(() => { this.timer = null; void this.tick(); }, 0);
     this.timer?.unref?.();
@@ -304,8 +438,20 @@ export class CombatMode {
     this.timer = null;
     o.phase = 'finished'; o.reason = reason; o.finishedAt = this.now(); this.last = o;
     this.record('finished', o);
+    const w = this.watch;
+    if (w && o.watchId === w.id) {
+      w.lastEngagement = { finished_at: o.finishedAt, reason, attacks: o.attacks, casts: o.casts,
+        reaction_ms: o.reactionMs ?? null };
+      w.reason = reason; w.phase = 'watching';
+      if (/survival floor/.test(reason)) { w.recovering = true; w.phase = 'recovering'; }
+      else if (!/target no longer visible|left the combat room|connection|identity changed|normal farming is paused/.test(reason)) {
+        w.blockedTarget = o.targetId; w.phase = 'blocked';
+      }
+      try { this.saveWatch?.(w); } catch (e) { w.persistenceError = e.message; }
+    }
     // Cleanup has its own fresh packet scope, not the cancelled combat guard.
     void this.restoreSafety().catch(() => {});
+    this.armTimer();
   }
 
   refreshTarget(o) {
@@ -314,6 +460,7 @@ export class CombatMode {
     const visible = t && (t.flags & OF.ATTACKABLE);
     if (visible && o.phase === 'engaging' && t.id === o.targetId && exactName(o.client, t) === o.targetName) return;
     if (!visible && o.phase === 'waiting') return;
+    if (!visible && o.watchId) { this.stop('target no longer visible; normal behavior resumed'); return; }
     withBodyCommand(this.s, () => this.s.cancelMovement(null, 'combat visibility changed'), o.id);
     o.phaseRevision++;
     o.phase = visible ? 'engaging' : 'waiting';
@@ -348,6 +495,10 @@ export class CombatMode {
       lease.client.safety(true);
       this.safetyRequest = { client: lease.client, playerId: lease.playerId, on: true };
       this.safetyLease = null; this.safetyRestoreError = null;
+      if (lease.watchId && this.watch?.id === lease.watchId) {
+        this.watch.restoreSafety = false;
+        try { this.saveWatch?.(this.watch); } catch (e) { this.watch.persistenceError = e.message; }
+      }
     })), owner).catch(error => { this.safetyRestoreError = error.message; }).finally(() => {
       if (this.restorePending === pending) this.restorePending = null;
     });
@@ -362,9 +513,14 @@ export class CombatMode {
     const safetyOn = request?.client === o.client && request.playerId === o.playerId
       ? request.on : !!(o.client.self.flags & OF.SAFETY);
     if (safetyOn) await this.s.pacer.submit('safety', () => {
+      if (o.watchId && this.watch?.id === o.watchId) {
+        this.watch.restoreSafety = true;
+        this.saveWatch?.(this.watch);
+      }
       o.client.safety(false);
       this.safetyRequest = { client: o.client, playerId: o.playerId, on: false };
-      this.safetyLease = { client: o.client, playerId: o.playerId, character: characterName(this.s, o.client) };
+      this.safetyLease = { client: o.client, playerId: o.playerId,
+        character: characterName(this.s, o.client), watchId: o.watchId };
       o.firstPacketAt ??= this.now();
     });
   }
@@ -375,10 +531,12 @@ export class CombatMode {
   }
 
   async tick() {
+    this.evaluateWatch();
     const o = this.active;
-    if (!o) return;
+    if (!o) { this.armTimer(); return; }
     // Validate even during a slow movement await. Stop/expiry does not wait for it.
     try { this.guard(o); this.refreshTarget(o); } catch (e) { this.stop(e.message); return; }
+    if (this.active !== o) { this.armTimer(); return; }
     if (o.running) { this.armTimer(); return; }
     o.running = true;
     const phaseRevision = o.phaseRevision;
@@ -397,7 +555,7 @@ export class CombatMode {
   }
 
   armTimer() {
-    if (this.timer || !this.active) return;
+    if (this.timer || (!this.active && !this.watch)) return;
     this.timer = this.schedule(() => { this.timer = null; void this.tick(); }, 100);
     this.timer?.unref?.();
   }

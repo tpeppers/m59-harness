@@ -7,6 +7,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Session } from './m59-game.mjs';
 import { M59Client, BP } from './m59-client.mjs';
+import { CombatMode } from './m59-combat-mode.mjs';
+import { TickLoop } from './m59-tick.mjs';
+import { OF } from './m59-parse.mjs';
 import { bodyAuthority, withBodyCommand } from './m59-body-command.mjs';
 import { readBoard, post, writeBoard } from './m59-board.mjs';
 
@@ -56,6 +59,29 @@ console.log('PASS direct protocol actions honor combat authority while reads rem
 }
 console.log('PASS raw tick movement honors the ground-effect hook before sending');
 
+// Exercise the real alternate farming scheduler: passive watch permits decide;
+// active combat owns the body; disappearance returns it to decide automatically.
+{
+  let farmTicks = 0;
+  const c = { selfId:1, self:{id:1,row:5,col:5}, room:{id:3900,objects:new Map()},
+    rsc:new Map([[2,'Fixture Target']]), vitals:()=>({health:{value:100,max:100}}), stand(){}, face(){}, attack(){} };
+  const s = {name:'fixture', client:c, live:true, combatEpoch:0, need:()=>c, world:{room:{num:39}},
+    cancelMovement(){}, pacer:{wake(){}, submit:async(_kind,fn)=>fn()}};
+  const keeper = {mode:'farm',running:true,policy:{}};
+  s.combat = new CombatMode(s,{keeper:()=>keeper,schedule:()=>1,unschedule(){}});
+  const loop = new TickLoop({session:s,decide:()=>{bodyAuthority(s).guard();farmTicks++;}});
+  loop.sensor.read = () => ({in_game:true,room:{num:39},position:{row:5,col:5}});
+  loop._lastGuardLogAt = Date.now(); loop._lastBeatAt = Date.now();
+  s.combat.issue({action:'kill',target:'Fixture Target',when_absent:'farm',watch_maps:[39,544]});
+  loop.tick(); assert.equal(farmTicks,1);
+  c.room.objects.set(2,{id:2,nameRsc:2,row:5,col:6,flags:OF.PLAYER|OF.ATTACKABLE});
+  s.combat.event({kind:'appeared',id:2}); loop.tick(); assert.equal(farmTicks,1);
+  c.room.objects.delete(2); s.combat.event({kind:'vanished',id:2});
+  loop.tick(); assert.equal(farmTicks,2); s.combat.issue({action:'stop'});
+  await new Promise(resolve=>setImmediate(resolve));
+}
+console.log('PASS real TickLoop farms during a passive watch and resumes after target disappearance');
+
 const fleetEnv = process.env.M59_FLEET, urlEnv = process.env.M59_CONTROL_URL, realFetch = globalThis.fetch;
 try {
   process.env.M59_FLEET = 'combat-offline-fixture';
@@ -80,6 +106,14 @@ try {
   };
   await fleetCombat({room:'Upstairs Castle Victoria', order:killPlayer('Target')});
   assert.equal(calls.length, 3, 'room selection must use one RPC, without fleet inspection');
+  globalThis.fetch = async (_url, opts) => {
+    const p = JSON.parse(opts.body).params; calls.push(p);
+    assert.equal(p.name,'combat_order'); assert.deepEqual(p.arguments.rooms,[39,544]);
+    assert.equal(p.arguments.when_absent,'farm');
+    return {json:async()=>({result:{content:[{type:'text',text:JSON.stringify({ok:true,results:[]})}]}})};
+  };
+  await fleetCombat({rooms:[39,544],order:killPlayer('Target',{when_absent:'farm'})});
+  assert.equal(calls.length,4);
   globalThis.fetch = async () => ({ json: async () => ({ result: { isError: true,
     content: [{ type: 'text', text: 'error: WRONG BROKER' }] } }) });
   const refusal = await fleetScript({ mode: 'combat', agents: ['a'], steps: [attackPlayer('Target')] });

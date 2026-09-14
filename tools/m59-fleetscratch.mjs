@@ -237,6 +237,7 @@ async function main() {
   say('          promote <pad> | guarantees | unsafe | quit');
   say('          combat kill|attack|ambush <player> agents=t1,t2 | combat stop|status agents=t1,t2');
   say('          combat kill <player> room="Room Name" — select and stay in the assigned map');
+  say('          combat kill <player> maps=39,544 absent=farm — farm normally and swarm on sight');
   say('          combat run <pad> k=v… — immediate override, even during a running errand');
   say('          simulate <simulation.json> — isolated saved-scene trials, with timings');
   say('  on dry/go:  skipTo=<mark|n>   runUntil=<mark|n>   — a skip must be covered by a checkpoint');

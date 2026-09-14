@@ -173,11 +173,11 @@ export { combatOrder } from './m59-combat-order.mjs';
 
 // Explicit urgent entry point. The broker checks roster identity in the same
 // request that dispatches the order; no health/snapshot preflight round trip.
-export async function fleetCombat({ agents, room, order, fleet = fleetName(), beforeDispatch = null } = {}) {
-  if (room != null) {
+export async function fleetCombat({ agents, room, rooms, order, fleet = fleetName(), beforeDispatch = null } = {}) {
+  if (room != null || rooms != null) {
     if (typeof order === 'function') throw Error('room combat needs one shared order');
     beforeDispatch?.(agents ?? null);
-    return combatOrder({ ...order, room, ...(agents ? { agents } : {}) }, { fleet });
+    return combatOrder({ ...order, ...(room == null ? { rooms } : { room }), ...(agents ? { agents } : {}) }, { fleet });
   }
   return dispatchCombatOrders({ agents, order, beforeDispatch,
     send: (agent, command) => call('combat', { ...command, agent, fleet_state: stateFileFor(fleet) }, 8000) });

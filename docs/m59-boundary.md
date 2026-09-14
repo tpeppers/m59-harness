@@ -5,6 +5,11 @@ actions in the keeper process. It preempts old work at the packet boundary and
 keeps health, mortality, identity and expiry checks local. It does not change
 standing policy or permanently transfer the protected faculties.
 
+A standing farm watch owns no directional faculties while passive. Only a
+visible exact target in an assigned map activates its combat override. Target
+loss returns ownership to farming; survival suspends the encounter while the
+watch remains armed for recovery. Paused or held farming cannot activate it.
+
 Split out of [`CLAUDE.md`](../CLAUDE.md), which carries the clock table this expands on: the three moments a playbook answers, and the difference between owning a character and being busy with it.
 
 ### The three moments the keeper asks about — `m59-playbook.mjs`

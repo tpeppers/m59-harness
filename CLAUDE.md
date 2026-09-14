@@ -131,6 +131,13 @@ assigned map and wait for exact-name visibility when the target is absent or
 lost. Human-piloted characters are excluded. Verify `--check` readiness during
 setup. See [combat mode](docs/m59-combat-mode.md).
 
+For conditional attacks during normal farming, use
+`--when-absent farm --maps 39,544` with that CLI, or `combat_order` with
+`when_absent: "farm", rooms: [39,544]`, restricted to the operator's requested
+maps. A passive durable watch leaves `active` false; inspect `watch.enabled` and
+`watch.phase`. It resumes after recovery and covers later arrivals while
+preserving normal farming when the target is absent.
+
 A fleet is a named roster, one per server, and **passing the wrong one operates on the
 wrong fleet quietly**. Nothing errors; you just get a healthy broker holding characters
 nobody is playing. So every fleet tool resolves the name the same way, most explicit

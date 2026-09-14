@@ -7,6 +7,10 @@ import { parseCombatCommand, dispatchCombatOrders } from './m59-combat-orders.mj
 import { OF } from './m59-parse.mjs';
 import { CombatDispatch, resolveCombatMap } from './m59-combat-dispatch.mjs';
 import { parseCombatCLI } from './m59-combat-order.mjs';
+import { combatWatchStore } from './m59-combat-watch-store.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve, basename } from 'node:path';
 
 let tests = 0;
 async function test(name, fn) { await fn(); tests++; console.log(`ok ${name}`); }
@@ -30,7 +34,7 @@ function fixture({ realPacer = false } = {}) {
   c.room.objects.set(2, { id: 2, nameRsc: 2, row: 5, col: 6, flags: OF.PLAYER | OF.ATTACKABLE });
   const s = { name: 'test', client: c, live: true, combatEpoch: 0, movementGeneration: 0, fightGeneration: 0,
     job: { kind: 'travel', done: false }, need: () => c,
-    world: { room: { num: 38 }, map: { rooms: { 38: { rows: 50, cols: 70 } } },
+    world: { room: { num: 38 }, map: { rooms: { 38: { rows: 50, cols: 70 }, 39: { rows: 50, cols: 70 } } },
       geometry: { rows: 50, cols: 70, standable: (r, col) => r > 0 && col > 0 && r < 50 && col < 70,
         path(r, col, tr, tc, { avoid }) {
           const next = { row: r + Math.sign(tr - r), col: col + Math.sign(tc - col) };
@@ -339,6 +343,152 @@ await test('CLI and assigned room aliases preserve literal kill intent', () => {
   assert.throws(() => parseCombatCLI(['Kill Player', '--bogus', 'true']), /invalid option/);
   const scratch = parseCombatCommand('combat kill Morpheus room="Upstairs Castle Victoria"');
   assert.equal(scratch.room, 'Upstairs Castle Victoria'); assert.equal(scratch.order.action, 'kill');
+});
+
+const watchOrder = { ...attack, action: 'kill', when_absent: 'farm', watch_maps: [38, 39] };
+const farmer = () => {
+  const f = fixture(); f.keeper.mode = 'farm'; f.keeper.running = true; return f;
+};
+await test('passive watch leaves normal farming packets, jobs and body authority intact', async () => {
+  const f = farmer(); f.c.room.objects.clear();
+  const epoch = f.s.combatEpoch, job = f.s.job;
+  const reply = f.mode.issue(watchOrder);
+  assert.equal(reply.active, false); assert.equal(reply.watch.enabled, true);
+  assert.equal(f.s.combatEpoch, epoch); assert.equal(job.done, false);
+  await withBodyCommand(f.s, () => f.s.pacer.submit('attack', () => f.sent.push('farm:monster')));
+  await f.mode.tick(); assert.deepEqual(f.sent, ['farm:monster']);
+  f.mode.issue({ action: 'stop' }); assert.equal(f.mode.watch, null);
+});
+await test('a sighting preempts farming and losing sight returns the body to normal farming', async () => {
+  const f = farmer(), target = f.c.room.objects.get(2); f.c.room.objects.clear();
+  f.mode.issue(watchOrder); assert.equal(f.s.job.done, false);
+  f.c.room.objects.set(2, target); f.mode.event({ kind: 'appeared', id: 2 });
+  assert.equal(f.mode.status().active, true); assert.equal(f.s.job.done, true);
+  await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:2');
+  f.c.room.objects.delete(2); f.mode.event({ kind: 'vanished', id: 2 }); await f.mode.tick();
+  assert.equal(f.mode.status().active, false); assert.equal(f.mode.status().watch.phase, 'watching');
+  await withBodyCommand(f.s, () => f.s.pacer.submit('attack', () => f.sent.push('farm:monster')));
+  assert.equal(f.sent.at(-1), 'farm:monster');
+  f.c.room.objects.set(22, { ...target, id: 22 }); f.mode.event({ kind: 'appeared', id: 22 });
+  await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:22');
+  assert.equal(f.mode.status().watch.engagements, 2); f.mode.issue({ action: 'stop' });
+});
+await test('low health suspends the encounter but retains and rearms the watch after recovery', async () => {
+  const f = farmer(); f.mode.issue(watchOrder); await f.mode.tick();
+  f.c.hp = 40; await f.mode.tick();
+  assert.equal(f.mode.status().active, false); assert.equal(f.mode.watch.recovering, true);
+  const attacks = f.sent.filter(p => p.startsWith('attack:')).length;
+  for (const hp of [45, 65, 79]) {
+    f.c.hp = hp; await f.mode.tick(); assert.equal(f.mode.status().active, false);
+  }
+  assert.equal(f.sent.filter(p => p.startsWith('attack:')).length, attacks);
+  f.c.hp = 90; await f.mode.tick(); assert.equal(f.mode.status().active, true);
+  assert.equal(f.mode.status().watch.engagements, 2); f.mode.issue({ action: 'stop' });
+});
+await test('watch can be installed during recovery without interrupting it', async () => {
+  const f = farmer(); f.c.hp = 10;
+  const reply = f.mode.issue(watchOrder);
+  assert.equal(reply.accepted, true); assert.equal(reply.active, false);
+  assert.equal(reply.watch.phase, 'recovering'); assert.equal(f.s.job.done, false);
+  f.c.hp = 95; await f.mode.tick(); assert.equal(f.mode.status().active, true);
+  f.mode.issue({ action: 'stop' });
+});
+await test('watch does not take over paused keepers, errands or nonfarming characters', async () => {
+  for (const pause of [f => { f.keeper.running = false; }, f => { f.keeper.inert = {}; }, f => { f.keeper.mode = 'idle'; }]) {
+    const f = farmer(); pause(f); f.mode.issue(watchOrder); await f.mode.tick();
+    assert.equal(f.mode.status().watch.phase, 'paused'); assert.equal(f.s.job.done, false);
+    assert.deepEqual(f.sent, []);
+    f.keeper.running = true; f.keeper.mode = 'farm'; f.keeper.inert = null;
+    await f.mode.tick(); assert.equal(f.mode.status().active, true);
+    f.keeper.running = false; await f.mode.tick(); assert.equal(f.mode.status().active, false);
+    f.keeper.running = true; await f.mode.tick(); assert.equal(f.mode.status().active, true);
+    f.mode.issue({ action: 'stop' });
+  }
+});
+await test('watch covers later arrivals in either assigned map without cross-map pursuit', async () => {
+  const f = farmer(); f.s.world.room.num = 37;
+  f.mode.issue(watchOrder); await f.mode.tick();
+  assert.equal(f.mode.status().watch.phase, 'outside_map'); assert.equal(f.s.job.done, false);
+  f.s.world.room.num = 39; f.c.room.id = 3900; f.mode.event({ kind: 'room-entered' });
+  await f.mode.tick(); assert.equal(f.mode.active.room, 39);
+  f.s.world.room.num = 37; f.c.room.id = 3700; f.mode.event({ kind: 'room-entered' }); await f.mode.tick();
+  assert.equal(f.mode.status().active, false); assert.equal(f.mode.status().watch.phase, 'outside_map');
+  f.mode.issue({ action: 'stop' });
+});
+await test('watch survives reconnection and scoped stop prevents any later reactivation', async () => {
+  const f = farmer(); const receipt = f.mode.issue(watchOrder); await f.mode.tick();
+  f.s.live = false; f.mode.event({ kind: 'disconnected' }); await f.mode.tick();
+  assert.equal(f.mode.status().active, false); assert.equal(f.mode.watch.id, receipt.watch.order_id);
+  f.s.live = true; f.c.selfId = 100; f.c.self.id = 100; f.c.room.id = 4000;
+  await f.mode.tick(); assert.equal(f.mode.status().active, true);
+  f.mode.issue({ action: 'stop', order_id: receipt.watch.order_id });
+  await f.mode.tick(); assert.equal(f.mode.status().active, false); assert.equal(f.mode.watch, null);
+});
+await test('failed approach does not repeatedly seize farming until that sighting ends', async () => {
+  const f = farmer(); f.s.world.geometry.path = () => ({ found: false }); f.c.room.objects.get(2).row = 30;
+  f.mode.issue(watchOrder); await f.mode.tick();
+  assert.equal(f.mode.status().active, false); assert.equal(f.mode.status().watch.phase, 'blocked');
+  for (let i = 0; i < 5; i++) await f.mode.tick();
+  assert.equal(f.mode.watch.engagements, 1); f.mode.issue({ action: 'stop' });
+});
+await test('group farm watch arms all recipients for both maps while preserving current jobs outside them', async () => {
+  const a = farmer(), b = farmer(), c = farmer(); a.c.room.objects.clear(); b.c.room.objects.clear(); c.c.room.objects.clear();
+  b.s.world.room.num = 39; c.s.world.room.num = 37;
+  const byAgent = { a, b, c };
+  const dispatch = new CombatDispatch({ candidates: () => Object.keys(byAgent).map(agent => ({ agent })),
+    rooms: () => ({ 38: { name: 'First' }, 39: { name: 'Second' } }),
+    send: (agent, input) => byAgent[agent].mode.issue(input) });
+  const reply = await dispatch.run({ action: 'kill', target: 'Exact Player', when_absent: 'farm', rooms: ['First', 'Second'] });
+  assert.equal(reply.ok, true); assert.deepEqual(reply.maps, [38, 39]);
+  for (const f of [a, b, c]) { assert.equal(f.mode.watch.id, reply.command_id); assert.equal(f.s.job.done, false); }
+  const stopped = await dispatch.run({ action: 'stop', command_id: reply.command_id });
+  assert.equal(stopped.ok, true); for (const f of [a, b, c]) assert.equal(f.mode.watch, null);
+  const again = await dispatch.run({ action: 'kill', target: 'Exact Player', when_absent: 'farm', rooms: ['First', 'Second'] });
+  dispatch.commands.clear(); // Broker restarted; the keepers retained their durable watches.
+  await dispatch.run({ action: 'stop', command_id: again.command_id });
+  for (const f of [a, b, c]) assert.equal(f.mode.watch, null);
+});
+await test('durable watches are isolated by roster, endpoint and character; stops survive restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'm59-combat-watch-'));
+  try {
+    const options = { directory, fleetPath: join(directory, 'prod.json'), host: 'fixture', port: 5959, agent: 'test', character: 'Us' };
+    const store = combatWatchStore(options), f = farmer(); f.mode.character = () => 'Us';
+    f.mode.saveWatch = w => store.write(w); f.c.room.objects.clear(); f.mode.issue(watchOrder);
+    assert.ok(store.read());
+    const restored = farmer(); restored.mode.character = () => 'Us'; restored.mode.saveWatch = w => store.write(w);
+    restored.mode.restoreWatch(store.read()); await restored.mode.tick();
+    assert.equal(restored.mode.status().active, true);
+    for (const change of [{ port: 5960 }, { character: 'Other' }, { fleetPath: join(directory, 'lab.json') }])
+      assert.equal(combatWatchStore({ ...options, ...change }).read(), null);
+    restored.mode.issue({ action: 'stop' }); assert.equal(store.read(), null);
+    f.mode.issue({ action: 'stop' });
+  } finally {
+    assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
+    assert.ok(basename(directory).startsWith('m59-combat-watch-'));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+await test('CLI and FleetScratch express farm watches in both assigned maps', () => {
+  const command = parseCombatCLI(['Kill Morpheus', '--maps', '39,544', '--when-absent', 'farm']);
+  assert.deepEqual(command, { action: 'kill', target: 'Morpheus', rooms: [39, 544], when_absent: 'farm' });
+  const scratch = parseCombatCommand('combat kill Morpheus maps=39,544 absent=farm');
+  assert.deepEqual(scratch.rooms, [39, 544]); assert.equal(scratch.order.when_absent, 'farm');
+  assert.throws(() => normalizeCombatOrder({ ...ambush, when_absent: 'farm' }), /farm watch/);
+});
+await test('restart restores the original PvP safety before a passive watch farms again', async () => {
+  let saved;
+  const f = farmer(); f.c.self.flags = OF.SAFETY;
+  f.mode.saveWatch = w => { saved = structuredClone(w); };
+  f.mode.issue(watchOrder); await f.mode.tick();
+  assert.equal(saved.restoreSafety, true);
+  const restored = farmer(); restored.c.room.objects.clear(); restored.c.self.flags = 0;
+  restored.mode.saveWatch = w => { saved = structuredClone(w); };
+  restored.mode.restoreWatch(saved); await restored.mode.tick();
+  await new Promise(r => setImmediate(r));
+  assert.equal(restored.sent.at(-1), 'safety:true');
+  assert.equal(saved.restoreSafety, false);
+  assert.equal(restored.mode.status().active, false);
+  restored.mode.issue({ action: 'stop' }); f.mode.issue({ action: 'stop' });
 });
 
 console.log(`PASS ${tests} combat mode scenarios`);

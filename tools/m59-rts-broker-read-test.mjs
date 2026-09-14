@@ -98,7 +98,7 @@ try {
   const combat = tools.find(tool => tool.name === 'combat');
   assert.deepEqual(combat.inputSchema.required, ['agent', 'action']);
   assert.deepEqual(combat.inputSchema.properties.action.enum, ['kill', 'attack', 'ambush', 'stop', 'status']);
-  assert.equal(health.combat_mode, 2);
+  assert.equal(health.combat_mode, 3);
   assert.ok(tools.some(tool => tool.name === 'combat_order'));
   for (const fleet_state of [health.state, 'wrong-combat-roster']) {
     const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },

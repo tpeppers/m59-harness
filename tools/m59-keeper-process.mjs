@@ -46,6 +46,7 @@ import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { audioView } from './m59-audio-observations.mjs';
 import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
 import { OF } from './m59-parse.mjs';
+import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
 import * as party from './m59-party.mjs';
@@ -253,6 +254,20 @@ session.pacer; // exists from constructor
 
 let autopilot = null;
 session.combat.keeper = () => autopilot;
+session.combat.character = () => character;
+session.combat.watchEligibility = () => !!autopilot && joinWanted && !errandHold && !autopilot.inert &&
+  (autopilot.mode === 'farm' && autopilot.running ||
+   autopilot.mode === 'tick' && autopilot.policy?.hunt && autopilot._tickLoop?.timer && !autopilot._tickLoop._frozen);
+const watchStore = combatWatchStore({
+  directory: process.env.M59_COMBAT_WATCH_DIR || resolve('substrate', 'combat-watches'),
+  fleetPath, host: credHost, port: credPort, agent, character,
+});
+session.combat.saveWatch = watch => watchStore.write(watch);
+try { session.combat.restoreWatch(watchStore.read()); }
+catch (error) {
+  session.combat.watchLoadError = error.message;
+  console.error('[keeper] combat watch was not restored: ' + error.message);
+}
 let defaultPolicy = null;
 // The deterministic responder, held so `/state` can report whether this character can
 // actually hear -- see the attach in join(). Keeper stderr is discarded by the spawner
@@ -1389,7 +1404,7 @@ const server = createServer(async (req, res) => {
       json({
         schema: 'm59-keeper-live/v1',
         tactical_orders: 1,
-        combat_mode: 2,
+        combat_mode: 3,
         audio_observations: 1,
         intent_observations: 1,
         ok: !!(inGame && session.live),
@@ -1492,7 +1507,7 @@ const server = createServer(async (req, res) => {
       const args = ask?.args ?? {};
       if (name === 'combat' || name === 'combat_order') { try {
         const result = session.combat.issue(args);
-        if (result.accepted && errandHold) releaseKeeper('combat override accepted', errandHold.token);
+        if (result.accepted && session.combat.active && errandHold) releaseKeeper('combat override accepted', errandHold.token);
         json(result);
       }
         catch (e) { json({ error: e.message }, 409); } return; }

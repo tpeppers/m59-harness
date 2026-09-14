@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { fleetName, stateFileFor, resolveControlUrl } from './m59-fleetpath.mjs';
 
-export async function combatOrder(input, { fleet = fleetName(), url = resolveControlUrl().url, timeoutMs = 5000 } = {}) {
+export async function combatOrder(input, { fleet = fleetName(), url = resolveControlUrl().url,
+  timeoutMs = ['ready', 'status'].includes(input.action) ? 10000 : 5000 } = {}) {
   if (!url) throw Error(resolveControlUrl().why ?? 'combat: control URL required');
   const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
@@ -23,7 +24,7 @@ export function parseCombatCLI(argv) {
     if (argv[i] === '--check') { options.action = 'ready'; continue; }
     if (argv[i].startsWith('--')) {
       const key = argv[i].slice(2);
-      if (!['fleet', 'room', 'agents', 'command-id', 'ttl'].includes(key) ||
+      if (!['fleet', 'room', 'maps', 'when-absent', 'agents', 'command-id', 'ttl'].includes(key) ||
           options[key] != null || !argv[i + 1] || argv[i + 1].startsWith('--'))
         throw Error('combat: invalid option ' + argv[i]);
       options[key] = argv[++i];
@@ -35,6 +36,8 @@ export function parseCombatCLI(argv) {
       (options.action && phrase)) throw Error('usage: m59-combat-order.mjs "Kill Player" --fleet prod --room "Room Name" | --check | status|stop [--command-id ID]');
   return { action, ...(match ? { target: match[2] } : {}),
     ...(options.room ? { room: options.room } : {}),
+    ...(options.maps ? { rooms: options.maps.split(',').map(Number) } : {}),
+    ...(options['when-absent'] ? { when_absent: options['when-absent'] } : {}),
     ...(options.agents ? { agents: options.agents.split(',') } : {}),
     ...(options['command-id'] ? { command_id: options['command-id'] } : {}),
     ...(options.ttl ? { ttl_ms: Number(options.ttl) } : {}) };

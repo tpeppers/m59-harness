@@ -23,15 +23,16 @@ export function parseCombatCommand(line) {
   const target = ['kill', 'attack', 'ambush'].includes(action) ? unquote(words.shift() ?? '') : undefined;
   const options = {};
   for (const word of words) {
-    const m = /^(agents|room|map|at|door|radius|ttl|order_id)=(.+)$/.exec(word);
+    const m = /^(agents|room|maps|absent|map|at|door|radius|ttl|order_id)=(.+)$/.exec(word);
     if (!m || Object.hasOwn(options, m[1])) throw new Error(`invalid or duplicate combat option: ${word}`);
     options[m[1]] = unquote(m[2]);
   }
   const agents = options.agents?.split(',').filter(Boolean);
-  if (!agents?.length && !options.room) throw new Error('combat needs agents=t1,t2 or room="Room Name"');
+  if (!agents?.length && !options.room && !options.maps) throw new Error('combat needs agents=t1,t2, room="Room Name", or maps=39,544');
   const allowed = new Set(action === 'ambush' ? ['agents', 'map', 'at', 'door', 'radius', 'ttl']
     : ['kill', 'attack'].includes(action) ? ['agents', 'ttl'] : action === 'stop' ? ['agents', 'order_id'] : ['agents']);
   allowed.add('room');
+  if (['kill', 'attack'].includes(action)) { allowed.add('absent'); allowed.add('maps'); }
   if (Object.keys(options).some(key => !allowed.has(key)) || (options.radius && !options.door))
     throw new Error('invalid combat option for this action');
   const point = value => {
@@ -39,12 +40,15 @@ export function parseCombatCommand(line) {
     if (!match) throw new Error('combat coordinates use r30c61 (or r30,c61)');
     return { row: Number(match[1]), col: Number(match[2]) };
   };
-  const selection = { ...(agents ? { agents } : {}), ...(options.room ? { room: options.room } : {}) };
+  if (options.maps && (options.room || options.absent !== 'farm')) throw new Error('maps requires absent=farm and no room option');
+  const selection = { ...(agents ? { agents } : {}), ...(options.room ? { room: options.room } : {}),
+    ...(options.maps ? { rooms: options.maps.split(',').map(Number) } : {}) };
   if (action === 'stop' || action === 'status') {
     if (options.room && options.order_id) throw new Error('use agents with order_id, or room without order_id');
     return { ...selection, order: { action, ...(options.order_id ? { order_id: options.order_id } : {}) } };
   }
-  const order = { action, target, ...(options.ttl ? { ttl_ms: Number(options.ttl) } : {}) };
+  const order = { action, target, ...(options.ttl ? { ttl_ms: Number(options.ttl) } : {}),
+    ...(options.absent ? { when_absent: options.absent } : {}) };
   if (action === 'ambush') {
     order.map = Number(options.map); order.position = point(options.at);
     if (options.door) order.door = { ...point(options.door), radius: Number(options.radius ?? 1) };
