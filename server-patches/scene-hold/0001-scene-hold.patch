@@ -384,3 +384,32 @@
  
        % weight here just to be like normal holder
        piBulk_hold = piBulk_hold + Send(what,@GetBulk);
+--- a/blakserv/adminfn.c
++++ b/blakserv/adminfn.c
+@@ -4383,6 +4383,15 @@
+ 	UnpauseTimers();
+ }
+ 
++/* Preserve the maintenance caller so a lab reload has a completion reply.
++   The normal no-players-in-game precondition below still applies. */
++static int scene_reload_admin_session = -1;
++static void SceneReloadHangupOtherSession(session_node *s)
++{
++  if (s->session_id != scene_reload_admin_session)
++    HangupSession(s);
++}
++
+ /* stuff for foreachsession */
+ int accounts_in_game;
+ void AdminReloadGame(int session_id,admin_parm_type parms[],
+@@ -4402,7 +4411,9 @@
+ 		return;
+ 	}
+ 
+-  AdminHangupAll(session_id, parms, num_blak_parm, blak_parm);
++  scene_reload_admin_session = session_id;
++  ForEachSession(SceneReloadHangupOtherSession);
++  scene_reload_admin_session = -1;
+ 
+ 	aprintf("Unloading game... ");
+ 	AdminSendBufferList();

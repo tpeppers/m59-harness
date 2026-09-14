@@ -1,0 +1,472 @@
+{
+  "schema": "m59-scene-reload-benchmark/v1",
+  "date": "2026-09-14",
+  "conditions": {
+    "server": "isolated Docker m59-replay-lab",
+    "cpu_limit": 2,
+    "memory_limit": "1 GiB",
+    "scene": "four bodies: player, two rats, mana node; full HP/200 vigor for speed trials",
+    "before": "native restart every trial, fixed ability-read waits",
+    "after": "cached native world reload, confirmed ability replies",
+    "simulation_ms": "zero for setup benchmarks/FleetScratch; 1000 for CLI variants",
+    "image": "sha256:8eeef56bb320924591b0e53ddb61bbffeb2ca925158359830b1388f3f04bc098",
+    "server_source": "1fb1f51478d14a2a7fa37a2bb5899899c0115c44",
+    "patch_sha256": "208fd5ee9209289bc3f6b39c1485d1142f579c4ab69de70c48f8baaa0d549168"
+  },
+  "before": {
+    "summary": {
+      "restore_to_start": {
+        "n": 3,
+        "min_ms": 6497.6971,
+        "median_ms": 6735.1446000000005,
+        "max_ms": 7104.1066
+      },
+      "complete_overhead": {
+        "n": 3,
+        "min_ms": 6602.472800000001,
+        "median_ms": 6839.944199999998,
+        "max_ms": 7210.4154
+      }
+    },
+    "runs": [
+      {
+        "trial": 1,
+        "timing_wall_ms": 7211.9963,
+        "timings": {
+          "ownership_and_attestation_ms": 159.02370000000002,
+          "previous_cleanup_ms": 0.057799999999986085,
+          "native_restore_ms": 2832.4925,
+          "engine_import_ms": 255.60249999999996,
+          "login_and_initial_reads_ms": 1569.5531,
+          "ability_reads_ms": 1685.7065000000002,
+          "controller_and_player_check_ms": 75.79809999999998,
+          "scene_prepare_ms": 39.89170000000013,
+          "client_scene_sync_ms": 475.60339999999997,
+          "controller_restore_and_start_ms": 10.37039999999979,
+          "restore_to_start_ms": 7104.1066,
+          "simulation_ms": 1.5808999999999287,
+          "cleanup_ms": 11.680099999999584,
+          "total_ms": 7117.378699999999
+        },
+        "loaded": true,
+        "verified": true
+      },
+      {
+        "trial": 2,
+        "timing_wall_ms": 6603.563400000001,
+        "timings": {
+          "ownership_and_attestation_ms": 159.2998,
+          "previous_cleanup_ms": 0.06189999999998008,
+          "native_restore_ms": 2287.5007,
+          "engine_import_ms": 221.69930000000022,
+          "login_and_initial_reads_ms": 1569.0382,
+          "ability_reads_ms": 1655.9712,
+          "controller_and_player_check_ms": 78.9992999999995,
+          "scene_prepare_ms": 43.30120000000079,
+          "client_scene_sync_ms": 472.15349999999944,
+          "controller_restore_and_start_ms": 9.668300000000272,
+          "restore_to_start_ms": 6497.6971,
+          "simulation_ms": 1.0905999999995402,
+          "cleanup_ms": 11.9375,
+          "total_ms": 6510.7412
+        },
+        "loaded": true,
+        "verified": true
+      },
+      {
+        "trial": 3,
+        "timing_wall_ms": 6841.026199999998,
+        "timings": {
+          "ownership_and_attestation_ms": 157.8287,
+          "previous_cleanup_ms": 0.06020000000000891,
+          "native_restore_ms": 2277.6607,
+          "engine_import_ms": 227.91510000000017,
+          "login_and_initial_reads_ms": 1558.2959,
+          "ability_reads_ms": 1662.0969999999998,
+          "controller_and_player_check_ms": 318.5604000000003,
+          "scene_prepare_ms": 51.151199999999335,
+          "client_scene_sync_ms": 469.7322000000004,
+          "controller_restore_and_start_ms": 11.839399999999841,
+          "restore_to_start_ms": 6735.1446000000005,
+          "simulation_ms": 1.0820000000003347,
+          "cleanup_ms": 13.381999999999607,
+          "total_ms": 6749.6171
+        },
+        "loaded": true,
+        "verified": true
+      }
+    ]
+  },
+  "cold_after": {
+    "trial": 1,
+    "timing_wall_ms": 5891.8409,
+    "timings": {
+      "ownership_and_attestation_ms": 161.5519,
+      "previous_cleanup_ms": 0.061800000000005184,
+      "native_restore_ms": 2488.2981,
+      "engine_import_ms": 220.15729999999985,
+      "login_and_initial_reads_ms": 1597.7892000000002,
+      "ability_reads_ms": 644.5743999999995,
+      "controller_and_player_check_ms": 84.07710000000043,
+      "scene_prepare_ms": 56.419699999999466,
+      "client_scene_sync_ms": 507.77760000000035,
+      "controller_restore_and_start_ms": 11.319999999999709,
+      "restore_to_start_ms": 5772.0333,
+      "simulation_ms": 1.606999999999971,
+      "cleanup_ms": 17.30280000000039,
+      "total_ms": 5790.945699999999
+    },
+    "loaded": true,
+    "verified": true
+  },
+  "warm_after": {
+    "summary": {
+      "restore_to_start": {
+        "n": 13,
+        "min_ms": 3576.0090999999998,
+        "median_ms": 3685.7739,
+        "max_ms": 3937.7252
+      },
+      "complete_overhead": {
+        "n": 13,
+        "min_ms": 3694.4610999999995,
+        "median_ms": 3871.966699999999,
+        "max_ms": 4286.7999
+      }
+    },
+    "runs": [
+      {
+        "trial": 2,
+        "timing_wall_ms": 3898.2390000000005,
+        "timings": {
+          "ownership_and_attestation_ms": 156.89260000000002,
+          "previous_cleanup_ms": 0.059699999999992315,
+          "native_restore_ms": 524.5685000000001,
+          "engine_import_ms": 212.64159999999993,
+          "login_and_initial_reads_ms": 1568.8225000000002,
+          "ability_reads_ms": 661.0605999999998,
+          "controller_and_player_check_ms": 88.58939999999984,
+          "scene_prepare_ms": 51.56700000000001,
+          "client_scene_sync_ms": 508.0045,
+          "controller_restore_and_start_ms": 12.236699999999928,
+          "restore_to_start_ms": 3784.4506,
+          "simulation_ms": 1.7619000000004235,
+          "cleanup_ms": 17.585499999999683,
+          "total_ms": 3803.8006
+        },
+        "loaded": true,
+        "verified": true,
+        "source": "setup-initial"
+      },
+      {
+        "trial": 3,
+        "timing_wall_ms": 3901.0915999999997,
+        "timings": {
+          "ownership_and_attestation_ms": 162.9203,
+          "previous_cleanup_ms": 0.061499999999995225,
+          "native_restore_ms": 476.51869999999997,
+          "engine_import_ms": 215.07500000000005,
+          "login_and_initial_reads_ms": 1572.1326000000001,
+          "ability_reads_ms": 651.7919999999999,
+          "controller_and_player_check_ms": 82.26800000000003,
+          "scene_prepare_ms": 42.44450000000006,
+          "client_scene_sync_ms": 521.7655,
+          "controller_restore_and_start_ms": 11.290599999999813,
+          "restore_to_start_ms": 3736.2753000000002,
+          "simulation_ms": 1.5673999999999069,
+          "cleanup_ms": 17.457000000000335,
+          "total_ms": 3755.304
+        },
+        "loaded": true,
+        "verified": true,
+        "source": "setup-initial"
+      },
+      {
+        "source": "CLI",
+        "trial": 1,
+        "case": "full-health",
+        "timing_wall_ms": 4871.9979,
+        "timings": {
+          "ownership_and_attestation_ms": 162.5693,
+          "previous_cleanup_ms": 0.05670000000000641,
+          "native_restore_ms": 358.7448,
+          "engine_import_ms": 230.12620000000004,
+          "login_and_initial_reads_ms": 1584.7738999999997,
+          "ability_reads_ms": 667.1799000000001,
+          "controller_and_player_check_ms": 78.27629999999999,
+          "scene_prepare_ms": 42.103200000000015,
+          "client_scene_sync_ms": 537.7836000000002,
+          "controller_restore_and_start_ms": 11.279199999999946,
+          "restore_to_start_ms": 3672.8973,
+          "simulation_ms": 1088.7696,
+          "cleanup_ms": 12.518599999999424,
+          "total_ms": 4774.1901
+        },
+        "outcome": "survived_window",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "CLI",
+        "trial": 1,
+        "case": "empty-room",
+        "timing_wall_ms": 4816.0363,
+        "timings": {
+          "ownership_and_attestation_ms": 163.31,
+          "previous_cleanup_ms": 0.06030000000001223,
+          "native_restore_ms": 338.9795,
+          "engine_import_ms": 250.48770000000002,
+          "login_and_initial_reads_ms": 1576.9634,
+          "ability_reads_ms": 638.6061,
+          "controller_and_player_check_ms": 76.76450000000023,
+          "scene_prepare_ms": 30.374899999999798,
+          "client_scene_sync_ms": 536.7137000000002,
+          "controller_restore_and_start_ms": 13.131599999999708,
+          "restore_to_start_ms": 3625.3956000000003,
+          "simulation_ms": 1084.4352,
+          "cleanup_ms": 10.820000000000618,
+          "total_ms": 4720.653600000001
+        },
+        "outcome": "survived_window",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "CLI",
+        "trial": 2,
+        "case": "full-health",
+        "timing_wall_ms": 4778.5792,
+        "timings": {
+          "ownership_and_attestation_ms": 165.53799999999998,
+          "previous_cleanup_ms": 0.06290000000001328,
+          "native_restore_ms": 334.43210000000005,
+          "engine_import_ms": 211.48899999999992,
+          "login_and_initial_reads_ms": 1556.7309999999998,
+          "ability_reads_ms": 651.9919,
+          "controller_and_player_check_ms": 80.42250000000013,
+          "scene_prepare_ms": 49.1541000000002,
+          "client_scene_sync_ms": 511.4020999999998,
+          "controller_restore_and_start_ms": 14.778699999999844,
+          "restore_to_start_ms": 3576.0090999999998,
+          "simulation_ms": 1084.1181000000006,
+          "cleanup_ms": 12.051899999999478,
+          "total_ms": 4672.182000000001
+        },
+        "outcome": "survived_window",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "CLI",
+        "trial": 2,
+        "case": "empty-room",
+        "timing_wall_ms": 4951.061899999999,
+        "timings": {
+          "ownership_and_attestation_ms": 175.3728,
+          "previous_cleanup_ms": 0.06949999999997658,
+          "native_restore_ms": 371.83910000000003,
+          "engine_import_ms": 244.13009999999997,
+          "login_and_initial_reads_ms": 1583.908,
+          "ability_reads_ms": 652.7316000000001,
+          "controller_and_player_check_ms": 85.18939999999975,
+          "scene_prepare_ms": 37.09720000000016,
+          "client_scene_sync_ms": 523.0075000000002,
+          "controller_restore_and_start_ms": 12.42489999999998,
+          "restore_to_start_ms": 3685.7739,
+          "simulation_ms": 1079.0951999999997,
+          "cleanup_ms": 12.08849999999984,
+          "total_ms": 4776.9603
+        },
+        "outcome": "survived_window",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "CLI",
+        "trial": 3,
+        "case": "full-health",
+        "timing_wall_ms": 5120.4281999999985,
+        "timings": {
+          "ownership_and_attestation_ms": 162.16789999999997,
+          "previous_cleanup_ms": 0.06730000000001723,
+          "native_restore_ms": 356.20360000000005,
+          "engine_import_ms": 244.27009999999996,
+          "login_and_initial_reads_ms": 1592.0218999999997,
+          "ability_reads_ms": 654.3562000000002,
+          "controller_and_player_check_ms": 84.9344000000001,
+          "scene_prepare_ms": 49.61869999999999,
+          "client_scene_sync_ms": 507.29529999999977,
+          "controller_restore_and_start_ms": 12.705899999999929,
+          "restore_to_start_ms": 3663.6471,
+          "simulation_ms": 1089.9611999999997,
+          "cleanup_ms": 11.80160000000069,
+          "total_ms": 4765.4139000000005
+        },
+        "outcome": "survived_window",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "CLI",
+        "trial": 3,
+        "case": "empty-room",
+        "timing_wall_ms": 5141.731800000001,
+        "timings": {
+          "ownership_and_attestation_ms": 162.8573,
+          "previous_cleanup_ms": 0.06769999999997367,
+          "native_restore_ms": 364.8357000000001,
+          "engine_import_ms": 247.56529999999998,
+          "login_and_initial_reads_ms": 1602.6106,
+          "ability_reads_ms": 664.2456999999999,
+          "controller_and_player_check_ms": 105.58539999999994,
+          "scene_prepare_ms": 43.71149999999989,
+          "client_scene_sync_ms": 501.4326000000001,
+          "controller_restore_and_start_ms": 13.57549999999992,
+          "restore_to_start_ms": 3706.4912999999997,
+          "simulation_ms": 1074.8864000000003,
+          "cleanup_ms": 11.02390000000014,
+          "total_ms": 4792.405
+        },
+        "outcome": "survived_window",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "FleetScratch",
+        "trial": 1,
+        "case": "full-health",
+        "timing_wall_ms": 3749.2674,
+        "timings": {
+          "ownership_and_attestation_ms": 159.9347,
+          "previous_cleanup_ms": 0.05530000000001678,
+          "native_restore_ms": 331.23699999999997,
+          "engine_import_ms": 208.6409,
+          "login_and_initial_reads_ms": 1594.9628000000002,
+          "ability_reads_ms": 655.6618999999996,
+          "controller_and_player_check_ms": 84.93740000000025,
+          "scene_prepare_ms": 47.24130000000014,
+          "client_scene_sync_ms": 536.2314999999999,
+          "controller_restore_and_start_ms": 11.817399999999907,
+          "restore_to_start_ms": 3630.7245000000003,
+          "simulation_ms": 1.2622000000001208,
+          "cleanup_ms": 13.179699999999684,
+          "total_ms": 3645.1693
+        },
+        "outcome": "setup_only",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "source": "FleetScratch",
+        "trial": 1,
+        "case": "empty-room",
+        "timing_wall_ms": 3808.4454,
+        "timings": {
+          "ownership_and_attestation_ms": 159.7988,
+          "previous_cleanup_ms": 0.06499999999999773,
+          "native_restore_ms": 362.9267,
+          "engine_import_ms": 228.4832,
+          "login_and_initial_reads_ms": 1615.7382000000002,
+          "ability_reads_ms": 641.6841999999997,
+          "controller_and_player_check_ms": 92.54670000000033,
+          "scene_prepare_ms": 36.579899999999725,
+          "client_scene_sync_ms": 539.8096,
+          "controller_restore_and_start_ms": 11.309900000000198,
+          "restore_to_start_ms": 3688.9467,
+          "simulation_ms": 1.0978000000000065,
+          "cleanup_ms": 13.169199999999819,
+          "total_ms": 3703.2181
+        },
+        "outcome": "setup_only",
+        "loaded": true,
+        "verified": true,
+        "player_state": true,
+        "method": "world-reload"
+      },
+      {
+        "trial": 1,
+        "timing_wall_ms": 4287.8572,
+        "timings": {
+          "ownership_and_attestation_ms": 164.89600000000002,
+          "previous_cleanup_ms": 0.06069999999999709,
+          "native_restore_ms": 616.6841,
+          "engine_import_ms": 237.36670000000004,
+          "login_and_initial_reads_ms": 1604.2099999999998,
+          "ability_reads_ms": 636.8197,
+          "controller_and_player_check_ms": 90.55140000000029,
+          "scene_prepare_ms": 49.03060000000005,
+          "client_scene_sync_ms": 526.9521,
+          "controller_restore_and_start_ms": 11.149799999999686,
+          "restore_to_start_ms": 3937.7252,
+          "simulation_ms": 1.0573000000003958,
+          "cleanup_ms": 11.380299999999806,
+          "total_ms": 3950.1657999999998
+        },
+        "loaded": true,
+        "verified": true,
+        "source": "setup-final"
+      },
+      {
+        "trial": 2,
+        "timing_wall_ms": 3717.9251000000004,
+        "timings": {
+          "ownership_and_attestation_ms": 157.9711,
+          "previous_cleanup_ms": 0.0660000000000025,
+          "native_restore_ms": 342.6026999999999,
+          "engine_import_ms": 222.69650000000001,
+          "login_and_initial_reads_ms": 1566.7875000000001,
+          "ability_reads_ms": 661.0900999999999,
+          "controller_and_player_check_ms": 89.7782000000002,
+          "scene_prepare_ms": 41.96319999999969,
+          "client_scene_sync_ms": 512.0621000000001,
+          "controller_restore_and_start_ms": 11.6878999999999,
+          "restore_to_start_ms": 3606.7094,
+          "simulation_ms": 1.184700000000248,
+          "cleanup_ms": 13.029799999999796,
+          "total_ms": 3620.9291000000003
+        },
+        "loaded": true,
+        "verified": true,
+        "source": "setup-final"
+      },
+      {
+        "trial": 3,
+        "timing_wall_ms": 3966.0231999999996,
+        "timings": {
+          "ownership_and_attestation_ms": 166.4894,
+          "previous_cleanup_ms": 0.06759999999999877,
+          "native_restore_ms": 369.15419999999995,
+          "engine_import_ms": 222.30220000000008,
+          "login_and_initial_reads_ms": 1571.4165,
+          "ability_reads_ms": 647.5364999999997,
+          "controller_and_player_check_ms": 342.65380000000005,
+          "scene_prepare_ms": 43.020500000000084,
+          "client_scene_sync_ms": 474.4106999999999,
+          "controller_restore_and_start_ms": 11.794300000000021,
+          "restore_to_start_ms": 3848.8508,
+          "simulation_ms": 1.3805999999999585,
+          "cleanup_ms": 13.206500000000233,
+          "total_ms": 3863.4412
+        },
+        "loaded": true,
+        "verified": true,
+        "source": "setup-final"
+      }
+    ]
+  },
+  "interpretation": "Performance/setup evidence only; no verified baseline reproduction or intervention efficacy claim."
+}

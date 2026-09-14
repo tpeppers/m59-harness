@@ -21,3 +21,12 @@ Player regeneration, external inputs, unrelated rooms, RNG and custom subclass
 handlers are separate fidelity concerns. The baseline replay gate remains required.
 See [the replay workflow](../../docs/m59-death-replay.md) for native world saves,
 variant CLI options, and interpretation rules.
+
+The patch also adjusts `AdminReloadGame` in `blakserv/adminfn.c` to preserve the
+requesting maintenance connection. Stock blakserv disconnects it before sending
+the completion reply, so callers cannot reliably acknowledge a warm reload.
+The existing no-players-in-game guard remains in force. The image advertises
+`org.openai.m59.scene-reload.ack=v1`; the adapter requires this capability before
+using warm resets. No native game-data loading logic is replaced. `reload game`
+retains account definitions and runtime RNG; use a cold restore when account
+administration is part of the experiment.

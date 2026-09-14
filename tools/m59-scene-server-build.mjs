@@ -16,7 +16,9 @@ if(!/^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9_.-]+$/.test(tag))throw Error('invalid ima
 const git=a=>execFileSync('git',['-c',`safe.directory=${source.replaceAll('\\','/')}`,'-C',source,...a],{maxBuffer:64*1024*1024});
 const commit=manifest.source.commit;
 for(const line of readFileSync(path.join(dir,manifest.source_hashes),'utf8').trim().split(/\r?\n/)) {
-  const [want,file]=line.split(/\s+/);if(hash(git(['show',commit+':'+file]))!==want)throw Error(`source mismatch: ${file}`);
+  const [want,file]=line.split(/\s+/);
+  const normalized=git(['show',commit+':'+file]).toString('utf8').replaceAll('\r\n','\n');
+  if(hash(normalized)!==want)throw Error(`source mismatch: ${file}`);
 }
 const build=path.join(root,'substrate/scene-build',patchHash.slice(0,12));mkdirSync(build,{recursive:true});
 const archive=path.join(build,'source.tar'),context=path.join(build,'source');mkdirSync(context,{recursive:true});

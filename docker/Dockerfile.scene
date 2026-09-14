@@ -59,6 +59,7 @@ ARG SOURCE_COMMIT
 ARG PATCH_SHA256
 
 LABEL org.openai.m59.scene-hold.schema="m59-scene-hold/v1" \
+      org.openai.m59.scene-reload.ack="v1" \
       org.openai.m59.scene-hold.source-commit="$SOURCE_COMMIT" \
       org.openai.m59.scene-hold.patch-sha256="$PATCH_SHA256" \
       org.openai.m59.scene-hold.lab-only="true"

@@ -96,7 +96,7 @@ A private config selects an existing lab roster/account. It never selects a flee
 }
 ```
 
-`players` maps other captured player names to explicitly selected shadow stand-ins. `classes` resolves a monster whose name is not uniquely covered by the generated class catalogue. `native_snapshot` is optional and is only accepted for the owned isolated container; when present, every trial starts by restoring the same complete native world. This also restores inventory lost in the previous trial, instead of treating a newly unarmed corpse as an equivalent baseline.
+`players` maps other captured player names to explicitly selected shadow stand-ins. `classes` resolves a monster whose name is not uniquely covered by the generated class catalogue. `native_snapshot` is optional and is only accepted for the owned isolated container; when present, every trial starts by restoring the same native world. This also restores inventory lost in the previous trial, instead of treating a newly unarmed corpse as an equivalent baseline. Account definitions are restored at the initial cold bootstrap; see the warm-reset contract below.
 
 ```text
 node tools/m59-death-replay.mjs checklist BUNDLE.json
@@ -106,6 +106,68 @@ node tools/m59-death-replay.mjs run BUNDLE.json --config PRIVATE_CONFIG.json --f
 The adapter claims the roster/account before login, runs the real Session/Autopilot methods, restores the captured policy/controller state where possible, and closes its own client and leases on completion. An in-flight approach resumes toward the captured refuge; the report admits that the JavaScript stack was not restored. Lab-only variant controls cannot be enabled on production endpoints.
 
 Each trial runs in a fresh Node process. The next trial begins only after that process exits, preventing an old resurrection or travel continuation, cached book, or mutable controller from carrying over. Native trial receipts include the actual image ID, server source/patch identity and native save checksums.
+
+## Fast repeated restores
+
+The default `native_restore: "auto"` performs a full container restart/restore once per snapshot and container lifetime. Later trials use blakserv's native `reload game TIMESTAMP`, keeping the process and installed save files in place. Game objects, lists, strings and saved timers reload; account definitions remain from the verified cold bootstrap. Use `native_restore: "restart"` for experiments that create/delete/change accounts or require an account reset every trial. A warm reload is appropriate for combat/travel experiments, but is not a C-runtime or RNG rewind.
+
+Warm reload requires the lab image label `org.openai.m59.scene-reload.ack=v1`. The lab patch preserves the requesting maintenance connection until the existing reload completion reply, while retaining the server's refusal to reload with players in game. `auto` falls back to cold restores on older images; `native_restore: "reload"` requires this capability (and still cold-bootstraps if the cache is missing). The private `.reload-cache.json` records snapshot hashes, container/image IDs and start time. Changing any of those forces a new bootstrap. Every warm trial rechecks the host checkpoint and installed save hashes; an unexpected installed-file mismatch is refused.
+
+The isolated game port 17959 also permits response-driven initial ability reads: list replies must arrive before requesting positional ability groups, and both requested groups must finish. Empty groups count as replies; stale data and timeouts do not. Packet pacing is unchanged. `fast_reads: false` restores the fixed-wait path for a comparison. Other servers keep their existing behavior.
+
+On the 2026-09-14 four-body fixture, 13 warm trials took **3.69–4.29 seconds** of total restore/cleanup overhead (median **3.87 seconds**). Three prior cold-only trials took **6.60–7.21 seconds** (median **6.84 seconds**). The optimized first cold trial took **5.89 seconds**. These exclude the requested simulation time. See [the benchmark report](scene-reload-performance-2026-09-14.md) for measurement boundaries and raw results.
+
+## FleetScript, FleetScratch and CLI simulator loops
+
+The shared `simulateScene` loop resets between every case/trial, runs cases in paired order, and returns outcomes, setup verification, controller decisions, intervention application, server/native-save identities and phase timings. `horizonMs: 0` measures setup only and reports `setup_only`. A failed load, release or execution stops the loop and preserves partial evidence in the output report. Native world restoration still uses the same private replay config above.
+
+Put a simulation definition beside its scene and private replay config:
+
+```json
+{
+  "scene": "before-raid.json",
+  "configFile": "replay-config.json",
+  "trials": 5,
+  "horizonMs": 10000,
+  "cases": [
+    {"id": "as-captured"},
+    {"id": "full-health", "reload": {"fullHp": true, "vigor": 200}},
+    {"id": "empty-room", "reload": {"noMonsters": true}},
+    {"id": "earlier-retreat", "policy": {"fleeBelow": 0.6}},
+    {"id": "without-refuge", "variant": {"kind": "disable", "strategies": ["nearest_refuge"]}}
+  ],
+  "out": "simulation-report.json"
+}
+```
+
+Paths in the JSON resolve relative to that file. CLI:
+
+```text
+node tools/m59-scene-simulator.mjs substrate/scenes/simulation.json
+```
+
+At the FleetScratch prompt:
+
+```text
+simulate substrate/scenes/simulation.json
+```
+
+FleetScript authors can invoke the same exported API from an explicit simulation driver:
+
+```js
+import {simulateScene} from './tools/m59-fleetscript.mjs';
+const report = await simulateScene({
+  scene: 'substrate/scenes/before-raid.json',
+  configFile: 'substrate/scenes/replay-config.json',
+  trials: 5, horizonMs: 10000,
+  cases: [{id: 'captured'}, {id: 'full', reload: {fullHp: true, vigor: 200}}],
+  onTrial: row => console.log(row.case, row.outcome, row.timings)
+});
+```
+
+This is an explicit simulation API, not a production errand step; importing/compiling a FleetScript does not run it. It never chooses an implicit account. Keep scene captures, native checkpoints, roster files and detailed simulation reports in private runtime storage.
+
+Simulation reports are marked `exploratory`, with `baseline_reproduction_verified: false`. They expose intervention application so an inactive variation is not mistaken for an effective one. To ask whether an intervention saved a known death, use `m59-death-replay.mjs run` and its existing source/baseline gate. Faster loading does not waive that requirement.
 
 ## What is and is not evidence
 

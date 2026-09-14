@@ -9,6 +9,15 @@ FleetScript fast path and FleetScratch input concurrency using offline fixtures.
 
 Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time; they open no socket and touch no roster.
 
+## Saved-scene simulator
+
+`node tools/m59-scene-simulator-test.mjs` covers the fast native-reset cache,
+container/endpoint identity, installed save hashes, completion acknowledgements,
+response-driven lab ability reads and the shared FleetScript/FleetScratch trial
+loop. Native commands and adapters are fakes. The 13 scenarios include stale and
+empty replies, pristine per-case input and failure reporting; the existing
+`m59-death-replay-test.mjs` retains the source/baseline reproduction checks.
+
 ## The one that never fails, and why it is not a contradiction
 
 ```bash

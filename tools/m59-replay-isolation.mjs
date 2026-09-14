@@ -2,13 +2,15 @@
 // from carrying over. The parent resolves only after the worker has exited.
 import {fork} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {performance} from 'node:perf_hooks';
 export function isolatedReplayAdapter({configFile,attest}) {
   let active=null;
   const invoke=(operation,request={})=>new Promise((resolve,reject)=>{
+    const began=performance.now();
     if(active)return reject(Error('a replay operation is already running'));
     if(request.onStarted||request.onPrepared)return reject(Error('callbacks require an explicitly in-process lab test'));
     const child=fork(fileURLToPath(new URL('./m59-replay-trial.mjs',import.meta.url)),[],{
-      stdio:['ignore','pipe','pipe','ipc'],windowsHide:true});
+      stdio:['ignore','pipe','pipe','ipc'],windowsHide:true,execArgv:[]});
     active=child;let result,error,tail='';
     const output=data=>{tail=(tail+String(data)).slice(-2000);};
     child.stdout.on('data',output);child.stderr.on('data',output);
@@ -18,7 +20,10 @@ export function isolatedReplayAdapter({configFile,attest}) {
     child.on('exit',code=>{
       clearTimeout(timeout);active=null;
       if(error||code!==0||result===undefined)reject(Error(error??`trial process exited ${code}: ${tail}`));
-      else resolve(result);
+      else {
+        if(result&&typeof result==='object')result.timing_wall_ms=performance.now()-began;
+        resolve(result);
+      }
     });
     child.send({operation,configFile,request});
   });

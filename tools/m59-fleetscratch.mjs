@@ -237,6 +237,7 @@ async function main() {
   say('          promote <pad> | guarantees | unsafe | quit');
   say('          combat attack|ambush <player> agents=t1,t2 | combat stop|status agents=t1,t2');
   say('          combat run <pad> k=v… — immediate override, even during a running errand');
+  say('          simulate <simulation.json> — isolated saved-scene trials, with timings');
   say('  on dry/go:  skipTo=<mark|n>   runUntil=<mark|n>   — a skip must be covered by a checkpoint');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
@@ -329,6 +330,13 @@ async function main() {
     const [verb, ...rest] = line.trim().split(/\s+/).filter(Boolean);
     try {
       if (!verb) { /* blank */ }
+      else if (verb === 'simulate') {
+        if(rest.length!==1)throw Error('usage: simulate <simulation.json>');
+        const {runSimulationFile}=await import('./m59-scene-simulator.mjs');
+        const report=await runSimulationFile(rest[0],{onTrial:r=>say(JSON.stringify({
+          case:r.case,trial:r.trial,outcome:r.outcome,restore_ms:r.timings?.restore_to_start_ms}))});
+        say(JSON.stringify({timing:report.timing,validation:report.validation}));
+      }
       else if (verb === 'quit' || verb === 'exit') { rl.close(); return; }
       else if (verb === 'list') listPads();
       else if (verb === 'reload') {

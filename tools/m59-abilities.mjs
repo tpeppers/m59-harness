@@ -32,6 +32,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {fastReplayReads,waitForReplayRead} from './m59-lab-readiness.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const ABILITY_DIR = process.env.M59_ABILITY_DIR || here('../substrate/abilities');
@@ -139,16 +140,23 @@ export function noteAdvancement(book, ev, at = Date.now()) {
 export async function readLive(s, { kinds = 'both', settleMs = 700 } = {}) {
   const c = s.need();
   const wantSpells = kinds !== 'skills', wantSkills = kinds !== 'spells';
+  const fast=fastReplayReads(s),sequence=c.evSeq;
 
   // The lists FIRST, and separately, for the reason in the header: a group-3 packet
   // is positional against plSpells and carries nothing that identifies a slot, so a
   // stale list mislabels every number in it.
   if (wantSpells) await s.pacer.submit('read', () => c.requestSpells());
   if (wantSkills) await s.pacer.submit('read', () => c.requestSkills());
-  await new Promise(r => setTimeout(r, 500));
+  if(fast)await waitForReplayRead(()=>['spells','skills'].every(kind=>
+    (kind==='spells'&&!wantSpells)||(kind==='skills'&&!wantSkills)||
+    c.events.some(e=>e.seq>sequence&&e.kind===kind)));
+  else await new Promise(r => setTimeout(r, 500));
+  const requestedAt=Date.now();
   if (wantSpells) await s.pacer.submit('read', () => c.stats(3));
   if (wantSkills) await s.pacer.submit('read', () => c.stats(4));
-  await new Promise(r => setTimeout(r, settleMs));
+  if(fast)await waitForReplayRead(()=>(!wantSpells||c.abilitiesAt.spells>=requestedAt)&&
+    (!wantSkills||c.abilitiesAt.skills>=requestedAt));
+  else await new Promise(r => setTimeout(r, settleMs));
 
   const known = c.abilitiesKnown();
   return {

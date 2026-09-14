@@ -316,6 +316,9 @@ const RETRYABLE_READS = Object.freeze(new Set([
   'status', 'inventory', 'equipment', 'abilities', 'fleet', 'look', 'map', 'merchants',
 ]));
 const TRANSPORT_FAILURE = /econnreset|socket hang up|fetch failed|other side closed|econnrefused/i;
+// Explicit lab simulation entry point; never runs as a side effect of compiling steps.
+export {simulateScene} from './m59-scene-simulator.mjs';
+
 export const isTransportFailure = (e) =>
   !!e && e.name !== 'TimeoutError' && e.name !== 'AbortError' &&
   (e.name === 'TypeError' || TRANSPORT_FAILURE.test(String(e?.message ?? '')) ||
