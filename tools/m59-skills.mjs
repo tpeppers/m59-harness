@@ -19,6 +19,7 @@
 
 import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-parse.mjs';
 import { traceSurvivalOperation, tracePoint } from './m59-survival-trace.mjs';
+import { currentSurvivalDecision, cancelSurvivalDecision } from './m59-survival-decision.mjs';
 // A ROOM REFERENCE CARRIES ITS SPACE — the client's room `.id` is an OBJECT ID and the bake's
 // key is a ROOM NUMBER, and both are small integers. See tools/m59-roomref.mjs.
 import { roomFields } from './m59-roomref.mjs';
@@ -1766,19 +1767,33 @@ export async function turnInPlace(s, { degrees = null, verify = true } = {}) {
 const FINE_HANDOVER_SQUARES = Number(process.env.M59_FINE_HANDOVER_SQUARES || 3);
 
 export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = {}) {
-  return traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance },
+  const decision=currentSurvivalDecision(s);
+  const result=await traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance },
     () => returnToSpotObserved(s, spot, { maxSteps, tolerance }));
+  if(result?.cancelled && decision && currentSurvivalDecision(s)?.id===decision.id)
+    cancelSurvivalDecision(s,result.why??result.reason??'shelter approach cancelled');
+  return result;
 }
 
 async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   const c = s.need();
   if (!spot) return { arrived: false, why: 'no spot given' };
+  const generation = s.movementGeneration, room = s.world?.room?.num;
+  const interrupted = result => result?.cancelled || s.movementWasCancelled?.(generation)
+    || (generation != null && s.movementGeneration !== generation)
+    || (room != null && s.world?.room?.num !== room);
+  const stopped = result => ({ ...result, arrived:false, cancelled:true,
+    why:result?.why ?? result?.reason ?? s.lastMovementCancel?.why ?? 'shelter approach ownership changed' });
   let attemptNumber = 0;
-  const attempt = (kind, previous, run) => traceSurvivalOperation(s, kind, {
+  const attempt = async (kind, previous, run) => {
+    if (interrupted(previous)) return stopped(previous);
+    const result = await traceSurvivalOperation(s, kind, {
     target: tracePoint(spot), attempt: ++attemptNumber,
     fallback_after: previous ? { arrived: previous.arrived, cancelled: previous.cancelled ?? null,
       reason: previous.reason ?? previous.why ?? null } : null,
-  }, run);
+    }, run);
+    return interrupted(result) ? stopped(result) : result;
+  };
   // A normal square walk is dead-reckoned for speed. That is appropriate while
   // crossing a room, but a predicted arrival is not evidence that we regained a
   // particular safe square: a delayed server position can still replace it and leave
@@ -1805,7 +1820,9 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
     if (spot.x == null) return 0;
     return Math.hypot(me.x - spot.x, me.y - spot.y);
   };
+  if (interrupted()) return stopped();
   await confirmPrediction();
+  if (interrupted()) return stopped();
   const d0 = at();
   if (d0 !== null && d0 <= tolerance) return { arrived: true, already: true, off_by: d0 };
 
@@ -1856,19 +1873,23 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
       w = await attempt('approach_fine', null,
         () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
                  .catch(e => ({ arrived: false, reason: e.message }));
+      if (interrupted(w)) return stopped(w);
       if (!w.arrived) {
         const square = await attempt('walk_to', w, () => s.walkTo(spot.col, spot.row, { maxSteps }))
                               .catch(e => ({ arrived: false, reason: e.message }));
+        if (interrupted(square)) return stopped(square);
         if (square.arrived) w = square;
         else w = { ...square, fine_tried: w.reason ?? 'fine approach did not arrive' };
       }
     } else {
       w = await attempt('walk_to', null, () => s.walkTo(spot.col, spot.row, { maxSteps }))
         .catch(e => ({ arrived: false, reason: e.message }));
+      if (interrupted(w)) return stopped(w);
       if (!w.arrived && typeof s.approachFine === 'function') {
         const fine = await attempt('approach_fine', w,
           () => s.approachFine(spot.col, spot.row, { toX: spot.x, toY: spot.y }))
                             .catch(e => ({ arrived: false, reason: e.message }));
+        if (interrupted(fine)) return stopped(fine);
         if (fine.arrived) w = fine;
         else w = { ...w, fine_tried: fine.reason ?? 'fine approach did not arrive' };
       }
@@ -1877,11 +1898,13 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
       return { arrived: false, why: w.reason || 'could not walk back to the square',
                ...(w.fine_tried ? { fine_tried: w.fine_tried } : {}) };
     await confirmPrediction();
+    if (interrupted()) return stopped();
   }
   if (spot.x != null && s.walkFine) {
-    await attempt('walk_fine', null,
+    const fine = await attempt('walk_fine', null,
       () => s.walkFine(spot.x, spot.y, { maxSteps: 6, stride: 40, arriveWithin: tolerance }))
            .catch(() => null);
+    if (interrupted(fine)) return stopped(fine);
   }
   const d = at();
   return { arrived: d !== null && d <= tolerance, off_by: d,

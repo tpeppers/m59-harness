@@ -1,6 +1,7 @@
 // Cached evidence only. Never consulted by a gameplay decision, never sends a packet.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { OF } from './m59-parse.mjs';
+import { currentSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
 
 export const SURVIVAL_TRACE_LIMITS = Object.freeze({ events: 192, damage: 64,
   age_ms: 30 * 60_000, active: 24, nearby: 24, objects_scanned: 2048,
@@ -113,6 +114,10 @@ function context(s, t, now) {
       omitted_matching: matching - nearby.length, scan_truncated: (objects?.size ?? scanned) > scanned,
       bodies: nearby.map(x => ({ ...x.body, squares_away: Number.isFinite(x.distance) ? x.distance : null })) },
     active_operations: [...t.active.keys()],
+    survival_decision: (() => { const d = currentSurvivalDecision(s); return d ?
+      { id:d.id, strategy:d.strategy, reason:d.reason, chosen_at:d.chosen_at,
+        age_ms:now-d.chosen_at, status:d.status, chosen_refuge:d.chosen_refuge,
+        previous_decision_id:d.previous_decision_id } : null; })(),
   };
 }
 function cachedContext(s, t, now) {
@@ -190,6 +195,6 @@ export function survivalTraceSnapshot(s) {
     const current = cachedContext(s, t, now);
     return structuredClone({ ...summary, captured_at: now, limits: SURVIVAL_TRACE_LIMITS,
       context_errors: t.context_errors, current, active_operations: [...t.active.values()],
-      events: t.events, damage: t.damage });
+      events: t.events, damage: t.damage, survival_decisions: survivalDecisionSnapshot(s) });
   } catch { return { version: 1, unavailable: true }; }
 }

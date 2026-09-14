@@ -9,6 +9,7 @@ process.env.M59_UPTIME_FILE = path.join(evidence, 'uptime.jsonl');
 const { Autopilot, CONTINUE, HANDLED, PASS_STAGES } = await import('./m59-autopilot.mjs');
 const { OF } = await import('./m59-parse.mjs');
 const { sheltersAlong } = await import('./m59-safespots.mjs');
+const {currentSurvivalDecision}=await import('./m59-survival-decision.mjs');
 
 function keeper() {
   const k = Object.assign(Object.create(Autopilot.prototype), {
@@ -136,7 +137,8 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   k.s.client.waitFor = async () => { k.health = 5; };
   await k.pass();
   assert.equal(k.frozenUntil, null);
-  assert.equal(ladderCalls, 1, 'damage returns control to survival on the same pass');
+  assert.equal(ladderCalls, 0, 'the explicit replacement owns this pass before the ordinary ladder');
+  assert.equal(currentSurvivalDecision(k.s).status, 'pending', 'damage queues a replacement on this same pass');
   assert.equal(rests, 1, 'no extra frozen rest after the damage');
 }
 

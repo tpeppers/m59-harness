@@ -14,6 +14,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { traceSurvival } from './m59-survival-trace.mjs';
+import { cancelSurvivalDecision, observeSurvivalDecision, currentSurvivalDecision,
+  finishSurvivalDecision } from './m59-survival-decision.mjs';
 import {saleBlocked} from './m59-inventory-intent.mjs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -1394,6 +1396,8 @@ class Session {
     if (typeof value !== 'number') return;
     const before = this.lastHealth;
     this.lastHealth = value;
+    observeSurvivalDecision(this, value);
+    if (value <= 0) finishSurvivalDecision(this, currentSurvivalDecision(this)?.id, 'died', 'health reached zero');
     if (before == null || value >= before) return;      // a heal, or the first reading
     // TOOK A HIT. STAMP IT, BECAUSE THE WALKER NEEDS TO KNOW *NOW* AND NOT AT THE END OF
     // THE LEG IT IS IN THE MIDDLE OF.
@@ -1997,11 +2001,12 @@ class Session {
   // `unattributed` is kept as the default deliberately rather than being made to guess: a
   // guessed attribution is worse than an admitted gap, and it now shows up in the journey
   // ledger as a named hole to go and close rather than as a plausible-looking caller.
-  cancelMovement(controlToken, why = 'unattributed') {
+  cancelMovement(controlToken, why = 'unattributed', survival = {}) {
     const job = this.job && !this.job.done ? this.job : null;
     this.lastMovementCancel = { why, at: Date.now(),
                                 room: this.world?.room?.num ?? null };
     this.movementGeneration++;
+    const replacement = cancelSurvivalDecision(this, why, survival);
     if (controlToken) {
       this.cancelledMovementTokens.add(controlToken);
       // Tokens are short-lived command leases, not history. Keep enough to cover
@@ -2017,6 +2022,7 @@ class Session {
     traceSurvival(this, 'movement_cancelled', { why,
       previous_generation: this.movementGeneration - 1,
       next_generation: this.movementGeneration, token_present: !!controlToken,
+      survival_decision_id: replacement?.id ?? null,
       interrupted: job ? { kind: job.kind, label: job.label } : null });
     return {
       cancelled: true,

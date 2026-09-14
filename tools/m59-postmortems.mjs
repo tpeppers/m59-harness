@@ -57,6 +57,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
+import { postmortemSurvivalDecisions } from './m59-survival-decisions.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR || here('../substrate/postmortems');
@@ -430,6 +431,7 @@ export function digest(file) {
   return {
     file, character: pm.character, agent: pm.agent, at: pm.at, level,
     cause, where, keeper: keeperOf(pm),
+    survival_decisions: postmortemSurvivalDecisions(pm),
     was: {
       doing: pm.was?.doing ?? null, hunting: pm.was?.hunting ?? null,
       strategy: pm.was?.strategy ?? null, in_safe_spot: !!pm.was?.in_safe_spot,

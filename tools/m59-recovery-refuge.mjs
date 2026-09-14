@@ -17,6 +17,7 @@ export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = 
       const path = geo.path(from.row, from.col, row, col,
         { avoid: occupied, clearance: 0, goalExempt: false });
       return { reachable: !!path?.found, steps: path?.found ? path.steps.length : null,
+        path: path?.found ? path.steps : null,
         why: path?.found ? undefined : path?.reason ?? 'no clear recovery route' };
     } catch { return { reachable: false, why: 'recovery route unavailable' }; }
   };

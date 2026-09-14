@@ -43,32 +43,26 @@ await test('frozen/no-movement spam cannot erase refuge evidence or issue reads'
   assert.equal(record.survival_trace.current.busy, null, 'standing claim is not an active busy job');
 });
 
-await test('a canceled fine approach still falls back; death preserves the pending chain', async () => {
+await test('a cancelled fine approach stops; death preserves its cancellation evidence', async () => {
   const { s, k, c, health } = fixture();
   tracePassContext(s, { room: s.world.room, hp: 0.94, v: { health: { value: 47, max: 50 } } });
   c.room.objects.set(10, { id: 10, name: 'battered skeleton', flags: OF.ATTACKABLE, row: 8, col: 17 });
   const calls = [];
-  let entered, complete;
-  const pending = new Promise(resolve => { entered = resolve; });
   s.approachFine = async () => {
     calls.push('fine'); s.cancelMovement('never-record-this-token', 'clear path watchdog');
     return { arrived: false, cancelled: true, reason: 'movement interrupted' };
   };
-  s.walkTo = async () => { calls.push('square'); entered(); return new Promise(resolve => { complete = resolve; }); };
-  const walk = returnToSpot(s, { row: 8, col: 18 });
-  await pending;
+  s.walkTo = async () => assert.fail('cancelled survival approach restarted as a square walk');
+  const result = await returnToSpot(s, { row: 8, col: 18 });
   health.value = 32;
   s.noteHealth({ value: 32, max: 50 });
   s.world.room = { num: 1, name: 'The Underworld' };
   c.room.objects.clear();
   const record = k.postMortem(), before = JSON.stringify(record);
   const trace = record.survival_trace;
-  assert.deepEqual(calls, ['fine', 'square'], 'telemetry does not fix or suppress the existing fallback');
-  assert.deepEqual(trace.active_operations.map(o => o.kind), ['return_to_spot', 'walk_to']);
-  const fallback = trace.active_operations[1];
-  assert.equal(fallback.parent_id, trace.active_operations[0].id);
-  assert.equal(fallback.detail.fallback_after.cancelled, true);
-  assert.equal(fallback.movement_generation, 1);
+  assert.deepEqual(calls, ['fine']);
+  assert.equal(result.cancelled,true);
+  assert.deepEqual(trace.active_operations, []);
   const cancel = trace.events.find(e => e.kind === 'movement_cancelled');
   assert.equal(cancel.detail.previous_generation, 0);
   assert.equal(cancel.detail.next_generation, 1);
@@ -79,8 +73,6 @@ await test('a canceled fine approach still falls back; death preserves the pendi
   assert.equal(trace.damage[0].context.health.value, 32);
   assert.equal(trace.current.room, 1);
   assert.ok(!before.includes('never-record-this-token'));
-  complete({ arrived: false, reason: 'blocked' });
-  assert.deepEqual(await walk, { arrived: false, why: 'blocked', fine_tried: 'movement interrupted' });
   assert.equal(survivalTraceSummary(s).active, 0);
   assert.equal(JSON.stringify(record), before, 'late completion cannot change the death record');
 });

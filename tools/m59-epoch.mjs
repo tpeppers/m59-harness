@@ -87,6 +87,10 @@ export const DOMAINS = Object.freeze({
       'tools/m59-routebake.mjs',  // what goes into that table
       'tools/m59-finepath.mjs',   // fine pathing
       'tools/m59-world.mjs',      // exits(), the candidate ranking, wrongExitSquares
+      'tools/m59-autopilot.mjs',  // survival movement ownership and replacement choices
+      'tools/m59-skills.mjs',     // shelter arrival and cancellation propagation
+      'tools/m59-recovery-refuge.mjs',
+      'tools/m59-survival-decision.mjs',
     ]),
   }),
   // THE SAFE-SPOT BOOK IS EVIDENCE ABOUT A DEFINITION, AND THE DEFINITION MOVES.

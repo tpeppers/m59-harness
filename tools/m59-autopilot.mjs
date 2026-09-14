@@ -22,6 +22,11 @@
 
 import * as skills from './m59-skills.mjs';
 import { recoveryRefugeReach } from './m59-recovery-refuge.mjs';
+import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
+  updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
+  observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
+import { createSurvivalDecisionRecorder } from './m59-survival-decision-log.mjs';
+import { epochId } from './m59-epoch.mjs';
 import { attachSurvivalTrace, traceSurvival, traceSurvivalNote, traceSurvivalOperation,
          tracePassContext, traceBody, traceRefuge, survivalTraceSnapshot,
          survivalTraceSummary } from './m59-survival-trace.mjs';
@@ -1456,6 +1461,17 @@ export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
     this.s = session;
     attachSurvivalTrace(session, this);
+    this.survivalRecorder = createSurvivalDecisionRecorder(session.name);
+    attachSurvivalDecisions(session, { epoch:epochId('movement'),
+      onCancel:(why,d) => this.replacementSurvivalChoice(why,d),
+      record:row => {
+        this.survivalRecorder(row);
+        traceSurvival(session, 'survival_decision_'+row.event, {
+          id:row.decision.id,strategy:row.decision.strategy,reason:row.decision.reason,
+          chosen_at:row.decision.chosen_at,status:row.decision.status,
+          chosen_refuge:row.decision.chosen_refuge,replacement_id:row.decision.replacement_id,
+          outcome:row.decision.outcome,cancel_reason:row.decision.cancel_reason });
+      } });
     this.mode = mode;
     this.policy = {
       // Rest when health OR vigor falls below this and nothing is attacking us.
@@ -3868,28 +3884,150 @@ export class Autopilot {
 
   async takeSafeSpot(why, quarry = null, options = {}) {
     if (options.recovery) quarry = null;
-    return traceSurvivalOperation(this.s, 'take_safe_spot', {
+    const decision = options.recovery ? (options.decisionId && currentSurvivalDecision(this.s)?.id === options.decisionId
+      ? currentSurvivalDecision(this.s) : chooseSurvivalDecision(this.s, {
+        strategy:options.recoveryRoute?'route_refuge':'nearest_refuge',reason:why,source:options.source })) : null;
+    if (decision) options = {...options,decisionId:decision.id};
+    const result = await traceSurvivalOperation(this.s, 'take_safe_spot', {
       why, quarry: traceBody(quarry), source: options.source ?? 'fight',
       nearest_only: options.nearestOnly ?? false, after_exit: options.afterExit ?? false,
       near_quarry: options.nearQuarry ?? false, destination: options.destination ?? null,
       recovery: options.recovery ?? false,
-    }, () => this.takeSafeSpotObserved(why, quarry, options));
+    }, () => this.takeSafeSpotObserved(why, quarry, options))
+      .catch(e => ({took:false,why:e.message}));
+    if (decision && currentSurvivalDecision(this.s)?.id === decision.id) {
+      if (result?.took) {
+        if(!decision.selected_at)this.recordSurvivalPath(decision.id,result.spot??this.hold);
+        updateSurvivalDecision(this.s,decision.id,{status:'recovering',arrived_at:Date.now()});
+      }
+      else chooseSurvivalDecision(this.s,this.replacementSurvivalChoice(result?.why??'refuge unavailable',decision),
+        {because:result?.why??'refuge unavailable',outcome:result?.cancelled?'cancelled':'blocked'});
+    }
+    return result;
+  }
+
+  replacementSurvivalChoice(why, previous) {
+    const wall=this.currentRecoveryWall();
+    if (wall?.ok) return {strategy:'logoff_safe',reason:why,reason_code:'sheltered_replacement',
+      chosen_refuge:{...wall,room:this.s.world?.room?.num},mitigation:'already standing at a geometric safe wall'};
+    const destination=this.inert?.to??this.suspendedJourney?.to;
+    return {strategy:previous?.strategy==='logoff_open'||(previous?.replan_count??0)>=1
+        ? 'logoff_open' : destination ? 'route_refuge' : 'nearest_refuge',
+      replan_count:(previous?.replan_count??0)+1,
+      reason:why,reason_code:'approach_interrupted',source:destination?'travel':'recovery',
+      mitigation:destination?'try the onward exit or another reachable refuge toward it':'reassess from the current position'};
+  }
+
+  recordSurvivalPath(id,spot) {
+    if (!id || !spot) return;
+    const s=this.s,me=s.client?.self,geo=s.world?.geometry;
+    let path=null;
+    try { path=recoveryRefugeReach(geo,me,s.client?.room?.objects,s.client?.selfId,
+      s.client?.playersOnline)(spot.col,spot.row); } catch {}
+    updateSurvivalDecision(s,id,{status:'approaching',activated_at:Date.now(),selected_at:Date.now(),
+      chosen_refuge:{...spot,room:s.world?.room?.num},path:path?.reachable?path.path:null,
+      path_length:path?.reachable?path.steps:null,
+      path_source:path?.reachable?'clear geometry plan at selection; movers may adjust around live bodies':'unavailable'});
+  }
+
+  currentRecoveryWall() {
+    // Exactly the safeWalls membership rule, evaluated only at our current square.
+    if(this.s.client?.self?.predicted)return null;
+    const wall=this.wallHere(),geo=this.s.world?.geometry;
+    return wall?.ok && wall.free_shots>0 && geo?.walkable?.(wall.row,wall.col) ? wall : null;
+  }
+
+  adoptRecoveryWall() {
+    const wall=this.currentRecoveryWall(),room=this.s.world?.room?.num;
+    if (!wall?.ok) return false;
+    if (!this.hold || this.hold.room!==room || this.hold.row!==wall.row || this.hold.col!==wall.col)
+      this.hold={room,row:wall.row,col:wall.col,proven:true,takenAt:Date.now(),quietMs:0,source:'recovery',quarry_id:null};
+    return true;
+  }
+
+  // Runs before all planners. A cancelled approach cannot fall through into shopping,
+  // quarry pursuit, or a stale journey while its replacement is waiting to execute.
+  async continueSurvivalDecision() {
+    const s=this.s,d=currentSurvivalDecision(s);
+    if (!d || d.strategy==='yield_to_controller') return false;
+    observeSurvivalDecision(s);
+    const v=s.client?.vitals?.(),hp=pct(v?.health);
+    if (s.world?.room?.num===1 || hp===0) {
+      finishSurvivalDecision(s,d.id,'died','entered the Underworld');return false;
+    }
+    if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80) {
+      finishSurvivalDecision(s,d.id,'recovered','health and resting vigor restored');return false;
+    }
+    if (d.retry_at && Date.now()<d.retry_at) return true;
+    if (this.stopping || (this.busy?.until>Date.now()) ||
+        (this.claims?.get('movement')?.until>Date.now())) {
+      chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'movement belongs to another controller',
+        reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
+    }
+    if (d.status==='recovering') {
+      if (this.checkFreeze()) return true;
+      if (!this.currentRecoveryWall()) {
+        chooseSurvivalDecision(s,this.replacementSurvivalChoice('recovery is no longer at a safe wall',d),
+          {because:'recovery position changed'});return true;
+      }
+      this.doing='recovering';
+      if(d.phase==='turn_required') {
+        const turned=await skills.turnInPlace(s,{verify:false}).catch(e=>({turned:false,why:e.message}));
+        if(currentSurvivalDecision(s)?.id!==d.id)return true;
+        if(turned.turned) {
+          this.turnedAt=Date.now();updateSurvivalDecision(s,d.id,{phase:'reconnected_turn_and_heal'});
+        } else chooseSurvivalDecision(s,{strategy:'logoff_safe',reason:'turn did not arm healing',
+          reason_code:'turn_failed',mitigation:turned.why},{because:'stationary healing was not established',outcome:'failed'});
+        return true;
+      }
+      const generation=s.movementGeneration,client=s.client;
+      const cancelled=()=>currentSurvivalDecision(s)?.id!==d.id || s.client!==client
+        || s.movementWasCancelled?.(generation) || !this.currentRecoveryWall();
+      const r=await skills.restUntil(s,{health:1,vigor:REST_VIGOR_CAP,maxSeconds:8,
+        shouldCancel:cancelled,
+        beforeMutation:()=>{if(cancelled())throw Error('survival recovery interrupted');},
+        beforeCleanup:()=>{if(currentSurvivalDecision(s)?.id!==d.id || s.movementWasCancelled?.(generation))throw Error('survival ownership changed');}});
+      observeSurvivalDecision(s);
+      if(r?.interrupted && currentSurvivalDecision(s)?.id===d.id) {
+        if(s.client?.self)this.noteFailedRestSpot(s.world?.room?.num,s.client.self.col,s.client.self.row);
+        chooseSurvivalDecision(s,this.replacementSurvivalChoice('recovery interrupted: '+r.interrupted,d),{because:'rest interrupted'});
+      }
+      return true;
+    }
+    if (d.status!=='pending') return false;
+    if (this.currentRecoveryWall() || d.strategy==='logoff_safe' || d.strategy==='logoff_open') {
+      await this.playDead(d.reason);return true;
+    }
+    await this.takeRecoverySpot(d.reason,{source:d.strategy==='route_refuge'?'travel':d.source,
+      route:d.strategy==='route_refuge',decisionId:d.id});
+    return true;
   }
 
   // Healing chooses the shortest clear approach to an exclusive local wall. Combat
   // later binds a quarry to its own wall through the ordinary target-first selector.
-  async takeRecoverySpot(why, { source = 'recovery' } = {}) {
-    return this.takeSafeSpot(why, null, { source, recovery: true, nearestOnly: true });
+  async takeRecoverySpot(why, { source = 'recovery', route=false, decisionId=null } = {}) {
+    if (this.adoptRecoveryWall()) {
+      const did=await this.playDead(why);
+      return {took:!!did || !!this.hold,spot:this.hold,via:'logoff_at_safe_wall'};
+    }
+    const generation=this.s.movementGeneration;
+    const result=await this.takeSafeSpot(why,null,{source,recovery:true,nearestOnly:!route,recoveryRoute:route,decisionId});
+    if(result?.cancelled || this.s.movementWasCancelled?.(generation))
+      return {...result,took:false,cancelled:true};
+    if (result?.took && this.adoptRecoveryWall()) await this.playDead(why);
+    return result;
   }
 
   async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false, recovery = false,
+                                           recoveryRoute = false, decisionId = null,
                                            onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
     let claimedHere = false;
     const interrupted = () => this.travelInterrupted()
-      || !!s.movementWasCancelled?.(movementGeneration);
+      || !!s.movementWasCancelled?.(movementGeneration)
+      || (decisionId && currentSurvivalDecision(s)?.id!==decisionId);
     const cancelled = () => {
       if (claimedHere) releaseSpot(s.name);
       return { took: false, cancelled: true, why: 'shelter movement interrupted — reassess survival' };
@@ -3901,7 +4039,7 @@ export class Autopilot {
     // a fight or a rest, and then nothing below changes.
     // `nearestOnly` is the search on the far side of a crossing: the first available wall,
     // ranked by distance alone, and never the next exit — a stopover, not the destination.
-    const onward = source === 'travel' && !nearestOnly && !recovery
+    const onward = source === 'travel' && !nearestOnly && (!recovery || recoveryRoute)
       ? (onwardGiven ?? this.onwardExit(room.num, destinationGiven ?? this.inert?.to ?? this.suspendedJourney?.to ?? null)) : null;
     // Once several independently tested walls have all failed, continuing to scan the
     // room is research, not survival. `noWallRooms` feeds the already-bounded choice
@@ -4126,6 +4264,7 @@ export class Autopilot {
         releaseSpot(this.s.name);
         return { took: false, why: 'the exit ranked as the nearest wall, but no hop toward the destination could be planned from here' };
       }
+      this.recordSurvivalPath(decisionId,{...spot,destination:hop.to});
       this.doing = 'travelling';
       this.note('taking the exit as the nearest wall', {
         at: { col: spot.col, row: spot.row }, to: hop.to, steps_away: spot.steps_away ?? null,
@@ -4155,7 +4294,7 @@ export class Autopilot {
                  why: `could not take the exit toward ${hop.to}: ${crossed?.why ?? crossed?.reason ?? 'the crossing did not happen'}` };
       }
       const far = await this.takeSafeSpot(`${why} — the first wall after the exit`, null,
-                                          { source, nearestOnly: true, afterExit: true })
+                                          { source, nearestOnly: true, afterExit: true, recovery, decisionId })
                             .catch(e => ({ took: false, why: e.message }));
       if (far?.took) return { ...far, via: 'exit', crossed_from: roomBefore };
       return { took: false, crossed: true, via: 'exit', room: roomAfter,
@@ -4163,6 +4302,7 @@ export class Autopilot {
     }
     if ((spot.steps_away ?? 99) > 0) {
       this.doing = 'travelling';
+      this.recordSurvivalPath(decisionId,spot);
       this.note('taking the selected safe spot', {
         to: { col: spot.col, row: spot.row }, steps_away: spot.steps_away ?? null,
         source, recovery, why });
@@ -4209,7 +4349,7 @@ export class Autopilot {
         // contract for both remembered and newly-derived spots.
         : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, { maxSteps: walkBudget })
                       .catch(e => ({ arrived: false, why: e.message }));
-      if (interrupted()) return cancelled();
+      if (arrival?.cancelled || interrupted()) return cancelled();
       this.movedAt = Date.now();
       if (!arrival.arrived) {
         releaseSpot(this.s.name);      // hand the reservation back
@@ -8489,6 +8629,8 @@ export class Autopilot {
   }
 
   postMortem(reason = 'died') {
+    const decision=currentSurvivalDecision(this.s);
+    if (decision) finishSurvivalDecision(this.s,decision.id,'died',reason);
     const frames = (this.recent5 || []).filter(f => !/underworld/i.test(f.room || ''));
     const last = frames[frames.length - 1] || null;
     // Rank frames on the true count, not the capped name list — otherwise every frame
@@ -8534,6 +8676,7 @@ export class Autopilot {
       frames,
       decisions: (this.journal || []).slice(-14),
       survival_trace: survivalTraceSnapshot(this.s),
+      survival_decisions: survivalDecisionSnapshot(this.s),
       text: this.recentText(30),
       // WHERE THE DAMAGE ACTUALLY LANDED, which the three above cannot say.
       //
@@ -9526,6 +9669,8 @@ export class Autopilot {
     return {
       running: this.running, mode: this.mode, policy: this.policy,
       survival_trace: survivalTraceSummary(this.s),
+      survival_decisions: survivalDecisionSnapshot(this.s,{history:false}),
+      survival_decision_log: this.survivalRecorder?.stats?.() ?? null,
       // Null unless a fleet update is waiting on this character. See park().
       parked: this.parkStatus(),
       // Null unless something else is driving this character. `running: true` with
@@ -10144,7 +10289,18 @@ export class Autopilot {
             });
             this.shelterRun = null;
           };
-          if (whole) { settle({ rested_to: null, why: 'arrived whole — walked on without resting' }); return false; }
+          const decision=currentSurvivalDecision(this.s);
+          if (decision) updateSurvivalDecision(this.s,decision.id,{arrived_at:Date.now()});
+          if (whole) {
+            if(decision) finishSurvivalDecision(this.s,decision.id,'recovered','arrived whole');
+            settle({ rested_to: null, why: 'arrived whole — walked on without resting' }); return false;
+          }
+          if (this.adoptRecoveryWall()) {
+            settle({rested_to:null,why:'handed to logoff, turn, and recovery at this safe wall'});
+            this.recordTravelShelterStop(source);
+            await this.playDead('reached the chosen route refuge — logoff before recovering');
+            return true;
+          }
           this.note('resting at a refuge on the way', {
             where, health: hp === null ? null : Math.round(hp * 100) + '%', vigor: vig,
             why: 'a refuge passed at less than full is a square rather than a refuge. The ' +
@@ -10182,6 +10338,11 @@ export class Autopilot {
         // cannot see the runs that never arrive, and those are the ones that end in a
         // postmortem. See tools/m59-shelter.mjs for the argument and the schema.
         onDivert: (stop, at) => {
+          if (stop) {
+            const decision=chooseSurvivalDecision(this.s,{strategy:'route_refuge',
+              reason:'shelter needed during travel',reason_code:'travel_shelter',source:at?.source??'route'});
+            this.recordSurvivalPath(decision.id,stop);
+          }
           const v = this.s.client?.vitals?.();
           const hp = v?.health?.max ? v.health.value / v.health.max : null;
           const me = this.s.client?.self ?? null;
@@ -10765,6 +10926,11 @@ export class Autopilot {
   // is still a running loop holding a session, and dropAutopilot must be able to get rid
   // of one. See goInert for why everything else should not.
   stop(why = null, { hard = false } = {}) {
+    if (currentSurvivalDecision(this.s)) {
+      const options={replacement:{strategy:'yield_to_controller',reason:why??'keeper stopped',status:'yielded',reason_code:'keeper_stop'}};
+      if(this.s.cancelMovement)this.s.cancelMovement(null,why??'keeper stopped',options);
+      else cancelSurvivalDecision(this.s,why??'keeper stopped',options);
+    }
     if (!hard) { this.goInert(why); return this.status(); }
     releaseQuarry(this.s.name);
     releaseSpot(this.s.name);
@@ -12543,6 +12709,7 @@ export class Autopilot {
     if (!s.live) { this.note('not in game'); return; }
     const c = s.client;
     this.survivalInterruptedPass = null;
+    observeSurvivalDecision(s);
     // Before GOAP, BT, or any request that could wake the room. Read health again
     // after the await: damage during the poll ends the freeze on this same pass.
     if (this.checkFreeze()) {
@@ -12559,6 +12726,7 @@ export class Autopilot {
         }
       }
     }
+    if (await this.continueSurvivalDecision()) return;
     // Apply loadout policy overlay BEFORE the BT check so that useBT (and other
     // loadout-driven policy fields) are live on the first pass after a restart.
     this.applyLoadoutPolicyOverlay();
@@ -15290,6 +15458,10 @@ export class Autopilot {
     const spent = Number.isFinite(rawVigor)
       && rawVigor < (this.policy.ordinaryVigorFloor ?? ORDINARY_VIGOR_FLOOR);
     const hurt = (hp !== null && hp < restAt) || (vig !== null && vig < vigorRestAt) || spent;
+    if(hurt && this.currentRecoveryWall()) {
+      await this.takeRecoverySpot('recovery needed while already at a safe wall');
+      return HANDLED;
+    }
 
     // RUN THE EXPERIMENT ON PURPOSE. A spot is only proved by standing in it without
     // swinging while something tries to kill us — and every other branch here is
@@ -16684,7 +16856,8 @@ export class Autopilot {
     const to = this.suspendedJourney?.to ?? this.inert?.to ?? null;
     this.suspendedJourney = null;
     if (this.inert?.travelling) this.inert.cancelled = true;
-    const result = this.s.cancelMovement(controlToken, why);
+    const result = this.s.cancelMovement(controlToken, why, {replacement:{
+      strategy:'yield_to_controller',reason:why,reason_code:'explicit_cancellation',status:'yielded'}});
     this.note('journey cancelled by its caller', { to, why });
     return { ...result, retired_destination: to };
   }
@@ -21373,6 +21546,49 @@ export class Autopilot {
   }
 
   async playDead(why) {
+    const s=this.s,atWall=this.adoptRecoveryWall();
+    const journey=this.inert;
+    if(journey?.travelling && !journey.cancelled && journey.to!=null && !this.suspendedJourney)
+      this.suspendedJourney={to:journey.to,why:journey.why,at:Date.now(),trigger:why,
+        attempts:(journey.attempts??0)+1,deaths_at:this.tally.deaths??0};
+    if (atWall && this.hold?.reclaimed && this.turnedAt>=this.hold.takenAt
+        && !(s.damagedAt>this.turnedAt)) {
+      const active=currentSurvivalDecision(s);
+      if (active?.strategy!=='rest_safe') chooseSurvivalDecision(s,{strategy:'rest_safe',reason:why,
+        reason_code:'healing_already_armed',status:'recovering',chosen_refuge:this.hold,
+        mitigation:'already logged back in and turned at this wall; preserve the running health timer'},
+        {because:'logoff already accomplished; continue healing'});
+      this.survivalInterruptedPass=this.passes;
+      s.cancelMovement?.(null,'continue healing at the safe wall',{preserveId:currentSurvivalDecision(s)?.id});
+      return false;
+    }
+    let d=currentSurvivalDecision(s);
+    const strategy=atWall?'logoff_safe':'logoff_open';
+    if (!d || d.strategy!==strategy || d.status!=='pending') d=chooseSurvivalDecision(s,{
+      strategy,reason:why,reason_code:atWall?'safe_wall_top_priority':'break_engagement',
+      chosen_refuge:atWall?this.hold:null},
+      {because:atWall?'logoff is the first choice at the current safe wall':why,
+        outcome:d?.arrived_at?'arrived':'cancelled'});
+    updateSurvivalDecision(s,d.id,{status:'active',activated_at:Date.now(),path:[],path_length:0,
+      path_source:'stationary logoff/reconnect',selected_at:Date.now()});
+    let did=false;
+    try { did=await this.playDeadObserved(why,d.id); }
+    catch(e) { this.note('play dead failed',{why:e.message}); }
+    if(currentSurvivalDecision(s)?.id===d.id) {
+      if(did) updateSurvivalDecision(s,d.id,{status:'recovering',
+        phase:this.frozenUntil>Date.now()?'frozen_without_action'
+          :atWall?(this.turnedAt>=this.hold?.takenAt?'reconnected_turn_and_heal':'turn_required'):'frozen_without_action'});
+      else {
+        const replacement=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'logoff did not establish recovery',
+          reason_code:'logoff_failed',mitigation:'seek another refuge before retrying'},
+          {because:'logoff failed or made no progress',outcome:'failed'});
+        updateSurvivalDecision(s,replacement.id,{retry_at:Date.now()+5000});
+      }
+    }
+    return did;
+  }
+
+  async playDeadObserved(why, decisionId) {
     const s = this.s;
 
     // THE LOGOFF IS THE ANSWER, AND IT NO LONGER ASKS PERMISSION. Operator, 2026-09-10:
@@ -21420,7 +21636,8 @@ export class Autopilot {
     // only by counting failures. This catches it on the first, and for the right reason:
     // there is nothing left for a freeze to buy here. Nothing can reach the square, and
     // the health timer is armed. Resting is strictly better, because it actually heals.
-    if (this.hold?.reclaimed && this.turnedAt && this.turnedAt >= this.hold.takenAt) {
+    if (this.hold?.reclaimed && this.turnedAt && this.turnedAt >= this.hold.takenAt
+        && !(s.damagedAt>this.turnedAt)) {
       this.note('not freezing again — we are on the spot and already healing', {
         health: s.client?.vitals?.()?.health?.value ?? null,
         where: { col: this.hold.col, row: this.hold.row },
@@ -21441,7 +21658,7 @@ export class Autopilot {
     // So: remember the health we last froze at. If we are back here no better off,
     // the freeze is not working and the answer has to be something that moves.
     const nowHp = s.client?.vitals?.()?.health?.value ?? null;
-    if (this.frozeAt != null && nowHp != null && nowHp <= this.frozeAt) {
+    if (this.frozeAt != null && nowHp != null && nowHp <= this.frozeAt && !this.currentRecoveryWall()) {
       this.freezesWithoutGain = (this.freezesWithoutGain || 0) + 1;
       if (this.freezesWithoutGain >= 2) {
         this.note('refusing to freeze again — it is not helping', {
@@ -21506,7 +21723,7 @@ export class Autopilot {
     // Invalidate the outstanding walk BEFORE reconnecting. Otherwise its next leg
     // immediately wakes the monsters the reconnect just put to sleep.
     this.survivalInterruptedPass = this.passes;
-    s.cancelMovement?.(null, 'playing dead to avoid dying');
+    s.cancelMovement?.(null, 'playing dead to avoid dying', {preserveId:decisionId});
 
     const came = await this.reconnect('logging off rather than dying');
     if (!came.ok) {
@@ -21516,7 +21733,8 @@ export class Autopilot {
 
     if (spot) {
       const me = s.client?.self;
-      const back = me && me.col === spot.col && me.row === spot.row;
+      const back = me && me.col === spot.col && me.row === spot.row
+        && s.world?.room?.num === spot.room && this.currentRecoveryWall();
       if (back) {
         this.hold = { ...spot, takenAt: Date.now(), quietMs: 0, reclaimed: true };
         this.tally.mulligans = (this.tally.mulligans || 0) + 1;

@@ -27,13 +27,13 @@ function fixture({ policy = true, markers = [], geometry = geo() } = {}) {
     vitals: () => ({ health: { value: f.hp, max: 100 },
       vigor: { value: f.vigor, scale_max: 200 } }),
     stats() { if (f.rests) { f.samples++; f.onSample?.(); } },
-    waitFor: async () => ({}), rest() { f.rests++; }, stand() { f.stands++; },
+    waitFor: async () => ({}), rest() { f.rests++; }, stand() { f.stands++; }, face() {},
   };
   const s = Object.assign(Object.create(Session.prototype), {
     client: c, world: { room: { num: 584 }, geometry }, movementGeneration: 0,
     need: () => c, pacer: { submit: async (_lane, fn) => fn() },
     movementWasCancelled(g) { return this.movementGeneration !== g; },
-    cancelMovement() { this.movementGeneration++; },
+    cancelledMovementTokens:new Set(),
     stepFine: async (x, y) => {
       f.calls.push(['move', x, y]);
       c.self = { x, y, row: Math.floor(y / 64), col: Math.floor(x / 64) };
@@ -135,6 +135,7 @@ try {
       note(what, detail) { f.calls.push(['note', what, detail]); }, sanctuary: () => false, roomOutranksUs: () => false,
       inertStatus() { return this.inert; },
       recordTravelShelterStop(source) { f.calls.push(['count', source]); },
+      passes:1,claims:new Map(),tellPilot:async()=>{},reconnect:async()=>({ok:true}),
     });
     k.goTravelling('test', { to: 596 });
     f.s.shelterPolicy.onDivert = () => {};
@@ -147,12 +148,16 @@ try {
       else { f.s.cancelMovement(); }
     };
     const r = await f.run();
+    assert.equal(r.cancelled,true,'logoff hands the route to the replacement recovery decision');
+    assert.equal(f.rests,0,'the old route cannot rest or continue after reconnecting');
+    await k.continueSurvivalDecision();
     assert.equal(f.rests, 1, JSON.stringify({outcome, calls:f.calls}));
     assert.deepEqual(f.calls.filter(x => x[0] === 'count'), [['count', 'track']], 'one metric per actual stop');
     if (outcome === 'recovered') {
       assert.equal(f.hp, 100); assert.equal(f.vigor, REST_VIGOR_CAP * 200);
       assert.equal(f.samples, 3, 'both full health and restable vigor are required');
-      assert.equal(f.stands, 1); assert.equal(r.left_room, true);
+      assert.equal(f.stands, 1);
+      assert.equal(k.suspendedJourney.to,596,'the travel objective survives the recovery handoff');
     } else if (outcome === 'damage') {
       assert.equal(f.samples, 1, 'damage aborts the shared rest at its next observation');
       assert.ok(k.unreachableIn(584).has('2,3'), 'failed refuge excluded from subsequent searches');

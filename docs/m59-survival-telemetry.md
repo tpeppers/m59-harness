@@ -1,5 +1,10 @@
 # Evidence for deaths during shelter and recovery
 
+The follow-up [explicit survival decision implementation](m59-survival-decisions.md)
+adds runtime decisions, linked replacements, postmortem timelines and strategy reports.
+The description below covers the original trace collector; it was telemetry-only, while
+the follow-up also changes cancellation and recovery execution.
+
 Death records now include `survival_trace.version: 1`. The existing `frames`,
 `decisions`, `hits`, summary and killer attribution remain available. The trace
 records choices and their execution without changing thresholds, movement fallback,

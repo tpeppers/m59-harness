@@ -48,6 +48,18 @@ function kv(k, v) { return '<div class="kv"><div class="k">' + k + '</div><div>'
 function renderDigest(d) {
   if (!d || d.error) return '<span class="bad">' + ((d && d.error) || 'not found') + '</span>';
   var w = d.where, c = d.cause;
+  var decisions = d.survival_decisions;
+  var safeText = function(v) { return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var survival = decisions && decisions.available ? (decisions.decisions || []).map(function(x) {
+    var p=x.chosen_refuge;
+    return '<div><b>' + safeText(x.strategy) + '</b> · chosen ' +
+      (x.chosen_ms_before_death/1000).toFixed(1) + 's before death · ' + safeText(x.reason) +
+      (p ? ' · refuge r'+safeText(p.row)+'c'+safeText(p.col)+' in room '+safeText(p.room) : ' · refuge not selected') +
+      (x.path_length != null ? ' · planned path '+safeText(x.path_length)+' steps' : '') +
+      (x.cancelled_at ? ' · cancelled '+(x.cancelled_ms_before_death/1000).toFixed(1)+'s before death: '+safeText(x.cancel_reason) : '') +
+      (x.replacement_id ? ' · replacement '+safeText(x.replacement_id) : '') +
+      ' · '+safeText(x.outcome || x.status)+'</div>';
+  }).join('') : '<span class="dim">No explicit survival decisions in this older record.</span>';
   var place = w.trusted
     ? w.room + ' <span class="dim">(' + w.col + ',' + w.row + ')</span>'
     : '<span class="guess">not known — ' + w.why + '</span>';
@@ -80,6 +92,7 @@ function renderDigest(d) {
     (d.during_keeper_outage ? kv('caveat', '<span class="guess">nothing was driving this character' +
       ' — do not read it as evidence about the strategy</span>') : '') +
   '</div>' +
+  '<div class="log"><b>Survival decisions</b>'+survival+'</div>' +
   (text ? '<div class="log">' + text + '</div>' : '');
 }
 `;

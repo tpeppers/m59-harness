@@ -1147,7 +1147,7 @@ the perp walk, the walker's blink ask and kill-and-continue, above.
 ## The exit is a wall
 
 **Recovery override, 2026-09-14.** Health/vigor recovery, withdrawal, and a journey
-paused to recover use `takeRecoverySpot`: no quarry, no forward-progress bonus and no
+paused to recover initially use `takeRecoverySpot`: no quarry, no forward-progress bonus and no
 exit candidate. The nearest canonical safe wall by passable approach length wins.
 Its square must be unoccupied and exclusively reservable; the route avoids currently
 visible players, attackable creatures and movement-blocking objects. Unlike the wider
@@ -1162,6 +1162,10 @@ separately once the existing readiness gates allow combat, and binds its own clo
 valid wall. Recovery never crosses an internal partition to reach a quarry's side.
 `m59-recovery-refuge-test.mjs` exercises these distinctions against the movement
 geometry, occupancy and cross-keeper reservations.
+
+The [explicit survival decision follow-up](m59-survival-decisions.md) records cancellation
+and its replacement. A blocked approach may select another clear refuge or the onward
+exit; current shelter prioritizes logoff, reconnect, turn and recovery in place.
 
 The forward-preview search in `shelterForwardAndMend` and the duplicate one in
 `withdraw` are gone. The selector logs `taking the selected safe spot` immediately
