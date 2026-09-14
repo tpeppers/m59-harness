@@ -1,0 +1,128 @@
+[
+  {
+    "scenario": "low health, nearby monster, no wedge",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "low health, nearby monster, no wedge",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 1,
+    "cancelled": true,
+    "freeze": true,
+    "suspended_to": 714,
+    "fight_due": false
+  },
+  {
+    "scenario": "five seconds estimated life, no adjacent object",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "five seconds estimated life, no adjacent object",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 1,
+    "cancelled": true,
+    "freeze": true,
+    "suspended_to": 714,
+    "fight_due": false
+  },
+  {
+    "scenario": "low health, nearby stranger, no wedge",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "low health, nearby stranger, no wedge",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 1,
+    "cancelled": true,
+    "freeze": true,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "hurt but above flee line, no imminent collapse",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "hurt but above flee line, no imminent collapse",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 1,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "unarmed at full health, default arm guard off",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "unarmed at full health, default arm guard off",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 1,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "unarmed at full health, arm guard explicitly on",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": false,
+    "freeze": false,
+    "suspended_to": null,
+    "fight_due": false
+  },
+  {
+    "scenario": "unarmed at full health, arm guard explicitly on",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 1,
+    "cancelled": true,
+    "freeze": false,
+    "suspended_to": 714,
+    "fight_due": false
+  },
+  {
+    "scenario": "low health and a five-second damaging wedge",
+    "origin": "internal shopping",
+    "guard_calls": 0,
+    "cancelled": true,
+    "freeze": false,
+    "suspended_to": 714,
+    "fight_due": false
+  },
+  {
+    "scenario": "low health and a five-second damaging wedge",
+    "origin": "travel with a free pass loop",
+    "guard_calls": 0,
+    "cancelled": true,
+    "freeze": false,
+    "suspended_to": 714,
+    "fight_due": false
+  }
+]

@@ -4110,7 +4110,8 @@ class Session {
           // waypoint is untouched, and the walk continues from here the moment the rest is
           // done. That is the whole difference between a pause and an ending.
           if (target.shelter && typeof shelter?.onArrive === 'function') {
-            try { await shelter.onArrive({ col: target.col, row: target.row }); }
+            try { await shelter.onArrive({ col: target.col, row: target.row },
+              { movementGeneration, controlToken }); }
             catch { /* a rest that cannot happen must not strand the crossing */ }
             if (this.movementWasCancelled(movementGeneration, controlToken))
               return { done: false, legs, singles, cancelled: true };
@@ -4154,7 +4155,8 @@ class Session {
         const now2 = c.self;
         if (now2 && now2.col === one.col && now2.row === one.row) {
           if (one.shelter && typeof shelter?.onArrive === 'function') {
-            try { await shelter.onArrive({ col: one.col, row: one.row }); }
+            try { await shelter.onArrive({ col: one.col, row: one.row },
+              { movementGeneration, controlToken }); }
             catch { /* a rest that cannot happen must not strand the crossing */ }
             if (this.movementWasCancelled(movementGeneration, controlToken))
               return { done: false, legs, singles, cancelled: true };
@@ -4305,7 +4307,8 @@ class Session {
         continue;                                  // aim at it properly, then rest on it
       }
       if (onIt && typeof shelter?.onArrive === 'function') {
-        try { await shelter.onArrive({ col: at.col, row: at.row }); }
+        try { await shelter.onArrive({ col: at.col, row: at.row },
+          { movementGeneration, controlToken }); }
         catch { /* a rest that cannot happen must not strand the crossing */ }
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return { done: false, legs, singles, cancelled: true };
@@ -10002,22 +10005,52 @@ class Session {
                  ms: Date.now() - started };
       if (!board?.arrived) return { rode: false, why: 'could not reach the station', off_by: Math.round(joinDist) };
     }
-    // MONORAIL HEALING STEPS.
-    //
-    // The tight squares that make these crossings awkward are the same squares a monster
-    // cannot reach — that IS a safe wall, measured — so a track already runs past the best
-    // shelter in the room, and `shelter` names which of its stations those are. A traveller
-    // hurt on the way does not need to reach a town; it needs the next station with a wall
-    // at its back, and it is standing on the route to one.
-    //
-    // Doctrine says a planned trip completes AS FAST AS POSSIBLE WHILE BEING ATTACKED and
-    // does not stop to fight — this does not break that. It is not a fight and it is not a
-    // detour: the shelter is a waypoint the journey was going to walk over anyway, and
-    // resting on it is strictly cheaper than arriving dead. It only fires BELOW the rest
-    // threshold, only on a station the track already contains, and it is bounded.
-    const shelter = new Set(track.shelter ?? []);
-    const restBelow = Number(process.env.M59_TRACK_REST_BELOW || 0.5);
-    const restMs = Number(process.env.M59_TRACK_REST_MS || 20000);
+    // Use the route policy and the same live geometry/exclusion search as walkTo.
+    // A track's fine aims remain its route: only actual stations are rest stops.
+    // The persisted `track.shelter` indexes used a legacy +1 square conversion and
+    // a different wall predicate; they are not authority for where to rest today.
+    const policy = this.shelterPolicy;
+    const planShelters = waypoints => {
+      const steps = waypoints.map(wp => ({ row: Math.floor(wp.y / KOD_FINENESS),
+                                         col: Math.floor(wp.x / KOD_FINENESS) }));
+      const spots = policy?.need && typeof policy.onArrive === 'function'
+        ? sheltersAlong(geo, steps, { within: 0, limit: steps.length,
+            book: policy.book ?? null, room: here,
+            unreachable: policy.unreachable?.(here) ?? null }) : [];
+      const plan = { spots, maxDetour: 0, atStep: 0, onward: steps.at(-1) ?? null };
+      this.activeShelter = plan;
+      return plan;
+    };
+    const shelter = planShelters(track.waypoints);
+    const visitedShelters = new Set();
+    const restAtStation = async (wp, index, plan) => {
+      this.activeShelter = plan;
+      plan.atStep = index;
+      if (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom()
+          || this.shelterPolicy !== policy) return;
+      let wants = false;
+      try { wants = !!policy?.need?.(); } catch { /* same refusal as walkPivots */ }
+      if (!wants) return;
+      const stop = plan.spots.find(spot => spot.atStep === index);
+      if (!stop) return;
+      const key = `${stop.col},${stop.row}`;
+      if (visitedShelters.has(key) || policy.unreachable?.(here)?.has(key)) return;
+      const at = c.self;
+      // Near a fine aim can still be the next square: resting requires THIS refuge.
+      if (!at || at.row !== stop.row || at.col !== stop.col
+          || Math.hypot(at.x - wp.x, at.y - wp.y) > 48) return;
+      visitedShelters.add(key);
+      try { policy.onDivert?.(stop, { atStep: index, source: 'track' }); } catch {}
+      if (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom()
+          || this.shelterPolicy !== policy) return;
+      const restStarted = Date.now();
+      let didRest = false;
+      try {
+        didRest = await policy.onArrive({ row: stop.row, col: stop.col },
+          { source: 'track', movementGeneration, controlToken });
+      } catch { /* the shared rest failed; the next guarded leg can still proceed */ }
+      if (didRest) { rested++; restedMs += Date.now() - restStarted; }
+    };
     let rested = 0, restedMs = 0;
     let reached = 0, blocked = 0, bodiesInTheWay = 0;
     const crossed = (extra = {}) => {
@@ -10076,78 +10109,9 @@ class Session {
         // End the replay at the first broken proof boundary and let the normal fallback act.
         break;
       }
-      // Standing on shelter, and hurt: take it. Only here, because only here is the
-      // character on a square something measured as hard to reach.
-      if (near && shelter.has(i)) {
-        // SIT, WATCH, STAND. `rest` is the client verb — there is no session-level
-        // rest-until, and reaching for one that does not exist would have made this whole
-        // feature a silent no-op. Polled rather than slept through, because the reason to
-        // be here is that something may be hitting us: it stops the moment health stops
-        // climbing, and stands up before walking on so the next leg is not crawled.
-        // VITALS ARE `{ value, max }`, NOT TWO NUMBERS — and reading them as two numbers is
-        // how this entire block sat here doing nothing since the day it was written.
-        //
-        // It used to be `const hp = vit.health, max = vit.maxHealth`. `vit.health` is an
-        // OBJECT, so `Number.isFinite(hp)` is false; `vit.maxHealth` does not exist at all,
-        // so `max` was undefined. The `if` below could therefore never be true, the rest
-        // never happened, and the loop's own `c.vitals()?.health` read had the same fault and
-        // would have broken on its first pass had it ever got there. `onTrackRest` hangs off
-        // this, so the fleet's travel-shelter telemetry has been honestly reporting zero.
-        //
-        // The correct read is thirty lines away in this same file (`v.health?.value ??
-        // v.health`), which is what makes this the expensive kind of bug: nothing was
-        // missing, the two halves simply never met. Same shape as the `status` two-shapes
-        // trap in CLAUDE.md.
-        //
-        // WHY IT MATTERS MORE THAN IT LOOKS. This is the mechanism that makes a travel death
-        // unnecessary: stand on a square something measured as hard to reach, sit, let health
-        // come back, stand up and walk on. With it dead, a hurt character crossing troll
-        // country simply keeps walking — which is 11 deaths in 15 minutes through Ukgoth and
-        // the Twisted Wood on 2026-09-12, and the operator's standing axiom that a non-PVP
-        // travel death is a coding defect. This was the defect.
-        const vit = c.vitals?.() ?? {};
-        const { hp, max } = readHealth(vit);
-        if (Number.isFinite(hp) && Number.isFinite(max) && max > 0 && hp / max < restBelow) {
-          const before = hp;
-          const restStarted = Date.now();
-          let last = hp, quiet = 0;
-          await this.pacer.submit('rest', () =>
-            (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom())
-              ? false : c.rest()).catch(() => null);
-          if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
-          if (leftTheRoom()) return roomChanged({ late_room_change: true });
-          const until = Date.now() + restMs;
-          while (Date.now() < until) {
-            if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
-            await new Promise(r => setTimeout(r, 2000));
-            if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
-            if (leftTheRoom()) return roomChanged({ late_room_change: true });
-            // Same `{ value, max }` read as above. Left as a bare `.health` this broke out of
-            // the wait on its first pass, so even a fixed entry condition would have rested
-            // for exactly one tick.
-            const { hp: h } = readHealth(c.vitals?.());
-            if (!Number.isFinite(h)) break;
-            if (h / max >= restBelow) break;
-            // LOSING health means something is hitting us and this is not shelter after
-            // all; standing still to be killed is the opposite of the point.
-            if (h < last) break;
-            if (h === last && ++quiet >= 3) break;      // nothing is coming back
-            if (h > last) quiet = 0;
-            last = h;
-          }
-          await this.pacer.submit('rest', () =>
-            (this.movementWasCancelled(movementGeneration, controlToken) || leftTheRoom())
-              ? false : c.stand()).catch(() => null);
-          if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
-          if (leftTheRoom()) return roomChanged({ late_room_change: true });
-          // WAS `(c.vitals()?.health ?? before) > before` — an OBJECT against a number,
-          // so this never fired and every shelter rest reported as no rest at all.
-          if ((readHealth(c.vitals?.()).hp ?? before) > before) {
-            rested++;
-            restedMs += Date.now() - restStarted;
-          }
-        }
-      }
+      await restAtStation(wp, i, shelter);
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return cancelledRide();
+      if (leftTheRoom()) return roomChanged({ late_room_change: true });
     }
     // The stitch did not get us out. Try the route that has actually been walked before
     // giving the crossing back to the planner.
@@ -10197,7 +10161,9 @@ class Session {
         const d = finitePoint(now) ? Math.hypot(sewn[i].x - now.x, sewn[i].y - now.y) : i;
         if (d < fallbackDist) { fallbackDist = d; fallbackAt = i; }
       }
-      for (const wp of fallbackAt < 0 ? [] : sewn.slice(fallbackAt)) {
+      const fallback = fallbackAt < 0 ? [] : sewn.slice(fallbackAt);
+      const fallbackShelter = planShelters(fallback);
+      for (const [i, wp] of fallback.entries()) {
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return cancelledRide({ fell_back_to_walked: true });
         if (leftTheRoom())
@@ -10207,6 +10173,11 @@ class Session {
         if (this.movementWasCancelled(movementGeneration, controlToken))
           return cancelledRide({ fell_back_to_walked: true });
         if (r?.left_room) return crossed({ fell_back_to_walked: true });
+        if (leftTheRoom())
+          return roomChanged({ fell_back_to_walked: true, late_room_change: true });
+        await restAtStation(wp, i, fallbackShelter);
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return cancelledRide({ fell_back_to_walked: true });
         if (leftTheRoom())
           return roomChanged({ fell_back_to_walked: true, late_room_change: true });
       }
@@ -10230,7 +10201,7 @@ class Session {
                             retired: struck >= 3 ? 'this track will not be offered again' : undefined }
                         : {}),
              ...(sewn ? { stitch_unproven: true } : {}),
-             ...(shelter.size ? { shelter_stations: shelter.size } : {}) };
+             ...(shelter.spots.length ? { shelter_stations: shelter.spots.length } : {}) };
   }
 
   // `exact` — THE CALLER'S DOOR SET IS THE WHOLE PERMITTED SET, not a starting suggestion.

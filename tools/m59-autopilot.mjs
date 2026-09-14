@@ -7150,11 +7150,8 @@ export class Autopilot {
             await this.travelHold(at, arm).catch(e => this.note('travel hold failed', { why: e.message }));
           if (onHop) await onHop(at);
         },
-        // `rideTrack` heals at stations below the room-boundary hook. Session surfaces each
-        // actual rest here so it cannot disappear on the track fast-path's early return.
-        onTrackRest: async ({ stops, held_ms }) => {
-          this.recordTravelShelterStop('track', { count: stops, heldMs: held_ms });
-        },
+        // The shared shelter policy records route and track rests at the rest itself.
+        // Do not count Session's onTrackRest summary again here.
       });
     } finally {
       // ONLY IF IT IS STILL THE VERY HOLD WE TOOK. Reviving somebody else's is how a
@@ -10084,7 +10081,16 @@ export class Autopilot {
         // and running is what makes the next room survivable. `restUntil` aborts the moment
         // health falls rather than sitting out a leash, so a wall that turns out to be wrong
         // costs one interrupted rest instead of a death.
-        onArrive: async (where) => {
+        onArrive: async (where, { source = 'route',
+          movementGeneration = this.s.movementGeneration, controlToken = null } = {}) => {
+          const room = this.s.world?.room?.num, client = this.s.client;
+          const roomId = client?.room?.id;
+          const cancelled = () => this.s.movementWasCancelled?.(movementGeneration, controlToken)
+            || this.s.client !== client || this.s.world?.room?.num !== room
+            || client?.room?.id !== roomId;
+          const onWall = () => client?.self?.col === where.col && client?.self?.row === where.row;
+          // Shared by pivots and fine tracks. A near aim is not refuge arrival.
+          if (cancelled() || !onWall()) return false;
           const v = this.s.client?.vitals?.();
           const hp = v?.health?.max ? v.health.value / v.health.max : null;
           const vig = vigorPct(v);
@@ -10136,8 +10142,12 @@ export class Autopilot {
           const done = await skills.restUntil(this.s, {
             health: 1, vigor: REST_VIGOR_CAP,
             maxSeconds: this.policy.refugeRestSeconds ?? 90,
+            shouldCancel: () => cancelled() || !onWall(),
+            beforeMutation: () => { if (cancelled() || !onWall()) throw new Error('refuge rest interrupted'); },
+            beforeCleanup: () => { if (cancelled()) throw new Error('refuge rest ownership changed'); },
           }).catch(e => ({ ok: false, why: e.message }));
-          this.recordTravelShelterStop('route', { heldMs: Date.now() - restStarted });
+          if (done?.rested) this.recordTravelShelterStop(source, { heldMs: Date.now() - restStarted });
+          if (done?.interrupted) this.noteFailedRestSpot(room, where.col, where.row);
           this.note('leaving the refuge', { where, ...(done?.ok === false ? { cut_short: done.why } : {}) });
           const after = this.s.client?.vitals?.();
           settle({
@@ -10145,9 +10155,9 @@ export class Autopilot {
             health: after?.health?.value ?? null,
             hp_gained: (after?.health?.value ?? null) != null && this.shelterRun?.health != null
               ? (after.health.value - this.shelterRun.health) : null,
-            cut_short: done?.ok === false ? done.why : null,
+            cut_short: done?.interrupted ?? (done?.ok === false ? done.why : null),
           });
-          return true;
+          return !!done?.rested;
         },
         // THE DECISION ROW — WRITTEN WHEN THE WALL IS CHOSEN, NOT WHEN IT IS REACHED.
         //

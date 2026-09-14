@@ -47,3 +47,17 @@ Damage during a freeze is reported with the preceding health/position, current
 health/position, and any held square. It invalidates the claimed protection;
 the event alone does not establish whether geometry, movement, or another
 damage source broke it.
+
+Recorded tracks now use the route shelter policy's need and arrival callbacks.
+Stations are checked with the same geometry/exclusion selector as ordinary route
+shelter, using canonical coordinates rather than the legacy saved shelter indexes.
+The separate 50% health and 20-second track rest settings are retired. The shared
+rest targets full health and restable vigor, checks arrival and movement ownership,
+and temporarily excludes a refuge after the shared rest reports incoming damage.
+Track and walked-fallback rests are counted once. Fine track aims remain intact;
+this change adds no off-track detours and does not modify `followRail`.
+
+`m59-track-shelter-test.mjs` exercises the real track and keeper rest methods offline.
+The [shopping execution report](internal-shopping-survival-2026-09-13.md) and
+[decision comparison](shopping-travel-decisions-2026-09-13.md) document the remaining
+pass-clock difference without enabling additional travel interventions.

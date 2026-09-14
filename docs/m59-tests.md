@@ -184,6 +184,11 @@ the records it describes.
   'blink' instead, because casting costs mana, may need a rest to afford, and can fail — a
   caller handed a boolean would plan a route needing a spell and report it as a walk. Also
   that a room with no blink point recorded loses nothing, since most of the map has none) and
+  `node tools/m59-track-shelter-test.mjs` — real `rideTrack` with the real keeper
+  shelter policy: geometry and exclusions, canonical station arrival, full health
+  and restable vigor, damage abort, cancellation ownership, walked fallback, and
+  exactly one count per actual rest. Offline; all mutable evidence goes to a temporary directory.
+
   `node tools/m59-tracks-test.mjs` (28 — **the monorail, which nothing tested until it was
   already wrong**: that RIDABILITY OUTRANKS TIME, in both arrival orders, because a crossing
   whose legs the mover refuses is not a quick one — it is `walkFine` groping between
