@@ -1,8 +1,8 @@
 # Morpheus death-attribution audit — 14 September 2026
 
-The production postmortems confirm **17 murders by Morpheus**, from 21:45:17 through 23:13:37 UTC (14:45–16:13 Pacific). Each contains both the victim-only server message naming Morpheus and the global announcement that the victim was murdered. These are direct server observations, not an inference from who happened to be nearby.
+The production postmortems confirm **18 murders by Morpheus**, from 21:45:17 through 23:19:35 UTC (14:45–16:19 Pacific). Each contains both the victim-only server message naming Morpheus and the global announcement that the victim was murdered. These are direct server observations, not an inference from who happened to be nearby.
 
-The first scan found 15; two additional records arrived during the audit.
+The first scan found 15; three additional records arrived during the audit and rollout.
 
 | Victim | Murders in this window |
 |---|---:|
@@ -17,6 +17,7 @@ The first scan found 15; two additional records arrived during the audit.
 | Janice | 1 |
 | Zoot | 1 |
 | Piggy | 1 |
+| Gonzo | 1 |
 
 ## Why they were misreported
 
@@ -40,7 +41,11 @@ The 17 original records were backed up byte for byte, with a SHA-256 manifest, u
 `substrate/attribution-backups/2026-09-14T23-18-01-942Z-f3d1c07f/`
 in the production checkout. The repair updates only derived attribution fields and is idempotent. Original text and anonymous global announcements are preserved.
 
+The final Gonzo record was corrected separately, with its original and manifest under
+`substrate/attribution-backups/2026-09-14T23-22-49-508Z-5bfc4054/`.
+
 Offline regression coverage includes real keeper death-writing logic, a personal message arriving during the broadcast wait, anonymous murder, stale messages, player-chat spoofing, another victim's announcement, repeated deaths, true versus morphed identity, monster/environment/self deaths, cause grouping, critic classification, and byte-identical repair backups. Existing death-dashboard and travel-critic tests also pass.
 
-This corrects the attribution of the killing blow. It does not establish that travel/shelter behavior had no contributing defects, or that a different intervention could not have saved a victim.
+Deployed code: `b289df8`, tag `deploy-2026-09-14-8`. The service restart completed, with 23 keeper child processes and 23/23 characters in game. Live MCP checks confirmed chronological listing and Gonzo's corrected attribution while preserving the anonymous broadcast. Browser checks verified all three radio modes and returned the page to the default. At verification, the seven-day chart showed Morpheus 81, Rick Deckard 22; grouped players 103; PvE 398; Unknown 7. The shared reader also corrects older records at read time, which is why these week-long totals exceed today's 18 repaired files.
 
+This corrects the attribution of the killing blow. It does not establish that travel/shelter behavior had no contributing defects, or that a different intervention could not have saved a victim.
