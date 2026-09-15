@@ -163,6 +163,7 @@ export function universalLauncherText({
     'rem Whatever the caller already put in the environment wins over these.',
     'if not defined M59_INVENTORY_SERVER set "M59_INVENTORY_SERVER=%~1:%~2"',
     `if not defined M59_OVERLAY_DIR set "M59_OVERLAY_DIR=${overlayDir}"`,
+    `if not defined M59_CLIENT_CONTEXT_DIR set "M59_CLIENT_CONTEXT_DIR=${join(REPO,'substrate','client-context')}"`,
     `if not defined M59_SIGNAL_PORT set "M59_SIGNAL_PORT=${signalPort}"`,
     `if not defined M59_DEBUG_TITLE set "M59_DEBUG_TITLE=${title ? 1 : 0}"`,
     'rem And the help key. Stock it opens the public guides, which is a page for somebody',

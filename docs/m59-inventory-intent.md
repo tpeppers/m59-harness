@@ -1,7 +1,8 @@
 # Shared inventory sell plan
 
 This is item-specific local metadata, shared by bot policy, the C&C viewer,
-and an opt-in patched Meridian client. It sends no game orders.
+and an opt-in patched Meridian client. Metadata changes send no game orders;
+the separate, explicit operator equip route is described below.
 
 AI recommendations enter the next-town sale queue automatically. An operator
 click on a queued item means **keep**; another click means **sell**. Explicit
@@ -19,7 +20,13 @@ Keep means "do not sell", not a prohibition on every possible use/transfer/drop.
     node tools/m59-inventory-intent-service.mjs --fleet <fleet> --broker-root <running-checkout>
 
 This binds only 127.0.0.1:8913. It reads broker health and pilot status, never
-game action endpoints. Start only one service per runtime directory.
+game action endpoints during polling. Capacity also reads the cached `fleet`
+view (no refresh flag), and vault contents come from the verified broker root's
+persisted cache. Only an authenticated, explicit operator `/equip` request may
+send stand/item-use commands, under the existing short commander lease; no
+automatic equip, sale, vault transfer or town trip is introduced.
+Start only one service per runtime directory. `--broker` selects its exact
+loopback broker URL; startup reports broker/root plus storage_schema/equip_schema.
 
 - M59_INVENTORY_INTENT_DIR selects shared local state; the default is this
   checkout's ignored substrate/inventory-intent/. All participating processes
@@ -33,6 +40,10 @@ game action endpoints. Start only one service per runtime directory.
   amber **$** requested but protected. Views expire after six seconds.
 - viewer.tsv supplies C&C inventory plans. Possessed inventory is display/
   metadata only; it does not grant bot movement, equipment or combat authority.
+- viewer-storage.tsv supplies M59SELLPLAN/2, pack/vault capacities, vault contents
+  and per-item purposes. Vault/equipment marks store legacy `keep` plus a purpose
+  so existing keepers still hold sales. Withdrawal marks bind the exact cached
+  contents and revision; legacy cache_key/cache_at documents remain readable.
 
 The native module needs M59_INVENTORY_INTENT_DIR, or derives its sibling
 directory from M59_OVERLAY_DIR. dev.bat records the original endpoint in

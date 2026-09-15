@@ -19,6 +19,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import {publishPlan,saleBlocked} from './m59-inventory-intent.mjs';
 import { attachHooks as ledgerAttachHooks } from './m59-ledger.mjs';
 import { createServer } from 'http';
+import { audioView } from './m59-audio-observations.mjs';
+import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
 import { resolve } from 'node:path';
 import { Session, Pacer } from './m59-session.mjs';
 import { autopilotFor, dropAutopilot, autopilotIfAny, releaseSpot } from './m59-autopilot.mjs';
@@ -38,10 +40,8 @@ import './m59-navgeom.mjs';   // installs the height model + lenient fine path o
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
 import { rtsJobReport, rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
-import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
-import { audioView } from './m59-audio-observations.mjs';
-import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
 import { OF } from './m59-parse.mjs';
+import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
 import * as party from './m59-party.mjs';
@@ -1293,13 +1293,42 @@ const server = createServer(async (req, res) => {
   const requireAddressedWrite = (req, body = {}) => {
     const identity = requestIdentity(req, body);
     if (addressedToUs(identity.agent, identity.character, identity.keeperPid)) return true;
-    refuseMisaddressed(identity.agent);
+    refuseMisaddressed(identity.agent, identity.character, identity.keeperPid);
     return false;
   };
-  const refuseMisaddressed = (claimed) => {
-    console.error(`[keeper] ${agent} refused an order addressed to "${claimed}" — ` +
-                  `another broker is guessing this port`);
-    json({ error: `this keeper is "${agent}", not "${claimed}"`, agent }, 409);
+  // NAME THE PART OF THE TUPLE THAT ACTUALLY DIFFERED.
+  //
+  // `addressedToUs` compares agent AND character AND pid, and this printed only the AGENT. So
+  // the commonest real failure — a caller holding a STALE PID after the keeper restarted —
+  // rendered as
+  //
+  //     this keeper is "t12", not "t12"
+  //
+  // two identical strings, because the half that differs was never shown. Measured on prod
+  // 2026-09-10: a resupply errand looped the same 596-second walk every ten minutes for 72
+  // minutes against that message, holding the fleet run lock the whole time, and it took a
+  // CPU sample and a source read to work out what it meant.
+  //
+  // AND THE SECOND-ORDER DAMAGE IS WORSE THAN THE FIRST. One of the refused writes is the
+  // ROUTE request, whose caller falls back to `walking without a trap check on the path` — so
+  // a stale pid does not merely refuse work, it quietly strips the trap check off every walk
+  // the errand then makes.
+  const refuseMisaddressed = (claimed, claimedCharacter, claimedPid) => {
+    const parts = [];
+    if (presentIdentityPart(claimed) && String(claimed) !== String(agent))
+      parts.push(`agent "${claimed}" (this is "${agent}")`);
+    if (presentIdentityPart(claimedCharacter) &&
+        normalizedKeeperCharacter(claimedCharacter) !== normalizedKeeperCharacter(character))
+      parts.push(`character "${claimedCharacter}" (this is "${character}")`);
+    if (presentIdentityPart(claimedPid) && Number(claimedPid) !== process.pid)
+      parts.push(`keeper_pid ${claimedPid} (this is ${process.pid} — the keeper has restarted ` +
+                 `since you looked it up)`);
+    if (!parts.length) parts.push('an incomplete identity — agent, character AND keeper_pid ' +
+                                  'must all be supplied before any part is compared');
+    const why = parts.join('; ');
+    console.error(`[keeper] ${agent} pid ${process.pid} refused a misaddressed order: ${why}`);
+    json({ error: `this keeper is "${agent}" pid ${process.pid} — the order named ${why}`,
+           agent, keeper_pid: process.pid, mismatch: parts }, 409);
   };
 
   // A READ IS ADDRESSED THE SAME WAY, in the query string. `/chat` is a character's whole
@@ -1311,7 +1340,8 @@ const server = createServer(async (req, res) => {
   // Refusing those would take away the tool that resolves the confusion.
   if (req.method === 'GET' && path !== '/health' && path !== '/state' && path !== '/live' &&
       !addressedToUsQuery(url)) {
-    refuseMisaddressed(url.searchParams.get('agent'));
+    refuseMisaddressed(url.searchParams.get('agent'), url.searchParams.get('character'),
+                       url.searchParams.get('keeper_pid'));
     return;
   }
 
@@ -1430,6 +1460,7 @@ const server = createServer(async (req, res) => {
             return;
           }
           case 'rts_tactical_status': {
+            // Exact capabilities/receipt are checked even after the source room changed.
             if (String(args.server_host).toLowerCase() !== String(credHost).toLowerCase() ||
                 Number(args.server_port) !== Number(credPort))
               throw new Error('tactical status server mismatch');
@@ -1794,7 +1825,7 @@ const server = createServer(async (req, res) => {
               json({ error: 'lease_token does not own the active background action' }, 409);
               return;
             }
-            if (job.kind === 'move' || job.kind.startsWith('context:')) {
+            if (job.kind === 'move' || job.kind === 'exit' || job.kind.startsWith('context:')) {
               json(session.cancelMovement(job.controlToken, 'RTS controller cancellation'));
               return;
             }
