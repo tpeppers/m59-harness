@@ -15,6 +15,12 @@ Repeatable recovery loops prevent treating this as fewer deaths per completed
 trip. The candidate is retained on `codex/death-replay-2026-09-14` with an
 explicit release hold until that failure has been resolved and validated.
 
+The [next routing experiment and startup-state audit](replay-state-isolation-2026-09-15.md)
+found that removing soft threat costs let two further runs with the intended
+shelter baseline complete the journey. The six runs in this report all passed
+that shelter-baseline audit. The movement candidate remains held while broader
+route and survival validation continues.
+
 ## Candidate changes
 
 1. The fallback walker now traces from the actual fine position in client units.
