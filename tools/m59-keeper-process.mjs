@@ -1185,18 +1185,18 @@ function log(line) {
 // exact-faculty checks are correctness boundaries, not an artificial local/prod gate.
 const RTS_COMMANDER_FACULTIES = ['work', 'movement', 'economy', 'social'];
 
-function requireKeeperRtsAuthority(args, packet = 'action') {
+function requireKeeperRtsAuthority(args, packet = 'action', travelling = false) {
   const expectedHost = String(args.server_host ?? '').trim().toLowerCase();
   const expectedPort = Number(args.server_port);
   if (String(credHost).trim().toLowerCase() !== expectedHost || Number(credPort) !== expectedPort)
     throw new Error(`RTS ${packet} server mismatch: keeper is on ${credHost}:${credPort}`);
   const room = Number(args.room);
   const actualRoom = Number(session.world?.room?.num);
-  if (!Number.isSafeInteger(room) || room !== actualRoom)
+  if (!travelling && (!Number.isSafeInteger(room) || room !== actualRoom))
     throw new Error(`RTS ${packet} room mismatch: expected ${room}, keeper is in ${actualRoom}`);
   const expectedRoomObjectId = Number(args.room_object_id);
   const actualRoomObjectId = Number(session.client?.room?.id);
-  if (Number.isSafeInteger(expectedRoomObjectId) && Number.isSafeInteger(actualRoomObjectId) &&
+  if (!travelling && Number.isSafeInteger(expectedRoomObjectId) && Number.isSafeInteger(actualRoomObjectId) &&
       expectedRoomObjectId !== actualRoomObjectId)
     throw new Error(`RTS ${packet} room generation changed`);
   const owner = String(args.commander_owner ?? '');
@@ -1324,6 +1324,7 @@ const server = createServer(async (req, res) => {
       json({
         schema: 'm59-keeper-live/v1',
         tactical_orders: 1,
+        tactical_routes: 1,
         audio_observations: 1,
         intent_observations: 1,
         ok: !!(inGame && session.live),
@@ -1360,7 +1361,7 @@ const server = createServer(async (req, res) => {
       // The broker may survive-reuse this process across a Windows service restart.
       // Publishing the exact PID lets it adopt the existing keeper instead of spawning
       // a doomed duplicate on the occupied port and recording that dead child's PID.
-      json({ ok: inGame, agent, pid: process.pid, ...s, as_of_ms: snapshot.ageMs, tactical_orders: 1 });
+      json({ ok: inGame, agent, pid: process.pid, ...s, as_of_ms: snapshot.ageMs, tactical_orders: 1, tactical_routes: 1 });
       return;
     }
 
@@ -1426,7 +1427,7 @@ const server = createServer(async (req, res) => {
         switch (name) {
           case 'rts_tactical_intent': {
             json(startTacticalJob(session, autopilot, args,
-              packet => requireKeeperRtsAuthority(args, packet)));
+              packet => requireKeeperRtsAuthority(args, packet, args.action === 'route' && packet !== 'tactical-intent')));
             return;
           }
           case 'rts_tactical_status': {

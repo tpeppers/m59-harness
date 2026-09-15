@@ -5,6 +5,7 @@ import { withPacketScope } from './m59-packet-scope.mjs';
 import { setIntentTarget } from './m59-intent-observations.mjs';
 import { OF } from './m59-parse.mjs';
 import { rtsJobReport } from './m59-rts-safety.mjs';
+import { travelUnderLease } from './fleetscripts/leased-travel.mjs';
 
 const text = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
 const requireThat = (test, message) => { if (!test) throw new Error(`tactical: ${message}`); };
@@ -53,18 +54,19 @@ export function tacticalJobStatus(job, args, now = Date.now()) {
     'the exact accepted job is no longer available');
   const report = rtsJobReport(job, now);
   return { order_id: job.tacticalId, observed_at: now,
-    state: !job.done ? 'running' : report.cancelled ? 'cancelled' : report.failed ? 'failed' : 'completed' };
+    state: !job.done ? 'running' : report.cancelled ? 'cancelled' : report.failed ? 'failed' : 'completed',
+    message: report.failed ? String(report.failed).slice(0,240) : undefined };
 }
 
 export function startTacticalJob(session, keeper, args, authority) {
   requireThat(/^[a-f0-9]{32}$/.test(args.order_id ?? ''), 'invalid order identity');
   requireThat(args.control_token === args.order_id && typeof args.lease_token === 'string' &&
     args.lease_token.length >= 16, 'missing order capability');
-  requireThat(args.action === 'attack' || args.action === 'exit', 'unsupported action');
+  requireThat(['attack', 'exit', 'route'].includes(args.action), 'unsupported action');
   authority('tactical-intent');
   const c = checkTacticalBinding(session, args);
   const roomObject = c.room.id;
-  const deadline = Date.now() + 120_000;
+  let deadline = Date.now() + (args.action === 'route' ? 45 * 60_000 : 120_000);
   let targetIdentity = null, exit = null;
   const target = args.target;
   const currentTarget = () => {
@@ -76,6 +78,15 @@ export function startTacticalJob(session, keeper, args, authority) {
     return object;
   };
   if (args.action === 'attack') targetIdentity = { nameRsc: currentTarget().nameRsc };
+  else if (args.action === 'route') {
+    requireThat(target && Object.keys(target).length === 1 &&
+      Number.isSafeInteger(target.destination_room) && target.destination_room > 0 &&
+      session.world.map?.rooms?.[String(target.destination_room)], 'route destination is not a known map');
+    requireThat(typeof keeper.travel === 'function', 'maintained keeper travel is unavailable');
+    const confine = keeper.policy?.confineRooms;
+    requireThat(!Array.isArray(confine) || !confine.length || confine.map(Number).includes(target.destination_room),
+      'route is outside the keeper confinement');
+  }
   else exit = selectTacticalExit(session.world.exits(), target, args.binding.room,
     Array.isArray(keeper.policy?.confineRooms) ? keeper.policy.confineRooms : []);
 
@@ -86,6 +97,19 @@ export function startTacticalJob(session, keeper, args, authority) {
       job.leaseToken === args.lease_token && !job.cancelled && !job.cancelRequestedAt &&
       !session.movementWasCancelled(job.generation, args.control_token), 'order cancelled or superseded');
     // Post-crossing BP_PLAYER confirmation is a read. It cannot authorize another move.
+    if (args.action === 'route') {
+      requireThat(['move', 'turn', 'rest', 'read', 'use', 'cast'].includes(kind), `unexpected ${kind} route packet`);
+      authority(kind);
+      requireThat(session.need() === c && c.selfId === args.binding.player_id,
+        'client connection or character changed');
+      // BP_PLAYER can precede the new ROOM_CONTENTS. A confirmation read may
+      // bridge that gap; no movement may use a missing/changed character row.
+      requireThat(c.self ? c.rsc.get(c.self.nameRsc) === args.binding.character : kind === 'read',
+        'character changed or room contents are incomplete');
+      requireThat(Number(session.world?.room?.num) !== 1 &&
+        (kind === 'read' || c.vitals()?.health?.value > 0), 'route interrupted by death or unknown health');
+      return;
+    }
     if (kind === 'read') return;
     requireThat(['move', 'turn', 'rest', 'attack'].includes(kind), `unexpected ${kind} packet`);
     authority(kind);
@@ -98,15 +122,21 @@ export function startTacticalJob(session, keeper, args, authority) {
     if (args.action === 'attack') currentTarget();
     else requireThat(kind !== 'attack', 'exit orders do not authorize combat');
   };
-  const job = session.startJob(args.action === 'attack' ? 'attack' : 'exit',
+  const job = session.startJob(args.action === 'route' ? 'travel' : args.action,
     `tactical ${args.action}`, async generation => {
       // Session installs the job before calling us, but its result identity is set
       // after startJob returns. No packet can run before this microtask boundary.
       await Promise.resolve();
-      setIntentTarget(session,exit?{kind:'exit',col:target.col,row:target.row,destination_room:target.destination_room}
+      setIntentTarget(session,args.action==='route'?{kind:'travel',destination_room:target.destination_room}:exit?{kind:'exit',col:target.col,row:target.row,destination_room:target.destination_room}
         :{kind:'attack',object_id:target.object_id});
       return withPacketScope(guard, async () => {
         guard('rest');
+        if (args.action === 'route') {
+          const result = await travelUnderLease({ session, keeper, destination: target.destination_room,
+            generation, token: args.control_token, check: () => guard('read'),
+            setDeadline: ms => { deadline = Math.min(deadline, Date.now() + ms); } });
+          return { arrived: result.ok === true, reason: result.why };
+        }
         if (exit) {
           if (target.destination_room === args.binding.room) {
             const doors = (session.world.room.goExits ?? []).filter(door =>

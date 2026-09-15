@@ -51,6 +51,25 @@ const fixture = () => {
       room_resource_id: 111, room_security_u32: 4294967294 } };
   return { s, c, args, exit };
 };
+for (const fault of ['none','lease','identity','cancel','death']) {
+  const {s,c,args}=fixture();args.action='route';args.target={destination_room:39};
+  s.world.map={rooms:{39:{num:39}}};s.world.route=()=>({found:true,hops:[{from:7,to:38},{from:38,to:39}]});
+  let live=true,moves=0;
+  const keeper={policy:{},travel:async(to,opts)=>{
+    assert.equal(to,39);assert.equal(opts.controlToken,args.order_id);
+    await s.pacer.submit('move',()=>{moves++;s.world.room.num=38;c.room.id++;c.roomRsc++;});
+    const self=c.self;c.self=null;await s.pacer.submit('read',()=>{});c.self=self;
+    if(fault==='lease')live=false;
+    if(fault==='identity')c.selfId++;
+    if(fault==='cancel')s.job.cancelled=true;
+    if(fault==='death')c.vitals=()=>({health:{value:0,max:100}});
+    await s.pacer.submit('move',()=>{moves++;s.world.room.num=39;c.room.id++;});return{arrived:true};
+  }};
+  const receipt=startTacticalJob(s,keeper,args,()=>{if(!live)throw Error('lost faculty');});
+  await s.job.promise;
+  assert.equal(moves,fault==='none'?2:1);
+  assert.equal(tacticalJobStatus(s.job,{...args,started_at:receipt.started_at}).state,fault==='none'?'completed':fault==='cancel'?'cancelled':'failed');
+}
 for (const action of ['attack', 'exit']) {
   sent = [];
   const { s, args, exit } = fixture();

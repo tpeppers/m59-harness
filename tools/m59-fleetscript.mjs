@@ -1341,6 +1341,13 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
 async function routeTrapAhead(ctx, agent, from, to) {
   if (ctx.allowTraps) return null;
   try {
+    if (ctx.leasedControl) {
+      const r = await ctx.leasedControl.route(to);
+      const hops = r?.hops;
+      if (!r?.found || !Array.isArray(hops)) return { unknown: r?.reason ?? 'router gave no hops' };
+      const trap = routeCrossesTrap(hops);
+      return trap ? { trap } : null;
+    }
     const ports = await keeperPorts(ctx.fleet);
     const entry = ports?.get?.(agent);
     if (!entry) return { unknown: 'no keeper port' };
@@ -1454,7 +1461,27 @@ const isBusyRefusal = (r) => /\bis busy\b|\bbusy:/i.test(refusalText(r));
 const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
 
+// Native controllers may supply their already-owned keeper instead of acquiring
+// a second lease. This is the SAME walk compiler, not a copy of its routing rules.
+// It never calls autopilot busy/free/revive, acquires a lease, or retries a native
+// journey. The caller must check its live capability at every emitted packet and
+// release its own control on completion/refusal/cancellation.
+export async function leasedFleetWalk({ agent, to, control, log = () => {} }) {
+  if (!agent || !Number.isSafeInteger(to) || to <= 0)
+    throw Error('leased FleetScript walk requires an exact agent and destination');
+  for (const method of ['check', 'observe', 'route', 'estimate', 'travel'])
+    if (typeof control?.[method] !== 'function') throw Error('missing leased FleetScript control: ' + method);
+  control.check();
+  const trap = trapCheck([walk(to)]);
+  if (trap) return { ok: false, why: trap };
+  const scoped = Object.fromEntries(['observe', 'route', 'estimate', 'travel'].map(method =>
+    [method, async (...args) => { control.check(); const result = await control[method](...args); control.check(); return result; }]));
+  return compiledWalk({ leasedControl: scoped, log, budgetFloorMs: 180_000,
+    budgetCapMs: 900_000, pollMs: 8000 }, agent, to, { minHealth: 1 });
+}
+
 async function compiledWalk(ctx, agent, to, { minHealth }) {
+  const observeHere = () => ctx.leasedControl ? ctx.leasedControl.observe() : observe(agent);
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
   // Logged live on 2026-09-03: `t11 walking 53 -> null, budget 490s`. A destination that is
@@ -1502,7 +1529,7 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
   let launched = 0;
   const sends = [];
   for (let attempt = 0; attempt < 3; attempt++) {
-    const at = await observe(agent);
+    const at = await observeHere();
     if (!at.ok) return { ok: false, why: 'could not read the character' };
     // Numeric on both sides on purpose; see the coercion note above.
     if (Number(at.room) === to) return { ok: true, room: to };
@@ -1521,6 +1548,10 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     if (!gate.ok && gate.code === 'health_unreadable')
       return { ok: false, why: gate.why, hurt: true };
     if (!gate.ok) {
+      // An external controller owns this body. Never release someone else's lease
+      // or change saved automation to heal it. Report the same FleetScript gate;
+      // its controller returns the body to normal recovery on this refusal.
+      if (ctx.leasedControl) return { ok: false, why: gate.why, hurt: true };
       // THE REMEDY IS THIS FILE'S, NOT THE GATE'S. A script is patient: rest to the floor and
       // set out, rather than refusing an errand somebody asked for.
       const healed = await healToFloor(ctx, agent, minHealth, ctx.healMs);
@@ -1546,7 +1577,8 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
       ctx.log(agent, `route ${at.room} -> ${to} could not be read (${crossing.unknown}) — ` +
                      'walking without a trap check on the path');
 
-    const est = await call('travel_estimate', { from: at.room, to, basis: 'p90' }, 30_000)
+    const est = await (ctx.leasedControl ? ctx.leasedControl.estimate(at.room, to) :
+      call('travel_estimate', { from: at.room, to, basis: 'p90' }, 30_000))
       .catch(() => null);
     const budget = Math.min(ctx.budgetCapMs,
       Math.max(ctx.budgetFloorMs, (Number(est?.ms) || 400_000) + 90_000));
@@ -1574,6 +1606,7 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
     // already rested to ITS floor must not then be refused by a different one -- `come-home`
     // deliberately lowers `minHealth` for an escort, and that decision is the script's.
     const send = async () => {
+      if (ctx.leasedControl) return ctx.leasedControl.travel(to, { budgetMs: budget, minHealth });
       // END WHAT THE KEEPER STARTED, EVERY TIME, not only when the lease was taken. A claim
       // takes the faculties and a journey is a JOB, so it outlives the claim -- and the keeper
       // has had this whole errand to decide the character belongs in assignedRoom.
@@ -1584,6 +1617,14 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
         .catch(e => ({ error: e?.message ?? String(e) }));
     };
     let sent = await send();
+    // Native leased runners await their one owned journey. No second job, RPC,
+    // polling loop or automatic retry may outlive that controller's cancellation.
+    if (ctx.leasedControl) {
+      const now = await observeHere();
+      return sent?.arrived === true && Number(now.room) === to
+        ? { ok: true, room: to }
+        : { ok: false, why: refusalText(sent) };
+    }
     for (let race = 0; race < BUSY_RACE_TRIES && sent?.started !== true && isBusyRefusal(sent);
          race++) {
       ctx.log(agent, `the keeper is holding the body (${refusalText(sent)}) — cancelled its ` +

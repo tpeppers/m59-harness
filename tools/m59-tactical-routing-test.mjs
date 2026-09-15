@@ -31,13 +31,23 @@ const session={name:'unit1',client:c,need:()=>c,world:{room:{num:7},exits:()=>[e
     job.promise=fn(0).then(result=>{job.result=result;},e=>{job.error=e.message;}).finally(()=>{job.done=true;});
     return job;
   }};
-const authority=(args)=>{
+const autopilot={policy:{},running:true,facultyOwner:()=>owned?'fixture-owner':'keeper',
+  travel:async(to)=>{await session.pacer.submit('move',()=>{packets++;session.world.room.num=38;c.room.id++;});
+    await session.pacer.submit('move',()=>{packets++;session.world.room.num=to;c.room.id++;});return{arrived:true};}};
+session.world.map={rooms:{39:{num:39}}};session.world.route=()=>({found:true,hops:[{from:7,to:38},{from:38,to:39}]});
+const authorityStart=keeper.indexOf('function requireKeeperRtsAuthority(');
+const authorityEnd=keeper.indexOf('function keeperRtsCancelled(',authorityStart);
+assert.ok(authorityStart>0&&authorityEnd>authorityStart);
+const nativeAuthority=Function('session','autopilot','credHost','credPort',
+  "const RTS_COMMANDER_FACULTIES=['work','movement','economy','social'];"+keeper.slice(authorityStart,authorityEnd)+
+  ';return requireKeeperRtsAuthority;')(session,autopilot,'example.invalid',5959);
+const authority=(args,packet,travelling)=>{
   assert.equal(args.commander_owner,'fixture-owner');
   assert.equal(args.room,7);assert.equal(args.room_object_id,200);
-  if(!owned)throw Error('lease expired');return c;
+  if(!owned)throw Error('lease expired');return nativeAuthority(args,packet,travelling);
 };
 function keeperAction(name,args){let result;
-  route(name,args,session,{policy:{}},()=>authority(args),v=>{result=v;},
+  route(name,args,session,autopilot,(a,p,t)=>authority(a,p,t),v=>{result=v;},
     startTacticalJob,tacticalJobStatus,'example.invalid',5959);return result;
 }
 class KeeperProxy {
@@ -61,10 +71,10 @@ const start=brokerHandler('tactical_intent'),status=brokerHandler('tactical_stat
 const base={agent:'unit1',order_id:'a'.repeat(32),control_token:'a'.repeat(32),lease_token:'fixture-capability',
   server_host:'example.invalid',server_port:5959,binding:{agent:'unit1',character:'Example',fleet:'fixture',
   broker_pid:12,player_id:101,room:7,room_resource_id:91,room_security_u32:93}};
-for(const action of ['attack','exit']){
+for(const action of ['attack','exit','route']){
   c.room.id=200;session.world.room.num=7;
   c.room.objects.set(202,{id:202,nameRsc:20,flags:OF.ATTACKABLE,col:4,row:3});
-  const args={...base,action,target:action==='attack'?{object_id:202,name:'Creature'}:
+  const args={...base,action,target:action==='route'?{destination_room:39}:action==='attack'?{object_id:202,name:'Creature'}:
     {kind:'edge',destination_room:8,col:4.125,row:7.25,how:'walk',trigger:''}};
   const receipt=await start(args,{local:true});assert.equal(receipt.accepted,true);
   await session.job.promise;assert.equal(session.job.error,undefined);
@@ -73,8 +83,8 @@ for(const action of ['attack','exit']){
   await assert.rejects(status({...checked,started_at:receipt.started_at+1},{local:true}),/exact accepted/);
   await assert.rejects(status({...checked,server_host:'wrong.invalid'},{local:true}),/server mismatch/);
 }
-assert.equal(packets,2);assert.ok(endpointChecks>=2&&rosterChecks===2);
+assert.equal(packets,4);assert.ok(endpointChecks>=3&&rosterChecks===3);
 owned=false;
 await assert.rejects(start({...base,action:'attack',target:{object_id:202,name:'Creature'}},{local:true}),/expired/);
-assert.equal(packets,2,'lost authority does not reach a packet');
+assert.equal(packets,4,'lost authority does not reach a packet');
 console.log('PASS actual broker/keeper routing: attack, exact exit, correlated status, endpoint and lease refusal; no sockets');

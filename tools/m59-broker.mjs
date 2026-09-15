@@ -7877,7 +7877,7 @@ const TOOLS = [
     name: 'tactical_intent',
     description: 'One temporary exact-bound viewer attack or selected-exit job. Keeper-owned sessions only; no saved policy changes.',
     schema: { type: 'object', properties: {
-      agent: { type: 'string' }, action: { type: 'string', enum: ['attack', 'exit'] },
+      agent: { type: 'string' }, action: { type: 'string', enum: ['attack', 'exit', 'route'] },
       order_id: { type: 'string' }, binding: { type: 'object' }, target: { type: 'object' },
       control_token: { type: 'string' }, lease_token: { type: 'string' },
       server_host: { type: 'string' }, server_port: { type: 'number' },
@@ -16511,6 +16511,7 @@ function brokerHealth() {
   return {
     ok: true,
     tactical_orders: 1,
+    tactical_routes: 1,
     audio_observations: 1,
     intent_observations: 1,
     pid: process.pid,
