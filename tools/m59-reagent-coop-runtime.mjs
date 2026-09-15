@@ -232,7 +232,9 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
     state.stage = 'return';
   }
   if (interrupted(k)) return pending('reagent coop return paused for survival');
-  if (room(k) === cfg.hall_room && state.origin !== cfg.hall_room) {
+  // Also return to the foyer when a keeper restarted inside the hall. Its
+  // next ordinary journey cannot reopen the internal chest-room doors.
+  if (room(k) === cfg.hall_room) {
     try { await guildPassage(k, 0, () => interrupted(k)); }
     catch (e) { k.note('reagent coop return waiting', { reason: e.message }); return pending(e.message); }
   }

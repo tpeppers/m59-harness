@@ -11,7 +11,7 @@ const doors = [
   { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]] },
   { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]] },
   { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]] },
-  { sector: 3, inward: [[7,7],[7,4]], outward: [[7,4],[7,8]], secret: true },
+  { sector: 3, inward: [[7,8],[7,4]], outward: [[7,4],[7,8]], secret: true },
 ];
 export function guildSection(row, col) {
   if (!closed) {
@@ -34,10 +34,13 @@ export async function guildPassage(k, destination, isInterrupted) {
     if (section < 0) throw new Error('guild position is outside the known passage');
     const inward = section < destination, door = doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
-    await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
+    const approach = await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
     await s.confirmPosition?.();
-    if (c.self.row !== trigger[0] || c.self.col !== trigger[1])
+    if (c.self.row !== trigger[0] || c.self.col !== trigger[1]) {
+      k.note?.('guild door trigger not reached', { sector: door.sector, reason: approach?.reason,
+        at: { row: c.self.row, col: c.self.col }, target: { row: trigger[0], col: trigger[1] } });
       throw new Error(`guild door ${door.sector} trigger not reached`);
+    }
     let crossed = false;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {
       if (isInterrupted()) throw new Error('guild passage paused for survival');

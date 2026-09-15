@@ -74,10 +74,18 @@ test('actual baked hall supports every inward and outward trigger even when door
         assert.equal(options.confirm, true);
         assert.ok(Math.max(Math.abs(row - c.self.row), Math.abs(col - c.self.col)) <= 1);
         assert.ok(g.path(c.self.row, c.self.col, row, col).found);
+        assert.ok(g.moverStepLands(c.self.row, c.self.col, row, col), `mover cannot land r${row}c${col}`);
         c.self = { row, col }; return { moved: true };
       },
       async walkTo(col, row) {
-        assert.ok(g.path(c.self.row, c.self.col, row, col).found, `closed path to r${row}c${col}`);
+        const path = g.path(c.self.row, c.self.col, row, col);
+        assert.ok(path.found, `closed path to r${row}c${col}`);
+        let previous = c.self;
+        for (const next of path.steps) {
+          assert.ok(g.moverStepLands(previous.row, previous.col, next.row, next.col),
+            `route planner's goal exception cannot certify landing r${next.row}c${next.col}`);
+          previous = next;
+        }
         c.self = { row, col }; observed.clear(); applyCeilingDoors(map, 714, observed);
       } } };
   await guildPassage(k, 4, () => false);
