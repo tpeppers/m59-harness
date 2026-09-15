@@ -5,6 +5,10 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {Session} from './m59-game.mjs';
 import {Autopilot} from './m59-autopilot.mjs';
+import {CombatMode} from './m59-combat-mode.mjs';
+import {OF} from './m59-parse.mjs';
+import {bindPacketScope} from './m59-packet-scope.mjs';
+import {bodyAuthority} from './m59-body-command.mjs';
 import {returnToSpot} from './m59-skills.mjs';
 import {geometryFor} from './m59-safespots.mjs';
 import {attachSurvivalDecisions,chooseSurvivalDecision,currentSurvivalDecision,
@@ -251,5 +255,33 @@ await test('newly excluded refuges count as new information for immediate altern
   };
   await k.continueSurvivalDecision();assert.equal(attempts,3);
   assert.equal(currentSurvivalDecision(s).status,'recovering');
+});
+await test('PvP monster cover uses the real recovery selector and arrival without starting healing',async()=>{
+  const {s,k,c,calls}=fixture();c.room.id=3900;
+  c.rsc=new Map([[2,'Assailant'],[3,'troll']]);
+  c.room.objects.set(2,{id:2,nameRsc:2,row:8,col:17,flags:OF.PLAYER|OF.ATTACKABLE});
+  c.room.objects.set(3,{id:3,nameRsc:3,row:8,col:18,flags:OF.ATTACKABLE});
+  c.attack=()=>calls.push('player attack');
+  s.combat=new CombatMode(s,{keeper:()=>k,schedule:()=>1,unschedule(){}});
+  s.pacer.submit=async(kind,fn)=>{
+    const authority=bodyAuthority(s),send=bindPacketScope(kind,authority.bind(fn));
+    await Promise.resolve();authority.guard();return send();
+  };
+  s.approachFine=s.walkTo=async(col,row)=>{
+    await s.pacer.submit('move',()=>{calls.push('shelter move');c.self={...c.self,col,row};});
+    return {arrived:true};
+  };
+  s.combat.event({kind:'message',text:'Assailant hits you.'});
+  c.room.objects.delete(2);s.combat.event({kind:'vanished',id:2});
+  s.combat.event({kind:'message',text:'The troll hits you.'});
+  await s.combat.tick();
+  assert.ok(calls.includes('shelter move'));
+  assert.ok(k.currentRecoveryWall()?.ok,'the shared selector reached an actual geometric safe wall');
+  assert.ok(!calls.includes('reconnect'));assert.ok(!calls.includes('turn'));
+  const d=currentSurvivalDecision(s);
+  assert.equal(d.strategy,'pvp_return_fire');assert.equal(d.phase,'monster_cover');
+  assert.equal(d.status,'active');assert.ok(d.path_length>0);
+  assert.equal(s.combat.pvpStatus().shelter.chosen_refuge.row,c.self.row);
+  s.combat.issue({action:'stop'});
 });
 console.log(`${passed} survival decision scenarios passed`);

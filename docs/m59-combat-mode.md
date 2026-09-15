@@ -76,6 +76,22 @@ passed since the last incoming player attack**. An assailant still present keeps
 the mode active beyond 30 seconds. Another known assailant becomes the target
 when the selected one leaves. It does not chase players across room boundaries.
 
+During that danger window, monster cover is the next priority **only while every
+known assailant is absent**. A recent server-confirmed damaging monster attack
+and that monster still being present permit the ordinary closest clear,
+unoccupied safe-wall selection. It is movement to cover, without invoking rest,
+safe-wall logout or the healing routine. Already at a safe wall, the bot stays
+alert there. Monster damage does not extend the player danger timer. A returning
+assailant immediately revokes queued shelter movement and resumes player combat,
+even while the previous movement call is still unwinding. A blocked wall search
+keeps PvP ownership and retries at most once per second.
+
+This cover approach uses the shared square router first, with the recovery
+selector's occupied squares excluded, then retains the fine-movement fallback
+for difficult wall pockets. Ordinary refuge approaches keep their existing
+handover behavior. This avoids a demonstrated CV close-range oscillation that
+ignored a valid detour around the monster.
+
 `combat.pvp_survival`, postmortems and replay scene controllers retain the
 decision ID, chosen time, last attack time/age, known assailants, attempted attack
 packets, server-confirmed incoming/outgoing hits and defenses, reconnect count,
@@ -86,6 +102,11 @@ remains available for death investigation. Process restart does not restore a
 live hostility episode; the durable standing watch remains, and new incoming
 attacks establish a fresh episode. Scene replay rebases hostility timestamps and
 maps recorded player names to the temporary stand-ins.
+
+The same record includes `last_monster_hit` and `shelter`: start, selection,
+arrival and interruption times, actual chosen refuge/path, monster evidence,
+failure/interruption reason and attempt count. Shelter remains a phase of the
+PvP survival decision; it cannot hand the body back to ordinary healing.
 
 Status distinguishes active combat from a passive watch:
 `active: false, watch: { enabled: true, phase: "watching" }` means normal farming

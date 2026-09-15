@@ -7,7 +7,7 @@ import { withBodyCommand } from './m59-body-command.mjs';
 import { withPacketScope } from './m59-packet-scope.mjs';
 import { effectsAt, groundEffectSquares, groundEffectOnSegment } from './m59-ground-effects.mjs';
 import { parsePlayerCombat } from './m59-player-evidence.mjs';
-import { chooseSurvivalDecision, finishSurvivalDecision,
+import { chooseSurvivalDecision, currentSurvivalDecision, finishSurvivalDecision,
   updateSurvivalDecision } from './m59-survival-decision.mjs';
 
 export const PVP_DANGER_MS = 30_000;
@@ -176,6 +176,8 @@ export class CombatMode {
     const p = this.active?.pvp ?? this.lastPvP;
     if (!p) return null;
     return structuredClone({ ...p, active: !!this.active?.pvp,
+      ...(this.active?.pvp && p.shelter?.status === 'approaching'
+        ? { shelter: { ...p.shelter, ...this.shelterPath(p) } } : {}),
       phase: this.active?.pvp ? this.active.phase : 'finished',
       last_attack_ago_ms: Math.max(0, this.now() - p.last_attacked_at),
       danger_until: p.last_attacked_at + PVP_DANGER_MS,
@@ -203,6 +205,91 @@ export class CombatMode {
     p.last_outcome = { ...result, at: this.now() };
     this.record('pvp_outcome', this.active);
     this.wake();
+  }
+
+  observeMonsterCombat(ev, c) {
+    const p = this.active?.pvp;
+    if (!p || ev.kind !== 'message' || !ev.text) return;
+    const line = ev.text.toLowerCase();
+    for (const monster of c.room?.objects?.values?.() ?? []) {
+      if (monster.id === c.selfId || !(monster.flags & OF.ATTACKABLE) ||
+          (monster.flags & OF.PLAYER) || c.playersOnline?.has?.(monster.id)) continue;
+      const name = c.rsc?.get?.(monster.nameRsc) ?? monster.name;
+      if (!name) continue;
+      const names = [name, `The ${name}`, `A ${name}`, `An ${name}`];
+      // A crowded room must not compile a suite of regexes for every monster
+      // on every chat/outgoing-combat line. Only a matching prefix needs parsing.
+      if (!names.some(n => line.startsWith(n.toLowerCase() + ' ') ||
+        line.startsWith(n.toLowerCase() + "'s ") || line.startsWith(n.toLowerCase() + '’s '))) continue;
+      const hit = parsePlayerCombat(ev.text, names);
+      if (hit?.direction !== 'incoming' || hit.outcome !== 'hit' || hit.verb.toLowerCase() === 'fails to damage') continue;
+      p.last_monster_hit = { at: this.now(), room: this.s.world?.room?.num,
+        character: name, text: ev.text };
+      this.record('pvp_monster_hit', this.active); this.wake(); return;
+    }
+  }
+
+  playerThreatPresent(o) {
+    return o.pvp.attackers.some(a => combatTarget(o.client, a.character));
+  }
+
+  shelterPath(p) {
+    const d = currentSurvivalDecision(this.s);
+    return d?.id === p.decision_id ? { chosen_refuge: d.chosen_refuge,
+      selected_at: d.selected_at, path: d.path, path_length: d.path_length } : {};
+  }
+
+  interruptPvPShelter(o, reason) {
+    const shelter = o.pvp?.shelter;
+    if (!shelter || !['approaching', 'sheltered'].includes(shelter.status)) return;
+    Object.assign(shelter, this.shelterPath(o.pvp), { status: 'interrupted', ended_at: this.now(), reason });
+    updateSurvivalDecision(this.s, o.pvp.decision_id, { status: 'active', phase: 'return_fire',
+      phase_reason: reason, chosen_refuge: null, path: null, path_length: null });
+    this.record('pvp_shelter_interrupted', o);
+  }
+
+  async shelterFromMonsters(o) {
+    const p = o.pvp, keeper = this.keeper(), hit = p?.last_monster_hit;
+    if (!p || !keeper?.takeSafeSpot || this.playerThreatPresent(o)) return;
+    const now = this.now();
+    if (!hit || hit.room !== this.s.world?.room?.num || now - hit.at > PVP_DANGER_MS ||
+        ![...o.client.room.objects.values()].some(m => !(m.flags & OF.PLAYER) && !o.client.playersOnline?.has?.(m.id) &&
+          (m.flags & OF.ATTACKABLE) && exactName(o.client, m) === hit.character.toLowerCase())) return;
+    if (now < (p.shelter_retry_at ?? 0)) return;
+    if (keeper.adoptRecoveryWall?.()) {
+      if (p.shelter?.status !== 'sheltered') {
+        p.shelter = { status: 'sheltered', started_at: now, arrived_at: now,
+          chosen_refuge: { ...keeper.hold }, reason: 'already covered from monsters; watching for player attackers' };
+        updateSurvivalDecision(this.s, p.decision_id, { status: 'active', phase: 'monster_cover',
+          chosen_refuge: keeper.hold, path: [], path_length: 0, phase_reason: p.shelter.reason });
+        this.record('pvp_sheltered', o);
+      }
+      return;
+    }
+    const revision = o.phaseRevision;
+    const interrupted = () => this.active !== o || o.phaseRevision !== revision ||
+      !this.s.live || this.s.client !== o.client || this.playerThreatPresent(o);
+    const shelter = p.shelter = { status: 'approaching', started_at: now,
+      reason: 'player attackers absent; seek monster cover during the PvP danger window',
+      monster_evidence: { ...hit } };
+    p.shelter_attempts = (p.shelter_attempts ?? 0) + 1;
+    updateSurvivalDecision(this.s, p.decision_id, { status: 'active', phase: 'monster_shelter',
+      phase_reason: shelter.reason, chosen_refuge: null, selected_at: null, path: null, path_length: null });
+    this.record('pvp_shelter_started', o);
+    // Use the ordinary closest clear, exclusive recovery selector and confirmed
+    // arrival. Do not invoke takeRecoverySpot: its next action is healing/logout.
+    const result = await keeper.takeSafeSpot(shelter.reason, null, { source: 'pvp_monster_cover',
+      recovery: true, nearestOnly: true, shelterOnly: true,
+      decisionId: p.decision_id, shouldInterrupt: interrupted })
+      .catch(error => ({ took: false, why: error.message }));
+    if (interrupted() || p.shelter !== shelter) return;
+    Object.assign(shelter, this.shelterPath(p), { status: result?.took ? 'sheltered' : 'blocked',
+      approach_ended_at: this.now(), ...(result?.took ? { arrived_at: this.now() } : { ended_at: this.now() }),
+      reason: result?.why ?? (result?.took ? 'reached monster cover' : 'no clear safe wall') });
+    p.shelter_retry_at = this.now() + 1000;
+    updateSurvivalDecision(this.s, p.decision_id, { status: 'active',
+      phase: result?.took ? 'monster_cover' : 'waiting_for_player', phase_reason: shelter.reason });
+    this.record(result?.took ? 'pvp_sheltered' : 'pvp_shelter_blocked', o);
   }
 
   beginPvP(evidence, observedAt = this.now()) {
@@ -263,6 +350,7 @@ export class CombatMode {
     const s = this.s, c = s.client, p = o.pvp;
     if (this.pvpEligibility?.() === false) { this.stop('operator suspended connection'); return false; }
     if (!s.live || !c?.self || c.combatReady === false) {
+      this.interruptPvPShelter(o, 'connection unavailable; retain PvP intent');
       if (o.phase !== 'offline') { o.phase = 'offline'; o.phaseRevision++; this.record('pvp_offline', o); }
       return false;
     }
@@ -271,6 +359,7 @@ export class CombatMode {
       this.stop('PvP survival ended: died'); return false;
     }
     if (c !== o.client || c.selfId !== o.playerId || c.room.id !== o.roomObject || s.world?.room?.num !== o.room) {
+      this.interruptPvPShelter(o, 'connection or room changed');
       if (c !== o.client) p.reconnects++;
       o.client = c; o.playerId = c.selfId; o.roomObject = c.room.id; o.room = s.world?.room?.num;
       o.phaseRevision++; o.standing = false; o.targetId = null; o.nextAt = 0;
@@ -278,6 +367,12 @@ export class CombatMode {
     }
     if (o.phase === 'offline') o.phase = 'waiting';
     const present = p.attackers.map(a => ({ a, target: combatTarget(c, a.character) })).filter(x => x.target);
+    if (present.length && p.shelter?.status === 'approaching') {
+      this.interruptPvPShelter(o, 'player attacker present; return fire takes priority');
+      withBodyCommand(s, () => s.cancelMovement(null, 'PvP attacker interrupted monster shelter',
+        { preserveId: p.decision_id }), o.id);
+      o.phaseRevision++; s.pacer.wake?.();
+    } else if (present.length) this.interruptPvPShelter(o, 'player attacker present; return fire takes priority');
     if (!present.length && this.now() - p.last_attacked_at >= PVP_DANGER_MS) {
       this.stop('PvP survival ended: attackers absent after 30 seconds'); return false;
     }
@@ -319,6 +414,8 @@ export class CombatMode {
         p[key] = saved[key] ?? 0;
       p.attackers = attackers; p.chosen_at = saved.chosen_at + delta;
       p.last_attacked_at = saved.last_attacked_at + delta;
+      if (saved.last_monster_hit) p.last_monster_hit = { ...saved.last_monster_hit,
+        at: saved.last_monster_hit.at + delta };
       this.active.attacks = p.attacks;
       this.record('pvp_restored', this.active);
     }
@@ -544,6 +641,8 @@ export class CombatMode {
       this.s.world.room.num === o.room, 'left the combat room');
     if (o.phase === 'armed') demand(o.client.self?.row === o.order.position.row &&
       o.client.self?.col === o.order.position.col, 'ambush position changed');
+    if (o.pvp?.shelter?.status === 'approaching')
+      demand(!this.playerThreatPresent(o), 'player threat preempts monster shelter');
     if (o.phase === 'engaging' && ['attack', 'turn', 'cast'].includes(kind)) {
       const t = o.client.room.objects.get(o.targetId);
       demand(t && t.id !== o.playerId && (t.flags & OF.PLAYER) && (t.flags & OF.ATTACKABLE) &&
@@ -554,13 +653,17 @@ export class CombatMode {
   event(ev, client = this.s.client) {
     if (!client || client !== this.s.client || client.combatReady === false) return;
     this.observePlayerCombat(ev, client);
+    this.observeMonsterCombat(ev, client);
     const requested = this.safetyRequest;
     if (requested && ev.kind === 'changed' && ev.id === requested.playerId &&
         requested.client === this.s.client && !!(requested.client.self?.flags & OF.SAFETY) === requested.on)
       this.safetyRequest = null;
     const o = this.active;
     if (!o) { void this.restoreSafety(); this.evaluateWatch(); this.wake(); return; }
-    if (o.pvp && !this.syncPvP(o)) { this.wake(); return; }
+    if (o.pvp) {
+      if (!this.syncPvP(o)) { this.wake(); return; }
+      this.refreshTarget(o);
+    }
     // Only a real CREATE after arming counts as an entry. A refresh, or somebody
     // already standing in the room when the ambush was armed, does not.
     if (ev.kind === 'message' && ev.text && o.phase === 'engaging') {
@@ -599,6 +702,7 @@ export class CombatMode {
     if (!o) return;
     if (o.pvp) {
       const p = o.pvp;
+      this.interruptPvPShelter(o, reason);
       p.ended_at = this.now(); p.outcome = /ended: died/.test(reason) ? 'died' :
         /attackers absent/.test(reason) ? 'attackers_left' : 'stopped';
       p.end_reason = reason; this.lastPvP = p;
@@ -713,9 +817,11 @@ export class CombatMode {
     // Validate even during a slow movement await. Stop/expiry does not wait for it.
     try { this.guard(o); this.refreshTarget(o); } catch (e) { this.combatFailure(o, e.message); return; }
     if (this.active !== o) { this.armTimer(); return; }
-    if (o.running) { this.armTimer(); return; }
-    o.running = true;
     const phaseRevision = o.phaseRevision;
+    if (o.running?.revision === phaseRevision) { this.armTimer(); return; }
+    // A stale shelter mover may still be unwinding an await. Its packets were
+    // revoked; the new combat phase must not wait for its completion/heartbeat.
+    const running = o.running = { revision: phaseRevision };
     this.armTimer();
     try {
       await withBodyCommand(this.s, () => withPacketScope(kind => {
@@ -725,7 +831,7 @@ export class CombatMode {
     } catch (e) {
       if (this.active === o && o.phaseRevision === phaseRevision) this.combatFailure(o, e.message);
     } finally {
-      o.running = false;
+      if (o.running === running) o.running = false;
       if (this.active === o) this.armTimer();
     }
   }
@@ -759,7 +865,11 @@ export class CombatMode {
       o.room = s.world.room.num; o.roomObject = c.room.id;
       o.phase = 'armed'; o.armedAt = this.now(); this.record('armed', o); return;
     }
-    if (o.phase === 'armed' || o.phase === 'waiting') { await this.restoreSafety(); return; }
+    if (o.phase === 'armed' || o.phase === 'waiting') {
+      await this.restoreSafety();
+      if (o.pvp && this.active === o && o.phase === 'waiting') await this.shelterFromMonsters(o);
+      return;
+    }
     const target = c.room.objects.get(o.targetId);
     if (!target || exactName(c, target) !== o.targetName) { this.refreshTarget(o); return; }
     await this.prepareSafety(o);

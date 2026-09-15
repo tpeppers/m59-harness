@@ -1,7 +1,7 @@
 // Recovery asks where this body can get safe now, independently of a future quarry.
 import { OF, blocksMovement } from './m59-parse.mjs';
 
-export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = null) {
+export function recoveryOccupiedSquares(objects, selfId, playersOnline = null) {
   // Geometry.path's established avoid grammar is "row,col". Occupied targets and
   // routes through these squares are both excluded; adjacent monsters are not a veto.
   const occupied = new Set();
@@ -10,6 +10,11 @@ export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = 
     if (blocksMovement(o.flags ?? 0) || (o.flags & (OF.ATTACKABLE | OF.PLAYER))
         || playersOnline?.has?.(o.id)) occupied.add(`${o.row},${o.col}`);
   }
+  return occupied;
+}
+
+export function recoveryRefugeReach(geo, from, objects, selfId, playersOnline = null) {
+  const occupied = recoveryOccupiedSquares(objects, selfId, playersOnline);
   return (col, row) => {
     if (!geo?.path || !from) return { reachable: false, why: 'recovery route unavailable' };
     if (occupied.has(`${row},${col}`)) return { reachable: false, why: 'recovery spot occupied' };

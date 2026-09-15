@@ -617,4 +617,125 @@ await test('shadow replay rebinds attacker names, carries counters and rebases t
   f.mode.issue({ action: 'stop' });
 });
 
+function monsterFixture(options) {
+  const f = fixture(options);
+  f.c.room.objects.set(7, { id: 7, name: 'troll', flags: OF.ATTACKABLE, row: 6, col: 6 });
+  f.monsterHit = () => f.mode.event({ kind: 'message', text: 'The troll hits you.' });
+  f.vanish = () => { f.c.room.objects.delete(2); f.mode.event({ kind: 'vanished', id: 2 }); };
+  f.returnPlayer = () => {
+    f.c.room.objects.set(2, { id: 2, nameRsc: 2, flags: OF.PLAYER | OF.ATTACKABLE, row: 5, col: 6 });
+    f.mode.event({ kind: 'appeared', id: 2 });
+  };
+  return f;
+}
+await test('monster cover is below player combat and does not extend the PvP danger timer', async () => {
+  const f = monsterFixture(); let shelters = 0;
+  f.keeper.takeSafeSpot = async (_why, quarry, opts) => {
+    shelters++; assert.equal(quarry, null); assert.equal(opts.recovery, true);
+    assert.equal(opts.nearestOnly, true); assert.equal(opts.shelterOnly, true);
+    assert.equal(opts.decisionId, f.mode.pvpStatus().decision_id);
+    assert.equal(opts.shouldInterrupt(), false);
+    return { took: true };
+  };
+  f.keeper.playDead = f.keeper.takeRecoverySpot = () => assert.fail('no healing or logout during PvP');
+  incoming(f); f.monsterHit(); await f.mode.tick();
+  assert.equal(shelters, 0); assert.equal(f.sent.at(-1), 'attack:2');
+  const dangerUntil = f.mode.pvpStatus().danger_until;
+  f.vanish(); f.advance(1500); f.monsterHit(); await f.mode.tick();
+  assert.equal(shelters, 1); assert.equal(f.mode.pvpStatus().shelter.status, 'sheltered');
+  assert.equal(f.mode.pvpStatus().danger_until, dangerUntil);
+  assert.equal(currentSurvivalDecision(f.s).strategy, 'pvp_return_fire');
+  assert.equal(currentSurvivalDecision(f.s).phase, 'monster_cover');
+  const arrived = f.mode.pvpStatus().shelter.arrived_at;
+  assert.ok(arrived); f.advance(1000); f.returnPlayer(); await f.mode.tick();
+  assert.equal(f.mode.pvpStatus().shelter.arrived_at, arrived);
+  assert.equal(f.mode.pvpStatus().shelter.ended_at, arrived + 1000);
+  f.mode.issue({ action: 'stop' });
+});
+await test('unknown damage, missed monster attacks, poison and departed monsters do not invent pressure', async () => {
+  const f = monsterFixture(); f.keeper.takeSafeSpot = () => assert.fail('unconfirmed monster damage');
+  incoming(f); f.vanish();
+  for (const text of ['You are poisoned.', "You dodge The troll's attack.", 'The troll fails to damage you.',
+    'The absent rat hits you.', 'Other Player tells you, "The troll hits you."'])
+    f.mode.event({ kind: 'message', text });
+  f.c.hp = 10; f.mode.event({ kind: 'stat', name: 'health', value: 10 });
+  await f.mode.tick(); assert.equal(f.mode.pvpStatus().last_monster_hit, undefined);
+  f.monsterHit(); f.c.room.objects.delete(7); await f.mode.tick();
+  f.mode.issue({ action: 'stop' });
+});
+await test('already at a safe wall stays covered and alert without healing or moving', async () => {
+  const f = monsterFixture(); f.keeper.takeSafeSpot = () => assert.fail('already sheltered');
+  f.keeper.hold = { room: 38, row: 5, col: 5 };
+  f.keeper.adoptRecoveryWall = () => true;
+  incoming(f); f.vanish(); f.monsterHit(); await f.mode.tick();
+  assert.deepEqual(f.sent, []); assert.equal(f.mode.pvpStatus().shelter.status, 'sheltered');
+  assert.equal(currentSurvivalDecision(f.s).phase, 'monster_cover');
+  f.returnPlayer(); await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:2');
+  assert.equal(currentSurvivalDecision(f.s).chosen_refuge, null);
+  f.mode.issue({ action: 'stop' });
+});
+await test('returning assailant fires immediately while the old shelter await is still unwinding', async () => {
+  const f = monsterFixture(); let resume, entered;
+  const ready = new Promise(r => { entered = r; });
+  f.keeper.takeSafeSpot = async (_why, _quarry, opts) => {
+    await new Promise(r => { resume = r; entered(); });
+    assert.equal(opts.shouldInterrupt(), true);
+    await f.s.pacer.submit('move', () => f.sent.push('STALE SHELTER MOVE'));
+    return { took: true };
+  };
+  incoming(f); f.vanish(); f.monsterHit(); const old = f.mode.tick(); await ready;
+  f.returnPlayer(); await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'attack:2', 'return fire did not wait for the old mover');
+  assert.equal(f.mode.pvpStatus().shelter.status, 'interrupted');
+  resume(); await old;
+  assert.ok(!f.sent.includes('STALE SHELTER MOVE'));
+  f.advance(1100); await f.mode.tick(); assert.equal(f.mode.pvpStatus().attacks, 2);
+  f.mode.issue({ action: 'stop' });
+});
+await test('returning player revokes a shelter packet already queued in the real pacer', async () => {
+  const f = monsterFixture({ realPacer: true }); let queued;
+  const ready = new Promise(r => { queued = r; });
+  f.keeper.takeSafeSpot = async () => {
+    f.s.pacer.lastSent = Date.now() + 200;
+    const move = f.s.pacer.submit('move', () => f.sent.push('QUEUED SHELTER MOVE'));
+    queued(); await move; return { took: true };
+  };
+  incoming(f); f.vanish(); f.monsterHit(); const old = f.mode.tick(); await ready;
+  f.returnPlayer(); await f.mode.tick(); await old;
+  assert.ok(!f.sent.includes('QUEUED SHELTER MOVE')); assert.equal(f.sent.at(-1), 'attack:2');
+  f.mode.issue({ action: 'stop' });
+});
+await test('no clear wall retains PvP intent and retries without a busy loop or healing', async () => {
+  const f = monsterFixture(); let searches = 0;
+  f.keeper.takeSafeSpot = async () => { searches++; return { took: false, why: 'blocked by monsters' }; };
+  incoming(f); f.vanish(); f.monsterHit(); await f.mode.tick(); await f.mode.tick();
+  assert.equal(searches, 1); assert.equal(f.mode.pvpStatus().active, true);
+  assert.equal(f.mode.pvpStatus().shelter.status, 'blocked');
+  f.advance(1000); await f.mode.tick(); assert.equal(searches, 2);
+  f.mode.issue({ action: 'stop' });
+});
+await test('danger-window expiry revokes the shelter mover before ordinary recovery resumes', async () => {
+  const f = monsterFixture(); let resume, entered;
+  const ready = new Promise(r => { entered = r; });
+  f.keeper.takeSafeSpot = async () => {
+    await new Promise(r => { resume = r; entered(); });
+    await f.s.pacer.submit('move', () => f.sent.push('EXPIRED MOVE')); return { took: true };
+  };
+  incoming(f); f.vanish(); f.monsterHit(); const old = f.mode.tick(); await ready;
+  f.advance(30000); await f.mode.tick(); resume(); await old;
+  assert.equal(f.mode.pvpStatus().outcome, 'attackers_left');
+  assert.equal(f.mode.pvpStatus().shelter.status, 'interrupted');
+  assert.ok(!f.sent.includes('EXPIRED MOVE')); bodyAuthority(f.s).guard();
+});
+await test('failed shelter calls retain their reason and use the same bounded retry', async () => {
+  const f = monsterFixture(); let attempts = 0;
+  f.keeper.takeSafeSpot = async () => { attempts++; throw Error('position read failed'); };
+  incoming(f); f.vanish(); f.monsterHit(); await f.mode.tick(); await f.mode.tick();
+  assert.equal(attempts, 1); assert.equal(f.mode.pvpStatus().shelter.status, 'blocked');
+  assert.equal(f.mode.pvpStatus().shelter.reason, 'position read failed');
+  f.advance(1000); await f.mode.tick(); assert.equal(attempts, 2);
+  f.returnPlayer(); await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:2');
+  f.mode.issue({ action: 'stop' });
+});
+
 console.log(`PASS ${tests} combat mode scenarios`);

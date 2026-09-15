@@ -24,7 +24,7 @@ import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import * as skills from './m59-skills.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
-import { recoveryRefugeReach } from './m59-recovery-refuge.mjs';
+import { recoveryRefugeReach, recoveryOccupiedSquares } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
   observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
@@ -3905,10 +3905,11 @@ export class Autopilot {
       recovery: options.recovery ?? false,
     }, () => this.takeSafeSpotObserved(why, quarry, options))
       .catch(e => ({took:false,why:e.message}));
+    if (options.shouldInterrupt?.()) return {...result,took:false,cancelled:true};
     if (decision && currentSurvivalDecision(this.s)?.id === decision.id) {
       if (result?.took) {
         if(!decision.selected_at)this.recordSurvivalPath(decision.id,result.spot??this.hold);
-        updateSurvivalDecision(this.s,decision.id,{status:'recovering',arrived_at:Date.now()});
+        updateSurvivalDecision(this.s,decision.id,{status:options.shelterOnly?'active':'recovering',arrived_at:Date.now()});
       }
       else chooseSurvivalDecision(this.s,this.replacementSurvivalChoice(result?.why??'refuge unavailable',decision),
         {because:result?.why??'refuge unavailable',outcome:result?.cancelled?'cancelled':'blocked'});
@@ -4097,14 +4098,14 @@ export class Autopilot {
 
   async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false, recovery = false,
-                                           recoveryRoute = false, decisionId = null,
+                                           recoveryRoute = false, decisionId = null, shouldInterrupt = null, shelterOnly = false,
                                            onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
     let claimedHere = false;
     // The old travel stack remains cancelled for this pass. A replacement survival
     // decision owns a fresh generation and can move now without reviving that stack.
-    const interrupted = () => (recovery ? this.checkFreeze() : this.travelInterrupted())
+    const interrupted = () => shouldInterrupt?.() || (recovery ? this.checkFreeze() : this.travelInterrupted())
       || !!s.movementWasCancelled?.(movementGeneration)
       || (decisionId && currentSurvivalDecision(s)?.id!==decisionId);
     const cancelled = () => {
@@ -4422,14 +4423,16 @@ export class Autopilot {
       // now a legitimate choice, and `walkTo` only raises a caller's cap to the plan's own
       // length once it has planned — so hand it a cap that already fits the walk asked for.
       const walkBudget = Math.max(24, Math.ceil((spot.steps_away ?? 0) * 2) + 12);
+      const approachOptions = { maxSteps: walkBudget, routeFirst: shelterOnly,
+        avoidSquares: shelterOnly ? recoveryOccupiedSquares(c.room?.objects,c.selfId,c.playersOnline) : null };
       const arrival = fine
-        ? await skills.returnToSpot(s, { col: spot.col, row: spot.row, ...fine }, { maxSteps: walkBudget })
+        ? await skills.returnToSpot(s, { col: spot.col, row: spot.row, ...fine }, approachOptions)
                       .catch(e => ({ arrived: false, why: e.message }))
         // Claiming a safe square is a correctness boundary, just like returning to one
         // after a pull. A plain walk can finish on a predicted position which a delayed
         // server update revokes on the next pass; use the shared confirmed arrival
         // contract for both remembered and newly-derived spots.
-        : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, { maxSteps: walkBudget })
+        : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, approachOptions)
                       .catch(e => ({ arrived: false, why: e.message }));
       if (arrival?.cancelled || interrupted()) return cancelled();
       this.movedAt = Date.now();

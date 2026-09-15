@@ -1780,16 +1780,17 @@ export async function confirmRefugePosition(s) {
     && !!c.self && !c.self.predicted;
 }
 
-export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = {}) {
+export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12,
+                                           routeFirst = false, avoidSquares = null } = {}) {
   const decision=currentSurvivalDecision(s);
-  const result=await traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance },
-    () => returnToSpotObserved(s, spot, { maxSteps, tolerance }));
+  const result=await traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance, routeFirst },
+    () => returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, avoidSquares }));
   if(result?.cancelled && decision && currentSurvivalDecision(s)?.id===decision.id)
     cancelSurvivalDecision(s,result.why??result.reason??'shelter approach cancelled');
   return result;
 }
 
-async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
+async function returnToSpotObserved(s, spot, { maxSteps, tolerance, routeFirst, avoidSquares }) {
   const c = s.need();
   if (!spot) return { arrived: false, why: 'no spot given' };
   const generation = s.movementGeneration, room = s.world?.room?.num;
@@ -1888,7 +1889,11 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   // by this — it compared whole approaches, and this changes which tool owns which part.
   if (c.self && (c.self.col !== spot.col || c.self.row !== spot.row)) {
     const away = Math.max(Math.abs(c.self.col - spot.col), Math.abs(c.self.row - spot.row));
-    const fineOwnsIt = away <= FINE_HANDOVER_SQUARES && typeof s.approachFine === 'function';
+    // Monster cover during a PvP lull has a clear recovery route. A nearby wall
+    // can still need a detour: CV's close-range fan oscillated in front of a
+    // zombie instead of following that route. Let this caller route first while
+    // retaining the fine fallback for the wall pocket itself.
+    const fineOwnsIt = !routeFirst && away <= FINE_HANDOVER_SQUARES && typeof s.approachFine === 'function';
     let w;
     if (fineOwnsIt) {
       w = await attempt('approach_fine', null,
@@ -1896,14 +1901,14 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
                  .catch(e => ({ arrived: false, reason: e.message }));
       if (interrupted(w)) return stopped(w);
       if (!w.arrived) {
-        const square = await attempt('walk_to', w, () => s.walkTo(spot.col, spot.row, { maxSteps }))
+        const square = await attempt('walk_to', w, () => s.walkTo(spot.col, spot.row, { maxSteps, avoidSquares }))
                               .catch(e => ({ arrived: false, reason: e.message }));
         if (interrupted(square)) return stopped(square);
         if (square.arrived) w = square;
         else w = { ...square, fine_tried: w.reason ?? 'fine approach did not arrive' };
       }
     } else {
-      w = await attempt('walk_to', null, () => s.walkTo(spot.col, spot.row, { maxSteps }))
+      w = await attempt('walk_to', null, () => s.walkTo(spot.col, spot.row, { maxSteps, avoidSquares }))
         .catch(e => ({ arrived: false, reason: e.message }));
       if (interrupted(w)) return stopped(w);
       if (!w.arrived && typeof s.approachFine === 'function') {

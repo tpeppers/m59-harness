@@ -71,6 +71,22 @@ await test('ordinary failed fine approach can use coarse fallback after one stan
  assert.equal((await returnToSpot(s,{row:8,col:18})).arrived,true);
  assert.deepEqual(calls,['stand','blocked','square']);
 });
+await test('monster cover routes around occupied squares before the nearby fine fan',async()=>{
+ const {s,calls}=fixture(),walk=s.walkTo,avoidSquares=new Set(['8,17']);
+ s.walkTo=async(col,row,options)=>{assert.equal(options.avoidSquares,avoidSquares);return walk(col,row);};
+ const r=await returnToSpot(s,{row:5,col:17},{routeFirst:true,avoidSquares});
+ assert.equal(r.arrived,true);assert.deepEqual(calls,['stand','square']);
+});
+await test('routed monster cover retains the fine fallback for a wall pocket',async()=>{
+ const {s,calls}=fixture();s.walkTo=async()=>{calls.push('blocked');return {arrived:false};};
+ assert.equal((await returnToSpot(s,{row:5,col:17},{routeFirst:true})).arrived,true);
+ assert.deepEqual(calls,['stand','blocked','fine']);
+});
+await test('cancelled monster cover cannot start its fine fallback',async()=>{
+ const {s,calls}=fixture();s.walkTo=async()=>{calls.push('cancelled');s.movementGeneration++;return {arrived:false};};
+ const r=await returnToSpot(s,{row:5,col:17},{routeFirst:true});
+ assert.equal(r.cancelled,true);assert.deepEqual(calls,['stand','cancelled']);
+});
 await test('cancellation during queued stand prevents every movement packet',async()=>{
  const {s,calls}=fixture();s.pacer.submit=async(_lane,fn)=>{s.movementGeneration++;fn();};
  const r=await returnToSpot(s,{row:8,col:18});assert.equal(r.cancelled,true);assert.deepEqual(calls,[]);
