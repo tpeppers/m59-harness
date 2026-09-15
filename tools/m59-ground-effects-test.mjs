@@ -37,3 +37,20 @@ assert.equal(groundEffectSquares(c).has('30,61'), false, 'REMOVE expires hazards
 c.room.objects.clear();
 assert.deepEqual(groundEffects(c), [], 'room reset clears hazards');
 console.log('PASS ground effects: flags, ambiguity, spore extent, escape, segment crossing, lifecycle and projections');
+
+const plate = { id: 10, name: 'something', icon_file: 'blank.bgf', flags: OF.NOEXAMINE | 3, row: 4, col: 28 };
+const hall = { roomFile: 'guildh14.roo' };
+assert.equal(groundEffect(plate, () => null, hall).avoid, false);
+assert.equal(groundEffect({ ...plate, icon_file: undefined, iconRsc: 21598 },
+  id => id === 21598 ? 'blank.bgf' : null, hall).avoid, false, 'uses the real parsed iconRsc field');
+assert.equal(groundEffect(plate).avoid, true, 'unknown room does not exempt blank triggers');
+assert.equal(groundEffect({ ...plate, col: 26 }, () => null, hall).avoid, true);
+assert.equal(groundEffect({ ...plate, name: 'wall of fire' }, () => null, hall).avoid, true);
+assert.equal(groundEffect({ ...plate, icon_file: 'poisoncl.bgf' }, () => null, hall).avoid, true);
+const plates = { roomRsc: 20, rsc: new Map([[20, 'guildh14.roo']]),
+  room: { objects: new Map([[10, plate]]) } };
+assert.equal(groundEffectOnSegment(plates, { row: 3, col: 28 }, { row: 5, col: 28 }), null);
+assert.equal(groundEffectSquares(plates).size, 0);
+plates.room.objects.set(11, { ...plate, id: 11, name: 'wall of lightning' });
+assert.equal(groundEffectOnSegment(plates, { row: 3, col: 28 }, { row: 5, col: 28 }).kind, 'lightning_wall');
+console.log('PASS guild entry triggers: room-bound exception preserves harmful and unknown effects');

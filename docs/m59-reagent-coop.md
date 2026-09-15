@@ -62,6 +62,9 @@ block would outlast the hall's five-second opening. Floor and ceiling updates
 are distinct, and room entry clears the previous room's sector observations.
 `node tools/m59-ceiling-doors-test.mjs` checks the live packet seam and both
 directions of every hall passage against the real baked geometry.
+The six invisible guild entrance sensors are recognized by their exact room
+resource, positions, flags and blank icon. They are harmless entry triggers,
+not unknown damaging spell objects; the rest of the hazard filter still applies.
 
 Offline verification: `node tools/m59-reagent-coop-test.mjs`, plus the purchase
 funding, purchase strategy, human controls, stockpile, guild wants and tithe tests.

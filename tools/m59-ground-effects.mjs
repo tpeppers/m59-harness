@@ -4,10 +4,10 @@
 // Caster, immunity, spell power and expiry are NOT carried by these objects.
 import { OF, MOVEON, moveOn } from './m59-parse.mjs';
 
-export function groundEffect(object, lookup = () => null) {
+export function groundEffect(object, lookup = () => null, { roomFile = '' } = {}) {
   if (!object || (object.flags & (OF.PLAYER | OF.GETTABLE))) return null;
   const name = String(lookup(object.nameRsc) ?? object.name ?? '').trim();
-  const icon = String(lookup(object.icon) ?? object.icon_file ?? '').toLowerCase();
+  const icon = String(lookup(object.iconRsc ?? object.icon) ?? object.icon_file ?? '').toLowerCase();
   const notify = moveOn(object.flags ?? 0) === MOVEON.NOTIFY;
   let kind, harmful = true, certainty = 'known', radius = 0, avoidRadius = 0, periodic = null;
   if (/^(wall of fire|firewall)$/i.test(name) || /(?:^|[\\/])woflame\.bgf$/.test(icon)) kind = 'firewall';
@@ -22,7 +22,17 @@ export function groundEffect(object, lookup = () => null) {
     // Ordinary fog, spores and poison share appearance. Do not invent immunity.
     if (!notify) { harmful = null; certainty = 'ambiguous'; }
   } else if (notify && (object.flags & OF.NOEXAMINE) && !(object.flags & OF.ATTACKABLE)) {
-    kind = 'unknown_ground_effect'; harmful = null; certainty = 'unknown'; radius = null;
+    // guildh14.CreateHotPlates creates these six harmless entry sensors. Their
+    // flags/name/icon also fit the conservative unknown-spell heuristic, which
+    // otherwise seals the guild entrance even after the door opens. Match the
+    // room resource AND the exact static footprint; blank objects elsewhere
+    // remain unknown hazards, and named damaging effects above still win.
+    const entryPlate = /(?:^|[\\/])guildh14\.roo$/i.test(String(roomFile)) &&
+      /(?:^|[\\/])blank\.bgf$/.test(icon) && /^something$/i.test(name) &&
+      object.flags === (OF.NOEXAMINE | MOVEON.NOTIFY) &&
+      [4,5].includes(object.row) && [27,28,29].includes(object.col);
+    if (entryPlate) { kind = 'guild_entry_trigger'; harmful = false; periodic = false; }
+    else { kind = 'unknown_ground_effect'; harmful = null; certainty = 'unknown'; radius = null; }
   } else return null;
   if (!Number.isFinite(object.row) || !Number.isFinite(object.col)) return null;
   return { id: object.id, kind, name, row: object.row, col: object.col,
@@ -34,7 +44,7 @@ export function groundEffect(object, lookup = () => null) {
 export function groundEffects(client) {
   const lookup = id => client?.rsc?.get?.(id);
   return [...(client?.room?.objects?.values?.() ?? [])]
-    .map(o => groundEffect(o, lookup)).filter(Boolean);
+    .map(o => groundEffect(o, lookup, { roomFile: lookup(client?.roomRsc) })).filter(Boolean);
 }
 
 export function groundEffectSquares(client) {

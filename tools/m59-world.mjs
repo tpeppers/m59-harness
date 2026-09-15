@@ -1197,7 +1197,7 @@ export class World {
         ...(includeAppearance ? renderState(c, o) : {}),
       };
       if (o.amount) out.amount = o.amount;
-      const effect = groundEffect(o, id => c.rsc.get(id));
+      const effect = groundEffect(o, id => c.rsc.get(id), { roomFile: c.rsc.get(c.roomRsc) });
       if (effect) out.ground_effect = effect;
       if (o.flags & OF.PLAYER) {
         // Who is safe to be near. These bits come straight from the server's own
