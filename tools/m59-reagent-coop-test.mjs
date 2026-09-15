@@ -255,4 +255,20 @@ test('DUM command polls one job and returns the same tithe receipt without charg
   assert.equal(reagentCoopCommand(k, k.s, args, 'coop-test').shillings, 120);
   assert.equal(k.purseNow(), 880);
 });
+test('closed guild entrance is opened from its foyer-side trigger before leaving', async () => {
+  const { k, c } = keeper();
+  c.self = { row: 2, col: 32 };
+  let opened = false;
+  c.go = () => {
+    assert.deepEqual(c.self, { row: 3, col: 28 });
+    opened = true; c.emit('sector-height');
+  };
+  k.s.walkTo = async (col, row) => {
+    if (row > 3 && !opened) return { arrived: false, reason: 'closed entrance' };
+    c.self = { row, col }; return { arrived: true };
+  };
+  const result = await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test');
+  assert.equal(opened, true);
+  assert.equal(result.shillings, 120);
+});
 test.after(() => rmSync(root, { recursive: true, force: true }));

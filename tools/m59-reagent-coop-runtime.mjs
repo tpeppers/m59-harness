@@ -102,11 +102,15 @@ async function transact(k, state, cfg, fleet) {
   };
   try {
     if (inFoyer(c.self?.row, c.self?.col)) {
-      // guildh14.SomethingTryGo opens the entrance at r4c28.
-      await s.walkTo(28, BOOKMAKERS_FOYER.south + 1, { maxSteps: 24 });
-      if (c.self?.row === 4 && c.self?.col === 28) {
-        await s.pacer.submit('move', () => c.go());
-      }
+      // guildh14.plGuild_doors includes r3c28, on the FOYER side. The
+      // r4c28 trigger is the other side of that closed door and cannot be
+      // reached until GO has opened it from here.
+      await s.walkTo(28, BOOKMAKERS_FOYER.south, { maxSteps: 24 });
+      if (c.self?.row !== 3 || c.self?.col !== 28) throw new Error('guild entrance trigger not reached');
+      const doorSince = c.evSeq;
+      await s.pacer.submit('move', () => c.go());
+      await c.waitFor({ since: doorSince, kinds: ['sector-height'], timeoutMs: 1000 });
+      await s.walkTo(28, BOOKMAKERS_FOYER.south + 2, { maxSteps: 4 });
       if (inFoyer(c.self?.row, c.self?.col)) throw new Error('could not leave the guild foyer');
     }
     if (!(await k.sayHallPassword()).ok) throw new Error('guild chest door unavailable');
@@ -232,7 +236,11 @@ export async function runReagentCoop(k, mode, { plan = null, bankable = 0, reque
       const r = await transact(k, state, cfg, fleet);
       if (r.pending && Date.now() - state.started < cfg.retry_ms) return r;
       if (r.pending) state.result.reason = r.reason;
-    } catch (e) { state.result.reason = e.message; }
+    } catch (e) {
+      state.result.reason = e.message;
+      k.note('reagent coop visit could not transfer', { mode, reason: e.message,
+        at: { row: k.s.client.self?.row, col: k.s.client.self?.col } });
+    }
     state.stage = 'return';
   }
   if (interrupted(k)) return pending('reagent coop return paused for survival');
