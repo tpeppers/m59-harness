@@ -22,6 +22,16 @@ import {restoreReplayJourney,replayJourneyDestination,resumeReplayJourney} from 
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
+export function attachReplayDecisionRecording(s,k,{execution,source,record}) {
+  const code={commit:execution?.harness?.commit??null,
+    source_sha256:execution?.harness?.source_sha256??null,dirty:execution?.harness?.dirty??null};
+  const sourceCommit=source?.harness?.commit??null;
+  // The capture identifies the old scene. New decisions belong to the code
+  // executing this replay; resumed historical decisions retain their own epoch.
+  attachSurvivalDecisions(s,{epoch:code.commit,
+    onCancel:(why,d)=>k.replacementSurvivalChoice(why,d),
+    record:event=>record({...event,replay_execution:{...code},source_scene_commit:sourceCommit})});
+}
 export function rebaseReplayTimes(value,delta) {
   if(Array.isArray(value))return value.map(x=>rebaseReplayTimes(x,delta));
   if(!value||typeof value!=='object')return value;
@@ -49,7 +59,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
   }
   const containerLab=Number(entry.credentials.port)===17959;
   const env={...process.env,M59_ADMIN_HOST:'127.0.0.1',M59_ADMIN_PORT:containerLab?'17998':'19998'};
-  let serverAttestation=null,nativeSave=null,containerInfo=null,restoreReceipt=null;
+  let serverAttestation=null,nativeSave=null,containerInfo=null,restoreReceipt=null,executionProvenance=null;
   let claim=null,leases=null,s=null,k=null,task=null,variantControl=null,staged=null,players=null,labState=null;
   const assumedHealth=new Map();let trialSequence=0;
   async function acquire() {
@@ -120,6 +130,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const {autopilotFor}=await import('./m59-autopilot.mjs');
       const skills=await import('./m59-skills.mjs');
       lap('engine_import_ms');
+      // Cache with the imported engine, not with a later mutable checkout HEAD.
+      executionProvenance??=runtimeProvenance(root);lap('execution_provenance_ms');
       s=new Session(config.agent);s.replayFastReads=containerLab&&config.fast_reads!==false;
       await s.join(entry.credentials);lap('login_and_initial_reads_ms');
       const abilityRead=await s.firstAbilityRead;
@@ -130,8 +142,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       Object.assign(k.policy,structuredClone(scene.controller?.policy??{}));
       k.applyLoadoutPolicyOverlay=()=>null; // the saved effective policy is this trial's input
       const decisions=[],suppressed=[],assumptions=[];
-      attachSurvivalDecisions(s,{epoch:scene.provenance?.harness?.commit??null,
-        onCancel:(why,d)=>k.replacementSurvivalChoice(why,d),record:r=>{decisions.push(r);s.replayRecorder?.decision(r);}});
+      attachReplayDecisionRecording(s,k,{execution:executionProvenance,source:scene.provenance,
+        record:r=>{decisions.push(r);s.replayRecorder?.decision(r);}});
       const input=structuredClone(scene);
       const victim=input.actors.find(a=>a.mine),victimLoadout=loadoutForActor(victim,playerOptions.loadouts);
       if(victimLoadout&&!config.native_snapshot)throw Error('restoring the replay victim loadout requires a native snapshot for trial reset');
@@ -254,6 +266,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const hp=s.client?.vitals?.()?.health;
       if(outcome!=='died'&&decisions.some(r=>r.event==='finished'&&r.decision.outcome==='recovered'))outcome='recovered';
       const result={outcome: error?'error':outcome,error,elapsed_ms:elapsed,death_room:outcome==='died'?lastRoom:null,
+        execution_provenance:structuredClone(executionProvenance),source_scene_provenance:structuredClone(scene.provenance??null),
         final_hp:hp,loaded,release,player_state,controller_restore,replayed_journey,
         decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,
         ...(players?{pvp:players.snapshot(),victim_hp_trace:hpTrace,

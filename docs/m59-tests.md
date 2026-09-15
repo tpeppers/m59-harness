@@ -90,6 +90,11 @@ after raw journey restoration, then verifies the real shelter trigger, explicit
 guard disables, recorded deadline/retries, keeper travel dispatch and ownership
 after interruption. It performs no game requests.
 
+`node tools/m59-replay-provenance-test.mjs` verifies that new replay decisions
+name the executing code, restored historical decisions keep their original
+epoch, and both carry separate execution/source labels. It also covers dirty
+source manifests and unknown execution identity without a game connection.
+
 ## The one that never fails, and why it is not a contradiction
 
 ```bash

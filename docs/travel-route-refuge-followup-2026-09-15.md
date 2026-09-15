@@ -143,6 +143,10 @@ selection, against a matching control, and investigate how route pulling and
 fallback movement lose a viable departure after the initial plan. Both routing
 variants remain confined to the private simulator.
 
+The [six matched ordinary-recovery repeats](travel-routing-cost-repeats-2026-09-15.md)
+are now complete. They also reproduce additional fallback, shelter-progress and
+suspended-journey ownership faults, with retained traces and separate outcomes.
+
 ## Evidence and checks
 
 Private evidence under `substrate/replay-smoke/travel-zero-2026-09-15/`:
