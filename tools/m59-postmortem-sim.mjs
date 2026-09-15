@@ -8,9 +8,10 @@ import {attributeDeath} from './m59-death-attribution.mjs';
 import {replayPlayerPlan} from './m59-replay-players.mjs';
 import {simulateScene} from './m59-scene-simulator.mjs';
 import {readLoadoutBindings} from './m59-scene-loadout.mjs';
+import {normalizeSceneGuilds} from './m59-scene-guilds.mjs';
 
 export async function planPostMortemSimulation({file,frameId=null,attackers=null,profile,
-  approximatePlayer=false,loadouts={},requireLoadouts=false,sequences={}}={}) {
+  approximatePlayer=false,loadouts={},requireLoadouts=false,sequences={},guilds='opponents'}={}) {
   if(!file)throw Error('an explicit postmortem or replay bundle file is required');
   file=path.resolve(file);
   const record=JSON.parse(await readFile(file,'utf8'));
@@ -36,11 +37,15 @@ export async function planPostMortemSimulation({file,frameId=null,attackers=null
     try{replayPlayerPlan(f.scene,{enabled:true,attackers});return true;}catch{return false;}
   });
   if(!candidate||!living(candidate))throw Error('no living checkpoint contains the selected attackers; choose a different frame or recording');
+  if(typeof guilds==='string'&&!['opponents','preserve'].includes(guilds))guilds=JSON.parse(await readFile(guilds,'utf8'));
+  // Resolve opposing teams once. The idle control must keep identical guilds.
+  options.guilds=normalizeSceneGuilds(candidate.scene,guilds,{attackers});
   const plan=replayPlayerPlan(candidate.scene,options);
   return {schema:'m59-postmortem-simulation-plan/v1',source:file,bundle_file:bundleFile,
     bundle_id:bundle.id,frame_id:candidate.id,captured_at:candidate.at,
     original_death:attribution,scene:structuredClone(candidate.scene),pvp:plan,options,
     limitations:['Other-player inputs and unknown attributes are modeled, not a replay of the human.',
+      'Configured guild teams and relationships are simulation assumptions, not historical guild intelligence.',
       'The idle-player control keeps their bodies and all recorded monsters in the same scene.',
       'Survival to the time limit is censored; it does not establish that the historical victim would have survived.']};
 }
@@ -67,15 +72,17 @@ export function annotatePvpTrial(row) {
   }
   row.victim_observed_hp_loss=loss;
   row.pvp_validation={attack_refusals:row.pvp.activity?.attack_refusals??0,
+    guild_setup:row.pvp.guilds?.verification??null,
+    guild_attack_permissions:row.pvp.guild_attack_permissions??null,
     interpretation:(row.pvp.activity?.attack_refusals??0)>0?
       'Attacks were refused; survival does not establish protection against the intended PvP encounter. Check guild and other server eligibility rules.':
       'Exploratory modeled combat; packet attempts alone do not prove landed attacks.'};
   return row;
 }
 export async function simulatePostMortem({file,configFile,frameId=null,attackers=null,profile,
-  approximatePlayer=false,loadouts={},requireLoadouts=false,sequences={},
+  approximatePlayer=false,loadouts={},requireLoadouts=false,sequences={},guilds='opponents',
   trials=3,horizonMs=15000,reload={},onTrial=()=>{},adapterFactory}={}) {
-  const plan=await planPostMortemSimulation({file,frameId,attackers,profile,approximatePlayer,loadouts,requireLoadouts,sequences});
+  const plan=await planPostMortemSimulation({file,frameId,attackers,profile,approximatePlayer,loadouts,requireLoadouts,sequences,guilds});
   let report;
   try {
     report=await simulateScene({scene:plan.scene,configFile,trials,horizonMs,
@@ -109,11 +116,14 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   let report;
   const out=arg('--out',file?file+'.pvp-'+Date.now()+'.json':null);
   try {
-    if(!['plan','run'].includes(action))throw Error('usage: m59-postmortem-sim.mjs plan|run POSTMORTEM_OR_BUNDLE --config PRIVATE_CONFIG [--attacker NAME] [--frame ID] [--loadouts MAP.json] [--require-loadouts] [--approximate-player] [--no-monsters] [--lab-scenery] [--trials N] [--horizon-ms N] [--out REPORT]');
+    if(!['plan','run'].includes(action))throw Error('usage: m59-postmortem-sim.mjs plan|run POSTMORTEM_OR_BUNDLE --config PRIVATE_CONFIG [--attacker NAME] [--frame ID] [--loadouts MAP.json] [--require-loadouts] [--guilds TEAMS.json | --guild-mode opponents|preserve] [--approximate-player] [--no-monsters] [--lab-scenery] [--trials N] [--horizon-ms N] [--out REPORT]');
     const options={file,frameId:arg('--frame'),attackers:args.flatMap((a,i)=>a==='--attacker'?[args[i+1]]:[])};
     if(!options.attackers.length)options.attackers=null;
     options.approximatePlayer=args.includes('--approximate-player');
     options.loadouts=arg('--loadouts')??{};options.requireLoadouts=args.includes('--require-loadouts');
+    if(arg('--guilds')&&arg('--guild-mode'))throw Error('use --guilds FILE or --guild-mode opponents|preserve');
+    if(arg('--guild-mode')&&!['opponents','preserve'].includes(arg('--guild-mode')))throw Error('--guild-mode must be opponents or preserve');
+    options.guilds=arg('--guilds')??arg('--guild-mode','opponents');
     if(action==='plan') {
       const {scene,...plan}=await planPostMortemSimulation(options);console.log(JSON.stringify(plan,null,2));
     }else {

@@ -38,6 +38,7 @@ try {
   const plan=await planPostMortemSimulation({file});
   assert.equal(plan.frame_id,'latest');assert.deepEqual(plan.options.attackers,['Morpheus']);
   assert.equal(plan.pvp.actors[0].behavior,'melee');
+  assert.deepEqual(plan.options.guilds.assignments,{self:'Guild A',attacker:'Guild B'});
   assert.equal((await planPostMortemSimulation({file,frameId:'earlier'})).scene.actors[0].vitals.hp.v.value,48);
   await assert.rejects(planPostMortemSimulation({file,frameId:'dead'}),/living checkpoint/);
   await assert.rejects(planPostMortemSimulation({file,attackers:['Absent']}),/checkpoint/);
@@ -67,6 +68,7 @@ try {
   assert.deepEqual(calls.map(c=>c.pvp.attackers.length),[1,0,1,0]);
   assert.ok(calls.every(c=>c.scene.actors.length===2&&c.pvp.allow_approximate_player&&c.variant.reload.noMonsters));
   for(const c of calls){assert.deepEqual(c.pvp.loadouts,{Morpheus:loadout});assert.equal(c.pvp.require_loadouts,true);
+    assert.deepEqual(c.pvp.guilds,plan.options.guilds,'attacking and idle trials retain identical guild teams');
     assert.deepEqual(c.pvp.sequences,{Morpheus:[{do:'attack',swings:2}]});}
   assert.equal(result.comparison[0].deaths,2);assert.equal(result.comparison[1].survived_window,2);
   assert.equal(result.comparison[0].trials_with_casts,2);assert.equal(result.comparison[1].trials_with_casts,0);

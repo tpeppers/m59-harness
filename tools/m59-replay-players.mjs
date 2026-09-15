@@ -9,13 +9,14 @@ import {planCharacter,STAT_PRESETS} from './m59-newchar.mjs';
 import {loadoutForActor,validateLoadoutBindings} from './m59-scene-loadout.mjs';
 import {readLive} from './m59-abilities.mjs';
 import {normalizeCombatOrder} from './m59-combat-mode.mjs';
+import {normalizeSceneGuilds,prepareSceneGuilds} from './m59-scene-guilds.mjs';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const norm=x=>String(x??'').trim().toLowerCase();
 export const isPvpAttackRefusal=text=>/not yet experienced|may not attack|cannot attack|can't attack|not allowed|out of range|only those in guilds may attack/i.test(text);
 export function replayPlayerPlan(scene,options={}) {
   if(options.enabled!==true)return {enabled:false,actors:[]};
-  const allowed=new Set(['enabled','attackers','profile','allow_approximate_player','loadouts','require_loadouts','sequences']);
+  const allowed=new Set(['enabled','attackers','profile','allow_approximate_player','loadouts','require_loadouts','sequences','guilds']);
   if(Object.keys(options).some(k=>!allowed.has(k)))throw Error('unknown PvP simulation option');
   const players=(scene.actors??[]).filter(a=>a.kind==='player'&&!a.mine);
   if(players.length>32)throw Error('PvP simulation supports at most 32 other player bodies');
@@ -47,7 +48,7 @@ export function replayPlayerPlan(scene,options={}) {
   if(typeof profile.stats!=='string'||!STAT_PRESETS[profile.stats])throw Error('PvP stats must name a character-creation preset');
   for(const [k,max] of [['health',151],['mana',200],['vigor',200],['unarmed',99]])
     if(!Number.isInteger(profile[k])||profile[k]<(k==='health'?1:0)||profile[k]>max)throw Error('invalid PvP profile '+k);
-  return {enabled:true,profile,actors,
+  return {enabled:true,profile,actors,guilds:normalizeSceneGuilds(scene,options.guilds??'preserve',{attackers}),
     allow_approximate_player:options.allow_approximate_player===true,
     assumptions:['Other-player stats are modeled unless captured. Supplied loadouts are verified; unmapped players use the unarmed profile.',
       'Stand-ins use the configured combat sequence (melee by default); historical human inputs are unknown.']};
@@ -62,11 +63,12 @@ export function accountIdentity(output,account,id=null) {
   const m=new RegExp('^\\s*:?[ \\t]*(\\d+)[ ADG]?\\s+'+account+'(?:\\s|$)','m').exec(output);
   return m&&(id==null||Number(m[1])===id)?Number(m[1]):null;
 }
-export async function createReplayPlayers({scene,options,env,attestation,leases,labState,Session,
+export async function createReplayPlayers({scene,options,env,attestation,leases,labState,Session,nativeSnapshot=false,
   dmFn=dm,readObjects=readAdminObjects,journalDir=process.env.M59_LAB_RUNTIME_DIR}={}) {
   const plan=replayPlayerPlan(scene,options);
   if(!plan.enabled)return null;
   assertTemporaryPlayerLab(env,attestation);
+  if(plan.guilds.mode==='teams'&&!nativeSnapshot)throw Error('guild fixtures require native_snapshot in the replay config');
   const actors=[],journal=path.join(journalDir,'pvp',randomBytes(8).toString('hex')+'.json');
   const receipt={schema:'m59-replay-players/v1',modeled:true,owner_pid:process.pid,
     created_at:new Date().toISOString(),plan,actors:[],cleanup:{complete:false}};
@@ -86,12 +88,19 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
     const evidence=s.playerEvidence?{status:s.playerEvidence.status(),records:s.playerEvidence.recent()}:null;
     await s.playerEvidence?.close?.();return evidence;
   };
-  let cleaned=false;
+  let cleaned=false,guilds=null;
   const manager={
     receipt,
     stop(){for(const a of actors)a.s.combat?.issue({action:'stop'});},
     resolve:a=>actors.find(x=>x.spec.key===(a.key??a.name))?.s.client.selfId??null,
     async sync({target}={}) {
+      if(!guilds) {
+        const bindings=new Map(scene.actors.filter(a=>a.kind==='player').map(a=>[a.key??a.name,
+          a.mine?target?.client.selfId:manager.resolve(a)]));
+        guilds=await prepareSceneGuilds({scene,plan:plan.guilds,bindings,attestation,nativeSnapshot,
+          env,dmFn,readObjects,onReceipt:async r=>{receipt.guilds=r;await persist();}});
+        receipt.guilds=guilds.receipt;
+      }
       // Raw stat restoration does not run the server's normal level-up hook.
       // Recompute eligibility using normal rules; do not force-enable PvP.
       const ids=[...actors.map(a=>a.s.client.selfId),...(target?[target.client.selfId]:[])];
@@ -99,6 +108,11 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
       const actual=await readObjects(ids,{env,dmFn});
       receipt.eligibility=actual.map(o=>({actor:actors.find(a=>a.s.client.selfId===o.id)?.spec.key??'self',
         enabled:o.properties.piflags==null?null:(o.properties.piflags.value&0x400)!==0}));
+      if(plan.guilds.mode==='teams'&&target) {
+        receipt.guild_attack_permissions=[];
+        for(const a of actors.filter(a=>a.spec.behavior!=='idle'))receipt.guild_attack_permissions.push({actor:a.spec.key,
+          allowed:await guilds.guildAttackPermission(a.s.client.selfId,target.client.selfId)});
+      }
       await Promise.all(actors.map(async a=>{
         const c=a.s.client,at=Date.now();
         if(a.spec.loadout){c.abilities.clear();await readLive(a.s);await a.s.pacer.submit('read',()=>c.requestInventory());}
@@ -111,6 +125,7 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
         a.report.ready_at=at;
       }));
     },
+    async verifyGuilds(){await guilds?.verify();},
     start({target,horizonMs,at}) {
       if(!target?.live||target.world?.room?.num!==scene.room.num)throw Error('PvP target is not the bound replay victim');
       for(const a of actors) {
@@ -139,9 +154,19 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
       if(cleaned)return;
       manager.snapshot();
       const errors=[];
+      manager.stop();
+      for(const a of actors)try {
+        if(!a.disconnected){a.report.player_evidence=await disconnect(a.s);a.disconnected=true;}
+      }catch(e){errors.push({actor:a.spec.key,error:e.message});}
+      try{await guilds?.close();}catch(e){errors.push({guilds:true,error:e.message});}
+      if(!guilds&&receipt.guilds?.mode==='teams'&&receipt.guilds.cleanup?.complete!==true)
+        errors.push({guilds:true,error:'guild preparation did not complete cleanup; retain account identities for recovery'});
+      // Keep accounts present if guild teardown failed, so recovery can verify
+      // membership and retry rather than deleting a guild master underneath it.
+      if(errors.length){receipt.cleanup={complete:false,errors};await persist();throw Error('temporary PvP guild cleanup failed; inspect '+journal);}
       for(const a of actors) {
         try {
-          a.report.player_evidence=await disconnect(a.s);
+          if(!a.disconnected){a.report.player_evidence=await disconnect(a.s);a.disconnected=true;}
           if(a.reserved&&!a.created) {
             const found=accountIdentity(await dmFn(['show account '+a.account],{env}),a.account);
             if(found){a.created=true;a.id=found;a.report.account_id=found;}

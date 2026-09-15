@@ -249,6 +249,68 @@ Private account journals live under the selected lab runtime's `pvp/` directory.
 
 See [the live validation report](postmortem-pvp-simulation-2026-09-14.md) for the first reproduced PvP deaths, assumptions and timings.
 
+### Guild-only PvP and guild teams
+
+Postmortem simulations now default to **opposing temporary guilds**: Guild A
+contains the victim and unselected player bodies; Guild B contains the selected
+attackers. The plan resolves these assignments once, so the attacking and idle
+controls have identical memberships. This is a modeled relationship, not inferred
+historical guild intelligence. Direct `simulateScene` cases preserve membership
+unless their `pvp.guilds` option supplies a setup.
+
+Guild creation uses native server `Guild` constructors and `InductNewMember`, with
+real roster entries, membership pointers and command powers. The loader verifies
+the system registry, both sides of membership, and configured relationships,
+then verifies them again before release. It also reports the room's
+`AllowGuildAttack` result for each attacker. Normal PvP eligibility and actual
+combat rules still run; room flags, damage and protection checks are not overridden.
+
+This requires the owned isolated container and the replay config's
+`native_snapshot`. The baseline's player accounts must be unguilded for modeled
+team setup. An existing guild is refused before membership changes; use
+`--guild-mode preserve` to use existing native memberships or reproduce an
+unguilded refusal. Temporary guilds avoid hall travel, invitation waits and a
+persistent pool of special accounts.
+
+Custom teams use exact captured player names or actor keys. Include every player;
+`null` leaves a player unguilded. Team labels have 1–16 simple characters. The native
+names get a unique simulation prefix. Relationships default to neutral; `allied`
+and `war` establish mutual relationships. A war fixture credits the native guild
+rent accounts by 50,000 coins per side so the scenario carries its war backing.
+
+```json
+{
+  "mode": "teams",
+  "assignments": {"self": "Guild A", "Morpheus": "Guild B"},
+  "relations": [{"a": "Guild A", "b": "Guild B", "kind": "war"}]
+}
+```
+
+```text
+node tools/m59-postmortem-sim.mjs plan POSTMORTEM.json --guilds guilds.json
+node tools/m59-postmortem-sim.mjs run POSTMORTEM.json --config PRIVATE_CONFIG.json --guilds guilds.json --out REPORT.json
+node tools/m59-postmortem-sim.mjs run POSTMORTEM.json --config PRIVATE_CONFIG.json --guild-mode preserve --out UNGUILDED_CONTROL.json
+```
+
+FleetScript `simulatePostMortem` accepts `guilds` as this object, a JSON file, or
+`"opponents"`/`"preserve"`. FleetScratch simulation JSON accepts the same field;
+file paths resolve relative to that JSON. General scene cases use
+`pvp: {enabled: true, attackers: [...], guilds: {...}}`. Reuse an explicit team
+mapping across manual attack/idle comparisons. Teams support multi-guild exercise
+setup; combat inputs still come from the configured player/controller behaviors.
+
+Reports retain native guild IDs/names, actor assignments, relationship and
+membership verification, room permission, setup duration and cleanup. Teardown
+disbands only verified owned guilds, restores original rejoin cooldowns, and then
+deletes the temporary accounts. Disbanded KOD objects can remain allocated until
+garbage collection; cleanup verifies registry removal, empty rosters, absent
+timers and cleared membership rather than waiting for object-node removal.
+Native world restoration also clears setup mail/news/resources before the next
+trial. A failed guild teardown retains account identities for investigation,
+disconnects their sessions and reports incomplete cleanup in the private journal.
+
+See [guild simulation validation](postmortem-guild-simulation-2026-09-15.md).
+
 ### Exact supplied loadouts
 
 The shared scene loader restores `m59-player-loadout/v1` specifications for both victims and other players. It recreates each item by its native class, restores all captured integer/boolean item properties (including condition, stack quantities, charges, damage/hit/defense modifiers and appearance flags), item attributes and equipped state, and installs the complete skill/spell lists. Skills retain their encoded proficiency and used/unused state. Native school totals, carried weight/bulk and lighting are recalculated. Normal equipment eligibility still applies; an impossible or incomplete specification stops the load.

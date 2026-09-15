@@ -33,6 +33,13 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
 
 ## Saved-scene simulator
 
+`node tools/m59-scene-guilds-test.mjs` checks explicit/opposing team plans,
+identical idle-control assignments, native roster and membership verification,
+neutral/allied/mutual-war relations, silent induction refusal, lost creation
+replies, existing-guild and lab gates, cooldown restoration and disband cleanup
+while native object nodes remain allocated. The postmortem suite checks that
+both paired cases receive the same guild configuration.
+
 `node tools/m59-scene-vital-timers-test.mjs` checks normal player health/mana
 timer restoration after raw scene-stat loading, preservation of existing timers,
 full/dead states, missing bindings/vitals, and silent or explicit server refusal.

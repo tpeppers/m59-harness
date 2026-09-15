@@ -145,7 +145,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       }
       if(!player_state.ok)return {outcome:'invalid_player_state',player_state,decisions,assumptions};
       players=await createReplayPlayers({scene:input,options:playerOptions,env,attestation:serverAttestation,
-        leases,labState,Session});
+        leases,labState,Session,nativeSnapshot:!!config.native_snapshot});
       if(players)assumptions.push(...playerPlan.assumptions);
       for(const actor of input.actors) {
         const key=actor.key??actor.name;
@@ -199,6 +199,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
         };
         s.noteCombatLine=function(ev){victimMessages.push({at:ev.at,text:ev.text});return noteCombatLine.call(this,ev);};
       }
+      await players?.verifyGuilds();
       const release=await staged.start();
       if(!release.ok)return {outcome:'invalid_release',loaded,release,decisions,assumptions};
       players?.start({target:s,horizonMs,at:release.at});
