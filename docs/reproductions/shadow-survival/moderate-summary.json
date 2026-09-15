@@ -1,0 +1,493 @@
+{
+  "counts": {
+    "control": {
+      "n": 2,
+      "death": 0,
+      "arrived": 2,
+      "timeout": 0
+    },
+    "extra": {
+      "n": 2,
+      "death": 2,
+      "arrived": 0,
+      "timeout": 0
+    }
+  },
+  "pairs": [
+    {
+      "agent": "shadow01",
+      "route": "flatlands",
+      "control": "arrived",
+      "extra": "death"
+    },
+    {
+      "agent": "shadow02",
+      "route": "flatlands",
+      "control": "arrived",
+      "extra": "death"
+    }
+  ],
+  "trials": [
+    {
+      "id": "moderate-flatlands-shadow01-control",
+      "agent": "shadow01",
+      "route": "flatlands",
+      "arm": "control",
+      "outcome": "arrived",
+      "seconds": 78.238,
+      "minHp": 21,
+      "finalHp": {
+        "value": 50,
+        "max": 50
+      },
+      "finalRoom": 106,
+      "startedAt": "2026-09-14T08:10:07.443Z",
+      "initialHp": {
+        "value": 35,
+        "max": 50
+      },
+      "equipment": [
+        "mace"
+      ],
+      "attributes": {
+        "might": 35,
+        "intellect": 30,
+        "stamina": 50,
+        "agility": 35,
+        "mysticism": 30,
+        "aim": 20,
+        "karma": 38
+      },
+      "placement": {
+        "ok": true,
+        "room": 584,
+        "room_object": 1579,
+        "square": {
+          "row": 35,
+          "col": 27
+        },
+        "moved": {
+          "Aaaa": "in the room"
+        },
+        "rejected": []
+      },
+      "guards": {
+        "flee": false,
+        "fight_back": false,
+        "arm": false
+      },
+      "notes": [
+        {
+          "at": 1789373407449,
+          "what": "no longer inert",
+          "why": "shadow trial starts"
+        },
+        {
+          "at": 1789373407456,
+          "what": "travelling — standing down from choosing, not from surviving",
+          "why": "travelling to room 106"
+        },
+        {
+          "at": 1789373408023,
+          "what": "! NOT MOVING — null, same square two pulses apart",
+          "health": "26/50",
+          "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. Every other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wedged character is replanning into the same wall forever"
+        },
+        {
+          "at": 1789373420474,
+          "what": "taking the exit as the nearest wall",
+          "why": "crossing breaks every attack; the first wall in the next room is where the mending happens"
+        },
+        {
+          "at": 1789373420565,
+          "what": "taking a wall on the way past",
+          "health": "52%",
+          "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago"
+        },
+        {
+          "at": 1789373433688,
+          "what": "took a safe spot",
+          "why": "resting at a wall part-way through a journey — the first wall after the exit"
+        },
+        {
+          "at": 1789373467354,
+          "what": "gave up the safe spot",
+          "why": "carrying on with the journey",
+          "held_s": 34
+        },
+        {
+          "at": 1789373467358,
+          "what": "rested at a wall mid-journey",
+          "health": "26 -> 50",
+          "held_s": 47
+        }
+      ],
+      "cleanup": true
+    },
+    {
+      "id": "moderate-flatlands-shadow01-extra",
+      "agent": "shadow01",
+      "route": "flatlands",
+      "arm": "extra",
+      "outcome": "death",
+      "seconds": 196.498,
+      "minHp": 1,
+      "finalHp": {
+        "value": 1,
+        "max": 50
+      },
+      "finalRoom": 1,
+      "startedAt": "2026-09-14T08:12:29.509Z",
+      "initialHp": {
+        "value": 35,
+        "max": 50
+      },
+      "equipment": [
+        "mace"
+      ],
+      "attributes": {
+        "might": 35,
+        "intellect": 30,
+        "stamina": 50,
+        "agility": 35,
+        "mysticism": 30,
+        "aim": 20,
+        "karma": 38
+      },
+      "placement": {
+        "ok": true,
+        "room": 584,
+        "room_object": 1579,
+        "square": {
+          "row": 35,
+          "col": 27
+        },
+        "moved": {
+          "Aaaa": "in the room"
+        },
+        "rejected": []
+      },
+      "guards": {
+        "flee": true,
+        "fight_back": true,
+        "arm": false
+      },
+      "notes": [
+        {
+          "at": 1789373549514,
+          "what": "no longer inert",
+          "why": "shadow trial starts"
+        },
+        {
+          "at": 1789373549519,
+          "what": "travelling — standing down from choosing, not from surviving",
+          "why": "travelling to room 106"
+        },
+        {
+          "at": 1789373549666,
+          "what": "LOGGING OFF TO AVOID DYING",
+          "health": {
+            "value": 29,
+            "max": 50,
+            "pct": 58
+          },
+          "why": "below the flee line at 58% while travelling, with 3 monster(s) on us"
+        },
+        {
+          "at": 1789373549797,
+          "what": "no longer travelling",
+          "why": "travel finished"
+        },
+        {
+          "at": 1789373552003,
+          "what": "playing dead"
+        },
+        {
+          "at": 1789373552003,
+          "what": "PAUSED THE JOURNEY — TAKING A WALL, THEN CARRYING ON",
+          "trigger": "logged off below the flee line",
+          "health": "29/50",
+          "why": "movement would wake the room again; keep the destination for after recovery"
+        },
+        {
+          "at": 1789373642047,
+          "what": "unfreezing",
+          "why": "freeze deadline reached"
+        },
+        {
+          "at": 1789373642757,
+          "what": "LOGGING OFF TO AVOID DYING",
+          "health": {
+            "value": 29,
+            "max": 50,
+            "pct": 58
+          },
+          "why": "at 58% with 3 adjacent, in the open — the logoff is what stops the attack"
+        },
+        {
+          "at": 1789373645094,
+          "what": "playing dead"
+        },
+        {
+          "at": 1789373735412,
+          "what": "unfreezing",
+          "why": "freeze deadline reached"
+        },
+        {
+          "at": 1789373735621,
+          "what": "refusing to freeze again — it is not helping",
+          "health": 29,
+          "why": "playing dead recovers vigor and never health, so repeating it from the same health cannot ever end. Something that moves has to happen instead."
+        },
+        {
+          "at": 1789373735966,
+          "what": "! NOT MOVING — travelling, same square two pulses apart",
+          "health": "29/50",
+          "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. Every other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wedged character is replanning into the same wall forever"
+        },
+        {
+          "at": 1789373745846,
+          "what": "died carrying money",
+          "why": "under the banking threshold, so this was the float we accept losing"
+        },
+        {
+          "at": 1789373745853,
+          "what": "DIED"
+        }
+      ],
+      "cleanup": true
+    },
+    {
+      "id": "moderate-flatlands-shadow02-control",
+      "agent": "shadow02",
+      "route": "flatlands",
+      "arm": "control",
+      "outcome": "arrived",
+      "seconds": 105.581,
+      "minHp": 8,
+      "finalHp": {
+        "value": 50,
+        "max": 50
+      },
+      "finalRoom": 106,
+      "startedAt": "2026-09-14T08:20:00.854Z",
+      "initialHp": {
+        "value": 35,
+        "max": 50
+      },
+      "equipment": [
+        "mace"
+      ],
+      "attributes": {
+        "might": 35,
+        "intellect": 30,
+        "stamina": 50,
+        "agility": 35,
+        "mysticism": 30,
+        "aim": 20,
+        "karma": 40
+      },
+      "placement": {
+        "ok": true,
+        "room": 584,
+        "room_object": 1579,
+        "square": {
+          "row": 35,
+          "col": 27
+        },
+        "moved": {
+          "Bbbb": "in the room"
+        },
+        "rejected": []
+      },
+      "guards": {
+        "flee": false,
+        "fight_back": false,
+        "arm": false
+      },
+      "notes": [
+        {
+          "at": 1789374000860,
+          "what": "no longer inert",
+          "why": "shadow trial starts"
+        },
+        {
+          "at": 1789374000865,
+          "what": "travelling — standing down from choosing, not from surviving",
+          "why": "travelling to room 106"
+        },
+        {
+          "at": 1789374012067,
+          "what": "taking the exit as the nearest wall",
+          "why": "crossing breaks every attack; the first wall in the next room is where the mending happens"
+        },
+        {
+          "at": 1789374012211,
+          "what": "taking a wall on the way past",
+          "health": "22%",
+          "why": "hurt, and this was already on the route — no stop, no replan, one more waypoint than the crossing had a moment ago"
+        },
+        {
+          "at": 1789374025077,
+          "what": "took a safe spot",
+          "why": "resting at a wall part-way through a journey — the first wall after the exit"
+        },
+        {
+          "at": 1789374086014,
+          "what": "reconnecting before stepping out",
+          "why": "carrying on with the journey"
+        },
+        {
+          "at": 1789374086218,
+          "what": "not in game"
+        },
+        {
+          "at": 1789374088358,
+          "what": "gave up the safe spot",
+          "why": "carrying on with the journey",
+          "held_s": 63
+        },
+        {
+          "at": 1789374088361,
+          "what": "rested at a wall mid-journey",
+          "health": "11 -> 50",
+          "held_s": 74
+        }
+      ],
+      "cleanup": true
+    },
+    {
+      "id": "moderate-flatlands-shadow02-extra",
+      "agent": "shadow02",
+      "route": "flatlands",
+      "arm": "extra",
+      "outcome": "death",
+      "seconds": 198.542,
+      "minHp": 1,
+      "finalHp": {
+        "value": 1,
+        "max": 50
+      },
+      "finalRoom": 1,
+      "startedAt": "2026-09-14T08:16:18.755Z",
+      "initialHp": {
+        "value": 35,
+        "max": 50
+      },
+      "equipment": [
+        "mace"
+      ],
+      "attributes": {
+        "might": 35,
+        "intellect": 30,
+        "stamina": 50,
+        "agility": 35,
+        "mysticism": 30,
+        "aim": 20,
+        "karma": 40
+      },
+      "placement": {
+        "ok": true,
+        "room": 584,
+        "room_object": 1579,
+        "square": {
+          "row": 35,
+          "col": 27
+        },
+        "moved": {
+          "Bbbb": "in the room"
+        },
+        "rejected": []
+      },
+      "guards": {
+        "flee": true,
+        "fight_back": true,
+        "arm": false
+      },
+      "notes": [
+        {
+          "at": 1789373778761,
+          "what": "no longer inert",
+          "why": "shadow trial starts"
+        },
+        {
+          "at": 1789373778767,
+          "what": "travelling — standing down from choosing, not from surviving",
+          "why": "travelling to room 106"
+        },
+        {
+          "at": 1789373779601,
+          "what": "LOGGING OFF TO AVOID DYING",
+          "health": {
+            "value": 24,
+            "max": 50,
+            "pct": 48
+          },
+          "why": "below the flee line at 48% while travelling, with 1 monster(s) on us"
+        },
+        {
+          "at": 1789373779894,
+          "what": "no longer travelling",
+          "why": "travel finished"
+        },
+        {
+          "at": 1789373781940,
+          "what": "playing dead"
+        },
+        {
+          "at": 1789373781940,
+          "what": "PAUSED THE JOURNEY — TAKING A WALL, THEN CARRYING ON",
+          "trigger": "logged off below the flee line",
+          "health": "24/50",
+          "why": "movement would wake the room again; keep the destination for after recovery"
+        },
+        {
+          "at": 1789373872302,
+          "what": "unfreezing",
+          "why": "freeze deadline reached"
+        },
+        {
+          "at": 1789373872675,
+          "what": "LOGGING OFF TO AVOID DYING",
+          "health": {
+            "value": 24,
+            "max": 50,
+            "pct": 48
+          },
+          "why": "at 48% with 2 adjacent, in the open — the logoff is what stops the attack"
+        },
+        {
+          "at": 1789373875013,
+          "what": "playing dead"
+        },
+        {
+          "at": 1789373965209,
+          "what": "unfreezing",
+          "why": "freeze deadline reached"
+        },
+        {
+          "at": 1789373965734,
+          "what": "refusing to freeze again — it is not helping",
+          "health": 24,
+          "why": "playing dead recovers vigor and never health, so repeating it from the same health cannot ever end. Something that moves has to happen instead."
+        },
+        {
+          "at": 1789373966214,
+          "what": "! NOT MOVING — travelling, same square two pulses apart",
+          "health": "24/50",
+          "why": "the position pulse reads the CHARACTER on its own clock, not the keeper. Every other stall number here measures when the keeper last moved somebody, which climbs while an errand walks the character perfectly well and stays quiet while a wedged character is replanning into the same wall forever"
+        },
+        {
+          "at": 1789373975557,
+          "what": "died carrying money",
+          "why": "under the banking threshold, so this was the float we accept losing"
+        },
+        {
+          "at": 1789373975567,
+          "what": "DIED"
+        }
+      ],
+      "cleanup": true
+    }
+  ]
+}

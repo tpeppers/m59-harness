@@ -1,5 +1,12 @@
 # Janice, Floyd, Gonzo, and Robin: death investigation
 
+Archived investigation of production `e1c26da`, recovered into main on September 15,
+2026. The executable probes assert historical defects: reproduce them from the
+original investigation commit `dda555654a0942cb309cad3e99528d4f0c87677b`. Failures
+against newer code can reflect fixes and do not invalidate the retained measurements.
+The associated [shadow experiment](shadow-shopping-survival-2026-09-14.md) is now
+preserved in this repository as well.
+
 The travelers did have shelter protection, and the records contain successful recovery stops. They died after getting stuck between refuges and failing to complete recovery. Robin died while farming: his keeper was attempting to reach another safe spot when its decision loop stopped returning. **There are real gaps in choosing and reaching refuge, and in handing control back after a cancellation. The evidence does not establish that enabling more survival interrupts would have saved any particular character.**
 
 This investigation covers the four production deaths identified when work began at approximately 17:22 UTC on September 14, 2026. All times below are PDT, seven hours behind the timestamps in the source files. Production was running `e1c26da82776`, including the shared `rideTrack` shelter change. The broker remained PID 42752. The four relevant keepers were still running when inspected. Production code, orders, and services were not changed. Freeze invalidation was not changed.

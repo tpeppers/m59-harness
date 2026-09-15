@@ -1,0 +1,139 @@
+{
+  "at": "2026-09-14T08:15:10.728Z",
+  "production": {
+    "pid": 42752,
+    "root": "C:\\code\\m59-lab\\prod-deploy\\",
+    "fleet": "prod",
+    "commit": "e1c26da8277619f7aecf3a58b4db83a0aed5cacb",
+    "server": {
+      "host": "76.214.42.186",
+      "port": 5959
+    },
+    "keepers": [
+      {
+        "pid": 53168,
+        "in_game": true
+      },
+      {
+        "pid": 49780,
+        "in_game": true
+      },
+      {
+        "pid": 23240,
+        "in_game": true
+      },
+      {
+        "pid": 17488,
+        "in_game": true
+      },
+      {
+        "pid": 49924,
+        "in_game": true
+      },
+      {
+        "pid": 48292,
+        "in_game": true
+      },
+      {
+        "pid": 53192,
+        "in_game": true
+      },
+      {
+        "pid": 27920,
+        "in_game": true
+      },
+      {
+        "pid": 39596,
+        "in_game": true
+      },
+      {
+        "pid": 45864,
+        "in_game": true
+      },
+      {
+        "pid": 23364,
+        "in_game": true
+      },
+      {
+        "pid": 13844,
+        "in_game": true
+      },
+      {
+        "pid": 51480,
+        "in_game": true
+      },
+      {
+        "pid": 22972,
+        "in_game": true
+      },
+      {
+        "pid": 26872,
+        "in_game": true
+      },
+      {
+        "pid": 48936,
+        "in_game": true
+      },
+      {
+        "pid": 54020,
+        "in_game": true
+      },
+      {
+        "pid": 47676,
+        "in_game": true
+      },
+      {
+        "pid": 7392,
+        "in_game": true
+      },
+      {
+        "pid": 49960,
+        "in_game": true
+      },
+      {
+        "pid": 21644,
+        "in_game": true
+      },
+      {
+        "pid": 56324,
+        "in_game": true
+      },
+      {
+        "pid": 55960,
+        "in_game": true
+      }
+    ]
+  },
+  "shadow": {
+    "pid": 37780,
+    "root": "C:\\Users\\taimp\\.codex\\visualizations\\2026\\09\\13\\01a09d26-314d-7781-83de-5fe212b61500\\shadow-survival\\",
+    "fleet": "shadow-ab",
+    "server": {
+      "host": "127.0.0.1",
+      "port": 15959
+    },
+    "commit": "e1c26da8277619f7aecf3a58b4db83a0aed5cacb"
+  },
+  "files": [
+    {
+      "file": "tools/m59-autopilot.mjs",
+      "shadow": "6f3081aa3d845d23a8a8ceb0936caeebc1f7f584fd272513dbab9d18f4442d3b",
+      "production": "6f3081aa3d845d23a8a8ceb0936caeebc1f7f584fd272513dbab9d18f4442d3b"
+    },
+    {
+      "file": "tools/m59-game.mjs",
+      "shadow": "57e4948c67a0249e4ec095904ba289198636b49b5564006df71cc4c66ef24def",
+      "production": "57e4948c67a0249e4ec095904ba289198636b49b5564006df71cc4c66ef24def"
+    },
+    {
+      "file": "tools/m59-movement.mjs",
+      "shadow": "7562c9d5878e45841210448c94fdc628493d5a12e1d9eb4d82979cca03766f0a",
+      "production": "7562c9d5878e45841210448c94fdc628493d5a12e1d9eb4d82979cca03766f0a"
+    },
+    {
+      "file": "tools/m59-keeper-process.mjs",
+      "shadow": "f465ce6128b74bb29bfa418cb524f60d106d71d222a0d3c23f0df60ab2c12e24",
+      "production": "f465ce6128b74bb29bfa418cb524f60d106d71d222a0d3c23f0df60ab2c12e24"
+    }
+  ]
+}

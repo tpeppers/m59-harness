@@ -724,3 +724,7 @@ _verify2.mjs
 /substrate/player-evidence/
 # Local forensic copies and cached runtime observations; never publish these.
 /substrate/latest-four-evidence/
+/substrate/shadow-survival-2026-09-14/
+/substrate/shadow-survival-replay/
+/substrate/loial-cv-light/
+/substrate/stockpile/
