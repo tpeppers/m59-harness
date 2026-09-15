@@ -396,10 +396,11 @@ export function signatures(pm) {
   const crowd = pm?.threats?.most_at_once;
   if (Number.isFinite(crowd) && crowd >= 10)
     push('crowd', `threats.most_at_once = ${crowd}`,
-         'a crowd no traveller crosses; 79% of these deaths are in one', 'routed_into_a_crowd');
+         'at least ten monsters were observed; check actual obstruction and survival decisions',
+         'routed_into_a_crowd');
   else if (Number.isFinite(crowd) && crowd >= 6)
     push('crowd', `threats.most_at_once = ${crowd}`,
-         'at or above travelStopMaxThreats, where a journey stops making stops',
+         'at least six monsters were observed; their count does not establish a shelter refusal',
          'routed_into_a_crowd');
   if (Number.isFinite(s.fled_in_time) && s.fled_in_time < 0.2)
     push('never_fled', `summary.fled_in_time = ${s.fled_in_time}`,

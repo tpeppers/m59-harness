@@ -185,14 +185,13 @@ console.log('\nthe gate that decides a candidate moment');
   ok('and that refusal names the floor the fleet chose, not a mechanic',
      /floor this fleet set at 80/.test(
        ask({ ...keeper(20, 44, 40), policy: { travelHold: 'on', travelHoldBelow: 0.75, travelHoldVigor: 80 } }).why));
-  ok('something already swinging is a fight, not a pause — the ordinary pass is better ' +
-     'at both halves of that than a hold is',
-     ask(keeper(20, 44, 150, 2)).candidate === false);
+  ok('nearby monsters cannot veto searching for a reachable refuge',
+     [1, 2, 5, 6, 14].every(n => ask(keeper(20, 44, 150, n)).candidate === true));
   ok('unreadable health refuses rather than guessing',
      ask({ ...keeper(20, 44, 150), s: { client: { vitals: () => ({}) } } }).candidate === false);
   ok('and every refusal says why, because a gate that silently never fires is an ' +
      'experiment that measures nothing',
-     [keeper(40, 44, 150), keeper(20, 44, 150, 2),
+     [keeper(40, 44, 150),
       { ...keeper(20, 44, 40), policy: { travelHold: 'on', travelHoldBelow: 0.75, travelHoldVigor: 80 } }]
        .every(k => typeof ask(k).why === 'string' && ask(k).why.length > 0));
 }

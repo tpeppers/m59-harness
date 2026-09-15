@@ -9,12 +9,12 @@
 //   1. THE GEOMETRY OFFERS THE WALL. From the square the body died on, the wall search with
 //      walls allowed finds a wall, and the wall the keeper actually chose is one the
 //      geometry calls a safe square. That is the old behaviour, and it is what killed.
-//   2. IN THIS CROWD THE SEARCH OFFERS NO WALL. With walls withheld (the crowd rule,
-//      Autopilot.crowded, at or above travelStopMaxThreats live threats) the same search
-//      answers nothing without a journey and only the exit with one.
+//   2. AN EXPLICIT EXIT-ONLY VARIANT OFFERS NO WALL. This is the historical crowd
+//      experiment's selector option, not current production policy. With walls
+//      withheld the same search answers nothing without a journey.
 //
-// And two facts from the record, so the fixture cannot be quietly re-read as something
-// milder: the crowd was at or above the rule's default, and blows landed on the stop square.
+// Preserve the historical room counts and hits. Neither proves that crowd size
+// invalidates a particular wall; current travel sheltering has no count gate.
 // Offline, no socket, no roster. Fixtures stay redacted — the last section checks.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -79,7 +79,7 @@ for (const f of files) {
        walls.map(w => `r${w.row}c${w.col}`).join(' ') + (chosenIsWall ? '' : ' not among ' + all.length + ' geometric walls'));
   }
 
-  // 2. in this crowd the search offers no wall
+  // 2. the explicit historical exit-only variant offers no wall
   const stats = {};
   let withheld = null;
   try { withheld = nearestSafeSpot(geo, stop, { ...opts, wallsAllowed: false, stats }); } catch (e) { withheld = { error: e.message }; }

@@ -4542,9 +4542,8 @@ export class Autopilot {
     // it for the whole minute, still pulling, one second before he died: "pulled it to the
     // wall, went 3" and "waiting for it at the wall, follow_window_ms 8000".
     //
-    // Below the flee line the survival ladder owns the body — fetching another monster to
-    // it is the opposite of what the ladder is for. In a crowd the doctrine is already
-    // written down: IN A CROWD THE ONLY WALL IS THE EXIT.
+    // Below the flee line the survival ladder owns the body. This crowd guard only
+    // refuses walking OUT to fetch another monster; it never refuses taking shelter.
     if (this.crowded()) {
       this.noteCrowdRefusal('pulling quarry to the wall');
       return { pulled: false, why: 'too many things in this room to walk out and back through' };
@@ -6650,11 +6649,8 @@ export class Autopilot {
     if (minVigor > 0 && vig != null && vig < minVigor)
       return { candidate: false, why: `vigor ${vig} — under the floor this fleet set at ${minVigor}`,
                frac, vigor: vig };
-    // Something already swinging at us is a fight or a flight, and the ordinary pass
-    // decides both far better than a hold does.
-    const inReach = this.inReachOfUs();
-    if (inReach.length)
-      return { candidate: false, why: `${inReach.length} already in reach — this is a fight, not a pause`, frac };
+    // Nearby monsters do not veto cover. The selector checks whether bodies or
+    // walls block the actual approach to each refuge.
 
     // AND A WALL STOPS MONSTERS, NOT PEOPLE. THIS IS THE ONE THING THAT OUTRANKS BEING HURT.
     //
@@ -6755,7 +6751,7 @@ export class Autopilot {
       // to arrive hurt in -- and writing those would put a record on every hop of every
       // journey and drown the ones that matter. So the ones recorded are exactly the ones
       // where the character WANTED to stop and something else refused it: hurt, mid-journey,
-      // and turned away by vigor, by a fight, or by people about.
+      // and turned away by an explicit vigor floor or by people about.
       if (look.frac != null && look.frac < (this.policy.travelHoldBelow ?? 0.75) && at.remaining > 0)
         this.ledgerEvent('travel_pause', {
           journey: at.journey, arm, room: at.room?.num ?? null, room_name: at.room?.name ?? null,
@@ -6790,7 +6786,9 @@ export class Autopilot {
         // the ledger, and that is the operator's instruction rather than an optimisation.
         spot = nearestSafeSpot(geo, me, { book: null, room: at.room?.num ?? null,
                                           unreachable: this.unreachableIn(at.room?.num ?? null),
-                                          reach: this.reachTest(),
+                                          reach: recoveryRefugeReach(geo, me,
+                                            this.s.client?.room?.objects, this.s.client?.selfId,
+                                            this.s.client?.playersOnline),
                                           // The cap is the operator's if set; otherwise the
                                           // room, and with an exit named it is not applied.
                                           within: this.policy.travelHoldWithin
@@ -7143,19 +7141,19 @@ export class Autopilot {
                                && Number(this.crowdExit.room) === Number(this.s.world?.room?.num));
     if (askedByWatchdog) this.crowdExit = null;
     if (wedge?.refused || askedByWatchdog) {
-      // Escape a crowded wedge using the nearest local recovery wall.
+      // Escape a wedge using the nearest local recovery wall, regardless of monster count.
       // A wall means recovery owns the body;
       // falling through to the journey would immediately walk away from it.
-      if (this.crowded()) {
+      {
         const here = this.s.world?.room?.num ?? null;
-        this.note('seeking shelter from a crowded wedge', { room: here, to: Number(room) });
-        const left = await this.takeRecoverySpot('wedged in a crowd — need route shelter',
+        this.note('seeking shelter from a wedge', { room: here, to: Number(room) });
+        const left = await this.takeRecoverySpot('wedged — need route shelter',
                                                  { source: 'travel' })
                                .catch(e => ({ took: false, why: e.message }));
         if (this.travelInterrupted() || this.s.movementWasCancelled?.(movementGeneration))
           return { arrived: false, paused: true, cancelled: true, reason: 'travel interrupted during wedge recovery' };
         if (left?.took) {
-          const why = 'sheltering after a crowded wedge';
+          const why = 'sheltering after a wedge';
           this.wedgeHold = null;
           this.wantsForwardShelter = null;
           this.survivalInterruptedPass = this.passes;
@@ -7169,7 +7167,7 @@ export class Autopilot {
         }
         if (left?.via === 'exit' || left?.crossed) {
           this.wedgeHold = null;
-          this.note('left a wedge by the exit', { from: here, to: this.s.world?.room?.num ?? null, why: wedge?.why ?? 'the watchdog asked: wedged and taking hits in a crowd' });
+          this.note('left a wedge by the exit', { from: here, to: this.s.world?.room?.num ?? null, why: wedge?.why ?? 'the watchdog asked: wedged and taking hits' });
           return { arrived: false, refused: false, wedged: true, left_by_exit: true,
                    why: `left the wedge in room ${here} by the exit; the journey re-plans from room ${this.s.world?.room?.num ?? '?'}` };
         }
@@ -8206,23 +8204,19 @@ export class Autopilot {
   // pair `travelShelterBelow` above has, and deliberately the same shape: in a zone the
   // character would happily fight in, an ordinary threshold; in a zone it would refuse to
   // engage anything in, the first scratch is the warning it gets.
-  // IN A CROWD, THE ONLY WALL IS THE EXIT. 89 road deaths across both fleets on 2026-09-02:
-  // 57 had stopped — a wall on the way past, a refuge on the way, a hop-boundary hold, or
-  // trading in place when wedged — in a room of 9 to 18 monsters, and stood a median of two
-  // to three minutes before dying. A wall the geometry calls unreachable is reached by a
-  // troll in a room of thirteen. So at or above this many live threats in the room a
-  // journey makes no stops of any kind and a retreat considers only the exit, which is
-  // what actually breaks every attack. Policy `travelStopMaxThreats` (autopilot tool
-  // `travel_stop_max_threats`), env M59_TRAVEL_STOP_MAX_THREATS, default 6; 0 disables.
+  // Legacy name retained for stored policy compatibility. This threshold only gates
+  // aggressive quarry pulls and trading melee blows in place. It does not gate
+  // taking, selecting or recovering at a travel refuge. Monster bodies matter to a
+  // refuge through obstruction of its actual approach, not their number in the room.
+  // Policy travelStopMaxThreats, input travel_stop_max_threats, environment
+  // M59_TRAVEL_STOP_MAX_THREATS; default 6, 0 disables those combat guards.
   travelStopMaxThreats() {
     const p = Number(this.policy?.travelStopMaxThreats);
     if (Number.isFinite(p)) return p;
     const e = Number(process.env.M59_TRAVEL_STOP_MAX_THREATS);
     return Number.isFinite(e) ? e : 6;
   }
-  // A CROWD IS COUNTED BY BODIES, NOT BY NAMES. namedThreatsHere() drops any object whose
-  // name resource the client has not resolved; in the Sewers of Barloque that left a room of
-  // 25 rats and lupoggs counting as empty, and a traveller took a wall there (tour 15).
+  // Count attackable monster bodies, including those whose names have not resolved.
   threatCountHere() {
     const c = this.s?.client;
     if (!c?.room?.objects) return 0;
@@ -8241,8 +8235,7 @@ export class Autopilot {
     try { n = this.threatCountHere(); } catch { return false; }
     return n >= cap;
   }
-  // One ledger row per room per minute when the crowd rule refuses a stop, so a tour says
-  // where the rule fired and what it refused.
+  // One ledger row per room per minute when a combat crowd guard fires.
   noteCrowdRefusal(what) {
     const room = Number(this.s?.world?.room?.num ?? 0);
     const now = Date.now();
@@ -8253,8 +8246,8 @@ export class Autopilot {
     let n = 0; try { n = this.threatCountHere(); } catch { /* counted as unknown */ }
     try {
       recordTactic({ character: this.s?.client?.me?.name ?? this.s?.name ?? null, room,
-                     tactic: 'crowd_no_stop', trigger: what, worked: true, ms: 0, hp_lost: 0, attempted: true,
-                     note: `${n} threats in the room (cap ${this.travelStopMaxThreats()}): refused ${what}; the exit is the only wall here` });
+                     tactic: 'crowd_combat_refusal', trigger: what, worked: true, ms: 0, hp_lost: 0, attempted: true,
+                     note: `${n} threats in the room (cap ${this.travelStopMaxThreats()}): refused ${what}; shelter remains available` });
     } catch { /* evidence, not a dependency */ }
   }
   travelDivertAt() {

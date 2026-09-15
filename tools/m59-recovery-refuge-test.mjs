@@ -77,6 +77,17 @@ await test('occupied closest wall loses; adjacent body alone does not veto a cle
   s=choose(); assert.deepEqual({row:s.row,col:s.col},{row:7,col:16});
 });
 
+await test('distant monster count cannot change the nearest recovery wall', async () => {
+  for (const monsters of [0, 1, 5, 6, 14]) {
+    const k = keeper();
+    for (let i = 0; i < monsters; i++) k.s.client.room.objects.set(i + 10,
+      { id:i+10,row:1,col:i+1,flags:OF.ATTACKABLE|MOVEON.NO });
+    const result = await k.takeRecoverySpot('recover regardless of room population');
+    assert.equal(result.took,true);
+    assert.deepEqual({row:k.hold.row,col:k.hold.col},{row:7,col:16});
+  }
+});
+
 await test('forward recovery never computes a preview or requires a precomputed route shelter', async () => {
   const k=keeper(598,{row:40,col:22});
   Object.defineProperty(k.s,'activeShelter',{get(){assert.fail('throwaway preview read');}});

@@ -299,7 +299,25 @@ remapped. It was not closed by reaching significance: it compared two ways of tr
 where it stands, which neither arm addressed while the control arm paid for the asking by
 walking hurt characters straight past the only free healing on the road.
 
-## In a crowd, the only wall is the exit
+## Monster count does not veto shelter
+
+Travel shelters and recovery walls are available regardless of how many monsters
+are in the room or within melee reach. Eligibility is about the specific refuge:
+its geometry, occupancy and a reachable approach around walls and bodies. The
+ordinary health thresholds and explicit travel guard settings still apply.
+
+The September 15 audit removed a remaining minimum-of-six gate on wedge recovery
+and a nearby-monster veto on hop-boundary shelter. Hop-boundary selection now
+uses the shared recovery path check. Routine route diversion and the recovery
+selector had already stopped using the old maximum crowd threshold.
+
+`travelStopMaxThreats` (legacy input `travel_stop_max_threats`, environment
+`M59_TRAVEL_STOP_MAX_THREATS`, default 6, 0 disables) now only gates aggressive
+quarry pulls and stationary melee trading. It cannot disable shelter. New
+refusals use `crowd_combat_refusal` telemetry; historical `crowd_no_stop` records
+must be interpreted using their code epoch and trigger, not as current policy.
+
+### Historical crowd experiment, September 2–3 (superseded)
 
 Read off 89 road deaths across both fleets on 2026-09-02 (10 on prod, 79 on shadow, farming
 rooms excluded): 57 of them had STOPPED — "taking a wall on the way past", "resting at a
@@ -316,16 +334,14 @@ reached, and the character dies on it without moving. The same squares recur on 
 servers: the Cragged Mountains' r18c16/r19c16 and r45c16/r46c16, the Twisted Wood
 border's r29c43/44, Ukgoth's r48c9/r50c10 and its row-24 road, the Badlands' column 9–12.
 
-So: `travelStopMaxThreats` (autopilot tool `travel_stop_max_threats`, env
-`M59_TRAVEL_STOP_MAX_THREATS`, default 6, 0 disables). At or above that many live
-threats in the room, a journey makes no stops of any kind — no wall on the way past, no
-hop-boundary hold, no trading in place — and a retreat withholds every wall
-(`wallsAllowed: false` in `nearestSafeSpot`) so the exit is the only candidate, which is
-the one square that actually breaks every attack. Each refusal writes one `crowd_no_stop`
-row per room per minute. Silence keeps the old behaviour: the rule is a number this
-machine can change live, and `m59-forward-shelter-test.mjs` pins the search half.
+That observation led to a room-count rule: at six live threats the journey
+withheld wall stops, and retreat passed `wallsAllowed: false` to
+`nearestSafeSpot`, leaving only exits. This was a historical policy inference,
+not proof that monster count invalidates a wall. The rule is no longer used for
+shelter. The explicit exit-only selector option remains available for simulations;
+no production caller derives that option from monster count.
 
-**A wedge in a crowd is left by the door.** With the crowd rule on, tour 14 (2026-09-02) had no wall-stop deaths and two
+**The historical wedge-exit experiment.** With the crowd rule on, tour 14 (2026-09-02) had no wall-stop deaths and two
 wedges: the wedge arm had given up ("N walks from this square went nowhere") and the journey attempt
 returned refused, which means the body STANDS for the hold — one stood 160 s in Ukgoth before the first
 blow. So when the arm gives up in a crowd the attempt calls `takeSafeSpot` with the journey's onward

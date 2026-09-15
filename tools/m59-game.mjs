@@ -2001,7 +2001,7 @@ class Session {
   // could not reach a swinging character; vigor is not checked inside the loop at all, so
   // a long fight drains the bar that sets the health regeneration rate (1.0 hp/s at 200
   // against 0.29 at 80) with nothing watching; and the room is invisible in there, so a
-  // crowd can build while "in a crowd the only wall is the exit" never gets to run.
+  // threats can build while the keeper cannot interrupt combat to take shelter.
   fightWasCancelled(generation, controlToken) {
     return generation !== this.fightGeneration ||
       (!!controlToken && this.cancelledMovementTokens.has(controlToken));

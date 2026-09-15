@@ -39,6 +39,12 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
 
 ## Saved-scene simulator
 
+Travel shelter count regressions are in
+`node tools/m59-survival-handoff-test.mjs` (route, hop boundary and wedge
+recovery at 0, 1, 5, 6 and 14 monsters) and
+`node tools/m59-recovery-refuge-test.mjs` (actual geometry, occupied refuges
+and blocked approaches). Monster proximity alone must not veto travel shelter.
+
 `node tools/m59-scene-guilds-test.mjs` checks explicit/opposing team plans,
 identical idle-control assignments, native roster and membership verification,
 neutral/allied/mutual-war relations, silent induction refusal, lost creation
@@ -70,6 +76,11 @@ empty replies, pristine per-case input and failure reporting; the existing
 `m59-death-replay-test.mjs` covers recording similarity separately from useful
 failure recurrence, including divergent deaths, nonfatal/invalid trial retention,
 actual-baseline intervention selection and partial reports after later errors.
+
+`node tools/m59-replay-journey-test.mjs` reproduces the missing shelter callbacks
+after raw journey restoration, then verifies the real shelter trigger, explicit
+guard disables, recorded deadline/retries, keeper travel dispatch and ownership
+after interruption. It performs no game requests.
 
 ## The one that never fails, and why it is not a contradiction
 

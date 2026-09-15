@@ -86,13 +86,16 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   } finally { globalThis.setInterval = interval; globalThis.clearInterval = clear; }
 }
 
-{
+for (const monsters of [0, 1, 5, 6, 14]) {
   const k = keeper();
-  for (let i = 0; i < 8; i++) k.s.client.room.objects.set(i + 10,
+  for (let i = 0; i < monsters; i++) k.s.client.room.objects.set(i + 10,
     { id: i + 10, flags: OF.ATTACKABLE, col: 1, row: 1 });
-  k.goTravelling('crowded road', { to: 39 });
-  assert.equal(k.crowded(), true);
+  k.goTravelling('road shelter', { to: 39 });
+  assert.equal(k.threatCountHere(), monsters);
   assert.equal(k.s.shelterPolicy.need(), true, 'crowds cannot veto route cover');
+  k.policy.travelHoldPvp = 'ignore';
+  assert.equal(k.travelHoldCandidate({ remaining: 1 }).candidate, true,
+    'monster count cannot veto hop-boundary shelter');
   k.health = 50;
   assert.equal(k.s.shelterPolicy.need(), false, 'whole travellers still keep walking');
   k.health = 20;
@@ -254,9 +257,11 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   assert.ok(next.length, 'an alternative shelter is still offered');
   assert.ok(next.every(s => `${s.col},${s.row}` !== key), 'route selector skips the failed rest square');
 }
+for (const monsters of [0, 1, 5, 6, 14])
 for (const [refused, via] of [[false, null], [true, null], [false, 'exit'], [true, 'exit']]) {
   const k = keeper();
-  k.crowded = () => true;
+  for (let i = 0; i < monsters; i++) k.s.client.room.objects.set(i + 10,
+    { id: i + 10, flags: OF.ATTACKABLE, col: 1, row: 1 });
   k.answerWedge = async () => ({ refused });
   k.crowdExit = { at: Date.now(), room: 584 };
   k.onwardExit = () => null;
@@ -274,6 +279,21 @@ for (const [refused, via] of [[false, null], [true, null], [false, 'exit'], [tru
   assert.equal(k.hold.row, 21, 'the acquired wall remains held');
   assert.equal(k.townTrip.nextService, 7, 'the purchase remains pending');
   assert.equal(k.travelInterrupted(), true);
+}
+for (const monsters of [1, 14]) {
+  const k = keeper();
+  for (let i = 0; i < monsters; i++) k.s.client.room.objects.set(i + 10,
+    { id: i + 10, flags: OF.ATTACKABLE, col: 1, row: 1 });
+  k.answerWedge = async () => ({ refused: true, why: 'repeated wedge' });
+  let attempts = 0;
+  k.takeRecoverySpot = async () => {
+    attempts++; return { took: false, why: 'no unoccupied refuge has a clear path' };
+  };
+  k.s.travel = async () => assert.fail('a refused wedge cannot start another mover');
+  const result = await k.travel(714);
+  assert.equal(attempts, 1, 'a wedge offers recovery even without a crowd or watchdog request');
+  assert.equal(result.gave_up, true, 'removing the count gate cannot invent reachable cover');
+  assert.equal(k.hold, undefined);
 }
 for (const forward of [true, false]) {
   const k = keeper();

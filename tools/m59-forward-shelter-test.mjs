@@ -113,7 +113,7 @@ console.log('\nthe exit is a wall: on a journey the onward square joins the cand
   ok('a rest or a fight names no exit and never gets one', !!rest && rest.kind !== 'exit', at(rest));
 }
 
-console.log('\nin a crowd the only wall is the exit: wallsAllowed false');
+console.log('\nexplicit exit-only search: wallsAllowed false (not a monster-count policy)');
 {
   const stats = {};
   const s = nearestSafeSpot(geo, MID, { onward: SOUTH_DOOR, forwardBias: 8, wallsAllowed: false, stats });
