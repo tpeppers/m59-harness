@@ -2,6 +2,11 @@
 
 Travel survival regressions:
 
+- `m59-travel-continuity-test.mjs`: fallback traces and route proofs start at
+  the actual fine position; separate proved legs cannot license a corner cut.
+  Recovery replaces intent immediately, retains the destination, and fulfills
+  shelter requests only at a confirmed wall. Ordinary steps cannot manufacture
+  a shelter stop or pay the progress guard without advancing.
 - `m59-refuge-posture-test.mjs`: eight shared refuge-entry cases, including a
   seated start, fine positioning, coarse fallback and queued cancellation.
 - `m59-position-confirmation-test.mjs`: five cases covering unsolicited room

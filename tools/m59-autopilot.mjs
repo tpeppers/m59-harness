@@ -3928,6 +3928,33 @@ export class Autopilot {
       mitigation:destination?'try the onward exit or another reachable refuge toward it':'reassess from the current position'};
   }
 
+  async recoverFromTravelFallback({movementGeneration=this.s.movementGeneration,controlToken=null,
+    why='pivot route did not reach its destination'}={}) {
+    const s=this.s;
+    if(s.movementWasCancelled(movementGeneration,controlToken) || !this.inert?.travelling
+        || !this.inert.guard?.safe_spot) return false;
+    const previous=currentSurvivalDecision(s);
+    // A different survival controller already owns the body; this old walker
+    // cannot replace it merely because its own route failed.
+    if(previous && (previous.strategy!=='route_refuge'
+        || !['pending','approaching'].includes(previous.status))) return false;
+    if(!previous && !s.shelterPolicy?.need?.()) return false;
+    const reason=previous ? `chosen shelter approach interrupted: ${why}`
+      : `shelter needed during fallback travel: ${why}`;
+    const choice=this.replacementSurvivalChoice(reason,previous);
+    // A fresh recovery chooses its closest clear wall independently of quarry
+    // or the onward destination. Failed approaches use the replacement ladder.
+    if(!previous && choice.strategy!=='logoff_safe') Object.assign(choice,{
+      strategy:'nearest_refuge',replan_count:0,reason_code:'fallback_shelter',source:'travel',
+      mitigation:'recover at the closest reachable safe wall, then resume the journey'});
+    const next=chooseSurvivalDecision(s,choice,{because:reason,outcome:'interrupted'});
+    this.suspendJourney(reason);
+    this.revive(reason);
+    s.cancelMovement(controlToken,reason,{preserveId:next.id});
+    await this.continueSurvivalDecision();
+    return true;
+  }
+
   recordSurvivalPath(id,spot) {
     if (!id || !spot) return;
     const s=this.s,me=s.client?.self,geo=s.world?.geometry;
@@ -3950,6 +3977,8 @@ export class Autopilot {
   adoptRecoveryWall() {
     const wall=this.currentRecoveryWall(),room=this.s.world?.room?.num;
     if (!wall?.ok) return false;
+    this.wantsForwardShelter=null;
+    this.resumeShelterWaits=0;
     if (!this.hold || this.hold.room!==room || this.hold.row!==wall.row || this.hold.col!==wall.col)
       this.hold={room,row:wall.row,col:wall.col,proven:true,takenAt:Date.now(),quietMs:0,source:'recovery',quarry_id:null};
     return true;
@@ -10213,6 +10242,7 @@ export class Autopilot {
     if (allow.safe_spot) {
       this.s.shelterPolicy = {
         book: this.book,
+        onFallback: context => this.recoverFromTravelFallback(context),
         unreachable: room => this.unreachableIn(room),
         // NO DISTANCE CAP BY DEFAULT (operator, 2026-09-01): a wall along the route that the
         // body can reach and leave for the door is shelter however far off the line it sits.
@@ -10378,6 +10408,12 @@ export class Autopilot {
         // cannot see the runs that never arrive, and those are the ones that end in a
         // postmortem. See tools/m59-shelter.mjs for the argument and the schema.
         onDivert: (stop, at) => {
+          if (!stop) {
+            const detail={why:at?.suppressed??'no route refuge selected',at_step:at?.atStep??null};
+            traceSurvival(this.s,'travel_shelter_deferred',detail);
+            this.note('route shelter deferred',detail);
+            return;
+          }
           if (stop) {
             const decision=chooseSurvivalDecision(this.s,{strategy:'route_refuge',
               reason:'shelter needed during travel',reason_code:'travel_shelter',source:at?.source??'route'});
@@ -10419,7 +10455,7 @@ export class Autopilot {
           this.note('taking a wall on the way past', {
             where: { col: stop.col, row: stop.row }, from, squares_to_walk: squares,
             health: hp === null ? null : Math.round(hp * 100) + '%',
-            proven: stop.proven, off_the_road: stop.detour, at_step: at.atStep,
+            proven: stop.proven, off_the_road: stop.detour, at_step: at?.atStep,
             why: 'hurt, and this was already on the route — no stop, no replan, one more ' +
                  'waypoint than the crossing had a moment ago',
           });
@@ -16939,7 +16975,9 @@ export class Autopilot {
     // claimant's to own. A bot that has changed its mind issues a travel, and that clears
     // the note (see goTravelling).
     const resumed = await this.resumeSuspendedJourney(ctx);
-    if (resumed === HANDLED) return HANDLED;
+    // A recovery/backoff wait retains its destination. Only an explicit drop or
+    // new order releases it for ordinary farming to choose another journey.
+    if (resumed === HANDLED || this.suspendedJourney) return HANDLED;
     // 4. Work. Only in farm mode, and only on what we were told to hunt.
     //
     // AND ONLY IF NOBODY ELSE OWNS IT. This is the seam the carve-out is cut along: every
