@@ -1447,6 +1447,7 @@ export class M59Client {
         this.room.flags = p.roomFlags;
         this.room.overrideDepths = p.overrideDepths;
         this.room.collisionInvalidated = null;
+        this.room.sectorHeights = new Map();
         this.roomNameRsc = p.roomNameRsc;
         this.roomRsc = p.roomRsc;
         this.inGame = true;
@@ -1727,10 +1728,8 @@ export class M59Client {
         // never read cannot be the basis of anything.
         const sector = body.length >= 3 ? body.readUInt16LE(1) : null;
         const height = body.length >= 5 ? body.readUInt16LE(3) : null;
-        if (sector != null && height != null) {
-          (this.room.sectorHeights ??= new Map()).set(sector, { height, at: Date.now() });
-          this.emit('sector-height', { room: this.room?.id ?? null, sector, height });
-        }
+        const type = body.length >= 1 ? body[0] : null;
+        const speed = body.length >= 6 ? body[5] : null;
         this.room.collisionInvalidated = {
           opcode: op,
           kind: BPNAME[op] || `bp ${op}`,
@@ -1739,9 +1738,14 @@ export class M59Client {
           // reading it already applies to a record with no `until`.
           sector,
           height,
+          type, speed,
           at: Date.now(),
           until: Date.now() + COLLISION_ANIMATION_MS,
         };
+        if (sector != null && height != null) {
+          (this.room.sectorHeights ??= new Map()).set(sector, { height, type, speed, at: Date.now() });
+          this.emit('sector-height', { room: this.room?.id ?? null, sector, height, type, speed });
+        }
         this.emit('collision-geometry-invalidated', { ...this.room.collisionInvalidated });
         break;
       }

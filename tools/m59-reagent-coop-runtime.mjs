@@ -8,7 +8,8 @@ import { FLEET_KEEP, weighItem } from './m59-items.mjs';
 import { inventorySalePlan, carryCapacity } from './m59-skills.mjs';
 import { reagentFloorFor } from './m59-stockpile.mjs';
 import { dropSpec } from './m59-parse.mjs';
-import { hallPassword, inFoyer, BOOKMAKERS_FOYER } from './m59-hallsecret.mjs';
+import { hallPassword } from './m59-hallsecret.mjs';
+import { guildPassage } from './m59-guild-passage.mjs';
 import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
   coopFundingAmount, coopRemainingPlan } from './m59-reagent-coop.mjs';
 
@@ -34,21 +35,12 @@ async function approach(k, box) {
   if (interrupted(k)) throw new Error('coop paused for survival');
   const s = k.s, c = s.need(), me = c.self;
   if (Math.abs(me.row - box.row) + Math.abs(me.col - box.col) <= 5) return;
-  // The secret door closes after five seconds. Advance in short legs and say
-  // the key again along the way, rather than spending its open window far away.
-  let stalls = 0;
-  for (let leg = 0; leg < 40; leg++) {
-    if (interrupted(k)) break;
-    const before = { row: c.self.row, col: c.self.col }, since = c.evSeq;
-    await k.sayHallPassword();
-    await c.waitFor({ since, kinds: ['sector-height'], timeoutMs: 500 });
-    const at = s.world.approachSquare(box.col, box.row);
-    if (!at) throw new Error(`no reachable approach to coop chest ${box.slot}`);
-    await s.walkTo(at.col, at.row, { maxSteps: 3, hardCap: 3 });
-    if (Math.abs(c.self.row - box.row) + Math.abs(c.self.col - box.col) <= 5) break;
-    stalls = before.row === c.self.row && before.col === c.self.col ? stalls + 1 : 0;
-    if (stalls >= 2) break;
-  }
+  await guildPassage(k, 4, () => interrupted(k));
+  const at = s.world.approachSquare(box.col, box.row);
+  if (!at) throw new Error('no reachable approach to coop chest ' + box.slot);
+  await s.walkTo(at.col, at.row, { maxSteps: 30, beforeMutation: () => {
+    if (interrupted(k)) throw new Error('coop paused for survival');
+  } });
   if (interrupted(k) || Math.abs(c.self.row - box.row) + Math.abs(c.self.col - box.col) > 5)
     throw new Error(`coop chest ${box.slot} not reached`);
 }
@@ -101,19 +93,6 @@ async function transact(k, state, cfg, fleet) {
     k.note('reagent coop transfer', row);
   };
   try {
-    if (inFoyer(c.self?.row, c.self?.col)) {
-      // guildh14.plGuild_doors includes r3c28, on the FOYER side. The
-      // r4c28 trigger is the other side of that closed door and cannot be
-      // reached until GO has opened it from here.
-      await s.walkTo(28, BOOKMAKERS_FOYER.south, { maxSteps: 24 });
-      if (c.self?.row !== 3 || c.self?.col !== 28) throw new Error('guild entrance trigger not reached');
-      const doorSince = c.evSeq;
-      await s.pacer.submit('move', () => c.go());
-      await c.waitFor({ since: doorSince, kinds: ['sector-height'], timeoutMs: 1000 });
-      await s.walkTo(28, BOOKMAKERS_FOYER.south + 2, { maxSteps: 4 });
-      if (inFoyer(c.self?.row, c.self?.col)) throw new Error('could not leave the guild foyer');
-    }
-    if (!(await k.sayHallPassword()).ok) throw new Error('guild chest door unavailable');
     const since = c.evSeq;
     await s.pacer.submit('read', () => c.roomContents());
     const r = await c.waitFor({ since, kinds: ['room-contents'], timeoutMs: 3500 });
@@ -220,7 +199,10 @@ export async function runReagentCoop(k, mode, { plan = null, bankable = 0, reque
       keep: k.purseNow() - bankable, target: null,
       result: { plan, took: [], shillings: 0, moved: true } };
   }
-  if (state.mode !== mode) return pending(`finish reagent coop ${state.mode} first`);
+  if (state.mode !== mode) {
+    const previous = await runReagentCoop(k, state.mode, {}, fleet, journey);
+    return previous.pending ? previous : pending('previous reagent coop visit completed; re-evaluate this order');
+  }
   if (interrupted(k)) return pending('reagent coop paused for survival');
   if (state.stage === 'outbound') {
     k.doing = 'travelling';
@@ -244,6 +226,10 @@ export async function runReagentCoop(k, mode, { plan = null, bankable = 0, reque
     state.stage = 'return';
   }
   if (interrupted(k)) return pending('reagent coop return paused for survival');
+  if (room(k) === cfg.hall_room && state.origin !== cfg.hall_room) {
+    try { await guildPassage(k, 0, () => interrupted(k)); }
+    catch (e) { k.note('reagent coop return waiting', { reason: e.message }); return pending(e.message); }
+  }
   if (room(k) !== state.origin) {
     k.doing = 'travelling';
     const r = await (journey ?? k.travel.bind(k))(state.origin, { maxHops: 30 });

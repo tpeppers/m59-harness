@@ -299,6 +299,7 @@ export function applyDoorState(map, roomNum, observed, { geometryOf } = {}) {
   // stored, and a shut door would read as unbaked instead of as ordinary.
   const deviations = [];
   for (const [id, kod] of observed instanceof Map ? observed : Object.entries(observed ?? {})) {
+    if (typeof kod === 'object' && kod?.type != null && kod.type !== 4) continue;
     const height = typeof kod === 'object' ? kod?.height : kod;
     const idNum = Number(id);
     if (!Number.isFinite(height) || !indices.has(idNum)) continue;
@@ -499,7 +500,7 @@ export function reachableFrom(map, roomNum, row, col, { geometryOf } = {}) {
 }
 
 /** Drop what we worked out about a room, because a door in it has moved. */
-function forgetReach(roomNum) {
+export function forgetReach(roomNum) {
   const prefix = `${Number(roomNum)}:`;
   for (const k of REACH_CACHE.keys()) if (k.startsWith(prefix)) REACH_CACHE.delete(k);
 }

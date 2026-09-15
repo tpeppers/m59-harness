@@ -4377,7 +4377,10 @@ export function geometryWithSectorHeights(buf, overrides = {}, { file = '', mask
   for (const sector of parsed.sectors) {
     const want = overrides[sector.serverId];
     if (want == null) continue;
-    sector.floorHeight = heightKodToClient(want);
+    if (typeof want === 'object') {
+      if (Number.isFinite(want.floor)) sector.floorHeight = heightKodToClient(want.floor);
+      if (Number.isFinite(want.ceiling)) sector.ceilingHeight = heightKodToClient(want.ceiling);
+    } else sector.floorHeight = heightKodToClient(want);
     moved++;
   }
   // Only when something actually moved: re-deriving is not free, and a no-op override must
@@ -4425,12 +4428,14 @@ export function applySectorHeights(geometry, overrides = [], { mask = null } = {
 
   const restore = [];
   let moved = 0;
-  for (const { index, floor } of overrides) {
+  for (const { index, floor, ceiling } of overrides) {
     const sector = geometry.sectors[index];
-    if (!sector || !Number.isFinite(floor)) continue;
-    if (sector.floorHeight === floor) continue;
-    restore.push({ index, floor: sector.floorHeight });
-    sector.floorHeight = floor;
+    if (!sector || (!Number.isFinite(floor) && !Number.isFinite(ceiling))) continue;
+    if ((!Number.isFinite(floor) || sector.floorHeight === floor) &&
+        (!Number.isFinite(ceiling) || sector.ceilingHeight === ceiling)) continue;
+    restore.push({ index, floor: sector.floorHeight, ceiling: sector.ceilingHeight });
+    if (Number.isFinite(floor)) sector.floorHeight = floor;
+    if (Number.isFinite(ceiling)) sector.ceilingHeight = ceiling;
     moved++;
   }
   if (!moved) return { moved: 0, restore: [], why: 'already at that height' };

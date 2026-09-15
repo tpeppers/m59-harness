@@ -51,5 +51,17 @@ Receipts are appended to `substrate/stockpile/<fleet>.coop.ndjson`; chest snapsh
 also refresh the existing storage display. Never edit/delete an active coop lock.
 This shared-money tithe is separate from the existing Frular guild-rent tithe.
 
+Hall access uses the foyer-side entrance trigger and the inner, hall and secret
+door triggers in both directions. `m59-ceiling-doors.json` holds all 32 exact
+combinations of these five ceiling doors, generated with
+`node tools/m59-ceiling-doorbake.mjs --write` against the unchanged routing
+baseline. The keeper observes the actual client's `onEvent` stream (the client
+is not an EventEmitter), updates both collision geometry and route masks, and
+uses the ceiling lift's speed to wait for it. An eight-second generic movement
+block would outlast the hall's five-second opening. Floor and ceiling updates
+are distinct, and room entry clears the previous room's sector observations.
+`node tools/m59-ceiling-doors-test.mjs` checks the live packet seam and both
+directions of every hall passage against the real baked geometry.
+
 Offline verification: `node tools/m59-reagent-coop-test.mjs`, plus the purchase
 funding, purchase strategy, human controls, stockpile, guild wants and tithe tests.

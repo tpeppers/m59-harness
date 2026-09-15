@@ -130,6 +130,7 @@ function keeper({ purse = 1000, herbs = 0, stored = [0, 0, 0], boxHerbs = 0 } = 
     requestGuildInfo() { this.emit('guild', { what: 'roster' }); },
     requestInventory() { this.emit('inventory'); },
     roomContents() { this.emit('room-contents'); },
+    go() { this.emit('sector-height'); },
     contents(id) { this.emit('container', { id, items: structuredClone(boxes.get(id)) }); },
     async waitFor({ since, kinds }) { return { events: this.events.filter(e => e.seq > since && kinds.includes(e.kind)) }; },
     put(spec, into) { move(this.inventory, boxes.get(into), spec, 'deposit'); },
@@ -260,7 +261,7 @@ test('closed guild entrance is opened from its foyer-side trigger before leaving
   c.self = { row: 2, col: 32 };
   let opened = false;
   c.go = () => {
-    assert.deepEqual(c.self, { row: 3, col: 28 });
+    if (!opened) assert.deepEqual(c.self, { row: 3, col: 28 });
     opened = true; c.emit('sector-height');
   };
   k.s.walkTo = async (col, row) => {

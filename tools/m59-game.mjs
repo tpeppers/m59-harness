@@ -2774,7 +2774,9 @@ class Session {
         const wy = Number.isFinite(me.y) ? me.y : me.row * KOD_FINENESS + (KOD_FINENESS >> 1);
         const inSector = (cx, cy) => {
           const leaf = geo.leafAtClient(cx, cy);
-          return leaf != null && leaf.sectorNum === invalidated.sector;
+          return leaf != null && (invalidated.sectorIndices
+            ? invalidated.sectorIndices.includes(leaf.sectorNum - 1)
+            : leaf.sectorNum === invalidated.sector);
         };
         touches = inSector((wx - KOD_FINENESS) * scale0, (wy - KOD_FINENESS) * scale0)
                || inSector((x - KOD_FINENESS) * scale0, (y - KOD_FINENESS) * scale0);
