@@ -176,6 +176,12 @@ async function transact(k, state, cfg, fleet) {
 // Travel is resumable separately from transfers: a survival interruption on the
 // return leg must never repeat a completed withdrawal or charge the tithe twice.
 export async function runReagentCoop(k, mode, { plan = null, bankable = 0, requestId = null } = {}, fleet, journey = null) {
+  if (k.coopRunning) return pending('reagent coop visit is already executing');
+  k.coopRunning = true;
+  try { return await executeCoop(k, mode, { plan, bankable, requestId }, fleet, journey); }
+  finally { k.coopRunning = false; }
+}
+async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = null } = {}, fleet, journey = null) {
   const cfg = coopConfig(k.policy.reagentCoop);
   if (!cfg) return { plan, skipped: true };
   let state = k.coopVisit;
@@ -200,7 +206,7 @@ export async function runReagentCoop(k, mode, { plan = null, bankable = 0, reque
       result: { plan, took: [], shillings: 0, moved: true } };
   }
   if (state.mode !== mode) {
-    const previous = await runReagentCoop(k, state.mode, {}, fleet, journey);
+    const previous = await executeCoop(k, state.mode, {}, fleet, journey);
     return previous.pending ? previous : pending('previous reagent coop visit completed; re-evaluate this order');
   }
   if (interrupted(k)) return pending('reagent coop paused for survival');
@@ -257,6 +263,7 @@ export function reagentCoopCommand(k, s, args, fleet) {
   if (typeof id !== 'string' || !id || id.length > 160 || !['contribute', 'supply', 'tithe'].includes(mode))
     throw new Error('reagent_coop needs action and a stable request_id');
   if (!k.policy.reagentCoop?.enabled) return { skipped: true, reason: 'reagent coop disabled' };
+  if (k.coopRunning) return pending('reagent coop visit is already executing');
   const prior = k.coopCommand;
   if (prior?.id === id) {
     if (prior.mode !== mode) throw new Error('reagent coop request_id already used for another action');

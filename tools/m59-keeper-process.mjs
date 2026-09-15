@@ -496,8 +496,11 @@ async function joinGenerationOnce(generation) {
     // to a user "when gets into new room" — so a character walking into a room whose door
     // opened yesterday is told about it, and this fires on that just as it does on a door
     // moving in front of us.
-    installDoorObserver(session.client, loadMap(), () => session.world?.room?.num, (num, out) => {
-      if (out.changed) console.error('[keeper] ' + agent + ' room ' + num + ' doors -> ' + (out.state ?? 'as shipped'));
+    installDoorObserver(session.client, session.world.map, () => session.world?.room?.num, (num, out) => {
+      if (out.changed) {
+        session.impossibleEdges?.delete(num);
+        console.error('[keeper] ' + agent + ' room ' + num + ' doors -> ' + (out.state ?? 'as shipped'));
+      }
       else if (out.unbaked) console.error('[keeper] ' + agent + ' room ' + num + ' ' + out.why);
     });
 

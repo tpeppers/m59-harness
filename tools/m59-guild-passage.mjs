@@ -34,7 +34,8 @@ export async function guildPassage(k, destination, isInterrupted) {
     if (section < 0) throw new Error('guild position is outside the known passage');
     const inward = section < destination, door = doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
-    await s.walkTo(trigger[1], trigger[0], { maxSteps: 80, beforeMutation: guard });
+    await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
+    await s.confirmPosition?.();
     if (c.self.row !== trigger[0] || c.self.col !== trigger[1])
       throw new Error(`guild door ${door.sector} trigger not reached`);
     let crossed = false;
@@ -50,8 +51,24 @@ export async function guildPassage(k, destination, isInterrupted) {
       const until = Math.min(Date.now() + 2200, c.room.collisionInvalidated?.until ?? Date.now());
       while (Date.now() < until && !isInterrupted()) await sleep(Math.min(100, until - Date.now()));
       if (isInterrupted()) throw new Error('guild passage paused for survival');
-      await s.walkTo(across[1], across[0], { maxSteps: 5, beforeMutation: guard });
+      // Do not coalesce across the entrance: its first and second hotplates
+      // occupy consecutive squares and must be crossed in order. Confirm each
+      // short step, then plan from the body's actual position.
+      let result;
+      if (s.step && s.world?.geometry) {
+        for (let step = 0; step < 6; step++) {
+          guard();
+          if (c.self.row === across[0] && c.self.col === across[1]) break;
+          const path = s.world.geometry.path(c.self.row, c.self.col, across[0], across[1]);
+          const next = path.steps?.[0];
+          if (!path.found || !next) { result = { reason: 'no live path across the open door' }; break; }
+          result = await s.step(next.col, next.row, { confirm: true, beforeMutation: guard });
+          if (!result.moved) break;
+        }
+      } else result = await s.walkTo(across[1], across[0], { maxSteps: 5, hardCap: 6, beforeMutation: guard });
       crossed = guildSection(c.self.row, c.self.col) === section + (inward ? 1 : -1);
+      k.note?.('guild door passage', { sector: door.sector, inward, crossed,
+        at: { row: c.self.row, col: c.self.col }, reason: result?.reason });
       if (!crossed && attempt < 2) {
         // GO while a door is already open does not restart its five-second
         // timer. Let that cycle finish, then request a fresh opening.

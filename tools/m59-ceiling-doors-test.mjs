@@ -69,7 +69,13 @@ test('actual baked hall supports every inward and outward trigger even when door
     else throw new Error(`invalid GO trigger r${row}c${col}`);
   };
   const k = { sayHallPassword: async () => { open(3); return { ok: true }; },
-    s: { need: () => c, pacer: { submit: async (_kind, fn) => fn() },
+    s: { need: () => c, world: { geometry: g }, pacer: { submit: async (_kind, fn) => fn() },
+      async step(col, row, options) {
+        assert.equal(options.confirm, true);
+        assert.ok(Math.max(Math.abs(row - c.self.row), Math.abs(col - c.self.col)) <= 1);
+        assert.ok(g.path(c.self.row, c.self.col, row, col).found);
+        c.self = { row, col }; return { moved: true };
+      },
       async walkTo(col, row) {
         assert.ok(g.path(c.self.row, c.self.col, row, col).found, `closed path to r${row}c${col}`);
         c.self = { row, col }; observed.clear(); applyCeilingDoors(map, 714, observed);

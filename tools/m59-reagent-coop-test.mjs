@@ -204,6 +204,19 @@ test('a live coop lock prevents another keeper from reading or transferring', as
   } finally { lock.release(); }
   assert.equal((await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test')).shillings, 120);
 });
+test('a manual command cannot start a second pass while the keeper owns this visit', async () => {
+  const { k, c } = keeper();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const original = c.waitFor.bind(c);
+  c.waitFor = async args => { if (args.kinds.includes('guild')) await gate; return original(args); };
+  const first = runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test');
+  assert.ok((await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test')).pending);
+  assert.ok(reagentCoopCommand(k, k.s, { action: 'tithe', request_id: 'overlap' }, 'coop-test').pending);
+  assert.equal(k.s.job, undefined);
+  release(); await first;
+  assert.equal(k.purseNow(), 880);
+});
 test('unreadable chests cannot spend money or count as empty', async () => {
   const { k, c } = keeper(); c.contents = () => {};
   const result = await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test');
