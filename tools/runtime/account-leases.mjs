@@ -628,6 +628,7 @@ export class AccountLeaseRegistry {
     };
     const inheritedLive = new Set();
     const recycled = [];
+    const recycledPids = new Set();
     for (const guardPid of this.#guardedAdoption.guardPids) {
       const status = live(guardPid);
       if (status === true) {
@@ -653,6 +654,7 @@ export class AccountLeaseRegistry {
         const name = this.describeProcess(guardPid);
         if (name !== null && !isNodeProcessName(name)) {
           recycled.push({ pid: guardPid, process: name });
+          recycledPids.add(guardPid);
           continue;
         }
         inheritedLive.add(guardPid);
@@ -680,7 +682,11 @@ export class AccountLeaseRegistry {
           ok: false, reason: 'account-guard-liveness-uncertain',
           agent: row.identity.agent, guard_pid: guardPid,
         });
-        if (status === false) continue;
+        // The fleet side already positively identified these PIDs as non-node processes.
+        // Apply that same cached decision to the account side: after a reboot the intact
+        // roster carries the old guard in both claims. Counting it here would contradict
+        // inheritedLive and refuse recovery with account-guard-absent-from-fleet.
+        if (status === false || recycledPids.has(guardPid)) continue;
         const agents = accountOwners.get(guardPid) ?? [];
         agents.push(row.identity.agent);
         accountOwners.set(guardPid, agents);

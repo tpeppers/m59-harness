@@ -295,7 +295,7 @@ try {
   // A FRESH SCENARIO PER CASE. A successful adoption clears the lineage, so three cases
   // sharing one fleet lock would silently stop testing what they claim to.
   {
-    const scenario = (tag, describeProcess) => {
+    const scenario = (tag, describeProcess, { completeRoster = false } = {}) => {
       const leaseDir = join(resolvedScratch, `recycled-${tag}`);
       const fleetPath = join(resolvedScratch, `recycled-${tag}.lock`);
       const livePids = new Set([1701, 1710, 1711]);
@@ -328,6 +328,8 @@ try {
       });
       // Only `a` survives the edited roster, so 1711 is the guard nothing accounts for.
       assert.equal(reg.acquire('a', credentials(`recycled-${tag}-a`)).ok, true);
+      if (completeRoster)
+        assert.equal(reg.acquire('b', credentials(`recycled-${tag}-b`)).ok, true);
       const out = reg.finalizeAdoptions();
       // The suite asserts at the end that nothing is left holding a lock. Retire the guard
       // pids first so the predecessor's account claims are releasable, then give back both
@@ -357,6 +359,21 @@ try {
       'a guard pid held by something that is not node is a reuse, not a survivor');
     assert.deepEqual(excluded.recycled_guards, [{ pid: 1711, process: 'ChatGPT.exe' }],
       'and the takeover must name what it judged recycled, or the judgement is invisible');
+
+    // After a reboot the unchanged roster still carries the recycled PID in its account
+    // claim too. Both sides must use the same classification or recovery refuses with
+    // account-guard-absent-from-fleet despite having already proved it is not a keeper.
+    const complete = scenario('complete-reused',
+      pid => pid === 1711 ? 'StartMenuExperienceHost.exe' : 'node.exe',
+      { completeRoster: true });
+    assert.equal(complete.ok, true, 'a recycled guard in both claims must allow exact-roster recovery');
+    assert.equal(complete.coverage.live_guards, 1, 'the actual surviving keeper remains guarded');
+    assert.deepEqual(complete.recycled_guards,
+      [{ pid: 1711, process: 'StartMenuExperienceHost.exe' }]);
+    assert.equal(scenario('complete-node', () => 'node.exe', { completeRoster: true })
+      .coverage.live_guards, 2, 'real node processes still count on both sides');
+    assert.equal(scenario('complete-unknown', () => null, { completeRoster: true })
+      .coverage.live_guards, 2, 'unknown processes retain their guards');
   }
 
 
