@@ -922,7 +922,7 @@ const PROVED_MEMO = new WeakMap();
 function provedSquares(geo, from, steps) {
   if (!geo?.collisionReady || typeof geo.stringPull !== 'function') return null;
   if (!Array.isArray(steps) || steps.length < 2 || !from) return null;
-  const memoKey = `${from.row},${from.col}|${steps.length}|${steps.map(s => s.row + ',' + s.col).join('>')}`;
+  const memoKey = `${from.row},${from.col}|${from.x},${from.y}|${steps.length}|${steps.map(s => s.row + ',' + s.col).join('>')}`;
   const now = Date.now();
   let perGeo = PROVED_MEMO.get(geo);
   if (!perGeo) { perGeo = new Map(); PROVED_MEMO.set(geo, perGeo); }
@@ -940,7 +940,11 @@ function provedSquaresUncached(geo, from, steps) {
          y: protocolToClient(s.row * KOD_FINENESS + half) };
   try {
     const line = [from, ...steps];
-    const pulled = geo.stringPull(line.map(pointOf));
+    // Only the origin carries protocol fine coordinates. Route points use the
+    // geometry's client-unit stand points, matching the step mover's targets.
+    const points = line.map((st,i) => i===0 && Number.isFinite(from.x) && Number.isFinite(from.y)
+      ? {x:protocolToClient(from.x),y:protocolToClient(from.y)} : pointOf(st));
+    const pulled = geo.stringPull(points);
     if (!pulled?.points?.length || !pulled.proved) return null;
     // Walk the pulled points back onto the plan, so a square can be asked "is the leg you
     // are on one the pull proved". Matching by POSITION rather than by index, because the
@@ -949,8 +953,8 @@ function provedSquaresUncached(geo, from, steps) {
     const pivotAt = new Map(pulled.points.map((pt, i) => [key(pt), i]));
     const ok = new Set();
     let leg = -1;
-    for (const st of line) {
-      const hit = pivotAt.get(key(pointOf(st)));
+    for (const [i,st] of line.entries()) {
+      const hit = pivotAt.get(key(points[i]));
       if (hit !== undefined) leg = hit;               // we are standing on a pivot
       // `proved[leg]` is the leg LEAVING pivot `leg`; the final pivot has no leg after it.
       if (leg >= 0 && pulled.proved[leg]) ok.add(st.row + ',' + st.col);
@@ -2250,6 +2254,10 @@ class Session {
     await this.pacer.submit('read', () => c.requestInventory());
     await this.pacer.submit('read', () => c.stats(1));
     await this.pacer.submit('read', () => c.stats(2));
+    // Existing poison survives logout but its icon needs this initial read.
+    // Without it, reconnecting recovery can mistake poison ticks for attacks
+    // and repeatedly restart the rest. Subsequent changes arrive as pushes.
+    await this.pacer.submit('read', () => c.requestEnchantments());
     await new Promise(r => setTimeout(r, 600));
 
     // ABILITIES, ONCE, HERE. Four more requests, and this is the only place they have
@@ -4246,18 +4254,19 @@ class Session {
         // The one square the pull could not prove: hand it to the ordinary step, which has
         // the aim correction, the slide and the edge learning. Then re-prove.
         const target = remaining[0];
+        const advances = me.col !== target.col || me.row !== target.row;
         // A FALL IS ALWAYS "UNPROVED" TO THE PULL, because the pull traces in walk mode —
         // which is precisely the predicate that refuses a fall. So it lands here, and here
         // is where the flag has to be passed on.
         const r = await this.step(target.col, target.row, { fall: !!target.fall });
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
-        legsSinceShelter++;   // progress since the last refuge — see the live-lock guard
         if (r.left_room) return { done: false, legs, singles, left_room: true };
         if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
         const now = c.self;
         if (!now) return { done: false, legs, singles, why: 'own_position_unknown' };
         if (now.col === target.col && now.row === target.row) {
+          if (advances) legsSinceShelter++;
           // ARRIVED AT A REFUGE. SIT DOWN IF WE ARE NOT WHOLE.
           //
           // The operator's rule: stop at each safe waypoint until health and vigor are full,
@@ -4277,7 +4286,9 @@ class Session {
               return { done: false, legs, singles, cancelled: true };
             if (c.room.id !== roomId) return { done: false, legs, singles, left_room: true };
           }
-          remaining.shift(); divertedTo = null; legsSinceShelter = 0; continue;
+          remaining.shift();
+          if (target.shelter) { divertedTo = null; legsSinceShelter = 0; }
+          continue;
         }
         return { done: false, legs, singles, why: 'an unproved step landed off plan' };
       }
@@ -4305,15 +4316,16 @@ class Session {
           && Date.now() - this.damagedAt < SHELTER_HIT_WINDOW_MS
           && remaining.length > 1) {
         const one = remaining[0];
+        const advances = me.col !== one.col || me.row !== one.row;
         const r = await this.step(one.col, one.row, { fall: !!one.fall });
         if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
         singles++;
-        legsSinceShelter++;   // progress since the last refuge — see the live-lock guard
         if (r.left_room) return { done: false, legs, singles, left_room: true };
         if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
         if (c.room.id !== roomId) return { done: false, legs, singles, left_room: true };
         const now2 = c.self;
         if (now2 && now2.col === one.col && now2.row === one.row) {
+          if (advances) legsSinceShelter++;
           if (one.shelter && typeof shelter?.onArrive === 'function') {
             try { await shelter.onArrive({ col: one.col, row: one.row },
               { movementGeneration, controlToken }); }
@@ -4322,7 +4334,8 @@ class Session {
               return { done: false, legs, singles, cancelled: true };
             if (c.room.id !== roomId) return { done: false, legs, singles, left_room: true };
           }
-          remaining.shift(); divertedTo = null; legsSinceShelter = 0;
+          remaining.shift();
+          if (one.shelter) { divertedTo = null; legsSinceShelter = 0; }
         }
         continue;
       }
@@ -4357,13 +4370,26 @@ class Session {
                                { wallOk: this._wallOk() })) {
         const nextSq = remaining[0];
         if (nextSq) {
+          const advances = me.col !== nextSq.col || me.row !== nextSq.row;
           const r = await this.step(nextSq.col, nextSq.row, { fall: !!nextSq.fall });
           if (typeof this._yieldIfPacketless === 'function') await this._yieldIfPacketless(r);
           if (r?.left_room || c.room.id !== roomId)
             return { done: false, legs, singles, left_room: true };
           singles++;
-          legsSinceShelter++;   // progress since the last refuge — see the live-lock guard
-          if (c.self && c.self.col === nextSq.col && c.self.row === nextSq.row) remaining.shift();
+          if (isTerminalMovementReason(r.reason)) return { done: false, legs, singles, ...r };
+          if (c.self && c.self.col === nextSq.col && c.self.row === nextSq.row) {
+            if (advances) legsSinceShelter++;
+            if (nextSq.shelter && typeof shelter?.onArrive === 'function') {
+              try { await shelter.onArrive({col:nextSq.col,row:nextSq.row},
+                {movementGeneration,controlToken}); }
+              catch { /* the keeper records a failed recovery handoff */ }
+              if (this.movementWasCancelled(movementGeneration,controlToken))
+                return {done:false,legs,singles,cancelled:true};
+              if (c.room.id !== roomId) return {done:false,legs,singles,left_room:true};
+            }
+            remaining.shift();
+            if (nextSq.shelter) { divertedTo = null; legsSinceShelter = 0; }
+          }
           continue;
         }
       }
@@ -6524,7 +6550,7 @@ class Session {
     // leg the pull could not prove, a refused move, a body in the way, a room that animated
     // under it. Falling through costs one plan and loses nothing — which is the property
     // that makes it safe to put in front of a walker this fleet depends on.
-    let pivotLegs = 0;
+    let pivotLegs = 0, fallbackWhy = 'route uses the fallback walker';
     if (geo.collisionReady && typeof geo.stringPull === 'function' && plan.steps.length > 1
         && !this.movementWasCancelled(movementGeneration, controlToken)) {
       const here = c.self;
@@ -6550,6 +6576,7 @@ class Session {
           : null;
         const ran = await this.walkPivots(plan.steps, geo,
                                           { movementGeneration, controlToken, shelter });
+        fallbackWhy = ran.why ?? 'pivot route did not reach its destination';
         pivotLegs = (ran.legs ?? 0) + (ran.singles ?? 0);
         if (ran.cancelled) return this.cancelledMovement({ steps: pivotLegs });
         if (ran.left_room)
@@ -6753,6 +6780,12 @@ class Session {
     while (queue.length && taken < maxSteps) {
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return this.cancelledMovement({ steps: taken, replans });
+      // A fallback still belongs to the journey's survival policy. Transfer to
+      // its recovery controller before another step, retaining explicit intent.
+      if (await this.shelterPolicy?.onFallback?.({movementGeneration,controlToken,why:fallbackWhy}))
+        return this.cancelledMovement({steps:taken,replans});
+      if (this.movementWasCancelled(movementGeneration,controlToken))
+        return this.cancelledMovement({steps:taken,replans});
       // ONE PACKET, SEVERAL SQUARES — as long as they are in a STRAIGHT LINE.
       //
       // The planned route is a list of adjacent squares, and sending one packet per
@@ -6791,7 +6824,7 @@ class Session {
       // nothing, because the only square left on the queue is the far end of the hop that
       // just failed.
       const skipped = [];
-      const from0 = c.self ? { col: c.self.col, row: c.self.row } : null;
+      const from0 = c.self ? { col: c.self.col, row: c.self.row, x:c.self.x, y:c.self.y } : null;
       // THE SECOND AIM, AND IT HAS TO MATCH THE FIRST. This traces a straight line across
       // several squares to decide which of them may be skipped, so if it measured that
       // line between CENTRES while `step` sends stand points, the line proved clear is not
@@ -6831,7 +6864,7 @@ class Session {
         // is the authoritative answer rather than a better guess. Falling back to the stand
         // point keeps a client that has not reported one behaving exactly as before.
         const here = Number.isFinite(c.self?.x) && Number.isFinite(c.self?.y)
-          ? { x: c.self.x, y: c.self.y }
+          ? { x: protocolToClient(c.self.x), y: protocolToClient(c.self.y) }
           : fineOf(from0);
         // FURTHEST FIRST, so a long clear run costs one trace rather than one per square.
         // Bounded by the same hop ceiling as before, so the packet a walk sends is no
@@ -6849,73 +6882,40 @@ class Session {
           if (occupied.has(`${s.row},${s.col}`)) break;
           reach.push(s);
         }
-        // A SQUARE ON A PROVED LEG NEEDS NO TRACE. The pull already showed the straight
-        // line arrives, and a prefix of a line that arrives also arrives — so the furthest
-        // square inside the hop cap is takeable for free. This is the 5.8x, and it is also
-        // what stops the walker burning the shared event loop on proofs it already has.
+        // Membership in a proved route does not prove a direct line from the
+        // current body: the squares may be on different legs around a corner,
+        // or the body may have slid since that proof. Trace each proposed hop
+        // from the actual fine position. A long clear run still costs one trace.
         let took = -1;
-        // Where the body is, for the mover check below and for `missedHops` further down.
         const hereSq = c.self ?? from0;
-        if (pulled && next && pulled.squares.has(`${next.row},${next.col}`)) {
-          for (let i = reach.length - 1; i >= 0; i--) {
-            const s = reach[i];
-            if (!pulled.squares.has(`${s.row},${s.col}`)) continue;
-            // THE PROOF IS A SHORTCUT PAST THE TRACE. IT IS NOT A SHORTCUT PAST THE MOVER.
-            //
-            // A proved leg skips the per-square `arrives()` trace, which is the 5.8x and
-            // worth keeping. What it must not skip is the question of whether the step LANDS,
-            // because the pull is computed from the character's exact FINE position and a
-            // line that was clear from one sub-square offset is not clear from another — and
-            // after the first slide the walker is never at a centre again.
-            //
-            // Left unchecked it offered squares the coarse grid calls SOLID ROCK. Measured in
-            // the Cragged Mountains on a character at full health taking no damage at all:
-            // targets 36,34 / 31,35 / 38,34 all read walkable=false, standable=true,
-            // moverStepLands=false, and the walker aimed a six-square hop into the rock face
-            // over and over. Every move was SENT — thirty-two of them, none refused — and
-            // each one clipped and slid along the wall instead of arriving, which is what an
-            // operator watching it described as the character walking along the western wall.
-            // Sixty seconds inside three squares, untouched.
-            //
-            // `moverStepLands` is the same question the router is required to plan on
-            // (docs/m59-routing.md), so this makes the fast path agree with the slow one
-            // about what a step is, rather than agreeing with a proof about what a LINE is.
-            if (hereSq && typeof geo.moverStepLands === 'function' &&
-                !geo.moverStepLands(hereSq.row, hereSq.col, s.row, s.col)) continue;
-            took = i; break;
-          }
+        for (let i = reach.length - 1; i >= 0; i--) {
+          const target = reach[i];
+          if (i + 2 > hopLimit && !pulled?.squares.has(`${target.row},${target.col}`)) continue;
+          if (hereSq && missedHops.has(edgeKey(hereSq.row,hereSq.col,target.row,target.col))) continue;
+          if (arrives(here,fineOf(target))) { took = i; break; }
         }
-        // Otherwise, or on a leg the pull could NOT prove, ask the geometry exactly as
-        // before. An unproved leg carries no promise and must not be jumped along.
-        if (took < 0) {
-          for (let i = reach.length - 1; i >= 0; i--)
-            if (arrives(here, fineOf(reach[i]))) { took = i; break; }
-        }
-        // Never re-offer a hop this walk has already watched miss from this square. The
-        // shorter candidates below it are still available, which is the point: the line is
-        // walkable, the LENGTH is not.
-        while (took >= 0 && hereSq &&
-               missedHops.has(edgeKey(hereSq.row, hereSq.col, reach[took].row, reach[took].col)))
-          took--;
         if (took >= 0) {
+          // `next` was removed before lookahead. It is still the first
+          // waypoint to restore if this coalesced move misses.
+          skipped.push(next);
           for (let k = 0; k <= took; k++) {
             const s = queue.shift();
             if (k < took) skipped.push(s);   // everything between here and the far end
             next = s;
             hop++;
           }
-          hop--;                         // `next` was already counted by the shift above
         }
       } else {
-        // NO COLLISION MODEL MEANS THE OLD RULE, EXACTLY. A checkout with no baked
-        // geometry has nothing to trace against, and must walk precisely as it did.
+        // Without a collision model, coalesce only collinear steps. Honor the
+        // same shortened retry and failed-hop memory as the traced branch.
         const dc0 = Math.sign(next.col - (c.self?.col ?? next.col));
         const dr0 = Math.sign(next.row - (c.self?.row ?? next.row));
-        while (hop < MOVE_HOP_MAX_SQUARES && queue.length) {
+        while (hop < hopLimit && queue.length) {
           const peek = queue[0];
           if (Math.sign(peek.col - next.col) !== dc0 || Math.sign(peek.row - next.row) !== dr0) break;
           if (occupied.has(`${peek.row},${peek.col}`)) break;
           if (blockedEdges.has(edgeKey(next.row, next.col, peek.row, peek.col))) break;
+          if (from0 && missedHops.has(edgeKey(from0.row, from0.col, peek.row, peek.col))) break;
           skipped.push(next);
           next = queue.shift(); hop++;
         }

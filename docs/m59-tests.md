@@ -20,6 +20,16 @@ These tests are offline. They do not execute a raid or shut down a server.
 
 Travel survival regressions:
 
+- `m59-failed-hop-test.mjs`: 13 cases against the real fallback walker. Refused
+  two-, three- and five-square moves restore the first swallowed waypoint;
+  repeated refusals still leave every waypoint walkable. Both geometry and
+  body refusals, legacy collinear retries, hop accounting and cancellation
+  are covered.
+- `m59-travel-continuity-test.mjs`: fallback traces and route proofs start at
+  the actual fine position; separate proved legs cannot license a corner cut.
+  Recovery replaces intent immediately, retains the destination, and fulfills
+  shelter requests only at a confirmed wall. Ordinary steps cannot manufacture
+  a shelter stop or pay the progress guard without advancing.
 - `m59-refuge-posture-test.mjs`: eight shared refuge-entry cases, including a
   seated start, fine positioning, coarse fallback and queued cancellation.
 - `m59-position-confirmation-test.mjs`: five cases covering unsolicited room

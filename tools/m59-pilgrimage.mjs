@@ -6,6 +6,7 @@
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --one-pass  # one crossing, then stop
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --cycle     # accepted compatibility spelling
 //   node tools/m59-pilgrimage.mjs --dry-run
+//   node tools/m59-pilgrimage.mjs --fleet shadow --reverse --out substrate/tour-sim/reverse.json
 //
 // `m59-solo-run.mjs` answers "can ONE character walk THIS road", one at a time, from one
 // square, because twenty-one characters crossing together measure contention as much as
@@ -27,12 +28,13 @@
 // Everything it reports is measured from the character, not from the request: `arrived`
 // means the room read back as the destination. See docs/m59-operations.md.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { CITY_INNS } from './m59-underworld.mjs';
+import { runtimeProvenance } from './m59-replay-worker.mjs';
 import {
   DISPATCH_MAX_ATTEMPTS,
   completeCycleArrival,
@@ -42,6 +44,7 @@ import {
   newPendingDispatch,
   noteDispatchResult,
   pilgrimageCycles,
+  pilgrimageHealth,
 } from './m59-pilgrimage-cycle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,7 +60,7 @@ const flag = (name, fallback = null) => {
 const has = name => argv.includes('--' + name);
 
 const KNOWN = new Set(['fleet', 'to', 'port', 'timeout', 'seed', 'agents', 'inns', 'no-retry',
-                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse']);
+                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse', 'out']);
 for (const a of argv) {
   if (!a.startsWith('--')) continue;
   if (!KNOWN.has(a.slice(2))) {
@@ -83,6 +86,11 @@ const TIMEOUT = Number(flag('timeout', 600)) * 1000;
 // watchAll. `--no-retry` restores the old behaviour for comparison with earlier runs.
 const RETRY = !has('no-retry');
 const DRY = has('dry-run');
+const OUT = flag('out');
+if (has('out') && (!OUT || OUT.startsWith('--') || existsSync(resolve(OUT)))) {
+  console.error('--out must name a new result file');
+  process.exit(2);
+}
 const ONLY = flag('agents') ? String(flag('agents')).split(',').map(s => s.trim()).filter(Boolean) : null;
 
 // The mainland five, in the canonical table's own order. Ko'catan is across the sea and is
@@ -261,7 +269,9 @@ async function launch(r) {
                        ?? String(r.health ?? '').split('/')[1]) || null;
     if (ids?.[r.character] != null && max) {
       const cmds = [...dm.healthCmds(ids[r.character], max)];
-      if (typeof dm.manaCmds === 'function') cmds.push(...dm.manaCmds(ids[r.character], 50));
+      const maxMana = Number(String(r.mana ?? '').split('/')[1]);
+      if (typeof dm.manaCmds === 'function' && Number.isFinite(maxMana) && maxMana > 0)
+        cmds.push(...dm.manaCmds(ids[r.character], maxMana));
       await dm.dm(cmds, { timeoutMs: 60000 });
     }
   } catch { /* healing is a courtesy; the leg is still a leg without it */ }
@@ -314,9 +324,11 @@ async function submitPendingDispatch(o) {
 // to answer a question that one `fleet` call answers for everybody. It also read the wrong
 // field: a fleet row's `room` is the room's NAME and `room_num` is the number, so every
 // reading came back NaN and the whole first run reported "timed out ... NaN".
+let measurementBegan = null;
 async function watchAll(outs) {
   const live = new Map(outs.filter(o => o.outcome === 'running').map(o => [o.agent, o]));
   const began = Date.now();
+  measurementBegan = began;
   while (live.size && Date.now() - began < TIMEOUT) {
     await sleep(5000);
     const snap = await call('fleet', {}, 60000);
@@ -337,9 +349,7 @@ async function watchAll(outs) {
       //
       // The same comment two screens up says a fleet row's `room` is the NAME and `room_num`
       // is the number. The health pair has the same shape and was missed.
-      const [hpRaw, maxRaw] = String(row.health ?? '').split('/');
-      const hp = Number(hpRaw);
-      const max = Number(row.max_health ?? row.health_max ?? maxRaw);
+      const { hp, max } = pilgrimageHealth(row);
       if (Number.isFinite(hp)) o.low = o.low === null ? hp : Math.min(o.low, hp);
       if (Number.isFinite(max)) o.max = max;
       // THE UNDERWORLD IS A DEATH, and it is the only honest way to see one from here: the
@@ -449,12 +459,23 @@ async function watchAll(outs) {
 }
 
 console.log('launching…');
+const provenance = OUT ? runtimeProvenance(REPO) : null;
 const launched = [];
 for (const r of order) {
   launched.push(await launch(r));
   await sleep(400);           // the pacer is per character; this is only to be kind to the DM port
 }
 const results = await watchAll(launched);
+if (OUT) writeFileSync(resolve(OUT), JSON.stringify({
+  schema: 'm59-pilgrimage-result/v1', fleet: FLEET, seed: SEED,
+  direction: REVERSE ? 'reverse' : 'forward', cycle: CYCLE, retry_after_death: RETRY,
+  ring: RING, requested_window_ms: TIMEOUT, measurement_began_at: measurementBegan,
+  finished_at: Date.now(), provenance,
+  initial_profiles: order.map(r => ({ agent: r.agent, character: r.character, health: r.health, mana: r.mana })),
+  results: results.map(r => ({ ...r, rooms: [...r.rooms] })),
+  limitations: ['Deaths counted from polled Underworld entries; reconcile with postmortems.',
+    'Launches are staggered before the measurement loop; timer expiry does not stop active journeys.'],
+}, null, 2), { flag: 'wx' });
 
 // ------------------------------------------------------------------ the report
 const pad = (s, n) => String(s ?? '').padEnd(n);

@@ -51,6 +51,11 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
       .map(v=>({kind:v.kind,name:v.name,ability:v.ability})),
       how:c.abilitiesAt?.skills!=null&&c.abilitiesAt?.spells!=null?'observed':'unknown'};
     a.ability_read_at=copyReplayConfig(c.abilitiesAt??null);
+    // Passive evidence only. Empty observed icons do not prove an absence of
+    // poison, and these fields do not restore hidden native effect timers.
+    const effects=c.enchantmentStatus?.();
+    a.status_effects=effects?observed(copyReplayConfig({...effects,
+      recognized_ailments:(c.ailments?.()??[]).slice(0,256)})):unknownField();
     if((c.inventory?.length??0)>limits.inventory)gaps.push('inventory truncated');
     if((c.abilities?.size??0)>limits.abilities)gaps.push('abilities truncated');
     actors.push(a);
@@ -71,6 +76,7 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
     provenance,capturedAt:new Date(at).toISOString(),capturedFrom:s.name,
     notes:['cached client observations; no server request made during capture',
       'server RNG state, timer phase, monster HP/targets and other players\' inputs are unknown',
+      'status effects record observed icons and recognition; restoring native effect timers requires a native world checkpoint',
       'fine positions describe the latest received state, not a simultaneous server checkpoint']});
   scene.capture={at,event_sequence:c.evSeq??null,room_object_id:c.room?.id??null,
     room_wire:copyReplayConfig(s.world?.roomBinding?.room_wire),objects_total:objects?.size??null,

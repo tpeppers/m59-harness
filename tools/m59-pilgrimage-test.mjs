@@ -10,6 +10,7 @@ import {
   newPendingDispatch,
   noteDispatchResult,
   pilgrimageCycles,
+  pilgrimageHealth,
 } from './m59-pilgrimage-cycle.mjs';
 
 let passed = 0, failed = 0;
@@ -24,6 +25,14 @@ console.log('pilgrimage mode defaults to continuous checkpoint travel');
   ok('the historical --cycle spelling still cycles', pilgrimageCycles(['--cycle']));
   ok('--one-pass explicitly restores scatter-and-converge',
      !pilgrimageCycles(['--one-pass']));
+}
+
+console.log('offline vitals are unknown, not a zero-health event');
+{
+  ok('missing and blank HP stay unknown', [undefined, null, '', ' / '].every(health => Number.isNaN(pilgrimageHealth({health}).hp)));
+  ok('a real zero is preserved', pilgrimageHealth({health:'0/52'}).hp === 0);
+  const live = pilgrimageHealth({health:'29/48'});
+  ok('live current and maximum HP are parsed', live.hp === 29 && live.max === 48);
 }
 
 console.log('a checkpoint handoff waits for the previous keeper job');

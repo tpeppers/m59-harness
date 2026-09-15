@@ -79,4 +79,9 @@ await test('whole confirmed traveller completes the route-refuge decision',async
  assert.deepEqual(f.calls,['confirm']);assert.equal(currentSurvivalDecision(f.s),null);
  assert.equal(f.events.at(-1).decision.outcome,'recovered');
 });
+await test('a deferred shelter note does not throw or invent a chosen refuge',async()=>{
+ const f=fixture(),run=f.k.shelterRun;
+ f.s.shelterPolicy.onDivert(null,{atStep:1,suppressed:'one leg of progress owed since the last refuge'});
+ assert.equal(currentSurvivalDecision(f.s).id,f.d.id);assert.equal(f.k.shelterRun,run);
+});
 console.log(passed+' route refuge arrival scenarios passed');
