@@ -184,3 +184,48 @@ Simulation reports are marked `exploratory`, with `baseline_reproduction_verifie
 Offline tests cover corruption, incomplete frames, wrong fine offsets, missing/extra/duplicate actors, current-vs-max HP, source/fidelity differences, recurring deaths, nonfatal/invalid trial retention, observed-strategy selection, suppression and worker persistence. Live measurements and repeated-run results are recorded in the implementation reports.
 
 Older production deaths have no retroactive complete replay bundle. Their existing traces remain useful for diagnosis, but cannot become faithful saves by filling missing state with guesses. The new workflow begins collecting prospective evidence; controlled lab fixtures demonstrate the machinery, not that any production intervention has saved lives.
+
+## Postmortem PvP simulations
+
+`m59-postmortem-sim.mjs` loads a checksum-verified replay bundle from a postmortem and creates temporary, account-backed player characters for every other captured player. It defaults to the latest living checkpoint containing the confirmed player killer. A nearby player is never automatically treated as the killer. Select other attackers or an earlier frame explicitly.
+
+```text
+node tools/m59-postmortem-sim.mjs plan POSTMORTEM.json
+node tools/m59-postmortem-sim.mjs run POSTMORTEM.json --config PRIVATE_CONFIG.json --trials 3 --horizon-ms 15000 --out REPORT.json
+node tools/m59-postmortem-sim.mjs run BUNDLE.json --config PRIVATE_CONFIG.json --attacker Morpheus --frame FRAME_ID --out REPORT.json
+```
+
+Each pair runs the captured victim controller against (1) the selected players attacking and (2) the same player bodies standing idle. Every case reloads independently. Attackers use ordinary, paced CombatMode melee packets, pursue only within the captured room, and stop below 5% health or at the time limit. They start after the shared room-release barrier. Account creation uses a validated ordinary character request, verifies all six attributes, recalculates normal server PvP eligibility after stat restoration, and verifies account deletion after each trial or handled error. Linux scene images must advertise `org.openai.m59.scene-accounts.delete=v1`; rebuild with `m59-scene-server-build.mjs` if missing. The owned isolated container at 17959/17998 is required for automatic stand-ins; the separate shadow server and production endpoints are refused.
+
+Other players' equipment, attributes and actual human inputs are usually unknown. The initial model is **unarmed melee**, with the `melee` creation preset, 100 HP, 50 mana, 200 vigor and 99 punch. Known captured vitals/stat fields take precedence; unknown fields use the profile. No spells, weapons, guild relationships or historical inputs are invented. A JSON/API `profile` can change `stats` (creation preset), `health`, `mana`, `vigor`, and `unarmed`. Keep the same profile across compared cases. This model is useful for reproducing failures, but it cannot certify the historical fight's difficulty.
+
+Strict loading is the default. Optional approximations are explicit:
+
+- `--approximate-player` uses the selected shadow victim's inventory/equipment/abilities when they differ from the capture; the mismatch is retained in `player_state.original_check`.
+- `--no-monsters` removes captured monsters and suppresses automatic room spawns during the trial. Reactive consequences such as a revenant summoned by a murder can still occur.
+- `--lab-scenery` retains the lab snapshot's room items/scenery instead of restoring recorded drops, corpses and temporary effects such as loose soil. The report lists the replacement; this can affect collisions and must be held constant between cases.
+
+Without these options, an unknown monster class, missing item binding or mismatched victim loadout stops the experiment. `classes` in the private replay config can resolve known monster KOD classes. A missing historical replay bundle is refused; prose cannot supply the absent positions.
+
+The shared FleetScratch `simulate` command and `m59-scene-simulator.mjs` accept a postmortem simulation definition:
+
+```json
+{
+  "postMortem": "../postmortems/DEATH.json",
+  "configFile": "replay-config.json",
+  "trials": 3,
+  "horizonMs": 10000,
+  "approximatePlayer": true,
+  "profile": {"stats": "melee", "health": 100, "unarmed": 99},
+  "reload": {"noMonsters": true, "labScenery": true},
+  "out": "pvp-report.json"
+}
+```
+
+FleetScript exports `planPostMortemSimulation` and `simulatePostMortem`. For intervention experiments, feed `plan.scene` to `simulateScene` and attach `pvp: plan.options` to each case alongside its `policy`, `variant`, and `reload`. This reuses exactly the same scene, stand-in and controller machinery.
+
+Reports retain temporary-to-captured player identities, source/save/image hashes, creation verification, normal PvP eligibility, attack attempts, refusal messages, victim HP pushes across reconnects, raw death messages, mapped killer attribution, survival decisions and cleanup receipts. `attacks` counts packets attempted, not successful hits; inspect refusals, HP loss and server-confirmed killer evidence. `survived_window` only means no death was observed within the horizon. Modeled PvP and approximate victim loadouts explicitly fail strict historical-fidelity validation, while repeatable deaths remain useful experimental results. Earlier trials remain in a partial report if a later trial fails.
+
+Private account journals live under the selected lab runtime's `pvp/` directory. Passwords exist only in memory and are excluded from reports/journals. A hard process kill or server outage can prevent cleanup; inspect the recorded exact temporary account identities before recovery, and never delete an account based on a name prefix alone. Normal completion and handled setup failures require confirmed absence after deletion.
+
+See [the live validation report](postmortem-pvp-simulation-2026-09-14.md) for the first reproduced PvP deaths, assumptions and timings.

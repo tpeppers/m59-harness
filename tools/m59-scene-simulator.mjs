@@ -33,7 +33,7 @@ export async function simulateScene({scene,configFile,cases=[{id:'baseline'}],tr
       const input=structuredClone(source);input.controller??={};
       input.controller.policy={...input.controller.policy,...entry.policy};
       const result=await adapter.run({scene:input,frame:{at:source.capture?.at??Date.now()},
-        variant:{kind:'baseline',...entry.variant,reload:entry.reload??{}},horizonMs});
+        variant:{kind:'baseline',...entry.variant,reload:entry.reload??{}},horizonMs,pvp:entry.pvp??null});
       const row={case:entry.id,trial,...result};
       if(horizonMs===0&&['survived_window','recovered'].includes(row.outcome))row.outcome='setup_only';
       runs.push(row);await onTrial(row);
@@ -51,20 +51,28 @@ export async function simulateScene({scene,configFile,cases=[{id:'baseline'}],tr
 }
 export async function runSimulationFile(file,{onTrial=()=>{}}={}) {
   const config=JSON.parse(await readFile(file,'utf8')),base=path.dirname(path.resolve(file));
-  if(typeof config.scene!=='string'||typeof config.configFile!=='string')throw Error('simulation file needs scene and configFile paths');
+  if((typeof config.scene!=='string'&&typeof config.postMortem!=='string')||typeof config.configFile!=='string')throw Error('simulation file needs scene or postMortem, and configFile paths');
   let report;
   try {
-    report=await simulateScene({...config,scene:path.resolve(base,config.scene),
+    if(config.postMortem) {
+      const {simulatePostMortem}=await import('./m59-postmortem-sim.mjs');
+      report=await simulatePostMortem({...config,file:path.resolve(base,config.postMortem),
+        configFile:path.resolve(base,config.configFile),onTrial});
+    }else report=await simulateScene({...config,scene:path.resolve(base,config.scene),
       configFile:path.resolve(base,config.configFile),onTrial});
     return report;
   }catch(error){report=error.report;throw error;
   }finally{if(config.out&&report)await writeFile(path.resolve(base,config.out),JSON.stringify(report,null,2));}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href) {
+  // Finish module evaluation before loading the optional postmortem driver,
+  // which shares simulateScene. Top-level await here would deadlock that import.
+  (async()=>{
   try {
     const report=await runSimulationFile(process.argv[2],{onTrial:r=>console.log(JSON.stringify({
       case:r.case,trial:r.trial,outcome:r.outcome,restore_ms:r.timings?.restore_to_start_ms,
       wall_ms:r.timing_wall_ms,method:r.native_restore?.method}))});
     console.log(JSON.stringify({timing:report.timing,validation:report.validation}));
   }catch(e){console.error(e.message);process.exitCode=1;}
+  })();
 }

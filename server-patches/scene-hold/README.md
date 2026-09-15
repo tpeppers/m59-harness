@@ -30,3 +30,11 @@ The existing no-players-in-game guard remains in force. The image advertises
 using warm resets. No native game-data loading logic is replaced. `reload game`
 retains account definitions and runtime RNG; use a cold restore when account
 administration is part of the experiment.
+
+The lab patch also fixes Linux `AdminDeleteAccount`: stock code posts the deletion
+only on Windows and silently does nothing on Linux. The lab executes the existing
+`DeleteAccountAndAssociatedUsersByID` on its server loop and advertises
+`org.openai.m59.scene-accounts.delete=v1`. Temporary PvP stand-ins require this
+capability and independently verify account absence after deletion. A verified
+create/delete pair may use warm world reloads because it leaves no account behind;
+other account mutations still require the cold-reset contract above.

@@ -82,6 +82,8 @@ export function baselineVerdict({bundle,frame,result,expected,attestation}) {
   if(!source?.source_sha256||attestation?.harness?.source_sha256!==source.source_sha256)reasons.push('loaded source manifest mismatch or unknown');
   if(!frame.scene.capture?.complete_visible_positions)reasons.push('incomplete or predicted starting positions');
   if(frame.scene.capture?.complete_controller===false)reasons.push('truncated controller state');
+  if(result?.pvp?.modeled)reasons.push('other-player behavior and unknown profile are modeled');
+  if(result?.player_state?.faithful===false)reasons.push('victim uses an explicitly approximate shadow loadout');
   if((bundle.capture?.dropped??0)>0||(bundle.capture?.errors??0)>0)reasons.push('capture dropped frames or reported errors');
   if(bundle.provenance?.server?.image_id&&result?.server_attestation?.image_id!==bundle.provenance.server.image_id)
     reasons.push('attested server image differs');

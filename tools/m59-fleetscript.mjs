@@ -325,6 +325,7 @@ const RETRYABLE_READS = Object.freeze(new Set([
 const TRANSPORT_FAILURE = /econnreset|socket hang up|fetch failed|other side closed|econnrefused/i;
 // Explicit lab simulation entry point; never runs as a side effect of compiling steps.
 export {simulateScene} from './m59-scene-simulator.mjs';
+export {simulatePostMortem,planPostMortemSimulation} from './m59-postmortem-sim.mjs';
 
 export const isTransportFailure = (e) =>
   !!e && e.name !== 'TimeoutError' && e.name !== 'AbortError' &&

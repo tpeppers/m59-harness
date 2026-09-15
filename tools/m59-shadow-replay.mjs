@@ -16,6 +16,7 @@ import {installLabGameGlobals} from './runtime/lab-game-globals.mjs';
 import {attachSurvivalDecisions,currentSurvivalDecision,restoreSurvivalDecisionForReplay} from './m59-survival-decision.mjs';
 import {installReplayVariant,REPLAY_STRATEGIES} from './m59-replay-variants.mjs';
 import {resetNativeScene,inspectSceneContainer} from './m59-scene-reset.mjs';
+import {createReplayPlayers,replayPlayerPlan} from './m59-replay-players.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -47,7 +48,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
   const containerLab=Number(entry.credentials.port)===17959;
   const env={...process.env,M59_ADMIN_HOST:'127.0.0.1',M59_ADMIN_PORT:containerLab?'17998':'19998'};
   let serverAttestation=null,nativeSave=null,containerInfo=null,restoreReceipt=null;
-  let claim=null,leases=null,s=null,k=null,task=null,variantControl=null,staged=null;
+  let claim=null,leases=null,s=null,k=null,task=null,variantControl=null,staged=null,players=null,labState=null;
   const assumedHealth=new Map();let trialSequence=0;
   async function acquire() {
     if(claim)return;
@@ -55,7 +56,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
     if(containerLab) {
       const info=containerInfo=inspectSceneContainer();
       if(!/Clients on port 5959, maintenance on port 9998/.test(status))throw Error('isolated scene maintenance endpoint did not attest');
-      serverAttestation={image_id:info.Image,source_commit:info.Config.Labels?.['org.openai.m59.scene-hold.source-commit']??null,
+      serverAttestation={image_id:info.Image,temporary_account_delete:info.Config.Labels?.['org.openai.m59.scene-accounts.delete']??null,
+        source_commit:info.Config.Labels?.['org.openai.m59.scene-hold.source-commit']??null,
         patch_sha256:info.Config.Labels?.['org.openai.m59.scene-hold.patch-sha256']??null};
     }else if(!/Clients on port 15959, maintenance on port 19998/.test(status))throw Error('maintenance endpoint did not attest to shadow game port 15959');
     claim=claimFleetLock(fleetFile+'.lock');if(!claim.ok){claim=null;throw Error('shadow roster already owned; stop its existing owner before replaying');}
@@ -69,9 +71,10 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
     configureLabEnvironment(selection,process.env,{scope:`replay-${process.pid}`});
     process.env.M59_SURVIVAL_DECISION_DIR=path.join(process.env.M59_LAB_RUNTIME_DIR,'decisions');
     process.env.M59_REPLAY_DIR=path.join(process.env.M59_LAB_RUNTIME_DIR,'replays');
-    installLabGameGlobals(selection);
+    labState=installLabGameGlobals(selection);
   }
   async function stopTrial() {
+    players?.stop();
     variantControl?.restore();variantControl=null;
     if(k)k.stop('replay trial ended',{hard:true});
     s?.cancelMovement?.(null,'replay trial ended',{replacement:{strategy:'yield_to_controller',status:'yielded'}});
@@ -82,7 +85,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
     if(s){s.client?.stopKeepalive?.();s.client?.sock?.destroy?.();s.recorder?.stop?.();await s.replayRecorder?.close?.();}
     if(k){const {dropAutopilot}=await import('./m59-autopilot.mjs');dropAutopilot(config.agent);}
     s=null;k=null;task=null;
-    await staged?.cleanup();staged=null;
+    try {await staged?.cleanup();staged=null;}finally{await players?.close();players=null;}
     if(!done)throw Error('previous trial did not stop; socket closed and refusing further trials');
   }
   async function resetNativeWorld() {
@@ -104,7 +107,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       await s.join(entry.credentials);await s.firstAbilityRead;
       return captureCachedScene(s,null,{provenance:runtimeProvenance(root)});
     },
-    async run({scene,variant,horizonMs,frame,onPrepared,onStarted}) {
+    async run({scene,variant,horizonMs,frame,onPrepared,onStarted,pvp=null}) {
+      const playerOptions=pvp??config.pvp??{},playerPlan=replayPlayerPlan(scene,playerOptions);
       const timings={},began=performance.now();let checkpoint=began;
       const lap=name=>{const now=performance.now();timings[name]=now-checkpoint;checkpoint=now;};
       await acquire();lap('ownership_and_attestation_ms');
@@ -127,8 +131,16 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       attachSurvivalDecisions(s,{epoch:scene.provenance?.harness?.commit??null,
         onCancel:(why,d)=>k.replacementSurvivalChoice(why,d),record:r=>{decisions.push(r);s.replayRecorder?.decision(r);}});
       const input=structuredClone(scene);
-      const player_state=comparePlayerState(input.actors.find(a=>a.mine),captureCachedScene(s,k).actors.find(a=>a.mine));
+      let player_state=comparePlayerState(input.actors.find(a=>a.mine),captureCachedScene(s,k).actors.find(a=>a.mine));
+      if(!player_state.ok&&playerPlan.enabled&&playerPlan.allow_approximate_player) {
+        player_state={ok:true,faithful:false,original_check:player_state,
+          mode:'explicit shadow loadout approximation'};
+        assumptions.push('victim inventory/equipment/abilities use the selected shadow account; captured state differs');
+      }
       if(!player_state.ok)return {outcome:'invalid_player_state',player_state,decisions,assumptions};
+      players=await createReplayPlayers({scene:input,options:playerOptions,env,attestation:serverAttestation,
+        leases,labState,Session});
+      if(players)assumptions.push(...playerPlan.assumptions);
       for(const actor of input.actors) {
         const key=actor.key??actor.name;
         if(actor.vitals?.hp?.how==='unknown'&&assumedHealth.has(key))actor.vitals.hp={v:assumedHealth.get(key),how:'estimated'};
@@ -138,6 +150,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
         requireNativeHold:config.require_native_hold===true,resolveActor:async actor=>{
           if(actor.mine)return s.client.selfId;
           if(actor.kind!=='player')return null;
+          if(players)return players.resolve(actor);
           const name=config.players?.[actor.name];
           if(!name)throw Error(`player ${actor.name} needs an explicit shadow stand-in`);
           assumptions.push('other player bodies restored; their future inputs are unknown');
@@ -150,6 +163,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       if(!loaded.ok)return {outcome:'invalid_load',loaded,decisions,assumptions};
       await s.pacer.submit('read',()=>s.client.roomContents());
       await s.pacer.submit('read',()=>s.client.stats(1));await sleep(250);
+      await players?.sync({target:s});
       lap('client_scene_sync_ms');
       // These are known omissions, never silently promoted into an exact server save.
       assumptions.push('server RNG and timer phases not restored; scene actors are released onto new timers');
@@ -164,8 +178,19 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       variantControl=installReplayVariant(k,variant,{onEvent:r=>suppressed.push(r)});
       k.replayStartActions=(control.start_actions??[]).map(action=>({...action,actor_key:`body-${bindings.get(action.actor_key)}`}));
       await onPrepared?.(s,k,staged);
+      const hpTrace=[],victimMessages=[];
+      if(players) {
+        const noteHealth=s.noteHealth,noteCombatLine=s.noteCombatLine;
+        s.noteHealth=function(ev){
+          hpTrace.push({at:ev.at??Date.now(),hp:ev.value,source:'server_push',room:this.world?.room?.num,
+            row:this.client?.self?.row??null,col:this.client?.self?.col??null});
+          return noteHealth.call(this,ev);
+        };
+        s.noteCombatLine=function(ev){victimMessages.push({at:ev.at,text:ev.text});return noteCombatLine.call(this,ev);};
+      }
       const release=await staged.start();
       if(!release.ok)return {outcome:'invalid_release',loaded,release,decisions,assumptions};
+      players?.start({target:s,horizonMs,at:release.at});
       await onStarted?.(s,k);
       lap('controller_restore_and_start_ms');
       timings.restore_to_start_ms=performance.now()-began;
@@ -200,6 +225,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const deaths=k.tally.deaths??0;
       while(Date.now()-before<horizonMs) {
         const room=s.world?.room?.num,hp=s.client?.vitals?.()?.health;
+        if(players&&hpTrace.at(-1)?.hp!==(hp?.value??null))hpTrace.push({at:Date.now(),hp:hp?.value??null,
+          room,row:s.client?.self?.row??null,col:s.client?.self?.col??null});
         if(room===1||hp?.value===0||(k.tally.deaths??0)>deaths){outcome='died';elapsed=Date.now()-before;break;}
         if(room!=null)lastRoom=room;
         if(error)break;
@@ -209,7 +236,9 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const hp=s.client?.vitals?.()?.health;
       if(outcome!=='died'&&decisions.some(r=>r.event==='finished'&&r.decision.outcome==='recovered'))outcome='recovered';
       const result={outcome: error?'error':outcome,error,elapsed_ms:elapsed,death_room:outcome==='died'?lastRoom:null,
-        final_hp:hp,loaded,player_state,decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,
+        final_hp:hp,loaded,release,player_state,decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,
+        ...(players?{pvp:players.snapshot(),victim_hp_trace:hpTrace,
+          victim_messages:victimMessages}:{}),
         server_attestation:serverAttestation,native_save:nativeSave?{stamp:nativeSave.stamp,files:nativeSave.files}:null,
         native_restore:restoreReceipt?{method:restoreReceipt.method,account_state:restoreReceipt.account_state}:null,
         intervention_applied:variant.kind==='disable'||variant.kind==='continue'?suppressed.length>0:

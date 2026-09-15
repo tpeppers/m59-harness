@@ -15,6 +15,20 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
   assertLab(env);
   const scene=sceneWithOptions(input,options),changes=[],assumptions=[],bindings=new Map(),used=new Set();
   const initial=await readAdminRoom(scene.room.num,{env,dmFn});
+  const labItems=new Map();
+  if(options.labScenery===true) {
+    const removed=scene.actors.filter(a=>a.kind==='item').map(a=>a.key??a.name);
+    scene.actors=scene.actors.filter(a=>a.kind!=='item');
+    for(const o of initial.actors.filter(o=>!isMonster(o)&&o.properties?.pihealth==null&&
+      !['User','Player'].includes(o.class))) {
+      const key='lab-scenery-'+o.id;labItems.set(key,o.id);
+      scene.actors.push({key,name:o.name??o.class,kind:'item',
+        at:{v:{row:o.row,col:o.col,x:o.x,y:o.y},how:'observed'},angle:{v:o.angle,how:'observed'}});
+    }
+    scene.reload.faithful=false;
+    scene.reload.changes.push({kind:'use_lab_scenery',removed,retained:[...labItems.keys()]});
+    assumptions.push('Explicit labScenery: room items and scenery come from the lab snapshot, not the recording');
+  }
   const native=initial.properties?.pbsceneheld!=null;
   if(requireNativeHold&&!native)throw Error('native scene hold is required; use the scene-hold lab image');
   const book=creatureClasses();
@@ -26,7 +40,7 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
   // Resolve user identity and scenery before any destructive preparation.
   for(const a of scene.actors.filter(a=>a.kind!=='monster')) {
     const key=a.key??a.name;
-    let id=await resolveActor?.(a);
+    let id=labItems.get(key)??await resolveActor?.(a);
     if(id==null&&a.kind==='player')id=(await resolve([a.name],{env}))[a.name];
     if(id==null) {
       const candidates=initial.actors.filter(o=>!used.has(o.id)&&o.name?.toLowerCase()===a.name?.toLowerCase());

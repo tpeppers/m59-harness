@@ -2243,9 +2243,13 @@ class Session {
   async joinAsNewCharacter(plan, { userField = null } = {}) {
     if (!this.credentials) throw new Error('nothing to create against — this session never joined');
     const { account, password, host = HOST, port = PORT } = this.credentials;
+    // Isolated scene stand-ins verify stats through the lab admin read immediately
+    // afterward. Ordinary character creation retains its existing settle waits.
+    const fastReplay=this.replayFastReads===true&&Number(port)===17959&&
+      ['127.0.0.1','localhost','::1'].includes(host);
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
-    await new Promise(r => setTimeout(r, 900));
+    if(!fastReplay)await new Promise(r => setTimeout(r, 900));
 
     const c = new M59Client({ host, port, verbose: false, resources });
     c.onEvent = ev => this.recorder.line('event', ev);
@@ -2315,7 +2319,7 @@ class Session {
     this.credentials = { ...this.credentials, character: plan.name };
     await this.pacer.submit('read', () => c.stats(1));
     await this.pacer.submit('read', () => c.stats(2));
-    await new Promise(r => setTimeout(r, 800));
+    if(!fastReplay)await new Promise(r => setTimeout(r, 800));
     return {
       created: !refused && !!c.selfId, refused, object_id: newId ?? c.selfId,
       name: plan.name, asked, replaced,

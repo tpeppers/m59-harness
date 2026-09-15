@@ -386,7 +386,18 @@
        piBulk_hold = piBulk_hold + Send(what,@GetBulk);
 --- a/blakserv/adminfn.c
 +++ b/blakserv/adminfn.c
-@@ -4383,6 +4383,15 @@
+@@ -3751,6 +3751,10 @@
+    // XXX Need a replacement for this on Linux
+ #ifdef BLAK_PLATFORM_WINDOWS
+ 	PostThreadMessage(main_thread_id,WM_BLAK_MAIN_DELETE_ACCOUNT,0,a->account_id);
++#else
++   /* Linux maintenance commands already execute on the server loop.
++      Temporary scene users must not leak accounts after a trial. */
++   DeleteAccountAndAssociatedUsersByID(account_id);
+ #endif
+ }
+ 
+@@ -4383,6 +4387,15 @@
  	UnpauseTimers();
  }
  
@@ -402,7 +413,7 @@
  /* stuff for foreachsession */
  int accounts_in_game;
  void AdminReloadGame(int session_id,admin_parm_type parms[],
-@@ -4402,7 +4411,9 @@
+@@ -4402,7 +4415,9 @@
  		return;
  	}
  
