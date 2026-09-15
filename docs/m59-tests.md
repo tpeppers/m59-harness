@@ -1,5 +1,23 @@
 # The offline test suites, and what each one pins
 
+## Recovered raid and process identity checks
+
+- `node tools/runtime/process-identity-test.mjs`: process start-time and image
+  matching, including recycled PIDs and unavailable identity evidence.
+- `node tools/runtime/fleet-lock-test.mjs` and
+  `node tools/runtime/account-leases-test.mjs`: guarded ownership, exact-roster
+  adoption and consistent exclusion of positively identified recycled PIDs.
+- `node tools/m59-checkpoint-test.mjs`: postconditions, unknown observations,
+  bounded establishment and checkpoint invalidation.
+- `node tools/m59-resistance-test.mjs` and `node tools/m59-mirror-test.mjs`:
+  resistance estimates and saved-scene combat simulation.
+- `node tools/m59-fleetscript-test.mjs`: includes verified cast outcomes and
+  retry-aware transport alongside the existing FleetScript coverage.
+
+These tests are offline. They do not execute a raid or shut down a server.
+
+## Travel and combat regressions
+
 Travel survival regressions:
 
 - `m59-refuge-posture-test.mjs`: eight shared refuge-entry cases, including a

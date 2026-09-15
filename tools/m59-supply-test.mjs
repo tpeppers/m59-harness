@@ -40,6 +40,7 @@
 // leaves a keeper held after it is finished with it.
 
 import { supplyBetween, supplyOps } from './m59-supply.mjs';
+import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -638,13 +639,17 @@ section('AN ORDER ADDRESSED TO ANOTHER FLEET IS REFUSED BY THE PROCESS THAT KNOW
   ok('and a read that does', /!addressedToUsQuery\(url\)/.test(keeper));
   // A conflict about identity, not a malformed request — and the broker turns 409 into
   // "drop the allocation and respawn" rather than retrying into the same stranger.
+  const receiver = { agent: 'receiver', character: 'Receiver', keeperPid: 123 };
+  const wrongReceiver = addressMismatch({ ...receiver, agent: 'sender' }, receiver);
   ok('it answers 409, naming itself', /\}, 409\);\n\s*\};/.test(keeper) &&
-     keeper.includes('this keeper is "${agent}", not "${claimed}"'));
+     keeper.includes('describeMismatch(mismatch)') &&
+     describeMismatch(wrongReceiver) === 'this keeper is agent "receiver", not "sender"');
   ok('and the broker drops the allocation rather than hammering it',
      /if \(r\.status === 409\)/.test(broker) && /keeperPorts\.delete\(agent\)/.test(broker));
 
   ok('an unaddressed write fails closed',
-     /if \(!supplied\) return !required/.test(keeper) &&
+     addressMismatch({}, receiver)?.part === 'unaddressed' &&
+     keeper.includes('addressMismatch(') &&
      /const requireAddressedWrite/.test(keeper));
   ok('every mutating keeper endpoint applies the same strict receiver guard',
      ['join', 'leave', 'rejoin', 'pass', 'policy', 'pause', 'resume', 'stop', 'cancel', 'reroll']

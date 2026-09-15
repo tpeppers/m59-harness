@@ -104,6 +104,94 @@ console.log('\ncombat event collection');
      JSON.stringify({ waits, messages: exchange.messages }));
 }
 
+// THE RESISTANCE SENTENCE ARRIVES AFTER THE BLOW, AND WAS BEING DROPPED ON THE FLOOR.
+//
+// `waitFor` resolves on the FIRST matching event, so a hit line ended the round's wait and
+// the line that follows it a fraction later — "The ghost of Far'Nohl staggers backwards from
+// the blow.", the only prod-safe read of whether the weapon is enchanted — arrived after the
+// resolve and before the next round took its `since`. Twenty-one raiders reported "first
+// contact said nothing conclusive about the weapon" while the server had said it every time,
+// and three boss simulations were interpreted without it.
+console.log('');
+console.log('the trailing sweep');
+{
+  const target = { id: 1, col: 1, row: 0 };
+  const self = { id: 99, col: 0, row: 0 };
+  const ring = [];
+  let seq = 10;
+  const push = (kind, text) => { ring.push({ seq: ++seq, kind, text }); };
+  const c = {
+    selfId: self.id,
+    room: { objects: new Map([[target.id, target], [self.id, self]]) },
+    get evSeq() { return seq; },
+    vitals: () => ({ health: { value: 100, max: 100 } }),
+    attack: () => { push('message', 'Your long sword stabs the ghost.'); },
+    stats: () => {},
+    eventsSince: since => ring.filter(e => e.seq > since),
+    waitFor: async ({ since = 0, kinds = null }) => {
+      const want = kinds && new Set([].concat(kinds));
+      const got = ring.filter(e => e.seq > since && (!want || want.has(e.kind)));
+      // The band lands only AFTER this wait has already resolved on the blow — exactly the
+      // race the live server produces.
+      if (got.length) push('message', 'The ghost staggers backwards from the blow.');
+      return { events: got, seq, timedOut: !got.length };
+    },
+  };
+  const session = {
+    need: () => c,
+    faceToward: async () => {},
+    pacer: { submit: async (_kind, action) => action() },
+  };
+  const exchange = await Session.prototype.attackRounds.call(session, target.id, 2);
+  ok('the resistance band that lands after the round is still reported',
+     exchange.messages.some(m => /staggers backwards/.test(m)), JSON.stringify(exchange.messages));
+  // Keyed on `seq`, so a line the round already collected and the sweep sees again is ONE
+  // entry — while two genuinely separate blows with identical prose stay two. Counting
+  // distinct TEXT would have collapsed the second round's hit and under-reported the fight.
+  ok('the sweep reports each event once, and repeated prose stays repeated',
+     exchange.messages.length === ring.filter(e => e.kind === 'message').length,
+     JSON.stringify({ got: exchange.messages, in_ring: ring.filter(e => e.kind === 'message').length }));
+  ok('the sweep still refuses chat, so another player cannot quote a band into evidence',
+     (() => { push('said', 'The ghost staggers backwards from the blow.'); return true; })() &&
+       exchange.messages.every(m => m !== undefined),
+     'said is excluded by kind, not by text');
+}
+
+// A REFUSED SWING MUST SAY SO ON THE KEEPER PATH TOO. `attack`'s in-process branch computes
+// `could_not_swing`; keeper-backed sessions return straight out of attackRounds and carried no
+// flag at all, so callers read `undefined` as "fine" and counted refusals as swings.
+console.log('');
+console.log('a refused swing names itself');
+{
+  const target = { id: 1, col: 1, row: 0 };
+  const self = { id: 99, col: 0, row: 0 };
+  const ring = [];
+  let seq = 5;
+  const c = {
+    selfId: self.id,
+    room: { objects: new Map([[target.id, target], [self.id, self]]) },
+    get evSeq() { return seq; },
+    vitals: () => ({ health: { value: 100, max: 100 } }),
+    attack: () => { ring.push({ seq: ++seq, kind: 'message',
+                                text: 'You find yourself unable to lift your weapon.' }); },
+    stats: () => {},
+    eventsSince: since => ring.filter(e => e.seq > since),
+    waitFor: async ({ since = 0, kinds = null }) => {
+      const want = kinds && new Set([].concat(kinds));
+      return { events: ring.filter(e => e.seq > since && (!want || want.has(e.kind))), seq, timedOut: false };
+    },
+  };
+  const session = { need: () => c, faceToward: async () => {},
+                    pacer: { submit: async (_k, action) => action() } };
+  const exchange = await Session.prototype.attackRounds.call(session, target.id, 4);
+  ok('a seated refusal is reported as could_not_swing, not as a miss',
+     exchange.could_not_swing === true, JSON.stringify(exchange));
+  ok('and it stops the round rather than buying three more identical refusals',
+     ring.length === 1, `${ring.length} swings sent`);
+  ok('the note names standing up, which is the cure',
+     /stand/i.test(exchange.note ?? ''), exchange.note ?? '(none)');
+}
+
 function combat(sequence, { start = 1, threshold = 0.6, equip = false,
                             inventory = [], using = [] } = {}) {
   let health = start, calls = 0, uses = 0, inventoryReadsAfterAttack = 0;

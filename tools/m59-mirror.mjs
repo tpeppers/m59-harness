@@ -5,6 +5,11 @@
 //   node tools/m59-mirror.mjs plan --character Animal
 //   node tools/m59-mirror.mjs commands --character Animal   just the console lines
 //   node tools/m59-mirror.mjs apply --object 1234 --character Animal --i-mean-it
+//   node tools/m59-mirror.mjs fleet --from-prefix t --prune --i-mean-it
+//
+// `--from-prefix` picks one family of prod agent names when their numbers would collide
+// (t1..t21 and hk1..hk2 both reduce to 1 and 2). `--prune` additionally REMOVES abilities
+// the sheet does not name, which is the only destructive thing here and is never default.
 //
 // m59-sheet.mjs is the export; this is the import. Prod is a server we do not run and
 // cannot snapshot — see the header of m59-sheet.mjs for why the savegame checkpoint does
@@ -236,14 +241,44 @@ export function enrichSheet(sheet) {
 // `objectId` is the LOCAL character's object id, not the one in the sheet — the sheet
 // records prod's id and it means nothing on another server. Object ids are also reissued
 // by `save game`, so this is asked for per run rather than remembered.
-// WHAT THE CHARACTER ALREADY HAS, DECODED. `plSkills` and `plSpells` are lists of one
-// integer per ability and the integer is `num * 100 + ability` — 45253 is skill 452 at 53%.
-// Measured on the local server, 2026-09-05.
+// WHAT THE CHARACTER ALREADY HAS, DECODED.
+//
+// THE SIGN IS A FLAG, NOT A MINUS, AND READING IT AS A MINUS MADE EVERY CHARACTER LOOK
+// EMPTY. `plSkills` and `plSpells` hold one integer per ability, and `EncodeSkill`
+// (player.kod:7254) is:
+//
+//     Has_Been_Used ?  num*100 + iability  :  -(num*100 + iability)
+//
+// so an ability the character has NOT exercised since it last advanced is stored negative —
+// `-45012` is skill 450 at 12%. `DecodeSkillNum` takes `abs(compound)/100` for exactly that
+// reason. This read `/INT (\d+)/`, which does not match a leading minus, so it returned {}
+// for a list of ten skills and the mirror concluded the character had none. Everything
+// downstream followed: it emitted `AddSkill` for abilities that were already there, the
+// server refused each one (AddSkill returns FALSE when `HasSkill`), the run reported those
+// refusals as "could not grant", and a plain read reported twenty of twenty-one characters
+// as having lost every skill they had. Nothing had been lost. Measured 2026-09-11.
+//
+// The used-flag is kept rather than discarded: a mirror has no business flipping it, and a
+// caller that wants to know whether an ability has been exercised should not have to go
+// back to the wire for it.
 export function decodeAbilityList(raw) {
   const out = {};
-  for (const m of String(raw).matchAll(/INT (\d+)/g)) {
-    const n = Number(m[1]);
+  for (const m of String(raw).matchAll(/INT (-?\d+)/g)) {
+    const n = Math.abs(Number(m[1]));
+    if (!Number.isSafeInteger(n) || n < 100) continue;
     out[Math.floor(n / 100)] = n % 100;
+  }
+  return out;
+}
+
+/** The same list, with whether each ability has been used since it last advanced. */
+export function decodeAbilityUse(raw) {
+  const out = {};
+  for (const m of String(raw).matchAll(/INT (-?\d+)/g)) {
+    const v = Number(m[1]);
+    const n = Math.abs(v);
+    if (!Number.isSafeInteger(n) || n < 100) continue;
+    out[Math.floor(n / 100)] = v > 0;
   }
   return out;
 }
@@ -407,9 +442,18 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'm59-mirror.mjs') {
     // WHO IS BEING MIRRORED ONTO WHOM. Prod's agents are t1..t21 and the local fleet's are
     // shadow01..shadow21; pairing is by that number and nothing else, so it is stable
     // across renames and says what it did before it does it.
+    //
+    // AND A NUMBER IS ONLY UNIQUE WITHIN ONE FAMILY OF AGENT NAMES. Prod grew `hk1` and
+    // `hk2` beside `t1`..`t21`; stripping the letters made `hk1` and `t1` the same key, so
+    // both were mirrored onto the same local character and the second silently won — Aaaa
+    // was written as Kermit (level 52) and then immediately as Loial the Ogier (level 20),
+    // and the run reported both as clean because each write succeeded. Measured 2026-09-11.
+    // A collision is now a refusal that names both sheets: a mirror that quietly picks one
+    // of two characters is worse than one that stops.
     const local = await (await fetch(new URL('/health', brokerUrl))).json();
     const localChar = local.session_characters ?? {};
     const numOf = a => Number(String(a).replace(/^\D+/, ''));
+    const prefixOf = a => String(a).replace(/\d+$/, '');
     const pairs = [];
     if (cmd === 'apply') {
       if (!only) { console.error('apply needs --character <prod name>'); process.exit(2); }
@@ -419,15 +463,35 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'm59-mirror.mjs') {
       pairs.push({ sheet, to: to ?? null, objectId });
     } else {
       const byNum = new Map(Object.entries(localChar).map(([a, c]) => [numOf(a), c]));
-      for (const s of readSheets({})) {
+      const wantPrefix = arg('--from-prefix');
+      let all = readSheets({});
+      const families = [...new Set(all.map(s => prefixOf(s.agent)))].sort();
+      if (wantPrefix) all = all.filter(s => prefixOf(s.agent) === wantPrefix);
+      else if (families.length > 1) {
+        console.error(`the sheets come from ${families.length} families of agent name: ${families.join(', ')}.`);
+        console.error('Their numbers collide, so pairing by number would put two prod characters on one');
+        console.error(`local one. Say which family to mirror:  --from-prefix ${families[0]}`);
+        process.exit(2);
+      }
+      const claimed = new Map();
+      for (const s of all) {
         const to = byNum.get(numOf(s.agent));
         if (!to) { console.error(`no local character paired with ${s.agent} (${s.character}) — skipped`); continue; }
+        const already = claimed.get(to);
+        if (already) {
+          console.error(`REFUSING: ${already.agent} (${already.character}) and ${s.agent} (${s.character}) ` +
+            `both pair with ${to}. Pass --from-prefix to choose one family.`);
+          process.exit(2);
+        }
+        claimed.set(to, s);
         pairs.push({ sheet: s, to, objectId: null });
       }
     }
     if (!pairs.length) { console.error('nothing to mirror'); process.exit(1); }
 
     const numbers = abilityNumbers();
+    const shortfalls = [];
+    const prune = argv.includes('--prune');
     const dm = await import('./m59-dm.mjs');
     // RESOLVED IN THE SAME RUN THAT USES THEM. `save game` reissues object ids.
     const names = pairs.map(p => p.to).filter(Boolean);
@@ -465,24 +529,106 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'm59-mirror.mjs') {
       const blocks = dm.split(out, cmds);
       const refused = [];
       cmds.forEach((c, i) => { if (/^send /.test(c) && /:\s*INT 0\b/.test(blocks[i] || '')) refused.push(lines[i]); });
-      // Read the character back rather than trust the batch.
+
+      // WHAT THE CHARACTER IS NOW, AGAINST WHAT THE SHEET ASKED FOR — read back from the
+      // world, per ability, not counted. A count matches for the wrong reasons: ten of ten
+      // says nothing about whether they are the right ten or at the right percentages, and
+      // a refusal count says nothing about whether the refusal mattered (`AddSkill` returns
+      // FALSE for an ability that is already AT or ABOVE the value asked for, which is a
+      // no-op, not a failure). This names every ability that did not land and why.
+      const after = await currentOf(oid);
       const back = await dm.dm([`show object ${oid}`]);
       const g = re => { const m = re.exec(back); return m ? Number(m[1]) : null; };
-      const skillList = /plSkills\s+= LIST (\d+)/.exec(back)?.[1];
-      const spellList = /plSpells\s+= LIST (\d+)/.exec(back)?.[1];
-      const count = async id => {
-        if (!id) return 0;
-        const raw = await dm.dm([`show list ${id}`]);
-        return [...String(raw).matchAll(/INT \d+/g)].length;
-      };
-      console.log(`${sheet.character} -> ${to} [${oid}]: hp ${g(/piMax_Health\s+= INT (\d+)/)}` +
-        ` (wanted ${sheet.level}), might ${g(/piMight\s+= INT (-?\d+)/)}` +
-        ` (wanted ${sheet.attributes?.might ?? '?'}), ${await count(skillList)} skill(s)` +
-        ` of ${(sheet.skills || []).length}, ${await count(spellList)} spell(s)` +
-        ` of ${(sheet.spells || []).length}` + (refused.length ? `  REFUSED ${refused.length}` : ''));
-      for (const r of refused) console.log(`    refused: ${r}`);
+      const short = [];
+      for (const kind of ['skills', 'spells']) {
+        for (const row of sheet[kind] ?? []) {
+          const want = row.ability;
+          if (!Number.isFinite(want) || want <= 0) continue;
+          const num = numbers[kind][String(row.name ?? '').toLowerCase()];
+          if (num == null) { short.push({ kind, name: row.name, want, why: 'no ability of that name in the local kod' }); continue; }
+          const have = after[kind][num];
+          if (!Number.isFinite(have)) { short.push({ kind, name: row.name, want, why: 'absent, and the server refused to add it' }); continue; }
+          if (have !== want) short.push({ kind, name: row.name, want, have, why: `sits at ${have}` });
+        }
+      }
+      // AND WHAT IS THERE THAT THE SHEET DID NOT ASK FOR. A mirror writes the abilities the
+      // sheet names and removes nothing, so a local character that has been something else
+      // — re-rolled, experimented on, or written by the wrong sheet — keeps the residue and
+      // every count still reads "clean". Named rather than removed: dropping an ability is
+      // destructive and the operator decides, but a divergence nobody is told about is one
+      // that gets measured as if it were prod.
+      const extras = [];
+      for (const kind of ['skills', 'spells']) {
+        const asked = new Set((sheet[kind] ?? [])
+          .map(r => numbers[kind][String(r.name ?? '').toLowerCase()])
+          .filter(n => n != null));
+        const nameOf = Object.fromEntries(Object.entries(numbers[kind]).map(([n, v]) => [v, n]));
+        for (const num of Object.keys(after[kind]).map(Number))
+          if (!asked.has(num)) extras.push(`${kind.slice(0, -1)} ${nameOf[num] ?? num} at ${after[kind][num]}`);
+      }
+
+      const attrsOff = Object.entries(ATTR_PROPERTY)
+        .filter(([k, prop]) => Number.isFinite(sheet.attributes?.[k]) && g(new RegExp(prop + '\\s+= INT (-?\\d+)')) !== sheet.attributes[k])
+        .map(([k]) => k);
+      const hp = g(/piMax_Health\s+= INT (\d+)/);
+      const wantedAbilities = ['skills', 'spells']
+        .reduce((n, k) => n + (sheet[k] ?? []).filter(r => r.ability > 0).length, 0);
+      console.log(`${sheet.character} -> ${to} [${oid}]: hp ${hp}${hp === sheet.level ? '' : ` (WANTED ${sheet.level})`}` +
+        `, attributes ${attrsOff.length ? 'OFF: ' + attrsOff.join(',') : 'exact'}` +
+        `, ${wantedAbilities - short.length}/${wantedAbilities} abilities as asked` +
+        (short.length || extras.length ? '' : '  — clean'));
+      for (const x of short)
+        console.log(`    ${x.kind.slice(0, -1)} ${x.name} wanted ${x.want}: ${x.why}`);
+      if (extras.length)
+        console.log(`    carries ${extras.length} ability(s) the sheet does not name: ${extras.slice(0, 6).join(', ')}` +
+          (extras.length > 6 ? `, and ${extras.length - 6} more` : ''));
+
+      // PRUNING IS OPT-IN, because it is the only destructive thing this file does.
+      // `RemoveSkill`/`RemoveSpell` (player.kod:7507, 7083) take an isDM flag and drop the
+      // ability outright. A mirror that pruned by default would quietly delete whatever a
+      // local character had been given for some other experiment; one that never prunes
+      // leaves a character that reads as a faithful clone and fights like something else.
+      // So: named always, removed only when asked.
+      if (prune && extras.length) {
+        const removals = [];
+        for (const kind of ['skills', 'spells']) {
+          const asked = new Set((sheet[kind] ?? [])
+            .map(r => numbers[kind][String(r.name ?? '').toLowerCase()]).filter(n => n != null));
+          const verb = kind === 'skills' ? 'RemoveSkill' : 'RemoveSpell';
+          for (const num of Object.keys(after[kind]).map(Number))
+            if (!asked.has(num)) removals.push(`send object ${oid} ${verb} num INT ${num} isDM INT 1`);
+        }
+        await dm.dm(removals);
+        const pruned = await currentOf(oid);
+        const left = ['skills', 'spells'].reduce((n, kind) => {
+          const asked = new Set((sheet[kind] ?? [])
+            .map(r => numbers[kind][String(r.name ?? '').toLowerCase()]).filter(x => x != null));
+          return n + Object.keys(pruned[kind]).map(Number).filter(x => !asked.has(x)).length;
+        }, 0);
+        console.log(`    pruned ${removals.length}; ${left ? `${left} still there` : 'none left'}`);
+      }
+      if (refused.length && !short.length)
+        console.log(`    (${refused.length} call(s) returned FALSE and changed nothing that needed changing)`);
+      shortfalls.push(...short.map(x => ({ character: sheet.character, ...x })));
     }
     if (!dryRun) {
+      console.log('');
+      // WHAT GENUINELY CANNOT BE GRANTED, gathered rather than left one line per character.
+      // The distinction that matters to a reader: "this server has never heard of it" is a
+      // fact about the kod the server was built from, and is not going to change by trying
+      // again; "the server refused to add it" is a fact about that character.
+      if (!shortfalls.length) console.log('Every ability in every sheet landed at the value the sheet asked for.');
+      else {
+        const byWhy = new Map();
+        for (const s of shortfalls) {
+          const rows = byWhy.get(s.why) ?? [];
+          rows.push(`${s.character}:${s.name}`);
+          byWhy.set(s.why, rows);
+        }
+        console.log(`COULD NOT GRANT — ${shortfalls.length} ability(s) across ${new Set(shortfalls.map(s => s.character)).size} character(s):`);
+        for (const [why, rows] of [...byWhy.entries()].sort((a, b) => b[1].length - a[1].length))
+          console.log(`  ${String(rows.length).padStart(3)}  ${why}`);
+      }
       console.log('');
       console.log('Abilities are PUSHED, not polled: a keeper that was already connected still holds');
       console.log('the ability list it was handed at login, so `abilities` will read stale until that');

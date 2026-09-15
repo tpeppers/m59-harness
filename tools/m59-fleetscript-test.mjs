@@ -2158,5 +2158,76 @@ console.log('\ncrawl_to refuses honestly when there is no keeper to ask');
      sent.said.length === 1);
 }
 
+// ===========================================================================
+// READING A CAST'S OUTCOME FROM WHAT THE SERVER SAID
+// ===========================================================================
+//
+// THE INCIDENT, 2026-09-11. `castVerified` decided from the COST: mana gone or reagents
+// moved meant it landed. `enchant weapon` charges 17 mana and 3 elderberry UP FRONT and then
+// freezes the caster for thirty seconds (enchwp.kod:52). Anything the character does in
+// those thirty seconds breaks the trance -- and the keeper's own one-second pass sat each
+// caster down to rest, because the cast itself drops ~19 vigor, below `vigorFloor`. So the
+// cost was always paid and the spell never landed. Three casters reported three successes,
+// the prep report said the weapons were enchanted, and the raid set off at a boss that
+// resists mundane weapons 90% carrying three mundane weapons. The server had said
+// "Your concentration is broken and the enchant weapon spell fizzles." every single time.
+//
+// These pin the classifier, which is the part that has to stay right.
+console.log('\na cast is read from the sentence, not from the receipt');
+{
+  const { classifyCast } = await import('./m59-fleetscript.mjs');
+  const fizzle = 'Your concentration is broken and the enchant weapon spell fizzles.';
+  const f = classifyCast([fizzle]);
+  ok('a broken trance is "interrupted", not a failed roll', f?.outcome === 'interrupted', JSON.stringify(f));
+  ok('and it is worth retrying', f?.retryable === true);
+
+  const roll = classifyCast(['You were unsuccessful in casting enchant weapon.']);
+  ok('a failed roll is its own outcome', roll?.outcome === 'failed_roll', JSON.stringify(roll));
+  ok('and it is also worth retrying', roll?.retryable === true);
+
+  // The distinction that makes prep idempotent: already-in-effect is refused in CanPayCosts,
+  // BEFORE the cost is taken, so asking is free and the answer is authoritative.
+  const done = classifyCast(['This weapon is already dedicated to Kraanan.']);
+  ok('"already dedicated" reports the buff as IN EFFECT', done?.in_effect === true, JSON.stringify(done));
+  ok('and it is NOT retried, because it is an answer rather than a failure', done?.retryable === false);
+
+  const already = classifyCast(['You are already enchanted.']);
+  ok('the generic personal-enchantment refusal reads the same way', already?.in_effect === true);
+  const strength = classifyCast(['You already have superior strength.']);
+  ok('and so does a per-spell override', strength?.in_effect === true, JSON.stringify(strength));
+
+  ok('an unrecognised sentence classifies as nothing, never as success',
+     classifyCast(['The troll shuffles about.']) === null);
+  ok('and silence classifies as nothing too', classifyCast([]) === null);
+}
+
+console.log('\nan interruption names the thing that interrupted it');
+{
+  const { classifyCast } = await import('./m59-fleetscript.mjs');
+  // A trance cannot survive a fight: EVENT_DAMAGE breaks it and no amount of holding still
+  // prevents that. Retrying under attack burns the reagents once per attempt for a cast that
+  // cannot land, so being hit turns a retryable outcome into a non-retryable one.
+  const fizzle = 'Your concentration is broken and the enchant weapon spell fizzles.';
+  const hit = classifyCast([fizzle, 'The troll wounds you with its attack.']);
+  ok('damage during a trance is named as the cause', hit?.interrupted_by === 'damage', JSON.stringify(hit));
+  ok('and it stops the retries rather than feeding a fight more reagents', hit?.retryable === false);
+  ok('and it says where the fix is', /somewhere safe/.test(hit?.why ?? ''), hit?.why);
+  ok('a fizzle with no attack in the transcript is still retryable',
+     classifyCast([fizzle, 'Someone says hello.'])?.retryable === true);
+}
+
+console.log('\nevery cast outcome carries the two things a caller has to branch on');
+{
+  const { CAST_OUTCOMES } = await import('./m59-fleetscript.mjs');
+  ok('every entry has an outcome name',
+     CAST_OUTCOMES.every(o => typeof o.outcome === 'string' && o.outcome.length > 0));
+  ok('every entry says whether it is worth retrying',
+     CAST_OUTCOMES.every(o => 'retryable' in o));
+  ok('every entry carries a matcher', CAST_OUTCOMES.every(o => o.re instanceof RegExp));
+  ok('outcome names are unique',
+     new Set(CAST_OUTCOMES.map(o => o.outcome)).size === CAST_OUTCOMES.length);
+}
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

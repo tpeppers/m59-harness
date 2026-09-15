@@ -47,6 +47,16 @@ import {SAVE_PARTS,lastSaveStamp,saveSetFiles} from './runtime/server-save-set.m
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
 const ADMIN_HOST = process.env.M59_HOST || '127.0.0.1';
+// 9998 IS NOT THIS MACHINE'S SERVER, AND SOMETHING ELSE ANSWERS ON IT. The native blakserv
+// here listens on 19998 (CLAUDE.md says so); 9998 on this box is Docker Desktop's backend.
+// The checkpoint half therefore sent `save game` to Docker, matched a stamp out of whatever
+// came back, and archived nothing — reporting "saved, but could not archive", which reads as
+// an archiving problem and is actually a save that went to the wrong place. Measured
+// 2026-09-11: four consecutive stamps, zero files, while the same command through m59-dm
+// (which resolves the port properly) wrote all four in about two seconds every time.
+//
+// Left as a default rather than changed, because a Docker install genuinely does use 9998 and
+// this tool is shared — but the mismatch is now LOUD instead of silent. Set M59_ADMIN_PORT.
 const ADMIN_PORT = Number(process.env.M59_ADMIN_PORT || 9998);
 
 const c = {
@@ -116,6 +126,26 @@ function findSavegame(explicit) {
 const checkpointRoot = savegame => join(dirname(savegame), 'checkpoints');
 
 // ------------------------------------------------------------------ save sets
+
+// WAIT FOR THE SET TO LAND. "Save time is (<stamp>)" comes back from the admin socket before
+// the four files are on disk — measured 2026-09-11, three attempts in a row, every one
+// reporting `save set <stamp> is missing gameuser, accounts, striings, dynarscs` for a set
+// that was complete moments later. So the sentence announces the save, it does not mean the
+// save has been WRITTEN, and archiving on the sentence is trusting a reply instead of reading
+// the world back — the oldest rule in this repository.
+//
+// Bounded, and it returns what it found rather than throwing: a set that never completes is a
+// real failure and the caller already knows how to report one.
+async function waitForSaveSet(savegame, stamp, ms = 30_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const files = saveSetFiles(savegame, stamp);
+    const missing = SAVE_PARTS.filter(p => !files.some(f => basename(f).startsWith(`${p}.`)));
+    if (!missing.length) return { ok: true, waited_ms: ms - (deadline - Date.now()) };
+    if (Date.now() >= deadline) return { ok: false, missing };
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
 
 // Copy a save set into its own directory, with a manifest saying what it is.
 // ABSENCE IS NOT SUCCESS: a set missing gameuser is not a save, and writing a
@@ -335,7 +365,7 @@ async function main() {
   } else {
     process.stdout.write('checkpoint:  saving... ');
     let out = '';
-    try { out = await admin('save game', 2000); }
+    try { out = await admin('save game'); }
     catch (e) { console.log(c.bad(`failed: ${e.message}`)); return 1; }
 
     // The server says "Save time is (<stamp>)" when it has finished. Anything
@@ -349,6 +379,18 @@ async function main() {
       return 1;
     }
     const dest = join(root, `${stamp}-checkpoint`);
+    // The stamp is the server's promise; the files are the fact. Wait for the fact.
+    const landed = await waitForSaveSet(savegame, m[1]);
+    if (!landed.ok) {
+      console.log(c.bad(`the server reported save ${m[1]} but it never finished writing: ` +
+                        `still missing ${landed.missing.join(', ')} after 30s`));
+      console.log(c.warn(`  ARE YOU SAVING THE RIGHT SERVER? This asked ${ADMIN_HOST}:${ADMIN_PORT} ` +
+                         `and archived from ${savegame}. If those are two different servers the ` +
+                         'save went elsewhere and this directory will never fill. Set ' +
+                         'M59_ADMIN_PORT (19998 for a native blakserv) and M59_SAVEGAME together.'));
+      console.log(c.warn('  the standing save above is intact; not stopping anything.'));
+      return 1;
+    }
     const r = archive(savegame, m[1], dest, 'checkpoint', a.label);
     if (!r.ok) { console.log(c.bad(`saved, but could not archive: ${r.why}`)); return 1; }
     console.log(c.ok(`done → ${basename(dest)} (${r.files} files, ${(r.bytes / 1024).toFixed(0)} KB)`));

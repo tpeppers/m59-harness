@@ -410,6 +410,145 @@ try {
     }).released, true);
   }
 
+  // ============================================================================
+  // A LIVE GUARD PID IS NOT A LIVE KEEPER.
+  // ============================================================================
+  //
+  // The incident this pins, twice over: a broker died holding a lock whose guard pid had
+  // since been handed to an unrelated program — a desktop chat application on 2026-09-08,
+  // McAfee's browserhost.exe on 2026-09-10. `inspectFleetLock` reported `live` on the
+  // strength of `kill(pid, 0)` and went on doing so for as long as that program ran, which
+  // left deleting a lock as the only recovery and this repository forbids that.
+  {
+    const ours = (pid, started, image) => ({
+      isPidLive: p => p === pid,
+      startTimes: pids => new Map(pids.map(p => [p, p === pid ? started : null])),
+      imageName: p => (p === pid ? image : null),
+    });
+
+    // 1. THE INCIDENT. Owner dead, guard alive, guard is not node.
+    {
+      const path = file('recycled-guard.lock');
+      writeRecord(path, record(900, 'owner-token-900-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [28016],
+      }));
+      const found = inspectFleetLock(path, ours(28016, null, 'browserhost.exe'));
+      assert.equal(found.state, 'stale');
+      assert.equal(found.reclaimable, true);
+      assert.equal(found.recycled_guards.length, 1);
+      assert.equal(found.recycled_guards[0].pid, 28016);
+      assert.match(found.why, /browserhost\.exe/);
+    }
+
+    // 2. A RECYCLED *NODE* PID, which the image check cannot see and the start time can.
+    {
+      const path = file('recycled-node-guard.lock');
+      writeRecord(path, record(901, 'owner-token-901-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [5150], guard_started: { 5150: 1_700_000_000_000 },
+      }));
+      const found = inspectFleetLock(path, ours(5150, 1_700_000_600_000, 'node.exe'));
+      assert.equal(found.state, 'stale', 'a node pid that started later is not the guard');
+      assert.match(found.why, /the guard was registered at/);
+    }
+
+    // 3. THE SAME PROCESS STILL HOLDS IT. This is the direction that must never regress.
+    {
+      const path = file('surviving-guard.lock');
+      writeRecord(path, record(902, 'owner-token-902-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [5151], guard_started: { 5151: 1_700_000_000_000 },
+      }));
+      const found = inspectFleetLock(path, ours(5151, 1_700_000_000_000, 'node.exe'));
+      assert.equal(found.state, 'live');
+      assert.equal(found.guard_pid, 5151);
+      assert.equal(found.owner_dead, true);
+    }
+
+    // 4. UNREADABLE IDENTITY FAILS CLOSED, exactly as it did before this existed.
+    {
+      const path = file('unknown-guard.lock');
+      writeRecord(path, record(903, 'owner-token-903-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [5152],
+      }));
+      assert.equal(inspectFleetLock(path, ours(5152, null, null)).state, 'live');
+    }
+
+    // 5. A LOCK WRITTEN BEFORE THIS FIELD EXISTED behaves as it always did when its guard
+    //    is a live node process. Old and new brokers share these files.
+    {
+      const path = file('legacy-guard.lock');
+      writeRecord(path, record(904, 'owner-token-904-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [5153],
+      }));
+      assert.equal(inspectFleetLock(path, ours(5153, null, 'node.exe')).state, 'live');
+    }
+
+    // 6. A DEAD GUARD IS STILL JUST DEAD, and says nothing about identity.
+    {
+      const path = file('dead-guard.lock');
+      writeRecord(path, record(905, 'owner-token-905-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [5154], guard_started: { 5154: 1_700_000_000_000 },
+      }));
+      const found = inspectFleetLock(path, {
+        isPidLive: () => false,
+        startTimes: pids => new Map(pids.map(p => [p, null])),
+        imageName: () => null,
+      });
+      assert.equal(found.state, 'stale');
+      assert.equal(found.recycled_guards, undefined, 'nothing was judged recycled');
+    }
+
+    // 7. REGISTRATION RECORDS THE IDENTITY, because that is the only moment it is knowable.
+    {
+      const path = file('guard-registration.lock');
+      const claim = claimFleetLock(path, {
+        pid: 906, token: 'owner-token-906-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+        guards: [], isPidLive: pid => pid === 906,
+      });
+      assert.equal(claim.ok, true);
+      const added = addFleetLockGuard(path, {
+        pid: 906, token: 'owner-token-906-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+        guardPid: 7001, isPidLive: pid => pid === 906 || pid === 7001,
+        startTimes: pids => new Map(pids.map(p => [p, p === 7001 ? 1_700_000_111_000 : null])),
+      });
+      assert.equal(added.ok, true);
+      const onDisk = JSON.parse(readFileSync(path, 'utf8'));
+      assert.deepEqual(onDisk.guards, [7001]);
+      assert.deepEqual(onDisk.guard_started, { 7001: 1_700_000_111_000 });
+    }
+
+    // 8. AND DROPS IT WITH THE GUARD, so the field cannot grow for ever.
+    {
+      const path = file('guard-pruning.lock');
+      writeRecord(path, record(907, 'owner-token-907-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [7101],
+        guard_started: { 7101: 1_700_000_222_000 },
+      }));
+      const added = addFleetLockGuard(path, {
+        pid: 907, token: 'owner-token-907-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+        guardPid: 7102,
+        // 7101 is gone, so it is pruned; 7102 is the one being registered.
+        isPidLive: pid => pid === 907 || pid === 7102,
+        startTimes: pids => new Map(pids.map(p => [p, p === 7102 ? 1_700_000_333_000 : null])),
+      });
+      assert.equal(added.ok, true);
+      const onDisk = JSON.parse(readFileSync(path, 'utf8'));
+      assert.deepEqual(onDisk.guards, [7102]);
+      assert.deepEqual(onDisk.guard_started, { 7102: 1_700_000_333_000 },
+        'the pruned guard took its identity with it');
+    }
+
+    // 9. A MALFORMED FIELD INVALIDATES THE RECORD rather than being quietly ignored — a
+    //    lock whose identities cannot be trusted must not be read as one with none.
+    {
+      const path = file('bad-guard-started.lock');
+      writeRecord(path, record(908, 'owner-token-908-aaaa', {
+        kind: BROKER_FLEET_LOCK_KIND, guards: [7201], guard_started: { 7201: -1 },
+      }));
+      const found = inspectFleetLock(path, ours(7201, null, 'node.exe'));
+      assert.equal(found.lock, undefined, 'an unparseable record is not a claim');
+    }
+  }
+
   console.log('runtime fleet lock: PASS');
 } finally {
   rmSync(resolvedScratch, { recursive: true, force: true });

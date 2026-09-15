@@ -5,6 +5,7 @@
 //   node tools/m59-simulate.mjs --target "ghost" --room 210 --mirror
 //   node tools/m59-simulate.mjs --room 35 --list          what is in that room, nothing else
 //   node tools/m59-simulate.mjs --room 35 --respawn QueenGenTimer   restock the room, then fight
+//   node tools/m59-simulate.mjs --room 40 --target Ghost --via 38,40   WALK there, then fight
 //
 // The question this answers is "can the fleet take X, and at what cost" — asked on a server
 // where the answer is cheap, before anyone walks twenty-one characters somewhere to find out.
@@ -380,6 +381,7 @@ function html(state, sum) {
  <div class="tile"><b>${t.incoming_other}</b><span>swings from everything else</span></div>
  <div class="tile"><b>${state.deaths.size}/${state.characters_count}</b><span>fleet dead</span></div>
  <div class="tile"><b>${state.peakInReach}</b><span>most in reach at once</span></div>
+ ${state.arrivals?.length ? `<div class="tile"><b>${state.arrivals[state.arrivals.length - 1].arrived}/${state.characters_count}</b><span>walked into the room</span></div>` : ''}
 </div>
 <h2>Per character</h2>
 <div class="scroll"><table>
@@ -388,6 +390,13 @@ ${rows}
 </table></div>
 <h2>Who was hitting us</h2>
 <div class="scroll"><table><tr><th>attacker</th><th>swings at the fleet</th></tr>${byWho || '<tr><td colspan=2>nothing landed a line</td></tr>'}</table></div>
+
+${state.arrivals?.length ? `<h2>Getting there</h2>
+<div class="scroll"><table><tr><th>room</th><th>arrived</th><th>took</th></tr>
+${state.arrivals.map(a => `<tr><td>${a.room}</td><td class="n">${a.arrived}/${a.of}</td><td class="n">${a.seconds}s</td></tr>`).join('')}
+</table></div>
+<p class="sub">A fleet that arrives in ones and twos fights a different battle from one that
+arrives together, whatever the combat numbers say. Rooms walked, not teleported.</p>` : ''}
 
 <h2>Who fell, and to what</h2>
 <div class="scroll"><table><tr><th>at</th><th>character</th><th>killed by</th></tr>${fell || '<tr><td colspan=3>nobody died</td></tr>'}</table></div>
@@ -518,25 +527,85 @@ async function main() {
   const check = await rpc('autopilot', { agent: agents[0], action: 'status' });
   console.error(`armed (${agents[0]}: flee ${check?.policy?.fleeBelow}, panicLogoff ${check?.policy?.panicLogoff})`);
 
-  // 5. PLACE.
+  const state0 = { arrivals: [] };
+
+  // 5. GET THERE.
+  //
+  // TWO WAYS IN, AND THEY ANSWER DIFFERENT QUESTIONS. The default teleports, because
+  // "can the fleet take X" and "can the fleet GET to X" are separate and mixing them
+  // means a failed approach reads as a lost fight. `--via 38,40` walks instead, hop by
+  // hop through the rooms named, which is the question you ask once the first one is
+  // answered — and the arrival report is then the interesting half: a fleet that arrives
+  // in ones and twos over four minutes fights a different battle from one that arrives
+  // together, whatever the combat numbers say afterwards.
   const g = await geometry(room);
   if (!g) console.error(`no baked geometry for room ${room} — placing without a floor check`);
-  const ring = slotsAround(g, target, 3.5);
   const ids = await dm.resolve(agents.map(a => characters[a]));
-  const placeCmds = [];
-  agents.forEach((a, i) => {
-    const spot = ring[i % Math.max(1, ring.length)];
-    const id = ids[characters[a]];
-    if (id != null && spot) placeCmds.push(dm.relocateCmd(id, roomObj, spot.row, spot.col));
-  });
-  if (placeCmds.length) await dm.dm(placeCmds);
-  console.error(`placed ${placeCmds.length} around ${target.cls}; ${ring.length} standable square(s) within 3.5`);
+  const via = (arg('--via') ?? '').split(',').map(x => Number(x.trim())).filter(Number.isFinite);
+
+  const roomNumOfObj = async objId => {
+    if (objId == null) return null;
+    const head = await dm.dm([`show object ${objId}`]);
+    return Number((/piRoom_num\s+= INT (\d+)/.exec(head) ?? [])[1]) || null;
+  };
+  const whereEveryone = async () => {
+    const checks = agents.map(a => `show object ${ids[characters[a]]}`);
+    const blocks = dm.split(await dm.dm(checks), checks);
+    const out = {};
+    const seenRooms = new Map();
+    for (let i = 0; i < agents.length; i++) {
+      const owner = Number((/poOwner\s+= OBJECT (\d+)/.exec(blocks[i] || '') ?? [])[1]) || null;
+      if (owner != null && !seenRooms.has(owner)) seenRooms.set(owner, await roomNumOfObj(owner));
+      out[agents[i]] = owner == null ? null : seenRooms.get(owner);
+    }
+    return out;
+  };
+
+  if (via.length) {
+    // The keeper must be free to walk: a journey is a JOB the keeper runs, so the errand
+    // posture that makes a character stand still also makes it refuse to travel.
+    for (const a of agents)
+      await rpc('autopilot', { agent: a, action: 'start', mode: 'idle', roam: false, hunt: null });
+    for (const hop of via) {
+      console.error(`${now()} walking ${agents.length} to room ${hop}`);
+      const started = Date.now();
+      await Promise.all(agents.map(a =>
+        rpc('travel', { agent: a, to: hop, background: true }, 60_000)));
+      // Poll rather than sleep: a fleet that arrives in ninety seconds must not sit out
+      // the rest of a fixed wait, and one that never arrives must not be waited on for ever.
+      const deadline = started + Number(arg('--hop-minutes', 8)) * 60_000;
+      let arrived = {};
+      while (Date.now() < deadline) {
+        arrived = await whereEveryone();
+        const n = Object.values(arrived).filter(r => r === hop).length;
+        if (n === agents.length) break;
+        await sleep(5000);
+      }
+      const there = agents.filter(a => arrived[a] === hop);
+      const elapsed = Math.round((Date.now() - started) / 1000);
+      console.error(`${now()} room ${hop}: ${there.length}/${agents.length} arrived in ${elapsed}s` +
+        (there.length === agents.length ? '' :
+         `  stragglers: ${agents.filter(a => arrived[a] !== hop).map(a => `${characters[a]}@${arrived[a] ?? '?'}`).join(', ')}`));
+      state0.arrivals.push({ room: hop, arrived: there.length, of: agents.length, seconds: elapsed });
+    }
+  } else {
+    const ring = slotsAround(g, target, 3.5);
+    const placeCmds = [];
+    agents.forEach((a, i) => {
+      const spot = ring[i % Math.max(1, ring.length)];
+      const id = ids[characters[a]];
+      if (id != null && spot) placeCmds.push(dm.relocateCmd(id, roomObj, spot.row, spot.col));
+    });
+    if (placeCmds.length) await dm.dm(placeCmds);
+    console.error(`placed ${placeCmds.length} around ${target.cls}; ${ring.length} standable square(s) within 3.5`);
+  }
 
   // 6. LISTEN. MCP is request/response: the world only reaches an agent that asks.
   const state = {
     room, roomName: (await dm.dm([`show object ${roomObj}`])).match(/is CLASS (\w+)/)?.[1] ?? `room ${room}`,
     target, characters, levels: {}, log: Object.fromEntries(agents.map(a => [a, []])),
     deaths: new Map(), started: Date.now(), ended: 0, won: false, verdict: '', peakInReach: 0,
+    arrivals: state0.arrivals,
     characters_count: agents.length,
   };
   for (const a of agents) {

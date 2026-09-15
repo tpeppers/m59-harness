@@ -2054,8 +2054,25 @@ class KeeperProxy {
         // the snapshot's own spell list rather than sent as a bare number, so the keeper
         // never has to guess which namespace it was handed.
         const sp = (s.spells ?? []).find(x => x.id === spellId);
+        const list = (Array.isArray(targets) ? targets : [targets]).filter(x => x != null);
+        // `target`, SINGULAR, IS THE FIELD THE KEEPER READS — and sending only the plural
+        // dropped every target on the floor.
+        //
+        // The keeper's /action handler decides with `args.target !== undefined` and
+        // validates one id (m59-keeper-process.mjs ~1613). This sent `targets` only, so
+        // `spellHasTarget` was false for every targeted cast a keeper-backed character has
+        // ever made and the keeper cast with an EMPTY list. Both halves then hid it: the
+        // keeper answered `sent: true` because it had sent something, and the broker threw
+        // that answer away.
+        //
+        // From outside it looked like two different bugs. `enchant weapon` did nothing at
+        // all, silently — the kod's `first(lTargets)` is `$` and enchwp.kod refuses a
+        // non-weapon. `bless` and `super strength` appeared to WORK, which is worse: a
+        // personal enchantment with no target lands on the CASTER, so every buff a raid
+        // thought it had put on someone had gone onto the person casting it. Measured
+        // 2026-09-11; the tell was `keeper_said.targets: []`.
         return act('cast', { spell: sp?.name ?? String(spellId), spell_id: spellId,
-                             targets: Array.isArray(targets) ? targets : [targets] });
+                             targets: list, ...(list.length ? { target: list[0] } : {}) });
       },
       // AND NO `buy`/`buyItems` HERE, DELIBERATELY — THAT ONE STAYS ON THE SESSION.
       //
@@ -2525,6 +2542,9 @@ class KeeperProxy {
       to: dest, toRoomNum: dest,
       where: opts.where, max_hops: opts.maxHops, control_token: opts.controlToken,
       run_errands: opts.runErrands !== false,
+      // Deliberately entering a NEVER_ENTER room. The keeper refuses the flag without a
+      // reason, so both travel together or neither does.
+      ...(opts.allowHazard ? { allow_hazard: true, hazard_why: opts.hazardWhy } : {}),
       // The keeper backgrounds by default; a foreground caller awaits `promise` below and
       // wants the journey's own result rather than an acknowledgement.
       background: !foreground,
@@ -6441,6 +6461,14 @@ const TOOLS = [
           'the destination. This is the errand that FINDS the missing trigger -- and 17 of ' +
           'those 25 rooms have a way out, so a person can plainly get into them. The reason ' +
           'is MANDATORY. See tools/m59-exits.mjs.' },
+      despite_hazard: { type: 'object',
+        properties: { reason: { type: 'string' } },
+        description: 'ENTER A ROOM ON THE NEVER-ENTER LIST, ON PURPOSE. Those rooms are on ' +
+          'the list because they killed somebody, and each entry cites the kod and the ' +
+          'post-mortem — room 40 is the Castle Victoria throne room, tusked skeletons at ' +
+          'level 100 up to ten at once, where Floyd died. A rescue and a boss raid are the ' +
+          'legitimate reasons to go anyway. `reason` is REQUIRED and is logged by the ' +
+          'keeper: an override nobody has to justify is just a hole in the list.' },
       run_errands: { type: 'boolean', description: 'do the outstanding errands — bank the ' +
         'takings, visit a vault being passed, hand over farm supplies — BEFORE setting off. ' +
         'Default true, because a character sent across the world should stock up first ' +
@@ -6525,6 +6553,9 @@ const TOOLS = [
         healthFloor: a.health_floor,
         despiteHealth: a.despite_health,
         despiteUnreachable: a.despite_unreachable,
+        // A hazard-room override is the flag AND the reason, together or not at all.
+        allowHazard: !!a.despite_hazard?.reason,
+        hazardWhy: a.despite_hazard?.reason ?? null,
         where: where.name, maxHops: num(a.max_hops, 25), controlToken: a.control_token,
         runErrands: a.run_errands !== false,
         // FOREGROUND MEANS WAIT FOR THE JOURNEY, NOT FOR AN ACKNOWLEDGEMENT.
@@ -11838,11 +11869,28 @@ const TOOLS = [
         carrying.set(n, (carrying.get(n) || 0) + (o.amount || 1));
       }
       // Reagent classes are kod class names (Herbs, ShamanBlood); inventory gives
-      // display names ("herb", "shaman blood"). Match loosely and say when unsure.
+      // display names ("herb", "shaman blood").
+      //
+      // THIS SAID "CARRYING 0" TO A CHARACTER HOLDING EIGHTEEN. The old normalisation only
+      // split camelCase — `ElderBerry` -> `elder berry` — and worked only because the
+      // catalogue happens to spell that one `Elderberry`. `enchant weapon` asks for
+      // `&orctooth` (enchwp.kod:65): one lowercase word with no boundary to split, while
+      // the pack calls it `orc tooth`. Neither string contains the other, so the check
+      // reported `needs 1 x orctooth, carrying 0` for a character carrying 18 — and `cast`
+      // then returned `cast: true` with `mana_spent: 0`, which is this repository's own
+      // phrasing for "the cast did not happen at all". An entire raid's preparation is
+      // gated on this number. Measured 2026-09-11.
+      //
+      // Strip everything that is not a letter or a digit from BOTH sides — the same
+      // normalisation the spell-name join below already uses, for the same reason.
+      const reagentKey = x => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
       const haveReagent = cls => {
-        const want = cls.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
-        for (const [name, n] of carrying)
-          if (name.includes(want) || want.includes(name)) return n;
+        const want = reagentKey(cls);
+        if (!want) return 0;
+        for (const [name, n] of carrying) {
+          const have = reagentKey(name);
+          if (have === want || have.includes(want) || want.includes(have)) return n;
+        }
         return 0;
       };
 
@@ -11999,8 +12047,9 @@ const TOOLS = [
       }
 
       const before = c.evSeq;
+      let sent;
       try {
-        await s.pacer.submit('cast', () => {
+        sent = await s.pacer.submit('cast', () => {
           beforeRtsMutation(a, 'cast');
           return c.cast(mine.id, targets);
         }, ATTACK_INTERVAL_MS);
@@ -12009,6 +12058,27 @@ const TOOLS = [
         if (cancelled) return cancelled;
         throw error;
       }
+      // THE KEEPER'S ANSWER WAS THROWN AWAY, AND A REFUSAL READ AS A SUCCESS.
+      //
+      // On a keeper-backed character `c.cast` is KeeperProxy.cast, which posts to the
+      // keeper's `/action` — an RTS safety surface with a FAIL-CLOSED allowlist of three
+      // spells (create food, create weapon, blink; m59-rts-safety.mjs). Anything else comes
+      // back 409 `{error: "... is not classified as safe for RTS casting"}`, and
+      // `keeperAction` hands that back as a VALUE rather than throwing. This discarded the
+      // return, so the tool answered `cast: true` for a spell the keeper had just refused
+      // to send, and the only visible symptom was that nothing happened — which is also
+      // what a legitimately resisted spell looks like. Hours went into the difference.
+      if (sent && typeof sent === 'object' && sent.error)
+        return { cast: false, reason: sent.error, refused_by: 'the keeper process',
+                 spell: mine.name, targets,
+                 note: 'the broker never touches the wire for a keeper-backed character: the ' +
+                       'cast is forwarded to that keeper, and its safety allowlist decides. ' +
+                       'Widening it is a deliberate change to m59-rts-safety.mjs, not a flag.' };
+      // AND WHAT IT SAID WHEN IT DID NOT REFUSE, because "accepted" is not "done": the
+      // keeper runs a cast as a background JOB and can still refuse inside it, after the
+      // HTTP reply has gone. Carried through so a caller can tell a queued cast from a
+      // sent one without reading a keeper log.
+      const keeperSaid = sent && typeof sent === 'object' ? sent : undefined;
       const unpriced = !info;
       const ev = await c.waitFor({ since: before, timeoutMs: 4000 });
       const messages = ev.events.filter(e => e.text).map(e => e.text);
@@ -12047,6 +12117,7 @@ const TOOLS = [
           'something downstream refused it (create weapon deletes the weapon when it will not fit)';
       return {
         cast: true, spell: mine.name, targets,
+        ...(keeperSaid ? { keeper_said: keeperSaid } : {}),
         messages,
         ...(created ? { created } : {}),
         mana_spent: spent, what_the_mana_says: reading,
@@ -16558,9 +16629,25 @@ const TOOLS = [
       // character was busy can point at a sequence number that has already been evicted,
       // and `eventsSince` — a plain `seq > since` filter — would return the survivors
       // with no indication that anything was missing. Say how many.
-      const oldest = c.events.length ? c.events[0].seq : c.evSeq + 1;
-      const missed = Math.max(0, oldest - 1 - since);
-      const { events, seq, timedOut } = await c.waitFor({
+      // THE RING IS THE REAL CLIENT'S AND A KEEPER-BACKED SESSION DOES NOT HAVE ONE.
+      //
+      // This read `c.events.length` unguarded, and KeeperProxy publishes `eventsSince` and
+      // `waitFor` but no local ring — so on every keeper-backed character, which is every
+      // character in both live fleets, `wait_for_event` THREW:
+      //
+      //     error: Cannot read properties of undefined (reading 'length')
+      //
+      // That is the tool whose own description calls it "how an agent listens", and it has
+      // been unavailable to the entire fleet. It cost a whole investigation into why a cast
+      // produced no server message: the answer was that nothing could read messages at all,
+      // and the caller — swallowing the error as an empty result — reported silence from
+      // the server instead of a crash in the tool. The window still comes from the keeper
+      // through `waitFor`; only the drop-detection needs a local ring, so without one the
+      // honest answer is "cannot tell", not a throw.
+      const ring = Array.isArray(c.events) ? c.events : null;
+      const oldest = ring ? (ring.length ? ring[0].seq : c.evSeq + 1) : null;
+      const missed = oldest === null ? 0 : Math.max(0, oldest - 1 - since);
+      const { events, seq, timedOut, no_event_stream, why } = await c.waitFor({
         since, kinds: a.kinds, timeoutMs: Math.min(num(a.timeout_ms, 30000), 120000) });
       s.cursor = seq;
       return { cursor: seq, timed_out: timedOut,
@@ -16571,6 +16658,11 @@ const TOOLS = [
                                             'cannot evict. Call `chat` for the transcript, or `inbox` for the ones ' +
                                             'addressed to a character that is listening.' }
                           : {}),
+               // SAY WHEN THE ANSWER IS "I CANNOT HEAR", because an empty list and a
+               // broken stream are the same shape and this repository has been fooled by
+               // that once already today.
+               ...(no_event_stream ? { no_event_stream: true, why } : {}),
+               ...(oldest === null ? { drop_detection: 'unavailable — this session has no local event ring' } : {}),
                note: buffered > 0 ? 'these were already waiting; poll again with the returned cursor to hear what happens next'
                                   : undefined,
                events };

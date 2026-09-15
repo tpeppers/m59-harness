@@ -5,7 +5,6 @@
 // These leases are keyed by canonical game endpoint + normalized account id, so every
 // runtime in this checkout meets at the same atomic file before any login is attempted.
 
-import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { isIP } from 'node:net';
@@ -22,6 +21,7 @@ import {
   isProcessLive,
   verifyFleetLockGuard,
 } from './fleet-lock.mjs';
+import { isNodeProcessName, processImageName } from './process-identity.mjs';
 
 export const DEFAULT_LEGACY_ROSTER_ROOT = fileURLToPath(
   new URL('../../substrate/', import.meta.url),
@@ -390,25 +390,6 @@ export function auditLegacyRosterLocks(entries, {
 // so the image is node (node.exe on Windows). Deliberately generous — any name containing
 // `node` counts — because the cost of a false YES is only that a refusal stands, while a
 // false NO would exclude a real guard.
-function isNodeProcessName(name) {
-  return /(^|[\/])node(\.exe)?$/i.test(String(name ?? '').trim())
-      || /node/i.test(String(name ?? ''));
-}
-
-function describePid(pid) {
-  try {
-    if (process.platform === 'win32') {
-      const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'],
-        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
-      const name = String(out).trim().split('","')[0]?.replace(/^"/, '') ?? '';
-      return name && !/^INFO:/i.test(name) ? name : null;
-    }
-    const out = execFileSync('ps', ['-p', String(pid), '-o', 'comm='],
-      { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
-    return String(out).trim() || null;
-  } catch { return null; }
-}
-
 export class AccountLeaseRegistry {
   #byAgent = new Map();
   #byKey = new Map();
@@ -424,7 +405,7 @@ export class AccountLeaseRegistry {
     isPidLive = isProcessLive,
     // Injectable for the same reason isPidLive is: the recycled-pid exclusion below is a
     // decision, and a decision no test can drive is a decision nobody has checked.
-    describeProcess = describePid,
+    describeProcess = processImageName,
     now = Date.now,
     tokenFactory = randomUUID,
     legacyRosterRoots = [DEFAULT_LEGACY_ROSTER_ROOT],
@@ -439,7 +420,7 @@ export class AccountLeaseRegistry {
     this.defaultHost = defaultHost;
     this.defaultPort = defaultPort;
     this.isPidLive = isPidLive;
-    this.describeProcess = typeof describeProcess === 'function' ? describeProcess : describePid;
+    this.describeProcess = typeof describeProcess === 'function' ? describeProcess : processImageName;
     this.now = now;
     this.tokenFactory = tokenFactory;
     if (typeof guardChildren !== 'boolean')
@@ -647,10 +628,10 @@ export class AccountLeaseRegistry {
         // Anything we cannot identify (`null`) stays live and still refuses, so the
         // uncertain case fails closed exactly as it did before.
         //
-        // This is narrower than the real fix, which is for a guard to record its process
-        // START TIME at registration — the checksum m59-which.mjs uses — so that even a
-        // recycled NODE pid fails to match. That needs a lock-format migration. This covers
-        // the common case today without one.
+        // This is the WEAKER of the two checks and is now the fallback. A guard registered
+        // by current code records its process START TIME (`guard_started`), which catches a
+        // recycled NODE pid too; the image name is what remains for locks written before
+        // that field existed. `guardStillOurs` in process-identity.mjs holds both rules.
         const name = this.describeProcess(guardPid);
         if (name !== null && !isNodeProcessName(name)) {
           recycled.push({ pid: guardPid, process: name });
@@ -710,14 +691,16 @@ export class AccountLeaseRegistry {
       // ends the investigation in one line, where the bare pid sent two sessions to Task
       // Manager and a wrong diagnosis of the credentials.
       //
-      // THE REAL FIX IS IDENTITY AND IT IS NOT HERE. A guard should record its process
-      // START TIME when it is registered — the same checksum m59-which.mjs uses to tell a
-      // genuine claim from a recycled pid wearing the same number — so a reused pid simply
-      // does not match. That is a lock-format addition and old locks carry no such field,
-      // so it needs its own migration and is deliberately not smuggled in beside a
-      // diagnostic. `M59_ALLOW_UNGUARDED_TAKEOVER` does NOT cover this case: the broker
-      // only supplies that context for a predecessor lock with no `guards` key at all
-      // (m59-broker.mjs ~3492), and this lock has guards — they are merely dead.
+      // IDENTITY IS NOW RECORDED, and this refusal is what remains when it is absent.
+      // A guard registered by current code writes its process START TIME into the lock's
+      // `guard_started` — the same checksum m59-which.mjs uses to tell a genuine claim from
+      // a recycled pid wearing the same number — so a reused pid, node or not, fails to
+      // match and `inspectFleetLock` never reports the lock live on its account. What can
+      // still reach this branch is a lock written before that field existed whose guard pid
+      // has been recycled by ANOTHER NODE PROCESS, which neither check can separate.
+      // `M59_ALLOW_UNGUARDED_TAKEOVER` does not cover it either: the broker only supplies
+      // that context for a predecessor lock with no `guards` key at all (m59-broker.mjs
+      // ~3492), and this lock has guards — they are merely dead.
       if (!agents.length) return Object.freeze({
         ok: false, reason: 'inherited-fleet-guard-unaccounted', guard_pid: guardPid,
         // The pid alone sent a reader to Task Manager. Say what is actually running under

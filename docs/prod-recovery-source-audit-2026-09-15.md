@@ -27,6 +27,7 @@ restart the expired, time-limited room-enchantment order.
 | Inventory purpose, withdrawal and authenticated equip integration | `32fe3dd`; three relevant offline suites pass against current main. |
 | Native context, human guidance, passive proxy observations and opt-in performance preload | `97bf7e4`; eight relevant suites pass against current main. |
 | Shadow survival experiment | Report, scripts, figures and the credential-free 20-trial evidence bundle recovered from the uncommitted research worktree. Offline unpacking and analysis reproduce the published severe and milder trial counts. |
+| Stranded `lease-guard-identity` branch at `29c80c8` | Reconciled source from 40 commits: process start-time guard identity, raid preparation/action/checkpoints, verified cast outcomes and concentration holds, room clearing, resistance and mirror simulation, and shutdown save completion. Runtime safe spots and raid state were excluded. |
 
 The source audit checked registered harness worktrees. The latest Codex replay,
 combat, reagent-coop, telemetry and refuge-release branches already land on main,
@@ -34,6 +35,24 @@ apart from the explicitly held research below. The nine apparent local-main-only
 commits were checked by patch/content and subject: their work is already upstream,
 including `buyLines` and the four movement-instrument suites. They should not be
 merged again solely because their hashes differ.
+
+### Stranded raid and guard branch
+
+The `lease-guard-identity` branch was local-only. Its source was applied to current
+main, retaining the newer keeper-address helper, retry-aware FleetScript transport,
+packet authority checks and shared server-save-set parser. Superseded regex edits
+were omitted. The combined FleetScript tests retain both NPC speech-range and cast
+outcome coverage. Existing supply assertions were updated to check the factored
+keeper identity rules, and the combat-mode fixture includes the Pacer's new
+concentration allow-list.
+
+Validation passed for process identity, fleet locks, account leases, combat safety,
+checkpoint postconditions, resistance, mirror simulation, FleetScript (319 checks),
+fleet selection, combat integration, buff service, keeper addressing, combat mode
+(40 scenarios), supplies (145 checks), and routing (148 checks). All changed JavaScript passes syntax
+checks. This is source preservation and offline integration validation; the raid
+and shutdown commands were not exercised against the production fleet. Production
+continues running the small reboot recovery release at `810bfce`.
 
 ## Preserved work requiring separate review
 

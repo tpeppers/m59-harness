@@ -334,7 +334,7 @@ export const isTransportFailure = (e) =>
    TRANSPORT_FAILURE.test(String(e?.cause?.message ?? '')));
 
 /** One broker call. Kept private so a step cannot bypass the pacing or the timeout. */
-async function call(name, args = {}, ms = 180_000) {
+export async function call(name, args = {}, ms = 180_000) {
   // A buy is a buy however it is spelled: `shop` is not on the list above, but naming the
   // condition here means a read that later grows a mutating argument cannot slip through.
   const mutates = !RETRYABLE_READS.has(name) || Array.isArray(args?.buy_ids) && args.buy_ids.length;
@@ -1257,6 +1257,8 @@ export const supply = (from, to, what, opts = {}) =>
   ({ do: 'supply', from, to, what, ...opts });
 
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
+/** Cast a spell and prove it landed from the world, never from the reply. */
+export const cast = (spell, opts = {}) => ({ do: 'cast', spell, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
 
 /**
@@ -1462,6 +1464,171 @@ export const foundGuild = (name, opts = {}) => ({ do: 'found_guild', name, ...op
 export const learn = (teacher, ability, opts = {}) =>
   ({ do: 'learn', teacher, ability, ...opts });
 
+
+// ---------------------------------------------------------------- casting, verified
+//
+// A CAST'S OWN REPLY CANNOT TELL YOU WHETHER IT HAPPENED, so nothing in this repository may
+// decide anything from it. Measured 2026-09-11: `mana_spent` is 0 on every cast including
+// ones that demonstrably worked (blink spent 15 and reported 0), `messages` is empty on
+// successes and failures alike, and for a keeper-backed character the broker used to answer
+// `cast: true` for a spell the keeper had refused outright. Three different fields, all
+// confidently wrong.
+//
+// What cannot lie is the world before and after:
+//
+//   MANA went down by roughly the spell's cost      -> it was cast
+//   REAGENTS went down by the recipe                -> it was cast, and paid for
+//   neither moved                                   -> nothing happened, whatever was said
+//
+// Both are read, because either alone has a hole: a spell with no reagents leaves only mana,
+// and mana regenerates while we look, so a small drop needs the reagent count to confirm it.
+// A cast that spends HALF the mana is a failed roll (spell.kod), which is a real outcome and
+// is reported as `rolled_and_failed` rather than as a refusal — they need different fixes.
+export const REAGENT_RE = /elderberry|herb|mushroom|orc tooth|sapphire|emerald|snack|fairy wing|entroot|solagh|kriipa|seraphym|dragon scale|angel feather|fire sand|yrxlsap|shaman blood|web moss|rainbow fern|heartstone|inky/i;
+
+export function countReagents(items = []) {
+  const out = {};
+  for (const i of items) {
+    const n = String(i.name ?? '');
+    if (REAGENT_RE.test(n)) out[n.toLowerCase()] = (out[n.toLowerCase()] ?? 0) + (i.amount || 1);
+  }
+  return out;
+}
+
+/**
+ * Cast one spell and say honestly whether it landed.
+ * `cost` is the spell's mana from the catalogue, used only to classify a partial spend.
+ */
+// The failures-only table and its classifier now live in m59-castoutcomes.mjs, with the kod
+// citation on every entry. Re-exported so existing callers and tests are unaffected; the
+// reason it moved is that this header is already 155 lines and lore does not belong in a
+// compiler.
+export { CAST_OUTCOMES, classifyCast, TRANCE_BREAK_EVENTS, TOOK_A_HIT } from './m59-castoutcomes.mjs';
+import { classifyCast } from './m59-castoutcomes.mjs';
+
+// The catalogue knows every spell's casting trance. Imported lazily and guarded, because it
+// reads the kod tree from M59_ROOT and a checkout without one must still be able to cast.
+let BUFFS = null;
+async function castTimeOf(spell) {
+  if (BUFFS === null) {
+    try { BUFFS = (await import('./m59-buffs.mjs')).buffCatalogue(); }
+    catch { BUFFS = []; }
+  }
+  const hit = BUFFS.find(b => b.name === String(spell).toLowerCase());
+  return hit?.cast_time_ms ?? 0;
+}
+
+/**
+ * Cast one spell and say honestly whether it landed.
+ *
+ * ============================================================================
+ * READ THE SENTENCE, NOT THE RECEIPT. 2026-09-11.
+ * ============================================================================
+ *
+ * This used to decide from the COST: if the mana went or the reagents moved, it landed.
+ * That is wrong for every spell with a casting trance, and wrong in the direction that does
+ * real damage — it reports SUCCESS for a cast that did nothing at all.
+ *
+ * `enchant weapon` takes the mana and the reagents up front and then freezes the caster for
+ * THIRTY SECONDS (enchwp.kod:52, `viCast_time = 30000`). Resting, running, attacking, using
+ * an item, taking damage or changing room during those thirty seconds breaks the trance:
+ * half the mana is refunded, the reagents are gone, and the spell does nothing. The cost is
+ * therefore paid whether or not it worked, so reading it answers a question nobody asked.
+ *
+ * Measured on the shadow fleet: all three "successful" enchants had in fact fizzled inside
+ * two seconds. The cast drops ~19 vigor, that put each caster below its keeper's
+ * `vigorFloor`, and the keeper's own one-second pass sat it down to recover — EVENT_REST.
+ * The raid then set out at a boss that resists mundane weapons 90% believing three weapons
+ * were enchanted. None was. The server had said so every time, in plain words:
+ * "Your concentration is broken and the enchant weapon spell fizzles."
+ *
+ * So: listen FIRST, cast, wait out the spell's own trance, and classify from what was said.
+ * The cost is still measured — it separates "nothing happened" from "something did" — but it
+ * never decides success on its own.
+ */
+export async function castVerified(agent, spell, { target = null, cost = null, settleMs = 3500,
+                                                   castTimeMs = null, listen = true } = {}) {
+  const trance = castTimeMs ?? await castTimeOf(spell);
+  const before = await Promise.all([
+    call('status', { agent, brief: true }, 40_000).catch(() => null),
+    call('inventory', { agent }, 40_000).catch(() => null),
+  ]);
+  const manaBefore = before[0]?.mana?.value ?? null;
+  const bagBefore = countReagents(before[1]?.items ?? []);
+
+  // LISTEN BEFORE CASTING. The outcome sentence can arrive before a slow cast call returns,
+  // and a listener started afterwards misses it — which is indistinguishable from silence.
+  const said = [];
+  let listening = listen;
+  const ear = listening ? (async () => {
+    while (listening) {
+      const ev = await call('wait_for_event', { agent, timeout_ms: 4000 }, 20_000).catch(() => null);
+      for (const e of (ev?.events ?? [])) if (e?.kind === 'message' && e.text) said.push(String(e.text));
+    }
+  })() : null;
+  let stopped = false;
+  const stop = async () => {
+    if (stopped) return;
+    stopped = true; listening = false;
+    try { await ear; } catch { /* the listener is best effort */ }
+  };
+
+  try {
+    // Tell the keeper how long to hold still. It freezes its own tick loop for the duration;
+    // without a hold sized from the SPELL, its 10Hz move/turn packets break the trance itself.
+    const reply = await call('cast', { agent, spell, ...(target != null ? { target } : {}),
+                                       ...(trance ? { holdMs: trance + 10_000 } : {}) },
+                             Math.max(90_000, trance + 60_000))
+      .catch(e => ({ error: e.message }));
+    if (reply?.cast === false) {
+      await stop();
+      const byWord = classifyCast([reply.reason, ...said].filter(Boolean));
+      return { landed: false, outcome: byWord?.outcome ?? 'refused', retryable: !!byWord?.retryable,
+               in_effect: !!byWord?.in_effect, why: byWord?.why ?? reply.reason ?? 'refused',
+               refused: true, spell, agent, said, reply };
+    }
+
+    // Wait out the trance, then settle. A spell with no trance settles immediately.
+    await sleep(trance + settleMs);
+    await stop();
+
+    const after = await Promise.all([
+      call('status', { agent, brief: true }, 40_000).catch(() => null),
+      call('inventory', { agent }, 40_000).catch(() => null),
+    ]);
+    const manaAfter = after[0]?.mana?.value ?? null;
+    const bagAfter = countReagents(after[1]?.items ?? []);
+    const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
+    const used = {};
+    for (const [k, n] of Object.entries(bagBefore)) {
+      const gone = n - (bagAfter[k] ?? 0);
+      if (gone > 0) used[k] = gone;
+    }
+    const paid = Object.keys(used).length > 0;
+    const full = cost != null && spent != null && spent >= cost - 1;
+
+    // THE SENTENCE WINS. It is the server's own account, and the cost cannot tell a fizzle
+    // from a success for any spell that charges up front.
+    const byWord = classifyCast(said);
+    if (byWord)
+      return { landed: false, ...byWord, spell, agent, mana_spent: spent, reagents_used: used, said };
+
+    // Nothing was announced. Paying in full is then good evidence it landed — but report it
+    // as an inference, because an unheard sentence and a silent success look identical.
+    if (paid || full)
+      return { landed: true, outcome: 'landed', spell, agent, mana_spent: spent,
+               reagents_used: used, said,
+               why: said.length ? said[said.length - 1] : 'paid in full and nothing was refused' };
+    return { landed: false, outcome: 'nothing_happened', retryable: true, spell, agent,
+             mana_spent: spent, said,
+             why: spent === 0 || spent === null
+               ? 'no mana and no reagents moved — the cast did not happen'
+               : `only ${spent} mana moved, which is regeneration rather than a cast` };
+  } finally {
+    await stop();
+  }
+}
+
 // ---------------------------------------------------------------- healing before a journey
 //
 // A HURT CHARACTER IS NOT DISQUALIFIED, IT IS EARLY. The first version refused anything
@@ -1641,7 +1808,7 @@ const isBusyRefusal = (r) => /\bis busy\b|\bbusy:/i.test(refusalText(r));
 const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
 
-async function compiledWalk(ctx, agent, to, { minHealth }) {
+async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
   // Logged live on 2026-09-03: `t11 walking 53 -> null, budget 490s`. A destination that is
@@ -1780,6 +1947,9 @@ async function compiledWalk(ctx, agent, to, { minHealth }) {
       await ctx.holds?.get(agent)?.cancelJourney?.(
         `clearing the way for the errand's own walk to ${to}`).catch(() => {});
       return call('travel', { agent, to, background: true, run_errands: false,
+                              // A step that names a hazard room says WHY, and the keeper
+                              // refuses the flag without it. See `walk(to, { despiteHazard })`.
+                              ...(despiteHazard ? { despite_hazard: { reason: String(despiteHazard) } } : {}),
                               health_floor: minHealth }, 60_000)
         .catch(e => ({ error: e?.message ?? String(e) }));
     };
@@ -2124,7 +2294,8 @@ async function runStep(ctx, agent, step, state) {
   }
   switch (step.do) {
     case 'walk':
-      return compiledWalk(ctx, agent, step.to, { minHealth: step.minHealth ?? ctx.minHealth });
+      return compiledWalk(ctx, agent, step.to, { minHealth: step.minHealth ?? ctx.minHealth,
+                                                 despiteHazard: step.despiteHazard ?? null });
 
     case 'bank': {
       const amount = typeof step.amount === 'function' ? step.amount(state) : step.amount;
@@ -2779,6 +2950,14 @@ async function runStep(ctx, agent, step, state) {
         : { ok: false, why: `still in the newbie zone (room ${after})` +
              (r?.error ? `: ${r.error}` : '. The portal is in room 1018 at col 11 row 2 and ' +
               'needs two touches; the first only warns.'), result: r };
+    }
+
+    // CASTING IS A STEP, and it verifies. Every script that casts anything goes through
+    // `castVerified` so that "it was cast" means the world changed, not that a reply said so.
+    case 'cast': {
+      const r = await castVerified(agent, step.spell,
+        { target: step.target ?? null, cost: step.cost ?? null });
+      return { ok: r.landed, result: r, why: r.landed ? undefined : r.why };
     }
 
     case 'act': {

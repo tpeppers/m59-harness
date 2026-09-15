@@ -424,9 +424,20 @@ export class M59Client {
   // with whatever accumulated. Returning empty on timeout rather than throwing is
   // deliberate: "nothing happened" is a real and useful answer about a world with
   // other people in it.
-  waitFor({ since = this.evSeq, kinds = null, timeoutMs = 30000 } = {}) {
+  // `match` NARROWS WITHIN A KIND, which `kinds` alone cannot do. Waiting for the outcome
+  // of a cast means waiting for a `message` that is ABOUT the cast, and a room full of
+  // people produces messages constantly — so a bare `kinds: ['message']` resolves on the
+  // first thing anybody says and reports it as the answer. The predicate is applied on top
+  // of `kinds`, never instead of it, so existing callers are unaffected.
+  waitFor({ since = this.evSeq, kinds = null, timeoutMs = 30000, match = null } = {}) {
     const want = kinds && new Set([].concat(kinds));
-    const pick = () => this.eventsSince(since).filter(e => !want || want.has(e.kind));
+    const ok = e => (!want || want.has(e.kind)) && (!match || (() => {
+      // A THROWING PREDICATE MUST NOT WEDGE THE POLL. It is caller-supplied and runs on
+      // every event; treating a throw as "no match" keeps a bad predicate to a timeout
+      // rather than an unhandled rejection inside the socket's event pump.
+      try { return !!match(e); } catch { return false; }
+    })());
+    const pick = () => this.eventsSince(since).filter(ok);
     return new Promise(resolve => {
       const ready = pick();
       if (ready.length) return resolve({ events: ready, seq: this.evSeq, timedOut: false });

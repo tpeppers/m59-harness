@@ -24,6 +24,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { guardStillOurs, processImageName, processStartTimes } from './process-identity.mjs';
 
 export const FLEET_LOCK_KIND = 'lab-runtime';
 export const BROKER_FLEET_LOCK_KIND = 'broker-runtime';
@@ -77,6 +78,38 @@ function guardPids(value, { optional = true } = {}) {
   return Object.freeze(guards.sort((left, right) => left - right));
 }
 
+// WHEN EACH GUARD'S PROCESS STARTED, so that a recycled pid fails to match.
+//
+// A SIBLING FIELD RATHER THAN A RICHER `guards`. Making a guard an object would change the
+// shape every existing reader depends on — `guards.includes(childPid)`, the JSON.stringify
+// equality in guardedAdoptionMatches, the allow-list comparison in the adoption check — and
+// a lock-format migration that rewrites all of those at once is how a takeover gets quietly
+// broken. `guards` stays a sorted array of pids and this records their identities beside it,
+// keyed by pid so it does not depend on order. A reader that has never heard of it behaves
+// exactly as it did before, which is what makes this safe to roll out to a running fleet.
+function guardStarts(value, { optional = true } = {}) {
+  if (value == null && optional) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_GUARD_PIDS) return false;
+  const out = {};
+  for (const [key, at] of entries) {
+    const pid = safePid(Number(key));
+    if (!pid || String(pid) !== String(key).trim()) return false;
+    if (!Number.isSafeInteger(at) || at <= 0) return false;
+    out[pid] = at;
+  }
+  return Object.freeze(out);
+}
+
+/** Keep only the identities of pids still in `guards`, so the field cannot grow for ever. */
+function prunedGuardStarts(starts, guards) {
+  if (!starts) return null;
+  const keep = {};
+  for (const pid of guards ?? []) if (Number.isSafeInteger(starts[pid])) keep[pid] = starts[pid];
+  return Object.keys(keep).length ? Object.freeze(keep) : null;
+}
+
 function predecessorPids(value, { optional = true } = {}) {
   if (value == null && optional) return null;
   if (!Array.isArray(value) || value.length > MAX_PREDECESSOR_PIDS) return false;
@@ -108,13 +141,17 @@ function lockRecord(value) {
   const subject = Object.hasOwn(value, 'subject')
     ? claimSubject(value.subject, { optional: false }) : null;
   const guards = Object.hasOwn(value, 'guards') ? guardPids(value.guards, { optional: false }) : null;
+  const guard_started = Object.hasOwn(value, 'guard_started')
+    ? guardStarts(value.guard_started, { optional: false }) : null;
   const predecessors = Object.hasOwn(value, 'predecessors')
     ? predecessorPids(value.predecessors, { optional: false }) : null;
-  if (subject === false || guards === false || predecessors === false) return null;
+  if (subject === false || guards === false || guard_started === false ||
+      predecessors === false) return null;
   if (kind && token) return Object.freeze({
     pid, at, kind, token,
     ...(subject !== null ? { subject } : {}),
     ...(guards !== null ? { guards } : {}),
+    ...(guard_started !== null ? { guard_started } : {}),
     ...(predecessors !== null ? { predecessors } : {}),
   });
   // Migration from the old broker's check-then-overwrite `{pid,at}` file. It blocks while
@@ -190,7 +227,13 @@ export function isProcessLive(pid, { kill = process.kill.bind(process) } = {}) {
 }
 
 /** Return exactly one of free, live, or stale for an exact absolute lock path. */
-export function inspectFleetLock(lockPath, { isPidLive = isProcessLive } = {}) {
+export function inspectFleetLock(lockPath, {
+  isPidLive = isProcessLive,
+  // Injectable for the same reason isPidLive is: a rule about process identity has to be
+  // testable without starting and recycling real processes.
+  startTimes = processStartTimes,
+  imageName = processImageName,
+} = {}) {
   const path = exactPath(lockPath);
   if (typeof isPidLive !== 'function') throw new TypeError('isPidLive must be a function');
   const read = readExact(path);
@@ -208,6 +251,19 @@ export function inspectFleetLock(lockPath, { isPidLive = isProcessLive } = {}) {
   }, read.raw);
   if (live !== false) return protectedResult(path,
     `pid ${read.lock.pid} liveness returned no definite answer`, { lock: read.lock, raw: read.raw });
+  // A LIVE PID IS NOT A LIVE KEEPER. This is where that used to be assumed, and where a
+  // recycled pid made a fleet un-takeoverable: owner dead, one guard "running", and the
+  // running thing was McAfee's browserhost.exe (2026-09-10) or a desktop chat application
+  // (2026-09-08). The lock then reads `live` for as long as that unrelated program does,
+  // and neither guarded adoption nor M59_ALLOW_UNGUARDED_TAKEOVER reaches this shape —
+  // leaving lock deletion, which this repository forbids, as the only way out.
+  //
+  // Identity is now asked for, in `guardStillOurs`: the start time the guard recorded, and
+  // failing that the process image. Both fail CLOSED — anything not positively somebody
+  // else keeps the lock exactly as before — so the only behaviour this changes is the one
+  // that was wrong.
+  const recycledGuards = [];
+  const liveGuards = [];
   for (const guardPid of read.lock.guards ?? []) {
     let guardLive;
     try { guardLive = isPidLive(guardPid); }
@@ -216,18 +272,38 @@ export function inspectFleetLock(lockPath, { isPidLive = isProcessLive } = {}) {
         `guard pid ${guardPid} liveness could not be verified: ${error.message}`,
         { lock: read.lock, raw: read.raw, owner_dead: true, guard_pid: guardPid });
     }
-    if (guardLive === true) return withRaw({
-      state: 'live', path, reclaimable: false, lock: read.lock,
-      mine: false, owner_dead: true, guard_pid: guardPid,
-      why: `owner pid ${read.lock.pid} is gone but guarded keeper pid ${guardPid} is running`,
-    }, read.raw);
+    if (guardLive === true) { liveGuards.push(guardPid); continue; }
     if (guardLive !== false) return protectedResult(path,
       `guard pid ${guardPid} liveness returned no definite answer`,
       { lock: read.lock, raw: read.raw, owner_dead: true, guard_pid: guardPid });
   }
+  if (liveGuards.length) {
+    // Asked once for the whole set, and only now: the owner is already dead and these pids
+    // are already live, which is the rare path rather than every ownership check.
+    const started = startTimes(liveGuards);
+    for (const guardPid of liveGuards) {
+      const verdict = guardStillOurs(guardPid, read.lock.guard_started?.[guardPid], {
+        startedAt: started.get(guardPid) ?? null,
+        imageName: imageName(guardPid),
+      });
+      if (verdict.ours) return withRaw({
+        state: 'live', path, reclaimable: false, lock: read.lock,
+        mine: false, owner_dead: true, guard_pid: guardPid,
+        why: `owner pid ${read.lock.pid} is gone but guarded keeper pid ${guardPid} is running`,
+      }, read.raw);
+      recycledGuards.push({ pid: guardPid, why: verdict.why });
+    }
+  }
   return withRaw({
     state: 'stale', path, reclaimable: true, confirmed_dead: true,
-    lock: read.lock, why: `pid ${read.lock.pid} is not running`,
+    lock: read.lock,
+    // NAMED, NOT SILENT. A lock reclaimed because a guard pid was judged recycled is a
+    // judgement, and a judgement that leaves no trace is the one nobody can review.
+    ...(recycledGuards.length ? { recycled_guards: Object.freeze(recycledGuards) } : {}),
+    why: recycledGuards.length
+      ? `pid ${read.lock.pid} is not running, and ${recycledGuards.length} live guard pid(s) ` +
+        `are not ours: ${recycledGuards.map(g => `${g.pid} (${g.why})`).join('; ')}`
+      : `pid ${read.lock.pid} is not running`,
   }, read.raw);
 }
 
@@ -376,6 +452,10 @@ function adoptGuardedClaim(path, found, record, options) {
     const adoptedRecord = Object.freeze({
       ...record,
       guards: latest.lock.guards,
+      // INHERITED WITH THE GUARDS THEY DESCRIBE. A successor that took the pids and dropped
+      // their identities would fall back to the image check for the rest of that lock's
+      // life — which is the weaker evidence, and silently so.
+      ...(latest.lock.guard_started ? { guard_started: latest.lock.guard_started } : {}),
       predecessors,
     });
     const replaced = replaceGuardedOwner(path, latest, adoptedRecord);
@@ -505,6 +585,7 @@ export function addFleetLockGuard(lockPath, {
   kind,
   guardPid,
   isPidLive = isProcessLive,
+  startTimes = processStartTimes,
 } = {}) {
   const path = exactPath(lockPath);
   const ownerPid = safePid(pid);
@@ -554,8 +635,17 @@ export function addFleetLockGuard(lockPath, {
       return Object.freeze({ ok: false, path, reason: 'guard-limit' });
 
     const guards = guardPids(retained, { optional: false });
+    // The identity of the guard being added, recorded at the moment it is registered —
+    // which is the only moment it can be recorded correctly. Carried forward for guards
+    // that were already there, dropped for ones just pruned. A reader that cannot see this
+    // field falls back to the image check, so an old broker and a new one can share a lock.
+    const startedNow = startTimes([childPid]).get(childPid) ?? null;
+    const merged = { ...(lock.guard_started ?? {}) };
+    if (Number.isSafeInteger(startedNow) && startedNow > 0) merged[childPid] = startedNow;
+    const guard_started = prunedGuardStarts(guardStarts(merged, { optional: false }) || null, guards);
     const next = Object.freeze({
       pid: lock.pid, at: lock.at, kind: lock.kind, token: lock.token, guards,
+      ...(guard_started ? { guard_started } : {}),
       ...(lock.subject ? { subject: lock.subject } : {}),
       ...(lock.predecessors ? { predecessors: lock.predecessors } : {}),
     });

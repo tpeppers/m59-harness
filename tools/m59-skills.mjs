@@ -2488,12 +2488,34 @@ async function fightWithIntent(s, {
                note: 'we were killed. You are in the Underworld; the way out is a portal — see escape_underworld.' };
     }
     if (gone) {
-      // Missing but alive and not in the Underworld: our id is stale, not our body.
-      return { fought: true, killed: false, died: false, rounds: roundsFought,
-               combat: combatLines.slice(-8), log, stale_identity: true,
-               note: 'our own object id is not in the room contents but we are alive and not in the ' +
-                     'Underworld — the server most likely renumbered ids in a save. Re-login to ' +
-                      'resolve a fresh id; do NOT treat this as death.' };
+      // ASK FOR FRESH CONTENTS BEFORE GIVING UP, BECAUSE THE CURE IS ALREADY IN THE CLIENT.
+      //
+      // A stale `selfId` self-heals in the BP.ROOM_CONTENTS handler (m59-client.mjs): names
+      // are unique in this game, so the PLAYER-flagged object carrying ours IS us, and the
+      // handler re-binds to it. But that only runs when contents actually arrive, and the
+      // fight loop was testing a map it had not refreshed — so a fight in a room whose
+      // contents had gone stale ended after ONE round, every time, reporting `stale_identity`
+      // and advising a re-login that nothing was going to perform.
+      //
+      // Measured 2026-09-11 in the Castle Victoria throne room: seventeen raiders "completed"
+      // the action phase against the ghost of Far'Nohl and it finished on 233 of 233 health,
+      // untouched, because each of them swung once and returned this.
+      //
+      // One refresh, then re-test. If we are still missing we are genuinely confused and the
+      // old answer stands — that part was right, it was only premature.
+      try {
+        const before = c.evSeq;
+        c.roomContents();
+        await c.waitFor({ since: before, kinds: ['room-contents'], timeoutMs: 4000 });
+      } catch { /* a refresh we could not get is just the old answer */ }
+      if (!c.room.objects.has(c.selfId))
+        return { fought: true, killed: false, died: false, rounds: roundsFought,
+                 combat: combatLines.slice(-8), log, stale_identity: true,
+                 note: 'our own object id is not in the room contents, and a fresh read did not ' +
+                       'resolve it, but we are alive and not in the Underworld — the server most ' +
+                       'likely renumbered ids in a save. Re-login to resolve a fresh id; do NOT ' +
+                       'treat this as death.' };
+      say('self id was stale; a fresh room read re-bound it', { round: roundsFought });
     }
 
     // Resolve the exchange before recovery policy. A low-health killing blow is still

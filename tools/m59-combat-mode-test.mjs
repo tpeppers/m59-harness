@@ -15,7 +15,7 @@ import { join, dirname, resolve, basename } from 'node:path';
 let tests = 0;
 async function test(name, fn) { await fn(); tests++; console.log(`ok ${name}`); }
 const source = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
-const start = source.indexOf('class Pacer {'), end = source.indexOf('// ---------------------------------------------------------------- session', start);
+const start = source.indexOf('const CONCENTRATION_SAFE ='), end = source.indexOf('// ---------------------------------------------------------------- session', start);
 const pacerClass = rate => Function('bindPacketScope', 'PACKETS_PER_SECOND', 'DOOR_SETTLE_MS', 'remainingDoorSettle',
   source.slice(start, end) + '; return Pacer;')(bindPacketScope, rate, 300, () => 0);
 const Pacer = pacerClass(100000);

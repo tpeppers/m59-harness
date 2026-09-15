@@ -1901,10 +1901,23 @@ const server = createServer(async (req, res) => {
             // a long comment about.
             const dest = Number(args.to ?? args.toRoomNum);
             if (!Number.isFinite(dest)) { json({ error: 'travel needs a destination room number' }, 400); return; }
+            // A HAZARD ROOM NEEDS BOTH THE FLAG AND A REASON. `NEVER_ENTER` entries each
+            // carry a kod citation and a post-mortem; overriding one is a decision somebody
+            // made, and a decision with no reason attached is indistinguishable from a
+            // mistake six weeks later. Refused loudly rather than ignored, so a caller that
+            // forgets the reason finds out now and not from a body.
+            const allowHazard = args.allow_hazard === true || args.allowHazard === true;
+            const hazardWhy = String(args.hazard_why ?? args.hazardWhy ?? '').trim();
+            if (allowHazard && !hazardWhy) {
+              json({ error: 'allow_hazard needs hazard_why: say why this room is worth entering' }, 400);
+              return;
+            }
+            if (allowHazard) log(`[keeper] ${agent} entering a hazard room on purpose: ${hazardWhy}`);
             const job = session.travelJob(dest, {
               where: args.where, maxHops: Number(args.max_hops ?? args.maxHops ?? 25),
               controlToken: args.control_token ?? args.controlToken,
               runErrands: args.run_errands !== false && args.runErrands !== false,
+              allowHazard, hazardWhy: hazardWhy || null,
             });
             if (args.background === false) { json({ ...(await job.promise), destination: dest }); return; }
             json({ started: true, destination: dest,
@@ -3951,20 +3964,47 @@ const server = createServer(async (req, res) => {
               // the character relocated) or a max timeout, rather than a fixed short
               // hold that would unfreeze too early and let the next move packet kill
               // the cast.
+              // HOLD STILL FOR THE SPELL'S OWN TRANCE, NOT FOR A BLINK-SHAPED GUESS.
+              //
+              // This used to freeze the tick loop and then wait for a `moved` event, capped
+              // at 15s. That is exactly right for BLINK, which is what it was written for:
+              // the relocation IS the completion. It is wrong for every other spell with a
+              // casting time, because no `moved` ever arrives — so the wait ran to its cap
+              // and, for anything charging longer than 15s, unfroze the loop mid-cast.
+              //
+              // `enchant weapon` charges for THIRTY seconds (enchwp.kod:52) and every cast
+              // of it on the shadow fleet fizzled inside two. Freezing the tick loop was
+              // never enough on its own either: a keeper sits down from several paths the
+              // loop does not own, and resting raises EVENT_REST, which breaks the trance
+              // just as surely as a move packet does. So the hold goes on the PACER, which
+              // is the single door every packet leaves by, and the caller sizes it from the
+              // spell rather than from a default that suits one spell.
               const loop = session._tickLoop;
-              if (loop) {
-                const since = c.evSeq;  // events after this are from the cast
-                loop._frozen = true;
+              const hold = Number(args.holdMs) || 15000;
+              const since = c.evSeq;
+              const startedAt = Date.now();
+              if (loop) loop._frozen = true;
+              session.pacer.holdForCast?.(hold, `casting ${spellName}`);
+              try {
                 c.cast(spell.id, targets);
-                const maxMs = Number(args.holdMs) || 15000;  // blink can take several s
-                const w = await c.waitFor({ since, kinds: ['moved'], timeoutMs: maxMs });
-                loop._frozen = false;
-                const moved = w.events.filter(e => e.kind === 'moved');
-                result = { sent: true, spell: spellName, targets, frozenMs: Date.now() - since,
-                           relocated: moved.length > 0, timedOut: w.timedOut };
-              } else {
-                c.cast(spell.id, targets);
-                result = { sent: true, spell: spellName, targets };
+                // Stop as soon as the server has DECIDED — blink relocates, everything else
+                // announces — and otherwise sit out the whole charge.
+                const w = await c.waitFor({
+                  since, kinds: ['moved', 'message'], timeoutMs: hold,
+                  match: e => e.kind === 'moved'
+                    || (e.kind === 'message' && /fizzles|unsuccessful in casting|is now dedicated|already/i.test(String(e.text ?? ''))),
+                });
+                const moved = (w.events ?? []).filter(e => e.kind === 'moved');
+                const said = (w.events ?? []).filter(e => e.kind === 'message').map(e => String(e.text));
+                result = { sent: true, spell: spellName, targets, held_ms: Date.now() - startedAt,
+                           relocated: moved.length > 0, timedOut: w.timedOut, said,
+                           suppressed: session.pacer.holdStatus?.()?.dropped ?? null };
+              } finally {
+                // ALWAYS, on every path. A hold that outlives its cast is a deaf character;
+                // the Pacer caps it at 60s as a second line of defence, but the cast's own
+                // exit is the first one.
+                session.pacer.releaseCastHold?.();
+                if (loop) loop._frozen = false;
               }
             }
             break;

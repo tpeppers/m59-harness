@@ -1562,7 +1562,16 @@ export class World {
    *   character cannot cross from THIS door it can usually cross from another, and the
    *   destination is frequently somewhere it must still be able to arrive at.
    */
-  route(toRoomNum, { avoid = null, blockedHops: learned = null } = {}) {
+  // `allowHazard` IS THE "ARE YOU SURE?" AND IT IS DELIBERATELY NOT A DEFAULT.
+  //
+  // `NEVER_ENTER` (m59-map.mjs) is a short list of rooms that killed somebody, each entry
+  // carrying the kod citation and the post-mortem. Refusing them is right almost always —
+  // and "almost" is why the override exists: a rescue goes into a trap room ON PURPOSE, and
+  // a boss raid's whole point is to go somewhere the fleet is normally kept out of.
+  // `findPath` has always taken `allowHazardDestination`; until now nothing above it could
+  // pass one, so the list was absolute for every fleet operation and the only way past it
+  // was to edit the list — which loses the citation and the post-mortem for everybody.
+  route(toRoomNum, { avoid = null, blockedHops: learned = null, allowHazard = false } = {}) {
     const room = this.room;
     if (!room) return { found: false, reason: 'current room is not in the graph' };
     // A CALLER MAY ADD TO THE AVOID SET, NEVER REPLACE IT. `AVOID_IN_TRANSIT` is this
@@ -1650,6 +1659,7 @@ export class World {
                        { avoid: merged, transitOk: this.transitOk(),
                          blockedHops: blockedHops.size ? blockedHops : null,
                          crossCost: this.crossCost(),
+                         allowHazardDestination: !!allowHazard,
                          availableFirstHops });
     if (!r.found) return r;
     return {

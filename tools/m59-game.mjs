@@ -685,6 +685,22 @@ async function readAbilitiesOnce(s, { why = 'read', kinds = 'both' } = {}) {
 
 // ---------------------------------------------------------------- Pacer
 
+// WHAT MAY STILL BE SENT WHILE A SPELL IS CHARGING. An ALLOW list, not a deny list, and the
+// polarity is the point: kod breaks a trance on EVENT_RUN, EVENT_REST, EVENT_USE,
+// EVENT_ATTACK, EVENT_CAST, EVENT_DAMAGE and EVENT_NEWOWNER, and EVENT_USE alone is raised
+// by using, eating, reading, buying, selling, banking and half a dozen other things that do
+// not look alike from here. A deny list has to name all of them and is wrong the day somebody
+// adds a packet kind; this is wrong only for kinds that are genuinely harmless, which fail
+// safe by being suppressed for a few seconds.
+//
+// These five are speech and observation. They send no action the server can treat as the
+// caster doing something, so they neither break the trance nor need to wait for it.
+//
+// `cast` is allowed for one reason only: the cast that OPENED the hold has to reach the
+// wire. A second cast arriving mid-trance genuinely does break the first (EVENT_CAST), and
+// that is correct behaviour rather than something to suppress — the caller changed its mind.
+const CONCENTRATION_SAFE = new Set(['say', 'look', 'describe', 'safety', 'guild', 'cast']);
+
 class Pacer {
   constructor(rate = PACKETS_PER_SECOND) {
     this.minGapMs = 1000 / rate;
@@ -720,8 +736,60 @@ class Pacer {
     return times.length / 3;  // avg per second over the window
   }
 
+  // ---------------------------------------------------------------------------
+  // CONCENTRATION -- the one door, held shut, for exactly as long as a cast charges
+  // ---------------------------------------------------------------------------
+  //
+  // A spell with `viCast_time` puts the caster in a TRANCE (trance.kod). The mana and the
+  // reagents are taken up front and then the caster must do nothing at all until it ends:
+  // EVENT_RUN, EVENT_REST, EVENT_USE, EVENT_ATTACK, EVENT_CAST, EVENT_DAMAGE and
+  // EVENT_NEWOWNER each break it, half the mana is refunded, the reagents are not, and the
+  // spell does nothing. `enchant weapon` charges for THIRTY SECONDS.
+  //
+  // WHY IT IS HERE AND NOT IN THE REST PATH. It was tried there first, and the trance still
+  // broke: a keeper sits down from several places, and the tick loop's own move/turn packets
+  // at 10Hz break it too. Every one of those reaches the wire through `submit`, so this is
+  // the only place where "hold perfectly still" can be said once and be true. Same argument
+  // as the menagerie guard's single `callTool` door.
+  //
+  // IT DROPS RATHER THAN QUEUES, and only the kinds that actually break concentration. A
+  // queued move fires the instant the hold lifts, which is a move decided thirty seconds ago
+  // by a tick that has long since been superseded. Dropping is also visible: `heldDropped`
+  // counts what was suppressed and by kind, so a hold that misbehaves shows up as a number
+  // rather than as a character that mysteriously stopped moving.
+  holdForCast(ms, reason = 'casting') {
+    // BOUNDED, ALWAYS. A hold that outlives its cast is a deaf character, so it can never be
+    // open-ended: the longest trance in the game is 30s and this allows double that.
+    const capped = Math.max(0, Math.min(Number(ms) || 0, 60_000));
+    this.holdUntil = Date.now() + capped;
+    this.holdReason = reason;
+    return this.holdUntil;
+  }
+
+  releaseCastHold() { this.holdUntil = 0; this.holdReason = null; }
+
+  /** Is concentration being held right now, and what has it suppressed? */
+  holdStatus() {
+    const active = !!this.holdUntil && Date.now() < this.holdUntil;
+    return { active, reason: active ? this.holdReason : null,
+             ms_left: active ? this.holdUntil - Date.now() : 0,
+             dropped: Object.fromEntries(this.heldDropped ?? []) };
+  }
+
+  static CONCENTRATION_SAFE = CONCENTRATION_SAFE;
+
   submit(kind, fn, minGapForKind = 0) {
     const authority = this.authority?.();
+    // Concentration first: a packet sent during a casting trance breaks it.
+    if (this.holdUntil) {
+      if (Date.now() >= this.holdUntil) { this.holdUntil = 0; this.holdReason = null; }
+      else if (!Pacer.CONCENTRATION_SAFE.has(kind)) {
+        this.heldDropped = this.heldDropped ?? new Map();
+        this.heldDropped.set(kind, (this.heldDropped.get(kind) ?? 0) + 1);
+        return Promise.resolve({ held: true, kind, reason: this.holdReason,
+                                 ms_left: this.holdUntil - Date.now() });
+      }
+    }
     this.prodTimes.push(Date.now());
     if (!this.prodByKind.has(kind)) this.prodByKind.set(kind, []);
     this.prodByKind.get(kind).push(Date.now());
@@ -1754,9 +1822,12 @@ class Session {
   // confined character now refuses an external travel out of its confinement instead of
   // quietly taking it. That is the documented intent of the setting — "the rooms this
   // character may be in AT ALL" — and the refusal is returned, not thrown.
+  // `opts` reaches `travel` verbatim, so `allowHazard`/`hazardWhy` need no plumbing here —
+  // but the announcement does, because a journey into a hazard room should be visible in the
+  // job label rather than only in whatever asked for it.
   travelJob(dest, { where = `room ${dest}`, runErrands = true, ...opts } = {}) {
     const keeper = autopilotIfAny(this.name);
-    return this.startJob('travel', `walk to ${where}`, async movementGeneration => {
+    return this.startJob('travel', `walk to ${where}${opts.allowHazard ? ' (HAZARD ROOM, on purpose)' : ''}`, async movementGeneration => {
       let ours = null;
       // READ BEFORE THE WALK, BECAUSE THE ONLY USE FOR IT IS A COMPARISON. Read afterwards
       // it is the count that already includes the death it is supposed to detect — which is
@@ -11147,7 +11218,27 @@ class Session {
   // an attack the server has already accepted.
   async attackRounds(targetId, swings = 4, { abortBelow = null, shouldCancel = null } = {}) {
     const c = this.need();
-    const messages = [];
+    // THE RESISTANCE SENTENCE ARRIVES AFTER THE HIT SENTENCE, AND THIS USED TO DROP IT.
+    //
+    // Each round waited from a `since` taken just before its own swing, and pushed only what
+    // that wait returned. `waitFor` resolves the instant ONE matching event is there, so a
+    // hit line resolved the wait and the line that follows it a fraction later — "The ghost
+    // of Far'Nohl staggers backwards from the blow." — arrived after the resolve and before
+    // the next round's `since`, into the gap, and was never reported to anybody.
+    //
+    // That sentence is the ONLY prod-safe read of whether the weapon in this hand is
+    // enchanted (player.kod:9686 selects the band from the target's resistance to what was
+    // just dealt), so losing it cost the raid its weapon check: 21 raiders reported
+    // "first contact said nothing conclusive" while the server had said it 21 times.
+    //
+    // So the per-round wait is unchanged — it still paces the exchange and still decides when
+    // to stop — but what is REPORTED is collected by sequence number into a map, and swept
+    // once more at the end from the whole exchange. The map is keyed on `seq` so the sweep
+    // cannot double-count what the rounds already saw, and a sweep that finds its start
+    // trimmed out of the 500-event ring still keeps everything the rounds collected.
+    const collected = new Map();
+    const keep = ev => { for (const e of ev) if (e.kind === 'message' && e.text) collected.set(e.seq, e.text); };
+    const exchangeFrom = c.evSeq;
     let aborted = null;
     let cancelled = null;
     const healthPct = () => {
@@ -11178,7 +11269,7 @@ class Session {
       const ev = await c.waitFor({
         since: before, kinds: ['message', 'vanished'], timeoutMs: 2500,
       });
-      messages.push(...ev.events.filter(e => e.kind === 'message' && e.text).map(e => e.text));
+      keep(ev.events);
       if (ev.events.some(e => e.kind === 'vanished' && e.id === targetId)) break;
       if (!c.room.objects.has(c.selfId)) break;      // we died
       if (abortBelow != null) {
@@ -11189,13 +11280,32 @@ class Session {
       // inside a round clears PFLAG_NO_FIGHT — so the other three are three more
       // identical refusals bought at a packet each. Stop and let the caller act on it;
       // `fight` stands up and takes the round again, which is the usual cure.
-      if (messages.some((t) => skills.cannotSwingText(t))) break;
+      if ([...collected.values()].some((t) => skills.cannotSwingText(t))) break;
     }
     // Health after the exchange, since deciding whether to keep fighting depends on
     // it and the stat only arrives when it changes.
     await this.pacer.submit('read', () => c.stats(1));
     await c.waitFor({ kinds: ['stat'], timeoutMs: 1500 });
-    return { messages, vitals: c.vitals(), aborted, cancelled };
+    // The trailing sweep. `said` is still excluded by `keep` — another player quoting hit
+    // prose must never become evidence — and ordering by seq puts the resistance band back
+    // immediately after the blow it describes, which is how a reader tells them apart.
+    // Guarded: a session double in a test has no ring to sweep, and the rounds' own
+    // collection is already the answer there.
+    if (typeof c.eventsSince === 'function') keep(c.eventsSince(exchangeFrom));
+    const messages = [...collected.entries()].sort((a, b) => a[0] - b[0]).map(e => e[1]);
+    // SAY THAT THE SWING WAS REFUSED, on the path that nearly every character in this fleet
+    // takes. The broker's own `attack` tool computes `could_not_swing` and prints the cure —
+    // stand up and swing again — but only on the in-process branch. Keeper-backed sessions
+    // return straight out of here, so the flag was simply absent, `r?.could_not_swing` read
+    // `undefined`, and a raid read 590 refusals as 590 swings that did no damage.
+    const couldNotSwing = messages.some(t => skills.cannotSwingText(t));
+    return { messages, vitals: c.vitals(), aborted, cancelled,
+             ...(couldNotSwing ? { could_not_swing: true,
+                                   note: 'the swings were refused, not missed — the character is ' +
+                                         'sitting down (PFLAG_NO_FIGHT, player.kod:1164). Send `rest` ' +
+                                         'with stand:true and swing again. Hold, Dazzle, Blind and a ' +
+                                         'DM freeze say the same thing and standing will not help those.' }
+                                : {}) };
   }
 
   // Pick up everything gettable within reach. Shared with the `loot` tool.
@@ -11481,6 +11591,10 @@ class Session {
   // long trip through one sticky doorway would run out of journey before it ran out of
   // patience.
   async travel(toRoomNum, {
+    // Going into a room on the NEVER_ENTER list, on purpose, with a reason that is recorded.
+    // Both halves are required: an override nobody has to justify is just a hole.
+    allowHazard = false,
+    hazardWhy = null,
     maxHops = 25,
     maxStumbles = 6,
     movementGeneration = this.movementGeneration,
@@ -11791,6 +11905,7 @@ class Session {
       const route = this.world.route(toRoomNum, {
         avoid: this.barredRooms?.size ? new Set(this.barredRooms) : null,
         blockedHops: exhaustedHops.size ? new Set(exhaustedHops.keys()) : null,
+        allowHazard,
       });
       if (!route.found) {
         const exhausted = exhaustedRouteResult(here);
@@ -11813,7 +11928,7 @@ class Session {
           pocketEscaped = true;
           const escaped = await this.retreatAlongBreadcrumbs({
             movementGeneration, controlToken,
-            until: () => this.world.route(toRoomNum, {
+            until: () => this.world.route(toRoomNum, { allowHazard,
               avoid: this.barredRooms?.size ? new Set(this.barredRooms) : null,
               blockedHops: exhaustedHops.size ? new Set(exhaustedHops.keys()) : null,
             }).found,

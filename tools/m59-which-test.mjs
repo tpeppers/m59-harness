@@ -54,8 +54,11 @@ mkdirSync(join(ROOT, 'tools', 'runtime'), { recursive: true });
 mkdirSync(FLEETS, { recursive: true });
 for (const f of ['m59-which.mjs', 'm59-fleetpath.mjs'])
   copyFileSync(join(HERE, f), join(ROOT, 'tools', f));
-copyFileSync(join(HERE, 'runtime', 'fleet-lock.mjs'),
-  join(ROOT, 'tools', 'runtime', 'fleet-lock.mjs'));
+// fleet-lock asks process-identity whether a live guard pid is still the process that
+// registered it, so the sandbox needs both files or every case here dies in module
+// resolution — which presents as eighteen unrelated assertions failing at once.
+for (const f of ['fleet-lock.mjs', 'process-identity.mjs'])
+  copyFileSync(join(HERE, 'runtime', f), join(ROOT, 'tools', 'runtime', f));
 
 // Two rosters that exist on disk. Content only has to parse and have keys — this tool
 // counts characters and never logs in.
