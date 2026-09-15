@@ -6820,24 +6820,27 @@ class Session {
           if (arrives(here,fineOf(target))) { took = i; break; }
         }
         if (took >= 0) {
+          // `next` was removed before lookahead. It is still the first
+          // waypoint to restore if this coalesced move misses.
+          skipped.push(next);
           for (let k = 0; k <= took; k++) {
             const s = queue.shift();
             if (k < took) skipped.push(s);   // everything between here and the far end
             next = s;
             hop++;
           }
-          hop--;                         // `next` was already counted by the shift above
         }
       } else {
-        // NO COLLISION MODEL MEANS THE OLD RULE, EXACTLY. A checkout with no baked
-        // geometry has nothing to trace against, and must walk precisely as it did.
+        // Without a collision model, coalesce only collinear steps. Honor the
+        // same shortened retry and failed-hop memory as the traced branch.
         const dc0 = Math.sign(next.col - (c.self?.col ?? next.col));
         const dr0 = Math.sign(next.row - (c.self?.row ?? next.row));
-        while (hop < MOVE_HOP_MAX_SQUARES && queue.length) {
+        while (hop < hopLimit && queue.length) {
           const peek = queue[0];
           if (Math.sign(peek.col - next.col) !== dc0 || Math.sign(peek.row - next.row) !== dr0) break;
           if (occupied.has(`${peek.row},${peek.col}`)) break;
           if (blockedEdges.has(edgeKey(next.row, next.col, peek.row, peek.col))) break;
+          if (from0 && missedHops.has(edgeKey(from0.row, from0.col, peek.row, peek.col))) break;
           skipped.push(next);
           next = queue.shift(); hop++;
         }

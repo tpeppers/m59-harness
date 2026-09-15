@@ -2,6 +2,11 @@
 
 Travel survival regressions:
 
+- `m59-failed-hop-test.mjs`: 13 cases against the real fallback walker. Refused
+  two-, three- and five-square moves restore the first swallowed waypoint;
+  repeated refusals still leave every waypoint walkable. Both geometry and
+  body refusals, legacy collinear retries, hop accounting and cancellation
+  are covered.
 - `m59-travel-continuity-test.mjs`: fallback traces and route proofs start at
   the actual fine position; separate proved legs cannot license a corner cut.
   Recovery replaces intent immediately, retains the destination, and fulfills

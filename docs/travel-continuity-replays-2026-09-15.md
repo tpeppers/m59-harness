@@ -21,6 +21,11 @@ shelter baseline complete the journey. The six runs in this report all passed
 that shelter-baseline audit. The movement candidate remains held while broader
 route and survival validation continues.
 
+The [additional Scooter/Floyd comparisons and failed-hop follow-up](travel-generalization-and-failed-hops-2026-09-15.md)
+found no benefit from removing costs in those two scenes. They also exposed a
+separate waypoint-loss defect; its correction is tested offline and remains
+unreleased pending native validation.
+
 ## Candidate changes
 
 1. The fallback walker now traces from the actual fine position in client units.
