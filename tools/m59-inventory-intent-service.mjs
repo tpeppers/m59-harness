@@ -1,10 +1,12 @@
-// Local-only inventory planning. This service NEVER sends a game order.
+// Local inventory planning; only an authenticated explicit /equip click can send an order.
 import {readFileSync,readdirSync,existsSync,writeFileSync,mkdirSync,renameSync,statSync,unlinkSync} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
 import {randomBytes,timingSafeEqual,randomUUID} from 'node:crypto';
-import {INTENT_DIR,identityOf,identityKey,itemIdentity,readIntent,setIntent,planInventory,atomicJson} from './m59-inventory-intent.mjs';
+import {INTENT_DIR,identityOf,identityKey,itemIdentity,readIntent,setIntent,setWithdrawal,planInventory,atomicJson} from './m59-inventory-intent.mjs';
+import {packCapacity,readVaultPlan,storageViewerText} from './m59-inventory-storage.mjs';
+import {checkedEquip,equipOnce} from './m59-inventory-equip.mjs';
 import {rosterFor} from './m59-devclient.mjs';
 import {estimateItemSellValue} from './m59-item-value.mjs';
 const need=(ok,why)=>{if(!ok)throw Error(why);};
@@ -58,13 +60,22 @@ export function checkedChange(plans,body,identity,{dir=INTENT_DIR(),now=Date.now
   need(body?.fleet===identity.fleet&&body.broker_pid===identity.broker_pid&&fresh(body.clicked_at,now),'stale or wrong broker');
   const plan=plans.find(p=>p.agent===body.agent&&p.identity.player_id===body.player_id&&p.identity.character===body.character);
   need(plan&&fresh(plan.at,now),'inventory is not current');
+  need(body.location===undefined||['pack','vault'].includes(body.location),'invalid inventory location');
+  need(Number.isSafeInteger(body.revision)&&body.revision===plan.revision,'inventory plan changed');
+  if(body.location==='vault'){
+    need(plan.vault&&body.vault_key===plan.vault.key&&body.vault_at===plan.vault.at,'vault contents changed');
+    const item=plan.vault.items.find(i=>i.id===body.item_id&&i.name===body.item_name);need(item,'vault item changed');
+    const result=setWithdrawal(plan.identity,item,{dir,vault_key:plan.vault.key,vault_at:plan.vault.at,state:body.state,revision:body.revision,
+      source:body.source||'operator',reason:body.reason||'operator decision'});
+    return {ok:true,revision:result.revision,state:result.withdrawals[plan.vault.key+':'+item.id].state,item:item.name};
+  }
   const item=plan.items.find(i=>i.id===body.item_id&&i.name===body.item_name);need(item,'item is no longer carried');
-  need(['sell','keep','auto'].includes(body.state)&&['operator','ai'].includes(body.source||'operator'),'invalid intent action');
+  need(['sell','keep','auto','vault','equipment'].includes(body.state)&&['operator','ai'].includes(body.source||'operator'),'invalid intent action');
   need(Number.isSafeInteger(body.revision)&&body.revision===plan.revision,'inventory plan changed');
   const result=setIntent(plan.identity,item,{dir,state:body.state,source:body.source||'operator',
     reason:body.reason||((body.source||'operator')==='operator'?'operator decision':'AI recommendation'),revision:body.revision});
   const effective=planInventory([item],result,{paused:plan.paused})[0];
-  return {ok:true,revision:result.revision,state:effective.state,blocked:effective.state==='blocked',item:item.name};
+  return {ok:true,revision:result.revision,state:effective.state,purpose:effective.purpose,blocked:effective.state==='blocked',item:item.name};
 }
 export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,broker='http://127.0.0.1:8901',
                                    brokerRoot,roster=rosterFor(fleet).entries}={}) {
@@ -73,6 +84,11 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
   const identities=new Map(roster.map(r=>[r.agent,{agent:r.agent,server:(r.host+':'+r.port).toLowerCase(),
     account:r.account.toLowerCase(),character:r.character}]));
   const token=randomBytes(32).toString('hex');let plans=[],health=null,busy=false,lastError='starting',lastTick=0;
+  const equipping=new Set();
+  const writeViews=()=>{
+    writeText(join(dir,'viewer.tsv'),viewerText(plans,{fleet,broker_pid:health.pid,now:lastTick}));
+    writeText(join(dir,'viewer-storage.tsv'),storageViewerText(plans,{fleet,broker_pid:health.pid,now:lastTick},encode));
+  };
   // DO NOT KEEP ASKING A BROKER THAT IS ALREADY STRUGGLING.
   //
   // This polled every second, flat, for ever. Each tick costs the broker a full `/health`
@@ -110,6 +126,8 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
       const response=await fetch(broker+'/health',{signal:AbortSignal.timeout(2500)});need(response.ok,'broker health failed');
       const h=await response.json();need(h.ok&&h.fleet===fleet&&(!brokerRoot||samePath(h.root,brokerRoot)),'broker identity changed');
       const pilot=await rpc('pilot',{action:'status'});need(Array.isArray(pilot.piloted),'pilot status unavailable');
+      // Cached broker snapshots only: never request inventory/equipment or refresh:true.
+      const board=await rpc('fleet',{});need(Array.isArray(board.fleet),'fleet capacity unavailable');
       const paused=new Map(pilot.piloted.filter(p=>p.alive).map(p=>[p.agent,p]));
       for(const [agent,p] of paused) {
         const r=identities.get(agent);if(!r||r.character!==p.character)continue;
@@ -155,11 +173,13 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
       const next=[];
       for(const p of selected.values()) {
         const doc=readIntent(p.identity,{dir});p.items=planInventory(p.items,doc,{paused:p.paused});p.revision=doc.revision;
+        p.capacity=packCapacity(p,board.fleet.find(row=>row.agent===p.agent),now);
+        p.vault=readVaultPlan(h.root,p.identity,doc,now);
         for(const item of p.items)try{item.value=estimateItemSellValue(item.name,{quantity:item.amount}).sell_value;}catch{item.value=null;}
         next.push(p);if(p.paused)writeText(join(dir,'views',p.pid+'.tsv'),clientView(p,now));
       }
       plans=next;health=h;lastError=null;lastTick=now;
-      writeText(join(dir,'viewer.tsv'),viewerText(plans,{fleet,broker_pid:h.pid,now}));
+      writeViews();
       failures=0;waitMs=BASE_MS;
     }catch(e){
       lastError=e.message;plans=[];
@@ -175,17 +195,29 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
     if(req.headers.origin||req.socket.remoteAddress!=='127.0.0.1'){req.resume();reply(403,{error:'local clients only'});return;}
     // `poll_ms` and `failures` are reported because a service that has quietly backed off to
     // 30s looks identical to one that is keeping up, and the difference is the whole point.
-    if(req.method==='GET'&&req.url==='/health'){reply(200,{kind:'inventory-intent',schema:1,fleet,pid:process.pid,broker_pid:health?.pid,plans:plans.length,clients:plans.filter(p=>p.paused).length,at:lastTick,error:lastError,poll_ms:waitMs,failures});return;}
+    if(req.method==='GET'&&req.url==='/health'){reply(200,{kind:'inventory-intent',schema:1,storage_schema:1,equip_schema:1,fleet,pid:process.pid,
+      broker,broker_root:health?.root||brokerRoot,broker_pid:health?.pid,plans:plans.length,clients:plans.filter(p=>p.paused).length,
+      active_equips:equipping.size,at:lastTick,error:lastError,poll_ms:waitMs,failures});return;}
     if(req.method==='GET'&&req.url==='/plans'){reply(200,{fleet,broker_pid:health?.pid,at:lastTick,plans});return;}
-    if(req.method!=='POST'||req.url!=='/intent'||!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){req.resume();reply(404,{error:'unsupported request'});return;}
+    if(req.method!=='POST'||!['/intent','/equip'].includes(req.url)||!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){req.resume();reply(404,{error:'unsupported request'});return;}
     const supplied=Buffer.from(String(req.headers['x-m59-intent-token']||'')),expected=Buffer.from(token);
     if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected)){req.resume();reply(403,{error:'intent token required'});return;}
     let body='';req.on('data',b=>{body+=b;if(body.length>8192)req.destroy();});
-    req.on('end',()=>{try{
+    req.on('end',async()=>{try{
       need(!lastError&&fresh(lastTick,Date.now()),'service is not current');
-      const result=checkedChange(plans,JSON.parse(body),{fleet,broker_pid:health.pid},{dir});reply(200,result);
-      for(const p of plans){const doc=readIntent(p.identity,{dir});p.items=planInventory(p.items,doc,{paused:p.paused});p.revision=doc.revision;if(p.paused)writeText(join(dir,'views',p.pid+'.tsv'),clientView(p));}
-      writeText(join(dir,'viewer.tsv'),viewerText(plans,{fleet,broker_pid:health.pid}));
+      const request=JSON.parse(body),binding={fleet,broker_pid:health.pid};
+      if(req.url==='/equip'){
+        const target=checkedEquip(plans,request,binding,{dir}),agent=target.plan.agent;
+        need(!equipping.has(agent),'equip already pending');equipping.add(agent);
+        try {reply(200,await equipOnce(target,binding,{rpc,currentPlan:()=>{
+          if(lastError||health.pid!==binding.broker_pid||!fresh(lastTick,Date.now()))return null;
+          const p=plans.find(p=>p.agent===agent);return p&&fresh(p.at,Date.now())?p:null;
+        }}));}finally{equipping.delete(agent);}return;
+      }
+      const result=checkedChange(plans,request,binding,{dir});reply(200,result);
+      for(const p of plans){const doc=readIntent(p.identity,{dir});p.items=planInventory(p.items,doc,{paused:p.paused});p.revision=doc.revision;
+        p.vault=readVaultPlan(health.root,p.identity,doc);if(p.paused)writeText(join(dir,'views',p.pid+'.tsv'),clientView(p));}
+      writeViews();
     }catch(e){if(!res.writableEnded)reply(409,{error:e.message});}});
     req.on('error',()=>{});
   });
@@ -203,5 +235,6 @@ export async function startService({fleet='prod',dir=INTENT_DIR(),port=8913,brok
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const args=process.argv.slice(2),get=(key,fallback)=>args.includes(key)?args[args.indexOf(key)+1]:fallback;
-  await startService({fleet:get('--fleet','prod'),dir:get('--dir',INTENT_DIR()),port:Number(get('--port',8913)),brokerRoot:get('--broker-root',undefined)});
+  await startService({fleet:get('--fleet','prod'),dir:get('--dir',INTENT_DIR()),port:Number(get('--port',8913)),
+    broker:get('--broker','http://127.0.0.1:8901'),brokerRoot:get('--broker-root',undefined)});
 }

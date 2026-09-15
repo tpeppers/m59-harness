@@ -36,6 +36,15 @@ export function readIntent(identity,{dir=INTENT_DIR()}={}) {
   for(const [id,row] of Object.entries(doc.intents)) {
     itemIdentity(row);need(String(row.id)===id,'intent id mismatch');
     need(['sell','keep'].includes(row.state)&&['operator','ai'].includes(row.source)&&text(row.reason,256),'invalid intent row');
+    need(row.purpose===undefined||(['vault','equipment'].includes(row.purpose)&&row.state==='keep'),'invalid item purpose');
+  }
+  if(doc.withdrawals!==undefined){
+    need(doc.withdrawals&&typeof doc.withdrawals==='object'&&!Array.isArray(doc.withdrawals)&&Object.keys(doc.withdrawals).length<=2048,'invalid withdrawal map');
+    for(const [key,row] of Object.entries(doc.withdrawals)){
+      const cacheKey=row.cache_key??row.vault_key;
+      itemIdentity(row);need(/^[a-f0-9]{64}$/.test(cacheKey)&&key===cacheKey+':'+row.id&&
+        ['withdraw','leave'].includes(row.state)&&['operator','ai'].includes(row.source)&&text(row.reason,256),'invalid withdrawal');
+    }
   }
   return doc;
 }
@@ -57,7 +66,7 @@ export function publishPlan(s,plan,{room=null,room_wire=null,dir=INTENT_DIR(),no
 // A crashed writer leaves a named lock to inspect; never delete somebody else's lock.
 export function setIntent(identity,item,{state,source='operator',reason='operator decision',revision,dir=INTENT_DIR()}={}) {
   identity=identityOf(identity);item=itemIdentity(item);
-  need(['sell','keep','auto'].includes(state)&&['operator','ai'].includes(source)&&text(reason,256),'invalid intent change');
+  need(['sell','keep','auto','vault','equipment'].includes(state)&&['operator','ai'].includes(source)&&text(reason,256),'invalid intent change');
   const key=identityKey(identity),root=join(dir,'plans'),lock=join(root,key+'.lock');mkdirSync(root,{recursive:true});
   mkdirSync(lock); // EEXIST means another writer; the caller retries a fresh revision.
   try {
@@ -66,10 +75,26 @@ export function setIntent(identity,item,{state,source='operator',reason='operato
     const previous=doc.intents[item.id];
     if(source==='ai'&&sameItem(previous,item)&&previous.source==='operator')return doc;
     if(state==='auto')delete doc.intents[item.id];
-    else doc.intents[item.id]={...item,state,source,reason,at:Date.now()};
+    else doc.intents[item.id]={...item,state:['vault','equipment'].includes(state)?'keep':state,
+      ...(['vault','equipment'].includes(state)?{purpose:state}:{}),source,reason,at:Date.now()};
     need(Object.keys(doc.intents).length<=2048,'too many item intents');
     doc.revision++;atomicJson(join(root,key+'.json'),doc);return doc;
   } finally {rmdirSync(lock);}
+}
+export function setWithdrawal(identity,item,{vault_key,vault_at,state,source='operator',reason='operator decision',revision,dir=INTENT_DIR()}={}) {
+  identity=identityOf(identity);item=itemIdentity(item);
+  need(/^[a-f0-9]{64}$/.test(vault_key)&&['withdraw','leave'].includes(state)&&
+    ['operator','ai'].includes(source)&&text(reason,256),'invalid withdrawal change');
+  const key=identityKey(identity),root=join(dir,'plans'),lock=join(root,key+'.lock');mkdirSync(root,{recursive:true});mkdirSync(lock);
+  try {
+    const doc=readIntent(identity,{dir});need(Number.isSafeInteger(revision)&&doc.revision===revision,'intent revision changed');
+    const slot=vault_key+':'+item.id,previous=doc.withdrawals?.[slot];
+    if(source==='ai'&&sameItem(previous,item)&&previous.source==='operator')return doc;
+    doc.withdrawals??={};doc.withdrawals[slot]={...item,cache_key:vault_key,
+      ...(Number.isSafeInteger(vault_at)&&vault_at>0?{cache_at:vault_at}:{}),state,source,reason,at:Date.now()};
+    need(Object.keys(doc.withdrawals).length<=2048,'too many withdrawal intents');
+    doc.revision++;atomicJson(join(root,key+'.json'),doc);return doc;
+  }finally{rmdirSync(lock);}
 }
 export function planInventory(items,doc,{paused=false}={}) {
   need(Array.isArray(items)&&items.length<=2048,'invalid inventory');
@@ -79,7 +104,7 @@ export function planInventory(items,doc,{paused=false}={}) {
     const requested=intent?intent.state==='sell':item.recommended===true;
     const blocked=item.equipped?'equipped':/^(shillings?|coins?)$/i.test(item.name)?'money':item.blocked||null;
     const state=intent?.state==='keep'?'keep':requested?(blocked?'blocked':'sell'):'none';
-    return {...item,state,queued:state==='sell',source:intent?.source||(requested?'ai':null),
+    return {...item,state,purpose:intent?.purpose||(state==='sell'?'sell':''),queued:state==='sell',source:intent?.source||(requested?'ai':null),
       reason:intent?.state==='keep'?intent.reason:blocked||intent?.reason||item.reason||'not selected for sale',
       paused:!!paused};
   });

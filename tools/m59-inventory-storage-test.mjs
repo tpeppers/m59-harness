@@ -32,6 +32,8 @@ try {
   assert.equal(checkedChange([p],change,{fleet:'test',broker_pid:77},{dir,now}).state,'withdraw');
   doc=readIntent(identity,{dir});p.revision=doc.revision;p.vault=readVaultPlan(dir,identity,doc,now);
   assert.equal(p.vault.items[0].purpose,'withdraw');
+  assert.equal(doc.withdrawals[p.vault.key+':1'].cache_key,p.vault.key); // existing persisted format
+  assert.equal(doc.withdrawals[p.vault.key+':1'].cache_at,p.vault.at);
   assert.throws(()=>checkedChange([p],{...change,revision:3,vault_key:'b'.repeat(64)},{fleet:'test',broker_pid:77},{dir,now}));
   const wire=storageViewerText([p],{fleet:'test',broker_pid:77,now},encode);assert.match(wire,/M59SELLPLAN\t2/);assert.match(wire,/\nJ\tt1\t1\tlong%20sword\t3/);
   const equip={...change,revision:3,item_id:31,location:'pack',state:'equip'};
