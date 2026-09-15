@@ -2,7 +2,8 @@
 // Static map/resources remain shared; mutable evidence is kept under the selected lab
 // roster so an experiment cannot write production's books and ledgers.
 
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,20 +79,26 @@ function copySeedIfAbsent(source, destination) {
   return true;
 }
 
-export function configureLabEnvironment(selection, env = process.env, { scope = null } = {}) {
+export function configureLabEnvironment(selection, env = process.env, { scope = null, fresh = false } = {}) {
   if (!selection?.fleet || !selection?.stateFile)
     throw new TypeError('configureLabEnvironment requires a fleet selection');
   if (scope != null && (typeof scope !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(scope)))
     throw new TypeError('lab environment scope must use 1-64 letters, digits, dash, or underscore');
+  if (typeof fresh !== 'boolean' || (fresh && scope == null))
+    throw new TypeError('fresh lab environments require a named scope and a boolean fresh option');
   const rosterStem = basename(selection.stateFile).replace(/\.json$/i, '');
   const baseRuntimeDir = join(dirname(selection.stateFile), '.lab-runtime', rosterStem);
   // One-process mode retains its historical paths. Shards get independent writer trees:
   // most of these JSON books use replace/pretty-write semantics and are not safe merely
   // because their processes happen to share a parent. Only explicit coordination stores
   // live under the common directory below.
-  const runtimeDir = scope == null
+  const shardDir = join(baseRuntimeDir, 'shards');
+  if (fresh) mkdirSync(shardDir, { recursive: true });
+  // A PID is not unique across trials: Windows reuses it. Fresh replay workers
+  // atomically allocate a new directory; earlier evidence is never overwritten.
+  const runtimeDir = fresh ? mkdtempSync(join(shardDir, `${scope}-`)) : scope == null
     ? baseRuntimeDir
-    : join(baseRuntimeDir, 'shards', scope);
+    : join(shardDir, scope);
   const coordinationDir = join(baseRuntimeDir, 'coordination');
   mkdirSync(runtimeDir, { recursive: true });
   mkdirSync(coordinationDir, { recursive: true });
@@ -115,17 +122,30 @@ export function configureLabEnvironment(selection, env = process.env, { scope = 
   const safespots = join(runtimeDir, 'm59-safespots.json');
   env.M59_SAFESPOT_FILE = safespots;
   const seeded = [];
+  const seedInputs = [];
   for (const [key, source] of Object.entries(sources)) {
-    if (copySeedIfAbsent(source, env[key])) seeded.push(key);
+    const copied = copySeedIfAbsent(source, env[key]);
+    if (copied) seeded.push(key);
+    // Hash the actual initial destination, not a source that a persistent lab
+    // may already have replaced with its own learned state.
+    const bytes = existsSync(env[key]) ? readFileSync(env[key]) : null;
+    seedInputs.push(Object.freeze({
+      key, source: resolve(source), destination: resolve(env[key]),
+      status: copied ? 'copied' : bytes == null ? 'missing' : 'retained',
+      initial_sha256: bytes == null ? null : createHash('sha256').update(bytes).digest('hex'),
+      initial_bytes: bytes?.length ?? null,
+    }));
   }
   return Object.freeze({
     baseRuntimeDir,
     runtimeDir,
     coordinationDir,
     scope,
+    fresh,
     safespots,
     badExits: env.M59_BAD_EXITS,
     trackStrikes: env.M59_TRACK_STRIKES,
     seeded: Object.freeze(seeded),
+    seedInputs: Object.freeze(seedInputs),
   });
 }

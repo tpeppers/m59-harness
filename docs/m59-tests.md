@@ -39,6 +39,15 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
 
 ## Saved-scene simulator
 
+`node tools/runtime/lab-environment-test.mjs` preserves ordinary lab learning
+while checking fresh replay directories, repeated scope/PID names, initial seed
+hashes, retained books and missing inputs. `node tools/m59-replay-environment-test.mjs`
+exercises the replay adapter's actual environment setup: repeated calls in the
+same process must allocate different directories, retain earlier evidence and
+restore the requested baseline. It also checks that report manifests are detached
+snapshots and that explicit process reuse, including capture/reset before a run,
+is reported. These tests do not connect to a fleet or game server.
+
 Travel shelter count regressions are in
 `node tools/m59-survival-handoff-test.mjs` (route, hop boundary and wedge
 recovery at 0, 1, 5, 6 and 14 monsters) and

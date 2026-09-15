@@ -1,10 +1,21 @@
-# Ordinary recovery and routing costs: matched repeats — 2026-09-15
+# Ordinary recovery and routing costs: repeated trials — 2026-09-15
 
 The monster-count shelter restrictions remain removed in production. These
 experiments test a separate choice: whether monster-proximity costs help route
 selection when actual body and wall collision checks remain active.
 
-Across three fresh trials per arm, current routing had **2/3 deaths**,
+**Correction after the startup-state audit:** no-cost trial 2 reused an old
+PID directory and inherited a different shelter book. Its result remains below
+as exploratory evidence, but it must not be pooled as a matched-input trial.
+The three controls and no-cost trials 3–4 have the intended shelter baseline:
+2/3 versus 0/2 deaths, and 0/3 versus 2/2 arrivals. Other mutable inputs were not
+hashed at startup by this older adapter. The
+[isolation report](replay-state-isolation-2026-09-15.md) records the evidence and
+fix. Original raw receipts, including the aggregate's earlier
+`matched_provenance` label, are preserved; that label checked code/loadout and
+did not establish identical learned state.
+
+Across the original three trials per arm, current routing had **2/3 deaths**,
 **0/3 starting-room exits** and **0/3 arrivals at the captured destination**.
 Removing only the soft proximity cost had **0/3 deaths**,
 **3/3 starting-room exits** and **2/3 destination arrivals**.
@@ -164,7 +175,8 @@ Private evidence is under `substrate/replay-smoke/travel-zero-2026-09-15/`:
 - `trial-104-route-{fixed,cost}-natural-{2,3,4}.json`, raw operation/HP/decision
   traces, exact loadout verification and server/code attestations.
 - `route-cost-repeat-progress.jsonl`, order and frozen source hashes.
-- `route-cost-series-summary-1789468716478.json`, matched aggregate and destination changes.
+- `route-cost-series-summary-1789468716478.json`, original code/loadout aggregate
+  and destination changes; see the shelter-baseline correction above.
 - `route-fix-exposure-1789468710586.json`, frozen production window.
 - `fallback-origin-probe-1789467438379.json`,
   `pivot-shelter-progress-probe-1789467487159.json`, and

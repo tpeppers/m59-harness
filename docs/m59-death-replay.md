@@ -119,6 +119,27 @@ A private config selects an existing lab roster/account. It never selects a flee
 
 `players` maps other captured player names to explicitly selected shadow stand-ins. `classes` resolves a monster whose name is not uniquely covered by the generated class catalogue. `native_snapshot` is optional and is only accepted for the owned isolated container; when present, every trial starts by restoring the same native world. This also restores inventory lost in the previous trial, instead of treating a newly unarmed corpse as an equivalent baseline. Account definitions are restored at the initial cold bootstrap; see the warm-reset contract below.
 
+Each default replay worker also allocates a fresh harness runtime directory.
+A process ID alone is insufficient: operating systems reuse PIDs, and reusing
+an old directory can silently retain a different learned shelter book. Earlier
+runtime directories are preserved. Ordinary persistent lab sessions keep their
+existing learning behavior.
+
+Trial results include `runtime_environment` with the directory and initial
+SHA-256/byte count of the shelter, bad-exit, prey-side and track-strike books.
+Each entry identifies its source, destination and `copied`, `retained` or
+`missing` status. Hashes describe actual destination contents at environment
+initialization; missing inputs remain explicit. Compare these inputs as well
+as code, scene and loadout when pairing experiments. They do not attest every
+mutable configuration file or reconstruct the original production book.
+
+The default isolated adapter starts a fresh engine process for each trial.
+Explicit `isolate:false` callers can retain module caches and learned state
+across operations; `reused_in_process` marks this, including a capture or reset
+before the first run. Their manifest still describes environment initialization,
+not a fresh snapshot before each later operation. Use separate workers for
+independent baselines.
+
 ```text
 node tools/m59-death-replay.mjs checklist BUNDLE.json
 node tools/m59-death-replay.mjs run BUNDLE.json --config PRIVATE_CONFIG.json --frame FRAME_ID --baselines 3 --trials 3 --out REPORT.json
