@@ -10,12 +10,14 @@ import { reagentFloorFor } from './m59-stockpile.mjs';
 import { dropSpec } from './m59-parse.mjs';
 import { hallPassword } from './m59-hallsecret.mjs';
 import { guildPassage } from './m59-guild-passage.mjs';
+import { NORTH_BARLOQUE, withGuildSecrecy } from './m59-guild-secrecy.mjs';
 import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
   coopFundingAmount, coopRemainingPlan } from './m59-reagent-coop.mjs';
 
 const pending = reason => ({ pending: true, ready: false, reason });
 const interrupted = k => k.travelInterrupted() || k.suspendedJourney ||
   (k.s.job?.kind === 'commerce:coop' && k.s.job.generation !== k.s.movementGeneration);
+const inwardInterrupted = k => interrupted(k) || !!k.coopSecrecy?.blocked;
 const room = k => Number(k.s.world?.room?.num);
 const pack = k => k.packAsItems();
 const sale = k => inventorySalePlan(k.s, { keep: FLEET_KEEP,
@@ -38,12 +40,12 @@ async function approach(k, box) {
   // beside a chest unnecessarily attempts the raised chest platform.
   const inRange = p => Math.abs(p.row - box.row) + Math.abs(p.col - box.col) <= 7;
   if (inRange(me)) return;
-  await guildPassage(k, 4, () => interrupted(k));
+  await guildPassage(k, 4, () => inwardInterrupted(k));
   const route = s.world.approachSquare(box.col, box.row);
   const at = route?.path?.find(inRange) ?? route;
   if (!at) throw new Error('no reachable approach to coop chest ' + box.slot);
   await s.walkTo(at.col, at.row, { maxSteps: 30, beforeMutation: () => {
-    if (interrupted(k)) throw new Error('coop paused for survival');
+    if (inwardInterrupted(k)) throw new Error(k.coopSecrecy?.blocked ?? 'coop paused for survival');
   } });
   if (interrupted(k) || !inRange(c.self))
     throw new Error(`coop chest ${box.slot} not reached`);
@@ -86,6 +88,7 @@ async function transfer(k, box, item, amount, direction, cfg, receipt) {
 }
 
 async function transact(k, state, cfg, fleet) {
+  await k.coopSecrecy?.fresh();
   const s = k.s, c = s.need();
   const dir = resolve(process.env.M59_COOP_DIR ?? 'substrate/stockpile'); mkdirSync(dir, { recursive: true });
   const stem = String(fleet).replace(/[^A-Za-z0-9_-]/g, '_');
@@ -108,7 +111,7 @@ async function transact(k, state, cfg, fleet) {
     // Include extra chests in the global cash cap, even if not selected for deposits.
     for (const b of boxes) await readBox(k, b, cfg);
     await inventory(k);
-    if (state.mode === 'contribute') {
+    if (['contribute', 'town'].includes(state.mode)) {
       for (const box of boxes.filter(b => cfg.chest_keys.includes(b.slot))) {
         await readBox(k, box, cfg);
         const planned = coopDepositPlan({ config: cfg, chests: [box], pack: pack(k),
@@ -159,7 +162,8 @@ async function transact(k, state, cfg, fleet) {
           state.result.shillings += await transfer(k, box, item, Math.min(need, item.amount ?? 1), 'withdraw', cfg, receipt);
         }
       }
-    } else if (state.mode === 'tithe') {
+    }
+    if (['tithe', 'town'].includes(state.mode)) {
       // Re-read all chests immediately before deciding the global cap.
       for (const box of boxes) await readBox(k, box, cfg);
       const stored = boxes.reduce((n, b) => n + coopCount(b.items, 'shilling'), 0);
@@ -179,23 +183,35 @@ async function transact(k, state, cfg, fleet) {
 
 // Travel is resumable separately from transfers: a survival interruption on the
 // return leg must never repeat a completed withdrawal or charge the tithe twice.
-export async function runReagentCoop(k, mode, { plan = null, bankable = 0, requestId = null } = {}, fleet, journey = null) {
+export async function runReagentCoop(k, mode, options = {}, fleet, journey = null) {
   if (k.coopRunning) return pending('reagent coop visit is already executing');
   k.coopRunning = true;
-  try { return await executeCoop(k, mode, { plan, bankable, requestId }, fleet, journey); }
+  try {
+    const cfg = coopConfig(k.policy.reagentCoop);
+    if (!cfg) return { plan: options.plan ?? null, skipped: true };
+    return await withGuildSecrecy(k, cfg, () => executeCoop(k, mode, options, fleet, journey));
+  }
   finally { k.coopRunning = false; }
 }
-async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = null } = {}, fleet, journey = null) {
+async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = null, nextRoom = null, first = false } = {}, fleet, journey = null) {
   const cfg = coopConfig(k.policy.reagentCoop);
   if (!cfg) return { plan, skipped: true };
   let state = k.coopVisit;
   if (!state) {
     const key = `${mode}:${requestId ?? k.townTrip?.startedAt ?? 'outside'}`;
+    // Town retries are opportunities on the route to the NEXT business stop.
+    // They never create a final detour after selling/vaulting is finished.
+    if (mode === 'town' && !first && ![NORTH_BARLOQUE, cfg.hall_room].includes(room(k))) {
+      const route = nextRoom == null ? null : k.s.world.route?.(Number(nextRoom));
+      if (!route?.found || !route.hops.some(h => Number(h.to) === NORTH_BARLOQUE))
+        return { deferred: true, skipped: true, reason: 'guild secrecy: no North Barloque passage before the next task' };
+    }
     if (Date.now() < (k.coopAttempts?.[key] ?? 0)) return { plan, skipped: true };
     if (mode === 'supply' && ![...plan.lines, ...plan.unpriced].some(l => cfg.reagents.includes(coopKey(l.item))))
       return { plan, skipped: true };
     if (mode === 'tithe' && bankable <= 0) return { skipped: true };
-    if (mode === 'contribute' && !sale(k).some(i => cfg.reagents.includes(coopKey(i.name)))) return { skipped: true };
+    if (['contribute', 'town'].includes(mode) && !(mode === 'town' && bankable > 0) &&
+        !sale(k).some(i => cfg.reagents.includes(coopKey(i.name)))) return { skipped: true };
     const c = k.s.need(), since = c.evSeq;
     await k.s.pacer.submit('read', () => c.requestGuildInfo());
     const membership = await c.waitFor({ since, kinds: ['guild'], timeoutMs: 3000 });
@@ -205,7 +221,7 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
       k.note('reagent coop unavailable', { reason: 'guild rank or hall key unavailable' });
       return { plan, skipped: true };
     }
-    state = k.coopVisit = { mode, key, origin: room(k), started: Date.now(), stage: 'outbound',
+    state = k.coopVisit = { mode, key, origin: mode === 'town' ? NORTH_BARLOQUE : room(k), started: Date.now(), stage: 'outbound',
       keep: k.purseNow() - bankable, target: null,
       result: { plan, took: [], shillings: 0, moved: true } };
   }
@@ -216,11 +232,28 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
   if (interrupted(k)) return pending('reagent coop paused for survival');
   if (state.stage === 'outbound') {
     k.doing = 'travelling';
-    const r = room(k) === cfg.hall_room ? { arrived: true } : await (journey ?? k.travel.bind(k))(cfg.hall_room, { maxHops: 30 });
-    if (interrupted(k)) return pending('reagent coop paused for survival');
-    if (!r?.arrived || room(k) !== cfg.hall_room) {
-      state.result.reason = r?.reason ?? 'guild hall not reached'; state.stage = 'return';
-    } else state.stage = 'transfer';
+    try {
+      // Split at the public entrance so no journey can enter on a stale reading
+      // taken back at a merchant. The scoped pacer refreshes throughout crossing.
+      if (![NORTH_BARLOQUE, cfg.hall_room].includes(room(k))) {
+        const approach = await (journey ?? k.travel.bind(k))(NORTH_BARLOQUE, { maxHops: 30 });
+        if (!approach?.arrived) throw new Error(approach?.reason ?? 'North Barloque not reached');
+      }
+      await k.coopSecrecy.fresh();
+      const r = room(k) === cfg.hall_room ? { arrived: true }
+        : await (journey ?? k.travel.bind(k))(cfg.hall_room, { maxHops: 2 });
+      if (!r?.arrived || room(k) !== cfg.hall_room) throw new Error(r?.reason ?? 'guild hall not reached');
+      await k.coopSecrecy.fresh();
+      state.stage = 'transfer';
+    } catch (e) {
+      if (interrupted(k) && !k.coopSecrecy.blocked) return pending('reagent coop paused for survival');
+      state.result.reason = k.coopSecrecy.blocked ?? e.message;
+      state.result.deferred = !!k.coopSecrecy.blocked;
+      state.stage = 'return';
+      // A secrecy refusal continues from the street; never march back to the
+      // farm/shop where the deferred town opportunity was first scheduled.
+      if (state.result.deferred && room(k) !== cfg.hall_room) state.origin = room(k);
+    }
   }
   if (state.stage === 'transfer') {
     k.doing = 'trading';
@@ -229,12 +262,14 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
       if (r.pending && Date.now() - state.started < cfg.retry_ms) return r;
       if (r.pending) state.result.reason = r.reason;
     } catch (e) {
-      state.result.reason = e.message;
+      state.result.reason = k.coopSecrecy?.blocked ?? e.message;
+      state.result.deferred = !!k.coopSecrecy?.blocked;
       k.note('reagent coop visit could not transfer', { mode, reason: e.message,
         at: { row: k.s.client.self?.row, col: k.s.client.self?.col } });
     }
     state.stage = 'return';
   }
+  if (state.result.deferred) state.origin = room(k) === cfg.hall_room ? NORTH_BARLOQUE : room(k);
   if (interrupted(k)) return pending('reagent coop return paused for survival');
   // Also return to the foyer when a keeper restarted inside the hall. Its
   // next ordinary journey cannot reopen the internal chest-room doors.
@@ -251,7 +286,7 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
   k.note('reagent coop visit completed', { mode, took: state.result.took,
     shillings: state.result.shillings, reason: state.result.reason });
   k.coopAttempts ??= {};
-  k.coopAttempts[state.key] = mode === 'tithe' && k.townTrip && !state.result.reason
+  k.coopAttempts[state.key] = ['tithe', 'town'].includes(mode) && k.townTrip && !state.result.reason
     ? Infinity : Date.now() + cfg.retry_ms;
   // Keep only the current trip and bounded retry history.
   for (const key of Object.keys(k.coopAttempts))
@@ -266,7 +301,7 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
 // travel; the ordinary keeper economy waits behind this session's job slot.
 export function reagentCoopCommand(k, s, args, fleet) {
   const id = args.request_id, mode = args.action;
-  if (typeof id !== 'string' || !id || id.length > 160 || !['contribute', 'supply', 'tithe'].includes(mode))
+  if (typeof id !== 'string' || !id || id.length > 160 || !['contribute', 'supply', 'tithe', 'town'].includes(mode))
     throw new Error('reagent_coop needs action and a stable request_id');
   if (!k.policy.reagentCoop?.enabled) return { skipped: true, reason: 'reagent coop disabled' };
   if (k.coopRunning) return pending('reagent coop visit is already executing');
@@ -288,7 +323,7 @@ export function reagentCoopCommand(k, s, args, fleet) {
     assertHold();
     const timer = setInterval(assertHold, 2000); timer.unref?.();
     try {
-      return await runReagentCoop(k, mode, { requestId: id,
+      return await runReagentCoop(k, mode, { requestId: id, nextRoom: args.next_room, first: args.first === true,
         plan: mode === 'supply' ? k.shoppingPlan({ kind: 'reagents' }) : null,
         bankable: Math.max(0, k.purseNow() - Math.max(Number(args.keep ?? 0),
           Number(k.policy.walkingMoney ?? 400), k.shoppingPlan().required_purse)),

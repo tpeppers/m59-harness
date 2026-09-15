@@ -22,7 +22,31 @@ DUM's multi-shop circuit also includes contribution and cash-tithe stops when
 the bot's live policy enables the coop. These call the broker `reagent_coop`
 command with a stable `request_id`, polling the same background job until it
 finishes. The command is also available to FleetScripts and manual operators;
-its actions are `contribute`, `supply`, and `tithe`.
+its actions are `contribute`, `supply`, `tithe`, and `town`. The town action combines
+surplus reagents and the cash tithe in one visit.
+
+Guild visits require secrecy. Before entering from North Barloque (101), again
+inside the hall, and before paced movement/speech/transfers, the keeper refreshes
+the guild invite dialog's room-player data. It includes invisible players and
+compares names with the fleet roster, including human-piloted fleet characters.
+Unknown or timed-out reads fail closed. A pushed outsider arrival also blocks the
+next inward action; the bot abandons transfers, leaves the hall, and continues
+its next town task. Survival retains control throughout.
+
+The game client builds its invite dialog from room contents
+(`module/merintr/guildinv.c`); there is no separate invite-list network request.
+The server's `ToCliRoomContents` includes invisible players. We deliberately omit
+the GUI's visibility filter. Server-hidden administrative characters are not
+exposed by this protocol. No guild invitation is sent by these checks.
+
+DUM tries the combined tithe before the first vault/shop stop. If secrecy
+prevents it, that town task goes ahead. Another chance is offered before the
+next business task only when its route passes North Barloque. A successful visit
+consumes all later chances. No chance is offered after the last vault/shop stop:
+banking and the return continue, and ordinary keeper banking cannot reinsert a
+hall visit. Cash is 20% of available bank-bound money **at the accepted visit**;
+sales after that visit do not cause another hall trip. Shopping supplies also
+obey secrecy; a refused coop supply visit falls through to private funding.
 
 Before selling on a town trip, bots contribute only reagents selected for sale
 by the existing inventory rules. Explicitly protected items, fleet keep items,

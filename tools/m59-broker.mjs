@@ -11725,7 +11725,7 @@ const TOOLS = [
     name: 'reagent_coop',
     description: 'Run or poll an idempotent reagent coop stop. Uses this bot’s live coop policy, travels to the hall and returns. Keep polling the same request_id while pending; a completed request is never charged twice.',
     schema: { type: 'object', properties: { agent: { type: 'string' },
-      action: { enum: ['contribute', 'supply', 'tithe'] }, request_id: { type: 'string' },
+      action: { enum: ['contribute', 'supply', 'tithe', 'town'] }, next_room: { type: 'integer' }, first: { type: 'boolean' }, request_id: { type: 'string' },
       keep: { type: 'number', minimum: 0 } }, required: ['agent', 'action', 'request_id'] },
     run: async a => {
       const s = session(a.agent);

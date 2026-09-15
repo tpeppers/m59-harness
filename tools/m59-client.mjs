@@ -1505,6 +1505,8 @@ export class M59Client {
         }
         this.log(`room ${res.roomId}: ${res.count} object(s)`);
         this.emit('room-contents', { room: res.roomId, count: res.count, request,
+                                     players: res.objects.filter(o => o.flags & OF.PLAYER)
+                                       .map(o => ({ id: o.id, flags: o.flags, name: this.rsc.get(o.nameRsc) })),
                                      objects: res.objects.map(o => describeObject(o, this.lookup)) });
         break;
       }

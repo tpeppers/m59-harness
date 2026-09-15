@@ -20630,6 +20630,18 @@ export class Autopilot {
         if (!funded.ready) return true;
       }
       if ((await this.leaveHold('continuing the shopping trip')).refused) return true;
+      if (this.policy.reagentCoop?.enabled && !trip.coopInitial &&
+          !BANKS.some(b => b.room === Number(trip.target.room))) {
+        const donation = await runReagentCoop(this, 'town', {
+          requestId: 'keeper-town:' + trip.startedAt + ':initial', nextRoom: trip.target.room,
+          bankable: Math.max(0, this.purseNow() - Math.max(this.policy.walkingMoney ?? 400,
+            this.shoppingPlan().required_purse ?? 0)),
+        }, TITHE_FLEET);
+        if (donation.pending) return true;
+        trip.coopInitial = true;
+        trip.coopOpportunity = 1; // sell is the next real task; do it before retrying
+        if (!donation.deferred) trip.coopDone = true;
+      }
       const alreadyThere = Number(this.s.world?.room?.num) === Number(trip.target.room);
       const r = alreadyThere
         ? { arrived: true }
@@ -20663,8 +20675,23 @@ export class Autopilot {
       ['buy delivery cargo', () => this.buyFarmDeliveryCargo()],
       ['vault', () => this.vaultRunIfPassing()],
     ];
+    const coopBusiness = new Set(['sell', 'restock here', 'buy food', 'buy reagents', 'buy delivery cargo', 'vault']);
     while (trip.nextService < steps.length) {
       const [name, run] = steps[trip.nextService];
+      if (this.policy.reagentCoop?.enabled && !trip.coopDone && coopBusiness.has(name) &&
+          trip.coopOpportunity !== trip.nextService) {
+        // Shopping is never refused for secrecy. A denied chance advances to
+        // this service; only another service creates another chance.
+        const donation = await runReagentCoop(this, 'town', {
+          requestId: 'keeper-town:' + trip.startedAt + ':' + trip.nextService,
+          nextRoom: name === 'buy food' ? FOOD_SHOP.room : name === 'buy reagents' ? REAGENT_SHOP.room : Number(this.s.world?.room?.num), first: false,
+          bankable: Math.max(0, this.purseNow() - Math.max(this.policy.walkingMoney ?? 400,
+            this.shoppingPlan().required_purse ?? 0)),
+        }, TITHE_FLEET);
+        if (donation.pending) return true;
+        trip.coopOpportunity = trip.nextService;
+        if (!donation.deferred) trip.coopDone = true;
+      }
       if (this.travelInterrupted() || this.suspendedJourney) return true;
       const result = await run().catch(e => {
         this.note('shopping step failed', { step: name, why: e.message });
@@ -21277,7 +21304,9 @@ export class Autopilot {
   // twenty-one characters to look at a full chest.
   async contributeGuildWants() {
     if (this.policy.reagentCoop?.enabled)
-      return runReagentCoop(this, 'contribute', {}, TITHE_FLEET);
+      // The town scheduler owns donation opportunities. Standalone passes must
+      // not resurrect a skipped final tithe or interrupt the next trip.
+      return { skipped: true };
     const cfg = this.policy.guildWants;
     if (!cfg?.enabled) return null;
     const plan = guildPlan();
@@ -21526,14 +21555,6 @@ export class Autopilot {
       return;
     }
 
-    if (this.policy.reagentCoop?.enabled) {
-      const tithe = await runReagentCoop(this, 'tithe', { bankable: carried - keep }, TITHE_FLEET);
-      if (tithe.pending) return tithe;
-      // The visit returned to this bank; refresh the purse before depositing.
-      const since = c.evSeq;
-      await s.pacer.submit('read', () => c.requestInventory());
-      await c.waitFor({ since, kinds: ['inventory'], timeoutMs: 3000 });
-    }
     const put = Math.max(0, this.purseNow() - keep);
     if (!put) return;
     this.doing = 'trading';

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { coopConfig, COOP_REAGENTS, coopDepositPlan, coopTithePlan, coopFundingAmount,
   coopRemainingPlan, coopCount, coopKey, REAGENT_COOP_SCHEMA } from './m59-reagent-coop.mjs';
-import { M59Client } from './m59-client.mjs';
+import { M59Client, BP } from './m59-client.mjs';
 import { weighItem } from './m59-items.mjs';
 import { reflectPolicy, validateValue } from './m59-policy-controls.mjs';
 
@@ -24,6 +24,8 @@ writeFileSync(join(process.env.M59_FLEETS_DIR, 'coop-test.secrets.json'), JSON.s
 const { runReagentCoop, reagentCoopCommand } = await import('./m59-reagent-coop-runtime.mjs');
 const { claimFleetLock } = await import('./runtime/fleet-lock.mjs');
 const { Autopilot } = await import('./m59-autopilot.mjs');
+const { readGuildInviteList, guildInviteOutsiders } = await import('./m59-guild-secrecy.mjs');
+const { setRosterSource } = await import('./m59-party.mjs');
 const cfg = coopConfig({ enabled: true });
 test('all spell reagent classes have an equal, weighable reservation', () => {
   const db = JSON.parse(readFileSync(new URL('../compendium/data/koddb.json', import.meta.url)));
@@ -123,13 +125,13 @@ function keeper({ purse = 1000, herbs = 0, stored = [0, 0, 0], boxHerbs = 0 } = 
     ...(stored[i] ? [{ id: nextId++, name: 'shilling', amount: stored[i] }] : []),
     ...(i === 0 && boxHerbs ? [{ id: nextId++, name: 'herb', amount: boxHerbs }] : []),
   ]]));
-  const c = { evSeq: 0, events: [], self: { row: 18, col: 4 }, guild: { id: 99, rank: 2 },
-    rsc: { get: v => v }, stat: () => 40, room: { objects: new Map(objects.map(o => [o.id, o])) },
+  const c = { evSeq: 0, roomContentsRequested: 0, selfId: 999, me: { id: 999, name: 'Fixture' }, events: [], self: { row: 18, col: 4 }, guild: { id: 99, rank: 2 },
+    equipped: new Set(), rsc: { get: v => v }, stat: () => 40, room: { id: 100, objects: new Map(objects.map(o => [o.id, o])) },
     inventory: [...(purse ? [{ id: 1, nameRsc: 'shilling', amount: purse }] : []), ...(herbs ? [{ id: 2, nameRsc: 'herb', amount: herbs }] : [])],
-    emit(kind, data = {}) { this.events.push({ kind, seq: ++this.evSeq, ...data }); },
+    emit(kind, data = {}) { const e = { kind, seq: ++this.evSeq, ...data }; this.events.push(e); this.onEvent?.(e); },
     requestGuildInfo() { this.emit('guild', { what: 'roster' }); },
     requestInventory() { this.emit('inventory'); },
-    roomContents() { this.emit('room-contents'); },
+    roomContents() { const request = ++this.roomContentsRequested; this.emit('room-contents', { room: this.room.id, request, players: [...this.room.objects.values()].filter(o => o.flags & 4).map(o => ({ ...o, name: o.nameRsc })) }); return request; },
     go() { this.emit('sector-height'); },
     contents(id) { this.emit('container', { id, items: structuredClone(boxes.get(id)) }); },
     async waitFor({ since, kinds }) { return { events: this.events.filter(e => e.seq > since && kinds.includes(e.kind)) }; },
@@ -150,17 +152,18 @@ function keeper({ purse = 1000, herbs = 0, stored = [0, 0, 0], boxHerbs = 0 } = 
   const k = { name: 'fixture', policy: { reagentCoop: cfg }, townTrip: { startedAt: nextId },
     paused: false, notes: [], travels: [],
     travelInterrupted() { return this.paused; },
+    protectedItemNames: () => [], loadout: () => null, weaponPriorityNow: () => null,
     packAsItems() { return c.inventory.map(i => ({ name: i.nameRsc, amount: i.amount || 1 })); },
     purseNow() { return coopCount(this.packAsItems(), 'shilling'); },
     async sayHallPassword() { return { ok: true }; },
     note(message, data) { this.notes.push({ message, data }); },
-    async travel(destination) { this.travels.push(destination); this.s.world.room.num = destination;
+    async travel(destination) { this.travels.push(destination); await this.s.pacer.submit('move', () => { this.s.world.room.num = destination; c.room.id = destination; });
       if (this.pauseOnReturn && destination === 100) { this.paused = true; return { arrived: false }; }
       return { arrived: true }; },
     s: { need: () => c, client: c, name: 'fixture',
       pacer: { submit: async (_kind, action) => action() }, world: { room: { num: 100 },
         approachSquare: (col, row) => ({ col, row }) },
-      async walkTo(col, row) { c.self = { col, row }; } },
+      async walkTo(col, row) { await this.pacer.submit('move', () => { c.self = { col, row }; }); } },
   };
   return { k, c, boxes };
 }
@@ -190,7 +193,7 @@ test('chest supply stops at legal transfer range before the raised platform', as
   k.s.world.approachSquare = () => ({ row: 17, col: 3, path: [
     { row: 12, col: 4 }, { row: 13, col: 4 }, { row: 17, col: 3 } ] });
   const walk = k.s.walkTo;
-  k.s.walkTo = async (col, row) => { assert.ok(row <= 13 || col > 6, 'does not try to climb the chest platform'); return walk(col, row); };
+  k.s.walkTo = async (col, row) => { assert.ok(row <= 13 || col > 6, 'does not try to climb the chest platform'); return walk.call(k.s, col, row); };
   const result = await runReagentCoop(k, 'supply', { plan: shopping }, 'coop-test');
   assert.deepEqual(result.took, [{ item: 'herb', amount: 6 }]);
 });
@@ -234,23 +237,17 @@ test('unreadable chests cannot spend money or count as empty', async () => {
   assert.equal(k.purseNow(), 1000);
   assert.equal(k.s.world.room.num, 100);
 });
-test('real banking step resumes its hall return and banks only the post-tithe surplus', async () => {
-  const { k, c, boxes } = keeper();
+test('banking skips a final hall tithe and deposits the full available surplus', async () => {
+  const { k, c } = keeper();
   k.policy = { ...k.policy, walkingMoney: 400, buyFood: false };
   Object.assign(k, { larder: () => [], deliveryCashReserve: () => 0, tally: {}, progress() {}, tradeFact() {} });
-  k.s.world.room.name = 'bank';
-  c.vitals = () => ({ vigor: { value: 200 } });
+  k.s.world.room.name = 'bank'; c.vitals = () => ({ vigor: { value: 200 } });
   let banked = 0;
   c.deposit = n => { banked += n; c.inventory.find(i => i.nameRsc === 'shilling').amount -= n; c.emit('message'); };
-  k.pauseOnReturn = true;
-  assert.ok((await Autopilot.prototype.bankSurplus.call(k)).pending);
-  assert.equal(k.purseNow(), 880);
-  k.s.world.room.num = 714; // survival paused the return before reaching the bank
-  k.pauseOnReturn = false; k.paused = false;
   await Autopilot.prototype.bankSurplus.call(k);
-  assert.equal(k.purseNow(), 400); assert.equal(banked, 480);
-  assert.equal([...boxes.values()].reduce((n, items) => n + coopCount(items, 'shilling'), 0), 120);
+  assert.equal(banked, 600); assert.equal(k.purseNow(), 400); assert.deepEqual(k.travels, []);
 });
+
 test('real funding step checks the coop before declaring a poor bot unaffordable', async () => {
   const { k } = keeper({ purse: 0, boxHerbs: 10 });
   let poorChecked = 0;
@@ -295,4 +292,87 @@ test('closed guild entrance is opened from its foyer-side trigger before leaving
   assert.equal(opened, true);
   assert.equal(result.shillings, 120);
 });
+test('invisible outsiders at North Barloque defer without entering or spending', async () => {
+  const { k, c } = keeper();
+  k.s.world.room.num = c.room.id = 101;
+  c.room.objects.set(77, { id: 77, nameRsc: 'Outsider', flags: 4 | 0x500000 });
+  const result = await runReagentCoop(k, 'town', { bankable: 600, first: true }, 'coop-test');
+  assert.equal(result.deferred, true); assert.equal(k.purseNow(), 1000);
+  assert.deepEqual(k.travels, []); assert.equal(k.coopVisit, null);
+});
+
+test('a fresh invite list timeout cannot authorize hall entry', async () => {
+  const { k, c } = keeper(); k.s.world.room.num = c.room.id = 101;
+  c.roomContents = () => ++c.roomContentsRequested;
+  const result = await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test');
+  assert.equal(result.deferred, true); assert.match(result.reason, /unavailable/);
+  assert.deepEqual(k.travels, []); assert.equal(k.purseNow(), 1000);
+});
+
+test('an outsider appearing inside aborts before chest transfers and exits to the street', async () => {
+  const { k, c } = keeper();
+  const travel = k.travel;
+  k.travel = async function(to) { const r = await travel.call(this, to);
+    if (to === 714) c.room.objects.set(77, { id: 77, nameRsc: 'Invisible outsider', flags: 4 | 0x500000 });
+    return r; };
+  const result = await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test');
+  assert.equal(result.deferred, true); assert.equal(k.purseNow(), 1000);
+  assert.equal(k.s.world.room.num, 101); assert.equal(k.coopVisit, null);
+});
+
+test('pushed arrival during a chest read stops the next transfer', async () => {
+  const { k, c } = keeper(); const contents = c.contents;
+  c.contents = function(id) { contents.call(this, id);
+    this.room.objects.set(77, { id: 77, nameRsc: 'Outsider', flags: 4 }); this.emit('appeared', { id: 77 }); };
+  const result = await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test');
+  assert.equal(result.deferred, true); assert.equal(k.purseNow(), 1000);
+  assert.equal(k.s.world.room.num, 101);
+});
+
+test('a town retry away from the North Barloque route creates no detour', async () => {
+  const { k } = keeper(); k.s.world.route = () => ({ found: true, hops: [{ to: 109 }] });
+  const result = await runReagentCoop(k, 'town', { nextRoom: 109, bankable: 600 }, 'coop-test');
+  assert.equal(result.deferred, true); assert.deepEqual(k.travels, []);
+});
+
+test('guild invite data retains invisible players at the actual client packet seam', () => {
+  const c = new M59Client({ host: '127.0.0.1', port: 1, resources: new Map([[12, 'Invisible outsider']]) });
+  c.log = () => {}; let event; c.onEvent = e => { if (e.kind === 'room-contents') event = e; };
+  const body = Buffer.alloc(42); let i = 0;
+  const u32 = n => { body.writeUInt32LE(n, i); i += 4; }, u16 = n => { body.writeUInt16LE(n, i); i += 2; };
+  const u8 = n => { body[i++] = n; };
+  u32(101); u16(1); u32(77); u32(0); u32(12); u32(4 | 0x500000); u32(0);
+  u16(0); u8(1); u16(0); u8(0); u16(128); u16(128); u16(0); u8(1); u16(0); u8(0);
+  c.onGameMessage(BP.ROOM_CONTENTS, body.subarray(0, i));
+  assert.equal(event.players.length, 1); assert.equal(event.players[0].name, 'Invisible outsider');
+  assert.equal(guildInviteOutsiders(c, event.players).length, 1);
+});
+
+test('self, visible fleet and invisible fleet are allowed; outsiders are not', () => {
+  const { c } = keeper(); setRosterSource(() => new Set(['Fleet Friend']));
+  try {
+    const players = [{ id: 999, flags: 4, name: 'Fixture' },
+      { id: 2, flags: 4 | 0x500000, name: 'Fleet Friend' }, { id: 3, flags: 4, name: 'Stranger' }];
+    assert.deepEqual(guildInviteOutsiders(c, players).map(p => p.id), [3]);
+  } finally { setRosterSource(null); }
+});
+
+test('an old invite reply and a reply from a different room cannot certify secrecy', async () => {
+  for (const wrong of ['ordinal', 'room']) {
+    const { k, c } = keeper();
+    c.roomContents = () => { const request = ++c.roomContentsRequested;
+      c.emit('room-contents', { request: wrong === 'ordinal' ? request - 1 : request,
+        room: wrong === 'room' ? 999 : c.room.id, players: [] }); return request; };
+    assert.equal((await readGuildInviteList(k.s)).known, false);
+  }
+});
+
+test('combined town tithe finishes on the street and pays once', async () => {
+  const { k } = keeper();
+  const result = await runReagentCoop(k, 'town', { first: true, bankable: 600 }, 'coop-test');
+  assert.equal(result.shillings, 120, JSON.stringify(result));
+  assert.equal(k.s.world.room.num, 101);
+  assert.equal(k.purseNow(), 880);
+});
+
 test.after(() => rmSync(root, { recursive: true, force: true }));
