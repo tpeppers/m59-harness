@@ -128,7 +128,7 @@ for (const change of ['cancel', 'room', 'policy']) {
 const timer = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...args) => timer(fn, ms === 3000 ? 0 : ms, ...args);
 try {
-  for (const outcome of ['recovered', 'damage', 'cancel']) {
+  for (const outcome of ['recovered', 'predicted', 'damage', 'cancel']) {
     const f = fixture();
     const k = Object.assign(Object.create(Autopilot.prototype), {
       s: f.s, policy: {}, book: { save() {}, recall() { return new Map(); } }, tally: {},
@@ -139,9 +139,16 @@ try {
     });
     k.goTravelling('test', { to: 596 });
     f.s.shelterPolicy.onDivert = () => {};
-    f.onMove = x => { if (outcome === 'damage' && x === wp(3).x) { f.hp = 100; f.vigor = 200; } };
+    f.onMove = x => {
+      if (outcome === 'damage' && x === wp(3).x) { f.hp = 100; f.vigor = 200; }
+      if (outcome === 'predicted') f.c.self.predicted = true;
+    };
+    f.s.confirmPosition = async () => {
+      f.calls.push(['confirm']); f.c.self.predicted = false;
+      return {row:f.c.self.row,col:f.c.self.col};
+    };
     f.onSample = () => {
-      if (outcome === 'recovered') {
+      if (outcome === 'recovered' || outcome === 'predicted') {
         f.hp = f.samples === 1 ? 80 : 100;
         f.vigor = f.samples < 3 ? 60 : REST_VIGOR_CAP * 200;
       } else if (outcome === 'damage') { f.hp = 59; }
@@ -153,11 +160,13 @@ try {
     await k.continueSurvivalDecision();
     assert.equal(f.rests, 1, JSON.stringify({outcome, calls:f.calls}));
     assert.deepEqual(f.calls.filter(x => x[0] === 'count'), [['count', 'track']], 'one metric per actual stop');
-    if (outcome === 'recovered') {
+    if (outcome === 'recovered' || outcome === 'predicted') {
       assert.equal(f.hp, 100); assert.equal(f.vigor, REST_VIGOR_CAP * 200);
       assert.equal(f.samples, 3, 'both full health and restable vigor are required');
       assert.equal(f.stands, 1);
       assert.equal(k.suspendedJourney.to,596,'the travel objective survives the recovery handoff');
+      if (outcome === 'predicted') assert.equal(f.calls.filter(x=>x[0]==='confirm').length,1,
+        'the real track-to-logoff handoff confirms its predicted arrival once');
     } else if (outcome === 'damage') {
       assert.equal(f.samples, 1, 'damage aborts the shared rest at its next observation');
       assert.ok(k.unreachableIn(584).has('2,3'), 'failed refuge excluded from subsequent searches');

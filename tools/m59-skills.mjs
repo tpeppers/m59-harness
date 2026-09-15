@@ -1768,6 +1768,18 @@ export async function turnInPlace(s, { degrees = null, verify = true } = {}) {
 // of the whole trip, which would move with how far away the character happened to start.
 const FINE_HANDOVER_SQUARES = Number(process.env.M59_FINE_HANDOVER_SQUARES || 3);
 
+// Shared by refuge approaches and route-arrival callbacks. An unanswered read
+// cannot certify the prediction, even if an older reply cleared its flag.
+export async function confirmRefugePosition(s) {
+  const c = s.need();
+  if (!c.self) return false;
+  if (!c.self.predicted) return true;
+  if (typeof s.confirmPosition !== 'function') return false;
+  const confirmed = await s.confirmPosition();
+  return !!confirmed && (s.client === undefined || s.client === c)
+    && !!c.self && !c.self.predicted;
+}
+
 export async function returnToSpot(s, spot, { maxSteps = 20, tolerance = 12 } = {}) {
   const decision=currentSurvivalDecision(s);
   const result=await traceSurvivalOperation(s, 'return_to_spot', { target: tracePoint(spot), maxSteps, tolerance },
@@ -1807,12 +1819,7 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   // Pay for one authoritative read at this boundary. Fine movement already confirms
   // every step, so this is needed only while the current position is explicitly marked
   // as predicted. An unanswered read cannot certify arrival from the old prediction.
-  const confirmPrediction = async () => {
-    if (!c.self?.predicted) return true;
-    if (typeof s.confirmPosition !== 'function') return false;
-    const confirmed = await s.confirmPosition();
-    return !!confirmed && !!c.self && !c.self.predicted;
-  };
+  const confirmPrediction = () => confirmRefugePosition(s);
   const unconfirmed = () => ({ arrived: false, unconfirmed: true,
     why: 'safe spot position is not confirmed' });
   const at = () => {

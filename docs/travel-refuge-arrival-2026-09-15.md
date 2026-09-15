@@ -64,10 +64,15 @@ still at full health when the window ended.
 
 The six-minute fixed trial also survived. It completed initial recovery at
 79.1 seconds and ended at 22/49 HP, still in room 598. A later route-refuge
-decision began at 134.3 seconds, remained unresolved for about 135 seconds,
-and was replaced at 269.1 seconds. The final position was r33c15. Resolving
-that later approach and the fallback walker's missing shelter callback handling
-are the next investigations.
+decision began at 134.3 seconds and was replaced at 269.1 seconds. **Follow-up
+correction:** its persistent `approaching` status did not mean the bot was
+approaching for all 135 seconds. Arrival was recorded at 136.7 seconds;
+the HP trace then shows healing from 32 to 49 at r34c16 until about 221 seconds,
+followed by more failed travel. The route callback's passive-rest path failed
+to update or finish the survival decision. The final position was r33c15,
+where another healing interval was likewise labelled `approaching`.
+The reporting defect and the failed departure are distinct. See the
+[route-arrival follow-up](travel-route-refuge-followup-2026-09-15.md).
 
 The sample is small and unseeded. The original group ran on `b0887c8` with
 the replay-journey correction; the new group ran on `f421ce1` plus the arrival

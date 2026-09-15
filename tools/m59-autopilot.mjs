@@ -10297,12 +10297,16 @@ export class Autopilot {
           movementGeneration = this.s.movementGeneration, controlToken = null } = {}) => {
           const room = this.s.world?.room?.num, client = this.s.client;
           const roomId = client?.room?.id;
+          const decision = currentSurvivalDecision(this.s);
           const cancelled = () => this.s.movementWasCancelled?.(movementGeneration, controlToken)
             || this.s.client !== client || this.s.world?.room?.num !== room
-            || client?.room?.id !== roomId;
+            || client?.room?.id !== roomId
+            || currentSurvivalDecision(this.s)?.id !== decision?.id;
           const onWall = () => client?.self?.col === where.col && client?.self?.row === where.row;
           // Shared by pivots and fine tracks. A near aim is not refuge arrival.
           if (cancelled() || !onWall()) return false;
+          const confirmed = await skills.confirmRefugePosition(this.s).catch(() => false);
+          if (cancelled()) return false;
           const v = this.s.client?.vitals?.();
           const hp = v?.health?.max ? v.health.value / v.health.max : null;
           const vig = vigorPct(v);
@@ -10324,7 +10328,7 @@ export class Autopilot {
           const settle = (extra) => {
             if (!this.shelterRun) return;
             const at = this.s.client?.self ?? null;
-            const onTheWall = !!(at && this.shelterRun.to
+            const onTheWall = !!(confirmed && at && !at.predicted && this.shelterRun.to
               && at.col === this.shelterRun.to.col && at.row === this.shelterRun.to.row);
             recordShelterRun({
               run: this.shelterRun.id, kind: 'settled', character: this.s.name,
@@ -10340,47 +10344,32 @@ export class Autopilot {
             });
             this.shelterRun = null;
           };
-          const decision=currentSurvivalDecision(this.s);
+          const replace = async (why, outcome = 'unconfirmed') => {
+            settle({rested_to:null,why,arrival_confirmed:confirmed,safe_wall:false});
+            const next = chooseSurvivalDecision(this.s,this.replacementSurvivalChoice(why,decision),
+              {because:why,outcome});
+            this.suspendJourney(why);
+            this.revive(why);
+            this.s.cancelMovement(null,why,{preserveId:next.id});
+            await this.continueSurvivalDecision();
+            return true;
+          };
+          if (!confirmed || !onWall())
+            return replace('route refuge arrival was not confirmed at the selected square');
+          if (!whole && !this.adoptRecoveryWall())
+            return replace('route refuge arrival did not establish a geometric safe wall','blocked');
           if (decision) updateSurvivalDecision(this.s,decision.id,{arrived_at:Date.now()});
           if (whole) {
             if(decision) finishSurvivalDecision(this.s,decision.id,'recovered','arrived whole');
             settle({ rested_to: null, why: 'arrived whole — walked on without resting' }); return false;
           }
-          if (this.adoptRecoveryWall()) {
-            settle({rested_to:null,why:'handed to logoff, turn, and recovery at this safe wall'});
-            this.recordTravelShelterStop(source);
-            await this.playDead('reached the chosen route refuge — logoff before recovering');
-            return true;
-          }
-          this.note('resting at a refuge on the way', {
-            where, health: hp === null ? null : Math.round(hp * 100) + '%', vigor: vig,
-            why: 'a refuge passed at less than full is a square rather than a refuge. The ' +
-                 'crossing is not cancelled — the mover keeps the body and the route behind ' +
-                 'this waypoint is untouched',
-          });
-          // BOUNDED, because a refuge that cannot heal must not hold a crossing for ever —
-          // and `abortOnDamage` defaults on, so a wall that turns out to be wrong costs one
-          // interrupted rest rather than a death.
-          const restStarted = Date.now();
-          const done = await skills.restUntil(this.s, {
-            health: 1, vigor: REST_VIGOR_CAP,
-            maxSeconds: this.policy.refugeRestSeconds ?? 90,
-            shouldCancel: () => cancelled() || !onWall(),
-            beforeMutation: () => { if (cancelled() || !onWall()) throw new Error('refuge rest interrupted'); },
-            beforeCleanup: () => { if (cancelled()) throw new Error('refuge rest ownership changed'); },
-          }).catch(e => ({ ok: false, why: e.message }));
-          if (done?.rested) this.recordTravelShelterStop(source, { heldMs: Date.now() - restStarted });
-          if (done?.interrupted) this.noteFailedRestSpot(room, where.col, where.row);
-          this.note('leaving the refuge', { where, ...(done?.ok === false ? { cut_short: done.why } : {}) });
-          const after = this.s.client?.vitals?.();
-          settle({
-            rested_to: after?.health?.max ? after.health.value / after.health.max : null,
-            health: after?.health?.value ?? null,
-            hp_gained: (after?.health?.value ?? null) != null && this.shelterRun?.health != null
-              ? (after.health.value - this.shelterRun.health) : null,
-            cut_short: done?.interrupted ?? (done?.ok === false ? done.why : null),
-          });
-          return !!done?.rested;
+          // Every admitted arrival uses the existing safe logoff/turn/heal lifecycle.
+          // The old passive-rest fallback skipped confirmation and left the decision
+          // "approaching" even after healing and walking away from the refuge.
+          settle({rested_to:null,why:'handed to logoff, turn, and recovery at this safe wall'});
+          this.recordTravelShelterStop(source);
+          await this.playDead('reached the chosen route refuge — logoff before recovering');
+          return true;
         },
         // THE DECISION ROW — WRITTEN WHEN THE WALL IS CHOSEN, NOT WHEN IT IS REACHED.
         //

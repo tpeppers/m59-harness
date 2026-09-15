@@ -49,6 +49,9 @@ Refuge arrival regressions in `node tools/m59-refuge-posture-test.mjs` and
 `node tools/m59-recovery-refuge-test.mjs` cover zero-step predicted positions,
 successful confirmation before safe logoff, corrections requiring a return walk,
 unanswered/older replies and cancellation across movement, room or client changes.
+`node tools/m59-route-refuge-arrival-test.mjs` exercises the real route policy:
+predicted arrivals must confirm before safe logoff, failed arrivals replace
+survival intent and retain the destination, and newer owners remain in control.
 
 `node tools/m59-scene-guilds-test.mjs` checks explicit/opposing team plans,
 identical idle-control assignments, native roster and membership verification,
