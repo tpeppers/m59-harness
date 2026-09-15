@@ -18,6 +18,7 @@ import {installReplayVariant,REPLAY_STRATEGIES} from './m59-replay-variants.mjs'
 import {resetNativeScene,inspectSceneContainer} from './m59-scene-reset.mjs';
 import {createReplayPlayers,replayPlayerPlan} from './m59-replay-players.mjs';
 import {loadoutForActor} from './m59-scene-loadout.mjs';
+import {restoreReplayJourney,replayJourneyDestination,resumeReplayJourney} from './m59-replay-journey.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -177,8 +178,9 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       assumptions.push('server RNG and timer phases not restored; scene actors are released onto new timers');
       let before=Date.now();const delta=before-(frame?.at??before),control=prepared.controller??{};
       k.hold=rebaseReplayTimes(control.hold??null,delta);
-      k.inert=rebaseReplayTimes(control.inert??null,delta);
-      k.suspendedJourney=rebaseReplayTimes(control.suspended_journey??null,delta);
+      const controller_restore={journey:restoreReplayJourney(k,{
+        inert:rebaseReplayTimes(control.inert??null,delta),
+        suspendedJourney:rebaseReplayTimes(control.suspended_journey??null,delta)})};
       k.turnedAt=control.turned_at?control.turned_at+delta:null;
       k.frozenUntil=control.frozen_until?control.frozen_until+delta:null;
       k.freezeSample=structuredClone(control.freeze_sample??null);
@@ -207,7 +209,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       lap('controller_restore_and_start_ms');
       timings.restore_to_start_ms=performance.now()-began;
       before=release.at;
-      let lastRoom=scene.room.num,outcome='survived_window',elapsed=null,error=null;
+      let lastRoom=scene.room.num,outcome='survived_window',elapsed=null,error=null,replayed_journey=null;
       const execute=async()=>{
         // A restored in-flight refuge approach needs its watchdog from the first
         // step, just as production did. Starting it after that await misses the
@@ -229,11 +231,11 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
           if(arrived.arrived)await k.playDead(restored.reason);
           assumptions.push('an in-flight approach was resumed from its captured refuge; JavaScript stack was not snapshotted');
         }
-        const destination=control.inert?.travelling?control.inert.to:control.suspended_journey?.to;
+        const destination=replayJourneyDestination(control);
         k.running=true;k.stopping=false;k.startedAt=Date.now();k.startWatchdog();
         if(destination!=null&&!currentSurvivalDecision(s)) {
-          k.goTravelling(control.inert?.why??'replayed journey',{to:destination});
-          const travel=s.travel(destination);await travel;
+          assumptions.push('captured journey restarted through keeper travel; route replanned and per-journey stop counters restarted');
+          replayed_journey=await resumeReplayJourney(k,destination,control.inert?.why);
         }
         await k.loop();
       };
@@ -252,7 +254,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const hp=s.client?.vitals?.()?.health;
       if(outcome!=='died'&&decisions.some(r=>r.event==='finished'&&r.decision.outcome==='recovered'))outcome='recovered';
       const result={outcome: error?'error':outcome,error,elapsed_ms:elapsed,death_room:outcome==='died'?lastRoom:null,
-        final_hp:hp,loaded,release,player_state,decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,
+        final_hp:hp,loaded,release,player_state,controller_restore,replayed_journey,
+        decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,
         ...(players?{pvp:players.snapshot(),victim_hp_trace:hpTrace,
           victim_messages:victimMessages}:{}),
         server_attestation:serverAttestation,native_save:nativeSave?{stamp:nativeSave.stamp,files:nativeSave.files}:null,

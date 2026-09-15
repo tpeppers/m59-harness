@@ -134,6 +134,17 @@ The CLI atomically saves a report after every completed trial and at the end. Th
 
 The adapter claims the roster/account before login, runs the real Session/Autopilot methods, restores the captured policy/controller state where possible, and closes its own client and leases on completion. An in-flight approach resumes toward the captured refuge; the report admits that the JavaScript stack was not restored. Lab-only variant controls cannot be enabled on production endpoints.
 
+An active journey also needs process-local callbacks. Replay reconstructs them
+through `goTravelling` before restoring the recorded deadline and retry count;
+copying `inert.travelling` alone makes the normal initializer return early and
+silently omits route shelters. Explicitly disabled shelter guards remain disabled.
+Resumed journeys use `Autopilot.travel`, including its room-boundary recovery
+hook, rather than bypassing that wrapper. Trial receipts include
+`controller_restore.journey` and the completed `replayed_journey` result when
+available. A still-running or interrupted journey is not an arrival. Routes are
+replanned from the captured position; this does not restore a JavaScript stack,
+the exact original waypoint list, or historical per-journey stop counters.
+
 Each trial runs in a fresh Node process. The next trial begins only after that process exits, preventing an old resurrection or travel continuation, cached book, or mutable controller from carrying over. Native trial receipts include the actual image ID, server source/patch identity and native save checksums.
 
 ## Fast repeated restores
