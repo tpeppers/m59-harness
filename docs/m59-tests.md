@@ -45,6 +45,11 @@ recovery at 0, 1, 5, 6 and 14 monsters) and
 `node tools/m59-recovery-refuge-test.mjs` (actual geometry, occupied refuges
 and blocked approaches). Monster proximity alone must not veto travel shelter.
 
+Refuge arrival regressions in `node tools/m59-refuge-posture-test.mjs` and
+`node tools/m59-recovery-refuge-test.mjs` cover zero-step predicted positions,
+successful confirmation before safe logoff, corrections requiring a return walk,
+unanswered/older replies and cancellation across movement, room or client changes.
+
 `node tools/m59-scene-guilds-test.mjs` checks explicit/opposing team plans,
 identical idle-control assignments, native roster and membership verification,
 neutral/allied/mutual-war relations, silent induction refusal, lost creation

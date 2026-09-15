@@ -4346,7 +4346,10 @@ export class Autopilot {
       return { took: false, crossed: true, via: 'exit', room: roomAfter,
                why: `crossed into room ${roomAfter}, which broke every attack; ${far?.why ?? 'no wall from here'}` };
     }
-    if ((spot.steps_away ?? 99) > 0) {
+    // A zero-length plan from a predicted position is not a confirmed arrival.
+    // Use the same arrival boundary even when the planner thinks we are there;
+    // otherwise recovery reports "took" and immediately abandons the unconfirmed wall.
+    if ((spot.steps_away ?? 99) > 0 || c.self?.predicted) {
       this.doing = 'travelling';
       this.recordSurvivalPath(decisionId,spot);
       this.note('taking the selected safe spot', {
@@ -4401,7 +4404,7 @@ export class Autopilot {
         releaseSpot(this.s.name);      // hand the reservation back
         // REMEMBERED, so the next pass picks a different one — or none, and gets on with
         // whatever it was doing. This is the line whose absence killed two characters.
-        this.noteUnreachableSpot(room?.num ?? null, spot.col, spot.row);
+        if (!arrival.unconfirmed) this.noteUnreachableSpot(room?.num ?? null, spot.col, spot.row);
         this.note('could not reach the safe spot', {
           spot: { col: spot.col, row: spot.row }, why: arrival.why || arrival.reason,
           ...(arrival.fine_tried ? { fine_tried: arrival.fine_tried } : {}) });
@@ -4410,6 +4413,7 @@ export class Autopilot {
         // a fallback that ran and lost from one that never ran at all, and that is the whole
         // question about the last mile into a wall.
         return { took: false, why: arrival.why || arrival.reason || 'could not get there',
+                 ...(arrival.unconfirmed ? { unconfirmed: true } : {}),
                  ...(arrival.fine_tried ? { fine_tried: arrival.fine_tried } : {}) };
       }
     }

@@ -32,6 +32,40 @@ await test('already at the exact refuge leaves passive recovery untouched',async
  const {s,c,calls}=fixture();const r=await returnToSpot(s,{...c.self});
  assert.equal(r.already,true);assert.equal(c.seated,true);assert.deepEqual(calls,[]);
 });
+await test('an unanswered confirmation cannot turn a predicted match into arrival',async()=>{
+ const {s,c,calls}=fixture();c.self.predicted=true;
+ s.confirmPosition=async()=>null;
+ const r=await returnToSpot(s,{row:c.self.row,col:c.self.col});
+ assert.equal(r.arrived,false);assert.equal(r.unconfirmed,true);
+ assert.deepEqual(calls,[],'no stand or movement while the position read is unanswered');
+});
+await test('an older reply clearing prediction cannot substitute for the requested confirmation',async()=>{
+ const {s,c,calls}=fixture();c.self.predicted=true;
+ s.confirmPosition=async()=>{c.self.predicted=false;return null;};
+ const r=await returnToSpot(s,{row:c.self.row,col:c.self.col});
+ assert.equal(r.arrived,false);assert.equal(r.unconfirmed,true);
+ assert.deepEqual(calls,[]);
+});
+await test('a predicted arrival after movement still requires confirmation',async()=>{
+ const {s,c}=fixture();s.approachFine=async(col,row)=>{
+  Object.assign(c.self,{row,col,predicted:true});return {arrived:true};
+ };
+ s.confirmPosition=async()=>null;
+ const r=await returnToSpot(s,{row:8,col:18});
+ assert.equal(r.arrived,false);assert.equal(r.unconfirmed,true);
+});
+await test('cancellation during confirmation keeps its ownership result',async()=>{
+ const {s,c,calls}=fixture();c.self.predicted=true;
+ s.confirmPosition=async()=>{s.movementGeneration++;return null;};
+ const r=await returnToSpot(s,{row:8,col:18});
+ assert.equal(r.cancelled,true);assert.deepEqual(calls,[]);
+});
+await test('losing the client during confirmation cancels arrival on the old connection',async()=>{
+ const {s,c,calls}=fixture();c.self.predicted=true;
+ s.confirmPosition=async()=>{s.client=null;c.self.predicted=false;return {row:8,col:16};};
+ const r=await returnToSpot(s,{row:8,col:16});
+ assert.equal(r.cancelled,true);assert.deepEqual(calls,[]);
+});
 await test('ordinary failed fine approach can use coarse fallback after one stand',async()=>{
  const {s,calls}=fixture();s.approachFine=async()=>{calls.push('blocked');return {arrived:false};};
  assert.equal((await returnToSpot(s,{row:8,col:18})).arrived,true);

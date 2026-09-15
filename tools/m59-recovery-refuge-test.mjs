@@ -88,6 +88,51 @@ await test('distant monster count cannot change the nearest recovery wall', asyn
   }
 });
 
+await test('zero-step recovery confirms a predicted wall before logging off there', async () => {
+  const k=keeper(39,{row:7,col:16,predicted:true}),calls=[];
+  k.s.confirmPosition=async()=>{
+    calls.push('confirm');k.s.client.self={...k.s.client.self,predicted:false};
+    return {row:7,col:16};
+  };
+  k.playDead=async()=>{calls.push('logoff');assert.ok(k.currentRecoveryWall());return true;};
+  k.s.standBeforeGo=async()=>assert.fail('a confirmed current wall must not be left');
+  k.s.walkTo=k.s.approachFine=async()=>assert.fail('already at the refuge');
+  const result=await k.takeRecoverySpot('recover at the apparent current wall');
+  assert.equal(result.took,true);
+  assert.deepEqual(calls,['confirm','logoff']);
+  assert.equal(k.s.client.self.predicted,false);
+});
+
+await test('unconfirmed zero-step recovery cannot claim arrival or discredit the wall', async () => {
+  const k=keeper(39,{row:7,col:16,predicted:true});
+  let confirms=0;
+  k.s.confirmPosition=async()=>{confirms++;return null;};
+  k.playDead=async()=>assert.fail('cannot claim a confirmed safe-wall logoff');
+  k.noteUnreachableSpot=()=>assert.fail('an unanswered position read does not prove a blocked wall');
+  const result=await k.takeRecoverySpot('recover at the apparent current wall');
+  assert.equal(confirms,1);
+  assert.equal(result.took,false);
+  assert.equal(result.unconfirmed,true);
+  assert.equal(k.hold,undefined);
+});
+
+await test('a corrected zero-step prediction walks back to the selected wall before logoff', async () => {
+  const k=keeper(39,{row:7,col:16,predicted:true}),calls=[];
+  k.s.confirmPosition=async()=>{
+    calls.push('confirm');k.s.client.self={...k.s.client.self,row:8,predicted:false};
+    return {row:8,col:16};
+  };
+  k.s.standBeforeGo=async()=>calls.push('stand');
+  k.s.approachFine=async(col,row)=>{
+    calls.push('approach');assert.deepEqual({row,col},{row:7,col:16});
+    k.s.client.self={...k.s.client.self,row,col,predicted:false};return {arrived:true};
+  };
+  k.playDead=async()=>{calls.push('logoff');assert.ok(k.currentRecoveryWall());return true;};
+  const result=await k.takeRecoverySpot('recover after a corrected prediction');
+  assert.equal(result.took,true);
+  assert.deepEqual(calls,['confirm','stand','approach','logoff']);
+});
+
 await test('forward recovery never computes a preview or requires a precomputed route shelter', async () => {
   const k=keeper(598,{row:40,col:22});
   Object.defineProperty(k.s,'activeShelter',{get(){assert.fail('throwaway preview read');}});

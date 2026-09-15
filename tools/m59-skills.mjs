@@ -1783,6 +1783,7 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   const generation = s.movementGeneration, room = s.world?.room?.num;
   const interrupted = result => result?.cancelled || s.movementWasCancelled?.(generation)
     || (generation != null && s.movementGeneration !== generation)
+    || (s.client !== undefined && s.client !== c)
     || (room != null && s.world?.room?.num !== room);
   const stopped = result => ({ ...result, arrived:false, cancelled:true,
     why:result?.why ?? result?.reason ?? s.lastMovementCancel?.why ?? 'shelter approach ownership changed' });
@@ -1805,13 +1806,15 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   //
   // Pay for one authoritative read at this boundary. Fine movement already confirms
   // every step, so this is needed only while the current position is explicitly marked
-  // as predicted. Test doubles and older sessions without confirmPosition retain the
-  // old behaviour rather than becoming unusable.
+  // as predicted. An unanswered read cannot certify arrival from the old prediction.
   const confirmPrediction = async () => {
-    if (c.self?.predicted && typeof s.confirmPosition === 'function')
-      await s.confirmPosition();
-    return c.self;
+    if (!c.self?.predicted) return true;
+    if (typeof s.confirmPosition !== 'function') return false;
+    const confirmed = await s.confirmPosition();
+    return !!confirmed && !!c.self && !c.self.predicted;
   };
+  const unconfirmed = () => ({ arrived: false, unconfirmed: true,
+    why: 'safe spot position is not confirmed' });
   const at = () => {
     const me = c.self;
     if (!me) return null;
@@ -1823,8 +1826,9 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
     return Math.hypot(me.x - spot.x, me.y - spot.y);
   };
   if (interrupted()) return stopped();
-  await confirmPrediction();
+  const confirmedStart = await confirmPrediction();
   if (interrupted()) return stopped();
+  if (!confirmedStart) return unconfirmed();
   const d0 = at();
   if (d0 !== null && d0 <= tolerance) return { arrived: true, already: true, off_by: d0 };
 
@@ -1907,8 +1911,9 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
     if (!w.arrived)
       return { arrived: false, why: w.reason || 'could not walk back to the square',
                ...(w.fine_tried ? { fine_tried: w.fine_tried } : {}) };
-    await confirmPrediction();
+    const confirmedArrival = await confirmPrediction();
     if (interrupted()) return stopped();
+    if (!confirmedArrival) return unconfirmed();
   }
   if (spot.x != null && s.walkFine) {
     const fine = await attempt('walk_fine', null,
@@ -1916,6 +1921,9 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
            .catch(() => null);
     if (interrupted(fine)) return stopped(fine);
   }
+  const confirmedEnd = await confirmPrediction();
+  if (interrupted()) return stopped();
+  if (!confirmedEnd) return unconfirmed();
   const d = at();
   return { arrived: d !== null && d <= tolerance, off_by: d,
            position: c.self ? { col: c.self.col, row: c.self.row, x: c.self.x, y: c.self.y } : null };
