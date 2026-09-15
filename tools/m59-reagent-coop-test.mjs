@@ -184,6 +184,16 @@ test('runtime cap counts every chest and repeated tithe does not charge again', 
   assert.equal([...boxes.values()].reduce((n, items) => n + coopCount(items, 'shilling'), 0), 75000);
   assert.ok((await runReagentCoop(k, 'tithe', { bankable: 570 }, 'coop-test')).skipped);
 });
+test('chest supply stops at legal transfer range before the raised platform', async () => {
+  const { k, c } = keeper({ purse: 0, boxHerbs: 6 });
+  c.self = { row: 7, col: 4 };
+  k.s.world.approachSquare = () => ({ row: 17, col: 3, path: [
+    { row: 12, col: 4 }, { row: 13, col: 4 }, { row: 17, col: 3 } ] });
+  const walk = k.s.walkTo;
+  k.s.walkTo = async (col, row) => { assert.ok(row <= 13 || col > 6, 'does not try to climb the chest platform'); return walk(col, row); };
+  const result = await runReagentCoop(k, 'supply', { plan: shopping }, 'coop-test');
+  assert.deepEqual(result.took, [{ item: 'herb', amount: 6 }]);
+});
 test('return interruption resumes without a second withdrawal or tithe', async () => {
   const { k } = keeper(); k.pauseOnReturn = true;
   assert.ok((await runReagentCoop(k, 'tithe', { bankable: 600 }, 'coop-test')).pending);

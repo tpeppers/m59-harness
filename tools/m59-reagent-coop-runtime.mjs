@@ -34,14 +34,18 @@ async function inventory(k) {
 async function approach(k, box) {
   if (interrupted(k)) throw new Error('coop paused for survival');
   const s = k.s, c = s.need(), me = c.self;
-  if (Math.abs(me.row - box.row) + Math.abs(me.col - box.col) <= 5) return;
+  // user.kod UserGet accepts Manhattan distance <= 7. Walking all the way
+  // beside a chest unnecessarily attempts the raised chest platform.
+  const inRange = p => Math.abs(p.row - box.row) + Math.abs(p.col - box.col) <= 7;
+  if (inRange(me)) return;
   await guildPassage(k, 4, () => interrupted(k));
-  const at = s.world.approachSquare(box.col, box.row);
+  const route = s.world.approachSquare(box.col, box.row);
+  const at = route?.path?.find(inRange) ?? route;
   if (!at) throw new Error('no reachable approach to coop chest ' + box.slot);
   await s.walkTo(at.col, at.row, { maxSteps: 30, beforeMutation: () => {
     if (interrupted(k)) throw new Error('coop paused for survival');
   } });
-  if (interrupted(k) || Math.abs(c.self.row - box.row) + Math.abs(c.self.col - box.col) > 5)
+  if (interrupted(k) || !inRange(c.self))
     throw new Error(`coop chest ${box.slot} not reached`);
 }
 
