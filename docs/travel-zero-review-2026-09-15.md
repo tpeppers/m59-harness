@@ -55,8 +55,13 @@ explicitly exposed/seated reconstruction; the native action flags were not saved
    runs, a real move toward the wall was followed by a move calculated from the
    stale starting position; the keeper then claimed an arrival the server no
    longer held. New requests now advance beyond both counters. This is a confirmed
-   replay defect and a shared-client robustness fix. Its frequency in production
-   has not been established.
+   replay defect and a shared-client robustness fix. A follow-up runtime snapshot
+   at 06:53 UTC also found two production keepers with three received snapshots
+   against two requests.
+   That confirms the counter imbalance can occur in production; it does not
+   establish its frequency or attribute any historical death to it. The wire has
+   no request IDs: advancing the ordinal fixes the observed already-received
+   surplus, not every possible race with a later unsolicited packet.
 
 The first two changes do not replace the safe-wall logoff strategy. Once actually
 at a safe wall, the keeper still logs off, reconnects, turns there, and rests.
@@ -90,8 +95,11 @@ Observed equipment identities and skill percentages are restored; the late
 freeze-retry count is an explicit assumption for these old captures.
 
 <!-- RESULTS -->
-The first nine trials all passed load/release verification and completed without
-execution or cleanup errors. Each ran for 90 seconds unless death ended it early.
+All 24 completed comparisons below passed load/release verification without
+execution or cleanup errors. The first nine ran for 90 seconds unless death
+ended the trial early; the shorter repeats and longer runs are identified separately.
+
+![Health through the first corrected comparisons](travel-zero-comparison-2026-09-15.png)
 
 | Scene, initial HP | Old posture / heartbeat | Stand / heartbeat | Stand / immediate |
 |---|---|---|---|
@@ -105,10 +113,13 @@ the seven trials that reached it. Scooter's old-posture control did not reach a
 wall. None had completed full recovery by 90 s.
 
 Two additional Janice old-posture controls died at 40.9 and 17.0 seconds. Thus the
-corrected Janice failure recurred in 3/3 baseline trials. The two modified variants
-each survived their first comparison. More repeats and longer recovery windows are
-being retained separately; this initial sample does not establish a fleet-wide
-survival rate or an additional life saved by immediate dispatch alone.
+corrected Janice failure recurred in 3/3 baseline trials. Two additional
+stand/immediate repeats survived 60 seconds, ending at 24 and 16 HP while healing
+at the wall. At the common 60-second endpoint, the old behavior had 3/3 deaths
+and stand/immediate had 0/3. Stand/heartbeat also survived its single 90-second
+comparison. This is evidence of an improvement in this reconstructed scenario;
+it does not establish a fleet-wide survival rate or an additional life saved by
+immediate dispatch alone. The longer recovery trials below are reported separately.
 
 Immediate dispatch removed about six seconds before wall recovery in Janice and
 Floyd, compared with standing alone. Their nearest-refuge activation delays fell
@@ -117,9 +128,42 @@ fell through directly to recovery, so its timing did not benefit from that chang
 Different final HP totals are not a reliable ranking of the dispatch variants:
 monster timers and RNG differ, and earlier movement changes exposure.
 
-Fresh-process restore-to-start times were 4.93–5.19 seconds for these nine trials.
+The later Scooter checkpoint was also tested in nine 45-second runs, three per
+variant, with an explicit pre-start turn-and-rest action while monsters were held.
+All nine survived. The old-posture controls ended at 33/51 HP without reaching a
+recorded wall recovery; both modified variants reached the nearby wall in about
+four seconds and ended at 32/51. This reconstruction does not reproduce the
+original late attack pressure, so it cannot establish a life saved or establish
+that open healing is safe in production. The capture lacks native action flags,
+monster target memory and timer phases. Preserve it as a useful nonfatal
+counterfactual and movement test.
+
+Seven initial late-checkpoint setups were rejected before release because the
+experimental turn changed the required facing. Those records remain archived;
+restoring the original facing before release fixed setup verification, and those
+cells were rerun. Setup rejections are not deaths or survivors.
+
+Fresh-process restore-to-start times were 4.93–5.19 seconds for the initial nine trials.
 That includes login, live equipment/ability synchronization, scene setup and
 release; the native world restore itself was approximately 0.4 seconds.
+
+Two longer stand/immediate trials test what happens after the initial window:
+
+| Scene | Full recovery | Subsequent behavior | End of observation |
+|---|---|---|---|
+| Scooter, 240 s | First sampled at 51/51 HP at 136.8 s; recovery decision completed at 139.0 s | Left cover, took a 7-HP hit, continued moving and returned to full health | Alive at 51/51. This checkpoint had no saved journey; movement afterward does not prove completion of the original trip. |
+| Janice, 450 s | First sampled at 49/49 HP at 185.2 s; recovery decision completed at 187.9 s | Attempted onward movement. Four exit approaches reported `collision_geometry_changed`. A later walk was cancelled as wedged; health fell to 26. Two open freezes held 26 HP for roughly three minutes, then a nearby wall enabled healing again. | Alive at 37/49, recovering. The original trip was not completed. |
+
+The later damage occurred after leaving the first recovery wall. Neither longer
+run had a sampled HP loss between the first reconnect-and-turn phase and that
+recovery decision's completion. The adapter's single `recovered` outcome means
+that a recovery completed somewhere in the trial; it must not be read as a
+successful journey, current full health, or the absence of subsequent trouble.
+Janice's onward geometry/wedge sequence is a retained follow-up scenario. Test
+waiting under cover for a viable exit approach, and alternative short refuge
+hops, against this sequence before selecting a further policy change. The two
+open freezes were existing policy, not heartbeat delays; freeze invalidation
+remains unchanged.
 <!-- END RESULTS -->
 
 Earlier protocol-3 and protocol-4 results remain on disk, including divergent and
@@ -148,7 +192,9 @@ and distinguish a nonfatal stall from a successful trip.
 Private evidence is under
 `substrate/replay-smoke/travel-zero-2026-09-15/` in the death-replay worktree:
 `catalog.json`, `interesting-cases.jsonl`, checkpoint cases, complete trial
-receipts, `protocol5-results.json`, and exact source archives. The previous
+receipts, `protocol5-results.json`, harness hash manifests, and exact experiment
+script archives. Later runs also archive modified engine sources; the earliest
+dirty-source runs have hashes but not a complete source-byte archive. The previous
 ten-death cohort remains frozen separately under `travel-review-2026-09-15/`.
 Runtime recordings and credentials are not committed.
 
@@ -159,6 +205,10 @@ blocked first refuge reaching its replacement in one dispatch, failed logoff
 starting refuge movement before pass return, lost cover, explicit external
 ownership, and bounded repeated failures.
 
-At this report revision the implementation has passed offline checks and the
-initial corrected comparisons; the production rollout and extended trials are
-still pending.
+The implementation is on main and deployed as
+`2dd3c1068684c42c27d6b117be4066f57de0cd2e`, tag `deploy-2026-09-15-11`.
+At 06:53:46 UTC on September 15, all 23 production keepers were verified in game
+with new PIDs, that exact commit, and the new posture/snapshot telemetry.
+The rollout preserved production's existing runtime files. Fourteen relevant
+offline suites passed. This is a verified rollout, not a claim that the fleet has
+achieved zero travel deaths.
