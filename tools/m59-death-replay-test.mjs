@@ -45,6 +45,7 @@ const baselineResult=()=>({outcome:'died',elapsed_ms:10000,death_room:39,decisio
 await test('capture retains every visible body and exact asymmetric fine positions without IO',()=>{
   const {s,c,k}=fixture(40);c.playersOnline=new Map([[40,{}]]);
   c.lastPostureCommand={verb:'rest',at:9000,room_object_id:12};
+  c.room.collisionInvalidated={kind:'SECTOR_MOVE',sector:1,type:5,height:348,speed:64,at:9000,until:10000,sectorIndices:[113]};
   c.roomContentsRequested=5;c.roomContentsReceived=7;k.frozeAt=20;k.freezesWithoutGain=2;
   c.stats=()=>assert.fail('capture polled the server');
   const sc=captureCachedScene(s,k,{provenance:code});
@@ -52,6 +53,9 @@ await test('capture retains every visible body and exact asymmetric fine positio
   assert.equal(sc.actors.find(a=>a.object_at_capture===40).kind,'player');
   assert.equal(sc.actors[1].vitals.hp.how,'unknown');assert.equal(sc.controller.policy.secret,undefined);
   assert.equal(sc.controller.posture_command.verb,'rest');
+  assert.equal(sc.capture.geometry_animation.sector,1);
+  c.room.collisionInvalidated.sectorIndices.push(7);
+  assert.deepEqual(sc.capture.geometry_animation.sectorIndices,[113],'animation evidence is copied without IO or aliases');
   assert.deepEqual(sc.controller.position_reads,{requested:5,received:7,lost:0});
   assert.equal(sc.controller.froze_at,20);assert.equal(sc.controller.freezes_without_gain,2);
   c.lastPostureCommand.verb='stand';assert.equal(sc.controller.posture_command.verb,'rest');

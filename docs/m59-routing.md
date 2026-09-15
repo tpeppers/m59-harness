@@ -22,7 +22,37 @@ in `m59-movement.mjs` is the closed list of failures that no other heading can f
 `collision_geometry_unavailable`, `room_geometry_mismatch`, `room_security_unknown` and the
 rest. They propagate instead of looping, which is what stops a bad route being learned.
 
-### THE ROUTER HAS TO PLAN ON THE MAP THE MOVER ENFORCES, AND THE TWO ARE NOT THE SAME MAP
+### Animated sector identity
+
+`BP_SECTOR_MOVE.sector` is a **server tag**, which can address several sectors.
+`leaf.sectorNum` is a **one-based BSP array index**. They are different identities:
+the Qor door in room 598 has tag 1 and BSP sector 114. Comparing the packet to
+index 1 blocks unrelated terrain and misses the actual door.
+
+Compact collision bakes now retain `sectorServerIds`, a two-byte-per-sector
+table, with a separate checksum bound to the collision digest. Geometry and route
+mask manifests stay unchanged. `toJSON` writes tags when the source has them;
+`fromJSON` verifies their checksum and length. An old bake still loads but cannot
+narrow a named animation without an explicit verified sector-index mapping.
+
+To add tags to an existing map without rebuilding geometry or routes:
+
+```text
+node tools/m59-sector-bindings.mjs --map OLD_MAP.json --out NEW_MAP.json
+```
+
+The binder reads local `.roo` resources and requires every collision payload byte,
+security value, wall and grid to match. It can try other available resource
+directories to find an exact match; `--roo-dir DIR` restricts that search.
+`--rooms 598,599` limits a diagnostic build. No file is written on a mismatch.
+Deploy the verified tag-bearing map with the movement change, including any
+selected local map override. Never treat a missing mapping as an array index.
+
+Movement refusal receipts retain the animation tag, resolved indices and timing;
+scene capture records the latest cached invalidation without a server request.
+That observation does not restore native door animation phase during scene load.
+
+### The router and mover must agree
 
 The mover validates against the client's BSP; the router planned on the server's coarse
 one-byte-a-square grid. A router planning on a different map from the one the mover

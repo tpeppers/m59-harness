@@ -3218,6 +3218,9 @@ if (![validateFineTarget, queueValidatedMove, confirmPosition, stepFine, ordinar
   // fleet's own name for that room is THE exception to "the geometry does not change".
   // One sector moved; the walls are still where the bake says, which this file already
   // says out loud. So a move that neither starts nor ends in that sector may proceed.
+  // The network ID is a server tag. This synthetic fixture explicitly assigns
+  // matching tags; real rooms need not (Qor tag 1 is BSP sector 114).
+  animating.session.world.geometry.sectors.forEach((sector, index) => { sector.serverId = index + 1; });
   const liveSector = animating.session.world.geometry.leafAtClient(3072, 2048)?.sectorNum;
   ok('the fixture has a sector to name', Number.isInteger(liveSector), String(liveSector));
   setAnimation({ kind: 'BP_SECTOR_MOVE', sector: liveSector,

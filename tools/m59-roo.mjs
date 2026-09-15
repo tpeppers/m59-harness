@@ -278,6 +278,20 @@ function collisionDigest({ file, security, version, rows, cols, grid, flags, mon
   return hash.digest('hex');
 }
 
+function sectorServerIdsDigest(collision) {
+  // Identity metadata does not change geometry or invalidate existing step masks.
+  // Its own checksum binds it to the exact collision payload it indexes.
+  return crypto.createHash('sha256').update(collision.digest + '\0sectorServerIds\0')
+    .update(Buffer.from(collision.sectorServerIds, 'base64')).digest('hex');
+}
+
+function encodeSectorServerIds(sectors) {
+  if (!sectors.every(s => Number.isInteger(s.serverId) && s.serverId >= 0 && s.serverId <= 0xffff)) return null;
+  const bytes = Buffer.alloc(sectors.length * 2);
+  sectors.forEach((s, i) => bytes.writeUInt16LE(s.serverId, i * 2));
+  return bytes.toString('base64');
+}
+
 const sideBits = sd => !sd ? 0
   : SIDE_EXISTS
     | ((sd.flags & WF.PASSABLE) ? SIDE_PASSABLE : 0)
@@ -3425,6 +3439,11 @@ export class RoomGeometry {
         nodes: encodeCollisionNodes(this.nodes, this.bspRoot, firstCollisionWalls),
       };
       out.collision.digest = collisionDigest({ ...out, collision: out.collision });
+      const sectorServerIds = encodeSectorServerIds(this.sectors);
+      if (sectorServerIds !== null) {
+        out.collision.sectorServerIds = sectorServerIds;
+        out.collision.sectorServerIdsDigest = sectorServerIdsDigest(out.collision);
+      }
     }
     if (includeSurfaces && this.sectors && this.leaves) {
       out.sectors = this.sectors.map((s, i) => ({
@@ -3450,6 +3469,23 @@ export class RoomGeometry {
       }));
     }
     return out;
+  }
+
+  // Server animation tags may name several BSP sectors. Missing metadata is
+  // unknown; an empty result from a complete table means the tag has no sectors.
+  sectorIndicesForServerId(serverId) {
+    if (!this._serverSectorIndices) {
+      if (!this.sectors?.length || !this.sectors.every(s => Number.isInteger(s.serverId)
+          && s.serverId >= 0 && s.serverId <= 0xffff)) return null;
+      const ids = new Map();
+      this.sectors.forEach((s, index) => {
+        if (!ids.has(s.serverId)) ids.set(s.serverId, []);
+        ids.get(s.serverId).push(index);
+      });
+      for (const [id, indices] of ids) ids.set(id, Object.freeze(indices));
+      this._serverSectorIndices = ids;
+    }
+    return this._serverSectorIndices.get(serverId) ?? [];
   }
 
   static fromJSON(j) {
@@ -3502,6 +3538,14 @@ export class RoomGeometry {
             || j.collision.digest !== collisionDigest({ ...j, collision: j.collision }))
           throw new Error('collision payload digest mismatch');
         collisionSectors = decodeCollisionSectors(j.collision.sectors);
+        if (Object.hasOwn(j.collision, 'sectorServerIds') || Object.hasOwn(j.collision, 'sectorServerIdsDigest')) {
+          if (typeof j.collision.sectorServerIds !== 'string'
+              || j.collision.sectorServerIdsDigest !== sectorServerIdsDigest(j.collision))
+            throw new Error('collision sector ID digest mismatch');
+          const ids = Buffer.from(j.collision.sectorServerIds, 'base64');
+          if (ids.length !== collisionSectors.length * 2) throw new Error('collision sector ID count mismatch');
+          collisionSectors.forEach((sector, i) => { sector.serverId = ids.readUInt16LE(i * 2); });
+        }
         collisionLeaves = decodeCollisionLeaves(j.collision.leaves, collisionSectors);
         const decodedTree = decodeCollisionNodes(j.collision.nodes, collisionLeaves);
         collisionNodes = decodedTree.nodes;
@@ -3615,6 +3659,26 @@ export class RoomGeometry {
     }
     return geometry;
   }
+}
+
+// Add identity metadata to an existing bake only when the raw ROO reproduces
+// every collision payload byte. Preserve its proven exits and all geometry.
+export function bindSectorServerIds(baked, source) {
+  if (!RoomGeometry.fromJSON(baked).collisionReady || !source?.collisionReady)
+    throw new Error('sector identity binding requires valid collision geometry');
+  const fresh = source.toJSON({ includeWalls: true, includeCollision: true,
+    includeSurfaces: false, edgeDirections: [] });
+  for (const field of ['file', 'security', 'version', 'rows', 'cols', 'grid', 'flags', 'monsterGrid', 'walls'])
+    if (JSON.stringify(fresh[field]) !== JSON.stringify(baked[field]))
+      throw new Error('sector identity source differs in ' + field);
+  for (const field of ['wallSides', 'sectors', 'leaves', 'nodes'])
+    if (fresh.collision[field] !== baked.collision[field])
+      throw new Error('sector identity source differs in collision ' + field);
+  if (fresh.collision.sectorServerIds == null) throw new Error('source lacks server sector IDs');
+  const out = structuredClone(baked);
+  out.collision.sectorServerIds = fresh.collision.sectorServerIds;
+  out.collision.sectorServerIdsDigest = sectorServerIdsDigest(out.collision);
+  return out;
 }
 
 // The map object is shared across sessions, and decoded collision geometry is

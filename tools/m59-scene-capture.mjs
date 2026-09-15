@@ -75,6 +75,10 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
   scene.capture={at,event_sequence:c.evSeq??null,room_object_id:c.room?.id??null,
     room_wire:copyReplayConfig(s.world?.roomBinding?.room_wire),objects_total:objects?.size??null,
     captured_actors:actors.length,gaps,complete_visible_positions:gaps.length===0};
+  // Client observations only: copying the last animation packet makes a future
+  // refusal investigable without decoding geometry or making a request in crisis.
+  // This is not a restoration of the native room's animation/timer state.
+  scene.capture.geometry_animation=copyReplayConfig(c.room?.collisionInvalidated??null);
   const controllerGaps=[];
   scene.controller=copyReplayConfig({mode:k?.mode,policy:k?.policy,hold:k?.hold,
     inert:k?.inert,suspended_journey:k?.suspendedJourney,doing:k?.doing,

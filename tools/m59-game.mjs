@@ -2771,19 +2771,22 @@ class Session {
     // still refused. Same safe reading `until == null` already gets.
     const invalidated = c.room.collisionInvalidated;
     if (invalidated && (invalidated.until == null || Date.now() < invalidated.until)) {
-      let touches = true;
+      let touches = true, narrowed = false, sectorIndices = null;
       if (Number.isInteger(invalidated.sector) && typeof geo.leafAtClient === 'function') {
+        // BP_SECTOR_MOVE names a server tag, not leaf.sectorNum's 1-based BSP
+        // index. In room 598 tag 1 is BSP sector 114 (the Qor door), not sector 1.
+        // Older compact bakes omitted tags; they cannot establish a narrow scope.
+        sectorIndices = invalidated.sectorIndices ?? geo.sectorIndicesForServerId?.(invalidated.sector) ?? null;
+        narrowed = Array.isArray(sectorIndices);
         const scale0 = CLIENT_FINENESS / KOD_FINENESS;
         const wx = Number.isFinite(me.x) ? me.x : me.col * KOD_FINENESS + (KOD_FINENESS >> 1);
         const wy = Number.isFinite(me.y) ? me.y : me.row * KOD_FINENESS + (KOD_FINENESS >> 1);
         const inSector = (cx, cy) => {
           const leaf = geo.leafAtClient(cx, cy);
-          return leaf != null && (invalidated.sectorIndices
-            ? invalidated.sectorIndices.includes(leaf.sectorNum - 1)
-            : leaf.sectorNum === invalidated.sector);
+          return leaf != null && sectorIndices.includes(leaf.sectorNum - 1);
         };
-        touches = inSector((wx - KOD_FINENESS) * scale0, (wy - KOD_FINENESS) * scale0)
-               || inSector((x - KOD_FINENESS) * scale0, (y - KOD_FINENESS) * scale0);
+        if (narrowed) touches = inSector((wx - KOD_FINENESS) * scale0, (wy - KOD_FINENESS) * scale0)
+                            || inSector((x - KOD_FINENESS) * scale0, (y - KOD_FINENESS) * scale0);
       }
       // A ROOM WE HAVE DECLARED TO BE PERMANENTLY IN MOTION DOES NOT GET TO CAGE US.
       //
@@ -2814,7 +2817,9 @@ class Session {
         // opposite fixes, so the refusal now says which.
         animation: {
           sector: Number.isInteger(invalidated.sector) ? invalidated.sector : null,
-          narrowed: Number.isInteger(invalidated.sector) && typeof geo.leafAtClient === 'function',
+          narrowed,
+          sector_indices: sectorIndices,
+          sector_identity_missing: Number.isInteger(invalidated.sector) && !narrowed,
           kind: invalidated.kind ?? null,
           // How long this record still has to run, so a caller can tell "it will clear in
           // 200ms" from "this has been re-armed continuously for a minute".
@@ -4998,6 +5003,7 @@ class Session {
       const at = c.self ? { x: c.self.x, y: c.self.y, col: c.self.col, row: c.self.row } : before;
       return { moved: false, position: at, left_room: leftRoom,
                geometry_blocked: validation.blocked !== false,
+               ...(validation.animation ? { animation: validation.animation } : {}),
                reason: validation.reason ?? 'geometry_blocked', note: validation.note };
     }
     this._moveGapMs = owed;
@@ -5099,6 +5105,7 @@ class Session {
         left_room: c.room.id !== startRoom,
         geometry_blocked: validation.blocked !== false,
         reason: validation.reason,
+        ...(validation.animation ? { animation: validation.animation } : {}),
         ...(validation.objectId != null ? { objectId: validation.objectId } : {}),
         note: validation.note ?? 'local client collision rejected this move before any packet was sent',
       };

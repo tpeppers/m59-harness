@@ -14,6 +14,12 @@ Travel survival regressions:
 The related recovery-refuge, survival-handoff, survival-trace, track-shelter,
 collision and death-replay suites exercise the shared paths independently.
 
+`m59-sector-bindings-test.mjs` checks server animation tags against BSP indices,
+including Qor tag 1 versus collision sector 114. It checks byte-matched binding,
+unchanged geometry identity, multiple sectors per tag, legacy unknown metadata,
+round trips, corrupted bindings, actual-door refusal and unrelated movement.
+The death-replay suite also verifies detached copies of cached animation evidence.
+
 Combat overrides: `node tools/m59-combat-mode-test.mjs` exercises preemption,
 arrival-triggered ambushes, exact player identity, sequences, expiry and survival.
 It also covers indefinite visibility waits, reacquisition, live map selection,
