@@ -1,5 +1,25 @@
 # The keeper: what it can see, and what it cannot
 
+## Survival does not wait for the ordinary heartbeat
+
+A blocked or cancelled survival approach selects and executes its replacement in
+the same keeper pass. The dispatcher continues through distinct pending choices;
+it stops at established recovery, an explicit controller handoff, or a repeated
+failed state with no new position or health information. A late pass stage also
+drains its newly selected survival decision before the ordinary decision sleep.
+Failed logoff no longer delays the different refuge action by five seconds.
+
+The cancelled travel stack stays invalid. Only the fresh recovery decision may
+proceed, under its own movement generation and the existing faculty/ownership
+checks. Packet pacing remains in effect. Ordinary work cannot regain movement
+merely because survival has continued within the same pass.
+
+Every committed `returnToSpot` movement stands before its first fine/coarse step.
+Frozen REST persists after the freeze deadline and otherwise leaves movement
+disabled. Already being at the exact refuge requires no posture change. Queued
+stand checks cancellation before sending, so it cannot disturb replacement rest.
+Turning to heal remains restricted to an actual safe wall.
+
 ## Farming across disconnected room sections
 
 Open-ground farming must run `bridgeToQuarry` before safe-wall selection. A

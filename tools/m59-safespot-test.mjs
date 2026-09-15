@@ -73,6 +73,7 @@ console.log('\n--- safe-spot arrival is confirmed, not predicted ---');
   const c = { get self() { return me; } };
   const s = {
     need: () => c,
+    standBeforeGo: async () => {},
     confirmPosition: async () => {
       confirms++;
       Object.assign(me, { col: 6, row: 5, x: 416, y: 352, predicted: false });

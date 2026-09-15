@@ -1,5 +1,13 @@
 # Ten production monster deaths: travel and refuge recovery
 
+**Follow-up correction:** the expanded investigation found that unsolicited
+snapshots from scene setup could make position confirmation return before a new
+reply arrived. The protocol-3 trials below remain preserved, but their arrival,
+healing and comparative survival results are provisional. Use the corrected
+protocol-5 comparisons in [the expanded travel review](travel-zero-review-2026-09-15.md)
+for current recommendations. This does not erase the original deaths or the
+independently demonstrated missing-stand precondition.
+
 The cohort was selected at **21:49 PDT on September 14, 2026** (04:49 UTC September 15), then kept fixed rather than changing as new deaths arrived. Recommendations and experimental results below concern this cohort, not a fleet-wide mortality estimate. Production survival policy was not changed for these experiments.
 
 The strongest candidate is a missing **stand before moving toward a recovery wall**. The keeper can finish its frozen rest and attempt movement while still sitting. A second problem is completing recovery after arrival: it must confirm that the character actually remains at a safe wall and turn to enable healing after login. An open freeze can buy time, but cannot safely heal the character. The comparisons below measure deaths and health recovery separately.

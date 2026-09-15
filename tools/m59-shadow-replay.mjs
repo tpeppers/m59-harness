@@ -182,6 +182,9 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       k.turnedAt=control.turned_at?control.turned_at+delta:null;
       k.frozenUntil=control.frozen_until?control.frozen_until+delta:null;
       k.freezeSample=structuredClone(control.freeze_sample??null);
+      k.doing=control.doing??null;
+      k.frozeAt=control.froze_at??null;
+      k.freezesWithoutGain=control.freezes_without_gain??0;
       restoreSurvivalDecisionForReplay(s,control.decision,{capturedAt:frame?.at??before});
       variantControl=installReplayVariant(k,variant,{onEvent:r=>suppressed.push(r)});
       k.replayStartActions=(control.start_actions??[]).map(action=>({...action,actor_key:`body-${bindings.get(action.actor_key)}`}));
@@ -205,6 +208,10 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       before=release.at;
       let lastRoom=scene.room.num,outcome='survived_window',elapsed=null,error=null;
       const execute=async()=>{
+        // A restored in-flight refuge approach needs its watchdog from the first
+        // step, just as production did. Starting it after that await misses the
+        // very cancellation and damage response the replay is meant to test.
+        k.running=true;k.stopping=false;k.startedAt=Date.now();k.startWatchdog();
         for(const action of control.start_actions??[]) {
           if(action.kind!=='attack'||!bindings.has(action.actor_key))throw Error('unsupported or unbound scene start action');
           await s.pacer.submit('attack',()=>s.client.attack(bindings.get(action.actor_key)));

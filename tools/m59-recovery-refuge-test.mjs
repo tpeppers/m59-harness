@@ -20,7 +20,7 @@ function keeper(room = 39, from = { row: 8, col: 16 }) {
     book: { get: () => null, discredited: () => false }, safety: () => ({ fleeAt: 0.68 }),
     crossSameRoomIsland: async () => assert.fail('recovery must not cross a partition for quarry'),
     onwardExit: () => assert.fail('recovery must not choose the onward exit'),
-    s: { name: null, client: c, movementGeneration: 0, need: () => c,
+    s: { name: null, client: c, movementGeneration: 0, need: () => c, standBeforeGo:async()=>{},
       world: { geometry: geo, room: map.rooms[room], map,
         reach(col,row) { const p=geo.path(c.self.row,c.self.col,row,col,{clearance:0});
           return { reachable:p.found,steps:p.steps?.length }; } } } });

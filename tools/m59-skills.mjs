@@ -1828,6 +1828,14 @@ async function returnToSpotObserved(s, spot, { maxSteps, tolerance }) {
   const d0 = at();
   if (d0 !== null && d0 <= tolerance) return { arrived: true, already: true, off_by: d0 };
 
+  // Frozen recovery sends REST. Its expiry does not stand the character up:
+  // Player.ResetPlayerFlagList retains PFLAG_NO_MOVE (and disables dodge), so
+  // even a valid refuge path can leave a sitting character taking hits in place.
+  // Use the same ordered precondition as exit travel, only once this decision
+  // actually requires movement. An already-held wall needs no posture change.
+  await s.standBeforeGo({ shouldCancel: () => interrupted() });
+  if (interrupted()) return stopped();
+
   // Get onto the right square first through the geometry, then close the last few
   // fine units directly — the square router cannot express the last bit.
   //

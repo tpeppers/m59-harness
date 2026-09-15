@@ -136,9 +136,11 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
   assert.equal(rests, 1);
   k.s.client.waitFor = async () => { k.health = 5; };
   await k.pass();
-  assert.equal(k.frozenUntil, null);
+  assert.ok(k.notes.some(n=>n.what==='unfreezing'&&n.detail.why==='damage while playing dead'));
+  assert.equal(k.tally.logoffs,2,'with no room geometry, the replacement logoff executes immediately');
+  assert.ok(k.frozenUntil>Date.now(),'the replacement establishes a new freeze');
   assert.equal(ladderCalls, 0, 'the explicit replacement owns this pass before the ordinary ladder');
-  assert.equal(currentSurvivalDecision(k.s).status, 'pending', 'damage queues a replacement on this same pass');
+  assert.equal(currentSurvivalDecision(k.s).status, 'recovering', 'the replacement executes on this same pass');
   assert.equal(rests, 1, 'no extra frozen rest after the damage');
 }
 

@@ -3958,6 +3958,36 @@ export class Autopilot {
   // Runs before all planners. A cancelled approach cannot fall through into shopping,
   // quarry pursuit, or a stale journey while its replacement is waiting to execute.
   async continueSurvivalDecision() {
+    // A replacement is executable intent, not work to defer to the heartbeat.
+    // Drain distinct alternatives serially, with fresh ownership/health checks in
+    // each step. Stop when an action is stable or the same failed state recurs;
+    // a cycle with no new information must not become an unbounded busy loop.
+    const attempted=new Set();
+    let handled=false;
+    try {
+      for (;;) {
+        const d=currentSurvivalDecision(this.s),me=this.s.client?.self;
+        if(!d || d.strategy==='yield_to_controller')return false;
+        const key=JSON.stringify([d.strategy,d.status,d.phase,d.replan_count,d.chosen_refuge,
+          this.s.world?.room?.num,me?.x,me?.y,me?.row,me?.col,this.s.client?.vitals?.()?.health?.value,
+          [...(this.unreachableIn(this.s.world?.room?.num)??[])].sort()]);
+        if(attempted.has(key)) {
+          this.note('survival alternatives exhausted for the current observation',{
+            decision_id:d.id,strategy:d.strategy,reason:d.reason,attempts:attempted.size});
+          return handled;
+        }
+        attempted.add(key);
+        const before={id:d.id,status:d.status,phase:d.phase};
+        handled=await this.continueSurvivalDecisionStep();
+        const next=currentSurvivalDecision(this.s);
+        if(!handled || !next || next.strategy==='yield_to_controller')return false;
+        if(next.id===before.id && next.status===before.status && next.phase===before.phase)return true;
+        if(next.status!=='pending' && !(next.status==='recovering'&&next.phase==='turn_required'))return true;
+      }
+    } finally { this._survivalDrainedDecisionId=currentSurvivalDecision(this.s)?.id; }
+  }
+
+  async continueSurvivalDecisionStep() {
     const s=this.s,d=currentSurvivalDecision(s);
     if (!d || d.strategy==='yield_to_controller') return false;
     observeSurvivalDecision(s);
@@ -4039,7 +4069,9 @@ export class Autopilot {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
     let claimedHere = false;
-    const interrupted = () => this.travelInterrupted()
+    // The old travel stack remains cancelled for this pass. A replacement survival
+    // decision owns a fresh generation and can move now without reviving that stack.
+    const interrupted = () => (recovery ? this.checkFreeze() : this.travelInterrupted())
       || !!s.movementWasCancelled?.(movementGeneration)
       || (decisionId && currentSurvivalDecision(s)?.id!==decisionId);
     const cancelled = () => {
@@ -12731,6 +12763,17 @@ export class Autopilot {
   // One decision cycle. Ordered by urgency: being dead, then being in danger, then
   // being hurt, then whatever the mode is for.
   async pass() {
+    this._survivalDrainedDecisionId=null;
+    await this.passOnce();
+    const d=currentSurvivalDecision(this.s);
+    // A later stage can select a replacement after the early survival dispatcher
+    // has already run. Execute it before returning to loop() and its decideMs sleep.
+    if(this.s.live && !this.stopping && d?.status==='pending' && d.strategy!=='yield_to_controller'
+        && d.id!==this._survivalDrainedDecisionId)
+      await this.continueSurvivalDecision();
+  }
+
+  async passOnce() {
     const s = this.s;
     if (!s.live) { this.note('not in game'); return; }
     if (s.combat?.active) {
@@ -21664,10 +21707,11 @@ export class Autopilot {
         phase:this.frozenUntil>Date.now()?'frozen_without_action'
           :atWall?(this.turnedAt>=this.hold?.takenAt?'reconnected_turn_and_heal':'turn_required'):'frozen_without_action'});
       else {
-        const replacement=chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'logoff did not establish recovery',
+        chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'logoff did not establish recovery',
           reason_code:'logoff_failed',mitigation:'seek another refuge before retrying'},
           {because:'logoff failed or made no progress',outcome:'failed'});
-        updateSurvivalDecision(s,replacement.id,{retry_at:Date.now()+5000});
+        // The failed logoff does not make a different refuge action unsafe to try.
+        // continueSurvivalDecision drains this replacement in the current pass.
       }
     }
     return did;

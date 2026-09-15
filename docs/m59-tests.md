@@ -1,5 +1,19 @@
 # The offline test suites, and what each one pins
 
+Travel survival regressions:
+
+- `m59-refuge-posture-test.mjs`: eight shared refuge-entry cases, including a
+  seated start, fine positioning, coarse fallback and queued cancellation.
+- `m59-position-confirmation-test.mjs`: five cases covering unsolicited room
+  snapshots, older outstanding replies, timeout recovery, failed sends and
+  sent-posture telemetry.
+- `m59-survival-decision-test.mjs`: 23 cases, including immediate replacement
+  after blockage, refused logoff and lost cover, explicit ownership handoff,
+  and repeated failed alternatives without an unbounded busy loop.
+
+The related recovery-refuge, survival-handoff, survival-trace, track-shelter,
+collision and death-replay suites exercise the shared paths independently.
+
 Combat overrides: `node tools/m59-combat-mode-test.mjs` exercises preemption,
 arrival-triggered ambushes, exact player identity, sequences, expiry and survival.
 It also covers indefinite visibility waits, reacquisition, live map selection,

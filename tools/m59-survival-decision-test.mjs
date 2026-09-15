@@ -17,7 +17,7 @@ async function test(name,run){await run();passed++;console.log('PASS '+name);}
 function fixture({row=8,col=16}={}) {
   const events=[],calls=[],health={value:30,max:50};
   const c={state:'game',selfId:1,self:{id:1,row,col,degrees:0},room:{objects:new Map()},
-    vitals:()=>({health,vigor:{value:80}}),face:()=>calls.push('turn'),stats(){},rest(){},waitFor:async()=>({})};
+    vitals:()=>({health,vigor:{value:80}}),face:()=>calls.push('turn'),stats(){},rest(){},stand(){},waitFor:async()=>({})};
   const s=Object.assign(Object.create(Session.prototype),{name:null,client:c,movementGeneration:0,
     cancelledMovementTokens:new Set(),world:{room:map.rooms[39],geometry:geometryFor(map.rooms[39]),map},
     need:()=>c,pacer:{submit:async(_lane,fn)=>fn()}});
@@ -177,5 +177,79 @@ await test('reports include successful chains and unknown attempts without inven
   writeFileSync(path.join(dir,'incomplete.jsonl'),'{incomplete');
   const loaded=loadSurvivalDecisionRows(dir);assert.equal(loaded.rows.length,events.length);assert.equal(loaded.malformed,1);
   assert.equal(record.stats().errors,0);
+});
+await test('a blocked refuge reaches its replacement within one survival dispatch',async()=>{
+  const {s,k,c,calls}=fixture();const attempted=[];
+  s.approachFine=s.walkTo=async(col,row)=>{
+    attempted.push({col,row});
+    if(row===7&&col===16)return {arrived:false,reason:'occupied'};
+    c.self={...c.self,col,row};return {arrived:true};
+  };
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'hurt'});
+  await k.continueSurvivalDecision();
+  assert.ok(attempted.some(p=>p.row!==7||p.col!==16));
+  assert.equal(currentSurvivalDecision(s).status,'recovering');
+  assert.deepEqual(calls,['reconnect','turn']);
+});
+await test('a late-stage refused logoff starts its refuge before pass returns',async()=>{
+  const {s,k,calls}=fixture();k.playDeadObserved=async()=>false;
+  k.passOnce=async()=>{await k.playDead('under attack');};
+  k.takeRecoverySpot=async()=>{
+    const d=currentSurvivalDecision(s);assert.equal(d.retry_at,undefined);
+    calls.push('replacement started');updateSurvivalDecision(s,d.id,{status:'recovering'});
+  };
+  await k.pass();assert.deepEqual(calls,['replacement started']);
+});
+await test('same-pass travel cancellation does not cancel a fresh survival approach',async()=>{
+  const {s,k,c,calls}=fixture();k.survivalInterruptedPass=k.passes;
+  s.cancelMovement(null,'old journey cancelled');
+  s.approachFine=s.walkTo=async(col,row)=>{c.self={...c.self,col,row};return {arrived:true};};
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'replace cancelled journey'});
+  await k.continueSurvivalDecision();
+  assert.deepEqual(calls,['reconnect','turn']);assert.equal(currentSurvivalDecision(s).status,'recovering');
+  assert.equal(k.travelInterrupted(),true,'the old travel stack stays cancelled');
+});
+await test('losing a recovery wall starts a replacement without another heartbeat',async()=>{
+  const {s,k,calls}=fixture();
+  chooseSurvivalDecision(s,{strategy:'rest_safe',status:'recovering',reason:'resting'});
+  k.takeRecoverySpot=async()=>{
+    calls.push('replacement started');
+    updateSurvivalDecision(s,currentSurvivalDecision(s).id,{status:'recovering'});
+  };
+  await k.continueSurvivalDecision();assert.deepEqual(calls,['replacement started']);
+});
+await test('explicit survival ownership handoff stops an immediate replacement chain',async()=>{
+  const {s,k,calls}=fixture();
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'hurt'});
+  k.takeRecoverySpot=async()=>{
+    calls.push('first');k.busy={until:Date.now()+10000};
+    chooseSurvivalDecision(s,{strategy:'route_refuge',reason:'try another wall'});
+  };
+  assert.equal(await k.continueSurvivalDecision(),false);
+  assert.deepEqual(calls,['first']);assert.equal(currentSurvivalDecision(s).strategy,'yield_to_controller');
+});
+await test('repeating failed alternatives preserves intent without a busy loop',async()=>{
+  const {s,k}=fixture();let attempts=0;
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'hurt'});
+  k.takeRecoverySpot=async()=>{
+    assert.ok(++attempts<10,'failed alternatives spun forever');
+    chooseSurvivalDecision(s,{strategy:'logoff_open',reason:'no refuge'});
+  };
+  k.playDeadObserved=async()=>false;
+  await k.continueSurvivalDecision();
+  assert.equal(attempts,1);assert.equal(currentSurvivalDecision(s).strategy,'nearest_refuge');
+});
+await test('newly excluded refuges count as new information for immediate alternatives',async()=>{
+  const {s,k}=fixture();let attempts=0;
+  chooseSurvivalDecision(s,{strategy:'nearest_refuge',reason:'hurt'});
+  k.playDeadObserved=async()=>false;
+  k.takeRecoverySpot=async()=>{
+    attempts++;
+    if(attempts===3){updateSurvivalDecision(s,currentSurvivalDecision(s).id,{status:'recovering'});return;}
+    assert.ok(attempts<4);k.noteUnreachableSpot(39,16+attempts,7);
+    chooseSurvivalDecision(s,{strategy:'logoff_open',reason:'refuge blocked'});
+  };
+  await k.continueSurvivalDecision();assert.equal(attempts,3);
+  assert.equal(currentSurvivalDecision(s).status,'recovering');
 });
 console.log(`${passed} survival decision scenarios passed`);

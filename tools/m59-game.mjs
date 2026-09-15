@@ -2556,9 +2556,13 @@ class Session {
   // that flag is exactly the thing that goes stale — the server never announces the
   // rest ending, and a wrong `false` costs a whole journey while a redundant stand
   // costs one packet.
-  async standBeforeGo() {
+  async standBeforeGo({ shouldCancel = null } = {}) {
     const c = this.need();
-    await this.pacer.submit('rest', () => c.stand());
+    await this.pacer.submit('rest', () => {
+      // A refuge decision may be replaced while this command is queued. Its
+      // delayed stand must not disturb the replacement's stationary recovery.
+      if (!shouldCancel?.()) c.stand();
+    });
   }
 
   // ONE BARE `GO` AT THE SQUARE THE CHARACTER IS ALREADY ON, stood up first.

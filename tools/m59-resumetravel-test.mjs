@@ -326,22 +326,25 @@ console.log('A WALL THAT HAS FINISHED ITS WORK IS RELEASED IN THE STAGE THAT OWN
 }
 
 console.log('');
-console.log('AN INJURED LEG MENDS AT A WALL FORWARD ON THE ROUTE, AND KEEPS ITS DESTINATION');
+console.log('AN INJURED LEG USES SHARED RECOVERY AND KEEPS ITS DESTINATION');
 {
   const src = KEEPER_SRC;
-  const fn = src.slice(src.indexOf('async shelterForwardAndMend'),
-                       src.indexOf('async shelterForwardAndMend') + 2200);
   // Two deaths asked for this, and both were survivable:
   //
   //   Aaaa  journey ended at two legs after a watchdog rescue, idle at +81s, dead at 201s
   //   Bbbb  reached the Cragged Mountains at 13 of 20, poisoned, and died there
   //
-  // One answer for both: a wall AHEAD on the route, mended at, objective kept. Forward
-  // because the room is what is dangerous — a wall behind pays the exposure twice.
+  // The operator subsequently chose nearest clear recovery over route bias.
+  // Exercise the shared call and retained state, not obsolete source-text spelling.
   ok('there is a forward recovery stop at all', /async shelterForwardAndMend/.test(src));
-  ok('and it asks the ROUTE for the next wall in front', /shelterAhead\(/.test(fn));
-  ok('and refuses walls it has just failed to reach', /unreachableIn\(/.test(fn));
-  ok('and says the destination is kept', /not the end of one/.test(fn));
+  const recovering=keeper(),journey={to:39,at:Date.now()};
+  recovering.suspendedJourney=journey;recovering.noteUnreachableSpot(535,25,6);
+  let calls=0,source;
+  recovering.takeRecoverySpot=async(_why,options)=>{calls++;source=options.source;return {took:true};};
+  await recovering.shelterForwardAndMend('injured on the road');
+  ok('and asks the shared recovery selector once',calls===1&&source==='travel');
+  ok('and retains the exclusions for failed refuges',recovering.unreachableIn(535).has('25,6'));
+  ok('and keeps the original destination',recovering.suspendedJourney===journey);
 
   // TRIGGER ONE. The watchdog must never leave a body idle in the room it was dying in.
   const rescue = src.slice(src.indexOf('WATCHDOG — took the character back from a driver') - 2600,

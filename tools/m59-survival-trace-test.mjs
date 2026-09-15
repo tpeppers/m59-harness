@@ -16,7 +16,7 @@ function fixture() {
   const s = Object.assign(Object.create(Session.prototype), { name: null, client: c,
     lastHealth: 50, movementGeneration: 0, cancelledMovementTokens: new Set(),
     world: { room: { num: 39, name: 'Upstairs Castle Victoria' } },
-    need: () => c, hitBook: () => null });
+    need: () => c, hitBook: () => null, standBeforeGo: async () => {} });
   const k = Object.assign(Object.create(Autopilot.prototype), { s, journal: [], passes: 9,
     passStage: 'passFleeAndRest', passStageAt: Date.now() - 20000,
     passStartedAt: Date.now() - 22000, policy: { fleeBelow: 0.45, blindWalkWatchdog: false },

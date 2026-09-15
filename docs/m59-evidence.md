@@ -30,6 +30,12 @@ node tools/m59-epoch-test.mjs     # 20 assertions; offline, safe any time
 
 ## Why not a clock
 
+Historical deaths from another or unknown movement epoch can still seed tactical
+experiments. Keep their recorded epoch and uncertainty; run the reconstructed
+scenario on explicitly stamped current code. This is new evidence about that
+experiment, not permission to count the historical route failure as a regression
+in the current mover. Preserve divergent and nonfatal results as well.
+
 That was the first fix here and it is wrong in both directions at once. "Older than 48
 hours" is a guess about how fast this repository changes: a fortnight of quiet evidence is
 still perfectly good, and four-hour-old evidence is worthless if the mover was rewritten in

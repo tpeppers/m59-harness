@@ -28,6 +28,21 @@ The harness stamp contains full commit, dirty status, Node version, and SHA-256 
 
 ## One scene format and loader
 
+Position confirmations must wait for a new room snapshot even when unsolicited
+snapshots have put the received count ahead of the requested count. Scene setup
+exposed a two-snapshot surplus: confirmation returned early, a fine mover acted
+on an older position, and the keeper reported a wall arrival the server had
+already undone. Requests now advance beyond both counters. Replay protocols
+before the September 15 protocol-5 travel comparison retain useful failures but
+must not be pooled with corrected trials to estimate intervention effectiveness.
+
+Captures now include freeze retry counters, the last sent rest/stand command,
+and room-snapshot request/receive/loss counters. The posture command is evidence
+of an action sent, not confirmation of the server's posture or action flags.
+The replay adapter restores captured keeper activity and retry counters and
+starts its watchdog before resuming an in-flight approach. Old captures still
+need explicit assumptions for missing counters and server action state.
+
 `m59-scene.mjs` remains the scene schema and low-level placement/vitals implementation. Manual `save` prefers the same `scene_capture` cache projection as death recording. Old brokers fall back to the older, less complete capture and retain its limitations.
 
 `m59-scene-staging.mjs` is the shared preparation layer used by scene CLI loads, FleetScratch scene establishment, and the shadow replay adapter. It:

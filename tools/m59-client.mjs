@@ -1233,8 +1233,14 @@ export class M59Client {
       encodeIntList(stats), encodeIntList(spells), encodeIntList(skills));
   }
 
-  rest()                { this.userCommand(UC.REST); }
-  stand()               { this.userCommand(UC.STAND); }
+  rest()                {
+    this.userCommand(UC.REST);
+    this.lastPostureCommand={verb:'rest',at:Date.now(),room_object_id:this.room?.id??null};
+  }
+  stand()               {
+    this.userCommand(UC.STAND);
+    this.lastPostureCommand={verb:'stand',at:Date.now(),room_object_id:this.room?.id??null};
+  }
   safety(on)            { this.userCommand(UC.SAFETY, u8b(on ? 1 : 0)); }
   balance()             { this.userCommand(UC.BALANCE); }
   deposit(n)            { this.userCommand(UC.DEPOSIT, u32(n)); }
@@ -1339,7 +1345,10 @@ export class M59Client {
   // method fails at load; a missing free variable fails only when the world goes wrong.
   requestPlayer()       { this.send(BP.SEND_PLAYER); }
   roomContents()        {
-    const request = this.roomContentsRequested + 1;
+    // Scene setup and unsolicited snapshots can put received ahead of requested.
+    // A new read must wait for a NEW reply; otherwise confirmPosition returns
+    // immediately, and a later snapshot can undo a refuge arrival already reported.
+    const request = Math.max(this.roomContentsRequested, this.roomContentsReceived) + 1;
     this.send(BP.SEND_ROOM_CONTENTS);
     this.roomContentsRequested = request;
     return request;

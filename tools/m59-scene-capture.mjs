@@ -79,6 +79,9 @@ export function captureCachedScene(s,k,{name='replay',at=Date.now(),provenance={
   scene.controller=copyReplayConfig({mode:k?.mode,policy:k?.policy,hold:k?.hold,
     inert:k?.inert,suspended_journey:k?.suspendedJourney,doing:k?.doing,
     frozen_until:k?.frozenUntil,freeze_sample:k?.freezeSample,turned_at:k?.turnedAt,
+    froze_at:k?.frozeAt,freezes_without_gain:k?.freezesWithoutGain,
+    posture_command:c?.lastPostureCommand??null,
+    position_reads:{requested:c?.roomContentsRequested,received:c?.roomContentsReceived,lost:c?.roomContentsLost??0},
     movement_generation:s.movementGeneration,decision:currentSurvivalDecision(s),
     variant:k?.replayVariant??null,start_actions:k?.replayStartActions??null},0,controllerGaps);
   scene.capture.controller_gaps=[...new Set(controllerGaps)];
