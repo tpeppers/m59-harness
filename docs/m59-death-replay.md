@@ -40,6 +40,10 @@ The harness stamp contains full commit, dirty status, Node version, and SHA-256 
 
 The low-level `executeLoad` remains available for tools with their own bindings and preparation. Its `pause` option alone is a legacy timer stop, not an atomic world freeze. Use `prepareScene` for reconstructed room experiments. FleetScratch's scene establishment result exposes `start`, `cleanup`, and a serializable preparation receipt so a raid can finish its setup before starting.
 
+Both shared release paths reconcile player regeneration with the server's normal `NewHealth` and `NewMana` handlers and verify that required timers exist. Raw stat assignments alone can turn a full-health lab character into a wounded character with no health timer, making a valid turn-and-rest experiment falsely appear unable to heal. Existing timers retain their phase; newly required timers use the normal interval. This does not grant health, force the moved-since-entry flag, or certify a safe wall. A post-login action still has to arm healing, and a turn is safe only when the character actually retains shelter. Release receipts include `player_vital_timers` and the measured preparation timestamps.
+
+With explicit `labScenery`, ordinary items created by room-entry hooks are included in the prepared scene and reported as `include_entry_lab_item`. Extra players and monsters still fail verification. Faithful scenery loads retain their strict actor check.
+
 ```text
 node tools/m59-scene.mjs save t4 --name before-raid
 node tools/m59-scene.mjs load substrate/scenes/before-raid.json --require-native-hold

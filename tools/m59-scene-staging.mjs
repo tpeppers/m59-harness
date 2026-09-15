@@ -11,12 +11,52 @@ import {restorePlayerLoadout,verifyPlayerLoadout,capturePlayerLoadout,loadoutFor
 const creatureClasses=()=>JSON.parse(readFileSync(new URL('../substrate/m59-spawns.json',import.meta.url))).creatures;
 const className=s=>typeof s==='string'&&/^[A-Za-z][A-Za-z0-9_]*$/.test(s);
 const isMonster=o=>o.properties?.pihit_points!=null;
+// Raw saved-stat assignments do not run Player.NewHealth/NewMana. A character
+// loaded from full to wounded can otherwise have no regeneration timer at all,
+// even after a legitimate turn sets MOVED_SINCE_ENTRY. Arm normal server timers
+// at release, without granting health or bypassing the action/safety rules.
+export async function armPlayerVitalTimers(scene,bindings,{env=process.env,dmFn=dm}={}) {
+  assertLab(env);
+  const ids=scene.actors.filter(a=>a.kind==='player').map(a=>bindings.get(a.key??a.name));
+  if(!ids.length)return {ok:true,actors:[]};
+  if(ids.some(id=>!Number.isInteger(id)))throw Error('player timer restoration needs current actor bindings');
+  const at=Date.now(),out=await dmFn(ids.flatMap(id=>[sendMsg(id,'NewHealth'),sendMsg(id,'NewMana')]),{env});
+  if(rejections(out).length)throw Error('player vital timer restoration rejected');
+  const actors=await readAdminObjects(ids,{env,dmFn});
+  if(actors.some(o=>['pihealth','pimax_health','pimana','pimax_mana']
+    .some(key=>o.properties[key]?.type!=='INT')))
+    throw Error('player vital timer verification lacks authoritative player vitals');
+  const receipts=actors.map(o=>({actor:scene.actors.find(a=>bindings.get(a.key??a.name)===o.id)?.key,
+    health_needed:o.hp.value>0&&o.hp.value!==o.hp.max,
+    health_armed:o.properties.pthealth?.type==='TIMER',
+    mana_needed:o.mana.value!==o.mana.max,
+    mana_armed:o.properties.ptmana?.type==='TIMER'}));
+  if(receipts.some(r=>(r.health_needed&&!r.health_armed)||(r.mana_needed&&!r.mana_armed)))
+    throw Error('player vital timers did not verify: '+JSON.stringify(receipts));
+  return {ok:true,started_at:at,completed_at:Date.now(),actors:receipts,
+    note:'Normal regeneration timers reconciled; action flag is not forced and historical timer phase is unknown.'};
+}
 export async function prepareScene(input,{env=process.env,resolveActor,classes={},options={},
     requireNativeHold=false,dmFn=dm}={}) {
   assertLab(env);
   const scene=sceneWithOptions(input,options),changes=[],assumptions=[],bindings=new Map(),used=new Set();
   const initial=await readAdminRoom(scene.room.num,{env,dmFn});
   const labItems=new Map();
+  // Some room entry hooks create items (for example mushrooms) after the first
+  // room read. Explicit lab scenery includes those too; monsters and players
+  // must still match the requested scene exactly.
+  const includeEntryScenery=(actual,map=bindings)=>{
+    if(options.labScenery!==true)return;
+    for(const o of actual.actors.filter(o=>!used.has(o.id)&&!isMonster(o)&&
+      o.properties?.pihealth==null&&o.properties?.pihits!=null&&
+      !['User','Player'].includes(o.class))) {
+      const key='lab-scenery-'+o.id;
+      scene.actors.push({key,name:o.name??o.class,kind:'item',
+        at:{v:{row:o.row,col:o.col,x:o.x,y:o.y},how:'observed'},angle:{v:o.angle,how:'observed'}});
+      bindings.set(key,o.id);map.set(key,o.id);used.add(o.id);
+      changes.push({kind:'include_entry_lab_item',class:o.class,key});
+    }
+  };
   if(options.labScenery===true) {
     const removed=scene.actors.filter(a=>a.kind==='item').map(a=>a.key??a.name);
     scene.actors=scene.actors.filter(a=>a.kind!=='item');
@@ -117,7 +157,9 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
           const response=await dmFn(commands,{env});
           if(rejections(response).length)return {ok:false,mismatches:['native monster restoration rejected']};
         }
-        return compareScenePlacement(sc,map,await readAdminRoom(sc.room.num,{env,dmFn}));
+        const actual=await readAdminRoom(sc.room.num,{env,dmFn});
+        includeEntryScenery(actual,map);
+        return compareScenePlacement(sc,map,actual);
       }});
     // Equip against the restored character's stats and room, with monsters held.
     if(loaded.ok)for(const a of scene.actors.filter(a=>a.kind==='player'&&a.loadout)) {
@@ -131,6 +173,7 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
       if(!loaded.ok)throw Error('refusing to start an unverified scene');
       // Verify once more immediately before release; setup reads may have taken time.
       const actual=await readAdminRoom(scene.room.num,{env,dmFn});
+      includeEntryScenery(actual);
       const final=compareScenePlacement(scene,bindings,actual);
       if(!final.ok)throw Error('scene changed while held: '+JSON.stringify(final.mismatches));
       for(const a of scene.actors.filter(a=>a.kind==='player'&&a.loadout)) {
@@ -145,10 +188,11 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
       if(generation!=null&&!options.noMonsters)commands.push(sendMsg(actual.room_object,'SetMonsterGeneration',{bValue:['INT',generation]}));
       const loadout_timers=[];
       for(const arm of loadoutHandles)loadout_timers.push(await arm());
+      const player_vital_timers=await armPlayerVitalTimers(scene,bindings,{env,dmFn});
       const at=Date.now(),response=await dmFn(commands,{env});
       if(rejections(response).length)throw Error('scene release rejected');
       started=true;
-      return {ok:true,at,completed_at:Date.now(),atomic_monster_release:native,loadout_timers,
+      return {ok:true,at,completed_at:Date.now(),atomic_monster_release:native,loadout_timers,player_vital_timers,
         note:native?'one server message releases all room monsters':'one admin batch; stock server cannot certify an atomic release'};
     };
     const cleanup=async()=>{
@@ -213,6 +257,7 @@ export async function releasePreparedScene(receipt,{env=process.env}={}) {
       sendMsg(bindings.get(a.key??a.name),'EnterStateWait',{delay:['INT',1]}),sendMsg(bindings.get(a.key??a.name),'StartBasicTimers')]);
   if(receipt.generation_before!=null&&!scene.reload?.options?.noMonsters)
     cmds.push(sendMsg(actual.room_object,'SetMonsterGeneration',{bValue:['INT',receipt.generation_before]}));
+  const player_vital_timers=await armPlayerVitalTimers(scene,bindings,{env});
   const at=Date.now(),out=await dm(cmds,{env});
-  return {ok:rejections(out).length===0,at,atomic_monster_release:native,loadout_timers};
+  return {ok:rejections(out).length===0,at,atomic_monster_release:native,loadout_timers,player_vital_timers};
 }

@@ -19,6 +19,11 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
 
 ## Saved-scene simulator
 
+`node tools/m59-scene-vital-timers-test.mjs` checks normal player health/mana
+timer restoration after raw scene-stat loading, preservation of existing timers,
+full/dead states, missing bindings/vitals, and silent or explicit server refusal.
+It uses an offline native-admin fixture and awards no artificial regeneration.
+
 `node tools/m59-player-evidence-test.mjs` exercises passive player-message/HP
 matching, ambiguous and rapidly collected loot, room boundaries, server-scoped
 worker persistence and conservative loadout models. `m59-postmortem-sim-test.mjs`
