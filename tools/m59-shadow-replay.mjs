@@ -83,7 +83,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
     if(task&&!terminateAfterTrial) {
       done=await Promise.race([task.then(()=>true,()=>true),sleep(12000).then(()=>false)]);
     }
-    if(s){s.client?.stopKeepalive?.();s.client?.sock?.destroy?.();s.recorder?.stop?.();await s.replayRecorder?.close?.();}
+    if(s){s.client?.stopKeepalive?.();s.client?.sock?.destroy?.();s.recorder?.stop?.();await s.replayRecorder?.close?.();await s.playerEvidence?.close?.();}
     if(k){const {dropAutopilot}=await import('./m59-autopilot.mjs');dropAutopilot(config.agent);}
     s=null;k=null;task=null;
     try {await staged?.cleanup();staged=null;}finally{await players?.close();players=null;}

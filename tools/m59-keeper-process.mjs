@@ -863,6 +863,7 @@ function state() {
     pid: process.pid,
     in_game: inGame,
     combat: session?.combat?.status(),
+    player_evidence: session?.playerEvidence?.status()??{enabled:false},
     connection_revision: connectionRevision,
     // WHAT WE BELIEVE vs WHAT THE SOCKET SAYS.
     //
@@ -3737,7 +3738,7 @@ const server = createServer(async (req, res) => {
       saveFinalState();
       // Let the acknowledgement reach the verified caller before ending the process.
       json({ ok: true });
-      setImmediate(() => process.exit(0));
+      setImmediate(async () => {try{await session.playerEvidence?.close?.();}finally{process.exit(0);}});
       return;
     }
 
@@ -4550,7 +4551,7 @@ function saveFinalState() {
 
 // ---------------------------------------------------------------- signal handling
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   log(`[keeper] ${agent} SIGTERM received`);
   armShutdownWatchdog('SIGTERM');
   changeJoinIntent(false);
@@ -4559,7 +4560,7 @@ process.on('SIGTERM', () => {
   if (session.client) {
     try { session.client.close(); } catch {}
   }
-  process.exit(0);
+  try{await session.playerEvidence?.close?.();}finally{process.exit(0);}
 });
 
 process.on('SIGINT', () => process.kill(process.pid, 'SIGTERM'));

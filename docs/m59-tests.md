@@ -19,6 +19,11 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
 
 ## Saved-scene simulator
 
+`node tools/m59-player-evidence-test.mjs` exercises passive player-message/HP
+matching, ambiguous and rapidly collected loot, room boundaries, server-scoped
+worker persistence and conservative loadout models. `m59-postmortem-sim-test.mjs`
+also checks guild-only attack-refusal reporting.
+
 `node tools/m59-scene-loadout-test.mjs` uses an offline native-admin fixture to
 check portable inventory/equipment/ability capture, exact restoration/readback,
 enchantment timer staging, strict mappings, checksums and refusal cleanup.

@@ -12,6 +12,7 @@ import {normalizeCombatOrder} from './m59-combat-mode.mjs';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const norm=x=>String(x??'').trim().toLowerCase();
+export const isPvpAttackRefusal=text=>/not yet experienced|may not attack|cannot attack|can't attack|not allowed|out of range|only those in guilds may attack/i.test(text);
 export function replayPlayerPlan(scene,options={}) {
   if(options.enabled!==true)return {enabled:false,actors:[]};
   const allowed=new Set(['enabled','attackers','profile','allow_approximate_player','loadouts','require_loadouts','sequences']);
@@ -81,6 +82,9 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
     const sock=s.client?.sock;
     if(sock&&!sock.destroyed)await new Promise(resolve=>{sock.once('close',resolve);sock.destroy();});
     s.recorder?.stop?.();await s.replayRecorder?.close?.();
+    await s.playerEvidence?.flush?.();
+    const evidence=s.playerEvidence?{status:s.playerEvidence.status(),records:s.playerEvidence.recent()}:null;
+    await s.playerEvidence?.close?.();return evidence;
   };
   let cleaned=false;
   const manager={
@@ -128,8 +132,7 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
         casts:actors.reduce((n,a)=>n+(a.report.combat?.casts??0),0),
         cast_failures:actors.flatMap(a=>a.report.messages??[]).filter(e=>
           /unsuccessful in casting|cannot cast|can't cast|unable to cast|not enough.*mana|do not have.*reagent/i.test(e.text)).length,
-        attack_refusals:actors.flatMap(a=>a.report.messages??[]).filter(e=>
-          /not yet experienced|may not attack|cannot attack|can't attack|not allowed|out of range/i.test(e.text)).length};
+        attack_refusals:actors.flatMap(a=>a.report.messages??[]).filter(e=>isPvpAttackRefusal(e.text)).length};
       return receipt;
     },
     async close() {
@@ -138,7 +141,7 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
       const errors=[];
       for(const a of actors) {
         try {
-          await disconnect(a.s);
+          a.report.player_evidence=await disconnect(a.s);
           if(a.reserved&&!a.created) {
             const found=accountIdentity(await dmFn(['show account '+a.account],{env}),a.account);
             if(found){a.created=true;a.id=found;a.report.account_id=found;}

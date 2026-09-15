@@ -52,6 +52,7 @@ import * as descriptions from './m59-describe.mjs';
 import { RemainingRequiredToLearnNewSkills, PointsToNextLevelOfTarget } from '../compendium/tools/learn.mjs';
 import { StorageCache } from './m59-storage.mjs';
 import { Recorder } from './m59-recorder.mjs';
+import {attachPlayerEvidence} from './m59-player-evidence-store.mjs';
 
 // ── IMPORTS THE PORTED SESSION NEEDS ────────────────────────────────────────────
 //
@@ -2107,6 +2108,7 @@ class Session {
     c.onEvent = ev => {
       this.combat?.event(ev);
       this.recorder.line('event', ev);
+      this.playerEvidence?.event(ev,c);
       if (ev.kind === 'ability') this.noteAdvancement(ev);
       if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); }
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for
@@ -2149,6 +2151,8 @@ class Session {
         code: 'GROUND_EFFECT_BLOCKED', ground_effect: hazard.ground_effect });
     };
     this.world = new World(c, worldMap);
+    attachPlayerEvidence(this).reset();
+    this.playerEvidence.event({kind:'room-contents',at:Date.now()},c);
 
     // WRITE THE NAME DOWN. The roster records an account and a password; which CHARACTER
     // that account is only becomes known once the login gets as far as the character
@@ -2252,7 +2256,7 @@ class Session {
     if(!fastReplay)await new Promise(r => setTimeout(r, 900));
 
     const c = new M59Client({ host, port, verbose: false, resources });
-    c.onEvent = ev => this.recorder.line('event', ev);
+    c.onEvent = ev => {this.recorder.line('event', ev);this.playerEvidence?.event(ev,c);};
     let asked = false, newId = null, refused = false, replaced = null, notFirstTime = null;
     c.onCharacters = (list) => {
       if (asked) return;
@@ -2316,6 +2320,8 @@ class Session {
     await c.login(account, password).catch(e => { throw new Error(`creation login failed: ${e.message}`); });
     this.client = c;
     this.world = new World(c, worldMap);
+    attachPlayerEvidence(this).reset();
+    this.playerEvidence.event({kind:'room-contents',at:Date.now()},c);
     this.credentials = { ...this.credentials, character: plan.name };
     await this.pacer.submit('read', () => c.stats(1));
     await this.pacer.submit('read', () => c.stats(2));

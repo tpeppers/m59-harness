@@ -3878,3 +3878,6 @@ They are driven by tools/m59-menagerie.mjs and ` +
   ctx.log(`${name}: ${ok}/${agents.length} completed`);
   return { ok: ok > 0, results };
 }
+export {estimatePlayer as estimatePlayerCombat} from './m59-player-evidence.mjs';
+export {readEvidence as readPlayerEvidence} from './m59-player-evidence-store.mjs';
+export {modeledLoadout as modelPlayerLoadout} from './m59-player-intel.mjs';

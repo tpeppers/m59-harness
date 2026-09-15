@@ -47,6 +47,8 @@ export async function planPostMortemSimulation({file,frameId=null,attackers=null
 export function annotatePvpTrial(row) {
   if(!row.pvp)return row;
   const actors=row.pvp.actors??[];
+  row.witnessed_dropped_loadouts=actors.flatMap(a=>(a.player_evidence?.records??[])
+    .filter(r=>r.type==='dropped_loadout').map(r=>({...r,shadow_witness:a.shadow_name,captured_witness:a.captured_name})));
   const target=actors.find(a=>a.behavior==='melee'||a.behavior==='sequence')?.combat?.target;
   if(row.outcome==='died') {
     const deathAt=row.victim_hp_trace?.find(h=>h.hp===0)?.at;
@@ -64,6 +66,10 @@ export function annotatePvpTrial(row) {
     previous=h.hp;
   }
   row.victim_observed_hp_loss=loss;
+  row.pvp_validation={attack_refusals:row.pvp.activity?.attack_refusals??0,
+    interpretation:(row.pvp.activity?.attack_refusals??0)>0?
+      'Attacks were refused; survival does not establish protection against the intended PvP encounter. Check guild and other server eligibility rules.':
+      'Exploratory modeled combat; packet attempts alone do not prove landed attacks.'};
   return row;
 }
 export async function simulatePostMortem({file,configFile,frameId=null,attackers=null,profile,

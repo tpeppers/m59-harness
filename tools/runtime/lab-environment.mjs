@@ -13,6 +13,7 @@ const DIRS = Object.freeze({
   M59_HITS_DIR: 'hits',
   M59_TRANSIT_DIR: 'transits',
   M59_POSTMORTEM_DIR: 'postmortems',
+  M59_PLAYER_EVIDENCE_DIR: 'player-evidence',
   M59_LEDGER_DIR: 'ledger',
   M59_STRATEGY_STATS_DIR: 'strategy-stats',
   M59_ABILITY_DIR: 'abilities',

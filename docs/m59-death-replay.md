@@ -282,3 +282,7 @@ Timed item enchantments are saved as remaining milliseconds. They stay paused du
 **Exact here means matching the supplied specification.** Old production recordings do not expose other players' hidden inventory, modifiers or abilities, so this cannot retroactively discover Morpheus's loadout. Base attributes, vitals, guild relationships, player buffs/debuffs, RNG and human input timing remain separate scene/native-save concerns. Item state referencing external objects, strings, nested structures or unsupported timers is refused instead of replaced with plain gear. Very short timers that expire before verification also refuse the start. Use a native server checkpoint for state the portable schema cannot represent. `historical_loadout_verified` remains false, and exploratory death evidence remains usable.
 
 See [the loadout validation report](postmortem-loadouts-2026-09-14.md) for armed and spell-casting live trials.
+Player combat estimates and witnessed dropped loot are available through the
+[player evidence workflow](m59-player-evidence.md). Evidence-informed models use
+the same portable loadout files and native restore verification as supplied
+loadouts; inferred skills and unknown equipment remain explicit assumptions.

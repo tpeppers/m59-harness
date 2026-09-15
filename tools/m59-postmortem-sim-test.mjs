@@ -8,6 +8,9 @@ import {digest,baselineVerdict} from './m59-death-replay.mjs';
 import {planPostMortemSimulation,simulatePostMortem,annotatePvpTrial} from './m59-postmortem-sim.mjs';
 import {spawnSync} from 'node:child_process';
 import {simulatePostMortem as fleetSim} from './m59-fleetscript.mjs';
+import {isPvpAttackRefusal} from './m59-replay-players.mjs';
+assert.equal(isPvpAttackRefusal('Only those in guilds may attack each other here.'),true);
+assert.match(annotatePvpTrial({pvp:{actors:[],activity:{attack_refusals:3}}}).pvp_validation.interpretation,/guild/);
 const dir=await mkdtemp(path.join(tmpdir(),'postmortem-pvp-'));
 const scene=hp=>({name:'fixture',room:{num:544},actors:[
   {key:'self',mine:true,kind:'player',name:'Victim',vitals:{hp:{v:{value:hp,max:48},how:'observed'}}},
