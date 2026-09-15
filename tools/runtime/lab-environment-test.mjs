@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { configureLabEnvironment, LAB_MUTABLE_PATH_KEYS } from './lab-environment.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'm59-lab-env-'));
@@ -71,6 +72,11 @@ try {
   assert.deepEqual(JSON.parse(readFileSync(env.M59_TRACK_STRIKES, 'utf8')), { lab_progress: true },
     'a later configure does not overwrite private evidence with its original seed');
   assert.equal(configuredAgain.seeded.length, 0);
+  const retained = configuredAgain.seedInputs.find(s => s.key === 'M59_TRACK_STRIKES');
+  assert.equal(retained.status, 'retained');
+  assert.equal(retained.initial_sha256,
+    createHash('sha256').update(readFileSync(env.M59_TRACK_STRIKES)).digest('hex'),
+    'manifest describes the actual retained book, not the original seed');
 
   const shardEnvA = { ...seedFiles };
   const shardEnvB = { ...seedFiles };
@@ -96,6 +102,34 @@ try {
   assert.throws(() => configureLabEnvironment(
     { fleet: 'lab-one', stateFile: join(root, 'lab-one.json') }, {},
     { scope: '../escape' }), /scope/);
+
+  const selection = { fleet: 'lab-one', stateFile: join(root, 'lab-one.json') };
+  const freshEnvA = { ...seedFiles }, freshEnvB = { ...seedFiles };
+  const freshA = configureLabEnvironment(selection, freshEnvA, { scope: 'same-pid', fresh: true });
+  writeFileSync(freshA.safespots, JSON.stringify({ learned_in_previous_trial: true }));
+  const freshB = configureLabEnvironment(selection, freshEnvB, { scope: 'same-pid', fresh: true });
+  assert.equal(freshA.fresh, true);
+  assert.notEqual(freshA.runtimeDir, freshB.runtimeDir,
+    'reused process IDs must not inherit a previous replay writer tree');
+  assert.equal(freshA.coordinationDir, freshB.coordinationDir);
+  assert.deepEqual(JSON.parse(readFileSync(freshA.safespots, 'utf8')), { learned_in_previous_trial: true },
+    'allocating a new replay must preserve earlier evidence');
+  assert.deepEqual(JSON.parse(readFileSync(freshB.safespots, 'utf8')), { seeded_by: 'M59_SAFESPOT_FILE' });
+  for (const input of freshB.seedInputs) {
+    const bytes = readFileSync(seedFiles[input.key]);
+    assert.equal(input.status, 'copied');
+    assert.equal(input.source, resolve(seedFiles[input.key]));
+    assert.equal(input.destination, resolve(freshEnvB[input.key]));
+    assert.equal(input.initial_bytes, bytes.length);
+    assert.equal(input.initial_sha256, createHash('sha256').update(bytes).digest('hex'));
+  }
+  // The manifest is a snapshot: later writes cannot change initial hashes.
+  assert.equal(freshA.seedInputs[0].initial_sha256, freshB.seedInputs[0].initial_sha256);
+  const missingSeeds = Object.fromEntries(Object.keys(seedFiles).map(key => [key, join(root, `missing-${key}`)]));
+  const missing = configureLabEnvironment(selection, missingSeeds, { scope: 'no-seeds', fresh: true });
+  assert.equal(missing.seeded.length, 0);
+  assert.ok(missing.seedInputs.every(s => s.status === 'missing' && s.initial_bytes === null && s.initial_sha256 === null));
+  assert.throws(() => configureLabEnvironment(selection, {}, { fresh: true }), /named scope/);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

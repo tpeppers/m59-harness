@@ -22,6 +22,20 @@ import {restoreReplayJourney,replayJourneyDestination,resumeReplayJourney} from 
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
+export function configureReplayEnvironment(selection,env=process.env) {
+  const runtime=configureLabEnvironment(selection,env,{scope:`replay-${process.pid}`,fresh:true});
+  env.M59_SURVIVAL_DECISION_DIR=path.join(runtime.runtimeDir,'decisions');
+  env.M59_REPLAY_DIR=path.join(runtime.runtimeDir,'replays');
+  return runtime;
+}
+export function replayEnvironmentReceipt(runtime,trialSequence,operationSequence) {
+  return {fresh_scope:runtime.fresh,runtime_dir:runtime.runtimeDir,
+    seed_inputs:structuredClone(runtime.seedInputs),seed_inputs_at:'environment_initialization',
+    trial_sequence:trialSequence,operation_sequence:operationSequence,
+    // Explicit in-process callers can keep module caches and learned state.
+    // The default isolated adapter starts a fresh worker for every trial.
+    reused_in_process:operationSequence>1};
+}
 export function attachReplayDecisionRecording(s,k,{execution,source,record}) {
   const code={commit:execution?.harness?.commit??null,
     source_sha256:execution?.harness?.source_sha256??null,dirty:execution?.harness?.dirty??null};
@@ -61,8 +75,9 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
   const env={...process.env,M59_ADMIN_HOST:'127.0.0.1',M59_ADMIN_PORT:containerLab?'17998':'19998'};
   let serverAttestation=null,nativeSave=null,containerInfo=null,restoreReceipt=null,executionProvenance=null;
   let claim=null,leases=null,s=null,k=null,task=null,variantControl=null,staged=null,players=null,labState=null;
-  const assumedHealth=new Map();let trialSequence=0;
+  const assumedHealth=new Map();let trialSequence=0,operationSequence=0,runtimeEnvironment=null;
   async function acquire() {
+    operationSequence++;
     if(claim)return;
     const status=await dm(['show status'],{env});
     if(containerLab) {
@@ -80,9 +95,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
     if(!got.ok){claim.release();claim=null;throw Error('shadow account is already owned');}
     const selection={fleet:path.basename(fleetFile,'.json'),stateFile:fleetFile,
       entries:[{id:config.agent,...entry}]};
-    configureLabEnvironment(selection,process.env,{scope:`replay-${process.pid}`});
-    process.env.M59_SURVIVAL_DECISION_DIR=path.join(process.env.M59_LAB_RUNTIME_DIR,'decisions');
-    process.env.M59_REPLAY_DIR=path.join(process.env.M59_LAB_RUNTIME_DIR,'replays');
+    runtimeEnvironment=configureReplayEnvironment(selection);
     labState=installLabGameGlobals(selection);
   }
   async function stopTrial() {
@@ -126,6 +139,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       await acquire();lap('ownership_and_attestation_ms');
       await stopTrial();lap('previous_cleanup_ms');
       await resetNativeWorld();lap('native_restore_ms');trialSequence++;
+      const runtime_environment=replayEnvironmentReceipt(runtimeEnvironment,trialSequence,operationSequence);
       const {Session}=await import('./m59-game.mjs');
       const {autopilotFor}=await import('./m59-autopilot.mjs');
       const skills=await import('./m59-skills.mjs');
@@ -156,7 +170,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
           mode:'explicit shadow loadout approximation'};
         assumptions.push('victim inventory/equipment/abilities use the selected shadow account; captured state differs');
       }
-      if(!player_state.ok)return {outcome:'invalid_player_state',player_state,decisions,assumptions};
+      if(!player_state.ok)return {outcome:'invalid_player_state',player_state,decisions,assumptions,runtime_environment};
       players=await createReplayPlayers({scene:input,options:playerOptions,env,attestation:serverAttestation,
         leases,labState,Session,nativeSnapshot:!!config.native_snapshot});
       if(players)assumptions.push(...playerPlan.assumptions);
@@ -179,7 +193,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const {scene:prepared,bindings,loaded}=staged;
       for(const actor of prepared.actors)if(actor.vitals?.hp?.how==='estimated')assumedHealth.set(actor.key??actor.name,actor.vitals.hp.v);
       assumptions.push(...loaded.preparation.assumptions);
-      if(!loaded.ok)return {outcome:'invalid_load',loaded,decisions,assumptions};
+      if(!loaded.ok)return {outcome:'invalid_load',loaded,decisions,assumptions,runtime_environment};
       await s.pacer.submit('read',()=>s.client.roomContents());
       await s.pacer.submit('read',()=>s.client.stats(1));await sleep(250);
       if(victimLoadout){s.client.abilities.clear();await (await import('./m59-abilities.mjs')).readLive(s);
@@ -215,7 +229,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       }
       await players?.verifyGuilds();
       const release=await staged.start();
-      if(!release.ok)return {outcome:'invalid_release',loaded,release,decisions,assumptions};
+      if(!release.ok)return {outcome:'invalid_release',loaded,release,decisions,assumptions,runtime_environment};
       players?.start({target:s,horizonMs,at:release.at});
       await onStarted?.(s,k);
       lap('controller_restore_and_start_ms');
@@ -268,7 +282,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       const result={outcome: error?'error':outcome,error,elapsed_ms:elapsed,death_room:outcome==='died'?lastRoom:null,
         execution_provenance:structuredClone(executionProvenance),source_scene_provenance:structuredClone(scene.provenance??null),
         final_hp:hp,loaded,release,player_state,controller_restore,replayed_journey,
-        decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,
+        decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,runtime_environment,
         ...(players?{pvp:players.snapshot(),victim_hp_trace:hpTrace,
           victim_messages:victimMessages}:{}),
         server_attestation:serverAttestation,native_save:nativeSave?{stamp:nativeSave.stamp,files:nativeSave.files}:null,
