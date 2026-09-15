@@ -7,9 +7,10 @@ import {readReplay} from './m59-death-replay.mjs';
 import {attributeDeath} from './m59-death-attribution.mjs';
 import {replayPlayerPlan} from './m59-replay-players.mjs';
 import {simulateScene} from './m59-scene-simulator.mjs';
+import {readLoadoutBindings} from './m59-scene-loadout.mjs';
 
 export async function planPostMortemSimulation({file,frameId=null,attackers=null,profile,
-  approximatePlayer=false}={}) {
+  approximatePlayer=false,loadouts={},requireLoadouts=false,sequences={}}={}) {
   if(!file)throw Error('an explicit postmortem or replay bundle file is required');
   file=path.resolve(file);
   const record=JSON.parse(await readFile(file,'utf8'));
@@ -25,12 +26,14 @@ export async function planPostMortemSimulation({file,frameId=null,attackers=null
     else throw Error('specify attackers by exact captured player name; no confirmed player killer can be selected automatically');
   }
   if(!Array.isArray(attackers)||!attackers.length)throw Error('select at least one captured attacker');
-  const options={enabled:true,attackers,...(profile?{profile}:{}),allow_approximate_player:approximatePlayer};
+  if(typeof loadouts==='string')loadouts=await readLoadoutBindings(loadouts);
+  const options={enabled:true,attackers,...(profile?{profile}:{}),allow_approximate_player:approximatePlayer,
+    loadouts,require_loadouts:requireLoadouts,sequences};
   const living=f=>f.scene?.actors?.find(a=>a.mine)?.vitals?.hp?.v?.value>0;
   const candidate=frameId?bundle.frames.find(f=>f.id===frameId):[...bundle.frames].reverse().find(f=>{
     if(f.at>=bundle.death.at)return false;
     if(!living(f))return false;
-    try{replayPlayerPlan(f.scene,options);return true;}catch{return false;}
+    try{replayPlayerPlan(f.scene,{enabled:true,attackers});return true;}catch{return false;}
   });
   if(!candidate||!living(candidate))throw Error('no living checkpoint contains the selected attackers; choose a different frame or recording');
   const plan=replayPlayerPlan(candidate.scene,options);
@@ -44,7 +47,7 @@ export async function planPostMortemSimulation({file,frameId=null,attackers=null
 export function annotatePvpTrial(row) {
   if(!row.pvp)return row;
   const actors=row.pvp.actors??[];
-  const target=actors.find(a=>a.behavior==='melee')?.combat?.target;
+  const target=actors.find(a=>a.behavior==='melee'||a.behavior==='sequence')?.combat?.target;
   if(row.outcome==='died') {
     const deathAt=row.victim_hp_trace?.find(h=>h.hp===0)?.at;
     const attribution=attributeDeath({character:target,at:deathAt,text:row.victim_messages,
@@ -64,8 +67,9 @@ export function annotatePvpTrial(row) {
   return row;
 }
 export async function simulatePostMortem({file,configFile,frameId=null,attackers=null,profile,
-  approximatePlayer=false,trials=3,horizonMs=15000,reload={},onTrial=()=>{},adapterFactory}={}) {
-  const plan=await planPostMortemSimulation({file,frameId,attackers,profile,approximatePlayer});
+  approximatePlayer=false,loadouts={},requireLoadouts=false,sequences={},
+  trials=3,horizonMs=15000,reload={},onTrial=()=>{},adapterFactory}={}) {
+  const plan=await planPostMortemSimulation({file,frameId,attackers,profile,approximatePlayer,loadouts,requireLoadouts,sequences});
   let report;
   try {
     report=await simulateScene({scene:plan.scene,configFile,trials,horizonMs,
@@ -82,6 +86,8 @@ export async function simulatePostMortem({file,configFile,frameId=null,attackers
           survived_window:rows.filter(r=>r.outcome==='survived_window').length,
           recovered:rows.filter(r=>r.outcome==='recovered').length,
           trials_with_attacks:rows.filter(r=>(r.pvp?.activity?.attacks??0)>0).length,
+          trials_with_casts:rows.filter(r=>(r.pvp?.activity?.casts??0)>0).length,
+          trials_with_cast_failures:rows.filter(r=>(r.pvp?.activity?.cast_failures??0)>0).length,
           trials_with_attack_refusals:rows.filter(r=>(r.pvp?.activity?.attack_refusals??0)>0).length,
           trials_with_hp_loss:rows.filter(r=>r.victim_observed_hp_loss>0).length,
           confirmed_standin_kills:rows.filter(r=>r.simulated_death?.captured_player!=null).length,
@@ -97,10 +103,11 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   let report;
   const out=arg('--out',file?file+'.pvp-'+Date.now()+'.json':null);
   try {
-    if(!['plan','run'].includes(action))throw Error('usage: m59-postmortem-sim.mjs plan|run POSTMORTEM_OR_BUNDLE --config PRIVATE_CONFIG [--attacker NAME] [--frame ID] [--approximate-player] [--no-monsters] [--lab-scenery] [--trials N] [--horizon-ms N] [--out REPORT]');
+    if(!['plan','run'].includes(action))throw Error('usage: m59-postmortem-sim.mjs plan|run POSTMORTEM_OR_BUNDLE --config PRIVATE_CONFIG [--attacker NAME] [--frame ID] [--loadouts MAP.json] [--require-loadouts] [--approximate-player] [--no-monsters] [--lab-scenery] [--trials N] [--horizon-ms N] [--out REPORT]');
     const options={file,frameId:arg('--frame'),attackers:args.flatMap((a,i)=>a==='--attacker'?[args[i+1]]:[])};
     if(!options.attackers.length)options.attackers=null;
     options.approximatePlayer=args.includes('--approximate-player');
+    options.loadouts=arg('--loadouts')??{};options.requireLoadouts=args.includes('--require-loadouts');
     if(action==='plan') {
       const {scene,...plan}=await planPostMortemSimulation(options);console.log(JSON.stringify(plan,null,2));
     }else {

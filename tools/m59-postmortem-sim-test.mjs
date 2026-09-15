@@ -51,17 +51,23 @@ try {
   assert.equal(cli.status,1);assert.match(cli.stderr,/absent-config/);
   assert.doesNotMatch(cli.stderr,/unsettled top-level await/,'postmortem import must not deadlock the simulator CLI');
   const calls=[];let closed=false;
+  const loadout={schema:'m59-player-loadout/v1',complete:true,items:[],skills:[43099],spells:[]};
   const result=await simulatePostMortem({file,trials:2,approximatePlayer:true,reload:{noMonsters:true},
+    loadouts:{Morpheus:loadout},requireLoadouts:true,sequences:{Morpheus:[{do:'attack',swings:2}]},
     adapterFactory:async()=>({run:async req=>{
       calls.push(structuredClone(req));const attack=req.pvp.attackers.length>0;
       req.scene.actors.length=0;
       return {outcome:attack?'died':'survived_window',loaded:{ok:true,landed:{ok:true}},
-        pvp:{modeled:true,activity:{attacks:attack?2:0},cleanup:{complete:true}}};
+        pvp:{modeled:true,activity:{attacks:attack?2:0,casts:attack?1:0,cast_failures:attack?1:0},cleanup:{complete:true}}};
     },close:async()=>{closed=true;}})});
   assert.equal(closed,true);assert.equal(result.completed,true);
   assert.deepEqual(calls.map(c=>c.pvp.attackers.length),[1,0,1,0]);
   assert.ok(calls.every(c=>c.scene.actors.length===2&&c.pvp.allow_approximate_player&&c.variant.reload.noMonsters));
+  for(const c of calls){assert.deepEqual(c.pvp.loadouts,{Morpheus:loadout});assert.equal(c.pvp.require_loadouts,true);
+    assert.deepEqual(c.pvp.sequences,{Morpheus:[{do:'attack',swings:2}]});}
   assert.equal(result.comparison[0].deaths,2);assert.equal(result.comparison[1].survived_window,2);
+  assert.equal(result.comparison[0].trials_with_casts,2);assert.equal(result.comparison[1].trials_with_casts,0);
+  assert.equal(result.comparison[0].trials_with_cast_failures,2);
   assert.equal(result.validation.baseline_reproduction_verified,false);
   const strict=baselineVerdict({bundle:payload,frame:payload.frames[1],result:result.runs[0],expected:[]});
   assert.equal(strict.valid,false);assert.ok(strict.reasons.some(r=>r.includes('modeled')));

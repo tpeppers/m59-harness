@@ -57,6 +57,7 @@ export async function runSimulationFile(file,{onTrial=()=>{}}={}) {
     if(config.postMortem) {
       const {simulatePostMortem}=await import('./m59-postmortem-sim.mjs');
       report=await simulatePostMortem({...config,file:path.resolve(base,config.postMortem),
+        loadouts:typeof config.loadouts==='string'?path.resolve(base,config.loadouts):config.loadouts,
         configFile:path.resolve(base,config.configFile),onTrial});
     }else report=await simulateScene({...config,scene:path.resolve(base,config.scene),
       configFile:path.resolve(base,config.configFile),onTrial});

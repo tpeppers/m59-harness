@@ -19,6 +19,12 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). All of these are safe to run any time;
 
 ## Saved-scene simulator
 
+`node tools/m59-scene-loadout-test.mjs` uses an offline native-admin fixture to
+check portable inventory/equipment/ability capture, exact restoration/readback,
+enchantment timer staging, strict mappings, checksums and refusal cleanup.
+`node tools/m59-postmortem-sim-test.mjs` also checks that paired attack/idle cases
+retain identical loadouts and combat sequences, including cast outcomes.
+
 `node tools/m59-scene-simulator-test.mjs` covers the fast native-reset cache,
 container/endpoint identity, installed save hashes, completion acknowledgements,
 response-driven lab ability reads and the shared FleetScript/FleetScratch trial

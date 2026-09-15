@@ -6,6 +6,7 @@ import {executeLoad,assertLab,resolveRoom} from './m59-scene.mjs';
 import {readAdminRoom,readAdminObjects,compareScenePlacement} from './m59-scene-admin.mjs';
 import {sceneWithOptions} from './m59-scene-options.mjs';
 import {nativeMonsterPlan,enrichHeldScene} from './m59-scene-native-state.mjs';
+import {restorePlayerLoadout,verifyPlayerLoadout,capturePlayerLoadout,loadoutForActor,armPlayerLoadoutTimers} from './m59-scene-loadout.mjs';
 
 const creatureClasses=()=>JSON.parse(readFileSync(new URL('../substrate/m59-spawns.json',import.meta.url))).creatures;
 const className=s=>typeof s==='string'&&/^[A-Za-z][A-Za-z0-9_]*$/.test(s);
@@ -108,6 +109,7 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
       if(rejections(result).length)throw Error('extra monster removal was rejected');
       changes.push({kind:'remove_extra_monsters',actors:extras.map(o=>({class:o.class,id_at_setup:o.id}))});
     }
+    const loadouts=[],loadoutHandles=[];
     const loaded=await executeLoad(scene,{pause:false,env,dmFn,resolveActor:a=>bindings.get(a.key??a.name),
       verify:async(sc,map)=>{
         const commands=sc.actors.flatMap(a=>nativeMonsterPlan(a,map.get(a.key??a.name),map));
@@ -117,7 +119,13 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
         }
         return compareScenePlacement(sc,map,await readAdminRoom(sc.room.num,{env,dmFn}));
       }});
-    loaded.preparation={native_hold:native,changes,assumptions,reload:scene.reload};
+    // Equip against the restored character's stats and room, with monsters held.
+    if(loaded.ok)for(const a of scene.actors.filter(a=>a.kind==='player'&&a.loadout)) {
+      const {armTimers,...verified}=await restorePlayerLoadout(bindings.get(a.key??a.name),loadoutForActor(a),{env,dmFn});
+      loadoutHandles.push(armTimers);
+      loadouts.push({actor:a.key??a.name,...verified});
+    }
+    loaded.preparation={native_hold:native,changes,assumptions,reload:scene.reload,loadouts};
     const start=async()=>{
       if(started)throw Error('scene has already started');
       if(!loaded.ok)throw Error('refusing to start an unverified scene');
@@ -125,16 +133,22 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
       const actual=await readAdminRoom(scene.room.num,{env,dmFn});
       const final=compareScenePlacement(scene,bindings,actual);
       if(!final.ok)throw Error('scene changed while held: '+JSON.stringify(final.mismatches));
+      for(const a of scene.actors.filter(a=>a.kind==='player'&&a.loadout)) {
+        const checked=await verifyPlayerLoadout(bindings.get(a.key??a.name),loadoutForActor(a),{env,dmFn,timersPaused:true});
+        if(!checked.ok)throw Error('loadout changed before scene start: '+a.name);
+      }
       const commands=native?[sendMsg(actual.room_object,'SceneStartRoom',{fresh:['INT',1]})]:
         scene.actors.filter(a=>a.kind==='monster').flatMap(a=>[
           sendMsg(bindings.get(a.key??a.name),'EnterStateWait',{delay:['INT',1]}),
           sendMsg(bindings.get(a.key??a.name),'StartBasicTimers')]);
       // A no-monster experiment must remain free of automatic spawns during its run.
       if(generation!=null&&!options.noMonsters)commands.push(sendMsg(actual.room_object,'SetMonsterGeneration',{bValue:['INT',generation]}));
+      const loadout_timers=[];
+      for(const arm of loadoutHandles)loadout_timers.push(await arm());
       const at=Date.now(),response=await dmFn(commands,{env});
       if(rejections(response).length)throw Error('scene release rejected');
       started=true;
-      return {ok:true,at,completed_at:Date.now(),atomic_monster_release:native,
+      return {ok:true,at,completed_at:Date.now(),atomic_monster_release:native,loadout_timers,
         note:native?'one server message releases all room monsters':'one admin batch; stock server cannot certify an atomic release'};
     };
     const cleanup=async()=>{
@@ -144,7 +158,7 @@ export async function prepareScene(input,{env=process.env,resolveActor,classes={
       generation_before:generation??null,prepared_at:Date.now()};
     const snapshot=async()=>{
       if(started)throw Error('capture the held checkpoint before starting');
-      return enrichHeldScene(scene,bindings,await readAdminRoom(scene.room.num,{env,dmFn}));
+      return enrichPlayerLoadouts(enrichHeldScene(scene,bindings,await readAdminRoom(scene.room.num,{env,dmFn})),bindings,{env,dmFn,pausedLoadouts:loadouts});
     };
     return {scene,bindings,loaded,start,cleanup,receipt,snapshot};
   }catch(e) {
@@ -174,15 +188,31 @@ async function resolvePreparedScene(receipt,{env=process.env}={}) {
 }
 export async function capturePreparedScene(receipt,options={}) {
   const {scene,bindings,actual}=await resolvePreparedScene(receipt,options);
-  return enrichHeldScene(scene,bindings,actual);
+  return enrichPlayerLoadouts(enrichHeldScene(scene,bindings,actual),bindings,{...options,pausedLoadouts:receipt.loaded.preparation?.loadouts});
+}
+async function enrichPlayerLoadouts(scene,bindings,options) {
+  for(const a of scene.actors.filter(a=>a.kind==='player')) {
+    const key=a.key??a.name,id=bindings.get(key);
+    if(options.pausedLoadouts?.some(x=>x.actor===key)) {
+      const spec=loadoutForActor(a),checked=await verifyPlayerLoadout(id,spec,{...options,timersPaused:true});
+      if(!checked.ok)throw Error('held loadout changed before capture: '+a.name);
+      // Native placeholders are deliberate: retain the supplied remaining timer
+      // durations instead of accidentally exporting a permanent enchantment.
+      a.loadout={v:structuredClone(spec),how:'estimated',restoration:checked};
+    }else a.loadout={v:await capturePlayerLoadout(id,options),how:'observed'};
+  }
+  return scene;
 }
 export async function releasePreparedScene(receipt,{env=process.env}={}) {
   const {scene,actual,bindings,native}=await resolvePreparedScene(receipt,{env});
+  const loadout_timers=[];
+  for(const a of scene.actors.filter(a=>a.kind==='player'&&a.loadout))
+    loadout_timers.push(await armPlayerLoadoutTimers(bindings.get(a.key??a.name),loadoutForActor(a),{env}));
   const cmds=native?[sendMsg(actual.room_object,'SceneStartRoom',{fresh:['INT',1]})]:
     scene.actors.filter(a=>a.kind==='monster').flatMap(a=>[
       sendMsg(bindings.get(a.key??a.name),'EnterStateWait',{delay:['INT',1]}),sendMsg(bindings.get(a.key??a.name),'StartBasicTimers')]);
   if(receipt.generation_before!=null&&!scene.reload?.options?.noMonsters)
     cmds.push(sendMsg(actual.room_object,'SetMonsterGeneration',{bValue:['INT',receipt.generation_before]}));
   const at=Date.now(),out=await dm(cmds,{env});
-  return {ok:rejections(out).length===0,at,atomic_monster_release:native};
+  return {ok:rejections(out).length===0,at,atomic_monster_release:native,loadout_timers};
 }

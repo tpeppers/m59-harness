@@ -197,7 +197,7 @@ node tools/m59-postmortem-sim.mjs run BUNDLE.json --config PRIVATE_CONFIG.json -
 
 Each pair runs the captured victim controller against (1) the selected players attacking and (2) the same player bodies standing idle. Every case reloads independently. Attackers use ordinary, paced CombatMode melee packets, pursue only within the captured room, and stop below 5% health or at the time limit. They start after the shared room-release barrier. Account creation uses a validated ordinary character request, verifies all six attributes, recalculates normal server PvP eligibility after stat restoration, and verifies account deletion after each trial or handled error. Linux scene images must advertise `org.openai.m59.scene-accounts.delete=v1`; rebuild with `m59-scene-server-build.mjs` if missing. The owned isolated container at 17959/17998 is required for automatic stand-ins; the separate shadow server and production endpoints are refused.
 
-Other players' equipment, attributes and actual human inputs are usually unknown. The initial model is **unarmed melee**, with the `melee` creation preset, 100 HP, 50 mana, 200 vigor and 99 punch. Known captured vitals/stat fields take precedence; unknown fields use the profile. No spells, weapons, guild relationships or historical inputs are invented. A JSON/API `profile` can change `stats` (creation preset), `health`, `mana`, `vigor`, and `unarmed`. Keep the same profile across compared cases. This model is useful for reproducing failures, but it cannot certify the historical fight's difficulty.
+Other players' equipment, attributes and actual human inputs are usually unknown. Without a supplied or captured native loadout, the model is **unarmed melee**, with the `melee` creation preset, 100 HP, 50 mana, 200 vigor and 99 punch. Known captured vitals/stat fields take precedence; unknown fields use the profile. A JSON/API `profile` can change `stats` (creation preset), `health`, `mana`, `vigor`, and `unarmed`. An explicit loadout replaces inventory/equipment and the entire skill/spell lists, including the creation profile's punch ability. Keep the same profile and loadouts across compared cases. This model cannot certify the historical fight's difficulty.
 
 Strict loading is the default. Optional approximations are explicit:
 
@@ -229,3 +229,56 @@ Reports retain temporary-to-captured player identities, source/save/image hashes
 Private account journals live under the selected lab runtime's `pvp/` directory. Passwords exist only in memory and are excluded from reports/journals. A hard process kill or server outage can prevent cleanup; inspect the recorded exact temporary account identities before recovery, and never delete an account based on a name prefix alone. Normal completion and handled setup failures require confirmed absence after deletion.
 
 See [the live validation report](postmortem-pvp-simulation-2026-09-14.md) for the first reproduced PvP deaths, assumptions and timings.
+
+### Exact supplied loadouts
+
+The shared scene loader restores `m59-player-loadout/v1` specifications for both victims and other players. It recreates each item by its native class, restores all captured integer/boolean item properties (including condition, stack quantities, charges, damage/hit/defense modifiers and appearance flags), item attributes and equipped state, and installs the complete skill/spell lists. Skills retain their encoded proficiency and used/unused state. Native school totals, carried weight/bulk and lighting are recalculated. Normal equipment eligibility still applies; an impossible or incomplete specification stops the load.
+
+Capture an existing player from the owned isolated scene container:
+
+```text
+node tools/m59-scene-loadout.mjs capture SHADOW_PLAYER --out substrate/scenes/attacker-loadout.json
+```
+
+Capture reads twice and refuses inventory/ability changes between reads. The file carries a checksum and source character/time/image/server commit. Native object/list/timer IDs are not exported. `capture-held` and the prepared scene's `snapshot()` also include player loadouts, so ordinary saved scenes and postmortem simulations use the same restoration code.
+
+Create a private name-to-file map, with paths relative to the map file:
+
+```json
+{
+  "Morpheus": "attacker-loadout.json",
+  "Gonzo": "victim-loadout.json"
+}
+```
+
+```text
+node tools/m59-postmortem-sim.mjs plan POSTMORTEM.json --loadouts substrate/scenes/loadouts.json --require-loadouts
+node tools/m59-postmortem-sim.mjs run POSTMORTEM.json --config PRIVATE_CONFIG.json --loadouts substrate/scenes/loadouts.json --require-loadouts --out REPORT.json
+```
+
+Names or scene actor keys must match exactly, ignoring case; absent or ambiguous mappings are refused. `--require-loadouts` requires a complete loadout for every selected attacker. Unselected bodies can remain unarmed. An actor's embedded `loadout` is used automatically; an explicit mapping overrides it. A victim loadout requires the private config's `native_snapshot` so each trial restores the existing shadow account before applying the next case.
+
+FleetScript exports `capturePlayerLoadout`, `readLoadoutFile`, `readLoadoutBindings`, and `writeLoadoutFile`. `planPostMortemSimulation` and `simulatePostMortem` accept `loadouts` as a map of specifications or a map-file path, and `requireLoadouts: true`. FleetScratch's simulation JSON accepts the same options, with file paths relative to that JSON:
+
+```json
+{
+  "postMortem": "../postmortems/DEATH.json",
+  "configFile": "replay-config.json",
+  "loadouts": "loadouts.json",
+  "requireLoadouts": true,
+  "sequences": {
+    "Morpheus": [{"do": "cast", "spell": "fireball"}, {"do": "attack", "swings": 2}]
+  },
+  "trials": 3,
+  "horizonMs": 10000,
+  "out": "equipped-pvp-report.json"
+}
+```
+
+An explicit sequence uses ordinary CombatMode casts/attacks and the restored abilities, mana and reagents. Owning a spell does not automatically select it. Without a sequence, the stand-in uses its equipped weapon for melee. The idle control retains the same loadouts while sending no combat inputs. Reports distinguish melee packets, casts, observed cast failures, damage and server-confirmed kills.
+
+Timed item enchantments are saved as remaining milliseconds. They stay paused during setup, including held-scene re-capture, and are armed just before room release with the native `AttributeTimer` callback. Reports show requested/remaining duration and arming timestamps; this is a measured small start skew, not a claim of simultaneous item/monster timer release. Full loadouts are checked after restoration and again immediately before start. Receipts include a full specification hash, normalized expected/actual state hashes and loadout provenance.
+
+**Exact here means matching the supplied specification.** Old production recordings do not expose other players' hidden inventory, modifiers or abilities, so this cannot retroactively discover Morpheus's loadout. Base attributes, vitals, guild relationships, player buffs/debuffs, RNG and human input timing remain separate scene/native-save concerns. Item state referencing external objects, strings, nested structures or unsupported timers is refused instead of replaced with plain gear. Very short timers that expire before verification also refuse the start. Use a native server checkpoint for state the portable schema cannot represent. `historical_loadout_verified` remains false, and exploratory death evidence remains usable.
+
+See [the loadout validation report](postmortem-loadouts-2026-09-14.md) for armed and spell-casting live trials.

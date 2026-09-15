@@ -6,12 +6,15 @@ import path from 'node:path';
 import {dm,setProp,sendMsg,skillCmds,rejections} from './m59-dm.mjs';
 import {readAdminObjects} from './m59-scene-admin.mjs';
 import {planCharacter,STAT_PRESETS} from './m59-newchar.mjs';
+import {loadoutForActor,validateLoadoutBindings} from './m59-scene-loadout.mjs';
+import {readLive} from './m59-abilities.mjs';
+import {normalizeCombatOrder} from './m59-combat-mode.mjs';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const norm=x=>String(x??'').trim().toLowerCase();
 export function replayPlayerPlan(scene,options={}) {
   if(options.enabled!==true)return {enabled:false,actors:[]};
-  const allowed=new Set(['enabled','attackers','profile','allow_approximate_player']);
+  const allowed=new Set(['enabled','attackers','profile','allow_approximate_player','loadouts','require_loadouts','sequences']);
   if(Object.keys(options).some(k=>!allowed.has(k)))throw Error('unknown PvP simulation option');
   const players=(scene.actors??[]).filter(a=>a.kind==='player'&&!a.mine);
   if(players.length>32)throw Error('PvP simulation supports at most 32 other player bodies');
@@ -20,16 +23,33 @@ export function replayPlayerPlan(scene,options={}) {
   const matches=attackers.map(n=>players.filter(a=>norm(a.key)===norm(n)||norm(a.name)===norm(n)));
   if(matches.some(m=>m.length!==1))throw Error('each PvP attacker must identify exactly one captured player');
   const chosen=new Set(matches.map(m=>m[0].key??m[0].name));
+  validateLoadoutBindings(scene,options.loadouts??{});
+  const sequences=options.sequences??{};
+  if(!sequences||typeof sequences!=='object'||Array.isArray(sequences))throw Error('sequences must map captured players to combat sequences');
+  for(const key of Object.keys(sequences))if(players.filter(a=>[a.key,a.name].some(n=>norm(n)===norm(key))).length!==1)
+    throw Error('combat sequence must identify exactly one other captured player: '+key);
+  const actors=players.map(a=>{
+    const loadout=loadoutForActor(a,options.loadouts),attacking=chosen.has(a.key??a.name);
+    if(attacking&&options.require_loadouts&&!loadout)throw Error('exact loadout is missing for '+a.name);
+    const matches=Object.entries(sequences).filter(([key])=>[a.key,a.name].some(n=>norm(n)===norm(key)));
+    if(matches.length>1)throw Error('ambiguous combat sequence for '+a.name);
+    const sequence=matches[0]?.[1];
+    if(matches.length) {
+      if(!Array.isArray(sequence)||!sequence.length)throw Error('combat sequence must be a nonempty array');
+      normalizeCombatOrder({action:'kill',target:'replay-victim',sequence});
+    }
+    return {key:a.key??a.name,name:a.name,behavior:attacking?(sequence?'sequence':'melee'):'idle',position:a.at?.v??null,
+      ...(loadout?{loadout}:{}),...(sequence?{sequence}:{})};
+  });
   const profile={stats:'melee',health:100,mana:50,vigor:200,unarmed:99,...options.profile};
   if(Object.keys(profile).some(k=>!['stats','health','mana','vigor','unarmed'].includes(k)))throw Error('unknown PvP player profile option');
   if(typeof profile.stats!=='string'||!STAT_PRESETS[profile.stats])throw Error('PvP stats must name a character-creation preset');
   for(const [k,max] of [['health',151],['mana',200],['vigor',200],['unarmed',99]])
     if(!Number.isInteger(profile[k])||profile[k]<(k==='health'?1:0)||profile[k]>max)throw Error('invalid PvP profile '+k);
-  return {enabled:true,profile,actors:players.map(a=>({key:a.key??a.name,name:a.name,
-    behavior:chosen.has(a.key??a.name)?'melee':'idle',position:a.at?.v??null})),
+  return {enabled:true,profile,actors,
     allow_approximate_player:options.allow_approximate_player===true,
-    assumptions:['Other-player stats, unarmed skill and equipment are modeled unless captured; temporary players are unarmed.',
-      'Melee stand-ins use the harness combat controller in the captured room; historical human inputs are unknown.']};
+    assumptions:['Other-player stats are modeled unless captured. Supplied loadouts are verified; unmapped players use the unarmed profile.',
+      'Stand-ins use the configured combat sequence (melee by default); historical human inputs are unknown.']};
 }
 export function assertTemporaryPlayerLab(env,attestation) {
   if(env?.M59_ADMIN_HOST!=='127.0.0.1'||Number(env?.M59_ADMIN_PORT)!==17998||
@@ -77,6 +97,7 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
         enabled:o.properties.piflags==null?null:(o.properties.piflags.value&0x400)!==0}));
       await Promise.all(actors.map(async a=>{
         const c=a.s.client,at=Date.now();
+        if(a.spec.loadout){c.abilities.clear();await readLive(a.s);await a.s.pacer.submit('read',()=>c.requestInventory());}
         await a.s.pacer.submit('read',()=>c.roomContents());
         await a.s.pacer.submit('read',()=>c.stats(1));
         for(let i=0;i<30&&(!c.self||a.s.world?.room?.num!==scene.room.num);i++)await sleep(20);
@@ -92,7 +113,8 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
         a.report.started_at=Date.now();a.report.start_delay_ms=a.report.started_at-at;
         if(a.spec.behavior==='idle'||horizonMs===0)continue;
         a.s.combat.issue({action:'kill',target:target.client.me.name,select_map:scene.room.num,
-          ttl_ms:Math.max(1000,Math.min(horizonMs,1800000)),stop_below:0.05});
+          ttl_ms:Math.max(1000,Math.min(horizonMs,1800000)),stop_below:0.05,
+          ...(a.spec.sequence?{sequence:a.spec.sequence}:{})});
       }
     },
     snapshot() {
@@ -104,6 +126,8 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
       }
       receipt.activity={attacks:actors.reduce((n,a)=>n+(a.report.combat?.attacks??0),0),
         casts:actors.reduce((n,a)=>n+(a.report.combat?.casts??0),0),
+        cast_failures:actors.flatMap(a=>a.report.messages??[]).filter(e=>
+          /unsuccessful in casting|cannot cast|can't cast|unable to cast|not enough.*mana|do not have.*reagent/i.test(e.text)).length,
         attack_refusals:actors.flatMap(a=>a.report.messages??[]).filter(e=>
           /not yet experienced|may not attack|cannot attack|can't attack|not allowed|out of range/i.test(e.text)).length};
       return receipt;
@@ -177,8 +201,9 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
       if(!s.live)throw Error('temporary player did not reconnect into the game');
       const punch=s.client.abilitiesKnown().skills.find(a=>norm(a.name)==='punch')?.ability??0;
       if(punch!==plan.profile.unarmed)throw Error('temporary player punch skill did not verify');
-      report.verified_unarmed=punch;
+      report.creation_unarmed=punch;
       const actor=scene.actors.find(x=>(x.key??x.name)===spec.key);
+      if(spec.loadout)actor.loadout=spec.loadout;
       actor.stats??={v:creation.stats,how:'estimated'};
       actor.vitals??={};
       for(const [k,v] of [['hp',plan.profile.health],['mana',plan.profile.mana],['vigor',plan.profile.vigor]])

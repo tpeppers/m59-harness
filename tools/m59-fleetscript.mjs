@@ -326,6 +326,7 @@ const TRANSPORT_FAILURE = /econnreset|socket hang up|fetch failed|other side clo
 // Explicit lab simulation entry point; never runs as a side effect of compiling steps.
 export {simulateScene} from './m59-scene-simulator.mjs';
 export {simulatePostMortem,planPostMortemSimulation} from './m59-postmortem-sim.mjs';
+export {capturePlayerLoadout,readLoadoutFile,readLoadoutBindings,writeLoadoutFile} from './m59-scene-loadout.mjs';
 
 export const isTransportFailure = (e) =>
   !!e && e.name !== 'TimeoutError' && e.name !== 'AbortError' &&

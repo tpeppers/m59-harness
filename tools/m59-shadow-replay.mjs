@@ -17,6 +17,7 @@ import {attachSurvivalDecisions,currentSurvivalDecision,restoreSurvivalDecisionF
 import {installReplayVariant,REPLAY_STRATEGIES} from './m59-replay-variants.mjs';
 import {resetNativeScene,inspectSceneContainer} from './m59-scene-reset.mjs';
 import {createReplayPlayers,replayPlayerPlan} from './m59-replay-players.mjs';
+import {loadoutForActor} from './m59-scene-loadout.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -131,7 +132,12 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       attachSurvivalDecisions(s,{epoch:scene.provenance?.harness?.commit??null,
         onCancel:(why,d)=>k.replacementSurvivalChoice(why,d),record:r=>{decisions.push(r);s.replayRecorder?.decision(r);}});
       const input=structuredClone(scene);
+      const victim=input.actors.find(a=>a.mine),victimLoadout=loadoutForActor(victim,playerOptions.loadouts);
+      if(victimLoadout&&!config.native_snapshot)throw Error('restoring the replay victim loadout requires a native snapshot for trial reset');
+      if(victimLoadout)victim.loadout=victimLoadout;
       let player_state=comparePlayerState(input.actors.find(a=>a.mine),captureCachedScene(s,k).actors.find(a=>a.mine));
+      if(victimLoadout)player_state={ok:true,faithful:false,original_check:player_state,
+        mode:'explicit supplied loadout; shared staging must verify before start'};
       if(!player_state.ok&&playerPlan.enabled&&playerPlan.allow_approximate_player) {
         player_state={ok:true,faithful:false,original_check:player_state,
           mode:'explicit shadow loadout approximation'};
@@ -163,6 +169,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       if(!loaded.ok)return {outcome:'invalid_load',loaded,decisions,assumptions};
       await s.pacer.submit('read',()=>s.client.roomContents());
       await s.pacer.submit('read',()=>s.client.stats(1));await sleep(250);
+      if(victimLoadout){s.client.abilities.clear();await (await import('./m59-abilities.mjs')).readLive(s);
+        await s.pacer.submit('read',()=>s.client.requestInventory());}
       await players?.sync({target:s});
       lap('client_scene_sync_ms');
       // These are known omissions, never silently promoted into an exact server save.
