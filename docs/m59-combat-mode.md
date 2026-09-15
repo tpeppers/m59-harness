@@ -38,7 +38,7 @@ Disappearance releases it, restores PvP safety when the order lowered it, and
 allows normal farming to resume without another command. Each keeper acts on
 its own current player visibility; an unseen object ID is never attacked blindly.
 
-Low health ends the current encounter but retains the watch. Normal survival
+Until the bot receives a confirmed player attack, low health ends the current encounter but retains the watch. Normal survival
 and recovery continue, and the watch rearms after health reaches the greater of
 80% and ten percentage points above the current survival floor, capped at 99%.
 An already-hurt bot can accept a watch without fighting. Paused, held and
@@ -51,6 +51,41 @@ character. It survives keeper restart and reconnect. This stores no account
 credentials. Explicit stop is saved too. A server refusal or impossible approach
 blocks the current sighting rather than repeatedly interrupting farming; a new
 appearance can be tried again.
+
+### PvP survival recovery
+
+A confirmed incoming player combat message, including a block, dodge, parry or
+avoid, immediately switches the bot to `pvp_return_fire`. Exact player identity
+comes from the server's player objects/online list; nearby players, outgoing
+attacks and quoted chat alone do not establish an assailant.
+
+This mode preempts farming, travel, shopping, shelter and healing, including
+queued packets and a previously started recovery's raw reconnect. It repeatedly
+attacks the assailant regardless of the ordinary HP floor or farming eligibility.
+It keeps attacking in range even under a ground effect; approach movement still
+uses collision and hazard checks. A server refusal or blocked approach is logged
+and retried, without returning control to ordinary recovery.
+
+Continuous return fire is the default; low HP does not trigger an automatic
+logout. If a connection drops, the mode retains hostility and counters in the
+keeper process, rebinds the exact player names after login, and resumes attacking
+at the remaining HP. Reconnecting never certifies a safe healing location. The
+mode ends on death, explicit combat stop/connection suspension, changed character
+identity, or when **every known assailant is absent and at least 30 seconds have
+passed since the last incoming player attack**. An assailant still present keeps
+the mode active beyond 30 seconds. Another known assailant becomes the target
+when the selected one leaves. It does not chase players across room boundaries.
+
+`combat.pvp_survival`, postmortems and replay scene controllers retain the
+decision ID, chosen time, last attack time/age, known assailants, attempted attack
+packets, server-confirmed incoming/outgoing hits and defenses, reconnect count,
+blocked reason and ending outcome. Counts belong to the PvP episode, starting
+with confirmed incoming hostility; earlier proactive attacks remain in combat
+recordings. Hit counts do not estimate damage dealt. The last ended episode
+remains available for death investigation. Process restart does not restore a
+live hostility episode; the durable standing watch remains, and new incoming
+attacks establish a fresh episode. Scene replay rebases hostility timestamps and
+maps recorded player names to the temporary stand-ins.
 
 Status distinguishes active combat from a passive watch:
 `active: false, watch: { enabled: true, phase: "watching" }` means normal farming
@@ -223,7 +258,7 @@ in place for when combat ends; cancelled errands are not replayed. Combat
 appears as the temporary owner of directional faculties, leaving the protected
 faculties with the keeper.
 
-The controller checks health, connection, player identity and expiry on incoming
+For proactive orders that have not become PvP survival, the controller checks health, connection, player identity and expiry on incoming
 events, a 100 ms fallback timer, and immediately before paced packets. Health at
 or below the greater of `stop_below` (default 0.35) and the keeper's computed
 survival threshold (falling back to `fleeBelow`)

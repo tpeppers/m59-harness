@@ -285,6 +285,7 @@ let initialJoinRetryTimer = null;
 let joinWanted = true;
 let joinGeneration = 0;
 let keeperJoinInFlight = null;
+session.combat.pvpEligibility = () => joinWanted;
 
 function cancelInitialJoinRetry() {
   if (initialJoinRetryTimer !== null) clearTimeout(initialJoinRetryTimer);
@@ -311,6 +312,7 @@ function scheduleInitialJoinRetry() {
 
 function changeJoinIntent(wanted) {
   joinWanted = wanted;
+  if (!wanted && session.combat.active?.pvp) session.combat.stop('operator suspended connection');
   joinGeneration++;
   cancelInitialJoinRetry();
   return joinGeneration;

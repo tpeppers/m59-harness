@@ -6,6 +6,11 @@ import { OF } from './m59-parse.mjs';
 import { withBodyCommand } from './m59-body-command.mjs';
 import { withPacketScope } from './m59-packet-scope.mjs';
 import { effectsAt, groundEffectSquares, groundEffectOnSegment } from './m59-ground-effects.mjs';
+import { parsePlayerCombat } from './m59-player-evidence.mjs';
+import { chooseSurvivalDecision, finishSurvivalDecision,
+  updateSurvivalDecision } from './m59-survival-decision.mjs';
+
+export const PVP_DANGER_MS = 30_000;
 
 const demand = (ok, why) => { if (!ok) throw new Error(`combat: ${why}`); };
 const square = (p, label) => {
@@ -143,12 +148,13 @@ export class CombatMode {
     this.active = null; this.last = null; this.timer = null;
     this.revision = 0; this.cancelled = new Set(); this.safetyLease = null; this.safetyRequest = null;
     this.watch = null;
+    this.lastPvP = null;
   }
 
   status() {
     const o = this.active ?? this.last;
     const watch = this.watchStatus();
-    if (!o) return { active: false, ...(watch ? { watch } : {}),
+    if (!o) return { active: false, pvp_survival: this.pvpStatus(), ...(watch ? { watch } : {}),
       ...(this.watchLoadError ? { watch_error: this.watchLoadError } : {}) };
     return { active: !!this.active, order_id: o.id, action: o.order.action,
       target: o.order.target, map: o.order.map ?? o.room, position: o.order.position,
@@ -162,7 +168,161 @@ export class CombatMode {
       last_outcome: o.lastOutcome ?? null,
       expires_at: o.expiresAt, finished_at: o.finishedAt ?? null,
       reason: o.reason ?? null, attacks: o.attacks, casts: o.casts,
+      pvp_survival: this.pvpStatus(),
       ...(watch ? { watch } : {}) };
+  }
+
+  pvpStatus() {
+    const p = this.active?.pvp ?? this.lastPvP;
+    if (!p) return null;
+    return structuredClone({ ...p, active: !!this.active?.pvp,
+      phase: this.active?.pvp ? this.active.phase : 'finished',
+      last_attack_ago_ms: Math.max(0, this.now() - p.last_attacked_at),
+      danger_until: p.last_attacked_at + PVP_DANGER_MS,
+      age_ms: this.now() - p.chosen_at });
+  }
+
+  // Exact server combat messages establish hostility. Merely sharing a room,
+  // outgoing attacks, and chat mentioning a player do not authorize retaliation.
+  observePlayerCombat(ev, c) {
+    if (ev.kind !== 'message' || !ev.text || this.pvpEligibility?.() === false) return;
+    const names = [...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => o.id !== c.selfId && (o.flags & OF.PLAYER))
+      .map(o => c.rsc?.get?.(o.nameRsc) ?? o.name).filter(Boolean);
+    for (const o of c.playersOnline?.values?.() ?? []) if (o.id !== c.selfId && o.name) names.push(o.name);
+    for (const a of this.active?.pvp?.attackers ?? []) names.push(a.character);
+    const result = parsePlayerCombat(ev.text, names);
+    if (!result) return;
+    if (result.direction === 'incoming') this.beginPvP(result, ev.at);
+    const p = this.active?.pvp;
+    if (!p) return;
+    const attacker = p.attackers.find(a => a.character.toLowerCase() === result.character.toLowerCase());
+    if (!attacker) return;
+    const key = `${result.direction}_${result.outcome === 'hit' ? 'hits' : 'misses'}`;
+    attacker[key]++; p[key]++;
+    p.last_outcome = { ...result, at: this.now() };
+    this.record('pvp_outcome', this.active);
+    this.wake();
+  }
+
+  beginPvP(evidence, observedAt = this.now()) {
+    const s = this.s, c = s.client;
+    if (!s.live || !c?.self || !(s.world?.room?.num > 1) || c.vitals?.()?.health?.value === 0) return;
+    const at = Math.min(this.now(), Number.isFinite(observedAt) ? observedAt : this.now());
+    let o = this.active;
+    if (!o?.pvp) {
+      const decision = chooseSurvivalDecision(s, { strategy: 'pvp_return_fire', status: 'active',
+        reason: `attacked by ${evidence.character}; return fire until the threat leaves or we die`,
+        reason_code: 'confirmed_player_attack', source: 'combat',
+        mitigation: 'ordinary HP floors, shelter and healing cannot stop return fire' },
+      { because: 'confirmed player attack supersedes ordinary recovery' });
+      this.stop('superseded by confirmed player attack', { preserveId: decision.id });
+      s.combatEpoch = (s.combatEpoch ?? 0) + 1;
+      s.fightGeneration = (s.fightGeneration ?? 0) + 1;
+      const id = randomUUID();
+      withBodyCommand(s, () => s.cancelMovement(null, 'PvP survival: return fire', { preserveId: decision.id }), id);
+      s._router?.clear?.();
+      if (s.job && !s.job.done) { s.job.cancelled = true; s.job.done = true; s.job.finishedAt = this.now(); }
+      const keeper = this.keeper();
+      if (keeper) {
+        keeper.suspendedJourney = null;
+        keeper.revive?.('PvP survival: return fire');
+        keeper.frozenUntil = null; keeper.freezeSample = null;
+      }
+      const order = normalizeCombatOrder({ action: 'kill', target: evidence.character });
+      o = this.active = { id, order, acceptedAt: this.now(), expiresAt: null,
+        client: c, playerId: c.selfId, room: s.world.room.num, roomObject: c.room.id,
+        phase: 'waiting', phaseRevision: 0, targetId: null, targetName: null,
+        attacks: 0, casts: 0, index: 0, remaining: 1, nextAt: 0, running: false,
+        pvp: { version: 1, strategy: 'return_fire', character: characterName(s, c),
+          decision_id: decision.id, chosen_at: this.now(), last_attacked_at: at,
+          first_evidence: evidence.text, attackers: [], attacks: 0,
+          incoming_hits: 0, incoming_misses: 0, outgoing_hits: 0, outgoing_misses: 0,
+          reconnects: 0, ended_at: null, outcome: null } };
+      updateSurvivalDecision(s, decision.id, { activated_at: this.now(), phase: 'return_fire' });
+      s.pacer.wake?.();
+    }
+    const p = o.pvp;
+    let a = p.attackers.find(a => a.character.toLowerCase() === evidence.character.toLowerCase());
+    if (!a) {
+      a = { character: evidence.character, first_attacked_at: at, last_attacked_at: at,
+        incoming_hits: 0, incoming_misses: 0, outgoing_hits: 0, outgoing_misses: 0 };
+      p.attackers.push(a);
+    }
+    a.last_attacked_at = Math.max(a.last_attacked_at, at);
+    p.last_attacked_at = Math.max(p.last_attacked_at, at);
+    this.syncPvP(o);
+    this.record('pvp_attacked', o);
+    this.wake();
+  }
+
+  // Keep ownership through disconnects and target disappearance. A reconnect
+  // preserves HP and hostility; it is never evidence that resting is safe.
+  syncPvP(o) {
+    if (!o?.pvp || this.active !== o) return true;
+    const s = this.s, c = s.client, p = o.pvp;
+    if (this.pvpEligibility?.() === false) { this.stop('operator suspended connection'); return false; }
+    if (!s.live || !c?.self || c.combatReady === false) {
+      if (o.phase !== 'offline') { o.phase = 'offline'; o.phaseRevision++; this.record('pvp_offline', o); }
+      return false;
+    }
+    if (characterName(s, c) !== p.character) { this.stop('character identity changed'); return false; }
+    if (c.vitals?.()?.health?.value === 0 || s.world?.room?.num === 1) {
+      this.stop('PvP survival ended: died'); return false;
+    }
+    if (c !== o.client || c.selfId !== o.playerId || c.room.id !== o.roomObject || s.world?.room?.num !== o.room) {
+      if (c !== o.client) p.reconnects++;
+      o.client = c; o.playerId = c.selfId; o.roomObject = c.room.id; o.room = s.world?.room?.num;
+      o.phaseRevision++; o.standing = false; o.targetId = null; o.nextAt = 0;
+      this.record('pvp_rebound', o);
+    }
+    if (o.phase === 'offline') o.phase = 'waiting';
+    const present = p.attackers.map(a => ({ a, target: combatTarget(c, a.character) })).filter(x => x.target);
+    if (!present.length && this.now() - p.last_attacked_at >= PVP_DANGER_MS) {
+      this.stop('PvP survival ended: attackers absent after 30 seconds'); return false;
+    }
+    const pick = present.find(x => (x.target.flags & OF.ATTACKABLE) &&
+      x.a.character.toLowerCase() === String(o.order.target).toLowerCase()) ??
+      present.find(x => x.target.flags & OF.ATTACKABLE) ?? present[0];
+    if (pick && String(o.order.target).toLowerCase() !== pick.a.character.toLowerCase()) {
+      o.order.target = pick.a.character; o.phaseRevision++; o.targetId = null; o.nextAt = 0;
+      this.record('pvp_retargeted', o);
+    }
+    return true;
+  }
+
+  combatFailure(o, reason) {
+    if (!o?.pvp) { this.stop(reason); return; }
+    if (this.active !== o || !this.syncPvP(o)) return;
+    // A blocked path or server refusal must not hand the body to PvE recovery.
+    // Keep retrying against fresh observations, without an automatic logout loop.
+    if (o.pvp.blocked_reason !== reason) {
+      o.pvp.blocked_reason = reason; this.record('pvp_blocked', o);
+    }
+    o.nextAt = this.now() + 1000;
+    this.armTimer();
+  }
+
+  restorePvPForReplay(saved, capturedAt, names = new Map()) {
+    if (!saved?.active) return false;
+    demand(['127.0.0.1', 'localhost', '::1'].includes(this.s.credentials?.host) &&
+      [15959, 17959].includes(Number(this.s.credentials?.port)), 'PvP replay requires the shadow server');
+    const delta = this.now() - capturedAt;
+    const attackers = (saved.attackers ?? []).map(a => ({ ...a,
+      character: names.get(a.character) ?? a.character,
+      first_attacked_at: a.first_attacked_at + delta, last_attacked_at: a.last_attacked_at + delta }));
+    for (const a of attackers) this.beginPvP({ character: a.character,
+      text: `restored PvP survival against ${a.character}` }, a.last_attacked_at);
+    if (this.active?.pvp) {
+      const p = this.active.pvp;
+      for (const key of ['attacks', 'incoming_hits', 'incoming_misses', 'outgoing_hits', 'outgoing_misses', 'reconnects'])
+        p[key] = saved[key] ?? 0;
+      p.attackers = attackers; p.chosen_at = saved.chosen_at + delta;
+      p.last_attacked_at = saved.last_attacked_at + delta;
+      this.active.attacks = p.attacks;
+      this.record('pvp_restored', this.active);
+    }
+    return !!this.active?.pvp;
   }
 
   issue(input, fromWatch = null) {
@@ -192,6 +352,8 @@ export class CombatMode {
     }
     // Validate completely before replacing the current order.
     const order = normalizeCombatOrder(input), s = this.s;
+    if (this.active?.pvp) return { ...this.status(), accepted: false, skipped: true,
+      reason: 'PvP survival owns the body; use explicit combat stop to release it' };
     if (input.command_id && this.cancelled.has(input.command_id))
       return { accepted: false, skipped: true, reason: 'command already stopped' };
     if (input.command_id && input.command_id === this.active?.id) return { accepted: true, ...this.status() };
@@ -370,13 +532,14 @@ export class CombatMode {
 
   guard(o, kind = 'read') {
     demand(this.active === o, 'order cancelled or replaced');
-    if (o.watchId) demand(this.farmEligible(), 'normal farming is paused');
+    if (o.watchId && !o.pvp) demand(this.farmEligible(), 'normal farming is paused');
     demand(this.s.client === o.client && o.client.selfId === o.playerId && this.s.live,
       'connection or character identity changed');
     demand(o.expiresAt == null || this.now() < o.expiresAt, 'order expired');
     demand(!(o.client.lastRxAt > 0 && this.now() - o.client.lastRxAt > 45000),
       'connection stale: no server data for 45 seconds');
-    demand(this.healthOK(o.order) && this.s.world?.room?.num > 1, 'survival floor reached');
+    demand((o.pvp ? this.healthFraction() > 0 : this.healthOK(o.order)) &&
+      this.s.world?.room?.num > 1, o.pvp ? 'waiting for live health' : 'survival floor reached');
     if (o.phase !== 'positioning') demand(o.client.room.id === o.roomObject &&
       this.s.world.room.num === o.room, 'left the combat room');
     if (o.phase === 'armed') demand(o.client.self?.row === o.order.position.row &&
@@ -388,19 +551,22 @@ export class CombatMode {
     }
   }
 
-  event(ev) {
+  event(ev, client = this.s.client) {
+    if (!client || client !== this.s.client || client.combatReady === false) return;
+    this.observePlayerCombat(ev, client);
     const requested = this.safetyRequest;
     if (requested && ev.kind === 'changed' && ev.id === requested.playerId &&
         requested.client === this.s.client && !!(requested.client.self?.flags & OF.SAFETY) === requested.on)
       this.safetyRequest = null;
     const o = this.active;
     if (!o) { void this.restoreSafety(); this.evaluateWatch(); this.wake(); return; }
+    if (o.pvp && !this.syncPvP(o)) { this.wake(); return; }
     // Only a real CREATE after arming counts as an entry. A refresh, or somebody
     // already standing in the room when the ambush was armed, does not.
     if (ev.kind === 'message' && ev.text && o.phase === 'engaging') {
       if (/good thing your safety was on|cannot attack|can't attack|can't bring yourself to attack/i.test(ev.text)) {
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'refused' };
-        this.stop(`server refused combat: ${ev.text}`); return;
+        this.combatFailure(o, `server refused combat: ${ev.text}`); return;
       }
       if (/your .* (hits|misses) |out of range/i.test(ev.text))
         o.lastOutcome = { at: this.now(), text: ev.text, kind: 'server_message' };
@@ -416,7 +582,7 @@ export class CombatMode {
       }
     }
     if (['appeared', 'vanished', 'changed', 'player-moved', 'moved', 'room-entered', 'room-contents', 'stat', 'disconnected'].includes(ev.kind)) {
-      try { this.guard(o); this.refreshTarget(o); } catch (e) { this.stop(e.message); return; }
+      try { this.guard(o); this.refreshTarget(o); } catch (e) { this.combatFailure(o, e.message); return; }
       this.evaluateWatch(); this.wake();
     }
   }
@@ -428,10 +594,17 @@ export class CombatMode {
     this.timer?.unref?.();
   }
 
-  stop(reason) {
+  stop(reason, { preserveId = null } = {}) {
     const o = this.active;
     if (!o) return;
-    withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`), o.id);
+    if (o.pvp) {
+      const p = o.pvp;
+      p.ended_at = this.now(); p.outcome = /ended: died/.test(reason) ? 'died' :
+        /attackers absent/.test(reason) ? 'attackers_left' : 'stopped';
+      p.end_reason = reason; this.lastPvP = p;
+      finishSurvivalDecision(this.s, p.decision_id, p.outcome, reason);
+    }
+    withBodyCommand(this.s, () => this.s.cancelMovement(null, `combat: ${reason}`, { preserveId }), o.id);
     this.active = null; this.s.combatEpoch = (this.s.combatEpoch ?? 0) + 1;
     this.s.pacer.wake?.();
     if (this.timer) this.unschedule(this.timer);
@@ -461,7 +634,8 @@ export class CombatMode {
     if (visible && o.phase === 'engaging' && t.id === o.targetId && exactName(o.client, t) === o.targetName) return;
     if (!visible && o.phase === 'waiting') return;
     if (!visible && o.watchId) { this.stop('target no longer visible; normal behavior resumed'); return; }
-    withBodyCommand(this.s, () => this.s.cancelMovement(null, 'combat visibility changed'), o.id);
+    withBodyCommand(this.s, () => this.s.cancelMovement(null, 'combat visibility changed',
+      { preserveId: o.pvp?.decision_id }), o.id);
     o.phaseRevision++;
     o.phase = visible ? 'engaging' : 'waiting';
     o.targetId = visible ? t.id : null; o.targetName = visible ? exactName(o.client, t) : null;
@@ -527,15 +701,17 @@ export class CombatMode {
 
   record(event, o) {
     this.s.recorder?.line?.('combat', { event, order_id: o.id, target: o.order.target,
-      action: o.order.action, phase: o.phase, room: this.s.world?.room?.num, reason: o.reason });
+      action: o.order.action, phase: o.phase, room: this.s.world?.room?.num, reason: o.reason,
+      attacks: o.attacks, casts: o.casts, ...(o.pvp ? { pvp_survival: this.pvpStatus() } : {}) });
   }
 
   async tick() {
     this.evaluateWatch();
     const o = this.active;
     if (!o) { this.armTimer(); return; }
+    if (o.pvp && !this.syncPvP(o)) { this.armTimer(); return; }
     // Validate even during a slow movement await. Stop/expiry does not wait for it.
-    try { this.guard(o); this.refreshTarget(o); } catch (e) { this.stop(e.message); return; }
+    try { this.guard(o); this.refreshTarget(o); } catch (e) { this.combatFailure(o, e.message); return; }
     if (this.active !== o) { this.armTimer(); return; }
     if (o.running) { this.armTimer(); return; }
     o.running = true;
@@ -547,7 +723,7 @@ export class CombatMode {
         this.guard(o, kind);
       }, () => this.advance(o)), o.id);
     } catch (e) {
-      if (this.active === o && o.phaseRevision === phaseRevision) this.stop(e.message);
+      if (this.active === o && o.phaseRevision === phaseRevision) this.combatFailure(o, e.message);
     } finally {
       o.running = false;
       if (this.active === o) this.armTimer();
@@ -562,7 +738,7 @@ export class CombatMode {
 
   async advance(o) {
     const s = this.s, c = o.client;
-    if (effectsAt(c, c.self).length) {
+    if (!o.pvp && effectsAt(c, c.self).length) {
       demand(await escapeGroundEffect(s), 'ground effect underfoot; no safe escape step');
       return;
     }
@@ -617,6 +793,7 @@ export class CombatMode {
           o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt);
         }
         o.attacks++;
+        if (o.pvp) { o.pvp.attacks++; o.pvp.blocked_reason = null; this.record('pvp_attack_sent', o); }
         if (--o.remaining <= 0) this.nextAction(o);
       }, 1050);
       o.nextAt = this.now() + 1000;

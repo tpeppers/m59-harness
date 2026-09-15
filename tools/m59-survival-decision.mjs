@@ -75,6 +75,10 @@ function archive(t,d) {
 }
 export function chooseSurvivalDecision(s,spec,{because='new survival choice',outcome='cancelled'}={}) {
   const active=state(s).current;
+  if(active && s.combat?.active?.pvp && spec.strategy!=='pvp_return_fire') {
+    emit(s,state(s),'replacement_suppressed',active,{because:'PvP return fire still owns survival',requested:spec.strategy});
+    return active;
+  }
   if(active&&state(s).replayControl?.keepDecision?.(active,spec,because)) {
     emit(s,state(s),'replacement_suppressed',active,{because});return active;
   }

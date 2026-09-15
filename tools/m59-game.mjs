@@ -2168,6 +2168,8 @@ class Session {
     // needs these.
     this.credentials = { account, password, character, host, port };
     const c = new M59Client({ host, port, verbose: false, resources });
+    c.combatReady = false;
+    const loginCombatEvents = [];
     // Everything the server says, straight to disk. This is the only place the raw
     // stream is kept — the in-memory event ring is small and is overwritten fast.
     //
@@ -2181,7 +2183,8 @@ class Session {
     this.lastHealth = null;
     this.lastCombatLine = null;
     c.onEvent = ev => {
-      this.combat?.event(ev);
+      if (!c.combatReady && ev.kind === 'message') loginCombatEvents.push(ev);
+      else this.combat?.event(ev, c);
       this.recorder.line('event', ev);
       this.playerEvidence?.event(ev,c);
       if (ev.kind === 'ability') this.noteAdvancement(ev);
@@ -2249,16 +2252,23 @@ class Session {
     }
     // The server does not volunteer the world. Ask, paced, and let the replies
     // land before reporting.
-    await this.pacer.submit('read', () => c.roomContents());
-    await this.pacer.submit('read', () => c.players());
-    await this.pacer.submit('read', () => c.requestInventory());
-    await this.pacer.submit('read', () => c.stats(1));
-    await this.pacer.submit('read', () => c.stats(2));
+    // Bootstrap observations may run while PvP retains ownership across login.
+    // Only these reads inherit that owner; an old recovery caller does not.
+    const loginRead = fn => withBodyCommand(this, () => this.pacer.submit('read', fn),
+      this.combat?.active?.id ?? 'login-observation');
+    await loginRead(() => c.roomContents());
+    await loginRead(() => c.players());
+    await loginRead(() => c.requestInventory());
+    await loginRead(() => c.stats(1));
+    await loginRead(() => c.stats(2));
     // Existing poison survives logout but its icon needs this initial read.
     // Without it, reconnecting recovery can mistake poison ticks for attacks
     // and repeatedly restart the rest. Subsequent changes arrive as pushes.
-    await this.pacer.submit('read', () => c.requestEnchantments());
+    await loginRead(() => c.requestEnchantments());
     await new Promise(r => setTimeout(r, 600));
+    c.combatReady = true;
+    for (const ev of loginCombatEvents) this.combat?.event(ev, c);
+    this.combat?.event({ kind: 'room-contents' }, c);
 
     // ABILITIES, ONCE, HERE. Four more requests, and this is the only place they have
     // to be spent: from now on the server pushes every change, so the cache stays
@@ -2423,6 +2433,8 @@ class Session {
   // renumbered underneath it.
   async rejoin() {
     if (!this.credentials) throw new Error('nothing to rejoin with — this session never joined');
+    // A recovery await begun before incoming PvP cannot disconnect the fighter.
+    if (this.live) bodyAuthority(this).guard();
     try { this.client?.sock?.destroy(); } catch { /* already gone */ }
     this.client = null;
     await new Promise(r => setTimeout(r, 800));

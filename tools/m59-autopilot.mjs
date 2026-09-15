@@ -3987,6 +3987,10 @@ export class Autopilot {
   // Runs before all planners. A cancelled approach cannot fall through into shopping,
   // quarry pursuit, or a stale journey while its replacement is waiting to execute.
   async continueSurvivalDecision() {
+    if (this.s.combat?.active?.pvp) {
+      await this.s.combat.tick();
+      return true;
+    }
     // A replacement is executable intent, not work to defer to the heartbeat.
     // Drain distinct alternatives serially, with fresh ownership/health checks in
     // each step. Stop when an action is stable or the same failed state recurs;
@@ -8749,6 +8753,8 @@ export class Autopilot {
       decisions: (this.journal || []).slice(-14),
       survival_trace: survivalTraceSnapshot(this.s),
       survival_decisions: survivalDecisionSnapshot(this.s),
+      combat: this.s.combat?.status?.() ?? null,
+      pvp_survival: this.s.combat?.pvpStatus?.() ?? null,
       replay: reason==='died' ? this.s.replayRecorder?.death({reason,character:this.s.client?.me?.name??this.s.name,
         where:last?{room:last.num,row:last.row,col:last.col}:null,
         survival_decisions:survivalDecisionSnapshot(this.s)})??null : null,
@@ -21698,6 +21704,7 @@ export class Autopilot {
   }
 
   async playDead(why) {
+    if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     const s=this.s,atWall=this.adoptRecoveryWall();
     const journey=this.inert;
     if(journey?.travelling && !journey.cancelled && journey.to!=null && !this.suspendedJourney)

@@ -9,6 +9,7 @@ import { Session } from './m59-game.mjs';
 import { M59Client, BP } from './m59-client.mjs';
 import { CombatMode } from './m59-combat-mode.mjs';
 import { TickLoop } from './m59-tick.mjs';
+import { Autopilot } from './m59-autopilot.mjs';
 import { OF } from './m59-parse.mjs';
 import { bodyAuthority, withBodyCommand } from './m59-body-command.mjs';
 import { readBoard, post, writeBoard } from './m59-board.mjs';
@@ -47,6 +48,32 @@ console.log('PASS real Session sender rejects newly appeared ground effects afte
   assert.equal(wire, 2);
 }
 console.log('PASS direct protocol actions honor combat authority while reads remain available');
+
+// The original death loop bypassed the pacer by destroying the socket. Exercise
+// the real Session.rejoin and keeper recovery dispatch after hostile player fire.
+{
+  let destroyed = 0, attacks = 0, resume;
+  const c = { state:'game', selfId:1, self:{id:1,row:5,col:5},
+    room:{id:3900,objects:new Map([[2,{id:2,name:'Assailant',row:5,col:6,flags:OF.PLAYER|OF.ATTACKABLE}]])},
+    vitals:()=>({health:{value:1,max:51}}), stand(){},face(){},attack(){attacks++;},
+    sock:{destroy(){destroyed++;}} };
+  const s = Object.assign(Object.create(Session.prototype), {name:'recovery-fixture',client:c,
+    credentials:{character:'Victim'},world:{room:{num:39}},combatEpoch:0,
+    cancelMovement(){},pacer:{wake(){},submit:async(_kind,fn)=>{bodyAuthority(s).guard();return fn();}}});
+  const k = Object.assign(Object.create(Autopilot.prototype), {s,policy:{},
+    revive(){},adoptRecoveryWall(){assert.fail('PvP cannot choose a healing wall');}});
+  s.combat = new CombatMode(s,{keeper:()=>k,schedule:()=>1,unschedule(){}});
+  const staleRecovery = withBodyCommand(s,async()=>{
+    await new Promise(r=>{resume=r;});await s.rejoin();
+  });
+  const rejected = assert.rejects(staleRecovery,/preempted/);
+  s.combat.event({kind:'message',text:'Assailant hits you.'});
+  resume();await rejected;
+  await k.playDead('low HP');await k.continueSurvivalDecision();
+  assert.equal(destroyed,0);assert.equal(attacks,1);assert.equal(s.combat.pvpStatus().active,true);
+  s.combat.issue({action:'stop'});
+}
+console.log('PASS real recovery dispatch and stale raw reconnect cannot interrupt low-HP return fire');
 
 // Raw tick movement bypasses Session.queueValidatedMove but must still honor
 // the late movement hook before a packet or a sent breadcrumb is produced.

@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {withPacketScope,bindPacketScope} from './m59-packet-scope.mjs';
 // Exercise the actual queue/pump body without importing a socket-owning Session.
 const source=readFileSync(new URL('./m59-game.mjs',import.meta.url),'utf8');
-const from=source.indexOf('class Pacer {'),to=source.indexOf('// ---------------------------------------------------------------- session',from);
+const from=source.indexOf('const CONCENTRATION_SAFE ='),to=source.indexOf('// ---------------------------------------------------------------- session',from);
 assert.ok(from>0&&to>from);
 const Pacer=Function('bindPacketScope','PACKETS_PER_SECOND','DOOR_SETTLE_MS','remainingDoorSettle',
  source.slice(from,to)+';return Pacer;')(bindPacketScope,100000,300,()=>0);

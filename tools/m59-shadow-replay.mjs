@@ -100,6 +100,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
   }
   async function stopTrial() {
     players?.stop();
+    s?.combat?.issue({action:'stop'});
     variantControl?.restore();variantControl=null;
     if(k)k.stop('replay trial ended',{hard:true});
     s?.cancelMovement?.(null,'replay trial ended',{replacement:{strategy:'yield_to_controller',status:'yielded'}});
@@ -230,6 +231,8 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       await players?.verifyGuilds();
       const release=await staged.start();
       if(!release.ok)return {outcome:'invalid_release',loaded,release,decisions,assumptions,runtime_environment};
+      controller_restore.pvp_survival = s.combat.restorePvPForReplay(control.pvp_survival,
+        frame?.at??before, players?.playerNames());
       players?.start({target:s,horizonMs,at:release.at});
       await onStarted?.(s,k);
       lap('controller_restore_and_start_ms');
@@ -283,6 +286,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
         execution_provenance:structuredClone(executionProvenance),source_scene_provenance:structuredClone(scene.provenance??null),
         final_hp:hp,loaded,release,player_state,controller_restore,replayed_journey,
         decisions:structuredClone(decisions),suppressed,assumptions,trial_sequence:trialSequence,runtime_environment,
+        pvp_survival:s.combat.pvpStatus(),
         ...(players?{pvp:players.snapshot(),victim_hp_trace:hpTrace,
           victim_messages:victimMessages}:{}),
         server_attestation:serverAttestation,native_save:nativeSave?{stamp:nativeSave.stamp,files:nativeSave.files}:null,

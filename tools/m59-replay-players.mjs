@@ -93,6 +93,7 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
     receipt,
     stop(){for(const a of actors)a.s.combat?.issue({action:'stop'});},
     resolve:a=>actors.find(x=>x.spec.key===(a.key??a.name))?.s.client.selfId??null,
+    playerNames:()=>new Map(actors.map(a=>[a.spec.name,a.s.client.me.name])),
     async sync({target}={}) {
       if(!guilds) {
         const bindings=new Map(scene.actors.filter(a=>a.kind==='player').map(a=>[a.key??a.name,
@@ -198,6 +199,9 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
       labState.set(agent,{credentials});
       const s=new Session(agent),report={actor:spec.key,captured_name:spec.name,shadow_name:name,account,
         behavior:spec.behavior,stats_as_asked:false,deleted:false};
+      // The stand-in follows the experiment's specified attack/cast sequence.
+      // Automatic victim retaliation must not replace that scripted treatment.
+      s.combat.pvpEligibility=()=>false;
       const a={spec,s,report,account,agent,created:false,id:null};actors.push(a);receipt.actors.push(report);await persist();
       const prior=await dmFn(['show account '+account],{env});
       if(!prior.includes('Cannot find account '+account+'.'))throw Error('temporary account name was not absent before creation');

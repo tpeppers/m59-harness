@@ -8,6 +8,8 @@ import { OF } from './m59-parse.mjs';
 import { CombatDispatch, resolveCombatMap } from './m59-combat-dispatch.mjs';
 import { parseCombatCLI } from './m59-combat-order.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
+import { currentSurvivalDecision, chooseSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
+import { captureCachedScene } from './m59-scene-capture.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
@@ -489,6 +491,130 @@ await test('restart restores the original PvP safety before a passive watch farm
   assert.equal(saved.restoreSafety, false);
   assert.equal(restored.mode.status().active, false);
   restored.mode.issue({ action: 'stop' }); f.mode.issue({ action: 'stop' });
+});
+
+const incoming = f => f.mode.event({ kind: 'message', text: "Exact Player's scimitar cleaves you." });
+await test('confirmed PvP at one HP preempts recovery and keeps returning fire below every health floor', async () => {
+  const f = fixture(); f.c.hp = 1; f.keeper.safety = () => ({ fleeAt: .95 });
+  f.keeper.inert = { why: 'shopping' }; f.keeper.frozenUntil = 999999;
+  chooseSurvivalDecision(f.s, { strategy: 'logoff_at_refuge', reason: 'old recovery' });
+  incoming(f); await f.mode.tick();
+  assert.equal(f.mode.pvpStatus().active, true); assert.equal(f.mode.status().attacks, 1);
+  assert.equal(f.sent.at(-1), 'attack:2'); assert.equal(f.keeper.frozenUntil, null);
+  assert.equal(currentSurvivalDecision(f.s).strategy, 'pvp_return_fire');
+  assert.equal(survivalDecisionSnapshot(f.s).history[0].outcome, 'cancelled');
+  f.advance(31000); await f.mode.tick();
+  assert.equal(f.mode.status().attacks, 2, 'visible assailant remains hostile after 30 seconds');
+  assert.equal(chooseSurvivalDecision(f.s, { strategy: 'rest_safe' }).strategy, 'pvp_return_fire');
+  assert.throws(() => bodyAuthority(f.s).guard(), /preempted/);
+  f.mode.issue({ action: 'stop' });
+});
+await test('blocks and dodges establish PvP; monster hits, outgoing results and quoted chat do not', async () => {
+  const f = fixture(); f.c.hp = 2;
+  for (const text of ['a troll hits you.', 'Your punch slaps Exact Player.',
+    'Other Player tells you, "Exact Player hits you."']) f.mode.event({ kind: 'message', text });
+  assert.equal(f.mode.status().active, false);
+  f.mode.event({ kind: 'message', text: "You dodge Exact Player's attack." });
+  await f.mode.tick(); assert.equal(f.mode.status().attacks, 1);
+  assert.equal(f.mode.pvpStatus().incoming_misses, 1);
+  f.mode.issue({ action: 'stop' });
+});
+await test('a standing watch promotes into PvP instead of withdrawing at the survival floor', async () => {
+  const f = fixture(); Object.assign(f.keeper, { mode: 'farm', running: true });
+  f.mode.issue({ action: 'kill', target: 'Exact Player', when_absent: 'farm', watch_maps: [38] });
+  await f.mode.tick(); incoming(f); f.c.hp = 30; f.keeper.running = false;
+  f.advance(1100); await f.mode.tick();
+  assert.equal(f.mode.pvpStatus().active, true);
+  assert.equal(f.mode.status().attacks, 1);
+  assert.equal(f.mode.status().watch.enabled, true);
+  assert.equal(f.mode.issue(attack).accepted, false, 'ordinary orders cannot replace survival');
+  f.mode.issue({ action: 'stop' });
+});
+await test('the last 30 seconds remain dangerous when an attacker vanishes, then recovery can resume', async () => {
+  const f = fixture(); incoming(f); await f.mode.tick();
+  f.c.room.objects.delete(2); f.mode.event({ kind: 'vanished', id: 2 });
+  f.advance(29999); await f.mode.tick(); assert.equal(f.mode.status().active, true);
+  f.advance(1); await f.mode.tick(); assert.equal(f.mode.status().active, false);
+  assert.equal(f.mode.pvpStatus().outcome, 'attackers_left');
+  assert.equal(survivalDecisionSnapshot(f.s).history.at(-1).outcome, 'attackers_left');
+  bodyAuthority(f.s).guard();
+});
+await test('another known assailant keeps combat active and is targeted when the first leaves', async () => {
+  const f = fixture(); incoming(f); await f.mode.tick();
+  f.c.room.objects.set(3, { id: 3, nameRsc: 3, row: 6, col: 5, flags: OF.PLAYER | OF.ATTACKABLE });
+  f.mode.event({ kind: 'message', text: 'Other Player hits you.' });
+  f.c.room.objects.get(2).flags = OF.PLAYER;
+  f.mode.event({ kind: 'changed', id: 2 });
+  assert.equal(f.mode.status().target, 'Other Player', 'an attackable assailant outranks a protected one');
+  f.c.room.objects.delete(2); f.mode.event({ kind: 'vanished', id: 2 });
+  f.advance(31000); await f.mode.tick();
+  assert.equal(f.mode.status().target, 'Other Player'); assert.equal(f.sent.at(-1), 'attack:3');
+  assert.equal(f.mode.pvpStatus().attackers.length, 2); f.mode.issue({ action: 'stop' });
+});
+await test('reconnect keeps intent and counters, rejects the old client, and resumes at unchanged one HP', async () => {
+  const f = fixture(); f.c.hp = 1; incoming(f); await f.mode.tick();
+  f.mode.event({ kind: 'message', text: 'Your punch slaps Exact Player.' });
+  f.mode.event({ kind: 'message', text: 'Exact Player blocks your attack.' });
+  f.s.live = false; f.mode.event({ kind: 'disconnected' });
+  assert.equal(f.mode.status().active, true); assert.equal(f.mode.status().phase, 'offline');
+  const next = { ...f.c, selfId: 10, room: { id: 3801, objects: new Map([
+    [22, { id: 22, nameRsc: 2, row: 5, col: 6, flags: OF.PLAYER | OF.ATTACKABLE }]]) }, combatReady: false };
+  f.s.client = next; f.s.live = true; f.advance(20000); await f.mode.tick();
+  assert.equal(f.mode.status().attacks, 1, 'no attacks during login bootstrap');
+  f.mode.event({ kind: 'message', text: 'Exact Player hits you.' }, f.c);
+  assert.equal(f.mode.pvpStatus().incoming_hits, 1, 'old socket cannot inject hostility');
+  next.combatReady = true; await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'attack:22'); assert.equal(f.mode.pvpStatus().reconnects, 1);
+  assert.equal(f.mode.pvpStatus().outgoing_hits, 1); assert.equal(f.mode.pvpStatus().outgoing_misses, 1);
+  const scene = captureCachedScene(f.s, null);
+  assert.equal(scene.controller.pvp_survival.attacks, 2);
+  assert.equal(scene.controller.pvp_survival.attackers[0].character, 'Exact Player');
+  f.mode.issue({ action: 'stop' });
+});
+await test('death ends PvP and preserves its final record for mortality handling', async () => {
+  const f = fixture(); incoming(f); await f.mode.tick();
+  f.c.hp = 0; f.mode.event({ kind: 'stat', name: 'health', value: 0 });
+  assert.equal(f.mode.status().active, false); assert.equal(f.mode.pvpStatus().outcome, 'died');
+  assert.equal(f.mode.pvpStatus().attacks, 1);
+  assert.equal(survivalDecisionSnapshot(f.s).history.at(-1).outcome, 'died');
+  bodyAuthority(f.s).guard();
+});
+await test('server refusal and blocked approach retain survival ownership instead of resting', async () => {
+  const f = fixture(); incoming(f);
+  f.c.room.objects.get(2).col = 20; f.s.world.geometry.path = () => ({ found: false });
+  await f.mode.tick(); assert.equal(f.mode.pvpStatus().active, true);
+  assert.match(f.mode.pvpStatus().blocked_reason, /no safe approach/);
+  f.c.room.objects.get(2).col = 6; f.advance(1100); await f.mode.tick();
+  assert.equal(f.sent.at(-1), 'attack:2');
+  f.mode.event({ kind: 'message', text: 'You cannot attack here.' });
+  assert.equal(f.mode.pvpStatus().active, true);
+  assert.match(f.mode.pvpStatus().blocked_reason, /server refused/);
+  f.mode.issue({ action: 'stop' });
+});
+await test('incoming PvP invalidates queued old recovery before its packet can leave', async () => {
+  const f = fixture({ realPacer: true }); f.s.pacer.lastSent = Date.now() + 200;
+  const pending = withBodyCommand(f.s, () => f.s.pacer.submit('rest', () => f.sent.push('OLD REST')));
+  const rejected = assert.rejects(pending, /preempted/); incoming(f);
+  await f.mode.tick(); await rejected;
+  assert.ok(!f.sent.includes('OLD REST')); assert.equal(f.sent.at(-1), 'attack:2');
+  f.mode.issue({ action: 'stop' });
+});
+await test('explicit operator stop and connection suspension release PvP ownership', async () => {
+  const f = fixture(); incoming(f); f.mode.issue({ action: 'stop' });
+  await f.mode.tick(); assert.equal(f.mode.status().active, false);
+  f.mode.pvpEligibility = () => false; incoming(f); await f.mode.tick();
+  assert.equal(f.mode.status().active, false); assert.deepEqual(f.sent, []);
+});
+await test('shadow replay rebinds attacker names, carries counters and rebases the danger window', async () => {
+  const original = fixture(); incoming(original); await original.mode.tick();
+  const saved = original.mode.pvpStatus(); original.mode.issue({ action: 'stop' });
+  const f = fixture(); f.advance(90000); f.c.rsc.set(2, 'ReplayAttacker');
+  assert.throws(() => f.mode.restorePvPForReplay(saved, 10000), /shadow server/);
+  f.s.credentials = { host: '127.0.0.1', port: 17959 };
+  assert.equal(f.mode.restorePvPForReplay(saved, 10000, new Map([['Exact Player', 'ReplayAttacker']])), true);
+  await f.mode.tick(); assert.equal(f.sent.at(-1), 'attack:2');
+  assert.equal(f.mode.pvpStatus().attacks, 2); assert.equal(f.mode.pvpStatus().last_attack_ago_ms, 0);
+  f.mode.issue({ action: 'stop' });
 });
 
 console.log(`PASS ${tests} combat mode scenarios`);
