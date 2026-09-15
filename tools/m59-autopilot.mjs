@@ -72,6 +72,7 @@ import { detailSettings, recordStrategyStat, saveVaultSnapshot }
   from './m59-strategy-stats.mjs';
 import { routeTravelKind } from './m59-travel-kind.mjs';
 import { purchasePlan, purchaseKey, PURCHASE_BANKS, accountBalance } from './m59-purchase-plan.mjs';
+import { runReagentCoop } from './m59-reagent-coop-runtime.mjs';
 import { readBankerLine } from './m59-bank.mjs';
 import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
@@ -1555,6 +1556,7 @@ export class Autopilot {
       // is a different thing from having them switched off, and only the first should be
       // silent on the board.
       guildWants: null,
+      reagentCoop: null,
       // Opt-in detailed, short-lived activity records. DUM owns this object and leaves
       // it null unless the independent Detailed strategy stats strategy is checked.
       strategyStats: null,
@@ -3737,6 +3739,7 @@ export class Autopilot {
   // standing half: anything ANY character in the fleet declares a floor for — in its loadout
   // or in its reagentTarget policy — is never sold while there is a chest to hold it.
   stockpileKeptNames() {
+    if (this.policy.reagentCoop?.enabled) return [];
     if (!this.policy.guildWants?.enabled) return [];
     try {
       const store = new StorageCache();
@@ -3756,6 +3759,7 @@ export class Autopilot {
   }
 
   guildWantedNames() {
+    if (this.policy.reagentCoop?.enabled) return [];
     if (!this.policy.guildWants?.enabled) return [];
     const plan = guildPlan();
     if (!plan) return [];
@@ -9908,6 +9912,10 @@ export class Autopilot {
         purchase_plan: this.townTrip.purchasePlan ?? null,
       } : null,
       purchase_funding: this.purchaseFunding ?? null,
+      reagent_coop: this.policy.reagentCoop?.enabled ? {
+        config: this.policy.reagentCoop, last_visit: this.coopStatus ?? null,
+        pending: this.coopVisit ? { mode: this.coopVisit.mode, stage: this.coopVisit.stage } : null,
+      } : null,
       poor_farming: this.poorSupply ? { ...this.poorSupply, active: this.poorFarmingActive(),
         vigor_floor: this.poorVigorFloor() } : null,
       deferred_shopping: this.deferredShoppingTrip ? {
@@ -20199,6 +20207,15 @@ export class Autopilot {
       return { ready: false, pending: true, reason };
     };
     this.postShoppingPlan(plan);
+    if (this.policy.reagentCoop?.enabled) {
+      const supplied = await runReagentCoop(this, 'supply', { plan }, TITHE_FLEET);
+      if (supplied.pending) return pending(supplied.reason);
+      plan = supplied.plan ?? plan;
+      this.postShoppingPlan(plan);
+      // The inventory and merchant IDs may have changed during the visit.
+      // Let the caller rebuild its quote before spending private/shared money.
+      if (supplied.moved) return { ready: false, pending: true, moved: true };
+    }
     if (this.poorFarmingActive() && !this.poorShoppingRetryReady()) {
       if (this.townTrip) { this.deferredShoppingTrip = this.townTrip; this.townTrip = null; }
       this.purchaseFunding.pending = false;
@@ -21025,7 +21042,7 @@ export class Autopilot {
     let have = this.reagentCount();
 
     // THE CHESTS FIRST. Only the shortfall that survives the stockpile is worth a merchant.
-    if (this.policy.guildWants?.enabled && (have.elderberry < wantEb || have.herbs < wantHb)) {
+    if (!this.policy.reagentCoop?.enabled && this.policy.guildWants?.enabled && (have.elderberry < wantEb || have.herbs < wantHb)) {
       await this.withdrawFromStockpile([
         { item: 'elderberry', amount: Math.max(0, wantEb - have.elderberry) },
         { item: 'herb', amount: Math.max(0, wantHb - have.herbs) },
@@ -21259,6 +21276,8 @@ export class Autopilot {
   // characters contribute, so a met plan silently produces no work instead of sending
   // twenty-one characters to look at a full chest.
   async contributeGuildWants() {
+    if (this.policy.reagentCoop?.enabled)
+      return runReagentCoop(this, 'contribute', {}, TITHE_FLEET);
     const cfg = this.policy.guildWants;
     if (!cfg?.enabled) return null;
     const plan = guildPlan();
@@ -21458,6 +21477,10 @@ export class Autopilot {
   // Keep a float in hand for flasks and food; bank the rest.
   async bankSurplus() {
     const s = this.s, c = s.need();
+    if (this.coopVisit?.mode === 'tithe') {
+      const resumed = await runReagentCoop(this, 'tithe', {}, TITHE_FLEET);
+      if (resumed.pending) return resumed;
+    }
     const FLOAT = this.policy.walkingMoney ?? 400;
     const room = s.world?.room;
     if (!room) return;
@@ -21503,7 +21526,16 @@ export class Autopilot {
       return;
     }
 
-    const put = carried - keep;
+    if (this.policy.reagentCoop?.enabled) {
+      const tithe = await runReagentCoop(this, 'tithe', { bankable: carried - keep }, TITHE_FLEET);
+      if (tithe.pending) return tithe;
+      // The visit returned to this bank; refresh the purse before depositing.
+      const since = c.evSeq;
+      await s.pacer.submit('read', () => c.requestInventory());
+      await c.waitFor({ since, kinds: ['inventory'], timeoutMs: 3000 });
+    }
+    const put = Math.max(0, this.purseNow() - keep);
+    if (!put) return;
     this.doing = 'trading';
     // The client speaks to the teller directly; there is no skills wrapper for this.
     const r = await s.pacer.submit('bank', () => c.deposit(put))

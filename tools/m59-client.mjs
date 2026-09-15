@@ -71,7 +71,7 @@ export const BP = {
   REQ_MOVE: 100, REQ_TURN: 101, REQ_GO: 102, REQ_ATTACK: 103, REQ_SHOOT: 104,
   REQ_CAST: 105, REQ_USE: 106, REQ_UNUSE: 107, REQ_APPLY: 108, REQ_ACTIVATE: 109,
   SAY_TO: 110, SAY_GROUP: 111,
-  REQ_PUT: 112, REQ_GET: 113, REQ_GIVE: 114, REQ_TAKE: 115,
+  REQ_PUT: 112, REQ_GET: 113, REQ_GIVE: 114, REQ_TAKE: 115, REQ_GET_FROM_CONTAINER: 239,
   REQ_LOOK: 116, REQ_INVENTORY: 117, REQ_DROP: 118, REQ_HIDE: 119,
   REQ_OFFER: 120, ACCEPT_OFFER: 121, CANCEL_OFFER: 122, REQ_COUNTEROFFER: 123,
   REQ_BUY: 124, REQ_BUY_ITEMS: 125, CHANGE_DESCRIPTION: 126,
@@ -1115,8 +1115,16 @@ export class M59Client {
   // form is the common case, so accept either.
   drop(ids)             { this.send(BP.REQ_DROP, encodeIdList([].concat(ids))); }
 
-  // BP_REQ_PUT {4,OBJECT} {4,OBJECT} — put an item into a container.
-  put(what, container)  { this.send(BP.REQ_PUT, u32(objId(what)), u32(objId(container))); }
+  // PARAM_OBJECT carries the NUMBER tag and quantity for stackable items.
+  // Bare IDs remain valid for non-stackable objects. Container GET is opcode 239;
+  // the ground GET opcode cannot specify a partial stack.
+  containerObject(what) {
+    const encoded = encodeIdList([what]);
+    if (encoded.readUInt16LE(0) !== 1) throw new Error('container transfer needs a positive quantity');
+    return encoded.subarray(2);
+  }
+  getFromContainer(what) { this.send(BP.REQ_GET_FROM_CONTAINER, this.containerObject(what)); }
+  put(what, container)  { this.send(BP.REQ_PUT, this.containerObject(what), u32(objId(container))); }
 
   // BP_REQ_BUY_ITEMS {4,OBJECT} {2,LIST_OBJ_PARM} — the seller, then the ids to
   // buy as a count-prefixed id list.

@@ -41,6 +41,7 @@ const readNativeContext = nativeContextReader();
 import os from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { PolicyControls } from './m59-policy-controls.mjs';
+import { REAGENT_COOP_SCHEMA, coopConfig } from './m59-reagent-coop.mjs';
 import { ChatControls } from './m59-chat-controls.mjs';
 import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
@@ -10452,6 +10453,7 @@ const TOOLS = [
       guild_tithe: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, daily_amount: { type: 'number' },
       }, description: 'pay at most this daily amount from verified town-sale proceeds to Frular for guild rent; null disables it' },
+      reagent_coop: REAGENT_COOP_SCHEMA,
       guild_wants: { type: ['object', 'null'], properties: { enabled: { type: 'boolean' } },
         description: 'contribute pack items toward the fleet-wide guild chest plan on town trips. ' +
           'The plan itself is substrate/guild-plan.json, written by the compendium planner GUILD HALL sheet ' +
@@ -11270,6 +11272,7 @@ const TOOLS = [
         }
       }
       if (a.guild_wants !== undefined) {
+        // Legacy guild stockpile remains available when the coop is disabled.
         if (a.guild_wants == null) p.policy.guildWants = null;
         else {
           const value = a.guild_wants;
@@ -11288,6 +11291,7 @@ const TOOLS = [
             daily_amount: Math.max(0, Math.floor(Number(value.daily_amount) || 0)) };
         }
       }
+      if (a.reagent_coop !== undefined) p.policy.reagentCoop = coopConfig(a.reagent_coop);
       // Floored at 0, never at 6: 0 is the legitimate "fight nothing above my own level",
       // and coercing a bad value up to the default would quietly hand back a WIDER band
       // than was asked for, which is the wrong direction for the one gate that decides
@@ -11715,6 +11719,18 @@ const TOOLS = [
       // without spots has to be told what it actually got.
       if (coerced.length) out.coerced = coerced;
       return keeper_push ? { ...out, keeper_push } : out;
+    },
+  },
+  {
+    name: 'reagent_coop',
+    description: 'Run or poll an idempotent reagent coop stop. Uses this bot’s live coop policy, travels to the hall and returns. Keep polling the same request_id while pending; a completed request is never charged twice.',
+    schema: { type: 'object', properties: { agent: { type: 'string' },
+      action: { enum: ['contribute', 'supply', 'tithe'] }, request_id: { type: 'string' },
+      keep: { type: 'number', minimum: 0 } }, required: ['agent', 'action', 'request_id'] },
+    run: async a => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) throw new Error('reagent_coop command requires a keeper-backed character');
+      return keeperAction(a.agent, s._index, 'reagent_coop', a);
     },
   },
   {

@@ -2,6 +2,9 @@
 
 Split out of [`CLAUDE.md`](../CLAUDE.md). A command space that refuses in total silence.
 
+For shared reagent storage, chest reserves and the 20% shared-money tithe, see
+the [reagent coop](m59-reagent-coop.md).
+
 - **A GUILD COMMAND IS REFUSED BY TOTAL SILENCE — NOT A SENTENCE SPOKEN TO THE ROOM, WHICH
   IS THE REFUSAL EVERYTHING ELSE IN THIS FILE WARNS ABOUT, BUT NOTHING AT ALL.**
   `User.UserGuildCommand` (`user.kod:4848`) tests the caller's command bitmask and, when the
@@ -162,4 +165,3 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). A command space that refuses in total 
   `node tools/m59-guild-test.mjs` (192) pins the permission check, the four packet layouts
   against server-built fixtures, the title ordering, the rent sign and its overlapping
   sentences, the Bookmaker's override, and the pooling arithmetic.
-

@@ -25,6 +25,7 @@ import { Session, Pacer } from './m59-session.mjs';
 // be tested without starting a keeper — see m59-keeper-address.mjs.
 import { addressMismatch, describeMismatch } from './m59-keeper-address.mjs';
 import { autopilotFor, dropAutopilot, autopilotIfAny, releaseSpot } from './m59-autopilot.mjs';
+import { reagentCoopCommand } from './m59-reagent-coop-runtime.mjs';
 import {captureCachedScene} from './m59-scene-capture.mjs';
 import { TickLoop } from './m59-tick.mjs';
 import { makeDecider, DEFAULT_GOALS, intend, INTENTS } from './m59-decide.mjs';
@@ -1515,6 +1516,10 @@ const server = createServer(async (req, res) => {
       try {
         await session.runCommand(async () => {
         switch (name) {
+          case 'reagent_coop': {
+            json(reagentCoopCommand(autopilot, session, args, fleetName));
+            return;
+          }
           case 'rts_tactical_intent': {
             json(startTacticalJob(session, autopilot, args,
               packet => requireKeeperRtsAuthority(args, packet)));
