@@ -14,6 +14,15 @@ export function pilgrimageCycles(argv = []) {
   return !argv.includes('--one-pass');
 }
 
+// Logging out briefly makes vitals unavailable; an empty string is not zero HP.
+export function pilgrimageHealth(row = {}) {
+  const [current, maximum] = String(row.health ?? '').split('/');
+  const hp = current?.trim() ? Number(current) : NaN;
+  const rawMax = row.max_health ?? row.health_max ?? maximum;
+  const max = rawMax != null && String(rawMax).trim() ? Number(rawMax) : NaN;
+  return { hp, max };
+}
+
 const ACTIVE = /travell?ing|\bwalk to\b|recovering|resting/i;
 
 export function keeperOwnsMovement(row = {}) {

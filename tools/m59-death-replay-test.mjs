@@ -5,6 +5,7 @@ import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {EventEmitter} from 'node:events';
 import {OF} from './m59-parse.mjs';
+import {BP,M59Client} from './m59-client.mjs';
 import {captureCachedScene} from './m59-scene-capture.mjs';
 import {loadPlan,executeLoad,executeRelease,observed,sceneProvenance} from './m59-scene.mjs';
 import {relocateFineCmd} from './m59-dm.mjs';
@@ -41,6 +42,22 @@ function bundleFixture() {
     death:{at:20000,detail:{where:{room:39}}},capture:{dropped:0,errors:0}};
 }
 const baselineResult=()=>({outcome:'died',elapsed_ms:10000,death_room:39,decisions:[],loaded:{ok:true,landed:{ok:true}}});
+
+await test('player-effect read uses the native type byte and capture preserves observed-only status without IO',()=>{
+  const sent=[];M59Client.prototype.requestEnchantments.call({send:(...args)=>sent.push(args)});
+  assert.equal(sent.length,1);assert.equal(sent[0][0],BP.SEND_ENCHANTMENTS);
+  assert.deepEqual([...sent[0][1]],[1]);
+  const {s,c,k}=fixture();
+  const effects={coverage:'observed-only',connected:true,entries:[{id:12,name:'poison'}]};
+  c.enchantmentStatus=()=>effects;c.ailments=()=>effects.entries;
+  c.requestEnchantments=()=>assert.fail('capture must not poll');
+  const sc=captureCachedScene(s,k),saved=sc.actors[0].status_effects;
+  assert.equal(saved.v.coverage,'observed-only');
+  assert.equal(saved.v.recognized_ailments[0].name,'poison');
+  effects.entries[0].name='changed';assert.equal(saved.v.entries[0].name,'poison');
+  delete c.enchantmentStatus;
+  assert.equal(captureCachedScene(s,k).actors[0].status_effects.how,'unknown');
+});
 
 await test('capture retains every visible body and exact asymmetric fine positions without IO',()=>{
   const {s,c,k}=fixture(40);c.playersOnline=new Map([[40,{}]]);

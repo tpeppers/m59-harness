@@ -1331,6 +1331,8 @@ export class M59Client {
   requestInventory()    { this.send(BP.REQ_INVENTORY); }
   requestSpells()       { this.send(BP.SEND_SPELLS); }
   requestSkills()       { this.send(BP.SEND_SKILLS); }
+  // Native RequestEnchantments(ENCHANT_PLAYER): the type byte is required.
+  requestEnchantments() { this.send(BP.SEND_ENCHANTMENTS, u8b(1)); }
   // WHO ARE WE. The reply is BP_PLAYER, whose handler re-assigns `selfId` and then
   // re-requests the room contents, so this is the one packet that recovers an identity
   // the server has renumbered underneath us — which it does on every garbage collection,

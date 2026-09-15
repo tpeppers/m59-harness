@@ -2183,6 +2183,10 @@ class Session {
     await this.pacer.submit('read', () => c.requestInventory());
     await this.pacer.submit('read', () => c.stats(1));
     await this.pacer.submit('read', () => c.stats(2));
+    // Existing poison survives logout but its icon needs this initial read.
+    // Without it, reconnecting recovery can mistake poison ticks for attacks
+    // and repeatedly restart the rest. Subsequent changes arrive as pushes.
+    await this.pacer.submit('read', () => c.requestEnchantments());
     await new Promise(r => setTimeout(r, 600));
 
     // ABILITIES, ONCE, HERE. Four more requests, and this is the only place they have
