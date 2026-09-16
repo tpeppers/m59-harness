@@ -2960,10 +2960,31 @@ async function runStep(ctx, agent, step, state) {
       return { ok: r.landed, result: r, why: r.landed ? undefined : r.why };
     }
 
+    // A STEP THAT SAYS OK MUST HAVE DONE SOMETHING.
+    //
+    // This used to be `ok: !r?.error`, which is right only for tools that report failure by
+    // throwing. Several of the most important ones do not: they answer 200 with a field
+    // saying it did not happen. `fight` replies `{fought:false, reason:"nothing here matches
+    // orc"}`, and the keeper's own fight answered `{ok:true}` for a year while doing nothing
+    // at all. Both read as success here, and the errand carried on to sell an empty pack.
+    //
+    // Measured 2026-09-16: a farm loop reported two complete laps for three characters, with
+    // one kill in the entire fleet and every sale earning 0sh. Every leg was green.
+    //
+    // So an explicit negative in the reply is a failure, and the reply's own words are the
+    // reason. This is the same rule the repository already applies to `verify`
+    // (`Boolean({ok:false})` is true, which is how the read-it-back guarantee passed on every
+    // failure) and to a merchant's spoken refusal: judge the world, not the envelope.
     case 'act': {
       const r = await call(step.tool, { agent, ...step.args }, step.timeoutMs ?? 120_000)
         .catch(e => ({ error: e.message }));
-      return { ok: !r?.error, result: r, why: r?.error };
+      const said = (k) => r && typeof r === 'object' && r[k] === false;
+      const denied = said('ok') || said('done') || said('fought') || said('engaged') ||
+                     said('accepted') || said('landed');
+      return { ok: !r?.error && !denied, result: r,
+               why: r?.error ?? (denied
+                 ? (r.why ?? r.reason ?? `${step.tool} reported it did not happen`)
+                 : undefined) };
     }
 
     // See the `supply` step above for the four silent failures this exists to prevent.

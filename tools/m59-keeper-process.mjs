@@ -1932,9 +1932,88 @@ const server = createServer(async (req, res) => {
             json(r ?? { ok: true });
             return;
           }
+          // FIGHT: CLOSE, THEN SWING, AND SAY WHICH HALF FAILED.
+          //
+          // This case used to be `await session.fight?.(args.target, args)` followed by
+          // `json(r ?? { ok: true })`. **`session.fight` is not defined anywhere in this
+          // tree**, so the optional call returned undefined and the handler answered
+          // `{ok:true}` having done nothing at all — for every character, every time.
+          //
+          // Measured 2026-09-16 in room 27 with eight orcs in the room and a level-58 body at
+          // full health: every combat path reported success and not one landed a blow. An
+          // errand that says "go to the cave and kill an orc" completed every leg, sold
+          // nothing, and reported two clean laps.
+          //
+          // The two primitives that DO reach the wire are `walkFine` and `attackRounds`, and
+          // the missing piece between them is REACH. At three squares every swing came back
+          // "The orc is too far away to hit with a mace" — sixteen times, cheerfully. So this
+          // closes first, re-reading the quarry every pass because it moves and because an id
+          // is a temporary handle, and it reports `closed` and `engaged` separately: "could
+          // not get there" and "got there and missed" are different findings and the caller
+          // must be able to tell them apart.
+          //
+          // KILLED IS READ OFF THE ROOM, NOT OFF THE REPLY. The corpse is the evidence.
           case 'fight': {
-            const r = await session.fight?.(args.target, args);
-            json(r ?? { ok: true });
+            const c = session.client;
+            const want = String(args.target ?? '').trim().toLowerCase();
+            const swings = Math.max(1, Math.min(Number(args.rounds ?? args.swings ?? 8), 40));
+            // A FRACTION, and the whole safety of the verb: one more swing at 15% is a death.
+            const abortBelow = args.abort_below == null ? 0.45 : Number(args.abort_below);
+            // Two squares, measured rather than assumed: three is already too far for a mace.
+            const reach = Number(args.reach ?? 2);
+            const closeTries = Math.max(0, Math.min(Number(args.close_tries ?? 6), 20));
+
+            const gap = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
+            const here = () => [...(c?.room?.objects?.values?.() ?? [])]
+              .filter(o => o.id !== c.selfId && o.col != null)
+              .map(o => ({ id: o.id, name: String(c.rsc?.get?.(o.nameRsc) ?? ''),
+                           is_player: !!((o.flags ?? 0) & 0x0004),
+                           col: o.col, row: o.row, x: o.x, y: o.y }));
+            const quarry = () => {
+              const self = c?.self; if (!self) return null;
+              const rows = here().filter(o => !o.is_player)
+                .filter(o => !want || o.name.toLowerCase().includes(want))
+                .map(o => ({ ...o, d: gap(self, o) }))
+                .sort((a, b) => a.d - b.d);
+              return rows[0] ?? null;
+            };
+
+            let t = quarry();
+            if (!t) {
+              json({ engaged: false, closed: false, killed: false, swings: 0,
+                     why: want ? `nothing here matches "${args.target}"` : 'nothing here to fight',
+                     attackable_here: here().filter(o => !o.is_player).map(o => o.name) });
+              return;
+            }
+
+            let closed = t.d <= reach;
+            const closeLog = [];
+            for (let i = 0; i < closeTries && !closed; i++) {
+              const w = await session.walkFine(t.x, t.y, { maxSteps: 200, arriveWithin: 40 });
+              const again = quarry();
+              if (!again) { t = null; break; }
+              closeLog.push({ try: i, arrived: w?.arrived ?? null, reason: w?.reason ?? null, d: again.d });
+              // NO PROGRESS IS AN ANSWER. A body wedged against geometry will burn every try
+              // reporting "ran out of steps" from the same square; saying so beats timing out.
+              if (again.d >= t.d && w?.arrived === false) { t = again; break; }
+              t = again;
+              closed = t.d <= reach;
+            }
+            if (!t) { json({ engaged: false, closed: false, killed: false, swings: 0,
+                             why: 'the quarry left before contact', close_log: closeLog }); return; }
+            if (!closed) {
+              json({ engaged: false, closed: false, killed: false, swings: 0,
+                     target: t.id, target_name: t.name, distance: t.d,
+                     why: `could not close: stopped ${t.d} square(s) away and reach is ${reach}`,
+                     close_log: closeLog });
+              return;
+            }
+
+            const r = await session.attackRounds(t.id, swings, { abortBelow });
+            const stillThere = [...(c?.room?.objects?.keys?.() ?? [])].some(id => id === t.id);
+            json({ engaged: true, closed: true, killed: !stillThere,
+                   target: t.id, target_name: t.name, distance: t.d,
+                   close_log: closeLog, ...(r ?? {}) });
             return;
           }
           // SPEECH, WHICH THE PROXY COULD NOT DO AT ALL.
