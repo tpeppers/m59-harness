@@ -48,6 +48,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLedger } from './m59-ledger.mjs';
+import { lastTownIncome } from './m59-town-income.mjs';
 import { foodValue } from './m59-items.mjs';
 import { listCharacters as bankedCharacters, balancesFor } from './m59-bank.mjs';
 
@@ -329,6 +330,7 @@ export function economy({ sinceMs = 24 * 3600 * 1000, live = null, characters = 
     const banked = accounts.reduce((t, a) => t + (a.balance || 0), 0);
     const row = {
       character,
+      last_town_trip: lastTownIncome(character),
       purse: p?.value ?? null, purse_at: p?.at ?? null, purse_from: p?.from ?? null,
       elderberry: r?.elderberry ?? null, herbs: r?.herbs ?? null,
       reagents_at: r?.at ?? null, reagents_from: r?.from ?? null,

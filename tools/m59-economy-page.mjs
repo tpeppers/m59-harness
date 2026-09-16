@@ -144,6 +144,31 @@ function sourcePill(from, at) {
          `stated it was holding when it last cast, ${esc(ago(at))}">cast ${esc(ago(at))}</span>`;
 }
 
+function townIncomeCell(trip) {
+  if (!trip) return '<span class="dim" title="No completed town trip recorded yet">—</span>';
+  const label = trip.unavailable ?? `${num(trip.net_shillings)} net shillings / ` +
+    `${(trip.elapsed_s / 3600).toFixed(2)} elapsed hours, including travel and shopping`;
+  return `<span title="${esc(label)}"${trip.shillings_per_hour < 0 ? ' class="bad"' : ''}>` +
+    `${trip.shillings_per_hour == null ? '—' : num(Math.round(trip.shillings_per_hour))}</span>` +
+    `<div class="dim" style="font-size:.72rem">${esc(ago(trip.completed_at))}</div>`;
+}
+
+function townIncomeDetail(trip) {
+  if (!trip) return '<p class="dim">Awaiting a completed town trip. A rate needs two completed trips to measure a full farming cycle.</p>';
+  const stamp = at => esc(new Date(at).toISOString().replace('T', ' ').replace('.000Z', ' UTC'));
+  return `<p>Last trip finished ${stamp(trip.completed_at)}.</p>` +
+    (trip.unavailable ? `<p class="dim">${esc(trip.unavailable)}.</p>` :
+    `<p><b>${num(Math.round(trip.shillings_per_hour))} shillings/hr</b> = ` +
+    `${num(trip.net_shillings)} net shillings / ${(trip.elapsed_s / 3600).toFixed(2)} hours.</p>
+    <p>Cycle began ${stamp(trip.cycle_started_at)}. Cash (purse + bank):
+      ${num(trip.cash_before.wealth)} → ${num(trip.cash.wealth)}.</p>
+    <p>Recorded vendor sales: ${num(trip.vendor_sales)}; purchases: ${num(trip.purchases)};
+      other cash changes: ${num(trip.other_cash_change)}.</p>`) +
+    '<p class="dim">Elapsed time includes farming, recovery, travel, shopping and offline time. ' +
+    'Deposits and withdrawals between purse and bank cancel out. Cash losses and guild payments reduce the return; ' +
+    'gifts or manual transfers also affect it. Unsold loot and goods contributed to guild storage are not valued.</p>';
+}
+
 // A PIE, DRAWN AS SVG ON THE SERVER, because this page has no JavaScript and should not
 // start having any for one chart. Every other figure here is server-rendered and readable
 // with the broker down; a chart that needs a script to appear is a chart that is blank in
@@ -253,6 +278,7 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
     <tr${r.short ? ' class="row-short"' : ''}>
       <td class="name">${esc(r.character)}</td>
       <td class="num">${r.purse == null ? '<span class="dim">—</span>' : num(r.purse)}</td>
+      <td class="num">${townIncomeCell(r.last_town_trip)}</td>
       <td class="num">${r.banked == null
           ? '<span class="guess" title="nobody has taken this character to a counter — this is not a balance of zero">never asked</span>'
           : num(r.banked)}</td>
@@ -271,9 +297,12 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
           ? `${vault.fullness.bulk} of ${VAULT_BULK_MAX} bulk on deposit`
           : 'no withdrawal list has been requested for this character')}</td>
     </tr>
-    <tr class="drill"><td colspan="10"><details>
-      <summary>${esc(r.character)} — pack and vault</summary>
+    <tr class="drill"><td colspan="11"><details>
+      <summary>${esc(r.character)} — last farming cycle, pack and vault</summary>
       <div class="inner">
+        <div class="box"><h4>Farming return · last town trip</h4>
+          <div class="items">${townIncomeDetail(r.last_town_trip)}</div>
+        </div>
         <div class="box">
           <h4>pack ${pack ? `· ${pack.percent}% · ${pack.binding}-bound` : ''}</h4>
           ${pack ? `<div class="dim" style="font-size:.75rem">${pack.bulk} bulk / ${pack.weight} weight
@@ -547,18 +576,23 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   })()}
 
   <h2>Every character</h2>
+  <div class="sub"><em>Farming shillings/hr</em> is the net change in purse + bank since the previous completed
+    town trip, divided by elapsed hours including travel and shopping. Expand a row for the calculation.
+    A dash means a full cycle has not been measured yet; the last trip stays visible across date filters.</div>
   <div class="sub">Rows tinted orange are under ${SHORT_BELOW} of a reagent and cannot cast
     their way out of an empty larder. <em>meals</em> is how many <em>create food</em> this
     character could cast right now, which is the only thing the reagents are for.</div>
   <div class="panel scroller" style="padding:.25rem .5rem">
   <table>
-    <thead><tr><th>character</th><th class="num">purse</th><th class="num">banked</th>
+    <thead><tr><th>character</th><th class="num">purse</th>
+      <th class="num" title="Net cash return per elapsed hour for the cycle ending at the last completed town trip">farming shillings/hr<br><span class="dim">last town trip</span></th>
+      <th class="num">banked</th>
       <th>balance</th><th class="num">elder</th><th class="num">herbs</th>
       <th class="num" title="create food castings this character could pay for out of its own pack">meals</th>
       <th title="live is the inventory this second; a time is how old the reading is">pack read</th>
       <th title="weight and bulk both cap at 1700 + might*20, and the pack is full when EITHER is reached — this is the worse of the two">pack full</th>
       <th title="a vault is bulk-only and 3000 per depositor, not per vault">vault full</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="8" class="empty">nothing on record yet</td></tr>'}</tbody>
+    <tbody>${rows || '<tr><td colspan="11" class="empty">nothing on record yet</td></tr>'}</tbody>
   </table>
   </div>
 

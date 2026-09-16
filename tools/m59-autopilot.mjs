@@ -73,7 +73,8 @@ import { detailSettings, recordStrategyStat, saveVaultSnapshot }
 import { routeTravelKind } from './m59-travel-kind.mjs';
 import { purchasePlan, purchaseKey, PURCHASE_BANKS, accountBalance } from './m59-purchase-plan.mjs';
 import { runReagentCoop } from './m59-reagent-coop-runtime.mjs';
-import { readBankerLine } from './m59-bank.mjs';
+import { readBankerLine, balancesFor } from './m59-bank.mjs';
+import { completeTownIncome, recordTownTrade } from './m59-town-income.mjs';
 import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
@@ -20806,6 +20807,18 @@ export class Autopilot {
     this.townTrip = null;
     this.lastTownServiceAt = Date.now();
     if (trip.marketStops?.length) this.lastMarketServiceAt = this.lastTownServiceAt;
+    // Only a finished service circuit closes an income cycle. Survival pauses,
+    // deferred unaffordable shopping and intermediate merchant stops do not.
+    try {
+      const who = this.s.client?.me?.name;
+      if (who) {
+        const income = completeTownIncome(who, { trip_started_at: trip.startedAt,
+          completed_at: this.lastTownServiceAt, room: this.s.world?.room?.num ?? null,
+          purse: Array.isArray(this.s.client.inventory) ? this.purseNow() : null,
+          accounts: balancesFor(who) });
+        if (income) this.ledgerEvent('town_trip_completed', income);
+      }
+    } catch { /* never let accounting interrupt play */ }
     this.progress('finished the shopping trip');
     return true;
   }
@@ -20831,6 +20844,7 @@ export class Autopilot {
   }
 
   tradeFact(fact = {}) {
+    try { recordTownTrade(this.s.client?.me?.name, fact); } catch { /* bookkeeping only */ }
     this.passTrade ??= { earned: 0, spent: 0, banked: 0, sold: [], bought: [], deposited: [] };
     for (const key of ['earned', 'spent', 'banked'])
       this.passTrade[key] += Number(fact[key]) || 0;
