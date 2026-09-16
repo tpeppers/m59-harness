@@ -282,3 +282,19 @@ await assert.rejects(() => duplicateBoundReader.snapshotV8(['t1'], boundGenerati
   /invalid or duplicate agent set/);
 
 console.log('m59 RTS broker aggregate fast-path and fail-closed safety passed');
+
+let release,calls=0;
+const coalesced=new BrokerReader({fetchImpl:async()=>{calls++;await new Promise(r=>{release=r;});return jsonResponse(200,aggregate);}});
+const first=coalesced.aggregateState(['t1','t2']),second=coalesced.aggregateState(['t2','t1']);
+assert.equal(calls,1);release();assert.deepEqual(await first,await second);
+assert.equal(coalesced.aggregatePending.size,0);
+let fail=true,attempts=0,recoverClock=1000;
+const recovering=new BrokerReader({now:()=>recoverClock,fetchImpl:async(_url,opts)=>{
+  assert.notEqual(opts?.method,'POST','transient outage must not fan out to MCP');attempts++;
+  if(fail)throw Error('temporary timeout');return jsonResponse(200,aggregate);
+}});
+await assert.rejects(()=>recovering.snapshot(['t1']),/temporary timeout/);
+await assert.rejects(()=>recovering.snapshot(['t1']),/recovering/);assert.equal(attempts,1);
+recoverClock+=1001;fail=false;assert.equal((await recovering.snapshot(['t1'])).sequence,aggregate.sequence);
+assert.equal(attempts,2);assert.equal(recovering.fastPathStatus.mode,'broker-aggregate-v1');
+console.log('aggregate coalescing and short transient recovery passed');

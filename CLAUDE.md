@@ -418,6 +418,48 @@ inside the game's own sentences (`### <agent> was just killed by a groundworm`),
 string it embeds is redacted against this machine's rosters. `/substrate/roomviews/` is
 gitignored: the pages are derived, and regenerating one is a second.
 
+## THE TWO ANSWERS THIS REPOSITORY IS NOT ALLOWED TO GIVE
+
+```bash
+node tools/m59-critic.mjs                       both lenses, worst first
+node tools/m59-critic.mjs travel --since 48h    the non-PVP travel deaths, as bug reports
+node tools/m59-critic.mjs node                  the stones, as missing affordances
+node tools/m59-critic.mjs --rubric              the gates a verdict has to clear
+```
+
+Two questions come up constantly and both have a comfortable answer that is TRUE AND CLOSES
+THE FILE. `.claude/skills/m59-critic/SKILL.md` is the voice that refuses them; the tool is the
+cheap wide net under it and judges nothing.
+
+**A TRAVEL DEATH THAT IS NOT PVP IS A CODING DEFECT.** The operator's axiom, and it is the
+strong claim rather than the polite one: *top-tier players do not die to monsters for months to
+years at a time, while playing intoxicated.* Not "rarely" — it does not happen to them. So the
+gap between this fleet and that player is code, and the death is a bug report the fleet filed by
+dying. Measured over 2,859 postmortems: 1,330 died `travelling`, 1,268 of those to a monster,
+and **1,131 of them died with the keeper's own longest pass block over sixty seconds.** Eighty-
+five per cent died while nobody was looking. `Ssss`, level 55, was stationary for 156 seconds
+while twelve things killed it. **"Killed by a spider" is the observation, not a reading of it**,
+and it is inadmissible as a finding — as are "overwhelmed", "unlucky" and "the roads are
+dangerous". PVP is the one exemption and it must be SHOWN: a named non-fleet player, never an
+unresolved `<dynamic …>` id, which is the mistake that turned six trolls into a PVP death once
+already.
+
+**"UNREACHABLE" IS A FACT ABOUT `substrate/m59-falljumps.json`, NOT ABOUT THE WORLD.** Every
+mana node stands where a person can walk to it in the retail client — they are easter eggs and
+players get them. So the agent is in that room BECAUSE the model is missing a jump, a ramp, a
+passage or a trigger, and finding which IS the errand rather than the obstacle. The file
+declares eight jumps in four rooms, and the column that predicts which stones the mover calls
+reachable is not the terrain — it is **whether somebody wrote the jump down**. Room 27 is the
+proof: four measurements called it unreachable on a night the operator had already melded it.
+The "needs new jumping mechanics" row has since been wrong twice in one day (750 is one square
+off, inside the meld box; 45 is three). `unreachable`, `impossible` and `needs new jumping
+mechanics` are inadmissible as terminal verdicts. Name the missing affordance, or name the tool
+that would find it.
+
+Both lenses take a verdict through five gates — cite, mechanism, class, deliverable, and the
+excuse argued at its strongest and then beaten — and `ingest` rejects one that fails any of
+them. **The gates are the product.** A critic that can be talked past is a style guide.
+
 ## Backing the fleet up, DM powers, and a scenario in one file
 
 ```bash

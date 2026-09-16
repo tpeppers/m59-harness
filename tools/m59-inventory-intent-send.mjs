@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Local metadata only. No broker/game order endpoint or character credentials.
+// Local metadata, or explicitly marked operator equip; no character credentials.
 import {readFileSync,statSync} from 'node:fs';
 import {resolve,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -30,8 +30,10 @@ export async function sendIntent(body,{dir=INTENT_DIR(),viewer=true,sessionPath}
   const h=await fetch(base+'/health',{signal:AbortSignal.timeout(2000)}).then(r=>r.json());
   need(h.kind===service.kind&&h.pid===service.pid&&h.fleet===body.fleet&&h.broker_pid===body.broker_pid&&
     !h.error&&Date.now()-h.at<=6000,'inventory service is not current');
-  const response=await fetch(base+'/intent',{method:'POST',headers:{'Content-Type':'application/json',
-    'X-M59-Intent-Token':service.token},body:JSON.stringify(body),signal:AbortSignal.timeout(3000)});
+  const equip=body.state==='equip';
+  need(!equip||(h.equip_schema===1&&body.source==='operator'&&body.location==='pack'),'invalid equip request');
+  const response=await fetch(base+(equip?'/equip':'/intent'),{method:'POST',headers:{'Content-Type':'application/json',
+    'X-M59-Intent-Token':service.token},body:JSON.stringify(body),signal:AbortSignal.timeout(equip?15000:3000)});
   const result=await response.json();need(response.ok&&result.ok,'inventory change refused');
   return result;
 }

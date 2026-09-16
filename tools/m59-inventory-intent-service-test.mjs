@@ -16,6 +16,8 @@ const broker=createServer((req,res)=>{
     fleet:badBroker?'wrong':'test',sessions:['t1'],session_object_ids:{t1:17},session_characters:{t1:'Fixture'}}));
   let text='';req.on('data',b=>text+=b);req.on('end',()=>{
     const body=JSON.parse(text);
+    if(body.params?.name==='fleet'&&Object.keys(body.params.arguments).length===0)
+      return res.end(JSON.stringify({result:{content:[{type:'text',text:JSON.stringify({fleet:[{agent:'t1',character:'Fixture',snapshot_age_ms:1,pack:{max:2000}}]})}]}}));
     if(body.params?.name!=='pilot'||body.params?.arguments?.action!=='status'){unexpected++;res.statusCode=403;return res.end('{}');}
     res.end(JSON.stringify({result:{content:[{type:'text',text:JSON.stringify({piloted:pilot})}]}}));
   });
@@ -30,6 +32,10 @@ try {
   service=await startService({fleet:'test',dir,port:0,broker:'http://127.0.0.1:'+broker.address().port,brokerRoot:dir,
     roster:[{agent:'t1',host:'fixture.invalid',port:5959,account:'fixture',character:'Fixture'}]});
   const base='http://127.0.0.1:'+service.server.address().port;
+  const health=await fetch(base+'/health').then(r=>r.json());
+  assert.equal(health.storage_schema,1);assert.equal(health.equip_schema,1);assert.equal(health.broker_root,dir);
+  assert.equal(health.broker,'http://127.0.0.1:'+broker.address().port);
+  assert.match(readFileSync(join(dir,'viewer-storage.tsv'),'utf8'),/^M59SELLPLAN\t2/);
   const plans=()=>fetch(base+'/plans').then(r=>r.json());
   assert.equal((await plans()).plans[0].items[0].state,'sell');
   const change={fleet:'test',broker_pid:77,agent:'t1',character:'Fixture',player_id:17,item_id:31,item_name:'herb',

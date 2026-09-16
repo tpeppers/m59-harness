@@ -37,6 +37,7 @@
 import net from 'node:net';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
+import { proxyContext, serveProxyContext } from './m59-proxy-context.mjs';
 import { parseRoomContents, objId } from './m59-parse.mjs';
 import { writeFileSync, appendFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join as joinPath, dirname as dirnamePath } from 'node:path';
@@ -777,7 +778,10 @@ function serveControl(port, getSession) {
 }
 
 export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
-                             observe = false, control = null, onSession = () => {} } = {}) {
+                             observe = false, control = null, onSession = () => {},
+                             listenHost = '0.0.0.0', contextPort = null } = {}) {
+  if(contextPort!==null && (!observe || control))throw Error('native context requires observe-only with no injection control');
+  const context=contextPort!==null?proxyContext({host,port,listen}):null;
   let current = null;
   const sessions = new Set();
   // 'list' is a peek for /status; a number selects by the player object id the
@@ -807,6 +811,7 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     const log = (m) => console.error(`[proxy ${tag}] ${m}`);
     log('client connected');
     const s = new ProxySession(sock, { host, port, observe, log });
+    if(context)try{context.attach(s);}catch{s.destroy();return;}
     current = s;
     sessions.add(s);
     s.on('closed', st => {
@@ -816,9 +821,10 @@ export function serveProxy({ listen = 5960, host = '127.0.0.1', port = 5959,
     });
     onSession(s);
   });
-  server.listen(listen, '0.0.0.0', () =>
-    console.error(`m59 proxy listening on 0.0.0.0:${listen} -> ${host}:${port}` +
+  server.listen(listen, listenHost, () =>
+    console.error(`m59 proxy listening on ${listenHost}:${listen} -> ${host}:${port}` +
                   (observe ? '  [OBSERVE ONLY — no injection]' : '')));
+  if(context){server.contextServer=serveProxyContext(context,contextPort);server.once('close',()=>{context.close();server.contextServer.closeAllConnections();server.contextServer.close();});}
   return server;
 }
 
@@ -856,5 +862,7 @@ if (process.argv[1]?.endsWith('m59-proxy.mjs')) {
     listen, host, port,
     observe: process.argv.includes('--observe'),
     control: arg('--control') ? Number(arg('--control')) : null,
+    listenHost: arg('--bind','0.0.0.0'),
+    contextPort: arg('--context-port') ? Number(arg('--context-port')) : null,
   });
 }
