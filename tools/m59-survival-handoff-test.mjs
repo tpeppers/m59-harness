@@ -49,17 +49,27 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
 // The real travel method stays awaiting its mover while the real watchdog rescues it.
 {
   const k = keeper();
-  let tick, settle, moving;
+  let tick, settle, moving, moverReturned = false, recoveries = 0;
+  k.passOnce = () => k.travel(714);
+  k.continueSurvivalDecision = async () => {
+    assert.ok(moverReturned, 'recovery cannot race the old mover');
+    assert.equal(currentSurvivalDecision(k.s)?.reason_code, 'travel_wedge');
+    recoveries++;
+    return true;
+  };
   const entered = new Promise(resolve => { moving = resolve; });
   k.s.travel = async (_to, options) => {
     assert.equal(options.movementGeneration, 0);
-    moving(); return new Promise(resolve => { settle = resolve; });
+    moving();
+    const result = await new Promise(resolve => { settle = resolve; });
+    moverReturned = true;
+    return result;
   };
   const interval = globalThis.setInterval, clear = globalThis.clearInterval;
   globalThis.setInterval = fn => { tick = fn; return { unref() {} }; };
   globalThis.clearInterval = () => {};
   try {
-    const trip = k.travel(714);
+    const trip = k.pass();
     await entered;
     assert.ok(k.inert?.travelling);
     const shelters = { spots: [{ row: 21, col: 21 }] };
@@ -70,19 +80,26 @@ const ctx = k => ({ s: k.s, c: k.s.client, room: k.s.world.room,
     assert.equal(k.inert, null, 'watchdog revokes the traveller');
     assert.equal(k.suspendedJourney.to, 714);
     assert.equal(k.s.activeShelter, shelters, 'recovery retains forward cover');
+    assert.equal(currentSurvivalDecision(k.s)?.strategy, 'nearest_refuge',
+      'cancelling the wedge records a replacement immediately');
+    assert.equal(recoveries, 0, 'the watchdog only publishes intent while movement owns control');
     tick();
     assert.equal(k.inert, null, 'lease timer cannot resurrect cancelled travel');
     assert.equal(k.suspendedJourney.to, 714);
     settle({ arrived: false, cancelled: true });
     await trip;
+    assert.equal(recoveries, 1, 'the same pass executes recovery before another heartbeat');
     const next = await k.travel(104);
     assert.equal(next.cancelled, true, 'the next shopping leg cannot steal the rescue');
 
     // A second journey in the same pass must have its own rescue allowance.
     k.goTravelling('new journey', { to: 39 });
+    k.currentRecoveryWall = () => ({ ok: true, row: 20, col: 20 });
     k.watchdogTick();
     assert.equal(k.inert, null);
     assert.equal(k.suspendedJourney.to, 39);
+    assert.equal(currentSurvivalDecision(k.s)?.strategy, 'logoff_safe',
+      'a verified current wall takes priority over moving to another refuge');
   } finally { globalThis.setInterval = interval; globalThis.clearInterval = clear; }
 }
 

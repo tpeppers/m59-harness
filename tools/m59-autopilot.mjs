@@ -11713,9 +11713,19 @@ export class Autopilot {
           attempts: (journey.attempts ?? 0) + 1,
           deaths_at: this.tally?.deaths ?? 0,
         };
-        try { s.cancelMovement(null, 'wedged below the flee line while travelling'); } catch {}
-        // Mend at a wall FORWARD on the route rather than idling where it was dying — the
-        // same landing the watchdog's other rescue takes, and for the same reason.
+        const reason = 'wedged below the flee line while travelling';
+        const wall = this.currentRecoveryWall();
+        const replacement = chooseSurvivalDecision(s, {
+          strategy: wall?.ok ? 'logoff_safe' : 'nearest_refuge',
+          reason, reason_code: 'travel_wedge', source: 'recovery',
+          ...(wall?.ok ? { chosen_refuge: { ...wall, room: s.world?.room?.num } } : {}),
+        }, { because: reason, outcome: 'interrupted' });
+        // Publish intent now; pass() executes it after the cancelled mover
+        // unwinds. A flag alone left Rowlf without a survival decision during
+        // the final 2.5 seconds of an internal errand.
+        try { s.cancelMovement(null, reason, { preserveId: replacement.id }); } catch {}
+        // Keep the legacy request for readers of the suspended journey; the
+        // explicit decision owns recovery at the closest reachable safe wall.
         this.wantsForwardShelter = 'wedged below the flee line while travelling';
         if (this.inert) this.revive('wedged below the flee line while travelling');
         this.note('WEDGED AND DYING MID-JOURNEY — the trip is suspended, not ended', {
@@ -14520,6 +14530,11 @@ export class Autopilot {
   // ── passArm: extracted from pass() ────────────────────────────────
   async passArm(ctx) {
     const { s, c, room } = ctx;
+    // A suspended journey still owns the objective. Rrrr's world-tour run spent
+    // 58 minutes repeating the low-mana arming errand at full HP, so neither the
+    // recovery ladder nor resumeSuspendedJourney could run. Let those stages
+    // decide readiness; ordinary arming resumes after the journey is finished.
+    if (this.suspendedJourney) return CONTINUE;
     // Deliberate bare-hand practice is not a broken loadout. It is allowed only on
     // the assigned farm ground; after a death or during travel the ordinary arm-first
     // survival rule remains in force.

@@ -957,5 +957,26 @@ console.log('FLAT ONLY MEANS "AS WELL AS I WILL GET" IF SOMETHING IS HEALING YOU
     !k.suspendedJourney && cancelled.retired_destination === 114);
 }
 
+console.log('\nunarmed suspended travel must reach the recovery/resume ladder');
+for (const health of [37, 12]) {
+  const k = keeper({ health });
+  k.s.client.equipment = () => ({ known: true, equipped: [] });
+  k.trainingStyleFor = () => 'melee';
+  k.suspendedJourney = { to: 39, at: Date.now(), attempts: 1, deaths_at: 0 };
+  let arming = 0;
+  k.sweepBroken = async () => {};
+  k.armSelf = async () => { arming++; return false; };
+  k.knowsCreateWeapon = () => true;
+  k.sanctuary = () => false;
+  k.townTripIfCornered = async () => false;
+  k.settle = async () => ({ settled: true });
+  const context = ctxFor(k);
+  ok(`unarmed at ${health}/37 yields to recovery/resume`,
+    await k.passArm(context) === CONTINUE && arming === 0);
+  await k.resumeSuspendedJourney(context);
+  ok(health === 37 ? 'whole unarmed traveller resumes its actual destination' : 'hurt unarmed traveller still waits for recovery',
+    health === 37 ? k.travelled[0]?.to === 39 : k.travelled.length === 0 && k.suspendedJourney?.to === 39);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

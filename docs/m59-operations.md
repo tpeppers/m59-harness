@@ -2,6 +2,9 @@
 
 Split out of [`CLAUDE.md`](../CLAUDE.md). Shortcuts, the service, the front ends, backups, the DM socket, the reports, and lending characters out.
 
+For per-character world-tour stall counts and thresholds, see
+[world-tour progress monitoring](m59-tour-progress.md).
+
 ## Click-to-play shortcuts
 
 `node tools/m59-shortcuts.mjs` writes one shortcut per character into
@@ -431,4 +434,3 @@ The borrowed characters then appear in the borrower's own tooling as ordinary MC
   operator could not.
 - **There is no TLS here.** Put it behind a VPN or an SSH tunnel; never expose either port
   directly. `substrate/grants/` is gitignored, like the roster.
-

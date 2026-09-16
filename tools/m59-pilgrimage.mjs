@@ -7,6 +7,8 @@
 //   node tools/m59-pilgrimage.mjs --fleet shadow --to 2 --cycle     # accepted compatibility spelling
 //   node tools/m59-pilgrimage.mjs --dry-run
 //   node tools/m59-pilgrimage.mjs --fleet shadow --reverse --out substrate/tour-sim/reverse.json
+//   --stall-seconds 180 --leg-stall-seconds 600   per-bot progress flags (no forced movement)
+//   --progress PATH   live per-bot report; defaults to OUT.progress.json when --out is set
 //
 // `m59-solo-run.mjs` answers "can ONE character walk THIS road", one at a time, from one
 // square, because twenty-one characters crossing together measure contention as much as
@@ -28,13 +30,14 @@
 // Everything it reports is measured from the character, not from the request: `arrived`
 // means the room read back as the destination. See docs/m59-operations.md.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { CITY_INNS } from './m59-underworld.mjs';
 import { runtimeProvenance } from './m59-replay-worker.mjs';
+import { PilgrimageProgress } from './m59-pilgrimage-progress.mjs';
 import {
   DISPATCH_MAX_ATTEMPTS,
   completeCycleArrival,
@@ -60,7 +63,8 @@ const flag = (name, fallback = null) => {
 const has = name => argv.includes('--' + name);
 
 const KNOWN = new Set(['fleet', 'to', 'port', 'timeout', 'seed', 'agents', 'inns', 'no-retry',
-                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse', 'out']);
+                       'dry-run', 'help', 'h', 'cycle', 'one-pass', 'reverse', 'out',
+                       'progress', 'stall-seconds', 'leg-stall-seconds']);
 for (const a of argv) {
   if (!a.startsWith('--')) continue;
   if (!KNOWN.has(a.slice(2))) {
@@ -87,6 +91,18 @@ const TIMEOUT = Number(flag('timeout', 600)) * 1000;
 const RETRY = !has('no-retry');
 const DRY = has('dry-run');
 const OUT = flag('out');
+const PROGRESS_OUT = flag('progress', OUT ? OUT + '.progress.json' : null);
+const progress = new PilgrimageProgress({
+  stallMs: Number(flag('stall-seconds', 180)) * 1000,
+  legStallMs: Number(flag('leg-stall-seconds', 600)) * 1000,
+  // A fleet request itself may take up to a minute; mark stale actors separately.
+  staleMs: 75_000,
+});
+if ((has('progress') && (!PROGRESS_OUT || PROGRESS_OUT.startsWith('--'))) ||
+    (PROGRESS_OUT && (existsSync(resolve(PROGRESS_OUT)) || (OUT && resolve(PROGRESS_OUT) === resolve(OUT))))) {
+  console.error('--progress must name a new file, distinct from --out');
+  process.exit(2);
+}
 if (has('out') && (!OUT || OUT.startsWith('--') || existsSync(resolve(OUT)))) {
   console.error('--out must name a new result file');
   process.exit(2);
@@ -325,15 +341,41 @@ async function submitPendingDispatch(o) {
 // field: a fleet row's `room` is the room's NAME and `room_num` is the number, so every
 // reading came back NaN and the whole first run reported "timed out ... NaN".
 let measurementBegan = null;
+let lastProgressCounts = null;
+function publishProgress(now = Date.now()) {
+  const snapshot = progress.snapshot(now);
+  if (PROGRESS_OUT) {
+    const file = resolve(PROGRESS_OUT), temporary = file + '.' + process.pid + '.tmp';
+    writeFileSync(temporary, JSON.stringify(snapshot, null, 2));
+    renameSync(temporary, file);
+  }
+  const counts = JSON.stringify([snapshot.stuck_count, snapshot.ever_stuck_count,
+    snapshot.unknown_count, snapshot.actors.filter(a => a.status === 'stuck')
+      .map(a => [a.agent, a.reason])]);
+  if (counts !== lastProgressCounts) {
+    console.log(`progress: stuck ${snapshot.stuck_count}, ever stuck ${snapshot.ever_stuck_count}, ` +
+      `unobserved ${snapshot.unknown_count}`);
+    for (const a of snapshot.actors.filter(a => a.status === 'stuck'))
+      console.log(`  ${a.agent} ${a.character ?? ''}: ${a.reason}, room ${a.room}, target ${a.target}, ` +
+        `${Math.round(a.seconds_without_progress)}s without route progress`);
+    lastProgressCounts = counts;
+  }
+  return snapshot;
+}
 async function watchAll(outs) {
   const live = new Map(outs.filter(o => o.outcome === 'running').map(o => [o.agent, o]));
   const began = Date.now();
   measurementBegan = began;
+  for (const o of outs) progress.expect(o.agent, began);
+  const byAgent = new Map(outs.map(o => [o.agent, o]));
   while (live.size && Date.now() - began < TIMEOUT) {
     await sleep(5000);
     const snap = await call('fleet', {}, 60000);
-    if (snap?._error) continue;
+    if (snap?._error) { publishProgress(); continue; }
     for (const row of (snap.fleet ?? [])) {
+      const observed = byAgent.get(row.agent);
+      if (observed) progress.observe(row, { now: Date.now(), checkpoints: observed.legs.length,
+        target: observed.to, done: observed.outcome === 'arrived' || observed.outcome === 'died' });
       const o = live.get(row.agent);
       if (!o) continue;
       const room = Number(row.room_num ?? NaN);
@@ -450,11 +492,17 @@ async function watchAll(outs) {
         continue;
       }
     }
+    publishProgress();
   }
   for (const o of live.values()) {
     o.outcome = CYCLE ? 'cycling' : (o.deaths ? 'still trying' : 'timed out');
     o.ms = Date.now() - o.began;
   }
+  for (const o of outs) {
+    const tracked = progress.agents.get(o.agent);
+    if (tracked && (o.outcome === 'arrived' || o.outcome === 'died')) tracked.done = true;
+  }
+  publishProgress();
   return outs;
 }
 
@@ -472,6 +520,7 @@ if (OUT) writeFileSync(resolve(OUT), JSON.stringify({
   ring: RING, requested_window_ms: TIMEOUT, measurement_began_at: measurementBegan,
   finished_at: Date.now(), provenance,
   initial_profiles: order.map(r => ({ agent: r.agent, character: r.character, health: r.health, mana: r.mana })),
+  progress: progress.snapshot(),
   results: results.map(r => ({ ...r, rooms: [...r.rooms] })),
   limitations: ['Deaths counted from polled Underworld entries; reconcile with postmortems.',
     'Launches are staggered before the measurement loop; timer expiry does not stop active journeys.'],
@@ -496,6 +545,9 @@ if (CYCLE) {
   console.log(`\nTHE CYCLE`);
   console.log(`  legs completed  ${legs.length}   by ${results.filter(o => o.legs.length).length} of ${results.length} characters`);
   console.log(`  deaths          ${deaths}`);
+  const progressReport = progress.snapshot();
+  console.log(`  stuck now       ${progressReport.stuck_count}   ever flagged ${progressReport.ever_stuck_count}`);
+  console.log(`  unobserved      ${progressReport.unknown_count}`);
   console.log(`  handoff retries ${dispatchRetries}`);
   console.log(`  handoff failures ${dispatchFailures.length}`);
   console.log(`  legs per character  min ${Math.min(...results.map(o => o.legs.length))}, ` +
