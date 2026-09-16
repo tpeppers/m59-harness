@@ -153,6 +153,7 @@
 //
 // A step that fails ends THAT AGENT's errand and no other's. One courier dying is not the
 // operation failing, which is the difference between a fleet tool and a script.
+import { readDevnotes, matchDevnotes, formatDevnote } from './m59-devnote.mjs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
@@ -3495,6 +3496,10 @@ export async function fleetScript({
   // GUARANTEE 9. `{ pinned, verified, touches, refuseOnDrift }` — the generation this task
   // was last seen green against. See checkProvenance above for why it exists.
   provenance = null,
+  // Widen which devnotes this errand is shown. The rooms it walks to are matched
+  // automatically, so most tasks need nothing here; `{ tags, touches }` adds topics and
+  // files on top of that.
+  devnotes = null,
   onLog = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a),
 } = {}) {
   if (!Array.isArray(agents) || !agents.length) throw new Error('fleetScript needs agents');
@@ -3508,6 +3513,36 @@ export async function fleetScript({
   // having it while the fleet is still untouched. Reported on every path — including
   // `unpinned`, quietly — so that "nobody pinned this" and "this is current" never read
   // the same, which is the distinction the outfit errand did not have.
+  // DEVNOTES, AT THE SAME MOMENT AND FOR THE SAME REASON AS PROVENANCE.
+  //
+  // Provenance asks "is this script still true of the code it was written against". A devnote
+  // answers the other question — "what did the last person find out about this ROOM, this tool
+  // or this topic" — and it is delivered here, before the lock and before anything walks,
+  // because that is the only moment at which reading it is free.
+  //
+  // This repository's own verdict on documentation, from CLAUDE.md: the traps "are all
+  // documented, in this file, and they were still walked into — a rule you have to remember is
+  // a rule you forget at 02:00 with a character dying". Turning a rule into a REFUSAL is the
+  // fix wherever a refusal is possible, and that is what the guarantees above are. Where it is
+  // not — "this room does not behave the way the tool says it does" — the next best thing is a
+  // note that arrives unbidden.
+  //
+  // The rooms are read off the errand's own steps, so it costs the author nothing: a script
+  // that walks to 27 is shown the notes about 27 without declaring anything.
+  try {
+    const sample = typeof steps === 'function' ? await steps(agents[0], {}) : steps;
+    const walkRooms = (Array.isArray(sample) ? sample : [])
+      .filter(x => x && (x.do === 'walk' || x.do === 'graze'))
+      .map(x => Number(x.to ?? x.room)).filter(Number.isFinite);
+    const hits = matchDevnotes(readDevnotes(), {
+      rooms: walkRooms,
+      tags: devnotes?.tags ?? [],
+      touches: [...(devnotes?.touches ?? []), ...(provenance?.touches ?? [])],
+    });
+    for (const n of hits.slice(0, 6)) onLog('\n' + formatDevnote(n));
+    if (hits.length > 6) onLog(`  ...and ${hits.length - 6} more devnote(s) — node tools/m59-devnote.mjs list`);
+  } catch { /* a note that cannot be read must never stop an errand */ }
+
   const prov = checkProvenance(provenance);
   if (prov.status === 'review') {
     onLog(`PROVENANCE: REVIEW — ${prov.why}`);
