@@ -105,6 +105,42 @@ creates characters. It is forwarded now, and `m59-shadow.mjs` waives `fullBudget
 reason: for a shadow, creation is **scaffolding** — `dress` grants every ability at the number
 prod actually has immediately afterwards.
 
+## IN GAME IS NOT THE SAME AS AVAILABLE — a new fleet goes shopping first
+
+**A freshly dressed shadow has no reagents.** It is minutes old, its loadout carries the same
+reagent floor as everybody else's, and that floor lives in the LOADOUT rather than the policy
+— so `buy_reagents: false` does not stop it. The first thing twenty-three keepers do on login
+is therefore set off for the apothecary, all of them, together.
+
+Stage `play` originally waited only for characters to be **in game**. They were: walking to a
+shop. The errand then started into a fleet that was already busy, and **a claim takes the
+faculties, not the body** — a journey or town trip already in flight is a *job* and keeps
+running through a successful claim.
+
+Measured 2026-09-16, the first full run of the shim: **ten of twenty-three characters
+completed a reagent town trip during the run** — about sixty purchases each, elderberry and
+herb from Joguer, `"the posted shopping list, funded before purchase"` — standing in room 104
+with `committed: -`, while the other thirteen walked the circuit normally. The first purchase
+is timestamped **seven minutes before the script started**. Nothing was stalled, nothing was
+refused, no character was hurt: half the fleet simply had other plans.
+
+**The detector cannot be a list of busy-sounding verbs, and this is the part worth reading.**
+A character standing at Joguer's counter working through a sixty-item shopping list reports
+`activity: "waiting"` — identical to an idle one. Matching `activity` against
+`travel|buy|shop|…` declares the fleet quiet on the first poll and changes nothing. So stage
+`play` fingerprints what MOVES instead — each character's `room_num` and its
+`town_service_at`, which advances across a town trip — and calls the fleet settled when
+nothing has changed for `--quiet-s` (45s default). It needs no verb list and no knowledge of
+the keeper's policy, so a keeper errand nobody has thought of still reads as activity.
+
+`--no-settle` races the keepers deliberately; `--settle-m` bounds the wait. A timeout goes
+ahead anyway and **says so**, because the old behaviour drove thirteen of twenty-three
+perfectly well — what was missing was anybody saying why the other ten ignored the errand.
+
+**The deeper fix is worth doing and is not done:** prod characters *have* reagents, so a
+shadow that starts with none is a less faithful mirror, not a more neutral one. Copying the
+reagent stock in `dress` would remove the shopping trip and the confound together.
+
 ## A SHADOW WITHOUT SKILLS ANSWERS THE WRONG QUESTION
 
 Until 2026-09-16 `dress` copied attributes, max health, position and equipment but never

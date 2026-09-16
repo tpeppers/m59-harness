@@ -146,6 +146,22 @@ const getJson = (port, path, ms = 20000) => new Promise(res => {
   req.on('error', () => res(null));
 });
 
+// Ask the broker a question through its MCP door. Read-only here — `fleet` is the only tool
+// this file calls, and it is how stage 4 finds out what the fleet is DOING rather than merely
+// that it exists.
+const tool = (name, args = {}, ms = 30000) => new Promise(res => {
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+                                params: { name, arguments: args } });
+  const req = http.request({ host: '127.0.0.1', port: HTTP_PORT, path: '/', method: 'POST', timeout: ms,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+    r => { let b = ''; r.setEncoding('utf8'); r.on('data', d => b += d);
+      r.on('end', () => { try { res(JSON.parse(JSON.parse(b).result.content[0].text)); }
+                          catch { res(null); } }); });
+  req.on('timeout', () => { req.destroy(); res(null); });
+  req.on('error', () => res(null));
+  req.end(body);
+});
+
 const sh = (cmd, args, { cwd = REPO, env = {}, label = '' } = {}) => new Promise((res) => {
   if (DRY) { say(`  [dry] ${label || cmd} ${args.join(' ')}`); return res({ code: 0, out: '' }); }
   const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, shell: false });
@@ -293,11 +309,93 @@ async function play() {
     // `session_characters` is the only reading that can tell those apart.
     const named = Object.values(h?.session_characters ?? {}).filter(Boolean);
     n = named.length || Number(h?.sessions ?? 0);
-    if (n >= want) { say(`  ${n} in game: ${named.slice(0, 6).join(', ')}${named.length > 6 ? ', …' : ''}`); return true; }
+    if (n >= want) {
+      say(`  ${n} in game: ${named.slice(0, 6).join(', ')}${named.length > 6 ? ', …' : ''}`);
+      return await settle();
+    }
     await new Promise(r => setTimeout(r, 10_000));
   }
   say(`  TIMED OUT with ${n} of ${want} in game after ${Math.round(WAIT_MS / 60000)} min`);
   return false;
+}
+
+// ------------------------------------ IN GAME IS NOT THE SAME AS AVAILABLE
+//
+// **A FRESHLY DRESSED SHADOW FLEET GOES SHOPPING THE MOMENT IT LOGS IN, AND THAT RACE IS
+// WHAT THE FIRST VERSION OF THIS FILE LOST.**
+//
+// A shadow is created minutes old. It has no elderberry and no herbs, its loadout carries a
+// reagent floor like every other character's, and the floor is in the LOADOUT rather than in
+// the policy — so `buy_reagents:false` does not stop it. The first thing twenty-three keepers
+// do on login is therefore set off for the apothecary, all of them, together.
+//
+// Stage 4 used to wait only for characters to be IN GAME. They were: walking to a shop. The
+// errand then started into a fleet that was already busy, and a claim takes the FACULTIES,
+// not the BODY — a journey or town trip already in flight is a JOB and keeps running through
+// a successful claim. Measured 2026-09-16: ten of twenty-three characters completed a reagent
+// town trip (about sixty purchases each, elderberry and herb from Joguer, "the posted
+// shopping list") DURING the run, standing in room 104 with `committed: -` while the other
+// thirteen walked the circuit. The first purchase is timestamped seven minutes before the
+// script started. Nothing was stalled, nothing was refused, and half the fleet simply had
+// other plans.
+//
+// So: wait for the fleet to be QUIET, not merely present. The wait is expected and bounded —
+// a reagent run is a few minutes — and it is reported rather than silent, because "why is
+// this sitting here" has a right answer and it should be on the screen.
+async function settle() {
+  if (has('--no-settle')) { say('  settle: skipped (--no-settle) — the errand will race the keepers'); return true; }
+  const budget = Number(arg('--settle-m', 10)) * 60_000;
+  const quietFor = Number(arg('--quiet-s', 45)) * 1000;
+  const until = Date.now() + budget;
+
+  // ASK WHETHER ANYTHING IS CHANGING, NOT WHAT THE FLEET SAYS IT IS DOING.
+  //
+  // The obvious implementation — match `activity` against travel/buy/shop — is WRONG here,
+  // and measurably so. A character standing at Joguer's counter working through a sixty-item
+  // shopping list reports `activity: "waiting"`, exactly like an idle one: measured on Aaaa
+  // at 22:14 with `town_service_at` set and sixty purchases in the ledger. A verb list would
+  // have declared the fleet quiet on the first poll and changed nothing.
+  //
+  // So this is a quiescence detector rather than a busy-ness detector: fingerprint what MOVES
+  // — the room a character is in, and `town_service_at`, which advances across a town trip —
+  // and call the fleet settled when nothing has changed for a while. It needs no list of
+  // verbs and no knowledge of the keeper's policy, so a keeper errand nobody has thought of
+  // still reads as activity.
+  const print = (rows) => rows.map(r => `${r.agent}:${r.room_num ?? '?'}:${r.town_service_at ?? 0}`).join('|');
+
+  let prev = null, steadySince = null, lastSaid = null;
+  say(`  settling: waiting for ${Math.round(quietFor / 1000)}s of no movement ` +
+      `(up to ${Math.round(budget / 60000)} min). A fleet this new always shops first — ` +
+      `it has no reagents and the floor is in the loadout.`);
+  for (;;) {
+    const t = await tool('fleet');
+    const rows = t?.fleet ?? [];
+    if (!rows.length) { say('  settle: the fleet read came back empty — going ahead'); return true; }
+
+    const now = print(rows);
+    const changed = prev === null ? rows.length
+      : rows.filter(r => !prev.includes(`${r.agent}:${r.room_num ?? '?'}:${r.town_service_at ?? 0}`)).length;
+    if (now === prev) { steadySince ??= Date.now(); }
+    else { steadySince = null; prev = now; }
+
+    const note = `${changed} of ${rows.length} moved since the last look`;
+    if (note !== lastSaid) { say(`  settle: ${note}`); lastSaid = note; }
+
+    if (steadySince && Date.now() - steadySince >= quietFor) {
+      say(`  settle: the fleet has been still for ${Math.round((Date.now() - steadySince) / 1000)}s — going`);
+      return true;
+    }
+    if (Date.now() >= until) {
+      // NOT A FAILURE. Going ahead with a busy fleet is what the old behaviour did, and it
+      // drove thirteen of twenty-three perfectly well. What was missing was anybody SAYING
+      // so, which is the difference between a confusing result and a readable one.
+      say(`  settle: TIMED OUT still moving — going ahead anyway. Characters still on their ` +
+          `own errand will ignore this one until it finishes: a claim takes the faculties, ` +
+          `not the body, and a job already in flight keeps running.`);
+      return true;
+    }
+    await new Promise(r => setTimeout(r, 15_000));
+  }
 }
 
 // ---------------------------------------------------------------- 5. run
