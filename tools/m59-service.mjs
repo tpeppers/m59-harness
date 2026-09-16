@@ -346,6 +346,22 @@ async function cmdStart() {
   // bites) fails with `s.world.route is not a function`. Until that is finished, a COMMANDED
   // fleet needs this flag and a self-driving one does not.
   if (process.argv.includes('--in-process')) args.push('--in-process');
+  // A BROKER THAT BUILDS A FLEET MUST NOT BE PLAYING IT.
+  //
+  // Both of these already existed on the broker and neither was reachable through the
+  // service, which is the only supported way to start one. Without them a rebuild
+  // deadlocks against itself: the broker resumes the roster, spawns one keeper process per
+  // entry, and each keeper takes that account's single allowed connection — so `reroll`,
+  // which has to log into the same account to send BP_NEW_CHARINFO, can never get in. The
+  // 45s rejoin sweep then puts every keeper back for as long as the rebuild lasts.
+  //
+  // It is invisible because it only bites the SECOND time. The first shadow fleet is built
+  // against an empty roster, which spawns no keepers and works perfectly; every rebuild
+  // afterwards fights twenty-three logins it started itself. 2026-09-16: twenty-three
+  // characters reported `NOT CREATED — no character came back` with the broker log showing
+  // nothing but its own keepers being refused for holding the wrong character.
+  if (process.argv.includes('--no-resume')) args.push('--no-resume');
+  if (process.argv.includes('--no-rejoin')) args.push('--no-rejoin');
   // Setup's server-matched local map remains authoritative across ordinary service
   // restarts. An explicit M59_MAP still wins; otherwise selection is local-then-reference.
   const env = { ...process.env, M59_MAP: mapFile };

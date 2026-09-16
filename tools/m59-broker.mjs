@@ -14743,6 +14743,26 @@ const TOOLS = [
       loadout: { type: 'string', description: 'spells: selfSufficient, healer, none. Default selfSufficient — ' +
         'create weapon needs no reagents so the character can never be unarmed, and create food needs ' +
         'elderberries and herbs, which is what it will be picking up anyway' },
+      // THE WAIVER HAS TO BE REACHABLE FROM THE TOOL, OR IT IS NOT A WAIVER.
+      //
+      // `planCharacter` has taken `unsafe` since it was written and `parseCreationWaiver`
+      // enforces the mandatory reason, but this tool never forwarded it — so the only way
+      // past a refused plan was to not use the tool. That made one guarantee unsatisfiable
+      // in practice: `fullBudget` wants all 45 ability points spent, level-1 abilities cost
+      // 10 and level-2 cost 25, so the only exact spend is two level-1 plus one level-2.
+      // Every all-level-1 loadout — `selfSufficient` is 4x10 = 40 — is therefore refused for
+      // ever, and the message's own advice ("add another level-1 spell or skill") reaches 50
+      // and is refused the other way.
+      //
+      // 2026-09-16: that is what stopped a shadow fleet being built. `reroll` returned
+      // `{done:false, plan}` for all twenty-three characters, m59-shadow.mjs collapsed it to
+      // "no character", and the accounts sat holding the server's placeholder User394556136
+      // while the failure was read as a wrong game server, a stale roster and a broken world
+      // in turn. The plan said exactly what was wrong on every one of those runs.
+      unsafe: { type: 'object', description: 'GO ANYWAY, AND SAY WHY — the shape fleetScript uses. ' +
+        '{ waives: ["fullBudget"], reason: "..." }. A reason is mandatory. Known waivers: ' +
+        'spellsGranted (a spell the server will silently refuse still costs its points) and ' +
+        'fullBudget (unspent ability points do not carry). Waiving "*" waives both.' },
       user_field: { type: 'number', description: 'the `user` field on BP_NEW_CHARINFO — the OBJECT ID ' +
         'of the character being replaced, which the server asks @IsFirstTime. Defaults to the id of the ' +
         'first-time character in the login list, which is what you want; override only to test the wire ' +
@@ -14757,7 +14777,7 @@ const TOOLS = [
     run: async (a) => {
       const plan = planCharacter({
         name: a.name, stats: a.stats || 'melee', loadout: a.loadout || 'selfSufficient',
-        skills: a.skills || [] });
+        skills: a.skills || [], unsafe: a.unsafe ?? null });
       if (a.action === 'plan') return plan;
       if (!plan.ok) return { done: false, plan, note: 'the plan is invalid; nothing was sent' };
 
