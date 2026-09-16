@@ -840,9 +840,25 @@ export function entryMatches(entry, name) {
   return itemNameKey(n) === itemNameKey(want);
 }
 
+// AMOUNT ZERO MEANS ONE, BECAUSE ZERO IS THE WIRE'S WORD FOR "NOT A STACK".
+//
+// `extractObject` files an amount only for a quantity-tagged object and writes 0 for
+// everything else (m59-parse.mjs: `isNumberObj(raw) ? r.u32() : 0`), which is faithful —
+// a hammer has no amount — and is why `stack` is tested on the TAG rather than on the
+// number. `??` only falls through on null/undefined, so a present 0 stayed 0 and every
+// non-stackable item in the pack counted as NOT HELD.
+//
+// Three of the four callers never saw it because they normalise at their own door with
+// `amount: o.amount || 1` — the keeper's packAsItems, the `loadout` MCP tool, and the
+// fleet row. The fourth is this file's own CLI, which feeds the `inventory` tool's reply
+// straight in. So `node tools/m59-loadout.mjs <name> --check` reported all 23 characters
+// as missing their weapon, body armour AND shield — naming `gear.want[0]`, a mace that
+// every character on the fleet is forbidden to draw — while the live path, reading the
+// same loadout through a door that normalised, correctly reported none of it.
+// Measured 2026-09-16: Sweetums was told to buy the knight's shield it was wearing.
 const countIn = (items, entry) => (items || [])
   .filter(i => entryMatches(entry, i.name))
-  .reduce((t, i) => t + (i.amount ?? i.count ?? 1), 0);
+  .reduce((t, i) => t + (Number(i.amount ?? i.count) || 1), 0);
 
 // ------------------------------------------------------------------ what the keeper asks
 
@@ -954,6 +970,57 @@ export function sellTest(loadout) {
   };
 }
 
+// A GEAR LIST THAT NAMES A WEAPON THE CHARACTER MAY NEVER DRAW IS NOT A PREFERENCE, IT IS
+// A CONTRADICTION — and it is silent in both directions, which is why it needs its own test.
+//
+// The two halves live in different files and neither reads the other. `gear.weapon` is in
+// the loadout and says what to fight with; `policy.bannedWeapons` is on the roster and says
+// what may never be drawn. Nothing refused the pair, so the fleet ran for weeks with them
+// pointing opposite ways and every call reporting success:
+//
+//   * `keepTest` protects every `gear.weapon` entry from sale — "a weapon this character is
+//     meant to fight with" — so a banned weapon became a PROTECTED one. Animal's pack held
+//     five hammers and seven axes it was forbidden to draw and not allowed to sell, against
+//     a `maxWeapons` of 2, while the one weapon it could legally draw (short sword) sat
+//     unprotected on its sell list. The loadout was exactly inverted.
+//   * `reconcile` reports `upgrade_to: ['mace']` for ever, because the best held entry is
+//     never the first one — an upgrade to a weapon the ban list forbids, recommended on
+//     every pass.
+//
+// Measured 2026-09-16 on prod: all 17 loadouts with a weapon list named `mace, hammer, axe`;
+// mace was banned on all 23 characters and all three were banned on ten of them.
+//
+// Pure, and the banned list is PASSED IN rather than looked up: this file must not learn
+// how to find a roster, and the same function then serves the CLI, a test and a planner.
+// An empty result means "nothing to say", never "no opinion" — pass the list you actually
+// have, and pass null when you could not read one so the caller can say so.
+export function bannedGearProblems(loadout, bannedWeapons = null) {
+  const want = loadout?.gear?.weapon ?? [];
+  const banned = Array.isArray(bannedWeapons) ? bannedWeapons.filter(Boolean) : [];
+  if (!want.length || !banned.length) return [];
+  const hits = want.filter(w => {
+    const n = String(w ?? '').toLowerCase();
+    return banned.some(b => { const t = String(b ?? '').trim().toLowerCase(); return t && n.includes(t); });
+  });
+  if (!hits.length) return [];
+  const problems = hits.map(item => ({
+    item, kind: 'banned_gear',
+    why: `gear.weapon names "${item}", which this character's policy.bannedWeapons forbids it ` +
+         'from ever drawing — and naming it as gear also protects it from being sold',
+  }));
+  // THE WHOLE-LIST CASE IS A DIFFERENT FAILURE AND GETS ITS OWN ROW. One banned entry among
+  // several is a stale preference; every entry banned means the character has no weapon it
+  // is both allowed to hold and told to keep, which is how ten characters ended up hoarding
+  // weapons they could not use and shedding the only one they could.
+  if (hits.length === want.length) problems.push({
+    item: null, kind: 'no_drawable_gear',
+    why: `every weapon in gear.weapon (${want.join(', ')}) is banned for this character, so ` +
+         'it is told to keep only weapons it may never draw. Name one it is allowed to hold ' +
+         '— policy.trainingWeapon is the keeper\'s own answer for the armed half.',
+  });
+  return problems;
+}
+
 // WHAT IS SHORT AND WHAT IS SURPLUS, in the vocabulary the fleet's interest board speaks.
 // This is what lets one character's shopping list stop another character selling the thing
 // it needs, which the board already does for elderberry and herbs and could not do for
@@ -995,7 +1062,18 @@ export function reconcile(loadout, { items = [], equipped = [] } = {}) {
     if (c.min > 0) keep.push({ item: c.item, upto: c.min, have, why: c.why ?? 'wanted' });
   }
 
+  // THE REPORT HAS TO RUN THE SAME RULE THE COUNTER RUNS. `sellTest` consults `keepTest`
+  // first and returns null when it matches — "keep always wins" — so a name on both lists
+  // is KEPT. This loop did not, and therefore named things that the sell path would then
+  // decline to sell: every one of these loadouts lists its shields under `gear.slots.shield`
+  // AND on `sell`, so the reconcile report offered the shield off the character's own arm
+  // while the live path quietly protected it. A report that disagrees with the behaviour it
+  // describes is worse than no report — it is what sends somebody to fix the wrong half.
+  //
+  // Narrowing only: nothing that was withheld before is offered now.
+  const sellKeep = keepTest(loadout, items);
   for (const s of loadout.sell) {
+    if (sellKeep && sellKeep(s)) continue;
     const have = countIn(items, { item: s });
     if (have > 0) sell.push({ item: s, have, keep_back: 0, over: have, why: 'on the sell list' });
   }
@@ -1351,6 +1429,17 @@ if (import.meta.filename === process.argv[1]) {
         if (g.upgrade_to) console.log(`   ${slot}: holding ${g.have}, wants ${g.upgrade_to.join(' or ')}`);
       if (r.gear.weapon?.upgrade_to)
         console.log(`   weapon: holding ${r.gear.weapon.have}, wants ${r.gear.weapon.upgrade_to.join(' or ')}`);
+      // The loadout half and the roster half of "what does this character fight with" are
+      // written in different files by different tools, so the only place they can be
+      // compared is here, where both are already in hand. A status read, not a change.
+      // Failing to read the policy is reported as UNKNOWN rather than as clean: "I could
+      // not ask" and "there is nothing wrong" are the two answers this repository keeps
+      // confusing, and a coherence check that goes quiet on an error is worse than absent.
+      let banned = null;
+      try { banned = (await broker('autopilot', { agent: row.agent, action: 'status' }))?.policy?.bannedWeapons ?? []; }
+      catch { banned = null; }
+      if (banned === null) console.log('   banned-weapon check: UNKNOWN — could not read this character\'s policy');
+      else for (const p of bannedGearProblems(l, banned)) console.log(`   PROBLEM  ${p.why}`);
     }
     process.exit(0);
   }

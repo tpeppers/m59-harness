@@ -1016,6 +1016,109 @@ console.log('\nbuying into a school this character does not cast');
      L.knowsSchool([{ kind: 'skill', name: 'fencing' }], 'Kraanan') === false);
 }
 
+// AMOUNT ZERO IS THE WIRE'S WORD FOR "NOT A STACK", AND IT MEANS ONE.
+//
+// extractObject writes an amount only for a quantity-tagged object and 0 for everything
+// else, so every weapon, shield and piece of armour in a pack arrives as `amount: 0`.
+// countIn used `??`, which only falls through on null/undefined, so all of them counted as
+// NOT HELD. The keeper, the `loadout` MCP tool and the fleet row each normalise at their
+// own door with `|| 1` and never saw it; this file's own CLI feeds the `inventory` reply
+// straight in and therefore reported all 23 prod characters as missing their weapon, body
+// armour and shield — naming gear.want[0], a mace the whole fleet is forbidden to draw.
+console.log('\na non-stackable item is one item, not zero');
+{
+  const { loadout } = L.normalise({ character: 'x',
+    gear: { weapon: ['short sword'], slots: { shield: ["knight's shield"] } },
+    carry: [{ item: 'elderberry', min: 12, max: 40 }] });
+  // exactly what the wire hands over: 0 for the non-stackables, a real count for the stack
+  const items = [{ name: 'short sword', amount: 0 }, { name: "knight's shield", amount: 0 },
+                 { name: 'elderberry', amount: 18 }];
+  const r = L.reconcile(loadout, { items });
+
+  ok('a weapon carried with amount 0 is HELD, not missing',
+     r.gear.weapon.missing === false && r.gear.weapon.have === 'short sword');
+  ok('...and so is a shield, which is the row that told Sweetums to buy the one it was wearing',
+     r.gear.slots.shield.missing === false);
+  ok('nothing is bought to replace gear the character already has',
+     !r.buy.some(b => b.gear));
+  ok('a real stack still counts as itself, so the fix does not inflate a floor',
+     !r.buy.some(b => b.item === 'elderberry'));
+
+  // The floor half runs through the same counter, so it had to move with it — and the
+  // answer it gives must still depend on the COUNT: below the floor the stack is
+  // protected, above it the surplus is fair game, which is the whole point of a floor.
+  ok('a carry floor still counts the stack: below it, protected',
+     L.keepTest(loadout, [{ name: 'elderberry', amount: 8 }])('elderberry') !== null);
+  ok('...and above it the surplus is still sellable',
+     L.keepTest(loadout, items)('elderberry') === null);
+
+  // And the direction that must NOT change: an item genuinely absent is still absent.
+  const gone = L.reconcile(loadout, { items: [{ name: 'elderberry', amount: 18 }] });
+  ok('an item that is not in the pack is still reported missing',
+     gone.gear.weapon.missing === true);
+}
+
+// THE REPORT HAS TO RUN THE RULE THE COUNTER RUNS.
+console.log('\nreconcile offers only what the sell path would actually sell');
+{
+  // Every one of this fleet's loadouts listed its shields as gear AND on the sell list.
+  const { loadout } = L.normalise({ character: 'x',
+    gear: { weapon: ['short sword'], slots: { shield: ["knight's shield"] } },
+    sell: ['long sword', "knight's shield"] });
+  const items = [{ name: 'long sword', amount: 0 }, { name: "knight's shield", amount: 0 }];
+  const r = L.reconcile(loadout, { items });
+  const offered = r.sell.map(s => s.item);
+
+  ok('a name on both the sell list and the gear list is KEPT, as sellTest already decided',
+     !offered.includes("knight's shield"));
+  ok('...and a sell-list entry nothing protects is still offered',
+     offered.includes('long sword'));
+  ok('reconcile and sellTest now give the same answer for the same name',
+     offered.includes('long sword') === (L.sellTest(loadout)('long sword') !== null) &&
+     offered.includes("knight's shield") === (L.sellTest(loadout)("knight's shield") !== null));
+}
+
+// A GEAR LIST THAT NAMES A WEAPON THE CHARACTER MAY NEVER DRAW.
+console.log('\ngear the roster forbids');
+{
+  const one = L.normalise({ character: 'x', gear: { weapon: ['mace', 'hammer', 'axe'] } }).loadout;
+  const BAN13 = ['mace', 'club', 'dagger', 'hammer', 'axe', 'long sword', 'scimitar'];
+
+  ok('nothing to say when there is no ban list',
+     L.bannedGearProblems(one, null).length === 0 && L.bannedGearProblems(one, []).length === 0);
+
+  const partial = L.bannedGearProblems(one, ['mace']);
+  ok('one banned entry among several is reported, and only that one',
+     partial.length === 1 && partial[0].item === 'mace' && partial[0].kind === 'banned_gear');
+
+  const all = L.bannedGearProblems(one, BAN13);
+  ok('EVERY entry banned is its own, louder finding',
+     all.filter(p => p.kind === 'banned_gear').length === 3 &&
+     all.some(p => p.kind === 'no_drawable_gear'));
+  ok('...and it says what to do about it, naming the keeper\'s own answer',
+     all.find(p => p.kind === 'no_drawable_gear').why.includes('trainingWeapon'));
+
+  // isBannedWeapon matches lower-cased substrings, so the check has to as well or it would
+  // pass a list the keeper will then refuse to draw from.
+  ok('matched as a substring, the same way the ban itself is',
+     L.bannedGearProblems(L.normalise({ character: 'x',
+       gear: { weapon: ['Battle Axe'] } }).loadout, ['axe']).length === 2);
+
+  ok('a loadout with no weapon list has nothing to contradict',
+     L.bannedGearProblems(L.normalise({ character: 'x' }).loadout, BAN13).length === 0);
+  ok('and a missing loadout is not a problem report',
+     L.bannedGearProblems(null, BAN13).length === 0);
+
+  // The shape the fleet was actually in: the ban list and the gear list pointing opposite
+  // ways, so keepTest protected the unusable weapons and left the usable one sellable.
+  const inverted = L.normalise({ character: 'x',
+    gear: { weapon: ['mace', 'hammer', 'axe'] }, sell: ['short sword'] }).loadout;
+  const keep = L.keepTest(inverted);
+  ok('THE INVERSION IS VISIBLE: banned weapons protected, the drawable one not',
+     keep('hammer') !== null && keep('axe') !== null && keep('short sword') === null &&
+     L.bannedGearProblems(inverted, BAN13).some(p => p.kind === 'no_drawable_gear'));
+}
+
 rmSync(root, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
