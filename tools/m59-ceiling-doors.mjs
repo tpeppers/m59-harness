@@ -53,8 +53,12 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   if (!state) return null;
   let changed = false;
   if (current.get(geometry) !== key) {
-    const result = applySectorHeights(geometry, state.sectors, { mask: Buffer.from(state.mask, 'base64') });
+    const mask = Buffer.from(state.mask, 'base64');
+    const result = applySectorHeights(geometry, state.sectors, { mask });
     if (result.why && result.why !== 'already at that height') return null;
+    // A fresh per-client geometry can already have these heights without a
+    // routing mask. applySectorHeights returns early in that case.
+    if (!geometry.attachStepMask(mask)) return null;
     changed = result.moved > 0; current.set(geometry, key);
     if (changed) forgetReach(roomNum);
   }

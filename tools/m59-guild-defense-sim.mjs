@@ -13,7 +13,7 @@ import {prepareScene} from './m59-scene-staging.mjs';
 import {loadMap,findPath} from './m59-map.mjs';
 import {RoomGeometry} from './m59-roo.mjs';
 import {guildPassage} from './m59-guild-passage.mjs';
-import {resumeReplayJourney} from './m59-replay-journey.mjs';
+import {ensureReplayHallDoors,respondWithRecovery} from './m59-guild-defense-controller.mjs';
 const root=path.resolve('substrate/guild-defense');
 const out=process.argv[2]??'castle-response.json',armor='ScaleArmor',tactic='focus',hallMode='owned-raided';
 const count=20,horizonMs=630000;
@@ -50,7 +50,7 @@ const scene={schema:'m59-scene/v1',name:'castle-victoria-response-20',room:{num:
 const skillNames={'dodge':401,'parry':402,'assess':403,'block':404,'second wind':405,'disarm':406,'slash':421,'thrust':422,'fire':425,'punch':430,'kick':431,'brawling':450,'fencing':451,'mace fighting':452,'scimitar wielding':453,'hammer wielding':454,'axe wielding':455,'archery':456,'short sword fighting':457};
 const teams={mode:'teams',assignments:Object.fromEntries(actors.map(a=>[a.key,a.mine?null:a.key.startsWith('raider')?'Raiders':'Defenders']))};
 let timer,castleStage,done=false,lever=null,reading=false,roster=[],at=0,hall=null;
-let autopilotFor,dropAutopilot;
+let autopilotFor,dropAutopilot,HANDLED,CONTINUE;
 const pilots=new Map(),journeys=[],dead=new Set(),ready=new Set(),last=new Map();
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const summary={assumptions:scene.assumptions,loadouts:{},orders:[],trace:[],events:[],hall_trace:[],errors:[]};
@@ -144,7 +144,8 @@ try {
             if(actual.room_object!==want||a.session.world?.room?.num!==(a.key.startsWith('raider')?714:39))throw Error('split-room start did not verify '+a.key);}
           summary.room=await readAdminRoom(714,{env});
         },onStarted:async(s,k,players)=>{
-          ({autopilotFor,dropAutopilot}=await import('./m59-autopilot.mjs'));
+          ({autopilotFor,dropAutopilot,HANDLED,CONTINUE}=await import('./m59-autopilot.mjs'));
+          for(const a of roster)ensureReplayHallDoors(a.session);
           at=Date.now();summary.started_at=new Date(at).toISOString();
           const raider=roster.find(a=>a.key==='raider1').session;
           await raider.pacer.submit('action',()=>raider.client.activate(lever));
@@ -160,6 +161,7 @@ try {
           };
           let ticks=0,lastProgress=0,lastTrace=0;
           const tick=()=>{try{
+            for(const a of roster)ensureReplayHallDoors(a.session);
             for(const a of roster)if(!dead.has(a.key)&&(a.session.world?.room?.num===1||a.session.client?.vitals?.()?.health?.value===0)){
               dead.add(a.key);a.session.cancelMovement?.(null,'simulation casualty');pilots.get(a.key)?.stop('simulation casualty',{hard:true});event('casualty',{actor:a.key,room:a.session.world?.room?.num});}
             const inHall=roster.filter(a=>alive(a)&&a.session.world?.room?.num===714);
@@ -183,8 +185,9 @@ try {
             pilot.running=true;pilot.stopping=false;pilot.startedAt=Date.now();pilot.startWatchdog();
             const task=(async()=>{
               event('response_order',{actor:a.key});
-              const result=await resumeReplayJourney(pilot,714,'guild defense response');
-              event('journey_result',{actor:a.key,result});
+              const result=await respondWithRecovery(pilot,714,{alive:()=>alive(a),stopped:()=>done,
+                handled:HANDLED,continueStage:CONTINUE,onEvent:(kind,data)=>event(kind,{actor:a.key,...data})});
+              event('response_result',{actor:a.key,result});
               if(done||!alive(a)||!result?.arrived)return;
               event('hall_foyer_arrival',{actor:a.key});
               await guildPassage(pilot,3,()=>done||!alive(a));

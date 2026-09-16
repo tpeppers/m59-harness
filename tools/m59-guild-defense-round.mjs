@@ -72,9 +72,9 @@ async function main(){
   if(!['run','import'].includes(mode)||!/^\d{3}-[a-z0-9-]+$/.test(id??'')||!hypothesis)
     throw Error('Usage: node tools/m59-guild-defense-round.mjs run|import 001-name "hypothesis" [old-report]');
   const root=path.resolve('substrate/guild-defense'),dir=path.join(root,'rounds',id);
-  fs.mkdirSync(path.dirname(dir),{recursive:true});fs.mkdirSync(dir); // Deliberately refuses overwrite.
   const dirty=!!git('status','--porcelain','--untracked-files=normal');
   if(mode==='run'&&dirty)throw Error('Commit this round before running it; tracked source must be clean');
+  fs.mkdirSync(path.dirname(dir),{recursive:true});fs.mkdirSync(dir); // Deliberately refuses overwrite.
   json(path.join(dir,'manifest.json'),{schema:'m59-guild-defense-round/v1',round:id,hypothesis,
     state:'started',started_at:new Date().toISOString(),
     provenance:mode==='import'?'Retrospective archive: execution provenance is inside the original report; this commit identifies the archive tooling.':'Executed from the recorded clean commit',
@@ -82,6 +82,7 @@ async function main(){
   fs.mkdirSync(path.join(dir,'inputs'));
   fs.copyFileSync(path.join(root,'defenders.json'),path.join(dir,'inputs','defenders.json'));
   fs.copyFileSync('tools/m59-guild-defense-sim.mjs',path.join(dir,'driver.mjs'));
+  if(process.env.SIM_PREFLIGHT_DIR)fs.cpSync(process.env.SIM_PREFLIGHT_DIR,path.join(dir,'preflight'),{recursive:true});
   if(mode==='import'){
     fs.copyFileSync(rest[0],path.join(dir,'report.json'));
     const baselineDriver=path.join(root,'castle-response.mjs');
