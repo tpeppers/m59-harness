@@ -91,6 +91,8 @@ export async function createReplayPlayers({scene,options,env,attestation,leases,
   let cleaned=false,guilds=null;
   const manager={
     receipt,
+    // Lab-only controller composition; these sessions are all owned temporary accounts.
+    controlledActors:()=>actors.map(a=>({key:a.spec.key,session:a.s})),
     stop(){for(const a of actors)a.s.combat?.issue({action:'stop'});},
     resolve:a=>actors.find(x=>x.spec.key===(a.key??a.name))?.s.client.selfId??null,
     playerNames:()=>new Map(actors.map(a=>[a.spec.name,a.s.client.me.name])),

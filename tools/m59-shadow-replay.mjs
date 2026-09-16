@@ -133,7 +133,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       await s.join(entry.credentials);await s.firstAbilityRead;
       return captureCachedScene(s,null,{provenance:runtimeProvenance(root)});
     },
-    async run({scene,variant,horizonMs,frame,onPrepared,onStarted,pvp=null}) {
+    async run({scene,variant,horizonMs,frame,onPrepared,onStarted,onStopping,shouldStop,sceneDm,pvp=null}) {
       const playerOptions=pvp??config.pvp??{},playerPlan=replayPlayerPlan(scene,playerOptions);
       const timings={},began=performance.now();let checkpoint=began;
       const lap=name=>{const now=performance.now();timings[name]=now-checkpoint;checkpoint=now;};
@@ -181,6 +181,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       }
       lap('controller_and_player_check_ms');
       staged=await prepareScene(input,{env,classes:config.classes,options:variant.reload??{},
+        ...(sceneDm?{dmFn:sceneDm}:{}),
         requireNativeHold:config.require_native_hold===true,resolveActor:async actor=>{
           if(actor.mine)return s.client.selfId;
           if(actor.kind!=='player')return null;
@@ -217,7 +218,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       restoreSurvivalDecisionForReplay(s,control.decision,{capturedAt:frame?.at??before});
       variantControl=installReplayVariant(k,variant,{onEvent:r=>suppressed.push(r)});
       k.replayStartActions=(control.start_actions??[]).map(action=>({...action,actor_key:`body-${bindings.get(action.actor_key)}`}));
-      await onPrepared?.(s,k,staged);
+      await onPrepared?.(s,k,staged,players);
       const hpTrace=[],victimMessages=[];
       if(players) {
         const noteHealth=s.noteHealth,noteCombatLine=s.noteCombatLine;
@@ -234,7 +235,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       controller_restore.pvp_survival = s.combat.restorePvPForReplay(control.pvp_survival,
         frame?.at??before, players?.playerNames());
       players?.start({target:s,horizonMs,at:release.at});
-      await onStarted?.(s,k);
+      await onStarted?.(s,k,players);
       lap('controller_restore_and_start_ms');
       timings.restore_to_start_ms=performance.now()-began;
       before=release.at;
@@ -271,6 +272,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
       task=execute().catch(e=>{error=e.message;});
       const deaths=k.tally.deaths??0;
       while(Date.now()-before<horizonMs) {
+        if(shouldStop?.())break;
         const room=s.world?.room?.num,hp=s.client?.vitals?.()?.health;
         if(players&&hpTrace.at(-1)?.hp!==(hp?.value??null))hpTrace.push({at:Date.now(),hp:hp?.value??null,
           room,row:s.client?.self?.row??null,col:s.client?.self?.col??null});
@@ -294,6 +296,7 @@ export async function createShadowReplayAdapter({configFile,isolate=true,termina
         intervention_applied:variant.kind==='disable'||variant.kind==='continue'?suppressed.length>0:
           variant.kind==='enable'?decisions.some(r=>r.decision?.activated_at!=null):true};
       lap('simulation_ms');
+      await onStopping?.();
       await stopTrial();lap('cleanup_ms');
       timings.total_ms=performance.now()-began;result.timings=timings;return result;
     },
