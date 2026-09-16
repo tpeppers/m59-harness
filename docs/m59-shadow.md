@@ -153,6 +153,53 @@ result: a shadow death told you about the road and the geometry and nothing abou
 socket. `--no-skills` goes back to a bare body **deliberately**, which is the right tool for
 isolating a geometry question, and the run says which it did.
 
+## WHAT A CLONE SHOULD CARRY — items, abilities, guild
+
+Operator, 2026-09-16: the default clone should be *"a copy of prod including items (like exact
+state)"*, and should pull *"skills/spell/guild (& hall) … so Shadow clones can cast rescue"*.
+Three parts, in different states:
+
+| | state |
+|---|---|
+| **abilities** (skills + spells) | **done.** `dress` grants each at the number prod actually has — 317 across 22 characters on the first run. `--no-skills` opts out deliberately |
+| **items** | **done for the common case.** `dress` recreates the recorded pack; `--no-items` opts out |
+| **guild and hall** | **half done.** The snapshot now records name, id, rank and rank title. Nothing yet recreates the guild on the lab |
+
+**The save/load code cannot do the reading half, and that is worth knowing before reaching for
+it.** `m59-scene-loadout.mjs` captures a player's carried items as portable native state, which
+is exactly the right shape — but `capturePlayerLoadout` reads through the **maintenance
+socket**, and `assertLab` refuses any host that is not loopback. Production is a remote server
+we do not run maintenance against, and that refusal is correct rather than an obstacle to route
+around. So a prod→lab clone reads over the **wire** (the broker's read-only `inventory`, which
+the snapshot already did) and writes by **DM on the lab**, which is loopback. Scene save/load
+remains the right tool for lab→lab.
+
+**The class is derived, never hand-written.** `inventory` reports `{name: 'herb', amount: 60}`
+and creating one needs `create object Herbs`. [`tools/m59-itemclass.mjs`](../tools/m59-itemclass.mjs)
+reads each `Item` class's own display-name resource out of `koddb.json` — the same string the
+wire sends back — covering 324 item classes and 332 names. Singular *and* plural are indexed,
+because `Herbs` is named `herb` and pluralised `herbs` and a table built from one misses the
+other. Seven names are genuinely ambiguous and **all seven refuse rather than guess**: `flask`
+is `Arsenic`, `Flask` or `DenialPotion`, and creating the first where prod carried the second is
+a poisoning, not a rounding error. `m59-itemclass-test.mjs` (30) pins it.
+
+**A stack is one object with a count, not N objects** — `piNumber` is the pile, and sixty
+separate `Herbs` would bury a fourteen-slot pack. `amount: 0` on the wire is the "not a stack"
+marker and means ONE.
+
+**Why guild is not optional.** Rescue's destination is **fixed and not chosen**: the guild hall,
+else the caster's hometown, which is random per character. A shadow with no guild therefore
+lands somewhere its original never would, and a rescue rehearsed on it proves nothing. Rank
+matters for the same reason guild commands are dangerous to assume — what a member may do is a
+bitmask keyed on rank, refused in **total silence** when the bit is absent.
+
+**Reading guild from prod needed a second guard.** The prod-side allowlist was by TOOL NAME,
+which was enough while every entry was a pure read. `guild` is not: the same tool that answers
+`status` also disbands, exiles, sets ranks and rents halls. The name alone would have put all of
+those on the production side of a file whose whole promise is that it never writes there. So the
+**action** is checked too (`status`, `list`, `halls`, `may`), and the default is refusal — a new
+action added upstream stays refused until somebody decides it is a read.
+
 ## Where the pieces live
 
 `tools/m59-shadow.mjs` is **gitignored on purpose** — it carries the shape of a real roster —
