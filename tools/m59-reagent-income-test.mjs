@@ -54,4 +54,13 @@ assert.equal(sale.total_received,30);
 assert.deepEqual(k.actions.filter(a=>a[0]==='sell'),[['sell',113,null],['sell',109,25],['sell',104,null]]);
 assert.equal(townDestinations({packFull:true,richEnoughToBank:true})[0].room,113);
 assert.ok(!MARKET_STOPS.some(s=>s.room===110));
+const owner=Object.assign(Object.create(Autopilot.prototype),{
+  policy:{},townTrip:{startedAt:1234},inertStatus:()=>null,parkStatus:()=>null,
+  heldStatus:()=>null,busyStatus:()=>null,
+});
+assert.equal(owner.commitment().kind,'errand');
+assert.equal(owner.commitment().since,1234);
+assert.notEqual(owner.commitment().takeable,true);
+owner.townTrip=null;owner.deferredShoppingTrip={startedAt:1234};
+assert.equal(owner.commitment(),null,'deferred unaffordable shopping releases the farmer');
 console.log('reagent income regression tests passed');

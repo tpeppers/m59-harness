@@ -36,6 +36,10 @@ The keeper's full-pack market was exclusively Roq, whose room is banned in
 production. Full-pack trips now visit the established equipment, gem and reagent
 specialists in Barloque (113, 109, 104). A persistent cursor resumes the current
 counter after survival interrupts travel. Herbutte receives stacks of at most 25.
+The first production visit exposed a second ownership problem: the director issued
+return-to-station while a keeper was at the first merchant. The entire pending
+shopping trip now publishes an errand commitment, including the counter phases,
+so routine station placement waits until the trip completes or is deferred.
 
 Whole-name keep rules and flattened loadout floors prevented surplus reagent sales.
 Both keeper-backed `sell_all` and autonomous shopping now use the same quantity

@@ -9981,6 +9981,8 @@ export class Autopilot {
       pending_shopping_trip: this.townTrip ? {
         to: this.townTrip.target.room, next_service: this.townTrip.nextService,
         started_at: this.townTrip.startedAt,
+        market_index: this.townTrip.marketIndex ?? null,
+        market_stops: this.townTrip.marketStops?.map(stop => stop.room) ?? null,
         purchase_plan: this.townTrip.purchasePlan ?? null,
       } : null,
       purchase_funding: this.purchaseFunding ?? null,
@@ -10622,7 +10624,10 @@ export class Autopilot {
   // out of without knowing there was another end to it.
   commitment() {
     return describeCommitment({
-      errand: this.errand,
+      // The director must also leave the keeper's own shopping operation alone
+      // between travel legs, while it quotes, trades, banks and restocks.
+      errand: this.errand ?? (this.townTrip ? { kind: 'selling and restocking',
+        at: this.townTrip.startedAt } : null),
       inert: this.inertStatus(),
       parked: this.parkStatus(),
       partner: this.policy?.partner ?? null,
