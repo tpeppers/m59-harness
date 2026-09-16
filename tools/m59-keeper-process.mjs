@@ -1986,18 +1986,57 @@ const server = createServer(async (req, res) => {
               return;
             }
 
+            // CLOSING IS A PLANNED PATH WALKED IN SHORT HOPS, NOT A STRAIGHT LINE AND NOT A
+            // ROOM CROSSING. This is the wedge, and it had two halves.
+            //
+            // `walkFine` aims at a point and SLIDES along whatever it meets. It is right for a
+            // few units of final approach and hopeless across a cave: from r27c19 it moved one
+            // square toward a quarry ten away, reported `arrived: undefined`, and left the body
+            // where it started.
+            //
+            // `walkTo` is the room crossing, and room 27's bake holds exactly TWO routes —
+            // `57,45>18,30` and its reverse, anchor to anchor. Asked for any other square it
+            // heads for an anchor instead: from r27c19 toward r31c29 (south-east) the body
+            // walked 39 steps to r18c18, which is the ROW of the `go` anchor at r18c30, and
+            // once crossed the room edge entirely. A through-route cannot express "walk over
+            // there", and a melee approach is nothing else.
+            //
+            // The geometry can. `geo.path` is the in-room A* the mover already owns, over the
+            // same step mask, and it finds what the bake cannot: 27 steps from the wedge to
+            // that orc, 73 to one across the cave, 91 into the far pocket. So plan with it and
+            // walk the waypoints in SHORT hops — a two-square `walkTo` reports "walked the
+            // proved route" and works, and short legs are what keeps the body on the plan
+            // instead of replanning from wherever a slide left it.
             let closed = t.d <= reach;
             const closeLog = [];
+            const HOP = Math.max(1, Number(args.hop ?? 3));
             for (let i = 0; i < closeTries && !closed; i++) {
-              const w = await session.walkFine(t.x, t.y, { maxSteps: 200, arriveWithin: 40 });
+              const self = c?.self;
+              if (!self) { closeLog.push({ try: i, why: 'own position unknown' }); break; }
+              // SNAPSHOT THE COORDS, NOT THE OBJECT. `c.self` is the live belief and the client
+              // mutates it in place, so holding the reference and comparing it afterwards
+              // compares a value with itself and reports progress on every pass.
+              const was = { row: self.row, col: self.col };
+              const geo = session.world?.geometry;
+              const plan = geo?.path?.(self.row, self.col, t.row, t.col, {}) ?? null;
+              if (!plan?.found || !plan.steps?.length) {
+                closeLog.push({ try: i, planned: false, why: plan?.reason ?? 'no path to the quarry' });
+                break;
+              }
+              // Walk to a waypoint a few squares along rather than the whole way: the quarry
+              // moves, and re-reading it between hops is what keeps this honest.
+              const wp = plan.steps[Math.min(HOP, plan.steps.length) - 1];
+              const w = await session.walkTo(wp.col, wp.row, { maxSteps: 30 });
               const again = quarry();
               if (!again) { t = null; break; }
-              closeLog.push({ try: i, arrived: w?.arrived ?? null, reason: w?.reason ?? null, d: again.d });
-              // NO PROGRESS IS AN ANSWER. A body wedged against geometry will burn every try
-              // reporting "ran out of steps" from the same square; saying so beats timing out.
-              if (again.d >= t.d && w?.arrived === false) { t = again; break; }
+              closeLog.push({ try: i, planned: plan.steps.length, aim: `r${wp.row}c${wp.col}`,
+                              arrived: w?.arrived ?? null, reason: w?.reason ?? null, d: again.d });
+              // NO PROGRESS IS AN ANSWER. A body that cannot leave its square will otherwise
+              // burn every try from the same place; saying so beats timing out.
+              const stuck = again.d >= t.d && was.row === c?.self?.row && was.col === c?.self?.col;
               t = again;
               closed = t.d <= reach;
+              if (stuck && !closed) { closeLog.push({ try: i, why: 'no ground gained' }); break; }
             }
             if (!t) { json({ engaged: false, closed: false, killed: false, swings: 0,
                              why: 'the quarry left before contact', close_log: closeLog }); return; }
