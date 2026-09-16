@@ -58,8 +58,8 @@ export function publishPlan(s,plan,{room=null,room_wire=null,dir=INTENT_DIR(),no
   atomicJson(join(dir,'observed','bot-'+process.pid+'.json'),{
     schema:'m59-inventory-plan/1',at:now,pid:process.pid,agent:s.name,identity:plan.identity,
     room,room_wire,revision:plan.revision,error:plan.error,
-    items:plan.items.map(({id,name,amount,equipped,role,actions,recommended,blocked,reason,state,queued,source})=>
-      ({id,name,amount,equipped,role,actions,recommended,blocked,reason,state,queued,source}))
+    items:plan.items.map(({id,name,amount,sale_amount,equipped,role,actions,recommended,blocked,reason,state,queued,source})=>
+      ({id,name,amount,sale_amount,equipped,role,actions,recommended,blocked,reason,state,queued,source}))
   });
 }
 // Multiple UI/AI callers use an OS-exclusive writer lock plus a revision check.

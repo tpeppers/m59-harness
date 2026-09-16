@@ -39,7 +39,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
-import { isFood, foodValue, weighItem, foodSurplusOf } from './m59-items.mjs';
+import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
@@ -1240,9 +1240,14 @@ const BANKS = [
 //
 // A bank is where MONEY goes; this is where GOODS go. Which one a trip aims at depends on
 // which threshold opened it — see bankRun.
-const MARKETS = [
-  { room: 110, name: 'A shadowy corner (Roq, Barloque)' },
-];
+export const MARKET_STOPS = Object.freeze([
+  { room: 113, name: "Fehr'loi Qan, Barloque" },
+  { room: 109, name: 'Herbutte, Barloque', maxStack: 25 },
+  { room: 104, name: 'Joguer, Barloque' },
+]);
+// A full pack needs all three specialists. The starting counter buys equipment;
+// the persisted shopping cursor then visits gems and reagents, without Roq's route.
+const MARKETS = [MARKET_STOPS[0]];
 
 // The bread. 103 is the one shelf in the world carrying cheese, meat pie, bread and
 // apples together (144/144/108/45), and it is a short hop from Roq — so the sell leg and
@@ -1315,10 +1320,10 @@ export function townDestinations({ needsCashFirst = false, supplyTrip = false, s
                                    packFull = false, brokeWithGoods = false,
                                    richEnoughToBank = false } = {}) {
   if (needsCashFirst) return BANKS;
+  if (packFull || brokeWithGoods) return MARKETS;
   if (richEnoughToBank) return BANKS;
   if (supplyTrip) return [REAGENT_SHOP];
   if (starving && !packFull) return [FOOD_SHOP];
-  if (packFull || brokeWithGoods) return MARKETS;
   return BANKS;
 }
 
@@ -19613,19 +19618,22 @@ export class Autopilot {
     const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);
     const fullness = cap?.known && cap.load
       ? Math.max(frac(cap.load.weight, cap.weight_max), frac(cap.load.bulk, cap.bulk_max)) : 0;
+    // Protected or refused cargo may remain heavy after every counter. Give the
+    // farmer a working interval rather than immediately repeating the same circuit.
+    const saleCooling = Date.now() - (this.lastMarketServiceAt ?? 0) < 600_000;
 
     // An inexact load is a LOWER bound — carryCapacity withholds room_for rather than
     // guess. "Make room" is the safe reading; "there is room" is how items get deleted.
-    if (cap?.known && cap.load?.exact === false)
+    if (!saleCooling && cap?.known && cap.load?.exact === false)
       return { sell: true, trigger: 'unweighable',
                why: 'the pack holds something not in the weight table, so its load is a ' +
                     'lower bound — treat that as make room, never as there is room' };
 
     const at = this.policy.sellAtLoad ?? 0.85;
-    if (fullness >= at)
+    if (!saleCooling && fullness >= at)
       return { sell: true, trigger: 'load', fullness,
                why: `pack is ${Math.round(fullness * 100)}% of capacity` };
-    if (stacks >= (this.policy.maxCarry ?? 14))
+    if (!saleCooling && stacks >= (this.policy.maxCarry ?? 14))
       return { sell: true, trigger: 'stacks', stacks, why: `${stacks} stacks, at the pack ceiling` };
 
     // RUNNING OUT IS A REASON TO GO. A PART-FULL PACK IS NOT.
@@ -20680,11 +20688,12 @@ export class Autopilot {
         : starving && !packFull && carried <= above
         ? 'no food and not both reagents, so the only vigor above the resting cap is bought'
         : (packFull || brokeWithGoods) && carried <= above
-        ? 'the pack has stopped earning; Roq is the one NPC that pays for a full one'
+        ? 'make pack room at the equipment, gem and reagent specialists'
         : 'everything carried is dropped on death and usually unrecoverable; a balance is not' });
     // The shopping objective survives every recovery stop. Save the exact service
     // cursor rather than relying on need thresholds and cooldowns to rediscover it.
-    this.townTrip = { target, nextService: -1, startedAt: Date.now() };
+    this.townTrip = { target, nextService: -1, startedAt: Date.now(),
+      marketStops: packFull || brokeWithGoods ? MARKET_STOPS.filter(m=>!this.bansDestination(m.room)) : null };
     this.postShoppingPlan(this.shoppingPlan());
     return this.continueTownTrip();
   }
@@ -20741,7 +20750,11 @@ export class Autopilot {
     }
     const steps = [
       ['guild contribution', () => this.contributeGuildWants()],
-      ['sell', async () => { trip.sale = await this.sellInTown(); }],
+      ['sell', async () => {
+        const result = trip.marketStops?.length ? await this.sellMarketCircuit(trip) : await this.sellInTown();
+        if (result?.pending) return result;
+        trip.sale = result;
+      }],
       ['guild tithe', () => this.guildTitheFromSale(trip.sale)],
       ['bank surplus', () => this.bankSurplus()],
       ['withdraw shopping money', () => this.ensurePurchaseFunds(this.shoppingPlan())],
@@ -20787,6 +20800,7 @@ export class Autopilot {
     }
     this.townTrip = null;
     this.lastTownServiceAt = Date.now();
+    if (trip.marketStops?.length) this.lastMarketServiceAt = this.lastTownServiceAt;
     this.progress('finished the shopping trip');
     return true;
   }
@@ -21336,7 +21350,7 @@ export class Autopilot {
   // protect its reagents and the fleet register was doing all the work alone. Both are
   // consulted now: either one saying "keep" is enough, which is what makes it safe to
   // sell everything else.
-  async sellInTown() {
+  async sellInTown({ maxStack = null } = {}) {
     const s = this.s, c = s.need();
     // "BUYS ANYTHING" IS USUALLY A TRICK, AND IT NEARLY COST THE FLEET EVERYTHING.
     //
@@ -21353,10 +21367,10 @@ export class Autopilot {
       .find(o => affordances(o.flags).includes('buy') && skills.trustedBuyer(c.rsc.get(o.nameRsc)));
     if (!buyer) return null;
     this.doing = 'trading';
-    const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.loadout(),
+    const r = await skills.sellAll(s, { merchant: buyer.id, loadout: this.loadout(), keep: MARKET_KEEP,
                                        protect: this.protectedItemNames(),
                                        maxWeapons: this.policy.maxWeapons,
-                                       weaponPriority: this.weaponPriorityNow() })
+                                       weaponPriority: this.weaponPriorityNow(), maxStack })
                           .catch(e => ({ error: e.message }));
     if (r.error) { this.note('could not sell in town', { why: r.error }); return null; }
     if (r.sold?.length) {
@@ -21378,6 +21392,25 @@ export class Autopilot {
   // reason the plan is an END STATE — "chest 2 should hold 300 mushrooms" shrinks as other
   // characters contribute, so a met plan silently produces no work instead of sending
   // twenty-one characters to look at a full chest.
+  async sellMarketCircuit(trip) {
+    trip.marketIndex ??= 0;
+    trip.marketSale ??= { sold: [], total_received: 0 };
+    while (trip.marketIndex < trip.marketStops.length) {
+      const stop = trip.marketStops[trip.marketIndex];
+      if (this.travelInterrupted() || this.suspendedJourney) return { pending: true };
+      if (Number(this.s.world?.room?.num) !== stop.room) {
+        const result = await this.travel(stop.room, { maxHops: 20 });
+        if (!result.arrived || this.travelInterrupted()) return { pending: true };
+      }
+      const sale = await this.sellInTown({ maxStack: stop.maxStack });
+      if (!sale || sale.error || this.travelInterrupted()) return { pending: true };
+      trip.marketSale.sold.push(...(sale.sold ?? []));
+      trip.marketSale.total_received += sale.total_received ?? 0;
+      trip.marketIndex++;
+    }
+    return trip.marketSale;
+  }
+
   async contributeGuildWants() {
     if (this.policy.reagentCoop?.enabled)
       // The town scheduler owns donation opportunities. Standalone passes must

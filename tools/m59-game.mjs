@@ -11525,12 +11525,15 @@ class Session {
     const c = this.need();
     const liveItem=(c.inventory||[]).find(o=>o.id===item.id);
     if(!liveItem)return {sold:false,offered_price:null,note:'item is no longer carried'};
+    const heldBefore=liveItem.amount||1, offeredAmount=liveItem.amount>0?item.amount:1;
+    if (!(offeredAmount>0) || offeredAmount>heldBefore)
+      return {sold:false,offered_price:null,note:'offered quantity is no longer carried'};
     const intentItem={id:item.id,name:c.rsc.get(liveItem.nameRsc)||liveItem.name||''};
     const blocked=saleBlocked(this,intentItem);
     if(blocked)return {sold:false,offered_price:null,note:blocked};
     const t = typeof merchantRef === 'object' && merchantRef !== null ? merchantRef : { id: Number(merchantRef) };
     const before = c.evSeq;
-    await this.pacer.submit('trade', () => c.offer(t.id, [item.amount > 1 ? { id: item.id, amount: item.amount } : item.id]));
+    await this.pacer.submit('trade', () => c.offer(t.id, [liveItem.amount > 0 ? { id: item.id, amount: item.amount } : item.id]));
     // Wait for the COUNTEROFFER specifically: our own echo always lands first, and
     // listening for both makes every sale look like a refusal.
     const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 });
@@ -11558,7 +11561,10 @@ class Session {
     await new Promise(r => setTimeout(r, 1400));
     await this.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 4000 });
-    return { sold: true, offered_price: price, merchant_said: said };
+    const remaining=c.inventory.find(o=>o.id===item.id);
+    const removed=heldBefore-(remaining?(remaining.amount||1):0);
+    return { sold: removed>=offeredAmount, amount: removed, offered_price: price, merchant_said: said,
+      ...(removed<offeredAmount?{note:'sale did not remove the offered quantity'}:{}) };
   }
 
   // Travel to another room, hop by hop, replanning at each arrival. Replanning per

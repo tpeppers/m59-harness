@@ -47,7 +47,7 @@ const ok = (name, cond, extra = '') => {
 const { townDestinations, Autopilot } = await import('./m59-autopilot.mjs');
 
 const rooms = state => townDestinations(state).map(d => d.room);
-const JOGUER = 104, BREAD = 103, ROQ = 110, TOS = 54, JASPER = 376;
+const JOGUER = 104, BREAD = 103, MARKET = 113, TOS = 54, JASPER = 376;
 
 console.log('\nwhere a town trip is aimed');
 {
@@ -61,14 +61,14 @@ console.log('\nwhere a town trip is aimed');
 
   // The doors that already worked, kept working. A full pack is the case the market was
   // built for and it must not be dragged along by the fix above.
-  ok('a full pack still goes to the market, which is the one NPC that pays',
-     rooms({ packFull: true }).join() === String(ROQ));
+  ok('a full pack starts at the equipment specialist',
+     rooms({ packFull: true }).join() === String(MARKET));
   ok('broke with goods aboard goes to the market too',
-     rooms({ brokeWithGoods: true }).join() === String(ROQ));
+     rooms({ brokeWithGoods: true }).join() === String(MARKET));
   ok('an empty larder goes to the bread shop',
      rooms({ starving: true }).join() === String(BREAD));
-  ok('a full pack outranks hunger — the bread shop is a hop from Roq anyway',
-     rooms({ starving: true, packFull: true }).join() === String(ROQ));
+  ok('a full pack sells before buying food',
+     rooms({ starving: true, packFull: true }).join() === String(MARKET));
 
   // Money on the character is the one thing a death takes for ever.
   ok('over the banking threshold, the bank wins over every shopping door',

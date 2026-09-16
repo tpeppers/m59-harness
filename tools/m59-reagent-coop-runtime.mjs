@@ -4,7 +4,7 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { claimFleetLock } from './runtime/fleet-lock.mjs';
 import { StorageCache, chestKey } from './m59-storage.mjs';
-import { FLEET_KEEP, weighItem } from './m59-items.mjs';
+import { MARKET_KEEP, weighItem } from './m59-items.mjs';
 import { inventorySalePlan, carryCapacity } from './m59-skills.mjs';
 import { reagentFloorFor } from './m59-stockpile.mjs';
 import { dropSpec } from './m59-parse.mjs';
@@ -20,9 +20,10 @@ const interrupted = k => k.travelInterrupted() || k.suspendedJourney ||
 const inwardInterrupted = k => interrupted(k) || !!k.coopSecrecy?.blocked;
 const room = k => Number(k.s.world?.room?.num);
 const pack = k => k.packAsItems();
-const sale = k => inventorySalePlan(k.s, { keep: FLEET_KEEP,
+const sale = k => inventorySalePlan(k.s, { keep: MARKET_KEEP,
   protect: k.protectedItemNames(), loadout: k.loadout(),
-  maxWeapons: k.policy.maxWeapons, weaponPriority: k.weaponPriorityNow() }).items.filter(i => i.queued);
+  maxWeapons: k.policy.maxWeapons, weaponPriority: k.weaponPriorityNow() }).items.filter(i => i.queued)
+  .map(i => ({ ...i, amount: i.sale_amount }));
 const ownFloor = (k, name) => reagentFloorFor({ loadout: k.loadout(), policy: {
   reagentTarget: ['herb', 'elderberry'].includes(name) ? k.policy.reagentTarget : null } }, name);
 

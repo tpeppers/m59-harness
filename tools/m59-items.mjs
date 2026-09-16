@@ -896,3 +896,8 @@ export const FLEET_KEEP = Object.freeze([
   'orc tooth',
   ...allWandAndScrollNames(),
 ]);
+
+// On a selling trip, loadout quantities and explicit collection orders reserve
+// useful gems. Keeping every gem or empty flask defeats a pack-clearing circuit.
+export const MARKET_KEEP = Object.freeze(FLEET_KEEP.filter(name =>
+  !['emerald', 'sapphire', 'diamond', 'ruby', 'flask'].includes(name)));

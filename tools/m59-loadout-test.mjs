@@ -221,10 +221,11 @@ console.log('\nthe keeper-backed branch carries the loadout too');
   const src = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   const at = src.indexOf("keeperAction(a.agent, s._index, 'sell_all'");
   ok('the keeper-backed sell_all call site is still findable', at > 0);
-  ok('sell_all hands the keeper the loadout protected names, not just the caller keep list',
-     src.slice(at, at + 400).includes('keep: [...(a.keep || []), ...fromLoadout]'));
+  const keeperSrc = readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  ok('sell_all evaluates the live loadout in the keeper, retaining quantities',
+     keeperSrc.includes('loadout: args.ignore_loadout ? null : autopilot?.loadout?.()'));
   ok('and it is still possible to opt out, which is what ignore_loadout is for',
-     src.includes('a.ignore_loadout || !who ? [] : protectedNames(loadoutFor(who))'));
+     src.slice(at, at + 400).includes('ignore_loadout: a.ignore_loadout'));
 }
 
 console.log('\nthe sell list, and what outranks it');

@@ -10232,7 +10232,6 @@ const TOOLS = [
       // character that is perfectly well in game. The roster is the one that cannot be cold —
       // it is the file this broker resumed from — so it is the floor under both.
       const who = s.client?.me?.name ?? s.character ?? rosterEntry(a.agent)?.credentials?.character ?? null;
-      const fromLoadout = a.ignore_loadout || !who ? [] : protectedNames(loadoutFor(who));
       // keeper-backed: sell runs in the keeper process (its client has the trade packets; the
       // broker's Session-only sellOne is not on the proxy). Merchant is resolved in the keeper's room.
       //
@@ -10255,7 +10254,7 @@ const TOOLS = [
       // through the BROKER against a keeper-backed character, never only in process.
       if (s instanceof KeeperProxy)
         return keeperAction(a.agent, s._index, 'sell_all',
-          { merchant: a.merchant, keep: [...(a.keep || []), ...fromLoadout],
+          { merchant: a.merchant, keep: a.keep, ignore_loadout: a.ignore_loadout,
           min_price: num(a.min_price, 1), max_stack: a.max_stack == null ? null : Number(a.max_stack),
           max_weapons: a.max_weapons == null ? null : Number(a.max_weapons),
           max_offers: a.max_offers, skip_names: a.skip_names });

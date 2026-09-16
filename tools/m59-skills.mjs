@@ -32,7 +32,7 @@ import { FLEET_KEEP, weighPack, isWeaponName, itemNameKey, foodValue } from './m
 // A character's own buy/sell/keep list, when it has one. Imported for the two pure
 // predicates only — this file does not go looking for the file, because the caller knows
 // which character it is and this one does not.
-import { keepTest as keepTestFor, sellTest as sellTestFor } from './m59-loadout.mjs';
+import { keepTest as keepTestFor, sellTest as sellTestFor, saleAllowance } from './m59-loadout.mjs';
 import * as buyers from './m59-buyers.mjs';
 import {readIntent,sessionIdentity,planInventory,saleBlocked} from './m59-inventory-intent.mjs';
 import { readFileSync } from 'node:fs';
@@ -3203,6 +3203,9 @@ export function sellable({ name, worn, keepRe, loadout = null, pack = [], armour
   const mustKeep = keepTestFor(loadout, pack);
   const kept = mustKeep?.(name);
   if (kept) return { sell: false, why: `this character's loadout: ${kept}` };
+  const allowance = saleAllowance(loadout, name, pack);
+  if (!allowance.amount) return { sell: false, why: 'working stock reserved by the loadout' };
+  if (allowance.overflow) return { sell: true, why: 'surplus above the loadout ceiling' };
   const mustSell = sellTestFor(loadout);
   if (mustSell?.(name)) return { sell: true, why: 'this character\'s loadout puts it on the sell list' };
   if (keepRe.test(name)) return { sell: false, why: 'the keep list' };
@@ -3281,24 +3284,29 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
   const identity=sessionIdentity(s);let doc=null,error=null;
   if(identity)try{doc=readIntent(identity);}catch{error='inventory intent unavailable';}
   const held=[];
+  const remaining = pack.map(x => ({ ...x }));
   const candidates=pack.filter(x=>x.name).map(x=>{
     const normal=sellable({name:x.name,worn:x.equipped,keepRe,loadout,armoured,pack});
+    const allowance=saleAllowance(loadout,x.name,remaining);
+    const saleAmount=Math.min(x.amount,allowance.amount);
     const recommended=equipment.sell.has(x.id)||(!equipment.keep.has(x.id)&&normal.sell);
     let blocked=error||(!equipped?'equipment is not known':null);
     if(itemIsProtected(x.name,protect))blocked='protected item';
     else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
-    else if(!equipment.sell.has(x.id)&&interest.anyoneWants(x.name,{except:s.name})) {
+    else if(!allowance.overflow&&!equipment.sell.has(x.id)&&interest.anyoneWants(x.name,{except:s.name})) {
       blocked='wanted by the fleet';
       if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});
     }
     // Explicit clicks may nominate ordinary carried loot, but do not override
     // configured keep floors or reserve lists, equipped gear, or fleet needs.
     if(!normal.sell&&!equipment.sell.has(x.id)&&!blocked)blocked=normal.why;
+    if(!saleAmount&&!blocked)blocked='working stock reserved by the loadout';
+    if(recommended&&!blocked)remaining.find(i=>i.id===x.id).amount-=saleAmount;
     const slot=armourKind(x.name)?.slot;
     const role=weaponScore(x.name)>0?'weapon':slot==='armour'?'armor':
       slot==='shield'?'shield':slot==='helm'?'helmet':foods.has(x.id)?'food':'other';
     // Intent metadata carries appearance, never grants an action capability.
-    return {...x,role,actions:[],recommended,blocked,reason:equipment.sell.get(x.id)||normal.why};
+    return {...x,sale_amount:saleAmount,role,actions:[],recommended,blocked,reason:equipment.sell.get(x.id)||normal.why};
   });
   return {identity,revision:doc?.revision??0,items:planInventory(candidates,doc),held,error};
 }
@@ -3315,7 +3323,7 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
 // ABSENCE of the argument that now means "use the fleet's answer" rather than "use no answer".
 export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], minPrice = 1,
                                    loadout = null, maxWeapons = null,
-                                   weaponPriority = null } = {}) {
+                                   weaponPriority = null, maxStack = null } = {}) {
   const c = s.need();
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
@@ -3357,16 +3365,27 @@ export async function sellAll(s, { merchant, keep = FLEET_KEEP, protect = [], mi
   for (const it of items) {
     const blocked=saleBlocked(s,it);
     if(blocked){refused.push({name:it.name,why:blocked});continue;}
-    const q = await s.sellOne(merchant, it.o, false);
-    if (!q.offered_price || q.offered_price < minPrice) {
-      refused.push({ name: it.name, why: q.merchant_said?.join(' ') || q.note || 'no price offered' });
+    const packNow=()=>c.inventory.map(o=>({name:c.rsc.get(o.nameRsc)||'',amount:o.amount||1}));
+    let left=it.sale_amount;
+    while(left>0) {
+      const live=c.inventory.find(o=>o.id===it.id);
+      if(!live)break;
+      const amount=Math.min(left,live.amount||1,saleAllowance(loadout,it.name,packNow()).amount,maxStack||Infinity);
+      if(!(amount>0))break;
+      const offer={...live,amount:live.amount>0?amount:0};
+      const q = await s.sellOne(merchant, offer, false);
+      if (!q.offered_price || q.offered_price < minPrice) {
+        refused.push({ name: it.name, why: q.merchant_said?.join(' ') || q.note || 'no price offered' });
+        await sleep(900);
+        break;
+      }
+      const veto=saleBlocked(s,it);
+      if(veto || saleAllowance(loadout,it.name,packNow()).amount<amount)break;
+      const done = await s.sellOne(merchant, offer, true);
+      if (done.sold) { sold.push({ name: it.name, amount, price: done.offered_price }); total += done.offered_price; left-=amount; }
+      else { refused.push({ name: it.name, why: done.note || 'accept failed' }); break; }
       await sleep(900);
-      continue;
     }
-    const done = await s.sellOne(merchant, it.o, true);
-    if (done.sold) { sold.push({ name: it.name, price: q.offered_price }); total += q.offered_price; }
-    else refused.push({ name: it.name, why: done.note || 'accept failed' });
-    await sleep(900);
   }
   return { sold, refused, total_received: total, kept_for_the_fleet: held,
            merchant: plan.merchant,

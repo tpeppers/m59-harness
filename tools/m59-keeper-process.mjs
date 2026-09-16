@@ -51,6 +51,7 @@ import { OF } from './m59-parse.mjs';
 import { combatWatchStore } from './m59-combat-watch-store.mjs';
 import { renderState } from './m59-world.mjs';
 import * as skills from './m59-skills.mjs';
+import { FLEET_KEEP } from './m59-items.mjs';
 import * as party from './m59-party.mjs';
 import { chatterFor, fleetChatter } from './m59-chatter.mjs';
 import {
@@ -4167,18 +4168,17 @@ const server = createServer(async (req, res) => {
             }
             if (!merchant) { result = { error: `no merchant matching "${ref}" in this room` }; break; }
             const merchId = merchant.id;
-            const keepRe = [...(args.keep || []), ...(autopilot?.protectedItemNames?.() ?? [])]
-              .map(k => String(k).toLowerCase());
+            const salePlan = () => skills.inventorySalePlan(session, {
+              keep: args.keep ?? FLEET_KEEP, protect: autopilot?.protectedItemNames?.() ?? [],
+              loadout: args.ignore_loadout ? null : autopilot?.loadout?.(),
+              maxWeapons: args.max_weapons, weaponPriority: args.weapon_priority ?? autopilot?.policy?.weaponPriority,
+            }).items;
             const minPrice = Number(args.min_price ?? 1);
             const maxStack = args.max_stack == null ? null : Number(args.max_stack);
             const maxOffers = args.max_offers == null ? Infinity : Math.max(1, Math.min(200, Number(args.max_offers) || 1));
             const skippedNames = new Set((args.skip_names ?? []).map(String));
             const equipped = c.equipment?.();
             if (!equipped?.known) { result = { error: 'equipment is not known; no items offered' }; break; }
-            const wornIds = new Set((equipped.equipped ?? []).map(o => o.id));
-            const equipmentPlan = skills.merchantEquipmentPlan(c, {
-              maxWeapons: args.max_weapons, weaponPriority: args.weapon_priority ?? autopilot?.policy?.weaponPriority,
-            });
             const nameOf = (o) => c.rsc?.get?.(o.nameRsc) || '';
             const sellChunk = async (id, amount) => {
               const item = c.inventory.find(o => o.id === id);
@@ -4186,6 +4186,8 @@ const server = createServer(async (req, res) => {
               const intentItem={id,name:nameOf(item)};
               const blocked=saleBlocked(session,intentItem);
               if(blocked)return {sold:false,note:blocked};
+              if (!salePlan().some(i=>i.id===id&&i.queued&&i.sale_amount>=amount))
+                return {sold:false,note:'working stock is reserved'};
               const beforeAmount = item?.amount || 1;
               const before = c.evSeq;
               // NumberItem offers need a quantity even when the final chunk is
@@ -4198,7 +4200,8 @@ const server = createServer(async (req, res) => {
               const held=await session.pacer.submit('trade', () => {
                 const current=c.inventory.find(o=>o.id===id);
                 const reason=!current||nameOf(current)!==intentItem.name
-                  ? 'item changed during the offer' : saleBlocked(session,intentItem);
+                  ? 'item changed during the offer' : saleBlocked(session,intentItem) ||
+                    (!salePlan().some(i=>i.id===id&&i.queued&&i.sale_amount>=amount) ? 'working stock is reserved' : null);
                 if(reason){c.cancelOffer();return reason;}
                 c.acceptOffer();return null;
               });
@@ -4215,20 +4218,19 @@ const server = createServer(async (req, res) => {
             if (loop) loop._frozen = true;
             const sold = [], refused = [];
             let offers = 0, more = false;
-            const targets = [...new Set((c.inventory || []).map(nameOf).filter(Boolean))]
-              .filter(nm => !skippedNames.has(nm) && !/shilling|\bcoins?\b/i.test(nm) && !keepRe.some(k => nm.toLowerCase().includes(k)));
+            const targets = [...new Set(salePlan().filter(i=>i.queued).map(i=>i.name))]
+              .filter(nm => !skippedNames.has(nm));
             try {
               saleLoop:
               for (const nm of targets) {
                 let guard = 0;
                 while (guard++ < 200) {
-                  const it = (c.inventory || []).find(o => nameOf(o) === nm
-                    && !wornIds.has(o.id) && !equipmentPlan.keep.has(o.id)
-                    && !saleBlocked(session,{id:o.id,name:nameOf(o)}));
+                  const selected = salePlan().find(i=>i.name===nm&&i.queued&&i.sale_amount>0);
+                  const it = selected?.o;
                   if (!it) break;
                   if (session.movementGeneration !== generation) throw new Error('sale cancelled');
                   if (offers >= maxOffers) { more = true; break saleLoop; }
-                  const stack = it.amount || 1;
+                  const stack = Math.min(it.amount || 1, selected.sale_amount);
                   const amount = maxStack && stack > maxStack ? maxStack : stack;
                   offers++;
                   const r = await sellChunk(it.id, amount);

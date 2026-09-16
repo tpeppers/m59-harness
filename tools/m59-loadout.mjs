@@ -37,6 +37,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { itemNameKey } from './m59-items.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
@@ -836,7 +837,7 @@ export function entryMatches(entry, name) {
   const how = entry.match ?? 'exact';
   if (how === 'contains') return n.includes(want);
   if (how === 'prefix') return n.startsWith(want);
-  return n === want;
+  return itemNameKey(n) === itemNameKey(want);
 }
 
 const countIn = (items, entry) => (items || [])
@@ -921,6 +922,23 @@ export function keepTest(loadout, items = null) {
   };
   test.rules = rules;
   return test;
+}
+
+// Quantities, unlike a keep predicate, can reserve part of a stack. A finite
+// ceiling is the working stock to bring home from a shop; selling down to the
+// refill trigger would cause another shopping trip immediately afterwards.
+export function saleAllowance(loadout, name, items = []) {
+  const entries = (loadout?.carry ?? []).filter(e => entryMatches(e, name));
+  if (!entries.length) return { amount: Infinity, overflow: false };
+  let amount = Infinity, overflow = false;
+  for (const e of entries) {
+    const bounded = Number.isFinite(e.max) && e.max >= 0;
+    const reserve = Math.max(e.min || 0, bounded ? e.max : 0);
+    const available = Math.max(0, countIn(items, e) - reserve);
+    amount = Math.min(amount, available);
+    overflow ||= bounded && available > 0;
+  }
+  return { amount, overflow: overflow && amount > 0 };
 }
 
 // THINGS THIS CHARACTER HAS SAID IT DOES NOT WANT. Separate from "not protected", because
