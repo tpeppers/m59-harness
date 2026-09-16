@@ -87,11 +87,50 @@ console.log('\nSILENCE FROM OUT OF EARSHOT IS NOT A RENT READING');
 {
   // SAY_RADIUS is 50 and compared SQUARED (holder.kod:604), so ~7 squares. 60 apart is out.
   clear();
-  const r = await guildRentStatus(session({ said: [], me: { col: 10, row: 10 },
-                                            frular: { col: 70, row: 10 } }));
+  const s = session({ said: [], me: { col: 10, row: 10 }, frular: { col: 70, row: 10 } });
+  let questions = 0;
+  s.need().say = () => { questions++; };
+  const r = await guildRentStatus(s);
   ok('the status says it was out of earshot', r.out_of_earshot === true);
   ok('and that nothing was recorded', r.recorded === false);
   ok('NO FILE IS WRITTEN — a question nobody heard is not an answer', rentFile() === null);
+  ok('FleetScript refuses to speak when the approach does not arrive', questions === 0);
+}
+
+console.log('\nRENT USES FLEETSCRIPT APPROACH AND FRESH POSITION VERIFICATION');
+{
+  for (const fine of [false, true]) {
+    clear();
+    const s = session({ said: ['Thy guild owes 1200 coins in rent.'],
+      me: { col: 5, row: 17 }, frular: { col: 7, row: 5 } });
+    const c = s.need(), calls = [];
+    s.fine = fine;
+    s.walkTo = async (col, row) => {
+      assert.equal(fine, false);
+      calls.push('walk'); c.self = { col, row }; return { arrived: true };
+    };
+    s.walkFine = async (x, y, opts) => {
+      assert.equal(fine, true);
+      assert.equal(opts.arriveWithin, 3);
+      calls.push('walk'); c.self = { col: Math.floor(x / 64), row: Math.floor(y / 64) };
+      return { arrived: true };
+    };
+    c.say = () => {
+      assert.ok((c.self.col - 7) ** 2 + (c.self.row - 5) ** 2 <= 50);
+      calls.push('say');
+    };
+    const r = await guildRentStatus(s);
+    ok(`rent walks within hearing range before speaking (fine=${fine})`, calls.join(',') === 'walk,say');
+    ok('the approached rent response is recorded', r.approached?.arrived && r.due === 1200);
+  }
+  clear();
+  const s = session({ me: { col: 5, row: 17 }, frular: { col: 7, row: 5 } });
+  let questions = 0;
+  s.walkTo = async () => { s.need().room.objects.clear(); return { arrived: true }; };
+  s.need().say = () => { questions++; };
+  const r = await guildRentStatus(s);
+  ok('an NPC disappearing during the walk prevents speech', questions === 0 && r.speech_outcome === 'not_here');
+  ok('the failed approach cannot manufacture a rent balance', r.due === null && rentFile() === null);
 }
 
 console.log('\nAND NEITHER IS A REPLY WE CANNOT READ');
@@ -128,12 +167,14 @@ console.log('\nAN ANSWER WE HEARD COUNTS, WHEREVER THE BODY DRIFTED AFTERWARDS')
   // A parsed line FROM Frular is proof we were heard. The range check exists to explain a
   // silence, not to overrule speech that demonstrably arrived.
   clear();
-  const r = await guildRentStatus(session({
+  const s = session({
     said: ['You say, "rent"', 'Frular says, "The The Second Swines owes 6547 coins in rent at this time."'],
-    me: { col: 5, row: 17 }, frular: { col: 7, row: 5 },   // squared distance 148 vs radius 50
-  }));
+    me: { col: 7, row: 6 }, frular: { col: 7, row: 5 },
+  });
+  s.need().say = () => { s.need().self = { col: 5, row: 17 }; };
+  const r = await guildRentStatus(s);
   ok('the answer is parsed', r.due === 6547);
-  ok('the range check still reports the drift', r.out_of_earshot === true);
+  ok('the range check measures at speech time, before the drift', !r.out_of_earshot);
   ok('AND IT IS RECORDED ANYWAY', r.recorded === true);
   ok('the file carries the debt', rentFile()?.due === 6547);
   ok('and the guild flag the stockpile gate reads', rentFile()?.in_guild === true);
@@ -141,18 +182,24 @@ console.log('\nAN ANSWER WE HEARD COUNTS, WHEREVER THE BODY DRIFTED AFTERWARDS')
 
 console.log('\nPAYMENTS WAIT PAST THEIR OWN ECHO AND REFRESH THE REMAINING RENT');
 {
-  const paymentSession = ({ balance, failQuery = false } = {}) => {
-    const s = session(), c = s.need();
+  const paymentSession = ({ balance, failQuery = false, blocked = false } = {}) => {
+    const s = session({ me: { col: 5, row: 17 }, frular: { col: 7, row: 5 } }), c = s.need();
     Object.assign(c, { events: [], waiters: [], maxEvents: 100,
       emit: M59Client.prototype.emit, eventsSince: M59Client.prototype.eventsSince,
       waitFor: M59Client.prototype.waitFor });
     c.requestInventory = () => setTimeout(() => c.emit('inventory', {}), 0);
     let offers = 0, questions = 0;
+    s.walkTo = async (col, row) => {
+      assert.equal(offers, 1, 'the rent approach follows the confirmed payment');
+      if (!blocked) c.self = { col, row };
+      return { arrived: !blocked };
+    };
     c.offer = (_id, items) => { offers++; c.inventory[0].amount -= items[0].amount;
       c.emit('message', { text: 'I thank thee for thy payment.' }); };
     c.cancelOffer = () => {};
     c.say = word => {
       assert.equal(word, 'rent'); questions++;
+      assert.ok((c.self.col - 7) ** 2 + (c.self.row - 5) ** 2 <= 50);
       if (failQuery) throw new Error('rent read connection failed');
       c.emit('said', { text: 'You say, "rent"' });
       setTimeout(() => c.emit('message', { text: 'Unrelated room chatter.' }), 5);
@@ -185,6 +232,12 @@ console.log('\nPAYMENTS WAIT PAST THEIR OWN ECHO AND REFRESH THE REMAINING RENT'
     result.rent_check_ok === false && result.due === null && /connection failed/.test(result.rent_check_error));
   ok('query failure does not replay the payment or overwrite the last observation',
     fixture.counts().offers === 1 && rentFile()?.due === 9999);
+  const blocked = paymentSession({ blocked: true });
+  const refused = await payGuildTithe(blocked.s, { amount: 100 });
+  ok('a blocked rent approach preserves the payment without speaking or paying twice',
+    refused.paid === 100 && refused.ok && blocked.counts().offers === 1 && blocked.counts().questions === 0);
+  ok('the blocked post-payment balance stays unknown and explains the hearing failure',
+    !refused.rent_check_ok && refused.due === null && /SAY_RADIUS/.test(refused.rent_check_error));
 }
 
 rmSync(dir, { recursive: true, force: true });

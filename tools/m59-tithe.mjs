@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetName } from './m59-fleetpath.mjs';
 import { SAY_RADIUS, squaredDistance, withinSayRange,
-         sayApproachSquare } from './m59-sayrange.mjs';
+         sayApproachSquare, sayToNpc } from './m59-sayrange.mjs';
 import { StorageCache } from './m59-storage.mjs';
 
 // WHICH FLEET'S BOOK, ANSWERED ONCE.
@@ -149,102 +149,53 @@ export const purseAmount = c => (c.inventory || [])
 // Re-exported so existing callers and m59-tithe-test.mjs keep their import.
 export { SAY_RADIUS, squaredDistance, withinSayRange, sayApproachSquare };
 
-async function askRent(s, c) {
-  // STAND CLOSE ENOUGH TO BE HEARD FIRST. Without this the say is swallowed by SayRangeCheck
-  // and the caller records "no answer" as though it were a fact about the guild's rent.
-  const frular = [...(c.room?.objects?.values() ?? [])]
-    .find(o => (c.rsc.get(o.nameRsc) || '') === FRULAR_NAME);
-
-  // OUR OWN POSITION, READ WHEN IT IS USED AND WAITED FOR IF IT IS NOT THERE YET.
-  //
-  // On a keeper-backed session `c` is rebuilt from each /state snapshot — "a picture, not a
-  // wire" — so `c.self` is null whenever the snapshot in hand lacks `you`, and non-null a
-  // moment later. Reading it once at the top and holding it is the same thin-snapshot trap
-  // that made object ids flap.
-  //
-  // AND IT COLLAPSED A THREE-VALUED TEST INTO THE WRONG BRANCH. `withinSayRange` answers
-  // true / false / null and the approach is gated on `=== false`; a null `me` answered null,
-  // the walk was skipped, and by the time earshot was judged a few lines later `c.self` had
-  // refreshed and answered false. Prod returned "out of earshot" twice with no `approached`
-  // field at all, because neither branch of the approach had run.
-  const readSelf = async () => {
-    for (let i = 0; i < 6; i++) {
-      const here = c.self ?? null;
-      if (Number.isFinite(here?.col) && Number.isFinite(here?.row)) return here;
-      await new Promise(r => setTimeout(r, 250));
-    }
-    return null;
-  };
-  const me = await readSelf();
-
-  let approached = null;
-  if (frular && !me) {
-    // UNKNOWN IS NOT "IN RANGE", and it is not "too far" either. Saying which one it is
-    // matters: one is fixed by walking and the other by finding out why the body cannot be
-    // located.
-    approached = { arrived: false,
-                   reason: 'our own position never arrived in a state snapshot, so there was ' +
-                           'nothing to walk from' };
-  } else if (frular && withinSayRange(me, frular) === false) {
-    // TWO WAYS TO FIND A SQUARE WITHIN EARSHOT, AND THE GOOD ONE IS USUALLY ABSENT.
-    //
-    // `s.world.approachSquare` knows about walls and is the right answer when it exists. It
-    // does not exist on a keeper-backed session — the World lives in the keeper process and
-    // the broker holds a snapshot whose world offers `room`, `route` and `exits` and nothing
-    // else. Since every character in a running fleet is keeper-backed, that is always.
-    //
-    // And it failed SILENTLY, which is why this survived: the call is optional-chained, so it
-    // returned undefined rather than throwing, `near` was null, and the character stood
-    // exactly where it was and said "rent" into the void. Measured on prod 2026-09-12 —
-    // Rowlf in room 700 with Frular in it, "You say, \"rent\"" echoed, out of earshot,
-    // nothing learned.
-    //
-    // `sayApproachSquare` answers the same question with arithmetic instead of a World: walk
-    // the line toward the hearer, stop two squares short. FleetScript's `say` step already
-    // uses it for this exact purpose, so this makes two callers share one rule rather than
-    // inventing a third.
-    const near = s.world?.approachSquare?.(frular.col, frular.row)
-              ?? sayApproachSquare(me, frular);
-    if (near && !near.already) {
-      approached = await s.walkTo(near.col, near.row,
-                                  { maxSteps: (near.steps ?? 0) + 8 })
-        .catch(error => ({ arrived: false, reason: error.message }));
-    } else if (!near) {
-      // No position for one of them. Not "too far" — unknown, and the caller must be able to
-      // tell those apart, because one is a walk and the other is a broken reading.
-      approached = { arrived: false, reason: 'no readable position for Frular or for us' };
-    }
-  }
-
-  const before = c.evSeq;
-  await s.pacer.submit('say', () => c.say('rent'));
-  // The first event is often our own echo, not Frular's answer. Keep consuming
-  // fresh messages until a rent line arrives or the bounded read expires. This
-  // also works through KeeperProxy, which cannot serialize a match predicate.
-  const said = [], deadline = Date.now() + 4000;
-  let cursor = before;
-  while (Date.now() < deadline) {
-    const reply = await c.waitFor({ since: cursor, kinds: ['message', 'said'],
-      timeoutMs: Math.max(1, deadline - Date.now()) });
-    const events = reply.events ?? [];
-    said.push(...events.filter(e => e.text).map(e => String(e.text)));
-    if (parseRentLine(said) || reply.timedOut || !events.length) break;
-    const next = Math.max(reply.seq ?? cursor, ...events.map(e => e.seq ?? cursor));
-    if (next <= cursor) break; // malformed/legacy snapshots must not spin
-    cursor = next;
-  }
-
-  // SAY WHY IT WAS SILENT, rather than reporting silence as an answer. A reading taken from
-  // out of earshot is a question nobody asked, and it must not be filed as "no rent due".
-  const heardFrom = frular ? withinSayRange(c.self ?? me, frular) : null;
-  const out_of_earshot = heardFrom === false;
+async function askRent(s) {
+  const spoken = await sayToNpc({ text: 'rent', to: FRULAR_NAME }, {
+    look: async () => {
+      // KeeperProxy snapshots can initially lack our body. Read again before
+      // measuring, and let the shared method refuse if it remains unknown.
+      let current = s.need();
+      for (let i = 0; i < 6; i++) {
+        const me = current.self;
+        if (Number.isFinite(me?.col) && Number.isFinite(me?.row)) break;
+        await new Promise(r => setTimeout(r, 250));
+        current = s.need();
+      }
+      return { you: current.self,
+        objects: [...(current.room?.objects?.values() ?? [])]
+          .map(o => ({ ...o, name: current.rsc.get(o.nameRsc) || '' })) };
+    },
+    // Match FleetScript's walk_to transport, including the fine mover when
+    // selected. Fine destinations are KOD units (64 per square, plus centre).
+    walkTo: (target, opts) => s.fine
+      ? s.walkFine(target.col * 64 + 32, target.row * 64 + 32,
+          { maxSteps: 120, stride: 48, arriveWithin: opts.arriveWithin })
+      : s.walkTo(target.col, target.row, { maxSteps: 30 }),
+    speak: async text => {
+      const current = s.need(), before = current.evSeq;
+      await s.pacer.submit('say', () => current.say(text));
+      // The first event is often our own echo. Consume fresh messages until
+      // Frular's rent answer arrives. KeeperProxy cannot serialize predicates.
+      const said = [], deadline = Date.now() + 4000;
+      let cursor = before;
+      while (Date.now() < deadline) {
+        const reply = await current.waitFor({ since: cursor, kinds: ['message', 'said'],
+          timeoutMs: Math.max(1, deadline - Date.now()) });
+        const events = reply.events ?? [];
+        said.push(...events.filter(e => e.text).map(e => String(e.text)));
+        if (parseRentLine(said) || reply.timedOut || !events.length) break;
+        const next = Math.max(reply.seq ?? cursor, ...events.map(e => e.seq ?? cursor));
+        if (next <= cursor) break; // malformed/legacy snapshots must not spin
+        cursor = next;
+      }
+      return { spoken_ok: true, replies: said.map(text => ({ text })) };
+    },
+  });
+  const said = (spoken.replies ?? []).map(r => r.text);
   return { said, rent: parseRentLine(said), hours_left: parseRentHours(said),
-           ...(approached ? { approached } : {}),
-           ...(out_of_earshot ? { out_of_earshot: true,
-             why: `too far from ${FRULAR_NAME} to be heard — SayRangeCheck drops a user's ` +
-                  `speech to a non-MOB_FULL_TALK monster beyond SAY_RADIUS ${SAY_RADIUS} ` +
-                  `(squared, holder.kod:604). Silence here is NOT evidence about the rent.` }
-            : {}) };
+    approached: spoken.approached ?? null,
+    ...(!spoken.ok ? { why: spoken.why, speech_outcome: spoken.outcome } : {}),
+    ...(spoken.outcome === 'out_of_earshot' ? { out_of_earshot: true } : {}) };
 }
 
 export async function guildRentStatus(s) {
@@ -255,7 +206,7 @@ export async function guildRentStatus(s) {
     go_to: FRULAR_ROOM,
     note: `travel to ${FRULAR_ROOM} (The Guildmaster's Hall, Barloque)` };
   const checked_at = Date.now();
-  const r = await askRent(s, c);
+  const r = await askRent(s);
 
   // WRITE IT DOWN, because until this line nothing ever did.
   //
@@ -308,7 +259,8 @@ export async function guildRentStatus(s) {
     // the answer was unusable" without re-reading the file.
     recorded: !!r.rent, checked_at,
     ...(r.out_of_earshot ? { out_of_earshot: true, why: r.why } : {}),
-    ...(!r.rent && !r.out_of_earshot
+    ...(r.speech_outcome ? { speech_outcome: r.speech_outcome, why: r.why } : {}),
+    ...(!r.rent && !r.why
       ? { why: 'nothing in the reply parsed as a rent line, so nothing was cached — ' +
                'an answer we cannot read is not an answer about the rent' }
       : {}) };

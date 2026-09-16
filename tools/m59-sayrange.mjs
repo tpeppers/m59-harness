@@ -66,3 +66,59 @@ export function sayApproachSquare(speaker, hearer, { leave = 2 } = {}) {
            row: Math.round(speaker.row + (hearer.row - speaker.row) * t),
            already: false };
 }
+
+// FleetScript's NPC-speaking method. Keep the approach, fresh position check and
+// speech in one operation so keeper errands can use it without starting a second
+// FleetScript driver or making an RPC back into their own broker. The adapters
+// provide transport only; neither caller gets to skip the hearing check.
+export async function sayToNpc(step, { look, walkTo, speak, log = () => {} }) {
+  const text = String(step.text ?? '').trim();
+  if (!text) return { ok: false, why: 'say needs something to say' };
+  const wantHeard = step.to ?? null, radius = step.radius ?? SAY_RADIUS;
+  const seen = async () => {
+    const view = await look();
+    return { me: view?.you ?? null, npc: wantHeard
+      ? (view?.objects ?? []).find(o =>
+          String(o.name ?? '').toLowerCase().includes(String(wantHeard).toLowerCase()))
+      : null };
+  };
+  const absent = approached => ({ ok: false, outcome: 'not_here', approached,
+    why: `${wantHeard} is not in this room, so nothing said here can reach them` });
+  let { me, npc } = await seen();
+  if (wantHeard && !npc) return absent(null);
+
+  let approached = null;
+  if (npc && withinSayRange(me, npc, radius) === false && step.approach !== false) {
+    const target = sayApproachSquare(me, npc, { leave: step.leave ?? 2 });
+    if (target && !target.already) {
+      log(`say "${text}": ${wantHeard} is out of earshot ` +
+          `(squared ${squaredDistance(me, npc)} > ${radius}) — closing to ` +
+          `r${target.row}c${target.col} first`);
+      approached = await walkTo(target, { arriveWithin: step.arriveWithin ?? 3,
+        timeoutMs: step.timeoutMs ?? 120_000 }).catch(error => ({ error: error.message }));
+      ({ me, npc } = await seen());
+      if (wantHeard && !npc) return absent(approached);
+    }
+  }
+
+  // A completed walk is not proof of arrival. Read back the actual positions.
+  const heard = npc ? withinSayRange(me, npc, radius) : true;
+  const d2 = npc ? squaredDistance(me, npc) : null;
+  if (heard === false)
+    return { ok: false, outcome: 'out_of_earshot', squared_distance: d2, radius, approached,
+      why: `still ${d2} squared from ${wantHeard}, past SAY_RADIUS ${radius} — ` +
+           `SayRangeCheck (holder.kod:604) DISCARDS this speech and sends nothing ` +
+           `back, so speaking anyway would look exactly like an NPC with no answer` };
+  if (heard === null)
+    return { ok: false, outcome: 'position_unknown', approached,
+      why: `cannot read both positions, so cannot tell whether ${wantHeard} would ` +
+           `hear this. Unknown is not close enough` };
+
+  const result = await speak(text), replies = result.replies ?? [];
+  return { ok: true, outcome: replies.length ? 'answered' : 'no_reply',
+    said: text, to: wantHeard, squared_distance: d2, approached,
+    ...result, replies,
+    ...(replies.length ? {} : { note:
+      `in earshot (squared ${d2} <= ${radius}) and nothing came back — THIS one is ` +
+      `a fact about ${wantHeard ?? 'the room'}, not about the distance` }) };
+}

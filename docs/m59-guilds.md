@@ -6,8 +6,11 @@ For shared reagent storage, chest reserves and the 20% shared-money tithe, see
 the [reagent coop](m59-reagent-coop.md).
 
 Rent payments to Frular are public and separate from the secret chest visit.
-After each payment, the payer asks `rent`, waits past its own echo and unrelated
-messages for the actual rent answer, and refreshes the shared rent cache.
+After each payment, the payer uses FleetScript's shared NPC-speaking method to
+approach Frular, verify it is within hearing range, and ask `rent`. It waits past
+its own echo and unrelated messages for the actual rent answer, and refreshes
+the shared rent cache. An unsuccessful approach prevents speech and leaves the
+new balance unknown.
 Payment receipts and the durable daily tithe book retain `due_after`,
 `credit_after`, `rent_checked_at`, and `rent_check_ok`. A failed balance check
 reports an unknown balance while retaining the verified payment; it never
