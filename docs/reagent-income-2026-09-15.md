@@ -40,6 +40,8 @@ The first production visit exposed a second ownership problem: the director issu
 return-to-station while a keeper was at the first merchant. The entire pending
 shopping trip now publishes an errand commitment, including the counter phases,
 so routine station placement waits until the trip completes or is deferred.
+Fehr'loi Qan, already used by the director's equipment circuit, is also included in
+the native seller's trusted-merchant allowlist. Bankers remain excluded.
 
 Whole-name keep rules and flattened loadout floors prevented surplus reagent sales.
 Both keeper-backed `sell_all` and autonomous shopping now use the same quantity

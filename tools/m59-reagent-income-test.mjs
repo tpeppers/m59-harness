@@ -1,7 +1,7 @@
 // Offline reserve, trade-quantity and interrupted-market regression tests.
 import assert from 'node:assert/strict';
 import { normalise, saleAllowance } from './m59-loadout.mjs';
-import { inventorySalePlan, sellAll } from './m59-skills.mjs';
+import { inventorySalePlan, sellAll, trustedBuyer } from './m59-skills.mjs';
 import { FLEET_KEEP, MARKET_KEEP } from './m59-items.mjs';
 import { Autopilot, MARKET_STOPS, townDestinations } from './m59-autopilot.mjs';
 import { Session } from './m59-game.mjs';
@@ -54,6 +54,8 @@ assert.equal(sale.total_received,30);
 assert.deepEqual(k.actions.filter(a=>a[0]==='sell'),[['sell',113,null],['sell',109,25],['sell',104,null]]);
 assert.equal(townDestinations({packFull:true,richEnoughToBank:true})[0].room,113);
 assert.ok(!MARKET_STOPS.some(s=>s.room===110));
+for(const stop of MARKET_STOPS)assert.equal(trustedBuyer(stop.name),true,stop.name);
+assert.equal(trustedBuyer('Skivlat'),false);
 const owner=Object.assign(Object.create(Autopilot.prototype),{
   policy:{},townTrip:{startedAt:1234},inertStatus:()=>null,parkStatus:()=>null,
   heldStatus:()=>null,busyStatus:()=>null,

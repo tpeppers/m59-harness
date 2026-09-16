@@ -3167,6 +3167,7 @@ export const SELL_TO = [
   /herbutte/i,         // Sparkling Stone Shop, Barloque — gems. Verified: paid 856.
   /joguer/i,           // Joguer's Herbs and Roots, Barloque — mushrooms, herbs, elderberry
   /quintor/i,          // Quintor's Smithy, Jasper — weapons and armour
+  /fehr['’]loi qan/i,  // Royal Blacksmith of Barloque — the established equipment circuit
   /paddock|solomon|pietro/i,   // inns and grocers we have traded with
 ];
 // NEVER. Named separately from "not on the allowlist" because these actively take goods.
