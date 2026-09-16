@@ -24,7 +24,8 @@ import { join } from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'm59-rentcache-'));
 process.env.M59_STORAGE_DIR = dir;
 
-const { guildRentStatus } = await import('./m59-tithe.mjs');
+const { guildRentStatus, payGuildTithe } = await import('./m59-tithe.mjs');
+const { M59Client } = await import('./m59-client.mjs');
 
 let pass = 0, fail = 0;
 const ok = (what, cond) => {
@@ -136,6 +137,54 @@ console.log('\nAN ANSWER WE HEARD COUNTS, WHEREVER THE BODY DRIFTED AFTERWARDS')
   ok('AND IT IS RECORDED ANYWAY', r.recorded === true);
   ok('the file carries the debt', rentFile()?.due === 6547);
   ok('and the guild flag the stockpile gate reads', rentFile()?.in_guild === true);
+}
+
+console.log('\nPAYMENTS WAIT PAST THEIR OWN ECHO AND REFRESH THE REMAINING RENT');
+{
+  const paymentSession = ({ balance, failQuery = false } = {}) => {
+    const s = session(), c = s.need();
+    Object.assign(c, { events: [], waiters: [], maxEvents: 100,
+      emit: M59Client.prototype.emit, eventsSince: M59Client.prototype.eventsSince,
+      waitFor: M59Client.prototype.waitFor });
+    c.requestInventory = () => setTimeout(() => c.emit('inventory', {}), 0);
+    let offers = 0, questions = 0;
+    c.offer = (_id, items) => { offers++; c.inventory[0].amount -= items[0].amount;
+      c.emit('message', { text: 'I thank thee for thy payment.' }); };
+    c.cancelOffer = () => {};
+    c.say = word => {
+      assert.equal(word, 'rent'); questions++;
+      if (failQuery) throw new Error('rent read connection failed');
+      c.emit('said', { text: 'You say, "rent"' });
+      setTimeout(() => c.emit('message', { text: 'Unrelated room chatter.' }), 5);
+      setTimeout(() => c.emit('said', { text: balance }), 15);
+    };
+    return { s, counts: () => ({ offers, questions }) };
+  };
+  for (const [balance, due, credit] of [
+    ['The Second Swines owes 3250 coins in rent.', 3250, -3250],
+    ['The Second Swines has a positive balance of 750 shillings.', -750, 750],
+    ['Thy guild owest no rent.', 0, 0],
+  ]) {
+    clear();
+    await guildRentStatus(session({ said: ['Thy guild owes 9999 coins in rent.'] }));
+    const fixture = paymentSession({ balance });
+    const result = await payGuildTithe(fixture.s, { amount: 100 });
+    ok('the payment is confirmed once', result.paid === 100 && fixture.counts().offers === 1);
+    ok('a new rent question follows the payment', fixture.counts().questions === 1 && result.rent_check_ok);
+    ok('the delayed answer supplies the remaining due/credit', result.due === due && result.credit === credit);
+    ok('the receipt includes the actual rent response and check time',
+      result.rent_frular_said.includes(balance) && Number.isFinite(result.rent_checked_at));
+    ok('post-payment balance replaces the old cache', rentFile()?.due === due && rentFile()?.credit === credit);
+  }
+  clear();
+  await guildRentStatus(session({ said: ['Thy guild owes 9999 coins in rent.'] }));
+  const fixture = paymentSession({ failQuery: true });
+  const result = await payGuildTithe(fixture.s, { amount: 100 });
+  ok('a rent query failure preserves the verified payment', result.ok && result.paid === 100);
+  ok('an unavailable balance is explicit, never zero or the old reading',
+    result.rent_check_ok === false && result.due === null && /connection failed/.test(result.rent_check_error));
+  ok('query failure does not replay the payment or overwrite the last observation',
+    fixture.counts().offers === 1 && rentFile()?.due === 9999);
 }
 
 rmSync(dir, { recursive: true, force: true });

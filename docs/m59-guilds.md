@@ -5,6 +5,14 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). A command space that refuses in total 
 For shared reagent storage, chest reserves and the 20% shared-money tithe, see
 the [reagent coop](m59-reagent-coop.md).
 
+Rent payments to Frular are public and separate from the secret chest visit.
+After each payment, the payer asks `rent`, waits past its own echo and unrelated
+messages for the actual rent answer, and refreshes the shared rent cache.
+Payment receipts and the durable daily tithe book retain `due_after`,
+`credit_after`, `rent_checked_at`, and `rent_check_ok`. A failed balance check
+reports an unknown balance while retaining the verified payment; it never
+repeats the payment or substitutes the previous cached balance for a fresh answer.
+
 - **A GUILD COMMAND IS REFUSED BY TOTAL SILENCE — NOT A SENTENCE SPOKEN TO THE ROOM, WHICH
   IS THE REFUSAL EVERYTHING ELSE IN THIS FILE WARNS ABOUT, BUT NOTHING AT ALL.**
   `User.UserGuildCommand` (`user.kod:4848`) tests the caller's command bitmask and, when the

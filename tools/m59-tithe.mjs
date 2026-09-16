@@ -218,8 +218,21 @@ async function askRent(s, c) {
 
   const before = c.evSeq;
   await s.pacer.submit('say', () => c.say('rent'));
-  const { events } = await c.waitFor({ since: before, timeoutMs: 4000 });
-  const said = events.filter(e => e.text).map(e => String(e.text));
+  // The first event is often our own echo, not Frular's answer. Keep consuming
+  // fresh messages until a rent line arrives or the bounded read expires. This
+  // also works through KeeperProxy, which cannot serialize a match predicate.
+  const said = [], deadline = Date.now() + 4000;
+  let cursor = before;
+  while (Date.now() < deadline) {
+    const reply = await c.waitFor({ since: cursor, kinds: ['message', 'said'],
+      timeoutMs: Math.max(1, deadline - Date.now()) });
+    const events = reply.events ?? [];
+    said.push(...events.filter(e => e.text).map(e => String(e.text)));
+    if (parseRentLine(said) || reply.timedOut || !events.length) break;
+    const next = Math.max(reply.seq ?? cursor, ...events.map(e => e.seq ?? cursor));
+    if (next <= cursor) break; // malformed/legacy snapshots must not spin
+    cursor = next;
+  }
 
   // SAY WHY IT WAS SILENT, rather than reporting silence as an answer. A reading taken from
   // out of earshot is a question nobody asked, and it must not be filed as "no rent due".
@@ -241,6 +254,7 @@ export async function guildRentStatus(s) {
   if (!frular) return { ok: false, reason: `${FRULAR_NAME} is not in this room`, room,
     go_to: FRULAR_ROOM,
     note: `travel to ${FRULAR_ROOM} (The Guildmaster's Hall, Barloque)` };
+  const checked_at = Date.now();
   const r = await askRent(s, c);
 
   // WRITE IT DOWN, because until this line nothing ever did.
@@ -292,7 +306,7 @@ export async function guildRentStatus(s) {
     approached: r.approached ?? null,
     // SAY WHETHER IT WAS RECORDED, so a caller can tell "asked and cached" from "asked and
     // the answer was unusable" without re-reading the file.
-    recorded: !!r.rent,
+    recorded: !!r.rent, checked_at,
     ...(r.out_of_earshot ? { out_of_earshot: true, why: r.why } : {}),
     ...(!r.rent && !r.out_of_earshot
       ? { why: 'nothing in the reply parsed as a rent line, so nothing was cached — ' +
@@ -326,9 +340,16 @@ export async function payGuildTithe(s, { amount = 0, all = false } = {}) {
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
   const after = purseAmount(c), paid = have - after;
-  const r = await askRent(s, c);
+  // Use the same fresh read-and-cache path as an explicit rent status request.
+  // A failed read must not lose the verified payment or cause it to be paid again.
+  let rent;
+  try { rent = await guildRentStatus(s); }
+  catch (error) { rent = { recorded: false, why: error.message, checked_at: Date.now() }; }
   return { action: 'pay', room, offered, purse_before: have, purse_after: after,
     paid, ok: paid > 0, thanked: said.some(x => /thank thee for thy payment/i.test(x)),
-    frular_said: said, due: r.rent?.due ?? null, credit: r.rent?.credit ?? null,
-    hours_until_arrears: r.hours_left };
+    frular_said: said, due: rent.due ?? null, credit: rent.credit ?? null,
+    hours_until_arrears: rent.hours_until_arrears ?? null,
+    rent_checked_at: rent.checked_at ?? Date.now(), rent_check_ok: !!rent.recorded,
+    rent_frular_said: rent.frular_said ?? [],
+    ...(!rent.recorded ? { rent_check_error: rent.why ?? rent.reason ?? 'no fresh rent answer' } : {}) };
 }

@@ -21588,11 +21588,15 @@ export class Autopilot {
     const result = await payGuildTithe(this.s, { amount: plan.amount });
     if (result.paid > 0) {
       book.record(result.paid, { detail: { target: plan.target,
-        proceeds: plan.proceeds, credit_after: result.credit ?? null } });
+        proceeds: plan.proceeds, credit_after: result.credit ?? null,
+        due_after: result.due ?? null, rent_checked_at: result.rent_checked_at,
+        rent_check_ok: result.rent_check_ok } });
       this.tally.guild_tithe = (this.tally.guild_tithe || 0) + result.paid;
       this.note('paid guild tithe from town-sale proceeds', { paid: result.paid,
         daily_target: plan.target, paid_today: plan.paid + result.paid,
-        credit_after: result.credit ?? null });
+        credit_after: result.credit ?? null, due_after: result.due ?? null,
+        rent_checked_at: result.rent_checked_at, rent_check_ok: result.rent_check_ok,
+        ...(result.rent_check_error ? { rent_check_error: result.rent_check_error } : {}) });
     } else this.note('guildmaster refused tithe', { offered: plan.amount,
       said: result.frular_said, due: result.due ?? null });
     return { ...plan, ...result };

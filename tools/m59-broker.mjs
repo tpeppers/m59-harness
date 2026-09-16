@@ -14441,7 +14441,9 @@ const TOOLS = [
       // ONLY THE VERIFIED DELTA IS WRITTEN DOWN. Recording what was offered would make a
       // refused tithe look paid for the rest of the day, which is exactly the day the fleet
       // would then skip.
-      if (res.paid > 0) book.record(res.paid, { detail: { room: res.room } });
+      if (res.paid > 0) book.record(res.paid, { detail: { room: res.room,
+        due_after: res.due ?? null, credit_after: res.credit ?? null,
+        rent_checked_at: res.rent_checked_at, rent_check_ok: res.rent_check_ok } });
       return { ...res, paid_today: book.paidToday(),
         ...(res.paid > 0 ? {} : { note:
           'the purse did not move, so nothing was paid whatever was said, and nothing was ' +
