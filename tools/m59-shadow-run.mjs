@@ -181,21 +181,37 @@ async function startBroker({ construction }) {
       label: construction ? 'start CONSTRUCTION broker' : 'start playing broker' });
 }
 
+// ------------------------------------------- THE REFUSALS, AS A PURE FUNCTION
+//
+// Separated from the socket checks so they can be tested without opening anything, which is
+// the only way a guard like this gets a test at all — and a guard with no test is one the
+// next person in a hurry deletes. These are the refusals that need no network to decide:
+// every one of them is about WHERE this command is pointed, and being wrong about that is
+// the failure the whole file exists to prevent.
+export function refusals({ fleet, httpPort, dashPort, prodPort = 8901, shadowTool = null } = {}) {
+  const out = [];
+  // THE ONE THAT IS NOT NEGOTIABLE. This command CREATES and REROLLS characters — `reroll`
+  // suicides the existing one and has no undo. Pointed at a fleet somebody plays, it is not
+  // a rehearsal, it is the incident.
+  if (/^prod/i.test(String(fleet ?? '')))
+    out.push(`REFUSING: --fleet "${fleet}" looks like production. This command CREATES ` +
+             `and REROLLS characters; it must never be pointed at a fleet anyone plays.`);
+  if (Number(httpPort) === Number(prodPort) || Number(dashPort) === Number(prodPort))
+    out.push(`REFUSING: ${prodPort} is the production broker's port.`);
+  // Both ports must differ, or `stop` quiesces whatever else is on the one they share.
+  if (Number(httpPort) === Number(dashPort))
+    out.push(`REFUSING: --http and --dashboard are both ${httpPort}.`);
+  if (!shadowTool)
+    out.push('no m59-shadow.mjs found. It is gitignored and lives only in the checkout ' +
+             'that built the fleet — pass --shadow-tool <path> or set M59_SHADOW_TOOL.');
+  return out;
+}
+
 // ---------------------------------------------------------------- 1. preflight
 async function preflight() {
   stage(1, 'preflight');
-  const problems = [];
-
-  // THE ONE REFUSAL THAT IS NOT NEGOTIABLE.
-  if (/^prod/i.test(FLEET))
-    problems.push(`REFUSING: --fleet "${FLEET}" looks like production. This command CREATES ` +
-                  `and REROLLS characters; it must never be pointed at a fleet anyone plays.`);
-  if (Number(HTTP_PORT) === PROD_PORT || Number(DASH_PORT) === PROD_PORT)
-    problems.push(`REFUSING: ${PROD_PORT} is the production broker's port.`);
-
-  if (!SHADOW_TOOL)
-    problems.push('no m59-shadow.mjs found. It is gitignored and lives only in the checkout ' +
-                  'that built the fleet — pass --shadow-tool <path> or set M59_SHADOW_TOOL.');
+  const problems = refusals({ fleet: FLEET, httpPort: HTTP_PORT, dashPort: DASH_PORT,
+                              prodPort: PROD_PORT, shadowTool: SHADOW_TOOL });
 
   if (!await listening(GAME_HOST, GAME_PORT))
     problems.push(`the test server is not listening on ${GAME_HOST}:${GAME_PORT}. ` +
@@ -356,6 +372,11 @@ async function run(name, params) {
 }
 
 // ---------------------------------------------------------------- cli
+//
+// GUARDED, BECAUSE IMPORTING THIS FILE MUST NOT DRIVE A FLEET. `m59-broker.mjs` has the same
+// rule for the same reason — importing it to check it took the fleet lock and started rejoin
+// timers — and the test below imports this module for `refusals`.
+if (import.meta.filename === process.argv[1]) {
 const positional = argv.filter((a, i) =>
   !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') &&
                            !['--dry', '--list', '--no-skills', '--skip-snapshot', '--down'].includes(argv[i - 1])));
@@ -383,3 +404,4 @@ if (ok && at('run')) ok = await run(name, params);
 if (has('--down')) { say(); await stopBroker(); }
 say(`\n${ok ? 'done' : 'STOPPED — see above'}`);
 process.exit(ok ? 0 : 1);
+}
