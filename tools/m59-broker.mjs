@@ -18124,8 +18124,22 @@ function serveDashboard(port) {
     if (req.method !== 'GET') { res.writeHead(405); return res.end('read-only'); }
     const url = url0;
     if (url.pathname === '/health') {
+      // SAY WHOSE DASHBOARD THIS IS. It answered `{ok, view, readonly}` and nothing else,
+      // so a caller holding this port could not tell production's dashboard from a lab
+      // one — not by checking harder, but because the reply carried no identity at all.
+      //
+      // `m59-service.mjs stop` verifies a broker on its RPC port and then sends
+      // /control/quiesce HERE. On 2026-09-16 a `stop --fleet shadow-ab --http 8903`, with
+      // the dashboard left at its own separate default of 8902, quiesced production while
+      // every line it printed named the lab broker — a 25-minute outage of 23 characters.
+      // The port default is fixed in m59-service.mjs; this is the half that lets the check
+      // exist at all. Identity comes from brokerHealth() rather than being rebuilt here,
+      // because two expressions for "which broker is this" is how they end up disagreeing.
+      const id = brokerHealth();
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, view: 'dashboard', readonly: true }));
+      return res.end(JSON.stringify({ ok: true, view: 'dashboard', readonly: true,
+                                      pid: id.pid, fleet: id.fleet ?? null,
+                                      root: id.root ?? null, state: id.state ?? null }));
     }
     // Where the wall-clock went, split into pacing (deliberate), queueing (contention)
     // and blocking (waiting for a reply — the only part that is waste). Read-only, and

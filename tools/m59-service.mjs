@@ -53,7 +53,27 @@ catch (e) { console.error(e.message); process.exit(2); }
 
 const LABEL = FLEET || 'default';
 const HTTP_PORT = Number(arg('--http', 8901));
-const DASH_PORT = Number(arg('--dashboard', 8902));
+// THE DASHBOARD DEFAULT HAS TO FOLLOW THE RPC PORT, OR `stop` QUIESCES SOMEBODY ELSE.
+//
+// These were two independent constants, and `cmdStop` verifies identity on HTTP_PORT and
+// then sends the shutdown to DASH_PORT. So `--http 8903` alone moved the half that is
+// CHECKED and left the half that is OBEYED pointing at 8902 — which on this machine is
+// production's dashboard.
+//
+// Measured 2026-09-16, and it cost a 25-minute prod outage. `m59-service.mjs stop --fleet
+// shadow-ab --http 8903` printed `stopping pid 9316 ("shadow-ab", 0 session(s))` — the
+// correct pid, found correctly on 8903 — and POSTed /control/quiesce to 8902, taking down
+// the 23-character prod fleet. Every line it printed was about the shadow broker. The
+// shadow broker then "accepted orderly shutdown but did not stop within 60s", because the
+// thing that accepted was prod.
+//
+// Nothing downstream could have caught it: the dashboard's own /health answers
+// `{ok:true,view:"dashboard",readonly:true}` with no pid, fleet or root, so the port
+// cannot be attributed to a broker even in principle. That is fixed too — see the
+// dashboard /health in m59-broker.mjs and `quiesceTarget` below — but the default is the
+// half that matters, because the pairing is the convention everywhere else: 8901/8902,
+// 8903/8904, and `start` prints them together.
+const DASH_PORT = Number(arg('--dashboard', HTTP_PORT + 1));
 const SUB = join(REPO, 'substrate');
 // Named for the fleet so two of these never collide. Both are gitignored — the log by
 // /substrate/*.log, the pid file because it is worthless to anyone else.
@@ -494,6 +514,31 @@ async function cmdStop({ quiet = false, force = false } = {}) {
   // stops and conditional ownership release. Ask the already identity-verified broker's
   // loopback-only dashboard to quiesce first. A null result is a rolling-old broker and
   // keeps the historical fallback; an accepted quiesce gets a full minute to settle.
+  // AND ASK THE DASHBOARD WHO IT IS BEFORE TELLING IT TO STOP.
+  //
+  // The port default above is the fix for the case that happened; this is the fix for the
+  // case where somebody starts a broker on a pair that is not adjacent. `found` was
+  // verified on HTTP_PORT — pid, root and fleet — and none of that was ever asked of the
+  // port the shutdown is actually sent to.
+  //
+  // A dashboard that names a DIFFERENT pid is refused outright: that is the prod outage,
+  // and it must fail rather than take the fleet somebody else is running. A dashboard that
+  // names no pid is a broker older than this field, which is the historical case the
+  // fallback below already exists for — so it is allowed through with a word, not refused,
+  // because refusing it would make `stop` stop working against every broker already up.
+  const dashId = await fetchJson(`http://127.0.0.1:${DASH_PORT}/health`, { timeoutMs: 3000 });
+  if (dashId && Number.isFinite(Number(dashId.pid)) && Number(dashId.pid) !== Number(found.pid)) {
+    console.error(c.bad(
+      `refusing to stop: the broker answering on ${HTTP_PORT} is pid ${found.pid}, but the ` +
+      `dashboard on ${DASH_PORT} belongs to pid ${dashId.pid}` +
+      (dashId.fleet ? ` ("${dashId.fleet}")` : '')));
+    console.error('  Quiescing that would stop a fleet nobody asked about. Pass the matching');
+    console.error(`  --dashboard for "${LABEL}", or check which broker owns ${DASH_PORT}.`);
+    return 1;
+  }
+  if (dashId && dashId.pid == null && !quiet)
+    console.error(c.dim(`  the dashboard on ${DASH_PORT} does not say whose it is (a broker ` +
+                        'older than this check) — proceeding on the port pairing alone'));
   const graceful = await fetchJson(
     `http://127.0.0.1:${DASH_PORT}/control/quiesce`,
     { method: 'POST', timeoutMs: 3000 },
