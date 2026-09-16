@@ -118,7 +118,23 @@ if (import.meta.filename === process.argv[1]) {
 
   const ask = async () => {
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(8000) });
+      // THE PROBE TIMEOUT HAS TO BE LONGER THAN A HEALTHY BROKER'S WORST ANSWER.
+      //
+      // This was 8s, and it produced a false `unreachable` within an hour of being armed:
+      // 2026-09-16T20:32:36Z it reported prod down, and 20:32:59Z reported it up again, with
+      // the broker's pid unchanged at 15128 and 23 sessions throughout. Nothing had happened
+      // — the event loop was simply busy.
+      //
+      // That is the documented normal here, not an anomaly. CLAUDE.md measures prod's
+      // /health at 1046ms idle and 2573ms under load against 4ms for an idle broker, and
+      // m59-service.mjs printed "took 7s to answer /health — its event loop is heavily
+      // blocked" twice in this same session. An 8s cap against a 7s reality is a coin toss.
+      //
+      // Raising it costs nothing that matters: detection is bounded by the POLL interval and
+      // the three-minute alert, not by this. A real outage answers instantly with
+      // ECONNREFUSED — it does not sit and time out — so the slow path is almost always a
+      // busy broker rather than a dead one, and treating those alike is what cried wolf.
+      const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(20000) });
       return await r.json();
     } catch { return null; }
   };
