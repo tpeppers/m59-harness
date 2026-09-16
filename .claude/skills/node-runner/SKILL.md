@@ -36,6 +36,26 @@ of doing the task, to fix our movement code — so you almost certainly can't ge
 trying harder."* And: *"there's absolutely no value to getting these nodes without the full
 script being runnable by everyone forever after."*
 
+## AND THE ANSWER IS NEVER "IT IS IMPOSSIBLE"
+
+The stones are reachable by regular players in the game client. That is not a hope, it is the
+premise — they are easter eggs, they were designed to be got, and people get them. So a router
+answering "no route" has proved something about `substrate/m59-falljumps.json` and the flood in
+`reachableFrom`, and nothing whatever about the world.
+
+**The mover being wrong is why the run exists.** What is missing is a jump, a ramp, a secret
+passage or a triggered effect that our scripted understanding of the map does not carry —
+finding which is the errand, not the obstacle. `unreachable`, `impossible` and `needs new
+jumping mechanics` are inadmissible as terminal verdicts here, and the reason is measured rather
+than moral: the column that predicts which stones the mover calls reachable is not the terrain,
+it is **whether somebody wrote the jump down** — 579 and 589 have declared falls and are
+reachable, and the four with no declared affordance are the four filed as impossible. Room 27
+had exactly that property while the stone was already melded.
+
+`node tools/m59-critic.mjs node` scores every stone against that, and
+`.claude/skills/m59-critic/SKILL.md` is the critic that will not accept the answer. Run it
+before writing up a node as anything other than reached.
+
 ## THE FAILURE THIS SKILL EXISTS TO STOP
 
 2026-09-09, room 49 (Kardde's Canyon): eleven refused departures across two characters and
@@ -101,6 +121,27 @@ failure, which is the entry criterion:
    is its replay half, and it is what turns each node into a regression test instead of an
    anecdote.
 
+## READ THIS BEFORE §"measuring the ground" — the source disagrees with three of our rules
+
+`FROM-RESEARCH-2026-09-10.md` in this directory, 2026-09-10, read from `C:\code\Meridian59`
+at `1fb1f514`. The three that change what a run should do:
+
+- **The flood cannot see a jump, and that is why the file only holds falls.** `moverStepLands`
+  re-seeds the body's height from the from-square every step (`m59-roo.mjs:2471`, no `motionZ`,
+  `fall` false). A drop-jump is a property of a SEQUENCE. `m59-falljumps.json` is not missing a
+  `kind`; the flood is missing a dimension. Backlog item for the greenfield question: flood over
+  `(cell, carried z)`.
+- **"Downhill only" is wrong by 384 units, and a jump is a distance budget rather than a shape.**
+  Running is 5 squares/s and the fall is `682.67t + 2560t^2` client units. So a landing may be
+  **+145 above** the take-off at one square and **exactly level at 1.38 squares**; from a
+  3.5-square drop a body crosses **5.34 squares**, not the 3 `FALL_MAX_SQUARES` searches.
+- **1006 is a lever puzzle, not terrain.** The node rides a column at floor 500 that drops to
+  105 when the last monster in the final chamber dies. Do not spend a night jumping at it.
+
+Also: there are **thirteen node bits in the kod, not seven**; node state (`NODE_DEAD`) refuses
+the meld before the range test and is visible on the wire as `ANIMATE_NONE` group 8; and room
+599 holds an undeclared node that exists for 5 real minutes in every 2 hours.
+
 ## What "measuring the ground" means
 
 **THE FINE GRID IS THE REALITY; A SQUARE IS A SUMMARY, AND ON INTERESTING GROUND IT IS A
@@ -147,13 +188,31 @@ A diagnosis is built in this order:
 ## Where the nodes stand
 
 Reachability is a claim about **which movement code is running**, so it lives in the
-`m59-fleetscript.mjs` header beside the `#movement` epoch convention. A failure on the
-right-hand column reports the state of the mover, not a fault in the errand.
+`m59-fleetscript.mjs` header beside the `#movement` epoch convention. A run that comes up short
+reports the state of the mover, not a fault in the errand — and never a fact about the terrain.
 
-| | nodes |
-|---|---|
-| reachable with the code as it stands | **27** Icky Cave, **39** Castle Victoria, **579** Ancient Place, **589** Sentinel |
-| NOT reachable — needs new jumping mechanics | **45** Badlands, **515** Seafarer's Peak, **750** Ice Caves, **1006** Mausoleum |
+**THE OLD TWO-ROW TABLE HAS BEEN RETIRED.** It read "reachable with the code as it stands" against
+"NOT reachable — needs new jumping mechanics", and the right-hand row was wrong twice in one day:
+750 is ONE square off, inside the meld box, by walking alone, and 45 is three. The row was never a
+measurement — it was a record of which stones somebody had got. Replaced by how far the mover
+actually gets, measured 2026-09-10 with `m59-exitreport.mjs <room> --to <rNcM> --box 2`, Chebyshev
+from the square a body lands on coming in. Anything at 2 or less is already inside the 5x5 box.
+
+| room | node | off | declared jumps | what that says |
+|---|---|---|---|---|
+| **39** | Castle Victoria | 0 | over 599's fall | reachable from the EAST doorway only; 22 short from the other |
+| **579** | Ancient Place | 0 | four | carried by the declared falls |
+| **589** | Sentinel | 0 | one | only across `r35c16 -> r38c19`, and only entered from 599 |
+| **750** | Ice Caves | 1 | none | INSIDE the box by walking. Filed as needing new mechanics; it needs none |
+| **45** | Badlands | 3 | none | one square outside the box, from `r60c46` |
+| **27** | Icky Cave | 4 | **none** | MELDED ANYWAY, 2026-09-09. The route is a jump nobody has declared |
+| **515** | Seafarer's Peak | 5 | none | nothing measured beyond the walking flood |
+| **1006** | Mausoleum | 10 | none | and no route to the room from Tos at all |
+
+Every `off` above is a statement about WALKING and nothing else. `reachableFrom` floods with
+`moverStepLands` one square at a time; a fall is not a step, so a stone across one reads as
+unreachable at whatever distance the flood happens to stop. `node tools/m59-critic.mjs node`
+prints this table live against the falljumps file rather than from this page.
 
 `substrate/mananodes/<agent>.json` records what a character holds and how it was got;
 `node tools/m59-fleetbook.mjs mana-nodes` is the recipe.
@@ -166,8 +225,10 @@ The grant is `((5 + Mysticism) / 10) + 3`, so +3 at mysticism 0 and +8 at 45 and
 
 ## Running one node
 
-**0. Read `nodes/<key>.md` in this directory first.** It is what previous runs measured. A
-run that re-measures a solved half has spent its budget on it.
+**0. Read `FROM-RESEARCH-2026-09-10.md` and then `nodes/<key>.md` in this directory first.**
+The first is what the SOURCE says — the client's real step predicate, the fall-jump reach
+table, and the three stones that are not terrain problems at all. The second is what previous
+runs measured. A run that re-measures a solved half has spent its budget on it.
 
 **1. Park and hold the hero.** A fragile caster left unheld is walked into open country by
 its own keeper within minutes — measured: 90 seconds unheld took a 20-health character from
