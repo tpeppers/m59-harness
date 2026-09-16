@@ -1,0 +1,114 @@
+**Prod deaths: September 12–13, 2026**
+
+The evidence supports a combination of much more travel and several broken survival handoffs. The shelter-rest health-shape bug repaired yesterday does not explain the whole overnight window. The current deployment still suppresses shelter in crowded rooms, can undo its own emergency travel suspension, and can keep a character frozen while it is being killed.
+
+This analysis uses a fixed window: **September 12, 7:16:57 p.m. through September 13, 7:16:57 a.m. PDT**. Code inspected: `deploy-2026-09-13-0656`, commit `00bfb43467dd`. No production code, orders, policies, or services were changed by this investigation. Offline reproductions and the report are stored outside the deploy checkout.
+
+**What changed in the rate**
+
+Each row below is the same 12-hour overnight period, ending at 7:16:57 a.m. PDT on the stated date. Counts use the current prod roster's 23 names; all 74 recent deaths belonged to its 21 regular characters.
+
+| Window ending | Deaths | Journey attempt records | Arrived | Recorded kills |
+|---|---:|---:|---:|---:|
+| September 9 | 6 | 155 | 89 | 7,046 |
+| September 10 | 27 | 557 | 450 | 1,528 |
+| September 11 | 30 | 1,725 | 1,509 | 819 |
+| September 12 | 17 | 878 | 714 | 1,912 |
+| September 13 | **74** | **2,083** | **1,297** | **37** |
+
+Deaths rose 12.3 times versus September 9, while journey attempts rose 13.4 times. The earlier 12 hours immediately preceding the investigated window were worse still: **155 deaths**. The latest 24-hour total was 229, compared with 65 in the preceding 24 hours.
+
+This is not a controlled comparison of mover versions. A journey record can represent a retry or a short town leg, and death can be recorded after the original journey has ended. Dividing deaths by attempts is therefore not a reliable per-trip probability. The clear finding is that the fleet shifted heavily from earning kills to travelling, shopping, recovering, and retrying. In the latest 12 hours, 1,543 of 2,083 attempts targeted four Barloque commercial destinations: rooms 114, 113, 104, and 109. Summed durations of recorded journey attempts rose from 6.4 character-hours on September 9 to 40.2 now; those durations include rests and retries.
+
+The 74 deaths concentrate strongly:
+
+| Independently placed death location | Deaths |
+|---|---:|
+| 585 — The border of the Badlands | 35 |
+| 584 — The Flatlands | 24 |
+| 597 — The Twisted Wood | 6 |
+| 599 — Ukgoth | 3 |
+| 596 — Outskirts of Tos | 3 |
+| 598 — The Cragged Mountains | 2 |
+| 38 — Castle Victoria | 1 |
+
+All 74 have server death broadcasts naming non-player killers. Spiders, groundworms, and trolls account for 67. The recorded activity labels are 50 travelling, 18 recovering, and 6 stalled; none is fighting. All have a final health/position frame within eight seconds of death. This is not the older failure where the keeper went entirely unobserved during travel: observations are arriving, but the actions needed to survive do not reliably follow them.
+
+**1. Shelter is explicitly vetoed in the rooms causing most deaths**
+
+`travelStopMaxThreats()` defaults to **6**. `crowded()` counts all non-player attackable objects in the room, regardless of distance from the character. The installed shelter policy then returns false from `need()` whenever that predicate is true, before testing the health threshold. A travel safe-spot search also withholds walls in a crowd and prefers an exit.
+
+Relevant code: [crowd predicate](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:7960), [route shelter veto](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:10002), [wall selection](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:4003).
+
+This is observable on the newly restarted code. Between 6:57 a.m. and the 7:16:57 cutoff, its tactics ledger contains **394 `crowd_no_stop` records**, all stamped `00bfb43467dd`. These include **34 refusals of “wall on the way past” in room 585 and 32 in room 584**, plus 26 and 18 hop-boundary crowd-refusal records in those rooms. The total also includes refusals to trade in place and retreat to a wall; it is not 394 unique journeys.
+
+An offline reproduction with eight monsters, 20/50 health, and `safe_spot: true` returns **`shelterRequested: false`**. The feature can be enabled and still deliberately refuse the expected behavior.
+
+The source documents this as a policy intended to avoid unsafe stops in crowds. That makes it a concrete conflict between the current behavior and the expectation of taking shelter under damage, rather than proof that removing the cap alone is safe. The remedy should evaluate the actual reachable refuge and damage on it, instead of assuming a room-wide monster count determines whether every wall can work.
+
+**2. An emergency suspension is undone by the journey's own timer**
+
+The watchdog cancels a wedged journey below the flee threshold, preserves its destination in `suspendedJourney`, requests forward shelter, and calls `revive()`. But `Autopilot.travel()` installs a two-second timer that calls `goTravelling()` whenever `this.inert` is absent. It does not distinguish an expired hold from a deliberate survival suspension. `goTravelling()` then clears `suspendedJourney`.
+
+Relevant code: [watchdog suspension](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:11334), [two-second reassertion](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:7032), [destination clearing](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:10149).
+
+Seven distinct rescue events in the death records are followed within 2.1 seconds by this renewed travelling state. They appear in eight postmortems because Beaker's two deaths share one recorded pass. All seven rescue events targeted the stockpile, room 714.
+
+**Beaker, after the latest restart:**
+
+| PDT time | Observed event |
+|---|---|
+| 7:01:29.101 a.m. | Watchdog suspends the stockpile journey at 35/54 health and requests shelter. |
+| 7:01:29.576 a.m. | Travelling to 714 is reasserted, **475 ms later**. |
+| 7:01:46.429 a.m. | Stockpile trip reports movement cancellation. |
+| 7:01:46.435 a.m. | The caller immediately starts another trip, to room 104. |
+| 7:02:13.472 a.m. | Spider kills Beaker in Outskirts of Tos. |
+| 7:07:32.306 a.m. | The same recorded pass has escaped and rested in Tos, reaching 53/53 health. |
+| 7:09:07.220 a.m. | Spider kills Beaker again in the Flatlands, after oscillation around r35c27–r35c28. |
+
+Both deaths are recorded in **pass 1**, blocked in `passErrand`; the second is about 12 minutes into it. [First postmortem](C:/code/m59-lab/prod-deploy/substrate/postmortems/Beaker-2026-09-13T14-02-13-472Z.json), [second postmortem](C:/code/m59-lab/prod-deploy/substrate/postmortems/Beaker-2026-09-13T14-09-07-220Z.json).
+
+The offline reproduction executes the timer callback extracted from the deployed method and the real `goTravelling()`: travelling is restored, the suspended destination is erased, and the shelter request remains pending.
+
+There is a second structural problem here: the restricted survival ladder is called from `passUnderworld`, on the ordinary pass loop. An internally awaited shopping journey occupies that same loop, so installing `goTravelling()` does not by itself give those guards an independent execution clock. The watchdog still records health and can cancel wedges, but a rescue is limited by `w.rescuedPass !== this.passes`. A single shopping pass can therefore consume its rescue and then continue into another dangerous leg without incrementing the pass number. [Restricted-ladder dispatch](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:13363), [rescue gate](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:11334), [shopping continuation](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:20502).
+
+**3. “Playing dead” is not enforced as a movement-free state, and damage does not end its wait**
+
+The damage-rate branch calls `playDead()`, which reconnects and sets a 90-second frozen deadline. It then calls `takeBack()`, which returns **`CONTINUE`**. The ordinary ladder can therefore execute more stages on the same pass after the successful freeze. The frozen-state check is only at the top of the next `pass()`.
+
+When that next pass arrives, the frozen branch reads health and rests, but does not test whether health fell or the character acted. It returns before the survival ladder regardless.
+
+Relevant code: [freeze deadline](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:21304), [damage-rate branch](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:14059), [fallthrough verdict](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:13590), [frozen early return](C:/code/m59-lab/prod-deploy/tools/m59-autopilot.mjs:12591).
+
+**Camilla, September 12 at 8:37 p.m. PDT:** freezes at 32/49 health at 8:37:08.516. The same pass resumes ordinary recovery behavior; position frames move from r42c31 through r29c31 to r24c27, and the journal records a safe-spot attempt. Health falls to 1, and a spider kills her at 8:37:22.376, less than 14 seconds after the claimed freeze. [Postmortem](C:/code/m59-lab/prod-deploy/substrate/postmortems/Camilla-2026-09-13T03-37-22-376Z.json).
+
+**Fourteen of the 74 deaths end with `frozen` as the last decision.** That does not establish the same initiating cause for all fourteen, but establishes that the supposedly protective waiting state can persist through a lethal attack. Waldorf's last fourteen decisions say “frozen” while health falls from 23 to 3; a spider then kills him. [Waldorf postmortem](C:/code/m59-lab/prod-deploy/substrate/postmortems/Waldorf-2026-09-13T03-39-59-748Z.json).
+
+Two offline reproductions confirm the code defects: the real damage-rate rescue returns `CONTINUE` with a live frozen deadline, and the real `pass()` keeps the freeze and calls the survival ladder zero times when health falls from 20 to 5 between passes. The code also labels a monster-triggered abandonment “A PLAYER IS ON US”; that label must not be used as evidence of PvP.
+
+**What the restart did fix, and what it did not**
+
+The prod reflog shows `d209de3` deployed September 12 at 1:32 p.m. PDT, and the uptime ledger shows a fleet start at 1:33 p.m. That fixed the real `rideTrack` rest-entry and polling mistakes: health was incorrectly treated as a number rather than `{value,max}`. Later restarts, including 5:33 p.m., precede the entire overnight window investigated here.
+
+This morning's checkout moved from `4ab56ac` to `00bfb43` at 6:56:27 a.m.; all 23 keepers recorded starts around 6:57:06–6:57:17. The new change centralizes the health read and repairs the success counter that still compared an object with a number. **Old zero track-rest counts cannot prove the rest never ran.** Ten deaths in the fixed snapshot occurred after this restart, and current tactics confirm the new epoch.
+
+Shelter is also split across multiple movement paths. `walkPivots` consumes `shelterPolicy`; `rideTrack` uses its own shelter indices, a 50% threshold, and a 20-second rest budget. `followRail` does not consume the route-shelter contract; its special rest is for insufficient vigor before a jump. A successful track crossing also `continue`s before the common hop-rest hook. These are additional coverage gaps to audit, not individually established causes of all 74 deaths. [Pivot contract](C:/code/m59-lab/prod-deploy/tools/m59-game.mjs:6376), [track rest](C:/code/m59-lab/prod-deploy/tools/m59-game.mjs:10017), [rail path](C:/code/m59-lab/prod-deploy/tools/m59-game.mjs:8001), [track early continue](C:/code/m59-lab/prod-deploy/tools/m59-game.mjs:11963).
+
+The whole fleet did take some shelter: journey records contain 75 route stops and 21 hop-wall holds in the window. But the fatal-journey snapshots record no route or hop-wall stops, and 71 of 74 report no shelter stop at all. This is selective failure on the dangerous attempts, not evidence that every shelter mechanism is universally dead.
+
+**Repair order**
+
+1. Make survival suspension authoritative until recovery explicitly releases it. Stop the timer from recreating a suspended journey, and stop shopping continuations from issuing the next leg after a survival cancellation or death. Exercise internal shopping journeys through the same protection guarantees as external travel.
+2. Make a successful freeze end the current pass, cancel or drain outstanding movement, and prevent other movement from silently breaking it. Damage or an action that invalidates the freeze must trigger a fresh survival decision rather than another frozen wait.
+3. Reconcile the crowd veto with the intended refuge behavior, and apply one verified shelter lifecycle across ordinary paths, tracks, rails, and successful hop transitions. Confirm arrival at the refuge before resting; abort on damage there.
+4. Investigate the repeated commercial trips and stockpile fallback loop as an exposure multiplier. Most recent attempts are commercial travel and the fleet is earning almost no kills. Changing a threshold alone cannot repair that workload or the ownership defects above.
+
+The timer was introduced in `3dfd6f0` on September 6; the September 10 changes `81b7bc2` and `f4b0d50` broadened play-dead use against monsters; stockpile travel was wired in on September 11. These dates support an interaction of older latent defects with newer behavior and heavier travel. The data does not isolate one commit as the sole cause of the fleet-wide rate increase.
+
+**Verification and limits**
+
+[Offline reproduction script](./reproduce-travel-survival.mjs) and [results](./reproduction-results.json) demonstrate four current-code failures without a game socket. Existing suites: vitals-shape 21 passed; resume-travel 149 passed; play-dead 35 passed. Travelling reports 145 passed and one failed assertion, “while one that ARRIVED does not”; the current commit already documents the same failure on its baseline. Its unit coverage does not establish that the combined timer, shopping continuation, freeze, and recovery lifecycle works.
+
+Deaths were read from this prod checkout's postmortems and scoped to the prod roster. Locations use `locate()`'s recent hit/frame evidence rather than blindly trusting `where`. Activity and stage labels can persist across waits, so the concrete timelines carry more weight than the labels alone. The tactics store resolves to the shared main-checkout substrate; those records were filtered to prod and the snapshot cutoff. Some movement evidence is trimmed at epoch changes, limiting direct pre/post comparisons.
+
+[Structured counts and per-death index](./analysis-summary.json) · [current-epoch tactics evidence](./latest-code-tactics.json) · [travelling test output](./travelling-test-output.txt)
