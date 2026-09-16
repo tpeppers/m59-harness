@@ -32,6 +32,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | commit, merge, push, cut a deploy, or work alongside another session | [`docs/m59-git-process.md`](docs/m59-git-process.md) |
 | interpret, log, serialize, or compare a coordinate | [`docs/m59-coordinates.md`](docs/m59-coordinates.md) |
 | run or extend the offline tests | [`docs/m59-tests.md`](docs/m59-tests.md) |
+| rehearse an errand on a copy of prod, or rebuild the shadow fleet | [`docs/m59-shadow.md`](docs/m59-shadow.md) |
 
 ## The one-liner
 
