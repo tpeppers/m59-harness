@@ -154,6 +154,8 @@
 // A step that fails ends THAT AGENT's errand and no other's. One courier dying is not the
 // operation failing, which is the difference between a fleet tool and a script.
 import { readDevnotes, matchDevnotes, formatDevnote } from './m59-devnote.mjs';
+import { routePreflight, roomsNamedBy, formatRoutePreflight,
+         warningMode } from './m59-routecheck.mjs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
@@ -1037,6 +1039,28 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'union, the router therefore cannot plan into any of them, and a walk to one ' +
               'burns three attempts and the whole budget before saying so. Asked of ' +
               'm59-exits.mjs, which is the ONE view all of it now agrees on',
+  },
+  routeCheck: {
+    what: 'a per-character check, before the lock, that every body this errand names has a ' +
+          'route the mover can plan to every room it names — ADVISORY by default',
+    since: '2026-09-17',
+    incident: 'asked for after a fleet-wide instance of the SHAPE, and deliberately not ' +
+              'described as a fix for it. What happened on 2026-09-17 was that three ' +
+              'characters were assigned to room 27 and every board and every keeper status ' +
+              'read `assigned_room: 27` for forty minutes while none of them moved and not ' +
+              'one travel to 27 was issued -- seventeen travel calls in that window, all to ' +
+              '38, 39 or 544. The cause was a DUM doctrine allowlist (`station.rooms`) that ' +
+              'the assignment did not share, and THIS CHECK WOULD HAVE PRINTED GREEN ON IT: ' +
+              'the route 38 -> 27 exists and always did. What it does catch is the other door ' +
+              'into the same room -- an errand that names a destination this particular body ' +
+              'has no planned route to from where a death or an errand left it, which is the ' +
+              'mirror of `reachable` (that asks whether ANYTHING arrives at a room, once and ' +
+              'globally). 25 of 264 rooms have nothing arriving in the union, and a walk to ' +
+              'one burns three attempts and the whole budget before saying so. It WARNS ' +
+              'rather than refuses because "no route" is a fact about the bake and not about ' +
+              'the world, and a check that grounded the fleet on a pessimistic router would ' +
+              'be switched off in a week -- `warnings: "error"` is how an errand that cannot ' +
+              'afford to be wrong opts in',
   },
   minHealth: {
     what: 'the health floor under every journey',
@@ -3645,6 +3669,10 @@ export async function fleetScript({
   // so an errand cannot wait for ever on somebody who cannot heal where it stands.
   healMs = 300_000,
   force = process.argv.includes('--force'), parallel = true,
+  // HOW LOUD AN ADVISORY IS. 'warn' (the default) prints and carries on; 'error' turns
+  // every advisory in this file into a refusal. Overridden by M59_FLEETSCRIPT_WARNINGS, so an
+  // operator can tighten a script they did not write without editing it.
+  warnings = null,
   // GUARANTEE 9. `{ pinned, verified, touches, refuseOnDrift }` — the generation this task
   // was last seen green against. See checkProvenance above for why it exists.
   provenance = null,
@@ -3717,6 +3745,58 @@ export async function fleetScript({
   // fleet is still untouched, and the banner has to be on screen before the first step.
   const waiver = parseUnsafe(unsafe, { scriptName: name });
   const waived = waiver.waived;
+
+  // GUARANTEE 16: CAN THESE BODIES ACTUALLY GET TO THESE ROOMS?
+  //
+  // Read the argument in m59-routecheck.mjs. In one line: `reachable` asks whether anything
+  // in the world arrives at a room; this asks whether THIS character has a route from where
+  // it is standing, and on 2026-09-17 those two disagreed for forty minutes while three
+  // characters reported the right room and farmed the wrong one.
+  //
+  // Placed AFTER the waiver is parsed (so `waives: ['routeCheck']` is known) and BEFORE the
+  // lock, the claim and the first heal — every one of which is wasted on an errand that could
+  // never have arrived.
+  const warn = warningMode({ script: warnings });
+  if (warn.rejected) onLog(`warnings: ${warn.rejected} — keeping 'warn'`);
+  if (!waived.has('routeCheck')) {
+    try {
+      const sample = typeof steps === 'function' ? await steps(agents[0], {}) : steps;
+      const rooms = roomsNamedBy(Array.isArray(sample) ? sample : []);
+      if (rooms.length) {
+        // WHERE EVERYBODY IS, READ ONCE. `observe` is a status call per character; the rooms
+        // are few and the agents are few, and this happens once per run rather than per step.
+        const where = {};
+        for (const a of agents) where[a] = (await observe(a).catch(() => ({})))?.room ?? null;
+        const { loadMap, movementMapFile, findPath } = await import('./m59-map.mjs');
+        const map = loadMap(movementMapFile());
+        // PLAN ON THE MAP THE MOVER ENFORCES — the routing doc's first rule. `findPath` is
+        // the same room-graph search the router uses, so a green here means the router agrees.
+        // `findPath` ANSWERS `{ found, hops, reason }` AND IS ALWAYS TRUTHY. The first
+        // version of this line read `p && p.length > 0`, which is true for every pair in the
+        // game — including `38 -> 999`, where 999 is not a room. That is a check that cannot
+        // fail, the same shape as `Boolean({ok:false})` passing a read-it-back guarantee.
+        // Read `found`, and pass `reason` through: the router's own sentence already names
+        // whether the obstacle is a hazard or the graph itself.
+        const result = routePreflight({ agents, rooms, where,
+          route: (from, to) => {
+            const p = findPath(map, from, to);
+            return { ok: p?.found === true, why: p?.reason };
+          } });
+        for (const line of formatRoutePreflight(result, { mode: warn.mode, scriptName: name }))
+          onLog(line);
+        if (result.problems.length && warn.mode === 'error' && !force)
+          throw new Error(`${name}: refusing — ${result.problems.length} character/room pair(s) ` +
+            'have no route the mover can plan. Re-bake, add the missing affordance, or say ' +
+            "`unsafe: { waives: ['routeCheck'] }`; --force overrides.");
+      }
+    } catch (e) {
+      // A CHECK THAT CANNOT RUN MUST NOT GROUND THE FLEET — unless it was the check itself
+      // refusing, which is re-thrown. A missing bake is an advisory; `warnings: 'error'`
+      // buys a refusal on a KNOWN-bad route, never on an unreadable map.
+      if (/refusing —/.test(String(e?.message))) throw e;
+      onLog(`routes: could not be checked (${e?.message ?? e}) — carrying on without that check`);
+    }
+  }
   if (waived.size) {
     onLog('─'.repeat(72));
     onLog(`UNSAFE — ${name} is running with ${waived.size} guarantee(s) OFF:`);

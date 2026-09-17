@@ -595,6 +595,20 @@ the records it describes.
   shape. **The scan reads the whole machine**, so the assertions are scoped to accounts
   nobody plays — a live Kermit failed five of them by being correctly detected) and
   `node tools/m59-bank-test.mjs` (52) and
+  `node tools/m59-routecheck-test.mjs` (56 — **can these bodies get to these rooms, asked
+  before the lock**. The per-character mirror of `reachable`: that one asks whether ANYTHING
+  arrives at a room, once and globally; this asks whether THIS character has a route from
+  wherever a death or an errand left it, and the two disagree routinely. Advisory by default
+  because "no route" is a fact about the bake and not about the world — `warnings: 'error'`
+  on the script, or `M59_FLEETSCRIPT_WARNINGS=error`, promotes it, and the environment beats
+  the script so an operator can tighten one they did not write. Pins the three refusals that
+  keep it from becoming a nuisance: a body already IN the room is not a failed route, an
+  unreadable position is not evidence of being stuck, and a router that throws or answers
+  null is a question rather than an answer. **And it pins the wiring as source text**, because
+  the bug worth having a test for was there rather than in the pure function: `findPath`
+  answers `{found, hops, reason}` and is ALWAYS truthy, so the first predicate — `p &&
+  p.length > 0` — was true for every pair in the game including `38 -> 999`, where 999 is not
+  a room. A check that cannot fail, the same shape as `Boolean({ok:false})`) and
   `node tools/m59-overfarm-test.mjs` (70 — **the mixture arithmetic, and the four things the
   loot ranker refuses to do**. Its first case is the one worth reading: sifting 150% of pack
   capacity out of a half-preferred stream comes home 75/25, and that is not a tuning target
