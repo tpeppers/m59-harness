@@ -33,7 +33,13 @@ export function detailSettings(policy = {}, category = null) {
              // pack that came home is worth more than the one a greedy lap would have
              // carried, and that comparison exists only in this record — an overfarm running
              // with its stream switched off is a bet nobody is settling.
-             : category === 'overfarm' ? policy?.overfarm?.enabled : false;
+             : category === 'overfarm' ? policy?.overfarm?.enabled
+             // GUILD-HALL RUNS RECORD WHENEVER guild_wants IS ON, for the reason the whole
+             // category exists: three chests sat unchanged for days while the planner asked
+             // for 45 orc teeth on every trip, and nothing on disk could say whether a trip
+             // had happened, whether the door had opened, or whether a `put` was refused.
+             // `this.note()` goes to an in-memory buffer a keeper restart empties.
+             : category === 'guild_chest' ? policy?.guildWants?.enabled : false;
   return auto ? { enabled: true, retention_hours: 24, default_window_hours: 2,
     [category]: true } : null;
 }

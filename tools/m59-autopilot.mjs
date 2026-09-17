@@ -80,10 +80,10 @@ import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telem
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
 import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
-import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey } from './m59-storage.mjs';
+import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
-import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
+import { hallPassword, inFoyer, SAID_NOTE, BOOKMAKERS_FOYER } from './m59-hallsecret.mjs';
 import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as party from './m59-party.mjs';
@@ -20940,6 +20940,100 @@ export class Autopilot {
   //
   // THE WORD NEVER ENTERS A LOG LINE. The hall is a public room, the say is audible to
   // whoever else is standing in it, and a transcript is a place this word must not be.
+  // HOW LONG A GUILD DOOR TAKES, and why it is a named constant rather than the 2500ms that
+  // happened to be on the roomContents wait. A guild hall door is not an ordinary door: it is
+  // opened by a spoken password and it swings slowly, so the read that looks for chests can
+  // easily happen while it is still shut. Overridable for a hall that behaves differently.
+  static HALL_DOOR_MS = Number(process.env.M59_HALL_DOOR_MS ?? 4000);
+
+  /**
+   * Get to where the chests can actually be seen: out of the foyer, password spoken, door
+   * given time to open, room read back.
+   *
+   * Returns { ok, why, at, said, chests } and NEVER throws -- the caller records it.
+   */
+  async reachHallChests() {
+    const s = this.s, c = s.need();
+    const where = () => {
+      const me = s?.client?.self ?? null;
+      return { row: me?.row ?? me?.y ?? null, col: me?.col ?? me?.x ?? null };
+    };
+    let at = where();
+    const steps = [];
+
+    if (inFoyer(at.row, at.col) === true) {
+      // ONE ROW SOUTH OF THE BOX, at whatever column we arrived on. The hall proper is south
+      // of the foyer (the chests are at rows 18-20), so this is the shortest way out and it
+      // does not need a route through the secret door -- which is the door we are trying to
+      // open and therefore cannot plan through.
+      const target = { row: BOOKMAKERS_FOYER.south + 1, col: at.col };
+      const walk = await s.walkTo(target.col, target.row, { maxSteps: 14 })
+        .catch(e => ({ arrived: false, reason: e?.message ?? String(e) }));
+      steps.push({ step: 'leave_foyer', to: `r${target.row}c${target.col}`,
+                   arrived: !!walk.arrived, why: walk.reason ?? null });
+      at = where();
+      if (inFoyer(at.row, at.col) === true) {
+        // Still inside. Say nothing -- speaking here cannot work and cannot be heard.
+        return { ok: false, why: 'could not leave the guild hall foyer, where the password ' +
+                                 'does nothing and speech is muffled',
+                 at, said: false, steps };
+      }
+    }
+
+    const said = await this.sayHallPassword().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    steps.push({ step: 'say_password', ok: !!said?.ok, why: said?.why ?? null });
+    if (!said?.ok) return { ok: false, why: said?.why ?? 'the password was not said', at, said: false, steps };
+
+    // THE DOOR IS SLOW. Waiting here is the difference between reading a room with chests in
+    // it and reading the same room through a door that has not finished opening.
+    await new Promise(r => setTimeout(r, Autopilot.HALL_DOOR_MS));
+    await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
+    await c.waitFor({ kinds: ['room-contents'], timeoutMs: 3000 }).catch(() => {});
+    const chests = [...(c.room?.objects?.values?.() ?? [])]
+      .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || '')).length;
+    steps.push({ step: 'read_room', chests_visible: chests, waited_ms: Autopilot.HALL_DOOR_MS });
+    return { ok: chests > 0, why: chests ? null : 'the door was opened but no chest is visible',
+             at: where(), said: true, chests, steps };
+  }
+
+  /**
+   * Write down what a guild-hall run actually did, on disk, either side of the deposit.
+   *
+   * ALWAYS, not only on success. The runs worth reading are the ones that moved nothing —
+   * a door that did not open and a chest that refused a `put` look identical from a chest
+   * that simply never changed, and until this existed that was the only view anyone had.
+   */
+  recordHallRun({ before, after, want, contributed, done, hall }) {
+    try {
+      const moved = {};
+      for (const item of new Set([...Object.keys(before?.pack ?? {}), ...Object.keys(after?.pack ?? {})])) {
+        const d = (before?.pack?.[item] ?? 0) - (after?.pack?.[item] ?? 0);
+        if (d) moved[item] = d;
+      }
+      const chestDelta = {};
+      for (const slot of new Set([...Object.keys(before?.chests ?? {}), ...Object.keys(after?.chests ?? {})])) {
+        const b = before?.chests?.[slot] ?? { rows: 0, bulk: 0 };
+        const a = after?.chests?.[slot] ?? { rows: 0, bulk: 0 };
+        if (a.bulk !== b.bulk || a.rows !== b.rows)
+          chestDelta[slot] = { bulk: a.bulk - b.bulk, rows: a.rows - b.rows, now: a };
+      }
+      this.detailEvent('guild_chest', 'run', {
+        ended_at: Date.now(), planned: want?.total ?? 0, contributed,
+        // THE TWO HALVES THE OPERATOR ASKED FOR, verbatim rather than summarised.
+        pack_before: before?.pack ?? null, pack_after: after?.pack ?? null,
+        chests_before: before?.chests ?? null, chests_after: after?.chests ?? null,
+        pack_delta: moved, chest_delta: chestDelta,
+        // AND WHY, which is the half that was missing entirely: the foyer, the password and
+        // the door, each as its own step with its own verdict.
+        hall: hall ?? null,
+        per_chest: done,
+        // A run that planned something and moved nothing is the interesting one; say so in a
+        // field rather than making every reader derive it.
+        moved_nothing: (want?.total ?? 0) > 0 && !contributed,
+      });
+    } catch { /* a record must never cost the deposit it is describing */ }
+  }
+
   async sayHallPassword() {
     const word = hallPassword(TITHE_FLEET);
     if (!word) {
@@ -21137,6 +21231,7 @@ export class Autopilot {
                                 hallGuildId: g?.id ?? null });
     if (!door.ok) { this.note('cannot use the stockpile', { why: door.why }); return { took: [], saved: 0 }; }
 
+    const before = snapshot();
     this.doing = 'travelling';
     const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));
@@ -21151,9 +21246,24 @@ export class Autopilot {
     // behind a shut secret door still appears here — which is exactly why this is not
     // optional and not conditional on "can I see a chest". The reachability, not the
     // visibility, is what the password buys.
-    await this.sayHallPassword().catch(() => {});
-    await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
-    await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
+    // THE FOYER IS WHERE THE PASSWORD DOES NOTHING, AND IT IS WHERE ARRIVALS LAND.
+    //
+    // `InFoyer` (ghall.kod:896-913) refuses the door for anyone inside the box and ALSO
+    // muffles speech across it, so a character standing there is not merely failing to open
+    // the door -- nobody in the hall proper can hear it at all. The Bookmaker's hall declares
+    // that box as rows 2-3, cols 26-39 (guildh14.kod:145-148) and the chests are at rows
+    // 18-20, so the whole of a deposit happens on the far side of a door that will not open
+    // for the square you arrive on.
+    //
+    // `sayHallPassword` already DETECTED this and returned { ok:false, why:'in the foyer' }.
+    // The caller then threw the result away with .catch(() => {}), read an empty room, found
+    // no chests, and recorded a tidy "no chest stands on that square" for each one. Measured
+    // 2026-09-17: three chests holding 3394/4570/305 bulk, unchanged for days, while the
+    // planner wanted 45 orc teeth into the first of them on every town trip.
+    //
+    // So: step out of the box first, then speak, then WAIT -- a guild door is slower than an
+    // ordinary one and the read that follows is what decides whether any chest exists.
+    const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     // EVERY CHEST IN THIS ROOM, EACH NAMED BY ITS OWN SQUARE. No mapping, no ordering and no
     // completeness requirement: the name is read off the object, so a chest seen at r18c6 is
     // r18c6 and a reading that shows two chests is a reading of two chests. An object id is
@@ -21526,6 +21636,20 @@ export class Autopilot {
     const pack = this.packAsItems();
     const want = contributionPlan({ plan, chests, pack, keepFloor, rent });
 
+    // THE BEFORE SNAPSHOT. Taken before the walk, because a run that never arrives is
+    // exactly the case the record has to be able to show.
+    // NEVER THROWS. A snapshot is a description of the run, and a description that can fail
+    // the thing it describes is worse than no description -- the first version of this called
+    // a helper that did not exist, outside any try, which would have broken every deposit.
+    const snapshot = () => { try { return {
+      at: Date.now(),
+      pack: Object.fromEntries((want.chests ?? []).flatMap(ch => (ch.give ?? []).map(g => g.item))
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .map(item => [item, this.packAsItems().filter(x => norm(x.name) === item)
+          .reduce((t, x) => t + (x.amount || 1), 0)])),
+      chests: Object.fromEntries((store.allChests() ?? []).map(ch =>
+        [ch.slot, { rows: (ch.items ?? []).length, bulk: chestFullness(ch.items ?? []).bulk }])),
+    }; } catch (e) { return { at: Date.now(), error: e?.message ?? String(e) }; } };
     if (!want.enabled) { this.note('guild wants are off', { why: want.why }); return want; }
     if (!want.walk) {
       // Deliberately quiet and deliberately not a walk. This is the common case on most
@@ -21540,6 +21664,8 @@ export class Autopilot {
     if (!trip.arrived) {
       this.note('could not reach the guild hall to contribute', {
         want: want.total, why: trip.reason || 'travel refused' });
+      this.recordHallRun({ before, after: before, want, contributed: 0, done: [],
+        hall: { ok: false, why: trip.reason || 'travel refused', arrived: false } });
       return { ...want, contributed: 0, reason: trip.reason || 'travel refused' };
     }
 
@@ -21549,9 +21675,11 @@ export class Autopilot {
     // behind a shut secret door still appears here — which is exactly why this is not
     // optional and not conditional on "can I see a chest". The reachability, not the
     // visibility, is what the password buys.
-    await this.sayHallPassword().catch(() => {});
-    await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
-    await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 }).catch(() => {});
+    // SAME FOYER PROBLEM AS THE WITHDRAW PATH, and this is the one that was costing us.
+    // `reachHallChests` steps out of the box, speaks, waits for the slow door and reads the
+    // room back — and returns WHY when any of that fails, which is what `recordHallRun`
+    // writes down. See the note on reachHallChests.
+    const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
 
     // A CHEST IS ADDRESSED BY OBJECT ID, and the cache is what knows which id is which
     // slot. Falling back to the order chests appear in the room would be a guess that
@@ -21626,7 +21754,9 @@ export class Autopilot {
           { store, why: `deposited ${intoThisChest}` });
     }
     this.tally.guild_contributed = (this.tally.guild_contributed || 0) + contributed;
-    this.note('contributed to the guild chests', { contributed, planned: want.total, done });
+    this.recordHallRun({ before, after: snapshot(), want, contributed, done, hall });
+    this.note('contributed to the guild chests', { contributed, planned: want.total, done,
+      hall: hall?.ok ? 'chests reachable' : (hall?.why ?? 'unknown') });
     if (contributed) this.progress('stocked the guild hall');
     return { ...want, contributed, done };
   }
