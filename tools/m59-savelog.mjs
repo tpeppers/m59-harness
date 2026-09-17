@@ -110,6 +110,12 @@ const quantile = (xs, q) => {
 
 // Every kind this file reads. Anything in the ledger and not in here is reported once per
 // window, so a rename surfaces as a line of output rather than as a smaller number.
+// How many identical failures, with no success in between, make a loop rather than a retry.
+// Twelve because the busiest honestly-failing pair on the day this was measured tried five
+// times; a threshold has to sit above the noise it is separating from, not at the middle of
+// it. Exported so a test can drive the edge rather than trusting the number.
+export const STUCK_REPEATS = Number(process.env.M59_STUCK_REPEATS || 12);
+
 export const COUNTED = new Set([
   'killed', 'died', 'level_up', 'level_lost', 'travel_journey', 'zone_change',
   'travel_hold', 'travel_paused_for_wall', 'travel_resumed', 'travel_resume_dropped',
@@ -151,12 +157,64 @@ export function window(rows, from, to) {
   const killers = {};
   for (const d of deaths) { const k = killerOf(d); killers[k] = N(killers[k]) + 1; }
 
-  // ---- journeys, with the quality measures the #movement work is judged on.
+  // ---- journeys. THREE OUTCOMES, NOT TWO, AND ONE STUCK CHARACTER IS NOT A DENOMINATOR.
   //
-  // A count of journeys says whether the fleet moved. These say whether it moved WELL, and
-  // they are the columns an A/B of two cherry-picked #movement commits is actually read on.
+  // `arrived: false` was being read as "the mover failed", and on 2026-09-17 that made a fleet
+  // whose mover was working almost perfectly report a 15.1% arrival rate. Two separate errors,
+  // both of them in the reader:
+  //
+  //   1. AN INTERRUPTED JOURNEY IS NOT A FAILED ONE. 1,367 rows that day carried a
+  //      `cancelled_by` — "playing dead to avoid dying" (3,208 over the file), "continue
+  //      healing at the safe wall", a newer command from the keeper. Every one of those is
+  //      something else deciding to stop the walk, usually the survival ladder doing exactly
+  //      its job. Counting them against the mover scores it for decisions it did not make.
+  //
+  //   2. A LOOP IS ONE FACT, NOT THIRTEEN THOUSAND JOURNEYS. Marco Polo stood in Kardde's
+  //      Canyon for 22.85 hours re-issuing the same journey to room 370 every six seconds:
+  //      13,770 rows, every one `legs: 0`, 77% of every travel_journey the fleet wrote. Its
+  //      first hop is the Main gate of Barloque and all five exit candidates are the one
+  //      square he is standing on, each refused `geometry_blocked` before any packet is sent.
+  //      That is one broken boundary, and it was wearing the shape of a fleet-wide collapse.
+  //
+  // With interruptions and that one loop set aside, the fleet arrived 2,703 times and
+  // genuinely failed TWICE. The raw count is kept — it is the true measure of how much work
+  // the mover was asked to do — but it is never the headline, because a number one stuck
+  // character can move by sixty points is not a measurement of anything else.
   const journeys = by('travel_journey');
+
+  // Interrupted, by anything that is not the mover giving up. `cancelled_by` names the
+  // decision; the reason string is the same fact when the cancel came from a newer command.
+  const interrupted = (j) => j.cancelled_by != null
+    || /cancelled by a newer command/i.test(String(j.reason ?? ''));
   const arrived = journeys.filter(j => j.arrived === true);
+  const stopped = journeys.filter(j => j.arrived !== true && interrupted(j));
+  const failed = journeys.filter(j => j.arrived !== true && !interrupted(j));
+
+  // A LOOP IS A DESTINATION A CHARACTER NEVER ONCE REACHED AND NEVER WALKED TOWARDS.
+  //
+  // Keyed on (character, destination) and NOT on the reason: an earlier draft included the
+  // reason, which meant an arrival could never match a failure's key, so every ordinary
+  // superseded route — Bunsen to 101, cancelled 105 times and arrived plenty — was declared
+  // stuck. Both extra conditions matter. Zero arrivals to that destination is what separates
+  // a loop from a busy route; zero legs walked is what separates going nowhere from failing
+  // late, and Marco's signature is exactly that.
+  const dest = new Map();
+  for (const j of journeys) {
+    const k = `${j.character}\u0000${j.to}`;
+    const e = dest.get(k) ?? { character: j.character, to: j.to, arrived: 0, failed: 0,
+                               legs: 0, first: j.t, last: j.t, reason: null };
+    if (j.arrived === true) e.arrived++;
+    else if (!interrupted(j)) { e.failed++; e.reason = j.reason ?? e.reason; }
+    e.legs += N(j.legs);
+    e.first = Math.min(e.first, j.t); e.last = Math.max(e.last, j.t);
+    dest.set(k, e);
+  }
+  const loops = [...dest.values()]
+    .filter(e => e.arrived === 0 && e.legs === 0 && e.failed >= STUCK_REPEATS)
+    .sort((a, b) => b.failed - a.failed);
+  const inLoop = new Set(loops.map(e => `${e.character}\u0000${e.to}`));
+  const failedReal = failed.filter(j => !inLoop.has(`${j.character}\u0000${j.to}`));
+
   const jms = arrived.map(j => N(j.ms)).filter(Boolean);
   const stumbles = journeys.reduce((a, j) => a + N(j.stumbles), 0);
   const overPlan = journeys.filter(j => N(j.legs) > N(j.planned_legs)).length;
@@ -210,7 +268,22 @@ export function window(rows, from, to) {
     // ======== MOVING
     journeys: journeys.length,
     journeys_arrived: arrived.length,
-    arrival_rate_pct: pct(arrived.length, journeys.length),
+    journeys_interrupted: stopped.length,
+    journeys_failed: failed.length,
+    journeys_failed_in_a_loop: failed.length - failedReal.length,
+    // THE MOVER'S OWN SCORE: of the journeys nobody interrupted and that were not part of a
+    // stuck loop, how many arrived. This is the column a #movement A/B is read on.
+    arrival_rate_pct: pct(arrived.length, arrived.length + failedReal.length),
+    // And the unfiltered number, always, beside it. Publishing only the filtered one would
+    // let a stuck fleet hide behind a healthy percentage — the opposite mistake, and worse.
+    arrival_rate_raw_pct: pct(arrived.length, journeys.length),
+    // Each loop, named: who, where to, why, how many attempts, over how long. A character
+    // that has been failing the same hop for hours is the most actionable row this file
+    // produces, and until now it was invisible inside a denominator.
+    stuck_loops: loops.map(e => ({
+      character: e.character, to: e.to, reason: e.reason, attempts: e.failed,
+      minutes: Math.round((e.last - e.first) / 60000),
+    })),
     journey_ms_p50: quantile(jms, 0.5),
     journey_ms_p90: quantile(jms, 0.9),
     journey_held_ms: journeys.reduce((a, j) => a + N(j.held_ms), 0),
@@ -338,9 +411,18 @@ function main() {
               + `${w.deaths_pvp_shown} PVP shown, ${w.deaths_pvp_guessed} PVP guessed, `
               + `${w.deaths_unattended} unattended, ${w.deaths_at_a_safe_wall} at a safe wall`
               + (w.deaths_unclassified ? `, ${w.deaths_unclassified} unclassified` : ''));
-    console.log(`    journeys ${w.journeys}  arrived ${w.arrival_rate_pct ?? '-'}%  `
+    console.log(`    journeys ${w.journeys}: ${w.journeys_arrived} arrived, `
+              + `${w.journeys_interrupted} interrupted, ${w.journeys_failed} failed`
+              + (w.journeys_failed_in_a_loop ? ` (${w.journeys_failed_in_a_loop} in a loop)` : ''));
+    console.log(`    arrival ${w.arrival_rate_pct ?? '-'}% of what nobody interrupted  `
+              + `(raw ${w.arrival_rate_raw_pct ?? '-'}%)  `
               + `p50 ${w.journey_ms_p50 ?? '-'}ms p90 ${w.journey_ms_p90 ?? '-'}ms  `
               + `stumbles ${w.journey_stumbles}  over plan ${w.journeys_over_plan}`);
+    // NAMED, LOUDLY. A character failing the same hop for hours is the most actionable thing
+    // in the window, and it spent 22 hours invisible inside a denominator before this existed.
+    for (const l of w.stuck_loops)
+      console.log(`    STUCK: ${l.character} -> room ${l.to}, ${l.attempts} attempts over `
+                + `${l.minutes} min, no legs walked — ${l.reason ?? 'no reason given'}`);
     console.log(`    travel deaths per 1000 journeys: ${w.deaths_per_1000_journeys ?? '-'}`);
     console.log(`    stalls ${w.stalled}/${w.unstalled}  shuffles ${w.shuffles}  `
               + `wedges given up ${w.wedge_gave_up}  holds ${w.travel_holds}`);

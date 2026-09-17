@@ -174,6 +174,85 @@ const row = (t, kind, extra = {}) => ({ t, type: 'event', kind, character: 'Alph
   eq(w.journey_hp_lost, 45, 'and the health it cost to get there');
 }
 
+// ---------------------------------------------------------------- the three journey outcomes
+//
+// THE INCIDENT, 2026-09-17. The fleet reported a 15.1% arrival rate on a day its mover
+// genuinely failed twice. Two errors, both in the reader, and each one alone is enough to
+// make a working mover look broken:
+//
+//   - an INTERRUPTED journey was counted as a failed one. "playing dead to avoid dying" was
+//     the commonest cancel in the file; scoring the mover for the survival ladder's decisions
+//     is scoring it for work it was told to stop doing.
+//   - ONE stuck character wrote 77% of all journey rows. Marco Polo re-issued the same
+//     journey every six seconds for 22.85 hours, walking zero legs each time.
+{
+  const rows = [];
+  // ten clean journeys: seven arrive, three genuinely fail
+  for (let i = 0; i < 7; i++) rows.push(row(T + i, 'travel_journey', { to: 39, arrived: true, ms: 1000, legs: 3 }));
+  for (let i = 0; i < 3; i++) rows.push(row(T + 10 + i, 'travel_journey', { to: 39, arrived: false, legs: 2, reason: 'gave up after 12 hops' }));
+  // five the survival ladder stopped
+  for (let i = 0; i < 5; i++)
+    rows.push(row(T + 20 + i, 'travel_journey', { to: 39, arrived: false, legs: 4, cancelled_by: 'playing dead to avoid dying' }));
+  // and two superseded by a newer order, which says so only in `reason`
+  for (let i = 0; i < 2; i++)
+    rows.push(row(T + 30 + i, 'travel_journey', { to: 39, arrived: false, legs: 4, reason: 'movement cancelled by a newer command' }));
+
+  const w = window(rows, T, T + 1000);
+  eq(w.journeys, 17, 'every row is still counted — the raw total is the truth about how much '
+     + 'work the mover was asked to do, and it is never dropped');
+  eq(w.journeys_arrived, 7, 'seven arrived');
+  eq(w.journeys_interrupted, 7, 'seven were stopped by something that was not the mover');
+  eq(w.journeys_failed, 3, 'and only three are the mover failing');
+  eq(w.arrival_rate_pct, 70, 'the headline rate is 7 of 10, not 7 of 17 — an interruption is '
+     + 'not a failure, and counting it as one scores the mover for the ladder\'s decisions');
+  eq(w.arrival_rate_raw_pct, 41.2, 'and the unfiltered number is published beside it, always');
+}
+
+// ---------------------------------------------------------------- a loop, and what is not one
+{
+  const stuck = [];
+  for (let i = 0; i < 40; i++)
+    stuck.push(row(T + i, 'travel_journey', { to: 370, arrived: false, legs: 0, planned_legs: 12,
+                                              ms: 4200, reason: 'route_progressing_exits_exhausted' }));
+  const w = window(stuck, T, T + 1000);
+  eq(w.stuck_loops.length, 1, 'forty identical failures to one room, no legs walked, is a loop');
+  eq(w.stuck_loops[0].to, 370, 'named by destination');
+  eq(w.stuck_loops[0].attempts, 40, 'with the attempt count');
+  eq(w.stuck_loops[0].reason, 'route_progressing_exits_exhausted', 'and the reason it gave');
+  eq(w.journeys_failed_in_a_loop, 40, 'and its rows are marked as belonging to a loop');
+  eq(w.arrival_rate_pct, null, 'with nothing else in the window there is no rate to report — '
+     + 'not 0%, which would read as a mover that failed rather than one never asked');
+
+  // A ROUTE THE CHARACTER SOMETIMES COMPLETES IS NOT A LOOP, and this is the over-fire an
+  // earlier draft had: keying on (character, destination, REASON) meant an ARRIVAL could
+  // never share a key with a failure, so every failure key had `arrived: 0` and any busy
+  // route was declared stuck. The arrival test has to be asked of the DESTINATION, across
+  // every reason.
+  //
+  // The failures here are genuine ones with no legs — the exact shape the loop filter looks
+  // for — so the single arrival is the only thing keeping this out of `stuck_loops`. An
+  // earlier version of this case used INTERRUPTED rows, which never reach the failure count
+  // at all: it passed against the bug it claimed to pin, and pinned nothing.
+  const busy = [];
+  for (let i = 0; i < 30; i++)
+    busy.push(row(T + i, 'travel_journey', { to: 101, arrived: false, legs: 0,
+                                             reason: 'route_progressing_exits_exhausted' }));
+  busy.push(row(T + 100, 'travel_journey', { to: 101, arrived: true, legs: 9, ms: 5000 }));
+  eq(window(busy, T, T + 1000).stuck_loops, [],
+     'one arrival to that destination is enough: the character is getting there, so the '
+     + 'failures are a flaky hop and not a body standing still');
+
+  // AND NEITHER IS FAILING LATE. Zero legs is what separates going nowhere from getting most
+  // of the way and losing it — different defects, and only one of them is a character standing
+  // still for a day.
+  const late = [];
+  for (let i = 0; i < 30; i++)
+    late.push(row(T + i, 'travel_journey', { to: 599, arrived: false, legs: 7,
+                                             reason: 'gave up after 12 hops' }));
+  eq(window(late, T, T + 1000).stuck_loops, [],
+     'a journey that walks seven legs and then fails is not a character standing still');
+}
+
 // ---------------------------------------------------------------- the seam, crossed for real
 //
 // EVERY CASE ABOVE HANDS THE READER ROWS THE TEST WROTE ITSELF, so all of them would still pass
