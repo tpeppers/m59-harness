@@ -1257,6 +1257,19 @@ export const supply = (from, to, what, opts = {}) =>
   ({ do: 'supply', from, to, what, ...opts });
 
 export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts });
+
+// KILL SOMETHING, THROUGH THE KEEPER, AND JUDGE IT BY THE CORPSE.
+//
+// `act('fight', …)` does not work and cannot: it calls the BROKER's fight tool, and on a
+// keeper-backed character — which is every character on every fleet now — that tool holds a
+// snapshot rather than a socket. Measured 2026-09-16 in room 27 with eight orcs present: four
+// minutes, the body never moved, combat never went active, and the call eventually failed.
+// The pad that used it completed two laps, killed one thing fleet-wide, and sold nothing.
+//
+// The socket is in the keeper, so the order goes there. `fight` closes by a planned path and
+// then swings, and reports `closed` and `engaged` separately so "could not get there" and
+// "got there and missed" stay distinguishable.
+export const fight = (target, opts = {}) => ({ do: 'fight', target, ...opts });
 /** Cast a spell and prove it landed from the world, never from the reply. */
 export const cast = (spell, opts = {}) => ({ do: 'cast', spell, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
@@ -2975,6 +2988,23 @@ async function runStep(ctx, agent, step, state) {
     // reason. This is the same rule the repository already applies to `verify`
     // (`Boolean({ok:false})` is true, which is how the read-it-back guarantee passed on every
     // failure) and to a merchant's spoken refusal: judge the world, not the envelope.
+    // See the `fight` constructor above for why this does not go through `call`.
+    case 'fight': {
+      const ports = await keeperPorts(ctx.fleet, { wantAgent: agent });
+      const who = ports?.get?.(agent);
+      if (!who) return { ok: false, why: 'no keeper port for this agent — nothing to address the fight to' };
+      const r = await keeperCall(who, 'fight', {
+        target: step.target, rounds: step.rounds ?? 10,
+        abort_below: step.abortBelow ?? 0.45,
+        reach: step.reach, close_tries: step.closeTries,
+      }).catch(e => ({ error: e.message }));
+      if (r?.error) return { ok: false, result: r, why: r.error };
+      // ENGAGED IS THE BAR, NOT "no error". A fight that could not close is a failure with a
+      // reason, and the reason is the useful half — it names the square it stopped on.
+      return { ok: !!r?.engaged, result: r,
+               why: r?.engaged ? undefined : (r?.why ?? 'did not engage') };
+    }
+
     case 'act': {
       const r = await call(step.tool, { agent, ...step.args }, step.timeoutMs ?? 120_000)
         .catch(e => ({ error: e.message }));
