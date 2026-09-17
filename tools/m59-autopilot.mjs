@@ -70,6 +70,7 @@ import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
 import { detailSettings, recordStrategyStat, saveVaultSnapshot }
   from './m59-strategy-stats.mjs';
+import { siftValue } from './m59-overfarm.mjs';
 import { routeTravelKind } from './m59-travel-kind.mjs';
 import { purchasePlan, purchaseKey, PURCHASE_BANKS, accountBalance } from './m59-purchase-plan.mjs';
 import { runReagentCoop } from './m59-reagent-coop-runtime.mjs';
@@ -1544,6 +1545,10 @@ export class Autopilot {
       // either strategy is what widens the keeper's behaviour, not merely installing it.
       farmCleanup: null,
       farmDelivery: null,
+      // SIFT MORE THAN THE PACK HOLDS AND CARRY THE BEST OF IT. Inert as null like its
+      // neighbours: a character with no overfarm policy loots exactly as this fleet always
+      // did — everything, nearest first, until the pack is full. See m59-overfarm.mjs.
+      overfarm: null,
       // Cast the Kraanan personal enchantments on whoever else is in the room. null is
       // inert like its neighbours: holding the spells is not the instruction, being posted
       // as the group's caster is. Shape: { enabled, spells: [...], gap_ms, mana_floor }.
@@ -9831,6 +9836,18 @@ export class Autopilot {
         looted: Object.entries(this.tally.looted).map(([k, n]) => `${k}${n > 1 ? ` x${n}` : ''}`),
         rooms_visited: [...this.visited],
       },
+      // WHAT WILL THIS CHARACTER DO IF IT FILLS ITS PACK — answerable BEFORE the post-mortem,
+      // for the same reason `travel_guard` is reported whether or not anything is travelling.
+      overfarm: this.policy.overfarm?.enabled ? {
+        enabled: true,
+        selective_at: this.policy.overfarm.selective_at,
+        overfarm_percent: this.policy.overfarm.overfarm_percent,
+        prefer: this.policy.overfarm.prefer, avoid: this.policy.overfarm.avoid,
+        lap: this.s?._overfarm ? {
+          sifted: this.s._overfarm.sifted, taken: this.s._overfarm.taken,
+          dropped: this.s._overfarm.dropped, left_behind: this.s._overfarm.left,
+        } : null,
+      } : { enabled: false },
       coordination: {
         farm_cleanup: { enabled: !!this.policy.farmCleanup?.enabled, ...this.coordination.cleanup },
         farm_delivery: { enabled: !!this.policy.farmDelivery?.enabled, ...this.coordination.delivery,
@@ -11106,6 +11123,35 @@ export class Autopilot {
       });
     }
 
+    // A LAP ENDS WHERE THE GOODS DO, so the delivery is where the overfarm is settled up.
+    // `siftValue` re-runs the whole lap's stream twice — once in encounter order, which is
+    // what a greedy lap would have carried, and once best-first, which is what selection
+    // produced — and the difference is the strategy's own claim, in shillings, measured
+    // against the room this character actually met rather than an average one.
+    if (kind === 'trading' && this.policy.overfarm?.enabled) {
+      const lap = this.s?.endOverfarmLap?.();
+      if (lap?.stream?.length && detailSettings(this.policy, 'overfarm')) {
+        const cap = skills.carryCapacity(this.s?.client);
+        const v = siftValue({ stream: lap.stream, policy: this.policy.overfarm,
+                              capacity: cap?.known ? cap.weight_max : null });
+        this.detailEvent('overfarm', 'lap', {
+          ended_at: Date.now(), room: room?.num ?? null, room_name: room?.name ?? null,
+          target_percent: this.policy.overfarm.overfarm_percent,
+          selective_at: this.policy.overfarm.selective_at,
+          sifted: v.sifted, sifted_percent: v.sifted_percent, capacity: v.capacity,
+          picked_up: lap.taken, traded_away: lap.dropped, left_behind: lap.left,
+          baseline_value: v.baseline.value, kept_value: v.kept.value,
+          gain: v.gain, gain_percent: v.gain_percent,
+          mixture: v.mixture.slice(0, 8), unpriced: v.unpriced.slice(0, 8),
+          // SAID OUT LOUD BECAUSE IT IS NOT A MEASUREMENT. Every shilling here is
+          // `viValue_average` through a merchant markup, and 160 of the 249 weighable items
+          // carry no price at all — they contribute cost to both halves and value to
+          // neither. The COMPARISON is sound because both sides have the same blind spot;
+          // the absolute number is an estimate and must never be reported as takings.
+          estimated: true,
+        });
+      }
+    }
     if (kind === 'trading' && detailSettings(this.policy, 'trading')) {
       const trade = this.passTrade ?? {};
       this.detailEvent('trading', 'session', {
@@ -12817,6 +12863,16 @@ export class Autopilot {
 
   async passOnce() {
     const s = this.s;
+    // INSTALL THE OVERFARM POLICY ON THE SESSION, EVERY PASS. `lootFloor` defaults to it,
+    // so this is what reaches the five call sites that are not in this file — the kill tick
+    // in m59-decide.mjs, the keeper's own loot action, the `loot` tool, the loot-runner
+    // errand and the clean-up sweep. Re-asserted rather than set once because the policy can
+    // change under a running keeper and a stale copy on the session would be invisible.
+    //
+    // The protect list is `protectedItemNames()` — vault items, temporary cargo, whatever
+    // the guild plan is still short of, and the declared stockpile floors — so the things
+    // this fleet already refuses to sell are also the things it refuses to trade away.
+    s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames());
     if (!s.live) { this.note('not in game'); return; }
     if (s.combat?.active) {
       await s.combat.tick();

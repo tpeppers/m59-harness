@@ -137,6 +137,7 @@ import { guardToolCall, hostNameIndex, withoutHosts, alliedCharacters,
 import { policyDiff, formatPolicyDiff, hasSpotChange, coerceSpotPair } from './m59-policydiff.mjs';
 import { loadoutFor, protectedNames, reconcile as reconcileLoadout, plannedAbilities } from './m59-loadout.mjs';
 import { resolveItemNames, weighItem, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
+import { normalizeOverfarm } from './m59-overfarm.mjs';
 import { hometownFrom } from './m59-describe.mjs';
 import { factionAssignment, factionJoinConfirmed, factionJoinSpec,
          factionOfferAllowed, FACTION_SOLDIER, factionFromProfile,
@@ -10434,12 +10435,24 @@ const TOOLS = [
         travel: { type: 'boolean' }, fighting: { type: 'boolean' },
         trading: { type: 'boolean' }, vault_accumulation: { type: 'boolean' },
         create_food: { type: 'boolean' }, farm_cleanup: { type: 'boolean' },
-        farm_delivery: { type: 'boolean' },
+        farm_delivery: { type: 'boolean' }, overfarm: { type: 'boolean' },
       }, description: 'opt-in rotating strategy detail recorder. null disables it; lightweight counters remain on' },
       farm_cleanup: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, max_floor_items: { type: 'number' },
         keep_free_stacks: { type: 'number' },
       }, description: 'before sell-bound departures, discard confirmed dead gear and rank floor stock for the return pack; null disables it' },
+      overfarm: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        selective_at: { type: 'number', description: 'pack % at which pickup stops taking everything. Default 85.' },
+        overfarm_percent: { type: 'number',
+          description: 'keep farming until this much of PACK CAPACITY has been sifted, counting what was later dropped. Default 150.' },
+        prefer: { type: 'array', items: { type: 'string' }, description: 'item names ranked up' },
+        avoid: { type: 'array', items: { type: 'string' }, description: 'item names ranked down' },
+        prefer_multiplier: { type: 'number' }, avoid_multiplier: { type: 'number' },
+        swap_margin: { type: 'number',
+          description: 'how much better a floor item must be than the worst carried one before the swap is worth the packets. Default 1.25.' },
+        merchant: { type: 'string', description: 'merchant tier the value estimate assumes. Scales everything equally; changes shillings, never the ranking.' },
+      }, description: 'SIFT MORE THAN THE PACK HOLDS AND CARRY THE BEST OF IT. Three phases by pack fullness: take everything below `selective_at`, then take only what outranks what is carried, then — once full — keep killing and trade the worst carried item for a better one on the floor, until `overfarm_percent` of capacity has passed through the hands. Ranking is shillings per unit of BINDING cost (the worse of weight and bulk) times the operator preference. An item that cannot be priced is UNRANKABLE, never worthless: it may be taken and is never dropped, which matters because 160 of the 249 weighable items have no price. null disables it and the character loots exactly as it did before' },
       accept_donations: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         reagents: { type: 'array', items: { type: 'string' },
@@ -11173,15 +11186,20 @@ const TOOLS = [
         else {
           const value = a.strategy_stats;
           const bools = ['crate_check', 'travel', 'fighting', 'trading', 'vault_accumulation', 'create_food',
-            'farm_cleanup', 'farm_delivery'];
+            'farm_cleanup', 'farm_delivery', 'overfarm'];
+          // `overfarm` ARRIVED AFTER THE SHAPE WAS FIXED, and a keeper or a DUM doctrine
+          // written against the old one sends eight switches rather than nine. Refusing it
+          // would turn a new stats category into an outage for every existing caller, so a
+          // missing switch defaults ON — the same as every other category — and only a
+          // present-but-not-boolean value is an error.
           if (typeof value !== 'object' || Array.isArray(value) || typeof value.enabled !== 'boolean' ||
-              bools.some(key => typeof value[key] !== 'boolean'))
-            throw new Error('strategy_stats needs enabled and eight boolean category switches');
+              bools.some(key => value[key] !== undefined && typeof value[key] !== 'boolean'))
+            throw new Error('strategy_stats needs enabled and boolean category switches');
           p.policy.strategyStats = {
             enabled: value.enabled,
             retention_hours: Math.max(1, Math.min(168, Number(value.retention_hours) || 24)),
             default_window_hours: Math.max(0.25, Math.min(168, Number(value.default_window_hours) || 2)),
-            ...Object.fromEntries(bools.map(key => [key, value[key]])),
+            ...Object.fromEntries(bools.map(key => [key, value[key] ?? true])),
           };
         }
       }
@@ -11194,6 +11212,22 @@ const TOOLS = [
           p.policy.farmCleanup = { enabled: true,
             max_floor_items: Math.max(1, Math.min(40, Math.floor(Number(value.max_floor_items) || 12))),
             keep_free_stacks: Math.max(0, Math.min(12, Math.floor(Number(value.keep_free_stacks) || 0))) };
+        }
+      }
+      // OVERFARMING. Validation is `normalizeOverfarm`, shared with the keeper and with the
+      // offline test, so the thing that is checked here and the thing that decides a pickup
+      // cannot drift apart. It never throws: an unusable number keeps the committed default
+      // and an unrecognised key is REPORTED, per docs/m59-policy.md — a refused policy is
+      // how a fleet ends up with no policy at all.
+      const overfarmNotes = [];
+      if (a.overfarm !== undefined) {
+        if (a.overfarm == null) p.policy.overfarm = null;
+        else {
+          const norm = normalizeOverfarm(a.overfarm);
+          overfarmNotes.push(...norm.rejected,
+            ...norm.unknown.map(k => `unrecognised key ${k}, not applied`));
+          const { unknown, rejected, ...policy } = norm;
+          p.policy.overfarm = policy;
         }
       }
       if (a.accept_donations !== undefined) {
@@ -11749,6 +11783,10 @@ const TOOLS = [
       // of the bug this block exists to close; a caller that asked for `require_safe_wall`
       // without spots has to be told what it actually got.
       if (coerced.length) out.coerced = coerced;
+      // Same rule as `coerced`: a setting that was accepted and then changed, or named and
+      // then ignored, has to come back in the reply. Silence here is what let `purpose` stay
+      // out of a schema for a year with every keeper's audit switched off.
+      if (overfarmNotes.length) out.overfarm_notes = overfarmNotes;
       return keeper_push ? { ...out, keeper_push } : out;
     },
   },

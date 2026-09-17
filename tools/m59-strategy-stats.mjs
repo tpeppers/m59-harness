@@ -28,7 +28,12 @@ export function detailSettings(policy = {}, category = null) {
   // on proving the coordination happened. Keep their small event stream even when the
   // broad Detailed strategy stats switch is off; it uses the same 24h rotation and 2h UI.
   const auto = category === 'farm_cleanup' ? policy?.farmCleanup?.enabled
-             : category === 'farm_delivery' ? policy?.farmDelivery?.enabled : false;
+             : category === 'farm_delivery' ? policy?.farmDelivery?.enabled
+             // OVERFARMING IS ITS OWN EVIDENCE. The whole claim of the strategy is that the
+             // pack that came home is worth more than the one a greedy lap would have
+             // carried, and that comparison exists only in this record — an overfarm running
+             // with its stream switched off is a bet nobody is settling.
+             : category === 'overfarm' ? policy?.overfarm?.enabled : false;
   return auto ? { enabled: true, retention_hours: 24, default_window_hours: 2,
     [category]: true } : null;
 }

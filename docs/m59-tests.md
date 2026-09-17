@@ -595,6 +595,20 @@ the records it describes.
   shape. **The scan reads the whole machine**, so the assertions are scoped to accounts
   nobody plays — a live Kermit failed five of them by being correctly detected) and
   `node tools/m59-bank-test.mjs` (52) and
+  `node tools/m59-overfarm-test.mjs` (70 — **the mixture arithmetic, and the four things the
+  loot ranker refuses to do**. Its first case is the one worth reading: sifting 150% of pack
+  capacity out of a half-preferred stream comes home 75/25, and that is not a tuning target
+  that could be adjusted to taste — it falls out of `overfarm_percent` being measured in bulk
+  sifted against capacity. If it ever stops coming out at 75/25 the unit has drifted and every
+  number the strategy reports is in a different currency from the one it claims. The rest pins
+  the refusals: an unpriced item scores `null` rather than 0 and is never dropped (160 of 249
+  weighable items have no price, so this is the common path); a protected name is not a drop
+  candidate at any score, singular or plural; cost is `max(weight, bulk)` because either
+  ceiling full means the pack is full; and a swap must clear `swap_margin` before it is worth
+  the drop, the get and the seconds they take in a monster room. A final section reads the
+  broker, autopilot, game and stats sources as TEXT to pin the wiring — importing
+  `m59-broker.mjs` would run it — because a policy that dies in transport is this
+  repository's signature failure) and
   `node tools/m59-supply-test.mjs` (115 — **moving supplies between two characters one broker
   is driving, on the architecture production actually runs**. `supplyBetween` was written when
   the broker WAS the keeper and the pacer and the socket; per-character keeper processes have

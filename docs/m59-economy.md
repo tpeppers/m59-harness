@@ -408,6 +408,77 @@ the protocol's bounded batches, and inventory gains confirm delivery. Offline re
   along, so Solomon in Cor Noth was reported as stationary whether or not he is. The class
   map is now case-insensitive on lookup while keeping the file's own spelling on iteration.
 
+## Overfarming: which hundred percent of a full pack comes home
+
+A pack is a fixed budget and a farming room is an unbounded supply, so "what did this lap
+earn?" is decided almost entirely by WHICH pack-full came back — and the fleet answered it by
+accident for a year, taking whatever was nearest until it was full and walking away from the
+rest. `tools/m59-overfarm.mjs` is the policy that makes it a choice, driven from a DUM slider
+(`overfarm` in the strategy catalogue) and executed by the keeper inside `lootFloor`.
+
+```bash
+node tools/m59-overfarm-test.mjs        # 70, offline
+```
+
+Three phases, by pack fullness, and the character loots exactly as it always did when the
+policy is absent:
+
+| phase | when | what it does |
+|---|---|---|
+| fill | below `selective_at` (85%) | take everything, nearest first — today's behaviour |
+| selective | 85% to full | take a drop only if it outranks the worst thing already carried |
+| overfarm | full, until `overfarm_percent` of capacity has been sifted | keep killing; trade the worst carried item for a better one on the floor |
+
+- **`overfarm_percent` IS IN BULK SIFTED AGAINST PACK CAPACITY, NOT IN KILLS**, and the unit
+  is what makes the setting predict its own outcome. Sift 150% of capacity out of a 50/50
+  stream and you have handled 0.75 of a pack of each; keep the best 1.0 and you carry 0.75
+  of the preferred and 0.25 of the other. **75/25, from nothing but the ratio** — which is
+  exactly what the operator predicted before any of this was written, and is why
+  `m59-overfarm-test.mjs` pins it as its first case. Kills would have been the obvious unit
+  and it varies by room, by creature and by luck; no two characters would agree on one.
+
+- **RANKING IS SHILLINGS PER UNIT OF BINDING COST, TIMES A PREFERENCE.** Not absolute value:
+  a long sword is 560sh and costs 80, which is 7 per unit carried, while an orc tooth is 28sh
+  for 3 — nearly a third better. Cost is `max(weight, bulk)`, the same rule `packFullness`
+  uses to report `percent`, because either ceiling full means the pack is full.
+
+- **AN UNPRICED ITEM IS UNRANKABLE, NEVER WORTHLESS, AND THIS IS THE COMMON CASE.** Measured
+  2026-09-16: **160 of the 249 items in the weight table have no entry in the value table** —
+  every unique, every magical item, most quest gear. Scoring them 0 would make them the first
+  thing out of the pack every time, which is "a floor of zero is not a floor" with the sign
+  flipped. They are taken while there is room and never dropped.
+
+  Resolving kod's inheritance chain would "fix" the coverage and must not be done: `Item`
+  declares `viValue_average: 10` and everything without its own value inherits it, so an
+  amulet of the three would price at the same 10 as a rock — a confident wrong number in
+  place of an honest unknown, which is strictly worse than the gap.
+
+- **THE TWO TABLES DISAGREE ABOUT THE SINGULAR.** `resolveItemName` canonicalises to `herb`;
+  `substrate/m59-values.json` keys the same reagent as `herbs`. A lookup that consults one
+  spelling prices it at nothing and then holds it for ever, because an unpriced item is
+  unrankable. `unitWorth` tries both, in both tables. Same family as the fleet board's
+  reagent columns reading zero.
+
+- **WHAT IS PROTECTED IS NOT A DROP CANDIDATE AT ANY SCORE.** The list is
+  `protectedItemNames()` — vault items, temporary cargo, whatever the guild plan is short of,
+  and the declared stockpile floors — so the things this fleet already refuses to SELL are
+  also the things it refuses to trade away on the floor of a monster room.
+
+- **A LAP ENDS WHERE THE GOODS DO.** The sift counter resets when the pack is emptied into a
+  merchant, a vault or a chest, and only then: measured from a clock or a room change, a
+  character that never delivers would farm for ever.
+
+- **A LOWER BOUND IS NOT A MEASUREMENT.** `carryCapacity` withholds `room_for` when the pack
+  holds something unweighable, and overfarming stands down entirely in that case rather than
+  computing a pack emptier than it is and dropping things to make room it already had.
+
+**What it was worth is recorded, and the comparison is the honest part.** `siftValue` replays
+the lap's own stream twice — once in encounter order, which is what a greedy lap would have
+carried home, and once best-first — and files the difference as an `overfarm`/`lap` detail
+event. Both halves are blind to the same unpriced items, so the COMPARISON holds even though
+the absolute shillings are an estimate off `viValue_average`; the row says `estimated: true`
+and the number must never be reported as takings.
+
 ## Guild wants and the four containers
 
 - **A GUILD WANT IS AN END STATE, NOT AN ERRAND, AND THAT IS WHAT MAKES IT SAFE TO GIVE TO

@@ -25,7 +25,9 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
-import { describeObject, affordances, OF, blocksMovement, prepareActTarget, readHealth } from './m59-parse.mjs';
+import { describeObject, affordances, OF, blocksMovement, prepareActTarget, readHealth,
+         dropSpec } from './m59-parse.mjs';
+import { planPickup, normalizeOverfarm, unitCost } from './m59-overfarm.mjs';
 import { World, spreadEdges, distinctStagesFirst, boundedSilentGo, boundedRegionEntry,
          doorSettleMs, remainingDoorSettle , sameRoomDoorPlan} from './m59-world.mjs';
 import { loadMap, movementMapReadiness, resolveRoom, forgetInferredExit, findPath, buildReverseEdges }
@@ -4233,6 +4235,35 @@ class Session {
                                 : {}) };
   }
 
+  /**
+   * Install the overfarm policy this character is running, and what it may never drop.
+   *
+   * The sift counter is NOT reset here: a policy change mid-lap is still the same lap, and
+   * zeroing it would hand the character a fresh 150% budget every time DUM re-asserted an
+   * unchanged setting — which it does on a timer.
+   */
+  setOverfarmPolicy(policy = null, protect = []) {
+    this._overfarmPolicy = policy ?? null;
+    this._overfarmProtect = Array.isArray(protect) ? protect : [];
+    if (policy?.enabled) this._overfarm ??= { sifted: 0, stream: [], taken: 0, dropped: 0, left: 0 };
+  }
+
+  /**
+   * A LAP ENDS WHERE THE GOODS DO. Called when the pack is emptied into a merchant, a vault
+   * or a guild chest — that is the moment the next 150% starts counting, and it is the only
+   * moment, because a lap measured from anything else (a clock, a room change, a restart)
+   * would let a character that never delivers farm for ever.
+   *
+   * Returns the finished lap so the caller can record it; the arithmetic of what the
+   * overfarming was worth is `siftValue` in m59-overfarm.mjs.
+   */
+  endOverfarmLap() {
+    const lap = this._overfarm ?? null;
+    this._overfarm = this._overfarmPolicy?.enabled
+      ? { sifted: 0, stream: [], taken: 0, dropped: 0, left: 0 } : null;
+    return lap;
+  }
+
   // Pick up everything gettable within reach. Shared with the `loot` tool.
   // `stayPut` is for looting from a safe spot: UserGet reaches seven squares on its
   // own, so most of a kill's drops are already gettable from where you stand, and the
@@ -4241,7 +4272,14 @@ class Session {
   async lootFloor({ only = null, ids = null, maxItems = 12, stayPut = false,
                     movementGeneration = this.movementGeneration, controlToken = null,
                     shouldCancel = null, explicitIdsOverride = true,
-                    beforeMutation = null } = {}) {
+                    beforeMutation = null,
+                    // DEFAULTED FROM THE SESSION, NOT REQUIRED FROM THE CALLER. Six places
+                    // call lootFloor and only one of them is inside the autopilot; asking
+                    // each to remember to forward the policy is how a strategy ends up
+                    // enabled on a character that never applies it. The autopilot installs
+                    // it on the session (`setOverfarmPolicy`) and every path inherits it.
+                    overfarm = this._overfarmPolicy ?? null,
+                    protect = this._overfarmProtect ?? [] } = {}) {
     const c = this.need();
     const cancelled = () => typeof shouldCancel === 'function' && shouldCancel();
     if (cancelled())
@@ -4323,6 +4361,67 @@ class Session {
 
     const taken = [], refused = [];
     let wasCancelled = false;
+
+    // OVERFARMING: DECIDE WHICH OF THIS FLOOR IS WORTH THE PACK IT WOULD COST.
+    //
+    // Here rather than in a caller, because this function's own comment forty lines down
+    // already says why: it is "the single place a floor drop becomes a carried item". Six
+    // call sites reach it — the kill tick, the loot-runner errand, the clean-up sweep, the
+    // `loot` tool, the corpse follow-up and the keeper action — and a policy installed in
+    // one of them would be a policy four characters do not have.
+    //
+    // It runs AFTER the cursed and broken filters and never reverses them: those are
+    // refusals about the item, this is a decision about the pack, and a thing we will not
+    // touch cannot be ranked into it.
+    let overfarmPlan = null;
+    const ofPolicy = overfarm ? normalizeOverfarm(overfarm) : null;
+    if (ofPolicy?.enabled && cands.length && !ids?.length) {
+      const cap = skills.carryCapacity(c);
+      // AN INEXACT LOAD IS A LOWER BOUND, and `carryCapacity` withholds `room_for` rather
+      // than guess — the same rule the sell trigger follows. Overfarming on a lower bound
+      // would compute a pack that is emptier than it is and then drop things to make room
+      // it already had, so it stands down and loots normally instead.
+      if (cap?.known && cap.load?.exact) {
+        const named = o => c.rsc.get(o.nameRsc) || '';
+        this._overfarm ??= { sifted: 0, stream: [], taken: 0, dropped: 0, left: 0 };
+        overfarmPlan = planPickup({
+          floor: cands.map(o => ({ id: o.id, name: named(o), amount: o.amount || 1 })),
+          pack: (c.inventory || []).map(o => ({ name: c.rsc.get(o.nameRsc) || o.name,
+                                                amount: o.amount || 1, id: o.id })),
+          policy: ofPolicy, protect, capacity: cap.weight_max,
+          sifted: this._overfarm.sifted,
+        });
+
+        // The swaps first: the pack has to have the room before the get is sent, or the
+        // server refuses the pickup and we have thrown something away for nothing.
+        for (const swap of overfarmPlan.swaps) {
+          for (const giving of swap.drop) {
+            const held = (c.inventory || []).find(o =>
+              (c.rsc.get(o.nameRsc) || o.name) === giving.name);
+            if (!held) continue;
+            await this.pacer.submit('drop', () => {
+              if (typeof beforeMutation === 'function') beforeMutation('drop', { target_id: held.id });
+              return c.drop([dropSpec(held, giving.amount)]);
+            }).catch(() => {});
+            this._overfarm.dropped++;
+            refused.push({ id: held.id, name: giving.name, dropped: true,
+                           why: `traded away for ${swap.take.name}: ${swap.why}` });
+          }
+        }
+        if (overfarmPlan.swaps.length) {
+          await this.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+          await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        }
+
+        const wanted = new Set(overfarmPlan.take.map(t => t.id));
+        for (const skipped of overfarmPlan.leave) {
+          refused.push({ id: skipped.id, name: skipped.name, why: skipped.why });
+          this._overfarm.left++;
+        }
+        cands = cands.filter(o => wanted.has(o.id));
+      }
+    }
+
     for (const n of brokenSkipped)
       refused.push({ item: n, why: 'BROKEN — the server says it has been shattered. It cannot be ' +
                                    'wielded or sold, and its name does not say so, which is why the ' +
@@ -4425,8 +4524,26 @@ class Session {
       } catch { /* a ledger write must never cost us the loot we just picked up */ }
     }
 
+    // THE SIFT COUNTER IS WHAT MAKES `overfarm_percent` MEASURABLE, and it counts what the
+    // hands passed over, not what came home: an item picked up and later traded away is the
+    // whole evidence that overfarming happened. Accumulated from `taken` — what the server
+    // CONFIRMED with a `got` — never from what was asked for.
+    if (this._overfarm && taken.length) {
+      for (const t of taken) {
+        const cost = unitCost(t.name);
+        if (cost.known) this._overfarm.sifted += cost.cost * (t.amount || 1);
+        this._overfarm.stream.push({ name: t.name, amount: t.amount || 1 });
+      }
+      this._overfarm.taken += taken.length;
+    }
+
     return { taken, refused,
              carrying: c.inventory.map(o => ({ id: o.id, name: c.rsc.get(o.nameRsc), amount: o.amount || undefined })),
+             ...(overfarmPlan ? { overfarm: { phase: overfarmPlan.phase,
+                                              pack_percent: overfarmPlan.pack_percent,
+                                              sifted_percent: overfarmPlan.sifted_percent,
+                                              swapped: overfarmPlan.swaps.length,
+                                              why: overfarmPlan.why } } : {}),
              ...(wasCancelled ? { cancelled: true,
                note: 'loot intent stopped before the next paced item action' } : {}) };
   }
