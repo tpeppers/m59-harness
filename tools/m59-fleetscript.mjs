@@ -2991,8 +2991,13 @@ async function runStep(ctx, agent, step, state) {
     // See the `fight` constructor above for why this does not go through `call`.
     case 'fight': {
       const ports = await keeperPorts(ctx.fleet, { wantAgent: agent });
-      const who = ports?.get?.(agent);
-      if (!who) return { ok: false, why: 'no keeper port for this agent — nothing to address the fight to' };
+      const entry = ports?.get?.(agent);
+      if (!entry) return { ok: false, why: 'no keeper port for this agent — nothing to address the fight to' };
+      // THE MAP IS KEYED BY AGENT AND ITS VALUES DO NOT CARRY IT — SO PUT IT BACK. Exactly
+      // what the note above `holdKeeper` says, and this walked into it anyway: the keeper
+      // refuses a partially addressed write before it will answer anything, so the first run
+      // of this step came back `addressed to "shadow03" but omits agent`.
+      const who = { ...entry, agent };
       const r = await keeperCall(who, 'fight', {
         target: step.target, rounds: step.rounds ?? 10,
         abort_below: step.abortBelow ?? 0.45,
