@@ -437,7 +437,7 @@ the records it describes.
   different facts, and a zero meaning *fixed* against a zero meaning *untested* is exactly
   the confusion that made Ukgoth's north door read `refused 182, crossings 0` on a day it
   crossed six times out of six. See [`m59-evidence.md`](m59-evidence.md)) and
-  `node tools/m59-savelog-test.mjs` (62 — **the per-save-window roll-up, which is a READER,
+  `node tools/m59-savelog-test.mjs` (68 — **the per-save-window roll-up, which is a READER,
   and a reader's failure mode is a number that is wrong while everything around it still adds
   up**. The first draft counted `k.what` for a kill against a ledger whose field is `creature`
   — every total correct, every breakdown empty — and invented two death splits that do not

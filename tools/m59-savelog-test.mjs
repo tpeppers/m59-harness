@@ -22,7 +22,10 @@
 //   7  PVP shown and PVP guessed never merge
 //   8  a window takes its own events and not the next window's
 import assert from 'node:assert/strict';
-import { boundaries, window, COUNTED, COLLAPSE_MS } from './m59-savelog.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { boundaries, window, readLedger, COUNTED, COLLAPSE_MS } from './m59-savelog.mjs';
 
 let n = 0;
 const ok = (c, why) => { n++; assert.ok(c, why); };
@@ -169,6 +172,41 @@ const row = (t, kind, extra = {}) => ({ t, type: 'event', kind, character: 'Alph
   eq(w.journey_stumbles, 45, 'stumbles sum across every journey, arrived or not');
   eq(w.journeys_over_plan, 1, 'a journey that took more legs than it planned is a route that was wrong');
   eq(w.journey_hp_lost, 45, 'and the health it cost to get there');
+}
+
+// ---------------------------------------------------------------- the seam, crossed for real
+//
+// EVERY CASE ABOVE HANDS THE READER ROWS THE TEST WROTE ITSELF, so all of them would still pass
+// if `ledgerEvent('server_save', ...)` put the phase somewhere the reader does not look. That
+// is the same class of bug as reading `k.what` for a kill — each half correct, the seam between
+// them wrong, and no window boundary ever found.
+//
+// So this writes one through the REAL `recordEvent` and reads it back with the REAL
+// `readLedger`. M59_LEDGER_DIR is set before the import because m59-ledger.mjs resolves its
+// directory at module load, and a test that writes into a live fleet's history puts a fictional
+// character into the audit that nothing downstream can tell from a real one.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'm59-savelog-'));
+  process.env.M59_LEDGER_DIR = dir;
+  const { recordEvent } = await import('./m59-ledger.mjs');
+
+  // What m59-game.mjs's handler actually calls, for both phases of one save.
+  recordEvent('Alpha', 'server_save', { agent: 't1', phase: 'begin', held_ms: null });
+  recordEvent('Beta',  'server_save', { agent: 't2', phase: 'begin', held_ms: null });
+  recordEvent('Alpha', 'server_save', { agent: 't1', phase: 'end', held_ms: 1400 });
+
+  const back = readLedger(dir);
+  eq(back.length, 3, 'the ledger took all three rows');
+  const marks = boundaries(back);
+  eq(marks.length, 1, 'two characters announcing one save are ONE boundary read off real rows');
+  eq(marks[0].saw, 2, 'and it knows both of them saw it');
+  ok(back.every(r => r.kind === 'server_save'),
+     'the detail spread cannot overwrite `kind` — recordEvent applies the identity fields last');
+  ok(back.some(r => r.phase === 'end' && r.held_ms === 1400),
+     'and the pause duration survives the round trip, which is the server-strain confounder');
+  eq(window(back, marks[0].at, marks[0].at + 1000).unaccounted, [],
+     'a real server_save row is a kind this reader counts, not one it reports as unknown');
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`m59-savelog-test: ${n} assertions passed`);

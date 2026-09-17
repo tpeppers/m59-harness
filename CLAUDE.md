@@ -413,7 +413,8 @@ no death in the window was classified.
 event kind present that nothing tallies — because a reader's failure mode is not a crash, it is
 a number that is wrong while everything around it still adds up. The first draft of this read
 `k.what` for a kill against a ledger whose field is `creature`: correct totals, empty breakdown,
-nothing anywhere saying so. `m59-savelog-test.mjs` (62, offline) pins that case and seven more.
+nothing anywhere saying so. `m59-savelog-test.mjs` (68, offline) pins that case and seven more, and crosses the
+ledger-to-reader seam with the real `recordEvent` rather than rows it wrote itself.
 [`docs/m59-evidence.md`](docs/m59-evidence.md) has the argument.
 
 ## The reports, and the two questions people actually ask

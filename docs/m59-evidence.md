@@ -144,7 +144,7 @@ factor of four.
 node tools/m59-savelog.mjs                  # the last few windows
 node tools/m59-savelog.mjs --write          # append closed ones to substrate/savelog/<fleet>.jsonl
 node tools/m59-savelog.mjs --all --since 7d
-node tools/m59-savelog-test.mjs             # 62 assertions; offline, safe any time
+node tools/m59-savelog-test.mjs             # 68 assertions; offline, safe any time
 ```
 
 **Stock and flow.** The server's save holds every inventory, vault, chest and position, and
