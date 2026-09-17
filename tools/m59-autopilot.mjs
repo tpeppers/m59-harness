@@ -20811,7 +20811,9 @@ export class Autopilot {
       trip.nextService = 0;
     }
     const steps = [
-      ['guild contribution', () => this.contributeGuildWants()],
+      // `duringTownTrip` because this IS the town trip — see the guard in
+      // contributeGuildWants, which without it skipped its own scheduler.
+      ['guild contribution', () => this.contributeGuildWants({ duringTownTrip: true })],
       ['sell', async () => {
         const result = trip.marketStops?.length ? await this.sellMarketCircuit(trip) : await this.sellInTown();
         if (result?.pending) return result;
@@ -21486,11 +21488,26 @@ export class Autopilot {
     return trip.marketSale;
   }
 
-  async contributeGuildWants() {
-    if (this.policy.reagentCoop?.enabled)
-      // The town scheduler owns donation opportunities. Standalone passes must
-      // not resurrect a skipped final tithe or interrupt the next trip.
-      return { skipped: true };
+  async contributeGuildWants({ duringTownTrip = false } = {}) {
+    // THE GUARD COULD NOT TELL ITS TWO CALLERS APART, AND ONE OF THEM WAS THE TOWN TRIP.
+    //
+    // The intent was right: the town scheduler owns donation opportunities, so a STANDALONE
+    // pass must not resurrect a skipped final tithe or interrupt the next trip. But
+    // `contributeGuildWants` is step 0 OF THAT SCHEDULER, and it is the same method, so with
+    // `reagentCoop` enabled it returned `{ skipped: true }` on the town trip as well —
+    // every time, for ever. Nothing in `coopBusiness` covers the gap either: the coop path
+    // donates REAGENTS to the coop, which is a different thing from filling a chest plan.
+    //
+    // Measured on prod 2026-09-17: three characters farmed room 27 for seven hours with
+    // `guild_wants` on, looted 87 orc teeth between them against a chest plan wanting 738,
+    // and deposited NOTHING. The chest cache had not been written since 06:33 — nobody had so
+    // much as opened a chest — while the teeth rode around in their packs and the surplus was
+    // sold to merchants. Every board read "guild_wants: on" throughout.
+    //
+    // So the caller says which it is, and only the standalone path is skipped.
+    if (this.policy.reagentCoop?.enabled && !duringTownTrip)
+      return { skipped: true, why: 'the town scheduler owns donation opportunities; ' +
+                                   'this is a standalone pass' };
     const cfg = this.policy.guildWants;
     if (!cfg?.enabled) return null;
     const plan = guildPlan();
