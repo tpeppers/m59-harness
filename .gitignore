@@ -735,3 +735,8 @@ _verify2.mjs
 # file is how m59-deploy.mjs finds it. Gitignored because it is one machine's answer, and
 # because a fresh clone must work with no such repository at all.
 /substrate/private-repo
+
+# WHAT A REVEALED MAGIC ITEM IS FOR. A keep list is ORDERS TO A FLEET, not a description of
+# one: a file that parses is a file the service acts on, and this one decides what gets sold.
+# The shape is committed beside it as substrate/magic-keep.example.json.
+substrate/magic-keep.json

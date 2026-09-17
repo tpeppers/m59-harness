@@ -1,0 +1,64 @@
+{
+  "_": [
+    "WHAT A REVEALED MAGIC ITEM IS FOR. Copy to substrate/magic-keep.json — that path is",
+    "gitignored, because a keep list is ORDERS TO A FLEET and not a description of one.",
+    "",
+    "Four verdicts, and the split is by WHO BUYS IT:",
+    "  keep             back to the character it came from",
+    "  sell_to_players  held and tagged for the menagerie merchant, who sells to real people",
+    "  sell_to_npc      a TIMED attribute: sold at a counter on the trip it was revealed on,",
+    "                   because the timer runs in the vault too and the value decays",
+    "  unknown          nothing matched. NOT a sale — a missing line in this file.",
+    "",
+    "Every entry is matched as a case-insensitive SUBSTRING against the item's name AND its",
+    "look text after a reveal. Seven of this game's twelve permanent weapon attributes do not",
+    "rename the item at all, so the look-text signature is usually the only handle: see",
+    "WEAPON_ATTRIBUTES in tools/m59-magicsort.mjs for the table and its kod citations.",
+    "",
+    "The committed default is derived from that table (permanent and difficulty >= 8 keeps,",
+    "permanent and weaker sells to players, timed sells to a counter). This file REPLACES it",
+    "rather than adding to it — an empty or unparseable file keeps the default and says so."
+  ],
+
+  "keep": {
+    "attributes": [
+      "soft, white light",
+      "unholy glow seems to suck all life",
+      "Colhorr's signature is engraved",
+      "swirling green 'GMT'"
+    ],
+    "items": []
+  },
+
+  "sell_to_players": {
+    "attributes": [
+      "unsuitable for blood combat",
+      "of the just"
+    ],
+    "items": [
+      "wand",
+      "ring of",
+      "scroll",
+      "mystic sword"
+    ]
+  },
+
+  "sell_to_npc": {
+    "attributes": ["enchanted", "glowing", "holy", "cursed"],
+    "items": []
+  },
+
+  "why": {
+    "unsuitable for blood combat": "ceremonial: +2 damage, difficulty 5, x1.5 price. The kod calls it unsuitable for combat, so it is worth more for its looks than its edge."
+  },
+
+  "overrides": [
+    {
+      "_comment": "Keyed by NAME plus text that must appear with it, NEVER by object id: ids are renumbered by every system save and 23% named a different object within three days. Omit looks_like to match the name alone.",
+      "name": "mystic sword",
+      "looks_like": "Colhorr's signature",
+      "verdict": "keep",
+      "why": "an expert mystic sword is better than anything the fleet is carrying"
+    }
+  ]
+}
