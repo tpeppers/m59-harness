@@ -2048,11 +2048,44 @@ const server = createServer(async (req, res) => {
               return;
             }
 
-            const r = await session.attackRounds(t.id, swings, { abortBelow });
-            const stillThere = [...(c?.room?.objects?.keys?.() ?? [])].some(id => id === t.id);
-            json({ engaged: true, closed: true, killed: !stillThere,
+            // FIGHT UNTIL IT IS DEAD, NOT FOR A FIXED NUMBER OF SWINGS.
+            //
+            // One exchange does not kill an orc, and a loop that swings once per lap is a loop
+            // that never earns anything. Measured 2026-09-17: twelve characters engaged over a
+            // half-hour farm run and the ledger recorded ZERO kills, because each got a single
+            // twelve-round exchange and walked away. By hand the same fight took two exchanges
+            // — 25 swings then 4 — and then the orc died.
+            //
+            // So `rounds` is a budget for the whole fight rather than for one exchange, spent
+            // in bursts with the quarry re-read between them: it moves, it can die, and an id
+            // is a temporary handle. `abortBelow` still ends it the instant health says so,
+            // which is the safety that matters and is checked per swing inside attackRounds.
+            const BURST = 8;
+            let spent = 0, lastR = null, killed = false, exchanges = 0;
+            while (spent < swings) {
+              const take = Math.min(BURST, swings - spent);
+              lastR = await session.attackRounds(t.id, take, { abortBelow });
+              spent += take; exchanges++;
+              const gone = ![...(c?.room?.objects?.keys?.() ?? [])].some(id => id === t.id);
+              if (gone) { killed = true; break; }
+              // Health is the other terminator: attackRounds aborts on it, and carrying on
+              // would just re-enter a fight it already refused.
+              if (lastR?.aborted) break;
+            }
+
+            // THE CORPSE IS THE POINT, AND SO IS WHAT IT DROPPED. A kill nobody picks up is a
+            // farm loop that sells an empty pack, which is exactly what the run measured.
+            let loot = null;
+            if (killed) {
+              try { loot = await session.lootFloor?.({ room: c?.room?.num ?? null }); }
+              catch (e) { loot = { error: e.message }; }
+            }
+
+            json({ engaged: true, closed: true, killed,
                    target: t.id, target_name: t.name, distance: t.d,
-                   close_log: closeLog, ...(r ?? {}) });
+                   exchanges, swings_spent: spent, close_log: closeLog,
+                   looted: (loot?.taken ?? []).map(x => `${x.name}x${x.amount ?? 1}`),
+                   ...(lastR ?? {}) });
             return;
           }
           // SPEECH, WHICH THE PROXY COULD NOT DO AT ALL.
