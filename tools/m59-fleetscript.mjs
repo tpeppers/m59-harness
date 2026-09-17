@@ -2122,7 +2122,16 @@ async function keeperMovecheck(who) {
   }));
 }
 
-async function keeperCall(who, name, args) {
+// THE TIMEOUT HAS TO FIT THE VERB, AND 20s DOES NOT FIT A FIGHT.
+//
+// This was a flat 20 seconds, which is generous for a read and far too short for an
+// exchange: a swing is about 2.9s on the wire, so a twelve-round fight is half a minute
+// before the closing walk that precedes it. Measured 2026-09-17 on the farm loop — seven
+// fights landed and six came back "The operation was aborted due to timeout", and because
+// the step is optional those read as a character that simply did not fight. A cap shorter
+// than the action it is capping does not protect anything; it just loses the result of work
+// the keeper went on to do anyway.
+async function keeperCall(who, name, args, timeoutMs = 20_000) {
   const r = await fetch(`http://127.0.0.1:${who.port}/action`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     // All three identity parts at the TOP level. The keeper checks the order is addressed to
@@ -2130,7 +2139,7 @@ async function keeperCall(who, name, args) {
     // refused rather than half-honoured.
     body: JSON.stringify({ name, agent: who.agent, character: who.character,
                            keeper_pid: who.pid, args }),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   return r.json().catch(() => ({}));
 }
@@ -2998,11 +3007,15 @@ async function runStep(ctx, agent, step, state) {
       // refuses a partially addressed write before it will answer anything, so the first run
       // of this step came back `addressed to "shadow03" but omits agent`.
       const who = { ...entry, agent };
+      // Sized from the work: a swing is ~2.9s on the wire and the close walks first, so the
+      // budget is the rounds plus a closing allowance, floored well above either.
+      const rounds = step.rounds ?? 10;
+      const budgetMs = step.timeoutMs ?? Math.max(120_000, rounds * 4_000 + 90_000);
       const r = await keeperCall(who, 'fight', {
-        target: step.target, rounds: step.rounds ?? 10,
+        target: step.target, rounds,
         abort_below: step.abortBelow ?? 0.45,
         reach: step.reach, close_tries: step.closeTries,
-      }).catch(e => ({ error: e.message }));
+      }, budgetMs).catch(e => ({ error: e.message }));
       if (r?.error) return { ok: false, result: r, why: r.error };
       // ENGAGED IS THE BAR, NOT "no error". A fight that could not close is a failure with a
       // reason, and the reason is the useful half — it names the square it stopped on.
