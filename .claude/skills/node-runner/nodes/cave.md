@@ -253,3 +253,53 @@ concluded a tag shipped something.
 Their sentence is the one to keep: **a restart that changes nothing is the cheapest way to get
 a false positive.** The re-test is one `route_fine` call against a broker known to carry the
 fix. Until that lands, "the deploy unblocks room 27" is a hypothesis and not a result.
+
+## THE WEST DOOR IS NOT ONE-WAY IN THE WORLD. IT IS ONE-WAY IN OUR .roo.
+
+Operator, 2026-09-16, volunteered before a test could conclude otherwise — which is the
+reason to write it down rather than re-derive it:
+
+> The exit from Icky isn't actually one sided/one-way... there are basically "false walls"
+> on the north-west corner of the map by the "chalice of the rain": if you travel to that
+> corner, you can go south through what looks like a painting on the wall and then up some
+> steps to a drop-down that puts you back in the front cave area on the south side of the
+> map, after which you can just exit out the entrance you came in.
+
+What the model says today, `node tools/m59-exitreport.mjs 27`:
+
+```
+DOORS OUT
+  west   to 2500  r11c1    region 0   OFF THE BODY
+  south  to 587   r57c45   region 15  on the body
+  go     to 5     r18c30   region 15  on the body
+
+DOOR TO DOOR, DIRECTED
+  south->587@r57c45 -> west->2500@r11c1   NO
+  go->5@r18c30      -> west->2500@r11c1   NO
+  west->2500@r11c1  -> south->587@r57c45  BLINK ONLY
+  west->2500@r11c1  -> go->5@r18c30       BLINK ONLY
+```
+
+So `r11c1` sits in region 0 with 49 regions in the room, and every inbound landing square
+reports "you CANNOT walk to: west to 2500 at r11c1". **That NO is the painting.** The
+passage the operator describes — through the false wall, up the steps, off the drop-down
+into the front cave — is a route our geometry does not carry, so this is the fourth entry
+in the ledger of "unreachable was a fact about the model": rooms 27, 750, 45 and now this
+corner. Name the affordance, never the verdict.
+
+Two things follow, and the second is the one that saves a session:
+
+- **It does not affect a farm loop, and that is worth stating so nobody widens the fix.**
+  Coming in from 587 lands at **r57c46** and the south door back out is **r57c45** — the
+  adjacent square — with 1473 of 1588 walkable squares in the main region between them. A
+  farming character never goes near `r11c1`, and cannot walk there from the body even if it
+  wanted to.
+- **The danger is asymmetric.** You cannot walk INTO region 0, so you cannot strand yourself
+  there on foot. Anything that DROPS a character in — a fall, a teleport, a rescue landing —
+  has put it somewhere the model can only leave by blink. Before adding a declared fall
+  anywhere near that corner, check which way it points.
+
+The cheap next step is not a walk: it is reading the `.roo` sidedefs along the north-west
+wall to see whether those "false walls" carry a passable flag we are dropping, or whether
+the steps and the drop-down are the part that is missing. `tools/m59-roo.mjs` reads the wall
+chains; `m59-roomview.mjs 27` draws them against the step mask.
