@@ -221,12 +221,25 @@ async function main() {
   const out = [];
   for (const r of rows) out.push(await meldOne(r.agent, r.character ?? r.name ?? r.agent));
 
-  const melded = out.filter(o => o.result === 'MELDED');
+  // MATCH THE PROSE THIS FILE ITSELF WRITES, NOT A BARE WORD.
+  //
+  // `meldOne` returns `result` as a sentence — "MELDED -- max mana 18 -> 23 (+5)" — and this
+  // compared it with `=== 'MELDED'`, which can never be true. So every successful meld
+  // printed its own line and was then summarised as "0 melded, 0 already bonded". Measured
+  // 2026-09-16 on the shadow fleet: Llll melded NODE_ORCCAVES, 18 -> 23, and the tally said
+  // zero. The same bug hid the already-bonded count, whose prose is "no change ... already
+  // bonded with this node".
+  //
+  // It is the third instance in this tool of the shape cave.md warns about: the grant lands
+  // and the tool cannot say so. A report that contradicts its own detail lines is worse than
+  // no report, because the obvious response is to run it again.
+  const melded = out.filter(o => /^MELDED/.test(String(o.result ?? '')));
   for (const o of out) {
     if (/no node in this room/.test(o.result) && !ONLY) continue;   // the ordinary case, not news
     console.log(`${String(o.character ?? o.agent).padEnd(10)} ${o.where ?? ''} — ${o.result}`);
   }
-  console.log(`\n${melded.length} melded, ${out.filter(o => o.result === 'already').length} already bonded`);
+  console.log(`\n${melded.length} melded, ` +
+              `${out.filter(o => /already bonded/.test(String(o.result ?? ''))).length} already bonded`);
 }
 
 main().catch(e => { console.error('mananode failed:', e.message); process.exit(1); });

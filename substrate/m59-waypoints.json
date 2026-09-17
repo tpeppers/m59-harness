@@ -8,6 +8,8 @@
       "_source": "plGenerators in kod/object/active/holder/room/monsroom/objroom/cave2.kod, read 2026-09-16. Thirteen generators; the room makes orcs and spiders 50/50, capped at 10 each.",
       "_why": "Farming this room means standing where the orcs appear, and every one of these is reachable AND returnable from the south-east entrance - measured with geo.path on the mover's own step mask: 30-71 steps out, 31-111 back. The asymmetry is the one-way drop, not an error.",
       "points": [
+        { "name": "mana-node",  "row": 23, "col": 53,
+          "_what": "NODE_ORCCAVES. Melded 2026-09-09 (max mana 25 -> 33 at mysticism 50), so this is a place a character has genuinely stood, not a guess. It is not an exit and never had a baked route, which is why walking to it failed the same way walking to a spawn point did. See .claude/skills/node-runner/nodes/cave.md." },
         { "name": "gen-sw",     "row": 51, "col": 14 },
         { "name": "gen-s",      "row": 50, "col": 34 },
         { "name": "gen-ne",     "row": 18, "col": 50 },
