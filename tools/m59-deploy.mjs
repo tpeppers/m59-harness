@@ -28,7 +28,8 @@
 // one choice, which is why this tool refuses branches rather than merely preferring tags.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const HARNESS = process.env.M59_HARNESS || process.cwd();
 const PROD = process.env.M59_PROD_DEPLOY || 'C:/code/m59-lab/prod-deploy';
@@ -298,9 +299,56 @@ function report(s) {
   if (s.runtime) console.log(`        ${s.runtime} runtime state file(s) (expected, not drift)`);
 }
 
+// ---------------------------------------------------------------- the private pin
+//
+// A DEPLOY TAG NAMES THE CODE. IT DOES NOT NAME THE ORDERS, AND THE ORDERS DECIDE AS MUCH.
+//
+// Every input that changes what the fleet does — rosters, loadouts, doctrines, the vigor
+// floors, the learned safe-spot book — is gitignored here on purpose, because it is one
+// machine's answer rather than the repository's. That is right, and it means a deploy tag
+// alone cannot reproduce a run. Measured 2026-09-17: one elderberry floor had three values
+// across three trees, and the committed one described a tree nobody was running.
+//
+// So a private repository pins this one as a submodule and carries the order surface beside
+// it, and a single private SHA describes the whole fleet. THIS FILE ONLY REPORTS on that:
+// `--verify` says when the pin has fallen behind, `--cut` prints the command as the third
+// line of a promotion. It never writes to the private repository.
+//
+// ABSENT IS SILENT. No pointer, no mention — a fresh clone gets every tool for running a
+// fleet and no opinions about where this machine keeps its secrets.
+function privateRepo() {
+  const fromEnv = process.env.M59_PRIVATE_REPO;
+  if (fromEnv) return existsSync(fromEnv) ? fromEnv : null;
+  const pointer = join(HARNESS, 'substrate', 'private-repo');
+  if (!existsSync(pointer)) return null;
+  const p = readFileSync(pointer, 'utf8').trim();
+  return p && existsSync(p) ? p : null;
+}
+
+// What the private repository claims is running, against what IS. `stale: null` means CANNOT
+// SAY — an unreadable pin is a question, never a clean bill of health.
+function pinStatus(prodHead) {
+  const repo = privateRepo();
+  if (!repo) return null;
+  const pinned = git(join(repo, 'harness'), 'rev-parse', 'HEAD');
+  if (!pinned) return { repo, pinned: null, stale: null };
+  return { repo, pinned, stale: prodHead ? pinned !== prodHead : null };
+}
+
 // What must be true for prod to be a deploy rather than a fork.
 function problems(s) {
   const bad = [];
+  // REPORTED, BUT NOT A REFUSAL. A stale pin is a recording gap, not a reason to block a
+  // roll — blocking a deploy on bookkeeping teaches people to skip the check. The `--cut`
+  // refusal filter below matches on specific phrases and deliberately does not match these.
+  const pin = pinStatus(s.prodHead);
+  if (pin && pin.pinned === null)
+    bad.push(`the private repo at ${pin.repo} has no readable harness pin, so it cannot say ` +
+             'what was running. Run its promote.mjs.');
+  else if (pin && pin.stale)
+    bad.push(`the private pin is STALE — it records ${pin.pinned.slice(0, 8)} and prod runs ` +
+             `${String(s.prodHead ?? '').slice(0, 8)}. Nothing is broken, but this window is ` +
+             `unattributable until pinned: node "${join(pin.repo, 'promote.mjs')}" --apply`);
   if (!s.known)
     bad.push('prod is running commits main has never seen. Land them on main first: ' +
              `git -C "${HARNESS}" fetch "${PROD}" ${s.ref} && git -C "${HARNESS}" merge --ff-only FETCH_HEAD`);
@@ -444,7 +492,21 @@ if (mode === '--cut') {
   console.log(`would cut ${tag} at ${s.trunkRef} @ ${s.trunkHead.slice(0, 8)} and move prod onto it:`);
   console.log(`  git -C "${HARNESS}" tag -a ${tag} ${s.trunkRef} -m "deploy ${day}"`);
   console.log(`  git -C "${PROD}" fetch "${HARNESS}" ${TRUNK} && git -C "${PROD}" checkout ${tag}`);
-  console.log('\nNot run: cutting a deploy restarts a live fleet. Run those two lines when ready.');
+  // THE THIRD LINE IS PART OF THE PROMOTION, NOT AN AFTERTHOUGHT. The first two move the
+  // code; this one records what was running alongside it — the orders, the doctrines, the
+  // safe-spot book — so the window that starts now is attributable later. Printed rather
+  // than run for the same reason as the other two: it is the operator's hand on the switch.
+  //
+  // It comes AFTER the checkout on purpose. promote.mjs reads prod-deploy's HEAD, so pinning
+  // before the checkout would faithfully record the version being replaced.
+  const pin = pinStatus(null);
+  if (pin) {
+    console.log(`  node "${join(pin.repo, 'promote.mjs')}" --apply --push`);
+    console.log('\nNot run: cutting a deploy restarts a live fleet. Run those three lines when');
+    console.log('ready, in that order — the pin reads prod-deploy, so it must follow the checkout.');
+  } else {
+    console.log('\nNot run: cutting a deploy restarts a live fleet. Run those two lines when ready.');
+  }
   process.exit(0);
 }
 

@@ -729,3 +729,9 @@ _verify2.mjs
 /substrate/loial-cv-light/
 /substrate/stockpile/
 /substrate/tour-sim/
+
+# WHERE THIS MACHINE KEEPS THE ORDERS AND THE PASSWORDS. One line, a path. The private
+# repository pins this one as a submodule so a single SHA describes the whole fleet; this
+# file is how m59-deploy.mjs finds it. Gitignored because it is one machine's answer, and
+# because a fresh clone must work with no such repository at all.
+/substrate/private-repo
