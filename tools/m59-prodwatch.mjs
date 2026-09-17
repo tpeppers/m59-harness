@@ -39,7 +39,8 @@
 // the purposes of the clock, and is reported as `unreachable` rather than `down` so the
 // distinction survives into whatever reads it. The exit code still separates them: 2 is
 // "could not ask", 1 is "asked, and nobody is there".
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, openSync } from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
@@ -98,6 +99,116 @@ export const describe = (v) => {
   return `${head} (${v.state}) — ${tail}. ${v.why}`;
 };
 
+// ============================================================ RUNNING IT AS A SERVICE
+//
+// A WATCH THAT DIES WITH THE SESSION IS THE FAILURE IT WAS BUILT TO CATCH, ONE LEVEL UP.
+//
+// The first version of this ran as a chat-session Monitor. It worked, and then the session
+// ended and it stopped — silently, leaving production running with nobody looking, which is
+// exactly the state the tool exists to detect. That is not a bug in the Monitor; it is the
+// wrong lifetime. The broker gets a detached process, a pid file and a log for precisely
+// this reason (see m59-service.mjs), so the thing WATCHING the broker gets the same.
+//
+//   node tools/m59-prodwatch.mjs service start     detached; outlives this terminal
+//   node tools/m59-prodwatch.mjs service status    up? and WHEN DID IT LAST LOOK?
+//   node tools/m59-prodwatch.mjs service stop
+//   node tools/m59-prodwatch.mjs service install   a Windows scheduled task, for reboots
+//
+// AND THE WATCHER NEEDS ITS OWN LIVENESS SIGNAL, or the blind spot has only moved. A dead
+// watcher and a quiet one produce identical output: nothing. So every poll stamps `at` into
+// the state file whether or not anything changed, and `service status` reports how long ago
+// that was and calls it STALE past three polls. "Nothing has alerted" is only reassuring
+// from a watcher that is demonstrably still looking.
+//
+// AN ALERT NOBODY READS IS NOT AN ALERT. The log is a file on one machine, so two other
+// doors exist: every alert and penalty crossing is appended to `prodwatch-alerts.jsonl`,
+// which survives the process and can be read afterwards by anything; and `--on-alert
+// "<command>"` runs a command of the operator's choosing when the line is crossed. The hook
+// is deliberately not a notifier of our own devising — whatever already reaches this
+// operator is better than whatever this file could invent.
+const svcPaths = (fleet) => ({
+  pid: join(REPO, 'substrate', `prodwatch-${fleet}.pid`),
+  log: join(REPO, 'substrate', `prodwatch-${fleet}.log`),
+  state: join(REPO, 'substrate', `prodwatch-${fleet}.json`),
+  alerts: join(REPO, 'substrate', `prodwatch-alerts.jsonl`),
+});
+
+const alive = (pid) => {
+  if (!Number.isFinite(pid)) return false;
+  // Signal 0 asks "does this pid exist and may I signal it" without touching it.
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+
+const readPidFile = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
+
+function serviceStart(fleet, passthrough) {
+  const P = svcPaths(fleet);
+  const running = readPidFile(P.pid);
+  if (running && alive(running.pid)) {
+    console.log(`already watching "${fleet}" — pid ${running.pid}, since ${new Date(running.at).toISOString().slice(0, 19)}`);
+    return 0;
+  }
+  mkdirSync(dirname(P.pid), { recursive: true });
+  const fd = openSync(P.log, 'a');
+  // detached + unref is what makes it outlive this terminal, and stdio to the log rather
+  // than 'ignore' is what makes it possible to find out afterwards what it saw.
+  const child = spawn(process.execPath,
+    [fileURLToPath(import.meta.url), '--watch', '--fleet', fleet, ...passthrough],
+    { detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env: process.env });
+  child.unref();
+  writeFileSync(P.pid, JSON.stringify({ pid: child.pid, fleet, at: Date.now() }, null, 2));
+  console.log(`watching "${fleet}"\n  pid   ${child.pid}\n  log   ${P.log}\n  state ${P.state}`);
+  return 0;
+}
+
+function serviceStop(fleet) {
+  const P = svcPaths(fleet);
+  const running = readPidFile(P.pid);
+  if (!running || !alive(running.pid)) { console.log(`nothing watching "${fleet}"`); return 0; }
+  try { process.kill(running.pid); console.log(`stopped pid ${running.pid}`); }
+  catch (e) { console.log(`could not stop pid ${running.pid}: ${e.message}`); return 1; }
+  return 0;
+}
+
+function serviceStatus(fleet, everyS) {
+  const P = svcPaths(fleet);
+  const running = readPidFile(P.pid);
+  const up = running && alive(running.pid);
+  const st = (() => { try { return JSON.parse(readFileSync(P.state, 'utf8')); } catch { return null; } })();
+  const ageMs = st?.at ? Date.now() - st.at : null;
+  // THREE MISSED POLLS IS STALE. One is a slow broker; three is a watcher that is not
+  // looking, and that is the thing this command exists to be able to say out loud.
+  const staleAfter = everyS * 3 * 1000;
+  console.log(`watcher: ${up ? `UP (pid ${running.pid})` : 'DOWN — nothing is watching this fleet'}`);
+  console.log(`last look: ${ageMs == null ? 'never' : `${Math.round(ageMs / 1000)}s ago`}` +
+              (ageMs != null && ageMs > staleAfter ? '   << STALE: it is not looking any more' : ''));
+  if (st?.down_since) console.log(`broker has been down since ${new Date(st.down_since).toISOString().slice(0, 19)}`);
+  console.log(`log: ${P.log}`);
+  return up && (ageMs == null || ageMs <= staleAfter) ? 0 : 1;
+}
+
+// A SCHEDULED TASK IS THE ONLY PART THAT SURVIVES A REBOOT, and schtasks.exe ships with
+// Windows — no third-party binary, which is the bar every other tool here is held to.
+// It registers the START, so the watcher comes back after a restart; it does not replace
+// the pid file, because a task that is "registered" says nothing about whether a process is
+// currently looking.
+function serviceInstall(fleet, passthrough) {
+  const self = fileURLToPath(import.meta.url);
+  const name = `m59-prodwatch-${fleet}`;
+  const cmd = `"${process.execPath}" "${self}" service start --fleet ${fleet} ${passthrough.join(' ')}`.trim();
+  try {
+    execFileSync('schtasks', ['/Create', '/F', '/SC', 'ONLOGON', '/TN', name, '/TR', cmd], { stdio: 'pipe' });
+    console.log(`registered scheduled task "${name}" — it starts the watcher at logon`);
+    console.log(`  remove it with:  schtasks /Delete /F /TN ${name}`);
+    return 0;
+  } catch (e) {
+    console.error(`could not register the task: ${String(e.stderr ?? e.message).trim()}`);
+    console.error('Run this from a terminal that can create scheduled tasks, or start it by hand ' +
+                  'with service start, which survives the terminal but not a reboot.');
+    return 1;
+  }
+}
+
 // ---------------------------------------------------------------- cli
 if (import.meta.filename === process.argv[1]) {
   const fleet = arg('--fleet') || (() => { try { return fleetName(); } catch { return 'prod'; } })();
@@ -106,14 +217,51 @@ if (import.meta.filename === process.argv[1]) {
   const penaltyMs = Number(arg('--penalty-s', DEFAULT_PENALTY_MS / 1000)) * 1000;
   const roster = stateFileFor(fleet);
 
+  // The service verbs are handled before anything probes, so `status` works with the broker
+  // down and `stop` works when the watcher is the only thing running.
+  if (argv[0] === 'service') {
+    const verb = argv[1] ?? 'status';
+    // Everything except the verb is handed to the watcher it starts, so --every-s,
+    // --alert-s, --port and --on-alert all reach the detached process unchanged.
+    const passthrough = argv.slice(2).filter(a => a !== '--fleet' && a !== fleet);
+    const everyS = Number(arg('--every-s', 20));
+    if (verb === 'start')   process.exit(serviceStart(fleet, passthrough));
+    if (verb === 'stop')    process.exit(serviceStop(fleet));
+    if (verb === 'status')  process.exit(serviceStatus(fleet, everyS));
+    if (verb === 'install') process.exit(serviceInstall(fleet, passthrough));
+    console.error(`unknown service verb "${verb}" — start, stop, status, install`);
+    process.exit(2);
+  }
+
   // The down-since clock has to survive between invocations or a cron job can never measure
   // a duration — every run would see a fresh outage and never reach three minutes.
   const stateFile = arg('--state', join(REPO, 'substrate', `prodwatch-${fleet}.json`));
   const readSince = () => { try { return JSON.parse(readFileSync(stateFile, 'utf8')).down_since ?? null; } catch { return null; } };
-  const writeSince = (v) => {
+  // THE HEARTBEAT. `at` is stamped on EVERY poll, up or down, changed or not, because it is
+  // what lets `service status` tell a watcher that is quiet from one that is dead. Those look
+  // identical from the outside and only one of them is safe.
+  const writeSince = (v, state = null) => {
     try { mkdirSync(dirname(stateFile), { recursive: true });
-          writeFileSync(stateFile, JSON.stringify({ down_since: v, at: Date.now() }) + '\n'); }
+          writeFileSync(stateFile, JSON.stringify({ down_since: v, at: Date.now(), state }) + '\n'); }
     catch { /* a watcher that cannot write its own clock must still report */ }
+  };
+
+  // A durable record, so an alert outlives the process that noticed it.
+  const alertsFile = join(REPO, 'substrate', 'prodwatch-alerts.jsonl');
+  const recordAlert = (kind, v) => {
+    try { appendFileSync(alertsFile,
+      JSON.stringify({ at: new Date().toISOString(), fleet, port, kind, state: v.state,
+                       down_for_s: Math.round(v.down_for_ms / 1000), why: v.why }) + '\n'); }
+    catch { /* the console line is still the primary report */ }
+  };
+  // And a door out of this machine, chosen by the operator rather than invented here.
+  const onAlert = arg('--on-alert', null);
+  const runHook = (kind, v) => {
+    if (!onAlert) return;
+    try { spawn(onAlert, { shell: true, stdio: 'ignore', detached: true,
+                           env: { ...process.env, M59_ALERT: kind, M59_FLEET: fleet,
+                                  M59_DOWN_FOR_S: String(Math.round(v.down_for_ms / 1000)) } }).unref(); }
+    catch { /* a hook that will not run must not stop the watch */ }
   };
 
   const ask = async () => {
@@ -141,7 +289,7 @@ if (import.meta.filename === process.argv[1]) {
 
   const once = async (prev) => {
     const v = verdict({ health: await ask(), roster, downSince: prev, alertMs, penaltyMs });
-    writeSince(v.down_since);
+    writeSince(v.down_since, v.state);
     return v;
   };
 
@@ -159,8 +307,11 @@ if (import.meta.filename === process.argv[1]) {
     const v = await once(since);
     since = v.down_since;
     if (v.state !== last) { console.log(`[${new Date().toISOString()}] ${fleet}: ${describe(v)}`); last = v.state; }
-    if (v.alert && !saidAlert) { console.log(`[${new Date().toISOString()}] ALERT: ${describe(v)}`); saidAlert = true; }
-    if (v.penalty && !saidPenalty) { console.log(`[${new Date().toISOString()}] PENALTY LINE: ${describe(v)}`); saidPenalty = true; }
+    if (v.alert && !saidAlert) { console.log(`[${new Date().toISOString()}] ALERT: ${describe(v)}`);
+      recordAlert('alert', v); runHook('alert', v); saidAlert = true; }
+    if (v.penalty && !saidPenalty) { console.log(`[${new Date().toISOString()}] PENALTY LINE: ${describe(v)}`);
+      recordAlert('penalty', v); runHook('penalty', v); saidPenalty = true; }
+    if (v.up && (saidAlert || saidPenalty)) recordAlert('recovered', v);
     if (v.up) { saidAlert = false; saidPenalty = false; }
     await new Promise(r => setTimeout(r, Number(arg('--every-s', 20)) * 1000));
   }
