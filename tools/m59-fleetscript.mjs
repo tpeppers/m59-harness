@@ -1270,6 +1270,21 @@ export const act = (tool, args, opts = {}) => ({ do: 'act', tool, args, ...opts 
 // then swings, and reports `closed` and `engaged` separately so "could not get there" and
 // "got there and missed" stay distinguishable.
 export const fight = (target, opts = {}) => ({ do: 'fight', target, ...opts });
+
+// STAND SOMEWHERE AND EARN. The farming primitive, and the one that stops a script trying to
+// farm with a step list.
+//
+// A SEQUENCE CANNOT FARM. Walking, selling and handing over are sequences — they happen once
+// and they are done. Farming is a standing POSTURE plus a goal predicate: hunt this, here,
+// until the pack holds enough. Driving it from the script means re-implementing combat one
+// level too high, and 2026-09-17 measured what that costs — a thirty-minute run over room 27
+// with eighteen fights "engaged", ZERO kills and fifteen 0sh sales. The same characters in
+// the same room, given the posture and let go, killed three things in sixty seconds.
+//
+// So this sets the posture, HANDS THE BODY BACK, watches the pack, and takes it again when
+// the goal is met or the budget runs out. The keeper does the fighting, because the keeper is
+// the thing with the socket and the one-second clock, and it has always known how.
+export const harvest = (opts = {}) => ({ do: 'harvest', ...opts });
 /** Cast a spell and prove it landed from the world, never from the reply. */
 export const cast = (spell, opts = {}) => ({ do: 'cast', spell, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
@@ -2997,6 +3012,74 @@ async function runStep(ctx, agent, step, state) {
     // reason. This is the same rule the repository already applies to `verify`
     // (`Boolean({ok:false})` is true, which is how the read-it-back guarantee passed on every
     // failure) and to a merchant's spoken refusal: judge the world, not the envelope.
+    case 'harvest': {
+      // REQUIRED, NEVER GUESSED — the same rule the autopilot schema states for `hunt`. A
+      // farm posture with no quarry is a character standing in a room with a policy that
+      // names nothing.
+      const quarry = [].concat(step.quarry ?? []).filter(Boolean);
+      if (!quarry.length) return { ok: false, why: 'harvest needs a quarry: what should it hunt?' };
+      const want = String(step.want ?? '').toLowerCase();
+      const target = Number(step.count ?? 0);
+      const budgetMs = Number(step.forMs ?? step.minutes * 60_000 ?? 0) || 10 * 60_000;
+      const room = Number(step.room ?? (await observe(agent)).room);
+
+      const held = async () => {
+        if (!want) return 0;
+        const inv = await call('inventory', { agent }, 60_000).catch(() => null);
+        return (inv?.items ?? [])
+          .filter(i => String(i.name ?? '').toLowerCase().includes(want))
+          .reduce((n, i) => n + (Number(i.amount) || 1), 0);
+      };
+      const before = await held();
+
+      // MODE IS THE WHOLE THING, AND IT IS WHY THIS STEP EXISTS.
+      //
+      // `hunt` is read ONLY in farm mode — the schema says so in as many words, "creature
+      // name for farm mode". A posture pushed with hunt, roam and assigned_room but no mode
+      // leaves the keeper in SURVIVE, where the hunt list is stored, reported back in
+      // /state, and read by nothing: running true, goal null, action null, standing still.
+      // It cost a day, because with the quarry further off than fight()'s six-step approach
+      // cap, out_of_reach is true as well and the whole thing reads as a movement bug.
+      const posture = await call('autopilot', {
+        agent, action: 'start', mode: 'farm', hunt: quarry, assigned_room: room,
+        roam: step.roam === true, ...(step.pullToSafeWall == null ? {} : { pull_to_safe_wall: step.pullToSafeWall }),
+      }, 60_000).catch(e => ({ error: e.message }));
+      if (posture?.error) return { ok: false, result: posture, why: `could not set the farm posture: ${posture.error}` };
+
+      // VERIFY THE VALUE, NOT THE INSTRUMENT. The push is reported as delivered; what decides
+      // whether anything hunts is the mode the keeper is actually in afterwards.
+      const status = await call('autopilot', { agent, action: 'status' }, 60_000).catch(() => null);
+      const mode = status?.mode ?? status?.autopilot?.mode ?? null;
+      if (mode && mode !== 'farm')
+        return { ok: false, result: { posture, status },
+                 why: `the posture was accepted but this keeper is in "${mode}" mode, not farm — ` +
+                      'nothing reads the hunt list outside farm mode' };
+
+      // Hand the body back: the keeper cannot hunt while the lease holds its work and legs.
+      await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+
+      const until = Date.now() + budgetMs;
+      let now = before;
+      while (Date.now() < until) {
+        await sleep(Math.max(15_000, ctx.pollMs ?? 15_000));
+        const at = await observe(agent);
+        if (at.dead) break;                       // recovery is the keeper's; the runner handles it
+        now = await held();
+        if (target > 0 && now - before >= target) break;
+      }
+
+      // Take it back so the delivery half can be driven. The runner's own handle is stale
+      // after this, which is harmless: freeAll frees each agent's autopilot regardless.
+      const re = await holdKeeper(ctx, agent, ctx.fleet ?? fleet).catch(() => null);
+
+      const gained = now - before;
+      const met = target <= 0 ? gained > 0 : gained >= target;
+      return { ok: met, result: { gained, held: now, target, quarry, room, reclaimed: !!re },
+               why: met ? undefined
+                  : `farmed ${gained} of ${target} ${want || 'item(s)'} in ` +
+                    `${Math.round(budgetMs / 60_000)} min` };
+    }
+
     // See the `fight` constructor above for why this does not go through `call`.
     case 'fight': {
       const ports = await keeperPorts(ctx.fleet, { wantAgent: agent });
