@@ -65,19 +65,26 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as dm from './m59-dm.mjs';
+import { CHAR_NAME_RE, checkCharacterName } from './m59-newchar.mjs';
 
 // ------------------------------------------------------------------ the spec
 //
 // Everything from here to `up` is pure. A scenario file that is wrong should say so
 // before anything is created, and proving that needs no server.
 
-// The server's own rule, from player.kod and mirrored in m59-newchar.mjs.
-export const NAME_RE = /^[A-Za-z][A-Za-z' -]{1,15}$/;
+// ONE COPY OF THE RULE, IMPORTED. This used to be a second regex with a comment claiming
+// player.kod, and the two drifted: the rule is in system.kod, it allows thirty characters
+// rather than sixteen, and it does NOT allow the hyphen both copies admitted. A rule
+// written down twice is a rule that disagrees with itself eventually.
+export const NAME_RE = CHAR_NAME_RE;
 
 export const ROLLS = new Set(['melee', 'caster', 'archer', 'balanced']);
 
-// Letter-only, because a character name may not contain a digit and the server does not
-// say so — it substitutes its 3/1/4/1/5/9 junk character and lets you find out later.
+// Letter-only, because this repository's name rule excludes digits (see
+// checkCharacterName). The server itself would take `Bot1`; the substitution story that
+// used to be written here belongs to the STATS list, not the name — player.kod:2081
+// stamps 3/1/4/1/5/9 on a character it has already created, while a name it dislikes is
+// refused outright and never exists.
 export const ORDINAL_WORDS = [
   'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
   'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen',
@@ -140,13 +147,14 @@ export function validate(spec) {
     for (const k of ['agent', 'account', 'password', 'name']) {
       if (!c[k]) problems.push(`${who}: ${k} is missing`);
     }
-    // A DIGIT IN A NAME IS THE TRAP, so it is named rather than lumped in with "invalid".
-    if (c.name && !NAME_RE.test(c.name)) {
-      problems.push(/\d/.test(c.name)
-        ? `${who}: name "${c.name}" contains a digit — the server refuses nothing, it ` +
-          `silently substitutes its junk character. Use {word} rather than {n} in a name.`
-        : `${who}: name "${c.name}" is not a letter followed by 1..15 of letter, ` +
-          `apostrophe, space or hyphen`);
+    // THE CHECKER SAYS WHY, so this does not keep its own second opinion about the rule.
+    // The digit case still earns an extra sentence, because the fix is a template change
+    // and nothing else here would tell you that.
+    if (c.name) {
+      const named = checkCharacterName(c.name);
+      if (!named.ok)
+        problems.push(`${who}: ${named.why}` +
+          (/\d/.test(c.name) ? '. Use {word} rather than {n} in a name.' : ''));
     }
     if (c.roll && !ROLLS.has(c.roll))
       problems.push(`${who}: roll "${c.roll}" is not one of ${[...ROLLS].join(', ')}`);

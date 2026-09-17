@@ -798,12 +798,17 @@ the records it describes.
   carry arithmetic have one home. Runs against scratch sheets, never the fleet's own) and
   `node tools/m59-backup-test.mjs` (42 — backing the rosters up and putting them back,
   against scratch directories; never touches a real fleet) and
-  `node tools/m59-testbed-test.mjs` (104 — the DM command vocabulary, the patrol ring, the
+  `node tools/m59-testbed-test.mjs` (113 — the DM command vocabulary, the patrol ring, the
   scenario spec and the arena reply. **Opens no socket, deliberately**: every live failure
   these three tools have had was "the command we sent was not the command we meant" — a
   room object id read out of a reply header, a karma figure a hundred times too small, a
-  name with a digit in it that the server accepts and silently replaces — and all of those
-  are decidable from a string) and
+  name this repository sent that the server was always going to refuse — and all of those
+  are decidable from a string. Nine of them are the CHARACTER NAME RULE, which is
+  `checkCharacterName` in `m59-newchar.mjs` and mirrors `kod/util/system.kod`: three to
+  thirty characters, and no hyphen. Both halves used to be wrong in opposite directions —
+  a sixteen-character ceiling that was ours rather than the server's, and a hyphen we
+  admitted and the server refuses, which turned a readable error into a bare
+  `BP_CHARINFO_NOT_OK` with nothing in it) and
   `node tools/m59-buyers-test.mjs` (38 — **what a merchant will actually buy**: that a gem
   is also a reagent and the apothecaries' exclusion turns on it, that Marion's smith takes
   no body armour, that an exclusive rule excludes a sibling of the same family, and above

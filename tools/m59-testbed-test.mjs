@@ -27,6 +27,7 @@ import assert from 'node:assert/strict';
 import * as dm from './m59-dm.mjs';
 import { ring, phased } from './m59-patrol.mjs';
 import { expand, validate, fill, ordinalWord, NAME_RE } from './m59-testbed.mjs';
+import { CHAR_NAME_MIN, CHAR_NAME_MAX, checkCharacterName } from './m59-newchar.mjs';
 import { arenaCall, isLocalServer, ARENA_ROOMS, ARENA_CHALLENGE_WORD } from './m59-chatter.mjs';
 
 let n = 0;
@@ -263,15 +264,39 @@ ok(!('count' in flat[1]), 'count belongs to the squad, not to the characters it 
 eq(flat[1].keeper, { mode: 'survive' }, 'the squad entry is copied to each member');
 eq(validate(SPEC), [], 'the worked example validates');
 
-// A DIGIT IN A NAME IS THE TRAP, and it is named as such rather than lumped in with
-// "invalid": the server does not refuse it, it substitutes 3/1/4/1/5/9 and the character
-// is permanently ruined in a way nothing reports.
+// A DIGIT IN A NAME IS THE TRAP a template walks into on its own, so it is named as such
+// rather than lumped in with "invalid". CORRECTED: this comment used to say the server
+// accepts a digit and substitutes 3/1/4/1/5/9. It does accept one — digits are in
+// system.kod:3740's legal set — but the substitution is the STATS path (player.kod:2081)
+// and has nothing to do with the name. A name this repository refuses is refused HERE; a
+// name the server refuses never becomes a character at all.
 const digits = validate({ ...SPEC, characters: [], squads: [{ ...SPEC.squads[0], name: 'bot{n}' }] });
 eq(digits.length, 5, 'every member of the squad is named, not just the first');
 ok(digits.every(p => /contains a digit/.test(p) && /\{word\}/.test(p)),
    'the message says which placeholder to use instead');
 ok(!NAME_RE.test('bot1') && NAME_RE.test('Alpha') && NAME_RE.test("Fehr'loi Qan"),
-   'the name rule is the server\'s own: a letter, then 1..15 of letter, apostrophe, space or hyphen');
+   'the name rule is one letter then letters, apostrophes and spaces');
+
+// THE TWO BOUNDARIES THAT WERE WRONG IN OPPOSITE DIRECTIONS, pinned here because the gate
+// only earns its keep if neither can come back. The ceiling was ours and uncitable at
+// sixteen; the hyphen was admitted by us and refused by the server, which turned a
+// readable error into a bare BP_CHARINFO_NOT_OK with no reason in it.
+eq(CHAR_NAME_MAX, 30, "the ceiling is the server's MAX_CHAR_NAME_LEN, not a number of ours");
+eq(CHAR_NAME_MIN, 3, "the floor is the server's MIN_CHAR_NAME_LEN");
+ok(checkCharacterName('Raphael son of Mephistopheles').ok,
+   'twenty-nine characters is a name the server takes, so the gate takes it too');
+ok(!checkCharacterName('Raphael Cambion son of Mephisto').ok,
+   'thirty-one is over the server ceiling and is refused here, where the reason is readable');
+ok(!checkCharacterName('Jean-Luc').ok,
+   'THE HYPHEN IS NOT IN system.kod:3740 - a gate that admits it moves the refusal onto the wire');
+ok(/does not allow it either/.test(checkCharacterName('Jean-Luc').why),
+   'and the message separates what the server refuses from what only this repository does');
+ok(!checkCharacterName('Ao').ok && !checkCharacterName('Raphael ').ok,
+   'two characters is under the floor, and a trailing space is trimmed by the client but not the server');
+ok(!checkCharacterName('Qor').ok && !checkCharacterName(' qor ').ok,
+   'a reserved name is reserved fuzzily: StringEqual trims the ends and uppercases');
+ok(!checkCharacterName('A Guardian Angel').ok,
+   'and "guardian angel" is a StringContain refusal, so it is refused anywhere in the name');
 
 // A COLLISION IS THE FAILURE THAT LOOKS LIKE SUCCESS: two entries on one account means
 // the second re-roll suicides the character the first one made, and both report fine.

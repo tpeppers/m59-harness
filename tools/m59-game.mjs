@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
+import { checkCharacterName } from './m59-newchar.mjs';
 import { describeObject, affordances, OF, blocksMovement, prepareActTarget, readHealth,
          dropSpec } from './m59-parse.mjs';
 import { planPickup, normalizeOverfarm, unitCost } from './m59-overfarm.mjs';
@@ -2363,6 +2364,16 @@ class Session {
   // CHARINFO_OK carrying 0. It looks like success and produces nothing.
   async joinAsNewCharacter(plan, { userField = null } = {}) {
     if (!this.credentials) throw new Error('nothing to create against — this session never joined');
+    // THE LAST DOOR BEFORE THE WIRE, AND THE ONLY ONE NOTHING CAN ROUTE AROUND. Every
+    // caller asks `planCharacter` first, but a plan is an ordinary object: a hand-built
+    // one, or a name edited after the plan was made, arrives here indistinguishable from a
+    // checked one. So the name is re-checked against the server's own rule at the point of
+    // no return, because of what the refusal costs by then — this method has already
+    // SUICIDED the old character to make the slot first-time, and a name the server
+    // dislikes comes back as a bare BP_CHARINFO_NOT_OK: one packet, no reason in it, and
+    // nothing created. Throwing here costs a sentence.
+    const named = checkCharacterName(plan?.name);
+    if (!named.ok) throw new Error(`will not create a character: ${named.why}`);
     const { account, password, host = HOST, port = PORT } = this.credentials;
     // Isolated scene stand-ins verify stats through the lab admin read immediately
     // afterward. Ordinary character creation retains its existing settle waits.

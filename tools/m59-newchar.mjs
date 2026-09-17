@@ -173,6 +173,109 @@ export function parseCreationWaiver(unsafe) {
   return new Set(named);
 }
 
+// ------------------------------------------------------------------ the name rule
+//
+// THE SERVER'S RULE IS IN system.kod, NOT player.kod. Three comments in this repository
+// used to send you to player.kod; that file holds the STATS rule, and the two have
+// opposite failure modes, which is how the confusion survived. Read the real branch
+// before touching anything here:
+//
+//   kod/util/system.kod:3733   ReceiveClient, the BP_NEW_CHARINFO branch
+//     StringLength(sName) < MIN_CHAR_NAME_LEN OR > MAX_CHAR_NAME_LEN    -> 3..30
+//                                (blakston.khd:2958-2959)
+//     StringConsistsOf(sName,
+//       "A-Za-z0-9_ '!@$^&*()+=:[]{};/?|<>")                            -> and nothing else
+//     ...then a refusal is ONE packet: AddPacket(1,BP_CHARINFO_NOT_OK), nothing created,
+//     no reason on the wire. The name that passes is written verbatim by SetResource.
+//
+// A BAD NAME IS REFUSED; A BAD STAT LIST IS SUBSTITUTED. That is the whole distinction the
+// old comments lost. player.kod:2081 stamps 3/1/4/1/5/9 on a character it has ALREADY
+// created and told you was fine — so the stats have to be verified afterwards, while the
+// name simply never happens. Nothing about a name is ever silently replaced.
+//
+// OURS IS A SUBSET ON PURPOSE, AND THE DIRECTION IS THE WHOLE POINT. The requirement is
+// that nothing we accept can be refused by the server — never that we accept everything it
+// would. So the LENGTH is the server's own 3..30 exactly, because a ceiling we invent is a
+// name the operator cannot have for a reason nobody can cite; and the CHARACTER SET is
+// letters, apostrophe and space, which is strictly inside the legal set. Digits, `_` and
+// the punctuation the server permits are refused here. They would be accepted by the game,
+// and the cost of admitting them is paid somewhere else entirely: a character name is a
+// key in a roster, a token in a log line, a thing `m59-roomview.mjs` redacts by matching,
+// and `|` or `<>` or `/` in one is a parser bug waiting for a quiet night. Widen it if
+// somebody wants a digit; do not widen it by accident.
+//
+// WHAT THIS REPLACED WAS WRONG IN BOTH DIRECTIONS. `/^[A-Za-z][A-Za-z' -]{1,15}$/`:
+//
+//   * SIXTEEN was ours and uncitable. "Raphael son of Mephistopheles" is twenty-nine
+//     characters and the server takes it; we refused it, from a comment that claimed to be
+//     quoting a rule file that does not contain one.
+//   * THE HYPHEN IS NOT IN THE SERVER'S SET AT ALL. So "Jean-Luc" passed our gate, went out
+//     on the wire, and came back as a bare BP_CHARINFO_NOT_OK. A gate that admits what the
+//     server refuses is worse than no gate: it moves the refusal to the one place that
+//     cannot say why it fired.
+export const CHAR_NAME_MIN = 3;    // MIN_CHAR_NAME_LEN, kod/include/blakston.khd:2958
+export const CHAR_NAME_MAX = 30;   // MAX_CHAR_NAME_LEN, kod/include/blakston.khd:2959
+export const CHAR_NAME_RE =
+  new RegExp(`^[A-Za-z][A-Za-z' ]{${CHAR_NAME_MIN - 1},${CHAR_NAME_MAX - 1}}$`);
+
+// The fixed refusals from the same branch. Both server predicates are FUZZY
+// (blakserv/ccode.c, FuzzyCollapseString): ends trimmed, then uppercased — so these are
+// case-insensitive, and " qor " is Qor. `CHAR_NAME_RESERVED` is StringEqual (system.kod's
+// lBadNameIs, plus its separate "guild" test); `CHAR_NAME_RESERVED_IN` is StringContain.
+export const CHAR_NAME_RESERVED = Object.freeze([
+  'Faren', "Shal'ille", 'Qor', 'Kraanan', 'Riija', 'Jala',   // the gods
+  'You', 'An Administrator',                                 // system_hidden_admin, :233
+  'guild',                                                   // the gmail-your-own-guild name
+]);
+export const CHAR_NAME_RESERVED_IN = Object.freeze(['guardian angel', 'guardianangel']);
+
+// WHAT THIS STILL CANNOT PROMISE, because the answer lives on the server: a name already
+// taken by a user, a monster, an NPC or a guild; "a"/"an" wrapped around a monster's true
+// name; and the profanity list, which `AddNaughtyWord` extends at RUNTIME and which
+// therefore no copy here could ever be. Those are still refused the way every refusal
+// here looks — one blank packet — which is why creation reads its result back rather than
+// trusting this. What this closes is the half decidable from the string, which is every
+// failure a typo or a template can cause on its own.
+export function checkCharacterName(name) {
+  if (typeof name !== 'string' || name === '')
+    return { ok: false, why: 'no character name was given' };
+  // Legal on the server, refused here: the client trims it (module/char/charname.c,
+  // VerifyCharName) and the server does not, so "Raphael " and "Raphael" are one character
+  // to a person and two to a roster.
+  if (name !== name.trim())
+    return { ok: false, why: `"${name}" starts or ends with a space` };
+  if (name.length < CHAR_NAME_MIN)
+    return { ok: false, why: `"${name}" is ${name.length} characters; the server's minimum ` +
+      `is ${CHAR_NAME_MIN} (MIN_CHAR_NAME_LEN)` };
+  if (name.length > CHAR_NAME_MAX)
+    return { ok: false, why: `"${name}" is ${name.length} characters; the server's ceiling ` +
+      `is ${CHAR_NAME_MAX} (MAX_CHAR_NAME_LEN)` };
+  // NAME THE CHARACTER, NOT THE PATTERN. "does not match /^[A-Za-z].../" tells the operator
+  // to go and read a regex; "a comma is not a legal character" tells them what to type next.
+  if (!CHAR_NAME_RE.test(name)) {
+    const bad = [...name].find((ch, i) => !(i === 0 ? /[A-Za-z]/ : /[A-Za-z' ]/).test(ch));
+    if (bad === undefined || !/[A-Za-z]/.test(name[0]))
+      return { ok: false, why: `"${name}" must begin with a letter` };
+    // A DIGIT IS SAID IN WORDS as well as quoted, because it is the one illegal character
+    // a template produces by itself — `bot{n}` — and the fix is to change the template
+    // rather than the character.
+    const what = /[0-9]/.test(bad) ? `a digit (${JSON.stringify(bad)})` : JSON.stringify(bad);
+    const known = /[0-9_!@$^&*()+=:[\]{};/?|<>]/.test(bad)
+      ? ' — the server allows it, this repository does not'
+      : ' — the server does not allow it either';
+    return { ok: false, why: `"${name}" contains ${what}, which is not one of ` +
+      `the letters, apostrophes and spaces a character name may use${known}` };
+  }
+  const fuzzy = name.trim().toUpperCase();
+  for (const r of CHAR_NAME_RESERVED)
+    if (fuzzy === r.toUpperCase())
+      return { ok: false, why: `"${name}" is a name the server reserves` };
+  for (const r of CHAR_NAME_RESERVED_IN)
+    if (fuzzy.includes(r.toUpperCase()))
+      return { ok: false, why: `"${name}" contains "${r}", which the server refuses` };
+  return { ok: true, why: null };
+}
+
 export function planCharacter({
   name, stats = 'melee', loadout = 'selfSufficient', skills = [], gender = 1,
   spellsFile = null,
@@ -195,8 +298,8 @@ export function planCharacter({
   // it is known to disappoint. Folding the second into the first turns a note into a wall,
   // and a wall somebody did not ask for is a wall they route around.
   const warnings = [];
-  if (!name || !/^[A-Za-z][A-Za-z' -]{1,15}$/.test(name))
-    problems.push(`"${name}" is not a usable character name`);
+  const named = checkCharacterName(name);
+  if (!named.ok) problems.push(named.why);
 
   const chosen = typeof stats === 'string' ? STAT_PRESETS[stats] : stats;
   if (!chosen) problems.push(`no stat preset called "${stats}"`);

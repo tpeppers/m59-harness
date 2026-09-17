@@ -48,8 +48,9 @@ const ADMIN_PORT = Number(process.env.M59_ADMIN_PORT || 9998);
 
 // ------------------------------------------------------------------ names
 //
-// Must satisfy the server's name rule (player.kod, mirrored in m59-newchar.mjs):
-// a letter, then 1..15 more of letter, apostrophe, space or hyphen.
+// Must satisfy checkCharacterName in m59-newchar.mjs, which mirrors the server's rule in
+// kod/util/system.kod (NOT player.kod, which is where this comment used to point): three
+// to thirty characters of letter, apostrophe and space.
 // THE NATO PHONETIC ALPHABET, AND IT IS A PRIVACY DECISION RATHER THAN A STYLE ONE.
 //
 // A character called Delta names nobody. The set is fixed, public, and chosen precisely
@@ -62,9 +63,10 @@ const ADMIN_PORT = Number(process.env.M59_ADMIN_PORT || 9998);
 // and IP-restricted to loopback, so a remote server's accounts are issued by its operator
 // and never by this. There is no second case to branch on.
 //
-// Past twenty-six, names repeat with a suffix. The server's rule (player.kod, mirrored in
-// m59-newchar.mjs) is a letter then 1..15 more of letter, apostrophe, space or hyphen —
-// so "Bravo Two" is legal at nine characters and the longest here stays inside sixteen.
+// Past twenty-six, names repeat with a suffix. The rule allows thirty characters, so
+// "Bravo Two" is legal at nine and the longest here, "November Three", is fourteen —
+// the suffixes were sized against a sixteen-character ceiling that was never the
+// server's, and they are comfortable rather than tight now.
 const NATO = [
   'Alfa', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel',
   'India', 'Juliett', 'Kilo', 'Lima', 'Mike', 'November', 'Oscar', 'Papa',
