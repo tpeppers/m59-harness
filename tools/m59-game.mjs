@@ -5627,6 +5627,11 @@ import {installIntentObservers,setIntentTarget,withIntent} from './m59-intent-ob
     provedSquares,
     resources,
     squaresPerSecond,
+    MAX_STEP_HEIGHT,
+    MIN_NOMOVEON,
+    lanePastBodies,
+    perpWalkPastBodies,
+    sameRoomDoorPlan,
   });
   for (const name of Object.getOwnPropertyNames(walk)) {
     if (name === 'constructor') continue;

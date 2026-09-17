@@ -30,8 +30,10 @@ import { readFileSync } from 'node:fs';
 import { KOD_FINENESS } from './m59-client.mjs';
 import { OF, blocksMovement } from './m59-parse.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
-import { traversable as fallJumpTraversable } from './m59-falljump.mjs';
-import { clientToProtocol } from './m59-roo.mjs';
+// `physics as fallPhysics` — the ALIAS matters: m59-falljump.mjs exports it as `physics`,
+// and the name the method bodies use is the alias m59-game.mjs gave it.
+import { traversable as fallJumpTraversable, physics as fallPhysics } from './m59-falljump.mjs';
+import { clientToProtocol, CLIENT_FINENESS, elideLoops, protocolToClient } from './m59-roo.mjs';
 import { fineRouteDetour, pullFine, pointOfSquare } from './m59-finepath.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
@@ -47,6 +49,12 @@ import { autopilotIfAny } from './m59-autopilot.mjs';
  * Every dependency is named rather than imported, so this file cannot reach back into
  * m59-game.mjs and there is no import cycle to reason about.
  */
+import { boundedRegionEntry, boundedSilentGo, distinctStagesFirst, spreadEdges } from './m59-world.mjs';
+
+import { forgetInferredExit } from './m59-map.mjs';
+
+import * as exitgap from './m59-exitgap.mjs';
+
 export function sessionWalkPrototype(deps) {
   const {
     ATTACK_INTERVAL_MS,
@@ -91,6 +99,11 @@ export function sessionWalkPrototype(deps) {
     provedSquares,
     resources,
     squaresPerSecond,
+    MAX_STEP_HEIGHT,
+    MIN_NOMOVEON,
+    lanePastBodies,
+    perpWalkPastBodies,
+    sameRoomDoorPlan,
   } = deps;
 
   // The class exists only to hold the methods in the syntax they were written in. It is

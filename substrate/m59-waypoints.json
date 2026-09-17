@@ -1,0 +1,27 @@
+{
+  "_what": "PLACES WORTH BAKING A ROUTE TO THAT ARE NOT EXITS. The bake plans between exit anchors, because crossing a room is what a journey needs. Working INSIDE a room needs the other thing: routes to the squares the work is at. These are declared rather than derived because the map file does not carry them - a spawn point lives in the .kod, not in the .roo - and because which squares are worth a route is a judgement, not a fact about the geometry.",
+  "_coordinates": "row,col in KOD 1-BASED SQUARES, the same space exitAnchors emits and the same space walk_to takes. Not fine units, not 0-based.",
+  "_how": "node tools/m59-routebake.mjs --rooms <n>   (it adopts every other room from the table on disk and refuses to write a hole)",
+  "rooms": {
+    "27": {
+      "_room": "A Deep, Dark, Spooky, Icky Cave",
+      "_source": "plGenerators in kod/object/active/holder/room/monsroom/objroom/cave2.kod, read 2026-09-16. Thirteen generators; the room makes orcs and spiders 50/50, capped at 10 each.",
+      "_why": "Farming this room means standing where the orcs appear, and every one of these is reachable AND returnable from the south-east entrance - measured with geo.path on the mover's own step mask: 30-71 steps out, 31-111 back. The asymmetry is the one-way drop, not an error.",
+      "points": [
+        { "name": "gen-sw",     "row": 51, "col": 14 },
+        { "name": "gen-s",      "row": 50, "col": 34 },
+        { "name": "gen-ne",     "row": 18, "col": 50 },
+        { "name": "gen-e",      "row": 27, "col": 47 },
+        { "name": "gen-mid-e",  "row": 23, "col": 39 },
+        { "name": "gen-n",      "row": 19, "col": 30 },
+        { "name": "gen-nw",     "row": 25, "col": 26 },
+        { "name": "gen-mid",    "row": 25, "col": 33 },
+        { "name": "gen-mid-s",  "row": 32, "col": 35 },
+        { "name": "gen-mid-w",  "row": 31, "col": 31 },
+        { "name": "gen-far-se", "row": 35, "col": 58 },
+        { "name": "gen-n-e",    "row": 15, "col": 43 },
+        { "name": "gen-e-far",  "row": 16, "col": 56 }
+      ]
+    }
+  }
+}

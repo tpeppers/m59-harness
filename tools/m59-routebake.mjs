@@ -71,6 +71,45 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadMap, edgeCandidatesOf } from './m59-map.mjs';
+
+// ROUTES TO PLACES THAT ARE NOT EXITS.
+//
+// This bake plans between EXIT ANCHORS, because crossing a room is what a journey needs.
+// Working INSIDE a room needs the other thing entirely — a route to the square the work is
+// at — and room 27 is the case that showed it: its whole table is two routes, 57,45>18,30
+// and its reverse, so a character asked to walk to a spawn point had nothing to follow and
+// the walker aimed at an anchor instead, 39 steps in the wrong direction.
+//
+// The planner was never the problem. The BFS below runs on the mover's own step mask, at
+// fine resolution, offline — it is exactly the "full A* with a wall guard" anybody would
+// reach for, and it already exists. The gap was WHICH squares got asked about.
+//
+// Declared rather than derived because a spawn point lives in the .kod and not in the .roo,
+// and because which squares deserve a route is a judgement. Missing file, unreadable file
+// or a room with no entry all mean "no extra anchors", which is what every room did before.
+const WAYPOINTS = (() => {
+  try {
+    const f = join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', 'm59-waypoints.json');
+    return JSON.parse(readFileSync(f, 'utf8'))?.rooms ?? {};
+  } catch { return {}; }
+})();
+
+export function waypointAnchors(roomNum, geometry) {
+  const declared = WAYPOINTS[String(roomNum)]?.points ?? [];
+  const out = [];
+  for (const w of declared) {
+    const row = Number(w.row), col = Number(w.col);
+    if (!Number.isFinite(row) || !Number.isFinite(col)) continue;
+    // A DECLARED SQUARE IS A CLAIM, AND THE GEOMETRY IS THE AUTHORITY. Baking a route to a
+    // square with no floor would put an unreachable destination in the table wearing the
+    // same shape as a good one — the failure this whole file exists to stop.
+    let ok = true;
+    try { ok = geometry.walkable(row, col) !== false; } catch { ok = true; }
+    if (!ok) continue;
+    out.push({ kind: 'waypoint', name: String(w.name ?? `${row},${col}`), row, col });
+  }
+  return out;
+}
 import { movementMapFile } from './m59-map-path.mjs';
 import { sharedRoomGeometry, CLIENT_FINENESS, STEP_MASK_VERSION,
          PLAYER_RADIUS, WF } from './m59-roo.mjs';
@@ -998,8 +1037,14 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
   // Seeded from the same square the permissive flood found most of the room from, so the
   // two views are answering about the same room rather than about two different corners.
   const bodyReachable = bodyReachableFrom(geometry, [mainSeed, ...reps].filter(Boolean));
-  const anchors = exitAnchors(room, geometry,
-    { reachable: reachedFromBody, playerReachable: coarseBody, bodyReachable });
+  const anchors = [
+    ...exitAnchors(room, geometry,
+      { reachable: reachedFromBody, playerReachable: coarseBody, bodyReachable }),
+    // Appended rather than merged into exitAnchors because a waypoint is NOT an exit: it
+    // must not appear in stranded-exit counts, gutter analysis or anything that reasons
+    // about how a character leaves. It is here only to be a BFS source and a route target.
+    ...waypointAnchors(room.num, geometry),
+  ];
   const regionOf = a => comp.label[comp.at(a.row, a.col)];
   const tagged = anchors.map(a => ({ ...a, region: regionOf(a),
                                      from_body: reachedFromBody.has(`${a.row},${a.col}`) }));
@@ -1097,6 +1142,37 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
       };
     } catch { return null; }
   };
+  // WOULD THE MOVER ACTUALLY WALK THIS? ASK BEFORE STORING IT.
+  //
+  // The planning BFS may cross a FALL edge — any move of more than one square, which
+  // `pulledRoute` detects and records. `moverStepLands` refuses one, because a fall is not a
+  // step. So a route could be planned, stored, and then refused move by move by the very
+  // predicate this bake exists to plan on: `m59-routes.mjs --verify` counted 829 such routes
+  // across 23 rooms before this check existed, and following one is indistinguishable from
+  // the wedge it produces.
+  //
+  // Room 27 is the worked example. Its r35/r34 boundary has seven northward openings
+  // (c41-44, c50-52) and three squares that only drop southward (c45, c46, c49). The plan
+  // took c46 because it is shorter, and every route to the two north-east spawn points then
+  // failed at the same step, r37c46 -> r34c46. A legal way round existed the whole time.
+  //
+  // So: replay, check every step, and prefer the STRICT plan when the permissive one will
+  // not walk. A pair with no walkable spelling stores no route at all — `reach` still
+  // carries the honest "can it be got to", so a refusal stays correct — rather than storing
+  // a line that reads like a proof and is not one.
+  const walksOnTheMover = (start, str) => {
+    if (!str) return false;
+    try {
+      let prev = start;
+      for (const step of replay(start.row, start.col, str)) {
+        if (!geometry.moverStepLands(prev.row, prev.col, step.row, step.col)) return false;
+        prev = step;
+      }
+      return true;
+    } catch { return false; }
+  };
+  let unwalkable = 0;
+
   for (const from of squares) {
     const targets = squares.filter(t => t.row !== from.row || t.col !== from.col);
     if (!targets.length) continue;
@@ -1180,9 +1256,27 @@ export function bakeRoom(room, { collision = true, preferCoarseFloor = true } = 
         }
       }
 
-      routes[pair] = p;
-      if (usedStrict) strictRoutes++;
-      if (evidence) pivots[pair] = evidence.pivot;
+      // See walksOnTheMover: a route the mover refuses is worse than no route, because the
+      // caller cannot tell the difference until a character is standing still in a cave.
+      if (p && !walksOnTheMover(from, p)) {
+        const alt = strict && strict.came.has(strict.key(to.row, to.col))
+          ? pathString(strict.came, strict.key, from.row, from.col, to.row, to.col)
+          : null;
+        if (alt && walksOnTheMover(from, alt)) {
+          p = alt;
+          evidence = pulledRoute(from, alt);
+          usedStrict = true;
+        } else {
+          p = null;
+          unwalkable++;
+        }
+      }
+
+      if (p) {
+        routes[pair] = p;
+        if (usedStrict) strictRoutes++;
+        if (evidence) pivots[pair] = evidence.pivot;
+      }
     }
   }
 
