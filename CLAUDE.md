@@ -390,7 +390,13 @@ The server's save holds the **stock** — every inventory, vault, chest and posi
 killed, how far anybody walked, what was earned, who died and to what, between one save and
 the next. That is gone the instant it passes, and it is the only thing here a checkpoint
 cannot give back. So this records flow and nothing else, and **aligns to the server's own
-save** so that the checkpoint for the same instant supplies the stock.
+save**.
+
+On a server we run, the checkpoint for that same instant then supplies the stock. **On prod it
+does not** — that fleet plays on `76.214.42.186:5959`, which is not ours, and we can neither
+hold nor trigger its saves. What the alignment buys there is that our windows begin and end
+where the world committed its state, so two of them are comparable and neither straddles a
+save. Do not write a plan that assumes a prod checkpoint exists.
 
 The boundary is the server's, **observed rather than assumed**: `GarbageCollecting()` sends
 every logged-in player `BP_WAIT` and then `BP_UNWAIT` (`user.kod:2154`, `:2182`), the client

@@ -145,15 +145,24 @@ node tools/m59-savelog.mjs                  # the last few windows
 node tools/m59-savelog.mjs --write          # append closed ones to substrate/savelog/<fleet>.jsonl
 node tools/m59-savelog.mjs --all --since 7d
 node tools/m59-savelog-test.mjs             # 68 assertions; offline, safe any time
+node tools/m59-savewire-test.mjs            # 14 — the BP_WAIT half, driven by the real dispatcher
 ```
 
 **Stock and flow.** The server's save holds every inventory, vault, chest and position, and
 `m59-shutdown.mjs` keeps two copies of it. Recording any of that again is a third copy of an
 authoritative file, and a worse one. What a save cannot hold is what *happened* between two
 of them — kills, journeys, levels, earnings, deaths — and that is gone the instant it passes.
-So the savelog records flow and nothing else. If you want the stock for a window edge, load
-the checkpoint for that same instant; making that possible is the entire reason the boundary
-is the server's save and not a timer of ours.
+So the savelog records flow and nothing else.
+
+**But read the pairing claim carefully, because it is only half true for prod.** On a server we
+run, the checkpoint for that same instant is ours and the two halves genuinely compose. **The
+prod fleet does not play on a server we run** — its roster points at `76.214.42.186:5959`, a
+shared test server, and we hold no save of it and cannot make it save. Corrected 2026-09-17: a
+`--checkpoint` taken to verify this chain end to end produced files, reported success, and could
+not possibly have produced a marker, because it saved a *local* server the fleet is not connected
+to. What aligning to the boundary buys on prod is therefore the *alignment itself* — our windows
+begin and end where the world committed its state, so two windows are comparable and neither
+straddles a save — and not a checkpoint we can load. On a lab or shadow server, it buys both.
 
 **The boundary is the server's, observed.** `user.kod GarbageCollecting()` sends every
 logged-in player `BP_WAIT` when a save begins and `BP_UNWAIT` when it ends
