@@ -250,6 +250,72 @@ section('the policy survives the wiring');
      'the record stays on when overfarm is on, even with the broad stats switch off');
 }
 
+// ---------------------------------------------------------------------------------------
+section('overfarm usurps the full-pack town trip, which is the whole strategy');
+{
+  const autopilot = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+
+  // THE DEFINITIONAL PROPERTY, in the operator's own words: overfarm "must usurp the ability
+  // for pack is full to trigger a town trip until the overfarm% is reached". The first
+  // version got the pickup phases right and missed this entirely — the trip still fired at
+  // sellAtLoad (85%), so the overfarm phase barely began and the 150% target was unreachable.
+  ok(/overfarmHoldsTrip\(\)/.test(autopilot), 'there is a hold');
+  ok(/fullness >= at && !hold/.test(autopilot), 'the load trigger defers to it');
+  ok(/maxCarry \?\? 14\) && !hold/.test(autopilot), 'and so does the stack-ceiling trigger');
+
+  // AND ONLY THOSE TWO. `unweighable` is a safety rule about a load we cannot read and
+  // `supply` is the character saying it cannot work; deferring either would farm somebody
+  // to a standstill or into a deletion.
+  // LINE-EXACT, because proximity is not evidence: the `stacks` guard sits a few lines above
+  // `supply`, so a "is there a !hold nearby" test reports one trigger gated when another is.
+  const lines = autopilot.split('\n');
+  const guardAbove = (needle) => {
+    const i = lines.findIndex(l => l.includes(needle));
+    if (i < 0) return null;
+    for (let j = i; j >= 0 && i - j < 6; j--) if (/^\s*if \(/.test(lines[j])) return lines[j];
+    return null;
+  };
+  const unweighed = guardAbove("trigger: 'unweighable'");
+  ok(unweighed && !/!hold/.test(unweighed), 'the unweighable trigger is NOT gated on the hold');
+  const supplyGuard = guardAbove("trigger: 'supply'");
+  ok(supplyGuard && !/!hold/.test(supplyGuard), 'and neither is the supply trigger');
+  ok(/!hold/.test(guardAbove("trigger: 'load'") ?? ''), 'while the load trigger is');
+  ok(/!hold/.test(guardAbove("trigger: 'stacks'") ?? ''), 'and so is the stack ceiling');
+
+  // A HOLD ON A NUMBER WE DO NOT HAVE WOULD FARM SOMEBODY UNTIL THEY DIED.
+  ok(/cap\?\.known \|\| !\(cap\.weight_max > 0\) \|\| cap\.load\?\.exact === false\) return null/.test(autopilot),
+     'an unreadable or lower-bound pack ceiling releases the hold');
+}
+
+// ---------------------------------------------------------------------------------------
+section('a longer lap is stocked for, and ends where the goods do');
+{
+  const autopilot = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+
+  // FARMING 150% AS LONG BURNS 150% OF THE CONSUMABLES. Without this the supply trigger —
+  // which is deliberately NOT deferred — fires mid-lap and drags them to town anyway, moving
+  // the interruption rather than removing it.
+  ok(/overfarmScale\(\)/.test(autopilot), 'there is a scale');
+  ok(/const upto = n => Math\.max\(0, Math\.ceil\(\(Number\(n\) \|\| 0\) \* scale\)\)/.test(autopilot),
+     'and the shopping targets are scaled by it');
+  ok(/upto\(reagentTargetFor\(.elderberry./.test(autopilot), 'elderberry scales');
+  ok(/upto\(reagentTargetFor\(.herb./.test(autopilot), 'herbs scale');
+  ok(/const target = upto\(Math\.max\(entry\.min/.test(autopilot),
+     'and so does every other loadout carry line');
+
+  // THE LAP BOUNDARY. It used to be any time booked as "trading", which includes BUYING:
+  // measured on prod, Camilla's first lap ended at 5% of capacity in a herb shop.
+  ok(!/kind === .trading. && this\.policy\.overfarm/.test(autopilot),
+     'the lap no longer ends on trading time');
+  eq((autopilot.match(/endOverfarmLap/g) ?? []).length, 1, 'it ends in exactly one place');
+  // `this.townTrip = null;` appears three times; the one that ENDS a trip is the one followed
+  // by lastTownServiceAt. Anchor on that pair rather than on the first match.
+  const closeIdx = autopilot.indexOf('this.lastTownServiceAt = Date.now();');
+  const lapIdx = autopilot.indexOf('endOverfarmLap');
+  ok(closeIdx > 0 && lapIdx > 0 && lapIdx < closeIdx && closeIdx - lapIdx < 2000,
+     'and that place is immediately before the town trip closes');
+}
+
 // A helper used by the first section: the greedy pack, for comparison.
 function siftValueKept(stream, capacity, policy) {
   let used = 0; const kept = [];

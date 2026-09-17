@@ -2540,6 +2540,49 @@ export class Autopilot {
   // Food counts as well as reagents: a pack with meals in it can raise vigor without
   // casting at all, so a character with bread is not out of supply just because the
   // reagents are gone. That is the whole point of carrying prepared food.
+  /**
+   * How much longer than an ordinary lap this character intends to farm, as a multiplier.
+   *
+   * 1 when overfarm is off, so every number downstream is untouched -- silence means the
+   * behaviour that was already there.
+   */
+  overfarmScale() {
+    const o = this.policy.overfarm;
+    if (o?.enabled !== true) return 1;
+    const pct = Number(o.overfarm_percent);
+    return Number.isFinite(pct) && pct >= 100 ? pct / 100 : 1.5;
+  }
+
+  /**
+   * Is an overfarm lap still running, and therefore holding the town trip open?
+   *
+   * THIS IS THE STRATEGY, not a tweak to it. Overfarming is a bet about TRAVEL OVERHEAD: the
+   * money is made killing things, a trip only realises it, and a trip costs a road crossing
+   * this fleet dies on. So it spends pack space to buy fewer trips, and the way it does that
+   * is by usurping "the pack is full" as a reason to go to town until the sift target is met.
+   *
+   * Returns a reason while the lap is short of target, and null once it is met -- or whenever
+   * the question cannot be answered, because a hold that fires on an unreadable pack would
+   * keep a character in a monster room for ever.
+   */
+  overfarmHoldsTrip() {
+    const o = this.policy.overfarm;
+    if (o?.enabled !== true) return null;
+    const lap = this.s?._overfarm;
+    if (!lap) return null;
+    const cap = skills.carryCapacity(this.s?.client);
+    // AN UNREADABLE CEILING RELEASES THE HOLD. carryCapacity withholds room_for rather than
+    // guess, and an inexact load is a LOWER bound -- the same reason the sell trigger treats
+    // one as "make room". Holding on a number we do not have is how a character farms until
+    // it dies.
+    if (!cap?.known || !(cap.weight_max > 0) || cap.load?.exact === false) return null;
+    const target = Math.round(this.overfarmScale() * cap.weight_max);
+    if (!(lap.sifted < target)) return null;
+    return { held: true, sifted: lap.sifted, target,
+             sifted_percent: Math.round((lap.sifted / cap.weight_max) * 100),
+             target_percent: Math.round(this.overfarmScale() * 100) };
+  }
+
   supplyShortfall() {
     const l = this.loadout();
     if (!l?.carry?.length) return { short: false, missing: [], why: 'no loadout floor to read' };
@@ -11126,35 +11169,6 @@ export class Autopilot {
       });
     }
 
-    // A LAP ENDS WHERE THE GOODS DO, so the delivery is where the overfarm is settled up.
-    // `siftValue` re-runs the whole lap's stream twice — once in encounter order, which is
-    // what a greedy lap would have carried, and once best-first, which is what selection
-    // produced — and the difference is the strategy's own claim, in shillings, measured
-    // against the room this character actually met rather than an average one.
-    if (kind === 'trading' && this.policy.overfarm?.enabled) {
-      const lap = this.s?.endOverfarmLap?.();
-      if (lap?.stream?.length && detailSettings(this.policy, 'overfarm')) {
-        const cap = skills.carryCapacity(this.s?.client);
-        const v = siftValue({ stream: lap.stream, policy: this.policy.overfarm,
-                              capacity: cap?.known ? cap.weight_max : null });
-        this.detailEvent('overfarm', 'lap', {
-          ended_at: Date.now(), room: room?.num ?? null, room_name: room?.name ?? null,
-          target_percent: this.policy.overfarm.overfarm_percent,
-          selective_at: this.policy.overfarm.selective_at,
-          sifted: v.sifted, sifted_percent: v.sifted_percent, capacity: v.capacity,
-          picked_up: lap.taken, traded_away: lap.dropped, left_behind: lap.left,
-          baseline_value: v.baseline.value, kept_value: v.kept.value,
-          gain: v.gain, gain_percent: v.gain_percent,
-          mixture: v.mixture.slice(0, 8), unpriced: v.unpriced.slice(0, 8),
-          // SAID OUT LOUD BECAUSE IT IS NOT A MEASUREMENT. Every shilling here is
-          // `viValue_average` through a merchant markup, and 160 of the 249 weighable items
-          // carry no price at all — they contribute cost to both halves and value to
-          // neither. The COMPARISON is sound because both sides have the same blind spot;
-          // the absolute number is an estimate and must never be reported as takings.
-          estimated: true,
-        });
-      }
-    }
     if (kind === 'trading' && detailSettings(this.policy, 'trading')) {
       const trade = this.passTrade ?? {};
       this.detailEvent('trading', 'session', {
@@ -19694,11 +19708,28 @@ export class Autopilot {
                why: 'the pack holds something not in the weight table, so its load is a ' +
                     'lower bound — treat that as make room, never as there is room' };
 
+    // OVERFARM USURPS "THE PACK IS FULL" AS A REASON TO GO TO TOWN.
+    //
+    // Both triggers below are about a full pack, and being full is precisely the moment
+    // overfarming BEGINS: from here the character keeps killing and trades the worst thing it
+    // carries for a better one on the floor, until it has sifted its target. Letting load fire
+    // here is what made the first version pointless -- it left for town at 85% and the
+    // overfarm phase never ran at all.
+    //
+    // ONLY THESE TWO ARE DEFERRED. unweighable above is a safety rule about a load we cannot
+    // read, and supply below is the character saying it can no longer work; neither waits.
+    // That is also why purchaseRequests buys the scaled amount -- leaving town stocked for an
+    // ordinary lap would just move the interruption rather than remove it.
+    const hold = this.overfarmHoldsTrip();
     const at = this.policy.sellAtLoad ?? 0.85;
-    if (!saleCooling && fullness >= at)
+    if (hold && (fullness >= at || stacks >= (this.policy.maxCarry ?? 14)))
+      this.note('overfarming - holding the town trip', { ...hold,
+        why: 'the pack is full, which is when overfarming starts: keep killing and trade up ' +
+             'until ' + hold.target_percent + '% of capacity has been sifted' });
+    if (!saleCooling && fullness >= at && !hold)
       return { sell: true, trigger: 'load', fullness,
                why: `pack is ${Math.round(fullness * 100)}% of capacity` };
-    if (!saleCooling && stacks >= (this.policy.maxCarry ?? 14))
+    if (!saleCooling && stacks >= (this.policy.maxCarry ?? 14) && !hold)
       return { sell: true, trigger: 'stacks', stacks, why: `${stacks} stacks, at the pack ceiling` };
 
     // RUNNING OUT IS A REASON TO GO. A PART-FULL PACK IS NOT.
@@ -20286,18 +20317,32 @@ export class Autopilot {
   }
 
   purchaseRequests() {
+    // STOCK FOR THE LAP YOU ARE ACTUALLY GOING TO FARM.
+    //
+    // A loadout is sized for an ordinary lap: fill the pack, go to town. An overfarming
+    // character farms overfarm_percent as long before it next sees a merchant, so it burns
+    // that much more of everything it consumes. Buying the ordinary amount sends it out
+    // under-stocked, the supply trigger fires mid-lap, and it goes to town anyway -- which
+    // MOVES the interruption instead of removing it, while fewer trips is the entire point.
+    //
+    // The shortfall TRIGGER is deliberately not scaled: that one fires at the real floor and
+    // means "cannot work", which is true whatever the plan was. This scales what to BUY.
+    const scale = this.overfarmScale();
+    const upto = n => Math.max(0, Math.ceil((Number(n) || 0) * scale));
     const have = this.reagentCount();
     const requests = new Map([
-      ['elderberry', Math.max(0, reagentTargetFor('elderberry', this.policy.reagentTarget) - have.elderberry)],
-      ['herb', Math.max(0, reagentTargetFor('herb', this.policy.reagentTarget) - have.herbs)],
+      ['elderberry', Math.max(0, upto(reagentTargetFor('elderberry', this.policy.reagentTarget)) - have.elderberry)],
+      ['herb', Math.max(0, upto(reagentTargetFor('herb', this.policy.reagentTarget)) - have.herbs)],
     ]);
     const pack = this.packAsItems();
     for (const entry of this.loadout()?.carry ?? []) {
       if (!(entry.min > 0)) continue;
       const held = pack.filter(i => purchaseKey(i.name) === purchaseKey(entry.item))
         .reduce((n, i) => n + i.amount, 0);
-      const target = Math.max(entry.min, Number(entry.max) || 0);
-      requests.set(purchaseKey(entry.item), held < entry.min ? target - held : 0);
+      // The ceiling scales with the floor, or a max written for an ordinary lap caps the
+      // extra straight back off. A loadout that declares no max keeps using its min.
+      const target = upto(Math.max(entry.min, Number(entry.max) || 0));
+      requests.set(purchaseKey(entry.item), held < upto(entry.min) ? target - held : 0);
     }
     return [...requests].filter(([, amount]) => amount > 0).map(([item, amount]) => ({ item, amount }));
   }
@@ -20864,6 +20909,35 @@ export class Autopilot {
         return true; // retry THIS step once recovered, then continue the shopping list
       }
       trip.nextService++;
+    }
+    // A LAP ENDS WHERE THE GOODS DO, AND THAT IS HERE.
+    //
+    // It used to end on any time booked as "trading", which includes BUYING. Measured on
+    // prod 2026-09-17: Camilla's first recorded lap ended at 5% of capacity sifted, in
+    // Joguer's Herbs and Roots, because she stopped to buy herbs -- so the counter reset
+    // constantly and the 150% target was unreachable. A completed town trip is the
+    // unambiguous moment: the pack has been emptied at merchants, the vault and the chests.
+    if (this.policy.overfarm?.enabled) {
+      const lap = this.s?.endOverfarmLap?.();
+      if (lap?.stream?.length && detailSettings(this.policy, 'overfarm')) {
+        const cap = skills.carryCapacity(this.s?.client);
+        const v = siftValue({ stream: lap.stream, policy: this.policy.overfarm,
+                              capacity: cap?.known ? cap.weight_max : null });
+        this.detailEvent('overfarm', 'lap', {
+          ended_at: Date.now(), room: this.s?.world?.room?.num ?? null,
+          target_percent: this.policy.overfarm.overfarm_percent,
+          selective_at: this.policy.overfarm.selective_at,
+          sifted: v.sifted, sifted_percent: v.sifted_percent, capacity: v.capacity,
+          picked_up: lap.taken, traded_away: lap.dropped, left_behind: lap.left,
+          baseline_value: v.baseline.value, kept_value: v.kept.value,
+          gain: v.gain, gain_percent: v.gain_percent,
+          mixture: v.mixture.slice(0, 8), unpriced: v.unpriced.slice(0, 8),
+          // Every shilling here is viValue_average through a merchant markup, and 160 of the
+          // 249 weighable items carry no price at all. The COMPARISON is sound because both
+          // halves are blind to the same items; the absolute number is an estimate.
+          estimated: true,
+        });
+      }
     }
     this.townTrip = null;
     this.lastTownServiceAt = Date.now();
