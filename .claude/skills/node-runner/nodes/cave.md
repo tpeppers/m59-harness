@@ -303,3 +303,36 @@ The cheap next step is not a walk: it is reading the `.roo` sidedefs along the n
 wall to see whether those "false walls" carry a passable flag we are dropping, or whether
 the steps and the drop-down are the part that is missing. `tools/m59-roo.mjs` reads the wall
 chains; `m59-roomview.mjs 27` draws them against the step mask.
+
+## 2026-09-17 — the node is in a ONE-WAY POCKET, and it is not a jump
+
+Re-measured with the waypoint bake and the mover's own predicate. **The stone at r23c53 sits
+in a 169-square pocket spanning rows 17-34, cols 46-56.** From the south-east entrance the
+body reaches 1300 squares and not one of them is in it; from the pocket it reaches 1469 — the
+same 1300 plus itself. Out, never in.
+
+**It is a GAP, not a wall and not a step.** The pocket is terraced (896, 1152, 1280, 1536,
+1792, 1920, 2304 — gaps of 128-384, each climbable). The edge is the problem: sampling from
+r33c55 (1536) to r32c55 (1920) returns **no floor at every point between the two centres**,
+and a 5x5 sample inside r32c55 is floor in one corner and null across the rest. `walkable()`
+says true because a square is a summary; the fine tracer says `destination_has_no_floor` and
+is right.
+
+**And no fall-jump reaches it.** Of 40 squares the entrance can reach that stand above a
+pocket square within the three-square carry, **zero** clear the gap. The best is
+`r36c46 -> r34c46` — the move the router keeps choosing and the mover keeps refusing — which
+needs 2048 units and gets 1415. A 384 drop is 0.276s of air; a run covers 1415 units in it.
+It falls **633 short**. Scored with `reachFor`/`airTime`, not by hand.
+
+**Not a stale bake:** the baked step mask and a freshly-traced geometry agree on every
+boundary square probed, so re-baking will not open this.
+
+So the way in is a PASSAGE our `.roo` does not carry — the operator's false wall by the
+Chalice of the Rain, "south through what looks like a painting, then up some steps". The
+terraces are those steps; what is missing is the way onto them. Finding that passage is the
+errand. Melding still works the moment a body is on the stone (verified again today, max mana
+18 -> 23 on a shadow), so the world has a door we have not written down.
+
+**Waypoints now exist for it.** `substrate/m59-waypoints.json` declares the node and the
+thirteen generators, so once the passage is found the bake gives routes to all of them
+without further work — eleven of thirteen spawn points already have verified round trips.
