@@ -234,7 +234,7 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
 const git = (args, cwd) => {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8',
+    return execFileSync('git', args, { windowsHide: true, cwd, encoding: 'utf8',
                                        stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { return null; }
 };

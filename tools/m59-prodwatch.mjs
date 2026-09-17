@@ -154,7 +154,7 @@ function serviceStart(fleet, passthrough) {
   // than 'ignore' is what makes it possible to find out afterwards what it saw.
   const child = spawn(process.execPath,
     [fileURLToPath(import.meta.url), '--watch', '--fleet', fleet, ...passthrough],
-    { detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env: process.env });
+    { windowsHide: true, detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env: process.env });
   child.unref();
   writeFileSync(P.pid, JSON.stringify({ pid: child.pid, fleet, at: Date.now() }, null, 2));
   console.log(`watching "${fleet}"\n  pid   ${child.pid}\n  log   ${P.log}\n  state ${P.state}`);

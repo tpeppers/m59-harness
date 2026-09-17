@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import path from 'node:path';
 
 export function runtimeProvenance(root) {
-  const git=args=>{try{return execFileSync('git',args,{cwd:root,encoding:'utf8',timeout:10000,
+  const git=args=>{try{return execFileSync('git',args,{ windowsHide: true,cwd:root,encoding:'utf8',timeout:10000,
     stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}};
   const files={},listed=git(['ls-files','-co','--exclude-standard','-z','tools','server-patches',
     'substrate/m59-map.json','substrate/m59-routes.json','substrate/m59-tracks.json','substrate/m59-falljumps.json']);

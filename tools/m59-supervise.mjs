@@ -1045,7 +1045,7 @@ async function reclaimDrops() {
   try {
     await new Promise(res => {
       const p = spawn(process.execPath, [script, '--sites', String(RECLAIM_SITES),
-                                         '--port', String(PORT), ...DRY_ARGS], { stdio: 'inherit' });
+                                         '--port', String(PORT), ...DRY_ARGS], { windowsHide: true, stdio: 'inherit' });
       p.on('exit', res);
       // SIGTERM rather than the default kill, so the errand's own signal handler runs and
       // revives its couriers. That is the whole reason it has one.
@@ -1070,7 +1070,7 @@ async function spreadReagents(rows) {
   try {
     await new Promise(res => {
       const p = spawn(process.execPath, [script, '--amount', String(ALMONER_SHARE),
-                                         '--port', String(PORT), ...DRY_ARGS], { stdio: 'inherit' });
+                                         '--port', String(PORT), ...DRY_ARGS], { windowsHide: true, stdio: 'inherit' });
       p.on('exit', res);
       setTimeout(() => { try { p.kill(); } catch {} res(); }, 8 * 60 * 1000);
     });
@@ -1098,7 +1098,7 @@ async function outfitPair(a, b) {
   try {
     await new Promise(res => {
       const p = spawn(process.execPath, [script, '--agents', `${a.agent},${b.agent}`,
-                                         '--port', String(PORT), ...DRY_ARGS], { stdio: 'inherit' });
+                                         '--port', String(PORT), ...DRY_ARGS], { windowsHide: true, stdio: 'inherit' });
       p.on('exit', res);
       setTimeout(() => { try { p.kill(); } catch {} res(); }, 8 * 60 * 1000);
     });

@@ -215,7 +215,7 @@ function readProcessStartMs(pid) {
       const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
         `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue; ` +
         `if ($p) { [long](([datetimeoffset]$p.CreationDate).ToUnixTimeMilliseconds()) }`,
-      ], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      ], { windowsHide: true, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       const ms = Number(out);
       return Number.isFinite(ms) && ms > 0 ? ms : null;
     }

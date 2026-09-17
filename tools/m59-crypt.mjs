@@ -81,7 +81,7 @@ function connect() {
   if (mcp) return mcp;
   const here = fileURLToPath(new URL('./m59-mcp-attach.mjs', import.meta.url));
   const child = spawn(process.execPath, [here, '--port', String(PORT)],
-    { stdio: ['pipe', 'pipe', 'ignore'] });
+    { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
   let buf = '';
   child.stdout.on('data', d => {
     buf += d;

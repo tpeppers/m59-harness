@@ -258,7 +258,7 @@ export function window(rows, from, to) {
 const git = (repo, ...a) => {
   try {
     return execFileSync('git', ['-C', repo, ...a],
-                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+                        { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { return null; }
 };
 

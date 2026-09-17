@@ -18190,7 +18190,7 @@ function handleControl(action, res) {
     if (FLEET) args.push('--fleet', FLEET);
     try {
       const child = spawn(process.execPath, args,
-        { detached: true, stdio: 'ignore', cwd: BROKER_ROOT });
+        { windowsHide: true, detached: true, stdio: 'ignore', cwd: BROKER_ROOT });
       child.unref();
     } catch (e) {
       return reply(500, { ok: false, note: `could not spawn the service: ${e.message}` });

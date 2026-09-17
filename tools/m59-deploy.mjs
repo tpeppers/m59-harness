@@ -44,7 +44,7 @@ const git = (repo, ...args) => {
     // stderr ignored: several of these are ASKS, not assertions — `describe --exact-match`
     // failing just means "no tag here", and its fatal: line is not news.
     return execFileSync('git', ['-C', repo, ...args],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch (e) {
     return null;
   }

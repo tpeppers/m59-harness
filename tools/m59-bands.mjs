@@ -127,7 +127,7 @@ export function discoverCheckouts(extra = []) {
   const roots = new Set([REPO, ...extra.map(p => resolve(p))]);
   try {
     const out = execFileSync('git', ['worktree', 'list', '--porcelain'],
-                             { cwd: REPO, encoding: 'utf8', timeout: 30_000 });
+                             { windowsHide: true, cwd: REPO, encoding: 'utf8', timeout: 30_000 });
     for (const line of out.split(/\r?\n/))
       if (line.startsWith('worktree ')) roots.add(resolve(line.slice(9).trim()));
   } catch { /* not a git tree, or git is unavailable: the CLI roots still stand */ }

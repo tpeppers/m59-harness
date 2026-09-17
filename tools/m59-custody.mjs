@@ -94,7 +94,7 @@ export const machine = () => hostname();
 
 const leasePath = (fleet) => join(CUSTODY_DIR, `${fleet}.json`);
 
-const git = (args, opts = {}) => execFileSync('git', args, {
+const git = (args, opts = {}) => execFileSync('git', args, { windowsHide: true,
   cwd: STORE, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts,
 }).trim();
 
@@ -216,7 +216,7 @@ const service = (verb, fleet) => {
   try {
     return execFileSync(process.execPath,
       [join(REPO, 'tools', 'm59-service.mjs'), verb, '--fleet', fleet],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) { return `service ${verb} failed: ${String(e.stdout || e.message).slice(0, 200)}`; }
 };
 

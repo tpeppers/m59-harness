@@ -190,7 +190,7 @@ function refreshSheets() {
   if (!fs.existsSync(tool)) return { ran: false, why: 'm59-sheet.mjs is not in this checkout' };
   try {
     execFileSync(process.execPath, [tool, '--checkpoint'],
-                 { cwd: REPO, stdio: 'pipe', timeout: 180_000 });
+                 { windowsHide: true, cwd: REPO, stdio: 'pipe', timeout: 180_000 });
     return { ran: true };
   } catch (e) {
     // The usual cause is no broker. Say so plainly — the sheets already on disk are still
@@ -200,7 +200,7 @@ function refreshSheets() {
 }
 
 const gitCommit = () => {
-  try { return execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], { stdio: 'pipe' })
+  try { return execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], { windowsHide: true, stdio: 'pipe' })
     .toString().trim(); } catch { return null; }
 };
 

@@ -118,7 +118,7 @@ function pathsFor(id) {
 }
 
 function docker(args, { timeout = 30000, allowMissing = false } = {}) {
-  const result = spawnSync('docker', args, { cwd: REPOSITORY_ROOT, encoding: 'utf8', timeout });
+  const result = spawnSync('docker', args, { windowsHide: true, cwd: REPOSITORY_ROOT, encoding: 'utf8', timeout });
   if (result.error) throw new Error(`docker could not run: ${result.error.message}`);
   if (result.status !== 0) {
     const detail = String(result.stderr || result.stdout || '').trim();
