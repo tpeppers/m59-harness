@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, sortPack, loadList, DEFAULT_LIST, WEAPON_ATTRIBUTES, needleText,
+import { classify, sortPack, loadList, DEFAULT_LIST, WEAPON_ATTRIBUTES, needleText, destinationOf,
          KEEP_AT_DIFFICULTY, VERDICTS, describeItem, routeOf } from './m59-magicsort.mjs';
 import { noDropFrom, NO_DROP_REASONS } from './m59-nodrop.mjs';
 
@@ -188,7 +188,40 @@ console.log('\nthe fifth verdict: the mule holds it, and `unknown` ends up there
 ok('there are five verdicts and THREE destinations — two verdicts share the mule', () => {
   assert.equal(VERDICTS.length, 5);
   assert.deepEqual([...new Set(VERDICTS.map(v => routeOf(v).to))].sort(),
-                   ['counter', 'mule', 'owner']);
+                   ['counter_barloque', 'mule', 'owner_vault']);
+});
+
+// A KEEP GOES TO THE VAULT, NOT TO THE PACK. Operator, 2026-09-17. The pack is the one
+// container a death empties and the one with two ceilings; a permanent attribute that survived
+// being classified `keep` should not then be carried into a fight.
+ok('a keep goes to the finder\'s VAULT — the pack is what a death empties', () => {
+  assert.equal(routeOf('keep').to, 'owner_vault');
+  assert.equal(destinationOf('owner_vault').who, 'owner');
+  assert.equal(destinationOf('owner_vault').store, 'vault');
+});
+
+// THE DESTINATION AND THE PROCEEDS ARE TWO QUESTIONS. This table answered only the first, so a
+// timed item read as "the mule sells it and keeps the money" — the fleet quietly taxing its own
+// farmers for using the reveal desk.
+ok('a timed item is sold in Barloque and the money goes back to whoever brought it', () => {
+  assert.equal(routeOf('sell_to_npc').to, 'counter_barloque');
+  assert.equal(routeOf('sell_to_npc').proceeds_to, 'owner');
+  assert.equal(destinationOf('counter_barloque').town, 'Barloque');
+});
+
+ok('...while what the mule sells to PLAYERS is the mule\'s, and a keep sells nothing at all', () => {
+  assert.equal(routeOf('sell_to_players').proceeds_to, 'mule');
+  assert.equal(routeOf('mule_keep').proceeds_to, 'mule');
+  assert.equal(routeOf('keep').proceeds_to, null, 'a keep is not sold, so there are no proceeds');
+  assert.equal(routeOf('unknown').proceeds_to, null, 'and neither is a gap');
+});
+
+ok('every route names a destination the table can explain', () => {
+  for (const v of VERDICTS) {
+    const d = destinationOf(routeOf(v).to);
+    assert.ok(d, `${v} routes to ${routeOf(v).to}, which DESTINATIONS does not describe`);
+    assert.ok(d.label && d.who && d.store);
+  }
 });
 ok('unknown routes to the mule WITHOUT becoming a decision', () => {
   assert.equal(routeOf('unknown').to, 'mule');

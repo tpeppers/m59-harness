@@ -92,13 +92,53 @@ export const VERDICTS = Object.freeze(['keep', 'sell_to_players', 'sell_to_npc',
 //
 // So: the ROUTING table maps a verdict to a destination, and two verdicts share one.
 export const ROUTES = Object.freeze({
-  keep: { to: 'owner', why: 'back to the character it came from' },
-  sell_to_players: { to: 'mule', why: 'held for the menagerie merchant to sell to people' },
-  sell_to_npc: { to: 'counter', why: 'sold on this trip: the timer runs wherever it is parked' },
-  mule_keep: { to: 'mule', why: 'the collection lives on the mule — it cannot lose it by dying' },
-  unknown: { to: 'mule', why: 'DEFAULT mule-keep. Not a decision: either nobody could read it ' +
-                              'or the list has no line for it, and neither is a reason to sell' },
+  // A KEEP GOES TO THE FINDER'S VAULT, NOT TO THE FINDER'S PACK. Operator, 2026-09-17: "anything
+  // keep (e.g.: SWL) goes into the finder's vault". The pack is the one container that a death
+  // empties and the one with two ceilings, so handing a permanent, fight-worthy attribute back
+  // into it is handing it to the next groundworm. The vault is also the only store whose timers
+  // do not matter, because a keep has no timer — that is what made it a keep.
+  keep: { to: 'owner_vault', proceeds_to: null,
+          why: "the finder's vault: a permanent attribute is worth storing, and the pack is the "
+             + 'one container a death empties' },
+
+  sell_to_players: { to: 'mule', proceeds_to: 'mule',
+                     why: 'held for the menagerie merchant to sell to people' },
+
+  // THE ITEM IS SOLD IN BARLOQUE AND THE MONEY IS THE FINDER'S. Same operator, same sentence:
+  // sold to a Barloque merchant, and "the one who brought it to be revealed can have it returned
+  // to them and keep the money from selling the magic item". The destination and the PROCEEDS are
+  // two different questions and this table used to answer only the first — so a timed item read
+  // as "the mule sells it and keeps the money", which is the fleet quietly taxing its own farmers
+  // for using the reveal desk.
+  //
+  // Barloque because that is where the desk is. The timer runs wherever the item is parked, so
+  // carrying it to a better counter spends the value it is being sold for.
+  sell_to_npc: { to: 'counter_barloque', proceeds_to: 'owner',
+                 why: 'a timed attribute is worth money today and nothing tomorrow, so it is sold '
+                    + 'at the Barloque counter beside the desk — and the shillings go back to '
+                    + 'whoever brought it in' },
+
+  mule_keep: { to: 'mule', proceeds_to: 'mule',
+               why: 'the collection lives on the mule — it cannot lose it by dying' },
+
+  unknown: { to: 'mule', proceeds_to: null,
+             why: 'DEFAULT mule-keep. Not a decision: either nobody could read it ' +
+                  'or the list has no line for it, and neither is a reason to sell' },
 });
+
+// THE DESTINATIONS, NAMED ONCE. A reader deciding what to DO needs to tell "the finder's vault"
+// from "the finder", and "a counter" from "the counter next to the desk" — and a caller that
+// derives those from the `to` string is a second opinion waiting to disagree with this one.
+export const DESTINATIONS = Object.freeze({
+  owner_vault: { who: 'owner', store: 'vault',
+                 label: "the finder's vault" },
+  mule: { who: 'mule', store: 'pack', label: "the mule's pack" },
+  counter_barloque: { who: 'mule', store: 'sold', town: 'Barloque',
+                      label: 'a Barloque counter' },
+});
+
+/** What a route's destination means: who holds it, in which store, and how to say it. */
+export const destinationOf = (to) => DESTINATIONS[to] ?? null;
 
 /** Where a verdict sends the item. Unknown routes to the mule without becoming a decision. */
 export const routeOf = (verdict) => ROUTES[verdict] ?? ROUTES.unknown;

@@ -96,7 +96,7 @@ import { ITEM_RARITY, rarityName, isUnidentified } from './m59-items.mjs';
 // THE SORTER IS A SEPARATE FILE ON PURPOSE. What an item is FOR is an operator's list that
 // changes without redeploying anything; what is UNIDENTIFIED is the server's own grade. Joining
 // them here rather than merging them keeps the volatile half editable by a person.
-import { sortPack, VERDICTS, routeOf, describeItem } from './m59-magicsort.mjs';
+import { sortPack, VERDICTS, routeOf, describeItem, destinationOf } from './m59-magicsort.mjs';
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -363,16 +363,31 @@ export function deskPlan(items = [], { desk = { intake: [] }, list = null, mule 
       const src = sortable.find(i => Number(i.id) === Number(r.id)) ?? {};
       const stage = isUnidentified(src) ? 'awaiting_reveal' : 'revealed';
       const owner = ownerOf(desk, { name: r.name, id: r.id });
+      // WHO HOLDS IT, WHERE THEY PUT IT, AND WHO GETS PAID — three answers, and the routing
+      // table owns all three. Deriving them from the `to` string here would be a second opinion
+      // about a question m59-magicsort.mjs has already answered.
+      const dest = destinationOf(r.route);
+      const proceeds = routeOf(r.verdict).proceeds_to;
+
       // `keep` GOES HOME, AND HOME MAY BE HERE. When the caster found it himself there is no
-      // owner to send it to, and routing it to "owner" would describe a journey to where it
-      // already is. Say `stays` so a reader does not plan a hand-over that is a no-op.
-      const to = r.route === 'owner'
-        ? (owner ? owner.from : (mule ?? 'the finder'))
-        : r.route === 'mule' ? (mule ?? 'the mule') : 'a counter';
+      // owner to send it to, and naming a journey to where the item already is would have a
+      // reader planning a hand-over that is a no-op. Say `stays` instead.
+      const mine = dest?.who === 'owner';
+      const who = mine ? (owner ? owner.from : null) : (mule ?? 'the mule');
+      const to = mine
+        ? (owner ? `${owner.from}'s ${dest.store}` : `${mule ?? 'the finder'}'s ${dest.store}`)
+        : dest?.town ? `a counter in ${dest.town}` : (mule ?? 'the mule');
+
       rows.push({ id: r.id, name: r.name, stage, verdict: r.verdict, why: r.why,
-                  route: r.route, to, owner: owner ? owner.from : null,
+                  route: r.route, to, store: dest?.store ?? null,
+                  owner: owner ? owner.from : null,
+                  // THE MONEY IS A SEPARATE ROW FROM THE ITEM. A timed attribute is sold at the
+                  // Barloque counter beside the desk and the shillings are the FINDER'S — the
+                  // operator's rule, and the one the plain `to` column cannot express.
+                  proceeds_to: proceeds === 'owner' ? (owner ? owner.from : null) : proceeds,
+                  owes_proceeds: proceeds === 'owner' && !!owner,
                   queued_behind: owner?.queued_behind ?? 0,
-                  stays: r.route === 'owner' ? !owner : r.route === 'mule' });
+                  stays: mine ? !owner : dest?.store !== 'sold' });
     }
   }
   // Worst first is not meaningful here; group by what a person would act on.
@@ -465,8 +480,9 @@ if (isMain) {
       if (!plan.rows.length) console.log('  nothing in the pack to sort.');
       for (const r of plan.rows) {
         const where = r.stays ? 'stays here' : `-> ${r.to}`;
+        const owed = r.owes_proceeds ? `  [shillings -> ${r.proceeds_to}]` : '';
         console.log(`  ${String(r.stage === 'awaiting_reveal' ? 'UNREVEALED' : 'revealed').padEnd(11)}`
-          + ` ${String(r.name).padEnd(24)} ${String(r.verdict).padEnd(16)} ${where}`
+          + ` ${String(r.name).padEnd(24)} ${String(r.verdict).padEnd(16)} ${where}${owed}`
           + (r.queued_behind ? `  (${r.queued_behind} more of this name queued)` : ''));
       }
       const waiting = plan.rows.filter(r => r.stage === 'awaiting_reveal').length;

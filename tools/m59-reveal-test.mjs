@@ -393,7 +393,8 @@ console.log('\nthe desk plan — every item, including the ones still unread');
   ok('a keep IS a keep — the fixture routes to the owner, or this case proves nothing', () => {
     const row = deskPlan([{ id: 4, name: 'long sword', rarity: 0, look: KEEP_LOOK }], {}).rows[0];
     assert.equal(row.verdict, 'keep');
-    assert.equal(row.route, 'owner');
+    assert.equal(row.route, 'owner_vault');
+    assert.equal(row.store, 'vault', "a keep is stored, not carried — the pack is what a death empties");
   });
 
   ok('a keep with no intake note STAYS — there is nobody to send it back to', () => {
@@ -401,17 +402,42 @@ console.log('\nthe desk plan — every item, including the ones still unread');
                          { mule: 'Loial the Ogier' }).rows[0];
     assert.equal(row.stays, true);
     assert.equal(row.owner, null);
-    assert.equal(row.to, 'Loial the Ogier');   // the finder keeps what nobody claimed
+    assert.match(row.to, /Loial the Ogier/);   // the finder keeps what nobody claimed
   });
 
-  ok('...and the same item WITH a note names the character it goes back to', () => {
+  ok('...and the same item WITH a note names the VAULT it goes back to', () => {
     const desk = noteIntake({ version: 1, intake: [] },
                             { from: 'Janice', items: [{ name: 'long sword' }] });
     const row = deskPlan([{ id: 4, name: 'long sword', rarity: 0, look: KEEP_LOOK }],
                          { desk, mule: 'Loial the Ogier' }).rows[0];
     assert.equal(row.owner, 'Janice');
-    assert.equal(row.to, 'Janice');
+    assert.equal(row.to, "Janice's vault");
     assert.equal(row.stays, false);
+    assert.equal(row.proceeds_to, null, 'a keep is not sold, so nobody is owed anything');
+  });
+
+  // THE MONEY IS A SEPARATE ROW FROM THE ITEM, and the plain `to` column cannot say it.
+  // Operator, 2026-09-17: a timed item is sold to a Barloque merchant and "the one who brought
+  // it to be revealed can ... keep the money from selling the magic item". Without this the
+  // mule sells it and keeps the proceeds — the fleet taxing its own farmers for using the desk.
+  ok('a timed item is sold in Barloque and the finder is owed the shillings', () => {
+    const desk = noteIntake({ version: 1, intake: [] },
+                            { from: 'Gonzo', items: [{ name: 'glowing mace' }] });
+    const row = deskPlan([{ id: 9, name: 'glowing mace', rarity: 0 }],
+                         { desk, mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.verdict, 'sell_to_npc');
+    assert.equal(row.route, 'counter_barloque');
+    assert.match(row.to, /Barloque/);
+    assert.equal(row.proceeds_to, 'Gonzo');
+    assert.equal(row.owes_proceeds, true);
+  });
+
+  ok('...and with nobody to credit, the sale owes nothing rather than crediting the mule', () => {
+    const row = deskPlan([{ id: 9, name: 'glowing mace', rarity: 0 }],
+                         { mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.verdict, 'sell_to_npc');
+    assert.equal(row.proceeds_to, null);
+    assert.equal(row.owes_proceeds, false);
   });
 
   // THE SORTER DECIDES WHAT IT IS FOR AND THE MULE IS NOT AN EXCEPTION TO THAT. A mystic sword
