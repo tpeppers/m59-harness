@@ -2060,12 +2060,31 @@ const server = createServer(async (req, res) => {
             // in bursts with the quarry re-read between them: it moves, it can die, and an id
             // is a temporary handle. `abortBelow` still ends it the instant health says so,
             // which is the safety that matters and is checked per swing inside attackRounds.
+            // ENGAGED MEANS BLOWS WERE TRADED, NOT THAT WE THOUGHT WE CLOSED.
+            //
+            // The server answers an out-of-range swing with a sentence — "The orc is too far
+            // away to hit with a mace." — and `attackRounds` reports that as messages like any
+            // other round. So a fight can spend its whole budget swinging at nothing and come
+            // back looking successful. It did: verified 2026-09-17, a character reported the
+            // fight step ok, finished on 61/61 with the orc alive, an empty pack and a 0sh
+            // sale. That is this repository's oldest trap wearing my code —
+            // "attack reports ok on a spoken refusal".
+            //
+            // So the refusals are counted, and a fight whose every swing was one did not
+            // engage. Damage taken is kept as corroboration rather than as the test: a fight
+            // can be real and one-sided.
+            const OUT_OF_RANGE = /too far away|cannot reach|out of range/i;
             const BURST = 8;
             let spent = 0, lastR = null, killed = false, exchanges = 0;
+            let landed = 0, refused = 0;
+            const hp0 = c?.vitals?.()?.health?.value ?? null;
             while (spent < swings) {
               const take = Math.min(BURST, swings - spent);
               lastR = await session.attackRounds(t.id, take, { abortBelow });
               spent += take; exchanges++;
+              for (const m of (lastR?.messages ?? [])) {
+                if (OUT_OF_RANGE.test(String(m))) refused++; else landed++;
+              }
               const gone = ![...(c?.room?.objects?.keys?.() ?? [])].some(id => id === t.id);
               if (gone) { killed = true; break; }
               // Health is the other terminator: attackRounds aborts on it, and carrying on
@@ -2081,10 +2100,17 @@ const server = createServer(async (req, res) => {
               catch (e) { loot = { error: e.message }; }
             }
 
-            json({ engaged: true, closed: true, killed,
+            const hp1 = c?.vitals?.()?.health?.value ?? null;
+            const traded = landed > 0;
+            json({ engaged: traded, closed: true, killed,
                    target: t.id, target_name: t.name, distance: t.d,
-                   exchanges, swings_spent: spent, close_log: closeLog,
+                   exchanges, swings_spent: spent, exchanged: landed, out_of_range: refused,
+                   damage_taken: hp0 != null && hp1 != null ? hp0 - hp1 : null,
+                   close_log: closeLog,
                    looted: (loot?.taken ?? []).map(x => `${x.name}x${x.amount ?? 1}`),
+                   why: traded ? undefined
+                      : `closed to ${t.d} square(s) but every one of ${refused} swing(s) was ` +
+                        `refused as out of range — reach is shorter than the distance reported`,
                    ...(lastR ?? {}) });
             return;
           }
