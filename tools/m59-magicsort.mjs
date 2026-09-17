@@ -76,7 +76,38 @@ import { fileURLToPath } from 'node:url';
 
 const here = (p) => join(fileURLToPath(new URL('.', import.meta.url)), p);
 
-export const VERDICTS = Object.freeze(['keep', 'sell_to_players', 'sell_to_npc', 'unknown']);
+export const VERDICTS = Object.freeze(['keep', 'sell_to_players', 'sell_to_npc',
+                                      'mule_keep', 'unknown']);
+
+// WHERE AN ITEM PHYSICALLY ENDS UP, which is not the same question as what it is FOR.
+//
+// Operator, 2026-09-17: a fifth state, `mule_keep` — the mule holds it — "and I guess that
+// means unknown will probably end up on Loial, so it's really just default mule-keep".
+//
+// Both are true and they stay SEPARATE VERDICTS anyway, because they need different actions from
+// whoever reads the report. `mule_keep` is a decision: this is where the item belongs. `unknown`
+// is a gap: either nobody could read the item, or the list has no line for what it says. They
+// route to the same pack and they are not the same fact, and collapsing them would turn a
+// growing backlog of unsorted loot into a category that looks deliberate.
+//
+// So: the ROUTING table maps a verdict to a destination, and two verdicts share one.
+export const ROUTES = Object.freeze({
+  keep: { to: 'owner', why: 'back to the character it came from' },
+  sell_to_players: { to: 'mule', why: 'held for the menagerie merchant to sell to people' },
+  sell_to_npc: { to: 'counter', why: 'sold on this trip: the timer runs wherever it is parked' },
+  mule_keep: { to: 'mule', why: 'the collection lives on the mule — it cannot lose it by dying' },
+  unknown: { to: 'mule', why: 'DEFAULT mule-keep. Not a decision: either nobody could read it ' +
+                              'or the list has no line for it, and neither is a reason to sell' },
+});
+
+/** Where a verdict sends the item. Unknown routes to the mule without becoming a decision. */
+export const routeOf = (verdict) => ROUTES[verdict] ?? ROUTES.unknown;
+
+// WHY THE MULE IS THE RIGHT SHELF, and why it has to be re-checked rather than assumed: a mule
+// keeps its entire pack through death because it still carries the newbie honour string, and
+// that protection is CLEARED at about two game months of age on a check that fires whenever
+// anybody looks at the character. See m59-nodrop.mjs — the collection is only as safe as that
+// sentence, and nothing here stores a claim about it.
 
 // ---------------------------------------------------------------- the evidence
 //
@@ -179,6 +210,10 @@ export const DEFAULT_LIST = Object.freeze({
     attributes: attrs(a => a.timed),
     items: Object.freeze([]),
   }),
+  // EMPTY BY DEFAULT, AND THAT IS NOT AN OVERSIGHT. Nothing in the kod says which items belong
+  // on a mule — that is a judgement about this fleet's shelves, so the committed default makes
+  // no claim and `unknown` carries everything unsorted to the mule anyway.
+  mule_keep: Object.freeze({ attributes: Object.freeze([]), items: Object.freeze([]) }),
   why: Object.freeze({
     'soft, white light': 'ItemAttTranscendant (iatransc.kod) — no timer, so worth storing',
     transcendant: 'the same attribute under its class name, in case the look text uses it',
@@ -207,7 +242,8 @@ export function loadList({ file = null } = {}) {
   const path = file ?? process.env.M59_MAGIC_KEEP ?? here('../substrate/magic-keep.json');
   const fallback = (note, extra = {}) => ({
     ...structuredClone({ keep: DEFAULT_LIST.keep, sell_to_players: DEFAULT_LIST.sell_to_players,
-                         sell_to_npc: DEFAULT_LIST.sell_to_npc }),
+                         sell_to_npc: DEFAULT_LIST.sell_to_npc,
+                         mule_keep: DEFAULT_LIST.mule_keep }),
     why: { ...DEFAULT_LIST.why }, overrides: [],
     source: { path, ...extra, note },
   });
@@ -230,7 +266,7 @@ export function loadList({ file = null } = {}) {
     items: names(raw?.[k]?.items),
   });
   const out = { keep: bucket('keep'), sell_to_players: bucket('sell_to_players'),
-                sell_to_npc: bucket('sell_to_npc') };
+                sell_to_npc: bucket('sell_to_npc'), mule_keep: bucket('mule_keep') };
   const entries = Object.values(out).reduce((n, b) => n + b.attributes.length + b.items.length, 0);
 
   // AN EMPTY FILE IS NOT AN EMPTY LIST. A file that parses to nothing would route every revealed
@@ -287,7 +323,11 @@ export function classify({ name = '', look = null } = {}, list = null) {
                   (o.looks_like ? ` reading "${o.looks_like}"` : '') };
   }
 
+  // ORDER: override, keep, MULE_KEEP, then the two sales. `mule_keep` sits above both sales
+  // because naming something for the mule is a decision to hold it, and a hold has to beat a
+  // sale — otherwise an item on both lists would be sold out from under the operator's own line.
   for (const [verdict, bucket] of [['keep', L.keep ?? EMPTY],
+                                   ['mule_keep', L.mule_keep ?? EMPTY],
                                    ['sell_to_players', L.sell_to_players ?? EMPTY],
                                    ['sell_to_npc', L.sell_to_npc ?? EMPTY]]) {
     for (const kind of ['attributes', 'items']) {
@@ -313,10 +353,13 @@ export function classify({ name = '', look = null } = {}, list = null) {
 /** Sort a revealed pack into the four piles, keeping the reason with each row. */
 export function sortPack(items = [], list = null) {
   const L = list ?? loadList();
-  const out = { keep: [], sell_to_players: [], sell_to_npc: [], unknown: [], source: L.source };
+  const out = { keep: [], sell_to_players: [], sell_to_npc: [], mule_keep: [], unknown: [],
+                source: L.source };
   for (const it of items) {
     const v = classify({ name: it.name, look: it.look ?? null }, L);
-    out[v.verdict].push({ ...it, ...v });
+    // The destination travels with the row: a reader deciding what to DO needs it, and
+    // deriving it twice is how two callers come to disagree about where `unknown` goes.
+    out[v.verdict].push({ ...it, ...v, route: routeOf(v.verdict).to });
   }
   return out;
 }
@@ -354,7 +397,7 @@ if (isMain) {
   if (L.source.note) console.log(`  ! ${L.source.note}`);
   if (L.source.unreadable) console.log(`  ! parse error: ${L.source.unreadable}`);
 
-  for (const k of ['keep', 'sell_to_players', 'sell_to_npc']) {
+  for (const k of ['keep', 'mule_keep', 'sell_to_players', 'sell_to_npc']) {
     const b = L[k] ?? { attributes: [], items: [] };
     console.log(`\n${k}`);
     for (const a of b.attributes) console.log('  attribute  ' + pad(a, 42) +
@@ -393,7 +436,7 @@ if (isMain) {
     }
     const out = sortPack(rows, L);
     console.log('\n--- the fleet, sorted ---');
-    for (const k of ['keep', 'sell_to_players', 'sell_to_npc', 'unknown']) {
+    for (const k of ['keep', 'mule_keep', 'sell_to_players', 'sell_to_npc', 'unknown']) {
       console.log(`\n${k} (${out[k].length})`);
       for (const r of out[k].slice(0, 25))
         console.log(`  ${pad(r.owner, 16)} ${pad(r.name, 22)} ${r.matched ?? '-'}`);

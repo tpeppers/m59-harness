@@ -11,7 +11,8 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify, sortPack, loadList, DEFAULT_LIST, WEAPON_ATTRIBUTES,
-         KEEP_AT_DIFFICULTY, VERDICTS, describeItem } from './m59-magicsort.mjs';
+         KEEP_AT_DIFFICULTY, VERDICTS, describeItem, routeOf } from './m59-magicsort.mjs';
+import { noDropFrom, NO_DROP_REASONS } from './m59-nodrop.mjs';
 
 let n = 0;
 const ok = (what, fn) => { fn(); n++; console.log('  ok  ' + what); };
@@ -177,6 +178,87 @@ ok('an override naming a verdict that does not exist is dropped, not obeyed', ()
   assert.equal(L.overrides.length, 0);
 });
 
+
+console.log('\nthe fifth verdict: the mule holds it, and `unknown` ends up there too');
+
+// Operator, 2026-09-17: "we want a mule-keep... and I guess that means unknown will probably
+// end up on Loial, so it's really just default mule-keep". Both true, and they stay separate
+// verdicts anyway — `mule_keep` is a decision, `unknown` is a gap, and they need different
+// actions from whoever reads the report.
+ok('there are five verdicts and THREE destinations — two verdicts share the mule', () => {
+  assert.equal(VERDICTS.length, 5);
+  assert.deepEqual([...new Set(VERDICTS.map(v => routeOf(v).to))].sort(),
+                   ['counter', 'mule', 'owner']);
+});
+ok('unknown routes to the mule WITHOUT becoming a decision', () => {
+  assert.equal(routeOf('unknown').to, 'mule');
+  assert.equal(routeOf('mule_keep').to, 'mule');
+  assert.match(routeOf('unknown').why, /DEFAULT mule-keep|Not a decision/);
+  assert.notEqual(routeOf('unknown').why, routeOf('mule_keep').why,
+                  'same shelf, different reason — the report has to be able to say which');
+});
+ok('and a verdict nobody recognises routes to the mule rather than to a sale', () => {
+  assert.equal(routeOf('incinerate').to, 'mule');
+  assert.equal(routeOf(undefined).to, 'mule');
+});
+
+// A HOLD BEATS A SALE. An item named on both the mule list and a sell list must not be sold out
+// from under the operator's own line.
+ok('mule_keep outranks both sales', () => {
+  const L = listAt({ mule_keep: { items: ['mace'] }, sell_to_npc: { attributes: ['glowing'] },
+                     sell_to_players: { items: ['mace'] } });
+  assert.equal(classify({ name: 'glowing mace', look: 'It is glowing.' }, L).verdict, 'mule_keep');
+});
+ok('but `keep` still outranks it — an owner who can use it beats a shelf', () => {
+  const L = listAt({ keep: { items: ['mace'] }, mule_keep: { items: ['mace'] } });
+  assert.equal(classify({ name: 'mace', look: 'x' }, L).verdict, 'keep');
+});
+ok('the committed default claims NOTHING for the mule, because the kod does not say', () => {
+  assert.equal(DEFAULT_LIST.mule_keep.items.length, 0);
+  assert.equal(DEFAULT_LIST.mule_keep.attributes.length, 0);
+});
+ok('sortPack gives the fifth pile and carries the destination on every row', () => {
+  const L = listAt({ mule_keep: { items: ['orb'] } });
+  const out = sortPack([{ id: 1, name: 'orb of x', look: 'plain' },
+                        { id: 2, name: 'helm', look: null }], L);
+  assert.deepEqual(out.mule_keep.map(i => i.id), [1]);
+  assert.equal(out.mule_keep[0].route, 'mule');
+  assert.deepEqual(out.unknown.map(i => i.id), [2]);
+  assert.equal(out.unknown[0].route, 'mule', 'the same shelf');
+});
+
+console.log('\na mule is a character that keeps its pack, and the protection EXPIRES');
+
+// The operator's shorthand is "20hp characters that cannot drop items when they die". The
+// mechanism is the newbie honour string, and hit points are only a correlate — which matters
+// because the string is cleared at about two game months on a check that fires whenever
+// anybody LOOKS at the character. player.kod:7990-8032, :1531-1550, :11086-11097.
+ok('the newbie honour sentence means the pack survives death', () => {
+  const v = noDropFrom('Grim looks tough. This soul is new to the lands of Meridian 59.');
+  assert.equal(v.no_drop, true);
+  assert.equal(v.reason, 'newbie_honour');
+  assert.match(v.why, /two game months/, 'and it says the protection expires');
+});
+ok('a look that came back WITHOUT it is a real no, not a shrug', () => {
+  const v = noDropFrom('Grim looks tough. He is a Barloquan.');
+  assert.equal(v.no_drop, false);
+  assert.match(v.why, /not in force/);
+});
+// NOBODY ASKED IS NOT A NO. The same three-way answer hometownFrom keeps, and for the same
+// reason: a collection parked on a guess is parked on the floor after one death.
+ok('no look text at all is NULL — nobody asked', () => {
+  assert.equal(noDropFrom(null), null);
+  assert.equal(noDropFrom(''), null);
+  assert.equal(noDropFrom('   '), null);
+});
+ok('all four kod routes to no-drop are recorded, with citations', () => {
+  assert.equal(NO_DROP_REASONS.length, 4);
+  assert.ok(NO_DROP_REASONS.every(r => r.cite && r.why && r.durable));
+  const honour = NO_DROP_REASONS.find(r => r.key === 'newbie_honour');
+  assert.match(honour.durable, /two game months/,
+               'the only durable one, and its expiry is part of the record');
+});
+
 console.log('\nsorting a pack keeps the reason with every row');
 
 ok('four piles, and every item lands in exactly one', () => {
@@ -190,7 +272,7 @@ ok('four piles, and every item lands in exactly one', () => {
   assert.deepEqual(out.sell_to_players.map(i => i.id), [2]);
   assert.deepEqual(out.sell_to_npc.map(i => i.id), [3]);
   assert.deepEqual(out.unknown.map(i => i.id), [4]);
-  assert.equal(VERDICTS.length, 4);
+  assert.equal(VERDICTS.length, 5, 'four piles plus mule_keep');
 });
 ok('and every row carries WHY, because a sale has to be auditable afterwards', () => {
   const out = sortPack([{ id: 1, name: 'wand', look: null }]);

@@ -10,6 +10,14 @@
     "                   because the timer runs in the vault too and the value decays",
     "  unknown          nothing matched. NOT a sale — a missing line in this file.",
     "",
+    "mule_keep is where the collection LIVES: a mule keeps its whole pack through death and",
+    "pays no death cost, because it still carries the newbie honour string. That protection is",
+    "cleared at about two game months of age on a check that fires whenever anybody looks at",
+    "the character, so it is asked rather than stored -- see tools/m59-nodrop.mjs. Empty here",
+    "on purpose: nothing in the kod says which items belong on a shelf, and `unknown` already",
+    "routes to the mule anyway. Name something here when you want it held DELIBERATELY, which",
+    "reads differently in the report from something nobody has sorted yet.",
+    "",
     "Every entry is matched as a case-insensitive SUBSTRING against the item's name AND its",
     "look text after a reveal. Seven of this game's twelve permanent weapon attributes do not",
     "rename the item at all, so the look-text signature is usually the only handle: see",
@@ -19,7 +27,6 @@
     "permanent and weaker sells to players, timed sells to a counter). This file REPLACES it",
     "rather than adding to it — an empty or unparseable file keeps the default and says so."
   ],
-
   "keep": {
     "attributes": [
       "soft, white light",
@@ -29,7 +36,10 @@
     ],
     "items": []
   },
-
+  "mule_keep": {
+    "attributes": [],
+    "items": []
+  },
   "sell_to_players": {
     "attributes": [
       "unsuitable for blood combat",
@@ -42,16 +52,18 @@
       "mystic sword"
     ]
   },
-
   "sell_to_npc": {
-    "attributes": ["enchanted", "glowing", "holy", "cursed"],
+    "attributes": [
+      "enchanted",
+      "glowing",
+      "holy",
+      "cursed"
+    ],
     "items": []
   },
-
   "why": {
     "unsuitable for blood combat": "ceremonial: +2 damage, difficulty 5, x1.5 price. The kod calls it unsuitable for combat, so it is worth more for its looks than its edge."
   },
-
   "overrides": [
     {
       "_comment": "Keyed by NAME plus text that must appear with it, NEVER by object id: ids are renumbered by every system save and 23% named a different object within three days. Omit looks_like to match the name alone.",
