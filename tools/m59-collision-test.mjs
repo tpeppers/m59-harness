@@ -1001,7 +1001,15 @@ function compileSessionMethod(source, signature, name, dependencies = {}) {
 // movement is CLIENT-AUTHORITATIVE and this model is the only collision check.
 //
 // If it moves again, the failure to look for is compileSessionMethod returning null.
-const brokerSource = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+// READ BOTH HALVES. The walking methods moved to m59-session-walk.mjs on 2026-09-16 —
+// walkTo, walkFine, step, followRail, leaveVia and the rest — and this extractor found
+// none of them, which is precisely the failure the note above predicted: a politely
+// skipped group, then a null dereference that took the file down. Concatenating the two
+// sources means the next move of a method between these files costs nothing here.
+const brokerSource = [
+  readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8'),
+  readFileSync(new URL('./m59-session-walk.mjs', import.meta.url), 'utf8'),
+].join('\n');
 
 // A PLAIN FUNCTION, LIFTED THE SAME WAY THE METHODS ARE. `provedSquares` is what turns a
 // route into the legs the pull has proved, and stubbing it would leave `walkTo` tested on
@@ -4331,7 +4339,10 @@ console.log('\nEVERY NAME `step` READS IS IN SCOPE WHERE IT READS IT');
   // `node --check` passes: the code is syntactically perfect. The dependency guard above only
   // knows MODULE-scope names, so a local in the wrong block satisfies it too. What catches it
   // is asking whether the declaration is positioned to cover the read.
-  const src = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  // laneAim lives in laneAroundBody, which moved to m59-session-walk.mjs. This check is
+  // about the ORDER of a declaration and its read, so it reads that one file: line numbers
+  // across a concatenation would mean nothing.
+  const src = readFileSync(new URL('./m59-session-walk.mjs', import.meta.url), 'utf8');
   const lines = src.split('\n');
   const declIdx = lines.findIndex(l => /^\s*let laneAim = null;/.test(l));
   const readIdx = lines.findIndex(l => /\?\s*\(laneAim$/.test(l) || /\(laneAim\b/.test(l) && !/let laneAim/.test(l));

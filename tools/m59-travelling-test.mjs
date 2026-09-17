@@ -64,7 +64,12 @@ const ok = (name, cond, extra = '') => {
 // so an assertion keeps working whichever side of the split its subject ends up on.
 const read = f => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
 const AUTOPILOT_SRC = read('tools/m59-autopilot.mjs') + '\n' + read('tools/m59-watchdog.mjs');
-const BROKER_SRC = read('tools/m59-broker.mjs') + '\n' + read('tools/m59-game.mjs');
+// THE WALKING HALF IS A THIRD FILE. It moved out of m59-game.mjs on 2026-09-16, taking
+// the shelter, divert and refuge-rest contracts with it; without this line eleven of these
+// assertions look for their evidence in a file that no longer holds it and fail while the
+// behaviour they describe is untouched.
+const BROKER_SRC = read('tools/m59-broker.mjs') + '\n' + read('tools/m59-game.mjs')
+  + '\n' + read('tools/m59-session-walk.mjs');
 
 // A keeper with no session behind it.
 //
