@@ -437,6 +437,17 @@ the records it describes.
   different facts, and a zero meaning *fixed* against a zero meaning *untested* is exactly
   the confusion that made Ukgoth's north door read `refused 182, crossings 0` on a day it
   crossed six times out of six. See [`m59-evidence.md`](m59-evidence.md)) and
+  `node tools/m59-savelog-test.mjs` (62 — **the per-save-window roll-up, which is a READER,
+  and a reader's failure mode is a number that is wrong while everything around it still adds
+  up**. The first draft counted `k.what` for a kill against a ledger whose field is `creature`
+  — every total correct, every breakdown empty — and invented two death splits that do not
+  exist on a `died` row, which would have reported zero PVP and zero travel deaths for ever.
+  So the cases here are all shapes that otherwise read as a healthy fleet: twenty-three
+  keepers announcing one save are ONE boundary and two saves past the tolerance are two; a
+  kill is attributed to `creature`; an unknown event kind is NAMED rather than dropped; a
+  death nobody classified makes the travel rate `null` and never `0.0`; PVP *shown* and PVP
+  *guessed* never merge; and adjacent windows partition rather than overlap, `from` inclusive
+  and `to` exclusive. See [`m59-evidence.md`](m59-evidence.md)) and
   `node tools/m59-which-test.mjs` (27 — **the gate every `/m59*` command runs first, and the
   one tool that may never name the wrong fleet**. It builds a throwaway checkout in TEMP and
   runs the real `m59-which.mjs` against fake brokers, so it opens sockets only to itself and

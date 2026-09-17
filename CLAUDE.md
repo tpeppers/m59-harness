@@ -28,7 +28,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
-| read a ledger, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
+| read a ledger, attribute a number to a build, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
 | commit, merge, push, cut a deploy, or work alongside another session | [`docs/m59-git-process.md`](docs/m59-git-process.md) |
 | interpret, log, serialize, or compare a coordinate | [`docs/m59-coordinates.md`](docs/m59-coordinates.md) |
 | run or extend the offline tests | [`docs/m59-tests.md`](docs/m59-tests.md) |
@@ -376,6 +376,45 @@ somewhere else; a stale map is a warning rather than a refusal, on purpose; a sa
 a pocket the router frequently cannot plan out of, which is what breadcrumbs are for; and
 **exits are not doors and are not 1:1** — a failed return trip is the normal case and is
 not evidence of a one-way door.
+
+## WHAT HAPPENED BETWEEN TWO SERVER SAVES — the half no checkpoint contains
+
+```bash
+node tools/m59-savelog.mjs                  # the last few windows
+node tools/m59-savelog.mjs --write          # append closed ones; the broker does this every 15 min
+node tools/m59-savelog.mjs --all --since 7d
+```
+
+The server's save holds the **stock** — every inventory, vault, chest and position — and
+`m59-shutdown.mjs` keeps two copies of it. What no save can hold is the **flow**: what was
+killed, how far anybody walked, what was earned, who died and to what, between one save and
+the next. That is gone the instant it passes, and it is the only thing here a checkpoint
+cannot give back. So this records flow and nothing else, and **aligns to the server's own
+save** so that the checkpoint for the same instant supplies the stock.
+
+The boundary is the server's, **observed rather than assumed**: `GarbageCollecting()` sends
+every logged-in player `BP_WAIT` and then `BP_UNWAIT` (`user.kod:2154`, `:2182`), the client
+raises those as `server-save`, and the ledger records them. It is not derived from
+`[Auto] SavePeriod` — that lives in a config no tool here can read, and an assumed boundary
+files one build's events under another's account.
+
+Every window carries a `provenance` block: the prod harness SHA, the deploy tag, the **private
+repo pin** and the DUM head. The private pin is the one that describes the whole fleet, code
+**and orders** — two windows on the same harness commit with different loadouts are not the
+same experiment. `promote.mjs` moves that pin as part of every production promotion.
+
+**NEVER A COUNT WITHOUT ITS OPPORTUNITY.** `deaths per day` fell 84 → 5 across a fortnight of
+`#movement` work while the journeys QUADRUPLED — the honest figure was 20.7 → 0.3 per thousand
+journeys, a sixty-nine-fold improvement the daily count understated fourfold. So the denominator
+is recorded beside every rate, and `deaths_per_1000_journeys` is **`null` and never `0`** when
+no death in the window was classified.
+
+**And the reader says what it did not count.** Each window carries `unaccounted`, naming every
+event kind present that nothing tallies — because a reader's failure mode is not a crash, it is
+a number that is wrong while everything around it still adds up. The first draft of this read
+`k.what` for a kill against a ledger whose field is `creature`: correct totals, empty breakdown,
+nothing anywhere saying so. `m59-savelog-test.mjs` (62, offline) pins that case and seven more.
+[`docs/m59-evidence.md`](docs/m59-evidence.md) has the argument.
 
 ## The reports, and the two questions people actually ask
 

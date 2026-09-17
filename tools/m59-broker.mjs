@@ -3920,6 +3920,49 @@ function startLedger() {
   // them may name a module-scope function; they queue onto their session and this drains.
   const gaps = setInterval(() => { try { drainExitGaps(); } catch { /* never fatal */ } }, 15_000);
   gaps.unref?.();
+  startSavelog();
+}
+
+// ROLL UP EACH CLOSED SAVE WINDOW — what happened between two of the SERVER's saves.
+//
+// The ledger above is the raw record; this is the per-window summary that gets attributed to
+// a build and compared to another one six weeks later. The boundaries are the server's own
+// `server_save` rows, so the summary lines up exactly with the checkpoint for the same
+// instant: the checkpoint holds the stock, this holds the flow, and neither duplicates the
+// other. See tools/m59-savelog.mjs.
+//
+// A CHILD PROCESS, NOT AN IMPORT. The roll-up parses a day of ledger — 22MB and fifty thousand
+// rows on a normal day — and doing that on the broker's event loop is how a keeper goes silent
+// for long enough that the server logs it out at thirty seconds. It costs nothing to hand the
+// work to a process that is allowed to block.
+//
+// AND IT IS DERIVED, IDEMPOTENT AND BOUNDED, which is what makes a timer honest here rather
+// than a compromise. The window edges live in the ledger, so a missed tick loses nothing and
+// the next one picks it up; closed windows only are written, and never twice. The interval
+// governs how FRESH the file is, never what is in it.
+const SAVELOG_INTERVAL_MS = Number(process.env.M59_SAVELOG_INTERVAL_MS || 15 * 60 * 1000);
+function startSavelog() {
+  if (process.env.M59_SAVELOG === 'off') return;
+  const tool = fileURLToPath(new URL('./m59-savelog.mjs', import.meta.url));
+  const roll = () => {
+    try {
+      // `--since 24h` bounds the read. Anything older is already written — the dedupe is on
+      // the window's own start time — so a wider window would only re-parse days to decide
+      // it had nothing to add.
+      const args = [tool, '--write', '--since', '24h'];
+      if (FLEET) args.push('--fleet', FLEET);
+      const child = spawn(process.execPath, args,
+                          { stdio: 'ignore', detached: false, windowsHide: true });
+      child.on('error', e => console.error('[savelog] ' + e.message));
+      child.unref?.();
+    } catch (e) { console.error('[savelog] ' + e.message); }
+  };
+  // Not at boot, for the same reason the sampler waits: the fleet is still logging in, and
+  // the first minutes of a restart are not a window anybody wants summarised on its own.
+  const first = setTimeout(roll, 120_000);
+  first.unref?.();
+  const t = setInterval(roll, SAVELOG_INTERVAL_MS);
+  t.unref?.();
 }
 
 // Rejoining is a login plus a walk, so it is slow and it can fail; nothing waits on

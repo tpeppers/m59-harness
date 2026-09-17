@@ -2201,6 +2201,18 @@ class Session {
       // server, whatever took it; there is nothing to poll and nothing to ask afterwards,
       // because by then it is gone. See noteLeftPack.
       if (ev.kind === 'left') this.noteLeftPack(ev);
+      // THE SERVER'S OWN SAVE, WRITTEN DOWN AS A BOUNDARY. BP_WAIT/BP_UNWAIT bracket the
+      // pause (user.kod:2154, :2182), and m59-savelog.mjs uses these rows to partition the
+      // ledger into windows — so what we record and what the checkpoint holds describe the
+      // same instants. Their save has the STOCK; the window between two of them has the FLOW,
+      // which nothing else keeps.
+      //
+      // Recorded by EVERY logged-in character, and that is deliberate: a client writes down
+      // what it saw, and the reader collapses the burst. A single nominated observer would be
+      // one restart away from a silently missing boundary.
+      if (ev.kind === 'server-save')
+        autopilotIfAny(this.name)?.ledgerEvent?.('server_save',
+          { phase: ev.phase, held_ms: ev.held_ms ?? null });
       // OFF THE STREAM, NOT OFF THE KEEPER. This is the one measurement that keeps
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
