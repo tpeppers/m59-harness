@@ -248,6 +248,52 @@ export function isCursedItem(c, o = null, name = null) {
   return set.has(`name:${String(n).trim().toLowerCase()}`);
 }
 
+
+// DO NOT PUT ON WHAT NOBODY HAS READ. The operator's rule, 2026-09-17: avoid USING magic items.
+//
+// `GetRarity` (item.kod:714-730) checks identification FIRST, so anything carrying a hidden
+// attribute comes back as ITEM_RARITY_GRADE_UNIDENTIFIED (100) whatever else is true of it. That
+// grade is on every inventory object the client parses — verified live on prod, 34 of 34 items in
+// one keeper's pack carried one — so this is a question we can ask before we act rather than
+// after.
+//
+// WHY IT IS WORTH REFUSING A PROBABLY-FINE ITEM. A cursed weapon can never be put down: it is
+// the one irreversible mistake in this game, and the fleet's existing guard learns about a curse
+// only from the server's refusal to UNWIELD it — which is to say, one move too late. The name
+// does not help either, because an item is only called "cursed" once its attributes have been
+// revealed, so the name test hands us precisely the weapon we must not pick up. Rizzo spent
+// 2026-09-12 stalled on exactly this, eighty consecutive passes, `training unarmed unavailable:
+// mace is cursed and cannot be removed`, and the mace had read as an ordinary one when he drew
+// it.
+//
+// The trade is small. A character carrying eight long swords loses nothing by declining the
+// unread one, and an unread item is worth more revealed than worn — see m59-reveal.mjs, which
+// exists to turn these into known quantities.
+//
+// STACKS ARE EXEMPT, and deliberately so. A NumberItem carries an amount — money, arrows, food,
+// reagents — and none of them has a hidden attribute; grade 100 on a stack is not a thing this
+// has ever seen. Testing the amount keeps the rule off the pack's bulk.
+export function isUnrevealed(o = null) {
+  if (!o) return false;
+  if ((Number(o.amount) || 0) > 1) return false;
+  return Number(o.rarity) === 100;
+}
+
+// HOW MANY OF THESE ARE BEING HELD BACK, AND WHY — because "nothing wieldable in the pack" and
+// "everything wieldable in the pack is unread" must never print the same. That conflation is the
+// commonest bug in this repository: a character holding three unrevealed maces and no others
+// would otherwise report an empty weapon list and punch things, with nothing saying why.
+export function unrevealedHeldBack(c, predicate = () => true) {
+  const rows = [];
+  for (const o of (c?.inventory || [])) {
+    if (!isUnrevealed(o)) continue;
+    const name = c?.rsc?.get?.(o.nameRsc) || '';
+    if (!predicate(name, o)) continue;
+    rows.push({ id: o.id, name });
+  }
+  return rows;
+}
+
 export const weaponScore = name => {
   if (isJunk(name)) return 0;
   for (const [re, n] of WEAPON_WORDS) if (re.test(name)) return n;
@@ -496,7 +542,8 @@ export const isBannedWeapon = (name, banned = null) => {
   });
 };
 
-export function weaponRanking(c, { priority = null, banned = null } = {}) {
+export function weaponRanking(c, { priority = null, banned = null,
+                                   allowUnrevealed = false } = {}) {
   const broken = brokenSet(c);
   const rows = (c.inventory || [])
     .map(o => ({ o, name: c.rsc.get(o.nameRsc) || '' }))
@@ -507,6 +554,10 @@ export function weaponRanking(c, { priority = null, banned = null } = {}) {
     // been identified, so the name test alone hands us the very weapon we must not
     // pick up. See the block above isCursedItem.
     !isJunk(x.name) && !isCursedItem(c, x.o, x.name) &&
+                 // AND NOT ONE NOBODY HAS READ. isCursedItem learns from the server's refusal to
+                 // UNWIELD, which is one move too late for the only irreversible mistake in this
+                 // game; the grade is knowable before the draw. See isUnrevealed.
+                 !(allowUnrevealed !== true && isUnrevealed(x.o)) &&
                  !isBannedWeapon(x.name, banned) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
@@ -567,7 +618,7 @@ export const HANDS_FULL = /hands are too full/i;
 export const handsFullText = (t) => HANDS_FULL.test(t || '');
 
 export async function equipBest(s, { priority = null, banned = null, maxTries = 4,
-                                     refresh = true,
+                                     refresh = true, allowUnrevealed = false,
                                      beforeMutation = null, shouldCancel = null } = {}) {
   const c = s.need();
   if (refresh) {
@@ -575,12 +626,24 @@ export async function equipBest(s, { priority = null, banned = null, maxTries = 
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
   const broken = brokenSet(c);
-  const ranked = weaponRanking(c, { priority, banned });
-  if (!ranked.length)
+  const ranked = weaponRanking(c, { priority, banned, allowUnrevealed });
+  if (!ranked.length) {
+    // "NOTHING WIELDABLE" AND "EVERY WEAPON HERE IS UNREAD" MUST NOT PRINT THE SAME. A character
+    // holding three unrevealed maces and nothing else would otherwise report an empty pack and
+    // punch things, with no line anywhere saying why — the absence-read-as-a-fact mistake this
+    // repository keeps paying for. The holdback is a REVEAL QUEUE, not a shortage.
+    const heldBack = allowUnrevealed ? [] : unrevealedHeldBack(c, (n) => weaponScore(n) > 0);
     return { wielding: null, verified: false,
              ...(broken.size ? { known_broken: broken.size } : {}),
-             note: 'nothing wieldable in the pack — you will fight with your fists, which ' +
-                   'works but badly. Junk and weapons known to be broken are excluded.' };
+             ...(heldBack.length ? { unrevealed_held_back: heldBack } : {}),
+             note: heldBack.length
+               ? `nothing REVEALED is wieldable, and ${heldBack.length} unread weapon(s) are ` +
+                 `being held back: ${heldBack.map(h => h.name).join(', ')}. That is a reveal ` +
+                 'job rather than a shortage — an unread item may be cursed, and a cursed ' +
+                 'weapon can never be put down. See m59-reveal.mjs.'
+               : 'nothing wieldable in the pack — you will fight with your fists, which ' +
+                 'works but badly. Junk and weapons known to be broken are excluded.' };
+  }
 
   // ALREADY HOLDING THE RIGHT THING. `fight` calls this before every engagement, so
   // without the check the common case is a request spent on being told no — out of a
@@ -803,7 +866,7 @@ export const armourScore = (a) => a ? a.defense + a.absorb * ABSORB_IS_WORTH : -
 // Everything wearable in the pack, best first, grouped by slot. Broken items are
 // excluded for the same reason weapons are: the server does not rename them, so the
 // only record that a thing has been refused is the one we keep.
-export function armourOf(c) {
+export function armourOf(c, { allowUnrevealed = false } = {}) {
   const broken = brokenSet(c);
   const out = { armour: [], shield: [], helm: [] };
   for (const o of c.inventory || []) {
@@ -811,6 +874,12 @@ export function armourOf(c) {
     const name = c.rsc.get(o.nameRsc) || '';
     const kind = armourKind(name);
     if (!kind) continue;
+    // THIS FILTERED ONLY `broken`, so cursed armour was wearable and an unread piece was
+    // preferred whenever it outscored a known one. A curse clings to a body slot exactly as it
+    // clings to a hand, and `weaponRanking` has guarded the hand for months — the armour path
+    // simply never got the same line.
+    if (isCursedItem(c, o, name)) continue;
+    if (allowUnrevealed !== true && isUnrevealed(o)) continue;
     out[kind.slot].push({ o, name, kind, score: armourScore(kind) });
   }
   for (const k of ARMOUR_SLOTS) out[k].sort((a, b) => b.score - a.score);
@@ -823,15 +892,19 @@ export function armourOf(c) {
 // meant to wear is how a fleet ends up believing it is armoured. `equipped` here means
 // the id is in plUsing and the server said so, nothing weaker.
 export async function wearBest(s, { slots = ARMOUR_SLOTS, refresh = true,
+                                    allowUnrevealed = false,
                                     beforeMutation = null, shouldCancel = null } = {}) {
   const c = s.need();
   if (refresh) {
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
-  const have = armourOf(c);
+  const have = armourOf(c, { allowUnrevealed });
   const broken = brokenSet(c);
   const worn = [], skipped = [], rejected = [];
+  // Same reason as equipBest: an empty slot because everything for it is unread is a reveal
+  // job, and it has to be distinguishable from owning no armour at all.
+  const heldBack = allowUnrevealed ? [] : unrevealedHeldBack(c, (n) => !!armourKind(n));
 
   // BARE IS AN OPTION, AND IT SCORES ZERO.
   //
@@ -992,6 +1065,14 @@ export async function wearBest(s, { slots = ARMOUR_SLOTS, refresh = true,
   return {
     worn, ...(stripped.length ? { stripped } : {}),
     ...(skipped.length ? { skipped } : {}), ...(rejected.length ? { rejected } : {}),
+    // An empty slot because every candidate for it is unread is a REVEAL JOB, and has to read
+    // differently from owning nothing for that slot. See isUnrevealed.
+    ...(heldBack.length ? { unrevealed_held_back: heldBack,
+                            unrevealed_note:
+                              `${heldBack.length} unread piece(s) held back: ` +
+                              `${heldBack.map(h => h.name).join(', ')}. An unread item may be ` +
+                              'cursed, and a curse clings to a body slot exactly as it clings ' +
+                              'to a hand. Reveal them first — see m59-reveal.mjs.' } : {}),
     defense_total: total,
     confirmed_by: equippedNow(c) ? 'the server\'s use list (BP_USE)' : null,
     ...(equippedNow(c) ? {} : {

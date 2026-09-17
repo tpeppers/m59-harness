@@ -24,7 +24,8 @@ import './m59-test-ledger.mjs';        // FIRST — importing the keeper records
 import { claimSpot, releaseSpot, spotTakenByAnother, claimedSpotList,
          spotOccupancy, SPOT_SHARE_CAP } from './m59-autopilot.mjs';
 import * as party from './m59-party.mjs';
-import { armourKind, armourScore, armourOf, ARMOUR_SLOTS,
+import { armourKind, armourScore, armourOf, ARMOUR_SLOTS, weaponRanking, weaponScore,
+         isUnrevealed, unrevealedHeldBack,
          absorbsSomething, wearBest } from './m59-skills.mjs';
 import { pairUp, assignRooms } from './m59-supervise.mjs';
 
@@ -230,6 +231,76 @@ party.resetParties();
   ok('the shield is filed as a shield', have.shield[0].name === 'small round shield');
   ok('the mace is not filed as armour',
      ARMOUR_SLOTS.every(s => !have[s].some(x => /mace/.test(x.name))));
+}
+
+
+// ------------------------------------------------- what nobody has read does not go on
+//
+// Operator's rule, 2026-09-17: avoid USING magic items. The grade is on every inventory object
+// the client parses (`GetRarity` checks identification FIRST, item.kod:714-730) — verified live,
+// 34 of 34 items in one keeper's pack carried one — so this is answerable before the draw.
+//
+// The existing guard could not be: `isCursedItem` learns a curse from the server's refusal to
+// UNWIELD, which is one move after the only irreversible mistake in this game, and the NAME says
+// "cursed" only once the attributes have been revealed — so the name test hands us precisely the
+// weapon we must not pick up. Rizzo spent 2026-09-12 stalled on exactly that, eighty consecutive
+// passes, and the mace had read as an ordinary one when he drew it.
+{
+  const c = {
+    inventory: [{ id: 1, nameRsc: 1, rarity: 0 }, { id: 2, nameRsc: 2, rarity: 100 },
+                { id: 3, nameRsc: 3, rarity: 100 }, { id: 4, nameRsc: 4, rarity: 0 },
+                { id: 5, nameRsc: 5, rarity: 100, amount: 80 }],
+    rsc: { get: r => ({ 1: 'long sword', 2: 'a mace', 3: 'plate armor',
+                        4: 'leather armor', 5: 'arrows' }[r]) },
+    using: new Set(),
+  };
+
+  ok('an unread WEAPON is not a candidate, however good its name',
+     !weaponRanking(c).some(x => /mace/.test(x.name)));
+  ok('and a read one still is', weaponRanking(c).some(x => /long sword/.test(x.name)));
+
+  // The armour path filtered only `broken` — no curse check at all — so an unread piece was
+  // preferred whenever it outscored a known one. A curse clings to a body slot exactly as it
+  // clings to a hand.
+  const have = armourOf(c);
+  ok('an unread piece of ARMOUR is not a candidate either',
+     !have.armour.some(x => /plate/.test(x.name)));
+  ok('and the read one is still there', have.armour.some(x => /leather/.test(x.name)));
+
+  // A STACK IS EXEMPT. A NumberItem carries an amount — money, arrows, food, reagents — and
+  // none of them has a hidden attribute; testing the amount keeps the rule off the pack's bulk.
+  ok('a STACK is never held back, whatever its grade', isUnrevealed({ rarity: 100, amount: 80 }) === false);
+  ok('a single object at grade 100 is', isUnrevealed({ rarity: 100 }) === true);
+  ok('grade 0 is a read item, not an absent reading', isUnrevealed({ rarity: 0 }) === false);
+  // An absent grade is not grade 100 — the absence-read-as-a-value mistake, in the direction
+  // that matters: a client too old to parse rarity must not stop the fleet wielding anything.
+  ok('and a MISSING grade does not hold anything back',
+     isUnrevealed({}) === false && isUnrevealed({ rarity: null }) === false);
+  ok('nor does a null object', isUnrevealed(null) === false);
+
+  // THE HOLDBACK HAS TO BE VISIBLE. "nothing wieldable in the pack" and "every weapon here is
+  // unread" must never print the same: the first is a shortage, the second is a reveal queue,
+  // and reading one as the other is the commonest bug in this repository.
+  const onlyUnread = {
+    inventory: [{ id: 9, nameRsc: 1, rarity: 100 }, { id: 10, nameRsc: 2, rarity: 100 }],
+    rsc: { get: r => ({ 1: 'a mace', 2: 'plate armor' }[r]) }, using: new Set(),
+  };
+  ok('with nothing read, there are no weapon candidates at all',
+     weaponRanking(onlyUnread).length === 0);
+  const back = unrevealedHeldBack(onlyUnread, (n) => weaponScore(n) > 0);
+  ok('but the holdback names the weapon being withheld',
+     back.length === 1 && /mace/.test(back[0].name), JSON.stringify(back));
+  ok('and the predicate keeps armour out of the WEAPON holdback',
+     !back.some(b => /plate/.test(b.name)));
+  const backArmour = unrevealedHeldBack(onlyUnread, (n) => !!armourKind(n));
+  ok('while the armour holdback names the armour', backArmour.length === 1 &&
+     /plate/.test(backArmour[0].name), JSON.stringify(backArmour));
+
+  // AND THERE IS A WAY TO SAY YES ON PURPOSE. A rule with no escape hatch gets deleted by the
+  // next person in a hurry; this one is off by default and named at the call site.
+  ok('allowUnrevealed puts them back in the running',
+     weaponRanking(c, { allowUnrevealed: true }).some(x => /mace/.test(x.name)) &&
+     armourOf(c, { allowUnrevealed: true }).armour.some(x => /plate/.test(x.name)));
 }
 
 // ------------------------------------------------- any armour beats none, in an EMPTY slot
