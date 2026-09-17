@@ -2210,9 +2210,22 @@ class Session {
       // Recorded by EVERY logged-in character, and that is deliberate: a client writes down
       // what it saw, and the reader collapses the burst. A single nominated observer would be
       // one restart away from a silently missing boundary.
-      if (ev.kind === 'server-save')
-        autopilotIfAny(this.name)?.ledgerEvent?.('server_save',
-          { phase: ev.phase, held_ms: ev.held_ms ?? null });
+      //
+      // AND IT DOES NOT GO THROUGH THE AUTOPILOT, which is the difference between a boundary
+      // that is usually there and one that is always there. `ledgerEvent` is a keeper method,
+      // and a keeper has no autopilot until `autopilotFor` has run — so a save landing during
+      // a fleet-wide resume would have been dropped by every character at once, silently, and
+      // the two windows either side of a restart would have been welded into one. A restart is
+      // exactly when the build changes, so that is the boundary that matters most.
+      if (ev.kind === 'server-save') {
+        const who = c.me?.name;
+        if (who) {
+          try {
+            recordEvent(who, 'server_save',
+              { agent: this.name ?? null, phase: ev.phase, held_ms: ev.held_ms ?? null });
+          } catch { /* never let bookkeeping break play */ }
+        }
+      }
       // OFF THE STREAM, NOT OFF THE KEEPER. This is the one measurement that keeps
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
