@@ -41,35 +41,39 @@ section('the foyer is a real place and the chests are not in it');
   eq(BOOKMAKERS_FOYER.south + 1, 4, 'the first row south of the box is row 4');
 }
 
-section('the run leaves the foyer before it speaks');
+section('the run uses the passage routine that was measured, not a fresh guess');
 {
-  ok(/async reachHallChests\(\)/.test(src), 'there is a reachHallChests step');
-  ok(/const hall = await this\.reachHallChests\(\)/.test(src),
-     'and contributeGuildWants goes through it');
-  ok(!/await this\.sayHallPassword\(\)\.catch\(\(\) => \{\}\);\n\s*await s\.pacer\.submit\('read', \(\) => c\.roomContents\(\)\)/.test(src),
-     'the old bare say-then-read, whose result was thrown away, is gone');
-  ok(/step: 'leave_foyer'/.test(src), 'leaving the foyer is its own recorded step');
-  // BOTH PATHS, and this counts occurrences rather than checking absence once. Two places
-  // open this door -- the DEPOSIT (contributeGuildWants) and the WITHDRAW
-  // (withdrawFromStockpile) -- with byte-identical say-then-read blocks. A single string
-  // replace fixed the first and left the one that mattered, and the recorder in the deposit
-  // path then referenced a `hall` variable that did not exist in its scope.
+  // ANOTHER AGENT ALREADY SOLVED THIS DOOR, on a live fleet, over two days of guild-hall
+  // defence drills -- m59-guild-passage.mjs. It knows the hall's sections, walks to each
+  // door's exact trigger square, waits on the server's own sector-height events rather than a
+  // guessed delay (a guild door ANIMATES, and a read taken mid-swing sees a shut door),
+  // retries three times a leg, and speaks the password only at the secret door's trigger.
+  //
+  // The first version of this fix was a one-row-south walk and an invented 4s wait, written
+  // without looking for what existed. CLAUDE.md's index rule is exactly this: ask first.
+  ok(/guildPassage\(this, GUILD_CHEST_SECTION/.test(src), 'the run goes through guildPassage');
+  ok(/const GUILD_CHEST_SECTION = 4/.test(src), 'aiming at the chest section the coop also uses');
+  ok(!/HALL_DOOR_MS/.test(src), 'the invented door delay is gone');
+  ok(!/step: 'leave_foyer'/.test(src), 'and so is the hand-rolled foyer walk');
   eq((src.match(/const hall = await this.reachHallChests/g) ?? []).length, 2,
-     'BOTH the deposit and the withdraw path go through reachHallChests');
+     'BOTH the deposit and the withdraw path go through it');
   eq(src.split(String.raw`await this.sayHallPassword().catch(() => {})`).length - 1, 0,
-     'and no call site throws the password result away any more');
-  ok(/BOOKMAKERS_FOYER\.south \+ 1/.test(src), 'and it steps to the first row south of the box');
-  // If it cannot get out, it must NOT speak: the word would be muffled and overheard.
-  ok(/could not leave the guild hall foyer/.test(src),
-     'a failure to leave is reported rather than followed by a useless say');
+     'and no call site throws the password result away');
 }
 
-section('the door is slow, and the wait is named rather than borrowed');
+section('a stack needs a drop spec -- a bare id moves nothing');
 {
-  ok(/HALL_DOOR_MS/.test(src), 'there is a named door wait');
-  ok(/M59_HALL_DOOR_MS/.test(src), 'overridable for a hall that behaves differently');
-  ok(/step: 'read_room'/.test(src), 'the room read is a recorded step');
-  ok(/chests_visible/.test(src), 'and it records how many chests it could actually see');
+  // THE ACTUAL CAUSE of the orc teeth never arriving, and the coop runtime states the rule in
+  // as many words: "Bare IDs are only for non-stackables." contributeGuildWants passed
+  // item.id. So the chests filled with a shield, a helm, a hammer, an axe, two scimitars and a
+  // scroll -- every one a single non-stackable -- and never with orc teeth, which come off an
+  // orc in stacks of 3 and 6. The put completes its handshake and moves nothing, which is the
+  // shape docs/m59-economy.md already records: "a hand-over that completes the handshake and
+  // moves nothing is usually a malformed id list".
+  ok(!/c\.put\(item\.id, target\.id\)/.test(src), 'the bare-id put is gone');
+  ok(/const spec = this\.dropSpec\(item, Math\.min\(left, item\.amount \|\| 1\)\)/.test(src),
+     'a drop spec is built for the amount actually being moved');
+  ok(/c\.put\(spec, target\.id\)/.test(src), 'and the spec is what is put');
 }
 
 section('the run is recorded either side, always');

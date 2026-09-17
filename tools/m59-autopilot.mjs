@@ -83,7 +83,10 @@ import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs
 import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
-import { hallPassword, inFoyer, SAID_NOTE, BOOKMAKERS_FOYER } from './m59-hallsecret.mjs';
+import { hallPassword, inFoyer, SAID_NOTE } from './m59-hallsecret.mjs';
+import { guildPassage } from './m59-guild-passage.mjs';
+// The chest side of the hall. The coop runtime asks guildPassage for the same section.
+const GUILD_CHEST_SECTION = 4;
 import { listLoadouts } from './m59-loadout.mjs';
 import * as uptime from './m59-uptime.mjs';
 import * as party from './m59-party.mjs';
@@ -20910,98 +20913,53 @@ export class Autopilot {
       if (fact[key]) this.passTrade[key].push(...[].concat(fact[key]));
   }
 
-  // A DETOUR, NOT A NEW ERRAND. The accumulation strategy does not pull a working
-  // character out of the field merely because it found one mushroom. It waits until
-  // the keeper is already within four room hops of the mainland vault, which covers the
-  // ordinary Barloque food/reagent loop, then stores every protected stack at once.
-  // READ THE VAULT BACK BY BUYING FROM IT. A vaultman's "shop" is your own deposit offered
-  // back at a retrieval fee, so a buy request is the only way to see what is in there — and
-  // the character is already standing at the counter, so it costs one packet rather than a
-  // trip across the world. Nobody has to walk to answer "what is in my vault" again.
-  //
-  // DELIBERATELY NOT GATED ON DETAILED STATS. It used to return early unless
-  // `vault_accumulation` stats were enabled, which made the fleet's only record of its own
-  // vaults a side effect of an observability toggle: turn the toggle off and the contents
-  // silently stopped being cached while the deposits carried on. The detail EVENT is still
-  // gated — that is a log — but the cache is not.
-  // SAY THE WORD THAT OPENS THE WALL IN FRONT OF THE CHESTS.
-  //
-  // A guild hall keeps its chests behind a secret door and the door is a SPOKEN key: the room
-  // itself listens, and `StringEqual(string, GetPassword())` opens a sector
-  // (ghall.kod:963-970). Four conditions, and THREE OF THEM FAIL WITHOUT A WORD OF
-  // EXPLANATION -- in the foyer, as an emote, or when it is already open. So each is decided
-  // here, before the say, rather than guessed at from a chest that is not reachable after it.
-  //
-  // IT SHUTS AGAIN IN FIVE SECONDS (DOOR_DELAY = 5000, guildh14.kod:43). Saying it is
-  // therefore not "unlock the hall", it is "start a five-second window", and anything that
-  // needs to be through the wall has to already be standing next to it. That is why this
-  // returns the moment of the say rather than a boolean: the caller's next move is the part
-  // that is timed.
-  //
-  // THE WORD NEVER ENTERS A LOG LINE. The hall is a public room, the say is audible to
-  // whoever else is standing in it, and a transcript is a place this word must not be.
-  // HOW LONG A GUILD DOOR TAKES, and why it is a named constant rather than the 2500ms that
-  // happened to be on the roomContents wait. A guild hall door is not an ordinary door: it is
-  // opened by a spoken password and it swings slowly, so the read that looks for chests can
-  // easily happen while it is still shut. Overridable for a hall that behaves differently.
-  static HALL_DOOR_MS = Number(process.env.M59_HALL_DOOR_MS ?? 4000);
-
   /**
    * Get to where the chests can actually be seen: out of the foyer, password spoken, door
    * given time to open, room read back.
    *
    * Returns { ok, why, at, said, chests } and NEVER throws -- the caller records it.
    */
+  /**
+   * Get to where the chests can actually be seen, using the passage routine that was worked
+   * out on a live fleet rather than a fresh guess.
+   *
+   * `guildPassage` (m59-guild-passage.mjs) knows the hall's sections and each door's exact
+   * trigger square, waits on the server's own `sector-height` events rather than a guessed
+   * delay -- a guild door animates, and a read taken mid-swing sees a shut door -- retries
+   * three times per leg, and says the password only at the secret door's trigger. Section 4
+   * is the chest side; the coop runtime asks for the same one.
+   *
+   * Returns { ok, why, chests, steps } and NEVER throws: the caller records it.
+   */
   async reachHallChests() {
     const s = this.s, c = s.need();
-    const where = () => {
-      const me = s?.client?.self ?? null;
-      return { row: me?.row ?? me?.y ?? null, col: me?.col ?? me?.x ?? null };
-    };
-    let at = where();
     const steps = [];
-
-    if (inFoyer(at.row, at.col) === true) {
-      // ONE ROW SOUTH OF THE BOX, at whatever column we arrived on. The hall proper is south
-      // of the foyer (the chests are at rows 18-20), so this is the shortest way out and it
-      // does not need a route through the secret door -- which is the door we are trying to
-      // open and therefore cannot plan through.
-      const target = { row: BOOKMAKERS_FOYER.south + 1, col: at.col };
-      const walk = await s.walkTo(target.col, target.row, { maxSteps: 14 })
-        .catch(e => ({ arrived: false, reason: e?.message ?? String(e) }));
-      steps.push({ step: 'leave_foyer', to: `r${target.row}c${target.col}`,
-                   arrived: !!walk.arrived, why: walk.reason ?? null });
-      at = where();
-      if (inFoyer(at.row, at.col) === true) {
-        // Still inside. Say nothing -- speaking here cannot work and cannot be heard.
-        return { ok: false, why: 'could not leave the guild hall foyer, where the password ' +
-                                 'does nothing and speech is muffled',
-                 at, said: false, steps };
-      }
+    try {
+      await guildPassage(this, GUILD_CHEST_SECTION, () => false);
+      steps.push({ step: 'guild_passage', ok: true, to_section: GUILD_CHEST_SECTION });
+    } catch (e) {
+      const why = e?.message ?? String(e);
+      steps.push({ step: 'guild_passage', ok: false, why });
+      return { ok: false, why, steps,
+               at: { row: c.self?.row ?? null, col: c.self?.col ?? null } };
     }
-
-    const said = await this.sayHallPassword().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
-    steps.push({ step: 'say_password', ok: !!said?.ok, why: said?.why ?? null });
-    if (!said?.ok) return { ok: false, why: said?.why ?? 'the password was not said', at, said: false, steps };
-
-    // THE DOOR IS SLOW. Waiting here is the difference between reading a room with chests in
-    // it and reading the same room through a door that has not finished opening.
-    await new Promise(r => setTimeout(r, Autopilot.HALL_DOOR_MS));
     await s.pacer.submit('read', () => c.roomContents()).catch(() => {});
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 3000 }).catch(() => {});
     const chests = [...(c.room?.objects?.values?.() ?? [])]
       .filter(o => /chest/i.test(c.rsc.get(o.nameRsc) || '')).length;
-    steps.push({ step: 'read_room', chests_visible: chests, waited_ms: Autopilot.HALL_DOOR_MS });
-    return { ok: chests > 0, why: chests ? null : 'the door was opened but no chest is visible',
-             at: where(), said: true, chests, steps };
+    steps.push({ step: 'read_room', chests_visible: chests });
+    return { ok: chests > 0, why: chests ? null : 'through the passage but no chest is visible',
+             chests, steps, at: { row: c.self?.row ?? null, col: c.self?.col ?? null } };
   }
 
   /**
    * Write down what a guild-hall run actually did, on disk, either side of the deposit.
    *
-   * ALWAYS, not only on success. The runs worth reading are the ones that moved nothing —
-   * a door that did not open and a chest that refused a `put` look identical from a chest
-   * that simply never changed, and until this existed that was the only view anyone had.
+   * ALWAYS, not only on success. The runs worth reading are the ones that moved nothing — a
+   * door that did not open, and a `put` that completed its handshake and moved nothing, look
+   * identical from a chest that simply never changed. Until this existed that was the only
+   * view anyone had, which is why three chests sat at 3394/4570/305 bulk for days with nobody
+   * able to say why. `this.note()` goes to an in-memory buffer a keeper restart empties.
    */
   recordHallRun({ before, after, want, contributed, done, hall }) {
     try {
@@ -21023,12 +20981,12 @@ export class Autopilot {
         pack_before: before?.pack ?? null, pack_after: after?.pack ?? null,
         chests_before: before?.chests ?? null, chests_after: after?.chests ?? null,
         pack_delta: moved, chest_delta: chestDelta,
-        // AND WHY, which is the half that was missing entirely: the foyer, the password and
-        // the door, each as its own step with its own verdict.
+        // AND WHY, which was missing entirely: the passage, each leg with its own verdict.
         hall: hall ?? null,
         per_chest: done,
         // A run that planned something and moved nothing is the interesting one; say so in a
-        // field rather than making every reader derive it.
+        // field rather than making every reader derive it. That is the exact signature a
+        // bare-id put on a stack produces.
         moved_nothing: (want?.total ?? 0) > 0 && !contributed,
       });
     } catch { /* a record must never cost the deposit it is describing */ }
@@ -21725,7 +21683,13 @@ export class Autopilot {
           const before = this.packAsItems()
             .filter(x => norm(x.name) === give.item)
             .reduce((t, x) => t + (x.amount || 1), 0);
-          await s.pacer.submit('trade', () => c.put(item.id, target.id)).catch(() => {});
+          // A STACK NEEDS A SPEC. `c.put(item.id, ...)` is a bare id, and the coop runtime
+          // states the rule outright: "Bare IDs are only for non-stackables." Orc teeth come
+          // off an orc in stacks of 3 and 6, so every tooth deposit completed its handshake
+          // and moved nothing, while shields, a helm, a hammer and a scroll -- all singles --
+          // went in fine. That is exactly the chest contents we measured.
+          const spec = this.dropSpec(item, Math.min(left, item.amount || 1));
+          await s.pacer.submit('trade', () => c.put(spec, target.id)).catch(() => {});
           await new Promise(r => setTimeout(r, 400));
           await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
           await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
