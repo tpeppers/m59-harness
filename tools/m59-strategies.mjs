@@ -53,8 +53,23 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // TOWN hooks ----------------------------------------------------------------
 //     // Asked when a character is standing at a counter and something has to decide what
 //     // to hand over. Return null to decline; return a plan to have it obeyed.
-//     //   ctx = { loadout, items, equipped, room, merchant, purse }
-//     // The answer is m59-townstop.planTownStop's shape: { sell, buy, keep_fragments, ... }.
+//     //   ctx = { loadout, items, equipped, room, merchant, purse, bulkFree, allies }
+//     // The answer is m59-townstop.planTownStop's shape:
+//     //   { sell, buy, give, keep_fragments, withheld, conflicts, spare_before, ... }
+//     //
+//     // `allies` is who ELSE is standing here and what they are short of, shaped by
+//     // m59-townstop.alliesInRoom: [{ agent, character, wants: [{item, short, kind}] }],
+//     // neediest first. It is the ctx's only field about somebody other than the subject,
+//     // and it was added on 2026-09-17 for `restock-allies` — a stance that hands a
+//     // fleetmate the reagents it is short of instead of selling them at a spread and
+//     // letting it buy them back at a worse one. A strategy that ignores it behaves exactly
+//     // as it did before, which is the first policy rule.
+//     //
+//     // `give` is the leg that serves it: [{ item, to, amount, from }]. `planTownStop`
+//     // subtracts a give from the `sell` amounts it draws on, so a plan can never promise
+//     // the same units to a merchant and a fleetmate — assert it with
+//     // `neverSellsWhatItGives`, which is arithmetic over `spare_before` rather than a name
+//     // match, because a PARTIAL give is correct and costs nothing.
 //     async atTownStop(ctx) { return null; },
 //     // CONVOY strategies use beforeCrossing too, but are asked a group question — "should
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.

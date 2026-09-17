@@ -20,7 +20,8 @@
 import { normalise } from './m59-loadout.mjs';
 // normalise() answers {loadout, problems}. Every assertion here is about the loadout.
 const norm1 = (raw) => normalise(raw).loadout;
-import { planTownStop, neverSellsWhatItBuys, DEFAULTS } from './m59-townstop.mjs';
+import { planTownStop, neverSellsWhatItBuys, neverSellsWhatItGives,
+         alliesInRoom, DEFAULTS } from './m59-townstop.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -163,6 +164,167 @@ console.log('\nthe defaults are stated, not implied');
 {
   ok('reagents are the default protected kind', DEFAULTS.never_sell_kinds.includes('reagent'));
   ok('and selling the unknown is on by default', DEFAULTS.sell_unknown === true);
+}
+
+
+console.log('\nan ally who needs it beats a merchant who will buy it');
+
+// Operator, 2026-09-17: a "restock-allies" town stance, so Loial can stand in Barloque
+// offering reveals and never run out of orc teeth because the farmers refill him.
+//
+// The money argument is the one this module already makes about sell/buy, one pack over: a
+// merchant buys below what it sells, so selling a reagent here and having a fleetmate buy one
+// back at the next counter pays the spread TWICE and ends with the reagent in the same pack it
+// could have been handed to.
+{
+  const { loadout } = normalise({
+    character: 'Zoot',
+    carry: [{ item: 'sapphire', min: 4, max: 10, kind: 'reagent' },
+            { item: 'mushroom', min: 0, max: 20, kind: 'reagent' },
+            { item: 'herb', min: 12, max: 60, kind: 'reagent' }],
+  });
+  const items = [{ name: 'sapphire', amount: 40 }, { name: 'mushroom', amount: 50 },
+                 { name: 'herb', amount: 3 }, { name: 'rat pelt', amount: 9 },
+                 { name: 'shilling', amount: 2000 }];
+  const wants = (item, short) => [{ character: 'Loial the Ogier', wants: [{ item, short }] }];
+
+  // SILENCE MEANS THE BEHAVIOUR THAT WAS ALREADY THERE — the first policy rule, and the one a
+  // new leg on an existing plan is most likely to break.
+  const none = planTownStop(loadout, { items });
+  ok('no allies changes nothing at all', Array.isArray(none.give) && none.give.length === 0);
+
+  const one = planTownStop(loadout, { items, allies: wants('sapphire', 12) });
+  ok('an ally short of a reagent is handed it out of our surplus',
+     one.give.length === 1 && one.give[0].amount === 12 && one.give[0].to === 'Loial the Ogier',
+     JSON.stringify(one.give));
+  ok('and the give says which pile it came out of, so a reader can see what it cost',
+     one.give[0].from === 'withheld');
+
+  // THE CASE THAT MATTERS ON THIS FLEET. `never_sell_kinds: ['reagent']` protects reagents from
+  // the COUNTER, and every reagent floor here is zero (deliberately, since 2026-08-27) — so the
+  // withheld pile is where nearly all the spare reagents live. A give pass that only drew from
+  // `sell` would find almost nothing to give on the fleet it was written for.
+  const prot = planTownStop(loadout, { items, settings: { never_sell_kinds: ['reagent'] },
+                                       allies: wants('mushroom', 15) });
+  ok('a reagent protected from the merchant is STILL given to a fleetmate who needs it',
+     prot.give.length === 1 && prot.give[0].item === 'mushroom' && prot.give[0].amount === 15,
+     JSON.stringify(prot.give));
+  ok('and the withheld row records how much of it went',
+     prot.withheld.find(w => w.item === 'mushroom')?.given === 15);
+  ok('the reason says protection from the counter is not protection from the fleet',
+     /does not protect it from the fleet/.test(prot.give[0].why));
+
+  // BEING SHORT OURSELVES OUTRANKS AN ALLY BEING SHORT. Otherwise two characters hand one herb
+  // back and forth for ever, which is a supply loop rather than a supply run.
+  const clash = planTownStop(loadout, { items, allies: wants('herb', 5) });
+  ok('an ally is refused what we are ourselves buying', clash.give.length === 0);
+  ok('...and the refusal is REPORTED rather than silent',
+     clash.conflicts.some(c => c.item === 'herb' && /so are we/.test(c.why)),
+     JSON.stringify(clash.conflicts));
+
+  // The caller decides priority by the order it passes allies in; this module will not rank
+  // fleetmates, because who deserves the last sapphire is a judgement about the fleet.
+  const two = planTownStop(loadout, {
+    items, allies: [{ character: 'Loial the Ogier', wants: [{ item: 'sapphire', short: 25 }] },
+                    { character: 'Beaker', wants: [{ item: 'sapphire', short: 25 }] }] });
+  ok('two allies are served in the order given, until the pile runs out',
+     two.give.length === 2 && two.give[0].amount === 25 && two.give[1].amount === 5,
+     JSON.stringify(two.give));
+
+  // A PARTIAL GIVE IS CORRECT AND COSTS NOTHING. Four of nine spare pelts across, five to the
+  // counter: the same ITEM in both lists and no single unit in both. The first version of
+  // neverSellsWhatItGives was a name match and called this a violation, which would have
+  // forced the pass to hand over a whole pile or none of it.
+  const loot = planTownStop(loadout, { items, allies: wants('rat pelt', 4) });
+  ok('loot the loadout has no opinion about can be given, and the remainder still sells',
+     loot.give[0].amount === 4 && loot.sell.find(s => s.item === 'rat pelt')?.amount === 5,
+     JSON.stringify([loot.give, loot.sell]));
+  ok('and that is NOT a double promise', neverSellsWhatItGives(loot).ok,
+     JSON.stringify(neverSellsWhatItGives(loot).over));
+
+  // The invariant has to be able to fail, or it is decoration. Hand it a plan that promises
+  // more than was spare.
+  ok('the invariant CATCHES a genuine double promise',
+     !neverSellsWhatItGives({ spare_before: { sapphire: 10 },
+                              give: [{ item: 'sapphire', amount: 8 }],
+                              sell: [{ item: 'sapphire', amount: 8 }] }).ok);
+
+  ok('a give is work, so a stop that only hands things over is not `ok: true`',
+     one.ok === false && /hand over/.test(one.summary), one.summary);
+  ok('an ally wanting something we do not have at all is not an error',
+     planTownStop(loadout, { items, allies: wants('orc tooth', 9) }).give.length === 0);
+  ok('a malformed ally row is skipped rather than throwing',
+     planTownStop(loadout, { items, allies: [{}, { character: 'X' },
+                                             { character: 'Y', wants: [{ item: 'sapphire' }] }] })
+       .give.length === 0);
+}
+
+
+console.log('\nwho else is standing here, and what are they short of');
+
+{
+  const lo = (character, carry) => norm1({ character, carry });
+  const subject = { character: 'Zoot', room: 106 };
+  const others = [
+    { agent: 'hk1', character: 'Loial the Ogier', room: 106,
+      items: [{ name: 'orc tooth', amount: 2 }],
+      loadout: lo('Loial the Ogier', [{ item: 'orc tooth', min: 12, kind: 'reagent' }]) },
+    { agent: 't6', character: 'Beaker', room: 106, items: [],
+      loadout: lo('Beaker', [{ item: 'sapphire', min: 4, kind: 'reagent' }]) },
+    { agent: 't9', character: 'Camilla', room: 39, items: [],
+      loadout: lo('Camilla', [{ item: 'sapphire', min: 40, kind: 'reagent' }]) },
+  ];
+
+  const found = alliesInRoom(subject, others);
+  ok('only the ones in THIS room are allies',
+     found.every(a => a.character !== 'Camilla'), JSON.stringify(found.map(a => a.character)));
+  ok('a want is a carry floor that is not met, counted off its own pack',
+     found.find(a => a.character === 'Loial the Ogier').wants[0].short === 10,
+     JSON.stringify(found.find(a => a.character === 'Loial the Ogier')?.wants));
+  // NEEDIEST FIRST, so a pile that cannot serve everyone serves whoever is worst off. The
+  // order is the caller's to change; planTownStop honours what it is given and ranks nobody.
+  ok('the neediest is first', found[0].character === 'Loial the Ogier',
+     JSON.stringify(found.map(a => a.character)));
+
+  ok('the subject is never its own ally',
+     alliesInRoom({ character: 'Zoot', room: 106 },
+                  [{ agent: 't17', character: 'Zoot', room: 106, items: [],
+                     loadout: lo('Zoot', [{ item: 'herb', min: 9 }]) }]).length === 0);
+  // SILENCE MEANS THE BEHAVIOUR THAT WAS ALREADY THERE. A character with no orders wants
+  // nothing; an absent loadout has never meant "give it everything".
+  ok('a character with no loadout wants nothing',
+     alliesInRoom(subject, [{ agent: 'x', character: 'Nobody', room: 106, items: [],
+                              loadout: null }]).length === 0);
+  // A FLOOR OF ZERO IS NOT A FLOOR — nineteen of this fleet's loadouts were zeroed for the
+  // graveyard shift, so a pass that read them as wants would try to fill the whole fleet.
+  ok('a floor of ZERO is not a want',
+     alliesInRoom(subject, [{ agent: 'x', character: 'Zero', room: 106, items: [],
+                              loadout: lo('Zero', [{ item: 'herb', min: 0, max: 60 }]) }])
+       .length === 0);
+  ok('an unknown room proves nobody is here, rather than everybody',
+     alliesInRoom({ character: 'Zoot', room: null }, others).length === 0);
+  ok('and a row with no room of its own is skipped rather than assumed present',
+     alliesInRoom(subject, [{ agent: 'x', character: 'Ghost', room: null, items: [],
+                              loadout: lo('Ghost', [{ item: 'herb', min: 9 }]) }]).length === 0);
+  ok('a satisfied floor is not a want',
+     alliesInRoom(subject, [{ agent: 'x', character: 'Full', room: 106,
+                              items: [{ name: 'herb', amount: 50 }],
+                              loadout: lo('Full', [{ item: 'herb', min: 9 }]) }]).length === 0);
+
+  // THE POINT OF THE WHOLE THING, end to end: a courier with spare teeth, standing next to a
+  // caster that is short of them, hands them over instead of selling them.
+  const { loadout: courier } = normalise({
+    character: 'Zoot', carry: [{ item: 'orc tooth', min: 2, max: 4, kind: 'reagent' }] });
+  const plan = planTownStop(courier, {
+    items: [{ name: 'orc tooth', amount: 24 }],
+    settings: { never_sell_kinds: ['reagent'] },
+    allies: alliesInRoom(subject, others),
+  });
+  ok('the courier hands the caster its teeth rather than parking them',
+     plan.give.length === 1 && plan.give[0].to === 'Loial the Ogier'
+       && plan.give[0].amount === 10, JSON.stringify(plan.give));
+  ok('...out of the pile that was protected from the counter', plan.give[0].from === 'withheld');
+  ok('and nothing is promised twice', neverSellsWhatItGives(plan).ok);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

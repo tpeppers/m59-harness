@@ -19,7 +19,8 @@
 //
 // The keeper is read directly rather than through the broker because the broker's in-process
 // Autopilot is a shell on a keeper-backed fleet: `inventory` there answers about nobody.
-import { planTownStop, neverSellsWhatItBuys } from './m59-townstop.mjs';
+import { planTownStop, neverSellsWhatItBuys, neverSellsWhatItGives,
+         alliesInRoom } from './m59-townstop.mjs';
 import { loadoutFor } from './m59-loadout.mjs';
 import { load as loadStrategies, activeFor } from './m59-strategies.mjs';
 import { resolveFleet } from './m59-fleetpath.mjs';
@@ -100,18 +101,45 @@ for (const agent of agents) {
 
   // Ask this machine's strategies first; fall back to the bare filter so the tool still works
   // on a clone with an empty strategies directory.
+  // WHO ELSE IS STANDING HERE. Built from the keeper states this run already discovered, so
+  // it costs no extra round trip — and `loadoutFor` is read per character because a want is a
+  // carry floor that is not met, which is the same definition `reconcile` uses.
+  //
+  // EVERY discovered keeper is offered, hosts included, and the filtering is alliesInRoom's:
+  // restocking lands on the WIDE side of "is this one of ours" (see its comment). A host is
+  // never NAMED by a tool here — the giver drives itself and the host's own keeper accepts the
+  // donation — so the menagerie guard is not involved and must not be worked around.
+  const others = [...discovered.states.entries()]
+    .filter(([a]) => a !== agent)
+    .map(([a, o]) => ({ agent: a, character: o?.character ?? null, room: o?.room ?? null,
+                        items: (o?.items || []).map(i => ({ name: i.name, amount: i.amount ?? 1 })),
+                        loadout: o?.character ? loadoutFor(o.character) : null }));
+  const allies = alliesInRoom({ character, room: st.room }, others);
+
   const ctx = { loadout, items, equipped, room: st.room, purse: st.gold,
-                bulkFree: st.carry?.room_for?.bulk ?? null };
+                bulkFree: st.carry?.room_for?.bulk ?? null, allies };
   let plan = null, from = null;
   for (const s of townHooks) {
     try { const a = await s.atTownStop(ctx); if (a) { plan = a; from = s.name; break; } }
     catch (e) { console.error(`    (strategy ${s.name} threw: ${e.message})`); }
   }
-  if (!plan) { plan = planTownStop(loadout, { items, equipped }); from = 'the bare filter'; }
+  if (!plan) { plan = planTownStop(loadout, { items, equipped, allies }); from = 'the bare filter'; }
   if (!plan) { console.log('    nothing to decide'); continue; }
 
   const inv = neverSellsWhatItBuys(plan);
   if (!inv.ok) { console.log(`    REFUSING: would sell and buy the same thing: ${inv.both.join(', ')}`); continue; }
+  // The same refusal for the give leg. A plan that promises one unit to a merchant and to a
+  // fleetmate will short one of them, and whichever it is, the trip reported something false.
+  const giv = neverSellsWhatItGives(plan);
+  if (!giv.ok) {
+    console.log('    REFUSING: promises the same units twice: ' +
+                giv.over.map(o => `${o.item} (${o.promised} of ${o.spare})`).join(', '));
+    continue;
+  }
+  if (plan.give?.length && allies.length)
+    for (const g of plan.give)
+      console.log(`    give   ${String(g.amount).padStart(4)} x ${String(g.item).padEnd(18)}` +
+                  `-> ${g.to}   (${g.from})`);
 
   console.log(`    plan from ${from}: ${plan.summary}`);
   for (const x of plan.sell) console.log(`      sell  ${String(x.amount).padStart(4)} ${x.item}   (${x.why})`);
