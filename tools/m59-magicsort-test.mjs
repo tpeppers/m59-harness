@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, sortPack, loadList, DEFAULT_LIST, WEAPON_ATTRIBUTES,
+import { classify, sortPack, loadList, DEFAULT_LIST, WEAPON_ATTRIBUTES, needleText,
          KEEP_AT_DIFFICULTY, VERDICTS, describeItem, routeOf } from './m59-magicsort.mjs';
 import { noDropFrom, NO_DROP_REASONS } from './m59-nodrop.mjs';
 
@@ -42,13 +42,13 @@ ok('every permanent, strong attribute is a keeper', () => {
 ok('every permanent, WEAK attribute goes to a person — the operator\'s rule', () => {
   for (const a of WEAPON_ATTRIBUTES) {
     if (a.timed || (a.difficulty ?? 0) >= KEEP_AT_DIFFICULTY) continue;
-    assert.ok(DEFAULT_LIST.sell_to_players.attributes.includes(a.look), `${a.file} misfiled`);
+    assert.ok(DEFAULT_LIST.sell_to_players.attributes.map(needleText).includes(a.look), `${a.file} misfiled`);
   }
 });
 ok('and every TIMED attribute goes to a counter, because the timer runs in the vault too', () => {
   for (const a of WEAPON_ATTRIBUTES) {
     if (!a.timed) continue;
-    assert.ok(DEFAULT_LIST.sell_to_npc.attributes.includes(a.look), `${a.file} misfiled`);
+    assert.ok(DEFAULT_LIST.sell_to_npc.attributes.map(needleText).includes(a.look), `${a.file} misfiled`);
   }
 });
 ok('no attribute is in two piles at once', () => {
@@ -259,13 +259,47 @@ ok('all four kod routes to no-drop are recorded, with citations', () => {
                'the only durable one, and its expiry is part of the record');
 });
 
+console.log('\na timed attribute is a NAME, and prose is not a sale');
+
+// THE CHALICE, 2026-09-17. Loial's `Chalice of the Rain` — a Shal'ille quest item — was
+// classified `sell_to_npc` on prod because its description reads "adorned with holy markings of
+// Shal'ille" and `holy` was a bare substring on that list. `sell_to_npc` is the only verdict
+// that DESTROYS the item; the other four put it on a shelf. So this is the one direction worth
+// hardening, and these cases fail if the anchoring is ever removed.
+ok('a quest item whose PROSE says "holy" is not sold', () => {
+  const v = classify({ name: 'Chalice of the Rain',
+                       look: "This ornate chalice is adorned with holy markings of Shal'ille." });
+  assert.notEqual(v.verdict, 'sell_to_npc');
+  assert.equal(v.verdict, 'unknown');
+});
+
+ok('...while the weapon the kod actually names "holy <x>" still is', () => {
+  const v = classify({ name: 'holy long sword',
+                       look: 'The weapon glows with a pure, white light.' });
+  assert.equal(v.verdict, 'sell_to_npc');
+  assert.equal(v.where, 'name');   // matched where the attribute really lives
+});
+
+// `unholy glow seems to suck all life` CONTAINS "holy". It was only ever safe because keep is
+// tested before the sales; word anchoring removes the dependence on that ordering.
+ok('the amper keep is not shadowed by the holy sale, and no longer needs luck to avoid it', () => {
+  const v = classify({ name: 'long sword',
+                       look: 'The unholy glow seems to suck all life from the room.' });
+  assert.equal(v.verdict, 'keep');
+});
+
+ok('a bare word in the look text does not sell the item', () => {
+  assert.equal(classify({ name: 'long sword', look: 'This blade is enchanted.' }).verdict,
+               'unknown', 'prose is not where a timed attribute is stated');
+});
+
 console.log('\nsorting a pack keeps the reason with every row');
 
 ok('four piles, and every item lands in exactly one', () => {
   const out = sortPack([
     { id: 1, name: 'long sword', look: 'It glows with a soft, white light.' },
     { id: 2, name: 'wand', look: 'It is shrouded.' },
-    { id: 3, name: 'axe', look: 'It is an enchanted axe.' },
+    { id: 3, name: 'enchanted axe', look: 'It shimmers faintly.' },
     { id: 4, name: 'helm', look: null },
   ]);
   assert.deepEqual(out.keep.map(i => i.id), [1]);

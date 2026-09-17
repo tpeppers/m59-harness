@@ -180,7 +180,17 @@ export const WEAPON_ATTRIBUTES = Object.freeze([
 // kod's own difficulty grading separates the fighting attributes from the decorative ones.
 export const KEEP_AT_DIFFICULTY = 8;
 
-const attrs = (pick) => Object.freeze(WEAPON_ATTRIBUTES.filter(pick).map(a => a.look));
+// A TIMED ATTRIBUTE IS A NAME PREFIX AND IS EMITTED AS ONE.
+//
+// The four timed rows carry bare words — enchanted, glowing, holy, cursed — because that is how
+// the kod names the weapon: waspellt.rsc is "holy %s", giving "holy long sword". Their look
+// text says something else entirely ("The weapon glows with a pure, white light."). Left as
+// plain substrings they matched PROSE, and the one they matched was a quest item: see needleOf.
+//
+// The twelve permanent rows stay plain substrings. They are distinctive phrases that appear in
+// the description rather than the name, which is where they have to be looked for.
+const attrs = (pick) => Object.freeze(WEAPON_ATTRIBUTES.filter(pick).map(
+  a => (a.timed ? { text: a.look, in: 'name', word: true } : a.look)));
 
 // THE COMMITTED DEFAULT, derived from the table above rather than typed beside it — so a
 // correction to the kod reading cannot leave a stale list behind.
@@ -289,6 +299,42 @@ export function loadList({ file = null } = {}) {
 
 const hay = (s) => String(s ?? '').toLowerCase();
 
+// A NEEDLE THAT IS A BARE WORD NEEDS TO SAY WHERE IT MAY MATCH, AND THE COST OF NOT SAYING SO
+// WAS A SALE.
+//
+// Measured on prod 2026-09-17: Loial's `Chalice of the Rain` — a Shal'ille quest item — was
+// classified `sell_to_npc` because its description reads "adorned with holy markings of
+// Shal'ille" and `holy` is on that list. `sell_to_npc` is the ONE verdict that destroys the
+// item; every other verdict puts it on a shelf. So a false positive there is the expensive
+// direction and the only one worth hardening against.
+//
+// The entry was never meant to match prose. `holy` is a timed weapon attribute and the kod
+// states it as a NAME PREFIX — waspellt.rsc carries "holy %s", giving "holy long sword" — while
+// the look text for that attribute is "The weapon glows with a pure, white light." The four
+// timed attributes are all this shape (`enchanted`, `glowing`, `holy`, `cursed`) and the twelve
+// permanent ones are distinctive phrases that cannot collide, which is why only these four bite.
+//
+// Note `unholy glow seems to suck all life` — a keep — CONTAINS "holy". Order saved that one:
+// keep is tested before the sales. A whole-word test removes the dependence on luck.
+//
+// A plain string still means what it always did, so every hand-written list keeps working.
+/** The TEXT of a list entry, whichever form it is written in. Exported because every consumer
+ *  that wants to compare, print or audit a list needs it and none of them should have to know
+ *  that two forms exist. */
+export const needleText = (x) => (x && typeof x === 'object') ? String(x.text ?? '') : String(x ?? '');
+
+const needleOf = (x) => (x && typeof x === 'object')
+  ? { text: String(x.text ?? ''), in: x.in ?? 'both', word: !!x.word }
+  : { text: String(x ?? ''), in: 'both', word: false };
+
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Word-anchored on request, substring otherwise. Anchors on non-alphanumerics, not \b, so
+ *  an apostrophe or a hyphen in the surrounding text still counts as a boundary. */
+const containsNeedle = (haystack, key, word) => word
+  ? new RegExp(`(^|[^a-z0-9])${reEscape(key)}([^a-z0-9]|$)`).test(haystack)
+  : haystack.includes(key);
+
 /**
  * KEEP, SELL TO A PERSON, SELL TO A COUNTER, OR NOBODY COULD TELL.
  *
@@ -305,11 +351,14 @@ export function classify({ name = '', look = null } = {}, list = null) {
   const n = hay(name);
   const l = look === null || look === undefined ? null : hay(look);
 
-  const hit = (needle) => {
-    const k = hay(needle);
+  const hit = (raw) => {
+    const q = needleOf(raw);
+    const k = hay(q.text);
     if (!k) return null;
-    if (n.includes(k)) return { matched: needle, where: 'name' };
-    if (l !== null && l.includes(k)) return { matched: needle, where: 'look text' };
+    if (q.in !== 'look text' && containsNeedle(n, k, q.word))
+      return { matched: q.text, where: 'name' };
+    if (q.in !== 'name' && l !== null && containsNeedle(l, k, q.word))
+      return { matched: q.text, where: 'look text' };
     return null;
   };
 
@@ -333,8 +382,9 @@ export function classify({ name = '', look = null } = {}, list = null) {
     for (const kind of ['attributes', 'items']) {
       for (const needle of bucket[kind] ?? []) {
         const h = hit(needle);
+        const key = needleOf(needle).text;
         if (h) return { verdict, ...h, kind: kind === 'attributes' ? 'attribute' : 'item',
-                        why: L.why?.[needle] ?? `"${needle}" is on the ${verdict} list` };
+                        why: L.why?.[key] ?? `"${key}" is on the ${verdict} list` };
       }
     }
   }
