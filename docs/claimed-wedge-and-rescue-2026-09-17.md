@@ -560,6 +560,42 @@ standing keepers, and a "zero" that measured who happened to be parked. The inst
 `stallshape.mjs` (prod-deploy-fa's). The open test is unchanged and now sharper: **a window with
 real transit through 578 under load.**
 
+## DONE — #4b the open freeze, DEPLOYED as `deploy-2026-09-18-2`
+
+Filed here as small (2 of 31 deaths). **It was not small, and the sizing was the wrong
+instrument.** Counting deaths whose own trail shows a freeze undercounts it, because the
+tactic's cost lands on characters that froze and then died of something else a few seconds
+later in a room they never left.
+
+**The cluster, from the `prod-deploy-fa` session's window-3 analysis.** Window 3 (23:00–02:00)
+had 5 deaths where windows 2 and 4 had none. Killers: `{"Guardian of Zjiria": 3, "troll": 2}` —
+**every one a room 599 creature** — with `deaths_in_safe_spot: 1`. Animal is one of the five:
+599, `in_safe_spot: false`, frozen twelve seconds at 4/55, `before {health: 4} → now
+{health: 4}`, dead 1.4s after unfreezing. Five deaths, one room, one tactic. That session had
+been holding those deaths against its own overfarm push; overfarm was live for the whole of
+window 4, which had zero deaths, so it does not fit and the freeze does.
+
+**The rule now:** no wall and no player → refuse, and fall through to a rung that MOVES. A wall
+is still fine (there the freeze is half of reconnect-TURN-heal, which is what arms
+`PFLAG_MOVED_SINCE_ENTRY`). A player is still fine — a person can be convinced you are dead, a
+monster cannot. Reverses the 2026-09-10 instruction; both rounds kept in the source.
+
+**THE ROLLBACK CRITERION, and it is a real risk rather than a formality.** Falling through to a
+rung that moves, at 4/55 with every exit through fifteen trolls and three Guardians, is not
+self-evidently safer than standing still — it is better only because the freeze was measured to
+buy *zero* health, not because crossing that crowd is safe. So the failure mode is a character
+that now dies **in transit** rather than stationary, landing in a different bucket than the one
+this empties.
+
+> **If `deaths_travelling` rises while total deaths do not fall, this change MOVED deaths
+> rather than prevented them — go back to `deploy-2026-09-18-1`.** Window 3's baseline is 2 of
+> 5 travelling. Do not read one window either way.
+
+**Side effect worth expecting rather than misreading:** converting open freezes into refuge
+attempts and withdrawals turns stationary keeper-minutes into MOVING ones — the exact
+denominator the 578 test has been starved of. More exposure in the next moving-rate table is
+this working, not drift.
+
 ## TO DO — #5 `provedSquares` memoises on the FINE position, so a walking body never hits it
 
 **The best-value item on this list as of 2026-09-18, and it is a MEASUREMENT before it is a
