@@ -88,8 +88,6 @@ const band = () => (BAND ??= resolveKeeperBand(FLEET, {
 // answers — so the slot names have to come from somewhere, and this is the only local source.
 // Nothing here reads, logs or passes on a value from that file.
 function rosterAgents() {
-  const only = (arg('agents') || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (only.length) return only;
   try {
     const raw = JSON.parse(readFileSync(stateFileFor(FLEET), 'utf8'));
     return Object.keys(raw).filter(k => /^[a-z]+[0-9]+$/i.test(k));
@@ -168,6 +166,13 @@ function runOnce(reason) {
 
 const lastRun = new Map();
 
+// WHO WE ACT ON. Separate from who we can SEE, and that distinction is the whole of the bug it
+// replaces: `--agents t1` used to narrow DISCOVERY, so Kermit stopped counting as being at a
+// town stop the moment he was named alone — the ally standing next to him was no longer being
+// discovered, so there was nobody to be short of anything. A scope flag must limit what a tool
+// DOES, never what it can observe, or the observation changes with the argument.
+const SCOPE = (arg('agents') || '').split(',').map(s => s.trim()).filter(Boolean);
+
 async function pass() {
   const agents = rosterAgents();
   if (!agents.length) return;
@@ -176,7 +181,8 @@ async function pass() {
     band: band(), expectedAgents: agents, liveTimeoutMs: 1500, stateTimeoutMs: 8000,
   });
 
-  const reasons = agents.map(a => townStopReason(a, states, merchants)).filter(Boolean);
+  const reasons = (SCOPE.length ? SCOPE : agents)
+    .map(a => townStopReason(a, states, merchants)).filter(Boolean);
   const now = Date.now();
   const fresh = reasons.filter(r => (now - (lastRun.get(r.agent) ?? 0)) >= COOLDOWN_MS);
   const cooling = reasons.length - fresh.length;
