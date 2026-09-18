@@ -9,7 +9,7 @@
 // The thing under test is not arithmetic. `m59-tune-farming.mjs` exists because a session
 // (2026-09-18) drove this fleet from ~2.4 kills/min to 0.57 while reporting progress, and every
 // step of that was permitted by the absence of a rule rather than by a wrong number. So what has
-// to be pinned is the five places the tool says NO — because a refusal is the only part of an
+// to be pinned is every place the tool says NO — because a refusal is the only part of an
 // experiment harness that anybody is ever tempted to delete at 02:00.
 //
 // Each case below is one of those failures, reproduced.
@@ -183,6 +183,36 @@ console.log('\n8. A ROUND TRIP KEEPS THE HISTORY');
   ok('the judged one keeps its verdict', back.experiments[0].verdict.measured_kpm === 1.2);
   ok('the open one is still open', openExperiment(back).change === 'second');
   ok('...and is the most recent, not the first', lastApplied(back).change === 'second');
+}
+
+console.log('\n9. A SUPERSEDED PROPOSAL IS NOT AN OPEN ONE');
+{
+  // The bug this pins, hit live on 2026-09-18: two proposals were left open at once and
+  // `applied` marked the FIRST of them, so the record would have named a change nobody made.
+  // `propose --supersede` now abandons the old one, and `openProposal` must agree.
+  const r = rec({ at: null, change: 'the one I typed first' },
+                { at: null, change: 'the one I meant' });
+  ok('with two open, the FIRST is what applied would mark', openProposal(r).change === 'the one I typed first');
+  r.experiments[0].abandoned = true;
+  ok('...and abandoning it hands the slot to the second', openProposal(r).change === 'the one I meant');
+  r.experiments[1].abandoned = true;
+  ok('...and abandoning both leaves nothing open', openProposal(r) === null);
+  ok('...while the record still holds both, so the log can show them', r.experiments.length === 2);
+}
+
+console.log('\n10. A BASELINE MAY NOT SPAN A CHANGE EITHER');
+{
+  // `measure` refused a spanning window from the first version; `propose` computed its baseline
+  // over a flat 30m regardless, so the number an experiment is JUDGED against was held to a
+  // looser standard than an ordinary reading. Same arithmetic, both places.
+  const span = (rec_, now, cap = 30) => {
+    const last = lastApplied(rec_);
+    return Math.max(1, Math.min(cap, last ? Math.round((now - last.applied_at) / 60_000) : cap));
+  };
+  ok('no change yet: the full 30m', span(rec(), NOW) === 30);
+  ok('a change 12m ago: 12m', span(rec({ at: 12 }), NOW) === 12);
+  ok('a change 40m ago: capped back to 30m', span(rec({ at: 40 }), NOW) === 30);
+  ok('a change this instant: floored at 1m, never 0', span(rec({ at: 0 }), NOW) === 1);
 }
 
 rmSync(DIR, { recursive: true, force: true });

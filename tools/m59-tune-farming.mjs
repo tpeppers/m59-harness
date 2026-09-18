@@ -3,7 +3,8 @@
 //
 //   node tools/m59-tune-farming.mjs status
 //   node tools/m59-tune-farming.mjs measure [--minutes 30]
-//   node tools/m59-tune-farming.mjs propose --why "..." --change "..." --predict 1.4 [--force]
+//   node tools/m59-tune-farming.mjs propose --why "..." --change "..." --predict 1.4 \
+//        [--agents t1,t2] [--force] [--supersede]
 //   node tools/m59-tune-farming.mjs applied
 //   node tools/m59-tune-farming.mjs verdict
 //   node tools/m59-tune-farming.mjs log
@@ -33,6 +34,14 @@
 //      change unless asked to, because that number describes two configurations at once.
 //   4. THE WINDOW GROWS WITH EVERY CHANGE. Each applied change adds GROW_MS to how long the
 //      review runs, which is the operator's own rule: earn your reading time.
+//   6. A FLEET TOTAL IS NOT THE EXPERIMENT. Added after change #2 missed on 2026-09-18: nine
+//      blocked characters were unblocked, five of them became earners for the first time in the
+//      session -- and the fleet rate FELL, because the baseline window was 28% one character
+//      (Scooter, 29 of 102 kills) who was hurt in a far room for unrelated reasons. A rate one
+//      character can carry by a quarter has a noise floor wider than most changes worth making.
+//      So `propose --agents` names who the change touches and the verdict reports THOSE
+//      characters before and after, with the fleet total kept only as context.
+//
 //   5. A VERDICT NEEDS A SAMPLE. `verdict` refuses before MIN_VERDICT_MS and below
 //      MIN_VERDICT_KILLS, because a rate computed off three kills in one minute is noise
 //      wearing a decimal point — and it will read as HELD about as often as not. `--anyway`
@@ -218,14 +227,39 @@ if (isMain) {
     const gate = mayChange(rec, now);
     if (!gate.ok && !has('force')) { console.error('refused: ' + gate.why); process.exit(3); }
     if (gate.ok === false && has('force')) console.log('(forced past the rate limit — say so in the verdict)');
-    const before = summarise(killsIn(now - 30 * 60_000, now), 30);
+
+    // A SECOND PROPOSAL IS AN EDIT, NOT AN EXPERIMENT. Without this, two proposals sat open at
+    // once on 2026-09-18 and `applied` marked the FIRST of them — so the record would have
+    // named a change nobody made. Say `--supersede` and mean it.
+    const already = openProposal(rec);
+    if (already && !has('supersede')) {
+      console.error(`refused: #${already.id} is already proposed and not yet applied:`);
+      console.error(`   "${already.change}" (predict ${already.predict_kpm}/min)`);
+      console.error('Apply it, or pass --supersede to abandon it for this one.');
+      process.exit(3);
+    }
+    if (already) { already.abandoned = true; already.abandoned_why = 'superseded at propose time'; }
+
+    // THE BASELINE MUST NOT SPAN A CHANGE EITHER — `measure` refuses one and it would be
+    // incoherent for the number an experiment is JUDGED against to be held to a looser standard.
+    // So the baseline runs back only as far as the last applied change.
+    const last = lastApplied(rec);
+    const span = Math.max(1, Math.min(30, last ? Math.round((now - last.applied_at) / 60_000) : 30));
+    const before = summarise(killsIn(now - span * 60_000, now), span);
+    const agents = String(arg('agents', '') || '').split(/[\s,]+/).filter(Boolean);
+
     rec.started_at = rec.started_at ?? now;
     rec.experiments.push({ id: rec.experiments.length + 1, proposed_at: now, why, change,
                            predict_kpm: predict, baseline_kpm: Number(before.kpm.toFixed(3)),
-                           baseline_kills: before.kills, forced: has('force') || undefined });
+                           baseline_kills: before.kills, baseline_minutes: span,
+                           agents: agents.length ? agents : undefined,
+                           baseline_by_character: before.characters,
+                           forced: has('force') || undefined });
     console.log(`proposed #${rec.experiments.length}: ${change}`);
     console.log(`  theory     ${why}`);
-    console.log(`  baseline   ${before.kpm.toFixed(2)}/min over the last 30m`);
+    console.log(`  baseline   ${before.kpm.toFixed(2)}/min over ${span}m` +
+                (span < 30 ? ` (shortened: a change landed ${ago(now - last.applied_at)} ago)` : ''));
+    if (agents.length) console.log(`  touches    ${agents.join(' ')}`);
     console.log(`  predicting ${predict}/min`);
     console.log(`  -> make the change, then: m59-tune-farming.mjs applied`);
     console.log(save(rec));
@@ -273,6 +307,7 @@ if (isMain) {
       held: Math.abs(after.kpm - open.predict_kpm) <= 0.2 * Math.max(0.01, open.predict_kpm),
       better_than_baseline: after.kpm > open.baseline_kpm,
     };
+    open.verdict.by_character = after.characters;
     const v = open.verdict;
     console.log(`#${open.id} ${open.change}`);
     console.log(`  predicted ${v.predicted_kpm}/min · measured ${v.measured_kpm}/min over ${minutes}m ` +
@@ -280,6 +315,29 @@ if (isMain) {
     console.log(`  prediction ${v.held ? 'HELD' : 'MISSED'} · ` +
                 `${v.better_than_baseline ? 'better' : 'NOT better'} than baseline`);
     if (v.provisional) console.log(`  PROVISIONAL — ${v.provisional}. Do not quote this as a result.`);
+    // RULE 6. The characters the change TOUCHED are the experiment; the fleet total is context.
+    // Without this, change #2 read as a clean failure while five of its nine subjects went from
+    // zero to earning for the first time all session.
+    const touched = open.agents ?? [];
+    const namesOf = (o) => Object.keys(o ?? {});
+    const b = open.baseline_by_character ?? {}, a2 = after.characters ?? {};
+    const everyone = [...new Set([...namesOf(b), ...namesOf(a2)])].sort();
+    const perMin = (n, m) => m > 0 ? n / m : 0;
+    const moved = everyone
+      .map(n => ({ n, was: perMin(b[n] ?? 0, open.baseline_minutes ?? 30), now: perMin(a2[n] ?? 0, minutes) }))
+      .map(r => ({ ...r, d: r.now - r.was }))
+      .sort((x, y) => y.d - x.d);
+    if (moved.length) {
+      console.log('  per character, kills/min, biggest gain first:');
+      for (const r of moved.slice(0, 6).concat(moved.slice(-3)).filter((x, i, arr) => arr.indexOf(x) === i))
+        console.log(`     ${r.n.padEnd(16)} ${r.was.toFixed(2)} -> ${r.now.toFixed(2)}  ${r.d >= 0 ? '+' : ''}${r.d.toFixed(2)}`);
+    }
+    if (touched.length)
+      console.log(`  NOTE this change declared it touches ${touched.join(' ')} — judge it on those ` +
+                  `rows, not on the fleet total, which one character can carry by a quarter`);
+    else
+      console.log('  this change declared no --agents, so there is nothing to judge it on except ' +
+                  'the fleet total — which is exactly the reading that misled #2');
     if (!v.held) console.log('  a missed prediction is the useful one — write what the model got ' +
                              'wrong into the next --why, or the next change repeats it');
     console.log(save(rec));
