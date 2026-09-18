@@ -183,6 +183,7 @@ import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { renderDashboard } from './m59-dashboard.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
+import { renderInventory } from './m59-inventory-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayers } from './m59-players-page.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
@@ -18672,6 +18673,27 @@ function serveDashboard(port) {
         .catch(e => {
           res.writeHead(500, { 'content-type': 'text/plain' });
           res.end('/economy failed: ' + e.message);
+        });
+      return;
+    }
+    // /inventory — THE SAME LIVE ROWS, ASKED A DIFFERENT QUESTION.
+    //
+    // Split from /economy on 2026-09-17: that page is the chain from loot to vigor and this one
+    // is what is in the packs. Same fetch, deliberately — the rows carry `pack` and `pack_items`
+    // already, so this costs no extra packet, and both pages are as fresh as each other. A
+    // second, differently-timed read of the same fleet is how two boards come to disagree.
+    if (url.pathname === '/inventory') {
+      const hours = Number(url.searchParams.get('hours')) || 168;
+      const tool = TOOLS.find(t => t.name === 'fleet');
+      Promise.resolve(tool ? tool.run({}) : null)
+        .then(out => out?.fleet ?? null, () => null)
+        .then(live => {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(renderInventory({ hours, live, characters: fleetCharacters() }));
+        })
+        .catch(e => {
+          res.writeHead(500, { 'content-type': 'text/plain' });
+          res.end('/inventory failed: ' + e.message);
         });
       return;
     }

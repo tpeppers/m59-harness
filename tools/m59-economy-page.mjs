@@ -487,32 +487,10 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   })()}
 
   <h3>Chests</h3>
-  <div class="sub" style="margin-top:-.4rem">A chest is ${num(CHEST_BULK_MAX)} BULK and no
-    weight limit at all (chest.kod:29) — so it is the one store in the game that a heavy
-    haul does not fill. The Bookmaker's hall builds ${BOOKMAKERS_CHESTS}
-    (guildh14.kod:518,520,522) at r18c2, r18c6 and r20c4; a hall may hold ${GUILD_CHEST_SLOTS}.
-    Each is named by the SQUARE it stands on rather than by a slot number — an object id is
-    a handle the server recycles and a chest cannot move — so only chests somebody has
-    actually looked inside appear here. There is no list of every square a chest could
-    occupy, and inventing rows for the unopened ones would be inventing chests.</div>
-  <div class="chests">
-    ${storage.allChests().length === 0
-      ? `<div class="chest empty"><h3>nothing looked in yet</h3>
-           <div class="dim" style="font-size:.8rem">no chest in the hall has been opened.
-           Chest contents are never pushed by the server, so the only record is the last
-           look — and that is not the same as the hall being empty.</div></div>`
-      : ''}
-    ${storage.allChests().map(ch => ch.never_opened
-      ? `<div class="chest empty"><h3>${esc(ch.slot)}</h3>
-           <div class="dim" style="font-size:.8rem">never opened — nothing has looked inside
-           this chest. That is not the same as empty.</div></div>`
-      : `<div class="chest"><h3>${esc(ch.slot)}</h3>
-           ${meter(ch.fullness.percent, `${ch.fullness.bulk} of ${CHEST_BULK_MAX} bulk`)}
-           <div class="dim" style="font-size:.75rem;margin:.35rem 0">
-             ${ch.items.length} stack(s) · ${ch.fullness.bulk} bulk ·
-             opened ${esc(ago(ch.observed_at))}${ch.opened_by ? ' by ' + esc(ch.opened_by) : ''}</div>
-           ${itemList(ch.items, 'empty')}</div>`).join('')}
-  </div>
+  <div class="sub" style="margin-top:-.4rem">Moved to the <a href="/inventory">Inventory</a>
+    page on 2026-09-17, with the packs and the vaults. A chest is a STORE, and the only question
+    anybody brings to one is what is in it — which is a list, and a list needs the width that
+    page has and this one does not. The rent above stays here, because rent is money.</div>
 
   ${(() => {
     // DOES THE HALL PAY FOR ITSELF? The question the stockpile exists to answer, and until

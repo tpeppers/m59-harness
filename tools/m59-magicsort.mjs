@@ -70,8 +70,9 @@
 //     the wrong item's text.
 //   * the name can ALSO gain the attribute, so both are matched. Deliberate redundancy rather
 //     than duplication: the name is cheap and always present, the look text is complete.
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { itemNameKey } from './m59-items.mjs';
 import { fileURLToPath } from 'node:url';
 
 const here = (p) => join(fileURLToPath(new URL('.', import.meta.url)), p);
@@ -471,6 +472,116 @@ export async function describeItem(agent, id, { call, tries = 3 } = {}) {
     if (text) return { text: String(text), id: got ?? id, tries: i + 1 };
   }
   return null;
+}
+
+
+// ---------------------------------------------------------------- what we have read
+
+// AN ITEM'S ATTRIBUTES LIVE ONLY IN ITS DESCRIPTION, AND `inventory` DOES NOT CARRY ONE.
+//
+// Every verdict in this file turns on the look text, and every page that wants to SAY what an
+// item is has the same problem the sorter has: the pack is a list of names and grades. Reading
+// a description costs a round trip and `look_at` is the call this repository trusts least, so a
+// board cannot fetch one while rendering — it has to read what somebody already asked.
+//
+// So this is the cache, and it is deliberately a cache rather than a record: an absent entry
+// means NOBODY HAS LOOKED, never "there is nothing on it". Those are opposite facts and the
+// pages must be able to tell them apart.
+//
+// KEYED BY NAME, FOR THE REASON IDS ARE NEVER KEYS HERE — they are renumbered by every system
+// save and 23% name a different object within three days. A name is not unique either, and that
+// is an accepted approximation with a stated cost: two long swords with different attributes
+// share one entry and the newer read wins. It is the right trade for a TOOLTIP, which is a hint
+// about an item a person is looking at, and it would be the wrong trade for a sale — which is
+// why `classify` still takes the look text it was handed and never consults this.
+export const LOOKS_VERSION = 1;
+export const LOOKS_FILE = process.env.M59_ITEM_LOOKS ?? here('../substrate/item-looks.json');
+
+const lookKey = (name) => itemNameKey(hay(name));
+
+/** What has been read, or an empty book. A missing file is a cache nobody has filled. */
+export function loadLooks({ file = null } = {}) {
+  const f = file ?? LOOKS_FILE;
+  if (!existsSync(f)) return { version: LOOKS_VERSION, items: {}, source: null };
+  try {
+    const raw = JSON.parse(readFileSync(f, 'utf8'));
+    return { version: raw.version ?? LOOKS_VERSION,
+             items: (raw.items && typeof raw.items === 'object') ? raw.items : {}, source: f };
+  } catch (e) {
+    // A FILE THAT WILL NOT PARSE IS NOT AN EMPTY FILE. Reading it as empty would turn every
+    // tooltip into "nobody has looked" with nothing anywhere saying why.
+    return { version: LOOKS_VERSION, items: {}, source: f, unreadable: String(e.message) };
+  }
+}
+
+export function saveLooks(looks, { file = null } = {}) {
+  const f = file ?? LOOKS_FILE;
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, JSON.stringify({ version: LOOKS_VERSION, items: looks.items ?? {} }, null, 1));
+  return f;
+}
+
+/** Record one description. Pure — it returns a new book and writes nothing. */
+export function noteLook(looks, { name = '', text = null, from = null, at = Date.now() } = {}) {
+  const key = lookKey(name);
+  // AN EMPTY READ IS NOT A READ. Storing null would make "we asked and got nothing" look
+  // identical to "we have the text", and the tooltip would show a blank box for both.
+  if (!key || !String(text ?? '').trim()) return looks;
+  return { ...looks,
+           items: { ...(looks.items ?? {}),
+                    [key]: { text: String(text).trim(), at, from: from ?? null,
+                             name: String(name) } } };
+}
+
+/** The description read for this item name, or null when nobody has looked. */
+export function lookFor(looks, name) {
+  const key = lookKey(name);
+  return (key && looks?.items?.[key]) || null;
+}
+
+// ---------------------------------------------------------------- is this thing magic
+
+// WHAT MAKES AN ITEM MAGIC IS NOT ITS GRADE, AND THAT IS THE TRAP IN THIS QUESTION.
+//
+// `rarity: 0` is NORMAL, and it is what a REVEALED magic item reads. Measured on Loial's pack
+// 2026-09-17: his Chalice of the Rain, nerudite armor, berserker ring and daemon skeleton mask
+// all answer 0. The grade says "identified and not cursed", never "ordinary". So a page that
+// tags on rarity alone marks the unidentified backlog and misses everything the desk has
+// already done its work on — exactly backwards.
+//
+// Three things make an item magic and they are found in three different places:
+//   * grade 100 — UNIDENTIFIED, so the server itself says something is hidden on it
+//   * grade 200 — CURSED
+//   * a verdict from the list, which is the only one that can see a REVEALED attribute
+//
+// A stack is never magic: a NumberItem is money, arrows, reagents or food, and an
+// identified-per-stack model does not exist on the server. The test is the TAG, not the amount —
+// a stack of one is still a stack.
+export function magicOf(item = {}, { list = null, looks = null } = {}) {
+  const isStack = item?.tag != null ? Number(item.tag) === 1 : (Number(item?.amount) || 0) > 1;
+  if (isStack) return null;
+
+  const grade = Number(item?.rarity);
+  const seen = looks ? lookFor(looks, item?.name) : null;
+  const look = item?.look ?? seen?.text ?? null;
+
+  if (grade === 100)
+    return { magic: true, grade: 'unidentified', verdict: null, text: look, seen_at: seen?.at ?? null,
+             why: 'the server grades this UNIDENTIFIED, which means something is hidden on it. '
+                + 'A reveal is what makes it readable.' };
+
+  if (grade === 200)
+    return { magic: true, grade: 'cursed', verdict: null, text: look, seen_at: seen?.at ?? null,
+             why: 'CURSED. It can never be unequipped once worn — a remove curse potion, the '
+                + 'remove curse spell, or the item breaking are the only ways off.' };
+
+  // A REVEALED ATTRIBUTE IS ONLY VISIBLE IN THE LOOK TEXT, so with nothing read this answers
+  // null and means "nothing known", not "nothing there". The caller renders the difference.
+  if (look == null) return null;
+  const v = classify({ name: item?.name, look }, list);
+  if (v.verdict === 'unknown') return null;
+  return { magic: true, grade: 'revealed', verdict: v.verdict, matched: v.matched, text: look,
+           seen_at: seen?.at ?? null, route: routeOf(v.verdict).to, why: v.why };
 }
 
 // ---------------------------------------------------------------- cli
