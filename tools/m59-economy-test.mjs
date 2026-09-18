@@ -317,33 +317,28 @@ console.log('\nboth boards render against this fixture');
   ok('an empty window still lists every ability, with nothing moved',
      empty.abilities.length === 3 && empty.advanced === 0 && empty.atrophied === 0);
 
-  // THE PACK DRILL-IN NAMES WHAT IS IN THE PACK, not only how full it is.
-  //
-  // A meter at 94% is a question; the list is the answer to it, and it comes off the
-  // fleet row the broker already builds from the client's cached inventory, so the page
-  // sends nothing. The two empty cases are the point: an EMPTY pack and an UNHELD
-  // character must not render alike, the same rule the hatched meter follows.
-  const withPack = renderEconomy({ hours: 6, live: [
+  // THE PACK LIST MOVED TO /inventory ON 2026-09-17 and these cases moved with it, further
+  // down this file. They were not deleted: the three absences they pin — an EMPTY pack, an
+  // UNHELD character, and a broker too old to send a list — are the whole reason the renderer
+  // is careful, and they are just as wrong on the new page as they were on this one. What the
+  // economy page must now prove is the NEGATIVE, that it no longer claims to know.
+  const noPack = renderEconomy({ hours: 6, live: [
     { character: 'Gonzo', purse: 999, reagents: { elderberry: 3, herbs: 4 },
       carrying: 3, pack: { percent: 41, weight: 700, bulk: 300, max: 1700,
                            binding: 'weight', exact: true },
-      pack_items: [{ name: 'Herbs', amount: 176 }, { name: 'ElderBerry', amount: 41 },
-                   { name: 'battle axe', amount: 1 }] },
-    { character: 'Beaker', carrying: 0, pack_items: [] },
+      pack_items: [{ name: 'Herbs', amount: 176 }, { name: 'battle axe', amount: 1 }] },
   ] });
-  ok('the pack drill-in lists the items, with the amount on a stack',
-     /Herbs <span class="dim">x176<\/span>/.test(withPack) && /battle axe/.test(withPack));
-  ok('and an item with one of it carries no xN', !/battle axe <span class="dim">x/.test(withPack));
-  ok('an empty pack says it is empty', /nothing in the pack/.test(withPack));
-  ok('and a character nobody is holding says no list rather than an empty one',
-     /no item list/.test(withPack));
-  // The third absence, which is the one that will actually be seen first: the page is
-  // new and the broker serving it is not. A row with no `pack_items` field at all is an
-  // OLD BROKER, not an empty pack, and saying "nothing in the pack" about a character
-  // carrying a full load is the kind of confident wrong answer this page exists to avoid.
-  const oldBroker = renderEconomy({ hours: 6, live: [{ character: 'Gonzo', purse: 999, carrying: 3 }] });
-  ok('a broker too old to report the list says so instead of claiming an empty pack',
-     /does not report the item list/.test(oldBroker) && !/nothing in the pack/.test(oldBroker));
+  ok('the economy page no longer lists pack contents', !/battle axe/.test(noPack));
+  ok('...nor the pack and vault meters it used to carry',
+     !/pack full/.test(noPack) && !/vault full/.test(noPack));
+  // AND IT SENDS THE READER SOMEWHERE, rather than dropping the answer. A page that removes a
+  // panel without saying where it went reads as a regression to whoever used it.
+  ok('and it names where they went', /href="\/inventory"/.test(noPack));
+  // THE FUEL STAYS. Elderberry and herbs are not inventory on this fleet, they are what
+  // `create food` turns into vigor, and splitting them off the chain they belong to would have
+  // made the economy page unable to answer its own question.
+  ok('the create-food reagents stay on the economy page',
+     /<th class="num">elder<\/th>/.test(noPack) && /<th class="num">herbs<\/th>/.test(noPack));
 }
 
 // ------------------------------------------------------------------ the tab bar
@@ -389,6 +384,31 @@ console.log('\nthe inventory board marks magic, and only where it knows');
 
   // The truncation this page exists to stop doing.
   ok('nothing is truncated', !/and \d+ more/.test(html));
+
+  // THE THREE ABSENCES, MOVED HERE WITH THE LIST THEY GUARD. An EMPTY pack, an UNHELD
+  // character and a broker too old to send a list are three different facts and must not
+  // render alike — the same rule the hatched bar follows one element up. They were on the
+  // economy page until the split; the renderer they pin is now `itemGrid`.
+  {
+    const withPack = renderInventory({ live: [
+      { character: 'Rizzo', purse: 999, carrying: 3,
+        pack: { percent: 41, weight: 700, bulk: 300, max: 1700, binding: 'weight', exact: true },
+        pack_items: [{ name: 'Herbs', amount: 176 }, { name: 'battle axe', amount: 1 }] },
+      { character: 'Beaker', carrying: 0, pack_items: [] },
+    ], characters: new Set(['Rizzo', 'Beaker']) });
+    ok('the pack list names the items, with the amount on a stack',
+       /Herbs <span class="dim">176<\/span>|Herbs <span class="dim">x176<\/span>/.test(withPack)
+       && /battle axe/.test(withPack));
+    ok('and an item with one of it carries no xN',
+       !/battle axe <span class="dim">x/.test(withPack));
+    ok('an empty pack says it is empty', /nothing in the pack/.test(withPack));
+    // THE UNHELD CASE IS *NO LIVE ROW AT ALL*, not a live row missing the field — that second
+    // one is the OLD BROKER below, and conflating them is how "nobody is holding this" comes to
+    // read as "the broker is out of date". The first draft of this case passed a live row with
+    // no pack_items and asserted the unheld message, which is the confusion in miniature.
+    ok('and a character nobody is holding says no list rather than an empty one',
+       /no item list/.test(renderInventory({ live: [], characters: new Set(['Rizzo']) })));
+  }
 
   // A row from an older broker has no grades at all. That must read as "nothing known" for
   // every item rather than as a fleet holding nothing magical.

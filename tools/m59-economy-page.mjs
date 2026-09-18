@@ -17,8 +17,10 @@ import { lore } from './m59-dashboard.mjs';
 import { esc, ago, num, NAV, STYLE, TREEMAP_JS, FACET_WIRING_JS } from './m59-page-chrome.mjs';
 import { StockpileBook } from './m59-stockpile.mjs';
 import { titheFleet } from './m59-tithe.mjs';
-import { StorageCache, packFullness, GUILD_CHEST_SLOTS, VAULT_BULK_MAX, CHEST_BULK_MAX,
-         BOOKMAKERS_CHESTS } from './m59-storage.mjs';
+// Only the RENT is read from storage here now. The vault, the chest ceilings and the chest
+// count went to /inventory with the stores they describe — an import left behind is a reader
+// being told this page still knows about chests.
+import { StorageCache } from './m59-storage.mjs';
 
 const { label: FLEET_LABEL } = resolveFleet();
 
@@ -94,11 +96,10 @@ function meter(percent, title = '') {
          `<span class="pc">${percent}%</span></span>`;
 }
 
-const itemList = (items, empty) => !items || !items.length
-  ? `<div class="items"><span class="none">${esc(empty)}</span></div>`
-  : `<div class="items">${items.slice(0, 40).map(i =>
-      `${esc(i.name)}${(i.amount ?? 1) > 1 ? ` <span class="dim">x${i.amount}</span>` : ''}`).join(', ')}` +
-    `${items.length > 40 ? ` <span class="dim">and ${items.length - 40} more</span>` : ''}</div>`;
+// `itemList` MOVED TO /inventory AS `itemGrid`, AND GREW OUT OF ITS CAP ON THE WAY. This one
+// stopped at forty names and then said "and 20 more", which is the single thing that page
+// was split out to stop doing. Deleted rather than left here unused: an inventory renderer
+// sitting in this file is an invitation to render an inventory in it again.
 
 // A polyline and a wash under it. No script and no library: this is four numbers of
 // context, and the page has to open on a phone with no internet behind it.
@@ -266,14 +267,9 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   // hatched rather than at zero.
   const liveOf = new Map((live || []).map(x => [x.character, x]));
   const rows = e.rows.map(r => {
-    const l = liveOf.get(r.character) ?? null;
-    const vault = storage.readVault(r.character);
-    // THE ROW'S OWN FIGURE, not a second computation from a different input. The pack
-    // needs might for the ceiling and the item list for the load, and neither survives
-    // into a stored sample — so the broker computes it where the client is in hand and
-    // this renders what it was given. A character nobody is holding has no pack reading
-    // and renders hatched, which is the honest answer rather than 0%.
-    const pack = l?.pack ?? null;
+    // NO PACK AND NO VAULT READ HERE ANY MORE. Both moved to /inventory on 2026-09-17, and
+    // the locals went with them rather than being left assigned-and-unused — a `storage.readVault`
+    // per character per render is a file read for a value nothing on this page displays.
     return `
     <tr${r.short ? ' class="row-short"' : ''}>
       <td class="name">${esc(r.character)}</td>
@@ -290,12 +286,6 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
       <td class="num ${(r.herbs ?? 0) < SHORT_BELOW ? 'bad' : ''}">${r.herbs == null ? '—' : r.herbs}</td>
       <td class="num ${r.casts_possible ? '' : 'bad'}">${r.casts_possible}</td>
       <td>${sourcePill(r.reagents_from, r.reagents_at)}</td>
-      <td>${meter(pack?.percent ?? null, pack
-          ? `pack ${pack.bulk} bulk / ${pack.weight} weight against ${pack.max}, ${pack.binding}-bound`
-          : 'no live inventory for this character — the stored sample carries totals, not an item list')}</td>
-      <td>${meter(vault?.fullness?.percent ?? null, vault
-          ? `${vault.fullness.bulk} of ${VAULT_BULK_MAX} bulk on deposit`
-          : 'no withdrawal list has been requested for this character')}</td>
     </tr>
     <tr class="drill"><td colspan="11"><details>
       <summary>${esc(r.character)} — last farming cycle, pack and vault</summary>
@@ -303,32 +293,17 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
         <div class="box"><h4>Farming return · last town trip</h4>
           <div class="items">${townIncomeDetail(r.last_town_trip)}</div>
         </div>
+        <!-- THE PACK AND THE VAULT MOVED TO /inventory ON 2026-09-17. They were a forty-item
+             list with "and 20 more" after it, inside a <details> inside a table row — the right
+             shape for a footnote and the wrong one for the question people kept bringing to it.
+             Deliberately NOT summarised here: a summary is what sent everybody looking for the
+             list in the first place. -->
         <div class="box">
-          <h4>pack ${pack ? `· ${pack.percent}% · ${pack.binding}-bound` : ''}</h4>
-          ${pack ? `<div class="dim" style="font-size:.75rem">${pack.bulk} bulk / ${pack.weight} weight
-             against a ceiling of ${pack.max} (1700 + might*20)${pack.exact ? '' : ' — LOWER BOUND, some items are not in the weight table'}</div>` : ''}
-          <div class="dim" style="font-size:.75rem">${l?.carrying != null
-             ? esc(String(l.carrying)) + ' stack(s) in the pack'
-             : 'no live reading — this character is not being held by the broker right now'}</div>
-          <!-- WHAT IS IN IT, not just how much of it there is. A pack meter at 94% is a
-               question and this is the answer to it: the reader deciding what to sell,
-               bank or drop needs the names, and asking for them per character was an
-               inventory call on the wire for a list the row already carries. Grouped by
-               name by the broker, biggest first.
-               The three empty cases are DIFFERENT and must not render alike — an empty
-               pack is a fact, an unheld character is the absence of one, and a row with
-               no such field at all is a broker older than this page. Same rule the
-               hatched meter follows. -->
-          ${itemList(l?.pack_items, !l
-             ? 'no item list — this character is not being held by the broker right now, and a stored sample carries totals rather than names'
-             : Array.isArray(l.pack_items) ? 'nothing in the pack'
-             : 'the broker holding this character is running code that does not report the item list — restart it and this fills in')}
-        </div>
-        <div class="box">
-          <h4>vault ${vault ? `· ${vault.fullness.percent}%` : ''}</h4>
-          ${vault ? `<div class="dim" style="font-size:.75rem">${vault.fullness.bulk} of ${VAULT_BULK_MAX} bulk
-             · read ${esc(ago(vault.observed_at))}</div>` : ''}
-          ${itemList(vault?.items, 'never read — a vault states its contents only when a withdrawal is requested')}
+          <h4>pack and vault</h4>
+          <div class="dim" style="font-size:.8rem">Listed in full, with magic items marked and
+            their descriptions on hover, on the <a href="/inventory">Inventory</a> page. This page
+            keeps the two reagents that <code>create food</code> turns into vigor, because on this
+            fleet they are fuel rather than cargo — everything else in the pack is over there.</div>
         </div>
       </div>
     </details></td></tr>`;
@@ -567,9 +542,7 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
       <th class="num">banked</th>
       <th>balance</th><th class="num">elder</th><th class="num">herbs</th>
       <th class="num" title="create food castings this character could pay for out of its own pack">meals</th>
-      <th title="live is the inventory this second; a time is how old the reading is">pack read</th>
-      <th title="weight and bulk both cap at 1700 + might*20, and the pack is full when EITHER is reached — this is the worse of the two">pack full</th>
-      <th title="a vault is bulk-only and 3000 per depositor, not per vault">vault full</th></tr></thead>
+      <th title="live is the inventory this second; a time is how old the reading is">reagents read</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="11" class="empty">nothing on record yet</td></tr>'}</tbody>
   </table>
   </div>
