@@ -361,6 +361,63 @@ so a room a character only transits is under-counted against one it parks in. Th
 against exactly the road rooms this is about, so **treat a high rate in a transit room as a
 floor.**
 
+#### And the denominator that supersedes it: MOVING keeper-minutes (`stallshape`)
+
+All-dwell was still wrong, because a parked keeper cannot stall in the shape that costs. Split
+the denominator. `/state` exposes no `doing`, so transit is derived — a changed position in the
+SAME room means that interval was moving:
+
+```js
+const PORTS = Array.from({length:23}, (_,i) => 9511+i);   // prod band
+const SAMPLE_MS = 15000;
+const move = {}, still = {}, last = {};
+const states = await Promise.all(PORTS.map(p => get(p, '/state?fresh=1')));
+for (const s of states) {
+  if (!s?.agent) continue;
+  const rm = s.room?.num, me = s.you || {};
+  if (rm == null || me.col == null) continue;
+  const prev = last[s.agent];
+  const moved = prev && prev.rm === rm ? (prev.col !== me.col || prev.row !== me.row) : null;
+  if (moved === true)  move[rm]  = (move[rm]  ?? 0) + SAMPLE_MS;
+  if (moved === false) still[rm] = (still[rm] ?? 0) + SAMPLE_MS;
+  last[s.agent] = { rm, col: me.col, row: me.row };
+}
+// numerator: the parser above, windowed on `resumed <ISO>`, AND cross-checked against the
+// log's own /travelling|travelling to/ marker.
+```
+
+Four properties that are not obvious, from its author:
+
+1. **`moved` is deliberately `null` on the first sample and on a room change** — a transition
+   is charged to NEITHER bucket rather than guessed.
+2. **A room change between samples is invisible as transit**, so moving-minutes are
+   under-counted. A moving-rate is therefore a **ceiling on cost per moving minute and a floor
+   on exposure** — the opposite direction from the 20s-granularity caveat above, and **they do
+   not cancel.** Carry both.
+3. **The travelling marker is the cross-check.** If the derived split and the log's own words
+   disagree, trust the marker and distrust the split. (3 of 3 in 599 agreed, which is why the
+   split is trusted at all.)
+4. **It cannot see a room with no keeper in it.** That is exactly how 578 ended up unmeasured
+   post-deploy, and no amount of window length fixes it — only a character going there does.
+
+#### A finding about what a STUMBLE is, obtained from a performance fix
+
+Worth separating out, because it is a fact about the mover rather than about this repair. The
+raycast change is **answer-identical by construction**: it cannot alter a collision verdict, so
+it cannot make a geometrically-refused step succeed. Therefore if a `stumble` were a geometric
+refusal, this change could not have moved the count at all, and the 196 → 30 would have to
+belong to the doctrine change or the restart.
+
+It did move. So **stumbles are predominantly staleness, not geometry** — consistent with the
+classic case in `travel()`'s own comment, *"the character arrives at an edge, its coordinates
+read as off the grid for an instant… nothing is wrong; the position has not settled."* A keeper
+that is not blocked re-observes sooner and asks its routing questions against fresher data.
+
+The inference is only available because the repair *forbids* something. A change that could
+have altered verdicts would have told us nothing about which kind of failure a stumble is.
+(The restart remains a shared confound for the magnitude, and tonight's data cannot separate
+them — this is a claim about the KIND of failure, not its size.)
+
 ### The prediction that makes the repair site falsifiable
 
 A stall count cannot distinguish an expensive room from a stuck character, because each
