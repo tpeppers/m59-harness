@@ -852,10 +852,37 @@ export function routeCrossesTrap(hops = []) {
 }
 
 export function trapCheck(plan = [], { standingIn = null, allowTraps = false } = {}) {
+  // A DESTINATION DECIDED AT RUN TIME MUST STILL DECLARE WHERE IT COULD GO.
+  //
+  // `walk(to)` may take a function of the run state (see DYNAMIC_FIELDS) so a script can walk
+  // where the server just told it to. `Number(someFunction)` is NaN and `KNOWN_TRAPS[NaN]` is
+  // undefined, so without this the trap guard would wave every such step through while
+  // looking exactly as though it had checked it — the shape of failure this file keeps a
+  // table of incidents about.
+  //
+  // The fix is not to guess: it is to make the script say. The candidate set is always known
+  // when the plan is written (the quest engine's own NPC list is a fixed array in
+  // questengine.kod), so `walk(fn, { candidates: [802, 45, 952] })` is a thing a script can
+  // always produce, and a step that cannot produce one has not thought about where it is
+  // going. Checked BEFORE `allowTraps`, because "I declared my rooms" and "I waived the trap
+  // check" are different claims and a rescue should still have to name its rooms.
+  const vague = plan.find(s => s?.do === 'walk' && typeof s.to === 'function' &&
+                               !Array.isArray(s.candidates));
+  if (vague) return `a walk whose destination is decided at run time must also pass ` +
+                    `{ candidates: [...] } naming every room it could choose — otherwise ` +
+                    `no trap, and no reviewer, can see where this errand goes.`;
   if (allowTraps) return null;
   const into = plan.find(s => s?.do === 'walk' && KNOWN_TRAPS[Number(s.to)]);
   if (into) return `walks to room ${into.to} — ${KNOWN_TRAPS[Number(into.to)]} ` +
                    `Pass { allowTraps: true } if this errand is the rescue.`;
+  for (const s of plan) {
+    if (s?.do !== 'walk' || !Array.isArray(s.candidates)) continue;
+    const trap = s.candidates.find(r => KNOWN_TRAPS[Number(r)]);
+    if (trap !== undefined)
+      return `may walk to room ${trap} — ${KNOWN_TRAPS[Number(trap)]} ` +
+             `It is one of this step's declared candidates. ` +
+             `Pass { allowTraps: true } if this errand is the rescue.`;
+  }
   // STANDING IN A TRAP IS NOT A REFUSAL. Measured 2026-09-10: asked for a route out of the
   // Ukgoth gutters, the keeper's own router answered the nine-hop way round without being told
   // anything at all. Refusing here does not protect the character, it strands it -- and it
@@ -1185,6 +1212,10 @@ export function parseUnsafe(unsafe, { scriptName = 'script' } = {}) {
 
 // ---------------------------------------------------------------- the step vocabulary
 
+// `to` is a room number, or a function of the run state for a destination the SERVER chooses
+// — see DYNAMIC_FIELDS above the step runner. A function `to` MUST be paired with
+// `{ candidates: [rooms] }` naming every room it could return; `trapCheck` refuses the plan
+// otherwise, because a destination nobody can read is a destination nobody can check.
 export const walk = (to, opts = {}) => ({ do: 'walk', to, ...opts });
 export const bank = (action, amount, opts = {}) => ({ do: 'bank', action, amount, ...opts });
 export const shop = (seller, lines, opts = {}) => ({ do: 'shop', seller, lines, ...opts });
@@ -2328,7 +2359,56 @@ async function recoverFromDeath(ctx, agent, budgetMs) {
   }
 }
 
-async function runStep(ctx, agent, step, state) {
+// ---------------------------------------------------------------- run-time step fields
+//
+// A STEP MAY LEARN ITS ARGUMENT FROM AN EARLIER STEP, AND THE GAME SOMETIMES INSISTS ON IT.
+//
+// `steps` is compiled ONCE per agent, before anything walks — which is most of what makes
+// this file able to refuse a bad plan cheaply, and it is exactly wrong for the errands where
+// the SERVER picks the destination. The disciple quests are the clean example: you say
+// "disciple" to a priestess and she replies naming one monster out of three (Kraanan) or one
+// NPC out of three to five (Shal'ille, Faren, Qor), rolled per quest instance. There is no
+// way to know before the say, and the reply is the only place it is ever stated
+// (questnode.kod:67, `NPC_quote_to_one`).
+//
+// The alternative a script reaches for is a hand-rolled leg inside a `verify` callback, and
+// that is the thing this whole file exists to stop: the lease has taken movement, so the
+// keeper is watching rather than driving, and a body walked by hand dies at 50% against a 70%
+// flee line with every safety correctly armed and nobody holding them.
+//
+// So: the SHAPE stays static — every step, in order, checkable before the first footfall —
+// and named fields may be a function of the run state instead of a value. `bank`'s `amount`
+// has worked this way since it was written; this generalises that one line rather than
+// inventing anything. `state.results` is keyed `"<index>:<verb>"`, so step 3 reads what step
+// 1 heard.
+//
+// RESOLVED BEFORE THE CONTROL GUARD, deliberately. `controlViolation` reads strings out of
+// the step to catch a plan that drives a character it never declared, and it cannot see
+// through a closure. Resolving first means a run-time-chosen value is inspected exactly like
+// a literal one — a dynamic field must not be a way to smuggle a character name past the
+// guard that exists to catch exactly that.
+const DYNAMIC_FIELDS = Object.freeze({
+  walk: ['to'],
+  say: ['text', 'to'],
+  fight: ['target'],
+  bank: ['amount'],
+});
+
+export function resolveStep(step, state) {
+  const fields = DYNAMIC_FIELDS[step?.do];
+  if (!fields) return step;
+  let out = step;
+  for (const f of fields) {
+    if (typeof step[f] !== 'function') continue;
+    if (out === step) out = { ...step };
+    out[f] = step[f](state);
+  }
+  return out;
+}
+
+async function runStep(ctx, agent, rawStep, state) {
+  // Every read below — including the control guard — sees values, never closures.
+  const step = resolveStep(rawStep, state);
   // GUARANTEE 1, THE OTHER HALF: a script drives what it declared, and nothing else.
   //
   // The lock is taken over the DECLARED set, so a body outside it is a body this run never
@@ -3106,6 +3186,21 @@ async function runStep(ctx, agent, step, state) {
 
     // See the `fight` constructor above for why this does not go through `call`.
     case 'fight': {
+      // AN EMPTY TARGET IS NOT "ANYTHING" — IT IS A SWING AT WHATEVER HAPPENS TO BE NEAREST.
+      //
+      // The keeper's `fight` action filters candidates by `o.name.includes(want)` and an empty
+      // `want` filters nothing, so it picks the closest non-player in the room and hits it.
+      // That is a reasonable default for a farm loop and a bad one for a step list: a step
+      // whose target came out null — a dynamic target the run state never filled in, a param
+      // the operator forgot — would attack a bystander rather than refuse, in a room the
+      // script chose for an entirely different creature.
+      //
+      // Refused here rather than in the keeper, because the keeper's default is the one a
+      // posture wants. Pair a dynamic target with `optional: true` and the leg simply does not
+      // happen when there is nothing to fight.
+      if (!String(step.target ?? '').trim())
+        return { ok: false, why: 'fight needs a target — an empty one makes the keeper swing ' +
+                                 'at whatever is nearest, which is not what a step list means' };
       const ports = await keeperPorts(ctx.fleet, { wantAgent: agent });
       const entry = ports?.get?.(agent);
       if (!entry) return { ok: false, why: 'no keeper port for this agent — nothing to address the fight to' };

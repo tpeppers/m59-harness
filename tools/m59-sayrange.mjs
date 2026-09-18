@@ -33,6 +33,15 @@
 // blakston.khd:1299. Compared against a SQUARED distance, so the reach is sqrt(50) ~= 7.07.
 export const SAY_RADIUS = 50;
 
+// AND BEING HEARD IS NOT THE ONLY REACH THERE IS. A quest node judges the same speech against
+// its OWN distance — `SquaredDistanceTo > Q_NPC_CLOSE_ENOUGH * Q_NPC_CLOSE_ENOUGH`
+// (questnode.kod:650-653), `Q_NPC_CLOSE_ENOUGH = 5` (blakston.khd:2779) — which is 25 against
+// speech's 50. So there is a band, roughly five to seven squares out, where the NPC HEARS the
+// word and the quest node discards it. Both silences look the same from here, and the second
+// one is the expensive kind: it reads as "she has no quest for me" when the answer is "stand
+// two squares closer".
+export const QUEST_NPC_RADIUS = 25;
+
 // Squared distance in SQUARES, which is the space SayRangeCheck works in. Null when either
 // position is unknown — never 0, because a missing coordinate is not the origin.
 export const squaredDistance = (a, b) =>
@@ -55,10 +64,16 @@ export function withinSayRange(speaker, hearer, radius = SAY_RADIUS) {
 // `leave` is how many squares short of the NPC to stop, defaulting to 2, which is inside
 // melee reach and comfortably inside earshot. Returns null when there is nothing to compute
 // from, and the speaker's own square when it is already close enough.
-export function sayApproachSquare(speaker, hearer, { leave = 2 } = {}) {
+//
+// `radius` IS THE CALLER'S, AND IT USED TO BE IGNORED. This read `d2 <= SAY_RADIUS` while its
+// only caller was already passing `step.radius` to `withinSayRange` — so a caller asking for
+// the quest node's tighter 25 got the approach decided at 50, answered `already: true` from
+// six squares out, and then failed `out_of_earshot` on the very check that had just sent it
+// there. The two halves of one decision were reading two different numbers.
+export function sayApproachSquare(speaker, hearer, { leave = 2, radius = SAY_RADIUS } = {}) {
   const d2 = squaredDistance(speaker, hearer);
   if (d2 === null) return null;
-  if (d2 <= SAY_RADIUS) return { col: speaker.col, row: speaker.row, already: true };
+  if (d2 <= radius) return { col: speaker.col, row: speaker.row, already: true };
   const dist = Math.sqrt(d2);
   const keep = Math.min(Math.max(leave, 0), Math.max(dist - 1, 0));
   const t = (dist - keep) / dist;
@@ -89,7 +104,7 @@ export async function sayToNpc(step, { look, walkTo, speak, log = () => {} }) {
 
   let approached = null;
   if (npc && withinSayRange(me, npc, radius) === false && step.approach !== false) {
-    const target = sayApproachSquare(me, npc, { leave: step.leave ?? 2 });
+    const target = sayApproachSquare(me, npc, { leave: step.leave ?? 2, radius });
     if (target && !target.already) {
       log(`say "${text}": ${wantHeard} is out of earshot ` +
           `(squared ${squaredDistance(me, npc)} > ${radius}) — closing to ` +
@@ -106,9 +121,13 @@ export async function sayToNpc(step, { look, walkTo, speak, log = () => {} }) {
   const d2 = npc ? squaredDistance(me, npc) : null;
   if (heard === false)
     return { ok: false, outcome: 'out_of_earshot', squared_distance: d2, radius, approached,
-      why: `still ${d2} squared from ${wantHeard}, past SAY_RADIUS ${radius} — ` +
-           `SayRangeCheck (holder.kod:604) DISCARDS this speech and sends nothing ` +
-           `back, so speaking anyway would look exactly like an NPC with no answer` };
+      why: `still ${d2} squared from ${wantHeard}, past the ${radius} this step asked for` +
+           (radius === SAY_RADIUS
+             ? ` (SAY_RADIUS) — SayRangeCheck (holder.kod:604) DISCARDS this speech and sends ` +
+               `nothing back, so speaking anyway would look exactly like an NPC with no answer`
+             : ` (SAY_RADIUS is ${SAY_RADIUS}, so ${wantHeard} may well HEAR this — it is the ` +
+               `tighter reach this step needs that is not met, and whatever is listening at ` +
+               `that reach would discard it silently)`) };
   if (heard === null)
     return { ok: false, outcome: 'position_unknown', approached,
       why: `cannot read both positions, so cannot tell whether ${wantHeard} would ` +

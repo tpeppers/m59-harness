@@ -28,6 +28,7 @@ covers what you are about to touch, before you touch it. Comments across `tools/
 | change a threshold, a posture, an area or a tactic | [`docs/m59-policy.md`](docs/m59-policy.md) |
 | hand a bot a character, or take one back | [`docs/m59-boundary.md`](docs/m59-boundary.md) |
 | add a character that is NOT the fleet — a merchant, a host, anything scripted | [`docs/m59-menagerie.md`](docs/m59-menagerie.md) |
+| buy a spell of LEVEL 3 or higher, or find out why a priestess will not sell one | `m59-research/reports/disciple-quests.md`, and `tools/fleetscripts/disciple-quest.mjs` |
 | read a ledger, or land a commit that changes how the fleet moves | [`docs/m59-evidence.md`](docs/m59-evidence.md) |
 | commit, merge, push, cut a deploy, or work alongside another session | [`docs/m59-git-process.md`](docs/m59-git-process.md) |
 | interpret, log, serialize, or compare a coordinate | [`docs/m59-coordinates.md`](docs/m59-coordinates.md) |
@@ -580,6 +581,7 @@ Wire, kod and the shape of a reply — [`docs/m59-protocol-traps.md`](docs/m59-p
 - Self-defence needs a grudge AND a live flag AND the safety; the grudge book is fleet-wide and gitignored.
 - A keeper PROCESS has to hold its own roster source, or it calls the whole fleet strangers — and a fleet-mate you turn red by hand is then shot by everyone with a false grudge. Statler, 2026-08-27.
 - One or two of the five Underworld portals are unlit at any moment, not all of them, and an unlit one is silent.
+- A priestess sells NOTHING above level 2 until the character has done her school's DISCIPLE quest — say `disciple` to her from within FIVE squares, which is tighter than she can hear from. Four schools have one; Riija and Jala do not.
 
 Money, merchants and supply — [`docs/m59-economy.md`](docs/m59-economy.md):
 
@@ -690,6 +692,15 @@ anything walks**: one driver per fleet, the body held, a health floor on every j
 waits sized from the journey's own p90, travel issued once and never re-issued while
 walking, results read back from the world, the bot's lease taken, and a known trap room
 refused outright.
+
+**AND A STEP MAY LEARN ITS ARGUMENT FROM AN EARLIER STEP, BECAUSE SOMETIMES THE SERVER PICKS.**
+`walk`, `say` and `fight` take a function of the run state as well as a value — the same shape
+`bank`'s `amount` has always had. It exists for the errands where the game names the destination
+and names it once: a disciple quest rolls one monster of three, or one NPC of three to five, and
+says so in a single private line that is never repeated. A run-time `walk` destination must ALSO
+pass `{ candidates: [...] }` naming every room it could choose, because `Number(aFunction)` is
+`NaN` and the trap check would otherwise wave it through while looking as though it had checked
+it. `tools/fleetscripts/disciple-quest.mjs` is the worked example.
 
 **Two of those are the ones a hand-written script always misses.**
 

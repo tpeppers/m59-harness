@@ -1197,3 +1197,60 @@ a DIFFERENT room resolves nothing.
 
 **It should fail the day a position read is answered from a cache, a bench credits a change across a
 single keeper pid, or a fake starts speaking a protocol no server does.**
+
+## The disciple gate — the level-3 spell quest
+
+**`m59-disciple-test.mjs` (100) — three groups, none of which is about whether the errand runs.**
+`tools/fleetscripts/disciple-quest.mjs` does a temple priestess's disciple quest, which is the
+only thing that unlocks spells of level 3 and above in her school (`temples.kod:52-73`,
+`monster.kod:4506-4518`). The whole derivation, with citations, is
+`m59-research/reports/disciple-quests.md`.
+
+**1. The sentences, read back out of the kod rather than out of a second copy.** Three of the four
+quests are *carry this sentence to that NPC*, and the node matches with `StringContain` — which
+after `FuzzyCollapseString` (`blakserv/ccode.c:626`) is uppercase-and-trim and then a plain
+`strstr`. Its own comment says interior whitespace is squashed and the code does not do that. So
+the two spaces after each full stop are load-bearing, and Faren's sentence spells `sacriligious`
+the way the server spells it. These cases parse `kod/util/questengine.kod` and compare byte for
+byte; **the failure they exist for is a reflowed comment or a helpful spell-check**, and the
+symptom is a character standing in the right town, saying the right words to the right NPC, and
+being ignored. They SKIP rather than fail where no `M59_ROOT` tree is present.
+
+**2. The reading, which is the only instrument there is.** Every refusal in this errand is
+silence: too far away, already a disciple, failed within the last hour of logged-in time, and
+anonymous are four different facts and one identical nothing. The one thing that distinguishes
+them is the free teach probe — say a level-3 spell's name to the priestess, and the library turns
+that into a bare `CanDoTeach` with no money and no state change (`monster.kod:5711-5733`,
+`library.kod:2868-2872`). The cases build her seven possible answers *from the kod resources*,
+fill `%s` the way the server does, and run the errand's own classifier over them. The ordering is
+asserted as well as the matching: the disciple refusal is the ONLY answer that means the quest is
+undone, because `CanDoTeach` tests the gate before `PlayerCanLearn`, so every other sentence is
+itself proof the gate is open. **A classifier that files the refusal as anything else reports
+success over a locked shop.** `monster_teach_base` is the one that catches a lazy test: it is
+split across two source lines mid-word, so a grep for the runtime wording finds nothing in the
+source and a grep for the source finds nothing at runtime.
+
+**3. The compiler changes this errand needed, and the hole one of them opened.** The server rolls
+the destination — one monster of three for Kraanan, one NPC of three to five for the others — and
+states it in a single private line that is never repeated. So a `walk`, a `fight` and a `say` may
+take a function of the run state, resolved before the control guard so a run-time value is
+inspected exactly like a literal one. `Number(someFunction)` is `NaN` and `KNOWN_TRAPS[NaN]` is
+undefined, so a dynamic destination sailed through `trapCheck` **while looking as though it had
+been checked** — hence the rule that such a walk must also declare `candidates`, every one of
+which is then checked. Pinned here: a bare function destination is refused with or without
+`allowTraps`; a trap among the declared candidates is caught before anything walks; and
+`sayApproachSquare` honours the caller's radius, which it did not, so a step asking for the quest
+node's reach of 25 was told it had already arrived at 36 and then failed the very check that had
+sent it.
+
+Also pinned, because it is the cheap half of an expensive mistake: `Q_NPC_CLOSE_ENOUGH` is still
+5 and `SAY_RADIUS` is still 50, so the silent band between five and seven squares — where the
+priestess demonstrably hears you and the quest node discards the sentence — is still real;
+`"disciple"` is said exactly once in the whole errand and not at all for a character that is
+already one, because joining a second instance of a quest already in flight is how a character
+ends up holding a deadline nobody is working on; the Kraanan fight is `optional`, so an
+unassigned run resolves to no target rather than swinging at whatever is nearest; and Riija and
+Jala are refused **by name, with the reason** rather than being absent from a table.
+
+**It should fail the day somebody tidies the whitespace in a quest sentence, teaches the probe to
+read silence as a yes, or lets a run-time destination past the trap check.**
