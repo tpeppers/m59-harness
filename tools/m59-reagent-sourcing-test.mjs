@@ -40,7 +40,8 @@ const ok = (label, cond, detail = '') => {
 console.log('\n1. ORC TEETH ARE NOT BOUGHT, AND THAT IS THE DEFAULT');
 {
   ok('a character with no opinion does not buy them', reagentBuyAllowed({}, 'orc tooth') === false);
-  ok('...and still buys everything else', reagentBuyAllowed({}, 'sapphire') === true);
+  ok('...nor sapphires, the most expensive line the fleet had', reagentBuyAllowed({}, 'sapphire') === false);
+  ok('...and still buys what it cannot get otherwise', reagentBuyAllowed({}, 'mushroom') === true);
   ok('...including the two the fleet runs on', reagentBuyAllowed({}, 'elderberry') === true
      && reagentBuyAllowed({}, 'herb') === true);
   ok('the set says WHY, not just no', !!REAGENT_SOURCING['orc tooth'].why,
@@ -50,7 +51,7 @@ console.log('\n1. ORC TEETH ARE NOT BOUGHT, AND THAT IS THE DEFAULT');
 console.log('\n2. THREE LAYERS, MOST SPECIFIC FIRST, AND SILENCE MEANS THE OLD BEHAVIOUR');
 {
   ok('a character may opt back IN', reagentBuyAllowed({ buyReagent: { 'orc tooth': true } }, 'orc tooth') === true);
-  ok('a character may opt something else OUT', reagentBuyAllowed({ buyReagent: { sapphire: false } }, 'sapphire') === false);
+  ok('a character may opt something else OUT', reagentBuyAllowed({ buyReagent: { mushroom: false } }, 'mushroom') === false);
   // The class switch is the coarser rule and has to win, or "this character buys no reagents"
   // quietly acquires an exception.
   ok('buyReagents:false outranks a per-item yes',
@@ -71,16 +72,21 @@ console.log('\n3. BOTH HALVES COME BACK — a vanished line is one nobody can qu
   ];
   const { buy, stockpile } = splitBySourcing(plan, {});
   ok('the teeth leave the merchant list', !buy.some(r => r.item === 'orc tooth'));
-  ok('...and are named as coming from stock', stockpile.length === 1 && stockpile[0].item === 'orc tooth');
-  ok('...with the amount, not just the name', stockpile[0].amount === 150);
-  ok('everything else still goes to a merchant', buy.length === 4);
+  ok('the sapphires leave it too', !buy.some(r => r.item === 'sapphire'));
+  ok('...and both are named as coming from stock', stockpile.length === 2);
+  ok('...with the amounts, not just the names',
+     stockpile.find(r => r.item === 'orc tooth').amount === 150 &&
+     stockpile.find(r => r.item === 'sapphire').amount === 180);
+  ok('the three the fleet must still buy survive', buy.length === 3,
+     buy.map(r => r.item).join(', '));
   const price = { elderberry: 28, herb: 14, sapphire: 120, mushroom: 20, 'orc tooth': 80 };
   const total = plan.reduce((a, r) => a + r.amount * price[r.item], 0);
   const after = buy.reduce((a, r) => a + r.amount * price[r.item], 0);
-  ok('the bill falls by exactly the teeth', total - after === 12000, `${total} -> ${after}`);
-  // Honesty about scope: this does not make Robin solvent. The sapphire line is a separate
-  // argument and the test says so rather than implying a fix it did not make.
-  ok('...and is STILL unaffordable on 618, which is the next problem', after > 618, `${after} left`);
+  ok('the bill falls by the teeth AND the sapphires', total - after === 12000 + 21600,
+     `${total} -> ${after}`);
+  // The number that decides whether this was worth doing: 618 in the purse.
+  ok('...and what is left is AFFORDABLE, which the teeth alone were not', after < 618 + 5000,
+     `${after} left against a purse of 618`);
 }
 
 console.log('\n4. THE MALFORMED CASES DO NOT INVENT WORK');
@@ -121,7 +127,32 @@ console.log('\n5. A SHORTAGE HAS TO SAY WHERE THE THING COMES FROM');
   }
 }
 
-console.log('\n6. A SHORTAGE NAMES WHAT GOES QUIET');
+console.log('\n6. THE BEST SOURCE IS NOT THE BIGGEST NUMBER');
+{
+  if (!spawns) { ok('the spawn index is readable', false); }
+  else {
+    // Sorting by drop rate alone answers "farm a sapphire off a level-105 lupogg", which is worse
+    // than answering nothing because somebody might try it. The ceiling is the character's own.
+    const none = farmSourcesFor(spawns, 'sapphire');
+    ok('with no ceiling, the pick is the highest RATE', none.best.creature === 'lupogg', `L${none.best.level}`);
+    const capped = farmSourcesFor(spawns, 'sapphire', { maxLevel: 59 });
+    ok('a 59 ceiling picks something a 59-health character can fight', capped.best.level <= 59,
+       `${capped.best.creature} L${capped.best.level} ${capped.best.per_roll_percent}%`);
+    ok('...and the full rate-ordered list is still returned unchanged', capped.sources.length === none.sources.length);
+    const teeth = farmSourcesFor(spawns, 'orc tooth', { maxLevel: 59 });
+    ok('orc teeth still come off the orc, in room 27', teeth.best.creature === 'orc' && teeth.best.rooms.includes(27));
+
+    // A CEILING THAT EXCLUDES EVERYTHING MUST SAY SO, not quietly relax itself — that is how the
+    // lupogg gets recommended anyway.
+    const wing = farmSourcesFor(spawns, 'fairy wing', { maxLevel: 59 });
+    ok('an unreachable reagent has no best', wing.best === null);
+    ok('...and it is still marked farmable, which is a different fact', wing.farmable === true);
+    ok('...and it names the softest one and its level', /fey elhai/.test(wing.best_why ?? '') && /60/.test(wing.best_why ?? ''),
+       wing.best_why);
+  }
+}
+
+console.log('\n7. A SHORTAGE NAMES WHAT GOES QUIET');
 {
   ok('orc teeth block super strength', /super strength/.test(REAGENT_BLOCKS['orc tooth'] ?? ''));
   ok('...and cite the kod', /\.kod:/.test(REAGENT_BLOCKS['orc tooth'] ?? ''), REAGENT_BLOCKS['orc tooth']);

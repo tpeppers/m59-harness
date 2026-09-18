@@ -1518,6 +1518,12 @@ export const REAGENT_SOURCING = {
   // Default OFF. Orcs drop these at 40% (orctres.kod:32) in a room this fleet already farms, and
   // the guild chest holds 202 of them, so paying 80 apiece is buying what we own.
   'orc tooth': { buy: false, why: 'orcs drop these at 40% and the guild chest holds hundreds' },
+  // Default OFF, and the most expensive line the fleet had. 180 sapphires at 120 was 21,600 of
+  // Robin's 39,124-shilling plan — 55% of a bill he could not pay with 618 in his purse — while
+  // 503 sat in the guild chests. And they are farmable by THIS fleet: the rate table is topped by
+  // a level-105 lupogg, but the SPIDER drops them at 10% in rooms 4, 6, 26, 27 and 28, and room 27
+  // is where the cave cohort already stands. Nobody has to go anywhere new for either of these.
+  'sapphire': { buy: false, why: 'spiders drop these at 10% in room 27 and the guild chests hold 503' },
 };
 
 /**
@@ -21580,8 +21586,13 @@ export class Autopilot {
     for (const w of wants) {
       const held = pack.get(norm(w.item)) ?? 0;
       if (held >= (w.amount ?? 0)) continue;
-      const farm = spawns ? farmSourcesFor(spawns, w.item) : null;
-      const best = farm?.sources?.[0] ?? null;
+      // THE CEILING IS THIS CHARACTER'S OWN. A creature at or below max health is one it can
+      // plausibly fight; above that is the band it is being advanced THROUGH, not the band it
+      // should be sent to for a reagent. Without this the pick is the highest drop rate in the
+      // game, which for a sapphire is a level-105 lupogg.
+      const ceiling = this.s.client?.vitals?.()?.health?.max ?? null;
+      const farm = spawns ? farmSourcesFor(spawns, w.item, { maxLevel: ceiling }) : null;
+      const best = farm?.best ?? null;
       short.push({
         item: w.item, wanted: w.amount ?? null, held,
         why: 'not bought by policy, and the stockpile did not cover it',
@@ -21589,6 +21600,9 @@ export class Autopilot {
         farm: best ? { creature: best.creature, level: best.level,
                        per_roll_percent: best.per_roll_percent, rooms: best.rooms.slice(0, 8) } : null,
         farmable: farm?.farmable ?? null,
+        // A shortage nobody can act on must say so rather than leaving `farm: null` to be read
+        // as "nothing drops it" — those are opposite facts.
+        farm_why: best ? null : (farm?.best_why ?? farm?.why ?? null),
       });
     }
     this.reagentShort = short;
