@@ -178,7 +178,24 @@ death unless the fix goes across with it.
 
 ---
 
-## TO DO — #2 `keeper_blind`: the rescue is rationed per *pass*, and a blocked pass is minutes
+## TO DO — #2 `keeper_blind`: the rescue is rationed per *pass* — **PREMISE CURRENTLY ABSENT**
+
+> **RE-MEASURED 2026-09-18 05:40, after `deploy-2026-09-18-1`. Do not pick this up on the
+> evidence below without re-checking the premise first.** This defect only bites when a pass
+> blocks for minutes. Over 508 seconds across all 23 prod keepers, **not one set a new worst
+> pass-block** (`longest_block_ms` grew for 0 of 23), and an 11-minute window recorded **zero**
+> stall lines at the shipped 1500ms threshold. The multi-minute values still visible in
+> `longest_block_ms` are lifetime maxima from startup and rejoin, not ongoing cost — the same
+> lifetime-max trap documented in the instrument table above.
+>
+> **What cannot be concluded:** that the raycast fixed it. The fleet is now 12.6% moving against
+> ~28% in the pre-fix window — it is farming, not travelling — so "blocks stopped" is confounded
+> between *each query got cheaper* and *the fleet stopped doing the expensive thing*. Both fit.
+>
+> The code defect below is real and unfixed. It is simply not currently costing anything, and it
+> will return the moment the fleet travels heavily again. Cheap insurance, low present yield.
+> Sized over 31 deaths in 72h: the premise (pass blocked >60s) appears in 29 of 31 — but every
+> one of those deaths predates the deploy.
 
 **Cite.** `Autopilot.watchdogTick`, in **both** rescue arms — the stalled-claimed-driver rescue
 and the wedged-mid-journey rescue — the same guard clause:
@@ -542,6 +559,48 @@ not the follow-up.** Four readings tonight were inverted by exposure — a corre
 standing keepers, and a "zero" that measured who happened to be parked. The instrument is
 `stallshape.mjs` (prod-deploy-fa's). The open test is unchanged and now sharper: **a window with
 real transit through 578 under load.**
+
+## TO DO — #5 `provedSquares` memoises on the FINE position, so a walking body never hits it
+
+**The best-value item on this list as of 2026-09-18, and it is a MEASUREMENT before it is a
+fix.** Added after the raycast landed, because it is the residual that repair structurally
+cannot touch: the raycast made each collision query ~14× cheaper; this is about how many
+queries happen at all.
+
+**Cite.** `m59-game.mjs`, `provedSquares` — the memo wrapper around `provedSquaresUncached`:
+
+```js
+const memoKey = `${from.row},${from.col}|${from.x},${from.y}|${steps.length}|…`;
+if (hit && now - hit.at < 2000) return hit.value;
+const value = provedSquaresUncached(geo, from, steps);
+if (perGeo.size > 64) perGeo.clear();
+```
+
+**Mechanism.** The key carries `from.x, from.y` — the FINE position, not just the square. A
+walking body has a different fine position on essentially every call, so the key is unique
+every time and the cache cannot hit **for a moving character**, which is exactly when it is
+called most and exactly the workload that stalls. Two aggravators: a 2s TTL, and a wholesale
+`perGeo.clear()` at 64 entries rather than evicting one.
+
+**Evidence it matters.** `provedSquaresUncached` was the single largest caller in the prod stall
+profile at **93.3s inclusive**, more than double `nearestSafeSpot` (44.2s) — i.e. the *uncached*
+path dominates, which is what a never-hitting cache looks like.
+
+**Why this is NOT a free win, and must not be done the way the raycast was.** The raycast prune
+was answer-identical by construction. **This is not.** Whether a step is provable may genuinely
+depend on where in the square the body stands, so loosening the key could change movement
+decisions. The order of work is therefore:
+
+1. Instrument the memo for a real hit/miss rate — establish the cache is actually missing before
+   changing anything. (If it hits, this item is void.)
+2. Determine whether fine position changes the ANSWER: same square, many fine positions, compare
+   `provedSquaresUncached` results. That is the equivalent of the 266-room bbox scan, and it is
+   what licenses any change.
+3. Only then quantise the key — and only to a granularity step 2 shows is safe.
+
+**Deliverable if steps 1–2 hold:** quantise the fine component, evict one entry rather than
+clearing 64, and revisit the 2s TTL. With a test in the shape of `m59-raycast-test.mjs` — run
+both key schemes over a real corpus and assert identical results.
 
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
