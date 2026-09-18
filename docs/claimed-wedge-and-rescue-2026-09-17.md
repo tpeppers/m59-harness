@@ -233,9 +233,60 @@ routing problem.
 
 **So the experiment needs a RATE, not a count.** Park-in-578 and park-in-150 both produce
 stalls in whichever room was watched longer; comparing counts measures the watching. The
-comparable number is **stalls per minute of keeper time in that room**, and the stall line
-gives numerator and denominator honestly. `prod-deploy-fa` has an eight-line parser against
-`/log?n=400` and offered it — take that rather than rebuild it.
+comparable number is **stalls per minute of keeper time in that room**.
+
+### The instrument, so nobody builds a fourth one
+
+From the `prod-deploy-fa` session. Point it at the keeper band — prod is **9511–9533**
+(verified: t1…t21, hk1, hk2, 23 keepers):
+
+```js
+const seen = new Set(), byRoom = {}, byCaller = {};
+for (let p = 9511; p <= 9533; p++) {
+  let lines = [];
+  try { const r = await fetch(`http://127.0.0.1:${p}/log?n=400`, {signal: AbortSignal.timeout(15000)});
+        lines = (await r.json()).lines || []; } catch { continue; }
+  for (const l of lines) {
+    const ms = l.match(/blocked ~(\d+)ms/); if (!ms) continue;
+    if (seen.has(l)) continue; seen.add(l);                    // two reads would double-count
+    const rm  = (l.match(/\(room (\d+)/) || [])[1] ?? '?';     // where it was WHEN IT BLOCKED
+    const top = ((l.split('callers:')[1] || '').trim().split(',')[0] || '').trim().split(' ')[0] || '(none)';
+    (byRoom[rm]   ??= {n:0, ms:0}).n++;  byRoom[rm].ms   += +ms[1];
+    (byCaller[top] ??= {n:0, ms:0}).n++; byCaller[top].ms += +ms[1];
+  }
+}
+```
+
+Three things in it that are not obvious, each of which cost a reading:
+
+1. **Dedupe on the whole line** — two reads of an overlapping window otherwise double-count.
+2. **`callers:` names the cause; `hot:` names the symptom.** Take the caller. Reading `hot:`
+   is how the raycast looks like the whole answer instead of the shared floor under several.
+3. **`/log?n=400` only reaches back to the last keeper restart.** This is why the "only 2 of
+   23 keepers stall" reading was mostly empty zeros rather than healthy ones — a restart wipes
+   the evidence, so never compare a post-restart log against a pre-restart one.
+
+**For the rate, the denominator has to cover the same window as the numerator:** sample every
+keeper's room every 20s to accumulate keeper-minutes per room, and count only stalls whose
+`resumed <ISO>` falls inside that window. A one-shot log read cannot give you this. Two outputs
+worth having beyond the rate itself — *percentage of keeper time blocked per room*, which is
+the number that actually says "this room is expensive", and *rooms with dwell and ZERO stalls*,
+which is a cheap room measured rather than assumed. Both our earlier samples lacked the second
+entirely.
+
+Its caveat, stated by its author rather than found later: dwell is sampled at 20s granularity,
+so a room a character only transits is under-counted against one it parks in. That biases
+against exactly the road rooms this is about, so **treat a high rate in a transit room as a
+floor.**
+
+### The prediction that makes the repair site falsifiable
+
+A stall count cannot distinguish an expensive room from a stuck character, because each
+produces the other — 578 currently shows both, with Pepe 25+ minutes crossing one room while
+his keeper blocks ~1.5–2s a pass. So if some of this fleet's 578 and 599 "routing failures"
+are COST rather than geometry, **they improve when the raycast gets cheaper and not when the
+bake changes.** That is a test the repair site above can be held to, and it is worth running
+before anyone re-bakes those two rooms.
 
 Either way this reorders the work. The geometry hot path blocks the pass for minutes; the
 per-pass ration then hands the watchdog one rescue per multi-minute block, while the thing the
