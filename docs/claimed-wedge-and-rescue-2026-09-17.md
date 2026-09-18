@@ -192,7 +192,14 @@ is waiting for whoever picks this up.
 |---|---|---|---|
 | 1 | top caller of an agent's whole log, vs where that agent stood now | a block to a position minutes away | withdrawn |
 | 2 | `longest_block_ms` (a LIFETIME max) vs the room at sample time | same join, other direction | withdrawn — this one was mine |
-| 3 | the stall line's own room field | nothing — the line records the room it blocked IN | **use this** |
+| 3 | the stall line's own room field | nothing — the line records the room it blocked IN | correct, but **counts rank by exposure** |
+| 4 | #3 plus dwell sampled every 20s over the same window | nothing — gives a **rate** | **use this to rank** |
+
+Instrument 3 is sound and still got the ranking wrong, which is the lesson worth carrying: a
+correct numerator ranked 599 second-worst when it is the cheapest room on the board, because a
+room the fleet stands in for 35 minutes accumulates stalls a room it passes through never
+will. Nothing is wrong with the counts; they answer "where did blocking happen", and the
+question is "which room is expensive".
 
 The stall line reads `(room 578, doing travelling, travelling to 113)`. It names the room at
 the moment of the block, so there is no join to get wrong. Both earlier readings — the
@@ -201,8 +208,8 @@ the moment of the block, so there is no join to get wrong. Both earlier readings
 is. **My shadow numbers do not contradict the prod reading and I should not have written them
 up as counter-evidence.** That window had almost no keeper exposure to 578.
 
-**The reading that stands.** 23 prod keepers, ~35 minutes after the restart reset the logs,
-106 stalls totalling 192.6s blocked — profiling by the `prod-deploy-fa` session:
+**The count reading.** 23 prod keepers, ~35 minutes after the restart reset the logs, 106
+stalls totalling 192.6s blocked — profiling by the `prod-deploy-fa` session:
 
 ```
   by room                         by top caller
@@ -211,6 +218,51 @@ up as counter-evidence.** That window had almost no keeper exposure to 578.
   557    5 stalls   11.1s         _approachSquareUncached   6  11.5s
   579    1 stall     1.9s         sheltersAlong             3   5.8s
 ```
+
+**THE RATE READING, WHICH IS THE AUTHORITATIVE ONE AND INVERTS THAT RANKING.** Same session,
+12.0 min window, 36 dwell samples, 38 stalls, 23 keepers — numerator and denominator over the
+same period:
+
+```
+  room  keeper-min  stalls  blocked_s  stalls/min  % keeper time blocked
+  557         2.0       7       13.4       3.50      11.2%   <- most expensive, PROVISIONAL
+  578        17.7      23       38.4       1.30       3.6%
+  579         3.0       2        4.1       0.67       2.3%
+  599        35.7       5        8.0       0.14       0.4%   <- CHEAP; the count said 2nd worst
+  38         24.3       1        1.6       0.04       0.1%
+  27         36.0       0        0.0       0.00       0.0%
+  39         24.0       0        0.0       0.00       0.0%
+  714        33.7       0        0.0       0.00       0.0%
+  584         9.0       0        0.0       0.00       0.0%
+  (~30 more rooms with dwell and zero stalls)
+```
+
+Four things in it, two of which overturn conclusions both sessions had accepted:
+
+1. **599 is cheap — 0.4% of keeper time — and the count made it second worst.** Its 10 stalls
+   were the highest dwell in the fleet (35.7 keeper-minutes), not cost. This is the exposure
+   artefact both readings were warned about, landing on the count this time.
+2. **557 is the most expensive room per minute and neither session had it on the list**: 3.50
+   stalls/min, 11.2% of keeper time blocked, 2.7× 578's rate. **Provisional** — 2.0
+   keeper-minutes and 7 stalls is a thin sample. It was third by count and first by rate, so
+   the ranking flipped on the metric rather than on new data.
+3. **578 survives the better metric** at 1.30 stalls/min and 3.6% blocked, consistent with the
+   earlier window. Genuinely expensive, but not uniquely so and not by the margin the count
+   implied.
+4. **584 logged 9.0 keeper-minutes and ZERO stalls**, where 578's rate predicts ~12. That is
+   evidence against my own shadow reading of 144,747 ms "in 584" specifically, and it is what a
+   lifetime maximum carried in from another room looks like. (150 at 1.0 min and room 2 at 2.7
+   min were also zero, but too thin to mean anything.)
+
+**And the output neither earlier sample could produce:** rooms 27, 38, 39 and 714 each logged
+24–36 keeper-minutes at zero-to-one stalls. Those are **cheap rooms measured rather than
+assumed** — the distinction between a cheap room and a merely quiet one, which no one-shot log
+read can make. It settles the scope: **the fleet's farming rooms are not where the cost is, so
+this is a road/transit cost**, which is what the feedback finding above predicts rather than
+something that undercuts it.
+
+The 20s dwell granularity bites hardest on rooms that are transited rather than parked in —
+which is both of the worst two — so **557 and 578 are floors, not estimates.**
 
 **It is NOT "the safe-spot search", which is what the earlier drafts of this document said.**
 The largest single caller is `provedSquaresUncached` at 93.3s against `nearestSafeSpot`'s
