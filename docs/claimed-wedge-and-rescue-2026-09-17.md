@@ -15,10 +15,18 @@ they should be taken. As of this document's last revision nobody is working on t
 work — its own task is the fleet's kill rate and it is blocked on a doctrine restart only the
 operator can run.
 
-Line numbers for the keeper are `tools/m59-autopilot.mjs` **as deployed at
-`deploy-2026-09-17-11`**. Repair #1 inserted 42 lines above the #2 and #3 sites, so every
-citation below has been re-read against the deployed file rather than carried over: what was
-11705 / 11800 / 11840 in the pre-repair tree is 11747 / 11842 / 11886 now.
+**Keeper citations below name SYMBOLS, not lines**, per CLAUDE.md: *"CITE THE SYMBOL, NOT THE
+LINE… a harness-to-harness line number is pinned to nothing and rots the moment two trees
+differ, which is always. A symbol survives a rebase."* This document learned that the hard
+way. It first cited `tools/m59-autopilot.mjs` by line, and then repair #1 inserted 42 lines
+*above* the #2 and #3 sites and silently invalidated every one of them — the same rot the rule
+was written for, arriving from a third direction: not two checkouts diverging, but **one tree
+where the repair moved the code below it**. Re-reading the numbers would only have held until
+the next repair above those sites. The symbols need no maintenance.
+
+The one exception is section #1 below, which keeps its pre-repair line numbers on purpose: it
+is an argument about what the code used to do, and renumbering it against a file that no longer
+reads that way would make it unfollowable.
 
 ## The window
 
@@ -160,18 +168,20 @@ decision; the code says so at `pennedIn`'s own comment and I have not touched it
 
 **Migration hazard — read this before the watchdog extraction lands.**
 `tools/m59-watchdog.mjs` is the extracted copy of this logic (the harness working tree is
-mid-migration to it). It carries **the identical bug** at its line 393, and its rescue at 490
-is `host.inert`-only as well. Its documented host contract (line 37) does not even expose
-`facultyHeld`, so fixing it there means extending the contract. Prod does not run it today —
-`watchdogTick` at 11651 calls the inline `this.pulsePosition`, and the module supplies only
-`freshState()` — but whoever finishes the extraction will reintroduce this death unless the
-fix goes across with it.
+mid-migration to it). Its exported `pulse()` carries **the identical bug** — the same
+`bleedingWhileInert = at && host.inert && …` — and the inert rescue in its exported `tick()` is
+`host.inert`-only as well. Its documented host contract (the `host.*` list in the file header)
+does not even expose `facultyHeld`, so fixing it there means extending the contract. Prod does
+not run it today — `Autopilot.watchdogTick` calls the inline `this.pulsePosition`, and the
+module supplies only `freshState()` — but whoever finishes the extraction will reintroduce this
+death unless the fix goes across with it.
 
 ---
 
 ## TO DO — #2 `keeper_blind`: the rescue is rationed per *pass*, and a blocked pass is minutes
 
-**Cite.** Line 11842 (and the same clause at 11747):
+**Cite.** `Autopilot.watchdogTick`, in **both** rescue arms — the stalled-claimed-driver rescue
+and the wedged-mid-journey rescue — the same guard clause:
 
 ```js
 && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
@@ -191,7 +201,7 @@ stood at 30,35 and lost 30 more health — `wedged_at_death.for_ms = 86124`,
 **Deliverable.** Replace the pass-identity guard with an elapsed-time cooldown on `w` (e.g.
 `w.rescuedAt` + a `RESCUE_COOLDOWN_MS` of about `INERT_RESCUE_MS`), so a long pass can be
 rescued more than once. Keep a cooldown — the point of the original guard was to stop the
-rescue firing every tick, and that is still right. Both sites (11747, 11842) take the same
+rescue firing every tick, and that is still right. Both rescue arms take the same
 change. Test alongside `m59-claimwedge-test.mjs`: drive a wedge past the threshold twice
 without advancing `host.passes`, and assert two rescues.
 
@@ -287,8 +297,8 @@ which is both of the worst two — so **557 and 578 are floors, not estimates.**
 **It is NOT "the safe-spot search", which is what the earlier drafts of this document said.**
 The largest single caller is `provedSquaresUncached` at 93.3s against `nearestSafeSpot`'s
 44.2s — at least two hot callers, and the safe-spot search is the smaller half. What is hot
-under *both* is the raycast: `_blockingWall` and `intersectNode`, `m59-roo.mjs:1083` and
-`:1103` (verified present in the deployed tree). **That is the repair site.** Optimising a
+under *both* is the raycast: `_blockingWall` and its inner `intersectNode`, in `m59-roo.mjs`
+(both verified present in the deployed tree). **That is the repair site.** Optimising a
 caller would leave the other callers paying the same cost.
 
 **The confound, which cannot be removed from this data.** Rooms with no fleet presence
@@ -368,8 +378,10 @@ rationing fix is small, bounded, and can land without waiting for that answer.
 
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
-**Cite.** Lines 11886–11894, the comment that ends "…taking ownership back is the operator's
-call (`autopilot action=release`), and survival never needed it to act. The claim stands".
+**Cite.** `Autopilot.watchdogTick`, the claimed-mover branch — `else this.note('WATCHDOG — the
+mover was claimed and had stopped; cancelled its walk', …)` — and the comment immediately above
+it, which ends "…taking ownership back is the operator's call (`autopilot action=release`), and
+survival never needed it to act. The claim stands".
 
 **Mechanism.** The rescue cancels the *current* walk but deliberately leaves the claim in
 place. The holder is still driving, so it re-issues, and the escape the survival ladder just
