@@ -828,6 +828,44 @@ export function huntRoomYield(spawns, roomNum, want, { standingHere = false } = 
   };
 }
 
+/**
+ * WHERE THIS REAGENT CAN BE FARMED — creature, rooms, drop rate, worst first by reachability.
+ *
+ * The other half of "do not buy it". An item the fleet refuses to pay for has to come from
+ * somewhere, and the honest options are a chest that somebody filled or a creature that drops it.
+ * This answers the second, so `farm <reagent>` can be a task with a destination rather than an
+ * aspiration: 202 orc teeth are in the guild chest because orcs drop them at 40% and the fleet
+ * already stands in a room full of orcs.
+ *
+ * IT JOINS THE DROP TABLE TO THE ROOM INDEX RATHER THAN NAMING ROOMS. A hardcoded room list is a
+ * second opinion about the map that goes stale silently; `whoDrops` cites the kod treasure type
+ * and `spawns.rooms` says where that creature actually generates, so a creature nothing spawns
+ * comes back with an empty room list and says so instead of sending somebody nowhere.
+ */
+export function farmSourcesFor(spawns, item) {
+  const rows = whoDrops(spawns, item);
+  const drops = Array.isArray(rows) ? rows : (rows?.creatures ?? rows?.rows ?? []);
+  if (!drops.length) return { item, farmable: false, sources: [],
+                              why: `nothing in the drop index drops ${item}` };
+  const roomsOf = (creature) => {
+    const out = [];
+    for (const [room, list] of Object.entries(spawns?.rooms ?? {}))
+      if ((list ?? []).some(g => creatureMatchesHunt(g, creature))) out.push(Number(room));
+    return out.sort((a, b) => a - b);
+  };
+  const sources = drops.map(d => ({
+    creature: d.creature, level: d.level ?? null, per_roll_percent: d.per_roll_percent ?? null,
+    cite: d.cite ?? null, rooms: roomsOf(d.creature),
+  })).sort((a, b) => (b.per_roll_percent ?? 0) - (a.per_roll_percent ?? 0));
+  const reachable = sources.filter(x => x.rooms.length);
+  return {
+    item, farmable: reachable.length > 0, sources,
+    why: reachable.length ? null
+      : `${item} is dropped by ${sources.map(x => x.creature).join(', ')}, and none of them ` +
+        'generates in any room the spawn index knows',
+  };
+}
+
 // WOULD KILLING THIS MOVE OUR KARMA THE WRONG WAY?
 //
 // A kill is an act worth the NEGATIVE of the victim's karma, so killing something
