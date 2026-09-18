@@ -327,5 +327,50 @@ console.log('\nwho else is standing here, and what are they short of');
   ok('and nothing is promised twice', neverSellsWhatItGives(plan).ok);
 }
 
+
+console.log('\nwhat counts as a town stop');
+
+{
+  const { townStopReason } = await import('./m59-townstop-watch.mjs');
+  const keeper = (agent, character, room) =>
+    [agent, { character, room: room == null ? null : { num: room, name: 'somewhere' },
+              items: [], __identity: { agent, character } }];
+
+  const withCounter = new Map([keeper('t6', 'Beaker', 104)]);
+  const merchants = new Map([[104, ['Joguer']]]);
+
+  ok('a counter in the room is a town stop, and the reason NAMES it',
+     (() => { const r = townStopReason('t6', withCounter, merchants);
+              return !!r && r.merchant === 'Joguer' && /counter/.test(r.why); })());
+
+  // A CHARACTER IN A ROOM WITH NOTHING IN IT IS NOT AT A TOWN STOP. Firing there would spend a
+  // pass per tick to be told there is nothing to do, and the log would fill with non-events.
+  ok('a room with no counter and nobody short of anything is NOT a stop',
+     townStopReason('t6', withCounter, new Map()) === null);
+
+  // NO VERIFIED KEEPER IS NOT OUR BUSINESS. `discoverKeeperStates` proves identity before it
+  // reports state, and a row without that proof is a port that answered, not a character.
+  ok('a state with no verified identity is skipped rather than acted on',
+     townStopReason('t6', new Map([['t6', { character: 'Beaker', room: { num: 104 } }]]),
+                    merchants) === null);
+
+  // AN UNKNOWN ROOM PROVES NOTHING IS HERE, rather than everything — the same rule
+  // alliesInRoom follows, and for the same reason.
+  ok('an unknown room is not a stop',
+     townStopReason('t6', new Map([keeper('t6', 'Beaker', null)]), merchants) === null);
+
+  ok('an agent nobody discovered is not a stop',
+     townStopReason('t99', withCounter, merchants) === null);
+
+  // THE REASON IS RETURNED RATHER THAN A BOOLEAN, because "the driver fired and the stop
+  // declined" and "the driver never fired" are different faults. A watcher that logged only the
+  // second could not tell them apart, which is the failure the whole tool exists to end.
+  ok('the reason carries enough to explain itself in a log',
+     (() => { const r = townStopReason('t6', withCounter, merchants);
+              return r.agent === 't6' && r.character === 'Beaker' && r.room === 104
+                     && Array.isArray(r.allies) && typeof r.why === 'string'
+                     && r.why.length > 0; })());
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;
