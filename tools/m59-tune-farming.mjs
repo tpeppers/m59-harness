@@ -320,6 +320,12 @@ if (isMain) {
     // zero to earning for the first time all session.
     const touched = open.agents ?? [];
     const namesOf = (o) => Object.keys(o ?? {});
+    // A MISSING BASELINE IS NOT A BASELINE OF ZERO, and this is rule 6 failing in its own first
+    // use. Experiment #3 predated `baseline_by_character`, so the per-character table printed
+    // `0.00 -> 0.52` for eight characters, every one of which had been earning perfectly well
+    // before the change. A table of fabricated gains is worse than no table: it is the confident
+    // wrong number this whole tool exists to make unsayable.
+    const haveBaseline = !!open.baseline_by_character;
     const b = open.baseline_by_character ?? {}, a2 = after.characters ?? {};
     const everyone = [...new Set([...namesOf(b), ...namesOf(a2)])].sort();
     const perMin = (n, m) => m > 0 ? n / m : 0;
@@ -327,7 +333,14 @@ if (isMain) {
       .map(n => ({ n, was: perMin(b[n] ?? 0, open.baseline_minutes ?? 30), now: perMin(a2[n] ?? 0, minutes) }))
       .map(r => ({ ...r, d: r.now - r.was }))
       .sort((x, y) => y.d - x.d);
-    if (moved.length) {
+    if (!haveBaseline) {
+      console.log('  no per-character baseline was recorded for this experiment, so there is ' +
+                  'nothing to compare against. Every row would read as a gain from zero, which ' +
+                  'is a fabricated number, so none is printed.');
+      console.log('  after, kills/min: ' +
+                  (Object.entries(a2).sort((x, y) => y[1] - x[1]).slice(0, 6)
+                    .map(([n, k]) => `${n} ${(k / minutes).toFixed(2)}`).join('  ') || '—'));
+    } else if (moved.length) {
       console.log('  per character, kills/min, biggest gain first:');
       for (const r of moved.slice(0, 6).concat(moved.slice(-3)).filter((x, i, arr) => arr.indexOf(x) === i))
         console.log(`     ${r.n.padEnd(16)} ${r.was.toFixed(2)} -> ${r.now.toFixed(2)}  ${r.d >= 0 ? '+' : ''}${r.d.toFixed(2)}`);
