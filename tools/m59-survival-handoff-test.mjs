@@ -111,6 +111,12 @@ for (const monsters of [0, 1, 5, 6, 14]) {
 
 {
   const k = keeper();
+  // AT A WALL. Since 2026-09-18 `playDead` refuses the OPEN freeze against monsters, and this
+  // case is about what a SUCCESSFUL freeze does to the pass rather than about when one is
+  // allowed — so the geometry has to offer a wall for there to be a success to test. Stubbed
+  // here rather than in `keeper()` because a fixture-wide wall changes what the failed-
+  // selection cases below report.
+  k.adoptRecoveryWall = () => true;
   k.timeToDeath = () => 9000; k.damageRate = () => 3;
   k.goTravelling('dying on the road', { to: 39 });
   const verdict = await k.passTravelling(ctx(k));
@@ -130,6 +136,7 @@ for (const monsters of [0, 1, 5, 6, 14]) {
 {
   const k = keeper();
   k.s.world.room = null;
+  k.adoptRecoveryWall = () => true;   // the freeze must land for the pass to be the subject
   await k.playDead('test');
   let ladderCalls = 0, rests = 0;
   k.runPassLadder = async () => { ladderCalls++; };

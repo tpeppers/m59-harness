@@ -65,6 +65,11 @@ function keeper(s, over = {}) {
   a.noProgress = m => a.notes.push({ msg: 'NOPROGRESS: ' + m });
   a.tellPilot = async () => {};
   a.holdWorks = () => true;
+  // `playDead` asks `adoptRecoveryWall()`, not `holdWorks()` — the wall question moved to the
+  // FORMULA when the ledger was taken out of it. These fixtures never stubbed it because the
+  // verb used to proceed whatever it answered; since 2026-09-18 it gates the open freeze on it,
+  // so a fixture that declares a hold has to say the geometry accepts that hold too.
+  a.adoptRecoveryWall = () => !!a.hold;
   a.reconnect = async () => {
     // A reconnect is a fresh entry into the room. That is the point: the flag comes back
     // CLEAR, which is what the turn has to fix.
@@ -204,52 +209,74 @@ console.log('a turn that does not go through is said out loud');
 // stationary at the moment of death, median 29 seconds still. In that corridor, standing
 // still IS the cause of death, and a freeze is a way of standing still on purpose.
 console.log('');
-console.log('and OFF a wall it freezes anyway, which is the operator\'s reversal');
+console.log('and OFF a wall against MONSTERS it now refuses — the rule reversed twice');
 {
-  // REVERSED 2026-09-10, BY THE OPERATOR, AND THE EVIDENCE ABOVE IS KEPT BECAUSE IT IS REAL.
+  // THIS ARGUMENT HAS GONE BOTH WAYS AND BOTH ROUNDS ARE KEPT, because the second reversal
+  // turns on a premise of the first rather than on its logic.
+  //
+  // ROUND 1, the original refusal, argued from the evidence above: a freeze recovers VIGOR and
+  // never health (the logoff flag stops HealthTimer), so off a wall it hands the room several
+  // free seconds and changes nothing.
+  //
+  // ROUND 2, 2026-09-10, the operator reversed it:
   //
   //   "implement fall throughs to the singular correct behavior that would have saved any
   //    character that died in this window: the preexisting play_dead() -- it is universally the
   //    best survival mechanism available... There is truly only one way: The play_dead."
   //
-  // The refusal this replaces was argued from the Twisted Wood corridor: three characters froze
-  // in the OPEN at 4, 10 and 13 health and all three died. That happened. What it does not show
-  // is that freezing CAUSED it -- those characters had no way out either way, and the comparison
-  // the refusal made was against a rescue they did not have.
+  // The reasoning: the logoff makes the enemy stop attacking IMMEDIATELY, where "waiting and
+  // hoping can let the enemy continue attacking for up to dozens of seconds". So off a wall the
+  // choice is not healing versus not healing; it is an attack that ends now versus one that
+  // continues. Camilla and Rizzo had just died in Ukgoth with `at_a_safe_wall: null`, precisely
+  // the state in which the verb answered no.
   //
-  // What the logoff actually buys, in the operator's words: the enemy stops attacking IMMEDIATELY,
-  // where "waiting and hoping can let the enemy continue attacking for up to dozens of seconds".
-  // So off a wall the choice is not healing versus not healing; it is an attack that ends now
-  // versus one that continues.
+  // ROUND 3, 2026-09-18, the operator again: "the open freeze should be removed as a tactic or
+  // only ever done in PvP, it will not save you from monsters."
   //
-  // AND IT COST TWO MORE CHARACTERS BEFORE IT WAS REVERSED. Camilla and Rizzo died in Ukgoth on
-  // 2026-09-10 with `at_a_safe_wall: null` -- precisely the state in which this verb answered no.
+  // WHAT DECIDED IT, and it is the premise round 2 never tested: that an attack ending NOW is
+  // worth having only if the seconds it buys are spent on something. They are not.
+  //
+  //   Animal, 2026-09-17, room 599, `in_safe_spot: false`, `hold: null`. Frozen twelve seconds
+  //   at 4/55, vigor 135 and never the constraint. Unfroze `before {health: 4} -> now
+  //   {health: 4}` -- ZERO health across the whole freeze, because there was no wall to turn
+  //   at. Then "logoff did not establish recovery", reached for a spot five steps away, dead
+  //   1.4s later.
+  //
+  // Round 2's own counter-case concedes its characters "had no way out either way", which is an
+  // argument that the refusal did not kill them -- not an argument that the freeze saves anyone.
+  // Against a PLAYER it is kept: a person can be convinced you are dead; a monster cannot.
   const s = fakeSession({ health: 4, max: 37 });
   const a = keeper(s);
-  a.holdWorks = () => false;          // open ground: the case that used to be refused
+  a.holdWorks = () => false;          // open ground
   a.hold = null;
+  a.playerThreatPresent = () => false;   // monsters only
   const froze = await a.playDead('at 4 health with 15 adjacent, nothing that holds');
-  ok('playDead freezes in the open rather than refusing', froze !== false);
-  // AND OFF A WALL IT DELIBERATELY SENDS NOTHING. On a wall the freeze ends with a TURN, which
-  // re-arms regeneration without giving up the square. In the open there is no square worth
-  // arming and a turn is an action monsters are entitled to answer, so the correct freeze here
-  // is a logoff and then nothing at all. My first version of this assertion asked for a send and
-  // failed on the behaviour being right.
-  ok('and it sends no TURN, because turning in the open re-exposes the body',
+  ok('playDead REFUSES in the open against monsters', froze === false);
+  ok('and it sends nothing at all — no turn, no logoff',
      !s.sent.some(x => x.kind === 'face'), JSON.stringify(s.sent).slice(0, 120));
-  ok('and it says it did nothing that counts as an action',
-     a.notes.some(n => /do NOTHING that counts as an action/.test(JSON.stringify(n.detail ?? {}))));
-  ok('and it no longer emits the old refusal note',
-     !a.notes.some(n => /refusing to play dead/.test(n.msg ?? '')));
+  ok('and it says why in a line a person can grep',
+     a.notes.some(n => /refusing to play dead in the open/.test(n.msg ?? n.what ?? '')),
+     JSON.stringify(a.notes.map(n => n.msg ?? n.what)).slice(0, 200));
 
-  // An unproven wall is no longer a special case either -- there is nothing left for the book to
-  // be consulted ABOUT. The operator: "do *not* consult the safe spot ledger regarding safe
-  // walls, use the formula".
+  // A PLAYER IS THE CARVE-OUT, and it is the whole of it.
+  const sp = fakeSession({ health: 4, max: 37 });
+  const p = keeper(sp);
+  p.holdWorks = () => false;
+  p.hold = null;
+  p.playerThreatPresent = () => true;
+  ok('...but in the open WITH A PLAYER here it still freezes',
+     (await p.playDead('a stranger is on us')) !== false);
+
+  // An unproven wall is still not a special case -- proof is not the question, geometry is,
+  // and `adoptRecoveryWall` answers it. The operator: "do *not* consult the safe spot ledger
+  // regarding safe walls, use the formula".
   const s2 = fakeSession({ health: 6, max: 40 });
   const b = keeper(s2);
   b.holdWorks = () => false;
   b.hold = { col: 1, row: 1, proven: false, takenAt: Date.now() };
-  ok('an unproven wall freezes too, because proof is no longer the question',
+  b.adoptRecoveryWall = () => true;      // the formula accepts it; the book is not asked
+  b.playerThreatPresent = () => false;
+  ok('an unproven wall that the FORMULA accepts still freezes',
      (await b.playDead('on a wall nobody has tested')) !== false);
 }
 // The rule lives in the VERB, not in one caller, and the caller that used to override it

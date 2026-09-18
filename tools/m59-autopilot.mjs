@@ -14381,7 +14381,8 @@ export class Autopilot {
     //
     // WHAT THE LADDER DOES WITH IT CHANGED ON 2026-08-21, and this take-back is still
     // right afterwards. It used to hand over to a choice between running for a town and
-    // PLAYING DEAD; playing dead off a proven wall is now refused outright, because in the
+    // PLAYING DEAD; playing dead off a proven wall is refused unless a PLAYER is here
+    // (restored 2026-09-18, see playDead), because against monsters in the
     // open it recovers vigor and never health and three characters were measured freezing
     // at 4, 10 and 13 health in a fifteen-monster room and dying there. So the choice this
     // hands to is now between a town trip and a withdrawal — and both of them MOVE, which
@@ -14391,7 +14392,8 @@ export class Autopilot {
     // IT STILL TAKES THE CHARACTER BACK. WHAT CHANGED IS WHAT THAT HANDS OVER TO.
     //
     // This rung used to be gated on `play_dead` and existed so the ordinary ladder could
-    // freeze. Freezing off a proven safe spot is now refused outright (see playDead), so
+    // freeze. Freezing off a proven safe spot is refused unless a player is here (see
+    // playDead; restored 2026-09-18 after the open freeze was measured to buy nothing), so
     // the hand-over is a town trip or a withdrawal — and both of them MOVE, which is the
     // whole reason ending the journey here is not the same as standing still.
     //
@@ -22045,9 +22047,73 @@ export class Autopilot {
     return false;
   }
 
+  /**
+   * IS A PERSON HERE — the only thing an open freeze works on.
+   *
+   * Room-wide rather than the 2-square radius the travel ladder uses for `strangers`: a
+   * player closes that distance while the pass is deciding, and the question here is "is
+   * this PVP", not "is it adjacent".
+   *
+   * IT CAN ONLY EVER SAY "SOMEBODY IS HERE", NEVER "NOBODY IS" — a room we cannot read
+   * reports nobody, exactly as the wall gate above it does. That bias is the safe one for
+   * the caller: an unreadable room refuses the open freeze and falls through to something
+   * that MOVES.
+   */
+  playerThreatPresent() {
+    const c = this.s?.client;
+    const here = c?.room?.objects ? [...c.room.objects.values()] : [];
+    return here.some(o => o.id !== c.selfId && (o.flags & OF.PLAYER)
+                          && !party.isFleetmate(c.rsc?.get(o.nameRsc)));
+  }
+
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     const s=this.s,atWall=this.adoptRecoveryWall();
+    // THE OPEN FREEZE IS REFUSED AGAINST MONSTERS. Operator, 2026-09-18: "the open freeze
+    // should be removed as a tactic or only ever done in PvP, it will not save you from
+    // monsters."
+    //
+    // THIS REVERSES THE 2026-09-10 INSTRUCTION QUOTED IN `playDeadObserved`, and that
+    // argument is left in place rather than deleted, because the reversal is about one of
+    // its premises and not about its logic. It reasoned that off a wall the choice is not
+    // healing-versus-not-healing but "an attack that ends now against one that continues".
+    // That is only worth having if the bought seconds are spent on something. They are not:
+    //
+    //   Animal, 2026-09-17, room 599, in_safe_spot false, hold null. Frozen twelve seconds
+    //   at 4/55 with vigor at 135 — never the constraint. Unfroze `before {health: 4} ->
+    //   now {health: 4}`: ZERO health across the whole freeze, because a freeze recovers
+    //   vigor and never health and there was no wall to turn at. Then "logoff did not
+    //   establish recovery", reached for a spot five steps away, and died 1.4s later.
+    //
+    // And the measurement the ORIGINAL refusal was written from still stands: 2026-08-21,
+    // three characters froze at 4, 10 and 13 health in a room of twelve to fifteen monsters
+    // and all three died. The 2026-09-10 counter-case concedes its own characters "had no
+    // way out either way" — which is an argument that the refusal did not kill them, not an
+    // argument that the freeze saves anybody.
+    //
+    // A WALL IS STILL FINE, because there the freeze is half of a real sequence: reconnect,
+    // TURN to set PFLAG_MOVED_SINCE_ENTRY, and heal. Off a wall there is no second half.
+    if (!atWall && !this.playerThreatPresent()) {
+      this.note('refusing to play dead in the open — it does not work on monsters', {
+        why, health: s.client?.vitals?.()?.health?.value ?? null,
+        at_wall: false, players_here: false,
+        note: 'a freeze recovers vigor and never health, and off a wall there is no turn to ' +
+              'arm regeneration with. The ladder falls through to something that MOVES',
+      });
+      // AND IT MUST LEAVE AN ACTIONABLE DECISION BEHIND, which the first version of this did
+      // not. A caller that has already chosen `logoff_open` gets `false` back, and if nothing
+      // replaces that decision the character sits on a strategy we have just refused to carry
+      // out — refusing the freeze and then stranding the body is worse than freezing. The
+      // failed-logoff path below chooses exactly this replacement; a refusal is a failure that
+      // happened earlier, so it gets the same treatment.
+      chooseSurvivalDecision(s, {
+        strategy: 'nearest_refuge',
+        reason: 'the open freeze does not work on monsters',
+        reason_code: 'open_freeze_refused',
+        mitigation: 'find a wall the formula accepts, or leave the room',
+      }, { because: 'playing dead off a wall recovers vigor and never health', outcome: 'failed' });
+      return false;
+    }
     const journey=this.inert;
     if(journey?.travelling && !journey.cancelled && journey.to!=null && !this.suspendedJourney)
       this.suspendedJourney={to:journey.to,why:journey.why,at:Date.now(),trigger:why,

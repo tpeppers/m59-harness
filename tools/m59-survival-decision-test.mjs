@@ -197,6 +197,10 @@ await test('a blocked refuge reaches its replacement within one survival dispatc
 });
 await test('a late-stage refused logoff starts its refuge before pass returns',async()=>{
   const {s,k,calls}=fixture();k.playDeadObserved=async()=>false;
+  // AT A WALL, so the subject is the REFUSED LOGOFF rather than the refused freeze: since
+  // 2026-09-18 `playDead` declines the open freeze against monsters before it ever reaches
+  // `playDeadObserved`, and this case is about what happens when the logoff itself fails.
+  k.adoptRecoveryWall=()=>true;
   k.passOnce=async()=>{await k.playDead('under attack');};
   k.takeRecoverySpot=async()=>{
     const d=currentSurvivalDecision(s);assert.equal(d.retry_at,undefined);
