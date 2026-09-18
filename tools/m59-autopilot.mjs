@@ -1222,6 +1222,31 @@ const SPELL_EXERTION_VIGOR = 13;
 // Measured 2026-08-29: Beaker had 57 bulk free and Janice 12, both stuffed with mushrooms.
 const CONJURED_WEAPON_BULK = 70;
 
+// EVERY WEAPON `create weapon` CAN PRODUCE, AND NOTHING ELSE.
+//
+// `creaweap.kod` CastSpell rolls `iNum = Random(iSpellPower/3, iSpellPower)` and picks by
+// band: mace under 20, short sword 20-29, hammer 30-44, axe 45-59, long sword 60-74,
+// scimitar 75-94, mystic sword at 95 and over. So the spell is a slot machine over exactly
+// these seven, and a ban list that forbids all seven makes every cast a certainty of waste:
+// 15 mana, 70 bulk, and an item the character may not hold.
+//
+// AND IT GETS WORSE AS THE CASTER IMPROVES, which is the part that surprises people.
+// `iSpellPower` is instrument bonus + maxHealth/12 + faction + GetSpellAbility/2
+// (spell.kod:2095, :2205), so practising the spell raises the floor of the roll. Once
+// spell power reaches about 135 the bottom of `Random(sp/3, sp)` clears 45 and MACE,
+// SHORT SWORD AND HAMMER BECOME UNREACHABLE — the three cheapest weapons, and the two
+// blunt ones this fleet needs for the skeleton family (skel.kod resists thrust 70 and
+// takes 20% EXTRA from bludgeon). A practised caster can no longer conjure the weapon its
+// own quarry calls for.
+const CONJURABLE_WEAPONS = Object.freeze([
+  'mace', 'short sword', 'hammer', 'axe', 'long sword', 'scimitar', 'mystic sword']);
+
+// How many unusable conjured weapons are enough to say the slot machine is not paying.
+// Three, because one is bad luck and the failure this stops had TWENTY-FOUR: Rizzo, on
+// prod 2026-09-18, stood bare in room 38 with 24 long swords its own ban list forbade and
+// 14 mana against the 15 the spell costs.
+const CONJURE_HOARD_LIMIT = 3;
+
 // WHERE THE MONEY GOES. Jasper and Tos share one banking system, so either counter
 // pays into the same balance and the only question is which is nearer — which really
 // does flip across this fleet's rooms: Jasper is closer to the Merchant Way rooms,
@@ -2368,6 +2393,47 @@ export class Autopilot {
     return Array.isArray(b) && b.length ? b : null;
   }
 
+  /**
+   * Is this character bare ON PURPOSE right now?
+   *
+   * `trainingStyle: 'unarmed'` means "train brawling on the quarry", and the keeper already
+   * honours it inside a fight -- `prepareTrainingStyle('unarmed')` calls
+   * `unuseTrainingWeapon()` and fights with fists. What it did NOT honour is the ARMING
+   * side: `armSelf()` is reached from the recovery branch with no style check, so a brawler
+   * resting between fights conjured a weapon, walked back out, and had it taken off again on
+   * the first swing. Summon, drop, repeat -- 15 mana and 70 bulk a lap, for a weapon the
+   * character is not allowed to keep hold of.
+   *
+   * Scoped to the character's OWN GROUND deliberately, which is what `styleForNonPrey`
+   * already encodes. Off its station an unarmed trainer still arms, because the weapon it
+   * wants there is for travel and survival rather than for the bout -- the same split
+   * meridian59-dum-bot's `TRAINING_PRESET` assumes when it declines to send a weapon
+   * priority for `unarmed` at all ("the keeper disarms in the farm room itself").
+   */
+  bareHandedByTraining() {
+    return this.styleForNonPrey(this.s?.world?.room) === 'unarmed';
+  }
+
+  /**
+   * Conjured weapons in the pack that this character's own ban list forbids it to hold.
+   *
+   * This is the hoard `create weapon` builds when the ban and the spell disagree: every cast
+   * succeeds, every result is refused by `equipBest`, and the pack fills with them. A full
+   * pack then answers `receiver_full` to every `supply`, so the character cannot even be
+   * handed a weapon it IS allowed to use.
+   */
+  bannedConjurablesHeld() {
+    const c = this.s?.client;
+    const banned = this.bannedWeaponsNow();
+    if (!c || !banned?.length) return 0;
+    const forbidden = n => banned.some(b => n.includes(String(b).toLowerCase()));
+    return (c.inventory || []).filter(o => {
+      const n = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+      if (!n) return false;
+      return CONJURABLE_WEAPONS.some(w => n.includes(w)) && forbidden(n);
+    }).length;
+  }
+
   weaponPriorityNow(targetName = null) {
     // Undead override, above even the operator's list: blunt for a skeleton, a short
     // sword for a zombie (operator order, 2026-09-01). Only these two prey — every
@@ -2753,6 +2819,40 @@ export class Autopilot {
     if ((mana?.value ?? 0) < 15)
       return this.declinedCast('create weapon', 'not enough mana',
         { mana: mana?.value ?? null, needs: 15 });
+    // THREE REASONS NOT TO PULL THE LEVER, ALL OF THEM KNOWABLE BEFORE PAYING.
+    //
+    // The existing check below reads what the spell MADE and refuses to call a banned
+    // result "armed". That is the right diagnosis and it says why in as many words: "the
+    // loop cannot end while the ban and the spell disagree." It does not end the loop --
+    // the next pass conjures another one. These three end it.
+    if (this.bareHandedByTraining())
+      return this.declinedCast('create weapon', 'training unarmed on its own ground',
+        { training_style: this.policy?.trainingStyle ?? null,
+          why: 'the bout disarms whatever this makes, so the cast buys a weapon that is ' +
+               'taken off on the first swing' });
+    const bannedNow = this.bannedWeaponsNow();
+    if (bannedNow?.length) {
+      const reachable = CONJURABLE_WEAPONS.filter(w =>
+        !bannedNow.some(b => w.includes(String(b).toLowerCase()) ||
+                             String(b).toLowerCase().includes(w)));
+      if (!reachable.length)
+        return this.declinedCast('create weapon', 'every weapon it could make is banned',
+          { banned_weapons: bannedNow, could_make: CONJURABLE_WEAPONS,
+            why: 'creaweap.kod can only produce these seven, and this character may hold ' +
+                 'none of them, so the cast is a certainty of 15 mana and 70 bulk for an ' +
+                 'item that will be refused',
+            doing: 'un-ban one of them, or hand this character a weapon it may hold' });
+      const hoard = this.bannedConjurablesHeld();
+      if (hoard >= CONJURE_HOARD_LIMIT)
+        return this.declinedCast('create weapon', 'already carrying unusable conjured weapons',
+          { held: hoard, limit: CONJURE_HOARD_LIMIT, banned_weapons: bannedNow,
+            can_still_make: reachable,
+            why: 'the spell rolls a band rather than granting a choice, and this character ' +
+                 'has already banked ' + hoard + ' results it may not hold. Casting again ' +
+                 'is the same bet at the same odds, and each one costs mana and the pack ' +
+                 'space that a supply would need',
+            doing: 'shed the hoard, or hand it one of: ' + reachable.join(', ') });
+    }
     // ONLY WHEN WE POSITIVELY KNOW THERE IS NO ROOM. carryCapacity withholds `room_for`
     // whenever anything in the pack is unweighed, and refusing on that silence would build
     // a fresh deadlock for exactly the characters this one already stranded — so an
@@ -2855,6 +2955,19 @@ export class Autopilot {
     const c = this.s.client;
     if (!c) return false;
     await this.wearArmourIfNeeded().catch(() => {});
+    // A BRAWLER IS NOT AN UNARMED CHARACTER WITH A PROBLEM. Armour still goes on above;
+    // only the weapon is declined, and only on this character's own farm ground.
+    if (this.bareHandedByTraining()) {
+      this.note('staying bare-handed on purpose', {
+        training_style: this.policy?.trainingStyle ?? null,
+        assigned_room: this.policy?.assignedRoom ?? null,
+        why: 'trainingStyle is unarmed and this is the assigned farm room, so the fight ' +
+             'itself will take any weapon back off (prepareTrainingStyle -> ' +
+             'unuseTrainingWeapon). Arming here only pays 15 mana and 70 bulk to be ' +
+             'disarmed on the first swing',
+        doing: 'fighting with fists, which is what the style asked for' });
+      return true;
+    }
     if (skills.weaponsOf(c).length) {
       const eq = await skills.equipBest(this.s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
       if (eq?.wielding) return true;
