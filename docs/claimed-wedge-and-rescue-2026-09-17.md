@@ -1,12 +1,24 @@
 # The claimed body that bounces — one repair, and three more to pick up
 
 Date: 2026-09-17. Scope: the 24-hour death review of the prod fleet (8 deaths, 2 exempt as
-PVP/Morpheus, 6 defects). Repair #1 is done and is in this checkout. **Repairs #2–#4 are
-written up here for somebody else to take, in the order they should be taken.**
+PVP/Morpheus, 6 defects).
 
-All line numbers are `tools/m59-autopilot.mjs` in **`C:\code\m59-lab\prod-deploy`**, which is
-what prod is running (`bcd302d` plus two commits that do not touch this file). `muster` is the
-same file at the same commit, plus repair #1.
+**Repair #1 is DEPLOYED.** Commit `8251d7a` on `origin/main`, cut as tag
+**`deploy-2026-09-17-11`**, with `prod-deploy` checked out to it and its broker and 23 keepers
+restarted onto it at 21:25 on 2026-09-17. Rollback is `git -C C:/code/m59-lab/prod-deploy
+checkout deploy-2026-09-17-10` plus `node tools/m59-service.mjs restart --fleet prod --http
+8901 --dashboard 8902`.
+
+**Repairs #2–#4 are unclaimed** and are written up here for whoever takes them, in the order
+they should be taken. As of this document's last revision nobody is working on them: the
+`prod-deploy-fa` session, which did the stall profiling below, explicitly declined the raycast
+work — its own task is the fleet's kill rate and it is blocked on a doctrine restart only the
+operator can run.
+
+Line numbers for the keeper are `tools/m59-autopilot.mjs` **as deployed at
+`deploy-2026-09-17-11`**. Repair #1 inserted 42 lines above the #2 and #3 sites, so every
+citation below has been re-read against the deployed file rather than carried over: what was
+11705 / 11800 / 11840 in the pre-repair tree is 11747 / 11842 / 11886 now.
 
 ## The window
 
@@ -30,7 +42,8 @@ Victoria HP bands@pid-…"`. That string is the whole story of repair #1.
 
 ## DONE — #1 `keeper_blind` / `wedged`: the bounce test never ran for a claimed body
 
-**Cited.** `pulsePosition`, prod-deploy line 11493:
+**Cited.** `pulsePosition`, **pre-repair** line 11493 — this section describes the defect as it
+stood before the deploy, so its line numbers are the old ones:
 
 ```js
 const bleedingWhileInert = at && this.inert
@@ -150,7 +163,7 @@ decision; the code says so at `pennedIn`'s own comment and I have not touched it
 mid-migration to it). It carries **the identical bug** at its line 393, and its rescue at 490
 is `host.inert`-only as well. Its documented host contract (line 37) does not even expose
 `facultyHeld`, so fixing it there means extending the contract. Prod does not run it today —
-`watchdogTick` at 11635 calls the inline `this.pulsePosition`, and the module supplies only
+`watchdogTick` at 11651 calls the inline `this.pulsePosition`, and the module supplies only
 `freshState()` — but whoever finishes the extraction will reintroduce this death unless the
 fix goes across with it.
 
@@ -158,7 +171,7 @@ fix goes across with it.
 
 ## TO DO — #2 `keeper_blind`: the rescue is rationed per *pass*, and a blocked pass is minutes
 
-**Cite.** Line 11800 (and the same clause at 11705):
+**Cite.** Line 11842 (and the same clause at 11747):
 
 ```js
 && (now - wedge.since) >= INERT_RESCUE_MS && w.rescuedPass !== this.passes) {
@@ -178,7 +191,7 @@ stood at 30,35 and lost 30 more health — `wedged_at_death.for_ms = 86124`,
 **Deliverable.** Replace the pass-identity guard with an elapsed-time cooldown on `w` (e.g.
 `w.rescuedAt` + a `RESCUE_COOLDOWN_MS` of about `INERT_RESCUE_MS`), so a long pass can be
 rescued more than once. Keep a cooldown — the point of the original guard was to stop the
-rescue firing every tick, and that is still right. Both sites (11705, 11800) take the same
+rescue firing every tick, and that is still right. Both sites (11747, 11842) take the same
 change. Test alongside `m59-claimwedge-test.mjs`: drive a wedge past the threshold twice
 without advancing `host.passes`, and assert two rescues.
 
@@ -195,11 +208,18 @@ is waiting for whoever picks this up.
 | 3 | the stall line's own room field | nothing — the line records the room it blocked IN | correct, but **counts rank by exposure** |
 | 4 | #3 plus dwell sampled every 20s over the same window | nothing — gives a **rate** | **use this to rank** |
 
-Instrument 3 is sound and still got the ranking wrong, which is the lesson worth carrying: a
-correct numerator ranked 599 second-worst when it is the cheapest room on the board, because a
-room the fleet stands in for 35 minutes accumulates stalls a room it passes through never
-will. Nothing is wrong with the counts; they answer "where did blocking happen", and the
-question is "which room is expensive".
+Instrument 3 is sound and still got the ranking wrong, and that is the lesson worth carrying
+out of this whole section: a correct numerator ranked 599 second-worst when it is the cheapest
+room on the board, because a room the fleet stands in for 35 minutes accumulates stalls a room
+it passes through never will. Nothing is wrong with the counts; they answer "where did blocking
+happen", and the question was "which room is expensive".
+
+**This is a worse failure than the bad joins in rows 1 and 2, not a milder one.** A bad join
+announces itself the moment anybody checks it. A correct instrument answering the adjacent
+question is silent — it produces a clean, defensible table that ranks the wrong thing, and it
+is trusted precisely because it is sound. Both sessions were caught by it in the same window
+and in opposite directions: 584 on one side, 599 on the other. The 599 reading in particular
+was confident, and was being used to correct the other session's numbers at the time.
 
 The stall line reads `(room 578, doing travelling, travelling to 113)`. It names the room at
 the moment of the block, so there is no join to get wrong. Both earlier readings — the
@@ -348,7 +368,7 @@ rationing fix is small, bounded, and can land without waiting for that answer.
 
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
-**Cite.** Lines 11840–11852, the comment that ends "…taking ownership back is the operator's
+**Cite.** Lines 11886–11894, the comment that ends "…taking ownership back is the operator's
 call (`autopilot action=release`), and survival never needed it to act. The claim stands".
 
 **Mechanism.** The rescue cancels the *current* walk but deliberately leaves the claim in
