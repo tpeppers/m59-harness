@@ -609,6 +609,21 @@ export const script = {
      * and the crawl then resolves to the body's own square, which `crawl_to` answers `arrived`
      * for without moving. `optional` covers the NPC simply not being in the room — that is a
      * fact the say step reports far better than a walker can.
+     *
+     * AND `optional` COVERS THE COHORT BLOCKING ITSELF, WHICH IS THE COMMON CASE.
+     *
+     * Six characters sent to one priestess arrive through one door and stand in it. Measured on
+     * the shadow fleet 2026-09-18 at the Temple of Shal'ille: five of six had both rungs refused
+     * at r8c31/r9c31 with `blocked by a BODY, not by the ground` — `crawl_to` telling the truth
+     * and distinguishing it from terrain, which is exactly what it is for. Every one of them
+     * then probed, said `disciple` and read its ask anyway, because piling through the same
+     * entrance had already put them within five squares.
+     *
+     * So this leg worked by a coincidence of the geography, and it is worth saying so: had the
+     * priestess stood further from her door, the crowd would have blocked the approach and the
+     * probe would have failed with the cohort standing in a heap. The fix if that ever bites is
+     * to stagger the cohort, not to make the walker push through bodies — a body is not a wall
+     * and the client SLIDES around one, so a walker that treats it as terrain learns a bad route.
      */
     const closeOn = (who, label) => [
       verify(async ({ agent: me, call, state }) => {
