@@ -376,6 +376,54 @@ rescue exists for is a body losing about half a point of health a second. **The 
 probably the larger win**, but it owes a rate measurement before anyone sizes it — and the
 rationing fix is small, bounded, and can land without waiting for that answer.
 
+### THE RAYCAST REPAIR IS WRITTEN AND MEASURED — commit `3f0f568`, not deployed
+
+`RoomGeometry._blockingWall` visited EVERY internal BSP node on every collision query: the box
+test sat at the top of `intersectNode`, returned null, and the traversal pushed both children
+anyway. One step's collision cost scaled with the size of the WHOLE ROOM. Hoisting the box test
+into the traversal lets a rejected box prune its subtree. Offline, against the shipped rooms:
+**811 node visits per query → 28.2 in room 578 (−96.5%), 41ms → 3ms (12.4×)**, with the pruned
+cost nearly flat at 14–29 visits regardless of room size.
+
+Equivalence was the real work, since a faster raycast that answers differently is a silent
+movement change: all 266 rooms and 109,172 internal nodes confirm every box bounds its subtree,
+and 62,832 queries run through both walks agree on verdict, reason and wall index. See
+`m59-raycast-test.mjs`.
+
+**LIVE A/B ON THE SHADOW FLEET.** Twelve characters working room 578, two 5-minute windows,
+identical but for `M59_RAYCAST_NO_PRUNE`. The stall threshold was lowered to 150ms
+(`M59_LOOP_STALL_MS`) in BOTH arms because at the shipped 1500ms the lab fleet is silent —
+it does not reproduce prod's blocking, and three earlier attempts measured nothing at all.
+
+```
+                         prune OFF      prune ON      change
+  stalls                    90             49          -46%
+  blocked total           42.7s          11.6s         -73%
+  room 578 blocked        17.8s           7.4s         -58%
+  room 579 blocked        23.2s           2.6s         -89%
+  _approachSquareUncached  7.9s           2.4s         -69%
+  shadow keeper CPU      222.9s         193.8s         -13%
+  prod keeper CPU        377.3s         452.4s         +20%   <- control
+```
+
+**The control is what makes this readable.** The prod keepers, untouched by the change, used
+20% MORE cpu during the second window — the machine was busier, not quieter. The shadow fleet's
+13% cpu drop happened against that, so it is a conservative figure rather than an artefact of a
+calmer box. (A single 5-minute window per arm, one character drifted out of 578 in arm B
+(11/12 vs 12/12), and the arms were not repeated: this is a direction, not an effect size.)
+
+**Read the room-578 line carefully, because it is the interesting one.** Stall COUNT there
+barely moved (35 → 36) while blocked TIME fell 58%. The fix does not stop the keeper being
+interrupted; it makes each interruption shorter. That is exactly the signature a cheaper
+raycast should produce, and it is a different claim from "fewer stalls".
+
+**What this does NOT establish.** The lab's hot callers are not prod's: this fleet farms in
+place, so its biggest caller was `snapshot`, while prod — whose characters run long journeys —
+is dominated by `provedSquaresUncached` (93.3s) and `nearestSafeSpot` (44.2s), which barely
+appear here. So the lab understates the prod effect and cannot confirm the prediction above.
+That still wants prod's own stall rate after deployment, with 599 as the control that should
+not move.
+
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
 **Cite.** `Autopilot.watchdogTick`, the claimed-mover branch — `else this.note('WATCHDOG — the
