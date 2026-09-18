@@ -16397,16 +16397,39 @@ const TOOLS = [
           // Grouped by NAME rather than left as stacks, because three stacks of herbs is
           // one fact to a reader and three rows to a table, and `carrying` above is
           // already the stack count for anyone who wants it. Biggest amount first.
+          //
+          // AND IT CARRIES THE GRADE AND THE STACK TAG, because a reader that only gets a name
+          // and a count cannot tell a cursed ring from a plain one. Added 2026-09-17 when the
+          // /inventory board's magic markers rendered ZERO times on a live fleet holding three
+          // cursed items and thirteen unidentified ones: the page was correct, `magicOf` was
+          // correct, and this function had quietly dropped the only two fields either of them
+          // could have used. Same shape as the `rarity` that reached both serializers and not
+          // the rebuild — a value that looks present and is not.
+          //
+          // UNANIMOUS OR NULL, because grouping by NAME is what loses the distinction. Two long
+          // swords under one row can disagree about their grade, and picking either one would be
+          // asserting something about an item the reader cannot see. `null` means "these are not
+          // all the same", which is a fact worth having; it is the same rule the hatched meter
+          // follows, one field down.
           pack_items: (() => {
             if (!c.inventory) return null;
             const by = new Map();
             for (const o of c.inventory) {
               const name = c.rsc.get(o.nameRsc) || '';
               if (!name) continue;
-              by.set(name, (by.get(name) || 0) + (o.amount || 1));
+              const row = by.get(name)
+                ?? { name, amount: 0, rarity: undefined, tag: undefined };
+              row.amount += (o.amount || 1);
+              for (const k of ['rarity', 'tag']) {
+                const v = o[k] ?? null;
+                row[k] = row[k] === undefined ? v : (row[k] === v ? v : null);
+              }
+              by.set(name, row);
             }
-            return [...by].map(([name, amount]) => ({ name, amount }))
-                          .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
+            return [...by.values()]
+              .map(r => ({ name: r.name, amount: r.amount,
+                           rarity: r.rarity ?? null, tag: r.tag ?? null }))
+              .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
           })(),
           // HOW FULL THAT PACK IS, which the count above cannot answer: twenty stacks of
           // feathers and twenty of plate are the same `carrying` and opposite answers to

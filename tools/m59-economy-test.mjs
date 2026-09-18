@@ -350,6 +350,56 @@ console.log('\nboth boards render against this fixture');
 //
 // The whole reason m59-page-chrome.mjs exists: nine boards carrying nine copies of one
 // list would inevitably leave a newly added page invisible from one of the others.
+console.log('\nthe inventory board marks magic, and only where it knows');
+
+{
+  const { renderInventory } = await import('./m59-inventory-page.mjs');
+
+  // THE ROW SHAPE IS THE CONTRACT, and it is the half that broke. `pack_items` is grouped by
+  // name in the broker's fleet tool, and that grouping used to emit `{name, amount}` only — so
+  // the markers rendered ZERO times on a live fleet holding three cursed items and thirteen
+  // unidentified ones. The page was right, `magicOf` was right, and the producer had dropped the
+  // only two fields either could use. This pins the page's half: given the fields, it marks.
+  const live = [{
+    character: 'Rizzo', carrying: 4,
+    pack: { percent: 42, binding: 'weight', bulk: 10, weight: 20, max: 2000, exact: true },
+    pack_items: [
+      { name: 'ring of lethargy', amount: 1, rarity: 200, tag: 0 },
+      { name: 'scroll', amount: 1, rarity: 100, tag: 0 },
+      { name: 'shilling', amount: 4000, rarity: 0, tag: 1 },
+      { name: 'long sword', amount: 1, rarity: 0, tag: 0 },
+    ],
+  }];
+  const html = renderInventory({ live, characters: new Set(['Rizzo']) });
+
+  ok('a cursed item is marked, and named as cursed rather than merely magic',
+     html.includes('(cursed)') && /class="magic cursed"/.test(html));
+  ok('an unidentified item is marked as unread — a backlog, not a property',
+     html.includes('(magic, unread)') && /class="magic unread"/.test(html));
+  // A STACK IS NEVER MAGIC, and the test is the TAG rather than the amount. Money, reagents,
+  // arrows and food carry no attribute, and an identified-per-stack model does not exist.
+  ok('money is not marked', !/shilling[^<]*<span class="magic/.test(html));
+  // AND NOTHING IS ASSERTED ABOUT WHAT NOBODY HAS READ. A plain long sword with no description
+  // is "nothing is known", never "it is ordinary" — so it gets no marker and no claim.
+  ok('an item with nothing read carries no marker rather than a claim that it is mundane',
+     !/long sword[^<]*<span class="magic/.test(html));
+
+  ok('the description is IN the tooltip, which is what was asked for',
+     /title="[^"]*never be unequipped once worn/.test(html));
+
+  // The truncation this page exists to stop doing.
+  ok('nothing is truncated', !/and \d+ more/.test(html));
+
+  // A row from an older broker has no grades at all. That must read as "nothing known" for
+  // every item rather than as a fleet holding nothing magical.
+  const old = renderInventory({
+    live: [{ character: 'Rizzo', carrying: 2,
+             pack_items: [{ name: 'ring of lethargy', amount: 1 }] }],
+    characters: new Set(['Rizzo']) });
+  ok('a broker too old to send grades marks nothing, rather than claiming the pack is mundane',
+     !/class="magic/.test(old) && old.includes('ring of lethargy'));
+}
+
 console.log('\none tab bar, ten boards');
 {
   const { NAV, TABS } = await import('./m59-page-chrome.mjs');
