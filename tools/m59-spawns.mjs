@@ -842,7 +842,7 @@ export function huntRoomYield(spawns, roomNum, want, { standingHere = false } = 
  * and `spawns.rooms` says where that creature actually generates, so a creature nothing spawns
  * comes back with an empty room list and says so instead of sending somebody nowhere.
  */
-export function farmSourcesFor(spawns, item) {
+export function farmSourcesFor(spawns, item, { maxLevel = null } = {}) {
   const rows = whoDrops(spawns, item);
   const drops = Array.isArray(rows) ? rows : (rows?.creatures ?? rows?.rows ?? []);
   if (!drops.length) return { item, farmable: false, sources: [],
@@ -858,8 +858,28 @@ export function farmSourcesFor(spawns, item) {
     cite: d.cite ?? null, rooms: roomsOf(d.creature),
   })).sort((a, b) => (b.per_roll_percent ?? 0) - (a.per_roll_percent ?? 0));
   const reachable = sources.filter(x => x.rooms.length);
+  // THE BEST SOURCE IS NOT THE BIGGEST NUMBER, and sorting by drop rate alone says it is.
+  //
+  // Sapphires, measured 2026-09-18: the rate order puts a level-105 lupogg at 12% on top and
+  // buries the SPIDER at level 50 and 10% six rows down — in rooms 4, 6, 26, 27, 28, where this
+  // fleet's cave cohort is already standing. A shortage report that answers "farm it off a lupogg"
+  // is worse than one that answers nothing, because somebody might try.
+  //
+  // So `sources` stays in rate order, which is a fact about the game, and `best` is the pick a
+  // caller can act on: the highest rate among creatures it can actually fight. No ceiling means
+  // no opinion, and a ceiling that excludes everything says so rather than falling back to the
+  // biggest number — silently relaxing the constraint is how the lupogg gets recommended anyway.
+  const withinReach = maxLevel == null ? reachable
+    : reachable.filter(x => Number.isFinite(x.level) && x.level <= maxLevel);
   return {
     item, farmable: reachable.length > 0, sources,
+    best: withinReach[0] ?? null,
+    max_level: maxLevel,
+    best_why: withinReach.length ? null
+      : (maxLevel == null ? null
+         : `every creature that drops ${item} is above level ${maxLevel}` +
+           (reachable.length ? ` (the softest is ${reachable[reachable.length - 1].creature} at ` +
+                               `level ${reachable[reachable.length - 1].level})` : '')),
     why: reachable.length ? null
       : `${item} is dropped by ${sources.map(x => x.creature).join(', ')}, and none of them ` +
         'generates in any room the spawn index knows',
