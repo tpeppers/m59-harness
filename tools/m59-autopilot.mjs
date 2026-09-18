@@ -11490,7 +11490,49 @@ export class Autopilot {
     // seconds later could never fire: measured live, `wedges` climbed to 8 and `rescues`
     // stayed at 0 while the character was being eaten. A wedge ends when the body MOVES,
     // which `stillHere` below decides, and not when a single second happens to be painless.
+    // AND `this.inert` ALONE WAS THE WRONG QUESTION HERE TOO — FOURTH SITE, AND IT BOUNCES.
+    //
+    // `drivenByOther` below, and both rescues in `watchdogTick`, have each already been
+    // widened from "the keeper stood ITSELF down" to "or a commander claim holds movement".
+    // This clause was left on the old test, so for a claimed character the widened rescues
+    // could only ever act on a wedge the EXACT-SQUARE test opened. A body held perfectly
+    // still is caught that way. A body that BOUNCES is not, and `pennedIn` — the one test
+    // written for the bounce — is gated behind this flag and so never ran for them.
+    //
+    // MEASURED, prod 2026-09-17. Rowlf, level 52, room 39, killed by a battered skeleton:
+    // `wedged_at_death.inert = "movement held by dum/prod Valley and Castle Victoria HP
+    // bands@pid-38876"`, `wedges: 415`, `movement.net_squares = 1` over 94.7s, and
+    // `wedged_at_death.for_ms = 1104` — the episode that killed him was 1.1 seconds old
+    // because every one before it was thrown away. His last pulses read 16,8 / 17,8 / 18,8
+    // and back: moving, by the exact-square test, for ever, at 41 -> 0 health. The rescue at
+    // INERT_RESCUE_MS could never mature because the clock kept restarting.
+    //
+    // Clifford, Animal x2 the same night carry the same marker. The claim is the commonest
+    // way this fleet is driven now, so the bounce case is not an edge.
+    //
+    // COMBAT CANNOT LEAK IN THROUGH `facultyHeld`. `facultyOwner` answers `combat:<id>` for
+    // an unprotected faculty while a fight is live, which would read as a claim here — but
+    // `watchdogTick` returns at `s.combat?.active` before it ever calls this, so a live
+    // fight never reaches this line. Stated because the two guards are 180 lines apart and
+    // nothing local says so.
+    //
+    // AND THE WIDENING IS TO `stillHere` ONLY — IT MUST NOT REACH THE EXCUSE LADDER.
+    //
+    // `bleedingWhileInert` does two jobs: it skips the ladder below, and it turns on
+    // `pennedIn` in `stillHere`. Skipping the ladder is right for an INERT keeper, which
+    // sets no `doing` at all and cannot be holding a wall — its own note says so. It is
+    // WRONG for a claimed one: that keeper is awake, it still sets `doing`, and it can be
+    // resting or holding a safe wall on purpose while a bot owns the walking. Folding the
+    // claim into the same flag flagged both, and the non-travelling rescue would then have
+    // cancelled movement and pulled a character OFF a wall it was deliberately holding —
+    // the safe wall being the fleet's whole defensive game. Caught by the regression gate
+    // in m59-claimwedge-test.mjs, which is why that gate is in it.
+    //
+    // So the claim gets the BOUNCE TEST and nothing else. Every excuse that applied to a
+    // claimed character a moment ago still applies.
     const bleedingWhileInert = at && this.inert
+      && (this.inertBleeding(w, hp) || !!w.wedged?.inert);
+    const bleedingWhileClaimed = at && !this.inert && this.facultyHeld('movement')
       && (this.inertBleeding(w, hp) || !!w.wedged?.inert);
     const excused = bleedingWhileInert ? null
       : !at ? 'no position'
@@ -11514,7 +11556,7 @@ export class Autopilot {
     // and the rescue below never gets a wedge to act on.
     const stillHere = (prev && last && prev.room === last.room
                        && prev.col === last.col && prev.row === last.row)
-                      || (bleedingWhileInert && this.pennedIn(w));
+                      || ((bleedingWhileInert || bleedingWhileClaimed) && this.pennedIn(w));
     if (!stillHere) { w.wedged = null; return null; }
 
     // ONE EPISODE, NOT ONE PER TICK. The alert is raised once when it starts and carries
