@@ -608,8 +608,8 @@ console.log('\none agent failing does not fail the others');
   // tests too — a suite nobody will sit through is a suite nobody runs.
   const r = await fleetScript({ name: 'mixed', fleet: 'testfleet', agents: ['a1', 'a2'],
     steps: [walk(54)], pollMs: 30, healMs: 400, onLog: quiet });
-  ok('the hurt one stops', r.results.a1.ok === false);
-  ok('the healthy one still completes', r.results.a2.ok === true);
+  ok('the hurt one stops', r.results?.a1?.ok === false);
+  ok('the healthy one still completes', r.results?.a2?.ok === true);
   ok('and the run reports partial success', r.ok === true);
 }
 

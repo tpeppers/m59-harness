@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// WHAT THE DISCIPLE QUEST NEEDS FROM US, PINNED (100). Offline: no broker, no server, no socket.
+// WHAT THE DISCIPLE QUEST NEEDS FROM US, PINNED (167). Offline: no broker, no server, no socket.
 //
 //   node tools/m59-disciple-test.mjs
 //
@@ -36,8 +36,10 @@ process.env.M59_KEEPER_BAND_REGISTRY = join(BAND_DIR, 'keeper-bands.json');
 const { walk, trapCheck, resolveStep, KNOWN_TRAPS } = await import('./m59-fleetscript.mjs');
 const { SAY_RADIUS, QUEST_NPC_RADIUS, sayApproachSquare, withinSayRange } =
   await import('./m59-sayrange.mjs');
-const { script, readProbe, PROBE_ANSWERS, SCHOOLS, KRAANAN_MONSTERS } =
+const { script, readProbe, PROBE_ANSWERS, SCHOOLS, KRAANAN_MONSTERS,
+        readAsk, ASK_KINDS, QUEST_HANDLERS, findSeller, findNpc } =
   await import('./fleetscripts/disciple-quest.mjs');
+const { saveRun, loadRun, listRuns, distinctAsks } = await import('./m59-questbook.mjs');
 
 let pass = 0, fail = 0, skip = 0;
 const ok = (what, cond, extra = '') => {
@@ -70,21 +72,23 @@ try { src = readFileSync(KOD, 'utf8'); } catch { /* no tree here */ }
 if (!src) {
   skipped(`no Meridian59 kod tree at ${KOD} — set M59_ROOT to check the cargo strings`);
 } else {
-  // The steps are built per school, and the cargo is the text of the delivery `say`. Resolve
-  // it the way the runner would: the step's `text` is a function of the run state.
-  const cargoOf = async school => {
-    const steps = await script.steps({ school, agent: 't1', agents: ['t1'] });
-    const says = steps.filter(s => s.do === 'say');
-    // [0] starts the quest, [1] is the delivery, [2] is the closing word.
-    return resolveStep(says[1], { disciple: false, quest: { npc: 'X', room: 1 } }).text;
-  };
+  // Against the school table, which is where the errand reads it from — and then again
+  // through a resolved step, so a refactor that stops WIRING the cargo into the say is caught
+  // as well as one that mistypes it.
   for (const [school, rsc] of [['shalille', 'shalilledisciple_trigger'],
                                ['faren', 'farendisciple_trigger'],
                                ['qor', 'qordisciple_trigger']]) {
-    const want = kodResource(src, rsc), got = await cargoOf(school);
+    const want = kodResource(src, rsc), got = SCHOOLS[school].cargo;
     ok(`${school}'s sentence is byte-for-byte ${rsc}`, want !== null && got === want,
        want === null ? `${rsc} not found in ${KOD}`
                      : `\n    kod: ${JSON.stringify(want)}\n    us:  ${JSON.stringify(got)}`);
+    const steps = await script.steps({ school, agent: 't1', agents: ['t1'] });
+    const ask = readAsk([`brave the temple of ${SCHOOLS[school].destinations[0].npc}`],
+                        { school });
+    const spoken = steps.filter(s => s.do === 'say')
+      .map(s => resolveStep(s, { disciple: false, ask }).text).filter(Boolean);
+    ok(`${school}: and that exact sentence is what the errand would say`,
+       spoken.includes(want), JSON.stringify(spoken.map(t => t.slice(0, 30))));
   }
   // The double spaces are the whole reason the case above exists, so assert them directly:
   // a single-space "fix" would still round-trip through any normalising comparison.
@@ -316,11 +320,17 @@ console.log('\nthe errand, per school');
     const steps = await script.steps({ school, agent: 't1', agents: ['t1'],
                                        rounds: 40, abortBelow: 0.5, home: 39 });
     const verbs = steps.map(s => s.do);
+    // Ends with the walk home and then the transcript, and BOTH are `always` — the walk
+    // because a failed quest still has to bring the body back, the transcript because the run
+    // a reviewer needs to read is the one that went wrong.
+    const home = steps[steps.length - 2], book = steps[steps.length - 1];
     ok(`${school}: the plan starts at the temple and ends at home`,
-       verbs[0] === 'walk' && steps[steps.length - 1].to === 39 &&
-       steps[steps.length - 1].always === true, verbs.join(' '));
+       verbs[0] === 'walk' && home.do === 'walk' && home.to === 39 && home.always === true,
+       verbs.join(' '));
+    ok(`${school}: and writes the run down afterwards, even while unwinding`,
+       book.do === 'verify' && book.always === true, verbs.join(' '));
     ok(`${school}: it asks before it acts, and measures before it reports`,
-       verbs[1] === 'verify' && verbs[verbs.length - 2] === 'verify', verbs.join(' '));
+       verbs[1] === 'verify' && verbs[verbs.length - 3] === 'verify', verbs.join(' '));
     ok(`${school}: every run-time walk declares its candidate rooms`,
        steps.filter(s => s.do === 'walk' && typeof s.to === 'function')
             .every(s => Array.isArray(s.candidates) && s.candidates.length),
@@ -340,22 +350,69 @@ console.log('\nthe errand, per school');
     const walks = fa.filter(s => s.do === 'walk' && typeof s.to === 'function');
     ok('faren declares both Hazarbad rooms as candidates',
        walks.every(w => w.candidates.includes(1007) && w.candidates.includes(1017)),
-       JSON.stringify(walks.map(w => w.candidates)));
-    const alt = walks[1];
+       JSON.stringify(walks.map(w => w.candidates.length)));
+    // The deliver handler's second address: the walk after the delivery `say` and its verify.
+    const alt = walks[2];
+    const twin = (delivered, alt_) => ({ delivered,
+      ask: { kind: 'deliver', npc: 'x', room: 1007, alt: alt_, cargo: 'c' } });
     ok('a delivery that landed does not walk to the twin',
-       resolveStep(alt, { delivered: true, quest: { npc: 'x', room: 1007, alt: 1017 } }).to === 45);
+       resolveStep(alt, twin(true, 1017)).to === 45, String(resolveStep(alt, twin(true, 1017)).to));
     ok('a delivery that did not land does',
-       resolveStep(alt, { delivered: false, quest: { npc: 'x', room: 1007, alt: 1017 } }).to === 1017);
+       resolveStep(alt, twin(false, 1017)).to === 1017, String(resolveStep(alt, twin(false, 1017)).to));
     ok('and a destination with no twin never walks a second time',
-       resolveStep(alt, { delivered: false, quest: { npc: 'x', room: 103, alt: null } }).to === 45);
+       resolveStep(alt, twin(false, null)).to === 45);
     // Every other school must not grow a twin leg by accident.
     for (const school of ['shalille', 'qor']) {
       const steps = await script.steps({ school, agent: 't1', agents: ['t1'] });
       const dyn = steps.filter(s => s.do === 'walk' && typeof s.to === 'function');
       ok(`${school}: its second address resolves to the temple, because it has no twin`,
-         resolveStep(dyn[1], { delivered: false, quest: { npc: 'x', room: 1, alt: null } }).to
-           === (school === 'shalille' ? 48 : 802));
+         resolveStep(dyn[2], twin(false, null)).to === (school === 'shalille' ? 48 : 802));
     }
+  }
+
+  // ---------------------------------------------------------------- the handler registry
+  //
+  // THE PLAN CARRIES EVERY HANDLER AND EXACTLY ONE ACTIVATES. That is what makes an ask the
+  // errand has never seen recordable rather than silently skipped — and it only works if the
+  // handlers that are NOT in play resolve to nothing rather than to something plausible.
+  console.log('\nevery prepared handler is in the plan, and only one fires');
+  {
+    const steps = await script.steps({ school: 'shalille', agent: 't1', agents: ['t1'] });
+    ok('every ask kind has a registry entry',
+       ASK_KINDS.every(k => QUEST_HANDLERS[k] && typeof QUEST_HANDLERS[k].describe === 'string'),
+       ASK_KINDS.filter(k => !QUEST_HANDLERS[k]).join(','));
+    ok('and every entry declares the rooms it could send a body to',
+       Object.values(QUEST_HANDLERS).every(h => Array.isArray(h.rooms(SCHOOLS.shalille, {}))));
+
+    const deliver = { kind: 'deliver', npc: 'Zuxana', room: 802, alt: null, cargo: 'C' };
+    ok('with a delivery in play the kill leg has no target',
+       resolveStep(steps.find(s => s.do === 'fight'), { ask: deliver }).target === null);
+    ok('and the fetch leg has no seller',
+       resolveStep(steps.find(s => s.do === 'shop'), { ask: deliver }).seller === null);
+    ok('and every idle walk resolves to the temple the body is standing in',
+       steps.filter(s => s.do === 'walk' && typeof s.to === 'function')
+            .map(s => resolveStep(s, { ask: deliver }).to)
+            .filter(r => r !== 802 && r !== 48).length === 0);
+
+    const kill = { kind: 'kill', monster: 'skeleton', room: 38, difficulty: 5 };
+    ok('with a kill in play the fight leg is armed',
+       resolveStep(steps.find(s => s.do === 'fight'), { ask: kill }).target === 'skeleton');
+    ok('and the delivery leg says nothing',
+       steps.filter(s => s.do === 'say')
+            .every(s => { const t = resolveStep(s, { ask: kill, disciple: true }).text;
+                          return t === '' || t === undefined; }));
+
+    const fetch = { kind: 'fetch', item: 'emerald', seller: 'Nasrin', shopRoom: 54, price: 100 };
+    const sh = resolveStep(steps.find(s => s.do === 'shop'), { ask: fetch });
+    ok('with a fetch in play the shop leg names the seller and buys exactly one',
+       sh.seller === 'Nasrin' && sh.lines.length === 1 && sh.lines[0].amount === 1,
+       JSON.stringify({ seller: sh.seller, lines: sh.lines?.length }));
+    ok('and the shop step is optional, so a run with nothing to buy skips it',
+       steps.find(s => s.do === 'shop').optional === true);
+    ok('a fetch finds a real seller for something a merchant really sells',
+       !!findSeller('emerald'), JSON.stringify(findSeller('emerald')));
+    ok('and answers null for something nobody sells',
+       findSeller('the crown of the duke of tos') === null);
   }
 
   // THE DESTINATION'S REBUFF IS THE SUCCESS MESSAGE, and the errand reads it to decide whether
@@ -412,6 +469,177 @@ console.log('\nthe two schools with no quest');
   catch (e) { threw = e.message; }
   ok('and a typo lists what it could have meant',
      threw !== null && /kraanan/.test(threw), String(threw));
+}
+
+// ---------------------------------------------------------------- hearing the refusal at all
+//
+// THE ONE SENTENCE THAT SAYS "NOT A DISCIPLE" IS THE ONE THIS CLIENT USED TO THROW AWAY.
+//
+// `CanDoTeach` announces the gate with `#string=vrTeach_quest_needed, #parm1=<ability name>`
+// (monster.kod:4511). On a `Temples` teacher that string is `priestess_teach_quest_needed`
+// (temples.kod:18) and it has NO `%s`, so the server writes a parameter the format never reads.
+// Four unread bytes made `parseSaid` report `exact: false`, and `M59Client.check` dropped the
+// whole message — text and all, already perfectly decoded.
+//
+// Measured on the shadow fleet 2026-09-18: Priestess Qerti'nya answered `bless` and
+// `create food` and was silent on `night vision`, `discordance`, `killing fields` and
+// `anti-magic aura` — every ability above the gate, and every one of them answered.
+console.log('\na format that uses fewer parameters than the server sent');
+{
+  const { parseSaid, parseStringMessage } = await import('./m59-parse.mjs');
+  const STR = {
+    100: 'To learn that, you must first become my disciple by proving the strength of your faith.',
+    101: 'You have already been taught %s.',
+    102: 'night vision',
+  };
+  const lookup = id => STR[id];
+  const said = (fmtId, parms = [], tail = []) => {
+    const b = Buffer.alloc(13 + parms.length * 4 + tail.length);
+    b.writeUInt32LE(1234, 0); b.writeUInt32LE(99, 4); b.writeUInt8(5, 8); b.writeUInt32LE(fmtId, 9);
+    parms.forEach((p, i) => b.writeUInt32LE(p, 13 + i * 4));
+    tail.forEach((v, i) => b.writeUInt8(v, 13 + parms.length * 4 + i));
+    return b;
+  };
+
+  const normal = parseSaid(said(101, [102]), lookup);
+  ok('a format that uses its parameter still parses exactly',
+     normal.exact === true && normal.text === 'You have already been taught night vision.');
+
+  const gated = parseSaid(said(100, [102]), lookup);
+  ok('THE DISCIPLE REFUSAL SURVIVES — a spare parameter is no longer a bad parse',
+     gated.exact === true, `exact=${gated.exact} leftover=${gated.leftover}`);
+  ok('and its text is the sentence the whole errand turns on',
+     /become my disciple/.test(gated.text), gated.text);
+  ok('the spare parameter is COUNTED, not ignored — it is a real fact about the kod',
+     gated.unused_parms === 1, String(gated.unused_parms));
+
+  ok('a genuinely truncated tail is still a bad parse',
+     parseSaid(said(100, [], [1, 2]), lookup).exact === false);
+  ok('and so is a tail that is a whole word but follows an UNRESOLVED format',
+     parseSaid(said(999, [102]), lookup).exact === false);
+  ok('the same tolerance applies to server prose, which takes the same formatter', (() => {
+    const b = Buffer.alloc(8); b.writeUInt32LE(100, 0); b.writeUInt32LE(102, 4);
+    const r = parseStringMessage(b, lookup);
+    return r.exact === true && r.unused_parms === 1 && /become my disciple/.test(r.text);
+  })());
+}
+
+// ---------------------------------------------------------------- closing the last few squares
+//
+// THE THING THAT ACTUALLY BROKE THE FIRST LIVE RUN. Six characters reached the Temple of
+// Kraanan and every one of them then stood 17 to 39 squares from the priestess reporting a
+// perfectly accurate `out_of_earshot`, because the approach aimed at a point on the straight
+// line between them and the room has a colonnade down it. `approach` (the broker tool) is the
+// right idea and throws on every keeper-backed character; `walk_to` re-issued wedges eight
+// squares short with identical replies. `crawl_to` asks the keeper what it can step onto.
+console.log('\ngetting within five squares of somebody');
+{
+  for (const school of ['kraanan', 'shalille', 'faren', 'qor']) {
+    const steps = await script.steps({ school, agent: 't1', agents: ['t1'] });
+    const crawls = steps.filter(s => s.do === 'crawl_to');
+    ok(`${school}: every say is preceded by a look and a crawl`,
+       crawls.length >= 2 && steps.filter(s => s.do === 'say').length >= 2,
+       `${crawls.length} crawl(s), ${steps.filter(s => s.do === 'say').length} say(s)`);
+    ok(`${school}: and each crawl stops at chebyshev 3, which is squared 18 at worst`,
+       crawls.every(c => c.within === 3), JSON.stringify(crawls.map(c => c.within)));
+    ok(`${school}: each crawl is optional, so an absent NPC is the say step's problem`,
+       crawls.every(c => c.optional === true));
+    ok(`${school}: and every say has given up trying to approach on its own`,
+       steps.filter(s => s.do === 'say').every(s => s.approach === false || s.approach === undefined));
+  }
+  const steps = await script.steps({ school: 'kraanan', agent: 't1', agents: ['t1'] });
+  const crawl = steps.find(s => s.do === 'crawl_to');
+  ok('a crawl aims at the square the look found',
+     (r => r.col === 20 && r.row === 13)(resolveStep(crawl, { near: { col: 20, row: 13 } })),
+     JSON.stringify(resolveStep(crawl, { near: { col: 20, row: 13 } })));
+  ok('and at nothing at all when the NPC was not in the room',
+     (r => r.col === null && r.row === null)(resolveStep(crawl, { near: null })));
+
+  // `findNpc` is the read, and its failure has to carry what WAS there — "she is not here" and
+  // "I could not parse the room" are different problems with the same empty answer.
+  ok('findNpc finds a priestess by a fragment of her name',
+     (r => r.col === 20 && r.row === 13)(findNpc(
+       { objects: [{ name: 'a pillar', col: 1, row: 1 },
+                   { name: "Priestess Qerti'nya", col: 20, row: 13 }] }, "Qerti'nya")));
+  ok('and when she is absent it says what it DID see',
+     (r => r.missing === true && r.saw.includes('a pillar'))(findNpc(
+       { objects: [{ name: 'a pillar', col: 1, row: 1 }] }, "Qerti'nya")));
+  ok('an object with no position is not a position',
+     findNpc({ objects: [{ name: "Priestess Qerti'nya" }] }, 'Qerti').missing === true);
+}
+
+// ---------------------------------------------------------------- reading the sentence back
+//
+// `readAsk` IS A PURE FUNCTION OVER WHAT THE WORLD SAID, and that is the point: the sentence
+// can be replayed into it off a transcript long after the character has walked away, which is
+// the only way to work out what a handler for it should do.
+console.log('\nturning what she said into what to do');
+{
+  const cases = [
+    ['You have two hours in which to kill a fungus beast.  Go immediately.', 'kraanan', 'kill', 'fungus beast'],
+    ['You have two hours in which to kill a mutant ant.  Go immediately.', 'kraanan', 'kill', 'mutant ant'],
+    ['You have two hours in which to kill a skeleton.  Go immediately.', 'kraanan', 'kill', 'skeleton'],
+    ['You must brave the temple of Zuxana, and proclaim your willingness', 'shalille', 'deliver', 'Zuxana'],
+    ['Take this message to Pietro: "You have defiled the land"', 'faren', 'deliver', 'Pietro'],
+    ['you must invoke Mistress Qor to Frisconar, thus:', 'qor', 'deliver', 'Frisconar'],
+    ['You must prove yourself before your learning may progress.  Bring me an emerald.', 'kraanan', 'fetch', 'emerald'],
+    ['Return and tell me when you are done.', 'kraanan', 'showup', null],
+    ['Qerti\'nya tells you, "hello there"', 'kraanan', 'unknown', null],
+  ];
+  for (const [line, school, kind, what] of cases) {
+    const a = readAsk([line], { school });
+    const got = a.monster ?? a.npc ?? a.item ?? null;
+    ok(`"${line.slice(0, 46)}…" -> ${kind}${what ? ` ${what}` : ''}`,
+       a.kind === kind && got === what, `got ${a.kind} ${got}`);
+  }
+  ok('an unknown ask is flagged unhandled, not merely empty',
+     readAsk(['nothing like a quest'], { school: 'kraanan' }).handled === false);
+  ok('and it keeps the raw sentence, which is the whole specification for the handler',
+     readAsk(['nothing like a quest'], { school: 'kraanan' }).raw === 'nothing like a quest');
+  ok('a kill ask carries the room and the difficulty, not just the name',
+     (a => a.room === 515 && a.difficulty === 8)(
+       readAsk(['kill a mutant ant.'], { school: 'kraanan' })));
+  // THE DECOY. Nothing the priestess says contains "red", so a recogniser written against the
+  // CLASS name reports no assignment and the run reads as "the quest never started".
+  ok('and "red ant" is NOT what she says, so matching on the class would find nothing',
+     readAsk(['kill a red ant.'], { school: 'kraanan' }).kind === 'unknown');
+}
+
+// ---------------------------------------------------------------- the questbook
+console.log('\nthe questbook, which is what makes a failed run reviewable');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'm59-qb-'));
+  process.env.M59_QUESTBOOK_DIR = dir;
+  const base = { fleet: 'test', agent: 't1', quest: 'disciple-kraanan',
+                 at: '2026-09-18T00:00:00Z' };
+  const p1 = saveRun({ ...base, id: 'r1', ask: { kind: 'kill', handled: true, monster: 'skeleton',
+                       raw: 'kill a skeleton.' }, outcome: 'in_progress' }, { fleet: 'test' });
+  ok('a run is written where it says it is', typeof p1 === 'string' && p1.includes('r1.json'));
+  // THE SECOND WRITE LANDS ON THE SAME FILE. Two halves of one run on disk would make every
+  // reader reassemble them, and a `listRuns` count that is twice the number of runs.
+  saveRun({ ...base, id: 'r1', ask: { kind: 'kill', handled: true, monster: 'skeleton',
+            raw: 'kill a skeleton.' }, outcome: 'ok', probe_after: 'qualified' }, { fleet: 'test' });
+  saveRun({ ...base, id: 'r2', agent: 't2', ask: { kind: 'unknown', handled: false,
+            raw: 'something nobody has written a handler for' },
+            outcome: 'failed' }, { fleet: 'test' });
+  const { runs, problems } = listRuns({ fleet: 'test' });
+  ok('two runs, not three — the rewrite replaced the first write', runs.length === 2,
+     String(runs.length));
+  ok('and nothing was unreadable', problems.length === 0);
+  ok('the finished one reads back with its outcome',
+     loadRun('r1', { fleet: 'test' })?.outcome === 'ok');
+  ok('and it kept what she actually said',
+     loadRun('r1', { fleet: 'test' })?.ask?.raw === 'kill a skeleton.');
+  const asks = distinctAsks({ fleet: 'test' });
+  ok('the ask index collapses instances into shapes', asks.length === 2, JSON.stringify(asks.map(a => a.kind)));
+  const un = asks.find(a => a.kind === 'unknown');
+  ok('and an unhandled ask is marked as one — this is the backlog of handlers to write',
+     un && un.handled === false, JSON.stringify(un));
+  ok('a corrupt transcript is REPORTED, not treated as an absent one', (() => {
+    writeFileSync(join(dir, 'test', 'broken.json'), '{ not json');
+    return listRuns({ fleet: 'test' }).problems.length === 1;
+  })());
+  delete process.env.M59_QUESTBOOK_DIR;
 }
 
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);

@@ -43,8 +43,15 @@
 // assignment said, so a second run of a half-finished quest picks it up: the probe answers
 // first, `disciple` is not said again once the quest is in flight or done, and the return leg
 // completes a node that was already waiting for the body to show its face.
-import { walk, say, fight, verify } from '../m59-fleetscript.mjs';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { walk, say, shop, fight, verify, walkTo, crawlTo } from '../m59-fleetscript.mjs';
 import { QUEST_NPC_RADIUS, sayToNpc } from '../m59-sayrange.mjs';
+import { fleetName } from '../m59-fleetpath.mjs';
+import { saveRun, runId } from '../m59-questbook.mjs';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // ---------------------------------------------------------------- what the server wants
 //
@@ -98,11 +105,15 @@ export const SCHOOLS = Object.freeze({
     quest: 'kill', questId: 2, temple: 801, priestess: "Qerti'nya",
     // The only level-3 spell she sells, so the only free probe available for this school.
     probe: 'night vision',
+    // THE CONTROL ASK — something she sells BELOW the gate. See `probe()`: the gate's refusal
+    // has historically not reached this client at all, so silence is its only reliable signal,
+    // and silence needs a second ask to tell it from "she cannot hear me".
+    control: 'create food',
     deadline: '2 hours',
   },
   shalille: {
     quest: 'deliver', questId: 1, temple: 48, priestess: 'Xiana',
-    probe: 'rescue', deadline: '3 hours', cargo: CARGO.shalille,
+    probe: 'rescue', control: 'minor heal', deadline: '3 hours', cargo: CARGO.shalille,
     // shalilledisciple_invoke_success — what the destination says when the sentence LANDS. It
     // reads like a rebuff in all three schools, which is the point: "neither wanted nor
     // needed", "I have no use for sermons", "that is a vile utterance" are SUCCESS.
@@ -116,7 +127,7 @@ export const SCHOOLS = Object.freeze({
   },
   faren: {
     quest: 'deliver', questId: 3, temple: 45, priestess: "Tenuv'vyal",
-    probe: 'winds', deadline: '3 hours', cargo: CARGO.faren,
+    probe: 'winds', control: 'light', deadline: '3 hours', cargo: CARGO.faren,
     invoke: /no use for sermons/i,
     // THE PRIESTESS HERSELF STANDS IN THE BADLANDS. Room 45 is a monster room, not a town: both
     // ends of this errand are somewhere a character can be attacked while standing still
@@ -139,7 +150,7 @@ export const SCHOOLS = Object.freeze({
   },
   qor: {
     quest: 'deliver', questId: 4, temple: 802, priestess: 'Zuxana',
-    probe: 'enfeeble', deadline: '2 hours', cargo: CARGO.qor,
+    probe: 'enfeeble', control: 'darkness', deadline: '2 hours', cargo: CARGO.qor,
     invoke: /vile utterance/i,
     destinations: [
       { npc: 'Xiana', room: 48, where: 'the temple of Shal\'ille' },
@@ -223,10 +234,81 @@ const cursorNow = (call, agent) =>
  * range answers "she said nothing", which is the answer this whole file exists to stop
  * anybody believing.
  */
-async function probe({ agent, call }, priestess, spell) {
+/**
+ * GETTING WITHIN FIVE SQUARES OF AN NPC IS A CRAWL, NOT AN AIM — AND NOT A ROOM CROSSING.
+ *
+ * Three things were tried against Priestess Qerti'nya on the shadow fleet, 2026-09-18, with
+ * the characters standing 17 to 39 squares away in a 49x50 temple with a colonnade down it:
+ *
+ *   * `sayApproachSquare` + `walk_to` — a point on the straight line between the two bodies.
+ *     Moved NOTHING, six times out of six, and reported `out_of_earshot` at the same squared
+ *     distance it started at. An accurate message that invites the wrong diagnosis.
+ *   * the broker's `approach` tool, which is the right idea — it asks the room geometry for a
+ *     walkable square beside the target and budgets by route length. It throws
+ *     `s.world.approachSquare is not a function` on every keeper-backed character, because the
+ *     broker holds a snapshot and the World is in the keeper. Same family as `act('fight')`.
+ *   * `walk_to` straight at her, re-issued. Crossed fourteen rows on the second call and then
+ *     WEDGED: `blocked_at r12c28`, `refused_edges 5`, identical reply four times running,
+ *     eight squares short. Same inputs, same failure — the shape the wedge detector exists for.
+ *
+ * `crawl_to` is the one that works, and it is the only one of the four that asks the KEEPER
+ * what it can actually step onto (`/movecheck`) instead of planning over a map and hoping. It
+ * is slower and it is the difference between an errand that arrives and one that reports a
+ * true sentence about a distance it never closed.
+ *
+ * `within: 3` rather than 5. The quest node wants SQUARED distance <= 25 and `crawl_to` stops
+ * on CHEBYSHEV — and chebyshev 5 can be (5,5), which is squared 50. Three is squared 18 at
+ * worst, comfortably inside, and still not standing on her.
+ */
+const NEAR_NPC = 3;
+
+/** Where a named NPC is standing right now, or null with the names that WERE in the room. */
+export function findNpc(view, name) {
+  const want = String(name ?? '').toLowerCase();
+  const objects = view?.objects ?? [];
+  const hit = objects.find(o => String(o.name ?? '').toLowerCase().includes(want));
+  return hit && hit.col != null && hit.row != null
+    ? { col: hit.col, row: hit.row, name: hit.name }
+    : { missing: true, saw: objects.map(o => o.name).filter(Boolean).slice(0, 12) };
+}
+
+/**
+ * THE PROBE IS DIFFERENTIAL, AND THAT IS NOT BELT AND BRACES — IT IS THE ONLY WAY IT WORKS.
+ *
+ * `CanDoTeach` announces the gate with
+ * `#string=vrTeach_quest_needed, #parm1=<ability name>` (monster.kod:4511), and on a Temples
+ * teacher that string is `priestess_teach_quest_needed` (temples.kod:18), which has NO `%s`.
+ * The server therefore writes a parameter the format never reads. `m59-parse.mjs` now tolerates
+ * that — it did not until 2026-09-18, and every keeper running older code still does not, so
+ * the sentence this errand most needs to hear is exactly the sentence most likely to go
+ * missing.
+ *
+ * Measured that day against Priestess Qerti'nya: `bless` and `create food` answered, and
+ * `night vision`, `discordance`, `killing fields` and `anti-magic aura` — every ability above
+ * the gate — were silent. She was answering all six.
+ *
+ * So the errand does not rely on receiving the refusal. It asks TWICE:
+ *
+ *   * a CONTROL, something she sells below the gate. Any answer proves she heard, she teaches,
+ *     and the reply path works.
+ *   * the PROBE, a level-3 spell.
+ *
+ * Control silent  -> the instrument is broken; say so and change nothing.
+ * Control answers, probe silent -> the gate, inferred from the difference.
+ * Probe answers   -> read the verdict straight off the sentence, which also corroborates the
+ *                    inference and is the reading a fixed client gets.
+ *
+ * This is the shape of "verify the value, not the instrument": the thing being measured is
+ * whether she will TEACH, and a silence that has two possible causes is not a measurement
+ * until the second cause has been ruled out by a control.
+ */
+async function askAbout({ agent, call }, priestess, spell) {
   let lines = [];
   const r = await sayToNpc(
-    { text: spell, to: priestess, radius: QUEST_NPC_RADIUS, leave: 2 },
+    // `approach: false` — the crawl step before this one is what closes the distance, and it
+    // does it properly. What `sayToNpc` still does, and must, is REFUSE when the distance was
+    // not closed: speaking anyway produces the silence this whole file is about.
+    { text: spell, to: priestess, radius: QUEST_NPC_RADIUS, approach: false },
     {
       look: () => call('look', { agent }, 30_000).catch(() => null),
       walkTo: (t, o) => call('walk_to',
@@ -239,9 +321,167 @@ async function probe({ agent, call }, priestess, spell) {
         return { spoken_ok: !spoken?.error, replies: lines.map(text => ({ name: null, text })) };
       },
     });
-  const verdict = readProbe(lines);
-  return { ...r, lines, verdict };
+  // ONLY THE LINES THAT NAME WHAT WE ASKED ABOUT.
+  //
+  // A teacher's reply is `Send(poOwner,@SomeoneSaid,...)` — a say to the ROOM, heard by
+  // everyone standing in it. When five of our own characters are at the same priestess asking
+  // her the same questions a second apart, each one's listening window is full of the others'
+  // answers. Measured 2026-09-18: shadow01 and shadow06 both read `already_known` off a reply
+  // to somebody ELSE's "create food", concluded they were already disciples, and skipped the
+  // whole quest — reporting success, with `Cccc says, "disciple"` sitting in their transcripts.
+  //
+  // Every teacher sentence carries the ability's name through `%s`, so the filter is exact. The
+  // two that do not — the disciple refusal and "you have learned so much already" — are the
+  // ones this client historically never received anyway, which is why the verdict does not rest
+  // on hearing them; see `probe`.
+  const mine = lines.filter(l => l.toLowerCase().includes(String(spell).toLowerCase()));
+  return { ...r, lines, heard: mine, verdict: readProbe(mine) };
 }
+
+/** Control then probe, and a verdict built from the DIFFERENCE between the two. */
+async function probe(ctx, s) {
+  const control = await askAbout(ctx, s.priestess, s.control);
+  // A control that could not even be spoken is a positioning failure, and the probe after it
+  // would be measuring the same thing twice.
+  if (!control.ok) return { ok: false, outcome: control.outcome, why: control.why,
+                            lines: control.lines, stage: 'control' };
+  const p = await askAbout(ctx, s.priestess, s.probe);
+  const lines = [...control.lines, ...p.lines];
+  if (!p.ok) return { ok: false, outcome: p.outcome, why: p.why, lines, stage: 'probe' };
+
+  // Heard directly: the sentence is the answer, whatever the control did.
+  if (p.verdict) return { ok: true, lines, verdict: p.verdict, heard_directly: true,
+                          control_answered: !!control.heard.length };
+
+  // Not heard. Now the control decides what the silence means — and it is the control's OWN
+  // answer that counts, not whatever else the room was saying.
+  if (!control.heard.length) return { ok: false, lines, why:
+    `${s.priestess} said nothing about "${s.control}" either, and that is a spell she sells ` +
+    `below the gate — so this is not a reading of the gate, it is the probe failing. Check ` +
+    `the distance, and check whether this keeper's client drops a message whose format takes ` +
+    `fewer parameters than the server sent (see m59-parse.mjs doneFormatted)` };
+
+  return { ok: true, lines, heard_directly: false, control_answered: true,
+           verdict: { verdict: 'not_a_disciple', disciple: false,
+                      line: `she answered "${s.control}" and was silent on "${s.probe}"` } };
+}
+
+// ---------------------------------------------------------------- what she asked for
+//
+// ONE RECOGNISER, AND AN ANSWER FOR THE SENTENCE IT DOES NOT KNOW.
+//
+// The quest engine can ask for a handful of shapes and it says which in one private line.
+// `readAsk` turns that line into a `kind` plus the fields that kind needs, and the point of
+// having it as a pure function is that the sentence can be replayed into it off a transcript
+// long after the character has walked away.
+//
+// `kind: 'unknown'` IS A RESULT. A sentence nothing here recognises is written to the
+// questbook with its raw text and `handled: false`, and `m59-questbook.mjs asks` lists those —
+// each one is the specification for the handler it needs. Silently doing nothing would leave a
+// character holding a deadline and a log saying the quest never started.
+export const ASK_KINDS = ['kill', 'deliver', 'fetch', 'showup', 'unknown'];
+
+export function readAsk(lines = [], { school = null, monsters = KRAANAN_MONSTERS } = {}) {
+  const all = (Array.isArray(lines) ? lines : [lines]).join('   ');
+  const raw = String(all).slice(0, 600);
+  const s = school ? SCHOOLS[school] : null;
+
+  // KILL — "You have two hours in which to kill a <monster>." Matched against the names the
+  // priestess SPEAKS, which for RedAnt is "mutant ant" and contains no "red".
+  const monster = Object.keys(monsters).find(n =>
+    new RegExp(`kill (?:a|an) ${n}\\b`, 'i').test(all) || all.toLowerCase().includes(n));
+  if (monster) return { kind: 'kill', handled: true, raw, monster, room: monsters[monster].room,
+                        difficulty: monsters[monster].difficulty };
+
+  // DELIVER — she names one of her own candidate NPCs and the sentence to repeat. The cargo is
+  // fixed per school (questengine.kod:173-201), so only WHO varies.
+  const dest = s?.destinations?.find(d => all.toLowerCase().includes(d.npc.toLowerCase()));
+  if (dest) return { kind: 'deliver', handled: true, raw, npc: dest.npc, room: dest.room,
+                     alt: dest.alt ?? null, where: dest.where, cargo: s.cargo };
+
+  // FETCH — "Bring me <something>." The old library quest system's wording (questengine.kod:161)
+  // and the shape every item-type node takes. No disciple quest has ever produced one here;
+  // the handler exists so that the day one does, the run buys the thing instead of recording a
+  // shrug. See QUEST_HANDLERS.fetch for what it is and is not allowed to do.
+  const bring = /bring me (?:some |a |an |the )?([a-z' -]{3,40}?)\s*[.!]/i.exec(all);
+  if (bring) return { kind: 'fetch', handled: true, raw, item: bring[1].trim() };
+
+  // SHOWUP — nothing to carry and nothing to kill, just be somewhere. The final node of every
+  // delivery quest is one of these and needs no leg of its own, so this is only reached when
+  // it is the WHOLE ask.
+  if (/return and tell me|come back|show your face|seek me/i.test(all))
+    return { kind: 'showup', handled: true, raw };
+
+  return { kind: 'unknown', handled: false, raw };
+}
+
+// ---------------------------------------------------------------- the prepared handlers
+//
+// EVERY HANDLER'S STEPS ARE IN THE PLAN, AND EXACTLY ONE OF THEM ACTIVATES.
+//
+// The alternative — build the plan after hearing the ask — is not available: `steps` is
+// compiled once, before anything walks, which is what lets a bad plan be refused for free. So
+// each handler contributes its legs unconditionally and gates every one on
+// `state.ask.kind`. A handler that is not the one in play resolves its walk to the temple the
+// body is already standing in, which `compiledWalk` returns early on, and its say and its
+// purchase to nothing, which `optional` skips.
+//
+// The cost is a few no-op steps per run. What it buys is that the whole reachable set of
+// rooms is declared up front — `trapCheck` and a reviewer both see it — and that adding a
+// handler is adding a table entry rather than rewriting the plan.
+const MERCHANTS = join(REPO_ROOT, 'substrate', 'm59-merchants.json');
+
+/** Every room a merchant sells anything in — the declared reach of the fetch handler. */
+function sellerRooms() {
+  try {
+    return [...new Set(JSON.parse(readFileSync(MERCHANTS, 'utf8')).merchants
+      .filter(m => (m.sells ?? []).length).map(m => Number(m.room)))].filter(Number.isFinite);
+  } catch { return []; }
+}
+
+/** Who sells something matching `item`, cheapest first. Null when nobody on the mainland does. */
+export function findSeller(item, file = MERCHANTS) {
+  const want = String(item ?? '').trim().toLowerCase();
+  if (!want) return null;
+  let all = [];
+  try { all = JSON.parse(readFileSync(file, 'utf8')).merchants ?? []; } catch { return null; }
+  const hits = [];
+  for (const m of all) {
+    for (const row of (m.sells ?? [])) {
+      const name = String(row.name ?? row.cls ?? '').toLowerCase();
+      if (!name.includes(want) && !want.includes(name)) continue;
+      hits.push({ seller: m.name, room: Number(m.room), item: row.name ?? row.cls,
+                  price: Number(row.price ?? row.cost ?? NaN) });
+    }
+  }
+  if (!hits.length) return null;
+  hits.sort((a, b) => (Number.isFinite(a.price) ? a.price : 1e9) -
+                      (Number.isFinite(b.price) ? b.price : 1e9));
+  return hits[0];
+}
+
+export const QUEST_HANDLERS = Object.freeze({
+  kill: {
+    describe: 'kill one creature of an exact class, by this character\'s own hand, then return',
+    rooms: (s, hunts) => Object.values(hunts).map(m => m.room),
+  },
+  deliver: {
+    describe: 'repeat a fixed sentence, word for word, to one NPC she names',
+    rooms: (s) => (s.destinations ?? []).flatMap(d => (d.alt ? [d.room, d.alt] : [d.room])),
+  },
+  fetch: {
+    describe: 'buy or find one item and hand it over',
+    rooms: () => sellerRooms(),
+  },
+  showup: {
+    describe: 'be in the room — no leg of its own, the return walk already does it',
+    rooms: () => [],
+  },
+  unknown: {
+    describe: 'RECORDED, NOT ATTEMPTED — the sentence is written to the questbook for review',
+    rooms: () => [],
+  },
+});
 
 export const script = {
   name: 'disciple-quest',
@@ -308,9 +548,14 @@ export const script = {
     abortBelow: { type: 'number', default: 0.5,
                   describe: 'health fraction at which the fight gives up. One more swing at ' +
                             '15% is a death, and a failed quest is cheaper than a corpse' },
+    // Which questbook the transcripts land in. Named rather than inferred because a rehearsal
+    // on a shadow fleet and a real run on prod must not share a directory — the whole value of
+    // the book is that "what has this fleet ever been asked for" has one answer.
+    fleet: { default: null, describe: 'questbook to write into; defaults to the running fleet' },
   },
 
-  async steps({ school, home, huntRooms, rounds, abortBelow, agent }) {
+  async steps({ school, home, huntRooms, rounds, abortBelow, fleet: fleetArg, agent }) {
+    const fleet = fleetArg || fleetName();
     const key = String(school ?? '').trim().toLowerCase().replace(/[^a-z]/g, '');
     if (NO_QUEST[key])
       throw new Error(`disciple-quest: ${key} has no disciple quest — ${NO_QUEST[key]}. ` +
@@ -329,19 +574,57 @@ export const script = {
       hunts[name] = { ...hunts[name], room: Number(room) };
     }
 
-    // Every room a run-time-decided walk in this plan could choose, so `trapCheck` and a
-    // reviewer see the whole reachable set rather than a closure.
-    const errandRooms = s.quest === 'kill'
-      ? Object.values(hunts).map(m => m.room)
-      : s.destinations.flatMap(d => (d.alt ? [d.room, d.alt] : [d.room]));
+    // EVERY ROOM ANY HANDLER COULD CHOOSE, declared once so `trapCheck` and a reviewer both see
+    // the whole reachable set rather than a closure. Union across handlers rather than per-leg,
+    // because a plan that carries every handler can walk to any of them.
+    const errandRooms = [...new Set([
+      ...Object.values(QUEST_HANDLERS).flatMap(h => h.rooms(s, hunts)),
+      s.temple,
+    ])].filter(Number.isFinite);
 
-    const middle = s.quest === 'kill'
-      ? [
+    /**
+     * LOOK, THEN CRAWL. Two steps, emitted before every place this errand has to speak.
+     *
+     * `who(state)` names the NPC to get near; returning null means "nothing to approach here",
+     * and the crawl then resolves to the body's own square, which `crawl_to` answers `arrived`
+     * for without moving. `optional` covers the NPC simply not being in the room — that is a
+     * fact the say step reports far better than a walker can.
+     */
+    const closeOn = (who, label) => [
+      verify(async ({ agent: me, call, state }) => {
+        const want = who(state);
+        state.near = null;
+        if (!want) return { ok: true, skipped: `nothing to approach for ${label}` };
+        const view = await call('look', { agent: me }, 30_000).catch(() => null);
+        const at = findNpc(view, want);
+        if (at.missing) return { ok: true, absent: want, saw: at.saw, note:
+          `${want} is not in room ${view?.room?.num ?? '?'} — the say step will report that ` +
+          `properly; there is nothing to crawl towards` };
+        state.near = at;
+        return { ok: true, approaching: want, at: `r${at.row}c${at.col}` };
+      }, `could not look for the ${label}`),
+
+      // A LADDER, NOT A CHOICE. `walk_to` plans over the map and covers ground fast — measured
+      // fourteen rows in one call in the Temple of Kraanan — and then WEDGES, returning the
+      // identical reply however often it is re-issued. `crawl_to` asks the keeper what it can
+      // step onto and never wedges, and it moves about one square every eight seconds, which
+      // across thirty-three squares of temple is most of a deadline spent on a walk.
+      //
+      // So: the fast one first for the distance, the careful one after for the last few squares
+      // it could not manage. `crawl_to` returns `arrived` on its first check when the walk
+      // already got there, so the second rung is free whenever the first one worked.
+      { ...walkTo(st => st.near?.col ?? null, st => st.near?.row ?? null,
+                  { within: NEAR_NPC, deadlineMs: 120_000, stallMs: 25_000 }), optional: true },
+      crawlTo(st => st.near?.col ?? null, st => st.near?.row ?? null,
+              { within: NEAR_NPC, optional: true, maxSteps: 60, deadlineMs: 180_000 }),
+    ];
+
+    const killSteps = [
           // WHERE THE ASSIGNED MONSTER LIVES — or nowhere, which is the temple we are already
           // standing in and therefore a no-op walk (compiledWalk returns early when the body is
           // already in the room).
-          walk(st => hunts[st.quest?.monster]?.room ?? s.temple,
-               { candidates: [...errandRooms, s.temple] }),
+          walk(st => (st.ask?.kind === 'kill' && hunts[st.ask.monster]?.room) || s.temple,
+               { candidates: errandRooms }),
 
           // ONE KILL, BY THIS CHARACTER, OF EXACTLY THAT CLASS.
           //
@@ -350,7 +633,7 @@ export const script = {
           // step list able to kill something at all. `optional` covers the case where nothing
           // was assigned: the resolved target is then null and the step refuses rather than
           // letting the keeper swing at whatever is nearest.
-          fight(st => st.quest?.monster ?? null,
+          fight(st => (st.ask?.kind === 'kill' ? st.ask.monster : null) ?? null,
                 { rounds: Number(rounds), abortBelow: Number(abortBelow), optional: true }),
 
           // AND CHECK THE CORPSE, NOT THE ENGAGEMENT. The fight step passes on `engaged`, which
@@ -362,7 +645,7 @@ export const script = {
           // against the quest's class with `<>`, not `IsClass` (questnode.kod:1583). Killing
           // the wrong skeleton is a complete, successful, useless fight.
           verify(async ({ state }) => {
-            const want = state.quest?.monster;
+            const want = state.ask?.kind === 'kill' ? state.ask.monster : null;
             if (!want) return { ok: true, skipped: 'nothing was assigned to kill' };
             const r = Object.entries(state.results)
               .filter(([k]) => k.endsWith(':fight')).map(([, v]) => v).pop()?.result ?? {};
@@ -378,19 +661,23 @@ export const script = {
                 `daemon or tusked skeleton is a fight that counts for nothing here` };
             return { ok: true, killed: hit || want };
           }, 'the assigned monster was not killed'),
-        ]
-      : [
-          // WHERE SHE SENT US. Never guessed: the destination is whichever of her candidates
-          // her own sentence named, and `null` means no assignment was read, which walks
-          // nowhere.
-          walk(st => st.quest?.room ?? s.temple, { candidates: [...errandRooms, s.temple] }),
+        ];
 
-          // THE SENTENCE, VERBATIM. `optional` because an unassigned run has nobody to say it
-          // to and `sayToNpc` refuses a say with no addressee rather than broadcasting it to a
-          // town.
-          say(st => (st.quest?.npc ? s.cargo : ''),
-              { to: st => st.quest?.npc ?? null, radius: QUEST_NPC_RADIUS,
-                listenMs: 6000, optional: true }),
+    const deliverSteps = [
+          // WHERE SHE SENT US. Never guessed: the destination is whichever of her candidates
+          // her own sentence named, and anything else walks to the temple we are standing in,
+          // which is a no-op.
+          walk(st => (st.ask?.kind === 'deliver' ? st.ask.room : null) ?? s.temple,
+               { candidates: errandRooms }),
+
+          ...closeOn(st => (st.ask?.kind === 'deliver' ? st.ask.npc : null), 'destination'),
+
+          // THE SENTENCE, VERBATIM. `optional` because a run with no delivery has nobody to say
+          // it to and `sayToNpc` refuses a say with no addressee rather than broadcasting it to
+          // a town.
+          say(st => (st.ask?.kind === 'deliver' ? st.ask.cargo : '') || '',
+              { to: st => (st.ask?.kind === 'deliver' ? st.ask.npc : null) ?? null,
+                radius: QUEST_NPC_RADIUS, listenMs: 6000, optional: true }),
 
           // DID IT LAND? The destination answers with a rebuff that is the success message,
           // and that sentence is the only difference between "delivered" and "stood next to
@@ -398,12 +685,14 @@ export const script = {
           // — a false negative here costs one extra town, and a false positive would cost the
           // whole quest.
           verify(async ({ agent: who, call, state }) => {
-            if (!state.quest?.npc) return { ok: true, skipped: 'nothing to deliver' };
-            const { lines } = await proseSince(call, who, state.cursor ?? 0, 3000);
+            if (state.ask?.kind !== 'deliver') return { ok: true, skipped: 'nothing to deliver' };
+            const { lines, cursor } = await proseSince(call, who, state.cursor ?? 0, 3000);
+            state.cursor = cursor;
+            (state.heard ??= []).push(...lines);
             state.delivered = lines.some(l => s.invoke.test(l));
             return { ok: true, delivered: state.delivered,
                      ...(state.delivered ? {} : { note:
-                       `${state.quest.npc} did not answer the way the quest engine makes a ` +
+                       `${state.ask.npc} did not answer the way the quest engine makes a ` +
                        `destination answer. That is not proof of failure — the line can be ` +
                        `missed — but it is the reason for the second attempt below` }) };
           }, 'could not tell whether the message was delivered'),
@@ -411,22 +700,97 @@ export const script = {
           // THE SECOND ADDRESS, FOR THE ONE NPC WHO EXISTS TWICE. Walked only when the first
           // delivery was not heard to land and this destination has a twin; otherwise this
           // resolves to the temple, which is where the next step goes anyway.
-          walk(st => (!st.delivered && st.quest?.alt) ? st.quest.alt : s.temple,
-               { candidates: [...errandRooms, s.temple] }),
-          say(st => (!st.delivered && st.quest?.alt ? s.cargo : ''),
-              { to: st => st.quest?.npc ?? null, radius: QUEST_NPC_RADIUS,
-                listenMs: 6000, optional: true }),
+          walk(st => (st.ask?.kind === 'deliver' && !st.delivered && st.ask.alt) || s.temple,
+               { candidates: errandRooms }),
+          ...closeOn(st => (st.ask?.kind === 'deliver' && !st.delivered && st.ask.alt
+                            ? st.ask.npc : null), 'twin destination'),
+          say(st => (st.ask?.kind === 'deliver' && !st.delivered && st.ask.alt ? st.ask.cargo : ''),
+              { to: st => (st.ask?.kind === 'deliver' ? st.ask.npc : null) ?? null,
+                radius: QUEST_NPC_RADIUS, listenMs: 6000, optional: true }),
         ];
+
+    // THE FETCH HANDLER — PREPARED, AND HONEST ABOUT NEVER HAVING FIRED.
+    //
+    // No disciple quest has asked for an item in anything measured here; the quest engine's
+    // item nodes exist (`QN_TYPE_ITEM`, `QN_TYPE_ITEMCLASS`, and the old library wording "Bring
+    // me %CARGO") and the operator asked that every possibility run to a prepared errand rather
+    // than to a shrug. So this is real code on a path that is, so far, theoretical — which is
+    // exactly the kind of code that rots silently, so `m59-questbook.mjs asks` reports whether
+    // a `fetch` has ever been seen and the transcript records it when one is.
+    //
+    // WHAT IT WILL NOT DO. It will not farm for an item nobody sells — a fetch whose item has
+    // no seller is recorded as unfulfillable rather than turned into an open-ended hunt, because
+    // an errand that cannot finish the thing that opened it runs for ever and every lap reports
+    // success. It buys ONE, from the cheapest mainland seller, and hands it over.
+    const fetchSteps = [
+      verify(async ({ state }) => {
+        if (state.ask?.kind !== 'fetch') return { ok: true, skipped: 'nothing to fetch' };
+        const found = findSeller(state.ask.item);
+        state.ask.seller = found?.seller ?? null;
+        state.ask.shopRoom = found?.room ?? null;
+        state.ask.price = found?.price ?? null;
+        if (!found) return { ok: false, why:
+          `she asked for "${state.ask.item}" and no merchant in ` +
+          `substrate/m59-merchants.json sells anything by that name. This errand does not ` +
+          `farm for a quest item — say so and let the deadline lapse rather than starting a ` +
+          `hunt that cannot end` };
+        return { ok: true, seller: found.seller, room: found.room, price: found.price };
+      }, 'could not find anywhere to buy the item she asked for'),
+
+      walk(st => (st.ask?.kind === 'fetch' ? st.ask.shopRoom : null) ?? s.temple,
+           { candidates: errandRooms }),
+
+      // ONE, not a stack: the node wants an item, and buying more is money spent on nothing.
+      shop(st => (st.ask?.kind === 'fetch' ? st.ask.seller : null) ?? null,
+           st => (st.ask?.kind === 'fetch' && st.ask.item
+             ? [{ match: new RegExp(String(st.ask.item).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+                  amount: 1 }]
+             : []),
+           { optional: true }),
+    ];
+
+    const middle = [...killSteps, ...deliverSteps, ...fetchSteps];
+
+
+    // ONE TRANSCRIPT PER RUN, REWRITTEN IN PLACE. The id is fixed on the first write so the
+    // second one lands on the same file rather than leaving two halves of one run on disk.
+    const startedAt = Date.now();
+    const writeTranscript = (state, outcome, extra = {}) => {
+      state.runId ??= runId({ agent: state.agent, quest: `disciple-${key}`, at: startedAt });
+      try {
+        return saveRun({
+          id: state.runId, at: new Date(startedAt).toISOString(), fleet,
+          agent: state.agent, quest: `disciple-${key}`, school: key,
+          priestess: s.priestess, temple: s.temple, probe_spell: s.probe, deadline: s.deadline,
+          probe_before: state.probe_before ?? null,
+          probe_after: state.probe_after ?? null,
+          ask: state.ask ?? null,
+          delivered: state.delivered ?? null,
+          // EVERY LINE THE WORLD SAID, in order. This is the part a later reader needs and the
+          // part nothing else keeps: server prose is not chat, so it is in no transcript the
+          // broker holds either.
+          heard: (state.heard ?? []).slice(-60),
+          steps: Object.entries(state.results ?? {}).map(([at, r]) => ({
+            at, ok: r?.ok ?? null, outcome: r?.outcome ?? null,
+            why: r?.why ? String(r.why).slice(0, 300) : undefined })),
+          outcome, ...extra,
+        }, { fleet });
+      } catch (e) {
+        // A transcript that cannot be written must not take the errand down with it.
+        return `UNWRITTEN (${e.message})`;
+      }
+    };
 
     return [
       walk(s.temple),
+      ...closeOn(() => s.priestess, 'priestess'),
 
       // ASK BEFORE STARTING ANYTHING. A character who is already a disciple must not be sent
       // round the world again, and — more sharply — must not have `disciple` said on its
       // behalf, because a second quest instance can be joined and then abandoned, which costs
       // an hour of logged-in time for nothing.
       verify(async (ctx) => {
-        const p = await probe(ctx, s.priestess, s.probe);
+        const p = await probe(ctx, s);
         ctx.state.probe_before = p.verdict?.verdict ?? null;
         ctx.state.disciple = p.verdict?.disciple ?? null;
         // MARK THE TAPE HERE. The assign hint is one line among whatever else the world is
@@ -436,12 +800,13 @@ export const script = {
         // read a window over exactly this exchange.
         ctx.state.cursor = await cursorNow(ctx.call, ctx.agent);
         if (!p.ok) return { ok: false, outcome: p.outcome, why: p.why };
-        // A probe that heard nothing is NOT a "no". It is the instrument failing, and the
-        // whole errand downstream would be reasoning from it.
+        // Belt and braces: `probe` only returns ok with a verdict, so this is unreachable
+        // unless that contract changes — and the thing it would otherwise produce is a run
+        // that reasons from `disciple: null` as though it were `false`.
         if (!p.verdict) return { ok: false, heard: p.lines.slice(0, 4), why:
-          `${s.priestess} said nothing recognisable about "${s.probe}" — in earshot and ` +
-          `silent means the probe spell is not one she sells, not that the gate is open` };
-        return { ok: true, verdict: p.verdict.verdict, disciple: p.verdict.disciple };
+          `no verdict came back about "${s.probe}" even though the probe reported ok` };
+        return { ok: true, verdict: p.verdict.verdict, disciple: p.verdict.disciple,
+                 heard_directly: p.heard_directly, evidence: p.verdict.line };
       }, 'could not read whether this character is already a disciple'),
 
       // START IT — and only when there is something to start. An empty text is refused by the
@@ -462,32 +827,32 @@ export const script = {
         // Carry the tape forward, or the next read re-hears this one and the delivery check
         // matches against a window that includes the assignment it is meant to follow.
         state.cursor = cursor;
-        const all = heard.join('   ');
-        if (s.quest === 'kill') {
-          const monster = Object.keys(KRAANAN_MONSTERS)
-            .find(n => new RegExp(`kill a ${n}\\b`, 'i').test(all) || all.toLowerCase().includes(n));
-          state.quest = monster ? { monster, room: hunts[monster].room } : null;
-          return monster
-            ? { ok: true, monster, difficulty: hunts[monster].difficulty, room: hunts[monster].room,
-                ...(hunts[monster].difficulty >= 8
-                  ? { warning: `a ${monster} is viDifficulty ${hunts[monster].difficulty} — if ` +
-                               `this character cannot take that fight, stop now and let the ` +
-                               `${s.deadline} lapse rather than walking it into one` }
-                  : {}) }
-            : { ok: false, heard: heard.slice(-4), why:
-                `${s.priestess} named no monster — she asks for a fungus beast, a mutant ant ` +
-                `or a skeleton ("mutant ant" is what RedAnt is called), so either the quest ` +
-                `never started or her line was missed` };
-        }
-        const dest = s.destinations.find(d => all.toLowerCase().includes(d.npc.toLowerCase()));
-        state.quest = dest ? { npc: dest.npc, room: dest.room, alt: dest.alt ?? null } : null;
-        return dest
-          ? { ok: true, deliver_to: dest.npc, room: dest.room, where: dest.where,
-              ...(dest.alt ? { alt_room: dest.alt } : {}) }
-          : { ok: false, heard: heard.slice(-4), why:
-              `${s.priestess} named none of her ${s.destinations.length} possible ` +
-              `destinations (${s.destinations.map(d => d.npc).join(', ')}), so either the ` +
-              `quest never started or her line was missed` };
+        (state.heard ??= []).push(...heard);
+        state.ask = readAsk(heard, { school: key, monsters: hunts });
+
+        // WRITE IT DOWN BEFORE ACTING ON IT. This is the write that matters: a character that
+        // then dies in the Badlands still leaves behind the sentence it was answering, and the
+        // step loop BREAKS on an unrecovered death, which skips even the `always` steps.
+        state.transcript = writeTranscript(state, 'in_progress');
+
+        if (state.ask.kind === 'unknown') return { ok: false, ask: state.ask, why:
+          `${s.priestess} asked for something with no prepared handler. It is written to ` +
+          `${state.transcript} — read it with \`m59-questbook.mjs show\` and add an entry to ` +
+          `QUEST_HANDLERS. Recording it beats the alternative, which is a character holding a ` +
+          `deadline while the log says the quest never started` };
+
+        if (state.ask.kind === 'kill')
+          return { ok: true, ask: 'kill', monster: state.ask.monster, room: state.ask.room,
+                   ...(state.ask.difficulty >= 8
+                     ? { warning: `a ${state.ask.monster} is viDifficulty ` +
+                                  `${state.ask.difficulty} — if this character cannot take that ` +
+                                  `fight, stop now and let the ${s.deadline} lapse rather than ` +
+                                  `walking it into one` }
+                     : {}) };
+        if (state.ask.kind === 'deliver')
+          return { ok: true, ask: 'deliver', to: state.ask.npc, room: state.ask.room,
+                   where: state.ask.where, ...(state.ask.alt ? { alt_room: state.ask.alt } : {}) };
+        return { ok: true, ask: state.ask.kind };
       }, 'could not read what the priestess asked for'),
 
       ...middle,
@@ -496,6 +861,7 @@ export const script = {
       // `CheckCompletionCriteria` too (monster.kod:915-928) — but the body may never have left
       // the room, so the say below is the one that has to work.
       walk(s.temple),
+      ...closeOn(() => s.priestess, 'priestess again'),
 
       // THE CLOSING WORD, AND DELIBERATELY NOT "disciple".
       //
@@ -518,7 +884,7 @@ export const script = {
       // a quest that is still open. The probe is the one reading that comes from the server's
       // own opinion of this character.
       verify(async (ctx) => {
-        const p = await probe(ctx, s.priestess, s.probe);
+        const p = await probe(ctx, s);
         ctx.state.probe_after = p.verdict?.verdict ?? null;
         if (!p.ok) return { ok: false, outcome: p.outcome, why: p.why };
         if (!p.verdict) return { ok: false, heard: p.lines.slice(0, 4), why:
@@ -539,6 +905,22 @@ export const script = {
       // ALWAYS. A quest that failed still has to bring the character back; the roads this
       // errand uses are where four of one night's deaths started.
       ...(home === undefined || home === null ? [] : [{ ...walk(Number(home)), always: true }]),
+
+      // AND ALWAYS WRITE THE RUN DOWN, including — especially — when it failed. `always` means
+      // this one still runs while the plan is unwinding, so the file that a reviewer reads is
+      // the file of the run that went wrong. The only case it misses is a death with no
+      // recovery, which breaks the loop outright; the in-progress write above covers that.
+      {
+        ...verify(async ({ state }) => {
+          const failed = Object.values(state.results ?? {}).find(r => r && r.ok === false);
+          const outcome = state.probe_after && state.probe_after !== 'not_a_disciple' ? 'ok'
+                        : failed ? 'failed' : 'unfinished';
+          const path = writeTranscript(state, outcome,
+            failed?.why ? { why: String(failed.why).slice(0, 400) } : {});
+          return { ok: true, transcript: path, outcome };
+        }, 'could not write the run transcript'),
+        always: true,
+      },
     ];
   },
 };

@@ -2392,6 +2392,15 @@ const DYNAMIC_FIELDS = Object.freeze({
   say: ['text', 'to'],
   fight: ['target'],
   bank: ['amount'],
+  // A purchase the errand did not know it would make until the game told it: a quest that
+  // asks for an item names one the plan could not have known. `lines` stays a list of
+  // `{match, amount}` either way — only WHICH list is decided at run time.
+  shop: ['seller', 'lines'],
+  // WHERE AN NPC IS STANDING IS NOT KNOWN UNTIL SOMEBODY LOOKS. A wanderer moves, and even a
+  // `MOB_NOMOVE` one is only findable by reading the room — so an errand that has to get
+  // within a few squares of a named NPC cannot write the square into its plan.
+  crawl_to: ['col', 'row'],
+  walk_to: ['col', 'row'],
 });
 
 export function resolveStep(step, state) {
@@ -2832,6 +2841,14 @@ async function runStep(ctx, agent, rawStep, state) {
     }
 
     case 'shop': {
+      // NOTHING TO BUY, OR NOBODY TO BUY IT FROM, IS A STEP THAT SHOULD NOT RUN — and with a
+      // run-time `seller`/`lines` that is a state a plan can legitimately reach: a handler
+      // whose kind is not the one in play resolves to no seller and an empty list. Without
+      // this it still opened the shop, bought nothing, and then judged itself on a pack that
+      // could not have changed. Pair a dynamic shop with `optional: true`.
+      if (!step.seller || !Array.isArray(step.lines) || !step.lines.length)
+        return { ok: false, outcome: 'nothing_to_buy',
+                 why: !step.seller ? 'shop step has no seller' : 'shop step has no lines to buy' };
       const list = await call('shop', { agent, seller: step.seller }, 60_000).catch(() => null);
       const items = list?.items || [];
       const buy = [];
@@ -3381,6 +3398,16 @@ async function runStep(ctx, agent, rawStep, state) {
     // says whether a refusal is a BODY or the GROUND, and those want opposite responses.
     case 'crawl_to': {
       const goal = { row: step.row, col: step.col };
+      // A CRAWL TO NOWHERE IS NOT A SHORT CRAWL, IT IS A FULL DEADLINE SPENT ON NaN. `chebyshev`
+      // against a null goal is NaN, every comparison against it is false, and the loop runs to
+      // `maxSteps` asking the keeper for neighbours it will never use. Reachable the moment a
+      // square is chosen at run time — which is the point of a dynamic `col`/`row` — so it is
+      // refused here the same way `walk` refuses a destination that is not a room number.
+      if (!Number.isFinite(Number(goal.row)) || !Number.isFinite(Number(goal.col)))
+        return { ok: false, outcome: 'no_square',
+                 why: `the plan asked for a crawl to r${goal.row}c${goal.col}, which is not a ` +
+                      `square. A run-time target that resolved to nothing belongs in an ` +
+                      `\`optional\` step, not in a walk that will spend its whole budget` };
       const within = step.within ?? 0;
       const healBelow = step.healBelow ?? 0.5;
       const bodyWaitMs = step.bodyWaitMs ?? 6000;
@@ -4180,12 +4207,33 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // way it can be: does any name on the keep list satisfy the pattern that was bought.
       if (!waived.has('buyThenSell')) {
         const bought = [];
-        let clash = null;
+        let clash = null, opaque = null;
         for (const [i, step] of plan.entries()) {
           if (step.do === 'shop') {
+            // A SHOPPING LIST DECIDED AT RUN TIME CANNOT BE READ HERE, AND THE OLD CODE READ IT
+            // ANYWAY. `for (const line of step.lines ?? [])` over a function throws
+            // `function is not iterable`, which arrived as a bare per-agent ERROR with no step
+            // and no plan in it — six characters, six identical lines, nothing naming `shop`.
+            // Measured on the shadow fleet 2026-09-18, the first live run of a plan whose
+            // purchase is chosen from what an NPC asked for.
+            //
+            // So: remember that this plan buys something UNKNOWABLE rather than pretending it
+            // buys nothing. Nothing is refused on its own — a plan that never sells cannot
+            // buy-then-sell — but a sell after it is refused below, because "I cannot see what
+            // was bought" must not read the same as "nothing was bought".
+            if (typeof step.lines === 'function') { opaque ??= i; continue; }
             for (const line of step.lines ?? [])
               if (line?.match instanceof RegExp) bought.push({ at: i, match: line.match });
             continue;
+          }
+          if (step.do === 'sell' && opaque !== null && opaque < i) {
+            const why = `step ${i} sells after step ${opaque} buys a list this plan decides at ` +
+                        `RUN TIME, so nothing here can tell whether the sale hands back what ` +
+                        `the purchase crossed the world for. Give that sell an explicit ` +
+                        `keep: [...], or waive \`buyThenSell\` if selling it is the point`;
+            ctx.log(agent, `plan refused: ${why}`);
+            results[agent] = { ok: false, at: i, step: 'sell', why, state: state.results };
+            return;
           }
           if (step.do !== 'sell' || !bought.length) continue;
           const keep = [...new Set([...FLEET_KEEP, ...(step.keep ?? [])])];

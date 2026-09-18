@@ -1200,7 +1200,7 @@ single keeper pid, or a fake starts speaking a protocol no server does.**
 
 ## The disciple gate — the level-3 spell quest
 
-**`m59-disciple-test.mjs` (100) — three groups, none of which is about whether the errand runs.**
+**`m59-disciple-test.mjs` (167) — three groups, none of which is about whether the errand runs.**
 `tools/fleetscripts/disciple-quest.mjs` does a temple priestess's disciple quest, which is the
 only thing that unlocks spells of level 3 and above in her school (`temples.kod:52-73`,
 `monster.kod:4506-4518`). The whole derivation, with citations, is
@@ -1254,3 +1254,38 @@ Jala are refused **by name, with the reason** rather than being absent from a ta
 
 **It should fail the day somebody tidies the whitespace in a quest sentence, teaches the probe to
 read silence as a yes, or lets a run-time destination past the trap check.**
+
+**And three more groups, every one of them written after a live rehearsal on the shadow fleet
+found the thing it guards.** The rehearsal is the point: each of these was green in theory and
+wrong in the world.
+
+**Closing the last five squares.** `Q_NPC_CLOSE_ENOUGH` is a distance the errand has to *reach*,
+not merely measure. Six characters walked into the Temple of Kraanan and every one then stood 17
+to 39 squares from the priestess reporting a perfectly accurate `out_of_earshot` — a true
+sentence that invites the wrong diagnosis, because she was reachable and the aim was not a route.
+Three approaches were tried: `sayApproachSquare` aims at a point on the straight line between two
+bodies and moved nothing, six times out of six, in a 49x50 room with a colonnade down it; the
+broker's `approach` tool is the right idea and throws `s.world.approachSquare is not a function`
+on every keeper-backed character, which is every character (same family as `act('fight')`); and
+`walk_to` re-issued crossed fourteen rows and then WEDGED eight squares short, `refused_edges 5`,
+identical reply four times running. `crawl_to` is the one that works, because it is the only one
+that asks the KEEPER what it can step onto. Pinned: every say is preceded by a look and a crawl,
+each crawl stops at chebyshev 3 (squared 18 at worst, inside the node's 25), each is `optional` so
+an absent NPC stays the say step's problem to report, and a crawl to a square that resolved to
+nothing is REFUSED rather than spending its whole deadline on `NaN`.
+
+**Every prepared handler is in the plan and exactly one fires.** `steps` is compiled once, before
+anything walks, so an errand whose instruction the server chooses cannot build its plan after
+hearing it. Each handler therefore contributes its legs unconditionally and gates them on
+`state.ask.kind`. Pinned: with a delivery in play the kill leg resolves to no target and the fetch
+leg to no seller; with a kill in play no say has anything to say; every idle walk resolves to the
+temple the body is already standing in; and an ask nothing recognises comes back
+`kind: "unknown", handled: false` with the raw sentence rather than as an empty result.
+
+**The questbook.** One transcript per run, written twice — once as soon as the ask is read, once
+at the end — because the step loop BREAKS on an unrecovered death and a `break` skips even the
+steps marked `always`. A single write at the end is therefore missing exactly when it matters.
+Pinned: the second write lands on the same file rather than leaving two halves of one run on disk,
+a finished run reads back with its outcome and with what she actually said, the ask index
+collapses instances into shapes so the list is a specification rather than a log, and a corrupt
+transcript is REPORTED rather than silently counting as a run that never happened.

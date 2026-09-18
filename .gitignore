@@ -735,3 +735,7 @@ _verify2.mjs
 # file is how m59-deploy.mjs finds it. Gitignored because it is one machine's answer, and
 # because a fresh clone must work with no such repository at all.
 /substrate/private-repo
+
+# Quest transcripts name characters and quote what the game said to them — this machine's
+# fleet, same rule as loadouts and rosters. `m59-questbook.mjs` reads them.
+/substrate/questbook/

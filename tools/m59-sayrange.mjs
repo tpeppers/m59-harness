@@ -86,6 +86,31 @@ export function sayApproachSquare(speaker, hearer, { leave = 2, radius = SAY_RAD
 // speech in one operation so keeper errands can use it without starting a second
 // FleetScript driver or making an RPC back into their own broker. The adapters
 // provide transport only; neither caller gets to skip the hearing check.
+// THIS APPROACH IS FOR THE LAST FEW SQUARES, AND IT IS NOT A ROUTER. SAY SO.
+//
+// `sayApproachSquare` returns a point on the line between the two bodies. That is right for a
+// couple of squares of final adjustment and hopeless across a room: the Temple of Kraanan is
+// 49x50 with a colonnade down the middle, and on the shadow fleet 2026-09-18 six characters
+// arrived 17 to 39 squares from Priestess Qerti'nya, every one of them aimed at a straight-line
+// point, every one of them moved nothing, and every one reported `out_of_earshot` at the SAME
+// squared distance it had started at. The message was accurate; the diagnosis it invites —
+// "she is too far away" — was wrong. She was reachable. The aim was not a route.
+//
+// TWO THINGS WERE TRIED INSTEAD AND ONE OF THEM IS A TRAP.
+//
+//   * The broker's `approach` tool is the right idea — it asks the room geometry for a walkable
+//     square beside the target and budgets by ROUTE length. It throws
+//     `s.world.approachSquare is not a function` on every keeper-backed character, because the
+//     broker holds a snapshot and the World lives in the keeper. That is every character on
+//     every fleet. Wiring it in here made this step WORSE, not better, and the offline suite
+//     caught it within the hour: `a say aimed at an NPC out of earshot WALKS into range first`
+//     went red. Do not re-add it.
+//   * `crawl_to`, which asks the keeper what it can step onto, does work — but it is a STEP,
+//     one square every eight seconds, and it belongs in the plan rather than inside a say.
+//
+// So a caller that needs to cross a room puts a walk in its plan before the say, and this stays
+// what it has always been: the last two squares, and an honest refusal when that is not enough.
+// `tools/fleetscripts/disciple-quest.mjs` has the ladder — look, `walk_to`, then `crawl_to`.
 export async function sayToNpc(step, { look, walkTo, speak, log = () => {} }) {
   const text = String(step.text ?? '').trim();
   if (!text) return { ok: false, why: 'say needs something to say' };
@@ -104,16 +129,14 @@ export async function sayToNpc(step, { look, walkTo, speak, log = () => {} }) {
 
   let approached = null;
   if (npc && withinSayRange(me, npc, radius) === false && step.approach !== false) {
+    log(`say "${text}": ${wantHeard} is out of reach ` +
+        `(squared ${squaredDistance(me, npc)} > ${radius}) — closing the last squares`);
     const target = sayApproachSquare(me, npc, { leave: step.leave ?? 2, radius });
-    if (target && !target.already) {
-      log(`say "${text}": ${wantHeard} is out of earshot ` +
-          `(squared ${squaredDistance(me, npc)} > ${radius}) — closing to ` +
-          `r${target.row}c${target.col} first`);
+    if (target && !target.already)
       approached = await walkTo(target, { arriveWithin: step.arriveWithin ?? 3,
         timeoutMs: step.timeoutMs ?? 120_000 }).catch(error => ({ error: error.message }));
-      ({ me, npc } = await seen());
-      if (wantHeard && !npc) return absent(approached);
-    }
+    ({ me, npc } = await seen());
+    if (wantHeard && !npc) return absent(approached);
   }
 
   // A completed walk is not proof of arrival. Read back the actual positions.

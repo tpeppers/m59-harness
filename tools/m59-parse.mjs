@@ -276,6 +276,37 @@ export function extractRoomObject(r) {
 
 const done = (r, o) => ({ ...o, exact: r.left === 0, leftover: r.left });
 
+// A FORMAT STRING THAT USES FEWER PARAMETERS THAN THE SERVER SENT IS NORMAL, AND TREATING IT
+// AS A BAD PARSE THREW AWAY THE MESSAGE.
+//
+// `Send(poOwner,@SomeoneSaid,#string=vrTeach_quest_needed,#parm1=Send(oAbility,@GetName))` —
+// monster.kod:4511. On a `Temples` teacher that string is
+// `priestess_teach_quest_needed` (temples.kod:18) and it contains **no `%s`**. So the server
+// writes a parameter the format never reads, four bytes are left in the buffer, `exact` goes
+// false, and `KlientClient.check` logs a parse error and `break`s without emitting anything.
+//
+// WHAT THAT COST, measured on the shadow fleet 2026-09-18. The dropped sentence is
+// *"To learn that, you must first become my disciple by proving the strength of your faith."*
+// — the ONLY thing in the game that tells you a character has not done its disciple quest, and
+// therefore why a priestess will not sell it a level-3 spell. Asked about `night vision`,
+// `discordance`, `killing fields` and `anti-magic aura`, Priestess Qerti'nya answered every one
+// of them and the fleet heard silence; asked about `bless` and `create food`, which are below
+// the gate and whose refusal HAS a `%s`, she came through perfectly. From outside, "she is
+// gated" and "she has nothing to say" were the same nothing.
+//
+// It is not one message. Any resource whose placeholders are fewer than its parameters is
+// invisible to this client, and nothing in the game stops kod passing a spare parm.
+//
+// So: after a format that RESOLVED, trailing whole words are unread parameters, not a cursor
+// that lost its place. Counted and reported rather than ignored — `unused_parms` is a real
+// signal about the kod — but never a reason to discard the text. A leftover that is not a whole
+// number of parameters, or a format that did not resolve at all, is still a bad parse.
+const doneFormatted = (r, o, resolved) => {
+  const spare = resolved && r.left > 0 && r.left % 4 === 0 ? r.left / 4 : 0;
+  return { ...o, exact: r.left === 0 || spare > 0, leftover: r.left,
+           ...(spare ? { unused_parms: spare } : {}) };
+};
+
 // BP_ROOM_CONTENTS (134) — HandleRoomContents, server.c:644.
 export function parseRoomContents(body) {
   const r = new Reader(body);
@@ -770,8 +801,8 @@ export function formatServerMessage(r, fmtId, lookup) {
 export function parseStringMessage(body, lookup) {
   const r = new Reader(body);
   const fmtId = r.u32();
-  const { text } = formatServerMessage(r, fmtId, lookup);
-  return done(r, { fmtId, text });
+  const { text, resolved } = formatServerMessage(r, fmtId, lookup);
+  return doneFormatted(r, { fmtId, text }, resolved);
 }
 
 // BP_SAID (206) — HandleSaid, server.c:880. sender, sender's NAME RESOURCE, say
@@ -784,8 +815,8 @@ export function parseSaid(body, lookup) {
   const nameRsc = r.u32();
   const sayType = r.u8();
   const fmtId = r.u32();
-  const { text } = formatServerMessage(r, fmtId, lookup);
-  return done(r, { speaker, nameRsc, sayType, fmtId, text });
+  const { text, resolved } = formatServerMessage(r, fmtId, lookup);
+  return doneFormatted(r, { speaker, nameRsc, sayType, fmtId, text }, resolved);
 }
 
 // BP_LOOK (207) — HandleLook, server.c:940. An object, a flags byte, then a
