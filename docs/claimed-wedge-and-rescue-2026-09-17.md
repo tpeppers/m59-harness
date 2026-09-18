@@ -182,21 +182,45 @@ rescue firing every tick, and that is still right. Both sites (11705, 11800) tak
 change. Test alongside `m59-claimwedge-test.mjs`: drive a wedge past the threshold twice
 without advancing `host.passes`, and assert two rescues.
 
-**AND WHY THE PASS BLOCKS AT ALL — named 2026-09-17 by the `prod-deploy-fa` session, whose
-profiling this is.** This defect was filed with the blocking as an unexplained given: 308s on
-an idle lab fleet, 877s on Waldorf's death, no cause. The cause is the safe-spot search. All 23
-prod keepers report stalls and eight stall in most log lines; Janice's keeper log was 120 of
-120 lines "event loop was blocked", ~1.8–2.5s per stall and 224 seconds of blockage in one
-window, hot in `_blockingWall` / `intersectNode` (`m59-roo.mjs`) underneath `nearestSafeSpot` /
-`sheltersAlong` / `safeSpots` (`m59-safespots.mjs`). Pepe: 76 of 77 lines, 157s.
+**AND WHY THE PASS BLOCKS AT ALL — a lead, and it is NOT yet a general finding.** This defect
+was filed with the blocking as an unexplained given: 308s measured on an idle lab fleet, 877s
+on Waldorf's death, no cause. The `prod-deploy-fa` session profiled prod on 2026-09-17 and
+found the stalls hot in `_blockingWall` / `intersectNode` (`m59-roo.mjs`) underneath
+`nearestSafeSpot` / `sheltersAlong` / `safeSpots` (`m59-safespots.mjs`). Janice's keeper log
+was 120 of 120 lines "event loop was blocked", ~1.8–2.5s per stall, 224 seconds of blockage in
+one window; Pepe 76 of 77, 157s. That profiling is theirs.
 
-That makes #2 one failure rather than two. The geometry hot path blocks the pass for minutes;
-the per-pass ration then hands the watchdog exactly one rescue per multi-minute block — while
-the thing the rescue exists for is a body losing half a point of health a second. **So the
-cheaper repair may be the hot path rather than the rationing**, and it should be measured
-first: a keeper that is not blocked for five minutes does not need two rescues in one pass.
-Both are worth doing; this one is now the better-evidenced, and it is a profiling job with a
-named entry point rather than a design question.
+**Read the scope carefully, because its author has already corrected it once.** The first
+report was "all 23 keepers stalling"; that was withdrawn the same night — after a broker
+restart only 2 of 23 showed stalls, and because the restart RESET the logs most of those zeros
+mean "no log yet", not "fixed". What survives the reset: the two that re-accumulated stalls
+within minutes were Pepe and Janice, **both in room 578 (Cragged Mountains)**, and every stall
+seen with a `nearestSafeSpot`/`sheltersAlong` caller that night was in 578. So the honest
+hypothesis is that the hot path may be specific to that room's geometry, which would be far
+cheaper to reproduce — one character parked in 578.
+
+**Counter-evidence from this repository's own shadow runs, which is why it is still open.**
+During the tours above, sampled live across all 23 shadow keepers, the longest pass blocks were
+308,011 ms in room 150, 144,747 ms in 584, 138,684 ms in room 2, and 96,661 ms in 108 — **not
+one of them in 578, on a seven-inn circuit that never enters 578.** The caveat that keeps this
+from being decisive in the other direction: `longest_block_ms` is a lifetime maximum and the
+room is where the keeper was when sampled, not necessarily where it blocked, and nothing
+profiled the shadow blocks, so they are not attributed to the safe-spot search. What the two
+readings together DO establish is that "the safe-spot search is slow in 578" is not yet
+supported enough to build a fix on, and multi-minute blocks occur in fleets that never go
+there.
+
+So: `"the safe-spot search is slow"` and `"…is slow in 578"` are different bugs with different
+repairs, and which one this is has not been settled. **Settle it before building either.** The
+cheap experiment is the one its author named — park a character in 578, profile, then park one
+in 150 and do it again; if both stall, the room is a red herring.
+
+Either way this reorders the work. The geometry hot path blocks the pass for minutes; the
+per-pass ration then hands the watchdog exactly one rescue per multi-minute block, while the
+thing the rescue exists for is a body losing half a point of health a second. **The hot path is
+probably the cheaper repair of the two** — a keeper that is not blocked for five minutes does
+not need two rescues in one pass — but it is the one still owing a reproduction, and the
+rationing fix is small, bounded and can land regardless.
 
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
