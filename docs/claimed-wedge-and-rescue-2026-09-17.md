@@ -336,12 +336,11 @@ comparable number is **stalls per minute of keeper time in that room**.
 
 ### The instrument, so nobody builds a fourth one
 
-From the `prod-deploy-fa` session. Point it at the keeper band — prod is **9511–9533**
-(verified: t1…t21, hk1, hk2, 23 keepers):
+From the `prod-deploy-fa` session. Point it at the keeper band — and read the warning below before hard-coding one:
 
 ```js
 const seen = new Set(), byRoom = {}, byCaller = {};
-for (let p = 9511; p <= 9533; p++) {
+for (let p = 9511; p <= 9550; p++) {          // a WIDE band; see the port warning below
   let lines = [];
   try { const r = await fetch(`http://127.0.0.1:${p}/log?n=400`, {signal: AbortSignal.timeout(15000)});
         lines = (await r.json()).lines || []; } catch { continue; }
@@ -384,8 +383,28 @@ All-dwell was still wrong, because a parked keeper cannot stall in the shape tha
 the denominator. `/state` exposes no `doing`, so transit is derived — a changed position in the
 SAME room means that interval was moving:
 
+> **DO NOT COMPUTE THE PORT FROM THE AGENT. `port = 9510 + N` IS NOT TRUE.** It held all
+> night and stopped holding across the `deploy-2026-09-18-2` restart. Measured immediately
+> after: the 23 keepers occupy **9511–9537**, four of them (`hk2` 9534, `t12` 9535, `t14`
+> 9536, `t21` 9537) **outside the 9511–9533 band every script here was scanning**, and nine
+> drifted from the arithmetic (`t3` expected 9513, actual 9526).
+>
+> **Two failure shapes, and only one is loud.** A WRITE to a computed port is safe — the
+> addressed-write envelope refuses a body whose agent/character/keeper_pid do not match what
+> is on that port, so a mis-aimed push comes back REFUSED. A READ is validated by nothing, so
+> a per-agent table built on computed ports silently attributes one character's data to
+> another and every row looks plausible.
+>
+> **The rule:** scan a band wide enough to be wrong about, read `agent` out of each `/state`,
+> push back to the SAME port with the identity that port just reported, and size the sweep off
+> the answers rather than off the roster count. Room-level tables that take `room` from the
+> stall LINE survive this; anything labelled with a character name from a computed port does
+> not. (Found by the `prod-deploy-fa` session when Fozzie read as "keeper not answering" and
+> its weapon unban silently failed to restore.)
+
 ```js
-const PORTS = Array.from({length:23}, (_,i) => 9511+i);   // prod band
+// A BAND, not arithmetic — and verify what answered rather than assuming who did.
+const PORTS = Array.from({length: 40}, (_, i) => 9511 + i);   // 9511..9550, deliberately wide
 const SAMPLE_MS = 15000;
 const move = {}, still = {}, last = {};
 const states = await Promise.all(PORTS.map(p => get(p, '/state?fresh=1')));
@@ -497,6 +516,15 @@ is dominated by `provedSquaresUncached` (93.3s) and `nearestSafeSpot` (44.2s), w
 appear here. So the lab understates the prod effect and cannot confirm the prediction above.
 That still wants prod's own stall rate after deployment, with 599 as the control that should
 not move.
+
+**AND EVERY PROD STALL SWEEP IN THIS DOCUMENT SCANNED 9511–9533.** Ports were verified to span
+9511–9537 immediately after `deploy-2026-09-18-2`, so any sweep taken while a keeper sat above
+9533 **under-counted by up to 4 of 23**. That biases every stall figure here DOWNWARD — which
+is the direction that makes a repair look better than it is, and specifically means the
+post-deploy "zero stalls" readings are a floor rather than a measurement. Fleet-level totals
+are the affected ones; room-level tables took `room` from the stall LINE and survive. When the
+drift began is not established: it is confirmed after the 10:10 restart and merely possible
+before it.
 
 ### DEPLOYED 2026-09-18 as `deploy-2026-09-18-1`, and what prod actually shows
 
