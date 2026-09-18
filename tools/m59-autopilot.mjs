@@ -41,7 +41,7 @@ import { OF, affordances, dropSpec as dropSpecFor, buyLines,
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
-         roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield,
+         roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
 import { sameRoomIslandBridgePlan } from './m59-world.mjs';
@@ -1470,6 +1470,89 @@ export function crowdedSquares(objects, selfId, { radius = 1, playersOnline = nu
         out.add(`${o.col + dc},${o.row + dr}`);
   }
   return out;
+}
+
+/**
+ * WHICH REAGENTS MAY BE BOUGHT, AND WHERE THE REST COME FROM.
+ *
+ * MEASURED ON PROD, 2026-09-18. Robin's shopping plan came to 39,124 shillings against a purse of
+ * 618; 12,000 of it was 150 ORC TEETH at 80 each. The guild chest at r18c2, cached the same
+ * afternoon, held **202 orc teeth**. Camilla's plan was the same shape and Bunsen's too. Ten of
+ * twenty-one characters sat in `poor_farming.active` and eleven carried
+ * `purchase_funding.status: "unaffordable - returning to farming"` — a status that RETRIES rather
+ * than stopping. Lew made 26 journeys in 90 minutes, every one of them to a shop, and reached his
+ * station ONCE. That is this repository's own trap, live on half the roster: a trip that cannot
+ * fix the thing that opened it will run for ever, and every lap reports success.
+ *
+ * SO A REAGENT HAS A SOURCE, NOT JUST A PRICE. Three answers, in order:
+ *
+ *   buy        a merchant sells it and we are allowed to pay — the historical behaviour, and
+ *              still the default for anything not named below, because silence must mean the
+ *              behaviour that was already there.
+ *   stockpile  the fleet already owns it; take it from the guild chest or a vault.
+ *   farm       nobody sells it and the chest is empty — kill the thing that drops it.
+ *              `farmSourcesFor` in m59-spawns.mjs turns that into a creature and a room list.
+ *
+ * AND WHEN NONE OF THE THREE IS AVAILABLE, THE WANT IS DROPPED RATHER THAN DEFERRED. That is the
+ * whole point. A character that cannot get orc teeth should carry on farming WITHOUT super
+ * strength and be visibly short of them — `reagent_short` on its status, "poor orc teeth" on the
+ * board — rather than walking to a counter it cannot afford every five minutes for ever. A
+ * shortage is a state to report; it is not an errand.
+ *
+ * OPERATOR DECISION, 2026-09-18: "Make it a special (default off) buy-orc-teeth option, where if
+ * it's off and not available in vault or chest it doesn't get added to the loadout... and when
+ * people take on tasks, we can make 'farm orc teeth' a task, because that can restock the chest."
+ */
+/**
+ * WHAT GOES QUIET WHEN A REAGENT RUNS OUT. Cited, because "short of orc teeth" means nothing to a
+ * reader who does not already know the spell list, and the whole point of publishing a shortage
+ * rather than retrying a purchase is that somebody can act on it.
+ */
+export const REAGENT_BLOCKS = {
+  'orc tooth': 'super strength (2 mushroom + 1 orc tooth, persench/strength.kod:57-64)',
+  'sapphire': 'bless (2 mushroom + 2 sapphire, persench/bless.kod:64-70)',
+  'fairy wing': 'holy weapon (3 fairy wing + 1 orc tooth, holywp.kod:60-62)',
+};
+
+export const REAGENT_SOURCING = {
+  // Default OFF. Orcs drop these at 40% (orctres.kod:32) in a room this fleet already farms, and
+  // the guild chest holds 202 of them, so paying 80 apiece is buying what we own.
+  'orc tooth': { buy: false, why: 'orcs drop these at 40% and the guild chest holds hundreds' },
+};
+
+/**
+ * May THIS character buy THIS reagent?
+ *
+ * Three layers, most specific first, and silence at every one means the behaviour that was
+ * already there: the character's own `buyReagent` map, then the fleet-wide default above, then
+ * yes. The class switch `buyReagents: false` still outranks all of it — a character forbidden
+ * from buying reagents at all is not quietly permitted to buy one.
+ */
+export function reagentBuyAllowed(policy, item) {
+  if (!purchaseEnabled(policy, 'reagents')) return false;
+  const key = norm(item);
+  const mine = policy?.buyReagent?.[key];
+  if (mine !== undefined) return mine !== false;
+  const fleet = REAGENT_SOURCING[key];
+  return fleet ? fleet.buy !== false : true;
+}
+
+/**
+ * Split a want list into what may be bought and what must come from stock or a kill.
+ *
+ * A PURE FUNCTION AND AN EXPORTED ONE, because the alternative is a filter inlined in a method
+ * that needs a live Autopilot to reach — and an untestable refusal is the kind the next person in
+ * a hurry deletes. It returns BOTH halves, never only the survivors: a line that silently
+ * vanishes from a shopping list is indistinguishable from one nobody wanted, which is the same
+ * failure shape as a keeper rendering `hunting` while standing in a guild hall.
+ */
+export function splitBySourcing(requests = [], policy = {}) {
+  const buy = [], stockpile = [];
+  for (const r of (Array.isArray(requests) ? requests : [])) {
+    if (!r || !r.item) continue;
+    (reagentBuyAllowed(policy, r.item) ? buy : stockpile).push(r);
+  }
+  return { buy, stockpile };
 }
 
 export class Autopilot {
@@ -9984,6 +10067,10 @@ export class Autopilot {
       // the other "is this prey reachable from where I am standing", and a caller that wants
       // to act on the second must not have to infer it from the first being silent.
       hunt_room: this.huntRoomCheck(),
+      // "poor orc teeth", in a field rather than in prose. A shortage the fleet has DECIDED to
+      // live with has to be visible, or the next reader sees a caster that quietly stopped
+      // casting and goes looking for a bug in the spell path.
+      reagent_short: this.reagentShort ?? [],
       // THE OBJECTIVE A STOPPED JOURNEY IS STILL CARRYING, or null if it carries none.
       //
       // Every leg of a twenty-one character run went `idle` between +170s and +400s, several
@@ -20443,8 +20530,14 @@ export class Autopilot {
   }
 
   shoppingPlan({ kind = 'all', items = null } = {}) {
-    const requests = purchaseEnabled(this.policy, 'reagents') && ['all', 'reagents', 'restock'].includes(kind)
+    let requests = purchaseEnabled(this.policy, 'reagents') && ['all', 'reagents', 'restock'].includes(kind)
       ? this.purchaseRequests() : [];
+    // The stockpile is the only source for these, so they never reach a price. Removed here
+    // rather than at the counter: a merchant refusal is a sentence spoken to the room, and an
+    // unaffordable TOTAL is what opens the loop this exists to close.
+    const split = splitBySourcing(requests, this.policy);
+    requests = split.buy;
+    this.chestOnlyWants = split.stockpile;
     if (purchaseEnabled(this.policy, 'reagents') && ['all', 'delivery'].includes(kind)
         && this.policy.farmDelivery?.enabled && this.pendingFarmDelivery) {
       const wanted = this.pendingFarmDelivery.requested;
@@ -20471,7 +20564,14 @@ export class Autopilot {
     const signature = JSON.stringify([plan.lines, plan.reserve, plan.unpriced, plan.estimated]);
     this.purchaseFunding = { ...plan, purse, shortfall: Math.max(0, plan.required_purse - purse),
       pending: plan.lines.length > 0 || plan.unpriced.length > 0,
-      status: purse >= plan.required_purse ? 'funded' : 'bank required' };
+      status: purse >= plan.required_purse ? 'funded' : 'bank required',
+      // A LINE THAT VANISHES SILENTLY IS INDISTINGUISHABLE FROM ONE NOBODY WANTED. If the plan
+      // is smaller because the guild chest owns these, the reader has to be able to see that.
+      ...(this.chestOnlyWants?.length
+        ? { from_stockpile: this.chestOnlyWants,
+            from_stockpile_why: 'not bought by policy — these come from the guild chest, a vault, ' +
+                                'or a kill (REAGENT_SOURCING / policy.buyReagent)' }
+        : {}) };
     if (this.townTrip) this.townTrip.purchasePlan = plan;
     if (signature !== this.lastPurchasePlanSignature) {
       this.lastPurchasePlanSignature = signature;
@@ -21456,6 +21556,46 @@ export class Autopilot {
     return { took, saved };
   }
 
+  /**
+   * WHAT THIS CHARACTER WANTS, CANNOT BUY, AND DOES NOT HAVE.
+   *
+   * Published rather than retried. `reagent_short` carries the item, how many casts it is worth,
+   * and — because "you are short of X" is useless without "and here is where X comes from" — the
+   * creature and rooms that drop it, so `farm orc teeth` can be dispatched as a task with a
+   * destination instead of an aspiration.
+   *
+   * IT NAMES WHAT STOPS WORKING. A character short of orc teeth is not broken; it is a character
+   * that cannot cast super strength. Saying which spell goes quiet is what makes the shortage
+   * readable by somebody who is not holding this file open.
+   */
+  noteReagentShortfalls() {
+    const wants = this.chestOnlyWants ?? [];
+    if (!wants.length) { this.reagentShort = []; return this.reagentShort; }
+    const pack = new Map();
+    for (const o of (this.s.client?.inventory ?? []))
+      pack.set(norm(this.s.client?.rsc?.get?.(o.nameRsc) ?? o.name ?? ''),
+               (pack.get(norm(this.s.client?.rsc?.get?.(o.nameRsc) ?? o.name ?? '')) ?? 0) + (o.amount || 1));
+    const spawns = loadSpawns(SPAWN_FILE);
+    const short = [];
+    for (const w of wants) {
+      const held = pack.get(norm(w.item)) ?? 0;
+      if (held >= (w.amount ?? 0)) continue;
+      const farm = spawns ? farmSourcesFor(spawns, w.item) : null;
+      const best = farm?.sources?.[0] ?? null;
+      short.push({
+        item: w.item, wanted: w.amount ?? null, held,
+        why: 'not bought by policy, and the stockpile did not cover it',
+        blocks: (REAGENT_BLOCKS[norm(w.item)] ?? null),
+        farm: best ? { creature: best.creature, level: best.level,
+                       per_roll_percent: best.per_roll_percent, rooms: best.rooms.slice(0, 8) } : null,
+        farmable: farm?.farmable ?? null,
+      });
+    }
+    this.reagentShort = short;
+    if (short.length) this.note('short of a reagent it may not buy', { short });
+    return short;
+  }
+
   async buyReagentsInTown() {
     if (!purchaseEnabled(this.policy, 'reagents')) return;
     const s = this.s, c = s.need();
@@ -21464,16 +21604,45 @@ export class Autopilot {
     const want = wantEb;
     let have = this.reagentCount();
 
-    // THE CHESTS FIRST. Only the shortfall that survives the stockpile is worth a merchant.
-    if (!this.policy.reagentCoop?.enabled && this.policy.guildWants?.enabled && (have.elderberry < wantEb || have.herbs < wantHb)) {
-      await this.withdrawFromStockpile([
-        { item: 'elderberry', amount: Math.max(0, wantEb - have.elderberry) },
-        { item: 'herb', amount: Math.max(0, wantHb - have.herbs) },
-      ].filter(n => n.amount > 0)).catch(error =>
+    // THE CHESTS FIRST, AND FOR EVERYTHING THE PLAN WANTS -- not for two hardcoded names.
+    //
+    // This asked for `elderberry` and `herb` and nothing else, so the three lines that actually
+    // cost money were never drawn: orc tooth, sapphire and mushroom, against a chest holding 202,
+    // 503 and 460 of them. Robin's plan was 39,124 shillings with a purse of 618 and 86% of it was
+    // sapphires and teeth the guild already owned.
+    //
+    // AND THE CO-OP GATE WAS BACKWARDS. `!this.policy.reagentCoop?.enabled` switched the chest off
+    // for every character the co-op was switched ON for. Depositing and drawing are opposite
+    // directions through the same door: a fleet that stocks its own chest is precisely the fleet
+    // that should be shopping from it. The co-op decides what goes IN and has no opinion about
+    // what comes out.
+    const chestWants = [
+      { item: 'elderberry', amount: Math.max(0, wantEb - have.elderberry) },
+      { item: 'herb', amount: Math.max(0, wantHb - have.herbs) },
+      // Everything else the plan asked for, including the chest-only items that were filtered
+      // out of it -- those have no other source at all.
+      ...(this.purchaseRequests?.() ?? []).map(r => ({ item: r.item, amount: r.amount })),
+    ].filter(n => n.amount > 0);
+    // One entry per item, largest want wins; withdrawFromStockpile takes a want list, not a bag.
+    const merged = new Map();
+    for (const w of chestWants) {
+      const k = norm(w.item);
+      if (!merged.has(k) || merged.get(k).amount < w.amount) merged.set(k, w);
+    }
+    if (this.policy.guildWants?.enabled && merged.size) {
+      await this.withdrawFromStockpile([...merged.values()]).catch(error =>
         this.note('stockpile withdrawal failed', { why: error.message }));
       if (this.travelInterrupted()) return;
       have = this.reagentCount();
     }
+    // A SHORTAGE IS A STATE TO REPORT, NOT AN ERRAND TO REPEAT.
+    //
+    // The chest has now had its turn. Anything still wanted that this character is not allowed to
+    // buy has no third option left today, so the want is DROPPED and the shortage is published
+    // instead. That is the difference between a fleet with eleven characters walking to a counter
+    // they cannot afford every five minutes and a fleet with eleven characters farming while a
+    // board says "poor orc teeth". The capability that needs it simply does not run.
+    this.noteReagentShortfalls();
     // Only the shortfall that stops a cast. Being deep in elderberry and out of herbs is
     // the normal state here, and it is exactly as unable to cook as having neither.
     const plan = this.shoppingPlan({ kind: 'reagents' });
