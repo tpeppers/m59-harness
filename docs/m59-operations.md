@@ -432,3 +432,33 @@ The borrowed characters then appear in the borrower's own tooling as ordinary MC
 - **There is no TLS here.** Put it behind a VPN or an SSH tunnel; never expose either port
   directly. `substrate/grants/` is gitignored, like the roster.
 
+
+## A broker started from another checkout can only be stopped from there
+
+`m59-service.mjs stop` refuses a broker whose `/health` reports a different repository root:
+
+    port 8971 is held by a broker from C:\code\m59-lab\muster\
+
+**`--force` does not override this, and should not.** `m59-runlock.mjs` writes its lock into
+its OWN checkout's `substrate/`, so two checkouts cannot see each other's claim — the guard is
+the only thing standing between "I am stopping my broker" and "I am stopping twenty-three
+characters somebody else is driving". That is the failure that once took down a live 46-session
+broker while every step reported success.
+
+**The way through is not a flag. It is a `cd`.** Run the same command from the checkout that
+owns it, and it stops first time:
+
+```bash
+cd /c/code/m59-lab/muster && node tools/m59-service.mjs stop --fleet shadow --http 8971 --dashboard 8972
+```
+
+Measured 2026-09-18: a shadow bring-up died at `m59-shadow-run.mjs`'s `play` stage for exactly
+this. That stage passes `--force` and treats the failure as fatal, so **a shadow rehearsal is
+dead in the water whenever another checkout owns the broker** — which, on a machine with
+thirty-odd worktrees, is most of the time. The refusal now prints the command that works; until
+every checkout has that version, the recipe above is the one to reach for.
+
+**And this is why the checkout a broker is started FROM is a deployment decision.** Every keeper
+is a child of the broker and runs the broker's checkout's code, so a rehearsal meant to test a
+change has to be driven by a broker started from the checkout that HAS it. Starting one from a
+stale tree gives a green run against the old code and nothing says so.

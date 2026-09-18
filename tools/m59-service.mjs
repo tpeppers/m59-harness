@@ -255,8 +255,23 @@ async function findBroker() {
     }
     return { running: false };
   }
+  // A FOREIGN BROKER IS NOT OURS TO STOP — AND SAYING ONLY THAT SENDS PEOPLE LOOKING FOR A
+  // BIGGER HAMMER. `--force` does not override this and should not: `m59-runlock` writes its
+  // lock into its OWN checkout's substrate, so two checkouts cannot see each other's claim, and
+  // the only process that can stop this one safely is the one that started it.
+  //
+  // What was missing is the way through, which is not a flag: run the same command from the
+  // checkout that owns it. Measured 2026-09-18 — a shadow bring-up died at the `play` stage
+  // because the broker had been started from a third checkout, `--force` answered the same
+  // refusal, and the fix was one `cd` that nothing here suggested.
   if (!sameRepo(h))
-    return { running: true, foreign: true, why: `port ${HTTP_PORT} is held by a broker from ${h.root}` };
+    return { running: true, foreign: true,
+             why: `port ${HTTP_PORT} is held by a broker from ${h.root}\n`
+                + `  --force does not override this: that checkout holds its own roster lock and `
+                + `cannot see ours.\n`
+                + `  Stop it from there instead:\n`
+                + `    cd "${h.root}" && node tools/m59-service.mjs stop --fleet ${LABEL} `
+                + `--http ${HTTP_PORT} --dashboard ${DASH_PORT}` };
   if (!sameFleet(h))
     return { running: true, foreign: true, why: `port ${HTTP_PORT} is held by the "${h.fleet}" fleet, not "${LABEL}"` };
   return { running: true, pid: h.pid, health: h };
