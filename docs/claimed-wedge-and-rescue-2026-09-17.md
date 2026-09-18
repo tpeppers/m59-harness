@@ -564,6 +564,46 @@ prediction turns on has no post-deploy transit data at all. Treat it as open. Th
 "zero over 8.7 keeper-minutes" claim is withdrawn — it could not establish those minutes were
 transit.
 
+### THE CLOSING MEASUREMENT — 599 like-for-like, and it is the only controlled one
+
+Full band 9511–9560, so no keeper missed; 10.0 min, 40 samples, 23 keepers, **4 stalls total**.
+
+```
+  room   moving-min  still-min  stalls  in transit  stalls/MOVING-min
+  38         19.3       29.3        0        0         0.00
+  599         9.8       29.0        0        0         0.00
+  39          5.3       24.0        0        0         0.00
+  27          2.0        0.0        0        0         0.00
+  579         0.8        0.0        4        4         5.33   <- NOISE, see below
+  578         0.8        0.0        0        0         0.00
+  557         1.5        0.0        0        0         0.00
+```
+
+**599 is the result, and it is the first comparison all night where the instrument, the
+denominator, the band AND the exposure shape match on both sides:** 3 stalls in 10.3
+moving-minutes before, **0 in 9.8 moving-minutes now**. The old rate predicts ~2.8; observing
+zero is about p 0.06. Suggestive, not significant — and the earlier claim that "599 still
+stalls when transited" no longer reproduces.
+
+**579 IS NOT THE NEW HOTSPOT, and the pattern is the lesson.** 4 stalls in 0.8 moving-minutes
+reads as 5.33/min and is noise. Track the "worst room" across tonight's runs: **557** (2.0
+moving-min) → **578** (17.7 all-dwell) → **599** (10.3 moving-min) → **579** (0.8 moving-min).
+A different room every time, and every time one with tiny exposure. That is the same exposure
+artefact in its sixth costume — this one small-sample rather than wrong-denominator. With 4
+stalls fleet-wide, a per-room rate is dominated by whichever room caught a minute of transit.
+
+**So the defensible claim is fleet-level only: 4 stalls in 10 minutes against 38 in 12 minutes
+pre-fix, on a band that now misses nobody.** And note the direction of the remaining bias: the
+pre-fix 38 was counted on the narrow 9511–9533 band, so it was itself an under-count — the true
+improvement is at least this large. Room-level attribution now needs more stalls than the fleet
+is producing, which is the good kind of problem.
+
+**578 SHOULD STOP BEING CALLED AN OPEN TEST.** Four consecutive attempts, and the reason it
+cannot be measured has changed every time: nobody transited it, then the fleet went stationary,
+now there is transit but not there (0.8 moving-minutes). At some point "we cannot measure this
+room" stops being a gap in the instrument and becomes a fact about the fleet: **it no longer
+routes through 578**, which answers a different question than the one the prediction asked.
+
 **What the deploy DID move**, fleet-wide and on the same 1500ms threshold: 38 stalls per 12 min
 → 3. From the savelog ledger, independent of the stall threshold entirely: interrupted journeys
 298 → 25, raw arrival 40% → 64–73%, stumbles 196 → 30. Fleet kills 1.28 → 3.47 per
