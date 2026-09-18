@@ -757,10 +757,40 @@ export class World {
       };
       return originFloods;
     };
-    const nearestIn = (by, stages) => stages
+    const rankedIn = (by, stages) => stages
       .map(stage => by.get(`${stage.col},${stage.row}`))
       .filter(Boolean)
-      .sort((a, b) => a.steps - b.steps)[0] ?? null;
+      .sort((a, b) => a.steps - b.steps);
+    const nearestIn = (by, stages) => rankedIn(by, stages)[0] ?? null;
+    // FOUR CROSSINGS ON ONE WALL MUST NOT BECOME FOUR COPIES OF ONE SQUARE.
+    //
+    // Each crossing used to contribute only `nearestIn(...)`, and the nearest staging square
+    // for every crossing on a short wall is the same square — so a boundary with four ways
+    // through published four candidates that were one question asked four times. Downstream
+    // then behaves exactly as designed and makes it worse: `distinctStagesFirst` collapses
+    // them into one attempt, and `leaveViaAny`'s three-walk budget buys that attempt three
+    // times before giving up.
+    //
+    // Kardde's Canyon (49) north to the Main gate of Barloque is the measured case, and it
+    // cost a character twenty-three hours. Its rim offers four crossings at fine x 1392,
+    // 1424, 1440 and 1456; from anywhere in the room body the nearest stage for all four is
+    // r1c21, and r1c21 is the one square on that boundary the collision model refuses
+    // (`geometry_blocked`, before any packet). Standing on r1c22 crosses first try — but
+    // r1c22 is only ever offered when the body is ALREADY on it, because then it is the
+    // nearest. So a character that walks to the anchor and fails can never try anything
+    // else, and a failed attempt leaves it standing exactly there: 5,910 refusals across the
+    // fleet's transit books, every one at 1,21, and one success in 1,183.
+    //
+    // So: a crossing whose nearest stage is already spoken for falls through to its
+    // NEXT-nearest. Conservative by construction — it can only ever substitute another
+    // square out of that crossing's own `stages`, and only when the preferred one is already
+    // in the list, so a boundary whose crossings genuinely stage apart is unchanged.
+    //
+    // This is the same defect as `distinctStagesFirst` (814f377) one level earlier: that one
+    // reorders duplicates after the fact, and reordering cannot help when every entry is a
+    // duplicate. Fix the place they are created.
+    const firstFree = (ranked, used) =>
+      ranked.find(s => !used.has(`${s.col},${s.row}`)) ?? ranked[0] ?? null;
 
     // Include the reverse of edge exits that only the other side declares. The
     // planner already routes through these (see inferredExits); without them here
@@ -813,12 +843,16 @@ export class World {
         // offered from here: the way out is a ROUTE -- through 589 and round -- not a crossing
         // of this room. 567 has no declared jump and keeps its fallback; 599 has two.
         const oneWayDropHere = roomHasDeclaredFallJump(Number(room?.num ?? 0));
+        // Which staging squares this boundary has already claimed, so the next crossing
+        // prefers a square nobody is standing on rather than repeating the nearest.
+        const stagedHere = new Set();
         for (const crossing of edgeCandidatesOf(room, e, null, { live: true })) {
-          let bestStage = nearestIn(moverBySquare, crossing.stages);
+          let bestStage = firstFree(rankedIn(moverBySquare, crossing.stages), stagedHere);
           const onlyCoarse = !bestStage;
           if (onlyCoarse && oneWayDropHere) continue;
-          if (onlyCoarse) bestStage = nearestIn(coarseBySquare, crossing.stages);
+          if (onlyCoarse) bestStage = firstFree(rankedIn(coarseBySquare, crossing.stages), stagedHere);
           if (!bestStage) continue;
+          stagedHere.add(`${bestStage.col},${bestStage.row}`);
           const fineSteps = Math.ceil(Math.hypot(
             crossing.fine_stand_on.x - (bestStage.col * KOD_FINENESS + (KOD_FINENESS >> 1)),
             crossing.fine_stand_on.y - (bestStage.row * KOD_FINENESS + (KOD_FINENESS >> 1))) / 48);

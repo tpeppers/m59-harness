@@ -1339,3 +1339,57 @@ attempt is what says whether it worked.
 **None of this widens the candidate SET.** `exits()` already publishes every declared crossing
 and every opening — that was checked, and the claim that it collapses them is wrong. What was
 collapsing was the budget.
+
+## A boundary's retry budget has to buy different squares — and that starts where they are made
+
+`leaveViaAny` spends a bounded three walks on a boundary (`M59_EXIT_CANDIDATES`) and then lets
+`travel` re-plan, because a candidate that works works in the first try or two. **That bargain
+only holds if the three tries are different places.**
+
+`distinctStagesFirst` (`814f377`) was the first defence: it reorders near-duplicate candidates
+to the tail so the budget reaches distinct squares. Reordering cannot help when **every** entry
+is a duplicate, and `_computeExits` was creating exactly that. Each crossing on a wall
+contributed one candidate — `nearestIn(...)`, its single nearest staging square — and on a
+short wall the nearest stage for every crossing is the *same* square. Four ways through
+published four copies of one.
+
+So a crossing whose nearest stage is already spoken for now falls through to its **next**
+nearest, out of its own `stages` list. It cannot invent a square, and a boundary whose
+crossings already stage apart is untouched. Measured over 120 rooms / 76 edge boundaries:
+boundaries offering only one staging square fell from **26 to 6**.
+
+**Kardde's Canyon is the case it was found on, and it cost a character 22.85 hours.** Room 49
+leaves north to the Main gate of Barloque (593) over a rim four squares wide, with four
+crossings at fine x 1392/1424/1440/1456. From anywhere in the room body the nearest stage for
+all four is `r1c21` — **and `r1c21` is the one square on that boundary the collision model
+refuses**, `geometry_blocked`, raised before any packet is sent. `r1c22` crosses on the first
+try. But `r1c22` was only ever offered when the body was already standing on it, because only
+then was it nearest.
+
+A failed crossing leaves the body standing on the anchor. So the first attempt walks a
+character onto `r1c21` and every attempt after that starts there with nothing else to try.
+Marco Polo (20 max health) did it **13,777 times over 22.85 hours**, `legs: 0` every time; the
+fleet's transit books hold **5,910 refusals on that boundary and every single one is at 1,21**,
+against one success in 1,183.
+
+Measured live on the lab server, same character, same square, same server:
+
+| `go 593` standing on | before | after |
+|---|---|---|
+| `r1c21` (the bake anchor) | `left: false`, `exit_candidates_exhausted`, 5 tried all `{21,1}` | **`left: true`** via `r1c22`, 3 attempts |
+| `r8c12` (room body) | one square offered | **`left: true`** via `r1c22`, 3 attempts |
+| `r1c19` (the far corner) | fails | **still fails** — see below |
+
+**It is an improvement, not a cure, and the remaining case says why.** From `r1c19` the list is
+`r1c20, r1c21, r2c21, r1c22` and the three-walk budget is spent before reaching the square that
+works. Ordering decides which three you buy, and nothing in the model knows which square
+crosses until it is tried — which is exactly what the `witness` key (observed crossings) exists
+to fix, and why an observation outranks a derivation there.
+
+**The stall was invisible the whole time.** `stuck: null`, absent from `m59-stucks.mjs`,
+`backUpToUnstick` never fired — because the ROUTER is fine. It plans twelve legs happily; the
+first hop's crossing is what fails. Every stall detector asks whether a route exists, and this
+is the case where one does and cannot be walked.
+
+`node tools/m59-stagespread-test.mjs` (8, offline) pins it, and skips loudly rather than
+passing when a checkout has no bake.
