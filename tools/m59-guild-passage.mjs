@@ -6,8 +6,8 @@ import { RoomGeometry, applySectorHeights } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
 
 let closed;
-const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
-const doors = [
+export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
+export const doors = [
   { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]] },
   { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]] },
   { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]] },
@@ -24,6 +24,59 @@ export function guildSection(row, col) {
   return anchors.findIndex(([r,c]) => closed.path(row, col, r, c).found && closed.path(r, c, row, col).found);
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// THE BAKED LINE ACROSS EACH DOOR, AND WHY THERE IS ONE.
+//
+// The live plan below asks `s.world.geometry.path(...)` inside a 350ms wait for a `sector-height`
+// event, in a window the door holds open for about five seconds. When the event has not arrived
+// yet, the geometry it plans across is the SHUT hall, `path` reports not-found, and the crossing
+// records `no live path across the open door` — which reads exactly like "there is no way out of
+// this room". Zoot spent an hour on door 59's outward trigger answering that every pass, with the
+// hall's only exit two squares away, and `come-home` gave up with route_progressing_exits_exhausted.
+//
+// The hall's geometry is ENUMERABLE — all 32 ceiling states are in substrate/m59-ceiling-doors.json
+// — so the line across an open door is a fact that can be cut in advance. m59-guildrails.mjs cuts
+// it against the state where that one door is up, verifies it with the mover's own trace, and
+// writes substrate/rail-714.json. This reads it.
+//
+// IT IS A FALLBACK, NOT A REPLACEMENT. The live geometry is the only thing that knows about
+// BODIES, and a rail knows only about the ceiling — so the live plan still goes first and the rail
+// answers only when the live plan has nothing. That way this can fix the race and cannot cause one.
+let RAILS = null;
+function bakedRails() {
+  if (RAILS === null) {
+    try {
+      RAILS = JSON.parse(readFileSync(new URL('../substrate/rail-714.json', import.meta.url)));
+    } catch { RAILS = false; }          // false, not null: asked once, absent, do not re-read
+  }
+  return RAILS || null;
+}
+
+/**
+ * The baked crossing from one square to another, as SQUARES, deduped.
+ *
+ * The rail is cut on a 64-unit client lattice because that is what the mover enforces; `s.step`
+ * takes a square. So the waypoints are collapsed to the square transitions they represent, which
+ * is the same line expressed in the units the caller can act on. A COORDINATE CARRIES ITS UNIT:
+ * waypoints are CLIENT (1024 to a square), the result is grid.
+ */
+export function bakedCrossing(from, to, sector) {
+  const baked = bakedRails();
+  if (!baked) return null;
+  const name = ([r, c]) => `r${r}c${c}`;
+  const leg = baked.legs?.find(l => l.ok && l.from === name(from) && l.to === name(to) &&
+                                    (l.doors_open ?? []).includes(sector));
+  if (!leg?.waypoints?.length) return null;
+  const out = [];
+  for (const p of leg.waypoints) {
+    const col = Math.floor(p.x / 1024) + 1, row = Math.floor(p.y / 1024) + 1;
+    const last = out[out.length - 1];
+    if (!last || last.row !== row || last.col !== col) out.push({ row, col });
+  }
+  // Drop the square we are already standing on; what is wanted is where to go NEXT.
+  if (out.length && out[0].row === from[0] && out[0].col === from[1]) out.shift();
+  return out.length ? out : null;
+}
 export async function guildPassage(k, destination, isInterrupted) {
   const s = k.s, c = s.need();
   const guard = () => { if (isInterrupted()) throw new Error('guild passage paused for survival'); };
@@ -57,21 +110,33 @@ export async function guildPassage(k, destination, isInterrupted) {
       // Do not coalesce across the entrance: its first and second hotplates
       // occupy consecutive squares and must be crossed in order. Confirm each
       // short step, then plan from the body's actual position.
-      let result;
+      let result, usedRail = false;
       if (s.step && s.world?.geometry) {
         for (let step = 0; step < 6; step++) {
           guard();
           if (c.self.row === across[0] && c.self.col === across[1]) break;
           const path = s.world.geometry.path(c.self.row, c.self.col, across[0], across[1]);
-          const next = path.steps?.[0];
-          if (!path.found || !next) { result = { reason: 'no live path across the open door' }; break; }
+          let next = path.steps?.[0];
+          if (!path.found || !next) {
+            // The live geometry has nothing. That is USUALLY the ceiling not having arrived yet
+            // rather than a wall, so ask the baked line for this door before giving up on it.
+            const rail = bakedCrossing([c.self.row, c.self.col], across, door.sector) ??
+                         bakedCrossing(trigger, across, door.sector);
+            next = rail?.[0] ?? null;
+            usedRail = !!next;
+            if (!next) { result = { reason: 'no live path across the open door, and nothing baked' }; break; }
+          }
           result = await s.step(next.col, next.row, { confirm: true, beforeMutation: guard });
           if (!result.moved) break;
         }
       } else result = await s.walkTo(across[1], across[0], { maxSteps: 5, hardCap: 6, beforeMutation: guard });
       crossed = guildSection(c.self.row, c.self.col) === section + (inward ? 1 : -1);
       k.note?.('guild door passage', { sector: door.sector, inward, crossed,
-        at: { row: c.self.row, col: c.self.col }, reason: result?.reason });
+        at: { row: c.self.row, col: c.self.col }, reason: result?.reason,
+        // A FALLBACK NOBODY CAN COUNT IS A FALLBACK NOBODY WILL MAINTAIN. If the rail is carrying
+        // this hall, that has to be visible in the log rather than inferred from the absence of
+        // the old refusal.
+        ...(usedRail ? { via: 'baked rail' } : {}) });
       if (!crossed && attempt < 2) {
         // GO while a door is already open does not restart its five-second
         // timer. Let that cycle finish, then request a fresh opening.
