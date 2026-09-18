@@ -2102,6 +2102,12 @@ class KeeperProxy {
       // still threw after being 'fixed'. `c` is this object, not the KeeperProxy that built it —
       // the comment forty lines down says so in as many words.
       requestRescue: () => act('rescue', {}),
+      // SAME FAMILY, AND IT HAD BEEN BROKEN FOR AS LONG. BP_CHANGE_DESCRIPTION lives on
+      // M59Client, so a keeper-backed character answered `c.setDescription is not a function`
+      // to every `m59-describe.mjs --set` — which is all twenty-three of them. The board kept
+      // showing the descriptions set before the fleet moved to keeper processes, so it read as
+      // working. An empty string is a real request: it is how one is cleared.
+      setDescription: (text) => act('describe', { text: String(text ?? '') }),
       // SPEAKING WAS THE ONE VERB THE PROXY NEVER FORWARDED, and a guild hall is full of
       // doors and merchants that only answer speech.
       //
