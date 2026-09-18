@@ -41,7 +41,7 @@ import { OF, affordances, dropSpec as dropSpecFor, buyLines,
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
-         roomThreats, goalYield, roomCap, karmaSafe,
+         roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
 import { sameRoomIslandBridgePlan } from './m59-world.mjs';
@@ -6137,6 +6137,13 @@ export class Autopilot {
     if (this.doing === 'pulling') return 'pulling quarry into position';
     if (this.doing === 'waiting') return 'waiting for quarry contact';
     if (this.mode === 'farm' && this.policy.hunt) {
+      // A ROOM THAT CANNOT PRODUCE THE QUARRY OUTRANKS EVERY OTHER THING THIS LINE CAN SAY,
+      // because it is the only one where no pass can ever succeed. "This prey pays nothing" is
+      // an argument about value; "there is no prey here" is an argument about arithmetic, and
+      // it was the commonest state in the fleet while being the only one with no name.
+      const dryRoom = this.huntRoomCheck();
+      if (dryRoom?.dry) return `stranded in ${dryRoom.room}: no ${huntLabel(this.policy.hunt)} here`;
+
       // A keeper earning nothing must not describe itself the same way as one that is.
       // This string is what the fleet board renders, and it is where the afternoon of
       // worthless grinding would have been visible had there been anything to see.
@@ -9144,6 +9151,38 @@ export class Autopilot {
   //
   // Returns null when it cannot know — no purpose set, no spawn index, prey not in the
   // index, vitals not read yet. Null means "no opinion", never "fine".
+  /**
+   * IS THE ROOM UNDER THIS CHARACTER'S FEET ONE THAT MAKES ITS QUARRY?
+   *
+   * `yieldCheck` asks whether the quarry is worth killing. It never asks whether the quarry is
+   * HERE, so a character hunting skeletons in a room where no skeleton can spawn passes the one
+   * audit that exists to catch a keeper earning nothing, and renders as `hunting: skeleton` —
+   * the healthy string — on every board.
+   *
+   * MEASURED, prod, 2026-09-18: four to seven characters of twenty-three were in this state at
+   * every one of sixty one-minute samples, spanning three configuration changes, none of which
+   * moved it. Zoot hunting skeletons in the Bookmakers guild hall; Scooter hunting zombies in a
+   * town room; Statler hunting skeletons in the Cragged Mountains, which makes black spiders and
+   * trolls. All three assigned to 38 or 39.
+   *
+   * IT DOES NOT TRY TO FIX IT, and that is deliberate. `shouldRelocateToAssignedRoom` opens with
+   * `if (movementLeased) return false`, and a bot that holds movement is the thing entitled to
+   * decide where this character stands. Walking home from here would be the keeper taking back a
+   * faculty it has given away. What the keeper owes is the TRUE SENTENCE, so that the bot, the
+   * board and the next post-mortem can all see the state rather than reading it as work.
+   */
+  huntRoomCheck() {
+    const want = this.policy?.hunt;
+    if (!want || this.mode !== 'farm') return null;
+    const room = this.s.world?.room?.num ?? this.s.client?.room?.num ?? null;
+    if (room == null) return null;
+    const spawns = loadSpawns(SPAWN_FILE);
+    if (!spawns) return null;
+    // `standingHere` is what turns "this room is not in the index" from missing data into an
+    // answer: the body is in it, so it is a room, so an absent entry means it makes nothing.
+    return huntRoomYield(spawns, room, want, { standingHere: true });
+  }
+
   yieldCheck() {
     const { purpose, goals, hunt } = this.policy;
     if (!purpose || !hunt) return null;
@@ -9941,6 +9980,10 @@ export class Autopilot {
       // The second invisible failure, alongside `stalled`: working perfectly and earning
       // nothing. Null when there is no opinion to give — never a quiet "fine".
       yield_check: this.yieldCheck(),
+      // Beside yield_check rather than inside it: one answers "is this prey worth killing",
+      // the other "is this prey reachable from where I am standing", and a caller that wants
+      // to act on the second must not have to infer it from the first being silent.
+      hunt_room: this.huntRoomCheck(),
       // THE OBJECTIVE A STOPPED JOURNEY IS STILL CARRYING, or null if it carries none.
       //
       // Every leg of a twenty-one character run went `idle` between +170s and +400s, several
