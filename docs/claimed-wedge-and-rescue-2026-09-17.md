@@ -655,6 +655,47 @@ attempts and withdrawals turns stationary keeper-minutes into MOVING ones — th
 denominator the 578 test has been starved of. More exposure in the next moving-rate table is
 this working, not drift.
 
+## TO DO — #6 a banned weapon list can leave a character bare while it is standing on weapons
+
+**Verified in source 2026-09-18, and it is the most lethal thing on this list.** Found by the
+`prod-deploy-fa` session while explaining Fozzie's death; the mechanism is theirs, the code
+check is mine.
+
+**Cite.** `Autopilot.armSelf`:
+
+```js
+if (skills.weaponsOf(c).length) {
+  const eq = await skills.equipBest(s, { priority: …, banned: this.bannedWeaponsNow() });
+  if (eq?.wielding) return true;
+}
+return await this.makeWeapon('about to fight with nothing in hand');
+```
+
+**Mechanism.** There is no fallback. If the character carries weapons and `bannedWeapons`
+forbids all of them, `equipBest` yields nothing wielding and the only remaining branch is
+`makeWeapon` — a spell costing 15 mana. A character whose mana is short then stays **bare while
+carrying usable weapons**, indefinitely.
+
+**Failure scenario, measured.** Fozzie, 2026-09-18, room 599: holding two hammers with `hammer`
+on the ban list, sixty seconds of *"create weapon needs 15 mana and mana barely moves while
+standing in a fight… no weapon, no money and no donor"*, in a room with fifteen threats — then
+PK'd to 17/51 and killed by a troll. The ban had been lifted hours earlier precisely because
+`skel.kod` resists thrust 70 and takes −20 on bludgeon; the lift **reverted across a broker
+restart**, and the character sat on port 9535 — outside the 9511–9533 sweep — so nothing noticed.
+
+**Deliverable, with the part that is not ours to decide.** Shape: when `equipBest` under the ban
+yields nothing AND the body is unarmed AND something is in reach, retry **without** the ban — a
+banned weapon beats bare hands when something is hitting you. The judgement inside it belongs to
+the operator: the ban protects the training split (a different proficiency resets
+`piWeaponSwings`, up to 74 swings of progress), so this is *training progress versus survival*.
+The defect is that there is currently no way to express **"prefer, but not unto death"** — the
+ban is absolute in a code path that can kill.
+
+**Related, same root:** `armSelf` is only reachable from the recovery branch (after
+`hibernate()`), so a character pinned below its `fightAboveVigor` floor never reaches the arming
+step at all. A character can therefore be simultaneously too tired to fight and too tired to
+pick up the weapon that would end the fight sooner.
+
 ## TO DO — #5 `provedSquares` memoises on the FINE position, so a walking body never hits it
 
 **The best-value item on this list as of 2026-09-18, and it is a MEASUREMENT before it is a
