@@ -424,6 +424,68 @@ appear here. So the lab understates the prod effect and cannot confirm the predi
 That still wants prod's own stall rate after deployment, with 599 as the control that should
 not move.
 
+### DEPLOYED 2026-09-18 as `deploy-2026-09-18-1`, and what prod actually shows
+
+**A DWELL DENOMINATOR IS STILL THE WRONG ONE — this is the fourth time exposure inverted a
+reading, and it caught the post-deploy numbers too.** The first clean post-deploy readings
+(zero stalls fleet-wide; 599 at 17.7 keeper-minutes and zero) were **diluted, not clean**:
+the fleet had largely stopped travelling, and a keeper standing still cannot stall in the shape
+that produced the pre-fix cost. `prod-deploy-fa` rebuilt the instrument to split dwell into
+**moving** and **stationary** keeper-minutes (position changed between 15s samples ⇒ that
+interval was transit) and rate against MOVING time. 12.0 min, 48 samples, 23 keepers, 3 stalls:
+
+```
+  room   moving-min  still-min  stalls  stalls/MOVING-min
+  714       15.8       14.8        0        0.00
+  599       10.3       15.0        3        0.29   <- all 3 carry a travelling marker
+  27         5.0       25.0        0        0.00
+  38         4.5       33.3        0        0.00
+  39         1.5       44.0        0        0.00
+```
+
+**The farming rooms are ~90% stationary** (39 is 44.0 still against 1.5 moving). So any
+all-dwell rate computed while the fleet farms is dominated by keepers standing in one place —
+which is exactly how the first post-deploy table looked so good.
+
+**599 STILL STALLS WHEN TRANSITED**, 3 stalls in 10.3 moving-minutes, every one marked
+travelling. Transit cost has not gone to zero, and whether the residual is this code path or
+another is not established.
+
+**BUT 0.14 → 0.29 IS NOT A REGRESSION, AND MUST NOT BE READ AS ONE.** The pre-fix 0.14 was
+stalls per ALL-DWELL minute; the 0.29 is per MOVING minute. Different denominators, not
+comparable. On the pre-fix denominator the same post-fix window gives 3 / 25.3 = **0.119**,
+against 0.140 before — flat to slightly down, on 5 and 3 stalls, which is no signal either way.
+Which is what a control is supposed to do: 599 was measured cheap and did not move.
+
+**578 IS UNMEASURED POST-FIX.** Nobody entered it during that window, so the room the whole
+prediction turns on has no post-deploy transit data at all. Treat it as open. The earlier
+"zero over 8.7 keeper-minutes" claim is withdrawn — it could not establish those minutes were
+transit.
+
+**What the deploy DID move**, fleet-wide and on the same 1500ms threshold: 38 stalls per 12 min
+→ 3. From the savelog ledger, independent of the stall threshold entirely: interrupted journeys
+298 → 25, raw arrival 40% → 64–73%, stumbles 196 → 30. Fleet kills 1.28 → 3.47 per
+character-hour — that last one confounded by a doctrine change landing in the same window, by
+its author's own statement.
+
+**The mechanism, stated because it is falsifiable.** This repair is answer-identical by
+construction, so it cannot change a single collision verdict and therefore cannot make a
+geometrically-blocked step succeed. A `stumble` is not a geometric refusal — it is a transient
+failure to progress, the classic being *"the character arrives at an edge, its coordinates read
+as off the grid for an instant… nothing is wrong; the position has not settled."* Those are
+STALENESS failures. A keeper that is not blocked re-observes sooner and asks its routing
+questions against fresher position data. So the causal claim is **"the keeper keeps up"**, never
+"the geometry changed" — and if stumbles had been purely geometric, this change could not have
+moved them at all. It also means the restart is a shared confound: a wedged character re-reading
+a room burns stumbles repeatedly, and the restart cleared those.
+
+**RECOMMENDATION FOR WHOEVER MEASURES THIS NEXT: make the moving/stationary split the default,
+not the follow-up.** Four readings tonight were inverted by exposure — a correct count ranking
+599 worst when it was cheapest, a lifetime-max joined to the wrong room, a rate diluted by
+standing keepers, and a "zero" that measured who happened to be parked. The instrument is
+`stallshape.mjs` (prod-deploy-fa's). The open test is unchanged and now sharper: **a window with
+real transit through 578 under load.**
+
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
 **Cite.** `Autopilot.watchdogTick`, the claimed-mover branch — `else this.note('WATCHDOG — the
