@@ -683,13 +683,38 @@ PK'd to 17/51 and killed by a troll. The ban had been lifted hours earlier preci
 `skel.kod` resists thrust 70 and takes −20 on bludgeon; the lift **reverted across a broker
 restart**, and the character sat on port 9535 — outside the 9511–9533 sweep — so nothing noticed.
 
-**Deliverable, with the part that is not ours to decide.** Shape: when `equipBest` under the ban
-yields nothing AND the body is unarmed AND something is in reach, retry **without** the ban — a
-banned weapon beats bare hands when something is hitting you. The judgement inside it belongs to
-the operator: the ban protects the training split (a different proficiency resets
-`piWeaponSwings`, up to 74 swings of progress), so this is *training progress versus survival*.
-The defect is that there is currently no way to express **"prefer, but not unto death"** — the
-ban is absolute in a code path that can kill.
+**IT IS NOT A ONE-OFF — there is a live instance, verified 2026-09-18 through the broker.**
+Rizzo (t19), room 38, 56/56, **wielding nothing**, `has_weapon: true`. Pack: 36 items of which
+**24 are long swords**. Ban list: `["club","dagger","axe","long sword","scimitar","mystic
+sword","nerudite sword","gold sword","black dagger","bow","crossbow"]` — every weapon it owns.
+Mana **8/24** against `makeWeapon`'s 15, down from 14 an hour earlier.
+
+**AND IT IS SELF-FEEDING, which is what makes it more than a misconfiguration.** The 24 swords
+are `create weapon` output. Cannot wield anything → casts for a weapon → the output is a long
+sword the same ban forbids → pack fills → mana drains → the next cast is further out of reach.
+Nothing is misconfigured: Rizzo's loadout asks for a short sword, short sword is *not* banned,
+and the ban and the loadout agree. It simply owns none, because its pack is full of the thing it
+conjures instead. (Bunsen was the same shape earlier the same night.)
+
+**Deliverable — and it splits into two, only one of which is a policy call.** This
+decomposition is the `prod-deploy-fa` session's and it is better than the single fix I first
+proposed:
+
+1. **`makeWeapon` must not be the fallback when the pack already holds a weapon the ban
+   rejects.** Conjuring a 24th long sword is strictly worse than wielding one of the 24 —
+   whatever the training policy is — because it costs mana, fills the pack, and produces an item
+   the same ban forbids. Declining to conjure in that state is not a survival-versus-training
+   trade; **it is declining to make things worse**, and it needs no operator decision.
+2. **Whether to then break the ban** — retry `equipBest` without it when the body is unarmed and
+   something is in reach. *This* one is the operator's: the ban protects the training split (a
+   different proficiency resets `piWeaponSwings`, up to 74 swings of progress), so it is
+   training progress versus survival, and the real gap is that there is no way to express
+   **"prefer, but not unto death"** — the ban is absolute in a code path that can kill.
+
+A third thing worth having either way: **the futility is silent.** A character whose conjure
+output is itself banned can never arm itself by that route, and nothing says so. That state
+should be loud — it is a misconfiguration the fleet cannot resolve on its own, and today it
+presents as sixty seconds of a character standing still in a monster room.
 
 **Related, same root:** `armSelf` is only reachable from the recovery branch (after
 `hibernate()`), so a character pinned below its `fightAboveVigor` floor never reaches the arming
