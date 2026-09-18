@@ -2399,8 +2399,13 @@ const DYNAMIC_FIELDS = Object.freeze({
   // WHERE AN NPC IS STANDING IS NOT KNOWN UNTIL SOMEBODY LOOKS. A wanderer moves, and even a
   // `MOB_NOMOVE` one is only findable by reading the room — so an errand that has to get
   // within a few squares of a named NPC cannot write the square into its plan.
-  crawl_to: ['col', 'row'],
-  walk_to: ['col', 'row'],
+  // `room` alongside them, because a square only means anything in the room it was read in.
+  // Both walkers already refuse when the body ends up somewhere else (`left_the_room`); what
+  // they could not know is which room the TARGET came from, so a caller that looked in one room
+  // and walked in another spent its whole budget on a coordinate that had stopped meaning
+  // anything. See the `closeOn` note in fleetscripts/disciple-quest.mjs.
+  crawl_to: ['col', 'row', 'room'],
+  walk_to: ['col', 'row', 'room'],
 });
 
 export function resolveStep(step, state) {

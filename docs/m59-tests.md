@@ -1216,7 +1216,7 @@ single keeper pid, or a fake starts speaking a protocol no server does.**
 
 ## The disciple gate — the level-3 spell quest
 
-**`m59-disciple-test.mjs` (167) — three groups, none of which is about whether the errand runs.**
+**`m59-disciple-test.mjs` (174) — three groups, none of which is about whether the errand runs.**
 `tools/fleetscripts/disciple-quest.mjs` does a temple priestess's disciple quest, which is the
 only thing that unlocks spells of level 3 and above in her school (`temples.kod:52-73`,
 `monster.kod:4506-4518`). The whole derivation, with citations, is

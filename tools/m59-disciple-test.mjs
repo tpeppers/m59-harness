@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// WHAT THE DISCIPLE QUEST NEEDS FROM US, PINNED (167). Offline: no broker, no server, no socket.
+// WHAT THE DISCIPLE QUEST NEEDS FROM US, PINNED (174). Offline: no broker, no server, no socket.
 //
 //   node tools/m59-disciple-test.mjs
 //
@@ -554,6 +554,29 @@ console.log('\ngetting within five squares of somebody');
      JSON.stringify(resolveStep(crawl, { near: { col: 20, row: 13 } })));
   ok('and at nothing at all when the NPC was not in the room',
      (r => r.col === null && r.row === null)(resolveStep(crawl, { near: null })));
+
+  // A SQUARE ONLY MEANS ANYTHING IN THE ROOM IT WAS READ IN.
+  //
+  // shadow07 looked in room 952, found Duke Akardius at r11c20, and was in room 951 by the time
+  // the crawl ran — which spent its whole deadline walking toward a coordinate in a room it had
+  // left and reported `ran out of time 9 square(s) from r11c20`. True about the number, and the
+  // number had stopped meaning anything. Both walkers already answer `left_the_room`; what they
+  // could not know is which room the TARGET came from.
+  ok('a crawl carries the room its target was seen in',
+     resolveStep(crawl, { near: { col: 20, row: 11, room: 952 } }).room === 952);
+  ok('and a walk_to carries it too — the fast rung has the same exposure',
+     resolveStep(steps.find(s => s.do === 'walk_to'),
+                 { near: { col: 20, row: 11, room: 952 } }).room === 952);
+  ok('no target means no room either, rather than a stale one',
+     resolveStep(crawl, { near: null }).room === null);
+  for (const school of ['kraanan', 'shalille', 'faren', 'qor']) {
+    const all = await script.steps({ school, agent: 't1', agents: ['t1'] });
+    ok(`${school}: every approach rung names the room it is walking in`,
+       all.filter(s => s.do === 'crawl_to' || (s.do === 'walk_to' && typeof s.col === 'function'))
+          .every(s => typeof s.room === 'function'),
+       all.filter(s => s.do === 'crawl_to' || s.do === 'walk_to')
+          .map(s => `${s.do}:${typeof s.room}`).join(' '));
+  }
 
   // `findNpc` is the read, and its failure has to carry what WAS there — "she is not here" and
   // "I could not parse the room" are different problems with the same empty answer.

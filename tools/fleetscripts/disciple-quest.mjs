@@ -635,8 +635,18 @@ export const script = {
         if (at.missing) return { ok: true, absent: want, saw: at.saw, note:
           `${want} is not in room ${view?.room?.num ?? '?'} — the say step will report that ` +
           `properly; there is nothing to crawl towards` };
-        state.near = at;
-        return { ok: true, approaching: want, at: `r${at.row}c${at.col}` };
+        // THE SQUARE BELONGS TO THE ROOM IT WAS SEEN IN, AND THE BODY CAN LEAVE BETWEEN THE
+        // LOOK AND THE WALK.
+        //
+        // Measured 2026-09-18: shadow07 looked in room 952, found Duke Akardius at r11c20, and
+        // was then in room 951 by the time the crawl ran — which spent its whole deadline
+        // walking toward a square in a room it had left, and reported `ran out of time 9
+        // square(s) from r11c20`. A true sentence about a coordinate that had stopped meaning
+        // anything. This is `start_has_no_floor` wearing different clothes: a position and a
+        // geometry from DIFFERENT ROOMS, which CLAUDE.md records as 1,535 of 2,361 hop failures
+        // in one window.
+        state.near = { ...at, room: Number(view?.room?.num ?? NaN) };
+        return { ok: true, approaching: want, at: `r${at.row}c${at.col}`, room: state.near.room };
       }, `could not look for the ${label}`),
 
       // A LADDER, NOT A CHOICE. `walk_to` plans over the map and covers ground fast — measured
@@ -648,10 +658,17 @@ export const script = {
       // So: the fast one first for the distance, the careful one after for the last few squares
       // it could not manage. `crawl_to` returns `arrived` on its first check when the walk
       // already got there, so the second rung is free whenever the first one worked.
+      // `room` NAMED ON BOTH RUNGS, and resolved from the same state the coordinates are.
+      // Both steps already honour `step.room ?? start.room` and answer `left_the_room`; what
+      // they could not do is know which room the SQUARE came from. Now they do, so a body that
+      // has left is refused at once instead of spending its budget walking to a coordinate
+      // that belongs somewhere else.
       { ...walkTo(st => st.near?.col ?? null, st => st.near?.row ?? null,
-                  { within: NEAR_NPC, deadlineMs: 120_000, stallMs: 25_000 }), optional: true },
+                  { within: NEAR_NPC, deadlineMs: 120_000, stallMs: 25_000 }),
+        room: st => st.near?.room ?? null, optional: true },
       crawlTo(st => st.near?.col ?? null, st => st.near?.row ?? null,
-              { within: NEAR_NPC, optional: true, maxSteps: 60, deadlineMs: 180_000 }),
+              { within: NEAR_NPC, optional: true, maxSteps: 60, deadlineMs: 180_000,
+                room: st => st.near?.room ?? null }),
     ];
 
     const killSteps = [
