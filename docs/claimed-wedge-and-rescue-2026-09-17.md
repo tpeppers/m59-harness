@@ -615,9 +615,40 @@ buy *zero* health, not because crossing that crowd is safe. So the failure mode 
 that now dies **in transit** rather than stationary, landing in a different bucket than the one
 this empties.
 
-> **If `deaths_travelling` rises while total deaths do not fall, this change MOVED deaths
-> rather than prevented them — go back to `deploy-2026-09-18-1`.** Window 3's baseline is 2 of
-> 5 travelling. Do not read one window either way.
+> ~~If `deaths_travelling` rises while total deaths do not fall…~~ **THAT CRITERION WAS WRONG
+> AND IS REPLACED.** It named the wrong bucket: the first death attributable to this change
+> (Fozzie, below) classified as NOT travelling, so the letter of the criterion was satisfied
+> while the thing it was meant to catch happened. A criterion that can be passed by the event
+> it was written for is worse than none.
+>
+> **THE CRITERION IS THE TRAIL, NOT THE BUCKET: a death whose decisions contain
+> `refusing to play dead in the open`.** Greppable, direct, and it cannot be dodged by
+> classification. Count them; if they accumulate faster than the freeze was killing people
+> (five in window 3), go back to `deploy-2026-09-18-1`.
+
+**First window after the deploy: 2 deaths in ~36 min against 0 in the previous 180-min window.
+One is attributable, one is not.**
+
+*Fozzie* — the refusal IS in the trail: `at 33% with 1 adjacent, in the open`, health 17,
+`at_wall false`, `players_here false`. Fell through to a wall two steps away, lost **nine
+health covering one square**, dead 5.2s later to a troll, 15 threats in room 599. **Counter at
+1.** But read the rest of the record before pricing it: he had been PK'd from 51 to 17 by a
+non-fleet player (`Rick Deckard shocks you with his lightning bolt`, three times, and Fozzie
+punched back) who then LEFT — frames confirm `players_present` drops from
+`["Rick Deckard",…]` to fleetmates only before the decision, so the gate's `players_here:
+false` was CORRECT, not a missed carve-out. And he was unarmed: sixty seconds of *"create
+weapon needs 15 mana… no weapon, no money and no donor"* in a fifteen-troll room.
+
+*Camilla* — **not this change.** No refusal anywhere in her trail; she is the wedged-while-
+travelling case (journey to 39, wedged in 599, 43 → 40 → 32 → 27, `WEDGED AND DYING
+MID-JOURNEY`, safe spot three steps away, `losing_per_s 4.46`). That is defect #2/#3.
+
+**What Fozzie does and does not show.** It shows the FALL-THROUGH did not save him. It does not
+show the FREEZE would have — and the 2026-08-21 measurement (three froze in the open, three
+died) argues it would not. Those are different claims and only the second would justify a
+rollback. **Holding**, with two confounds larger than this change in the same window: a third
+party's doctrine re-sort at 09:56 pushing transit through 599, and a disarmed character in
+Ukgoth, which is the vigor/arming gate rather than the freeze gate.
 
 **Side effect worth expecting rather than misreading:** converting open freezes into refuge
 attempts and withdrawals turns stationary keeper-minutes into MOVING ones — the exact
