@@ -357,7 +357,7 @@ if (process.argv[1]?.endsWith('m59-devclient.mjs')) {
 
   if (has('launch')) {
     console.log('\nlaunching...');
-    const child = spawn('cmd.exe', ['/c', out], { detached: true, stdio: 'ignore' });
+    const child = spawn('cmd.exe', ['/c', out], { windowsHide: true, detached: true, stdio: 'ignore' });
     child.unref();
     console.log('  started. The caption names the account, the room and the square.');
     console.log(`  overlay files: ${flag('overlay-dir', OVERLAY_DIR())}`);

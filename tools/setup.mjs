@@ -114,7 +114,7 @@ function movementMapStatus(file = movementMapFile()) {
 function dockerReady() {
   try {
     const r = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'],
-                        { encoding: 'utf8', timeout: 25000 });
+                        { windowsHide: true, encoding: 'utf8', timeout: 25000 });
     return !r.error && r.status === 0 && !!(r.stdout || '').trim();
   } catch { return false; }
 }
@@ -158,7 +158,7 @@ function serverRunArgs() {
 // has already short-circuited server() above; a container found here is stopped.)
 function startServer() {
   const found = spawnSync('docker', ['ps', '-aq', '--filter', `name=^${M59_CONTAINER}$`],
-                          { encoding: 'utf8', timeout: 15000 });
+                          { windowsHide: true, encoding: 'utf8', timeout: 15000 });
   if (!found.error && (found.stdout || '').trim()) {
     return run('docker', ['start', M59_CONTAINER]);
   }
@@ -468,7 +468,7 @@ function rsc() {
     return 0;
   }
   const found = spawnSync('docker', ['ps', '-aq', '--filter', `name=^${M59_CONTAINER}$`],
-                          { encoding: 'utf8' }).stdout.trim();
+                          { windowsHide: true, encoding: 'utf8' }).stdout.trim();
   if (!found) {
     console.log('  --    resource table    no container yet; run `setup.mjs server` first');
     return 0;

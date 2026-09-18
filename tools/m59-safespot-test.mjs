@@ -885,6 +885,11 @@ console.log('\n--- a freeze that changed nothing is not repeated ---');
   // is on the OUTCOME rather than the cause — so it has to set up the one situation where
   // a freeze can happen, or it is testing the refusal instead of the repeat.
   p.hold = { col: w.me().col, row: w.me().row, proven: true, takenAt: Date.now() - 60_000 };
+  // And say so in the terms the verb actually asks in. `playDead` gates on
+  // `adoptRecoveryWall()` — the FORMULA — not on `hold` being set, so declaring a hold is not
+  // by itself a claim that the geometry shelters it. Without this the block exercises the
+  // open-freeze refusal (restored 2026-09-18) instead of the livelock guard it is about.
+  p.adoptRecoveryWall = () => true;
   let rejoins = 0;
   p.s.rejoin = async () => { rejoins++; };
   const first = await p.playDead('test');

@@ -71,7 +71,7 @@ export function claudeProjectDirs(home = homedir()) {
   let repoName = basename(REPO);
   try {
     const common = execFileSync('git', ['-C', REPO, 'rev-parse', '--git-common-dir'],
-                                { encoding: 'utf8' }).trim();
+                                { windowsHide: true, encoding: 'utf8' }).trim();
     if (common) repoName = basename(resolve(REPO, common, '..'));
   } catch { /* not a git tree: fall back to the directory name */ }
   // Every project whose slug mentions it. A worktree and the trunk checkout are DIFFERENT
@@ -134,7 +134,7 @@ export function searchTranscripts(needle, { home = homedir(), sinceMs = 0 } = {}
 // answer is usually already written down and needs no searching at all.
 export function gitAuthors(pathOrCommit, { commit = false } = {}) {
   const run = (...args) => {
-    try { return execFileSync('git', ['-C', REPO, ...args], { encoding: 'utf8' }); }
+    try { return execFileSync('git', ['-C', REPO, ...args], { windowsHide: true, encoding: 'utf8' }); }
     catch { return ''; }
   };
   const log = commit

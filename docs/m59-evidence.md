@@ -130,3 +130,92 @@ zero that means *untested* are different facts and an operator has to tell them 
 None of this makes a stale claim safe to reason from. It makes staleness **visible**. A
 claim that contradicts what is written down still needs a reproduction before anything is
 decided on it — see the top of [`CLAUDE.md`](../CLAUDE.md).
+
+## The save window — attributing FLOW to a build
+
+The epoch above says *which code* a number is about. It does not say *how much opportunity*
+there was, and a count without its opportunity is the other half of every wrong conclusion
+this repository has reached. `deaths per day` fell 84 → 5 over a fortnight of `#movement`
+work; the journeys **quadrupled** in the same window, so the honest figure was 20.7 → 0.3
+per thousand journeys — a sixty-nine-fold improvement that the daily count understated by a
+factor of four.
+
+```bash
+node tools/m59-savelog.mjs                  # the last few windows
+node tools/m59-savelog.mjs --write          # append closed ones to substrate/savelog/<fleet>.jsonl
+node tools/m59-savelog.mjs --all --since 7d
+node tools/m59-savelog-test.mjs             # 68 assertions; offline, safe any time
+node tools/m59-savewire-test.mjs            # 14 — the BP_WAIT half, driven by the real dispatcher
+```
+
+**Stock and flow.** The server's save holds every inventory, vault, chest and position, and
+`m59-shutdown.mjs` keeps two copies of it. Recording any of that again is a third copy of an
+authoritative file, and a worse one. What a save cannot hold is what *happened* between two
+of them — kills, journeys, levels, earnings, deaths — and that is gone the instant it passes.
+So the savelog records flow and nothing else.
+
+**But read the pairing claim carefully, because it is only half true for prod.** On a server we
+run, the checkpoint for that same instant is ours and the two halves genuinely compose. **The
+prod fleet does not play on a server we run** — its roster points at `76.214.42.186:5959`, a
+shared test server, and we hold no save of it and cannot make it save. Corrected 2026-09-17: a
+`--checkpoint` taken to verify this chain end to end produced files, reported success, and could
+not possibly have produced a marker, because it saved a *local* server the fleet is not connected
+to. What aligning to the boundary buys on prod is therefore the *alignment itself* — our windows
+begin and end where the world committed its state, so two windows are comparable and neither
+straddles a save — and not a checkpoint we can load. On a lab or shadow server, it buys both.
+
+**The boundary is the server's, observed.** `user.kod GarbageCollecting()` sends every
+logged-in player `BP_WAIT` when a save begins and `BP_UNWAIT` when it ends
+(`user.kod:2154`, `:2182`). `m59-client.mjs` raises those as a `server-save` event,
+`m59-game.mjs` writes them to the ledger as `server_save`, and `m59-savelog.mjs` partitions
+on them. It is **not** derived from `[Auto] SavePeriod`, which lives in a config no tool here
+can read and which the operator can change without telling anyone — and an assumed boundary
+files one build's events under another's account.
+
+All twenty-three keepers see each save, so the markers arrive in a burst and are collapsed on
+a 20-second tolerance. Every character writing its own marker is deliberate: one nominated
+observer is one restart away from a silently missing boundary.
+
+**What each window carries, and why.** Fighting, dying, moving and earning, plus a
+`provenance` block — the prod harness SHA, the deploy tag, the **private repo pin** and the
+DUM head. The private pin is the one that describes the *whole* fleet, code and orders
+together: two windows on the same harness commit with different loadouts are not the same
+experiment, and nothing else in this repository would have said so. `promote.mjs` moves that
+pin as part of every production promotion, so it is always the orders that were actually
+running.
+
+**A reader's failure mode is not a crash.** It is a number that is wrong while everything
+around it still adds up. The first draft of `m59-savelog.mjs` counted `k.what` for a kill
+against a ledger whose field is `creature` — every total correct, every breakdown empty — and
+invented two death splits (`players_present`, `doing`) that do not exist on a `died` row at
+all, which would have reported zero PVP deaths and zero travel deaths for ever. Three
+consequences, all load-bearing:
+
+- every field name in it was read off the ledger on disk before it was written down;
+- each window carries `unaccounted`, naming every event kind in it that nothing counts, so a
+  renamed event surfaces as a line of output instead of as a quieter fleet;
+- `deaths_per_1000_journeys` is `null`, never `0`, when no death in the window was
+  classified — unknown has to look unknown.
+
+**`was_travelling` on a death row is new, and old rows are `null`.** The classification the
+whole `#movement` question turns on used to exist only in the postmortem store, so a window
+aggregate either re-opened three thousand files or went without, and it went without. It is
+now on the `died` ledger row, read off `governed_by.doctrine` rather than off a room or a
+strategy name — a character resting at a wall mid-journey is still travelling, and only the
+doctrine knows that. Deaths written before the field are counted as `deaths_unclassified`
+rather than as "not travelling", which would halve the number.
+
+**The write is derived, idempotent and bounded, so the cadence does not matter.** The
+boundaries live in the ledger; only closed windows are written, never the open one, and never
+twice. The broker rolls it up every fifteen minutes as a **child process** — parsing a day of
+ledger is twenty megabytes and fifty thousand rows, and doing that on the broker's event loop
+is how a keeper goes silent for long enough that the server logs it out at thirty seconds.
+`M59_SAVELOG=off` disables it; `M59_SAVELOG_INTERVAL_MS` changes the freshness, never the
+contents.
+
+**It lives beside the ledger it is derived from**, at `substrate/savelog/<fleet>.jsonl`, and
+that path is *derived from* `ledgerDirFor()` rather than resolved again. `evidenceDirFor()`
+and `ledgerDirFor()` do not agree in a worktree — prod's ledger lands in the pinned deploy's
+own substrate while `evidenceDirFor` sends evidence home to the checkout the worktree was cut
+from — so resolving it independently would put a summary in one tree describing a ledger in
+another, and the mismatch would present as missing days rather than as a path bug.

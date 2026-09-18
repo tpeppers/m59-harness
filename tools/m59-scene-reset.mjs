@@ -9,7 +9,7 @@ import {dm,rejections} from './m59-dm.mjs';
 import {verifyServerSave,SAVE_PARTS} from './runtime/server-save-set.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 export function inspectSceneContainer(exec=execFileSync) {
-  const [info]=JSON.parse(exec('docker',['inspect','m59-replay-lab'],{encoding:'utf8',timeout:10000}));
+  const [info]=JSON.parse(exec('docker',['inspect','m59-replay-lab'],{ windowsHide: true,encoding:'utf8',timeout:10000}));
   const ports=info.NetworkSettings?.Ports;
   if(!info.State?.Running||info.Config?.Labels?.['org.openai.m59.scene-lab']!=='true'||
     !ports?.['5959/tcp']?.some(p=>p.HostIp==='127.0.0.1'&&p.HostPort==='17959')||
@@ -42,7 +42,7 @@ export async function resetNativeScene({snapshot,mode='auto',env,info=null,exec=
     // Byte verification is retained on every loop. lastsave.txt changes whenever
     // the server saves; the explicit timestamp chooses these four immutable parts.
     const output=exec('docker',['exec','m59-replay-lab','sha256sum',
-      ...SAVE_PARTS.map(part=>'/m59/savegame/'+part+'.'+manifest.stamp)],{encoding:'utf8',timeout:10000});
+      ...SAVE_PARTS.map(part=>'/m59/savegame/'+part+'.'+manifest.stamp)],{ windowsHide: true,encoding:'utf8',timeout:10000});
     if(!verifyInstalledSave(output,manifest))throw Error('installed native checkpoint checksum mismatch');
     const response=await dmFn(['reload game '+manifest.stamp],{env,timeoutMs:10000});
     if(rejections(response).length||/Cannot reload|system dead|couldn.t reload/i.test(response)||
@@ -53,10 +53,10 @@ export async function resetNativeScene({snapshot,mode='auto',env,info=null,exec=
   // A new snapshot, container start or image gets one complete restore, including
   // accounts. Never apply a cached warm-reload claim to a different server lifetime.
   await dmFn(['terminate save'],{env});
-  exec('docker',['wait','m59-replay-lab'],{timeout:20000,stdio:'pipe'});
-  exec(process.execPath,[path.join(root,'tools/m59-scene-server-save.mjs'),'restore',snapshot,'--container','m59-replay-lab'],{timeout:30000,stdio:'pipe'});
-  exec('docker',['start','m59-replay-lab'],{timeout:20000,stdio:'pipe'});
-  exec('docker',['exec','--user','root','m59-replay-lab','chown','-R','blak:blak','/m59/savegame'],{timeout:10000,stdio:'pipe'});
+  exec('docker',['wait','m59-replay-lab'],{ windowsHide: true,timeout:20000,stdio:'pipe'});
+  exec(process.execPath,[path.join(root,'tools/m59-scene-server-save.mjs'),'restore',snapshot,'--container','m59-replay-lab'],{ windowsHide: true,timeout:30000,stdio:'pipe'});
+  exec('docker',['start','m59-replay-lab'],{ windowsHide: true,timeout:20000,stdio:'pipe'});
+  exec('docker',['exec','--user','root','m59-replay-lab','chown','-R','blak:blak','/m59/savegame'],{ windowsHide: true,timeout:10000,stdio:'pipe'});
   let ready=false;
   for(let i=0;i<30;i++) {
     try{if((await dmFn(['show status'],{env,timeoutMs:1000})).includes('System Status')){ready=true;break;}}catch{}

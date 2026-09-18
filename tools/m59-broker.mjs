@@ -183,6 +183,7 @@ import { recentDeathsIn, DEATH_WINDOW_MS } from './m59-death-tally.mjs';
 import { renderDashboard } from './m59-dashboard.mjs';
 import { renderDeaths, renderTougher, deathReportJSON } from './m59-deaths-page.mjs';
 import { renderEconomy } from './m59-economy-page.mjs';
+import { renderInventory } from './m59-inventory-page.mjs';
 import { renderSkills } from './m59-skills-page.mjs';
 import { renderPlayers } from './m59-players-page.mjs';
 import { renderStatsBoard } from './m59-stats-page.mjs';
@@ -2101,6 +2102,12 @@ class KeeperProxy {
       // still threw after being 'fixed'. `c` is this object, not the KeeperProxy that built it —
       // the comment forty lines down says so in as many words.
       requestRescue: () => act('rescue', {}),
+      // SAME FAMILY, AND IT HAD BEEN BROKEN FOR AS LONG. BP_CHANGE_DESCRIPTION lives on
+      // M59Client, so a keeper-backed character answered `c.setDescription is not a function`
+      // to every `m59-describe.mjs --set` — which is all twenty-three of them. The board kept
+      // showing the descriptions set before the fleet moved to keeper processes, so it read as
+      // working. An empty string is a real request: it is how one is cleared.
+      setDescription: (text) => act('describe', { text: String(text ?? '') }),
       // SPEAKING WAS THE ONE VERB THE PROXY NEVER FORWARDED, and a guild hall is full of
       // doors and merchants that only answer speech.
       //
@@ -3935,6 +3942,49 @@ function startLedger() {
   // them may name a module-scope function; they queue onto their session and this drains.
   const gaps = setInterval(() => { try { drainExitGaps(); } catch { /* never fatal */ } }, 15_000);
   gaps.unref?.();
+  startSavelog();
+}
+
+// ROLL UP EACH CLOSED SAVE WINDOW — what happened between two of the SERVER's saves.
+//
+// The ledger above is the raw record; this is the per-window summary that gets attributed to
+// a build and compared to another one six weeks later. The boundaries are the server's own
+// `server_save` rows, so the summary lines up exactly with the checkpoint for the same
+// instant: the checkpoint holds the stock, this holds the flow, and neither duplicates the
+// other. See tools/m59-savelog.mjs.
+//
+// A CHILD PROCESS, NOT AN IMPORT. The roll-up parses a day of ledger — 22MB and fifty thousand
+// rows on a normal day — and doing that on the broker's event loop is how a keeper goes silent
+// for long enough that the server logs it out at thirty seconds. It costs nothing to hand the
+// work to a process that is allowed to block.
+//
+// AND IT IS DERIVED, IDEMPOTENT AND BOUNDED, which is what makes a timer honest here rather
+// than a compromise. The window edges live in the ledger, so a missed tick loses nothing and
+// the next one picks it up; closed windows only are written, and never twice. The interval
+// governs how FRESH the file is, never what is in it.
+const SAVELOG_INTERVAL_MS = Number(process.env.M59_SAVELOG_INTERVAL_MS || 15 * 60 * 1000);
+function startSavelog() {
+  if (process.env.M59_SAVELOG === 'off') return;
+  const tool = fileURLToPath(new URL('./m59-savelog.mjs', import.meta.url));
+  const roll = () => {
+    try {
+      // `--since 24h` bounds the read. Anything older is already written — the dedupe is on
+      // the window's own start time — so a wider window would only re-parse days to decide
+      // it had nothing to add.
+      const args = [tool, '--write', '--since', '24h'];
+      if (FLEET) args.push('--fleet', FLEET);
+      const child = spawn(process.execPath, args,
+                          { stdio: 'ignore', detached: false, windowsHide: true });
+      child.on('error', e => console.error('[savelog] ' + e.message));
+      child.unref?.();
+    } catch (e) { console.error('[savelog] ' + e.message); }
+  };
+  // Not at boot, for the same reason the sampler waits: the fleet is still logging in, and
+  // the first minutes of a restart are not a window anybody wants summarised on its own.
+  const first = setTimeout(roll, 120_000);
+  first.unref?.();
+  const t = setInterval(roll, SAVELOG_INTERVAL_MS);
+  t.unref?.();
 }
 
 // Rejoining is a login plus a walk, so it is slow and it can fail; nothing waits on
@@ -16381,16 +16431,39 @@ const TOOLS = [
           // Grouped by NAME rather than left as stacks, because three stacks of herbs is
           // one fact to a reader and three rows to a table, and `carrying` above is
           // already the stack count for anyone who wants it. Biggest amount first.
+          //
+          // AND IT CARRIES THE GRADE AND THE STACK TAG, because a reader that only gets a name
+          // and a count cannot tell a cursed ring from a plain one. Added 2026-09-17 when the
+          // /inventory board's magic markers rendered ZERO times on a live fleet holding three
+          // cursed items and thirteen unidentified ones: the page was correct, `magicOf` was
+          // correct, and this function had quietly dropped the only two fields either of them
+          // could have used. Same shape as the `rarity` that reached both serializers and not
+          // the rebuild — a value that looks present and is not.
+          //
+          // UNANIMOUS OR NULL, because grouping by NAME is what loses the distinction. Two long
+          // swords under one row can disagree about their grade, and picking either one would be
+          // asserting something about an item the reader cannot see. `null` means "these are not
+          // all the same", which is a fact worth having; it is the same rule the hatched meter
+          // follows, one field down.
           pack_items: (() => {
             if (!c.inventory) return null;
             const by = new Map();
             for (const o of c.inventory) {
               const name = c.rsc.get(o.nameRsc) || '';
               if (!name) continue;
-              by.set(name, (by.get(name) || 0) + (o.amount || 1));
+              const row = by.get(name)
+                ?? { name, amount: 0, rarity: undefined, tag: undefined };
+              row.amount += (o.amount || 1);
+              for (const k of ['rarity', 'tag']) {
+                const v = o[k] ?? null;
+                row[k] = row[k] === undefined ? v : (row[k] === v ? v : null);
+              }
+              by.set(name, row);
             }
-            return [...by].map(([name, amount]) => ({ name, amount }))
-                          .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
+            return [...by.values()]
+              .map(r => ({ name: r.name, amount: r.amount,
+                           rarity: r.rarity ?? null, tag: r.tag ?? null }))
+              .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
           })(),
           // HOW FULL THAT PACK IS, which the count above cannot answer: twenty stacks of
           // feathers and twenty of plate are the same `carrying` and opposite answers to
@@ -18181,7 +18254,7 @@ function handleControl(action, res) {
     if (FLEET) args.push('--fleet', FLEET);
     try {
       const child = spawn(process.execPath, args,
-        { detached: true, stdio: 'ignore', cwd: BROKER_ROOT });
+        { windowsHide: true, detached: true, stdio: 'ignore', cwd: BROKER_ROOT });
       child.unref();
     } catch (e) {
       return reply(500, { ok: false, note: `could not spawn the service: ${e.message}` });
@@ -18663,6 +18736,27 @@ function serveDashboard(port) {
         .catch(e => {
           res.writeHead(500, { 'content-type': 'text/plain' });
           res.end('/economy failed: ' + e.message);
+        });
+      return;
+    }
+    // /inventory — THE SAME LIVE ROWS, ASKED A DIFFERENT QUESTION.
+    //
+    // Split from /economy on 2026-09-17: that page is the chain from loot to vigor and this one
+    // is what is in the packs. Same fetch, deliberately — the rows carry `pack` and `pack_items`
+    // already, so this costs no extra packet, and both pages are as fresh as each other. A
+    // second, differently-timed read of the same fleet is how two boards come to disagree.
+    if (url.pathname === '/inventory') {
+      const hours = Number(url.searchParams.get('hours')) || 168;
+      const tool = TOOLS.find(t => t.name === 'fleet');
+      Promise.resolve(tool ? tool.run({}) : null)
+        .then(out => out?.fleet ?? null, () => null)
+        .then(live => {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(renderInventory({ hours, live, characters: fleetCharacters() }));
+        })
+        .catch(e => {
+          res.writeHead(500, { 'content-type': 'text/plain' });
+          res.end('/inventory failed: ' + e.message);
         });
       return;
     }

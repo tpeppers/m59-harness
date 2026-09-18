@@ -117,7 +117,7 @@ export const DOMAINS = Object.freeze({
 
 const git = (args) => {
   try {
-    return execFileSync('git', args, {
+    return execFileSync('git', args, { windowsHide: true,
       cwd: REPO, encoding: 'utf8', timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();

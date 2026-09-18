@@ -445,7 +445,7 @@ function errandsRunning() {
   const ps = "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' } | " +
              "ForEach-Object { $_.ProcessId.ToString() + '|' + $_.CommandLine }";
   const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
-                      { encoding: 'utf8' });
+                      { windowsHide: true, encoding: 'utf8' });
   if (r.error || r.status !== 0 || !r.stdout) return [];
   // MATCHED ON THE SCRIPT NAME, AND DELIBERATELY NOT ON THE PATH.
   //
@@ -753,7 +753,7 @@ async function cmdGoapStart() {
   mkdirSync(SUB, { recursive: true });
   const fd = openSync(GOAP_LOG, 'a');
   const child = spawn(process.execPath, [join(HERE, 'm59-goap.mjs')],
-    { detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env: { ...process.env } });
+    { windowsHide: true, detached: true, stdio: ['ignore', fd, fd], cwd: REPO, env: { ...process.env } });
   child.unref();
   // The goap writes its own pid file from within; wait for it rather than trusting
   // the spawn-time pid, which can be re-used before the child starts.

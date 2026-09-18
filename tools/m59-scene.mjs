@@ -89,7 +89,7 @@ export const unknownField = () => field(null, UNKNOWN_FIELD);
 
 const git = (args, cwd) => {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8',
+    return execFileSync('git', args, { windowsHide: true, cwd, encoding: 'utf8',
                                        stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { return null; }
 };
@@ -561,7 +561,7 @@ export function sceneRunner({ dir = SCENE_DIR, env = process.env, spawn = null }
 async function defaultSpawn(tool, args, env) {
   const { spawn } = await import('node:child_process');
   return new Promise((res) => {
-    const kid = spawn(process.execPath, [join(HERE, tool), ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const kid = spawn(process.execPath, [join(HERE, tool), ...args], { windowsHide: true, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     kid.stdout.on('data', d => { out += d; });
     kid.stderr.on('data', d => { out += d; });

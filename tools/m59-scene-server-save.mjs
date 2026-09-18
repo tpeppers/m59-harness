@@ -14,7 +14,7 @@ try {
   }else if(action==='restore') {
     const container=arg('--container');if(!args.includes('--container')||!/^m59-[a-z0-9-]+$/.test(container))throw Error('explicit lab container name required');
     const m=verifyServerSave(resolve(source));
-    const [info]=JSON.parse(execFileSync('docker',['inspect',container],{encoding:'utf8'}));
+    const [info]=JSON.parse(execFileSync('docker',['inspect',container],{ windowsHide: true,encoding:'utf8'}));
     if(info.State.Running)throw Error('stop the isolated lab with terminate save before restoring');
     if(info.Config.Labels?.['org.openai.m59.scene-lab']!=='true')throw Error('container is not marked as an isolated scene lab');
     for(const name of Object.keys(m.files))execFileSync('docker',['cp',join(resolve(source),name),`${container}:/m59/savegame/${name}`]);

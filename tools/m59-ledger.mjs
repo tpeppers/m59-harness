@@ -248,6 +248,27 @@ export function recordSample(rows = []) {
           // `false` means it was asked and the answer was no; `null` means nobody asked,
           // which is the distinction that made the old records unreadable.
           fled_in_time: d.fled_in_time ?? null,
+          // WAS IT GOING SOMEWHERE? The one split the whole #movement question turns on, and
+          // the ledger was dropping it for the same reason it dropped `in_safe_spot`: the
+          // keeper computes it, nothing carried it across. `m59-critic.mjs` can only ask this
+          // of the postmortem STORE — so every window aggregate had to either re-open 3,600
+          // files or go without, and it went without.
+          //
+          // Read off `governed_by`, which the keeper sets to the travel doctrine while a
+          // journey is live, rather than off a room or a strategy name: a character resting
+          // at a wall mid-journey is still travelling, and only the doctrine knows that.
+          // `null` when the keeper had not filled it in, never `false` — a death nobody
+          // classified and a death classified as stationary are different records.
+          was_travelling: d.governed_by ? d.governed_by.doctrine === 'travel' : null,
+          // AND WAS IT ON A WALL WE HAD PROMISED WAS SAFE. `in_safe_spot` above is the
+          // book's answer; this is the keeper's own, flagged at the moment of death because
+          // `hold` is cleared by several paths and cannot be reconstructed afterwards. They
+          // disagree usefully: the falsifiable claim is that a death here is only ever PVP.
+          at_a_safe_wall: d.at_a_safe_wall
+            ? { at: d.at_a_safe_wall.at ?? null,
+                held_for_s: d.at_a_safe_wall.held_for_s ?? null,
+                players_present: d.at_a_safe_wall.players_present ?? null }
+            : (d.at_a_safe_wall === null || d.at_a_safe_wall === undefined ? null : false),
           ...(thin ? { detail_missing: true,
                        note: 'the keeper had not finished reconstructing this death when the ' +
                              'sample caught it — room and level come from the sampler, the ' +

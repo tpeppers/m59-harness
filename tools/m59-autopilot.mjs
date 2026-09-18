@@ -41,7 +41,7 @@ import { OF, affordances, dropSpec as dropSpecFor, buyLines,
 import * as grudge from './m59-grudge.mjs';
 import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
-         roomThreats, goalYield, roomCap, karmaSafe,
+         roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
 import { sameRoomIslandBridgePlan } from './m59-world.mjs';
@@ -6137,6 +6137,13 @@ export class Autopilot {
     if (this.doing === 'pulling') return 'pulling quarry into position';
     if (this.doing === 'waiting') return 'waiting for quarry contact';
     if (this.mode === 'farm' && this.policy.hunt) {
+      // A ROOM THAT CANNOT PRODUCE THE QUARRY OUTRANKS EVERY OTHER THING THIS LINE CAN SAY,
+      // because it is the only one where no pass can ever succeed. "This prey pays nothing" is
+      // an argument about value; "there is no prey here" is an argument about arithmetic, and
+      // it was the commonest state in the fleet while being the only one with no name.
+      const dryRoom = this.huntRoomCheck();
+      if (dryRoom?.dry) return `stranded in ${dryRoom.room}: no ${huntLabel(this.policy.hunt)} here`;
+
       // A keeper earning nothing must not describe itself the same way as one that is.
       // This string is what the fleet board renders, and it is where the afternoon of
       // worthless grinding would have been visible had there been anything to see.
@@ -9144,6 +9151,38 @@ export class Autopilot {
   //
   // Returns null when it cannot know — no purpose set, no spawn index, prey not in the
   // index, vitals not read yet. Null means "no opinion", never "fine".
+  /**
+   * IS THE ROOM UNDER THIS CHARACTER'S FEET ONE THAT MAKES ITS QUARRY?
+   *
+   * `yieldCheck` asks whether the quarry is worth killing. It never asks whether the quarry is
+   * HERE, so a character hunting skeletons in a room where no skeleton can spawn passes the one
+   * audit that exists to catch a keeper earning nothing, and renders as `hunting: skeleton` —
+   * the healthy string — on every board.
+   *
+   * MEASURED, prod, 2026-09-18: four to seven characters of twenty-three were in this state at
+   * every one of sixty one-minute samples, spanning three configuration changes, none of which
+   * moved it. Zoot hunting skeletons in the Bookmakers guild hall; Scooter hunting zombies in a
+   * town room; Statler hunting skeletons in the Cragged Mountains, which makes black spiders and
+   * trolls. All three assigned to 38 or 39.
+   *
+   * IT DOES NOT TRY TO FIX IT, and that is deliberate. `shouldRelocateToAssignedRoom` opens with
+   * `if (movementLeased) return false`, and a bot that holds movement is the thing entitled to
+   * decide where this character stands. Walking home from here would be the keeper taking back a
+   * faculty it has given away. What the keeper owes is the TRUE SENTENCE, so that the bot, the
+   * board and the next post-mortem can all see the state rather than reading it as work.
+   */
+  huntRoomCheck() {
+    const want = this.policy?.hunt;
+    if (!want || this.mode !== 'farm') return null;
+    const room = this.s.world?.room?.num ?? this.s.client?.room?.num ?? null;
+    if (room == null) return null;
+    const spawns = loadSpawns(SPAWN_FILE);
+    if (!spawns) return null;
+    // `standingHere` is what turns "this room is not in the index" from missing data into an
+    // answer: the body is in it, so it is a room, so an absent entry means it makes nothing.
+    return huntRoomYield(spawns, room, want, { standingHere: true });
+  }
+
   yieldCheck() {
     const { purpose, goals, hunt } = this.policy;
     if (!purpose || !hunt) return null;
@@ -9941,6 +9980,10 @@ export class Autopilot {
       // The second invisible failure, alongside `stalled`: working perfectly and earning
       // nothing. Null when there is no opinion to give — never a quiet "fine".
       yield_check: this.yieldCheck(),
+      // Beside yield_check rather than inside it: one answers "is this prey worth killing",
+      // the other "is this prey reachable from where I am standing", and a caller that wants
+      // to act on the second must not have to infer it from the first being silent.
+      hunt_room: this.huntRoomCheck(),
       // THE OBJECTIVE A STOPPED JOURNEY IS STILL CARRYING, or null if it carries none.
       //
       // Every leg of a twenty-one character run went `idle` between +170s and +400s, several
@@ -11490,7 +11533,49 @@ export class Autopilot {
     // seconds later could never fire: measured live, `wedges` climbed to 8 and `rescues`
     // stayed at 0 while the character was being eaten. A wedge ends when the body MOVES,
     // which `stillHere` below decides, and not when a single second happens to be painless.
+    // AND `this.inert` ALONE WAS THE WRONG QUESTION HERE TOO — FOURTH SITE, AND IT BOUNCES.
+    //
+    // `drivenByOther` below, and both rescues in `watchdogTick`, have each already been
+    // widened from "the keeper stood ITSELF down" to "or a commander claim holds movement".
+    // This clause was left on the old test, so for a claimed character the widened rescues
+    // could only ever act on a wedge the EXACT-SQUARE test opened. A body held perfectly
+    // still is caught that way. A body that BOUNCES is not, and `pennedIn` — the one test
+    // written for the bounce — is gated behind this flag and so never ran for them.
+    //
+    // MEASURED, prod 2026-09-17. Rowlf, level 52, room 39, killed by a battered skeleton:
+    // `wedged_at_death.inert = "movement held by dum/prod Valley and Castle Victoria HP
+    // bands@pid-38876"`, `wedges: 415`, `movement.net_squares = 1` over 94.7s, and
+    // `wedged_at_death.for_ms = 1104` — the episode that killed him was 1.1 seconds old
+    // because every one before it was thrown away. His last pulses read 16,8 / 17,8 / 18,8
+    // and back: moving, by the exact-square test, for ever, at 41 -> 0 health. The rescue at
+    // INERT_RESCUE_MS could never mature because the clock kept restarting.
+    //
+    // Clifford, Animal x2 the same night carry the same marker. The claim is the commonest
+    // way this fleet is driven now, so the bounce case is not an edge.
+    //
+    // COMBAT CANNOT LEAK IN THROUGH `facultyHeld`. `facultyOwner` answers `combat:<id>` for
+    // an unprotected faculty while a fight is live, which would read as a claim here — but
+    // `watchdogTick` returns at `s.combat?.active` before it ever calls this, so a live
+    // fight never reaches this line. Stated because the two guards are 180 lines apart and
+    // nothing local says so.
+    //
+    // AND THE WIDENING IS TO `stillHere` ONLY — IT MUST NOT REACH THE EXCUSE LADDER.
+    //
+    // `bleedingWhileInert` does two jobs: it skips the ladder below, and it turns on
+    // `pennedIn` in `stillHere`. Skipping the ladder is right for an INERT keeper, which
+    // sets no `doing` at all and cannot be holding a wall — its own note says so. It is
+    // WRONG for a claimed one: that keeper is awake, it still sets `doing`, and it can be
+    // resting or holding a safe wall on purpose while a bot owns the walking. Folding the
+    // claim into the same flag flagged both, and the non-travelling rescue would then have
+    // cancelled movement and pulled a character OFF a wall it was deliberately holding —
+    // the safe wall being the fleet's whole defensive game. Caught by the regression gate
+    // in m59-claimwedge-test.mjs, which is why that gate is in it.
+    //
+    // So the claim gets the BOUNCE TEST and nothing else. Every excuse that applied to a
+    // claimed character a moment ago still applies.
     const bleedingWhileInert = at && this.inert
+      && (this.inertBleeding(w, hp) || !!w.wedged?.inert);
+    const bleedingWhileClaimed = at && !this.inert && this.facultyHeld('movement')
       && (this.inertBleeding(w, hp) || !!w.wedged?.inert);
     const excused = bleedingWhileInert ? null
       : !at ? 'no position'
@@ -11514,7 +11599,7 @@ export class Autopilot {
     // and the rescue below never gets a wedge to act on.
     const stillHere = (prev && last && prev.room === last.room
                        && prev.col === last.col && prev.row === last.row)
-                      || (bleedingWhileInert && this.pennedIn(w));
+                      || ((bleedingWhileInert || bleedingWhileClaimed) && this.pennedIn(w));
     if (!stillHere) { w.wedged = null; return null; }
 
     // ONE EPISODE, NOT ONE PER TICK. The alert is raised once when it starts and carries
@@ -14339,7 +14424,8 @@ export class Autopilot {
     //
     // WHAT THE LADDER DOES WITH IT CHANGED ON 2026-08-21, and this take-back is still
     // right afterwards. It used to hand over to a choice between running for a town and
-    // PLAYING DEAD; playing dead off a proven wall is now refused outright, because in the
+    // PLAYING DEAD; playing dead off a proven wall is refused unless a PLAYER is here
+    // (restored 2026-09-18, see playDead), because against monsters in the
     // open it recovers vigor and never health and three characters were measured freezing
     // at 4, 10 and 13 health in a fifteen-monster room and dying there. So the choice this
     // hands to is now between a town trip and a withdrawal — and both of them MOVE, which
@@ -14349,7 +14435,8 @@ export class Autopilot {
     // IT STILL TAKES THE CHARACTER BACK. WHAT CHANGED IS WHAT THAT HANDS OVER TO.
     //
     // This rung used to be gated on `play_dead` and existed so the ordinary ladder could
-    // freeze. Freezing off a proven safe spot is now refused outright (see playDead), so
+    // freeze. Freezing off a proven safe spot is refused unless a player is here (see
+    // playDead; restored 2026-09-18 after the open freeze was measured to buy nothing), so
     // the hand-over is a town trip or a withdrawal — and both of them MOVE, which is the
     // whole reason ending the journey here is not the same as standing still.
     //
@@ -22003,9 +22090,73 @@ export class Autopilot {
     return false;
   }
 
+  /**
+   * IS A PERSON HERE — the only thing an open freeze works on.
+   *
+   * Room-wide rather than the 2-square radius the travel ladder uses for `strangers`: a
+   * player closes that distance while the pass is deciding, and the question here is "is
+   * this PVP", not "is it adjacent".
+   *
+   * IT CAN ONLY EVER SAY "SOMEBODY IS HERE", NEVER "NOBODY IS" — a room we cannot read
+   * reports nobody, exactly as the wall gate above it does. That bias is the safe one for
+   * the caller: an unreadable room refuses the open freeze and falls through to something
+   * that MOVES.
+   */
+  playerThreatPresent() {
+    const c = this.s?.client;
+    const here = c?.room?.objects ? [...c.room.objects.values()] : [];
+    return here.some(o => o.id !== c.selfId && (o.flags & OF.PLAYER)
+                          && !party.isFleetmate(c.rsc?.get(o.nameRsc)));
+  }
+
   async playDead(why) {
     if (this.s.combat?.active?.pvp) { await this.s.combat.tick(); return true; }
     const s=this.s,atWall=this.adoptRecoveryWall();
+    // THE OPEN FREEZE IS REFUSED AGAINST MONSTERS. Operator, 2026-09-18: "the open freeze
+    // should be removed as a tactic or only ever done in PvP, it will not save you from
+    // monsters."
+    //
+    // THIS REVERSES THE 2026-09-10 INSTRUCTION QUOTED IN `playDeadObserved`, and that
+    // argument is left in place rather than deleted, because the reversal is about one of
+    // its premises and not about its logic. It reasoned that off a wall the choice is not
+    // healing-versus-not-healing but "an attack that ends now against one that continues".
+    // That is only worth having if the bought seconds are spent on something. They are not:
+    //
+    //   Animal, 2026-09-17, room 599, in_safe_spot false, hold null. Frozen twelve seconds
+    //   at 4/55 with vigor at 135 — never the constraint. Unfroze `before {health: 4} ->
+    //   now {health: 4}`: ZERO health across the whole freeze, because a freeze recovers
+    //   vigor and never health and there was no wall to turn at. Then "logoff did not
+    //   establish recovery", reached for a spot five steps away, and died 1.4s later.
+    //
+    // And the measurement the ORIGINAL refusal was written from still stands: 2026-08-21,
+    // three characters froze at 4, 10 and 13 health in a room of twelve to fifteen monsters
+    // and all three died. The 2026-09-10 counter-case concedes its own characters "had no
+    // way out either way" — which is an argument that the refusal did not kill them, not an
+    // argument that the freeze saves anybody.
+    //
+    // A WALL IS STILL FINE, because there the freeze is half of a real sequence: reconnect,
+    // TURN to set PFLAG_MOVED_SINCE_ENTRY, and heal. Off a wall there is no second half.
+    if (!atWall && !this.playerThreatPresent()) {
+      this.note('refusing to play dead in the open — it does not work on monsters', {
+        why, health: s.client?.vitals?.()?.health?.value ?? null,
+        at_wall: false, players_here: false,
+        note: 'a freeze recovers vigor and never health, and off a wall there is no turn to ' +
+              'arm regeneration with. The ladder falls through to something that MOVES',
+      });
+      // AND IT MUST LEAVE AN ACTIONABLE DECISION BEHIND, which the first version of this did
+      // not. A caller that has already chosen `logoff_open` gets `false` back, and if nothing
+      // replaces that decision the character sits on a strategy we have just refused to carry
+      // out — refusing the freeze and then stranding the body is worse than freezing. The
+      // failed-logoff path below chooses exactly this replacement; a refusal is a failure that
+      // happened earlier, so it gets the same treatment.
+      chooseSurvivalDecision(s, {
+        strategy: 'nearest_refuge',
+        reason: 'the open freeze does not work on monsters',
+        reason_code: 'open_freeze_refused',
+        mitigation: 'find a wall the formula accepts, or leave the room',
+      }, { because: 'playing dead off a wall recovers vigor and never health', outcome: 'failed' });
+      return false;
+    }
     const journey=this.inert;
     if(journey?.travelling && !journey.cancelled && journey.to!=null && !this.suspendedJourney)
       this.suspendedJourney={to:journey.to,why:journey.why,at:Date.now(),trigger:why,

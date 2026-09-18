@@ -493,7 +493,7 @@ async function main() {
     const { execFileSync } = await import('node:child_process');
     console.error('mirroring prod sheets onto this fleet...');
     execFileSync(process.execPath, [path.join(HERE, 'm59-mirror.mjs'), 'fleet',
-                                    '--broker', brokerUrl, '--i-mean-it'], { stdio: 'inherit' });
+                                    '--broker', brokerUrl, '--i-mean-it'], { windowsHide: true, stdio: 'inherit' });
   }
 
   // 4. POLICY. Snapshotted first: this strips every safety these characters have and the

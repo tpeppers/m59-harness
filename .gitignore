@@ -739,3 +739,7 @@ _verify2.mjs
 # Quest transcripts name characters and quote what the game said to them — this machine's
 # fleet, same rule as loadouts and rosters. `m59-questbook.mjs` reads them.
 /substrate/questbook/
+# WHAT A REVEALED MAGIC ITEM IS FOR. A keep list is ORDERS TO A FLEET, not a description of
+# one: a file that parses is a file the service acts on, and this one decides what gets sold.
+# The shape is committed beside it as substrate/magic-keep.example.json.
+substrate/magic-keep.json

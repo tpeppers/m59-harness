@@ -213,7 +213,7 @@ function writeWindowsShortcut(path, e, exe, args, opts) {
     '$s.Save()',
   ].join('; ');
   const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-                      { encoding: 'utf8', timeout: 30000 });
+                      { windowsHide: true, encoding: 'utf8', timeout: 30000 });
   if (!r.error && r.status === 0 && existsSync(path)) return path;
 
   const cmdPath = path.replace(/\.lnk$/, '.cmd');

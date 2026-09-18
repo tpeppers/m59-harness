@@ -129,6 +129,50 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Things the wire, the server or the sou
   destination. An unlit one is silent, which is why the old code read a working
   pentagram as a dead one. `node tools/m59-underworld.mjs` prints the table.
 
+## Making a character: THE NAME IS REFUSED, THE STATS ARE SUBSTITUTED
+
+Two halves of one packet, two opposite failure modes, and they live in two different files.
+Confusing them is why this repository spent a year refusing names the server would have
+taken and sending one kind it never would.
+
+- **THE NAME RULE IS IN `kod/util/system.kod:3733`, NOT `player.kod`.** `ReceiveClient`,
+  the `BP_NEW_CHARINFO` branch: `StringLength` between `MIN_CHAR_NAME_LEN` and
+  `MAX_CHAR_NAME_LEN` — **3 to 30** (`blakston.khd:2958-2959`) — and then
+  `StringConsistsOf` against a literal set:
+
+      ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890_ '!@$^&*()+=:[]{};/?|<>
+
+  Space, underscore, apostrophe and a pile of punctuation are legal. **A comma is not. A
+  hyphen is not. A full stop is not.** The client carries the same string byte for byte as
+  `legal_chars` in `module/char/charname.c`, so there is no second opinion to appeal to.
+
+- **A name it dislikes is a REFUSAL: `AddPacket(1,BP_CHARINFO_NOT_OK)`, one packet, no
+  reason, nothing created.** A bad STAT list is the opposite — `BP_CHARINFO_OK` first, the
+  character made, and then `player.kod:2081` stamps `3/1/4/1/5/9` on it and lets you find
+  out at level 15. So the stats must be verified AFTERWARDS and the name must be verified
+  BEFORE, and a tool that gets those the wrong way round is checking the wrong half twice.
+
+- **Ours is `checkCharacterName` in `m59-newchar.mjs`, and it is a deliberate SUBSET.** The
+  length is the server's own 3..30 exactly; the character set is letters, apostrophe and
+  space, which is strictly inside the legal one. The direction is the whole design: nothing
+  we accept may be refused by the server, and we are free to refuse more. Digits and `|`
+  and `<>` are legal names the game would take and a parser here would not.
+
+  What the old rule cost, wrong in both directions at once
+  (`/^[A-Za-z][A-Za-z' -]{1,15}$/`): **sixteen characters was ours and uncitable**, so
+  `Raphael son of Mephistopheles` (29) was refused by us and nobody could say by what rule;
+  and **the hyphen is not in the server's set at all**, so `Jean-Luc` passed our gate, went
+  out on the wire, and came back as that one blank packet. A gate that admits what the
+  server refuses is worse than no gate — it moves the refusal to the only place that cannot
+  say why it fired. Three comments cited `player.kod` for a rule that was never in it.
+
+- **Four refusals still cannot be checked offline**, and they look identical to the rest: a
+  name already held by a user, a monster, an NPC or a guild; `"a"`/`"an"` wrapped around a
+  monster's true name; the god names and `You`, `guild`, `guardian angel`; and the profanity
+  list, which `AddNaughtyWord` extends at RUNTIME so no copy here could ever be complete.
+  The fixed ones are mirrored (`CHAR_NAME_RESERVED`); the live ones are why creation still
+  reads its result back.
+
 ## Looking at a player, and describing one
 
 - **LOOKING AT A PLAYER IS NOT `BP_LOOK`.** `Player.TryLook` (`user.kod:4374`) diverts to

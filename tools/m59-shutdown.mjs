@@ -93,7 +93,7 @@ function admin(cmds, settle = 1500, timeoutMs = 180000) {
 function savegameFromContainer() {
   try {
     const r = spawnSync('docker', ['inspect', 'm59', '--format',
-      '{{range .Mounts}}{{.Destination}}={{.Source}}\n{{end}}'], { encoding: 'utf8', timeout: 15000 });
+      '{{range .Mounts}}{{.Destination}}={{.Source}}\n{{end}}'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
     if (r.status !== 0) return null;
     for (const line of (r.stdout || '').split('\n')) {
       const [dest, src] = line.split('=');
@@ -236,7 +236,7 @@ function cmdlineOf(pid) {
   if (process.platform === 'win32') {
     const r = spawnSync('powershell', ['-NoProfile', '-Command',
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
-      { encoding: 'utf8', timeout: 20000 });
+      { windowsHide: true, encoding: 'utf8', timeout: 20000 });
     return (r.stdout || '').trim();
   }
   try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim(); }
@@ -301,7 +301,7 @@ function stopServer() {
   // stopping it is `docker stop m59` — no compose binary in the picture. blakserv
   // has no SIGTERM handler, so the checkpoint above is what actually saved the
   // world; this just ends the process.
-  const r = spawnSync('docker', ['stop', 'm59'], { encoding: 'utf8', timeout: 120000 });
+  const r = spawnSync('docker', ['stop', 'm59'], { windowsHide: true, encoding: 'utf8', timeout: 120000 });
   if (!r.error && r.status === 0) return 'stopped the server container';
   return 'no container to stop (a native server must be stopped by hand)';
 }

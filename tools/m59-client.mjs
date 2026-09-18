@@ -1420,6 +1420,37 @@ export class M59Client {
     }
     const r = new Reader(body);
     switch (op) {
+      // THE SERVER ANNOUNCES ITS OWN SAVE, AND THAT IS THE ONLY HONEST CLOCK FOR ONE.
+      //
+      // `user.kod GarbageCollecting()` sends every logged-in player, in this order: a SysMsg
+      // (`user_garbage_collecting`), the system_save.wav, and then BP_WAIT. When the save
+      // finishes it sends BP_UNWAIT (user.kod:2182). The pair brackets the pause exactly — no
+      // polling, no guessing at `[Auto] SavePeriod`, and no assuming a cadence from a config
+      // file this process cannot read and the operator may have changed.
+      //
+      // WHY THIS IS THE RIGHT BOUNDARY TO RECORD ON. The server's save holds the STOCK — every
+      // inventory, vault, chest and position — and we keep two copies of it already. What no
+      // save contains is the FLOW: what was killed, how far anybody walked, what was earned,
+      // between one save and the next. That is gone the moment it happens. Aligning our record
+      // to this boundary is what makes the two comparable: their state and our flow, at the
+      // same instants, so a checkpoint and a snapshot describe one moment together.
+      //
+      // EVERY LOGGED-IN CHARACTER RECEIVES THIS, so twenty-three keepers each emit one. That
+      // is correct at this layer — a client reports what it saw — and the recorder dedupes on
+      // the timestamp rather than this pretending to know about its siblings.
+      case BP.WAIT:
+        this.savePausedAt = Date.now();
+        this.emit('server-save', { phase: 'begin', at: this.savePausedAt });
+        break;
+      case BP.UNWAIT: {
+        const began = this.savePausedAt ?? null;
+        this.savePausedAt = null;
+        // The duration is worth carrying. A save that takes noticeably longer than usual is a
+        // server under strain, which is a confounder for every rate measured around it.
+        this.emit('server-save', { phase: 'end', at: Date.now(), began,
+                                   held_ms: began ? Date.now() - began : null });
+        break;
+      }
       // The server does not start streaming the world on its own. It sends
       // BP_LOAD_MODULE, and the real client loads module/char, whose init calls
       // RequestCharacters(). Without that the session sits in game state

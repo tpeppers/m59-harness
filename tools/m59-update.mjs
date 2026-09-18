@@ -92,7 +92,7 @@ const here = rel => fileURLToPath(new URL(rel, import.meta.url));
 
 function run(script, args) {
   return new Promise((res, rej) => {
-    const p = spawn(process.execPath, [here(script), ...args], { stdio: 'inherit' });
+    const p = spawn(process.execPath, [here(script), ...args], { windowsHide: true, stdio: 'inherit' });
     p.on('exit', code => code === 0 ? res(code) : rej(new Error(`${script} exited ${code}`)));
     p.on('error', rej);
   });
@@ -123,7 +123,7 @@ function supervisorRunning() {
     const out = execFileSync('powershell.exe', ['-NoProfile', '-Command',
       "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
       'Where-Object { $_.CommandLine -like \'*m59-supervise*\' } | ' +
-      'Select-Object -ExpandProperty ProcessId'], { encoding: 'utf8', timeout: 15000 });
+      'Select-Object -ExpandProperty ProcessId'], { windowsHide: true, encoding: 'utf8', timeout: 15000 });
     const pids = out.split(/\s+/).filter(Boolean);
     return pids.length ? pids : null;
   } catch { return null; }

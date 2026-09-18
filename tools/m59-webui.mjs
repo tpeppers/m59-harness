@@ -130,7 +130,7 @@ export function install({ log = console.error } = {}) {
   const s = state();
   if (s.absent) { log(s.why); return { ok: false, ...s }; }
   log(`installing ${s.dir} …`);
-  const r = spawnSync('npm', ['install'], { cwd: s.dir, stdio: 'inherit', shell: process.platform === 'win32' });
+  const r = spawnSync('npm', ['install'], { windowsHide: true, cwd: s.dir, stdio: 'inherit', shell: process.platform === 'win32' });
   const ok = !r.error && r.status === 0;
   if (!ok) log(`npm install failed in ${s.dir}${r.error ? ` — ${r.error.message}` : ` (exit ${r.status})`}`);
   return { ok, ...state() };
@@ -162,7 +162,7 @@ export async function start({ log = console.error, waitMs = 60_000 } = {}) {
   // serves a map of whatever the harness looked like whenever somebody last built.
   const args = ['run', 'dev'];
   if (UI_PORT !== 3000) args.push('--', '--port', String(UI_PORT));
-  const child = spawn('npm', args, {
+  const child = spawn('npm', args, { windowsHide: true,
     cwd: STRATEGY_DIR, detached: true, stdio: ['ignore', fd, fd],
     shell: process.platform === 'win32',
     env: { ...process.env, M59_BROKER_URL: process.env.M59_BROKER_URL || 'http://127.0.0.1:8901' },

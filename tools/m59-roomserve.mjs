@@ -244,7 +244,7 @@ export async function start({ log = console.error, waitMs = 20_000 } = {}) {
   const args = [join(HERE, 'm59-roomserve.mjs'), '--port', String(PORT)];
   if (FLEET) args.push('--fleet', FLEET);
   const child = spawn(process.execPath, args,
-                      { detached: true, stdio: ['ignore', fd, fd] });
+                      { windowsHide: true, detached: true, stdio: ['ignore', fd, fd] });
   child.unref();
   writeFileSync(PID_FILE, JSON.stringify({ pid: child.pid, port: PORT, fleet: FLEET,
                                            at: Date.now() }, null, 2));

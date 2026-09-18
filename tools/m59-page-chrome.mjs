@@ -38,6 +38,36 @@ export const num = (n) => (n == null ? '—' : Number(n).toLocaleString('en-GB')
 // `here` is the page's own key; everything else is a link. A key nothing matches simply
 // leaves no tab highlighted, which is the right failure — a page that forgets to name
 // itself still gets a working nav.
+// A MAGIC ITEM, MARKED WHEREVER A PACK IS LISTED.
+//
+// Operator, 2026-09-17: identify magic items with a "(magic)" and a mouse-over tooltip carrying
+// the full description text, anywhere an inventory shows on the fleet pages. One renderer, used
+// by every board, because the alternative is each page deciding for itself what magic means —
+// and this repository already has the receipt for that: six boards share this tab bar because a
+// seventh written by hand was invisible from whichever copy nobody edited.
+//
+// WHAT IT WILL NOT DO IS GUESS. `magicOf` answers null when nothing is known, which is not the
+// same as "ordinary" — an item nobody has looked at has no description to show, and a page that
+// rendered that as a plain name would be asserting it is mundane. So there are three states and
+// the markup says which: a grade the server gave us, an attribute we have READ, and silence.
+//
+// THE TOOLTIP IS A `title` ATTRIBUTE AND THAT IS DELIBERATE. Every other figure on these boards
+// is server-rendered and readable with the broker down; a hover that needs a script is a hover
+// that is missing in exactly the situation somebody is reading the page urgently.
+export function magicTag(m) {
+  if (!m) return '';
+  const cls = m.grade === 'cursed' ? 'magic cursed'
+            : m.grade === 'unidentified' ? 'magic unread' : 'magic';
+  const label = m.grade === 'cursed' ? '(cursed)'
+              : m.grade === 'unidentified' ? '(magic, unread)' : '(magic)';
+  // The description first, because it is what was asked for and what a person wants; the reason
+  // under it, because "why does this say magic" is the next question and the page should not
+  // make anybody go and find out.
+  const tip = [m.text, m.verdict ? `verdict: ${m.verdict}` : null, m.why]
+    .filter(Boolean).join('\n\n');
+  return ` <span class="${cls}" title="${esc(tip)}">${label}</span>`;
+}
+
 export const TABS = [
   { key: 'fleet', href: '/', label: 'Fleet' },
   { key: 'dum', href: '/dum', label: 'DUM bot' },
@@ -45,6 +75,7 @@ export const TABS = [
   { key: 'deaths', href: '/deaths', label: 'Post mortems' },
   { key: 'tougher', href: '/tougher', label: 'Tougher' },
   { key: 'economy', href: '/economy', label: 'Economy' },
+  { key: 'inventory', href: '/inventory', label: 'Inventory' },
   { key: 'skills', href: '/skills', label: 'Skills' },
   { key: 'stats', href: '/stats', label: 'Stats' },
   { key: 'players', href: '/players', label: 'Players' },
@@ -56,6 +87,13 @@ export const NAV = (here) => `
   </nav>`;
 
 export const STYLE = `
+  /* A magic item's marker. The cursed variant is red because it is the one irreversible
+     mistake here; the unread one is dimmed because it is a backlog, not a property. */
+  .magic { font-size:.75em; color:#b48ead; white-space:nowrap; cursor:help;
+           border-bottom:1px dotted currentColor; }
+  .magic.cursed { color:#bf616a; }
+  .magic.unread { color:#8a8a8a; }
+
   :root { color-scheme: light dark; --fg:#1a1a1a; --dim:#767676; --bg:#fbfbfa;
           --panel:#fff; --line:#e6e4e0; --good:#1a7f4b; --bad:#b3261e; --accent:#5b6ee1;
           --edge:#c2700a; --mana:#2563eb; }

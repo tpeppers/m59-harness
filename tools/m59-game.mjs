@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { M59Client, KOD_FINENESS, BPNAME, BP } from './m59-client.mjs';
 import { loadResources } from './m59-rsc.mjs';
+import { checkCharacterName } from './m59-newchar.mjs';
 import { describeObject, affordances, OF, blocksMovement, prepareActTarget, readHealth,
          dropSpec } from './m59-parse.mjs';
 import { planPickup, normalizeOverfarm, unitCost } from './m59-overfarm.mjs';
@@ -2201,6 +2202,31 @@ class Session {
       // server, whatever took it; there is nothing to poll and nothing to ask afterwards,
       // because by then it is gone. See noteLeftPack.
       if (ev.kind === 'left') this.noteLeftPack(ev);
+      // THE SERVER'S OWN SAVE, WRITTEN DOWN AS A BOUNDARY. BP_WAIT/BP_UNWAIT bracket the
+      // pause (user.kod:2154, :2182), and m59-savelog.mjs uses these rows to partition the
+      // ledger into windows — so what we record and what the checkpoint holds describe the
+      // same instants. Their save has the STOCK; the window between two of them has the FLOW,
+      // which nothing else keeps.
+      //
+      // Recorded by EVERY logged-in character, and that is deliberate: a client writes down
+      // what it saw, and the reader collapses the burst. A single nominated observer would be
+      // one restart away from a silently missing boundary.
+      //
+      // AND IT DOES NOT GO THROUGH THE AUTOPILOT, which is the difference between a boundary
+      // that is usually there and one that is always there. `ledgerEvent` is a keeper method,
+      // and a keeper has no autopilot until `autopilotFor` has run — so a save landing during
+      // a fleet-wide resume would have been dropped by every character at once, silently, and
+      // the two windows either side of a restart would have been welded into one. A restart is
+      // exactly when the build changes, so that is the boundary that matters most.
+      if (ev.kind === 'server-save') {
+        const who = c.me?.name;
+        if (who) {
+          try {
+            recordEvent(who, 'server_save',
+              { agent: this.name ?? null, phase: ev.phase, held_ms: ev.held_ms ?? null });
+          } catch { /* never let bookkeeping break play */ }
+        }
+      }
       // OFF THE STREAM, NOT OFF THE KEEPER. This is the one measurement that keeps
       // working while the keeper is inside a multi-minute travel await or held inert by
       // an errand — which is where 23 of the last 50 deaths happened. See m59-hits.mjs.
@@ -2338,6 +2364,16 @@ class Session {
   // CHARINFO_OK carrying 0. It looks like success and produces nothing.
   async joinAsNewCharacter(plan, { userField = null } = {}) {
     if (!this.credentials) throw new Error('nothing to create against — this session never joined');
+    // THE LAST DOOR BEFORE THE WIRE, AND THE ONLY ONE NOTHING CAN ROUTE AROUND. Every
+    // caller asks `planCharacter` first, but a plan is an ordinary object: a hand-built
+    // one, or a name edited after the plan was made, arrives here indistinguishable from a
+    // checked one. So the name is re-checked against the server's own rule at the point of
+    // no return, because of what the refusal costs by then — this method has already
+    // SUICIDED the old character to make the slot first-time, and a name the server
+    // dislikes comes back as a bare BP_CHARINFO_NOT_OK: one packet, no reason in it, and
+    // nothing created. Throwing here costs a sentence.
+    const named = checkCharacterName(plan?.name);
+    if (!named.ok) throw new Error(`will not create a character: ${named.why}`);
     const { account, password, host = HOST, port = PORT } = this.credentials;
     // Isolated scene stand-ins verify stats through the lab admin read immediately
     // afterward. Ordinary character creation retains its existing settle waits.

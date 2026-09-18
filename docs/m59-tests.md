@@ -437,6 +437,17 @@ the records it describes.
   different facts, and a zero meaning *fixed* against a zero meaning *untested* is exactly
   the confusion that made Ukgoth's north door read `refused 182, crossings 0` on a day it
   crossed six times out of six. See [`m59-evidence.md`](m59-evidence.md)) and
+  `node tools/m59-savelog-test.mjs` (68 — **the per-save-window roll-up, which is a READER,
+  and a reader's failure mode is a number that is wrong while everything around it still adds
+  up**. The first draft counted `k.what` for a kill against a ledger whose field is `creature`
+  — every total correct, every breakdown empty — and invented two death splits that do not
+  exist on a `died` row, which would have reported zero PVP and zero travel deaths for ever.
+  So the cases here are all shapes that otherwise read as a healthy fleet: twenty-three
+  keepers announcing one save are ONE boundary and two saves past the tolerance are two; a
+  kill is attributed to `creature`; an unknown event kind is NAMED rather than dropped; a
+  death nobody classified makes the travel rate `null` and never `0.0`; PVP *shown* and PVP
+  *guessed* never merge; and adjacent windows partition rather than overlap, `from` inclusive
+  and `to` exclusive. See [`m59-evidence.md`](m59-evidence.md)) and
   `node tools/m59-which-test.mjs` (27 — **the gate every `/m59*` command runs first, and the
   one tool that may never name the wrong fleet**. It builds a throwaway checkout in TEMP and
   runs the real `m59-which.mjs` against fake brokers, so it opens sockets only to itself and
@@ -787,12 +798,17 @@ the records it describes.
   carry arithmetic have one home. Runs against scratch sheets, never the fleet's own) and
   `node tools/m59-backup-test.mjs` (42 — backing the rosters up and putting them back,
   against scratch directories; never touches a real fleet) and
-  `node tools/m59-testbed-test.mjs` (104 — the DM command vocabulary, the patrol ring, the
+  `node tools/m59-testbed-test.mjs` (113 — the DM command vocabulary, the patrol ring, the
   scenario spec and the arena reply. **Opens no socket, deliberately**: every live failure
   these three tools have had was "the command we sent was not the command we meant" — a
   room object id read out of a reply header, a karma figure a hundred times too small, a
-  name with a digit in it that the server accepts and silently replaces — and all of those
-  are decidable from a string) and
+  name this repository sent that the server was always going to refuse — and all of those
+  are decidable from a string. Nine of them are the CHARACTER NAME RULE, which is
+  `checkCharacterName` in `m59-newchar.mjs` and mirrors `kod/util/system.kod`: three to
+  thirty characters, and no hyphen. Both halves used to be wrong in opposite directions —
+  a sixteen-character ceiling that was ours rather than the server's, and a hyphen we
+  admitted and the server refuses, which turned a readable error into a bare
+  `BP_CHARINFO_NOT_OK` with nothing in it) and
   `node tools/m59-buyers-test.mjs` (38 — **what a merchant will actually buy**: that a gem
   is also a reagent and the apothecaries' exclusion turns on it, that Marion's smith takes
   no body armour, that an exclusive rule excludes a sibling of the same family, and above

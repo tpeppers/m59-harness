@@ -2276,6 +2276,33 @@ const server = createServer(async (req, res) => {
             break;
           }
 
+          // THE SAME BUG AS `rescue` ABOVE, ONE PACKET OVER, AND IT HAD SILENCED THE WHOLE FLEET.
+          //
+          // `setDescription` is a BP_CHANGE_DESCRIPTION (126) and it lives on M59Client, so it
+          // is here and nowhere else. The broker's describe tool called it on `session.need()`,
+          // which for a keeper-backed character is a KeeperProxy shim with no such method — so
+          // `m59-describe.mjs --set` answered `c.setDescription is not a function` for every one
+          // of the twenty-three, and had done since the fleet moved to keeper processes. The
+          // descriptions on the board are all from before that move, which is why they read as
+          // current while nothing could change one.
+          //
+          // Measured 2026-09-17, setting Loial's desk advertisement.
+          //
+          // VERIFIED BY READING IT BACK, NOT BY THE SEND. A description REPLACES the look text
+          // (player.kod:1521) and the server acknowledges nothing, so "the packet went out" is
+          // not evidence. The caller re-looks; this reports only what it did.
+          case 'describe': {
+            const text = String(args.text ?? args.description ?? '');
+            // AN EMPTY STRING IS A REAL REQUEST — it is how a description is CLEARED, and
+            // clearing is not the same as restoring the default prose. Refusing it here would
+            // make `--clear` silently do nothing, which is the failure this whole block is about.
+            await session.pacer.submit('describe', () => c.setDescription(text));
+            json({ op: 'describe', sent: true, seq: c.evSeq, length: text.length,
+                   note: 'the server acknowledges nothing — a description REPLACES the look ' +
+                         'text, so read the character back rather than trusting this' });
+            break;
+          }
+
           case 'escape_underworld': {
             // The socket and live World belong to this keeper process. Calling an
             // optional Session method used to return {ok:true} even though Session has

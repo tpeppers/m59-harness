@@ -6,7 +6,11 @@
 // rather than a log line.
 import assert from 'node:assert/strict';
 import { ITEM_RARITY, rarityName, isUnidentified, isCursed } from './m59-items.mjs';
-import { REVEAL, IDENTIFY, teethIn, revealable, budget } from './m59-reveal.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { REVEAL, IDENTIFY, teethIn, revealable, budget,
+         loadDesk, saveDesk, noteIntake, ownerOf, markReturned, deskPlan } from './m59-reveal.mjs';
 
 let n = 0;
 const ok = (what, fn) => { fn(); n++; console.log('  ok  ' + what); };
@@ -291,6 +295,202 @@ console.log('\nthe keeper-backed rebuild keeps both shapes apart');
     assert.equal(eq.equipped.length, 0);
     assert.equal(eq.grades_known, false);
   });
+}
+
+
+console.log('\nthe desk — what happens to an item after the trance');
+
+{
+  const empty = { version: 1, intake: [] };
+
+  ok('a pack carries no provenance, so an item nobody handed in has no owner', () => {
+    assert.equal(ownerOf(empty, { name: 'short sword' }), null);
+  });
+
+  ok('an intake note needs BOTH a giver and a name — an unattributable one is dropped', () => {
+    const d = noteIntake(empty, { from: 'Gonzo', items: [{ name: '' }, { name: 'axe' }] });
+    assert.equal(d.intake.length, 1);
+    assert.equal(d.intake[0].name, 'axe');
+    assert.equal(noteIntake(empty, { from: null, items: [{ name: 'axe' }] }).intake.length, 0);
+  });
+
+  ok('noteIntake is PURE — the book it was handed is unchanged', () => {
+    const d = noteIntake(empty, { from: 'Gonzo', items: [{ name: 'axe' }] });
+    assert.equal(empty.intake.length, 0);
+    assert.equal(d.intake.length, 1);
+  });
+
+  // A NAME IS A QUEUE, NOT A KEY. Two characters hand in a short sword and the desk must not
+  // invent which one it is holding.
+  ok('two claims on one name are a queue, oldest first, and it SAYS how many are behind', () => {
+    let d = noteIntake(empty, { from: 'Gonzo', items: [{ name: 'short sword' }], at: 100 });
+    d = noteIntake(d, { from: 'Waldorf', items: [{ name: 'short sword' }], at: 200 });
+    const who = ownerOf(d, { name: 'short sword' });
+    assert.equal(who.from, 'Gonzo');
+    assert.equal(who.queued_behind, 1);
+    assert.equal(who.matched_by, 'name, oldest first');
+  });
+
+  // THE ID IS A HINT AND NEVER THE KEY. Ids are renumbered by every system save and 23% named a
+  // different object within three days, so a book keyed on one starts naming somebody else's
+  // property. It may still promote a row within one session, which is all it is trusted for.
+  ok('an id promotes a row within a session and is never matched on alone', () => {
+    let d = noteIntake(empty, { from: 'Gonzo', items: [{ name: 'short sword', id: 11 }], at: 100 });
+    d = noteIntake(d, { from: 'Waldorf', items: [{ name: 'short sword', id: 22 }], at: 200 });
+    assert.equal(ownerOf(d, { name: 'short sword', id: 22 }).from, 'Waldorf');
+    assert.equal(ownerOf(d, { name: 'short sword', id: 22 }).matched_by, 'id and name');
+    // An id that matches nothing is not evidence against the name — it falls back to the queue.
+    assert.equal(ownerOf(d, { name: 'short sword', id: 999 }).from, 'Gonzo');
+  });
+
+  ok('settling a claim takes exactly one row out of the queue', () => {
+    let d = noteIntake(empty, { from: 'Gonzo', items: [{ name: 'short sword' }], at: 100 });
+    d = noteIntake(d, { from: 'Waldorf', items: [{ name: 'short sword' }], at: 200 });
+    d = markReturned(d, { name: 'short sword' });
+    assert.equal(d.intake.filter(r => r.returned).length, 1);
+    assert.equal(ownerOf(d, { name: 'short sword' }).from, 'Waldorf');
+    assert.equal(ownerOf(d, { name: 'short sword' }).queued_behind, 0);
+  });
+
+  ok('marking something nobody handed in changes nothing', () => {
+    assert.deepEqual(markReturned(empty, { name: 'nothing' }), empty);
+  });
+}
+
+console.log('\nthe desk plan — every item, including the ones still unread');
+
+{
+  const mundane = { id: 1, name: 'short sword', rarity: 0 };
+  const waiting = { id: 2, name: 'long sword', rarity: 100 };
+
+  // A BACKLOG THAT IS LEFT OUT OF THE PLAN IS AN INVISIBLE BACKLOG, which is this repository's
+  // commonest failure shape. An unrevealed item is work, so it is a row with a stage.
+  ok('an item still reading unidentified is a ROW, staged as awaiting_reveal', () => {
+    const p = deskPlan([mundane, waiting], { mule: 'Loial the Ogier' });
+    assert.equal(p.rows.length, 2);
+    assert.equal(p.rows.find(r => r.id === 2).stage, 'awaiting_reveal');
+    assert.equal(p.rows.find(r => r.id === 1).stage, 'revealed');
+    // awaiting_reveal sorts first: it is the half somebody has to act on.
+    assert.equal(p.rows[0].stage, 'awaiting_reveal');
+  });
+
+  ok('every verdict carries its destination, and unknown defaults to the mule', () => {
+    const p = deskPlan([{ id: 3, name: 'thing nobody listed', rarity: 0 }],
+                       { mule: 'Loial the Ogier' });
+    assert.equal(p.rows[0].verdict, 'unknown');
+    assert.equal(p.rows[0].route, 'mule');
+    assert.equal(p.rows[0].to, 'Loial the Ogier');
+  });
+
+  // `keep` MEANS "GO HOME", AND HOME MAY BE HERE. Routing a found item to "owner" would be
+  // describing a journey to where it already is.
+  // A REAL `keep`, ASSERTED UNCONDITIONALLY. The first draft of this case used a mystic
+  // sword, which the list routes to the MULE as sell_to_players — so the `if (route === 'owner')`
+  // it was wrapped in never ran and the case proved nothing. A test that cannot fail is
+  // decoration. 'of the defender' is a difficulty-8 weapon attribute and is on the keep list.
+  const KEEP_LOOK = 'It bears the mark of the defender.';
+
+  ok('a keep IS a keep — the fixture routes to the owner, or this case proves nothing', () => {
+    const row = deskPlan([{ id: 4, name: 'long sword', rarity: 0, look: KEEP_LOOK }], {}).rows[0];
+    assert.equal(row.verdict, 'keep');
+    assert.equal(row.route, 'owner_vault');
+    assert.equal(row.store, 'vault', "a keep is stored, not carried — the pack is what a death empties");
+  });
+
+  ok('a keep with no intake note STAYS — there is nobody to send it back to', () => {
+    const row = deskPlan([{ id: 4, name: 'long sword', rarity: 0, look: KEEP_LOOK }],
+                         { mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.stays, true);
+    assert.equal(row.owner, null);
+    assert.match(row.to, /Loial the Ogier/);   // the finder keeps what nobody claimed
+  });
+
+  ok('...and the same item WITH a note names the VAULT it goes back to', () => {
+    const desk = noteIntake({ version: 1, intake: [] },
+                            { from: 'Janice', items: [{ name: 'long sword' }] });
+    const row = deskPlan([{ id: 4, name: 'long sword', rarity: 0, look: KEEP_LOOK }],
+                         { desk, mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.owner, 'Janice');
+    assert.equal(row.to, "Janice's vault");
+    assert.equal(row.stays, false);
+    assert.equal(row.proceeds_to, null, 'a keep is not sold, so nobody is owed anything');
+  });
+
+  // THE MONEY IS A SEPARATE ROW FROM THE ITEM, and the plain `to` column cannot say it.
+  // Operator, 2026-09-17: a timed item is sold to a Barloque merchant and "the one who brought
+  // it to be revealed can ... keep the money from selling the magic item". Without this the
+  // mule sells it and keeps the proceeds — the fleet taxing its own farmers for using the desk.
+  ok('a timed item is sold in Barloque and the finder is owed the shillings', () => {
+    const desk = noteIntake({ version: 1, intake: [] },
+                            { from: 'Gonzo', items: [{ name: 'glowing mace' }] });
+    const row = deskPlan([{ id: 9, name: 'glowing mace', rarity: 0 }],
+                         { desk, mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.verdict, 'sell_to_npc');
+    assert.equal(row.route, 'counter_barloque');
+    assert.match(row.to, /Barloque/);
+    assert.equal(row.proceeds_to, 'Gonzo');
+    assert.equal(row.owes_proceeds, true);
+  });
+
+  ok('...and with nobody to credit, the sale owes nothing rather than crediting the mule', () => {
+    const row = deskPlan([{ id: 9, name: 'glowing mace', rarity: 0 }],
+                         { mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.verdict, 'sell_to_npc');
+    assert.equal(row.proceeds_to, null);
+    assert.equal(row.owes_proceeds, false);
+  });
+
+  // THE SORTER DECIDES WHAT IT IS FOR AND THE MULE IS NOT AN EXCEPTION TO THAT. A mystic sword
+  // is sell_to_players — no fixed merchant stocks one — so it stays with the mule even when
+  // somebody handed it in. The intake note is about `keep`, not about every verdict.
+  ok('an intake note does NOT drag a sell_to_players back to its finder', () => {
+    const desk = noteIntake({ version: 1, intake: [] },
+                            { from: 'Janice', items: [{ name: 'mystic sword' }] });
+    const row = deskPlan([{ id: 5, name: 'mystic sword', rarity: 0 }],
+                         { desk, mule: 'Loial the Ogier' }).rows[0];
+    assert.equal(row.verdict, 'sell_to_players');
+    assert.equal(row.to, 'Loial the Ogier');
+  });
+
+  ok('an empty pack is an empty plan, not a crash', () => {
+    const p = deskPlan([], {});
+    assert.equal(p.rows.length, 0);
+    assert.equal(Object.values(p.counts).reduce((a, b) => a + b, 0), 0);
+  });
+}
+
+console.log('\nthe intake book on disk');
+
+{
+  const tmp = path.join(os.tmpdir(), `m59-desk-test-${process.pid}.json`);
+  try {
+    ok('a missing book is an EMPTY one and says so with a null source', () => {
+      const d = loadDesk({ file: tmp });
+      assert.equal(d.intake.length, 0);
+      assert.equal(d.source, null);
+      assert.equal(d.unreadable, undefined);
+    });
+
+    ok('a round trip keeps the claims', () => {
+      const d = noteIntake(loadDesk({ file: tmp }),
+                           { from: 'Scooter', items: [{ name: 'chain armor', id: 7 }] });
+      saveDesk(d, { file: tmp });
+      const back = loadDesk({ file: tmp });
+      assert.equal(back.intake.length, 1);
+      assert.equal(back.intake[0].from, 'Scooter');
+      assert.equal(back.source, tmp);
+    });
+
+    // A FILE THAT WILL NOT PARSE IS NOT AN EMPTY FILE. Reading it as empty would silently
+    // forget who owns what and every `keep` would become a `stays`.
+    ok('a corrupt book is DISTINGUISHABLE from an absent one', () => {
+      fs.writeFileSync(tmp, '{ this is not json');
+      const d = loadDesk({ file: tmp });
+      assert.equal(d.intake.length, 0);
+      assert.ok(d.unreadable, 'it has to say it could not read it');
+      assert.equal(d.source, tmp);
+    });
+  } finally { try { fs.unlinkSync(tmp); } catch {} }
 }
 
 console.log(`\n${n} assertions, all offline.\n`);

@@ -767,6 +767,67 @@ export function roomCap(spawns, roomNum) {
   return null;
 }
 
+/**
+ * IS THIS CHARACTER HUNTING SOMETHING THIS ROOM DOES NOT MAKE?
+ *
+ * MEASURED ON PROD, 2026-09-18, across sixty one-minute samples spanning three configuration
+ * changes: **between four and seven characters of twenty-three were in this state at every
+ * single sample**, and not one of the three changes moved that number. It is the largest single
+ * waste in the fleet and it was invisible, because the board renders it as `hunting: skeleton`
+ * — the healthy string — exactly like a character standing in a room with nine skeletons in it.
+ *
+ * Six at once, read live: Zoot hunting skeletons in the Bookmakers guild hall (714 generates
+ * nothing at all), Scooter hunting zombies in room 2 (a town room), Piggy and Sweetums in 104
+ * (one NPC), Statler in the Cragged Mountains (black spiders and trolls), Rizzo in the Sewers
+ * (giant rats). Every one of them assigned to 27, 38 or 39.
+ *
+ * WHY THEY STAY THERE, which is the part that makes this a keeper concern and not a bot one.
+ * `shouldRelocateToAssignedRoom` opens with `if (movementLeased) return false`, and DUM holds
+ * movement on the whole fleet — so the keeper is forbidden from walking anybody home and the
+ * only recall is the bot's, which is a per-pass decision competing with everything else it does.
+ * That is the right division of labour and it is not what this fixes. What this fixes is that
+ * the state has no name: `yieldCheck` audits the QUARRY against the character's own level and
+ * never asks whether the room contains it, so a character hunting skeletons where no skeleton
+ * can spawn passes the audit that exists to catch a keeper earning nothing.
+ *
+ * SILENT ON A ROOM NOBODY BAKED, UNLESS SOMEBODY IS STANDING IN IT. `spawns.rooms` holds 183
+ * rooms and NONE of them has an empty generator list, because the index is built from the map and
+ * only records rooms that make something. So a room absent from it either makes nothing, or is not
+ * a room. Answering `dry` for both would be a guess; answering `null` for both hides the two worst
+ * cases measured — Zoot in the guild hall (714) and Scooter in a town room (2), neither of which
+ * is indexed, both of which generate precisely nothing.
+ *
+ * The caller resolves it for free: a keeper STANDING IN the room has already proved the room
+ * exists, so an absent entry there is not missing data, it is the answer. `standingHere: true`
+ * says so, and the verdict records which of the two questions was asked. Guessing without it
+ * would flag every character shopping in a town — and a check that cries wolf is switched off
+ * inside a week.
+ */
+export function huntRoomYield(spawns, roomNum, want, { standingHere = false } = {}) {
+  const names = huntNames(want);
+  if (!names.length) return null;                       // no order, nothing to be dry about
+  const list = spawns?.rooms?.[roomNum];
+  if (!Array.isArray(list)) return standingHere
+    ? { dry: true, room: roomNum, hunting: names, generates: [], matched: [], indexed: false,
+        why: `room ${roomNum} makes nothing — it is not one of the ${Object.keys(spawns?.rooms ?? {}).length} ` +
+             `rooms with a generator, and this character is standing in it, so that is the answer ` +
+             `rather than missing data. Hunting ${huntLabel(want)} here cannot succeed` }
+    : { dry: null, room: roomNum, hunting: names, generates: null, matched: null, indexed: false,
+        why: `nothing is baked for room ${roomNum}, and nobody is standing in it, so this cannot ` +
+             'tell a room that makes nothing from a room number that is not a room' };
+  const generates = list.map(e => e.creature ?? e.name).filter(Boolean);
+  const matched = list.filter(e => names.some(n => creatureMatchesHunt(e, n)))
+                      .map(e => e.creature ?? e.name);
+  return {
+    dry: matched.length === 0,
+    room: roomNum, hunting: names, generates, matched, indexed: true,
+    why: matched.length
+      ? null
+      : `room ${roomNum} generates ${generates.length ? generates.join(', ') : 'nothing'} and ` +
+        `this character is hunting ${huntLabel(want)}; no pass here can find one`,
+  };
+}
+
 // WOULD KILLING THIS MOVE OUR KARMA THE WRONG WAY?
 //
 // A kill is an act worth the NEGATIVE of the victim's karma, so killing something
