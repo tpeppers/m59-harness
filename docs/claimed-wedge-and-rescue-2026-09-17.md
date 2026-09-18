@@ -182,45 +182,66 @@ rescue firing every tick, and that is still right. Both sites (11705, 11800) tak
 change. Test alongside `m59-claimwedge-test.mjs`: drive a wedge past the threshold twice
 without advancing `host.passes`, and assert two rescues.
 
-**AND WHY THE PASS BLOCKS AT ALL — a lead, and it is NOT yet a general finding.** This defect
-was filed with the blocking as an unexplained given: 308s measured on an idle lab fleet, 877s
-on Waldorf's death, no cause. The `prod-deploy-fa` session profiled prod on 2026-09-17 and
-found the stalls hot in `_blockingWall` / `intersectNode` (`m59-roo.mjs`) underneath
-`nearestSafeSpot` / `sheltersAlong` / `safeSpots` (`m59-safespots.mjs`). Janice's keeper log
-was 120 of 120 lines "event loop was blocked", ~1.8–2.5s per stall, 224 seconds of blockage in
-one window; Pepe 76 of 77, 157s. That profiling is theirs.
+**AND WHY THE PASS BLOCKS AT ALL — read the instrument before the number.** This defect was
+filed with the blocking as an unexplained given: 308s measured on an idle lab fleet, 877s on
+Waldorf's death, no cause. Finding the cause took three readings on 2026-09-17 and the first
+two were artefacts of how they were measured. That history is kept here because the same trap
+is waiting for whoever picks this up.
 
-**Read the scope carefully, because its author has already corrected it once.** The first
-report was "all 23 keepers stalling"; that was withdrawn the same night — after a broker
-restart only 2 of 23 showed stalls, and because the restart RESET the logs most of those zeros
-mean "no log yet", not "fixed". What survives the reset: the two that re-accumulated stalls
-within minutes were Pepe and Janice, **both in room 578 (Cragged Mountains)**, and every stall
-seen with a `nearestSafeSpot`/`sheltersAlong` caller that night was in 578. So the honest
-hypothesis is that the hot path may be specific to that room's geometry, which would be far
-cheaper to reproduce — one character parked in 578.
+| | instrument | what it joined | verdict |
+|---|---|---|---|
+| 1 | top caller of an agent's whole log, vs where that agent stood now | a block to a position minutes away | withdrawn |
+| 2 | `longest_block_ms` (a LIFETIME max) vs the room at sample time | same join, other direction | withdrawn — this one was mine |
+| 3 | the stall line's own room field | nothing — the line records the room it blocked IN | **use this** |
 
-**Counter-evidence from this repository's own shadow runs, which is why it is still open.**
-During the tours above, sampled live across all 23 shadow keepers, the longest pass blocks were
-308,011 ms in room 150, 144,747 ms in 584, 138,684 ms in room 2, and 96,661 ms in 108 — **not
-one of them in 578, on a seven-inn circuit that never enters 578.** The caveat that keeps this
-from being decisive in the other direction: `longest_block_ms` is a lifetime maximum and the
-room is where the keeper was when sampled, not necessarily where it blocked, and nothing
-profiled the shadow blocks, so they are not attributed to the safe-spot search. What the two
-readings together DO establish is that "the safe-spot search is slow in 578" is not yet
-supported enough to build a fix on, and multi-minute blocks occur in fleets that never go
-there.
+The stall line reads `(room 578, doing travelling, travelling to 113)`. It names the room at
+the moment of the block, so there is no join to get wrong. Both earlier readings — the
+`prod-deploy-fa` session's and my own shadow sample of 308,011 ms in room 150, 144,747 ms in
+584, 138,684 ms in room 2 — were built on a join and neither is evidence about where the cost
+is. **My shadow numbers do not contradict the prod reading and I should not have written them
+up as counter-evidence.** That window had almost no keeper exposure to 578.
 
-So: `"the safe-spot search is slow"` and `"…is slow in 578"` are different bugs with different
-repairs, and which one this is has not been settled. **Settle it before building either.** The
-cheap experiment is the one its author named — park a character in 578, profile, then park one
-in 150 and do it again; if both stall, the room is a red herring.
+**The reading that stands.** 23 prod keepers, ~35 minutes after the restart reset the logs,
+106 stalls totalling 192.6s blocked — profiling by the `prod-deploy-fa` session:
+
+```
+  by room                         by top caller
+  578   90 stalls  158.6s         provedSquaresUncached    52  93.3s   (m59-game.mjs)
+  599   10 stalls   20.9s         nearestSafeSpot          26  44.2s   (m59-safespots.mjs)
+  557    5 stalls   11.1s         _approachSquareUncached   6  11.5s
+  579    1 stall     1.9s         sheltersAlong             3   5.8s
+```
+
+**It is NOT "the safe-spot search", which is what the earlier drafts of this document said.**
+The largest single caller is `provedSquaresUncached` at 93.3s against `nearestSafeSpot`'s
+44.2s — at least two hot callers, and the safe-spot search is the smaller half. What is hot
+under *both* is the raycast: `_blockingWall` and `intersectNode`, `m59-roo.mjs:1083` and
+`:1103` (verified present in the deployed tree). **That is the repair site.** Optimising a
+caller would leave the other callers paying the same cost.
+
+**The confound, which cannot be removed from this data.** Rooms with no fleet presence
+contribute no stalls whatever they cost. Both 578 characters were mid-journey *through* it
+(Pepe to 113, Janice to 376) and Pepe had been crossing that one room for 25+ minutes. So
+578's 82% of blocked time is partly that it is expensive and partly that two characters were
+sitting in it.
+
+**Which is a finding in its own right, independent of scope:** a road room that blocks the
+keeper loop costs a multiple of its own transit time, because the block extends the exposure
+that generates more blocks. It is a positive feedback, and it means an expensive room shows up
+in the data as a *stuck* room — which is exactly how a cost problem gets mistaken for a
+routing problem.
+
+**So the experiment needs a RATE, not a count.** Park-in-578 and park-in-150 both produce
+stalls in whichever room was watched longer; comparing counts measures the watching. The
+comparable number is **stalls per minute of keeper time in that room**, and the stall line
+gives numerator and denominator honestly. `prod-deploy-fa` has an eight-line parser against
+`/log?n=400` and offered it — take that rather than rebuild it.
 
 Either way this reorders the work. The geometry hot path blocks the pass for minutes; the
-per-pass ration then hands the watchdog exactly one rescue per multi-minute block, while the
-thing the rescue exists for is a body losing half a point of health a second. **The hot path is
-probably the cheaper repair of the two** — a keeper that is not blocked for five minutes does
-not need two rescues in one pass — but it is the one still owing a reproduction, and the
-rationing fix is small, bounded and can land regardless.
+per-pass ration then hands the watchdog one rescue per multi-minute block, while the thing the
+rescue exists for is a body losing about half a point of health a second. **The raycast is
+probably the larger win**, but it owes a rate measurement before anyone sizes it — and the
+rationing fix is small, bounded, and can land without waiting for that answer.
 
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
