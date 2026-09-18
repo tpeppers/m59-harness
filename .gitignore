@@ -743,3 +743,10 @@ _verify2.mjs
 # one: a file that parses is a file the service acts on, and this one decides what gets sold.
 # The shape is committed beside it as substrate/magic-keep.example.json.
 substrate/magic-keep.json
+# The savelog ledger is written by the running fleet — one line per server save window, which
+# is what `m59-savelog.mjs` reads to decide which deploy a number belongs to. Runtime output,
+# same rule as history/ and recordings/. It was NOT ignored, so it sat untracked in
+# prod-deploy and `m59-deploy.mjs --cut` refused every release for "1 uncommitted file(s) …
+# running in production and in no repository" — a true sentence about a ledger nobody meant
+# to commit.
+/substrate/savelog/
