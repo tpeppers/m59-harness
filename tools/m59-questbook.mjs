@@ -105,7 +105,11 @@ export function distinctAsks({ fleet = 'default' } = {}) {
     // Keyed on the SHAPE, not on the instance: "kill a skeleton" and "kill a fungus beast" are
     // one ask with two rolls, and collapsing them is what makes the list a specification.
     const key = `${r.quest ?? '?'}/${a.kind}`;
-    const row = by.get(key) ?? { quest: r.quest, kind: a.kind, count: 0, handled: !!a.handled,
+    // `none` IS NOT AN UNHANDLED ASK. A run that failed before the game said anything has no
+    // ask to handle, and marking it NO HANDLER puts the largest row in the backlog on a
+    // problem nobody can write a handler for. Only a real `unknown` belongs there.
+    const row = by.get(key) ?? { quest: r.quest, kind: a.kind, count: 0,
+                                 handled: a.kind === 'none' ? null : !!a.handled,
                                  outcomes: {}, rolls: new Set(), examples: [] };
     row.count++;
     row.outcomes[r.outcome ?? '?'] = (row.outcomes[r.outcome ?? '?'] ?? 0) + 1;
@@ -132,7 +136,9 @@ function main() {
     console.log(`what the game has asked for — fleet "${fleet}"\n`);
     for (const r of rows) {
       const out = Object.entries(r.outcomes).map(([k, v]) => `${k}:${v}`).join(' ');
-      console.log(`  ${r.quest}/${r.kind}  x${r.count}  ${r.handled ? '' : 'NO HANDLER  '}${out}`);
+      const flag = r.handled === false ? 'NO HANDLER  '
+                 : r.handled === null ? 'nothing was asked  ' : '';
+      console.log(`  ${r.quest}/${r.kind}  x${r.count}  ${flag}${out}`);
       if (r.rolls.length) console.log(`      rolls seen: ${r.rolls.join(', ')}`);
       for (const e of r.examples) console.log(`      e.g. ${e.id}: "${String(e.raw).slice(0, 110)}"`);
     }
