@@ -182,6 +182,22 @@ rescue firing every tick, and that is still right. Both sites (11705, 11800) tak
 change. Test alongside `m59-claimwedge-test.mjs`: drive a wedge past the threshold twice
 without advancing `host.passes`, and assert two rescues.
 
+**AND WHY THE PASS BLOCKS AT ALL — named 2026-09-17 by the `prod-deploy-fa` session, whose
+profiling this is.** This defect was filed with the blocking as an unexplained given: 308s on
+an idle lab fleet, 877s on Waldorf's death, no cause. The cause is the safe-spot search. All 23
+prod keepers report stalls and eight stall in most log lines; Janice's keeper log was 120 of
+120 lines "event loop was blocked", ~1.8–2.5s per stall and 224 seconds of blockage in one
+window, hot in `_blockingWall` / `intersectNode` (`m59-roo.mjs`) underneath `nearestSafeSpot` /
+`sheltersAlong` / `safeSpots` (`m59-safespots.mjs`). Pepe: 76 of 77 lines, 157s.
+
+That makes #2 one failure rather than two. The geometry hot path blocks the pass for minutes;
+the per-pass ration then hands the watchdog exactly one rescue per multi-minute block — while
+the thing the rescue exists for is a body losing half a point of health a second. **So the
+cheaper repair may be the hot path rather than the rationing**, and it should be measured
+first: a keeper that is not blocked for five minutes does not need two rescues in one pass.
+Both are worth doing; this one is now the better-evidenced, and it is a profiling job with a
+named entry point rather than a design question.
+
 ## TO DO — #3 `guard_did_not_fire`: after the rescue, the holder's walk comes straight back
 
 **Cite.** Lines 11840–11852, the comment that ends "…taking ownership back is the operator's
