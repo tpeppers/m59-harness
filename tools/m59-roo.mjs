@@ -125,6 +125,12 @@ function declaredFallJumpTable() {
 }
 export const FALL_MAX_SQUARES = Number(process.env.M59_FALL_MAX_SQUARES || 3);
 
+// THE COLLISION RAYCAST PRUNES THE BSP. See `_blockingWall`'s traversal for the measurement
+// and for why pruning is equivalent. Set M59_RAYCAST_NO_PRUNE=1 to walk every node the way
+// this code did before 2026-09-17 — an escape hatch for bisecting a movement complaint in
+// production without a deploy, not a supported mode, and about 30x the node visits.
+export const RAYCAST_PRUNE = process.env.M59_RAYCAST_NO_PRUNE !== '1';
+
 /**
  * DOES THIS ROOM CONTAIN A DECLARED ONE-WAY DROP.
  *
@@ -1100,13 +1106,20 @@ export class RoomGeometry {
       const dy = f32(f32(y0) - f32(y1));
       return f32(f32(dx * dx) + f32(dy * dy));
     };
+    // THE BOX TEST, LIFTED OUT OF `intersectNode` SO IT CAN PRUNE THE SUBTREE.
+    //
+    // Identical arithmetic to the test that used to open `intersectNode` — same f32 rounding,
+    // same operand order, same `playerRadius` slack. Only the CALLER changed: see the
+    // traversal below.
+    const bboxRejects = node => {
+      const b = node.bbox;
+      if (!Array.isArray(b) || b.length !== 4) return false;
+      return f32(f32(b[0]) - f32(to.x)) > playerRadius
+          || f32(f32(to.x) - f32(b[2])) > playerRadius
+          || f32(f32(b[1]) - f32(to.y)) > playerRadius
+          || f32(f32(to.y) - f32(b[3])) > playerRadius;
+    };
     const intersectNode = node => {
-      if (Array.isArray(node.bbox) && node.bbox.length === 4) {
-        if (f32(f32(node.bbox[0]) - f32(to.x)) > playerRadius
-            || f32(f32(to.x) - f32(node.bbox[2])) > playerRadius
-            || f32(f32(node.bbox[1]) - f32(to.y)) > playerRadius
-            || f32(f32(to.y) - f32(node.bbox[3])) > playerRadius) return null;
-      }
       const planeDistance = separatorValue(node.separator, to.x, to.y);
       const oldDistance = separatorValue(node.separator, from.x, from.y);
       const newDistance = f32(Math.abs(planeDistance) / CLIENT_FINENESS);
@@ -1148,12 +1161,55 @@ export class RoomGeometry {
 
     // FindIntersection is pre-order DFS: current splitter, then positive subtree,
     // then negative subtree. The first blocking wall determines the stock slide.
+    //
+    // A REJECTED BOX PRUNES ITS WHOLE SUBTREE, AND THAT IS THE WORK THIS LOOP EXISTS TO NOT DO.
+    //
+    // The box test used to live at the top of `intersectNode` and return null, after which
+    // this loop pushed both children anyway — so a node whose box was nowhere near the
+    // destination rejected itself and then had its entire subtree walked one node at a time.
+    // Every internal node in the room was visited on every query. That is a BSP being paid
+    // for and not used: the cost of one collision test scaled with the size of the WHOLE
+    // ROOM rather than with the geometry near the body.
+    //
+    // MEASURED at PLAYER_RADIUS (248), sampling every other square of each room's walkable
+    // grid. The left column is the room's whole BSP; the middle is what one query touches:
+    //
+    //     room 578 Cragged Mountains   811 internal nodes   811 visits/query -> 28.2   -96.5%
+    //     room 557 Sweet Grass         757                  757             -> 27.3   -96.4%
+    //     room 599 Ukgoth              445                  445             -> 28.9   -93.5%
+    //     room  38 Castle Victoria     544                  544             -> 19.4   -96.4%
+    //     room  39 Upstairs CV         231                  231             -> 14.4   -93.8%
+    //
+    // The pruned column is nearly FLAT at ~14-29 regardless of room size, which is the shape
+    // a BSP is supposed to have and the shape the old walk did not have.
+    //
+    // Note what the middle column predicts and the prod stall data confirms: the rooms that
+    // block keepers are the rooms with the most nodes. 578 and 557 are the two worst by
+    // stalls/min and are the two largest here; 39, which stalls zero times over 24 keeper-
+    // minutes, is the smallest.
+    //
+    // WHY PRUNING IS SOUND, MEASURED RATHER THAN ASSUMED. Skipping the subtree is only
+    // equivalent if a node's box contains its descendants' boxes — otherwise a child could
+    // sit near the destination while its parent's box did not. Checked across ALL 266 shipped
+    // rooms and 109,172 internal nodes: every internal box contains its entire subtree, and
+    // none is stored unnormalised (see m59-raycast-test.mjs, which re-runs that scan). So a
+    // parent that is further than `playerRadius` from the destination guarantees every
+    // descendant is too, and each would have rejected itself on its own test.
+    //
+    // Push order is untouched, so the FIRST hit — which is the one that decides the slide —
+    // is the same node it was before.
+    //
+    // M59_RAYCAST_NO_PRUNE=1 restores the exhaustive walk. It is an escape hatch for
+    // bisecting a movement complaint in production without a deploy, not a supported mode.
     const stack = [this.bspRoot];
     while (stack.length) {
       const node = this.nodes?.[stack.pop() - 1];
       if (!node || node.type === 'leaf') continue;
-      const hit = intersectNode(node);
-      if (hit) return hit;
+      if (bboxRejects(node)) { if (RAYCAST_PRUNE) continue; }
+      else {
+        const hit = intersectNode(node);
+        if (hit) return hit;
+      }
       if (node.negative) stack.push(node.negative);
       if (node.positive) stack.push(node.positive);
     }
