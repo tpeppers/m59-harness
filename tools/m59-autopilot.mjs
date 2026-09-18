@@ -79,7 +79,8 @@ import { completeTownIncome, recordTownTrade } from './m59-town-income.mjs';
 import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
-import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
+import { contributionPlan, guildPlan, guildKeepTest, reagentSource, REAGENT_MODES }
+  from './m59-guildwants.mjs';
 import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
@@ -1473,40 +1474,12 @@ export function crowdedSquares(objects, selfId, { radius = 1, playersOnline = nu
 }
 
 /**
- * WHICH REAGENTS MAY BE BOUGHT, AND WHERE THE REST COME FROM.
+ * WHAT GOES QUIET WHEN A REAGENT RUNS OUT.
  *
- * MEASURED ON PROD, 2026-09-18. Robin's shopping plan came to 39,124 shillings against a purse of
- * 618; 12,000 of it was 150 ORC TEETH at 80 each. The guild chest at r18c2, cached the same
- * afternoon, held **202 orc teeth**. Camilla's plan was the same shape and Bunsen's too. Ten of
- * twenty-one characters sat in `poor_farming.active` and eleven carried
- * `purchase_funding.status: "unaffordable - returning to farming"` — a status that RETRIES rather
- * than stopping. Lew made 26 journeys in 90 minutes, every one of them to a shop, and reached his
- * station ONCE. That is this repository's own trap, live on half the roster: a trip that cannot
- * fix the thing that opened it will run for ever, and every lap reports success.
- *
- * SO A REAGENT HAS A SOURCE, NOT JUST A PRICE. Three answers, in order:
- *
- *   buy        a merchant sells it and we are allowed to pay — the historical behaviour, and
- *              still the default for anything not named below, because silence must mean the
- *              behaviour that was already there.
- *   stockpile  the fleet already owns it; take it from the guild chest or a vault.
- *   farm       nobody sells it and the chest is empty — kill the thing that drops it.
- *              `farmSourcesFor` in m59-spawns.mjs turns that into a creature and a room list.
- *
- * AND WHEN NONE OF THE THREE IS AVAILABLE, THE WANT IS DROPPED RATHER THAN DEFERRED. That is the
- * whole point. A character that cannot get orc teeth should carry on farming WITHOUT super
- * strength and be visibly short of them — `reagent_short` on its status, "poor orc teeth" on the
- * board — rather than walking to a counter it cannot afford every five minutes for ever. A
- * shortage is a state to report; it is not an errand.
- *
- * OPERATOR DECISION, 2026-09-18: "Make it a special (default off) buy-orc-teeth option, where if
- * it's off and not available in vault or chest it doesn't get added to the loadout... and when
- * people take on tasks, we can make 'farm orc teeth' a task, because that can restock the chest."
- */
-/**
- * WHAT GOES QUIET WHEN A REAGENT RUNS OUT. Cited, because "short of orc teeth" means nothing to a
- * reader who does not already know the spell list, and the whole point of publishing a shortage
- * rather than retrying a purchase is that somebody can act on it.
+ * Cited, because "short of orc teeth" means nothing to a reader who does not already know the
+ * spell list, and the entire point of publishing a shortage rather than retrying a purchase is
+ * that somebody can act on it. A character that cannot get orc teeth is not broken; it is a
+ * character that cannot cast super strength.
  */
 export const REAGENT_BLOCKS = {
   'orc tooth': 'super strength (2 mushroom + 1 orc tooth, persench/strength.kod:57-64)',
@@ -1514,52 +1487,51 @@ export const REAGENT_BLOCKS = {
   'fairy wing': 'holy weapon (3 fairy wing + 1 orc tooth, holywp.kod:60-62)',
 };
 
-export const REAGENT_SOURCING = {
-  // Default OFF. Orcs drop these at 40% (orctres.kod:32) in a room this fleet already farms, and
-  // the guild chest holds 202 of them, so paying 80 apiece is buying what we own.
-  'orc tooth': { buy: false, why: 'orcs drop these at 40% and the guild chest holds hundreds' },
-  // Default OFF, and the most expensive line the fleet had. 180 sapphires at 120 was 21,600 of
-  // Robin's 39,124-shilling plan — 55% of a bill he could not pay with 618 in his purse — while
-  // 503 sat in the guild chests. And they are farmable by THIS fleet: the rate table is topped by
-  // a level-105 lupogg, but the SPIDER drops them at 10% in rooms 4, 6, 26, 27 and 28, and room 27
-  // is where the cave cohort already stands. Nobody has to go anywhere new for either of these.
-  'sapphire': { buy: false, why: 'spiders drop these at 10% in room 27 and the guild chests hold 503' },
-};
-
 /**
- * May THIS character buy THIS reagent?
+ * WHICH REAGENTS THIS CHARACTER MAY BUY, AND WHERE THE REST COME FROM.
  *
- * Three layers, most specific first, and silence at every one means the behaviour that was
- * already there: the character's own `buyReagent` map, then the fleet-wide default above, then
- * yes. The class switch `buyReagents: false` still outranks all of it — a character forbidden
- * from buying reagents at all is not quietly permitted to buy one.
+ * MEASURED ON PROD, 2026-09-18. Robin's shopping plan came to 39,124 shillings against a purse of
+ * 618; 33,600 of it was 180 sapphires and 150 orc teeth. The guild chests, cached the same
+ * afternoon, held 503 sapphires, 460 mushrooms and 202 orc teeth. Ten of twenty-one characters sat
+ * in `poor_farming.active` and eleven carried `purchase_funding.status: "unaffordable — returning
+ * to farming"`, a status that RETRIES rather than stopping. Lew made 26 journeys in 90 minutes,
+ * every one to a shop, and reached his station ONCE.
+ *
+ * THE DECISION DOES NOT LIVE HERE ANY MORE, and that is the point. It was a hardcoded set naming
+ * orc teeth, which made one fleet's economy a fact about the source tree. It is now the GUILD's,
+ * in its own plan file, with a default and per-reagent overrides — `reagentSource` in
+ * m59-guildwants.mjs — because whether a guild can supply its own reagents is a fact about that
+ * guild's hall, not about this repository.
+ *
+ * `chest` is one setting with two halves and is meaningless without both: take it from the chest
+ * instead of buying, AND put it in the chest instead of selling. A merchant buys at ~60% and sells
+ * at ~140%, so a reagent that goes over a counter and comes back has cost 2.3x its own value. The
+ * selling half is `chestSourcedNames`, which joins `protectedItemNames`.
  */
-export function reagentBuyAllowed(policy, item) {
-  if (!purchaseEnabled(policy, 'reagents')) return false;
-  const key = norm(item);
-  const mine = policy?.buyReagent?.[key];
-  if (mine !== undefined) return mine !== false;
-  const fleet = REAGENT_SOURCING[key];
-  return fleet ? fleet.buy !== false : true;
+export function reagentBuyAllowed(policy, item, plan = null) {
+  if (!purchaseEnabled(policy, 'reagents')) return false;   // the class switch still outranks all
+  return reagentSource(item, { plan, policy }) === 'buy';
 }
 
 /**
- * Split a want list into what may be bought and what must come from stock or a kill.
+ * Split a want list three ways by how each item is to be acquired.
  *
  * A PURE FUNCTION AND AN EXPORTED ONE, because the alternative is a filter inlined in a method
- * that needs a live Autopilot to reach — and an untestable refusal is the kind the next person in
- * a hurry deletes. It returns BOTH halves, never only the survivors: a line that silently
- * vanishes from a shopping list is indistinguishable from one nobody wanted, which is the same
- * failure shape as a keeper rendering `hunting` while standing in a guild hall.
+ * that needs a live Autopilot to reach, and an untestable refusal is the kind the next person in
+ * a hurry deletes. It returns ALL THREE groups, never only the survivors: a line that silently
+ * vanishes from a shopping list is indistinguishable from one nobody wanted.
  */
-export function splitBySourcing(requests = [], policy = {}) {
-  const buy = [], stockpile = [];
+export function splitBySourcing(requests = [], { policy = null, plan = null } = {}) {
+  const buy = [], stockpile = [], off = [];
   for (const r of (Array.isArray(requests) ? requests : [])) {
     if (!r || !r.item) continue;
-    (reagentBuyAllowed(policy, r.item) ? buy : stockpile).push(r);
+    if (!purchaseEnabled(policy, 'reagents')) { stockpile.push(r); continue; }
+    const mode = reagentSource(r.item, { plan, policy });
+    (mode === 'buy' ? buy : mode === 'off' ? off : stockpile).push(r);
   }
-  return { buy, stockpile };
+  return { buy, stockpile, off };
 }
+
 
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
@@ -3872,6 +3844,7 @@ export class Autopilot {
       // could never sell anything again.
       ...this.guildWantedNames(),
       ...this.stockpileKeptNames(),
+      ...this.chestSourcedNames(),
     ].map(String).filter(Boolean))];
   }
 
@@ -3901,6 +3874,34 @@ export class Autopilot {
       characters.push({ loadout: this.loadout() ?? { carry: [] }, policy: this.policy });
       const test = stockpileKeepTest({ characters, available });
       return [...(test.inUse ?? new Set())];
+    } catch { return []; }
+  }
+
+  /**
+   * REAGENTS THE GUILD SOURCES FROM ITS OWN CHEST, KEPT AWAY FROM EVERY MERCHANT.
+   *
+   * The other half of `chest`, and the half that was missing. `guildWantedNames` protects what the
+   * chest is SHORT of, which is a want about quantity and goes away the moment a target is met.
+   * This is about DIRECTION and does not: a guild that buys its sapphires out of its own chest
+   * must never be selling sapphires at 60% on the same trip, whatever the chest holds this minute.
+   *
+   * IT IS NOT GATED ON `reagentCoop.enabled`, unlike its two neighbours, and that is deliberate
+   * rather than an oversight. That gate is backwards — it switched the chest off for exactly the
+   * characters the co-op was switched ON for — when depositing and drawing are opposite directions
+   * through the same door. A fleet that stocks its own chest is precisely the fleet that should be
+   * shopping from it.
+   */
+  chestSourcedNames() {
+    try {
+      const plan = guildPlan();
+      if (!plan) return [];
+      const named = new Set();
+      // Everything this character has an opinion about, plus everything the guild names. A
+      // guild-wide `default: "chest"` cannot be enumerated — it applies to reagents nobody has
+      // written down — so the list is what is ASKED for, resolved one at a time at the call site.
+      for (const r of (this.purchaseRequests?.() ?? [])) named.add(String(r.item));
+      for (const c of (this.loadout()?.carry ?? [])) if (c?.item) named.add(String(c.item));
+      return [...named].filter(item => reagentSource(item, { plan, policy: this.policy }) === 'chest');
     } catch { return []; }
   }
 
@@ -20541,9 +20542,10 @@ export class Autopilot {
     // The stockpile is the only source for these, so they never reach a price. Removed here
     // rather than at the counter: a merchant refusal is a sentence spoken to the room, and an
     // unaffordable TOTAL is what opens the loop this exists to close.
-    const split = splitBySourcing(requests, this.policy);
+    const split = splitBySourcing(requests, { policy: this.policy, plan: guildPlan() });
     requests = split.buy;
     this.chestOnlyWants = split.stockpile;
+    this.reagentsOff = split.off;
     if (purchaseEnabled(this.policy, 'reagents') && ['all', 'delivery'].includes(kind)
         && this.policy.farmDelivery?.enabled && this.pendingFarmDelivery) {
       const wanted = this.pendingFarmDelivery.requested;
@@ -20576,7 +20578,7 @@ export class Autopilot {
       ...(this.chestOnlyWants?.length
         ? { from_stockpile: this.chestOnlyWants,
             from_stockpile_why: 'not bought by policy — these come from the guild chest, a vault, ' +
-                                'or a kill (REAGENT_SOURCING / policy.buyReagent)' }
+                                'or a kill: the guild plan reagents block, or policy.reagentSource' }
         : {}) };
     if (this.townTrip) this.townTrip.purchasePlan = plan;
     if (signature !== this.lastPurchasePlanSignature) {

@@ -23,7 +23,9 @@
 // Operator, 2026-09-18: "Make it a special (default off) buy-orc-teeth option, where if it's off
 // and not available in vault or chest it doesn't get added to the loadout... and when people take
 // on tasks, we can make 'farm orc teeth' a task, because that can restock the chest."
-import { reagentBuyAllowed, splitBySourcing, REAGENT_SOURCING, REAGENT_BLOCKS } from './m59-autopilot.mjs';
+import { reagentBuyAllowed, splitBySourcing, REAGENT_BLOCKS } from './m59-autopilot.mjs';
+import { reagentSource, reagentSellTest, normaliseReagents, normalisePlan,
+         REAGENT_MODES, DEFAULT_REAGENT_MODE } from './m59-guildwants.mjs';
 import { loadSpawns, farmSourcesFor } from './m59-spawns.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,30 +39,75 @@ const ok = (label, cond, detail = '') => {
   console.log(`  ${cond ? 'yes ' : 'NO  '} ${label}${detail ? ' — ' + detail : ''}`);
 };
 
-console.log('\n1. ORC TEETH ARE NOT BOUGHT, AND THAT IS THE DEFAULT');
+console.log('\n1. THE GUILD DECIDES, AND A FLEET THAT HAS NOT OPTED IN IS UNAFFECTED');
 {
-  ok('a character with no opinion does not buy them', reagentBuyAllowed({}, 'orc tooth') === false);
-  ok('...nor sapphires, the most expensive line the fleet had', reagentBuyAllowed({}, 'sapphire') === false);
-  ok('...and still buys what it cannot get otherwise', reagentBuyAllowed({}, 'mushroom') === true);
-  ok('...including the two the fleet runs on', reagentBuyAllowed({}, 'elderberry') === true
-     && reagentBuyAllowed({}, 'herb') === true);
-  ok('the set says WHY, not just no', !!REAGENT_SOURCING['orc tooth'].why,
-     REAGENT_SOURCING['orc tooth'].why);
+  // This was a hardcoded set naming orc teeth, which made one fleet's economy a fact about the
+  // source tree. Whether a guild can supply its own reagents is a fact about that guild's hall.
+  ok('with no plan at all, everything is still bought', reagentSource('orc tooth', {}) === 'buy');
+  ok('...which is the shipped default, stated once', DEFAULT_REAGENT_MODE === 'buy');
+  ok('...and it is NOT chest, because a fleet with no hall cannot source from one',
+     DEFAULT_REAGENT_MODE !== 'chest');
+  const plan = { reagents: normaliseReagents({ reagents: { default: 'chest' } }) };
+  ok('a guild-wide default flips everything at once', reagentSource('sapphire', { plan }) === 'chest');
+  ok('...including reagents nobody wrote down', reagentSource('vial of solagh', { plan }) === 'chest');
 }
 
-console.log('\n2. THREE LAYERS, MOST SPECIFIC FIRST, AND SILENCE MEANS THE OLD BEHAVIOUR');
+console.log('\n2. FOUR LAYERS, MOST SPECIFIC FIRST, AND SILENCE MEANS THE LAYER BELOW');
 {
-  ok('a character may opt back IN', reagentBuyAllowed({ buyReagent: { 'orc tooth': true } }, 'orc tooth') === true);
-  ok('a character may opt something else OUT', reagentBuyAllowed({ buyReagent: { mushroom: false } }, 'mushroom') === false);
-  // The class switch is the coarser rule and has to win, or "this character buys no reagents"
-  // quietly acquires an exception.
-  ok('buyReagents:false outranks a per-item yes',
-     reagentBuyAllowed({ buyReagents: false, buyReagent: { 'orc tooth': true } }, 'orc tooth') === false);
-  ok('...and outranks the default yes', reagentBuyAllowed({ buyReagents: false }, 'herb') === false);
-  // An unrecognised item is not a refusal. Nothing here knows every reagent in the game, and
-  // guessing no would silently stop a purchase nobody asked to stop.
-  ok('an item nobody has an opinion about is buyable', reagentBuyAllowed({}, 'vial of solagh') === true);
-  ok('casing does not decide it', reagentBuyAllowed({}, 'Orc Tooth') === false);
+  const plan = { reagents: normaliseReagents({ reagents: { default: 'chest', items: { herb: 'buy' } } }) };
+  ok('the guild default applies', reagentSource('sapphire', { plan }) === 'chest');
+  ok('a guild per-item override beats it', reagentSource('herb', { plan }) === 'buy');
+  ok('a CHARACTER beats the guild', reagentSource('sapphire', { plan, policy: { reagentSource: { sapphire: 'buy' } } }) === 'buy');
+  ok('...and may turn one off entirely', reagentSource('herb', { plan, policy: { reagentSource: { herb: 'off' } } }) === 'off');
+  // The class switch is coarser and has to win, or "this character buys no reagents" quietly
+  // acquires an exception.
+  ok('buyReagents:false outranks a per-item buy',
+     reagentBuyAllowed({ buyReagents: false, reagentSource: { herb: 'buy' } }, 'herb', plan) === false);
+
+  // AN UNRECOGNISED MODE IS REPORTED, NEVER APPLIED AND NEVER DROPPED. A typo of "chests" must
+  // not read as "buy" — that is how `purpose` stayed out of a schema for a year.
+  const problems = [];
+  const r = normaliseReagents({ reagents: { default: 'chests', items: { herb: 'maybe' } } }, problems);
+  ok('a bad default is refused, not guessed', r.default === null);
+  ok('a bad override is dropped from the map', r.items.size === 0);
+  ok('...and BOTH are reported', problems.length === 2, problems.join(' | ').slice(0, 90));
+  ok('the mode list is the three the operator named', REAGENT_MODES.join(',') === 'chest,buy,off');
+}
+
+console.log('\n2b. THE NORMALISER IS IDEMPOTENT, AND IT COST ME AN HOUR THAT IT WAS NOT');
+{
+  // `guildPlan()` already runs `normalisePlan`, which runs `normaliseReagents`. Calling it again
+  // on the result handed back an ALREADY-NORMALISED block whose `items` is a Map, and
+  // `Object.entries(new Map(...))` is `[]` — so every per-item override silently disappeared while
+  // `default`, being a plain string, survived. Measured against the real prod file, which held
+  // `{ elderberry: "buy", herb: "buy" }` on a `chest` default: both vanished, and the fleet's two
+  // FOOD reagents resolved to `chest` against a guild chest holding fifteen castings for
+  // twenty-one characters. Correct in the file, correct in the code, a starved fleet.
+  const once = normaliseReagents({ reagents: { default: 'chest', items: { herb: 'buy' } } });
+  const twice = normaliseReagents({ reagents: once });
+  ok('normalising twice keeps the default', twice.default === 'chest');
+  ok('...and keeps the overrides', twice.items.get('herb') === 'buy', `${twice.items.size} override(s)`);
+  ok('...and resolves the same either way',
+     reagentSource('herb', { plan: { reagents: twice } }) === 'buy');
+  // normalisePlan carries the block through, which is how a caller gets one object.
+  const full = normalisePlan({ chests: {}, reagents: { default: 'chest', items: { herb: 'buy' } } });
+  ok('normalisePlan carries the reagents block', full.reagents.items.get('herb') === 'buy');
+  ok('...and it survives being normalised again', normalisePlan(full).reagents.items.get('herb') === 'buy');
+}
+
+console.log('\n2c. `chest` IS ONE SETTING WITH TWO HALVES');
+{
+  // Take it from the chest instead of buying, AND put it in the chest instead of selling. Either
+  // half alone leaves the round trip open in one direction — and a merchant buys at ~60% and
+  // sells at ~140%, so a reagent that goes over a counter and comes back costs 2.3x its value.
+  const plan = { reagents: normaliseReagents({ reagents: { default: 'chest', items: { herb: 'buy' } } }) };
+  const sell = reagentSellTest({ plan });
+  ok('a chest-sourced reagent is never sold', sell('sapphire') === true);
+  ok('...and a bought one still is', sell('herb') === false);
+  ok('the test says why, for a reader who did not set it', /60%/.test(sell.why) && /140%/.test(sell.why));
+  // The direction matters more than the quantity: guildKeepTest protects what the chest is SHORT
+  // of, which goes away the moment a target is met. This does not.
+  ok('it does not depend on what the chest currently holds', reagentSellTest({ plan })('orc tooth') === true);
 }
 
 console.log('\n3. BOTH HALVES COME BACK — a vanished line is one nobody can question');
@@ -70,7 +117,9 @@ console.log('\n3. BOTH HALVES COME BACK — a vanished line is one nobody can qu
     { item: 'sapphire', amount: 180 }, { item: 'mushroom', amount: 160 },
     { item: 'orc tooth', amount: 150 },
   ];
-  const { buy, stockpile } = splitBySourcing(plan, {});
+  const guild = { reagents: normaliseReagents({ reagents: { default: 'chest',
+                                                 items: { elderberry: 'buy', herb: 'buy', mushroom: 'buy' } } }) };
+  const { buy, stockpile } = splitBySourcing(plan, { policy: {}, plan: guild });
   ok('the teeth leave the merchant list', !buy.some(r => r.item === 'orc tooth'));
   ok('the sapphires leave it too', !buy.some(r => r.item === 'sapphire'));
   ok('...and both are named as coming from stock', stockpile.length === 2);
@@ -97,7 +146,11 @@ console.log('\n4. THE MALFORMED CASES DO NOT INVENT WORK');
   const messy = splitBySourcing([null, { amount: 5 }, { item: '' }, { item: 'herb', amount: 1 }], {});
   ok('rows with no item are dropped, not passed on as blanks', messy.buy.length === 1);
   ok('...and the good row survives', messy.buy[0].item === 'herb');
-  ok('a missing policy is the default policy', splitBySourcing([{ item: 'orc tooth', amount: 1 }]).stockpile.length === 1);
+  ok('no options at all is the historical behaviour', splitBySourcing([{ item: 'orc tooth', amount: 1 }]).buy.length === 1);
+  // `off` is a third group, not a silent drop.
+  const offPlan = { reagents: normaliseReagents({ reagents: { items: { 'orc tooth': 'off' } } }) };
+  const three = splitBySourcing([{ item: 'orc tooth', amount: 1 }, { item: 'herb', amount: 1 }], { plan: offPlan });
+  ok('an off reagent is neither bought nor drawn', three.off.length === 1 && three.buy.length === 1);
 }
 
 console.log('\n5. A SHORTAGE HAS TO SAY WHERE THE THING COMES FROM');
