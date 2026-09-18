@@ -266,6 +266,16 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
   // sample carries no item list, so a character nobody is holding renders its pack meter
   // hatched rather than at zero.
   const liveOf = new Map((live || []).map(x => [x.character, x]));
+  // THE PACK AND THE VAULT MOVED TO /inventory ON 2026-09-17. They were a forty-item list with
+  // "and 20 more" after it, inside a <details> inside a table row — the right shape for a
+  // footnote and the wrong one for the question people kept bringing to it. The drill-in below
+  // points at them and deliberately does NOT summarise them: a summary is what sent everybody
+  // looking for the list in the first place.
+  //
+  // A JS COMMENT RATHER THAN AN HTML ONE, because this template runs once per character: the
+  // first version of this note shipped twenty-three copies of itself to the browser, about nine
+  // kilobytes of prose no reader can see, and tripped the page's own "nothing is truncated" check
+  // by containing the phrase it was explaining.
   const rows = e.rows.map(r => {
     // NO PACK AND NO VAULT READ HERE ANY MORE. Both moved to /inventory on 2026-09-17, and
     // the locals went with them rather than being left assigned-and-unused — a `storage.readVault`
@@ -293,11 +303,6 @@ export function renderEconomy({ hours = 168, live = null, characters = null } = 
         <div class="box"><h4>Farming return · last town trip</h4>
           <div class="items">${townIncomeDetail(r.last_town_trip)}</div>
         </div>
-        <!-- THE PACK AND THE VAULT MOVED TO /inventory ON 2026-09-17. They were a forty-item
-             list with "and 20 more" after it, inside a <details> inside a table row — the right
-             shape for a footnote and the wrong one for the question people kept bringing to it.
-             Deliberately NOT summarised here: a summary is what sent everybody looking for the
-             list in the first place. -->
         <div class="box">
           <h4>pack and vault</h4>
           <div class="dim" style="font-size:.8rem">Listed in full, with magic items marked and
