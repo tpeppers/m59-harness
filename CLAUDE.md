@@ -563,6 +563,25 @@ nothing at all. A skill you cannot learn is simply absent from the shop list. A 
 character request is silently replaced with `3/1/4/1/5/9`. **No error has never meant
 success here** — verify by reading the world back.
 
+**AND SOME OF THAT SILENCE WAS OURS. ANY CONCLUSION OF THE FORM "THE SERVER SAID NOTHING",
+REACHED BEFORE `6cc1fe4`, IS UNSAFE.** `M59Client.check` threw away every message whose format
+string read FEWER parameters than the server sent — a perfectly decoded sentence, discarded
+because four unread bytes left the cursor short of the end. Nothing kod does stops a spare
+parm, so this is a CLASS of message, not one line. Measured 2026-09-18: Priestess Qerti'nya
+answered six questions and the fleet heard two; the four it lost were every ability above the
+disciple gate, announced with `#parm1=<ability name>` against a string containing no `%s`
+(`monster.kod:4511`, `temples.kod:18`). The refusal that says *"you are not my disciple"* was
+the one sentence this harness could not receive.
+
+Because the game's whole idiom is refusal-by-silence, a dropped message and a genuine refusal
+were indistinguishable — so the three traps in the paragraph above are exactly the shape most
+likely to have been misread. `doneFormatted` in `tools/m59-parse.mjs` now counts trailing whole
+words as unread parameters (`unused_parms`) after a format that RESOLVED, and still fails a
+truncated tail. **A keeper picks that up only when it restarts**, so until every keeper on a
+fleet has been through one, prefer a DIFFERENTIAL reading — ask something you know answers,
+then the thing in question, and read the difference. `tools/m59-teachprobe.mjs` prints
+`DROPPED <what>: <why>` for exactly this.
+
 Wire, kod and the shape of a reply — [`docs/m59-protocol-traps.md`](docs/m59-protocol-traps.md):
 
 - A `send` reply names its RECEIVER before its answer, so a bare `/OBJECT (\d+)/` reads the wrong number.
@@ -581,6 +600,7 @@ Wire, kod and the shape of a reply — [`docs/m59-protocol-traps.md`](docs/m59-p
 - Self-defence needs a grudge AND a live flag AND the safety; the grudge book is fleet-wide and gitignored.
 - A keeper PROCESS has to hold its own roster source, or it calls the whole fleet strangers — and a fleet-mate you turn red by hand is then shot by everyone with a false grudge. Statler, 2026-08-27.
 - One or two of the five Underworld portals are unlit at any moment, not all of them, and an unlit one is silent.
+- **`approach` is dead on every keeper-backed character, which is every character on every fleet** — the World is in the keeper and the broker holds a snapshot, so it answered `s.world.approachSquare is not a function`. Getting near an NPC is `walk_to` for the distance then `crawl_to` for the last few squares; only `crawl_to` asks the keeper what it can step onto.
 - A priestess sells NOTHING above level 2 until the character has done her school's DISCIPLE quest — say `disciple` to her from within FIVE squares, which is tighter than she can hear from. Four schools have one; Riija and Jala do not.
 
 Money, merchants and supply — [`docs/m59-economy.md`](docs/m59-economy.md):

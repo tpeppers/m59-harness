@@ -2411,6 +2411,21 @@ class KeeperProxy {
       // See `exits()` below: answerable here because a room's exits belong to the room.
       exits: () => this.exits(),
       geometry: null,
+      // AND `approachSquare`, WHICH THREW FOR THE ENTIRE LIVE FLEET.
+      //
+      // `route` was added here after a keeper-backed character died with
+      // "s.world.route is not a function". `approachSquare` is the same hole one method over,
+      // and it went unnoticed for longer because the tool that needs it is not on the survival
+      // path: `approach` — the thing every melee setup and every "get near that NPC" is
+      // supposed to use — answered `s.world.approachSquare is not a function` on EVERY
+      // keeper-backed character, which is every character on every fleet. Found 2026-09-18
+      // trying to walk up to a temple priestess.
+      //
+      // Null rather than a throw, and `snapshot` so the caller can tell "I cannot ask" from
+      // "the geometry says no" — those are opposite answers and the tool used to print the
+      // second one for both.
+      approachSquare: () => null,
+      snapshot: true,
     };
   }
   set world(v) { this._world = v; }
@@ -7941,6 +7956,25 @@ const TOOLS = [
       const want = num(a.distance, 1);
       const away = () => { const me = c.self, o = c.room.objects.get(t.id);
                            return me && o ? Math.hypot(o.col - me.col, o.row - me.row) : Infinity; };
+
+      // A SNAPSHOT CANNOT ROUTE, AND SAYING "no walkable square" WOULD BE A LIE.
+      //
+      // The World lives in the keeper for every keeper-backed character, so this tool has no
+      // geometry to ask and never had. Before 2026-09-18 that surfaced as
+      // `s.world.approachSquare is not a function` — a throw, for the whole live fleet — and
+      // the obvious "fix" of letting a null `spot` fall through to the branch below would have
+      // been worse: it reports that no square beside the target is reachable, which is a
+      // statement about the room made by something that cannot see the room.
+      //
+      // What actually works on a keeper-backed body is a `walk_to` for the distance and then a
+      // `crawl_to` for the last few squares, because `crawl_to` asks the KEEPER what it can
+      // step onto. `tools/fleetscripts/disciple-quest.mjs` has that ladder.
+      if (s.world?.snapshot)
+        return { reason: 'this character is driven by a keeper process, so the broker has no ' +
+                         'geometry to route an approach with — it holds a snapshot, not a ' +
+                         'World. Use walk_to to cover the distance and crawl_to for the last ' +
+                         'few squares; crawl_to asks the keeper what it can actually step onto',
+                 keeper_backed: true, distance: away() === Infinity ? null : Math.round(away()) };
 
       let walk = null;
       if (away() > want) {
