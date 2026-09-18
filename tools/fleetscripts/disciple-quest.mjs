@@ -120,7 +120,27 @@ export const SCHOOLS = Object.freeze({
     invoke: /neither wanted nor needed/i,
     // questengine.kod template #13. `first(...)` of each occupation list, so one instance each.
     destinations: [
-      { npc: 'Zuxana', room: 802, where: 'the temple of Qor' },
+      // THE TEMPLE OF QOR HAS A WANDERING ENTRANCE, AND NO STATIC EXIT TABLE CAN HOLD IT.
+      //
+      // `tempqor.kod:47,79-131`: `plExitPossibilities = [ RID_I8, RID_H9 ]` — rooms 598 and 589
+      // — and `ExitsTimer` fires every `EXIT_DELAY = 600000` ms, ten minutes, choosing a
+      // DIFFERENT one each time (`while oChosenExit = piCurrentExit` loops until it changes, so
+      // it never stays put). It then sends `OpenQorTemple` to the winner and `CloseQorTemple`
+      // to the loser. One door, alternating, for ever.
+      //
+      // So a router asked for room 802 answers, correctly about itself and misleadingly about
+      // the world: *"nothing in the unified exit view arrives at room 802 … it is a room with
+      // no recorded way in."* Measured on the shadow fleet 2026-09-18, when the Shal'ille quest
+      // rolled Zuxana and the walk was refused before a step. The temple is not unreachable —
+      // players go there — it is a door our model has no way to express, which is the same
+      // shape as a mana node called unreachable because nobody wrote the jump down.
+      //
+      // Whoever fixes this has to decide what "the way in" means when it moves: 589 and 598 are
+      // each right half the time, and which is open is only knowable by looking. Until then
+      // this destination is expected to fail at the walk, the questbook records it, and a run
+      // that draws it has simply drawn the hard one.
+      { npc: 'Zuxana', room: 802, where: 'the temple of Qor — entered from 598 or 589, ' +
+                                         'alternating every 600s; no static exit table has it' },
       { npc: "Tenuv'vyal", room: 45, where: 'the Badlands — the one dangerous destination here' },
       { npc: 'Akardius', room: 952, where: 'the Duke' },
     ],
