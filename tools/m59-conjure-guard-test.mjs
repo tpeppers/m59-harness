@@ -19,6 +19,7 @@
 // declines to call it armed. That is the diagnosis and it already says why — "the loop
 // cannot end while the ban and the spell disagree". This pins the half that ENDS it.
 import { Autopilot } from './m59-autopilot.mjs';
+import * as skills from './m59-skills.mjs';
 
 let failed = 0;
 const ok = (label, condition, detail = '') => {
@@ -111,6 +112,89 @@ console.log('\n--- makeWeapon refuses before it pays ---');
   ok('ONE unusable result is not a hoard — bad luck still gets another roll',
      !fine.declined.some(d => d.why === 'already carrying unusable conjured weapons'),
      refusedEarly ? 'stopped later for an unrelated reason, which is fine' : 'proceeded');
+}
+
+
+// ── ESCALATION: a murderer inherits the loadout anyway ───────────────────────
+//
+// `bannedWeapons` protects a training block that a different proficiency would reset
+// (player.kod:4753-4757). Worth defending against a fungus beast; not worth defending
+// against a person who is killing you, because the block dies with the character and the
+// pack drops to the killer. Operator, 2026-09-18. Scoped to PVP and nothing else.
+
+const pvpRig = (pack, { banned = ['long sword', 'axe'], abilities = {} } = {}) => {
+  const items = pack.map((p, i) => typeof p === 'string'
+    ? { id: i + 1, nameRsc: i + 1, name: p }
+    : { id: i + 1, nameRsc: i + 1, ...p });
+  const names = items.map(o => o.name);
+  const equipped = [];
+  const self = {
+    tally: {}, notes: [],
+    policy: { bannedWeapons: banned },
+    s: {
+      client: {
+        inventory: items,
+        rsc: { get: id => names[id - 1] ?? '' },
+        abilityOf: sk => abilities[sk] ?? null,
+      },
+    },
+    note: (what, facts) => self.notes.push({ what, facts }),
+  };
+  self.bannedWeaponsNow = Autopilot.prototype.bannedWeaponsNow.bind(self);
+  // Stub the wield so the test stays offline; record what was asked for.
+  self._equipped = equipped;
+  return { self, equipped, items };
+};
+
+console.log('\n--- escalation picks the weapon this character is BEST with ---');
+{
+  // The proficiency names are the SERVER's, not the ones you would guess: a long sword is
+  // `fencing` and a hammer is `hammer wielding` (WEAPON_PROFICIENCY). Keying the stub on
+  // anything else returns null for both and the sort silently falls back to the crude name
+  // score — which passed, and proved nothing about ability ordering.
+  const { self } = pvpRig(['long sword', 'hammer'],
+    { banned: ['long sword'], abilities: { fencing: 80, 'hammer wielding': 20 } });
+  const ranked = skills.weaponRanking(self.s.client, { banned: null });
+  ok('with the ban lifted the pack ranks by PROFICIENCY, best first',
+     ranked.length === 2 && ranked[0].name === 'long sword' && ranked[0].ability === 80,
+     `got ${ranked.map(r => `${r.name}:${r.ability}`).join(', ')}`);
+  const flipped = pvpRig(['long sword', 'hammer'],
+    { banned: ['long sword'], abilities: { fencing: 10, 'hammer wielding': 90 } }).self;
+  const ranked2 = skills.weaponRanking(flipped.s.client, { banned: null });
+  ok('and it is the ABILITY deciding, not the name — flip them and the hammer wins',
+     ranked2[0].name === 'hammer' && ranked2[0].ability === 90,
+     `got ${ranked2.map(r => `${r.name}:${r.ability}`).join(', ')}`);
+  const legal = skills.weaponRanking(self.s.client, { banned: ['long sword'] });
+  ok('and the ban is what was hiding it — legally there is only the hammer',
+     legal.length === 1 && legal[0].name === 'hammer');
+}
+
+console.log('\n--- what escalation still refuses ---');
+{
+  const cursedish = skills.weaponRanking(
+    pvpRig([{ name: 'long sword', rarity: 100 }]).self.s.client, { banned: null });
+  ok('an UNREVEALED weapon is refused even with the ban lifted', cursedish.length === 0,
+     'a ban is a preference; wielding a cursed weapon is the one irreversible mistake');
+
+  const bowOnly = pvpRig(['bow']).self.s.client;
+  const noAmmo = (bowOnly.inventory || []).some(o =>
+    /arrow|bolt/.test(String(bowOnly.rsc.get(o.nameRsc)).toLowerCase()));
+  ok('a bow with no arrows is not ammunition-backed', !noAmmo,
+     'escalateArmForPvp drops bows unless arrows or bolts are aboard');
+
+  const withAmmo = pvpRig(['bow', 'arrow']).self.s.client;
+  const hasAmmo = (withAmmo.inventory || []).some(o =>
+    /arrow|bolt/.test(String(withAmmo.rsc.get(o.nameRsc)).toLowerCase()));
+  ok('a bow WITH arrows is', hasAmmo);
+}
+
+console.log('\n--- fists are an answer, not a failure ---');
+{
+  const { self } = pvpRig([], { banned: ['long sword'] });
+  const ranked = skills.weaponRanking(self.s.client, { banned: null });
+  ok('an empty pack ranks nothing, so escalation returns null and the swing goes bare',
+     ranked.length === 0,
+     'defendAgainstPlayers proceeds either way — standing still is the only wrong answer');
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall good');

@@ -2422,6 +2422,84 @@ export class Autopilot {
    * pack then answers `receiver_full` to every `supply`, so the character cannot even be
    * handed a weapon it IS allowed to use.
    */
+  /**
+   * Hostile PLAYERS within melee reach — the same predicate the survival ladder's
+   * `strangers` uses: a player flag, attackable, and NOT a fleetmate. The fleetmate
+   * exclusion is load-bearing rather than tidy; turning a fleet-mate red by hand and then
+   * shooting it is the Statler incident of 2026-08-27.
+   */
+  hostilePlayersInReach() {
+    const c = this.s?.client, me = c?.self;
+    if (!me || !c?.room?.objects) return [];
+    return [...c.room.objects.values()].filter(o =>
+      o.id !== c.selfId && (o.flags & OF.PLAYER) && (o.flags & OF.ATTACKABLE) &&
+      !party.isFleetmate(c.rsc?.get(o.nameRsc)) &&
+      Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row) <= REACH);
+  }
+
+  /**
+   * ESCALATION: A MURDERER IS ABOUT TO INHERIT THE LOADOUT ANYWAY.
+   *
+   * `bannedWeapons` is a TRAINING preference — it protects a proficiency block that a
+   * different weapon type would reset (player.kod:4753-4757). That is worth defending
+   * against a fungus beast. It is not worth defending against a person who is killing you,
+   * because everything in the hand and the pack drops on death and the training block dies
+   * with the character holding it. The operator's framing, 2026-09-18: there is no reason
+   * to be precious about equipment that is all about to be stolen by your murderer.
+   *
+   * So the ban is lifted for THIS case only: a hostile player in reach, no legal weapon in
+   * hand. Scoped that narrowly on purpose — the general "may a starving character break its
+   * ban" question is a training-versus-survival judgement and belongs to whoever owns the
+   * split, not to the keeper.
+   *
+   * WHAT IS NOT LIFTED. `weaponRanking` filters cursed and unrevealed weapons
+   * independently of the ban, so this keeps both. A ban is a preference and can be
+   * overridden; wielding a cursed weapon is the one irreversible mistake in this game and
+   * an emergency is exactly when somebody would be tempted to skip the check.
+   *
+   * WHAT IT PICKS. `weaponRanking` already sorts by the character's ABILITY in the
+   * weapon's proficiency (`abilityOf(c, proficiencyFor(name))`), falling back to the crude
+   * name score when the ability has not been read — so "most effective" means the weapon
+   * this character is actually best with, not the biggest one. A bow is excluded unless
+   * ammunition is aboard, because nothing else in the pipeline checks it and a drawn bow
+   * with no arrows is strictly worse than fists.
+   *
+   * Returns the weapon taken up, or null — and null is a legitimate outcome: fists are a
+   * weapon, and `passFightBack` swings either way.
+   */
+  async escalateArmForPvp(attacker = null) {
+    const c = this.s?.client;
+    if (!c) return null;
+    const banned = this.bannedWeaponsNow();
+    const hasAmmo = (c.inventory || []).some(o => {
+      const n = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+      return /arrow|bolt/.test(n) && !/water finding/.test(n) && (o.amount ?? 1) > 0;
+    });
+    const ranked = skills.weaponRanking(c, { banned: null })
+      .filter(r => hasAmmo || !/bow|crossbow|sling/i.test(r.name));
+    if (!ranked.length) return null;                   // fists it is, and that is an answer
+    const pick = ranked[0];
+    const eq = await skills.equipBest(this.s, { priority: [pick.name], banned: null })
+      .catch(() => null);
+    if (!eq?.wielding) return null;
+    const broke = banned?.length
+      ? banned.some(b => String(eq.wielding).toLowerCase().includes(String(b).toLowerCase()))
+      : false;
+    if (broke) this.tally.pvp_ban_escalations = (this.tally.pvp_ban_escalations || 0) + 1;
+    this.note(broke ? "PVP — breaking this character's own weapon ban to fight back"
+                    : 'PVP — arming to fight back', {
+      took_up: eq.wielding, proficiency: pick.skill ?? null, ability: pick.ability ?? null,
+      banned_weapons: banned ?? undefined, attacker: attacker ?? null,
+      why: broke
+        ? 'a hostile player is in reach and every weapon this character is ALLOWED to ' +
+          'hold is absent, so the alternative was fists. The ban protects a training ' +
+          'block that dies with the character, and the pack drops to the killer either way'
+        : 'a hostile player is in reach and the hand was empty',
+      kept: 'cursed and unrevealed weapons are still refused — a ban is a preference, a ' +
+            'curse is permanent' });
+    return eq.wielding;
+  }
+
   bannedConjurablesHeld() {
     const c = this.s?.client;
     const banned = this.bannedWeaponsNow();
@@ -8247,6 +8325,12 @@ export class Autopilot {
         hits_on_us: pick.verdict.grudge?.hits ?? null,
       });
     }
+    // ARM FOR THIS ONE EVEN IF THE BAN FORBIDS EVERYTHING WE CARRY. `isArmed` answers TRUE
+    // when it cannot see the equipment, so this fires only when the hand is KNOWN empty —
+    // it will not strip a weapon we simply failed to read. See escalateArmForPvp for why
+    // the ban yields here and nowhere else.
+    if (!skills.isArmed(c))
+      await this.escalateArmForPvp(pick.name).catch(() => null);
     this.doing = 'fighting';
     // SAY SO, SO THE OTHERS CAN COME. This is the one place a conflict is published:
     // past `mayReturnFire`, at the moment of the swing, by the character swinging. Being
