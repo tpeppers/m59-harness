@@ -758,6 +758,43 @@ export const KNOWN_TRAPS = Object.freeze({
       "unreachable from the room body: the anchor is on a 6016 rim above ground at " +
       "3840 against a 384 climb cap, so it is a one-way drop in. Plan through the " +
       "south edge and the walk never ends.",
+
+  // 555 — THE FOREST SHRINE. The operator's answer to "what is actually a trap", and it is
+  // the first entry that clears the bar the 599 removal set: name the mechanism, show it is
+  // about the WORLD rather than our model of it, and say what would falsify it.
+  //
+  // THE MECHANISM, from the server's own source. `e5.kod` (RID_E5 = 555,
+  // blakston.khd:549) is a PUZZLE ROOM, not a room with monsters in it. `SomethingMoved`
+  // posts `CheckPlayerPosition` on every step, and a 2-second `CheckAllPositionsTimer`
+  // re-checks regardless of whether anybody moved. Standing still is not safe. A wrong
+  // square calls `PunishPlayer`:
+  //
+  //     iDamage = send(who,@GetBaseMaxHealth) / 3;
+  //     Send(who,@AssessDamage, #damage=iDamage, #aspell=ATCK_SPELL_ACID, ...)
+  //     ... if that returns $  ->  send(who,@killed)
+  //     otherwise  ->  UtilGoNearSquare back to row 9, col 3, and the puzzle resets
+  //
+  // A THIRD OF MAX HEALTH PER MISTAKE, as acid, with death as the ordinary outcome of the
+  // third one — and the teleport puts the character back at the start to try again, so a
+  // keeper that treats "I did not arrive" as "walk at it again" loops through the damage.
+  //
+  // AND IT CANNOT BE BAKED AROUND, WHICH IS THE WHOLE POINT. The safe square is
+  // `piNextSafeRow = Random(A,G)` — re-rolled by the room, not fixed geometry. There is no
+  // route to learn, no anchor to declare and no fall-jump to write down; a collision map is
+  // exactly as useful here as it is against a lock. That is the distinction the 599 entry
+  // failed and this one passes: 599 was our routing being wrong about a jump we had already
+  // declared, while this is the server rolling dice on every crossing.
+  //
+  // WHAT WOULD FALSIFY IT: a character crossing 555 without taking acid damage, or reaching
+  // the far side by any route the bake plans. Either would mean the puzzle can be solved
+  // from outside it, and this entry should go the way 599's did.
+  //
+  // `{ allowTraps: true }` is still how a script says it is going in on purpose.
+  555: "The Forest Shrine - a PUZZLE room (e5.kod), not a monster room. Every step and a " +
+       "2-second timer check position; a wrong square costs GetBaseMaxHealth()/3 as acid " +
+       "damage and teleports back to r9c3, with death the ordinary third outcome. The safe " +
+       "row is Random(A,G), re-rolled by the room, so there is no route to bake and no " +
+       "anchor to declare. Walking a character through here is damage with no plan.",
 });
 
 // WHY THIS FILE NO LONGER SECOND-GUESSES THE ROUTER ABOUT TRAPS. MEASURED 2026-09-10.
@@ -808,6 +845,12 @@ export const TRAP_WAY_OUT = Object.freeze({
   // works from there. Read by diagnostics and by the stuck guide; NOT by the walker.
   599: 589,   // south, r71c2. From the 589 landing (r67c3) it is the only door reachable at all.
   49: 593,    // north, r1c21. South to 45 is a one-way drop: 6016 rim over 3840 ground, 384 cap.
+  // 555 has exactly ONE edge exit and no go-exits: west to 556, arriving r7c59. There is no
+  // second door to get wrong. `PunishPlayer` teleports a failed crossing back to r9c3 — inside
+  // the room, not out of it — so the west edge is the only way a character leaves under its
+  // own power, and a keeper that has taken acid damage should be walked at it rather than at
+  // the puzzle again.
+  555: 556,
 });
 /**
  * Refuse a plan that walks into a room we know keeps characters, and say so about a

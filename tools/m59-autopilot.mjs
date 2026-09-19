@@ -2604,6 +2604,22 @@ export class Autopilot {
     return eq.wielding;
   }
 
+  // A WEAPON THIS CHARACTER IS FORBIDDEN TO HOLD, WHATEVER MADE IT.
+  //
+  // Deliberately about the BAN and not about provenance: `equipBest` refuses it on every pass
+  // whether the fleet conjured it or an orc dropped it, so it is dead weight either way. The
+  // drop ranking uses this; the conjure gate below counts a narrower set.
+  bannedWeaponUseless(name) {
+    const n = String(name ?? '').toLowerCase();
+    if (!n) return false;
+    const banned = this.bannedWeaponsNow();
+    if (!banned?.length) return false;
+    // Only WEAPONS — the ban list is matched by substring elsewhere too, and a name fragment
+    // like "dagger" must not catch a "dagger fern" if one is ever added.
+    if (!(skills.weaponScore?.(n) > 0)) return false;
+    return banned.some(b => n.includes(String(b).toLowerCase()));
+  }
+
   bannedConjurablesHeld() {
     const c = this.s?.client;
     const banned = this.bannedWeaponsNow();
@@ -3064,7 +3080,12 @@ export class Autopilot {
             doing: 'un-ban one of them, or hand this character a weapon it may hold' });
       const hoard = this.bannedConjurablesHeld();
       if (hoard >= CONJURE_HOARD_LIMIT)
-        return this.declinedCast('create weapon', 'already carrying unusable conjured weapons',
+        // NOT NECESSARILY CONJURED, AND THE OLD WORDING SENT AN OPERATOR AFTER THE WRONG
+        // THING. This counts weapons whose NAME a conjure could also produce, so an orc's
+        // hammer counts exactly like one the fleet made. Beaker's three were all orc drops.
+        // The gate is still right — three unusable weapons is three reasons not to add a
+        // fourth — but the sentence has to say what was actually counted.
+        return this.declinedCast('create weapon', 'already carrying unusable weapons it may not hold',
           { held: hoard, limit: CONJURE_HOARD_LIMIT, banned_weapons: bannedNow,
             can_still_make: reachable,
             why: 'the spell rolls a band rather than granting a choice, and this character ' +
@@ -23866,6 +23887,23 @@ export class Autopilot {
       // does NOT go before something the loadout explicitly named for selling (-1): that is
       // an instruction rather than an inference.
       if (surplus?.id === o.id) return -0.5;
+      // A WEAPON THIS CHARACTER MAY NEVER HOLD IS THE ONLY THING IN THE PACK WITH NO USE AT
+      // ALL, so it goes before ordinary sell-fodder and before surplus food.
+      //
+      // Food is surplus but still edible; loot is carried to be sold. A banned weapon can be
+      // neither wielded nor grown into — `equipBest` refuses it on every pass for as long as
+      // it is aboard — and it costs twice over, because `bannedConjurablesHeld()` counts it
+      // and at three of them `create weapon` declines with "already carrying unusable
+      // conjured weapons". So the pack fills with weapons the character cannot use, and the
+      // spell that would give it one it CAN use is switched off by their presence.
+      //
+      // Measured on prod 2026-09-19: Beaker at 25 mana, unarmed, holding two hammers and an
+      // axe — every one of them banned, none of them conjured; the operator identified them
+      // as orc drops. Three is the limit, so the ladder was blocked by loot.
+      //
+      // It stays ABOVE the loadout's explicit sell list (-1), because that list is an
+      // instruction and this is an inference.
+      if (this.bannedWeaponUseless?.(name)) return -0.75;
       if (mine(name)) return 2;                                          // ours, keep longest
       if (skills.interest.anyoneWants(name, { except: me })) return 1;    // somebody's, keep
       return 0;                                                          // sell-fodder, goes first

@@ -100,7 +100,12 @@ console.log('\n--- makeWeapon refuses before it pays ---');
   const hoarder = rig({ banned: ['long sword'], pack: Array(24).fill('long sword') });
   await Autopilot.prototype.makeWeapon.call(hoarder, 'test');
   ok('a hoard of unusable results stops the next cast',
-     hoarder.declined[0]?.why === 'already carrying unusable conjured weapons',
+     // THE WORDING CHANGED AND THE RULE DID NOT. This counts weapons whose NAME a conjure
+     // could also produce, so an orc's dropped hammer counts exactly like one the fleet
+     // made — and it said "conjured" about loot. Beaker's three were all orc drops, and
+     // the operator corrected the diagnosis on 2026-09-19. The gate is unchanged; only the
+     // sentence, which now says what was actually counted.
+     hoarder.declined[0]?.why === 'already carrying unusable weapons it may not hold',
      hoarder.declined[0]?.why ?? 'nothing declined');
   ok('and it names what would still be worth holding',
      /hammer/.test(JSON.stringify(hoarder.declined[0]?.facts?.can_still_make ?? [])),
@@ -110,7 +115,7 @@ console.log('\n--- makeWeapon refuses before it pays ---');
   const refusedEarly = await Autopilot.prototype.makeWeapon.call(fine, 'test')
     .then(() => fine.declined.length > 0, () => true);
   ok('ONE unusable result is not a hoard — bad luck still gets another roll',
-     !fine.declined.some(d => d.why === 'already carrying unusable conjured weapons'),
+     !fine.declined.some(d => d.why === 'already carrying unusable weapons it may not hold'),
      refusedEarly ? 'stopped later for an unrelated reason, which is fine' : 'proceeded');
 }
 
