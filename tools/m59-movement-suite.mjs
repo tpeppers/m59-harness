@@ -36,6 +36,8 @@ import { existsSync } from 'node:fs';
 const SUITES = [
   ['m59-blockedpath-test.mjs',
    'can a weak creature indefinitely block a fully built character — the 584 southeast corridor'],
+  ['m59-unarmed-blocker-test.mjs',
+   'a refusal never names a precondition that is already satisfied — the seven-hour stall'],
   ['m59-clearblockers-test.mjs',
    'the rung that swings at what is in the way, and the gates that keep it from becoming "fight everything"'],
   ['m59-needle-test.mjs',
