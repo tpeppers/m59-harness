@@ -50,3 +50,45 @@ export const nextDeployTag = (tags, day) => {
   }, 0);
   return highest === 0 ? `deploy-${day}` : `deploy-${day}-${highest + 1}`;
 };
+
+/**
+ * CAN THIS DEPLOY BE DATED? — the other pure question about a deploy tag's name.
+ *
+ * A LIGHTWEIGHT TAG CARRIES NO TAGGER AND NO DATE. `git tag <name> <sha>` writes a plain ref
+ * into `refs/tags/`; `git tag -a` (which is what `--cut` does) writes a tag OBJECT with an
+ * author and a timestamp. Both check out identically, both deploy identically, and `git
+ * describe` reports both — so nothing about a hand-cut deploy looks wrong at the moment it is
+ * made, or at any moment after.
+ *
+ * WHAT IT COST, 2026-09-18/19. Six deploys were cut in one evening and one of them shipped a
+ * routing change that planned 258 room pairs — 3.9% of the map — through a door the game seals
+ * half the time. Reconstructing the evening afterwards was possible to the SECOND for five of
+ * the six, because an annotated tag records when it was made; for the sixth it was not possible
+ * at all, and that sixth was the one that shipped the regression. Sixteen deploy tags existed,
+ * fifteen annotated, and the one with an empty date column was the one anybody needed to date.
+ *
+ * The session that cut it did so because `--cut` refused an unpushed trunk and they reached for
+ * `git tag` to get past the refusal — so this is not carelessness, it is the shape of every
+ * shortcut around a tool: the thing that gets you past the check is the thing that removes the
+ * evidence. (`--cut --push` was the supported answer and the refusal printed it.)
+ *
+ * IT REPORTS AND MUST NOT REFUSE A CUT. `--cut`'s whole job here is to move production onto a
+ * NEW annotated tag, which is the remedy — so blocking it would leave the tree stuck on the
+ * unauditable tag it is complaining about. The wording below is deliberately clear of the
+ * phrases `--cut` filters on, and the test asserts that.
+ *
+ * `kind` is `git cat-file -t <tag>`: `tag` for annotated, `commit` for lightweight. Anything
+ * else — including null, which is what an unreadable ref gives — is NOT taken as a failure,
+ * because a guard that cannot read its input has not passed, it has abstained, and reporting an
+ * abstention as a problem is how a check earns the reputation that gets it switched off.
+ */
+export const lightweightTagProblem = ({ ref, tag, kind }) => {
+  if (ref !== 'HEAD') return null;        // a branch checkout is rule 1's problem, not this one
+  if (!tag) return null;                  // detached at no tag at all is already reported
+  if (!/^deploy-/.test(String(tag))) return null;
+  if (kind !== 'commit') return null;     // annotated, or unreadable: not a finding either way
+  return `prod is on "${tag}", which is a LIGHTWEIGHT tag — a plain ref with no tagger and no ` +
+         `date, so this deploy cannot be dated by anything, ever. Re-cut it annotated at the ` +
+         `same commit: git tag -a -f ${tag} ${tag} -m "re-cut annotated" && git push --force ` +
+         `origin ${tag}   (or move this worktree onto an annotated tag instead).`;
+};
