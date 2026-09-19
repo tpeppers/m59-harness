@@ -51,7 +51,8 @@ import { RoomGeometry, protocolToward, STEP_MASK_DIRS, KOD_FINENESS, CLIENT_FINE
          sharedRoomGeometry, STEP_MASK_VERSION, elideLoops } from './m59-roo.mjs';
 import { bakeRoom, components, compositionRisk, exitAnchors, replay,
          ROUTES_FILE } from './m59-routebake.mjs';
-import { loadMap, selectedEdgeAt, findPath, edgeExitsOf, edgeCandidatesOf } from './m59-map.mjs';
+import { loadMap, selectedEdgeAt, findPath, edgeExitsOf, edgeCandidatesOf,
+         AVOID_IN_TRANSIT } from './m59-map.mjs';
 import { anchorFor } from './m59-routes.mjs';
 import { World } from './m59-world.mjs';
 import { crossingBook, WALKS_DIR } from './m59-crossings.mjs';
@@ -1595,6 +1596,73 @@ console.log('A SPLIT BOUNDARY HAS SQUARES THAT LEAD SOMEWHERE ELSE, AND THEY ARE
     // The inland strip is where a slide starts AND where the baked line runs, so it is opt-in.
     const withInland = w.wrongExitSquares({ direction: 'east', to: 597 }, { includeInland: true });
     ok('the inland strip is available but not the default', withInland.size > avoid.size);
+  }
+}
+
+// ------------------------------------------------ AVOID_IN_TRANSIT, AND THE BAR FOR JOINING IT
+//
+// The set had no test at all, which is how a preference that silently reshapes every journey in
+// the world gets an entry nobody re-examines. What is pinned is the ENTRY CRITERION the 534
+// comment states and the 802 comment repeats — "avoiding it costs hops rather than reachability"
+// — because that is the claim that makes an addition safe, and it is checkable.
+{
+  const { movementMapFile: mapPath } = await import('./m59-map-path.mjs');
+  const mapFile = mapPath();
+  if (!existsSync(mapFile)) {
+    skip('AVOID_IN_TRANSIT', 'no baked map in this checkout');
+  } else {
+    const map = loadMap(mapFile);
+    ok('the set is not empty, and every entry is a room number',
+       AVOID_IN_TRANSIT.size > 0 && [...AVOID_IN_TRANSIT].every(n => Number.isFinite(n)),
+       JSON.stringify([...AVOID_IN_TRANSIT]));
+
+    // NOT A CUT VERTEX — for every entry, measured rather than asserted. A room whose removal
+    // disconnects something must not be a transit preference: the fallback that "goes through
+    // it anyway when there is no other way" then fires on every journey, and the preference is
+    // a lie that costs a pathfind.
+    for (const room of AVOID_IN_TRANSIT) {
+      const r = map.rooms[String(room)];
+      ok(`${room} is a real room in the bake`, !!r, String(room));
+      if (!r) continue;
+      const nbrs = [...new Set([
+        ...(r.edgeExits ?? []).map(e => Number(e.to ?? e.room ?? e.dest)),
+        ...(r.goExits ?? []).map(e => Number(e.to ?? e.room ?? e.dest)),
+        ...Object.entries(map.rooms).filter(([, o]) =>
+          [...(o.edgeExits ?? []), ...(o.goExits ?? [])]
+            .some(e => Number(e.to ?? e.room ?? e.dest) === Number(room)))
+          .map(([k]) => Number(k)),
+      ])].filter(n => Number.isFinite(n) && n !== Number(room));
+
+      let cut = null;
+      outer:
+      for (const a of nbrs) for (const b of nbrs) {
+        if (a === b) continue;
+        const p = findPath(map, a, b, { avoid: AVOID_IN_TRANSIT });
+        if (p?.found !== true) { cut = `${a}->${b}`; break outer; }
+      }
+      ok(`${room} is NOT a cut vertex — its neighbours still reach each other without it`,
+         cut === null, String(cut));
+    }
+
+    // AND A ROOM ON THE LIST IS STILL A DESTINATION. The whole point of a preference rather
+    // than a block: an errand that NAMES the room must still get there. 802 is the live case —
+    // the Qor disciple quest's own temple.
+    for (const room of AVOID_IN_TRANSIT) {
+      const p = findPath(map, 39, room);
+      ok(`39 -> ${room} still routes, because avoiding in transit is not a ban`,
+         p?.found === true, String(p?.reason ?? ''));
+      ok(`and the route to ${room} ENDS there rather than passing through`,
+         !(p?.hops ?? []).some(h => Number(h.from) === Number(room)));
+    }
+
+    // The 802 regression itself: it must not be the shortcut it became the moment it was
+    // reachable. 589 -> 598 is the sharpest pair — two hops through the temple, six around.
+    if (AVOID_IN_TRANSIT.has(802)) {
+      const p = findPath(map, 589, 598);
+      ok('589 -> 598 does not thread through the Temple of Qor',
+         p?.found === true && !(p.hops ?? []).some(h => Number(h.to) === 802),
+         JSON.stringify((p?.hops ?? []).map(h => h.to)));
+    }
   }
 }
 
