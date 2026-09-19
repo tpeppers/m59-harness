@@ -97,6 +97,52 @@ export const WATCHDOG_BLOCKED_MS = num('WATCHDOG_BLOCKED_MS', 3_000);
 // WATCH_MS in m59-postmortems.mjs deliberately: the thing that reports blindness and
 // the thing that prevents it must not disagree about what it is.
 export const WATCHDOG_FRAME_MS = num('WATCHDOG_FRAME_MS', 8_000);
+// HOW LONG BEFORE A BLOCKED PASS MAY BE INTERRUPTED A SECOND TIME.
+//
+// The arms below fire at most once per pass, guarded by `interruptedPass === passes`, with
+// the reason "cancelling twice does nothing useful". That is TRUE OF THE LEVER — the lever is
+// `cancelMovement`, and cancelling a cancelled walk is a no-op — and it stops being true of
+// the SITUATION the moment a pass is blocked on something cancelling movement cannot free.
+// Then "once per pass" means "never again", because the pass never ends.
+//
+// Measured on prod 2026-09-19: Robin spent 533 seconds of a 534-second pass inside one rung
+// and died in it. The watchdog was entitled to act exactly once in those nine minutes.
+//
+// So the guard re-arms — but only on BOTH of: this long since the last interrupt, AND health
+// lower than it was at that interrupt. Health still falling is what distinguishes "the first
+// interrupt did not work" from "the first interrupt worked and the pass is legitimately long",
+// and without it this would fire every thirty seconds through every slow shopping trip.
+export const WATCHDOG_REINTERRUPT_MS = num('WATCHDOG_REINTERRUPT_MS', 30_000);
+
+/**
+ * MAY THE WATCHDOG INTERRUPT THIS PASS AGAIN?
+ *
+ * A pure function because the guard it replaces is four lines deep inside a two-hundred-line
+ * method, and a decision nobody can import is a decision nobody can check — which is how the
+ * original "once per pass" survived every review for as long as it did.
+ *
+ * BOTH conditions, never one:
+ *
+ *   * long enough since the last interrupt, so this cannot fire on consecutive ticks; and
+ *   * health LOWER than it was at that interrupt.
+ *
+ * The second is the load-bearing one. It separates "the first interrupt did not work" from
+ * "the first interrupt worked and this pass is legitimately long" — a town trip that takes
+ * four minutes at full health must not be interrupted on a timer, and a character losing
+ * health inside a rung that has stopped answering must not be left for nine minutes because
+ * the watchdog already spoke once.
+ *
+ * Unknown health is NOT falling health. A missing reading is a question, not an answer, and a
+ * guard that cannot read its input has not passed — so it declines rather than re-firing.
+ */
+export function mayReinterrupt({ now, interruptedAt = null, interruptedAtHealth = null,
+                                 health = null, reinterruptMs = WATCHDOG_REINTERRUPT_MS } = {}) {
+  if (!Number.isFinite(now)) return false;
+  const longEnough = now - (interruptedAt ?? 0) >= reinterruptMs;
+  const stillFalling = Number.isFinite(interruptedAtHealth) && Number.isFinite(health) &&
+                       health < interruptedAtHealth;
+  return longEnough && stillFalling;
+}
 export const PULSE_MS = Number(process.env.M59_PULSE_MS || 1_000);
 // SIX, NOT THREE, and the reason is a rate rather than a position. "How fast is it losing
 // health" cannot be asked of three samples: damage lands about once a second, so a

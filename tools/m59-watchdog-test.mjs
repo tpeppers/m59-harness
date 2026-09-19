@@ -176,5 +176,42 @@ console.log('\none home for the withdraw line');
      safetyFor({ vitals: () => ({}) }, { fleeBelow: 0.4 }).fleeAt === 0.4);
 }
 
+// ------------------------------------------- MAY THE WATCHDOG INTERRUPT THE SAME PASS AGAIN?
+//
+// The guard this replaces was `if (w.interruptedPass === this.passes) return;`, commented
+// "cancelling twice does nothing useful". True of the LEVER — cancelling a cancelled walk is
+// a no-op — and false of the SITUATION when the pass is blocked on something cancelling
+// movement cannot free, because then the pass never ends and "once per pass" means "never
+// again". Prod 2026-09-19: Robin spent 533 seconds of a 534-second pass inside one rung and
+// was killed in it, with the watchdog entitled to act exactly once in those nine minutes.
+console.log('\nre-interrupting a pass that is still blocked');
+{
+  const MS = wd.WATCHDOG_REINTERRUPT_MS;
+  const base = { now: 1_000_000, interruptedAt: 1_000_000 - MS - 1, interruptedAtHealth: 50 };
+  ok('health still falling after long enough re-arms the watchdog',
+     wd.mayReinterrupt({ ...base, health: 40 }) === true);
+  // THE LOAD-BEARING HALF. Without it a four-minute town trip at full health is interrupted
+  // on a timer, which is the behaviour the original guard was right to prevent.
+  ok('health UNCHANGED does not — a long pass is not the same as a stuck one',
+     wd.mayReinterrupt({ ...base, health: 50 }) === false);
+  ok('health RECOVERING does not either',
+     wd.mayReinterrupt({ ...base, health: 60 }) === false);
+  ok('and neither does falling health too soon after the last interrupt',
+     wd.mayReinterrupt({ ...base, interruptedAt: 1_000_000 - 1, health: 10 }) === false);
+  // A guard that cannot read its input has not passed.
+  ok('unknown health is a question, not falling health',
+     wd.mayReinterrupt({ ...base, health: null }) === false);
+  ok('and an unknown baseline is too',
+     wd.mayReinterrupt({ ...base, interruptedAtHealth: null, health: 10 }) === false);
+  ok('a nonsense clock declines rather than firing',
+     wd.mayReinterrupt({ ...base, now: NaN, health: 10 }) === false);
+  // The first interrupt of a pass never reaches this function, but if it ever did, an
+  // unstamped watchdog must not be read as "interrupted at time zero, health unknown".
+  ok('an unstamped watchdog does not re-arm on the strength of the epoch',
+     wd.mayReinterrupt({ now: 1_000_000, health: 10 }) === false);
+  ok('the interval is a real number and overridable',
+     Number.isFinite(MS) && MS > 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
