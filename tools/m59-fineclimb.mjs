@@ -257,8 +257,23 @@ if (RAIL)
 // checked on the SHELF as well as the distance — `distanceToRail` is the floor-aware answer,
 // and the 2D one picks a waypoint on a ledge the body cannot step onto and calls it 304 units
 // away. Refusing here costs a walk; not refusing costs the six minutes it takes to notice.
+//
+// AND A POSITION THAT WAS NOT READ IS NOT A DISTANCE. `toClient(undefined)` is NaN, every
+// comparison against it is false, and the refusal below would then read "not on the rail: NaN
+// square(s)" — blaming the line for a body nobody could locate. Measured on the shadow fleet
+// 2026-09-19: 18 of 23 characters answer `status` with `you: null`, because the broker's
+// room-view projection falls back to the keeper's own ROOM and not to its POSITION, while
+// `look` answers with a position for those same characters in the same second. This tool reads
+// `look` and `walk_to`'s own reply and never `status`, so it is not on that path — but a source
+// that can go quiet has to say so when it does, which is the fix `crawl_to` took as
+// `position_unreadable`.
 if (RAIL && !DRY) {
   const first = (railLegs.find(l => l.kind === 'walk')?.waypoints) ?? [];
+  if (at0.x == null || at0.y == null) {
+    console.log(`position_unreadable: look answered for ${AGENT} in room ${at0.room} with no ` +
+                `x/y, so there is nothing to board from. That is a READ failing, not the rail.`);
+    process.exit(2);
+  }
   const here = { x: toClient(at0.x), y: toClient(at0.y) };
   const d = distanceToRail(first, here, { floor: R.floorAt(here.x, here.y) });
   if (!(d.d <= BOARD * F)) {
