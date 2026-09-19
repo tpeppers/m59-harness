@@ -13324,20 +13324,101 @@ export class Autopilot {
   // rung is. `trade_in_place_when_wedged: false` switches it off per character.
   async tradeInPlaceIfWedged({ near = [], v = null } = {}) {
     if (this.policy?.tradeInPlaceWhenWedged === false) return false;
-    if (this.crowded()) { this.noteCrowdRefusal('trading in place'); return false; }
     if (!near.length || this.hold || this.holdWorks()) return false;
     const frac = pct(v?.health);
-    if (frac === null || frac >= this.safety().fleeAt) return false;
+    if (frac === null) return false;
+    // BEING HURT IS NO LONGER THE TICKET IN, IT ONLY DECIDES WHAT WE MAY SWING AT.
+    //
+    // This used to read `frac >= fleeAt -> return false`, so clearing a body out of the way
+    // was available ONLY to a character already below its flee line. That made a routine jam
+    // — the operator's own report was bots piled up behind "a few spiders and ants clogging
+    // the needle" — unanswerable until somebody was nearly dead, and then answerable only if
+    // the room was not crowded, which by that point it always is.
+    //
+    // So the health test now selects the TARGET RULE instead of gating the rung:
+    //   at or above the flee line   clear only what the engagement band already permits —
+    //                               the small things actually blocking the corridor
+    //   below it                    desperation: anything in reach, because every other rung
+    //                               is movement-shaped and the body is not moving
+    const desperate = frac < this.safety().fleeAt;
     const wedge = this.wedgedInPlace();
     if (!wedge) return false;
+
+    // THE CROWD RULE ASSUMES LEAVING IS AVAILABLE, AND A WEDGE IS THE STATE WHERE IT IS NOT.
+    //
+    // This test used to be the FIRST line of this function, above every other gate, so a room
+    // with six attackable bodies in it refused the swing before anything asked whether the
+    // character could still walk. That is backwards exactly here: `crowded()` implements "IN A
+    // CROWD THE ONLY WALL IS THE EXIT", which is right doctrine and rests on a premise — that
+    // the exit can be reached. `wedgedInPlace()` above is the measurement that says it cannot.
+    //
+    // WHAT IT COST, measured over 3,665 postmortems carrying a threat list:
+    //
+    //     >= 6 threats at the end (the cap, so the veto fired)   3,131   85.4%
+    //     ...and died with `swinging: false`                     3,057   83.4% of ALL deaths
+    //
+    // Clifford, lv55, The Flatlands, 2026-09-19: six spiders and an ant inside melee reach,
+    // 36 wedges, `gross_squares: 0` across all eight sampled passes, `rooms_crossed: 0`, sixty
+    // seconds, health 1/55, `swinging: false`, trail ending "survival alternatives exhausted
+    // for the current observation". Every movement rung had already declined; this one was
+    // refused for the crowd; there was nothing below it. Sweetums died the same way in the
+    // same room thirty-six minutes earlier.
+    //
+    // THE DEADLOCK IT CLOSES. `clear_path` defers below the flee line because "running is the
+    // answer and the ladder owns it"; the ladder's rungs are all movement-shaped and the body
+    // cannot move; this rung was the fallback and the crowd switched it off. Three rungs each
+    // deferring to the next, and the fleet dies without swinging.
+    //
+    // THE ORDER IS THE FIX, NOT THE DELETION. The veto still exists and still fires for a
+    // character that is merely hurt in a busy room — it is now BELOW `wedgedInPlace()`, so it
+    // can only be reached by a body that has been pinned for WATCHDOG_PINNED_MS, or has had
+    // walks cancelled here, or has given up walking from this square. `tradeInPlaceWhenCrowded:
+    // false` restores the old precedence without a deploy, because the aggro argument for the
+    // veto is real — swinging can wake bodies that were only standing there — and an operator
+    // who would rather take that risk than this one must be able to say so.
+    //
+    // The player exclusion is untouched and is not negotiable: `near` is filtered on
+    // `!(o.flags & OF.PLAYER)` by the caller, so nothing here can ever swing at a person.
+    const crowd = this.crowded();
+    if (crowd && this.policy?.tradeInPlaceWhenCrowded === false) {
+      this.noteCrowdRefusal('trading in place');
+      return false;
+    }
     const c = this.s.client, me = c?.self;
     if (!me) return false;
     const dist = o => Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row);
-    const target = [...near].sort((a, b) => dist(a) - dist(b))[0];
-    const name = target.name ?? c?.rsc?.get?.(target.nameRsc) ?? null;
+    const nameOf = o => o.name ?? c?.rsc?.get?.(o.nameRsc) ?? null;
+    // NEAREST FIRST, BUT ONLY AMONG THINGS WE ARE ALLOWED TO FIGHT.
+    //
+    // `refuseEngagement` is the operator's own ceiling on viDifficulty — "smaller than you is
+    // the engagement band, NOT the level" — and it is what makes this safe to run at full
+    // health. Without it a healthy character wedged beside a troll would start a fight it was
+    // never going to win, because the troll happened to be the nearest body. Below the flee
+    // line the filter is dropped: there we are not declining a fight in favour of a better
+    // option, only in favour of dying.
+    const ordered = [...near].sort((a, b) => dist(a) - dist(b));
+    const pool = desperate ? ordered : ordered.filter(o => !this.refuseEngagement(nameOf(o)));
+    if (!pool.length) {
+      // Say so rather than failing silently — "wedged next to something I may not hit" is a
+      // different fact from "nothing is in reach", and only one of them is a doctrine choice.
+      this.note('wedged with something in reach but nothing inside the engagement band', {
+        in_reach: ordered.length, nearest: nameOf(ordered[0]),
+        health: v?.health ? `${v.health.value}/${v.health.max}` : null,
+        wedged: wedge.why,
+        why: 'the band refused every body beside us and we are not below the flee line, so ' +
+             'this rung declines and the movement rungs keep the pass',
+      });
+      return false;
+    }
+    const target = pool[0];
+    const name = nameOf(target);
     this.tally.wedge_trades = (this.tally.wedge_trades || 0) + 1;
     this.note('wedged and hurt with something in reach — trading in place', {
       target: name, target_id: target.id ?? null, in_reach: near.length,
+      // Named so a sweep can count how often the crowd veto would have refused this.
+      crowd_overridden: crowd,
+      mode: desperate ? 'below the flee line — anything in reach' : 'in-band blockers only',
+      threats_here: (() => { try { return this.threatCountHere(); } catch { return null; } })(),
       health: v?.health ? `${v.health.value}/${v.health.max}` : null,
       flee_at: Math.round(this.safety().fleeAt * 100) + '%',
       wedged: wedge.why, wedged_for_s: Math.round(wedge.for_ms / 1000),
