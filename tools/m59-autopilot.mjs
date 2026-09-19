@@ -3547,7 +3547,10 @@ export class Autopilot {
                          'something that is not coming, and a character parked in an inn for ever ' +
                          'is a character retired by accident' });
     if (hp < 0.95) return false;
-    if ((vigorPct(v) ?? 1) < REST_VIGOR_CAP) return false;
+    // The per-character ceiling, not the global cap: a cursed character can never reach 80
+    // of 200, so against the bare cap `recovered()` answers false for ever and the body
+    // stays parked in an inn — the exact retirement-by-accident this method guards against.
+    if ((vigorPct(v) ?? 1) < this.restVigorCeiling()) return false;
     // A zero or unreadable mana ceiling is not a shortfall — it is a character that has
     // no bar to fill, and blocking on it would be the retirement this guards against.
     const mp = pct(v?.mana);
@@ -5275,7 +5278,7 @@ export class Autopilot {
       blind ? 'vitals have not arrived yet' : null,
       (hp ?? 1) < 0.95 ? 'health' : null,
       (mp ?? 1) < 0.95 ? 'mana' : null,
-      (vig ?? 1) < REST_VIGOR_CAP ? 'vigor' : null,
+      (vig ?? 1) < this.restVigorCeiling() ? 'vigor' : null,
     ].filter(Boolean);
 
     this.sanctuaryHoldSince ??= Date.now();
@@ -16103,7 +16106,7 @@ export class Autopilot {
     // route, and since every character is attackable, a heap of friendly bots is
     // indistinguishable from a mob to every bot in it.
     if (this.sanctuary(room) && this.settledIn !== room?.num &&
-        ((hp !== null && hp < 0.95) || (vigorPct(v) ?? 1) < REST_VIGOR_CAP))
+        ((hp !== null && hp < 0.95) || (vigorPct(v) ?? 1) < this.restVigorCeiling()))
       await this.settle('arrived somewhere safe and not at full strength').catch(() => {});
     // Leaving a room means the next safe one gets its own seat, and its own attempts.
     if (this.settledIn != null && room?.num !== this.settledIn && !this.sanctuary(room)) {
@@ -16178,7 +16181,15 @@ export class Autopilot {
     // down on the next pass. Hungry characters spent entire sessions in that loop.
     // For vigor the trigger is what resting can actually deliver; the shortfall above
     // it is a food problem, and eat()/loot runs are what answer it.
-    const vigorRestAt = Math.min(this.policy.restBelow, REST_VIGOR_CAP);
+    // THE SAME CEILING AS THE RELEASE, FOR THE SAME REASON. `REST_VIGOR_CAP` is where the
+    // game stops awarding rest vigor, so using it as the SIT-DOWN threshold asks a cursed
+    // character to reach a bar its curse forbids: a worn ring of lethargy caps the wearer
+    // at 60 of 200 against this 80, so `vig < vigorRestAt` is permanently true, `hurt` is
+    // permanently true, and the branch below parks it at a recovery wall and RETURNS --
+    // before `releaseRestedHold` further down can ever be reached. Fixing the release bar
+    // alone left this one holding them, which is what prod showed: full health, zero
+    // kills, held_s climbing past a thousand seconds.
+    const vigorRestAt = Math.min(this.policy.restBelow, this.restVigorCeiling());
     // SPENT is not the same as hurt, and it is not negotiable. See ORDINARY_VIGOR_FLOOR: the
     // vigor trigger above makes a character want to rest, and wanting has been refused for an
     // hour at a time. This is the floor no ordinary activity crosses.
@@ -17580,7 +17591,7 @@ export class Autopilot {
       return this.resumeDeclined('still mending — health is below the start floor and climbing',
                                  { health: Math.round(hp * 100) + '%', floor, flat: this.resumeFlat ?? 0 });
     const vig = vigorPct(v);
-    if (vig !== null && vig < REST_VIGOR_CAP && stillMending)
+    if (vig !== null && vig < this.restVigorCeiling() && stillMending)
       return this.resumeDeclined('still mending — vigor is under the resting cap and climbing',
                                  { vigor: vig, cap: REST_VIGOR_CAP, flat: this.resumeFlat ?? 0 });
     // Already there. Nothing to resume, and reporting it as a resume would put a journey in

@@ -53,6 +53,13 @@ console.log('\n--- layer 3: the bar is what THIS character can reach ---');
   ok('two rings to 40', Math.round(ceiling(2) * VIGOR_MAX) === 40);
   ok('and the kod floor of 10 holds', Math.round(ceiling(9) * VIGOR_MAX) === 10,
      'SetVigorRestThreshold floors at 10, so the bar can never reach zero');
+  // BOTH BARS, because they are the same mistake in two places: one decides whether to SIT
+  // DOWN and the other whether to GET UP, and a cursed character failed both for ever.
+  const restAt = (rings, restBelow = 0.85) => Math.min(restBelow, ceiling(rings));
+  ok('a cursed character is not "hurt" at its own ceiling', !(60 / VIGOR_MAX < restAt(1)),
+     `sit-down bar ${restAt(1)} against vigor ${60 / VIGOR_MAX}`);
+  ok('an uncursed one still rests below 80 as before', 70 / VIGOR_MAX < restAt(0),
+     'the uncursed behaviour is unchanged, which is the point of a per-character ceiling');
   ok('a cursed character clears its own bar at the vigor it actually has',
      60 / VIGOR_MAX >= ceiling(1),
      'against the old fixed 0.4 it never could, which is why they never left the wall');
@@ -68,6 +75,16 @@ console.log('\n--- the wiring, so a silent no-op cannot come back ---');
   ok('and the bar is the per-character ceiling',
      /vig < this\.restVigorCeiling\(\)/.test(ap));
   const game = src('./m59-game.mjs');
+  ok('the SIT-DOWN threshold uses the ceiling too, not the fixed cap',
+     /Math\.min\(this\.policy\.restBelow, this\.restVigorCeiling\(\)\)/.test(ap),
+     'fixing only the release left this one deciding a cursed character was permanently hurt');
+  // CODE LINES ONLY. The first version of this matched the explanatory comment above
+  // `restVigorCeiling`, which quotes the old expression on purpose — a source-text test that
+  // reads prose is testing the documentation, not the program.
+  const codeLines = ap.split(/\r?\n/).filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  const bare = codeLines.filter(l => /<\s*REST_VIGOR_CAP/.test(l));
+  ok('no vigor comparison still uses the bare global cap', bare.length === 0,
+     bare.join(' | ').slice(0, 120));
   ok('the loot path refuses unrevealed jewellery',
      /UNREVEALED_JEWELLERY\.test\(n\) && skills\.isUnrevealed\(o\)/.test(game));
 }
