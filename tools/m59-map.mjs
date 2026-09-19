@@ -951,7 +951,37 @@ export function codeExits(roomNum) {
 // Checked before adding it: 534 is NOT a cut vertex. Valley -> bread shop, Source of the
 // Ille -> bread shop and Valley -> Jasper bank all still connect with it removed, so
 // avoiding it costs hops rather than reachability.
-export const AVOID_IN_TRANSIT = new Set([534]);
+// 802, THE TEMPLE OF QOR — A DOOR THE GAME SHUTS HALF THE TIME, ADDED THE DAY IT BECAME
+// ROUTABLE AND FOR THAT EXACT REASON.
+//
+// Until 2026-09-19 nothing in the world model arrived at 802 at all, so no route could cross
+// it. Fixing that (`m59-codeexits.mjs` was matching `FindRoomByNum` case-sensitively against a
+// case-insensitive language, and missed both of the temple's entrances) did not only unlock the
+// temple — it inserted a SHORTCUT into the middle of the map. Measured immediately afterwards,
+// seven of seven sampled pairs began threading through it: 801->38 went 9 hops to 7, 589->598
+// went 6 to 2, 801->2 went 8 to 6. The Kraanan disciple quest's skeleton hunt is one of them.
+//
+// It must not be a through-route, and the reason is the GAME's rather than our mover's.
+// `tempqor.kod`'s `ExitsTimer` alternates the entrance between 598 and 589 every ten minutes
+// (`EXIT_DELAY`), driving `OpenQorTemple`/`CloseQorTemple`, which `setsector` a ceiling lift in
+// 598 (348 open / 284 shut) and a floor lift in 589 (290 open / 350 shut). Measured off the BSP
+// at both trigger squares: headroom 1024 open against `PLAYER_HEIGHT` 768, and ZERO shut — the
+// two animations close to nothing from opposite directions. So exactly one door is sealed at
+// any moment, by design, for ever. A route that depends on the shut one fails half the time on
+// a clock nobody controls.
+//
+// And the edges we would be depending on are INFERRED. 802's own `edgeExits` are empty; its way
+// out is `StandardLeaveDir`/`LEAVE_SOUTH` -> `ExitFromQor`, which puts the body in whichever
+// room is CURRENTLY the exit. The reverse edges the router uses were derived from the two
+// inbound triggers, so "802 -> 598" is a claim the world honours only while 598 is the live
+// side. That is the routing doc's own rule — exits are not doors and are not 1:1 — with a
+// timer on it.
+//
+// Checked before adding it, to the bar 534 set: 802 is NOT a cut vertex. Every pair that now
+// crosses it still routes with it removed, at a cost of two to four hops and no loss of
+// reachability. A character sent to the temple ON PURPOSE is unaffected — this is a transit
+// preference, and the disciple quest names 802 as its destination.
+export const AVOID_IN_TRANSIT = new Set([534, 802]);
 
 // ROOMS THAT KILL BY A RULE, NOT BY A FIGHT — AND THE BLOCK ON THEM IS NOT NEGOTIABLE.
 //
