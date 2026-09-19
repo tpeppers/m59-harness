@@ -1,7 +1,7 @@
 {
  "note": "Sectors the world MOVES, derived from the kod by tools/m59-varsectors.mjs. A sector whose height crosses MAX_STEP_HEIGHT (384) is a door: the same square is passable at one height and not at the other, and a static bake cannot tell. Regenerate with --write; do not hand-edit.",
  "max_step_height": 384,
- "built_at": "2026-09-11T02:00:44.032Z",
+ "built_at": "2026-09-19T18:43:38.841Z",
  "rooms": [
   {
    "room": 5,
@@ -504,6 +504,30 @@
    "groups": []
   },
   {
+   "room": 380,
+   "rid": "RID_SEWER_KING",
+   "file": "object/active/holder/room/monsroom/bossroom/sewking.kod",
+   "sectors": [
+    {
+     "sector": 4,
+     "name": "SECTOR_WATERFALL",
+     "kind": "ceiling",
+     "heights": [
+      100,
+      850
+     ],
+     "cite_lines": [
+      240,
+      283
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
    "room": 532,
    "rid": "RID_C2",
    "file": "object/active/holder/room/monsroom/feyforst/c2.kod",
@@ -705,6 +729,30 @@
      ]
     }
    ]
+  },
+  {
+   "room": 568,
+   "rid": "RID_F8",
+   "file": "object/active/holder/room/monsroom/f8.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "DOOR",
+     "kind": "ceiling",
+     "heights": [
+      308,
+      388
+     ],
+     "cite_lines": [
+      142,
+      161
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
   },
   {
    "room": 589,
@@ -971,6 +1019,46 @@
    "groups": []
   },
   {
+   "room": 703,
+   "rid": "RID_GUILDH3",
+   "file": "object/active/holder/room/ghall/guildh3.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "ENTRANCE",
+     "kind": "ceiling",
+     "heights": [
+      500,
+      580
+     ],
+     "cite_lines": [
+      129,
+      142
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 2,
+     "name": "BRIDGE",
+     "kind": "floor",
+     "heights": [
+      500,
+      654
+     ],
+     "cite_lines": [
+      153,
+      165
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    }
+   ],
+   "groups": []
+  },
+  {
    "room": 704,
    "rid": "RID_GUILDH4",
    "file": "object/active/holder/room/ghall/guildh4.kod",
@@ -1034,6 +1122,46 @@
      "cite_lines": [
       264,
       330
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 705,
+   "rid": "RID_GUILDH12",
+   "file": "object/active/holder/room/ghall/guildh12.kod",
+   "sectors": [
+    {
+     "sector": 59,
+     "name": "MAIN_DOOR",
+     "kind": "floor",
+     "heights": [
+      600,
+      700
+     ],
+     "cite_lines": [
+      173,
+      185
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 155,
+     "name": "SECRET_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      105,
+      190
+     ],
+     "cite_lines": [
+      197,
+      209
      ],
      "gates": false,
      "gate_risk": false,
@@ -1651,6 +1779,204 @@
    "groups": []
   },
   {
+   "room": 713,
+   "rid": "RID_GUILDH13",
+   "file": "object/active/holder/room/ghall/guildh13.kod",
+   "sectors": [
+    {
+     "sector": 5,
+     "name": "SECRET_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      480
+     ],
+     "cite_lines": [
+      116
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 4,
+     "name": "MAIN_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      360,
+      500
+     ],
+     "cite_lines": [
+      265,
+      277
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 714,
+   "rid": "RID_GUILDH14",
+   "file": "object/active/holder/room/ghall/guildh14.kod",
+   "sectors": [
+    {
+     "sector": 55,
+     "name": "HALL_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      160,
+      230
+     ],
+     "cite_lines": [
+      330,
+      408
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 58,
+     "name": "COUNTER_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      100,
+      190
+     ],
+     "cite_lines": [
+      344,
+      428
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 53,
+     "name": "INNER_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      160,
+      240
+     ],
+     "cite_lines": [
+      357,
+      418
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 83,
+     "name": "LIFT_ONE",
+     "kind": "floor",
+     "heights": [
+      100,
+      115
+     ],
+     "cite_lines": [
+      375,
+      438
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 84,
+     "name": "LIFT_TWO",
+     "kind": "floor",
+     "heights": [
+      100,
+      115
+     ],
+     "cite_lines": [
+      393,
+      448
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": false
+    },
+    {
+     "sector": 59,
+     "name": "MAIN_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      100,
+      190
+     ],
+     "cite_lines": [
+      460,
+      472
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    },
+    {
+     "sector": 3,
+     "name": "SECRET_DOOR",
+     "kind": "ceiling",
+     "heights": [
+      160,
+      250
+     ],
+     "cite_lines": [
+      483,
+      496
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 715,
+   "rid": "RID_GUILDH15",
+   "file": "object/active/holder/room/ghall/guildh15.kod",
+   "sectors": [
+    {
+     "sector": 2,
+     "name": "ENTRANCE_SECTOR",
+     "kind": "floor",
+     "heights": [
+      10,
+      200
+     ],
+     "cite_lines": [
+      161,
+      172
+     ],
+     "gates": false,
+     "gate_risk": true,
+     "headroom_risk": false
+    },
+    {
+     "sector": 1,
+     "name": "SECRET_SECTOR",
+     "kind": "ceiling",
+     "heights": [
+      0,
+      96
+     ],
+     "cite_lines": [
+      183,
+      194
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
+    }
+   ],
+   "groups": []
+  },
+  {
    "room": 750,
    "rid": "RID_ICE_CAVE1",
    "file": "object/active/holder/room/monsroom/objroom/icecave1.kod",
@@ -2145,6 +2471,30 @@
      "gates": false,
      "gate_risk": true,
      "headroom_risk": false
+    }
+   ],
+   "groups": []
+  },
+  {
+   "room": 2505,
+   "rid": "RID_ORC_CAVE6",
+   "file": "object/active/holder/room/monsroom/orccave6.kod",
+   "sectors": [
+    {
+     "sector": 1,
+     "name": "DOORSECTOR",
+     "kind": "ceiling",
+     "heights": [
+      1060,
+      1150
+     ],
+     "cite_lines": [
+      77,
+      89
+     ],
+     "gates": false,
+     "gate_risk": false,
+     "headroom_risk": true
     }
    ],
    "groups": []

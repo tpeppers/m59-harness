@@ -1,10 +1,12 @@
 {
  "note": "Doors you OPERATE: attempt a `go` on a trigger square, the room moves a sector, and it closes again after delay_ms — which is timed from the PRESS, not from the moment it finishes opening. Derived from SomethingTryGo by tools/m59-doors.mjs; do not hand-edit. `gate` is what refuses the press: ReqLegalEntry or IsMember.",
- "built_at": "2026-09-19T18:26:51.769Z",
+ "built_at": "2026-09-19T18:45:52.181Z",
  "rooms": {
   "5": {
    "name": "The Underground Lake",
    "cls": "Cave3",
+   "rows": 75,
+   "cols": 78,
    "file": "object/active/holder/room/cave3.kod",
    "doors": [
     {
@@ -41,6 +43,8 @@
   "568": {
    "name": "Lake of Jala's Song",
    "cls": "OutdoorsF8",
+   "rows": 49,
+   "cols": 50,
    "file": "object/active/holder/room/monsroom/f8.kod",
    "doors": [
     {
@@ -100,6 +104,8 @@
   "701": {
    "name": "Mercenary Alley",
    "cls": "GuildHall1",
+   "rows": 28,
+   "cols": 21,
    "file": "object/active/holder/room/ghall/guildh1.kod",
    "doors": [
     {
@@ -133,6 +139,8 @@
   "702": {
    "name": "The Hall of Explorers",
    "cls": "GuildHall2",
+   "rows": 21,
+   "cols": 33,
    "file": "object/active/holder/room/ghall/guildh2.kod",
    "doors": [
     {
@@ -319,6 +327,8 @@
   "703": {
    "name": "The Den of Shadows",
    "cls": "GuildHall3",
+   "rows": 29,
+   "cols": 21,
    "file": "object/active/holder/room/ghall/guildh3.kod",
    "doors": [
     {
@@ -352,6 +362,8 @@
   "704": {
    "name": "The Wryn's Keep",
    "cls": "GuildHall4",
+   "rows": 51,
+   "cols": 49,
    "file": "object/active/holder/room/ghall/guildh4.kod",
    "doors": [
     {
@@ -498,6 +510,8 @@
   "705": {
    "name": "West Tower Guild Hall in Ko'catan",
    "cls": "GuildHall12",
+   "rows": 48,
+   "cols": 54,
    "file": "object/active/holder/room/ghall/guildh12.kod",
    "doors": [
     {
@@ -534,6 +548,8 @@
   "706": {
    "name": "The Old Dwarven Hall",
    "cls": "GuildHall7",
+   "rows": 30,
+   "cols": 38,
    "file": "object/active/holder/room/ghall/guildh7.kod",
    "doors": [
     {
@@ -619,6 +635,8 @@
   "707": {
    "name": "Konima's Abandoned Dwelling",
    "cls": "GuildHall5",
+   "rows": 34,
+   "cols": 29,
    "file": "object/active/holder/room/ghall/guildh5.kod",
    "doors": [
     {
@@ -753,6 +771,8 @@
   "709": {
    "name": "The Abandoned Warehouse",
    "cls": "GuildHall9",
+   "rows": 29,
+   "cols": 28,
    "file": "object/active/holder/room/ghall/guildh9.kod",
    "doors": [
     {
@@ -786,6 +806,8 @@
   "710": {
    "name": "Jaarba's Abode",
    "cls": "GuildHall10",
+   "rows": 20,
+   "cols": 20,
    "file": "object/active/holder/room/ghall/guildh10.kod",
    "doors": [
     {
@@ -975,6 +997,8 @@
   "711": {
    "name": "The Ivory Chapel",
    "cls": "GuildHall6",
+   "rows": 19,
+   "cols": 23,
    "file": "object/active/holder/room/ghall/guildh6.kod",
    "doors": [
     {
@@ -1008,6 +1032,8 @@
   "712": {
    "name": "The home of the Friends of the Forest",
    "cls": "GuildHall11",
+   "rows": 29,
+   "cols": 30,
    "file": "object/active/holder/room/ghall/guildh11.kod",
    "doors": [
     {
@@ -1041,6 +1067,8 @@
   "713": {
    "name": "The Hall of the Slaughtered Command",
    "cls": "GuildHall13",
+   "rows": 16,
+   "cols": 38,
    "file": "object/active/holder/room/ghall/guildh13.kod",
    "doors": [
     {
@@ -1079,6 +1107,8 @@
   "714": {
    "name": "The Bookmaker's Guild House",
    "cls": "GuildHall14",
+   "rows": 49,
+   "cols": 52,
    "file": "object/active/holder/room/ghall/guildh14.kod",
    "doors": [
     {
@@ -1253,6 +1283,8 @@
   "715": {
    "name": "Inner Sanctum of Queen Venya'cyr",
    "cls": "GuildHall15",
+   "rows": 27,
+   "cols": 51,
    "file": "object/active/holder/room/ghall/guildh15.kod",
    "doors": [
     {
@@ -1325,6 +1357,8 @@
   "750": {
    "name": "The Dreaded Caves of Ice",
    "cls": "IceCave1",
+   "rows": 47,
+   "cols": 45,
    "file": "object/active/holder/room/monsroom/objroom/icecave1.kod",
    "doors": [
     {
@@ -1360,6 +1394,8 @@
   "801": {
    "name": "The Temple of Kraanan",
    "cls": "TempleKraanan",
+   "rows": 49,
+   "cols": 50,
    "file": "object/active/holder/room/tempkra.kod",
    "doors": [
     {
@@ -1395,6 +1431,8 @@
   "802": {
    "name": "The Temple of Qor",
    "cls": "TempleQor",
+   "rows": 39,
+   "cols": 49,
    "file": "object/active/holder/room/tempqor.kod",
    "doors": [
     {
@@ -1434,6 +1472,8 @@
   "951": {
    "name": "Blackstone Keep",
    "cls": "Duke2",
+   "rows": 42,
+   "cols": 30,
    "file": "object/active/holder/room/duke2.kod",
    "doors": [
     {
@@ -1541,6 +1581,8 @@
   "2505": {
    "name": "Konima's Ascension",
    "cls": "OrcCave6",
+   "rows": 79,
+   "cols": 102,
    "file": "object/active/holder/room/monsroom/orccave6.kod",
    "doors": [
     {
@@ -1623,6 +1665,8 @@
   "2506": {
    "name": "Lair of the Orc Pit Boss",
    "cls": "Orcpit1",
+   "rows": 74,
+   "cols": 70,
    "file": "object/active/holder/room/monsroom/bossroom/orcpit1.kod",
    "doors": [
     {
@@ -1694,6 +1738,8 @@
   "2507": {
    "name": "Grog's Antechamber",
    "cls": "OrcPitA",
+   "rows": 167,
+   "cols": 61,
    "file": "object/active/holder/room/monsroom/orcpita.kod",
    "doors": [
     {
@@ -1756,6 +1802,8 @@
   "2508": {
    "name": "Brog's Antechamber",
    "cls": "OrcPitB",
+   "rows": 129,
+   "cols": 59,
    "file": "object/active/holder/room/monsroom/orcpitb.kod",
    "doors": [
     {

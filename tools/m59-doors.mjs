@@ -279,7 +279,12 @@ export function buildDoors({ kodRoot, mapFile, outFile }) {
           (d.ambiguous_heights ? ` (${d.ambiguous_heights.length} candidate heights)` : ''));
       else if (d.delay_ms == null) noAutoClose.push(`${room.num} ${d.sector_name}`);
     }
-    rooms[room.num] = { name: room.name, cls, file: file.slice(file.indexOf('object')).replace(/\\/g, '/'), doors };
+    // THE ROOM'S SIZE TRAVELS WITH ITS DOORS, because a trigger is a PREDICATE and a caller
+    // that wants the squares has to enumerate it against some bounds. Without these,
+    // `m59-doorplan.mjs` would have to load the whole world map to expand `col >= 19 and
+    // col <= 21` into three squares.
+    rooms[room.num] = { name: room.name, cls, rows: room.rows, cols: room.cols,
+                        file: file.slice(file.indexOf('object')).replace(/\\/g, '/'), doors };
   }
 
   const out = {

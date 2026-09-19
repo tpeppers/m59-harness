@@ -125,10 +125,29 @@ export function sectorsInSource(src, { consts = constantsInSource(src) } = {}) {
   // case, and matching only `@SetSector` silently dropped the Temple of Qor door — the one
   // the operator named first, in a room this fleet crosses daily. A scanner that misses a
   // door is worse than no scanner, because the empty result reads as "no doors here".
-  for (const m of src.matchAll(/@setsector\s*,\s*#sector\s*=\s*([A-Za-z0-9_]+)[\s\S]{0,200}?#height\s*=\s*(-?\d+)/gi)) {
+  // AND THE HEIGHT IS RESOLVED THROUGH THE CONSTANTS TOO, WHICH IT WAS NOT.
+  //
+  // `#height` used to require a literal `(-?\d+)` while `#sector` beside it was already
+  // resolved through the constants map. Half the world writes the height as a constant, so
+  // half the world's doors did not exist as far as this scanner was concerned — and the
+  // failure is the one this function's own comment above is about, one argument to the right.
+  //
+  // What it cost, measured 2026-09-19: room 714, The Bookmaker's Guild House, writes
+  // `#height=MAIN_DOOR_OPEN`. All six of its doors were invisible here, so `m59-doorbake.mjs`
+  // — which keys its variants off this scan — baked no open-door masks for the hall, so the
+  // router only ever saw the shut geometry, in which 714 breaks into 28 regions with its only
+  // exit in one the body cannot reach. Zoot, Statler and Pepe were stranded in it. `guildh10`
+  // writes `#height = 72` as a literal and was found all along, which is why this looked like
+  // it worked.
+  for (const m of src.matchAll(/@setsector\s*,\s*#sector\s*=\s*([A-Za-z0-9_]+)[\s\S]{0,200}?#height\s*=\s*([A-Za-z0-9_]+)/gi)) {
     const raw = m[1];
     const sector = /^\d+$/.test(raw) ? Number(raw) : consts.get(raw);
     if (sector == null) continue;          // a sector we cannot resolve is not a claim
+    const rawHeight = m[2];
+    const height = /^-?\d+$/.test(rawHeight) ? Number(rawHeight) : consts.get(rawHeight);
+    // A HEIGHT WE CANNOT RESOLVE IS NOT A HEIGHT. Recording `NaN` would put a door into the
+    // table with a swing nothing can reason about, which is worse than leaving it out loudly.
+    if (!Number.isFinite(height)) continue;
     const line = src.slice(0, m.index).split('\n').length;
     // WHICH SURFACE IS MOVING decides what "blocked" even means. A floor gates by the step
     // a character can climb; a ceiling gates by whether it can fit underneath. Reading a
@@ -138,7 +157,7 @@ export function sectorsInSource(src, { consts = constantsInSource(src) } = {}) {
     if (!bySector.has(sector))
       bySector.set(sector, { sector, name: /^\d+$/.test(raw) ? null : raw,
                              heights: new Set(), kinds: new Set(), lines: [] });
-    bySector.get(sector).heights.add(Number(m[2]));
+    bySector.get(sector).heights.add(height);
     bySector.get(sector).kinds.add(kind);
     bySector.get(sector).lines.push(line);
   }
