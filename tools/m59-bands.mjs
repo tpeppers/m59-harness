@@ -3,6 +3,8 @@
 //   node tools/m59-bands.mjs              every band registry on this machine, collisions first
 //   node tools/m59-bands.mjs --json       the same, for a launcher
 //   node tools/m59-bands.mjs --no-probe   paper only: read the files, open no socket
+//   node tools/m59-bands.mjs --free       the band the allocator would pick next
+//   node tools/m59-bands.mjs --free --for lab7      ...for a named fleet, with the line to add
 //
 // WHY THIS EXISTS. `substrate/keeper-bands.json` is per-checkout and gitignored, so each
 // checkout's registry is authoritative for itself and INVISIBLE TO EVERY OTHER ONE. Two
@@ -28,7 +30,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, sep } from 'node:path';
-import { KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
+import { KEEPER_BAND_WIDTH,
+         FIRST_NAMED_KEEPER_BAND_BASE } from './runtime/keeper-bands.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTRY_LEAF = join('substrate', 'keeper-bands.json');
@@ -149,6 +152,61 @@ export function readRegistries(checkouts) {
 }
 
 /**
+ * EVERY BAND CLAIMED BY SOMEBODY ELSE — the view `allocateKeeperBand` cannot build for itself.
+ *
+ * This tool has been able to see the whole machine since the day it was written, and it
+ * deliberately repairs nothing, because repairing a collision means deciding which fleet goes
+ * down. SUPPLYING THE VIEW IS NOT REPAIRING ANYTHING: an allocator that is told which bands are
+ * spoken for simply does not pick them, and no running fleet moves. So this is the join, and it
+ * is the only thing here that another module is meant to call.
+ *
+ * `exclude` is the checkout doing the allocating — its own claims are already in its own
+ * registry and re-reserving them would make an existing fleet look contended with itself.
+ *
+ * IT NEVER THROWS. The input is other people's files, discovered by walking a machine that had
+ * sixty-nine checkouts the day this was written, and a broker that cannot start because a
+ * stranger's registry is malformed is a worse failure than the collision this prevents.
+ */
+export function reservedElsewhere({ exclude = REPO, extra = [], checkouts = null } = {}) {
+  const out = [];
+  try {
+    const roots = checkouts ?? discoverCheckouts(extra);
+    const { found } = readRegistries(roots);
+    for (const f of found) {
+      if (f.json == null) continue;                       // unreadable: a question, not a claim
+      if (resolve(f.checkout) === resolve(exclude)) continue;
+      const { claims } = claimsFrom(f.registry, f.json);
+      for (const c of claims) out.push({ base: c.base, end: c.end, fleet: c.fleet,
+                                         registry: c.registry });
+    }
+  } catch { /* see above: no view is not the same as no bands, and it must not throw */ }
+  return out;
+}
+
+/**
+ * The first canonical band that nothing on this machine claims — the same question
+ * `allocateKeeperBand` asks, asked out loud so a person doing it by hand gets the same answer.
+ *
+ * `occupied` is an optional list of ports that ANSWERED. A band nobody claims but somebody is
+ * sitting on is not free: that is precisely the stale-registry case, where the file says one
+ * thing and the ports say another, and the ports are the ones the broker will actually talk to.
+ */
+export function firstFreeBand({ reserved = [], mine = [], occupied = [],
+                                from = FIRST_NAMED_KEEPER_BAND_BASE } = {}) {
+  const taken = [...reserved, ...mine].map(r => ({
+    base: Number(r.base ?? r), end: Number(r.end ?? (Number(r.base ?? r) + KEEPER_BAND_WIDTH - 1)),
+  })).filter(r => Number.isSafeInteger(r.base) && Number.isSafeInteger(r.end));
+  const ports = occupied.map(o => Number(o.port ?? o)).filter(Number.isSafeInteger);
+  for (let base = from; base + KEEPER_BAND_WIDTH - 1 <= 65535; base += KEEPER_BAND_WIDTH) {
+    const end = base + KEEPER_BAND_WIDTH - 1;
+    if (taken.some(r => base <= r.end && r.base <= end)) continue;
+    if (ports.some(p => p >= base && p <= end)) continue;
+    return { base, end };
+  }
+  return null;
+}
+
+/**
  * Ask a port who is on it. Deliberately NOT `probeKeeperLive`, which returns null for an agent
  * the caller did not expect — here the stranger IS the finding.
  */
@@ -196,6 +254,63 @@ async function main(argv) {
     if (f.json == null) { broken.push(f); continue; }
     const { claims, rejected: bad } = claimsFrom(f.registry, f.json);
     all.push(...claims); rejected.push(...bad);
+  }
+
+  // --free: THE SAME QUESTION THE ALLOCATOR ASKS, ASKED OUT LOUD.
+  //
+  // Somebody standing up a new fleet by hand edits `substrate/keeper-bands.json`, and the way
+  // they pick a number is by looking at their own file — which is the blindness this whole tool
+  // exists to report. This prints the band the allocator would now choose, so the hand path and
+  // the automatic one cannot diverge.
+  //
+  // IT PROBES BEFORE IT ANSWERS, unless told not to. A band nobody claims but somebody is
+  // sitting on is not free, and that is exactly the stale-registry case: the file says one
+  // thing, the ports say another, and the ports are what a broker actually talks to.
+  if (argv.includes('--free')) {
+    const forFleet = (() => {
+      const i = argv.indexOf('--for');
+      return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : null;
+    })();
+    const mine = all.filter(c => c.registry.startsWith(REPO));
+    const others = all.filter(c => !c.registry.startsWith(REPO));
+    const held = forFleet ? mine.find(c => c.fleet === forFleet) : null;
+    let occupied = [];
+    if (probe) {
+      // Probe only the candidate the paper view proposes, and the two after it — probing every
+      // band on the machine is 55,000 ports and this runs while somebody is waiting.
+      let cand = firstFreeBand({ reserved: others, mine });
+      for (let k = 0; k < 3 && cand; k++) {
+        occupied.push(...await probeRange(cand.base, cand.end));
+        cand = firstFreeBand({ reserved: others, mine, occupied, from: cand.base + KEEPER_BAND_WIDTH });
+      }
+    }
+    const free = firstFreeBand({ reserved: others, mine, occupied });
+    if (json) {
+      console.log(JSON.stringify({ free, for: forFleet, already_held: held ?? null,
+        claims_here: mine.length, claims_elsewhere: others.length,
+        probed: probe, answering: occupied.length }, null, 2));
+      return free ? 0 : 1;
+    }
+    if (held) {
+      console.log(`"${forFleet}" already has ${held.base}-${held.end} in ${held.registry}.`);
+      console.log(`A fleet that already has a band keeps it — moving a live one is the decision`);
+      console.log(`this tool does not make. Nothing to allocate.`);
+      return 0;
+    }
+    if (!free) {
+      console.log(`no complete ${KEEPER_BAND_WIDTH}-port band is free ` +
+                  `(${mine.length} claimed here, ${others.length} elsewhere).`);
+      return 1;
+    }
+    console.log(`${free.base}-${free.end}` + (forFleet ? `   for "${forFleet}"` : ''));
+    console.log(`  clear of ${mine.length} claim(s) in this checkout and ${others.length} in ` +
+                `${new Set(others.map(o => o.registry)).size} other(s)` +
+                (probe ? `; ${occupied.length} port(s) answered while looking` : '; NOT probed'));
+    if (forFleet)
+      console.log(`  write it: add {"${forFleet}": ${free.base}} to ` +
+                  `${join(REPO, REGISTRY_LEAF)} — or just start the broker, which now allocates ` +
+                  `against this same view.`);
+    return 0;
   }
   const hits = collisions(all);
 
