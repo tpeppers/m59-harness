@@ -990,6 +990,66 @@ export const PASS_STAGES = [
   'passFarm',
 ];
 
+// ------------------------------------------------------ HOW LONG THE LADDER WAITS FOR A RUNG
+//
+// A PASS STAGE HAD NO DEADLINE, SO ONE HUNG RUNG HELD THE WHOLE SURVIVAL LADDER.
+//
+// `runPassLadder` did `await this[stage](ctx)` with no race and no bound, and the watchdog's
+// only lever fires at most once per pass. So a rung that never returns is a keeper that never
+// decides anything again — including fleeing, because `passFleeAndRest` is a rung like any
+// other and cannot run while `passFarm` above it is still awaiting.
+//
+// Measured on prod, 2026-09-19, over 36 deaths in fourteen hours. Using this file's own test —
+// "`in_stage_ms` is the number to compare against `pass_blocked_ms`; when they match, the
+// stage named here is the one that stopped the keeper" — 21 of 36 had ONE stage owning more
+// than 80% of the blocked pass: `passFleeAndRest` 10, `passFarm` 9, `passOutside` 2. Robin
+// spent 533 seconds of a 534-second pass inside `passFarm` and was killed in it. Across those
+// deaths `fled_in_time` ran 0.02 to 0.22 against a 0.68 flee threshold — the flee decision was
+// not losing an argument, it was never reached.
+//
+// THE BOUND IS ON THE WAIT, NOT ON THE WORK, and that distinction is the whole design. A
+// promise cannot be cancelled, so the rung keeps running; what expires is the LADDER's
+// patience with it. The rung is then marked in flight and SKIPPED on later passes until it
+// settles, so nothing is ever invoked twice — a second shopping trip on top of a running one
+// is a worse bug than the one being fixed. Everything above the stuck rung therefore runs
+// every pass, which is the point: a hung `passFarm` must not be able to stop a character
+// fleeing.
+//
+// So the numbers are short even for the rungs that legitimately take minutes. `passFarm`
+// bounded at 30s does not mean a town trip gets 30 seconds; it means the ladder stops waiting
+// on it after 30 and goes back to watching for danger while it finishes.
+//
+// `M59_STAGE_DEADLINE_MS=0` restores the old unbounded behaviour exactly, for a bisect.
+export const STAGE_OVERRAN = Symbol('stage overran the ladder deadline');
+
+const STAGE_DEADLINE_MS = Object.freeze({
+  // Identity, mortality, survival and recovery. These are this repository's at the one-second
+  // clock; a rung here that needs more than fifteen seconds has already failed at its job.
+  passUnderworld: 15_000,
+  passArm: 15_000,
+  passPlaybook: 15_000,
+  passFightBack: 15_000,
+  passFleeAndRest: 15_000,
+  passFollow: 15_000,
+  // Directional. These legitimately walk across towns and stand at counters — and the bound
+  // does not interrupt any of it, it only stops the ladder holding its breath.
+  passOutside: 30_000,
+  passErrand: 30_000,
+  passFarm: 30_000,
+});
+
+/** How long the ladder waits for one rung. 0 (or an unparseable override) means forever. */
+export function stageDeadlineMs(stage, env = process.env) {
+  const override = env.M59_STAGE_DEADLINE_MS;
+  if (override !== undefined && override !== '') {
+    const n = Number(override);
+    // AN UNUSABLE VALUE KEEPS THE COMMITTED ONE. Same rule as every other policy surface
+    // here: a typo must not silently unbound the survival ladder.
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return STAGE_DEADLINE_MS[stage] ?? 30_000;
+}
+
 // ------------------------------------------------------- debugging from inside the game
 //
 // THREE STATES WE DO NOT YET UNDERSTAND, reported to whoever is standing next to the
@@ -12584,9 +12644,23 @@ export class Autopilot {
     // character deliberately, and cancelling its movement from underneath it would be
     // this keeper fighting the thing it stood down for.
     if (this.inert) return;
-    // Once per blocked pass. Cancelling twice does nothing useful and the note would
-    // repeat every tick.
-    if (w.interruptedPass === this.passes) return;
+    // ONCE PER BLOCKED PASS — AND ONCE WAS ONLY EVER ENOUGH IF IT WORKED.
+    //
+    // "Cancelling twice does nothing useful" is true of the LEVER: cancelling a cancelled
+    // walk is a no-op. It is not true of the SITUATION when the pass is blocked on something
+    // `cancelMovement` cannot free, because then the pass never ends and this guard means
+    // "never again". Robin, prod 2026-09-19: 533 seconds of a 534-second pass inside one
+    // rung, killed in it, and this line entitled the watchdog to act once in nine minutes.
+    //
+    // Re-arms on BOTH conditions, never one. Health still falling since the last interrupt is
+    // what separates "the first interrupt did not work" from "it worked and this pass is
+    // legitimately long" — without it, every slow town trip would be interrupted on a timer.
+    if (w.interruptedPass === this.passes) {
+      if (!watchdog.mayReinterrupt({ now, interruptedAt: w.interruptedAt,
+                                     interruptedAtHealth: w.interruptedAtHealth,
+                                     health: hp?.value ?? null })) return;
+      this.tally.watchdog_reinterrupts = (this.tally.watchdog_reinterrupts || 0) + 1;
+    }
 
     const frac = pct(hp);
     if (frac === null) return;
@@ -12637,6 +12711,11 @@ export class Autopilot {
       const place = w.pinnedAnchor ?? spot ?? null;
       if (cancelling) {
         w.interruptedPass = this.passes;
+        // WHAT THE RE-ARM COMPARES AGAINST. See the guard at the top of this method: a second
+        // interrupt inside one pass needs to know when the first one was and how healthy the
+        // body was then, or "is it still getting worse" cannot be asked.
+        w.interruptedAt = now;
+        w.interruptedAtHealth = hp?.value ?? null;
         w.pinnedInterrupts = (w.pinnedInterrupts ?? 0) + 1;
         w.pinnedSince = null; w.pinnedAnchor = null;
         this.tally.watchdog_pinned_interrupts = (this.tally.watchdog_pinned_interrupts || 0) + 1;
@@ -12717,6 +12796,8 @@ export class Autopilot {
       return;
     }
     w.interruptedPass = this.passes;
+    w.interruptedAt = now;
+    w.interruptedAtHealth = hp?.value ?? null;
     w.interrupts++;
     this.tally.watchdog_interrupts = (this.tally.watchdog_interrupts || 0) + 1;
     const stopped = (() => {
@@ -13944,6 +14025,65 @@ export class Autopilot {
     return this.runPassLadder({ s, c, room, v, hp });
   }
 
+  /**
+   * RUN ONE RUNG, AND STOP WAITING FOR IT AFTER ITS DEADLINE.
+   *
+   * See STAGE_DEADLINE_MS for why this exists and what it measured. Three properties, each
+   * of which is the difference between this and a bare `Promise.race`:
+   *
+   *   * THE WORK IS NOT CANCELLED, because a promise cannot be. The rung keeps running and
+   *     finishes whatever it was doing; only the ladder stops waiting.
+   *   * THE RUNG IS MARKED IN FLIGHT until it settles, so `runPassLadder` skips it rather
+   *     than starting a second copy on the same body.
+   *   * A LATE REJECTION CANNOT CRASH THE PROCESS. Once the race is lost nothing awaits the
+   *     original promise, so an abandoned rung that throws five minutes later would be an
+   *     unhandled rejection — on a keeper, that is the whole character gone for a bug in a
+   *     rung that had already been given up on.
+   *
+   * A rung that returns before its deadline behaves exactly as it did: same verdict, same
+   * throw, same everything. With `M59_STAGE_DEADLINE_MS=0` this is a straight call.
+   */
+  async runStageBounded(stage, ctx) {
+    const ms = stageDeadlineMs(stage);
+    if (!(ms > 0)) return this[stage](ctx);
+    // The async wrapper is what turns a SYNCHRONOUS throw out of the rung into a rejection,
+    // so both failure shapes take the same path.
+    const running = (async () => this[stage](ctx))();
+    this.stageInFlight ??= new Map();
+    const startedAt = Date.now();
+    const settled = running.then(
+      v => { this.stageInFlight.delete(stage); return v; },
+      e => { this.stageInFlight.delete(stage); throw e; });
+    // Attached BEFORE the race, because the race is what may stop observing it.
+    settled.catch(() => {});
+    this.stageInFlight.set(stage, settled);
+
+    let timer = null;
+    // DELIBERATELY NOT `unref`. Its lifetime is already bounded by the race — `clearTimeout`
+    // in the `finally` below fires the moment the rung answers — so it can never hold a
+    // process open. Unreferencing it instead lets node exit while the race is still pending,
+    // which in a test is an "unsettled top-level await" and in a keeper would be a pass that
+    // vanishes rather than resolves.
+    const overran = new Promise(res => { timer = setTimeout(() => res(STAGE_OVERRAN), ms); });
+    let verdict;
+    try { verdict = await Promise.race([settled, overran]); }
+    finally { clearTimeout(timer); }
+
+    if (verdict === STAGE_OVERRAN) {
+      this.tally.stage_overran = (this.tally.stage_overran || 0) + 1;
+      this.note('a pass rung overran the ladder deadline — carrying on without it', {
+        stage, waited_ms: Date.now() - startedAt, deadline_ms: ms,
+        why: 'the ladder stopped waiting so the rungs above this one get a turn again. The ' +
+             'rung itself is STILL RUNNING and is not called again until it returns — this ' +
+             'abandons the wait, never the work',
+        what_it_costs: 'this pass ends here; the next one starts at the top, which is how ' +
+                       'passFleeAndRest gets its turn back',
+      });
+      return STAGE_OVERRAN;
+    }
+    return verdict;
+  }
+
   // THE LADDER ITSELF, ON ITS OWN, SO THAT THE TEST CAN RUN THE REAL ONE.
   //
   // Kept out of `pass()` deliberately. `pass()` has a long preamble that wants a live
@@ -13972,10 +14112,26 @@ export class Autopilot {
       // `loop_stall` in m59-keeper-process.mjs profiles the EVENT LOOP, which an await does
       // not block, so it reports nothing for exactly this case.
       //
+      // A RUNG THAT HAS NOT COME BACK YET IS NOT CALLED AGAIN. See STAGE_DEADLINE_MS: the
+      // deadline abandons the WAIT and never the WORK, so the previous invocation is still
+      // out there walking a body. Invoking it a second time would put two shopping trips, or
+      // two retreats, on one character — which is worse than the hang.
+      if (this.stageInFlight?.has(stage)) {
+        this.tally.stage_skipped_in_flight = (this.tally.stage_skipped_in_flight || 0) + 1;
+        continue;
+      }
       // One assignment per stage, no allocation, no I/O. Read by `postMortem`.
       this.passStage = stage;
       this.passStageAt = Date.now();
-      const verdict = await this[stage](ctx);
+      const verdict = await this.runStageBounded(stage, ctx);
+      // THE LADDER GAVE UP WAITING. End the pass here rather than falling through: the rung
+      // is still running, and starting the next one on top of it is the double-invocation the
+      // skip above exists to prevent. The next pass begins at the top, which is the whole
+      // point — `passFleeAndRest` gets a turn again.
+      if (verdict === STAGE_OVERRAN) {
+        this.traceThisPass(ctx, ran, stage);
+        return stage;
+      }
       // A watchdog can interrupt while this rung awaits a whole shopping trip.
       // Its old context must not send the character into the next errand/farm rung.
       if (this.travelInterrupted()) {

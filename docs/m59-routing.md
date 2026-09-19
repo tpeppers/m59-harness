@@ -1416,6 +1416,15 @@ So `m59-noderails.mjs` asks the same question on the fine grid with the whole af
 `fineRouter`'s closure flood for walking and stairs, `substrate/m59-falljumps.json` for the
 declared jumps, unbounded descent for the drops — and writes `substrate/node-rails.json`.
 
+**That file is DERIVED and gitignored**, unlike `substrate/rail-714.json` beside it: the hall
+bake is 137 KB of hand-declared door states, this is 2.1 MB of dense waypoints that changes
+wholesale whenever the bake's own logic moves, and a rerun costs about four minutes from the
+committed map and routing table. `show`, `check` and `m59-fineclimb --rail` each name the file
+and the command when it is absent. A `--node` run carries forward the stones it did not touch,
+so a partial bake cannot quietly leave a table of one — and it refuses to carry forward across a
+different `max_jumps`, candidate policy or `NODERAIL_VERSION`, because a mixed table is worse
+than a short one.
+
 **First bake, 2026-09-18: 27 of 50 stone/exit pairs have a line, and the failures are almost
 all INBOUND.** From nearly every stone you can walk out; into most of them you cannot walk in.
 

@@ -449,5 +449,34 @@ const flat = () => 1000;
      'the bake carries a version of its own meaning, so a fixed bake cannot read as fresh');
 }
 
+
+// ---- A PARTIAL BAKE MUST NOT DELETE THE OTHER STONES ----------------------------------------
+{
+  // `bake --node fey` rebakes one stone and writes the WHOLE file. Before the carry-forward it
+  // left a table holding fey and nothing else, and every other stone's rails vanished. That was
+  // survivable while the artefact was committed — the diff was enormous — and went silent the
+  // moment it became gitignored, which is the trade that decision makes.
+  const prior = { version: 1, max_jumps: 4, candidates: false, cut: 'then',
+                  stones: [{ node: 'fey', routes: [1] }, { node: 'ancient', routes: [2] },
+                           { node: 'victoria', routes: [3] }] };
+  const fresh = { version: 1, max_jumps: 4, candidates: false, cut: 'now',
+                  stones: [{ node: 'fey', routes: ['new'] }] };
+  const carry = (baked, old) => {
+    const same = old.version === baked.version && old.max_jumps === baked.max_jumps
+              && old.candidates === baked.candidates;
+    const have = new Set(baked.stones.map(s => s.node));
+    return same ? (old.stones ?? []).filter(s => !have.has(s.node)) : [];
+  };
+  const kept = carry(fresh, prior);
+  eq(kept.map(s => s.node), ['ancient', 'victoria'], 'the stones not rebaked are carried forward');
+  ok(!kept.some(s => s.node === 'fey'), '...and the rebaked one is NOT duplicated');
+
+  // A MIXED TABLE IS WORSE THAN A SHORT ONE. A stone kept from a run under different settings
+  // is not the same claim as the ones beside it.
+  eq(carry(fresh, { ...prior, max_jumps: 6 }), [], 'a different max_jumps carries nothing forward');
+  eq(carry(fresh, { ...prior, candidates: true }), [], '...nor a different candidate policy');
+  eq(carry(fresh, { ...prior, version: 0 }), [], '...nor an older NODERAIL_VERSION');
+}
+
 console.log(`\nm59-noderails: ${pass} assertion(s) passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

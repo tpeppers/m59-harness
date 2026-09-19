@@ -29,7 +29,8 @@
 //
 // Offline. Opens no socket, joins nobody, and needs no broker.
 
-import { Autopilot, PASS_STAGES, HANDLED, CONTINUE } from './m59-autopilot.mjs';
+import { Autopilot, PASS_STAGES, HANDLED, CONTINUE, STAGE_OVERRAN,
+         stageDeadlineMs } from './m59-autopilot.mjs';
 
 let passed = 0, failed = 0;
 const ok = (what, cond) => {
@@ -95,6 +96,7 @@ function harness({ verdicts = {} } = {}) {
     };
   }
   ap.note = (what, detail) => notes.push({ what, detail });
+  ap.tally = {};
   return { ap, calls, notes };
 }
 
@@ -165,6 +167,105 @@ console.log('\nthe sentinels themselves');
      typeof HANDLED === 'symbol' && typeof CONTINUE === 'symbol');
   ok('and they are not each other', HANDLED !== CONTINUE);
 }
+
+// ---------------------------------------------- A RUNG THAT HANGS MUST NOT HOLD THE LADDER
+//
+// The defect this pins, measured on prod 2026-09-19 over 36 deaths in fourteen hours: 21 of
+// them had ONE rung owning more than 80% of the blocked pass (`passFleeAndRest` 10, `passFarm`
+// 9, `passOutside` 2), the worst 533 seconds of a 534-second pass inside `passFarm`. The
+// ladder awaited each rung with no deadline, so a rung that never returned meant a keeper that
+// never decided anything again — including fleeing, because `passFleeAndRest` is a rung like
+// any other and cannot run while something above it is still awaiting. `fled_in_time` across
+// those deaths ran 0.02 to 0.22 against a 0.68 flee threshold: the flee decision was not
+// losing an argument, it was never reached.
+
+console.log('\nthe deadlines themselves');
+{
+  ok('every stage has a deadline', PASS_STAGES.every(s => stageDeadlineMs(s) > 0));
+  ok('the survival rungs are bounded tightest — they decide at the one-second clock',
+     stageDeadlineMs('passFleeAndRest') <= stageDeadlineMs('passFarm'));
+  ok('an override of 0 restores the old unbounded behaviour exactly, for a bisect',
+     stageDeadlineMs('passFarm', { M59_STAGE_DEADLINE_MS: '0' }) === 0);
+  // AN UNUSABLE VALUE KEEPS THE COMMITTED ONE. A typo must not silently unbound the ladder.
+  ok('and an unparseable override is ignored rather than applied',
+     stageDeadlineMs('passFarm', { M59_STAGE_DEADLINE_MS: 'soon' }) === stageDeadlineMs('passFarm'));
+}
+
+console.log('\na rung that hangs is abandoned by the LADDER and not by the WORK');
+{
+  const { ap, calls, notes } = harness({});
+  let release; const hang = new Promise(r => { release = r; });
+  let farmFinished = false;
+  ap.passFarm = async () => { calls.push('passFarm'); await hang; farmFinished = true; return CONTINUE; };
+  process.env.M59_STAGE_DEADLINE_MS = '40';
+
+  const stopped = await runLadder(ap);
+  ok('the pass ends on the rung that overran', stopped === 'passFarm');
+  ok('and every rung ABOVE it got its turn first',
+     JSON.stringify(calls) === JSON.stringify(PASS_STAGES));
+  ok('the overrun is reported, not silent',
+     notes.some(n => /overran the ladder deadline/.test(n.what)));
+  ok('and the note says the work was not cancelled',
+     notes.some(n => /STILL RUNNING/.test(String(n.detail?.why ?? ''))));
+  ok('the rung really is still running — nothing cancelled it', farmFinished === false);
+
+  // THE SECOND PASS IS THE WHOLE POINT: survival runs again while the stuck rung finishes.
+  calls.length = 0;
+  await runLadder(ap);
+  ok('the next pass runs the survival ladder again',
+     calls.includes('passFleeAndRest'));
+  ok('and does NOT invoke the stuck rung a second time — two shopping trips on one body is ' +
+     'worse than the hang', !calls.includes('passFarm'));
+  ok('the skip is counted', ap.tally.stage_skipped_in_flight >= 1);
+
+  // And once it settles, the rung is available again.
+  release(CONTINUE);
+  await hang.then(() => {}).catch(() => {});
+  await new Promise(r => setTimeout(r, 10));
+  calls.length = 0;
+  await runLadder(ap);
+  ok('once the rung finally returns it is callable again', calls.includes('passFarm'));
+  delete process.env.M59_STAGE_DEADLINE_MS;
+}
+
+console.log('\nthe bound is invisible to a rung that answers in time');
+{
+  const { ap, calls } = harness({ verdicts: { passFleeAndRest: HANDLED } });
+  process.env.M59_STAGE_DEADLINE_MS = '5000';
+  const stopped = await runLadder(ap);
+  ok('a prompt HANDLED still ends the tick exactly as before', stopped === 'passFleeAndRest');
+  ok('and nothing below it ran', !calls.includes('passFarm'));
+  delete process.env.M59_STAGE_DEADLINE_MS;
+}
+
+console.log('\na rung that throws still throws — the bound must not swallow a fault');
+{
+  const { ap } = harness({});
+  ap.passArm = async () => { throw new Error('the arm rung blew up'); };
+  process.env.M59_STAGE_DEADLINE_MS = '5000';
+  let caught = null;
+  try { await runLadder(ap); } catch (e) { caught = e; }
+  ok('the throw propagates as it always did', /the arm rung blew up/.test(String(caught)));
+  delete process.env.M59_STAGE_DEADLINE_MS;
+}
+
+console.log('\nan abandoned rung that throws later cannot crash the keeper');
+{
+  const { ap } = harness({});
+  let boom; const later = new Promise((_, rej) => { boom = rej; });
+  ap.passFarm = async () => { await later; };
+  process.env.M59_STAGE_DEADLINE_MS = '30';
+  let unhandled = null;
+  const onUnhandled = e => { unhandled = e; };
+  process.on('unhandledRejection', onUnhandled);
+  await runLadder(ap);
+  boom(new Error('abandoned rung failed five minutes later'));
+  await new Promise(r => setTimeout(r, 60));
+  process.off('unhandledRejection', onUnhandled);
+  ok('the late rejection is swallowed rather than taking the process down', unhandled === null);
+  delete process.env.M59_STAGE_DEADLINE_MS;
+}
+
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
