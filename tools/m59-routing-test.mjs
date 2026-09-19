@@ -1655,13 +1655,37 @@ console.log('A SPLIT BOUNDARY HAS SQUARES THAT LEAD SOMEWHERE ELSE, AND THEY ARE
          !(p?.hops ?? []).some(h => Number(h.from) === Number(room)));
     }
 
-    // The 802 regression itself: it must not be the shortcut it became the moment it was
-    // reachable. 589 -> 598 is the sharpest pair — two hops through the temple, six around.
-    if (AVOID_IN_TRANSIT.has(802)) {
-      const p = findPath(map, 589, 598);
-      ok('589 -> 598 does not thread through the Temple of Qor',
-         p?.found === true && !(p.hops ?? []).some(h => Number(h.to) === 802),
-         JSON.stringify((p?.hops ?? []).map(h => h.to)));
+    // THE PROPERTY, NOT THE MEMBERSHIP — assert the ZERO rather than the entry.
+    //
+    // Measured 2026-09-19 across 6,575 room pairs: with 802 in the set the new exit table
+    // produces routing IDENTICAL to the table that predates it, 0 changed; without it, 258
+    // pairs (3.9%) divert through the temple, `2->598` falling from 8 hops to 3. So the
+    // mitigation is load-bearing rather than belt-and-braces, and anything that later drops
+    // 802 from the set reopens 3.9% of the map in silence. Checking `AVOID_IN_TRANSIT.has(802)`
+    // would not catch that: the set could keep the entry and the router stop honouring it.
+    // This asks the router.
+    //
+    // Stated as an invariant so it needs no fixture: a room avoided in transit may be an
+    // ENDPOINT of a route and must never be an INTERIOR hop of one.
+    {
+      const sample = [2, 38, 39, 50, 101, 150, 200, 350, 515, 563, 575, 578, 579, 589,
+                      593, 597, 598, 599, 801];
+      const offenders = [];
+      for (const a of sample) for (const b of sample) {
+        if (a === b) continue;
+        const p = findPath(map, a, b);
+        if (p?.found !== true) continue;
+        const hops = p.hops ?? [];
+        // Interior = arrived at and then left again. The last hop's `to` is the endpoint.
+        for (let i = 0; i < hops.length - 1; i++)
+          if (AVOID_IN_TRANSIT.has(Number(hops[i].to))) {
+            offenders.push(`${a}->${b} via ${hops[i].to}`);
+            break;
+          }
+      }
+      ok(`no route among ${sample.length} sampled rooms passes THROUGH an avoided room ` +
+         `(${sample.length * (sample.length - 1)} pairs)`,
+         offenders.length === 0, offenders.slice(0, 8).join(' | '));
     }
   }
 }
