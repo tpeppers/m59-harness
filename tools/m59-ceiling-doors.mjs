@@ -37,9 +37,16 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
   if (!definition) return null;
   const room = map.rooms[roomNum], geometry = geometryOf ? geometryOf(room) : sharedRoomGeometry(room);
   if (!geometry || geometry.security !== definition.security) return null;
+  // A DOOR WE HAVE NOT SEEN MOVE IS WHERE THE .roo SHIPS IT, WHICH IS NOT ALWAYS SHUT.
+  // The room replay carries the sectors that have moved, so on entry most doors are unknown
+  // and this fallback decides the whole state. Room 714 ships all five shut, which is why
+  // `d.closed` looked right; rooms 380, 598 and one of 750's two ship OPEN, and assuming shut
+  // there applies a sealed mask to a standing-open passage — the router then calls it no
+  // route, which is the exact failure this table exists to prevent. `shipped` is read off the
+  // .roo by the bake; `?? d.closed` keeps a table baked before it worked as it did.
   const heights = definition.doors.map(d => {
     const seen = observed.get(d.id);
-    return seen?.type === 5 ? seen.height : d.closed;
+    return seen?.type === 5 ? seen.height : (d.shipped ?? d.closed);
   });
   const key = heights.join(','), state = definition.states[key];
   if (!state) return null;
