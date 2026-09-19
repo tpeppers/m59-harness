@@ -1,0 +1,1814 @@
+{
+ "note": "Doors you OPERATE: attempt a `go` on a trigger square, the room moves a sector, and it closes again after delay_ms — which is timed from the PRESS, not from the moment it finishes opening. Derived from SomethingTryGo by tools/m59-doors.mjs; do not hand-edit. `gate` is what refuses the press: ReqLegalEntry or IsMember.",
+ "built_at": "2026-09-19T18:26:51.769Z",
+ "rooms": {
+  "5": {
+   "name": "The Underground Lake",
+   "cls": "Cave3",
+   "file": "object/active/holder/room/cave3.kod",
+   "doors": [
+    {
+     "sector": 12,
+     "sector_name": "SECTOR_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 68
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        37,
+        38
+       ]
+      }
+     ],
+     "open": 260,
+     "closed": 336,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 150,
+     "delay_ms": null,
+     "delay_from": null,
+     "gate": null,
+     "opened_via": "RaiseTemple"
+    }
+   ]
+  },
+  "568": {
+   "name": "Lake of Jala's Song",
+   "cls": "OutdoorsF8",
+   "file": "object/active/holder/room/monsroom/f8.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 6
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 49
+      }
+     ],
+     "open": 388,
+     "closed": 308,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": null,
+     "delay_from": "LIFT_DELAY",
+     "gate": null,
+     "opened_via": "OpenDoor"
+    },
+    {
+     "sector": 1,
+     "sector_name": "DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 6
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 50
+      }
+     ],
+     "open": 388,
+     "closed": 308,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": null,
+     "delay_from": "LIFT_DELAY",
+     "gate": null,
+     "opened_via": "OpenDoor"
+    }
+   ]
+  },
+  "701": {
+   "name": "Mercenary Alley",
+   "cls": "GuildHall1",
+   "file": "object/active/holder/room/ghall/guildh1.kod",
+   "doors": [
+    {
+     "sector": 3,
+     "sector_name": "ENTRANCE",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 18
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 10
+      }
+     ],
+     "open": 128,
+     "closed": 200,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "LIFT_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "OpenEntrancedoor"
+    }
+   ]
+  },
+  "702": {
+   "name": "The Hall of Explorers",
+   "cls": "GuildHall2",
+   "file": "object/active/holder/room/ghall/guildh2.kod",
+   "doors": [
+    {
+     "sector": 2,
+     "sector_name": "CLOSET",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        16,
+        17
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        31,
+        32
+       ]
+      }
+     ],
+     "open": 96,
+     "closed": 24,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 100,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 3,
+     "sector_name": "MAINDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 18
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 29
+      }
+     ],
+     "open": 88,
+     "closed": 24,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 100,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "opened_via": "OpenEntranceDoor"
+    },
+    {
+     "sector": 4,
+     "sector_name": "EASTDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        11,
+        12
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 28
+      }
+     ],
+     "open": 168,
+     "closed": 96,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 100,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 5,
+     "sector_name": "OFFICEDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        11,
+        12
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 25
+      }
+     ],
+     "open": 176,
+     "closed": 96,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 100,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 6,
+     "sector_name": "SOUTHDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        14,
+        15
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        19,
+        20
+       ]
+      }
+     ],
+     "open": 96,
+     "closed": 24,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 100,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 7,
+     "sector_name": "WESTDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        12,
+        13
+       ]
+      },
+      {
+       "axis": "col",
+       "op": ">",
+       "value": 16
+      },
+      {
+       "axis": "col",
+       "op": "<",
+       "value": 20
+      }
+     ],
+     "open": 184,
+     "closed": 24,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 100,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    }
+   ]
+  },
+  "703": {
+   "name": "The Den of Shadows",
+   "cls": "GuildHall3",
+   "file": "object/active/holder/room/ghall/guildh3.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "ENTRANCE",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 5
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 8
+      }
+     ],
+     "open": 580,
+     "closed": 500,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": null,
+     "delay_from": "LIFT_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "openEntrancedoor"
+    }
+   ]
+  },
+  "704": {
+   "name": "The Wryn's Keep",
+   "cls": "GuildHall4",
+   "file": "object/active/holder/room/ghall/guildh4.kod",
+   "doors": [
+    {
+     "sector": 4,
+     "sector_name": "WESTDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 29
+      },
+      {
+       "axis": "col",
+       "op": "<",
+       "value": 24
+      }
+     ],
+     "open": 204,
+     "closed": 128,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 20000,
+     "delay_from": "RESET_TIME_LONG",
+     "gate": null
+    },
+    {
+     "sector": 5,
+     "sector_name": "EASTDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 29
+      },
+      {
+       "axis": "col",
+       "op": ">",
+       "value": 25
+      }
+     ],
+     "open": 204,
+     "closed": 128,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 20000,
+     "delay_from": "RESET_TIME_LONG",
+     "gate": null
+    },
+    {
+     "sector": 6,
+     "sector_name": "MASTERDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": ">",
+       "value": 35
+      },
+      {
+       "axis": "row",
+       "op": "<",
+       "value": 39
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 33
+      }
+     ],
+     "open": 204,
+     "closed": 128,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 20000,
+     "delay_from": "RESET_TIME_LONG",
+     "gate": null
+    },
+    {
+     "sector": 7,
+     "sector_name": "ASSISTDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 33
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        36,
+        35
+       ]
+      }
+     ],
+     "open": 204,
+     "closed": 128,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 20000,
+     "delay_from": "RESET_TIME_LONG",
+     "gate": null
+    },
+    {
+     "sector": 0,
+     "sector_name": "PIPOS2",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 43
+      },
+      {
+       "axis": "col",
+       "op": "<",
+       "value": 26
+      },
+      {
+       "axis": "col",
+       "op": ">",
+       "value": 23
+      }
+     ],
+     "open": 196,
+     "closed": 256,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 1000,
+     "delay_from": "NEXT_TIME",
+     "gate": "ReqLegalEntry",
+     "opened_via": "OpenEntranceDoor"
+    }
+   ]
+  },
+  "705": {
+   "name": "West Tower Guild Hall in Ko'catan",
+   "cls": "GuildHall12",
+   "file": "object/active/holder/room/ghall/guildh12.kod",
+   "doors": [
+    {
+     "sector": 59,
+     "sector_name": "MAIN_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 32
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        2,
+        3
+       ]
+      }
+     ],
+     "open": 700,
+     "closed": 600,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "opened_via": "OpenEntranceDoor"
+    }
+   ]
+  },
+  "706": {
+   "name": "The Old Dwarven Hall",
+   "cls": "GuildHall7",
+   "file": "object/active/holder/room/ghall/guildh7.kod",
+   "doors": [
+    {
+     "sector": 7,
+     "sector_name": "SWDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 18
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 9
+      }
+     ],
+     "open": 132,
+     "closed": 32,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "RESET_TIME",
+     "gate": null,
+     "opened_via": "OpenEntranceDoor"
+    },
+    {
+     "sector": 7,
+     "sector_name": "SWDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 7
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 11
+      }
+     ],
+     "open": 132,
+     "closed": 32,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "RESET_TIME",
+     "gate": null,
+     "opened_via": "OpenEntranceDoor"
+    },
+    {
+     "sector": 7,
+     "sector_name": "SWDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 6
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 23
+      }
+     ],
+     "open": 132,
+     "closed": 32,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "RESET_TIME",
+     "gate": null,
+     "opened_via": "OpenEntranceDoor"
+    }
+   ]
+  },
+  "707": {
+   "name": "Konima's Abandoned Dwelling",
+   "cls": "GuildHall5",
+   "file": "object/active/holder/room/ghall/guildh5.kod",
+   "doors": [
+    {
+     "sector": 6,
+     "sector_name": "6",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        11,
+        12
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        17,
+        18
+       ]
+      }
+     ],
+     "open": 168,
+     "closed": 70,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 32,
+     "delay_ms": 6000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 7,
+     "sector_name": "7",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        8,
+        9
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        23,
+        24
+       ]
+      }
+     ],
+     "open": 134,
+     "closed": 54,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 32,
+     "delay_ms": 6000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 8,
+     "sector_name": "8",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        8,
+        9
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        12,
+        13
+       ]
+      }
+     ],
+     "open": 134,
+     "closed": 54,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 32,
+     "delay_ms": 6000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 9,
+     "sector_name": "9",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 24
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        14,
+        15,
+        21,
+        22
+       ]
+      }
+     ],
+     "open": 70,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 6000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "OpenEntranceDoor"
+    }
+   ]
+  },
+  "709": {
+   "name": "The Abandoned Warehouse",
+   "cls": "GuildHall9",
+   "file": "object/active/holder/room/ghall/guildh9.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "MAINDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 12
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 19
+      }
+     ],
+     "open": 128,
+     "closed": 224,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 100,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "openEntrancedoor"
+    }
+   ]
+  },
+  "710": {
+   "name": "Jaarba's Abode",
+   "cls": "GuildHall10",
+   "file": "object/active/holder/room/ghall/guildh10.kod",
+   "doors": [
+    {
+     "sector": 6,
+     "sector_name": "NORTH_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        7,
+        8
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 11
+      }
+     ],
+     "open": 72,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 7000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 4,
+     "sector_name": "EAST_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        9,
+        10
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        13,
+        14,
+        15
+       ]
+      }
+     ],
+     "open": 72,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 7000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 5,
+     "sector_name": "WEST_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 9
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        7,
+        8,
+        9
+       ]
+      }
+     ],
+     "open": 72,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 7000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 1,
+     "sector_name": "ENTRANCE_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 16
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 11
+      }
+     ],
+     "open": 72,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 7000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "openentrancedoor"
+    },
+    {
+     "sector": 2,
+     "sector_name": "BAR_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        12,
+        13
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        13,
+        14,
+        15
+       ]
+      }
+     ],
+     "open": 72,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 7000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 3,
+     "sector_name": "NEWS_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        12,
+        13
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        7,
+        8,
+        9
+       ]
+      }
+     ],
+     "open": 72,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 7000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null,
+     "ambiguous_pairs": true
+    }
+   ]
+  },
+  "711": {
+   "name": "The Ivory Chapel",
+   "cls": "GuildHall6",
+   "file": "object/active/holder/room/ghall/guildh6.kod",
+   "doors": [
+    {
+     "sector": 2,
+     "sector_name": "GH6ENTRANCE",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 11
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 13
+      }
+     ],
+     "open": 128,
+     "closed": 208,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "LIFT_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "openEntrancedoor"
+    }
+   ]
+  },
+  "712": {
+   "name": "The home of the Friends of the Forest",
+   "cls": "GuildHall11",
+   "file": "object/active/holder/room/ghall/guildh11.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "MAINDOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 8
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 16
+      }
+     ],
+     "open": 48,
+     "closed": 128,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "OpenEntranceDoor"
+    }
+   ]
+  },
+  "713": {
+   "name": "The Hall of the Slaughtered Command",
+   "cls": "GuildHall13",
+   "file": "object/active/holder/room/ghall/guildh13.kod",
+   "doors": [
+    {
+     "sector": 4,
+     "sector_name": "MAIN_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": ">=",
+       "value": 2
+      },
+      {
+       "axis": "row",
+       "op": "<=",
+       "value": 4
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 8
+      }
+     ],
+     "open": 500,
+     "closed": 360,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "OpenEntranceDoor"
+    }
+   ]
+  },
+  "714": {
+   "name": "The Bookmaker's Guild House",
+   "cls": "GuildHall14",
+   "file": "object/active/holder/room/ghall/guildh14.kod",
+   "doors": [
+    {
+     "sector": 59,
+     "sector_name": "MAIN_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 4
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 28
+      }
+     ],
+     "open": 190,
+     "closed": 100,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "OpenEntranceDoor"
+    },
+    {
+     "sector": 55,
+     "sector_name": "HALL_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        18,
+        19
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 10
+      }
+     ],
+     "open": 230,
+     "closed": 160,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 58,
+     "sector_name": "COUNTER_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        2,
+        3
+       ]
+      },
+      {
+       "axis": "col",
+       "op": ">=",
+       "value": 19
+      },
+      {
+       "axis": "col",
+       "op": "<=",
+       "value": 21
+      }
+     ],
+     "open": 190,
+     "closed": 100,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 53,
+     "sector_name": "INNER_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": ">=",
+       "value": 11
+      },
+      {
+       "axis": "row",
+       "op": "<=",
+       "value": 13
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 13
+      }
+     ],
+     "open": 240,
+     "closed": 160,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": null
+    },
+    {
+     "sector": 83,
+     "sector_name": "LIFT_ONE",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 13
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 31
+      }
+     ],
+     "open": 115,
+     "closed": 100,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "IsMember"
+    },
+    {
+     "sector": 84,
+     "sector_name": "LIFT_TWO",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 17
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 24
+      }
+     ],
+     "open": 115,
+     "closed": 100,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 50,
+     "delay_ms": 5000,
+     "delay_from": "DOOR_DELAY",
+     "gate": "IsMember"
+    }
+   ]
+  },
+  "715": {
+   "name": "Inner Sanctum of Queen Venya'cyr",
+   "cls": "GuildHall15",
+   "file": "object/active/holder/room/ghall/guildh15.kod",
+   "doors": [
+    {
+     "sector": 2,
+     "sector_name": "ENTRANCE_SECTOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        12,
+        13,
+        14
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        31,
+        32,
+        33
+       ]
+      }
+     ],
+     "open": 10,
+     "closed": 200,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 16,
+     "delay_ms": 13000,
+     "delay_from": "LIFT_DELAY",
+     "gate": "ReqLegalEntry",
+     "opened_via": "openEntrancedoor",
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 1,
+     "sector_name": "SECRET_SECTOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 19
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        13,
+        14,
+        15
+       ]
+      }
+     ],
+     "open": 96,
+     "closed": 0,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 13000,
+     "delay_from": "LIFT_DELAY",
+     "gate": null,
+     "opened_via": "OpenSecretDoor"
+    }
+   ]
+  },
+  "750": {
+   "name": "The Dreaded Caves of Ice",
+   "cls": "IceCave1",
+   "file": "object/active/holder/room/monsroom/objroom/icecave1.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "YETI_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "value": 24
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        10,
+        11
+       ]
+      }
+     ],
+     "open": 448,
+     "closed": 380,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "YETI_DOOR_TIME",
+     "gate": null
+    }
+   ]
+  },
+  "801": {
+   "name": "The Temple of Kraanan",
+   "cls": "TempleKraanan",
+   "file": "object/active/holder/room/tempkra.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "SECTOR_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        30,
+        31
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 20
+      }
+     ],
+     "open": 164,
+     "closed": 92,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "RESET_TIME",
+     "gate": null
+    }
+   ]
+  },
+  "802": {
+   "name": "The Temple of Qor",
+   "cls": "TempleQor",
+   "file": "object/active/holder/room/tempqor.kod",
+   "doors": [
+    {
+     "sector": 4,
+     "sector_name": "SECTOR_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        3,
+        4
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        17,
+        18
+       ]
+      }
+     ],
+     "open": 270,
+     "closed": 192,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 16,
+     "delay_ms": null,
+     "delay_from": "RESET_TIME",
+     "gate": null,
+     "ambiguous_pairs": true
+    }
+   ]
+  },
+  "951": {
+   "name": "Blackstone Keep",
+   "cls": "Duke2",
+   "file": "object/active/holder/room/duke2.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "EAST_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": ">=",
+       "value": 17
+      },
+      {
+       "axis": "row",
+       "op": "<=",
+       "value": 19
+      },
+      {
+       "axis": "col",
+       "op": ">=",
+       "value": 22
+      },
+      {
+       "axis": "col",
+       "op": "<=",
+       "value": 24
+      }
+     ],
+     "open": 356,
+     "closed": 436,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_TIME",
+     "gate": null
+    },
+    {
+     "sector": 2,
+     "sector_name": "WEST_DOOR",
+     "when": [
+      {
+       "axis": "row",
+       "op": ">=",
+       "value": 17
+      },
+      {
+       "axis": "row",
+       "op": "<=",
+       "value": 19
+      },
+      {
+       "axis": "col",
+       "op": ">=",
+       "value": 7
+      },
+      {
+       "axis": "col",
+       "op": "<=",
+       "value": 9
+      }
+     ],
+     "open": 356,
+     "closed": 436,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 16,
+     "delay_ms": 10000,
+     "delay_from": "DOOR_TIME",
+     "gate": null
+    },
+    {
+     "sector": 4,
+     "sector_name": "FEAST_DOOR_OPEN",
+     "when": [
+      {
+       "axis": "row",
+       "op": ">=",
+       "value": 9
+      },
+      {
+       "axis": "row",
+       "op": "<=",
+       "value": 10
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "value": 14
+      }
+     ],
+     "open": 356,
+     "closed": 419,
+     "closed_from": "the sector's other SetSector",
+     "kind": "floor",
+     "animation": "ANIMATE_FLOOR_LIFT",
+     "speed": 0,
+     "delay_ms": null,
+     "delay_from": null,
+     "gate": null
+    }
+   ]
+  },
+  "2505": {
+   "name": "Konima's Ascension",
+   "cls": "OrcCave6",
+   "file": "object/active/holder/room/monsroom/orccave6.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "DOORSECTOR",
+     "when": [
+      {
+       "axis": "Row",
+       "op": "==",
+       "value": 5
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 61
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 62
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 63
+      },
+      {
+       "axis": "Row",
+       "op": "==",
+       "value": 6
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 61
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 62
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 63
+      },
+      {
+       "axis": "Row",
+       "op": "==",
+       "value": 7
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 61
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 62
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 63
+      }
+     ],
+     "open": 1150,
+     "closed": 1060,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 10000,
+     "delay_from": "10000",
+     "gate": null
+    }
+   ]
+  },
+  "2506": {
+   "name": "Lair of the Orc Pit Boss",
+   "cls": "Orcpit1",
+   "file": "object/active/holder/room/monsroom/bossroom/orcpit1.kod",
+   "doors": [
+    {
+     "sector": 1,
+     "sector_name": "SECTOR_DOOR1A",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        56,
+        57
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        14,
+        15
+       ]
+      }
+     ],
+     "open": 380,
+     "closed": 310,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": null,
+     "delay_ms": 9000,
+     "delay_from": "DOOR_RESET_TIME",
+     "gate": null,
+     "ambiguous_pairs": true
+    },
+    {
+     "sector": 3,
+     "sector_name": "SECTOR_DOOR2A",
+     "when": [
+      {
+       "axis": "row",
+       "op": "==",
+       "values": [
+        63,
+        64
+       ]
+      },
+      {
+       "axis": "col",
+       "op": "==",
+       "values": [
+        55,
+        56
+       ]
+      }
+     ],
+     "open": 380,
+     "closed": 310,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": null,
+     "delay_ms": 9000,
+     "delay_from": "DOOR_RESET_TIME",
+     "gate": null,
+     "ambiguous_pairs": true
+    }
+   ]
+  },
+  "2507": {
+   "name": "Grog's Antechamber",
+   "cls": "OrcPitA",
+   "file": "object/active/holder/room/monsroom/orcpita.kod",
+   "doors": [
+    {
+     "sector": 2,
+     "sector_name": "DOORSECTOR",
+     "when": [
+      {
+       "axis": "Row",
+       "op": "==",
+       "value": 93
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 24
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 25
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 26
+      },
+      {
+       "axis": "Row",
+       "op": "==",
+       "value": 91
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 24
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 25
+      },
+      {
+       "axis": "Col",
+       "op": "==",
+       "value": 26
+      }
+     ],
+     "open": 600,
+     "closed": 500,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 60000,
+     "delay_from": "60000",
+     "gate": null
+    }
+   ]
+  },
+  "2508": {
+   "name": "Brog's Antechamber",
+   "cls": "OrcPitB",
+   "file": "object/active/holder/room/monsroom/orcpitb.kod",
+   "doors": [
+    {
+     "sector": 2,
+     "sector_name": "DOORSECTOR",
+     "when": [
+      {
+       "axis": "Row",
+       "op": ">=",
+       "value": 53
+      },
+      {
+       "axis": "Col",
+       "op": ">=",
+       "value": 28
+      },
+      {
+       "axis": "Row",
+       "op": "<=",
+       "value": 55
+      },
+      {
+       "axis": "Col",
+       "op": "<=",
+       "value": 30
+      }
+     ],
+     "open": 600,
+     "closed": 500,
+     "closed_from": "the sector's other SetSector",
+     "kind": "ceiling",
+     "animation": "ANIMATE_CEILING_LIFT",
+     "speed": 50,
+     "delay_ms": 60000,
+     "delay_from": "60000",
+     "gate": null
+    }
+   ]
+  }
+ },
+ "stats": {
+  "classes_scanned": 281,
+  "rooms_with_doors": 24,
+  "doors": 53,
+  "unmatched_classes": [],
+  "incomplete": [],
+  "no_auto_close": [
+   "5 SECTOR_DOOR",
+   "951 FEAST_DOOR_OPEN",
+   "703 ENTRANCE",
+   "568 DOOR",
+   "568 DOOR",
+   "802 SECTOR_DOOR"
+  ]
+ }
+}
