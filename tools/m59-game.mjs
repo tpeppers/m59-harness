@@ -4756,6 +4756,10 @@ class Session {
     // loop below reports one stable terminal result instead of walking the same boundary
     // again. Nothing here is persisted beyond this journey.
     const exhaustedHops = new Map();
+    // ONE DOOR PER JOURNEY. A room that needs its door opened needs it once; a second attempt
+    // after the first failed is a five-second cycle spent on the same refusal, which is the
+    // loop this whole change exists to end rather than to relocate.
+    let doorTried = false;
     // A WRONG-ROOM LANDING DOES NOT BAN THE HOP IT AIMED FOR.
     //
     // This kept a journey-scoped set and added to it whenever a crossing landed in the wrong
@@ -5056,6 +5060,34 @@ class Session {
         allowHazard,
       });
       if (!route.found) {
+        // BEFORE DECLARING A ROOM SEALED, TRY ITS DOORS. Once per journey, like the safe-wall
+        // pocket escape below and for the same reason: the thing it fixes either works the
+        // first time or is not what was wrong, and a second go would be a loop rather than a
+        // retry. See `openOperableDoor` — the press is a `go` from the trigger square and the
+        // wait is the server's own `sector-height` event, so if the sector moves the LIVE
+        // geometry is different and `continue` re-plans against it. That is the whole of the
+        // integration: no new router, just a room that is no longer lying about its exits.
+        if (!doorTried) {
+          doorTried = true;
+          // OPTIONAL, BECAUSE A SESSION WITHOUT IT MUST BEHAVE EXACTLY AS BEFORE. Not
+          // defensive programming for its own sake: `travel` is extracted and run against a
+          // stripped fake by m59-travel-test.mjs, and a hard call there turns "this journey
+          // has no doors to try" into a TypeError that ends the journey.
+          const opened = this.openOperableDoor
+            ? await this.openOperableDoor({ movementGeneration, controlToken })
+                .catch(e => ({ opened: false, reason: e?.message ?? String(e) }))
+            : null;
+          if (opened?.opened) {
+            log.push({ outcome: 'operated_a_door', room: here.num, sector: opened.sector,
+                       name: opened.name, at: opened.at, shuts_after_ms: opened.shuts_after_ms,
+                       note: 're-planning against the geometry this opened — the exits were ' +
+                             'not exhausted, they were shut' });
+            continue;
+          }
+          if (opened?.reason && opened.reason !== 'this room has no door anybody can operate')
+            log.push({ outcome: 'door_not_opened', room: here.num, sector: opened.sector ?? null,
+                       gate: opened.gate ?? null, note: opened.reason });
+        }
         const exhausted = exhaustedRouteResult(here);
         if (exhausted) return exhausted;
         // SAFE-WALL POCKET ESCAPE, FOR THE FIRST HOP. A character parked on a safe wall is

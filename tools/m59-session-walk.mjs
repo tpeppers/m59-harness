@@ -54,6 +54,9 @@ import { boundedRegionEntry, boundedSilentGo, distinctStagesFirst, spreadEdges }
 import { forgetInferredExit } from './m59-map.mjs';
 
 import * as exitgap from './m59-exitgap.mjs';
+// The door table and the decision about which door is in the way. Pure and file-backed; it
+// answers empty when a checkout has no table, so this is inert wherever there are no doors.
+import { doorsFor } from './m59-doorplan.mjs';
 
 export function sessionWalkPrototype(deps) {
   const {
@@ -4728,6 +4731,118 @@ export function sessionWalkPrototype(deps) {
              note: moved
                ? `expected to land near r${door.arriveRow}c${door.arriveCol}`
                : 'the body did not move; a refused `go` says so in prose and nothing else' };
+  }
+
+  /**
+   * OPEN A DOOR THIS ROOM WILL OPEN FOR US — the half that was only ever reachable by an errand.
+   *
+   * `m59-guild-passage.mjs` worked this out on a live fleet and does it well, but it walks the
+   * Bookmakers hall's five sections against a hand-written table, and the only callers are the
+   * chest errand and the co-op runtime. So a character that merely wanted to LEAVE fell through
+   * to the ordinary router, which plans on the frozen bake, finds a hall of welded doors and
+   * says `route_progressing_exits_exhausted`. Zoot and Statler spent hours in 714 standing ON
+   * `r4c28`, which is MAIN_DOOR's trigger, with the exit two squares past it.
+   *
+   * THIS ONE NEEDS NO TOPOLOGY, AND THAT IS THE WHOLE DIFFERENCE. guildPassage has to know
+   * which square is on the far side because it is walking a fixed chain of sections. Opening a
+   * door does not: once the sector has moved the LIVE geometry changes, so the caller simply
+   * re-plans and the way through is there. That is what makes this composable with the router
+   * rather than a second router.
+   *
+   * THE FOUR THINGS THAT WERE LEARNED THE EXPENSIVE WAY, kept exactly:
+   *
+   *   * the trigger is where the body IS — `SomethingTryGo` receives `piRow`/`piCol`
+   *     (`user.kod:5669`), so this walks ONTO the door square and presses from there;
+   *   * the press is a bare `go`, and the wait is for the SERVER's `sector-height` event.
+   *     Never a duration: a geometry read taken mid-swing sees a shut door, which is the race
+   *     guild-passage records as `no live path across the open door` — a sentence that reads
+   *     exactly like "there is no way out of this room";
+   *   * the settle is CAPPED at 2.2s. Ceiling animations land inside 1.9s and the door shuts
+   *     5s after the PRESS, so waiting out a generic 8s collision invalidation would miss the
+   *     window entirely;
+   *   * a second `go` while the door is already open does NOT restart its timer, so a retry
+   *     waits the cycle out first.
+   *
+   * AND A SILENT PRESS ON A GATED DOOR IS A REFUSAL, NOT A SLOW DOOR. 714's main door asks
+   * `ReqLegalEntry` and its lifts ask `IsMember`; a character without the right is answered
+   * with nothing at all, which is this game's whole idiom. Retrying that is three wasted
+   * five-second cycles, so a gated door that produces no event is abandoned after one attempt
+   * and SAYS which gate refused it.
+   *
+   * Returns `{ opened, sector, reason }` and never throws — the caller records it.
+   */
+  async openOperableDoor({ movementGeneration = this.movementGeneration, controlToken,
+                           isInterrupted = () => false } = {}) {
+    const c = this.need?.();
+    const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken);
+    if (!c) return { opened: false, reason: 'no client' };
+    const roomNum = Number(this.world?.room?.num ?? NaN);
+    if (!Number.isFinite(roomNum)) return { opened: false, reason: 'room unknown' };
+
+    let plan = null;
+    try { plan = doorsFor(roomNum, { row: c.self?.row, col: c.self?.col }); }
+    catch { return { opened: false, reason: 'door table unreadable' }; }
+    if (!plan || (!plan.on.length && !plan.others.length))
+      return { opened: false, reason: 'this room has no door anybody can operate' };
+
+    // Standing on one already is the case that matters. Otherwise take the nearest trigger —
+    // Chebyshev, the metric the server's own range tests use.
+    const here = { row: c.self?.row, col: c.self?.col };
+    const cheb = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
+    const pick = plan.on[0] ?? [...plan.others]
+      .map(p => ({ p, sq: p.stand_on.filter(s => Number.isFinite(here.row))
+        .sort((x, y) => cheb(x, here) - cheb(y, here))[0] }))
+      .filter(x => x.sq).sort((a, b) => cheb(a.sq, here) - cheb(b.sq, here))[0]?.p;
+    if (!pick) return { opened: false, reason: 'no trigger square this body could aim at' };
+    const target = plan.on.includes(pick)
+      ? pick.stand_on.find(s => s.row === here.row && s.col === here.col)
+      : pick.stand_on.slice().sort((x, y) => cheb(x, here) - cheb(y, here))[0];
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (cancelled() || isInterrupted())
+        return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
+      if (c.self?.row !== target.row || c.self?.col !== target.col) {
+        const walked = await this.walkTo(target.col, target.row,
+          { movementGeneration, controlToken }).catch(e => ({ arrived: false, reason: e.message }));
+        if (cancelled() || walked?.cancelled)
+          return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
+        await this.confirmPosition?.();
+        if (c.self?.row !== target.row || c.self?.col !== target.col)
+          return { opened: false, sector: pick.sector,
+                   reason: `could not reach the trigger r${target.row}c${target.col}` +
+                           (walked?.reason ? ` (${walked.reason})` : '') };
+      }
+
+      const since = c.evSeq;
+      await (this.pacer?.submit ? this.pacer.submit('move', () => c.go()) : c.go())
+        .catch(() => {});
+      const moved = await c.waitFor({ since, kinds: ['sector-height'], timeoutMs: 350 })
+        .then(() => true, () => false);
+      if (moved) {
+        // Let the animation land, but never past the window the door itself allows.
+        const until = Math.min(Date.now() + 2200,
+                               c.room?.collisionInvalidated?.until ?? Date.now());
+        while (Date.now() < until && !isInterrupted() && !cancelled())
+          await new Promise(r => setTimeout(r, Math.min(100, Math.max(1, until - Date.now()))));
+        return { opened: true, sector: pick.sector, name: pick.name, at: target,
+                 shuts_after_ms: pick.within_ms,
+                 reason: `sector ${pick.sector} moved; the live geometry has changed and the ` +
+                         'route can be planned again' };
+      }
+      if (pick.gate)
+        return { opened: false, sector: pick.sector, gate: pick.gate,
+                 reason: `no sector moved and this door asks ${pick.gate} — a refusal in this ` +
+                         'game is silence, so this is very likely a door this character is not ' +
+                         'entitled to open. Not retried' };
+      if (attempt < 2) {
+        // A `go` while it is already open does not restart the five-second timer.
+        const retryAt = Date.now() + 5200;
+        while (Date.now() < retryAt && !isInterrupted() && !cancelled())
+          await new Promise(r => setTimeout(r, 100));
+      }
+    }
+    return { opened: false, sector: pick.sector,
+             reason: 'pressed three times and no sector moved' };
   }
 
   // WHICH INTERNAL DOOR, IF ANY, JOINS US TO ONE OF THESE SQUARES. Thin: the search is

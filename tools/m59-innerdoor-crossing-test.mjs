@@ -1,9 +1,18 @@
 // Offline behavior checks for the actual internal-door executor.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const source = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+// THE METHOD MOVED AND THIS DID NOT FOLLOW IT. `crossSameRoomDoor` lives in
+// m59-session-walk.mjs; m59-game.mjs has not contained it for some time, so `indexOf`
+// returned -1, `slice(-1, -1)` returned the empty string, and this built a class with no
+// methods at all. The failure surfaced as `b.s.crossSameRoomDoor is not a function` — which
+// reads like the executor is missing rather than like the test is looking in the wrong file,
+// and is exactly the shape of a test that extracts source by name: it cannot tell "this
+// changed" from "this is not here".
+const source = readFileSync(new URL('./m59-session-walk.mjs', import.meta.url), 'utf8');
 const start = source.indexOf('  async crossSameRoomDoor(');
 const end = source.indexOf('\n  // WHICH INTERNAL DOOR', start);
+assert.ok(start >= 0, 'crossSameRoomDoor is not in m59-session-walk.mjs — this test is stale');
+assert.ok(end > start, 'the end marker after crossSameRoomDoor moved — this test is stale');
 const Session = new Function('KOD_FINENESS', 'DOOR_SETTLE_MS', 'isTerminalMovementReason',
   'setTimeout', `return class { ${source.slice(start, end)} }`)(64, 0, () => false, fn => fn());
 const door = { row: 10, col: 13, arriveRow: 10, arriveCol: 15 };
