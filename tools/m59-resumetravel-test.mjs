@@ -288,10 +288,22 @@ console.log('A WALL THAT HAS FINISHED ITS WORK IS RELEASED IN THE STAGE THAT OWN
   //
   // Full health, vigor at the resting cap, a destination still carried — both release
   // conditions satisfied and nothing asking.
+  // THE SEAM, NOT THE SPELLING — and the second assertion that used to be here pinned a
+  // condition that has since been REMOVED ON PURPOSE.
+  //
+  // This read `if (this.hold && this.suspendedJourney)` and required the journey clause.
+  // `releaseRestedHold` computes `onARoad` and branches on it — it has a farming half and
+  // a travelling half — so gating the CALL on a suspended journey made the farming half
+  // unreachable, and four characters held a wall at full health with nothing asking. The
+  // clause went in fed3add and this assertion went red with it, still defending the bug.
+  //
+  // What matters is that the stage asks AT ALL while holding. The condition is allowed to
+  // change; the question being asked is not.
   ok('the stage that owns the wall asks whether it is finished',
-     /this\.hold && this\.suspendedJourney[\s\S]{0,60}releaseRestedHold\(\)/.test(stage));
-  ok('and only when there is a journey waiting on it',
-     /if \(this\.hold && this\.suspendedJourney\)/.test(stage));
+     /if \(this\.hold[^)]*\)[\s\S]{0,80}releaseRestedHold\(\)/.test(stage));
+  ok('and it is asked for a holder with no journey too, which is the farming half',
+     !/if \(this\.hold && this\.suspendedJourney\)/.test(stage),
+     'the journey clause made the farming branch of releaseRestedHold unreachable');
   // The release itself is unchanged: a hurt character still keeps its wall.
   // RUN, NOT GREPPED. This asserted the SPELLING of the threshold — `hp < (this.policy
   // .holdResumeAbove` — and went red the moment the expression grew a second case, while
@@ -393,7 +405,14 @@ console.log('FIT TO GO ON MEANS THE WALL HAS STOPPED PAYING, NOT AN ABSOLUTE NUM
      /resumeFlat/.test(fn) && /resumeWatch/.test(fn));
   ok('and the health gate yields once it has stopped',
      /hp < floor && stillMending/.test(fn), 'floor && stillMending');
-  ok('as does the vigor gate', /vig < REST_VIGOR_CAP && stillMending/.test(fn));
+  // THE SHAPE OF THE GATE, NOT THE THRESHOLD IT COMPARES AGAINST. This required the bare
+  // `REST_VIGOR_CAP` and went red when the bar became per-character — `restVigorCeiling()`,
+  // because a worn ring of lethargy lowers where resting stops awarding vigor by 20, so a
+  // wearer can never reach the global cap and every `vig < REST_VIGOR_CAP` was permanently
+  // true for it. The property being defended is that the vigor gate YIELDS once vigor has
+  // stopped climbing, and that is untouched.
+  ok('as does the vigor gate', /vig < [^&]+&& stillMending/.test(fn),
+     'the threshold may be global or per-character; the stillMending pairing may not go');
   ok('and the absolute floor is still there for anyone who wants one',
      /travelStartHealth/.test(fn));
   // AGAINST THE BEST SEEN, NOT THE LAST SAMPLE. Comparing each reading to the previous one
