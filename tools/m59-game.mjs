@@ -101,6 +101,9 @@ if (typeof noteGeometryDrift !== 'function') {
   };
 }
 import { loadSpawns } from './m59-spawns.mjs';
+// A REFUSED ROOM MAY BE A SHUT ROOM. See `exhaustedRouteResult`: pure, file-backed, and it
+// answers null when there is no door table, so a checkout without one is unaffected.
+import { operableDoorsBlocking } from './m59-doorplan.mjs';
 import * as skills from './m59-skills.mjs';
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
@@ -4975,15 +4978,40 @@ class Session {
       const [blockedHop, blockedDetail] = exhaustedHere.find(([hop]) => hop === preferredHop)
         ?? exhaustedHere[0];
       const exhausted = exhaustedHere.map(([hop, detail]) => ({ hop, ...detail }));
+      // "NO EXIT PROGRESSES" IS A FACT ABOUT ONE SECTOR STATE, AND SOME ROOMS HAVE A SWITCH.
+      //
+      // The mover enforces the frozen bake, so a room whose doors are baked shut has no exits
+      // and says so truthfully. Room 714 breaks into 28 regions that way, with its only exit
+      // in one the body cannot reach — and on 2026-09-19 Zoot and Statler sat in it standing
+      // ON `r4c28`, which is MAIN_DOOR's trigger, for hours. The verdict was right and the
+      // conclusion a reader drew from it was wrong, and nothing in the record distinguished
+      // "this room has no way out" from "this room's ways out are shut and can be opened".
+      //
+      // Additive on purpose: the outcome STRING is unchanged, because `m59-savelog.mjs` and
+      // `m59-travel-test.mjs` key on it and a renamed reason would rewrite the stuck-loop
+      // history rather than improve it. What changes is that the refusal now carries the
+      // door, the square to stand on and the window to cross in.
+      let doors = null;
+      try {
+        doors = operableDoorsBlocking(Number(here.num),
+          { row: this.world?.self?.row ?? null, col: this.world?.self?.col ?? null });
+      } catch { doors = null; }   // evidence, never a dependency
       log.push({ outcome: 'route_progressing_exits_exhausted', room: here.num,
                  blocked_hop: blockedHop, exhausted_hops: exhausted,
-                 note: 'the router has no untried route-progressing exit from this room' });
+                 ...(doors ? { operable_doors: doors } : {}),
+                 note: doors
+                   ? 'the router has no untried route-progressing exit IN THE STATE THE BAKE ' +
+                     'HOLDS — but this room has doors that open on request: ' + doors.why
+                   : 'the router has no untried route-progressing exit from this room' });
       return arrivedIfHere({
         arrived: false,
         outcome: 'route_progressing_exits_exhausted',
         reason: 'route_progressing_exits_exhausted',
         note: `the remaining route reuses ${blockedHop}, whose exit candidates ` +
-              'were already exhausted in this journey',
+              'were already exhausted in this journey' +
+              (doors ? `. ${doors.why}` : ''),
+        // The plan a caller needs to free itself, rather than a verdict it can only report.
+        ...(doors ? { operable_doors: doors } : {}),
         room: { num: here.num, name: here.name },
         destination: toRoomNum,
         blocked_hops: exhaustedHere.map(([hop]) => hop),

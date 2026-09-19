@@ -36,7 +36,13 @@ export function loadRids(khdPath) {
 }
 
 // Pull one method body out of a kod class by brace matching.
-function methodBody(src, name) {
+//
+// EXPORTED so `m59-doors.mjs` can read `SomethingTryGo` with the same parser this file reads
+// `SomethingMoved` with. This file's header argues that there must be exactly one predicate
+// language here; a second brace-matcher and a second condition parser beside it is how the
+// evaluator and the renderers drifted apart the first time, and a two-square doorway that read
+// as the impossible `row == 17 and row == 18` was the result.
+export function methodBody(src, name) {
   const at = src.search(new RegExp('^\\s*' + name + '\\s*\\(', 'mi'));
   if (at < 0) return null;
   const open = src.indexOf('{', at);
@@ -50,9 +56,21 @@ function methodBody(src, name) {
 }
 
 // "(new_row < 32) and (new_col > 66)" -> [{axis:'row',op:'<',value:32}, ...]
-function parseCondition(text) {
+//
+// EXPORTED alongside `methodBody`, with one difference that matters: a DOOR's `SomethingTryGo`
+// tests bare `row`/`col` where a room exit's `SomethingMoved` tests `new_row`/`new_col`, so the
+// prefix is optional.
+//
+// THE GUARD IS A LOOKBEHIND, NOT `\b`, AND THE DIFFERENCE COST A REGENERATION. `\b` between an
+// optional `new_` and `row` can never match: `_` and `r` are both word characters, so there is
+// no boundary there, and the optional group backtracks to empty and fails at `_row` for the
+// same reason. Written that way this matched NOTHING and the next `node tools/m59-codeexits.mjs`
+// wrote an exit table with zero rooms in it, silently — the routing input for the whole world,
+// emptied by a regex that looked stricter. `(?<![A-Za-z0-9])` says what was actually meant:
+// not in the middle of a word, so `arrow` and `protocol` are still excluded.
+export function parseCondition(text) {
   const out = [];
-  const re = /new_(row|col)\s*(<=|>=|<|>|=)\s*(\d+)/gi;
+  const re = /(?<![A-Za-z0-9])(?:new_)?(row|col)\s*(<=|>=|<|>|=)\s*(\d+)/gi;
   let m;
   while ((m = re.exec(text))) out.push({ axis: m[1], op: m[2] === '=' ? '==' : m[2], value: Number(m[3]) });
   return out;
