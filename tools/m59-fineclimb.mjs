@@ -4,8 +4,22 @@
 //   node tools/m59-fineclimb.mjs --agent shadow01 --to 52,30
 //   node tools/m59-fineclimb.mjs --agent shadow01 --to 52,30 --dry-run
 //   node tools/m59-fineclimb.mjs --agent shadow01 --room 589 --to 45,32 --port 8971
+//   node tools/m59-fineclimb.mjs --agent shadow01 --rail ancient            walk a BAKED rail
+//   node tools/m59-fineclimb.mjs --agent shadow01 --rail ancient --direction to_exit
 //
 // `--to` is `row,col` (KOD/RoomGeometry order), like every other geometry tool here.
+//
+// `--rail <node>` FOLLOWS A RAIL `m59-noderails.mjs` ALREADY CUT rather than planning one.
+// The difference is not speed, it is that a baked rail has been CHECKED: every one of its
+// points is a lattice step the mover's own trace accepted, and its aim list was decimated by
+// stepping each chord rather than by noticing a heading change. A plan made here is a fresh
+// opinion; a rail is one that has been re-walked offline by `noderails check`.
+//
+// AND A RAIL IS ONLY VALID FROM WHERE IT WAS CUT — `m59-railcut.mjs`'s first sentence. These
+// are cut from the bake's own exit ANCHORS, which is where a journey delivers a body, so the
+// follow refuses when the body is not on the line and says how far off it is. Boarding a rail
+// from an arbitrary square is how sixteen legs of correct following produced no progress at
+// all in room 49. `--board-within` is the knob; re-cutting from the body is the alternative.
 //
 // WHY THIS EXISTS, AND IT IS NOT THAT THE ROUTE WAS WRONG. `m59-fineroute.mjs` plans the
 // Ancient Place climb correctly — the operator's own three declared jumps, in their order,
@@ -42,6 +56,8 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { rosterGameEndpoint } from './m59-fleetpath.mjs';
 import { fineRouter } from './m59-fineroute.mjs';
+import { RAILS_FILE, findRoute } from './m59-noderails.mjs';
+import { distanceToRail } from './m59-railfollow.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -52,7 +68,8 @@ const flag = (n, d = null) => {
   return at >= 0 && argv[at + 1] && !argv[at + 1].startsWith('--') ? argv[at + 1] : d;
 };
 const KNOWN = new Set(['agent', 'room', 'to', 'port', 'fleet', 'dry-run', 'tolerance',
-                       'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help']);
+                       'steps', 'stride', 'no-hop', 'max-jumps', 'allow-candidates', 'help',
+                       'rail', 'exit', 'direction', 'rail-file', 'board-within']);
 if (has('help') || !argv.length) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8')
     .split('\n').slice(1).filter(l => l.startsWith('//'))
@@ -80,8 +97,42 @@ const STEPS = Number(flag('steps', 6));             // fine steps allowed per wa
 // step clean over the tread and into the gully beside it. Smaller strides cost packets and
 // buy precision, which is the trade this tool exists to make.
 const STRIDE = Number(flag('stride', 16));
-if (!AGENT || !TO) { console.error('fineclimb: need --agent and --to row,col'); process.exit(2); }
-const [toRow, toCol] = TO.split(',').map(Number);
+// A BAKED RAIL, IF ONE WAS NAMED. Loaded before the roster check so a typo costs nothing and
+// `--dry-run` can print the rail without a server.
+const RAIL_NODE = flag('rail');
+const DIRECTION = flag('direction', 'to_node');
+const BOARD = Number(flag('board-within', 2));          // squares
+let RAIL = null;
+if (RAIL_NODE) {
+  const railFile = flag('rail-file', RAILS_FILE());
+  let baked = null;
+  try { baked = JSON.parse(readFileSync(railFile, 'utf8')); }
+  catch (e) {
+    console.error(`fineclimb: cannot read ${railFile}: ${e.message}`);
+    console.error('           bake one first: node tools/m59-noderails.mjs bake');
+    process.exit(2);
+  }
+  RAIL = findRoute(baked, { node: RAIL_NODE, direction: DIRECTION, exit: flag('exit') });
+  if (!RAIL) {
+    // A MISSING RAIL IS NOT A MISSING ROUTE. Say which of the two it is, or this reads as
+    // "there is no way there" when it means "nobody baked one, or the bake said no".
+    const s = (baked.stones ?? []).find(x => x.node === RAIL_NODE);
+    console.error(!s
+      ? `fineclimb: ${railFile} has no stone called "${RAIL_NODE}"`
+      : `fineclimb: no ${DIRECTION} rail for "${RAIL_NODE}"` +
+        `${flag('exit') ? ` via ${flag('exit')}` : ''} — the bake holds ` +
+        `${(s.routes ?? []).filter(r => r.direction === DIRECTION && r.ok).length} of ` +
+        `${(s.routes ?? []).filter(r => r.direction === DIRECTION).length} in that direction`);
+    process.exit(2);
+  }
+}
+if (!AGENT || !(TO || RAIL)) {
+  console.error('fineclimb: need --agent and either --to row,col or --rail <node>');
+  process.exit(2);
+}
+const railTarget = RAIL ? /^r(\d+)c(\d+)$/.exec(RAIL.to) : null;
+const [toRow, toCol] = TO ? TO.split(',').map(Number)
+                          : [Number(railTarget[1]), Number(railTarget[2])];
 if (!Number.isFinite(toRow) || !Number.isFinite(toCol)) {
   console.error('fineclimb: --to must be row,col'); process.exit(2);
 }
@@ -157,6 +208,15 @@ if (at0.room !== ROOM) {
   console.error(`fineclimb: ${AGENT} is in room ${at0.room}, not ${ROOM}. This plans INSIDE one room.`);
   process.exit(2);
 }
+// A RAIL IS A LINE INSIDE ONE ROOM, AND NOTHING ELSE SAYS WHICH. Without this the router is
+// built for the room the BODY is in while the waypoints come from another — it plans, it
+// prints, it drives, and every coordinate is about a different building. Caught with shadow01
+// standing in 801 following the rail cut for 589.
+if (RAIL && Number(RAIL.room) !== ROOM) {
+  console.error(`fineclimb: the "${RAIL_NODE}" rail is a line inside room ${RAIL.room}, and ` +
+                `${AGENT} is in room ${ROOM}. Travel there first.`);
+  process.exit(2);
+}
 
 // PLAN FROM WHERE THE BODY IS. A plan whose first waypoint is thirty squares away is a plan
 // for somebody else, and the follower will spend its whole leash getting to the start.
@@ -169,13 +229,48 @@ const R = fineRouter(ROOM);
 const fromPt = (at0.x != null && at0.y != null)
   ? { row: at0.row, col: at0.col, x: toClient(at0.x), y: toClient(at0.y) }
   : { row: at0.row, col: at0.col };
-const plan = R.plan(fromPt, { row: toRow, col: toCol },
-                    { maxJumps: Number(flag('max-jumps', 4)),
-                      allowCandidates: has('allow-candidates') });
+// A BAKED RAIL IS DRIVEN BY ITS `aims`, NOT BY ITS WAYPOINTS. The dense list is the proof —
+// one lattice step a trace accepted, per point — and driving it one `walk_to` per point would
+// be 1,249 round trips for a walk of forty squares. `aims` is the same line decimated to its
+// straight runs, so every aim is a chord made of steps the flood already accepted.
+const railLegs = RAIL
+  ? RAIL.legs.map(l => (l.kind === 'walk' ? { ...l, waypoints: l.aims ?? l.waypoints } : l))
+  : null;
+const plan = RAIL
+  ? { ok: true, legs: railLegs, jumps: RAIL.jumps, all_declared: RAIL.all_declared,
+      confidence: `baked rail — ${RAIL.confidence}` }
+  : R.plan(fromPt, { row: toRow, col: toCol },
+           { maxJumps: Number(flag('max-jumps', 4)),
+             allowCandidates: has('allow-candidates') });
 const total = (plan.legs ?? []).filter(l => l.kind === 'walk')
   .reduce((a, l) => a + l.waypoints.length, 0);
 console.log(`room ${ROOM} — ${R.room.name}`);
 console.log(`${AGENT} at r${at0.row}c${at0.col} hp ${at0.hp} -> r${toRow}c${toCol}`);
+if (RAIL)
+  console.log(`rail: ${RAIL_NODE} ${DIRECTION} via ${RAIL.exit_label}, ` +
+              `${RAIL.waypoints} waypoint(s) -> ${total} aim(s)` +
+              `${RAIL.unvalidated ? `, ${RAIL.unvalidated} unvalidated span(s)` : ''}` +
+              `${RAIL.committing_drops ? `, ${RAIL.committing_drops} committing drop(s)` : ''}`);
+// A RAIL IS ONLY VALID FROM WHERE IT WAS CUT. Measured in room 49: a body 240 units off the
+// seed had a step accepted from the seed and REFUSED from where it stood, and sixteen legs of
+// correct boarding-and-following produced no along-track progress at all. So the board is
+// checked on the SHELF as well as the distance — `distanceToRail` is the floor-aware answer,
+// and the 2D one picks a waypoint on a ledge the body cannot step onto and calls it 304 units
+// away. Refusing here costs a walk; not refusing costs the six minutes it takes to notice.
+if (RAIL && !DRY) {
+  const first = (railLegs.find(l => l.kind === 'walk')?.waypoints) ?? [];
+  const here = { x: toClient(at0.x), y: toClient(at0.y) };
+  const d = distanceToRail(first, here, { floor: R.floorAt(here.x, here.y) });
+  if (!(d.d <= BOARD * F)) {
+    console.log(`not on the rail: ${(d.d / F).toFixed(1)} square(s) from it ` +
+                `(nearest segment ${d.i}, shelf ${d.onShelf === false ? 'DIFFERENT' : 'same'}, ` +
+                `floor ${d.floorKnown ? 'read' : 'UNREADABLE'}), --board-within is ${BOARD}`);
+    console.log(`  this rail is cut from ${RAIL.from}. Walk there first, or cut one from here ` +
+                `with m59-railcut.`);
+    process.exit(2);
+  }
+  console.log(`boarding at segment ${d.i}, ${(d.d / F).toFixed(1)} square(s) off`);
+}
 if (!plan.ok) { console.log(`no plan: ${plan.why}`); process.exit(2); }
 console.log(`plan: ${plan.jumps} jump(s), ${total} waypoint(s), all_declared=${plan.all_declared}`);
 console.log(`  ${plan.confidence}`);

@@ -1315,3 +1315,63 @@ Pinned: the second write lands on the same file rather than leaving two halves o
 a finished run reads back with its outcome and with what she actually said, the ask index
 collapses instances into shapes so the list is a specification rather than a log, and a corrupt
 transcript is REPORTED rather than silently counting as a run that never happened.
+
+## m59-noderails-test.mjs (140) — the node/exit rail bake
+
+Offline: no map, no socket, no room, no roster. The edge test and the router are injected, so
+every case runs against a synthetic world whose shape is known exactly. The suite exists
+because `m59-noderails.mjs` produces something that looks right when it is wrong — a list of
+coordinates with a plausible shape — and four of its cases are failures that actually shipped
+during the first afternoon of building it.
+
+**The two it exists for.** `railSpan`'s unvalidated branch is a chord nobody traced; if it
+were dropped, the rail would quietly shorten, and if the route were dropped, a reachable stone
+would read as unreachable. `arrivalOf` is the other: `fineRouter` succeeds when the closure
+holds a point whose SQUARE is the goal, and room 45's stone sits on a plateau with the valley
+directly under it — so a flood reaching the valley half of `r63c46` satisfies that test exactly
+as the plateau does. The case pins that reaching the square while 3,296 units below the
+footing is reported as `arrived_in_square: true, arrived_off_shelf: true`, which is the whole
+trap in two fields.
+
+**`fineEdge` and the slide that shipped a false finding.** The trace answers `moved: true,
+arrived: false, blocked: true, slid: true, destinationFloor: 1152` for an aim whose floor is
+4096, with the body twenty units from it — inside every distance test. The suite pins that the
+landing's SHELF decides, that the same slide landing on the aim's own shelf is still an edge
+(sliding is how you hug a wall), that `destinationFloor` is preferred to re-reading geometry
+the trace already resolved, and that an unreadable floor refuses rather than passing a guard
+that did not run.
+
+**What is written is what was checked.** One case drives a chord through a point the edge
+refuses and asserts the span is not settled as a chord and that whatever it emits verifies
+under the very edge it was cut with. Another walks a two-span leg and asserts no step exceeds
+one lattice cell, which is the joint a cursor-less loop leaves untraced. A third covers
+`cutRail`'s snapped seed, which reports `bridgeOk` and returns ok either way — on the real bake
+that joint was 21 units, under the mover's floor, and was the last surviving disagreement
+between the bake and `noderails check`.
+
+**An aim below the mover's minimum step is a no-op that reports success.** A synthetic zigzag —
+every step 64 units, every heading different, which is what a diagonal staircase looks like on
+the lattice — asserts that corners get merged when a traced chord allows it, that every interior
+aim clears `MIN_MOVER_STEP`, that a refusing edge cannot shorten a straight run (it needs no
+trace at all), and that where the merge is refused the short aim survives and is COUNTED rather
+than hidden.
+
+**`check` must be able to be green.** An unvalidated point was kept rather than proved, so the
+step into it refuses on every map for ever; a checker that counts that as drift is permanently
+red and stops being read. The suite pins that such a step is skipped and the skip reported, that
+real drift after the hole is still caught, and that the reported index is the position in the
+whole rail rather than in the run — splitting the verification restarts the count at zero, and
+a refusal in the second run would otherwise be reported as if it were in the first.
+
+**And the rest is about not re-deriving what the repository already knows.** The exits come from
+the bake's own anchors with `waypoint` entries dropped — in room 27 one of those IS the mana
+stone, so keeping them would bake a rail from the node to itself; two exits through one wall get
+two ids, because Western border of the Twisted Wood declares `east->586` and `east->597` on the
+same boundary. The stone list comes from `m59-stones.mjs` with its documented aliases, so
+`--node seafarer` and `--node peak` find the same room. `MANANODE_RANGE` is 3 and the box is
+judged per axis: the diagonal corner melds while a nearer square on one axis does not, which a
+euclidean radius scores wrong in both directions. And a refusal never says "unreachable" — it
+carries `bound` and `closure_squares`.
+
+**It should fail the day a rail is emitted that its own edge would refuse, or the day a slide
+onto a different shelf is accepted as a step.**
