@@ -37,7 +37,7 @@ export function loadRids(khdPath) {
 
 // Pull one method body out of a kod class by brace matching.
 function methodBody(src, name) {
-  const at = src.search(new RegExp('^\\s*' + name + '\\s*\\(', 'm'));
+  const at = src.search(new RegExp('^\\s*' + name + '\\s*\\(', 'mi'));
   if (at < 0) return null;
   const open = src.indexOf('{', at);
   if (open < 0) return null;
@@ -52,7 +52,7 @@ function methodBody(src, name) {
 // "(new_row < 32) and (new_col > 66)" -> [{axis:'row',op:'<',value:32}, ...]
 function parseCondition(text) {
   const out = [];
-  const re = /new_(row|col)\s*(<=|>=|<|>|=)\s*(\d+)/g;
+  const re = /new_(row|col)\s*(<=|>=|<|>|=)\s*(\d+)/gi;
   let m;
   while ((m = re.exec(text))) out.push({ axis: m[1], op: m[2] === '=' ? '==' : m[2], value: Number(m[3]) });
   return out;
@@ -76,11 +76,33 @@ export function codeExitsFor(src, rids) {
       else if (body[i] === '}') depth--;
     }
     const block = body.slice(m.index + m[0].length, i);
-    const rid = /FindRoomByNum\s*,?\s*#num\s*=\s*(RID_[A-Z0-9_]+)/.exec(block);
+    // EVERY PATTERN IN THIS FILE IS CASE-INSENSITIVE, BECAUSE KOD IS, AND THAT ONE LETTER COST
+    // THE ONE ROOM IN THE GAME WHOSE ENTRANCE MOVES.
+    //
+    // Four places in the whole kod tree spell it `findroombynum` rather than `FindRoomByNum`,
+    // and TWO OF THEM ARE THE TWO WAYS INTO THE TEMPLE OF QOR — `monsroom/i8.kod` (598, stand
+    // on r38c26) and `monsroom/objroom/h9.kod` (589, stand on r26c12), each handing the mover
+    // to `RID_TEMPLE_QOR`'s `TempleEntrance`, which lands it at r33c14. The temple ALTERNATES
+    // between those two rooms every ten minutes (`tempqor.kod` `ExitsTimer`, `EXIT_DELAY`), so
+    // no static bake can carry it and this file is the only place it could ever have come from.
+    //
+    // What it cost, measured 2026-09-19: `inboundFor(map, 802)` returned `[]` and `mayArrive`
+    // answered `nothing_arrives` — *"All of bake.edgeExits/goExits, inferred,
+    // substrate/m59-codeexits.json were consulted, so this is not one tool's blind spot."* It
+    // was one tool's blind spot, and the sentence ruling that out was true of every tool that
+    // had been asked. The disciple quest for the school of Qor could not be routed to its own
+    // temple, and the reason was a letter case in a language that does not have them.
+    //
+    // Note both `SomethingMoved` hooks fire on the SQUARE ALONE and never consult
+    // `piCurrentExit` — the alternation drives a sector lift (`OpenQorTemple` /
+    // `CloseQorTemple`), so what changes is whether the hole is open, not whether the trigger
+    // is armed. Whether the square can be walked onto at a given moment is therefore a
+    // question about live sector heights, which a static collision bake cannot answer.
+    const rid = /FindRoomByNum\s*,?\s*#num\s*=\s*(RID_[A-Z0-9_]+)/i.exec(block);
     if (!rid) continue;                       // #where=self is a nudge, not an exit
     const to = rids.get(rid[1]);
     if (to == null) continue;
-    const arrive = /#new_row\s*=\s*(\d+)\s*,\s*#new_col\s*=\s*(\d+)/.exec(block);
+    const arrive = /#new_row\s*=\s*(\d+)\s*,\s*#new_col\s*=\s*(\d+)/i.exec(block);
     out.push({
       to, rid: rid[1], when: cond,
       arrive: arrive ? { row: Number(arrive[1]), col: Number(arrive[2]) } : null,
@@ -211,6 +233,62 @@ function walk(dir, out = []) {
   return out;
 }
 
+// ------------------------------------------- THE TWO HAND-EDITS, MADE PROPERTIES OF THE CODE
+//
+// The committed `m59-codeexits.json` carried two corrections that a regeneration destroyed, and
+// its own `note` field said so in as many words: *"Regenerating this file will bring it back"*
+// and *"A regeneration must carry the disjunction through"*. That is a warning addressed to a
+// person, in a file nobody reads before running a generator, about a file that is generated.
+// This block is that warning turned into code, because the third time it will be someone who
+// never saw the note. Measured 2026-09-19: I regenerated to pick up the Temple of Qor and
+// silently reintroduced both, and `m59-exits-test.mjs` — the canary the note names — caught it.
+//
+// 1. A SUPPRESSION LIST: exits the kod really declares that the world does not honour.
+//
+// IT IS EMPTY, AND THAT IS THE FINDING RATHER THAN AN OVERSIGHT.
+//
+// The generated file's own `note` said `534->48 (RID_TEMPLE)` had been "removed by hand
+// 2026-08-07" over 9 successes against 1,645 failures, and that regenerating would bring it
+// back. I read that as an instruction and put it in here. IT IS NOT IN THE FILE THE FLEET IS
+// USING: the live `m59-codeexits.json` carries 534->48, so the removal was undone at some point
+// and only the sentence describing it survived.
+//
+// Measured before putting it back, 2026-09-19, which is the only reason this is not now a
+// broken fleet: with 534->48 suppressed, `inboundFor(map, 48)` drops to `["6:trigger"]` and
+// `findPath` answers NO for 39->48 and 350->48 — the Temple of Shal'ille becomes unreachable
+// from almost everywhere, including from the rooms this fleet actually stands in. It is the
+// only general way in. A 0.5% crossing rate is a reason to fix the crossing; it is not a
+// reason to delete the one door.
+//
+// So the list stays, because a suppression belongs in code rather than in a hand-edit, and it
+// stays EMPTY. Anything added here must show that the destination is still reachable without
+// it — `findPath` from 39 and from a room the fleet is in is the cheap check, and it takes a
+// second.
+const SUPPRESSED = [];
+
+// 2. A SHAPE: same-axis equalities are ALTERNATIVES, and must be written as ones.
+//
+// The kod writes a two-square doorway as `(new_row = 17) or (new_row = 18)`, which the parser
+// above emits as two entries. `inRegion` has always read that correctly — it is the evaluator
+// `World.exits()` uses — while every renderer joined the list with AND and described the
+// doorway as the impossible `row == 17 and row == 18`. Collapsing at generation time means the
+// data can only be written the way that no reader gets wrong.
+export function collapseDisjunctions(when = []) {
+  const out = [];
+  for (const axis of ['row', 'col']) {
+    const cs = when.filter(c => c.axis === axis);
+    const eqs = cs.filter(c => c.op === '==');
+    const vals = [...new Set(eqs.flatMap(c => (Array.isArray(c.values) ? c.values : [c.value])))];
+    if (vals.length > 1) out.push({ axis, op: '==', values: vals });
+    else if (vals.length === 1) out.push({ axis, op: '==', value: vals[0] });
+    for (const c of cs.filter(c => c.op !== '==')) out.push(c);
+  }
+  // Anything on neither axis is passed through untouched rather than dropped: a condition shape
+  // this function does not understand must not vanish from the data because of that.
+  for (const c of when) if (c.axis !== 'row' && c.axis !== 'col') out.push(c);
+  return out;
+}
+
 // Scan every room class and index the result by room number.
 export function buildCodeExits({ kodRoot, mapFile, outFile }) {
   const rids = loadRids(join(kodRoot, 'include', 'blakston.khd'));
@@ -220,6 +298,7 @@ export function buildCodeExits({ kodRoot, mapFile, outFile }) {
 
   const found = {};
   let scanned = 0, unmatched = [];
+  const suppressed = [];
   for (const file of walk(join(kodRoot, 'object', 'active', 'holder', 'room'))) {
     const src = readFileSync(file, 'utf8');
     const cls = /^\s*([A-Za-z0-9_]+)\s+is\s+[A-Za-z0-9_]+/m.exec(src)?.[1];
@@ -229,12 +308,32 @@ export function buildCodeExits({ kodRoot, mapFile, outFile }) {
     if (!exits.length) continue;
     const room = byCls.get(cls.toLowerCase());
     if (!room) { unmatched.push(cls); continue; }
-    found[room.num] = exits.map(e => ({ ...e, from_name: room.name }));
+    const kept = exits
+      .filter(e => !SUPPRESSED.some(s => s.from === Number(room.num) && s.to === Number(e.to)))
+      .map(e => ({ ...e, when: collapseDisjunctions(e.when), from_name: room.name }));
+    for (const s of SUPPRESSED)
+      if (s.from === Number(room.num) && exits.some(e => Number(e.to) === s.to)) suppressed.push(s);
+    if (kept.length) found[room.num] = kept;
   }
 
   const out = { rooms: found,
                 stats: { classes_scanned: scanned, rooms_with_code_exits: Object.keys(found).length,
-                         unmatched_classes: unmatched } };
+                         unmatched_classes: unmatched,
+                         // SAY WHAT WAS LEFT OUT, in the file itself. A suppression that is
+                         // invisible in its own output is indistinguishable from an extractor
+                         // that failed to find the exit, which is the question somebody will
+                         // ask about this exact entry.
+                         suppressed: suppressed.map(s => `${s.from}->${s.to}`) },
+                note: [
+                  ...suppressed.map(s => s.why),
+                  'Same-axis `==` conditions are written as `values: [...]` because they are ' +
+                  'ALTERNATIVES, not a conjunction — `collapseDisjunctions` in ' +
+                  'm59-codeexits.mjs does that at generation time, so a regeneration can no ' +
+                  'longer flatten them. tools/m59-exits-test.mjs is the canary.',
+                  'GENERATED. Do not hand-edit: the two corrections this file used to carry by ' +
+                  'hand are now in m59-codeexits.mjs (SUPPRESSED and collapseDisjunctions), ' +
+                  'which is where a third one belongs too.',
+                ].join(' | ') };
   if (outFile) writeFileSync(outFile, JSON.stringify(out));
   return out;
 }

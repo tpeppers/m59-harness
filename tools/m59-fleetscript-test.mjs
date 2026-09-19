@@ -28,12 +28,16 @@ process.env.M59_CONTROL_URL = 'http://127.0.0.1:1/';   // never actually reached
 const BAND_DIR = mkdtempSync(join(tmpdir(), 'm59-band-'));
 writeFileSync(join(BAND_DIR, 'keeper-bands.json'), JSON.stringify({ testfleet: 19900 }));
 process.env.M59_KEEPER_BAND_REGISTRY = join(BAND_DIR, 'keeper-bands.json');
+// A TEN-SECOND HEARTBEAT IS UNTESTABLE AND THE BUG IT CARRIED WAS A LAPSED LEASE. Set before
+// the module is imported, because the interval is read at load.
+process.env.M59_KEEPER_BEAT_MS = '400';
 const KEEPER_PORT = 19900;
 
 const { stateFileFor } = await import('./m59-fleetpath.mjs');
 const { fleetScript, walk, walkTo, crawlTo, crawlChoice, healthFractionOf, rest,
         shop, bank, verify, sell, vault, VAULT_KEEP, leaveRaza, say,
-        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure, readTwice, packConfirmed } =
+        foodIn, nonFoodIn, splitFood, FOOD_KEEP, purseOf, isTransportFailure, readTwice, packConfirmed,
+        gate, ungate, gateStatus, gateReset } =
   await import('./m59-fleetscript.mjs');
 
 let pass = 0, fail = 0;
@@ -628,7 +632,7 @@ console.log('\na banker refusal is prose, not an error');
   };
   const r = await fleetScript({ name: 'poor', fleet: 'testfleet', agents: ['a1'],
     steps: [bank('withdraw', 5000)], onLog: quiet });
-  ok('a refusal spoken as a sentence is caught as a failure', r.results.a1.ok === false);
+  ok('a refusal spoken as a sentence is caught as a failure', r.results?.a1?.ok === false);
 }
 
 console.log('\nTHE PURSE IS THE RECEIPT, NOT THE BANKER\u2019S SENTENCE');
@@ -1978,9 +1982,71 @@ console.log('\ncrawl_to gives up on a body that never moves, and SAYS it was a b
   ok('it fails rather than waiting for ever', r.results.a1.ok === false);
   ok('and the outcome names a BODY, not the geometry',
      out.outcome === 'body_will_not_move', String(out.outcome));
-  ok('it waited exactly the number of times it was told to', out.waited === 3, String(out.waited));
+  // THE CONTRACT CHANGED ON 2026-09-18 AND THIS IS THE ASSERTION THAT RECORDS IT. It used to
+  // read `out.waited === bodyRetries`: the crawl stood still for the whole budget and then
+  // failed. That is right for an orc, which walks off, and is a DEADLOCK when the body is
+  // another fleet character crawling the other way — each one is the other's blocker, neither
+  // has an improving square, and both spend the full budget looking at each other. Six
+  // characters did exactly that in the Temple of Shal'ille. So the waits are now capped at
+  // `bodyPatience` and the rest of the budget is spent walking AROUND.
+  ok('it stops waiting after bodyPatience rather than spending the whole retry budget',
+     out.waited === 2, String(out.waited));
+  ok('and it tried to walk around before giving up', out.arounds >= 4, String(out.arounds));
   ok('and it says which direction the thing was standing in',
      (out.blockers ?? []).some(b => b.startsWith('E')));
+  ok('and the reason names both the waiting and the detour, so neither reads as the geometry',
+     /wait\(s\)/.test(out.why) && /walk around it/.test(out.why), out.why);
+}
+
+console.log('\ncrawl_to walks AROUND a body that will not move, when there is a way around');
+{
+  // A pillar of one body: the square due east of the START is refused for ever, and nothing
+  // else is. The old crawl waited out its whole budget on it and failed; going one square
+  // north and then east is the whole detour.
+  const blocked = { row: 10, col: 11 };
+  const world = { at: { row: 10, col: 10 },
+                  refuse(to) {
+                    return (to.row === blocked.row && to.col === blocked.col)
+                      ? 'object_blocked' : null;
+                  } };
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: world.at },
+    onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl-around', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(13, 10, { bodyWaitMs: 2, bodyRetries: 8, deadlineMs: 20000,
+                              settleMs: 5, maxSteps: 30 })],
+    onLog: quiet });
+  restore();
+  const out = r.results.a1.state['0:crawl_to'];
+  ok('it gets there', r.results.a1.ok === true, JSON.stringify(out).slice(0, 200));
+  ok('by going around rather than by waiting it out', (out.arounds ?? 0) >= 1, String(out.arounds));
+  ok('and it did not spend the whole wait budget first',
+     out.waited <= 2, String(out.waited));
+}
+
+console.log('\ncrawlChoice: patience decides WHEN a body becomes furniture');
+{
+  const at = { row: 10, col: 10 }, goal = { row: 10, col: 13 };
+  const neighbours = [
+    { dir: 'E', row: 10, col: 11, blocked: true, reason: 'object_blocked' },
+    { dir: 'N', row: 9, col: 10, blocked: false },
+    { dir: 'S', row: 11, col: 10, blocked: false },
+    { dir: 'W', row: 10, col: 9, blocked: false },
+  ];
+  const early = crawlChoice({ neighbours, at, goal, waited: 0, bodyPatience: 2 });
+  ok('the first look at a blocking body says WAIT — an orc walks off', early.verdict === 'body');
+  ok('and it names the body rather than moving', early.move === null && early.bodies.length === 1);
+  const late = crawlChoice({ neighbours, at, goal, waited: 2, bodyPatience: 2 });
+  ok('once patience is spent the same reading says go AROUND', late.verdict === 'around',
+     late.verdict);
+  ok('and it picks the open square that loses the least ground',
+     late.move && late.move.dir !== 'W', JSON.stringify(late.move));
+  const walled = crawlChoice({
+    neighbours: neighbours.map(n => n.dir === 'E' ? n : { ...n, blocked: true,
+                                                          reason: 'geometry_blocked' }),
+    at, goal, waited: 9, bodyPatience: 2 });
+  ok('with nothing open there is nothing to go around by, so it is still a body',
+     walled.verdict === 'body', walled.verdict);
 }
 
 console.log('\ncrawl_to rests at a safe wall the moment it gets hurt, mid-crawl');
@@ -2228,6 +2294,126 @@ console.log('\nevery cast outcome carries the two things a caller has to branch 
      new Set(CAST_OUTCOMES.map(o => o.outcome)).size === CAST_OUTCOMES.length);
 }
 
+
+// ------------------------------------------------------------------ the gate
+//
+// WHY THIS IS TESTED AT ALL, given it is twenty lines of queue: the failure it prevents is
+// silent and the failure it can CAUSE is worse. A gate that is not released hangs every other
+// character in the fleet behind a character that is no longer doing anything, and the symptom
+// is a run that reports nothing for fifteen minutes. So the cases that matter are the ones
+// where the holder does not reach its own `ungate`.
+
+console.log('\nthe gate lets one character at a time into a place that only fits one');
+{
+  gateReset();
+  const order = [];
+  const steps = [
+    gate('temple', { timeoutMs: 5000 }),
+    verify(async () => { order.push('in'); await new Promise(r => setTimeout(r, 40));
+                         order.push('out'); return true; }, 'inside the temple'),
+    ungate('temple'),
+  ];
+  fakeBroker({ rooms: { a1: 39, a2: 39, a3: 39 },
+               positions: { a1: { row: 1, col: 1 }, a2: { row: 1, col: 2 }, a3: { row: 1, col: 3 } } });
+  const r = await fleetScript({ name: 'gated', fleet: 'testfleet', agents: ['a1', 'a2', 'a3'],
+    steps, onLog: quiet });
+  ok('every character gets through', ['a1', 'a2', 'a3'].every(a => r.results[a].ok === true),
+     JSON.stringify(r.results).slice(0, 220));
+  ok('and none of them was inside while another was',
+     order.join(',') === 'in,out,in,out,in,out', order.join(','));
+  ok('the gate is empty afterwards',
+     gateStatus().every(g => g.holder === null && g.waiting.length === 0),
+     JSON.stringify(gateStatus()));
+}
+
+console.log('\na gate is released even when the holder never reaches its ungate step');
+{
+  gateReset();
+  const seen = [];
+  fakeBroker({ rooms: { a1: 39, a2: 39 },
+               positions: { a1: { row: 1, col: 1 }, a2: { row: 1, col: 2 } } });
+  const r = await fleetScript({ name: 'gate-unwind', fleet: 'testfleet', agents: ['a1', 'a2'],
+    steps: agent => [
+      gate('temple', { timeoutMs: 6000 }),
+      verify(async () => { seen.push(agent); return agent !== 'a1'; }, 'the errand'),
+      ungate('temple'),
+    ], onLog: quiet });
+  ok('the first character fails at the step it was always going to fail at',
+     r.results.a1.ok === false);
+  ok('and the second one still got in', seen.length === 2, seen.join(','));
+  ok('and the one that succeeded reports success', r.results.a2.ok === true);
+  ok('and nothing is left holding the gate',
+     gateStatus().every(g => g.holder === null), JSON.stringify(gateStatus()));
+}
+
+console.log('\na gate that never comes free FAILS the step rather than waiting for ever');
+{
+  gateReset();
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 1, col: 1 } } });
+  // Somebody outside this run holds it and never lets go — the stuck-holder case.
+  const { gateAcquire } = await import('./m59-fleetscript.mjs');
+  await gateAcquire('temple', 'someone-else', 60_000);
+  const r = await fleetScript({ name: 'gate-timeout', fleet: 'testfleet', agents: ['a1'],
+    steps: [gate('temple', { timeoutMs: 300 })], onLog: quiet });
+  const out = r.results.a1;
+  ok('the step fails', out.ok === false);
+  ok('and it says it was the gate, not the errand', out.outcome === 'gate_timeout',
+     String(out.outcome));
+  ok('and it names who is holding it, because that is the thing to go and look at',
+     /someone-else/.test(out.why ?? ''), out.why);
+  gateReset();
+}
+
+console.log('\na gate key that resolves to nothing does not serialize the fleet behind it');
+{
+  gateReset();
+  fakeBroker({ rooms: { a1: 39, a2: 39 },
+               positions: { a1: { row: 1, col: 1 }, a2: { row: 1, col: 2 } } });
+  const r = await fleetScript({ name: 'gate-null', fleet: 'testfleet', agents: ['a1', 'a2'],
+    steps: [gate(() => null, { timeoutMs: 200 }), ungate(() => null)], onLog: quiet });
+  ok('both get through', r.results.a1.ok === true && r.results.a2.ok === true,
+     JSON.stringify(r.results).slice(0, 200));
+  ok('and it says it queued for nothing rather than queueing for "null"',
+     /no gate key/.test(r.results.a1.state['0:gate'].skipped ?? ''),
+     JSON.stringify(r.results.a1.state['0:gate']));
+}
+
+// ------------------------------------------------------ the two leases, on the same beat
+//
+// WHAT THIS PINS, AND WHY IT IS WORTH A TEST INSTEAD OF A COMMENT.
+//
+// A held character carries two facts and only one of them makes anything leave it alone. The
+// keeper CLAIM says who is steering and is deliberately `takeable: true`. The broker-side
+// `busy` window is the one `isTakeable` answers false for, and it is the exact test DUM's
+// first rule makes, and `m59-supervise.mjs`'s unstick round, and the broker's own weapon
+// sweep. `declareBusy` leases it for five minutes and `busyStatus()` clears it ON READ.
+//
+// This file used to declare `busy` once and then heartbeat only the keeper claim. Five
+// minutes into any longer errand the character went back to advertising itself as available
+// while still being driven — held and takeable at the same time, which is not a middle state
+// but the worst of the two. A disciple quest runs ten to thirty minutes.
+console.log('\nthe errand renews the busy window, not just the keeper claim');
+{
+  const sent = fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 1, col: 1 } } });
+  const r = await fleetScript({ name: 'long-errand', fleet: 'testfleet', agents: ['a1'],
+    // Longer than three beats at the 400ms the env override sets at the top of this file.
+    // NOT MUCH SHORTER THAN THAT: the beat sends a real `autopilot` call through whatever fetch
+    // stub is installed, so a very hot beat sprays calls across the test that runs next.
+    steps: [verify(async () => { await new Promise(x => setTimeout(x, 1500)); return true; },
+                   'the long leg')],
+    onLog: quiet });
+  ok('the errand itself is fine', r.results.a1.ok === true, JSON.stringify(r.results.a1));
+  const busies = sent.filter(x => x.name === 'autopilot' && x.action === 'busy');
+  ok('busy is declared at the start', busies.length >= 1, String(busies.length));
+  ok('and RE-declared while the errand runs, rather than left to lapse',
+     busies.length >= 3, `${busies.length} declaration(s) over 3+ beats`);
+  ok('and every declaration names a lease, so a dead runner still hands the character back',
+     busies.every(b => Number(b.lease_ms) > 0),
+     JSON.stringify(busies.map(b => b.lease_ms)));
+  ok('and the lease is short enough that a crash costs minutes, not the 15-minute ceiling',
+     busies.every(b => Number(b.lease_ms) <= 5 * 60_000),
+     JSON.stringify(busies.map(b => b.lease_ms)));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -329,8 +329,43 @@ console.log('\nthe errand, per school');
        verbs.join(' '));
     ok(`${school}: and writes the run down afterwards, even while unwinding`,
        book.do === 'verify' && book.always === true, verbs.join(' '));
+    // `gate` is queueing, not acting: it touches no character and changes nothing in the
+    // world, so the shape of the errand is read with it filtered out. Its own placement is
+    // asserted separately below.
+    const acts = verbs.filter(v => v !== 'gate');
     ok(`${school}: it asks before it acts, and measures before it reports`,
-       verbs[1] === 'verify' && verbs[verbs.length - 3] === 'verify', verbs.join(' '));
+       acts[1] === 'verify' && acts[acts.length - 3] === 'verify', verbs.join(' '));
+
+    // THE PRIESTESS IS APPROACHED ONE AT A TIME, AND THE GATE IS GIVEN BACK BOTH TIMES.
+    //
+    // This is the guarantee that five of six Shal'ille runs died for want of on 2026-09-18:
+    // a temple is entered by a kod trigger, every character lands on the same square, and
+    // two of them crawling toward the same NPC are each other's blocker for the whole retry
+    // budget. What makes it worth a test rather than a comment is the failure mode of the fix
+    // — a gate taken and not given back hangs the rest of the cohort behind a character that
+    // has finished — so the pairing is what is pinned, not the presence.
+    const gates = steps.map((x, i) => [i, x]).filter(([, x]) => x.do === 'gate');
+    ok(`${school}: both temple visits queue for the priestess`,
+       gates.filter(([, x]) => !x.release).length === 2, JSON.stringify(gates.map(([i]) => i)));
+    ok(`${school}: and each one is handed back`,
+       gates.filter(([, x]) => x.release).length === 2, JSON.stringify(gates.map(([i]) => i)));
+    ok(`${school}: they alternate — never two takes in a row, which would deadlock the fleet`,
+       gates.map(([, x]) => (x.release ? 'R' : 'T')).join('') === 'TRTR',
+       gates.map(([, x]) => (x.release ? 'R' : 'T')).join(''));
+    ok(`${school}: every gate names the same temple, so the queue is one queue`,
+       new Set(gates.map(([, x]) => x.key)).size === 1, JSON.stringify(gates.map(([, x]) => x.key)));
+    ok(`${school}: the last hand-back runs even while the plan is unwinding`,
+       gates[gates.length - 1][1].always === true);
+    ok(`${school}: and waiting is bounded, because an unbounded queue is a hung fleet`,
+       gates.filter(([, x]) => !x.release).every(([, x]) => Number(x.timeoutMs) > 0),
+       JSON.stringify(gates.map(([, x]) => x.timeoutMs)));
+    // The take is immediately before the look that starts the approach, and the hand-back is
+    // after the last thing that needs her. Anything else is a gate that does not cover the
+    // contended stretch, which is the same as no gate at all.
+    ok(`${school}: each take is followed by the approach it exists to protect`,
+       gates.filter(([, x]) => !x.release)
+            .every(([i]) => verbs[i + 1] === 'verify' && verbs[i + 2] === 'walk_to'),
+       verbs.join(' '));
     ok(`${school}: every run-time walk declares its candidate rooms`,
        steps.filter(s => s.do === 'walk' && typeof s.to === 'function')
             .every(s => Array.isArray(s.candidates) && s.candidates.length),

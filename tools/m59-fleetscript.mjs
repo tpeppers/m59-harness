@@ -1422,14 +1422,117 @@ export const walkTo = (col, row, opts = {}) => ({ do: 'walk_to', col, row, ...op
  */
 export const crawlTo = (col, row, opts = {}) => ({ do: 'crawl_to', col, row, ...opts });
 
+// ---------------------------------------------------------------- ONE AT A TIME, BY NAME
+//
+// A PLACE CAN BE THE SCARCE RESOURCE, AND NOTHING ELSE IN THIS FILE COULD SAY SO.
+//
+// `parallel` is all-or-nothing: every character at once, or one character at a time for the
+// whole errand. Both are wrong for the shape that keeps coming up — a fleet-wide errand whose
+// legs are independent except for ONE ROOM that only fits one body at a time.
+//
+// The disciple quests are the clean case and the one that forced this. A temple is entered by
+// a kod trigger, so every character arrives on the SAME square, and the priestess has to be
+// approached to within three squares of her. Six characters sent at once on 2026-09-18 all
+// landed on r10c21 in room 48 and jammed: five of six runs failed, none of them on the quest.
+// `parallel: false` would have fixed it and would also have serialized the two cross-country
+// legs and the monster fight, turning a six-minute errand into forty.
+//
+// So the gate is named and held for a SPAN OF STEPS rather than for the run. Everything
+// outside the span still runs at full width.
+//
+//   gate('temple-48', { timeoutMs: 15 * 60_000 })   // wait my turn
+//   ... the steps that need the room to themselves ...
+//   ungate('temple-48')                             // let the next one in
+//
+// THREE THINGS THAT MAKE IT SAFE TO USE:
+//
+//   * A HOLDER THAT DIES DOES NOT KEEP THE GATE. The agent's `finally` releases every gate it
+//     still holds, on success, failure, throw or Ctrl-C — the same place and for the same
+//     reason the keeper lease is handed back there.
+//   * WAITING IS BOUNDED. `timeoutMs` is not optional in spirit: a gate with no deadline turns
+//     one stuck character into a stuck fleet. On expiry the step FAILS rather than proceeding
+//     silently, and a caller that would rather crowd than wait marks it `optional`.
+//   * IT IS IN-PROCESS ONLY, and says so. Two runners in two terminals do not see each other's
+//     gates. That is the same boundary as `m59-runlock.mjs` and has the same answer — the run
+//     lock is what stops two runners from existing, and this is what orders the one that does.
+const GATES = new Map();
+
+const gateState = (key) => {
+  let g = GATES.get(key);
+  if (!g) { g = { holder: null, since: 0, queue: [] }; GATES.set(key, g); }
+  return g;
+};
+
+/** Take the named gate, or wait for it. Resolves `{ ok, waitedMs, queued }`. */
+export function gateAcquire(key, agent, timeoutMs = 600_000) {
+  const g = gateState(key);
+  if (!g.holder) {
+    g.holder = agent; g.since = Date.now();
+    return Promise.resolve({ ok: true, waitedMs: 0, queued: 0 });
+  }
+  const started = Date.now();
+  const queued = g.queue.length + 1;
+  const ahead = g.holder;
+  return new Promise(resolve => {
+    const entry = { agent, timer: null, take: null };
+    entry.take = () => {
+      clearTimeout(entry.timer);
+      g.holder = agent; g.since = Date.now();
+      resolve({ ok: true, waitedMs: Date.now() - started, queued });
+    };
+    entry.timer = setTimeout(() => {
+      const i = g.queue.indexOf(entry);
+      if (i >= 0) g.queue.splice(i, 1);
+      resolve({ ok: false, waitedMs: Date.now() - started, queued, holder: g.holder,
+                why: `waited ${Math.round((Date.now() - started) / 1000)}s for the "${key}" ` +
+                     `gate and never got it — ${g.holder ?? 'somebody'} has held it since ` +
+                     `${new Date(g.since).toISOString()}. That is a stuck holder, not a ` +
+                     `queue: look at what ${g.holder ?? ahead} is doing.` });
+    }, timeoutMs);
+    // DELIBERATELY NOT `unref`. An unreferenced timer lets node exit while an agent is still
+    // waiting its turn, and the whole run then ends with "unsettled top-level await" and no
+    // result for the characters that were queueing. The wait is bounded by `timeoutMs`, so
+    // keeping the loop alive for it is exactly as long as the errand meant to wait.
+    g.queue.push(entry);
+  });
+}
+
+/** Hand the named gate to whoever is next. Safe to call when we never held it. */
+export function gateRelease(key, agent) {
+  const g = GATES.get(key);
+  if (!g || (agent != null && g.holder !== agent)) return false;
+  g.holder = null;
+  const next = g.queue.shift();
+  if (next) next.take();
+  return true;
+}
+
+/** Everything a test or a status line wants: who holds what, and who is waiting. */
+export const gateStatus = () => [...GATES.entries()].map(([key, g]) =>
+  ({ key, holder: g.holder, since: g.since || null, waiting: g.queue.map(e => e.agent) }));
+
+/** For tests only — a module-level registry outlives a case otherwise. */
+export const gateReset = () => GATES.clear();
+
+/** Wait for the named gate. `key` may be a function of the run-time state. */
+export const gate = (key, opts = {}) => ({ do: 'gate', key, ...opts });
+/** Hand it on. Always pair it with `always: true` or a `finally` will do it for you. */
+export const ungate = (key, opts = {}) => ({ do: 'gate', key, release: true, ...opts });
+
 /** Chebyshev — the metric the server's own range tests use, per axis. */
 const chebyshev = (a, b) => Math.max(Math.abs(a.row - b.row), Math.abs(a.col - b.col));
 
 /**
  * THE WHOLE DECISION, AS A PURE FUNCTION, so it can be tested without a keeper.
- * Returns `{ move, verdict, bodies, ground }` — verdict 'step' | 'body' | 'sidestep' | 'boxed'.
+ * Returns `{ move, verdict, bodies, ground }` — verdict 'step' | 'body' | 'around' |
+ * 'sidestep' | 'boxed'.
+ *
+ * `waited` is how many times this crawl has already stood still for this body, and
+ * `bodyPatience` is how many of those are worth spending before going AROUND instead. See the
+ * note on the 'around' branch: the two-character deadlock has no other exit.
  */
-export function crawlChoice({ neighbours = [], at, goal, avoid = [] } = {}) {
+export function crawlChoice({ neighbours = [], at, goal, avoid = [],
+                              waited = 0, bodyPatience = 2 } = {}) {
   const here = chebyshev(at, goal);
   const closer = n => chebyshev(n, goal) < here;
   const shunned = n => avoid.some(a => a.row === n.row && a.col === n.col);
@@ -1444,7 +1547,34 @@ export function crawlChoice({ neighbours = [], at, goal, avoid = [] } = {}) {
 
   const improving = open.filter(closer).sort((a, b) => chebyshev(a, goal) - chebyshev(b, goal));
   if (improving.length) return { move: improving[0], verdict: 'step', bodies, ground };
-  if (bodies.length) return { move: null, verdict: 'body', bodies, ground };
+  if (bodies.length) {
+    // WAITING OUT A BODY ASSUMES THE BODY IS GOING SOMEWHERE, AND TWO OF OUR OWN CHARACTERS
+    // ARE NOT.
+    //
+    // The wait exists for the orc: a wanderer crosses the square and the refusal fixes
+    // itself, so walking around it would be wasted hops. That reasoning inverts exactly when
+    // the blocker is another fleet character crawling the other way — each is the other's
+    // `bodies`, each has `improving` empty, and both sit out the full retry budget looking
+    // directly at each other. It is a deadlock rather than a delay, and no amount of patience
+    // resolves it.
+    //
+    // Measured on the shadow fleet 2026-09-18, six characters into the Temple of Shal'ille:
+    // every one of them landed on r10c21 — room 48 is entered by a kod trigger, so there is
+    // one landing square and they all arrive on it — and then `a body blocks W, N` for
+    // shadow07 and `a body blocks W, N, S` for shadow08, eight waits each, 50 seconds each,
+    // both giving up 11 squares from the priestess. Five of six runs failed there, and the
+    // quest itself was never the problem.
+    //
+    // So: spend `bodyPatience` waits on the hypothesis that it will move, then treat it as
+    // furniture and go around. `avoid` already stops the sidestep from walking straight back,
+    // and `maxSteps` still bounds the whole crawl, so the worst case is a longer route rather
+    // than a loop.
+    const around = open.filter(n => !shunned(n))
+                       .sort((a, b) => chebyshev(a, goal) - chebyshev(b, goal));
+    if (waited >= bodyPatience && around.length)
+      return { move: around[0], verdict: 'around', bodies, ground };
+    return { move: null, verdict: 'body', bodies, ground };
+  }
 
   const sideways = open.filter(n => !shunned(n));
   if (sideways.length) return { move: sideways[0], verdict: 'sidestep', bodies, ground };
@@ -1763,7 +1893,7 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
     // Take it back either way: the caller still owns this errand and an unheld body is one
     // the patrol will re-task out from under the next step.
     await call('autopilot', { agent, action: 'busy', kind: 'fleetscript',
-      label: ctx.name }, 30_000).catch(() => {});
+      label: ctx.name, lease_ms: BUSY_LEASE_MS }, 30_000).catch(() => {});
   }
 }
 
@@ -2119,7 +2249,33 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null })
 // is its keeper's again within half a minute.
 const KEEPER_FACULTIES = Object.freeze(['work', 'movement', 'economy']);
 const KEEPER_LEASE_MS = 30_000;        // the keeper's own ceiling; asking for more is clamped
-const KEEPER_BEAT_MS = 10_000;
+// OVERRIDABLE FOR ONE REASON: A TEN-SECOND BEAT IS UNTESTABLE, AND THE BUG BELOW LIVED IN THE
+// BEAT. The same argument `budgetFloorMs` makes further down — a path no offline test can reach
+// is a path bugs live in — and the same shape of fix.
+const KEEPER_BEAT_MS = Number(process.env.M59_KEEPER_BEAT_MS) > 0
+  ? Number(process.env.M59_KEEPER_BEAT_MS) : 10_000;
+// AND THE BROKER-SIDE `busy` WINDOW, WHICH IS A SEPARATE LEASE ON A SEPARATE CLOCK AND WAS
+// NEVER RENEWED.
+//
+// Two facts sit on a character and they are not the same fact. The keeper CLAIM says who is
+// steering, and it is `takeable: true` on purpose — a bot quietly holding nine characters must
+// not grey them out. `busy` is the one that says an operation is IN FLIGHT, and it is the only
+// one that makes anything step over the character: `isTakeable` is false only while it is set,
+// and that is the exact test DUM's first rule (`respect-commitment`), `m59-supervise.mjs`'s
+// unstick round and the broker's own weapon-errand sweep all make.
+//
+// `declareBusy` leases it for five minutes by default and `busyStatus()` clears it on READ the
+// moment it expires. `fleetScript` declared it once, at the start, and then heartbeat the
+// KEEPER lease every ten seconds for the rest of the errand — so five minutes into any errand
+// longer than five minutes, the character silently went back to `{kind:'bot', takeable:true}`
+// and every one of those callers was free to retarget it. A disciple quest runs ten to thirty
+// minutes. The claim held the whole time, which is why this never looked like a hole: the
+// character was genuinely still held, and was advertised as available.
+//
+// Two minutes rather than the fifteen-minute ceiling for the same reason the keeper lease is
+// thirty seconds against a ten-second beat: the lease is what protects the fleet from a runner
+// that stopped answering, so it is sized to a handful of missed beats and not to the errand.
+const BUSY_LEASE_MS = 120_000;
 
 let keeperPortsPromise = null;
 let keeperPortsAt = 0;
@@ -2355,7 +2511,7 @@ async function recoverFromDeath(ctx, agent, budgetMs) {
     return { ok: false, why: `did not come back within ${Math.round(budgetMs / 1000)}s` };
   } finally {
     await call('autopilot', { agent, action: 'busy', kind: 'fleetscript',
-      label: ctx.name }, 30_000).catch(() => {});
+      label: ctx.name, lease_ms: BUSY_LEASE_MS }, 30_000).catch(() => {});
   }
 }
 
@@ -2406,6 +2562,10 @@ const DYNAMIC_FIELDS = Object.freeze({
   // anything. See the `closeOn` note in fleetscripts/disciple-quest.mjs.
   crawl_to: ['col', 'row', 'room'],
   walk_to: ['col', 'row', 'room'],
+  // THE SCARCE PLACE IS SOMETIMES CHOSEN AT RUN TIME TOO. A quest that sends every character
+  // to whichever NPC the server rolled needs one gate per NPC, not one gate for the errand —
+  // otherwise two characters with different destinations queue behind each other for nothing.
+  gate: ['key'],
 });
 
 export function resolveStep(step, state) {
@@ -2451,6 +2611,36 @@ async function runStep(ctx, agent, rawStep, state) {
     case 'walk':
       return compiledWalk(ctx, agent, step.to, { minHealth: step.minHealth ?? ctx.minHealth,
                                                  despiteHazard: step.despiteHazard ?? null });
+
+    // WAIT MY TURN AT A PLACE THAT ONLY FITS ONE. See the GATES block for the argument.
+    case 'gate': {
+      const key = step.key == null ? null : String(step.key);
+      // A GATE ON NOTHING IS NOT A FREE PASS. A dynamic key that resolved to null would
+      // otherwise serialize every agent behind the single gate called "null" — which is
+      // exactly backwards from what a caller meant by leaving it open.
+      if (!key) return { ok: true, skipped: 'no gate key — nothing to queue for' };
+      state.gates ??= new Set();
+      if (step.release) {
+        const had = gateRelease(key, agent);
+        state.gates.delete(key);
+        return { ok: true, released: had, key,
+                 ...(had ? {} : { skipped: `this character did not hold "${key}"` }) };
+      }
+      if (state.gates.has(key))
+        return { ok: true, key, skipped: 'already held by this character' };
+      const timeoutMs = step.timeoutMs ?? 900_000;
+      const before = gateStatus().find(g => g.key === key);
+      if (before?.holder && before.holder !== agent)
+        ctx.log(agent, `waiting for "${key}" — ${before.holder} has it` +
+                       (before.waiting.length ? `, ${before.waiting.length} ahead` : '') +
+                       `, up to ${Math.round(timeoutMs / 1000)}s`);
+      const got = await gateAcquire(key, agent, timeoutMs);
+      if (!got.ok) return { ok: false, outcome: 'gate_timeout', key, ...got };
+      state.gates.add(key);
+      if (got.waitedMs > 1000)
+        ctx.log(agent, `"${key}" is mine after ${Math.round(got.waitedMs / 1000)}s`);
+      return { ok: true, key, waitedMs: got.waitedMs, queued: got.queued };
+    }
 
     case 'bank': {
       const amount = typeof step.amount === 'function' ? step.amount(state) : step.amount;
@@ -3417,6 +3607,15 @@ async function runStep(ctx, agent, rawStep, state) {
       const healBelow = step.healBelow ?? 0.5;
       const bodyWaitMs = step.bodyWaitMs ?? 6000;
       const bodyRetries = step.bodyRetries ?? 8;
+      // TWO WAITS IS TWELVE SECONDS, which is long enough for a wanderer to clear a square and
+      // far short of the 50 seconds two deadlocked fleet-mates used to spend staring at each
+      // other. `bodyRetries` still caps the total, so this only decides where the patience is
+      // spent, never how much there is.
+      const bodyPatience = step.bodyPatience ?? 2;
+      // AND A DETOUR THAT GAINS NOTHING IS STILL A BODY IN THE WAY. Going around has to be
+      // bounded by something other than `maxSteps`, or the honest diagnosis — "a body, not the
+      // ground" — degrades into `out_of_steps`, which points a reader at the geometry.
+      const aroundRetries = step.aroundRetries ?? 4;
       const deadline = Date.now() + (step.deadlineMs ?? 300_000);
       const maxSteps = step.maxSteps ?? 120;
 
@@ -3436,6 +3635,10 @@ async function runStep(ctx, agent, rawStep, state) {
       const wantRoom = step.room ?? start.room;
 
       let waited = 0, healed = 0, sidesteps = 0, hops = 0, probed = 0, readdressed = 0;
+      // The closest this crawl has ever been, and how close it was when it first gave up on
+      // waiting and started walking around. A detour is only working if the first comes below
+      // the second.
+      let arounds = 0, bestAway = Infinity, awayAtDetour = Infinity;
       const recent = [];
       let lastGround = [];
 
@@ -3471,7 +3674,8 @@ async function runStep(ctx, agent, rawStep, state) {
                    why: `the crawl ended in room ${p.room}, not ${wantRoom}` };
         if (p.row != null && chebyshev(p, goal) <= within)
           return { ok: true, outcome: 'arrived', at: `r${p.row}c${p.col}`,
-                   hops, waited, healed, sidesteps, probed, readdressed };
+                   hops, waited, healed, sidesteps, arounds, probed, readdressed };
+        if (p.row != null) bestAway = Math.min(bestAway, chebyshev(p, goal));
 
         // HEAL WHEREVER IT BECOMES NECESSARY, not once at the top. `rest` walks to a safe wall
         // and refuses the open; "nowhere here is safe" is a true answer and is not fatal.
@@ -3493,7 +3697,8 @@ async function runStep(ctx, agent, rawStep, state) {
                         `(pid ${who.pid}), so there is no way to tell a body in the way from ` +
                         `ground that does not cross` };
 
-        const choice = crawlChoice({ neighbours, at: p, goal, avoid: recent });
+        const choice = crawlChoice({ neighbours, at: p, goal, avoid: recent,
+                                     waited, bodyPatience });
         lastGround = choice.ground;
 
         if (choice.verdict === 'body') {
@@ -3506,7 +3711,8 @@ async function runStep(ctx, agent, rawStep, state) {
                      blockers: choice.bodies.map(b => `${b.dir}->r${b.row}c${b.col}`),
                      why: `something has been standing in the way for ${bodyRetries} tries at ` +
                           `r${p.row}c${p.col} — ${choice.bodies.map(b => b.dir).join(', ')} ` +
-                          `blocked by a BODY, not by the ground. Clear it or come back.` };
+                          `blocked by a BODY, not by the ground, and no open square to go ` +
+                          `around by. Clear it or come back.` };
           waited++;
           ctx.log(agent, `crawl_to: r${p.row}c${p.col} — a body blocks ` +
                          `${choice.bodies.map(b => b.dir).join(', ')}; waiting ${bodyWaitMs}ms ` +
@@ -3547,6 +3753,26 @@ async function runStep(ctx, agent, rawStep, state) {
                                   .join(', ') + '; all four diagonals probed and none moved the body' };
         }
         if (choice.verdict === 'sidestep') sidesteps++;
+        if (choice.verdict === 'around') {
+          // A DETOUR THAT NEVER GETS CLOSER IS NOT A DETOUR. `bestAway` is the closest this
+          // crawl has managed; if four goes around a body have not improved on it, the body is
+          // against something that the detour cannot get past, and saying `out_of_steps` here
+          // would send the next reader to measure the floor.
+          if (arounds >= aroundRetries && bestAway >= awayAtDetour)
+            return { ok: false, outcome: 'body_will_not_move', at: `r${p.row}c${p.col}`,
+                     away: chebyshev(p, goal), hops, waited, healed, arounds, readdressed,
+                     blockers: choice.bodies.map(b => `${b.dir}->r${b.row}c${b.col}`),
+                     why: `a body has been in the way at r${p.row}c${p.col} — ` +
+                          `${choice.bodies.map(b => b.dir).join(', ')} blocked by a BODY, not ` +
+                          `by the ground — through ${waited} wait(s) and ${arounds} attempt(s) ` +
+                          `to walk around it, none of which got any closer than ${bestAway} ` +
+                          `square(s). Clear it or come back.` };
+          if (!arounds) awayAtDetour = bestAway;
+          arounds++;
+          ctx.log(agent, `crawl_to: r${p.row}c${p.col} — ` +
+                         `${choice.bodies.map(b => b.dir).join(', ')} still blocked by a body ` +
+                         `after ${waited} wait(s); going around via ${choice.move.dir}`);
+        }
 
         const to = choice.move;
         await call('cancel_movement', { agent, why: 'crawl step' }, 20_000).catch(() => {});
@@ -3571,7 +3797,7 @@ async function runStep(ctx, agent, rawStep, state) {
       }
       const end = await read();
       return { ok: false, outcome: 'out_of_steps', at: `r${end.row}c${end.col}`,
-               away: chebyshev(end, goal), hops, waited, healed, sidesteps, probed, readdressed,
+               away: chebyshev(end, goal), hops, waited, healed, sidesteps, arounds, probed, readdressed,
                ground: lastGround.map(g => `${g.dir}->r${g.row}c${g.col}`),
                why: `${maxSteps} hops and still ${chebyshev(end, goal)} square(s) out` };
     }
@@ -3907,10 +4133,60 @@ export async function fleetScript({
         const result = routePreflight({ agents, rooms, where,
           route: (from, to) => {
             const p = findPath(map, from, to);
-            return { ok: p?.found === true, why: p?.reason };
+            if (p?.found !== true) return { ok: false, why: p?.reason };
+            // A ROUTE THAT EXISTS AND CROSSES A KNOWN TRAP IS THE WORST ANSWER THIS CHECK CAN
+            // GIVE, BECAUSE IT IS GREEN.
+            //
+            // `trapCheck` reads the rooms a plan NAMES. A journey's trap is usually not one of
+            // them — it is a room the router picks on the way, which nothing in the plan
+            // mentions and nobody chose. `findPath` has known the hops all along and this check
+            // was throwing them away.
+            //
+            // Measured 2026-09-19, and it is the reason this exists. The disciple quest for the
+            // school of Faren aims at room 45, the Badlands, where its priestess stands. 45's
+            // only inbound edge is from room 49, Kardde's Canyon — which is ALREADY in
+            // `KNOWN_TRAPS` above, with the measurement: its south anchor sits at floor 6016 on
+            // a rim while the reachable ground below is 3840, against a 384 climb cap, so from
+            // the room body you cannot reach it. 49's other edge, north to 593, is measured at
+            // 1 success in 1,183 attempts. Five characters were sent, the route preflight
+            // answered `routes: green — every one of 10 character/room pair(s) has a route`,
+            // and all five ended up standing in the canyon re-issuing a walk that cannot
+            // complete, with the way home almost as bad. The router was right that a route
+            // exists; every step of it was correct; the destination is not reachable.
+            //
+            // Waived by the same waiver that waives `trapCheck`, because a rescue walks in on
+            // purpose and this must not be the thing that stops it.
+            if (!allowTraps && !waived.has('trapCheck')) {
+              const crossed = [...new Set((p.hops ?? []).flatMap(h => [h.from, h.to]))]
+                .map(Number).filter(n => n !== Number(to) && KNOWN_TRAPS[n]);
+              if (crossed.length)
+                return { ok: false, why:
+                  `the only route from ${from} to ${to} crosses room ${crossed.join(', ')}, ` +
+                  `which is a KNOWN TRAP: ${KNOWN_TRAPS[crossed[0]]} A route the router can ` +
+                  `PLAN through it is not a route the mover can WALK, and a character left ` +
+                  `there is hard to get back` };
+            }
+            return { ok: true };
           } });
+        // A TRAP ON THE PATH REFUSES WHATEVER THE WARNING MODE SAYS, AND THE OTHER PROBLEMS
+        // STILL OBEY IT.
+        //
+        // "No route" is usually a fact about the bake — a missing jump, a missing trigger —
+        // and a warning is the right default for it, because the room is very often walkable
+        // and the model is what is behind. A KNOWN_TRAPS crossing is the opposite kind of
+        // claim: every entry in that list is there because somebody was measured getting
+        // stranded, and the cost of being wrong is a character that has to be rescued rather
+        // than a walk that fails. So it is refused by default, and `waives: ['trapCheck']`
+        // is how a rescue says it is going in anyway.
+        const trapped = result.problems.filter(p => /KNOWN TRAP/.test(String(p.why ?? '')));
         for (const line of formatRoutePreflight(result, { mode: warn.mode, scriptName: name }))
           onLog(line);
+        if (trapped.length && !force)
+          throw new Error(`${name}: refusing — ${trapped.length} character/room pair(s) can ` +
+            `only be routed THROUGH A KNOWN TRAP. ${trapped[0].agent}: ${trapped[0].from} -> ` +
+            `${trapped[0].to} — ${trapped[0].why} Name the missing affordance that would make ` +
+            `the crossing walkable, or say \`unsafe: { waives: ['trapCheck'] }\`; --force ` +
+            `overrides.`);
         if (result.problems.length && warn.mode === 'error' && !force)
           throw new Error(`${name}: refusing — ${result.problems.length} character/room pair(s) ` +
             'have no route the mover can plan. Re-bake, add the missing affordance, or say ' +
@@ -4097,6 +4373,9 @@ They are driven by tools/m59-menagerie.mjs and ` +
     // attempts on a hop that takes seven and a half seconds, because home EQUALLED
     // assignedRoom -- which is the common case, not the exotic one.
     let hold = { ok: false, cancelJourney: async () => {}, release: async () => {} };
+    // The `busy` renewal, cleared in the `finally` below. Declared out here so the finally can
+    // reach it however the errand ended.
+    let busyBeat = null;
     const setHold = h => { hold = h; ctx.holds.set(agent, h); return h; };
     setHold(hold);
     try {
@@ -4105,9 +4384,26 @@ They are driven by tools/m59-menagerie.mjs and ` +
       // KEEPER — it is the only one of the two that stops the process holding the socket from
       // steering. Sending only the first is what put this runner and twenty-one keepers on the
       // same bodies all afternoon.
-      await call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name }, 40_000)
+      await call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name,
+                                lease_ms: BUSY_LEASE_MS }, 40_000)
         .catch(() => {});
       held.add(agent);
+      // AND KEEP SAYING IT. `busy` is LEASED — `busyStatus()` clears it on read the moment it
+      // expires — and this call used to be the only one. Five minutes into any longer errand
+      // the character went back to reading `{kind: 'bot', takeable: true}`, which is what DUM's
+      // `respect-commitment`, `m59-supervise.mjs`'s unstick round and the broker's weapon sweep
+      // all consult. Held and advertised as available at the same time.
+      //
+      // HERE RATHER THAN ON THE KEEPER HEARTBEAT, which is where it went first and which is
+      // wrong for the case that has no keeper: `holdKeeper` returns a no-op hold when no keeper
+      // process answers — a broker-run session, a keeper that restarted, a waived lease — and
+      // the beat that would have carried the renewal never starts. The character still needs
+      // the fleet to leave it alone. This interval is the runner's, so it runs on every path.
+      busyBeat = setInterval(() => {
+        call('autopilot', { agent, action: 'busy', kind: 'fleetscript', label: name,
+                            lease_ms: BUSY_LEASE_MS }, 20_000).catch(() => {});
+      }, KEEPER_BEAT_MS);
+      busyBeat.unref?.();
       // Waivable, and the sharpest edge in the file: without the lease a DUM bot re-decides
       // about every thirty seconds and quietly overwrites the order while every call still
       // reports success. Anything waiving this is choosing to race the keeper.
@@ -4367,7 +4663,13 @@ They are driven by tools/m59-menagerie.mjs and ` +
           // caller or a ledger must be able to branch on that without parsing a sentence.
           // Filing contention as a movement failure corrupts the #movement evidence, which is
           // keyed on the distinction being right.
+          // AND `outcome` FOR THE SAME REASON, which this record used to drop on the floor.
+          // Half the steps in this file already name their failure — `body_will_not_move`,
+          // `out_of_time`, `no_square`, `gate_timeout` — and every one of those names was
+          // reaching the per-step state and then being thrown away at the run boundary, so a
+          // caller asking "why did this errand fail" got a sentence and had to regex it.
           failure = { at, step: step.do, why: r.why,
+                      ...(r.outcome ? { outcome: r.outcome } : {}),
                       ...(r.never_started ? { never_started: true } : {}),
                       ...(r.refused ? { refused: r.refused } : {}) };
           continue;
@@ -4390,6 +4692,23 @@ They are driven by tools/m59-menagerie.mjs and ` +
       results[agent] = { ok: false, why: e.message };
       ctx.log(agent, 'ERROR', e.message);
     } finally {
+      // STOP SAYING BUSY BEFORE ANYTHING ELSE. A renewal that fires after the release would
+      // re-mark a character the errand has already let go of, and nothing would ever take it
+      // back — the lease would be the only thing that ever cleared it.
+      if (busyBeat) { clearInterval(busyBeat); busyBeat = null; }
+      // LET THE QUEUE THROUGH FIRST, AND DO IT HERE RATHER THAN IN THE PLAN.
+      //
+      // A gate released only by an `ungate` step is released only on the paths that reach it,
+      // and the paths that do not reach it are exactly the interesting ones: a failed step
+      // unwinds to the `always` steps, a thrown error unwinds past them, and a Ctrl-C unwinds
+      // past everything. Any of those would leave the gate held by a character that is no
+      // longer doing anything, and every other character waits out its full timeout behind a
+      // ghost. Same argument as the keeper lease two lines down, and the same fix.
+      for (const key of (state.gates ?? [])) {
+        gateRelease(key, agent);
+        ctx.log(agent, `released the "${key}" gate on the way out`);
+      }
+      state.gates?.clear();
       // CANCEL BEFORE HANDING BACK. Whatever ended this errand — success, a give-up after
       // three attempts, a thrown error, a Ctrl-C — the keeper may still be walking the route
       // we asked for. Handing the faculties back without cancelling gives it a journey it

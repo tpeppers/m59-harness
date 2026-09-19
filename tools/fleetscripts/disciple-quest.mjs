@@ -46,7 +46,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { walk, say, shop, fight, verify, walkTo, crawlTo } from '../m59-fleetscript.mjs';
+import { walk, say, shop, fight, verify, walkTo, crawlTo, gate, ungate } from '../m59-fleetscript.mjs';
 import { QUEST_NPC_RADIUS, sayToNpc } from '../m59-sayrange.mjs';
 import { fleetName } from '../m59-fleetpath.mjs';
 import { saveRun, runId } from '../m59-questbook.mjs';
@@ -572,9 +572,37 @@ export const script = {
     // on a shadow fleet and a real run on prod must not share a directory — the whole value of
     // the book is that "what has this fleet ever been asked for" has one answer.
     fleet: { default: null, describe: 'questbook to write into; defaults to the running fleet' },
+
+    // THE HEALTH FLOOR IS THIS ERRAND'S TO SET, AND LEAVING IT UNSET MEANT 100%.
+    //
+    // `fleetScript` defaults `minHealth` to 1 — full health — which is the right default for a
+    // script that does not think about it, because the alternative is walking a hurt body onto
+    // the roads that kill this fleet. It is the wrong answer for a quest with a deadline:
+    // measured on the shadow fleet 2026-09-18, shadow10 was refused its walk to the Temple of
+    // Shal'ille at 94%, six percentage points of a 48-health body, and the run ended there.
+    // "Rest first" is not available to a character that is already standing in a temple with
+    // nothing hitting it — resting caps out where it caps out.
+    //
+    // 0.6 is the fleet's own flee line for a reason, and a body above it is a body the keeper
+    // would keep in the field. A character below it should not be crossing a map at all, so
+    // the refusal is still the right answer down there.
+    minHealth: { type: 'number', default: 0.6,
+                 describe: 'health fraction a character must have before it will set out. ' +
+                           'The chassis default is 1 (full), which refuses a 94% body' },
+    // The SAME argument one floor down, for the other guarantee that refuses a journey. A
+    // 20-max-health caster is genuinely fragile on a road, and it is also exactly the character
+    // most likely to be sent for a disciple quest, so this is stated rather than inherited.
+    fragileBelow: { type: 'number', default: 25,
+                    describe: 'maximum-health floor under which a journey is refused outright' },
+    // How long a character will wait its turn at the priestess before giving up. See the gate
+    // steps below: the whole cohort is queueing for one NPC, so this has to cover the worst
+    // case of everybody ahead of it taking its full time.
+    templeWaitMs: { type: 'number', default: 20 * 60_000,
+                    describe: 'how long to queue for the priestess before failing the run' },
   },
 
-  async steps({ school, home, huntRooms, rounds, abortBelow, fleet: fleetArg, agent }) {
+  async steps({ school, home, huntRooms, rounds, abortBelow, templeWaitMs,
+                fleet: fleetArg, agent }) {
     const fleet = fleetArg || fleetName();
     const key = String(school ?? '').trim().toLowerCase().replace(/[^a-z]/g, '');
     if (NO_QUEST[key])
@@ -833,8 +861,38 @@ export const script = {
       }
     };
 
+    // THE PRIESTESS IS THE SCARCE RESOURCE, AND SHE ONLY FITS ONE.
+    //
+    // Five of six Shal'ille runs failed on 2026-09-18 without the quest ever being the problem.
+    // A temple is entered by a kod trigger, so every character lands on the SAME square — all
+    // six arrived on r10c21 in room 48 — and the approach then has to cross the room to within
+    // three squares of her. What the log shows is not a crowd, it is a DEADLOCK: shadow07
+    // `a body blocks W, N`, shadow08 `a body blocks W, N, S`, each one the other's blocker,
+    // eight waits each, fifty seconds each, both giving up eleven squares out.
+    //
+    // `parallel: false` would fix it and would also serialize two cross-country legs and a
+    // monster fight — a six-minute errand becomes forty. So only the part that needs the room
+    // to itself is gated: everyone travels at once, and then they take turns with her.
+    //
+    // The crawl's own fix is the other half and they are not redundant. Going AROUND a body
+    // after two waits is what gets one character past the five standing on the landing square;
+    // the gate is what stops those five from trying to move at the same time, which is the
+    // case no amount of going around resolves because every detour is into somebody else.
+    const templeGate = `temple:${s.temple}`;
+    // A PARAMETER DEFAULT IS APPLIED BY `runNamed`, AND `steps()` IS ALSO CALLED DIRECTLY —
+    // by the offline test, by `--dry`, and by anything that wants to read the plan without
+    // running it. `Number(undefined)` is NaN, and a NaN timeout is an UNBOUNDED wait: the
+    // whole cohort would queue behind the first character for ever. So the floor is restated
+    // here rather than trusted to the caller.
+    const templeWait = Number(templeWaitMs) > 0 ? Number(templeWaitMs) : 20 * 60_000;
+
     return [
       walk(s.temple),
+
+      // WAIT MY TURN. Held from here to the moment she has been asked, and released even if the
+      // run falls over in between — the runner's own `finally` does that, which is the whole
+      // reason this is a step and not a lock taken inside `closeOn`.
+      gate(templeGate, { timeoutMs: templeWait }),
       ...closeOn(() => s.priestess, 'priestess'),
 
       // ASK BEFORE STARTING ANYTHING. A character who is already a disciple must not be sent
@@ -907,12 +965,23 @@ export const script = {
         return { ok: true, ask: state.ask.kind };
       }, 'could not read what the priestess asked for'),
 
+      // LET THE NEXT ONE IN. The quest legs below go anywhere in the world and take minutes;
+      // holding the priestess through a monster fight would queue the whole cohort behind one
+      // character's errand.
+      ungate(templeGate),
+
       ...middle,
 
       // BACK TO HER. Walking in is enough on its own — `SomethingEntered` calls
       // `CheckCompletionCriteria` too (monster.kod:915-928) — but the body may never have left
       // the room, so the say below is the one that has to work.
       walk(s.temple),
+
+      // AND QUEUE AGAIN FOR THE RETURN, WHICH IS THE VISIT THAT DECIDES THE QUEST. The closing
+      // word has to be spoken within five squares of her (Q_NPC_CLOSE_ENOUGH), so this is the
+      // approach that cannot be allowed to fail — shadow08 delivered its message, walked back,
+      // could not get through the crowd, and finished the run still not a disciple.
+      gate(templeGate, { timeoutMs: templeWait }),
       ...closeOn(() => s.priestess, 'priestess again'),
 
       // THE CLOSING WORD, AND DELIBERATELY NOT "disciple".
@@ -953,6 +1022,12 @@ export const script = {
                      `do with the quest`
                    : undefined };
       }, 'the priestess still will not teach level-3 spells'),
+
+      // AND LET GO, WHATEVER HAPPENED. `always` rather than a plain step because the verdict
+      // above is the step most likely to fail, and a gate held by a character walking home is
+      // the rest of the cohort waiting out its full timeout for nothing. The runner's `finally`
+      // would catch it too; this releases it a leg earlier, before the walk home.
+      { ...ungate(templeGate), always: true },
 
       // ALWAYS. A quest that failed still has to bring the character back; the roads this
       // errand uses are where four of one night's deaths started.
