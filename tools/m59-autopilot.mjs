@@ -2628,9 +2628,47 @@ export class Autopilot {
       using = skills.equippedNow(c);
     }
     if (!using) return { ready: false, why: 'the server use list is not known' };
-    const held = (c.inventory || []).find(o => using.has(o.id) &&
-      skills.weaponScore(c.rsc.get(o.nameRsc) || '') > 0);
-    if (!held) return { ready: true, already: true };
+    const weaponish = (o) => skills.weaponScore(c.rsc?.get?.(o.nameRsc) || o.name || '') > 0;
+    let held = (c.inventory || []).find(o => using.has(o.id) && weaponish(o));
+    // THE ID JOIN CAN FAIL WHILE THE HAND IS STILL FULL, AND THAT USED TO BE SILENT.
+    //
+    // `using` is the server's use list and carries ids and little else; `c.inventory` is a
+    // different list with its own ids. They are joined here on the id, which is the one
+    // thing this repository has written down as untrustworthy -- renumbered on every save,
+    // recycled within hours. When the join misses, this returned `{ready: true, already:
+    // true}`, which reads as "the hand was already empty" and is indistinguishable from
+    // success. `passArm` notes only on `ready && removed` and complains only on `!ready`,
+    // so `ready && !removed` wrote NOTHING ANYWHERE.
+    //
+    // Measured on prod 2026-09-19: Floyd, `trainingStyle: unarmed`, mode farm, room 27,
+    // assignedRoom 27 -- every gate true -- holding a short sword, with the decision ring
+    // not advancing at all. No disarm, no complaint, and brawling cannot advance because a
+    // swing with a weapon zeroes piWeaponSwings against the proficiency being trained
+    // (player.kod:4753-4757).
+    //
+    // So: fall back to the NAME, which is what the server's own equipment list speaks, and
+    // if the hand is provably full and nothing matched, say so as a REFUSAL rather than as
+    // an empty hand. A caller that is told "already bare" stops asking; one that is told it
+    // failed asks again and complains where somebody can read it.
+    if (!held) {
+      // `||` AND NOT `??` ON BOTH SIDES. `rsc.get` answers '' for a name it cannot resolve,
+      // and '' is neither null nor undefined, so `??` keeps the empty string and the
+      // fallback never reaches `o.name`. That is the same shape as the bug being fixed:
+      // two readers of one object disagreeing about which field carries the name.
+      const worn = new Set((c.equipment?.()?.equipped ?? [])
+        .map(o => String(o.name || c.rsc?.get?.(o.nameRsc) || '').toLowerCase())
+        .filter(Boolean));
+      if (worn.size)
+        held = (c.inventory || []).find(o =>
+          worn.has(String(c.rsc?.get?.(o.nameRsc) || o.name || '').toLowerCase()) && weaponish(o));
+    }
+    if (!held) {
+      if (skills.isArmed(c))
+        return { ready: false, why: 'the server says this character is armed and nothing in ' +
+                 'the pack matched the use list, by id or by name — the weapon cannot be ' +
+                 'identified to take it off' };
+      return { ready: true, already: true };
+    }
     const name = c.rsc.get(held.nameRsc) || 'weapon';
     const before = c.evSeq;
     await s.pacer.submit('use', () => c.unuse(held.id)).catch(() => {});
@@ -3509,7 +3547,10 @@ export class Autopilot {
                          'something that is not coming, and a character parked in an inn for ever ' +
                          'is a character retired by accident' });
     if (hp < 0.95) return false;
-    if ((vigorPct(v) ?? 1) < REST_VIGOR_CAP) return false;
+    // The per-character ceiling, not the global cap: a cursed character can never reach 80
+    // of 200, so against the bare cap `recovered()` answers false for ever and the body
+    // stays parked in an inn — the exact retirement-by-accident this method guards against.
+    if ((vigorPct(v) ?? 1) < this.restVigorCeiling()) return false;
     // A zero or unreadable mana ceiling is not a shortfall — it is a character that has
     // no bar to fill, and blocking on it would be the retirement this guards against.
     const mp = pct(v?.mana);
@@ -4034,6 +4075,28 @@ export class Autopilot {
       this.noProgress('split-room crossing did not complete');
     }
     return true;
+  }
+
+  /**
+   * The loadout's carry MINIMUMS, as {name: min}, for the overfarm eviction.
+   *
+   * `protectedItemNames()` above answers "may this be given up at all", which is a name and
+   * therefore all-or-nothing. This answers "how much of it must stay", which is what lets a
+   * reagent OVERFLOW: keep the floor, offer the surplus. Without it a character one tooth
+   * over its floor protected the entire stack and could free nothing for anything better.
+   *
+   * Only positive minimums are reported. A floor of zero is not a floor -- it is an entry
+   * with nothing to say -- and emitting it as `0` would read downstream as "all of this is
+   * surplus", which is the opposite of silence.
+   */
+  carryFloors() {
+    const out = {};
+    for (const row of (this.loadout()?.carry ?? [])) {
+      const name = String(row?.item ?? '').trim();
+      const min = Number(row?.min);
+      if (name && Number.isFinite(min) && min > 0) out[name] = min;
+    }
+    return out;
   }
 
   protectedItemNames() {
@@ -5044,6 +5107,13 @@ export class Autopilot {
         why: 'no square beside it that this map says we can stand on',
         how: 'remembered by SQUARE for a few minutes, so a respawn in the same corner is ' +
              'skipped too and the next pass picks something reachable instead' });
+      // AND THE RETURN, WHICH IS THE ONLY LINE HERE THAT DOES ANYTHING. Everything above it
+      // is bookkeeping; without this the branch falls through to `approach.col` on a null
+      // `approach` and throws, in precisely the case the branch was added to handle. It was
+      // dropped by an edit that added the note ABOVE the return and replaced it rather than
+      // preceding it — a class of mistake no reviewer catches by reading the new lines,
+      // because the new lines are all correct.
+      return { closed: false, target: name, why: 'no square beside it that we can reach' };
     }
     this.doing = 'fighting';
     const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
@@ -5208,7 +5278,7 @@ export class Autopilot {
       blind ? 'vitals have not arrived yet' : null,
       (hp ?? 1) < 0.95 ? 'health' : null,
       (mp ?? 1) < 0.95 ? 'mana' : null,
-      (vig ?? 1) < REST_VIGOR_CAP ? 'vigor' : null,
+      (vig ?? 1) < this.restVigorCeiling() ? 'vigor' : null,
     ].filter(Boolean);
 
     this.sanctuaryHoldSince ??= Date.now();
@@ -13352,7 +13422,8 @@ export class Autopilot {
     // The protect list is `protectedItemNames()` — vault items, temporary cargo, whatever
     // the guild plan is still short of, and the declared stockpile floors — so the things
     // this fleet already refuses to sell are also the things it refuses to trade away.
-    s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames());
+    s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
+                          this.carryFloors());
     if (!s.live) { this.note('not in game'); return; }
     if (s.combat?.active) {
       await s.combat.tick();
@@ -16035,7 +16106,7 @@ export class Autopilot {
     // route, and since every character is attackable, a heap of friendly bots is
     // indistinguishable from a mob to every bot in it.
     if (this.sanctuary(room) && this.settledIn !== room?.num &&
-        ((hp !== null && hp < 0.95) || (vigorPct(v) ?? 1) < REST_VIGOR_CAP))
+        ((hp !== null && hp < 0.95) || (vigorPct(v) ?? 1) < this.restVigorCeiling()))
       await this.settle('arrived somewhere safe and not at full strength').catch(() => {});
     // Leaving a room means the next safe one gets its own seat, and its own attempts.
     if (this.settledIn != null && room?.num !== this.settledIn && !this.sanctuary(room)) {
@@ -16110,7 +16181,15 @@ export class Autopilot {
     // down on the next pass. Hungry characters spent entire sessions in that loop.
     // For vigor the trigger is what resting can actually deliver; the shortfall above
     // it is a food problem, and eat()/loot runs are what answer it.
-    const vigorRestAt = Math.min(this.policy.restBelow, REST_VIGOR_CAP);
+    // THE SAME CEILING AS THE RELEASE, FOR THE SAME REASON. `REST_VIGOR_CAP` is where the
+    // game stops awarding rest vigor, so using it as the SIT-DOWN threshold asks a cursed
+    // character to reach a bar its curse forbids: a worn ring of lethargy caps the wearer
+    // at 60 of 200 against this 80, so `vig < vigorRestAt` is permanently true, `hurt` is
+    // permanently true, and the branch below parks it at a recovery wall and RETURNS --
+    // before `releaseRestedHold` further down can ever be reached. Fixing the release bar
+    // alone left this one holding them, which is what prod showed: full health, zero
+    // kills, held_s climbing past a thousand seconds.
+    const vigorRestAt = Math.min(this.policy.restBelow, this.restVigorCeiling());
     // SPENT is not the same as hurt, and it is not negotiable. See ORDINARY_VIGOR_FLOOR: the
     // vigor trigger above makes a character want to rest, and wanting has been refused for an
     // hour at a time. This is the floor no ordinary activity crosses.
@@ -16187,7 +16266,13 @@ export class Autopilot {
     //
     // Called here so the wall is given up on the pass that finishes it. The release itself is
     // unchanged and still refuses a hurt character; all that changes is that it is asked.
-    if (this.hold && this.suspendedJourney) await this.releaseRestedHold();
+    // ASKED FOR A FARMER TOO. `releaseRestedHold` computes `onARoad` and branches on it —
+    // a farming floor of `holdResumeAbove ?? 0.9` against a travelling floor of 1, plus
+    // farm-only refusals for a pending pull and for contact — so it was plainly written for
+    // both. The `&& this.suspendedJourney` here made the farming half unreachable, which left
+    // farmers in the original bug this call was added to fix: "a character holding a wall
+    // never reaches [passFarm], because this stage handles the pass and returns first."
+    if (this.hold) await this.releaseRestedHold();
 
     // A HEALER BEHIND A WALL NEVER HEALED ANYBODY, AND THAT IS THIS STAGE'S DOING.
     //
@@ -17206,6 +17291,39 @@ export class Autopilot {
   // timeout. Both ceilings met means the wall has given all it has.
   //
   // Forced, because the ordinary refusal is about being hurt and this character is not.
+  /**
+   * THE MOST VIGOR RESTING CAN ACTUALLY GIVE THIS CHARACTER, as a fraction of the bar.
+   *
+   * `REST_VIGOR_CAP` is 0.4 — 80 of 200 — and the game stops AWARDING rest vigor there, so a
+   * test of `vig < REST_VIGOR_CAP` can be met exactly and never cleared. That was survivable
+   * until something lowered the ceiling below it.
+   *
+   * A worn `ring of lethargy` does exactly that: `lethring.kod` calls
+   * `SetVigorRestThreshold(current - piVigorRestThresholdChange)` with a change of 20 and a
+   * floor of 10, so the wearer rests to 60 of 200 and not one point further. Against a bar of
+   * 80 that is a wait with no end, and the wait happens against a wall — measured on prod
+   * 2026-09-19, four characters at FULL HEALTH held a safe spot for nineteen minutes with
+   * zero kills, waiting for vigor the curse had already forbidden them.
+   *
+   * So the bar is what THIS character can reach rather than what an uncursed one could. The
+   * note it gates still reads "all the vigor resting can give", which is now true.
+   */
+  restVigorCeiling() {
+    const worn = this.s?.client?.equipment?.()?.equipped ?? [];
+    const rings = worn.filter(o =>
+      /ring of lethargy/i.test(String(o?.name ?? this.s?.client?.rsc?.get?.(o?.nameRsc) ?? '')))
+      .length;
+    if (!rings) return REST_VIGOR_CAP;
+    // 20 of 200 per ring, floored at 10 of 200 — the kod's own numbers, not a guess.
+    // IN POINTS, THEN DIVIDED ONCE. Subtracting fractions gets this wrong in the only case
+    // that matters: `0.4 - 0.1` is 0.30000000000000004, and a wearer sitting at exactly 60
+    // vigor reads 0.3, which is LESS — so the bar would still be unclearable and the fix
+    // would look right while changing nothing. `vigorPct` divides by the same 200, so
+    // computing the ceiling the same way makes the two comparable exactly.
+    const cap = Math.round(REST_VIGOR_CAP * skills.VIGOR_MAX);   // 80 of 200
+    return Math.max(10, cap - rings * 20) / skills.VIGOR_MAX;
+  }
+
   async releaseRestedHold() {
     if (!this.hold) return false;
     const v = this.s.client?.vitals?.();
@@ -17241,7 +17359,7 @@ export class Autopilot {
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : (this.policy.holdResumeAbove ?? 0.9);
     if (hp === null || hp < floor) return false;
-    if (vig !== null && vig < REST_VIGOR_CAP) return false;
+    if (vig !== null && vig < this.restVigorCeiling()) return false;
     this.note('leaving the wall — full health and all the vigor resting can give', {
       health: `${v?.health?.value}/${v?.health?.max}`,
       vigor: `${v?.vigor?.value}/${v?.vigor?.scale_max ?? 200}`,
@@ -17473,7 +17591,7 @@ export class Autopilot {
       return this.resumeDeclined('still mending — health is below the start floor and climbing',
                                  { health: Math.round(hp * 100) + '%', floor, flat: this.resumeFlat ?? 0 });
     const vig = vigorPct(v);
-    if (vig !== null && vig < REST_VIGOR_CAP && stillMending)
+    if (vig !== null && vig < this.restVigorCeiling() && stillMending)
       return this.resumeDeclined('still mending — vigor is under the resting cap and climbing',
                                  { vigor: vig, cap: REST_VIGOR_CAP, flat: this.resumeFlat ?? 0 });
     // Already there. Nothing to resume, and reporting it as a resume would put a journey in

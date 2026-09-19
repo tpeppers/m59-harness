@@ -102,5 +102,37 @@ console.log('\n--- `avoid` narrows the hunt and can never widen it ---');
      'an avoid that refuses nothing must not reintroduce what the name filter removed');
 }
 
+console.log('');
+console.log('--- closeOnQuarry RETURNS on unreachable prey, and does not walk at a null ---');
+{
+  // THE GAP THIS CLOSES IS IN THE TEST, NOT THE CODE. Every assertion above exercised the
+  // memory and none of them called `closeOnQuarry`, so a shipped edit that dropped the
+  // `return` from the unreachable branch — leaving it to fall through to `approach.col` on a
+  // null approach — passed the whole suite. The memory was written correctly and then the
+  // function threw. A unit test of the bookkeeping is not a test of the branch.
+  const k = keeper();
+  const foe = { id: 7, col: 4, row: 9, nameRsc: 1 };
+  let walked = 0;
+  const s = {
+    name: 'test',
+    client: { room: { objects: new Map([[7, foe]]) }, rsc: { get: () => 'mummy' } },
+    world: { room: { num: 1016 }, approachSquare: () => null },
+    walkTo: async () => { walked++; return { arrived: true }; },
+  };
+  k.s = s;
+  k.note = () => {};
+
+  let threw = null, out = null;
+  try { out = await k.closeOnQuarry({ id: 7 }); } catch (e) { threw = e; }
+
+  ok('it does not throw', threw === null, threw ? threw.message : '');
+  ok('it reports closed:false with a readable reason',
+     out?.closed === false && /no square beside it/.test(out?.why ?? ''));
+  ok('and it never asked the mover to walk anywhere', walked === 0,
+     'falling through called walkTo(null.col) and threw before it could');
+  ok('while still remembering the square for the next pass',
+     k.unreachablePreyIn(1016)?.has('4,9') === true);
+}
+
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);

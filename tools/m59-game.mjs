@@ -106,6 +106,11 @@ import * as skills from './m59-skills.mjs';
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
 const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
+
+// THE SHAPES THAT EQUIP THEMSELVES AND NEVER COME OFF. A cursed weapon is refused at the
+// WIELD by `weaponRanking`, which is a second chance this family does not get: `item.kod:514`
+// posts `TryUseItem` on pickup, so for a ring or an amulet the pickup IS the wear.
+export const UNREVEALED_JEWELLERY = /\b(ring|amulet|necklace|circlet)\b/i;
 // Facing coalescing tolerance (degrees) for the turn-before-move in walkTo. A player only
 // turns when the heading changes; we suppress the per-step re-face that pushed us over the
 // server's 5-packet/s throttle. See docs/packet-throttle.md.
@@ -4278,9 +4283,13 @@ class Session {
    * zeroing it would hand the character a fresh 150% budget every time DUM re-asserted an
    * unchanged setting — which it does on a timer.
    */
-  setOverfarmPolicy(policy = null, protect = []) {
+  setOverfarmPolicy(policy = null, protect = [], floors = null) {
     this._overfarmPolicy = policy ?? null;
     this._overfarmProtect = Array.isArray(protect) ? protect : [];
+    // {name: min} from the loadout's carry floors. `protect` says whether a thing may be
+    // given up at all; this says how much of it must stay, which is what makes a surplus
+    // droppable instead of the whole stack being untouchable.
+    this._overfarmFloors = floors && typeof floors === 'object' ? floors : null;
     if (policy?.enabled) this._overfarm ??= { sifted: 0, stream: [], taken: 0, dropped: 0, left: 0 };
   }
 
@@ -4345,6 +4354,33 @@ class Session {
     cands = cands.filter(o => {
       const n = c.rsc.get(o.nameRsc) || '';
       if (CURSED_ITEMS.test(n)) { cursedSkipped.push(n); return false; }
+      // AND THE ONES WHOSE NAME HAS NOT TOLD US YET.
+      //
+      // `CURSED_ITEMS` is a NAME ban, and a name cannot protect against an item whose name
+      // is still hidden: an unidentified ring of lethargy is not called that until it has
+      // been revealed, so the filter above reads it as an ordinary ring and takes it.
+      //
+      // PICKING IT UP IS WEARING IT. `item.kod:514` POSTS `TryUseItem` on the picker the
+      // moment a cursed item enters the pack -- the item equips itself -- and a cursed ring
+      // can never come off (`ItemReqUnuse` returns FALSE unconditionally). So the loot
+      // decision IS the wear decision, and it is irreversible.
+      //
+      // Measured on prod 2026-09-19: four characters wearing rings of lethargy, each one
+      // capped at 60 vigor of a 200 bar for as long as it lives, parked against a wall at
+      // full health for nineteen minutes because the rest floor they can never reach was
+      // the thing being waited for.
+      //
+      // JEWELLERY ONLY, AND UNREVEALED ONLY. This does not refuse unidentified loot in
+      // general -- a wand or a mace that turns out to be cursed is a bad afternoon, not a
+      // permanent one, because the wield is a separate decision that `weaponRanking`
+      // already guards. Rings and amulets have no such second chance, which is the whole
+      // difference. And identify reaches an item ON THE GROUND in the same room
+      // (`IsTargetInRange`), so leaving one where it lies costs nothing: it can be read
+      // first and picked up afterwards.
+      if (UNREVEALED_JEWELLERY.test(n) && skills.isUnrevealed(o)) {
+        cursedSkipped.push(`${n} (unidentified — a cursed ring equips itself on pickup)`);
+        return false;
+      }
       return true;
     });
 
@@ -4424,7 +4460,7 @@ class Session {
           floor: cands.map(o => ({ id: o.id, name: named(o), amount: o.amount || 1 })),
           pack: (c.inventory || []).map(o => ({ name: c.rsc.get(o.nameRsc) || o.name,
                                                 amount: o.amount || 1, id: o.id })),
-          policy: ofPolicy, protect, capacity: cap.weight_max,
+          policy: ofPolicy, protect, floors: this._overfarmFloors, capacity: cap.weight_max,
           sifted: this._overfarm.sifted,
         });
 
