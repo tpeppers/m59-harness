@@ -414,6 +414,10 @@ function problems(s) {
 // because the reading is only worth having when the ref it is computed from is current.
 const noFetch = process.argv.includes('--no-fetch');
 const doPush = process.argv.includes('--push');
+// PERFORM the promotion rather than printing it. Opt-in, never a default: the print exists
+// because cutting a deploy restarts a live fleet, and that judgement belongs to whoever is
+// asking. This only removes the requirement that they be able to type into another checkout.
+const doApply = process.argv.includes('--apply');
 const mode = process.argv.find(a => a.startsWith('--') && a !== '--no-fetch' && a !== '--push')
   || '--status';
 
@@ -511,10 +515,47 @@ if (mode === '--cut') {
   const pin = pinStatus(null);
   if (pin) {
     console.log(`  node "${join(pin.repo, 'promote.mjs')}" --apply --push`);
-    console.log('\nNot run: cutting a deploy restarts a live fleet. Run those three lines when');
-    console.log('ready, in that order — the pin reads prod-deploy, so it must follow the checkout.');
-  } else {
+    if (!doApply) {
+      console.log('\nNot run: cutting a deploy restarts a live fleet. Run those three lines when');
+      console.log('ready, in that order — the pin reads prod-deploy, so it must follow the checkout.');
+    }
+  } else if (!doApply) {
     console.log('\nNot run: cutting a deploy restarts a live fleet. Run those two lines when ready.');
+  }
+  // ---------------------------------------------------------------- doing it
+  //
+  // LOUD, ORDERED, AND IT STOPS AT THE FIRST FAILURE. Each step prints before it runs, so a
+  // transcript shows exactly how far the promotion got — which matters most when it does not
+  // finish, because a half-promoted prod is a checkout on new code with its orders still
+  // pinned to the old ones.
+  if (doApply) {
+    const step = (what, repo, args) => {
+      console.log(`\n-> ${what}`);
+      try {
+        const out = execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        if (out.trim()) console.log(out.trim());
+      } catch (e) {
+        console.error(`FAILED: ${what}`);
+        console.error((e.stderr || e.stdout || e.message || '').toString().trim());
+        process.exit(1);
+      }
+    };
+    step(`tag ${tag} at ${s.trunkHead.slice(0, 8)}`, HARNESS, ['tag', '-a', tag, s.trunkRef, '-m', `deploy ${day}`]);
+    step('fetch the trunk into prod', PROD, ['fetch', HARNESS, TRUNK]);
+    step(`move prod onto ${tag}`, PROD, ['checkout', tag]);
+    // THE PIN COMES AFTER THE CHECKOUT, because promote.mjs reads the prod HEAD -
+    // pinning first would faithfully record the version being replaced.
+    if (pin) {
+      console.log(`\n-> record the orders pin`);
+      try {
+        const out = execFileSync(process.execPath, [join(pin.repo, 'promote.mjs'), '--apply', '--push'],
+                                 { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        if (out.trim()) console.log(out.trim());
+      } catch (e) { console.error('FAILED: the orders pin was not recorded — the code is deployed and the orders are not');
+        console.error((e.stderr || e.stdout || e.message || '').toString().trim()); process.exit(1); }
+    }
+    console.log(`\ncut and applied: prod is now ${tag}. The broker still needs restarting:`);
+    console.log(`  node "${join(PROD, 'tools', 'm59-service.mjs')}" restart --fleet ${process.env.M59_FLEET ?? 'prod'}`);
   }
   process.exit(0);
 }
