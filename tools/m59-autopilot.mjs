@@ -2628,9 +2628,47 @@ export class Autopilot {
       using = skills.equippedNow(c);
     }
     if (!using) return { ready: false, why: 'the server use list is not known' };
-    const held = (c.inventory || []).find(o => using.has(o.id) &&
-      skills.weaponScore(c.rsc.get(o.nameRsc) || '') > 0);
-    if (!held) return { ready: true, already: true };
+    const weaponish = (o) => skills.weaponScore(c.rsc?.get?.(o.nameRsc) || o.name || '') > 0;
+    let held = (c.inventory || []).find(o => using.has(o.id) && weaponish(o));
+    // THE ID JOIN CAN FAIL WHILE THE HAND IS STILL FULL, AND THAT USED TO BE SILENT.
+    //
+    // `using` is the server's use list and carries ids and little else; `c.inventory` is a
+    // different list with its own ids. They are joined here on the id, which is the one
+    // thing this repository has written down as untrustworthy -- renumbered on every save,
+    // recycled within hours. When the join misses, this returned `{ready: true, already:
+    // true}`, which reads as "the hand was already empty" and is indistinguishable from
+    // success. `passArm` notes only on `ready && removed` and complains only on `!ready`,
+    // so `ready && !removed` wrote NOTHING ANYWHERE.
+    //
+    // Measured on prod 2026-09-19: Floyd, `trainingStyle: unarmed`, mode farm, room 27,
+    // assignedRoom 27 -- every gate true -- holding a short sword, with the decision ring
+    // not advancing at all. No disarm, no complaint, and brawling cannot advance because a
+    // swing with a weapon zeroes piWeaponSwings against the proficiency being trained
+    // (player.kod:4753-4757).
+    //
+    // So: fall back to the NAME, which is what the server's own equipment list speaks, and
+    // if the hand is provably full and nothing matched, say so as a REFUSAL rather than as
+    // an empty hand. A caller that is told "already bare" stops asking; one that is told it
+    // failed asks again and complains where somebody can read it.
+    if (!held) {
+      // `||` AND NOT `??` ON BOTH SIDES. `rsc.get` answers '' for a name it cannot resolve,
+      // and '' is neither null nor undefined, so `??` keeps the empty string and the
+      // fallback never reaches `o.name`. That is the same shape as the bug being fixed:
+      // two readers of one object disagreeing about which field carries the name.
+      const worn = new Set((c.equipment?.()?.equipped ?? [])
+        .map(o => String(o.name || c.rsc?.get?.(o.nameRsc) || '').toLowerCase())
+        .filter(Boolean));
+      if (worn.size)
+        held = (c.inventory || []).find(o =>
+          worn.has(String(c.rsc?.get?.(o.nameRsc) || o.name || '').toLowerCase()) && weaponish(o));
+    }
+    if (!held) {
+      if (skills.isArmed(c))
+        return { ready: false, why: 'the server says this character is armed and nothing in ' +
+                 'the pack matched the use list, by id or by name — the weapon cannot be ' +
+                 'identified to take it off' };
+      return { ready: true, already: true };
+    }
     const name = c.rsc.get(held.nameRsc) || 'weapon';
     const before = c.evSeq;
     await s.pacer.submit('use', () => c.unuse(held.id)).catch(() => {});
