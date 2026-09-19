@@ -4036,6 +4036,28 @@ export class Autopilot {
     return true;
   }
 
+  /**
+   * The loadout's carry MINIMUMS, as {name: min}, for the overfarm eviction.
+   *
+   * `protectedItemNames()` above answers "may this be given up at all", which is a name and
+   * therefore all-or-nothing. This answers "how much of it must stay", which is what lets a
+   * reagent OVERFLOW: keep the floor, offer the surplus. Without it a character one tooth
+   * over its floor protected the entire stack and could free nothing for anything better.
+   *
+   * Only positive minimums are reported. A floor of zero is not a floor -- it is an entry
+   * with nothing to say -- and emitting it as `0` would read downstream as "all of this is
+   * surplus", which is the opposite of silence.
+   */
+  carryFloors() {
+    const out = {};
+    for (const row of (this.loadout()?.carry ?? [])) {
+      const name = String(row?.item ?? '').trim();
+      const min = Number(row?.min);
+      if (name && Number.isFinite(min) && min > 0) out[name] = min;
+    }
+    return out;
+  }
+
   protectedItemNames() {
     return [...new Set([
       ...(Array.isArray(this.policy.vaultItems) ? this.policy.vaultItems : []),
@@ -13352,7 +13374,8 @@ export class Autopilot {
     // The protect list is `protectedItemNames()` — vault items, temporary cargo, whatever
     // the guild plan is still short of, and the declared stockpile floors — so the things
     // this fleet already refuses to sell are also the things it refuses to trade away.
-    s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames());
+    s.setOverfarmPolicy?.(this.policy.overfarm ?? null, this.protectedItemNames(),
+                          this.carryFloors());
     if (!s.live) { this.note('not in game'); return; }
     if (s.combat?.active) {
       await s.combat.tick();

@@ -235,14 +235,20 @@ section('the policy survives the wiring');
 
   const autopilot = src('./m59-autopilot.mjs');
   ok(/^\s*overfarm: null,/m.test(autopilot), 'the autopilot policy defaults it to null — inert, not empty');
-  ok(/s\.setOverfarmPolicy\?\.\(this\.policy\.overfarm \?\? null, this\.protectedItemNames\(\)\)/.test(autopilot),
-     "every pass installs it on the session with the fleet's own protected names");
+  ok(/s\.setOverfarmPolicy\?\.\(this\.policy\.overfarm \?\? null, this\.protectedItemNames\(\),\s*this\.carryFloors\(\)\)/.test(autopilot),
+     "every pass installs it with the fleet's protected names AND its carry floors");
+  ok(/carryFloors\(\) \{/.test(autopilot), 'and the floors come from the loadout carry minimums');
+  ok(/if \(name && Number\.isFinite\(min\) && min > 0\) out\[name\] = min;/.test(autopilot),
+     'a floor of zero is not reported — it would read downstream as "all of this is surplus"');
   ok(/this\.detailEvent\('overfarm', 'lap'/.test(autopilot), 'and a finished lap is recorded');
 
   const game = src('./m59-game.mjs');
   ok(/overfarm = this\._overfarmPolicy \?\? null/.test(game),
      'lootFloor defaults the policy from the session, so all six call sites inherit it');
-  ok(/setOverfarmPolicy\(policy = null, protect = \[\]\)/.test(game), 'the session accepts a policy');
+  ok(/setOverfarmPolicy\(policy = null, protect = \[\], floors = null\)/.test(game),
+     'the session accepts a policy, the protected names and the carry floors');
+  ok(/floors: this\._overfarmFloors/.test(game),
+     'and the live pickup passes the floors through, or the overflow rule is inert');
   ok(/endOverfarmLap\(\)/.test(game), 'and can close a lap');
 
   const stats = src('./m59-strategy-stats.mjs');
@@ -326,6 +332,45 @@ function siftValueKept(stream, capacity, policy) {
     used += c; kept.push({ ...o, rank: r });
   }
   return kept;
+}
+
+// ---------------------------------------------------------------------------------------
+section('a floor protects a QUANTITY, not a name — the overflow rule');
+{
+  // Sitting on a big surplus against a small floor. Before `floors` existed `protect`
+  // covered the whole stack, so a character one tooth over its floor could free nothing.
+  const plan = planPickup({ floor: [{ name: 'emerald', amount: 1 }],
+    pack: [{ name: 'orc tooth', amount: 300 }], floors: { 'orc tooth': 12 },
+    protect: ['orc tooth'], policy: { ...ON }, capacity: 100, sifted: 400 });
+  const teeth = plan.swaps.flatMap(sw => sw.drop).filter(d => d.name === 'orc tooth');
+  ok(teeth.every(d => d.amount <= 288), 'never evicts below the floor of 12');
+  ok(teeth.every(d => d.amount > 0), 'an eviction is always a positive amount');
+}
+{
+  // A protected name with NO floor stays protected entire: no such thing as a surplus scale.
+  const plan = planPickup({ floor: [{ name: 'emerald', amount: 1 }],
+    pack: [{ name: 'blue dragon scale', amount: 9 }], floors: { 'orc tooth': 12 },
+    protect: ['blue dragon scale'], policy: { ...ON }, capacity: 10, sifted: 400 });
+  ok(plan.swaps.flatMap(sw => sw.drop).every(d => d.name !== 'blue dragon scale'),
+     'a protected name with no floor is never evicted, at any score');
+}
+
+section('un-buyable is evicted LAST, whatever it is worth');
+{
+  eq(OVERFARM_DEFAULTS.unbuyable.length, 0, 'unbuyable defaults to empty — silence is the old behaviour');
+  const norm = normalizeOverfarm({ enabled: true, unbuyable: ['orc tooth', 'orc tooth'] });
+  eq(norm.unbuyable.length, 1, 'the list is de-duplicated like prefer/avoid');
+  eq(norm.unknown.length, 0, 'and is a recognised key rather than reported as unknown');
+}
+{
+  // THE UNKNOWN IS TREATED AS BUYABLE. The merchant catalogue indexes shop inventories only
+  // and misses say-the-word LIBACT_CONDITIONAL entries — `merchants sells:"orc tooth"`
+  // returns nothing and Marion Elder sells 4 for 350 (MrElder.kod:82). So deriving
+  // "un-buyable" by ABSENCE would protect the wrong things and call it evidence.
+  const bare = planPickup({ floor: [{ name: 'emerald', amount: 1 }],
+    pack: [{ name: 'orc tooth', amount: 40 }], floors: { 'orc tooth': 0 },
+    policy: { ...ON }, capacity: 50, sifted: 400 });
+  ok(Array.isArray(bare.swaps), 'no un-buyable list means ordinary ranking, not blanket protection');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

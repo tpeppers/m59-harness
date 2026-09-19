@@ -10531,6 +10531,8 @@ const TOOLS = [
         overfarm_percent: { type: 'number',
           description: 'keep farming until this much of PACK CAPACITY has been sifted, counting what was later dropped. Default 150.' },
         prefer: { type: 'array', items: { type: 'string' }, description: 'item names ranked up' },
+        unbuyable: { type: 'array', items: { type: 'string' },
+          description: 'names NO merchant will sell back. Evicted LAST whatever they are worth, because sell value is what a merchant PAYS and says nothing about the cost of losing something that cannot be replaced at any price. Named explicitly rather than derived from the merchant catalogue, which indexes standard shop inventories only and misses every say-the-word LIBACT_CONDITIONAL entry — orc teeth read as unsellable there and are 4 for 350 from Marion Elder' },
         avoid: { type: 'array', items: { type: 'string' }, description: 'item names ranked down' },
         prefer_multiplier: { type: 'number' }, avoid_multiplier: { type: 'number' },
         swap_margin: { type: 'number',

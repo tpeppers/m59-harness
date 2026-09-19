@@ -62,6 +62,15 @@ export const OVERFARM_DEFAULTS = Object.freeze({
   // `orc tooth` are the same entry.
   prefer: Object.freeze([]),
   avoid: Object.freeze([]),
+  // ITEMS NO MERCHANT WILL SELL BACK, evicted last whatever they are worth. Named
+  // EXPLICITLY rather than derived from the merchant catalogue, because that catalogue
+  // indexes standard shop inventories only and misses every LIBACT_CONDITIONAL
+  // say-the-word entry. Orc teeth are the worked example: `merchants sells:"orc tooth"`
+  // returns nothing, and yet Marion Elder sells 4 for 350 (MrElder.kod:82), the Tos Inn
+  // Keeper 2 for 650 and the Kocatan Weapons Master 2 for 750. Deriving "un-buyable" by
+  // ABSENCE from an index with a known systematic gap would quietly protect the wrong
+  // things and call it evidence -- the same error as scoring an unpriced item zero.
+  unbuyable: Object.freeze([]),
   prefer_multiplier: 4,
   avoid_multiplier: 0.25,
   // How much better a floor item must be than the worst droppable carried item before the
@@ -98,7 +107,7 @@ export function normalizeOverfarm(policy = null) {
   for (const [key, value] of Object.entries(policy)) {
     if (key === 'enabled') continue;
     if (!Object.hasOwn(OVERFARM_DEFAULTS, key)) { unknown.push(key); continue; }
-    if (key === 'prefer' || key === 'avoid') {
+    if (key === 'prefer' || key === 'avoid' || key === 'unbuyable') {
       if (!Array.isArray(value)) { rejected.push(`${key} must be a list of item names`); continue; }
       out[key] = [...new Set(value.map(v => String(v).trim()).filter(Boolean))];
       continue;
@@ -243,7 +252,8 @@ export function overfarmPhase({ packPercent = null, sifted = 0, capacity = null,
  * @returns {{phase, take, leave, swaps, room, sifted_percent, why}}
  */
 export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
-                             protect = [], might = null, capacity = null, sifted = 0 } = {}) {
+                             protect = [], floors = null, unbuyable = null,
+                             might = null, capacity = null, sifted = 0 } = {}) {
   const p = policy;
   const max = capacity ?? (might == null ? null : packMax(might));
   const carriedCost = pack.reduce((n, it) => {
@@ -275,13 +285,51 @@ export function planPickup({ floor = [], pack = [], policy = OVERFARM_DEFAULTS,
   const take = [], leave = [], swaps = [];
   let free = room ?? Infinity;
 
-  // What is in the pack and could be given up, worst first. Protected names are excluded
-  // here rather than filtered later, so nothing downstream can reintroduce them.
+  // WHAT MAY BE GIVEN UP, AND HOW MUCH OF IT.
+  //
+  // `protect` is a NAME list and a name is all-or-nothing: one orc tooth over the floor
+  // protected the whole stack, so a character sitting on three hundred of them against a
+  // floor of twelve could not free a single one for anything better. `floors` makes the
+  // question a QUANTITY -- keep the floor, offer the OVERAGE. A protected name with NO
+  // floor stays protected entire, which is the old behaviour and the right one for a vault
+  // item: there is no such thing as a surplus dragon scale.
+  //
+  // This is the half of the overflow rule that lets a reagent accumulate at all. The other
+  // half is `guildKeepTest`, which holds an item back from the vendor exactly while a chest
+  // still wants it and releases it the moment the plan is met.
+  const floorOf = (name) => {
+    if (!floors) return null;
+    for (const [k, v] of Object.entries(floors))
+      if (listHas([k], name)) return Math.max(0, Number(v) || 0);
+    return null;
+  };
+  const spareOf = (it) => {
+    const held = Number(it.amount) || 1;
+    const f = floorOf(it.name);
+    if (f == null) return listHas(protect, it.name) ? 0 : held;
+    return Math.max(0, held - f);
+  };
+  // UN-BUYABLE IS EVICTED LAST, WHATEVER IT IS WORTH.
+  //
+  // Sell value is what a merchant PAYS, and for anything no merchant sells that number says
+  // nothing about the cost of losing it: it cannot be replaced at any price. Orc teeth are
+  // the case in hand -- 325 each from Paddock when he has them, mined from a 40%/roll drop
+  // when he does not -- and the ranking would otherwise shed them first precisely because
+  // they are cheap per unit of bulk.
+  //
+  // ONLY A POSITIVE ABSENCE COUNTS. `unbuyable` is null when the merchant catalogue is not
+  // on this machine, and an unknown is treated as BUYABLE rather than as protected --
+  // the other way round protects everything and evicts nothing, which is the "a floor of
+  // zero is not a floor" mistake with the sign flipped.
+  const noRebuy = unbuyable ?? (p.unbuyable?.length ? p.unbuyable : null);
+  const cannotRebuy = (name) => !!noRebuy && listHas(noRebuy, name);
   const droppable = pack
-    .filter(it => !listHas(protect, it.name))
-    .map(it => ({ ...it, rank: rank(it.name) }))
+    .map(it => ({ ...it, spare: spareOf(it) }))
+    .filter(it => it.spare > 0)
+    .map(it => ({ ...it, amount: it.spare, rank: rank(it.name) }))
     .filter(it => it.rank.rankable)          // never drop what cannot be ranked
-    .sort((a, b) => a.rank.score - b.rank.score);
+    .sort((a, b) => (cannotRebuy(a.name) ? 1 : 0) - (cannotRebuy(b.name) ? 1 : 0)
+                 || a.rank.score - b.rank.score);
 
   for (const o of ranked) {
     const cost = (o.rank.cost ?? 0) * (Number(o.amount) || 1);

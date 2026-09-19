@@ -4278,9 +4278,13 @@ class Session {
    * zeroing it would hand the character a fresh 150% budget every time DUM re-asserted an
    * unchanged setting — which it does on a timer.
    */
-  setOverfarmPolicy(policy = null, protect = []) {
+  setOverfarmPolicy(policy = null, protect = [], floors = null) {
     this._overfarmPolicy = policy ?? null;
     this._overfarmProtect = Array.isArray(protect) ? protect : [];
+    // {name: min} from the loadout's carry floors. `protect` says whether a thing may be
+    // given up at all; this says how much of it must stay, which is what makes a surplus
+    // droppable instead of the whole stack being untouchable.
+    this._overfarmFloors = floors && typeof floors === 'object' ? floors : null;
     if (policy?.enabled) this._overfarm ??= { sifted: 0, stream: [], taken: 0, dropped: 0, left: 0 };
   }
 
@@ -4424,7 +4428,7 @@ class Session {
           floor: cands.map(o => ({ id: o.id, name: named(o), amount: o.amount || 1 })),
           pack: (c.inventory || []).map(o => ({ name: c.rsc.get(o.nameRsc) || o.name,
                                                 amount: o.amount || 1, id: o.id })),
-          policy: ofPolicy, protect, capacity: cap.weight_max,
+          policy: ofPolicy, protect, floors: this._overfarmFloors, capacity: cap.weight_max,
           sifted: this._overfarm.sifted,
         });
 
