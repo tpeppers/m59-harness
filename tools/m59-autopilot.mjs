@@ -16255,7 +16255,13 @@ export class Autopilot {
     //
     // Called here so the wall is given up on the pass that finishes it. The release itself is
     // unchanged and still refuses a hurt character; all that changes is that it is asked.
-    if (this.hold && this.suspendedJourney) await this.releaseRestedHold();
+    // ASKED FOR A FARMER TOO. `releaseRestedHold` computes `onARoad` and branches on it —
+    // a farming floor of `holdResumeAbove ?? 0.9` against a travelling floor of 1, plus
+    // farm-only refusals for a pending pull and for contact — so it was plainly written for
+    // both. The `&& this.suspendedJourney` here made the farming half unreachable, which left
+    // farmers in the original bug this call was added to fix: "a character holding a wall
+    // never reaches [passFarm], because this stage handles the pass and returns first."
+    if (this.hold) await this.releaseRestedHold();
 
     // A HEALER BEHIND A WALL NEVER HEALED ANYBODY, AND THAT IS THIS STAGE'S DOING.
     //
@@ -17274,6 +17280,39 @@ export class Autopilot {
   // timeout. Both ceilings met means the wall has given all it has.
   //
   // Forced, because the ordinary refusal is about being hurt and this character is not.
+  /**
+   * THE MOST VIGOR RESTING CAN ACTUALLY GIVE THIS CHARACTER, as a fraction of the bar.
+   *
+   * `REST_VIGOR_CAP` is 0.4 — 80 of 200 — and the game stops AWARDING rest vigor there, so a
+   * test of `vig < REST_VIGOR_CAP` can be met exactly and never cleared. That was survivable
+   * until something lowered the ceiling below it.
+   *
+   * A worn `ring of lethargy` does exactly that: `lethring.kod` calls
+   * `SetVigorRestThreshold(current - piVigorRestThresholdChange)` with a change of 20 and a
+   * floor of 10, so the wearer rests to 60 of 200 and not one point further. Against a bar of
+   * 80 that is a wait with no end, and the wait happens against a wall — measured on prod
+   * 2026-09-19, four characters at FULL HEALTH held a safe spot for nineteen minutes with
+   * zero kills, waiting for vigor the curse had already forbidden them.
+   *
+   * So the bar is what THIS character can reach rather than what an uncursed one could. The
+   * note it gates still reads "all the vigor resting can give", which is now true.
+   */
+  restVigorCeiling() {
+    const worn = this.s?.client?.equipment?.()?.equipped ?? [];
+    const rings = worn.filter(o =>
+      /ring of lethargy/i.test(String(o?.name ?? this.s?.client?.rsc?.get?.(o?.nameRsc) ?? '')))
+      .length;
+    if (!rings) return REST_VIGOR_CAP;
+    // 20 of 200 per ring, floored at 10 of 200 — the kod's own numbers, not a guess.
+    // IN POINTS, THEN DIVIDED ONCE. Subtracting fractions gets this wrong in the only case
+    // that matters: `0.4 - 0.1` is 0.30000000000000004, and a wearer sitting at exactly 60
+    // vigor reads 0.3, which is LESS — so the bar would still be unclearable and the fix
+    // would look right while changing nothing. `vigorPct` divides by the same 200, so
+    // computing the ceiling the same way makes the two comparable exactly.
+    const cap = Math.round(REST_VIGOR_CAP * skills.VIGOR_MAX);   // 80 of 200
+    return Math.max(10, cap - rings * 20) / skills.VIGOR_MAX;
+  }
+
   async releaseRestedHold() {
     if (!this.hold) return false;
     const v = this.s.client?.vitals?.();
@@ -17309,7 +17348,7 @@ export class Autopilot {
       ? (this.policy.travelHoldResumeAbove ?? 1)
       : (this.policy.holdResumeAbove ?? 0.9);
     if (hp === null || hp < floor) return false;
-    if (vig !== null && vig < REST_VIGOR_CAP) return false;
+    if (vig !== null && vig < this.restVigorCeiling()) return false;
     this.note('leaving the wall — full health and all the vigor resting can give', {
       health: `${v?.health?.value}/${v?.health?.max}`,
       vigor: `${v?.vigor?.value}/${v?.vigor?.scale_max ?? 200}`,
