@@ -20311,6 +20311,36 @@ export class Autopilot {
   //
   // Call it between tasks — after a kill, before setting off, at the top of a town errand.
   // It reads state and decides; it walks nobody.
+  // IS THIS PACK WORTH THE CIRCUIT, WHATEVER OPENED THE TRIP.
+  //
+  // `checkIfShouldSell` answers "should we set off", and its answer is a TRIGGER — load,
+  // stacks, broke, supply, unweighable. The trip builder then read that trigger to decide
+  // whether to attach the market stops, and two of the five say no: a `supply` trip is a
+  // reagent shortfall and a `broke` trip is a money one. Both are correct about the
+  // DESTINATION and neither is evidence about the PACK.
+  //
+  // So a character out of elderberry walked to Joguer with twenty-six stacks aboard, bought
+  // its two reagents, sold the mushrooms Joguer buys, and came home still carrying
+  // twenty-one long swords — because Joguer is not a blacksmith and the circuit that would
+  // have walked it to one was never attached.
+  //
+  // Measured on prod 2026-09-19: Pepe and Statler both on `pending_trip.to = 104` with
+  // `market_stops: null` and 26 stacks each; 122 long swords across eleven characters.
+  //
+  // This asks the pack directly and is deliberately the SAME arithmetic the load and stacks
+  // triggers use, so a trip cannot be attached under one rule and refused under another.
+  packWantsMarket() {
+    const c = this.s.client;
+    if (!c) return false;
+    const cap = skills.carryCapacity(c);
+    const frac = (v, max) => (max > 0 && Number.isFinite(v) ? v / max : 0);
+    const fullness = cap?.known && cap.load
+      ? Math.max(frac(cap.load.weight, cap.weight_max), frac(cap.load.bulk, cap.bulk_max)) : 0;
+    const stacks = (c.inventory || []).length;
+    return fullness >= (this.policy.sellAtLoad ?? 0.85)
+        || stacks >= (this.policy.maxCarry ?? 14);
+  }
+
   checkIfShouldSell({ windowOpen = false } = {}) {
     const c = this.s.client;
     if (!c) return { sell: false, trigger: null, why: 'no client' };
@@ -21453,8 +21483,17 @@ export class Autopilot {
         : 'everything carried is dropped on death and usually unrecoverable; a balance is not' });
     // The shopping objective survives every recovery stop. Save the exact service
     // cursor rather than relying on need thresholds and cooldowns to rediscover it.
+    // THE CIRCUIT IS ATTACHED ON THE PACK, NOT ON WHICHEVER NEED OPENED THE TRIP. A reagent
+    // run and a full pack are not alternatives — a character is routinely both, and it is
+    // already walking past the specialists. See `packWantsMarket`.
+    const wantsMarket = packFull || brokeWithGoods || this.packWantsMarket();
     this.townTrip = { target, nextService: -1, startedAt: Date.now(),
-      marketStops: packFull || brokeWithGoods ? MARKET_STOPS.filter(m=>!this.bansDestination(m.room)) : null };
+      marketStops: wantsMarket ? MARKET_STOPS.filter(m=>!this.bansDestination(m.room)) : null };
+    if (wantsMarket && !packFull && !brokeWithGoods)
+      this.note('carrying enough to be worth the circuit while we are here', {
+        trigger: sellCall.trigger, stops: MARKET_STOPS.map(m => m.name),
+        why: 'the trip was opened by something other than the pack, and the pack is at its ' +
+             'ceiling anyway — the equipment and gem counters are on the way' });
     this.postShoppingPlan(this.shoppingPlan());
     return this.continueTownTrip();
   }
