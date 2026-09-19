@@ -732,6 +732,37 @@ if (isMain) {
       },
     });
     const file = flag('out', RAILS_FILE());
+    // A PARTIAL BAKE MUST NOT DELETE THE OTHER STONES.
+    //
+    // `bake --node fey` rebakes one stone and writes the whole file, so before this it left a
+    // table containing fey and nothing else — and every other stone's rails simply vanished.
+    // That was survivable while the bake was committed, because the diff was enormous and
+    // somebody would notice; the moment it became a gitignored artefact the same mistake got
+    // silent, which is the trade this file's own header warns about one level up. So a `--node`
+    // run carries forward every stone it did not touch, the way `m59-routebake --resume` adopts
+    // the rooms it is not rebaking.
+    //
+    // CARRIED FORWARD ONLY WHEN THE BAKE AGREES WITH ITSELF. A stone kept from a table cut
+    // under a different `max_jumps`, a different candidate policy or an older NODERAIL_VERSION
+    // is not the same claim as the ones beside it, and a mixed table is worse than a short one.
+    if (flag('node') && !has('dry-run') && existsSync(file)) {
+      try {
+        const prior = JSON.parse(readFileSync(file, 'utf8'));
+        const same = prior.version === baked.version && prior.max_jumps === baked.max_jumps
+                  && prior.candidates === baked.candidates;
+        const fresh = new Set(baked.stones.map(s => s.node));
+        const kept = same ? (prior.stones ?? []).filter(s => !fresh.has(s.node)) : [];
+        if (kept.length) {
+          baked.stones = [...baked.stones, ...kept];
+          baked.partial_of = prior.cut;
+          console.log(`  carried forward ${kept.length} stone(s) from the table cut ${prior.cut}`);
+        } else if (!same && (prior.stones ?? []).length) {
+          console.log(`  NOT carrying forward ${(prior.stones ?? []).length} stone(s): that table ` +
+                      `was cut under different settings (version ${prior.version}, ` +
+                      `max_jumps ${prior.max_jumps}, candidates ${prior.candidates})`);
+        }
+      } catch { /* an unreadable table is replaced, which is what a bake is for */ }
+    }
     // COMPACT, like `substrate/m59-routes.json` and unlike `substrate/rail-714.json`. Nothing
     // reads this by eye — `show` is for that — and a dense rail indents to 5.2MB against 2.1.
     if (!has('dry-run')) writeFileSync(file, JSON.stringify(baked));
