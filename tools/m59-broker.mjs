@@ -128,7 +128,9 @@ import {
 import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
 import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings, recordAbandoned,
          recordDeclined, recordFailed, unusedTools } from './runtime/deadlines.mjs';
-import { allocateKeeperBand, KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
+import { allocateKeeperBand, lookupKeeperBand,
+         KEEPER_BAND_WIDTH } from './runtime/keeper-bands.mjs';
+import { reservedElsewhere } from './m59-bands.mjs';
 import { resolveAgentName } from './m59-agent-name.mjs';
 import { menageriePathFor, loadMenagerie, splitRosters, hostConfig, excludedNote,
          isMenageriePath } from './m59-menagerie-roster.mjs';
@@ -914,7 +916,35 @@ function keeperPortBand() {
       base, end: base + KEEPER_BAND_WIDTH - 1, width: KEEPER_BAND_WIDTH,
     });
   } else {
-    _keeperPortBand = allocateKeeperBand(FLEET);
+    // ALLOCATE AGAINST THE MACHINE, NOT AGAINST THIS ONE FILE.
+    //
+    // `substrate/keeper-bands.json` is per-checkout and gitignored, so the allocator's "first
+    // free band" means first free IN HERE. Two checkouts standing up a first named fleet both
+    // pick the same base, neither can tell, and the loser's keepers are commanded by the
+    // winner's broker — measured 2026-09-11, when shadow-ab and prod both held 9011 and
+    // `m59-which` reported "nothing is holding a fleet" while three of prod's characters
+    // answered on 9013, 9022 and 9028.
+    //
+    // THE SCAN IS PAID ONLY WHEN THERE IS NOTHING TO LOOK UP. `lookupKeeperBand` is a pure read
+    // with no lock; a fleet that already has a band takes it and this costs nothing, which is
+    // every broker start but the first for a given fleet. Walking the machine means
+    // `git worktree list` over sixty-nine checkouts, and paying that on every boot to answer a
+    // question that was settled weeks ago would be its own defect.
+    //
+    // AND IT FAILS OPEN, DELIBERATELY. `reservedElsewhere` cannot throw, but if the view comes
+    // back empty for any reason the allocation proceeds exactly as it did before rather than
+    // refusing. A broker that will not start because a STRANGER's registry is unreadable is a
+    // worse failure than the collision this avoids, and failing open is not a regression: it is
+    // the behaviour that shipped for months.
+    const held = (() => { try { return lookupKeeperBand(FLEET); } catch { return null; } })();
+    if (held) _keeperPortBand = held;
+    else {
+      const reserved = reservedElsewhere();
+      if (reserved.length)
+        console.error(`[bands] allocating a band for "${FLEET}", avoiding ${reserved.length} ` +
+                      `claim(s) in ${new Set(reserved.map(r => r.registry)).size} other checkout(s)`);
+      _keeperPortBand = allocateKeeperBand(FLEET, { reserved });
+    }
   }
   return _keeperPortBand;
 }

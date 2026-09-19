@@ -1393,3 +1393,105 @@ is the case where one does and cannot be walked.
 
 `node tools/m59-stagespread-test.mjs` (8, offline) pins it, and skips loudly rather than
 passing when a checkout has no bake.
+
+## A rail from the stone to the door, and back — and why the two are different questions
+
+```bash
+node tools/m59-noderails.mjs bake      # every stone, every exit, both directions
+node tools/m59-noderails.mjs show      # what is baked
+node tools/m59-noderails.mjs check     # re-walk every baked rail against the map
+node tools/m59-fineclimb.mjs --agent shadow09 --rail ancient --exit edge:578:r1c17
+```
+
+`m59-routebake.mjs` plans between exit anchors on the **square** grid, because crossing a room
+is what a journey needs. Every mana stone stands on ground where that is the wrong resolution —
+`r40c33` in the Ancient Place spans 3520 to 10880, the valley floor and the high ledge in one
+square with one number — so the square router asked to walk the spiral staircase plans through
+the valley, because that is what the square says is there. Declaring the stone as a waypoint
+(`substrate/m59-waypoints.json`, which room 27 already does) buys a route only where the square
+grid is telling the truth: it cannot express a staircase whose treads are narrower than a
+square, and it cannot express a jump at all.
+
+So `m59-noderails.mjs` asks the same question on the fine grid with the whole affordance set —
+`fineRouter`'s closure flood for walking and stairs, `substrate/m59-falljumps.json` for the
+declared jumps, unbounded descent for the drops — and writes `substrate/node-rails.json`.
+
+**First bake, 2026-09-18: 27 of 50 stone/exit pairs have a line, and the failures are almost
+all INBOUND.** From nearly every stone you can walk out; into most of them you cannot walk in.
+
+| | |
+|---|---|
+| both directions | `ancient` (579) from all three usable anchors, `victoria` (39) from two of four, `fey` (532), `avar` (2154) |
+| stone -> door only | `cave` (27), `peak` (515), `sentinel` (589) west, `martyr` (47) south, `ukgoth` (599) all three |
+| door -> stone only | `badlands` (45) both anchors, `martyr` (47) north, `sentinel` (589) east |
+| neither | `ice` (750), `mausoleum` (1006), `corpse` (1, which has no exit anchor at all) |
+
+That asymmetry is not bookkeeping. **A fall is one-way by construction** — 589's stone is
+reached by the operator's declared `r35c16 -> r38c19` and nothing declares the climb back — and
+**one wall in fourteen is climbable one way and capped the other**, because `move.c:530-539`
+picks the sidedef facing the body, so the below-texture short-circuit is a property of a SIDE.
+A symmetric model calls 589 connected when the return leg does not exist.
+
+### What a rail is here, and three ways a bake can lie about one
+
+The planner emits a **line**: waypoints decimated on a heading change, which is the right leash
+for a follower and is not a validated path — the chord across two kept points is a line nobody
+traced. So every span of it is re-walked at the 64-unit lattice, the chord stepped first
+because that is what a walker does with an aim point, the flood used when the chord refuses,
+and a span that survives neither kept, marked `u`, and counted. Three things went wrong
+building it, and each is a general trap rather than a detail of this tool:
+
+- **A slide that lands NEAR the aim and thousands of units below it passes every distance
+  test.** Room 45, aim `(16714,7490)`: the trace answers `moved: true, arrived: false, blocked:
+  true, slid: true, destinationFloor: 1152` with the body twenty units from an aim whose floor
+  is 4096. Accepting it recorded a **+2,944-unit climb in one 64-unit step**, and the bake
+  announced a walkable rail onto the Badlands mesa. This is `holdShelf`'s own sentence moved
+  into the bake — judge the SLID LANDING, not the aim. `fineRouter`'s flood is safe from it
+  because it keys on where the body actually landed; a lattice flood cannot, so it must refuse
+  the step instead.
+- **Heights read from a cache are a neighbour's heights.** `fineRouter`'s `floorAt` is memoised
+  on `(x >> 5, y >> 5)`; on a ledge the two halves of a 32-unit cell are different worlds. The
+  first bake invented two over-cap rises that were flat ground when re-read at the points
+  themselves. Right trade for a flood, wrong number to write into a file somebody reads a drop
+  off.
+- **What is written must be what was checked.** Validating with `chordWalkable`'s fractional
+  pieces and emitting the rounded ones made `check` refuse 6 of 27 rails at a handful of steps
+  each, on ground the bake had just called walkable. Neither pass was wrong; they were asking
+  about two different lines. The same fault at a joint: `cutRail` snaps the start to the lattice
+  and reports `bridgeOk` without acting on it, so a flood span could open with a 21-unit hop —
+  under the mover's 128-unit floor, so the trace will not move at all.
+
+### Two lists ship, and throwing away either one loses something
+
+`waypoints` is the proof: every leg one lattice step the mover's own trace accepted,
+deliberately not decimated. `aims` is what a follower drives, decimated to **straight runs** —
+a chord over steps that share a heading IS those steps, so merging them asks no new question
+and costs no trace.
+
+**An aim shorter than 128 client units is a no-op that reports success.** `walkFine` floors
+every step at 8 protocol units and answers a closer aim with `arrived: true, steps: 0`.
+Measured on this bake before the fix, on the Ancient Place's west rail: **410 of 602 aim gaps
+were under 128, median 64** — two thirds of the round trips would have moved nobody, and each
+one reads as arrival. A short run is now extended across the next corner and that chord is
+*stepped* before it is accepted; where the geometry refuses the merge, the short aim survives
+and is counted (`short_aims`), because dropping it would hand the walker a straight line round
+a hairpin that nothing traced.
+
+### `arrived in the square` is not `arrived at the stone`
+
+`fineRouter` succeeds when the closure contains a point whose SQUARE is the goal, and on a
+split square the valley half satisfies that exactly as the ledge does. So every route records
+where it actually stopped — `arrival`, `target_floor`, `arrived_below`, `arrived_off_shelf` —
+and inbound routes also record `meld_box`.
+
+**The meld test is the server's, and it has no height term.** `abs(GetRow(who) -
+GetRow(self)) < MANANODE_RANGE AND abs(GetCol(...)) < MANANODE_RANGE`, `MANANODE_RANGE = 3`
+(`kod/object/passive/mananode.kod`, `TryActivate`): a 5x5 box judged per axis, and nothing
+about z — the same sentence as "THE SERVER IS TWO-DIMENSIONAL. HEIGHT IS OURS". Both `victoria`
+inbound rails end **512 units below** the stone's own footing and **inside** that box; `peak`'s
+outbound rail ends 1,344 below its door, which for a door is a false arrival and is flagged.
+
+**`unreachable` is still not an output.** A refusal carries its bound — `no route to R,C within
+N jump(s)`, the largest closure the search reached, and the wall clock — because a bounded
+search answering no is a statement about the bound. `node tools/m59-nodegap.mjs` is the tool
+that names the missing affordance.

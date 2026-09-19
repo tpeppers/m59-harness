@@ -35,7 +35,7 @@ const HARNESS = process.env.M59_HARNESS || process.cwd();
 const PROD = process.env.M59_PROD_DEPLOY || 'C:/code/m59-lab/prod-deploy';
 const TRUNK = process.env.M59_TRUNK || 'main';
 
-import { nextDeployTag } from './m59-deploytag.mjs';
+import { nextDeployTag, lightweightTagProblem } from './m59-deploytag.mjs';
 
 import { strandedCommits } from './m59-deploy-drift.mjs';
 import { holdsIn, holdRefusals } from './m59-release-consent.mjs';
@@ -275,8 +275,12 @@ function survey({ fetch = true } = {}) {
   });
   const runtime = all.length - dirty.length;
   const tag = git(PROD, 'describe', '--tags', '--exact-match') || null;
+  // ANNOTATED OR LIGHTWEIGHT — `tag` or `commit`. `describe` reports both and they check out
+  // identically, so this one call is the only thing that can tell them apart. Null when the ref
+  // cannot be read, which `lightweightTagProblem` treats as an abstention rather than a finding.
+  const tagKind = tag ? (git(PROD, 'cat-file', '-t', tag) || null) : null;
   return { prodHead, trunkHead, trunkRef, trunkNote, trunkUnpushed,
-           known, ahead, behind, stranded: strandedShas, holds, ref, dirty, runtime, tag };
+           known, ahead, behind, stranded: strandedShas, holds, ref, dirty, runtime, tag, tagKind };
 }
 
 function report(s) {
@@ -285,7 +289,8 @@ function report(s) {
   console.log(`trunk   ${s.trunkRef} @ ${s.trunkHead?.slice(0, 8)}  (${HARNESS})`);
   for (const n of s.trunkNote || []) console.log(`        ${n}`);
   console.log(`prod    ${s.prodHead?.slice(0, 8)}  (${PROD})`);
-  console.log(`        checked out as: ${s.ref === 'HEAD' ? `detached${s.tag ? ` at tag ${s.tag}` : ''}` : `BRANCH ${s.ref}`}`);
+  console.log(`        checked out as: ${s.ref === 'HEAD' ? `detached${s.tag ? ` at tag ${s.tag}` +
+    `${s.tagKind === 'commit' ? ' (LIGHTWEIGHT — no tagger, no date)' : ''}` : ''}` : `BRANCH ${s.ref}`}`);
   if (!s.known) {
     console.log('        UNKNOWN TO MAIN — prod is running commits the development repo has never seen.');
     return;
@@ -365,6 +370,10 @@ function problems(s) {
   if (!s.tag && s.ref === 'HEAD')
     bad.push('prod is detached but not at a tag, so the deployed version has no name and ' +
              'cannot be rolled back to by name.');
+  // A NAME IS NOT ENOUGH; IT HAS TO BE DATABLE. See lightweightTagProblem — the decision is
+  // pure and lives beside nextDeployTag because this file runs on import and cannot be tested.
+  const lightweight = lightweightTagProblem({ ref: s.ref, tag: s.tag, kind: s.tagKind });
+  if (lightweight) bad.push(lightweight);
   if (s.dirty.length)
     bad.push(`prod has ${s.dirty.length} uncommitted file(s). Whatever they are, they are ` +
              'running in production and are in no repository:\n      ' + s.dirty.join('\n      '));
