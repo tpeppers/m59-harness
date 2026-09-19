@@ -16651,7 +16651,29 @@ export class Autopilot {
     const hurt = (hp !== null && hp < restAt) || (vig !== null && vig < vigorRestAt) || spent;
     if(hurt && this.currentRecoveryWall()) {
       await this.takeRecoverySpot('recovery needed while already at a safe wall');
-      return HANDLED;
+      // TAKE THE SPOT AS A SIDE EFFECT AND LET THE PASS CARRY ON — the same correction the
+      // branch below already carries, in its own words: "returned as soon as takeSafeSpot()
+      // succeeded, and that deadlocked characters ... the branch fired again next pass".
+      // This one kept the `return` and deadlocks in the identical way, except that it is
+      // reached by a VIGOR deficit rather than a health one, which is what makes it
+      // permanent: `hurt` is true because vigor is under the rest ceiling, and the only
+      // thing that raises vigor is the REST GATE FURTHER DOWN THIS PASS. Returning here
+      // parks the character at the wall and skips the rest that would clear the condition
+      // that parked it.
+      //
+      // Measured on prod 2026-09-19, Camilla (t9) in room 589: full health 59/59, vigor
+      // frozen at exactly 70 of 200 against a ceiling of 80, no ring of lethargy, held_s
+      // 4,388 and climbing, `stuck: null` and `refusals: []` throughout — nothing anywhere
+      // reported a problem. Six errand journeys were issued from that room in ninety
+      // minutes, three to 113 and three to 39; every one "actually set out" and not one
+      // arrived, because this branch fetched her back to the wall on the next pass. A
+      // character that cannot leave a room is indistinguishable from a mover failure until
+      // you notice the wall is being RE-taken rather than held.
+      //
+      // The rest gate below is unchanged and still refuses to rest in the open, which was
+      // always the real requirement — so nothing that could not rest before can rest now.
+      // It just gets asked.
+      if (!this.hold) return HANDLED;
     }
 
     // RUN THE EXPERIMENT ON PURPOSE. A spot is only proved by standing in it without

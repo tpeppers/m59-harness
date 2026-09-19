@@ -87,6 +87,29 @@ console.log('\n--- the wiring, so a silent no-op cannot come back ---');
      bare.join(' | ').slice(0, 120));
   ok('the loot path refuses unrevealed jewellery',
      /UNREVEALED_JEWELLERY\.test\(n\) && skills\.isUnrevealed\(o\)/.test(game));
+
+  // AND THE PARK MUST NOT SKIP THE REST THAT WOULD END IT.
+  //
+  // Raising the ceiling made the bar reachable for a cursed character. It did nothing for an
+  // UNCURSED one sitting under the ordinary 80, because the branch that parks on a vigor
+  // deficit returned before the rest gate that raises vigor — so the condition that parked
+  // the character was the one thing the pass then skipped.
+  //
+  // Measured on prod 2026-09-19, Camilla (t9), no ring at all: full health 59/59, vigor frozen
+  // at exactly 70 of 200, held_s 4,388 and climbing, `stuck: null` and `refusals: []`. Six
+  // errand journeys were issued out of that room in ninety minutes; every one "actually set
+  // out" and not one arrived, because the next pass fetched her straight back to the wall.
+  const parkAt = ap.indexOf("takeRecoverySpot('recovery needed while already at a safe wall')");
+  ok('the recovery park is still reached', parkAt > 0);
+  const parkBody = parkAt > 0 ? ap.slice(parkAt, parkAt + 2000) : '';
+  const parkCode = parkBody.split(/\r?\n/)
+    .filter(l => !/^\s*\/\//.test(l))
+    .slice(0, 6).join('\n');
+  ok('and it no longer returns unconditionally — the rest gate below must be reachable',
+     parkCode.length > 0 && !/^\s*return HANDLED;\s*$/m.test(parkCode),
+     'an unconditional return parks a character on a vigor deficit and skips the rest that ' +
+     'would clear it — the deadlock its own neighbouring branch was already fixed for');
+
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall good');
