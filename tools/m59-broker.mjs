@@ -10801,6 +10801,15 @@ const TOOLS = [
       use_safe_spots: { type: 'boolean',
         description: 'fight from a wall whenever the kill would pay (default true). Turning this off ' +
           'gives up the largest survival advantage in the game and is almost never right' },
+      ignore_unreachable_prey: { type: 'boolean',
+        description: 'SKIP PREY THIS CHARACTER HAS PROVED IT CANNOT WALK TO (default true). The ' +
+          'keeper ranks the nearest creature, and when the map offers no square beside it to ' +
+          'stand on it breaks off and ranks the same one again — for ever, while the board reads ' +
+          '"hunting". Remembered by SQUARE rather than by object id, so a respawn in the same ' +
+          'walled-off corner is skipped too, and expired after a few minutes because ' +
+          '"unreachable" is a fact about our model of the room and not about the room. Set false ' +
+          'to keep trying, which is what you want when you suspect a MISSING JUMP or an undeclared ' +
+          'door rather than a genuine wall' },
       escape_ladder: { type: 'boolean',
         description: 'WHEN A HEALTHY CHARACTER IS WEDGED AND THE WATCHDOG HAS GIVEN UP, CLIMB THE ' +
           'ESCAPE LADDER (default true): back along the breadcrumbs, rejoin the baked rail, leave ' +
@@ -11753,6 +11762,7 @@ const TOOLS = [
       if (a.inky_reserve_floor !== undefined)
         p.policy.inkyReserveFloor = Math.max(0, Number(a.inky_reserve_floor) || 0);
       if (a.use_safe_spots !== undefined) p.policy.useSafeSpots = !!a.use_safe_spots;
+      if (a.ignore_unreachable_prey !== undefined) p.policy.ignoreUnreachablePrey = !!a.ignore_unreachable_prey;
       if (a.escape_ladder !== undefined)
         p.policy.escapeLadder = !!a.escape_ladder;
       if (a.back_up_when_wedged !== undefined)

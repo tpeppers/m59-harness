@@ -158,7 +158,131 @@ export function normalisePlan(raw) {
     }
     chests.set(slot, items);
   }
-  return { chests, problems, empty: [...chests.values()].every(items => !items.length) };
+  const reagents = normaliseReagents(raw, problems);
+  return { chests, problems, reagents,
+           empty: [...chests.values()].every(items => !items.length) };
+}
+
+/**
+ * HOW A GUILD ACQUIRES A REAGENT: from its own chest, from a merchant, or not at all.
+ *
+ * THE ARITHMETIC THAT MAKES THIS THE WHOLE POINT. A merchant buys at about 60% of value and
+ * sells at about 140%, so a reagent sold on one town trip and bought back on the next has cost
+ * roughly 2.3x what it was worth — and the fleet was doing exactly that, in both directions at
+ * once. Measured on prod 2026-09-18: Robin's shopping plan asked for 180 sapphires and 150 orc
+ * teeth, 33,600 shillings he did not have, while the guild chests held 503 sapphires, 460
+ * mushrooms and 202 orc teeth, and the sell path was free to put more of the same over a counter.
+ * Eleven characters carried `purchase_funding.status: "unaffordable - returning to farming"`,
+ * which retries rather than stopping; Lew made 26 journeys in 90 minutes, every one to a shop,
+ * and reached his station once.
+ *
+ * So `chest` is one setting with two halves, and it is meaningless without both: **take it from
+ * the chest instead of buying, and put it in the chest instead of selling.** Either half alone
+ * leaves the round trip open in one direction.
+ *
+ *   chest   the guild owns this. Withdraw it, never buy it, never sell it — deposit instead.
+ *           If the chest is empty the want is DROPPED and reported, not retried at a counter.
+ *   buy     a merchant is the source. The chest is still tried first, because it is free.
+ *   off     do not acquire it at all. Whatever needs it simply does not run.
+ *
+ * OPERATOR DECISION, 2026-09-18: a guild-wide default with per-reagent overrides, "such that for
+ * anyone who can get stuff from the chest should be withdrawing from the chest instead of buying
+ * to save money, and anyone who was going to sell reagents should be dropping off in the chest".
+ */
+export const REAGENT_MODES = ['chest', 'buy', 'off'];
+
+/**
+ * The shipped default for a fleet with no guild, no hall and no plan.
+ *
+ * DELIBERATELY NOT `chest` — a fleet with nowhere to put anything cannot source from a chest it
+ * does not have, and a default that silently stops every purchase is an outage rather than a
+ * policy. Silence means the behaviour that was already there; a guild that HAS a hall says so in
+ * its own plan file.
+ */
+export const DEFAULT_REAGENT_MODE = 'buy';
+
+/**
+ * Read the `reagents` block off a guild plan, reporting what it could not use.
+ *
+ * AN UNRECOGNISED MODE IS REPORTED, NEVER APPLIED AND NEVER DROPPED. `substrate/policy.local.json`
+ * already argues this and the reason is the same: a setting that silently does nothing is how
+ * `purpose` stayed out of a schema for a year with every keeper's audit switched off. A typo of
+ * "chests" must not read as "buy".
+ */
+export function normaliseReagents(raw, problems = []) {
+  const src = raw?.reagents ?? {};
+  // A NORMALISER THAT IS NOT IDEMPOTENT IS A TRAP, and this one caught me within the hour.
+  //
+  // `guildPlan()` already runs `normalisePlan`, which runs this — so a caller holding a plan and
+  // calling it again hands an ALREADY-NORMALISED block back in. `items` is then a Map, and
+  // `Object.entries(new Map(...))` is `[]`: every per-item override silently disappears while
+  // `default`, being a plain string, survives. Measured 2026-09-18 against the real file, which
+  // held `{ elderberry: "buy", herb: "buy" }` on a `chest` default — both overrides vanished and
+  // the fleet's two food reagents resolved to `chest`, against a guild chest holding fifteen
+  // castings for twenty-one characters. That is a starved fleet from a config that reads correct
+  // in the file and correct in the code, which is this repository's whole recurring failure shape.
+  if (src.items instanceof Map) return { default: src.default ?? null, items: src.items };
+  let dflt = null;
+  if (src.default != null) {
+    const v = String(src.default).trim().toLowerCase();
+    if (REAGENT_MODES.includes(v)) dflt = v;
+    else problems.push(`reagents.default "${src.default}" is not one of ${REAGENT_MODES.join(', ')} ` +
+                       '— ignored, and the shipped default still applies');
+  }
+  const items = new Map();
+  for (const [name, mode] of Object.entries(src.items ?? {})) {
+    const v = String(mode).trim().toLowerCase();
+    if (!REAGENT_MODES.includes(v)) {
+      problems.push(`reagents.items["${name}"] = "${mode}" is not one of ${REAGENT_MODES.join(', ')} ` +
+                    '— ignored, so this reagent falls through to the default');
+      continue;
+    }
+    items.set(norm(name), v);
+  }
+  return { default: dflt, items };
+}
+
+/**
+ * How should THIS character acquire THIS reagent? Most specific first.
+ *
+ *   1. the character's own `policy.reagentSource[item]`  — one body disagreeing on purpose
+ *   2. the guild's per-item override                      — "sapphires come from the chest"
+ *   3. the guild's default                                — "everything comes from the chest"
+ *   4. the shipped default                                — buy, i.e. what it always did
+ *
+ * SILENCE AT EVERY LAYER MEANS THE LAYER BELOW, and the bottom is the historical behaviour. That
+ * is the rule this repository already applies to thresholds, loadouts and playbooks, and it is
+ * what makes a guild-wide switch safe to flip: a fleet that has not opted in is unaffected.
+ */
+export function reagentSource(item, { plan = null, policy = null } = {}) {
+  const key = norm(item);
+  const mine = policy?.reagentSource?.[key] ?? policy?.reagentSource?.[String(item)];
+  if (mine != null) {
+    const v = String(mine).trim().toLowerCase();
+    if (REAGENT_MODES.includes(v)) return v;
+  }
+  const g = plan?.reagents ?? (plan ? normaliseReagents(plan) : null);
+  if (g) {
+    const per = g.items instanceof Map ? g.items.get(key) : g.items?.[key];
+    if (per) return per;
+    if (g.default) return g.default;
+  }
+  return DEFAULT_REAGENT_MODE;
+}
+
+/**
+ * Must this item be kept OUT of a merchant's hands and put in the chest instead?
+ *
+ * The other half of `chest`, and the half that was missing. `guildKeepTest` already protects what
+ * the guild is SHORT of, which is a want about quantity; this is about direction. A guild sourcing
+ * its sapphires from the chest must not be selling sapphires at 60% on the same trip, whatever the
+ * chest's current count says — the shortfall can be zero this minute and 180 the next.
+ */
+export function reagentSellTest({ plan = null, policy = null } = {}) {
+  const test = (name) => reagentSource(name, { plan, policy }) === 'chest';
+  test.why = 'the guild sources this from its own chest; selling it at 60% and buying it back ' +
+             'at 140% is the round trip this setting exists to stop';
+  return test;
 }
 
 const countIn = (items, item) => (items || [])

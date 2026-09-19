@@ -79,7 +79,8 @@ import { completeTownIncome, recordTownTrade } from './m59-town-income.mjs';
 import { travelJourneyMetrics, withTravelJourneyMetrics } from './m59-trip-telemetry.mjs';
 import { TitheBook, payGuildTithe, purseAmount, tithePaymentPlan,
          titheFleet } from './m59-tithe.mjs';
-import { contributionPlan, guildPlan, guildKeepTest } from './m59-guildwants.mjs';
+import { contributionPlan, guildPlan, guildKeepTest, reagentSource, REAGENT_MODES }
+  from './m59-guildwants.mjs';
 import { StorageCache, BOOKMAKERS_HALL_ROOM, chestKey, chestFullness } from './m59-storage.mjs';
 import { stockpileKeepTest, sourcePlan, savingsOf, StockpileBook,
          canEnterHall, REAGENTS } from './m59-stockpile.mjs';
@@ -1221,6 +1222,31 @@ const SPELL_EXERTION_VIGOR = 13;
 // Measured 2026-08-29: Beaker had 57 bulk free and Janice 12, both stuffed with mushrooms.
 const CONJURED_WEAPON_BULK = 70;
 
+// EVERY WEAPON `create weapon` CAN PRODUCE, AND NOTHING ELSE.
+//
+// `creaweap.kod` CastSpell rolls `iNum = Random(iSpellPower/3, iSpellPower)` and picks by
+// band: mace under 20, short sword 20-29, hammer 30-44, axe 45-59, long sword 60-74,
+// scimitar 75-94, mystic sword at 95 and over. So the spell is a slot machine over exactly
+// these seven, and a ban list that forbids all seven makes every cast a certainty of waste:
+// 15 mana, 70 bulk, and an item the character may not hold.
+//
+// AND IT GETS WORSE AS THE CASTER IMPROVES, which is the part that surprises people.
+// `iSpellPower` is instrument bonus + maxHealth/12 + faction + GetSpellAbility/2
+// (spell.kod:2095, :2205), so practising the spell raises the floor of the roll. Once
+// spell power reaches about 135 the bottom of `Random(sp/3, sp)` clears 45 and MACE,
+// SHORT SWORD AND HAMMER BECOME UNREACHABLE — the three cheapest weapons, and the two
+// blunt ones this fleet needs for the skeleton family (skel.kod resists thrust 70 and
+// takes 20% EXTRA from bludgeon). A practised caster can no longer conjure the weapon its
+// own quarry calls for.
+const CONJURABLE_WEAPONS = Object.freeze([
+  'mace', 'short sword', 'hammer', 'axe', 'long sword', 'scimitar', 'mystic sword']);
+
+// How many unusable conjured weapons are enough to say the slot machine is not paying.
+// Three, because one is bad luck and the failure this stops had TWENTY-FOUR: Rizzo, on
+// prod 2026-09-18, stood bare in room 38 with 24 long swords its own ban list forbade and
+// 14 mana against the 15 the spell costs.
+const CONJURE_HOARD_LIMIT = 3;
+
 // WHERE THE MONEY GOES. Jasper and Tos share one banking system, so either counter
 // pays into the same balance and the only question is which is nearer — which really
 // does flip across this fleet's rooms: Jasper is closer to the Merchant Way rooms,
@@ -1473,40 +1499,12 @@ export function crowdedSquares(objects, selfId, { radius = 1, playersOnline = nu
 }
 
 /**
- * WHICH REAGENTS MAY BE BOUGHT, AND WHERE THE REST COME FROM.
+ * WHAT GOES QUIET WHEN A REAGENT RUNS OUT.
  *
- * MEASURED ON PROD, 2026-09-18. Robin's shopping plan came to 39,124 shillings against a purse of
- * 618; 12,000 of it was 150 ORC TEETH at 80 each. The guild chest at r18c2, cached the same
- * afternoon, held **202 orc teeth**. Camilla's plan was the same shape and Bunsen's too. Ten of
- * twenty-one characters sat in `poor_farming.active` and eleven carried
- * `purchase_funding.status: "unaffordable - returning to farming"` — a status that RETRIES rather
- * than stopping. Lew made 26 journeys in 90 minutes, every one of them to a shop, and reached his
- * station ONCE. That is this repository's own trap, live on half the roster: a trip that cannot
- * fix the thing that opened it will run for ever, and every lap reports success.
- *
- * SO A REAGENT HAS A SOURCE, NOT JUST A PRICE. Three answers, in order:
- *
- *   buy        a merchant sells it and we are allowed to pay — the historical behaviour, and
- *              still the default for anything not named below, because silence must mean the
- *              behaviour that was already there.
- *   stockpile  the fleet already owns it; take it from the guild chest or a vault.
- *   farm       nobody sells it and the chest is empty — kill the thing that drops it.
- *              `farmSourcesFor` in m59-spawns.mjs turns that into a creature and a room list.
- *
- * AND WHEN NONE OF THE THREE IS AVAILABLE, THE WANT IS DROPPED RATHER THAN DEFERRED. That is the
- * whole point. A character that cannot get orc teeth should carry on farming WITHOUT super
- * strength and be visibly short of them — `reagent_short` on its status, "poor orc teeth" on the
- * board — rather than walking to a counter it cannot afford every five minutes for ever. A
- * shortage is a state to report; it is not an errand.
- *
- * OPERATOR DECISION, 2026-09-18: "Make it a special (default off) buy-orc-teeth option, where if
- * it's off and not available in vault or chest it doesn't get added to the loadout... and when
- * people take on tasks, we can make 'farm orc teeth' a task, because that can restock the chest."
- */
-/**
- * WHAT GOES QUIET WHEN A REAGENT RUNS OUT. Cited, because "short of orc teeth" means nothing to a
- * reader who does not already know the spell list, and the whole point of publishing a shortage
- * rather than retrying a purchase is that somebody can act on it.
+ * Cited, because "short of orc teeth" means nothing to a reader who does not already know the
+ * spell list, and the entire point of publishing a shortage rather than retrying a purchase is
+ * that somebody can act on it. A character that cannot get orc teeth is not broken; it is a
+ * character that cannot cast super strength.
  */
 export const REAGENT_BLOCKS = {
   'orc tooth': 'super strength (2 mushroom + 1 orc tooth, persench/strength.kod:57-64)',
@@ -1514,52 +1512,51 @@ export const REAGENT_BLOCKS = {
   'fairy wing': 'holy weapon (3 fairy wing + 1 orc tooth, holywp.kod:60-62)',
 };
 
-export const REAGENT_SOURCING = {
-  // Default OFF. Orcs drop these at 40% (orctres.kod:32) in a room this fleet already farms, and
-  // the guild chest holds 202 of them, so paying 80 apiece is buying what we own.
-  'orc tooth': { buy: false, why: 'orcs drop these at 40% and the guild chest holds hundreds' },
-  // Default OFF, and the most expensive line the fleet had. 180 sapphires at 120 was 21,600 of
-  // Robin's 39,124-shilling plan — 55% of a bill he could not pay with 618 in his purse — while
-  // 503 sat in the guild chests. And they are farmable by THIS fleet: the rate table is topped by
-  // a level-105 lupogg, but the SPIDER drops them at 10% in rooms 4, 6, 26, 27 and 28, and room 27
-  // is where the cave cohort already stands. Nobody has to go anywhere new for either of these.
-  'sapphire': { buy: false, why: 'spiders drop these at 10% in room 27 and the guild chests hold 503' },
-};
-
 /**
- * May THIS character buy THIS reagent?
+ * WHICH REAGENTS THIS CHARACTER MAY BUY, AND WHERE THE REST COME FROM.
  *
- * Three layers, most specific first, and silence at every one means the behaviour that was
- * already there: the character's own `buyReagent` map, then the fleet-wide default above, then
- * yes. The class switch `buyReagents: false` still outranks all of it — a character forbidden
- * from buying reagents at all is not quietly permitted to buy one.
+ * MEASURED ON PROD, 2026-09-18. Robin's shopping plan came to 39,124 shillings against a purse of
+ * 618; 33,600 of it was 180 sapphires and 150 orc teeth. The guild chests, cached the same
+ * afternoon, held 503 sapphires, 460 mushrooms and 202 orc teeth. Ten of twenty-one characters sat
+ * in `poor_farming.active` and eleven carried `purchase_funding.status: "unaffordable — returning
+ * to farming"`, a status that RETRIES rather than stopping. Lew made 26 journeys in 90 minutes,
+ * every one to a shop, and reached his station ONCE.
+ *
+ * THE DECISION DOES NOT LIVE HERE ANY MORE, and that is the point. It was a hardcoded set naming
+ * orc teeth, which made one fleet's economy a fact about the source tree. It is now the GUILD's,
+ * in its own plan file, with a default and per-reagent overrides — `reagentSource` in
+ * m59-guildwants.mjs — because whether a guild can supply its own reagents is a fact about that
+ * guild's hall, not about this repository.
+ *
+ * `chest` is one setting with two halves and is meaningless without both: take it from the chest
+ * instead of buying, AND put it in the chest instead of selling. A merchant buys at ~60% and sells
+ * at ~140%, so a reagent that goes over a counter and comes back has cost 2.3x its own value. The
+ * selling half is `chestSourcedNames`, which joins `protectedItemNames`.
  */
-export function reagentBuyAllowed(policy, item) {
-  if (!purchaseEnabled(policy, 'reagents')) return false;
-  const key = norm(item);
-  const mine = policy?.buyReagent?.[key];
-  if (mine !== undefined) return mine !== false;
-  const fleet = REAGENT_SOURCING[key];
-  return fleet ? fleet.buy !== false : true;
+export function reagentBuyAllowed(policy, item, plan = null) {
+  if (!purchaseEnabled(policy, 'reagents')) return false;   // the class switch still outranks all
+  return reagentSource(item, { plan, policy }) === 'buy';
 }
 
 /**
- * Split a want list into what may be bought and what must come from stock or a kill.
+ * Split a want list three ways by how each item is to be acquired.
  *
  * A PURE FUNCTION AND AN EXPORTED ONE, because the alternative is a filter inlined in a method
- * that needs a live Autopilot to reach — and an untestable refusal is the kind the next person in
- * a hurry deletes. It returns BOTH halves, never only the survivors: a line that silently
- * vanishes from a shopping list is indistinguishable from one nobody wanted, which is the same
- * failure shape as a keeper rendering `hunting` while standing in a guild hall.
+ * that needs a live Autopilot to reach, and an untestable refusal is the kind the next person in
+ * a hurry deletes. It returns ALL THREE groups, never only the survivors: a line that silently
+ * vanishes from a shopping list is indistinguishable from one nobody wanted.
  */
-export function splitBySourcing(requests = [], policy = {}) {
-  const buy = [], stockpile = [];
+export function splitBySourcing(requests = [], { policy = null, plan = null } = {}) {
+  const buy = [], stockpile = [], off = [];
   for (const r of (Array.isArray(requests) ? requests : [])) {
     if (!r || !r.item) continue;
-    (reagentBuyAllowed(policy, r.item) ? buy : stockpile).push(r);
+    if (!purchaseEnabled(policy, 'reagents')) { stockpile.push(r); continue; }
+    const mode = reagentSource(r.item, { plan, policy });
+    (mode === 'buy' ? buy : mode === 'off' ? off : stockpile).push(r);
   }
-  return { buy, stockpile };
+  return { buy, stockpile, off };
 }
+
 
 export class Autopilot {
   constructor(session, { mode = 'survive', policy = {} } = {}) {
@@ -1800,6 +1797,19 @@ export class Autopilot {
       // on every write, so the key survives only so that anything still writing it keeps
       // parsing. To choose a COMBAT posture, use `pullToSafeWall`.
       useSafeSpots: true,
+
+      // SKIP PREY THIS CHARACTER HAS PROVED IT CANNOT WALK TO. On by default, because the
+      // failure it prevents is silent and total: the keeper ranks the nearest creature,
+      // cannot reach it, breaks off, and ranks it again -- for ever, while every board reads
+      // "hunting". Declared here rather than left implicit so `status` reports it, per the
+      // rule that a setting which silently does nothing is how `purpose` stayed out of a
+      // schema for a year with every keeper's audit switched off.
+      //
+      // Set false to make the keeper keep trying, which is the right choice exactly when you
+      // suspect the MODEL is wrong rather than the world -- an undeclared jump, a missing
+      // fall, a door the bake does not know. Turning it off is how you reproduce the stall on
+      // purpose. It is never a fix for a room that is genuinely walled off.
+      ignoreUnreachablePrey: true,
 
       // WHERE YOU STOP IS NOT THE SAME QUESTION AS HOW YOU FIGHT, AND CONFLATING THEM COST
       // FOUR DEATHS.
@@ -2396,6 +2406,125 @@ export class Autopilot {
     return Array.isArray(b) && b.length ? b : null;
   }
 
+  /**
+   * Is this character bare ON PURPOSE right now?
+   *
+   * `trainingStyle: 'unarmed'` means "train brawling on the quarry", and the keeper already
+   * honours it inside a fight -- `prepareTrainingStyle('unarmed')` calls
+   * `unuseTrainingWeapon()` and fights with fists. What it did NOT honour is the ARMING
+   * side: `armSelf()` is reached from the recovery branch with no style check, so a brawler
+   * resting between fights conjured a weapon, walked back out, and had it taken off again on
+   * the first swing. Summon, drop, repeat -- 15 mana and 70 bulk a lap, for a weapon the
+   * character is not allowed to keep hold of.
+   *
+   * Scoped to the character's OWN GROUND deliberately, which is what `styleForNonPrey`
+   * already encodes. Off its station an unarmed trainer still arms, because the weapon it
+   * wants there is for travel and survival rather than for the bout -- the same split
+   * meridian59-dum-bot's `TRAINING_PRESET` assumes when it declines to send a weapon
+   * priority for `unarmed` at all ("the keeper disarms in the farm room itself").
+   */
+  bareHandedByTraining() {
+    return this.styleForNonPrey(this.s?.world?.room) === 'unarmed';
+  }
+
+  /**
+   * Conjured weapons in the pack that this character's own ban list forbids it to hold.
+   *
+   * This is the hoard `create weapon` builds when the ban and the spell disagree: every cast
+   * succeeds, every result is refused by `equipBest`, and the pack fills with them. A full
+   * pack then answers `receiver_full` to every `supply`, so the character cannot even be
+   * handed a weapon it IS allowed to use.
+   */
+  /**
+   * Hostile PLAYERS within melee reach — the same predicate the survival ladder's
+   * `strangers` uses: a player flag, attackable, and NOT a fleetmate. The fleetmate
+   * exclusion is load-bearing rather than tidy; turning a fleet-mate red by hand and then
+   * shooting it is the Statler incident of 2026-08-27.
+   */
+  hostilePlayersInReach() {
+    const c = this.s?.client, me = c?.self;
+    if (!me || !c?.room?.objects) return [];
+    return [...c.room.objects.values()].filter(o =>
+      o.id !== c.selfId && (o.flags & OF.PLAYER) && (o.flags & OF.ATTACKABLE) &&
+      !party.isFleetmate(c.rsc?.get(o.nameRsc)) &&
+      Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row) <= REACH);
+  }
+
+  /**
+   * ESCALATION: A MURDERER IS ABOUT TO INHERIT THE LOADOUT ANYWAY.
+   *
+   * `bannedWeapons` is a TRAINING preference — it protects a proficiency block that a
+   * different weapon type would reset (player.kod:4753-4757). That is worth defending
+   * against a fungus beast. It is not worth defending against a person who is killing you,
+   * because everything in the hand and the pack drops on death and the training block dies
+   * with the character holding it. The operator's framing, 2026-09-18: there is no reason
+   * to be precious about equipment that is all about to be stolen by your murderer.
+   *
+   * So the ban is lifted for THIS case only: a hostile player in reach, no legal weapon in
+   * hand. Scoped that narrowly on purpose — the general "may a starving character break its
+   * ban" question is a training-versus-survival judgement and belongs to whoever owns the
+   * split, not to the keeper.
+   *
+   * WHAT IS NOT LIFTED. `weaponRanking` filters cursed and unrevealed weapons
+   * independently of the ban, so this keeps both. A ban is a preference and can be
+   * overridden; wielding a cursed weapon is the one irreversible mistake in this game and
+   * an emergency is exactly when somebody would be tempted to skip the check.
+   *
+   * WHAT IT PICKS. `weaponRanking` already sorts by the character's ABILITY in the
+   * weapon's proficiency (`abilityOf(c, proficiencyFor(name))`), falling back to the crude
+   * name score when the ability has not been read — so "most effective" means the weapon
+   * this character is actually best with, not the biggest one. A bow is excluded unless
+   * ammunition is aboard, because nothing else in the pipeline checks it and a drawn bow
+   * with no arrows is strictly worse than fists.
+   *
+   * Returns the weapon taken up, or null — and null is a legitimate outcome: fists are a
+   * weapon, and `passFightBack` swings either way.
+   */
+  async escalateArmForPvp(attacker = null) {
+    const c = this.s?.client;
+    if (!c) return null;
+    const banned = this.bannedWeaponsNow();
+    const hasAmmo = (c.inventory || []).some(o => {
+      const n = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+      return /arrow|bolt/.test(n) && !/water finding/.test(n) && (o.amount ?? 1) > 0;
+    });
+    const ranked = skills.weaponRanking(c, { banned: null })
+      .filter(r => hasAmmo || !/bow|crossbow|sling/i.test(r.name));
+    if (!ranked.length) return null;                   // fists it is, and that is an answer
+    const pick = ranked[0];
+    const eq = await skills.equipBest(this.s, { priority: [pick.name], banned: null })
+      .catch(() => null);
+    if (!eq?.wielding) return null;
+    const broke = banned?.length
+      ? banned.some(b => String(eq.wielding).toLowerCase().includes(String(b).toLowerCase()))
+      : false;
+    if (broke) this.tally.pvp_ban_escalations = (this.tally.pvp_ban_escalations || 0) + 1;
+    this.note(broke ? "PVP — breaking this character's own weapon ban to fight back"
+                    : 'PVP — arming to fight back', {
+      took_up: eq.wielding, proficiency: pick.skill ?? null, ability: pick.ability ?? null,
+      banned_weapons: banned ?? undefined, attacker: attacker ?? null,
+      why: broke
+        ? 'a hostile player is in reach and every weapon this character is ALLOWED to ' +
+          'hold is absent, so the alternative was fists. The ban protects a training ' +
+          'block that dies with the character, and the pack drops to the killer either way'
+        : 'a hostile player is in reach and the hand was empty',
+      kept: 'cursed and unrevealed weapons are still refused — a ban is a preference, a ' +
+            'curse is permanent' });
+    return eq.wielding;
+  }
+
+  bannedConjurablesHeld() {
+    const c = this.s?.client;
+    const banned = this.bannedWeaponsNow();
+    if (!c || !banned?.length) return 0;
+    const forbidden = n => banned.some(b => n.includes(String(b).toLowerCase()));
+    return (c.inventory || []).filter(o => {
+      const n = String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+      if (!n) return false;
+      return CONJURABLE_WEAPONS.some(w => n.includes(w)) && forbidden(n);
+    }).length;
+  }
+
   weaponPriorityNow(targetName = null) {
     // Undead override, above even the operator's list: blunt for a skeleton, a short
     // sword for a zombie (operator order, 2026-09-01). Only these two prey — every
@@ -2781,6 +2910,40 @@ export class Autopilot {
     if ((mana?.value ?? 0) < 15)
       return this.declinedCast('create weapon', 'not enough mana',
         { mana: mana?.value ?? null, needs: 15 });
+    // THREE REASONS NOT TO PULL THE LEVER, ALL OF THEM KNOWABLE BEFORE PAYING.
+    //
+    // The existing check below reads what the spell MADE and refuses to call a banned
+    // result "armed". That is the right diagnosis and it says why in as many words: "the
+    // loop cannot end while the ban and the spell disagree." It does not end the loop --
+    // the next pass conjures another one. These three end it.
+    if (this.bareHandedByTraining())
+      return this.declinedCast('create weapon', 'training unarmed on its own ground',
+        { training_style: this.policy?.trainingStyle ?? null,
+          why: 'the bout disarms whatever this makes, so the cast buys a weapon that is ' +
+               'taken off on the first swing' });
+    const bannedNow = this.bannedWeaponsNow();
+    if (bannedNow?.length) {
+      const reachable = CONJURABLE_WEAPONS.filter(w =>
+        !bannedNow.some(b => w.includes(String(b).toLowerCase()) ||
+                             String(b).toLowerCase().includes(w)));
+      if (!reachable.length)
+        return this.declinedCast('create weapon', 'every weapon it could make is banned',
+          { banned_weapons: bannedNow, could_make: CONJURABLE_WEAPONS,
+            why: 'creaweap.kod can only produce these seven, and this character may hold ' +
+                 'none of them, so the cast is a certainty of 15 mana and 70 bulk for an ' +
+                 'item that will be refused',
+            doing: 'un-ban one of them, or hand this character a weapon it may hold' });
+      const hoard = this.bannedConjurablesHeld();
+      if (hoard >= CONJURE_HOARD_LIMIT)
+        return this.declinedCast('create weapon', 'already carrying unusable conjured weapons',
+          { held: hoard, limit: CONJURE_HOARD_LIMIT, banned_weapons: bannedNow,
+            can_still_make: reachable,
+            why: 'the spell rolls a band rather than granting a choice, and this character ' +
+                 'has already banked ' + hoard + ' results it may not hold. Casting again ' +
+                 'is the same bet at the same odds, and each one costs mana and the pack ' +
+                 'space that a supply would need',
+            doing: 'shed the hoard, or hand it one of: ' + reachable.join(', ') });
+    }
     // ONLY WHEN WE POSITIVELY KNOW THERE IS NO ROOM. carryCapacity withholds `room_for`
     // whenever anything in the pack is unweighed, and refusing on that silence would build
     // a fresh deadlock for exactly the characters this one already stranded — so an
@@ -2883,6 +3046,19 @@ export class Autopilot {
     const c = this.s.client;
     if (!c) return false;
     await this.wearArmourIfNeeded().catch(() => {});
+    // A BRAWLER IS NOT AN UNARMED CHARACTER WITH A PROBLEM. Armour still goes on above;
+    // only the weapon is declined, and only on this character's own farm ground.
+    if (this.bareHandedByTraining()) {
+      this.note('staying bare-handed on purpose', {
+        training_style: this.policy?.trainingStyle ?? null,
+        assigned_room: this.policy?.assignedRoom ?? null,
+        why: 'trainingStyle is unarmed and this is the assigned farm room, so the fight ' +
+             'itself will take any weapon back off (prepareTrainingStyle -> ' +
+             'unuseTrainingWeapon). Arming here only pays 15 mana and 70 bulk to be ' +
+             'disarmed on the first swing',
+        doing: 'fighting with fists, which is what the style asked for' });
+      return true;
+    }
     if (skills.weaponsOf(c).length) {
       const eq = await skills.equipBest(this.s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
       if (eq?.wielding) return true;
@@ -3872,6 +4048,7 @@ export class Autopilot {
       // could never sell anything again.
       ...this.guildWantedNames(),
       ...this.stockpileKeptNames(),
+      ...this.chestSourcedNames(),
     ].map(String).filter(Boolean))];
   }
 
@@ -3901,6 +4078,34 @@ export class Autopilot {
       characters.push({ loadout: this.loadout() ?? { carry: [] }, policy: this.policy });
       const test = stockpileKeepTest({ characters, available });
       return [...(test.inUse ?? new Set())];
+    } catch { return []; }
+  }
+
+  /**
+   * REAGENTS THE GUILD SOURCES FROM ITS OWN CHEST, KEPT AWAY FROM EVERY MERCHANT.
+   *
+   * The other half of `chest`, and the half that was missing. `guildWantedNames` protects what the
+   * chest is SHORT of, which is a want about quantity and goes away the moment a target is met.
+   * This is about DIRECTION and does not: a guild that buys its sapphires out of its own chest
+   * must never be selling sapphires at 60% on the same trip, whatever the chest holds this minute.
+   *
+   * IT IS NOT GATED ON `reagentCoop.enabled`, unlike its two neighbours, and that is deliberate
+   * rather than an oversight. That gate is backwards — it switched the chest off for exactly the
+   * characters the co-op was switched ON for — when depositing and drawing are opposite directions
+   * through the same door. A fleet that stocks its own chest is precisely the fleet that should be
+   * shopping from it.
+   */
+  chestSourcedNames() {
+    try {
+      const plan = guildPlan();
+      if (!plan) return [];
+      const named = new Set();
+      // Everything this character has an opinion about, plus everything the guild names. A
+      // guild-wide `default: "chest"` cannot be enumerated — it applies to reagents nobody has
+      // written down — so the list is what is ASKED for, resolved one at a time at the call site.
+      for (const r of (this.purchaseRequests?.() ?? [])) named.add(String(r.item));
+      for (const c of (this.loadout()?.carry ?? [])) if (c?.item) named.add(String(c.item));
+      return [...named].filter(item => reagentSource(item, { plan, policy: this.policy }) === 'chest');
     } catch { return []; }
   }
 
@@ -4830,7 +5035,16 @@ export class Autopilot {
     if (!foe) return { closed: false, why: 'it is not in the room any more' };
     const name = c.rsc.get(foe.nameRsc);
     const approach = s.world?.approachSquare?.(foe.col, foe.row);
-    if (!approach) return { closed: false, target: name, why: 'no square beside it that we can reach' };
+    if (!approach) {
+      // The geometric answer, and the definitive one: there is no square adjacent to it that
+      // this map says we can stand on. Nothing about the next pass will change that.
+      this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
+      this.note('ignoring prey we cannot walk to', {
+        target: name, at: `r${foe.row}c${foe.col}`,
+        why: 'no square beside it that this map says we can stand on',
+        how: 'remembered by SQUARE for a few minutes, so a respawn in the same corner is ' +
+             'skipped too and the next pass picks something reachable instead' });
+    }
     this.doing = 'fighting';
     const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
                        .catch(e => ({ arrived: false, reason: e.message }));
@@ -4839,7 +5053,14 @@ export class Autopilot {
       // TERMINAL_MOVEMENT_REASONS propagate rather than loop — a heading no other heading
       // can fix is reported, not retried, which is what stops a bad route being learned.
       const terminal = this.terminalMovement(out, 'close-on movement');
-      if (terminal) return { closed: false, target: name, ...terminal };
+      if (terminal) {
+        // TERMINAL means no other heading fixes it, which is precisely the claim this memory
+        // wants. A NON-terminal failure is deliberately NOT remembered: a body in the doorway
+        // is the commonest one and it walks away by itself, so forgetting it after one try
+        // would ban a perfectly good creature for five minutes.
+        this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
+        return { closed: false, target: name, ...terminal };
+      }
       return { closed: false, target: name, why: out.reason || 'could not get to it' };
     }
     this.note('closed on the quarry', {
@@ -8133,6 +8354,12 @@ export class Autopilot {
         hits_on_us: pick.verdict.grudge?.hits ?? null,
       });
     }
+    // ARM FOR THIS ONE EVEN IF THE BAN FORBIDS EVERYTHING WE CARRY. `isArmed` answers TRUE
+    // when it cannot see the equipment, so this fires only when the hand is KNOWN empty —
+    // it will not strip a weapon we simply failed to read. See escalateArmForPvp for why
+    // the ban yields here and nowhere else.
+    if (!skills.isArmed(c))
+      await this.escalateArmForPvp(pick.name).catch(() => null);
     this.doing = 'fighting';
     // SAY SO, SO THE OTHERS CAN COME. This is the one place a conflict is published:
     // past `mayReturnFire`, at the moment of the swing, by the character swinging. Being
@@ -8549,6 +8776,64 @@ export class Autopilot {
     // Bounded, because a long session in a bad room must not grow this without limit.
     if (forRoom.size > 256) forRoom.clear();
     forRoom.set(`${col},${row}`, Date.now());
+  }
+
+  // PREY WE HAVE PROVED WE CANNOT WALK TO, REMEMBERED BY SQUARE.
+  //
+  // `closeOnQuarry` already DETECTS this and then forgets it, which is the whole defect: a
+  // null `approachSquare` returns "no square beside it that we can reach", the next pass
+  // ranks the same creature nearest again, and the keeper walks at it for ever. Measured on
+  // prod 2026-09-18, a character in the Mausoleum (1016) with mummies behind a locked-off
+  // corner: `stuck` repeats 23, lever null, "broke off without a landed hit or a kill",
+  // twenty-five minutes, zero kills and zero damage TAKEN -- it never got close enough to be
+  // hit. It escalated to STALL_NO_LEVER, which is correct and useless, because the only
+  // lever is "stop choosing that one" and nothing could express it.
+  //
+  // THE KEY IS THE SQUARE, NOT THE OBJECT, and that is the whole reason this works. An
+  // object id is a temporary handle -- renumbered on every system save, recycled within
+  // hours -- so a remembered id would name a different monster by morning AND would miss the
+  // replacement that spawns in the same corner thirty seconds later. The corner is the
+  // durable fact. Keyed "col,row" per room, exactly like noteUnreachableSpot above.
+  //
+  // AND IT EXPIRES, for the reason the critic rubric insists on: "unreachable" is a fact
+  // about our model of the world, never about the world. A door opens, a body moves, a jump
+  // gets declared -- so this is a few minutes of local memory and not a verdict. Same TTL as
+  // the spot memory, and a square gets another chance once the reason has had time to move.
+  noteUnreachablePrey(room, col, row) {
+    if (room == null || col == null || row == null) return;
+    const per = (this.unreachablePreySpots ??= new Map());
+    const forRoom = per.get(room) ?? per.set(room, new Map()).get(room);
+    if (forRoom.size > 256) forRoom.clear();
+    forRoom.set(`${col},${row}`, Date.now());
+  }
+
+  /** Squares in this room where prey has recently proved unreachable, or null. */
+  unreachablePreyIn(room) {
+    const ttl = this.policy.unreachableSpotMs ?? UNREACHABLE_SPOT_MS;
+    const now = Date.now();
+    const forRoom = this.unreachablePreySpots?.get(room);
+    if (!forRoom) return null;
+    const live = new Set();
+    for (const [k, at] of forRoom) {
+      if (now - at <= ttl) live.add(k);
+      else forRoom.delete(k);
+    }
+    if (!forRoom.size) this.unreachablePreySpots.delete(room);
+    return live.size ? live : null;
+  }
+
+  // The predicate `skills.fight` takes. Null when there is nothing to avoid, so the common
+  // case adds no filter at all rather than an always-true one.
+  //
+  // DELIBERATELY NOT FOLDED INTO `unreachableIn`. That set feeds the safe-spot selector, and
+  // "a square I could not walk to" and "a square something I cannot reach is standing on"
+  // are different claims -- the second square may be perfectly good to stand on. Same shape,
+  // same TTL, separate stores, because merging them would quietly shrink the wall book.
+  preyAvoid(room) {
+    if (this.policy.ignoreUnreachablePrey === false) return null;
+    const bad = this.unreachablePreyIn(room);
+    if (!bad) return null;
+    return o => o?.col != null && o?.row != null && bad.has(`${o.col},${o.row}`);
   }
 
   // A failed rest must choose somewhere else on the next attempt. This is local,
@@ -18662,6 +18947,10 @@ export class Autopilot {
                                         // otherwise substring against "battered skeleton,zombie"
                                         // and find nothing in a room full of both.
                                         match: this.huntMatch(engageName),
+                                        // Prey this character has already proved it cannot walk
+                                        // to, skipped by SQUARE so a respawn in the same corner
+                                        // is skipped too. Null when there is none.
+                                        avoid: this.preyAvoid(s.world?.room?.num ?? null),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,
@@ -20541,9 +20830,10 @@ export class Autopilot {
     // The stockpile is the only source for these, so they never reach a price. Removed here
     // rather than at the counter: a merchant refusal is a sentence spoken to the room, and an
     // unaffordable TOTAL is what opens the loop this exists to close.
-    const split = splitBySourcing(requests, this.policy);
+    const split = splitBySourcing(requests, { policy: this.policy, plan: guildPlan() });
     requests = split.buy;
     this.chestOnlyWants = split.stockpile;
+    this.reagentsOff = split.off;
     if (purchaseEnabled(this.policy, 'reagents') && ['all', 'delivery'].includes(kind)
         && this.policy.farmDelivery?.enabled && this.pendingFarmDelivery) {
       const wanted = this.pendingFarmDelivery.requested;
@@ -20576,7 +20866,7 @@ export class Autopilot {
       ...(this.chestOnlyWants?.length
         ? { from_stockpile: this.chestOnlyWants,
             from_stockpile_why: 'not bought by policy — these come from the guild chest, a vault, ' +
-                                'or a kill (REAGENT_SOURCING / policy.buyReagent)' }
+                                'or a kill: the guild plan reagents block, or policy.reagentSource' }
         : {}) };
     if (this.townTrip) this.townTrip.purchasePlan = plan;
     if (signature !== this.lastPurchasePlanSignature) {
