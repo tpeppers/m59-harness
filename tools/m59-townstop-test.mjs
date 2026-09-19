@@ -116,11 +116,29 @@ console.log('\nthe sell list never beats a floor');
     carry: [{ item: 'long sword', min: 1, max: 2, kind: 'weapon' }],
     sell: ['long sword'],
   });
-  const p = planTownStop(L, { items: pack({ 'long sword': 0 }) });
+  // HOLDING NONE IS AN ABSENT ROW, NOT A ROW OF ZERO — and this fixture said it the other
+  // way, which is the only reason it ever passed.
+  //
+  // This used to read `pack({ 'long sword': 0 })`, meaning "holds none". On the wire that
+  // shape does not occur: `amount` is the STACK COUNT, and anything that does not stack
+  // reports 0 while being one real object. Measured on prod 2026-09-19 across 24 live keeper
+  // packs — 13 characters held no long swords and NONE of them carried a long-sword row,
+  // while 226 rows fleet-wide carried `amount: 0` and every one was an object the character
+  // was really holding. A row that exists is at least one thing.
+  //
+  // The fixture is corrected rather than the reading, because the reading is what let 122
+  // long swords, 47 flasks, 10 hammers and 9 axes sit in packs through every town stop: the
+  // planner counted them as zero and the `>= min_stack` test dropped them silently.
+  const p = planTownStop(L, { items: [] });
   ok('an item under its floor is bought', !!buyOf(p, 'long sword'));
   ok('and not sold, even though it is on the sell list', !sellOf(p, 'long sword'));
   ok('and the contradiction is reported as a conflict',
      p.conflicts.some(c => /sell list AND under its floor/.test(c.why)));
+
+  // AND THE OTHER HALF OF THE SAME AMBIGUITY, so it cannot come back by either door.
+  const held = planTownStop(L, { items: [{ name: 'long sword', amount: 0 }] });
+  ok('one non-stackable row is ONE held, so the floor of 1 is met and nothing is bought',
+     !buyOf(held, 'long sword'), JSON.stringify(held.buy));
 }
 
 console.log('\nkeep_fragments is the plan in sell_all vocabulary');

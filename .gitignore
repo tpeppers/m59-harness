@@ -750,3 +750,14 @@ substrate/magic-keep.json
 # running in production and in no repository" — a true sentence about a ledger nobody meant
 # to commit.
 /substrate/savelog/
+
+# The node/exit rail bake: every mana stone to every door of its room and back, cut at the
+# 64-unit lattice by tools/m59-noderails.mjs. DERIVED and regenerable in about four minutes
+# from substrate/m59-map.json and substrate/m59-routes.json, which ARE committed — the same
+# reasoning as the room views above, and the reason it is not filed beside rail-714.json:
+# that one is a hand-declared hall of thirty-two door states, 137 KB, and this is 2.1 MB of
+# dense waypoints that changes wholesale every time the bake's own logic moves. Committing it
+# put a megabyte-scale artefact in front of every reviewer to say nothing a rerun would not.
+# `node tools/m59-noderails.mjs bake` writes it; `show`, `check` and `m59-fineclimb --rail`
+# all say so by name when it is absent.
+/substrate/node-rails.json

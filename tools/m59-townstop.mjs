@@ -37,9 +37,31 @@ import { norm, entryMatches } from './m59-loadout.mjs';
 
 // The same counting the loadout does, on the same matcher, because a second definition of
 // "how many of these am I carrying" is how the two answers above came apart.
+// AN `amount` OF ZERO IS ONE OBJECT, NOT NONE — AND `??` CANNOT SAY SO.
+//
+// The server reports a stack count in `amount`, and for anything that does not STACK it
+// reports 0. `i.amount ?? i.count ?? 1` falls through only on null and undefined, so a
+// non-stackable item read as a count of ZERO and every downstream `>= min_stack` test
+// excluded it. Silently: it simply never appeared in a sell list, so the stop reported
+// success having left the whole pile behind.
+//
+// Measured on prod 2026-09-19, reading live keeper packs: EVERY non-stackable item in the
+// fleet was invisible to the town stop. 122 long swords across eleven characters — Pepe 22,
+// Statler 21, Janice 16, Bunsen 15, Robin 15, Kermit 12 — plus 47 flasks, 10 hammers, 9 axes,
+// shields and armour. Kermit's own pack read `long sword amount:0` twelve times over while
+// `red mushroom amount:30` sold the same trip. An operator got on a character after a town
+// stop and found it still carrying twenty of them.
+//
+// The sibling path in m59-skills.mjs (`inventorySalePlan`) has always used `o.amount || 1`,
+// which is correct. Two code paths, one field, and only one of them could see a sword.
+export const unitsOf = (i) => {
+  const n = Number(i?.amount ?? i?.count);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+};
+
 const countIn = (items, entry) => (items || [])
   .filter(i => entryMatches(entry, i.name))
-  .reduce((t, i) => t + (i.amount ?? i.count ?? 1), 0);
+  .reduce((t, i) => t + unitsOf(i), 0);
 
 export const MONEY = /shilling|coins/i;
 
@@ -186,7 +208,14 @@ export function planTownStop(loadout, { items = [], equipped = [], settings = {}
       if (MONEY.test(name)) continue;
       if (worn.has(n)) continue;
       if (spokenFor.some(e => entryMatches(e, name))) continue;
-      const have = it.amount ?? it.count ?? 1;
+      // ACROSS EVERY ROW OF THAT NAME, NOT JUST THIS ONE. The loop above de-duplicates by
+      // name so each kind is offered once — which is right for a stack, where one row IS the
+      // whole holding, and wrong for anything that does not stack, where twelve swords are
+      // TWELVE ROWS. Reading this row alone would have offered one of Kermit's twelve and
+      // reported a successful stop for the other eleven.
+      const have = (items || [])
+        .filter(x => x?.name && norm(x.name) === n)
+        .reduce((t, x) => t + unitsOf(x), 0);
       if (have >= s.min_stack)
         sell.push({ item: name, have, keep_back: 0, amount: have,
                     why: 'loot — the loadout has no opinion' });
