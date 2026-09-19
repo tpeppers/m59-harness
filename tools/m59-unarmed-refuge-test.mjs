@@ -25,10 +25,12 @@ const ok = (label, cond, detail = '') => {
 };
 
 const rig = ({ sanctuary = { room: 106, hops: 2, preferred: true }, arrives = true,
-               reason = 'no route', fledInARow = 0, backoffUntil = null } = {}) => {
+               reason = 'no route', fledInARow = 0, backoffUntil = null,
+               trainingUnarmed = false } = {}) => {
   const calls = { nearest: 0, travelled: [], notes: [], progress: [], noProgress: [], hibernate: 0 };
   const self = {
     fledInARow, noUnarmedRefugeUntil: backoffUntil,
+    bareHandedByTraining: () => trainingUnarmed,
     s: { client: { vitals: () => ({ mana: { value: 4 } }) } },
     nearestSanctuary() { calls.nearest++; return sanctuary; },
     async travel(room) { calls.travelled.push(room); return arrives ? { arrived: true } : { arrived: false, reason }; },
@@ -85,15 +87,34 @@ const outcomes = new Set();
   ok('returns false and reports NO progress', r === false && calls.noProgress.length === 1);
 }
 {
+  // WHILE BACKED OFF IT SAYS NOTHING AT ALL, and that is the fix for the fix. The first
+  // version noted `search_rate_limited` on every pass, which reproduced the 1,850-repeat spam
+  // this whole file exists to stop — with a better label on it. Measured on prod within ten
+  // minutes of shipping: Beaker and Animal emitting it once a pass, indefinitely.
   const { self, calls } = rig({ backoffUntil: Date.now() + 60_000 });
   const r = await call(self);
-  outcomes.add(calls.notes[0]?.outcome);
-  ok('a rate-limited pass names itself too', calls.notes[0]?.outcome === 'search_rate_limited');
+  ok('a rate-limited pass is SILENT rather than noting once a pass',
+     calls.notes.length === 0, JSON.stringify(calls.notes.map(n => n.outcome)));
   ok('and does NOT run the sanctuary flood while backed off', calls.nearest === 0);
   ok('returns false', r === false);
 }
-ok('all three failure outcomes are different strings', outcomes.size === 3,
+ok('the two outcomes it does report are different strings', outcomes.size === 2,
    [...outcomes].join(' | '));
+
+console.log('\n--- A DELIBERATE BRAWLER IS NOT LOOKING FOR A WEAPON ---');
+{
+  // `makeWeapon` declines with 'training unarmed on its own ground' on the same predicate, so
+  // without this guard the pass refuses to conjure and then walks off to find the mana for the
+  // conjure it just refused. Beaker at 25 mana and Animal at 23 did exactly that in room 27,
+  // with `create weapon` needing fifteen.
+  const { self, calls } = rig({ trainingUnarmed: true });
+  const r = await call(self);
+  ok('it declines immediately for a character training unarmed', r === false);
+  ok('it does not travel', calls.travelled.length === 0);
+  ok('and it does not note — being bare-handed was the ORDER, not a shortfall',
+     calls.notes.length === 0);
+  ok('and it never even asks for a sanctuary', calls.nearest === 0);
+}
 
 console.log('\n--- a refusal is never reported as progress ---');
 {

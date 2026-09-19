@@ -5568,11 +5568,29 @@ export class Autopilot {
   // there" indistinguishably, which is what made 1,850 identical lines say nothing. A
   // failure that cannot name itself gets rediscovered from scratch.
   async leaveForManaWhileUnarmed() {
+    // A CHARACTER TRAINING UNARMED ON ITS OWN GROUND IS NOT LOOKING FOR A WEAPON.
+    //
+    // `makeWeapon` already declines for exactly this reason and with exactly this predicate —
+    // "training unarmed on its own ground: the bout disarms whatever this makes" — and the two
+    // must agree, or the pass refuses to conjure and then walks off to find the mana for a
+    // conjure it has already refused.
+    //
+    // Measured on prod 2026-09-19, minutes after the refuge fix shipped: Beaker at 25 mana and
+    // Animal at 23, both in room 27 with `trainingStyle: unarmed`, both noting "leaving to
+    // regain mana" on every pass. `create weapon` needs FIFTEEN. They had it and to spare.
+    // Being bare-handed was the ORDER, not a shortfall, and the whole premise of this rung —
+    // "this is how a character with no weapon, no money and no donor gets armed again" — is
+    // false for them. Room 27 is where they are supposed to be, punching things.
+    if (this.bareHandedByTraining()) return false;
     const searchedRecently = this.noUnarmedRefugeUntil && Date.now() < this.noUnarmedRefugeUntil;
     const best = searchedRecently ? null : this.nearestSanctuary({ maxHops: 3 });
     let went = false, outcome, toRoom = best?.room ?? null;
     if (searchedRecently) {
-      outcome = 'search_rate_limited';
+      // SAY IT ONCE PER BACKOFF, NOT ONCE PER PASS. The first version of this noted every
+      // pass while rate-limited, which reproduced the 1,850-repeat spam it was written to
+      // stop — with a better label on it, which is not the same as fixing it. Measured on
+      // prod within ten minutes of shipping.
+      return false;
     } else if (!best) {
       // Keep looking eventually, but not every pass: the flood is the expensive part.
       this.noUnarmedRefugeUntil = Date.now() + 120_000;
