@@ -5535,6 +5535,86 @@ export class Autopilot {
     return { settled: !!w.arrived, spot };
   }
 
+  // EXTRACTED SO IT CAN BE TESTED. It lives inside `passArm`, which is far too large to
+  // rig in a unit test, and the defect it fixes was a silent early return — exactly the
+  // class that only a direct test catches. Returns true when the character is now
+  // somewhere safe and the pass should end.
+  // So walk out first — a character with nothing in its hands has no business in a
+  // monster room, and the walk is the cheapest of the four routes because it needs no
+  // money, no donor and no meeting.
+  //
+  // AND IT ASKS `nearestSanctuary` DIRECTLY, NOT `townTripIfCornered`, BECAUSE THAT
+  // FUNCTION'S FIRST GATE CANNOT BE SATISFIED FROM HERE. Its line 3 is
+  // `if ((this.fledInARow || 0) <= 2) return false;` and `fledInARow` is incremented in
+  // exactly ONE place in this file — `gotOut()` in `passFleeAndRest`, after a successful
+  // `leaveViaAny`. It counts successful FLEES. Being unarmed is not fleeing and never
+  // touches that counter, so this caller asked a question whose precondition it could
+  // never meet, and was refused SILENTLY, every pass, for ever.
+  //
+  // Measured on prod 2026-09-19: Beaker 1,850 consecutive repeats of the note below and
+  // Animal 1,100, both bare-handed with a spider ONE SQUARE away, `went_to_town: false`
+  // on every one of them. The flag was the only output and it could not say why.
+  //
+  // The gate is not widened, because it is load-bearing for the original caller: three
+  // flees in a row IS the escalation ladder, and `townTripIfCornered` resets the counter
+  // on success. An unarmed character has no business incrementing a flee counter to buy
+  // itself a sit-down. It wants the other half of that function — "where is the nearest
+  // place I can sit down safely" — which is already extracted, already prefers a real
+  // inn over a quiet field (`CITY_INNS` first, and see the note on the spawn index), and
+  // is already what the post-death recovery calls.
+  //
+  // AND THE NOTE NAMES WHICH OF THE THREE OUTCOMES HAPPENED. `went_to_town: false` meant
+  // "refused by a gate", "nothing within three hops" and "walked and could not get
+  // there" indistinguishably, which is what made 1,850 identical lines say nothing. A
+  // failure that cannot name itself gets rediscovered from scratch.
+  async leaveForManaWhileUnarmed() {
+    const searchedRecently = this.noUnarmedRefugeUntil && Date.now() < this.noUnarmedRefugeUntil;
+    const best = searchedRecently ? null : this.nearestSanctuary({ maxHops: 3 });
+    let went = false, outcome, toRoom = best?.room ?? null;
+    if (searchedRecently) {
+      outcome = 'search_rate_limited';
+    } else if (!best) {
+      // Keep looking eventually, but not every pass: the flood is the expensive part.
+      this.noUnarmedRefugeUntil = Date.now() + 120_000;
+      outcome = 'no_sanctuary_within_3_hops';
+    } else {
+      this.doing = 'travelling';
+      const t = await this.travel(best.room, { maxHops: 6 })
+                          .catch(e => ({ arrived: false, reason: e.message }));
+      if (t.arrived) { went = true; outcome = 'arrived'; }
+      else {
+        // BACK OFF ON A FAILED WALK TOO, NOT ONLY ON A FAILED SEARCH. `townTripIfCornered`
+        // has a SECOND silent gate — `noTownUntil` — and bypassing the flee counter skips
+        // that backoff as well. Without one here, a character that can see a refuge and
+        // cannot reach it re-plans the identical walk every pass: a loop of failed walks,
+        // which reads healthier on a board than a silent refusal and is worse in the room.
+        // Shorter than the no-search backoff because a blocked route is likelier to clear
+        // than an empty map is to fill.
+        this.noUnarmedRefugeUntil = Date.now() + 60_000;
+        outcome = 'travel_failed: ' + (t.reason || 'refused');
+      }
+    }
+    this.note('unarmed and in a room that spawns — leaving to regain mana', {
+      mana: this.s.client?.vitals?.()?.mana?.value ?? null,
+      needs: 15, went_to_town: went, outcome,
+      to_room: toRoom, hops: best?.hops ?? null, preferred: best?.preferred ?? null,
+      why: 'create weapon needs 15 mana and mana barely moves while standing in a ' +
+           'fight. Sitting somewhere nothing spawns is the only way this character ' +
+           'gets armed again when it has no weapon, no money and no donor' });
+    if (went) {
+      this.progress('reached a refuge to regain mana while unarmed');
+      await this.hibernate('unarmed, resting for the 15 mana a weapon costs')
+                .catch(() => {});
+      return true;
+    }
+    // A REFUSAL THAT MOVED NOTHING IS NOT PROGRESS. Reporting progress() here would hide
+    // a permanently stuck body from every stall detector, which is the `retreat_to_inn`
+    // mistake: five callers reported progress for a retreat that returned {arrived:false}
+    // having moved nobody, and four characters died inside it.
+    this.noProgress('unarmed, could not reach a refuge: ' + outcome);
+    return false;
+  }
+
   // GO TO TOWN WHEN THE WILDERNESS HAS STOPPED WORKING.
   //
   // Called after a successful escape. Two flees is a bad patch; a third says this
@@ -15386,20 +15466,12 @@ export class Autopilot {
       // weapon anywhere, no shillings, and nothing able to sell them one. Four routes to a
       // weapon and all four shut.
       //
-      // So walk out first. townTripIfCornered already knows how to find the nearest room
-      // nothing huntable spawns in and hibernate there, which is exactly the errand — a
-      // character with nothing in its hands has no business in a monster room, and the
-      // walk is the cheapest of the four routes because it needs no money, no donor and
-      // no meeting.
+      // So walk out first — a character with nothing in its hands has no business in a
+      // monster room, and the walk is the cheapest of the four routes because it needs no
+      // money, no donor and no meeting. The argument, and the gate that used to make this
+      // unreachable, are on `leaveForManaWhileUnarmed`.
       if (!this.sanctuary()) {
-        const went = await this.townTripIfCornered().catch(() => false);
-        this.note('unarmed and in a room that spawns — leaving to regain mana', {
-          mana: this.s.client?.vitals?.()?.mana?.value ?? null,
-          needs: 15, went_to_town: !!went,
-          why: 'create weapon needs 15 mana and mana barely moves while standing in a ' +
-               'fight. Sitting somewhere nothing spawns is the only way this character ' +
-               'gets armed again when it has no weapon, no money and no donor' });
-        if (went) return HANDLED;
+        if (await this.leaveForManaWhileUnarmed()) return HANDLED;
       }
       // settle() returns {settled}, not a boolean — reading it as one would make this
       // fallback dead code, which is exactly the kind of silent no-op this branch exists
