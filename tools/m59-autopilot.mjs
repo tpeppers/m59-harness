@@ -5104,6 +5104,13 @@ export class Autopilot {
         why: 'no square beside it that this map says we can stand on',
         how: 'remembered by SQUARE for a few minutes, so a respawn in the same corner is ' +
              'skipped too and the next pass picks something reachable instead' });
+      // AND THE RETURN, WHICH IS THE ONLY LINE HERE THAT DOES ANYTHING. Everything above it
+      // is bookkeeping; without this the branch falls through to `approach.col` on a null
+      // `approach` and throws, in precisely the case the branch was added to handle. It was
+      // dropped by an edit that added the note ABOVE the return and replaced it rather than
+      // preceding it — a class of mistake no reviewer catches by reading the new lines,
+      // because the new lines are all correct.
+      return { closed: false, target: name, why: 'no square beside it that we can reach' };
     }
     this.doing = 'fighting';
     const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
