@@ -71,8 +71,18 @@ assert.match(broker, /await targeted\.ensureSnapshot\(\);/,
   'state-consuming tool calls fail rather than silently using an arbitrarily stale snapshot');
 assert.match(broker, /SNAPSHOT_OPTIONAL_TOOLS[\s\S]*'wait_for_event'/,
   'event waits must not materialize rich world state');
-assert.match(broker, /allocateKeeperBand\(FLEET\)/,
+assert.match(broker, /allocateKeeperBand\(FLEET, \{ reserved \}\)/,
   'keeper bands are assigned through the cross-process atomic registry');
+// AND AGAINST THE MACHINE, NOT AGAINST ONE GITIGNORED FILE. The registry is per-checkout, so
+// "first free band" meant first free IN HERE and two checkouts picked the same one — 2026-09-11,
+// shadow-ab and prod both on 9011, prod's 23 keepers displaced.
+assert.match(broker, /reservedElsewhere\(\)/,
+  'a new band is chosen against the claims of every other checkout, not only this one');
+// THE SCAN IS PAID ONLY WHEN THERE IS NOTHING TO LOOK UP. Walking the machine is a
+// `git worktree list` over sixty-nine checkouts; paying it on every boot to re-answer a settled
+// question would be its own defect, and a lookup hit must short-circuit it.
+assert.match(broker, /lookupKeeperBand\(FLEET\)[\s\S]{0,400}if \(held\) _keeperPortBand = held;/,
+  'an existing band is taken by pure lookup and never re-derived');
 assert.match(broker, /port <= portBand\.end/,
   'keeper allocation must stop at the assigned 100-port band edge');
 assert.match(broker, /refusing to borrow another fleet's range/,

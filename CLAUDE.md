@@ -1139,7 +1139,9 @@ is the only arrangement in which two people can both use this repository.
   four-hour-old evidence is worthless if the mover was rewritten in between; the clock does
   not know what changed and the commit does. Uncommitted movement code is its own epoch, so
   the half nobody has to remember works on its own. `node tools/m59-epoch.mjs` says which
-  epoch is in play and which commit declared it; the standard, and how to add a domain, is
+  epoch is in play and which commit declared it, and **`npm run test:movement` is the dozen
+  offline suites such a commit has to clear** — it baselines the already-red ones BY ASSERTION
+  NAME rather than by count, so a new failure is caught even when the total is unchanged; the standard, and how to add a domain, is
   in [`docs/m59-evidence.md`](docs/m59-evidence.md).
 
 - **The private server is on `127.0.0.1:15959`, not 5959.** It is a native Windows

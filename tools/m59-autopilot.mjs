@@ -785,6 +785,37 @@ function ratingOfCreature(name) {
   return hit?.attack_rating ?? null;
 }
 
+// WHICH PRECONDITION IS ACTUALLY MISSING FOR `create weapon`, AS A PURE FUNCTION.
+//
+// Extracted from `passArm` because the bug it fixes is a CLASSIFICATION bug and the
+// classification lived inside a six-hundred-line pass nothing could drive. The chain names
+// the preconditions this keeper knows about and calls the leftover case `neither` — and
+// `neither` used to be reported as `mana`, so a character with vigor, mana AND pack space all
+// sufficient was told it needed mana it already had.
+//
+// THAT IS NOT A COSMETIC DEFECT. `m59-supervise.mjs` skips any character refusing
+// UNARMED_NO_DONOR, on the correct reasoning that a character below the bar will arm itself
+// the moment mana returns. A character ABOVE the bar never leaves that skip. Measured on prod
+// 2026-09-19: Animal, 23 mana against a bar of 15, `stuck.seconds` 25122 — seven hours — and
+// `repeats` 22155. The false reason disabled the layer whose job was to catch it.
+//
+// So `neither` gets its own code, and the code is what the supervisor reads.
+export function unarmedBlocker({ vigor = null, mana = null, bulkFree = null,
+                                 vigorNeeded = 0, manaNeeded = 15, bulkNeeded = 0,
+                                 declinedWhy = null } = {}) {
+  const blocker = (vigor != null && vigor < vigorNeeded) ? 'vigor'
+                : (mana != null && mana < manaNeeded) ? 'mana'
+                : (bulkFree != null && bulkFree < bulkNeeded) ? 'room'
+                : 'neither';
+  const code = blocker === 'neither' ? 'UNARMED_CANNOT_CAST' : 'UNARMED_NO_DONOR';
+  // Only the two that come back on their own are a WAIT. Pack space does not regenerate and
+  // a policy refusal does not pass, so promising a wait for either is a promise nothing keeps.
+  const wait = blocker === 'vigor' ? 'VIGOR_FOR_CREATE_WEAPON'
+             : blocker === 'mana' ? 'MANA_FOR_CREATE_WEAPON'
+             : null;
+  return { blocker, code, wait, declinedWhy: blocker === 'neither' ? declinedWhy : null };
+}
+
 // ONE SOURCE-DERIVED ENGAGEMENT DECISION FOR EVERY KEEPER PATH.
 //
 // The capped-room cleanup path and the retaliation path used to implement this rule
@@ -5628,11 +5659,29 @@ export class Autopilot {
   // there" indistinguishably, which is what made 1,850 identical lines say nothing. A
   // failure that cannot name itself gets rediscovered from scratch.
   async leaveForManaWhileUnarmed() {
+    // A CHARACTER TRAINING UNARMED ON ITS OWN GROUND IS NOT LOOKING FOR A WEAPON.
+    //
+    // `makeWeapon` already declines for exactly this reason and with exactly this predicate —
+    // "training unarmed on its own ground: the bout disarms whatever this makes" — and the two
+    // must agree, or the pass refuses to conjure and then walks off to find the mana for a
+    // conjure it has already refused.
+    //
+    // Measured on prod 2026-09-19, minutes after the refuge fix shipped: Beaker at 25 mana and
+    // Animal at 23, both in room 27 with `trainingStyle: unarmed`, both noting "leaving to
+    // regain mana" on every pass. `create weapon` needs FIFTEEN. They had it and to spare.
+    // Being bare-handed was the ORDER, not a shortfall, and the whole premise of this rung —
+    // "this is how a character with no weapon, no money and no donor gets armed again" — is
+    // false for them. Room 27 is where they are supposed to be, punching things.
+    if (this.bareHandedByTraining()) return false;
     const searchedRecently = this.noUnarmedRefugeUntil && Date.now() < this.noUnarmedRefugeUntil;
     const best = searchedRecently ? null : this.nearestSanctuary({ maxHops: 3 });
     let went = false, outcome, toRoom = best?.room ?? null;
     if (searchedRecently) {
-      outcome = 'search_rate_limited';
+      // SAY IT ONCE PER BACKOFF, NOT ONCE PER PASS. The first version of this noted every
+      // pass while rate-limited, which reproduced the 1,850-repeat spam it was written to
+      // stop — with a better label on it, which is not the same as fixing it. Measured on
+      // prod within ten minutes of shipping.
+      return false;
     } else if (!best) {
       // Keep looking eventually, but not every pass: the flood is the expensive part.
       this.noUnarmedRefugeUntil = Date.now() + 120_000;
@@ -10345,6 +10394,11 @@ export class Autopilot {
   // The count is the interesting part anyway; the line is only there to date it.
   declinedCast(spell, why, detail = {}) {
     const name = String(spell || 'unknown').toLowerCase();
+    // KEEP THE LAST REASON, because the refusal that reports this to an operator is raised
+    // somewhere else entirely and had no way to see it. `UNARMED_NO_DONOR` spent seven hours
+    // telling an operator a character needed mana it already had, because all it could see
+    // was its own precondition chain and not the answer `makeWeapon` had actually given.
+    this.lastDeclinedCast = { spell: name, why: String(why ?? ''), at: Date.now() };
     const b = this.bookFor(name);
     b.declined[why] = (b.declined[why] || 0) + 1;
     const key = name + '/' + why;
@@ -15665,6 +15719,7 @@ export class Autopilot {
       // cannot work, which is the difference between a character waiting and one stuck.
       if (!this.knowsCreateWeapon()) {
         this.clearRefusal('UNARMED_NO_DONOR');
+        this.clearRefusal('UNARMED_CANNOT_CAST');
         // A standing condition, not an event: said once a minute rather than every pass.
         if (Date.now() - (this._noConjureNoteAt ?? 0) > 60_000) {
           this._noConjureNoteAt = Date.now();
@@ -15865,10 +15920,15 @@ export class Autopilot {
       // reason, which sends an operator after mana that was never short. The remedy for this
       // one is not waiting at all: nothing regenerates pack space.
       const bulkFreeNow = skills.carryCapacity(c)?.room_for?.bulk ?? null;
-      const blocker = vigorLeft < SPELL_EXERTION_VIGOR ? 'vigor'
-                    : manaNow < 15 ? 'mana'
-                    : (bulkFreeNow != null && bulkFreeNow < CONJURED_WEAPON_BULK) ? 'room'
-                    : 'neither';
+      const lastDecl = this.lastDeclinedCast;
+      const declFresh = lastDecl && lastDecl.spell === 'create weapon'
+                        && Date.now() - lastDecl.at < 120_000 ? lastDecl.why : null;
+      const classified = unarmedBlocker({
+        vigor: vigorLeft, mana: manaNow, bulkFree: bulkFreeNow,
+        vigorNeeded: SPELL_EXERTION_VIGOR, manaNeeded: 15, bulkNeeded: CONJURED_WEAPON_BULK,
+        declinedWhy: declFresh });
+      const blocker = classified.blocker;
+      let unblockedWhy = classified.declinedWhy;
       if (blocker === 'room') {
         // NOT A WAIT. Vigor and mana come back on their own; pack space does not, so a
         // `waitFor` here would be a promise nothing intends to keep. Say what has to happen.
@@ -15883,32 +15943,78 @@ export class Autopilot {
           expectedMs: Math.max(0, SPELL_EXERTION_VIGOR - vigorLeft) * 10_000,
           why: `unarmed and too tired to cast; ${vigorLeft} of the ` +
                `${SPELL_EXERTION_VIGOR} vigor create weapon needs (spell.kod:597)` });
-      } else {
+      } else if (blocker === 'mana') {
         this.waitFor('MANA_FOR_CREATE_WEAPON', {
           // Mana regenerates on its own timer; this is an estimate for a reader deciding
           // whether to look again, not a promise.
           expectedMs: Math.max(0, (15 - manaNow)) * 20_000,
           why: `unarmed with no donor; ${manaNow} of the 15 mana create weapon needs` });
+      } else {
+        // NOTHING IS SHORT, AND SAYING "MANA" HERE IS THE BUG THIS BRANCH EXISTS TO STOP.
+        //
+        // `blocker` enumerates the preconditions this function knows about and calls the
+        // leftover case 'neither'. It then fell into the mana branch, so a character with
+        // vigor, mana AND pack space all sufficient was told it needed mana — and `waitFor`
+        // promised a wait that nothing would ever end, because the thing it was waiting for
+        // had already happened.
+        //
+        // Measured on prod 2026-09-19: Animal, standing in the Bookmaker's Guild House with
+        // 23 mana against a bar of 15, `stuck.seconds` 25122 — SEVEN HOURS — and
+        // `repeats` 22155, refusing with "unarmed — 23 mana, needs 15 to make one". Beaker
+        // the same at 25 mana. The refusal was right that the cast was declined and wrong
+        // about every actionable word in it, which is worse than silence: an operator who
+        // reads it goes looking for mana.
+        //
+        // The real reason lives in `makeWeapon` — training unarmed on purpose, every
+        // conjurable banned, or a hoard of results it may not hold — and is now carried on
+        // `lastDeclinedCast`. A NO WAIT is issued deliberately: none of those three ends by
+        // waiting, so a `waitFor` would be the same false promise pointed at a new noun.
+        this.doneWaiting?.();
       }
-      this.refuse('UNARMED_NO_DONOR', {
+      // A DIFFERENT CODE WHEN NOTHING IS SHORT, BECAUSE THE SUPERVISOR READS CODES AS DATA.
+      //
+      // `m59-supervise.mjs` skips any character refusing UNARMED_NO_DONOR — "waiting for
+      // casting mana; churning the keeper restarts the decision, not the wait" — which is
+      // exactly right for a character below the bar and exactly wrong for one above it. So
+      // the false 'mana' reason did not merely mislead a reader: it matched the skip and
+      // DISABLED the one automated layer that would have acted. Animal sat in the
+      // Bookmaker's Guild House for seven hours and 22,155 repeats inside that skip.
+      //
+      // Structural rather than a better sentence, because the skip is a code test and a
+      // regex over prose; a new code cannot be pattern-matched back into the old branch.
+      this.refuse(classified.code, {
         faculty: 'work', blocking: true,
         why: blocker === 'room'
           ? `unarmed — no room to hold one: ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK}`
           : blocker === 'vigor'
           ? `unarmed — too tired to cast: ${vigorLeft} vigor, needs ${SPELL_EXERTION_VIGOR}`
-          : `unarmed — ${manaNow} mana, needs 15 to make one`,
+          : blocker === 'mana'
+          ? `unarmed — ${manaNow} mana, needs 15 to make one`
+          : `unarmed and NOTHING is short — ${vigorLeft} vigor, ${manaNow} mana, ` +
+            `${bulkFreeNow} bulk free, all sufficient. The cast is being declined` +
+            (unblockedWhy ? `: ${unblockedWhy}` : ' for a reason this pass could not read'),
         remedy: blocker === 'room'
           ? 'sell, drop or hand over something — waiting does not make pack space, and the ' +
             'weapon is deleted on hand-over rather than refused before the mana is spent'
           : blocker === 'vigor'
           ? 'let it rest or feed it — casting spends vigor, and vigor is what it is short of'
-          : 'hand it a weapon, or leave it alone until it can cast one',
+          : blocker === 'mana'
+          ? 'hand it a weapon, or leave it alone until it can cast one'
+          // WAITING IS NOT ON THE LIST, and that is the point. Every reason `makeWeapon`
+          // declines for with full bars is a POLICY reason, and no policy ends by waiting.
+          : 'nothing here is short, so waiting changes nothing. Either the order forbids the ' +
+            'cast (training unarmed, every conjurable banned, a hoard of unusable results) ' +
+            'or the character needs a weapon handed to it',
         retryAfterMs: 60_000 });
       this.noProgress(blocker === 'room'
         ? `unarmed -- ${bulkFreeNow} bulk free, needs ${CONJURED_WEAPON_BULK} to hold one`
         : blocker === 'vigor'
         ? `unarmed -- ${vigorLeft} vigor, needs ${SPELL_EXERTION_VIGOR} to cast one`
-        : `unarmed -- ${manaNow} mana, needs 15 to make one`);
+        : blocker === 'mana'
+        ? `unarmed -- ${manaNow} mana, needs 15 to make one`
+        // A DISTINCT SENTENCE, so `stallRepeats` counts it as its own loop and
+        // STALL_NO_LEVER declares THIS rather than a mana stall that is not happening.
+        : `unarmed -- nothing short, cast declined${unblockedWhy ? ': ' + unblockedWhy : ''}`);
       return HANDLED;
     }
 

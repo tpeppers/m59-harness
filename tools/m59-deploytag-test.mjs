@@ -18,7 +18,7 @@
 // process.argv at the top level and calls process.exit at the bottom — so a test that imported
 // it would execute the modes that move production. A pure decision buried in an un-importable
 // script is a decision nobody can check, which is how this survived to be cut.
-import { nextDeployTag, deployTagNumber } from './m59-deploytag.mjs';
+import { nextDeployTag, deployTagNumber, lightweightTagProblem } from './m59-deploytag.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, extra) => {
@@ -109,6 +109,51 @@ console.log('the tool is wired to this module rather than keeping its own copy')
   ok('and calls it', /nextDeployTag\(/.test(src));
   ok('and no longer walks upward to the first free slot',
      !/for \(let n = 2; git\(HARNESS, 'rev-parse'/.test(src));
+  // A PURE FUNCTION NOBODY CALLS IS A CHECK THAT CANNOT FIRE, and it passes its own unit tests
+  // perfectly while doing so. That is the same shape as `purpose` missing from a schema and
+  // switching off every keeper's audit for a year, so the wiring is asserted, not assumed.
+  ok('m59-deploy.mjs calls lightweightTagProblem', /lightweightTagProblem\(/.test(src));
+  ok('...and feeds it a tag KIND it actually read',
+     /cat-file', '-t'/.test(src) && /tagKind/.test(src),
+     'describe reports annotated and lightweight identically; cat-file is the only thing that separates them');
+}
+
+console.log('');
+console.log('A DEPLOY NOBODY CAN DATE IS A DEPLOY NOBODY CAN AUDIT');
+{
+  const lw = { ref: 'HEAD', tag: 'deploy-2026-09-18-9', kind: 'commit' };
+  const an = { ref: 'HEAD', tag: 'deploy-2026-09-18-8', kind: 'tag' };
+
+  ok('a lightweight deploy tag is a problem', !!lightweightTagProblem(lw));
+  ok('an ANNOTATED deploy tag is not', lightweightTagProblem(an) === null,
+     'without this the guard degenerates into "refuse every deploy"');
+
+  // THE REMEDY, NOT THE RULE. A refusal that only names the fault sends the reader away to
+  // look up what to do, which is the failure that produced the hand-cut tag in the first place.
+  const msg = lightweightTagProblem(lw);
+  ok('...and it names the tag', /deploy-2026-09-18-9/.test(msg));
+  ok('...and prints the command that fixes it', /git tag -a -f/.test(msg));
+  ok('...and offers the other way out', /annotated tag instead/.test(msg));
+
+  // IT MUST NOT BLOCK `--cut`. Cutting moves prod onto a NEW annotated tag, which IS the
+  // remedy; a guard that refused the cut would strand the tree on the very tag it objects to.
+  // `--cut` filters problems by these phrases, so the wording has to stay clear of them.
+  const CUT_REFUSES = /AHEAD|never seen|uncommitted|nobody else can fetch|asks not to be released|no reason/;
+  ok('the message does not trip the --cut refusal filter', !CUT_REFUSES.test(msg),
+     'a report that blocks the cut would leave prod stuck on the unauditable tag');
+
+  // ABSTAIN RATHER THAN ACCUSE. A guard that cannot read its input has not passed.
+  ok('an unreadable tag kind is not a finding', lightweightTagProblem({ ...lw, kind: null }) === null);
+  ok('nor is an unexpected kind', lightweightTagProblem({ ...lw, kind: 'blob' }) === null);
+
+  // SCOPE. Each of these is somebody else's problem and is already reported as one.
+  ok('a BRANCH checkout does not fire this', lightweightTagProblem({ ...lw, ref: 'main' }) === null,
+     'rule 1 already refuses a branch in prod');
+  ok('detached at no tag does not fire this', lightweightTagProblem({ ...lw, tag: null }) === null,
+     'the no-name case has its own line');
+  ok('a lightweight tag that is not a deploy tag is ignored',
+     lightweightTagProblem({ ...lw, tag: 'v1.2.3' }) === null,
+     'this tool has an opinion about DEPLOY tags only');
 }
 
 console.log('');

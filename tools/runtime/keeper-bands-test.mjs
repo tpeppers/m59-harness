@@ -120,6 +120,54 @@ async function runTests() {
       assert.deepEqual(allocated, { base: 9211, end: 9310, width: 100 });
     }
 
+    // A BAND THIS REGISTRY CANNOT SEE IS STILL TAKEN. The search picks the first band free in
+    // THIS file, and the file is per-checkout and gitignored, so two checkouts allocating a
+    // first named fleet both pick FIRST_NAMED_KEEPER_BAND_BASE and neither can tell. Measured
+    // 2026-09-11: shadow-ab and prod both held 9011 and prod's 23 keepers were displaced.
+    {
+      const path = file('reserved.json');
+      const reserved = [FIRST_NAMED_KEEPER_BAND_BASE,
+                        { base: FIRST_NAMED_KEEPER_BAND_BASE + 100,
+                          end: FIRST_NAMED_KEEPER_BAND_BASE + 199 }];
+      const allocated = allocateKeeperBand('alpha', { registryPath: path, reserved });
+      assert.equal(allocated.base, FIRST_NAMED_KEEPER_BAND_BASE + 200,
+        'both reserved bands are skipped — a bare base and a {base,end} range alike');
+      // AND THE RESERVATION IS NOT WRITTEN DOWN. Another checkout's claim is its own file's
+      // business; recording it here would make this registry lie about what it owns the moment
+      // that checkout moved, which is the failure one level up from the one being fixed.
+      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+        { alpha: FIRST_NAMED_KEEPER_BAND_BASE + 200 });
+    }
+    {
+      // SUPPLYING NOTHING MUST BEHAVE EXACTLY AS BEFORE, byte for byte — this option exists to
+      // be absent on every path that has not been taught about it yet.
+      const a = file('default-a.json'), b = file('default-b.json');
+      assert.deepEqual(allocateKeeperBand('x', { registryPath: a }),
+                       allocateKeeperBand('x', { registryPath: b, reserved: [] }));
+      assert.equal(allocateKeeperBand('y', { registryPath: a, reserved: undefined }).base,
+        FIRST_NAMED_KEEPER_BAND_BASE + 100, 'undefined is not a reservation');
+    }
+    {
+      // AN EXISTING FLEET KEEPS ITS BAND EVEN IF SOMEBODY ELSE NOW CLAIMS IT. Moving a live
+      // fleet's keepers out from under it is the thing `m59-bands.mjs` refuses to decide, and
+      // an allocator that silently renumbered on read would be making that call every start.
+      const path = file('existing.json');
+      writeRegistry(path, { held: FIRST_NAMED_KEEPER_BAND_BASE });
+      assert.equal(allocateKeeperBand('held',
+        { registryPath: path, reserved: [FIRST_NAMED_KEEPER_BAND_BASE] }).base,
+        FIRST_NAMED_KEEPER_BAND_BASE, 'a contended existing band is reported, never moved');
+    }
+    {
+      // Garbage in the reservation list is ignored rather than throwing: it arrives from a scan
+      // of other people's files, so it is untrusted input, and a malformed peer registry must
+      // not be able to stop this checkout starting a broker.
+      const path = file('junk-reserved.json');
+      assert.equal(allocateKeeperBand('z', {
+        registryPath: path,
+        reserved: [null, 'nine thousand', {}, { base: 'x' }, { base: 7, end: 3 }, -1],
+      }).base, FIRST_NAMED_KEEPER_BAND_BASE, 'unusable reservations are dropped, not obeyed');
+    }
+
     // Every entry is validated before either lookup or allocation.  No invalid file is
     // rewritten or treated as an empty registry.
     for (const [label, value, code] of [

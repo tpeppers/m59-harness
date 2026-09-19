@@ -1330,6 +1330,34 @@ transcript is REPORTED rather than silently counting as a run that never happene
   `retreat_to_inn` mistake, which hides a stuck body from every stall detector — and that the
   flee ladder is neither read nor written, because sharing that counter between the two callers
   is the tidy-up a later reader will be tempted into.)
+- `npm run test:movement` (**the dozen offline suites a `#movement` commit has to clear**,
+  `tools/m59-movement-suite.mjs`). It exists because a plain `&&` chain cannot run this list:
+  some of these suites are ALREADY RED — 12 assertions in `m59-needle-test` and 4 in
+  `m59-travelling-test` at origin/main, nobody's fault today — and a chain stops at the first
+  and reports nothing about the ten behind it. **The baseline is BY ASSERTION NAME, never by
+  count**, so a new failure fails the run even when the total is unchanged. That is the trap it
+  closes: on 2026-09-18 a session compared "84 passed, 2 failed" against a remembered "84
+  passed, 2 failed", concluded it had broken nothing, and had swapped two of somebody else's
+  failures for two of its own. It also prints `FIXED` for a baseline entry that has started
+  passing, because a known-red list nobody prunes becomes a list of things allowed to fail for
+  ever. `--list` shows what it runs and why; `--strict` fails on the baseline too.
+
+- `node tools/m59-blockedpath-test.mjs` (24 — **can a weak creature indefinitely block a fully
+  built character**). The southeast exit of The Flatlands (584) is walkable on ROW 35 ALONE for
+  columns 27-34 and pinches to exactly 64 fine units at columns 29-32, so everything leaving
+  that way goes single file. `tools/fixtures/flatlands-584-row35.json` is that corridor captured
+  off live keepers: an ant at the west mouth, a spider at r35c32, and TWO OF OUR OWN CHARACTERS
+  pinned between them. The suite requires one of the two acceptable answers to be available and
+  checks them in order. **Threading first** — and it measured something worth knowing: a body
+  dead centre in EVERY pinch column is still crossable, because an obstacle is one
+  MIN_NOMOVEON exclusion zone and `move.c` slides. **Clearing second** — two bodies per pinch
+  column, which is exactly the room's own spawn cap of 8, genuinely does shut it, and that is
+  the case `tradeInPlaceIfWedged` exists for. It then pins the band end to end: a built
+  character (ceiling 83) may clear the ant and the spider that were actually there, a
+  20-health service character may NOT be sent to fight a level-40 ant, and an unrecognised
+  creature is refused rather than assumed harmless — which matters because `Guardian of
+  Zjiria` killed four characters on 2026-09-19 and has no row in the creature table, so nothing
+  would ever clear one out of a doorway.
 - `node tools/m59-clearblockers-test.mjs` (17 — **killing the small thing standing in the way**.
   `tradeInPlaceIfWedged` is the one survival rung that does not answer being stuck with
   movement, and two gates made it unreachable in the state it exists for. `crowded()` was its
@@ -1345,3 +1373,62 @@ transcript is REPORTED rather than silently counting as a run that never happene
   out-of-band troll it merely bumped into, while below the flee line the band is dropped because
   there is no better option left. `tradeInPlaceWhenCrowded: false` restores the old precedence
   without a deploy, because the aggro argument for the veto is real.)
+## m59-noderails-test.mjs (140) — the node/exit rail bake
+
+Offline: no map, no socket, no room, no roster. The edge test and the router are injected, so
+every case runs against a synthetic world whose shape is known exactly. The suite exists
+because `m59-noderails.mjs` produces something that looks right when it is wrong — a list of
+coordinates with a plausible shape — and four of its cases are failures that actually shipped
+during the first afternoon of building it.
+
+**The two it exists for.** `railSpan`'s unvalidated branch is a chord nobody traced; if it
+were dropped, the rail would quietly shorten, and if the route were dropped, a reachable stone
+would read as unreachable. `arrivalOf` is the other: `fineRouter` succeeds when the closure
+holds a point whose SQUARE is the goal, and room 45's stone sits on a plateau with the valley
+directly under it — so a flood reaching the valley half of `r63c46` satisfies that test exactly
+as the plateau does. The case pins that reaching the square while 3,296 units below the
+footing is reported as `arrived_in_square: true, arrived_off_shelf: true`, which is the whole
+trap in two fields.
+
+**`fineEdge` and the slide that shipped a false finding.** The trace answers `moved: true,
+arrived: false, blocked: true, slid: true, destinationFloor: 1152` for an aim whose floor is
+4096, with the body twenty units from it — inside every distance test. The suite pins that the
+landing's SHELF decides, that the same slide landing on the aim's own shelf is still an edge
+(sliding is how you hug a wall), that `destinationFloor` is preferred to re-reading geometry
+the trace already resolved, and that an unreadable floor refuses rather than passing a guard
+that did not run.
+
+**What is written is what was checked.** One case drives a chord through a point the edge
+refuses and asserts the span is not settled as a chord and that whatever it emits verifies
+under the very edge it was cut with. Another walks a two-span leg and asserts no step exceeds
+one lattice cell, which is the joint a cursor-less loop leaves untraced. A third covers
+`cutRail`'s snapped seed, which reports `bridgeOk` and returns ok either way — on the real bake
+that joint was 21 units, under the mover's floor, and was the last surviving disagreement
+between the bake and `noderails check`.
+
+**An aim below the mover's minimum step is a no-op that reports success.** A synthetic zigzag —
+every step 64 units, every heading different, which is what a diagonal staircase looks like on
+the lattice — asserts that corners get merged when a traced chord allows it, that every interior
+aim clears `MIN_MOVER_STEP`, that a refusing edge cannot shorten a straight run (it needs no
+trace at all), and that where the merge is refused the short aim survives and is COUNTED rather
+than hidden.
+
+**`check` must be able to be green.** An unvalidated point was kept rather than proved, so the
+step into it refuses on every map for ever; a checker that counts that as drift is permanently
+red and stops being read. The suite pins that such a step is skipped and the skip reported, that
+real drift after the hole is still caught, and that the reported index is the position in the
+whole rail rather than in the run — splitting the verification restarts the count at zero, and
+a refusal in the second run would otherwise be reported as if it were in the first.
+
+**And the rest is about not re-deriving what the repository already knows.** The exits come from
+the bake's own anchors with `waypoint` entries dropped — in room 27 one of those IS the mana
+stone, so keeping them would bake a rail from the node to itself; two exits through one wall get
+two ids, because Western border of the Twisted Wood declares `east->586` and `east->597` on the
+same boundary. The stone list comes from `m59-stones.mjs` with its documented aliases, so
+`--node seafarer` and `--node peak` find the same room. `MANANODE_RANGE` is 3 and the box is
+judged per axis: the diagonal corner melds while a nearer square on one axis does not, which a
+euclidean radius scores wrong in both directions. And a refusal never says "unreachable" — it
+carries `bound` and `closure_squares`.
+
+**It should fail the day a rail is emitted that its own edge would refuse, or the day a slide
+onto a different shelf is accepted as a step.**

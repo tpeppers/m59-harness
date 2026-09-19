@@ -817,7 +817,18 @@ async function round(n) {
     // is not accumulating.
     //
     // The keeper arms itself and moves on the moment it reaches 15. Leave it be.
-    if (refused('UNARMED_NO_DONOR') || r.waiting_on?.code === 'MANA_FOR_CREATE_WEAPON' ||
+    // AND NOT WHEN NOTHING IS SHORT. `UNARMED_CANNOT_CAST` is the keeper saying vigor, mana
+    // and pack space are ALL sufficient and the cast is being declined for a policy reason —
+    // training unarmed, every conjurable banned, a hoard of results it may not hold. None of
+    // those ends by waiting, so the sentence below is false for it and the skip is the thing
+    // keeping it stuck. Measured: Animal, 23 mana against a bar of 15, seven hours and 22,155
+    // repeats inside this branch because the keeper reported the wrong blocker and this line
+    // believed it.
+    if (refused('UNARMED_CANNOT_CAST')) {
+      console.log(`   ${r.character} is unarmed with NOTHING short — not a wait: ` +
+                  reason.slice(0, 80));
+      // Falls through deliberately: this one is a candidate for the bounded restart below.
+    } else if (refused('UNARMED_NO_DONOR') || r.waiting_on?.code === 'MANA_FOR_CREATE_WEAPON' ||
         /needs \d+ to make one|resting for the mana|regain mana|unarmed —/i.test(reason)) {
       console.log(`   leaving ${r.character} alone: ${reason.slice(0, 70)} ` +
                   '(waiting for casting mana — churning the keeper restarts the decision, not the wait)');
@@ -1007,6 +1018,22 @@ const ALMONER_SHARE = Number(arg('almoner-share', 6));
 let almonerAt = 0;
 let almonerBusy = false;
 
+// THE GATE, AS A PURE FUNCTION, so the decision can be tested without spawning an errand.
+//
+// `out` is the sweep's own stdout. Absence of a "recovered N" sentence counts as DRY: a sweep
+// that did not get far enough to say what it recovered is not evidence that it recovered
+// something, and defaulting the other way is how a dry sweep keeps its short interval for ever.
+export function reclaimVerdict(out, { dry = 0, baseMs = 180_000, maxMs = 1_800_000 } = {}) {
+  const text = String(out ?? '');
+  const m = /recovered\s+(\d+)\s+item stack/i.exec(text);
+  const got = m ? Number(m[1]) : 0;
+  const unroutable = (text.match(/nobody can route there/gi) || []).length;
+  if (got > 0) return { got, unroutable, paid: true, dry: 0, everyMs: baseMs };
+  const next = dry + 1;
+  return { got, unroutable, paid: false, dry: next,
+           everyMs: Math.min(maxMs, baseMs * 2 ** Math.min(next, 8)) };
+}
+
 // GO BACK FOR THE PACK BEFORE SOMEBODY ELSE DOES.
 //
 // A death drops the character's whole inventory on the floor. The corpse decays; THE ITEMS
@@ -1032,20 +1059,52 @@ let almonerBusy = false;
 // own outfitPair once did.
 const RECLAIM_EVERY_MS = Number(arg('reclaim-every', 180)) * 1000;
 const RECLAIM_SITES = Number(arg('reclaim-sites', 6));
+// THE SWEEP IS GATED ON WHETHER IT IS STILL PAYING.
+//
+// The argument above for a SHORT interval is sound and stays: drop value decays, so a sweep
+// that arrives an hour after a death arrives after the world has swept up. What it did not
+// account for is a sweep that can never reach the site at all.
+//
+// Measured on prod 2026-09-19, two consecutive rounds: 1,419 recorded death sites, the newest
+// six tried each time, TWELVE attempts, "nobody can route there" on every one, `recovered 0
+// item stack(s)` both rounds. The newest sites were in 598 and 599 — the rooms this fleet
+// dies in — and those are precisely the rooms nothing can plan a route to. Deaths concentrate
+// where routing fails, so the sites most worth recovering are the ones least reachable, and
+// the sweep will keep scoring zero for as long as that is true.
+//
+// So: back off geometrically while it is dry, and reset the moment it recovers anything. This
+// is deliberately NOT a room ban — a room becomes routable when a bake is repaired or a body
+// moves, and a permanent skip would outlive the reason for it. Sweeps are cheap to retry and
+// the only thing being conserved is how often.
+//
+// `--reclaim-every 0` switches it off outright, for an operator who would rather not spend
+// couriers on it at all.
+const RECLAIM_MAX_MS = Number(arg('reclaim-max', 1800)) * 1000;   // 30 min ceiling
 let reclaimAt = 0;
 let reclaimBusy = false;
+let reclaimDry = 0;            // consecutive sweeps that recovered nothing
+let reclaimEveryMs = RECLAIM_EVERY_MS;
 
 async function reclaimDrops() {
-  if (reclaimBusy || Date.now() - reclaimAt < RECLAIM_EVERY_MS) return;
+  if (RECLAIM_EVERY_MS <= 0) return;                       // switched off
+  if (reclaimBusy || Date.now() - reclaimAt < reclaimEveryMs) return;
   reclaimBusy = true;
   reclaimAt = Date.now();
   const { spawn } = await import('node:child_process');
   const script = fileURLToPath(new URL('./m59-reclaim.mjs', import.meta.url));
-  console.log(`   reclaiming drops (m59-reclaim.mjs --sites ${RECLAIM_SITES})`);
+  console.log(`   reclaiming drops (m59-reclaim.mjs --sites ${RECLAIM_SITES})` +
+              (reclaimDry ? `  [${reclaimDry} dry sweep(s), every ${Math.round(reclaimEveryMs / 1000)}s]` : ''));
+  let out = '';
   try {
     await new Promise(res => {
+      // PIPED RATHER THAN INHERITED, so this process can read the outcome it is gating on —
+      // and forwarded verbatim, because the sweep's own lines are what an operator reads.
       const p = spawn(process.execPath, [script, '--sites', String(RECLAIM_SITES),
-                                         '--port', String(PORT), ...DRY_ARGS], { windowsHide: true, stdio: 'inherit' });
+                                         '--port', String(PORT), ...DRY_ARGS],
+                      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const tee = (chunk) => { const t = String(chunk); out += t; process.stdout.write(t); };
+      p.stdout?.on('data', tee);
+      p.stderr?.on('data', tee);
       p.on('exit', res);
       // SIGTERM rather than the default kill, so the errand's own signal handler runs and
       // revives its couriers. That is the whole reason it has one.
@@ -1056,6 +1115,23 @@ async function reclaimDrops() {
   } finally {
     reclaimBusy = false;
   }
+  // WHAT IT RECOVERED, READ FROM ITS OWN SENTENCE. Absent means the sweep did not get far
+  // enough to say, which is not evidence that it paid — so it counts as dry.
+  const was = reclaimEveryMs;
+  const v = reclaimVerdict(out, { dry: reclaimDry, baseMs: RECLAIM_EVERY_MS, maxMs: RECLAIM_MAX_MS });
+  const { got, unroutable } = v;
+  reclaimDry = v.dry;
+  reclaimEveryMs = v.everyMs;
+  if (v.paid) {
+    if (was !== RECLAIM_EVERY_MS)
+      console.log(`   reclaim paid again (${got} stack(s)) — interval back to ${RECLAIM_EVERY_MS / 1000}s`);
+    return;
+  }
+  if (reclaimEveryMs !== was)
+    console.log(`   reclaim recovered nothing (${reclaimDry} in a row` +
+                (unroutable ? `, ${unroutable} site(s) unroutable` : '') +
+                `) — backing off to every ${Math.round(reclaimEveryMs / 1000)}s` +
+                (reclaimEveryMs >= RECLAIM_MAX_MS ? ' (ceiling)' : ''));
 }
 
 async function spreadReagents(rows) {

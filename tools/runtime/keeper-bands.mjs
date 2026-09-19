@@ -286,7 +286,40 @@ function allocationOptions(options) {
     throw new RangeError('lockTimeoutMs must be an integer between 0 and 60000');
   if (!Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1 || retryDelayMs > 1000)
     throw new RangeError('retryDelayMs must be an integer between 1 and 1000');
-  return { path, lockTimeoutMs, retryDelayMs };
+  return { path, lockTimeoutMs, retryDelayMs, reserved: normalizeReserved(options.reserved) };
+}
+
+/**
+ * BANDS THIS REGISTRY CANNOT SEE — the whole reason a collision is possible at all.
+ *
+ * The search below picks the first band free IN THIS FILE, and this file is per-checkout and
+ * gitignored. So two checkouts allocating a first named fleet both pick
+ * `FIRST_NAMED_KEEPER_BAND_BASE`, neither can tell, and the loser's keepers are commanded by
+ * the winner's broker. Measured 2026-09-11: a lab worktree's `shadow-ab` and the deploy's
+ * `prod` both held 9011, prod's 23 keepers were displaced, and `m59-which` reported "nothing is
+ * holding a fleet" while three of prod's characters answered on 9013, 9022 and 9028.
+ *
+ * `m59-bands.mjs` has been able to SEE all of that since the day it was written — it walks
+ * every checkout on the machine and probes the ports — and it deliberately allocates nothing,
+ * because repairing a collision means deciding which fleet goes down. Supplying the view is not
+ * repairing anything, so this is the join: the detector hands over what it knows, and the
+ * allocator simply does not choose those bands.
+ *
+ * Accepts bare bases (`9011`) or ranges (`{base, end}`), because the detector speaks ranges and
+ * the registry speaks bases, and making the caller convert is how the two drift.
+ */
+export function normalizeReserved(reserved) {
+  if (reserved == null) return [];
+  const out = [];
+  for (const r of reserved) {
+    const base = Number(typeof r === 'object' && r !== null ? r.base : r);
+    if (!Number.isSafeInteger(base) || base < 1) continue;
+    const end = Number(typeof r === 'object' && r !== null && r.end != null
+      ? r.end : base + KEEPER_BAND_WIDTH - 1);
+    if (!Number.isSafeInteger(end) || end < base) continue;
+    out.push({ base, end });
+  }
+  return out;
 }
 
 /**
@@ -332,7 +365,9 @@ export function allocateKeeperBand(fleet, options = {}) {
            base += KEEPER_BAND_WIDTH) {
         const end = base + KEEPER_BAND_WIDTH - 1;
         const overlaps = [...registry.entries.values()].some(existingBase =>
-          base <= existingBase + KEEPER_BAND_WIDTH - 1 && existingBase <= end);
+          base <= existingBase + KEEPER_BAND_WIDTH - 1 && existingBase <= end)
+          // AND THE BANDS THIS FILE CANNOT SEE. Same overlap test, other checkouts' claims.
+          || normalized.reserved.some(r => base <= r.end && r.base <= end);
         if (!overlaps) {
           selected = base;
           break;
@@ -340,7 +375,10 @@ export function allocateKeeperBand(fleet, options = {}) {
       }
       if (selected === null) {
         throw registryError('NO_AVAILABLE_KEEPER_BAND',
-          `no complete ${KEEPER_BAND_WIDTH}-port keeper band remains within 1-${MAX_PORT}`,
+          `no complete ${KEEPER_BAND_WIDTH}-port keeper band remains within 1-${MAX_PORT}` +
+          (normalized.reserved.length
+            ? ` (${registry.entries.size} claimed here, ` +
+              `${normalized.reserved.length} reserved by other checkouts)` : ''),
           { path: normalized.path });
       }
       registry.entries.set(name, selected);
