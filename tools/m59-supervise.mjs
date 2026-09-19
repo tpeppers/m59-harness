@@ -817,7 +817,18 @@ async function round(n) {
     // is not accumulating.
     //
     // The keeper arms itself and moves on the moment it reaches 15. Leave it be.
-    if (refused('UNARMED_NO_DONOR') || r.waiting_on?.code === 'MANA_FOR_CREATE_WEAPON' ||
+    // AND NOT WHEN NOTHING IS SHORT. `UNARMED_CANNOT_CAST` is the keeper saying vigor, mana
+    // and pack space are ALL sufficient and the cast is being declined for a policy reason —
+    // training unarmed, every conjurable banned, a hoard of results it may not hold. None of
+    // those ends by waiting, so the sentence below is false for it and the skip is the thing
+    // keeping it stuck. Measured: Animal, 23 mana against a bar of 15, seven hours and 22,155
+    // repeats inside this branch because the keeper reported the wrong blocker and this line
+    // believed it.
+    if (refused('UNARMED_CANNOT_CAST')) {
+      console.log(`   ${r.character} is unarmed with NOTHING short — not a wait: ` +
+                  reason.slice(0, 80));
+      // Falls through deliberately: this one is a candidate for the bounded restart below.
+    } else if (refused('UNARMED_NO_DONOR') || r.waiting_on?.code === 'MANA_FOR_CREATE_WEAPON' ||
         /needs \d+ to make one|resting for the mana|regain mana|unarmed —/i.test(reason)) {
       console.log(`   leaving ${r.character} alone: ${reason.slice(0, 70)} ` +
                   '(waiting for casting mana — churning the keeper restarts the decision, not the wait)');
