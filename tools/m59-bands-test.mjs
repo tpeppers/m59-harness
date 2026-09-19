@@ -6,7 +6,14 @@
 // getting right. The one worth naming: `boscontrol` at 9311 in five checkouts is five
 // checkouts AGREEING, and reporting it as ten collisions buried the one conflict that had
 // just taken prod down. A detector that cries wolf is a detector somebody deletes.
-import { claimsFrom, collisions, overlaps, verdict, bandOf } from './m59-bands.mjs';
+import { claimsFrom, collisions, overlaps, verdict, bandOf,
+         reservedElsewhere, firstFreeBand } from './m59-bands.mjs';
+// Temp checkouts, written here and read here: the header's "reads no registry off this
+// machine" still holds, and a fake registry is the only way to test the cross-checkout view
+// without depending on whatever else happens to be on the disk today.
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) pass++; else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -139,6 +146,61 @@ eq(claimsFrom(R1, {}).claims, [], 'an empty registry yields no claims');
 {
   const c = collisions(claims([R1, { a: 9011, b: 9511 }], [R2, { c: 9011, d: 9511 }]));
   ok(c.length >= 2 && c[0].from <= c[1].from, 'conflicts come out lowest port first');
+}
+
+
+// ---- THE VIEW THE ALLOCATOR CANNOT BUILD FOR ITSELF -----------------------------------------
+{
+  // `substrate/keeper-bands.json` is per-checkout and gitignored, so `allocateKeeperBand` picks
+  // the first band free IN ITS OWN FILE. Two checkouts standing up a first named fleet both pick
+  // the same base and neither can tell - 2026-09-11, shadow-ab and prod both on 9011, prod's 23
+  // keepers displaced. This tool could always SEE that; supplying the view is the join.
+  const root = mkdtempSync(join(tmpdir(), 'm59-bands-'));
+  const mk = (name, json) => {
+    const co = join(root, name);
+    mkdirSync(join(co, 'substrate'), { recursive: true });
+    writeFileSync(join(co, 'substrate', 'keeper-bands.json'), JSON.stringify(json));
+    return co;
+  };
+  const mine = mk('mine', { prod: 9511 });
+  const other = mk('other', { shadow: 9111, arena: 9211 });
+  const broken = mk('broken', {});
+  writeFileSync(join(broken, 'substrate', 'keeper-bands.json'), '{ not json');
+
+  const seen = reservedElsewhere({ exclude: mine, checkouts: [mine, other, broken] });
+  ok(seen.length === 2, 'the other checkout two claims are reported');
+  ok(!seen.some(r => r.fleet === 'prod'), 'and MY OWN claims are not - re-reserving them would ' +
+     'make an existing fleet look contended with itself');
+  ok(seen.every(r => Number.isSafeInteger(r.base) && r.end === r.base + 99),
+     'each claim carries a full 100-port range, which is what the allocator overlaps against');
+  ok(seen.some(r => r.registry && r.fleet), 'and names the file and fleet, so a refusal can say where');
+  // AN UNREADABLE STRANGER MUST NOT STOP A BROKER STARTING. The input is other people's files on
+  // a machine that had sixty-nine checkouts; a malformed one is a question, not a claim.
+  ok(true, 'a malformed peer registry is skipped rather than thrown');
+
+  let threw = false;
+  try { reservedElsewhere({ exclude: mine, checkouts: ['/no/such/place'] }); } catch { threw = true; }
+  ok(!threw, 'a checkout that does not exist yields nothing rather than an exception');
+}
+
+// ---- firstFreeBand: the same question the allocator asks, asked out loud ---------------------
+{
+  const claims = [{ base: 9011, end: 9110 }, { base: 9111, end: 9210 }];
+  ok(firstFreeBand({ reserved: claims, from: 9011 }).base === 9211,
+     'it skips every claimed band and returns the first gap');
+  ok(firstFreeBand({ reserved: [], mine: [{ base: 9011, end: 9110 }], from: 9011 }).base === 9111,
+     'this own checkout claims are skipped too - both lists are taken');
+  // A BAND NOBODY CLAIMS BUT SOMEBODY IS SITTING ON IS NOT FREE. That is the stale-registry
+  // case exactly: the file says one thing, the ports say another, and the ports are what a
+  // broker actually talks to.
+  ok(firstFreeBand({ reserved: [], occupied: [{ port: 9050 }], from: 9011 }).base === 9111,
+     'an answering port takes the band it sits in out of the running');
+  ok(firstFreeBand({ reserved: [], occupied: [9050], from: 9011 }).base === 9111,
+     '...given as a bare port number too');
+  ok(firstFreeBand({ reserved: [9011], from: 9011 }).base === 9111,
+     'a bare base is read as a full band, because the registry speaks bases and this speaks ranges');
+  ok(firstFreeBand({ reserved: [{ base: 1, end: 65535 }], from: 9011 }) === null,
+     'and when nothing is free it says so rather than proposing a band off the end');
 }
 
 console.log(`\nm59-bands: ${pass} assertion(s) passed, ${fail} failed`);
