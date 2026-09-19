@@ -284,7 +284,30 @@ if (RAIL && !DRY) {
                 `with m59-railcut.`);
     process.exit(2);
   }
-  console.log(`boarding at segment ${d.i}, ${(d.d / F).toFixed(1)} square(s) off`);
+  // AND BOARDING MEANS STARTING THERE, NOT MERELY SAYING SO.
+  //
+  // The check above works out WHERE on the line the body is and the follow loop then began at
+  // waypoint 1 regardless — so a body that boarded two thirds of the way along was immediately
+  // asked for the rail's first point and declared to have come off. Measured on 589,
+  // 2026-09-19: `boarding at segment 19, 0.8 square(s) off` followed one second later by
+  // `CAME OFF at waypoint 1/169: asked r18c46 ... 3.0 squares off`. Both lines are correct and
+  // they are about different places; printing the first without acting on it is the whole bug.
+  //
+  // The aims before the boarding point are dropped. They are behind the body, and walking back
+  // to the start of a line you are already standing on is the same wasted travel `aimAhead` was
+  // written to stop.
+  if (d.i > 0) {
+    const leg = railLegs.find(l => l.kind === 'walk');
+    if (leg && d.i < leg.waypoints.length - 1) {
+      leg.waypoints = leg.waypoints.slice(d.i);
+      console.log(`boarding at segment ${d.i}, ${(d.d / F).toFixed(1)} square(s) off — ` +
+                  `${leg.waypoints.length} aim(s) remain on this leg`);
+    } else {
+      console.log(`boarding at segment ${d.i}, ${(d.d / F).toFixed(1)} square(s) off`);
+    }
+  } else {
+    console.log(`boarding at segment ${d.i}, ${(d.d / F).toFixed(1)} square(s) off`);
+  }
 }
 if (!plan.ok) { console.log(`no plan: ${plan.why}`); process.exit(2); }
 console.log(`plan: ${plan.jumps} jump(s), ${total} waypoint(s), all_declared=${plan.all_declared}`);
@@ -342,6 +365,26 @@ for (const [li, leg] of plan.legs.entries()) {
                 `${ok ? 'JUMPED' : 'REFUSED'}  now r${pos.row}c${pos.col} hp ${pos.hp}` +
                 (ok ? '' : `\n           ${j?._error ?? j?.reason ?? JSON.stringify(j).slice(0, 200)}`));
     if (!ok) { came_off = { leg: li + 1, kind: 'jump' }; break; }
+    // A DECLARED JUMP *IS* A FALL, AND THE FALL DETECTOR HAS TO BE TOLD SO.
+    //
+    // `lastFloor` is the body's own floor one waypoint ago, and the next walk leg trips on a
+    // drop of more than 1000 from it. A jump lands thousands below its take-off BY
+    // CONSTRUCTION, so leaving `lastFloor` on the take-off's shelf makes the first waypoint
+    // after every successful jump read as falling off a ledge.
+    //
+    // MEASURED on the Ancient Place's east rail, 2026-09-19: leg 1 walked 137 waypoints, the
+    // declared r40c33 -> r40c32 JUMPED and the body arrived on the 7040 shelf exactly where
+    // the rail wanted it — and leg 3 immediately reported `FELL OFF at waypoint 1/81: floor
+    // 8640 -> 7040 ... 0.0 squares away but 0 below/above it`. Nought point nought squares
+    // away is the guard saying, in its own output, that nothing had gone wrong.
+    //
+    // So the landing becomes the new reference. The guard still catches a real fall on the far
+    // side, because the very next waypoint is measured against where the body actually is.
+    {
+      const lx = pos?.x != null ? toClient(pos.x) : null;
+      const landed = lx == null ? null : R.floorAt(lx, toClient(pos.y));
+      if (landed != null) lastFloor = landed;
+    }
     continue;
   }
   for (const [wi, wp] of leg.waypoints.entries()) {
