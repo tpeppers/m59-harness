@@ -5129,6 +5129,19 @@ export class Autopilot {
         // is the commonest one and it walks away by itself, so forgetting it after one try
         // would ban a perfectly good creature for five minutes.
         this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
+        // A BAN THAT LEAVES NO TRACE IS A BAN NOBODY CAN INVESTIGATE, and this site laid
+        // one down silently while the `!approach` site above announced itself. That
+        // asymmetry cost a real diagnosis on 2026-09-18: a postmortem sweep for "ignoring
+        // prey we cannot walk to" came back 0 of 16 and was read as clearing this feature,
+        // when it only ever covered the noisy half — every ban taken through a terminal
+        // movement failure was invisible to the same query. The two sites ban the same
+        // thing for different reasons and both must say so.
+        this.note('ignoring prey we cannot walk to', {
+          target: name, at: `r${foe.row}c${foe.col}`, reason: terminal.why ?? 'terminal movement',
+          why: 'the walk to it failed for a reason no other heading can fix',
+          how: 'remembered by SQUARE for a few minutes, like the no-approach case — but ' +
+               'arrived at through the MOVER rather than the geometry, which is the half ' +
+               'that used to be silent' });
         return { closed: false, target: name, ...terminal };
       }
       return { closed: false, target: name, why: out.reason || 'could not get to it' };

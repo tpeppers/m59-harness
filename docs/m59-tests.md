@@ -809,7 +809,7 @@ the records it describes.
   a sixteen-character ceiling that was ours rather than the server's, and a hyphen we
   admitted and the server refuses, which turned a readable error into a bare
   `BP_CHARINFO_NOT_OK` with nothing in it) and
-  `node tools/m59-preyreach-test.mjs` (17 — **prey the keeper has proved it cannot walk to**.
+  `node tools/m59-preyreach-test.mjs` (20 — **prey the keeper has proved it cannot walk to**.
   `closeOnQuarry` always detected it and never remembered it, so the next pass ranked the same
   creature nearest and walked at it again, for ever, while every board read `hunting`. The case
   it pins hardest is the KEY: the memory is a SQUARE, not an object id, because an id is

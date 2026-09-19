@@ -134,5 +134,42 @@ console.log('--- closeOnQuarry RETURNS on unreachable prey, and does not walk at
      k.unreachablePreyIn(1016)?.has('4,9') === true);
 }
 
+console.log('');
+console.log('--- EVERY ban announces itself, because a silent one cannot be investigated ---');
+{
+  // 2026-09-18: a postmortem sweep for "ignoring prey we cannot walk to" came back 0 of 16
+  // and was read as clearing this feature. It only ever covered the no-approach site — the
+  // terminal-movement site banned squares silently, so the query could not see the half that
+  // was likelier to be firing in a crowded room. The check was sound and the instrument had
+  // a hole in it. This pins that both sites speak.
+  const mk = (approach, walkResult) => {
+    const k = keeper();
+    const foe = { id: 7, col: 4, row: 9, nameRsc: 1 };
+    const notes = [];
+    k.s = {
+      name: 'test',
+      client: { room: { objects: new Map([[7, foe]]) }, rsc: { get: () => 'mummy' } },
+      world: { room: { num: 1016 }, approachSquare: () => approach },
+      walkTo: async () => walkResult,
+    };
+    k.note = (what) => notes.push(what);
+    k.terminalMovement = () => ({ why: 'start_has_no_floor', terminal: true });
+    return { k, notes };
+  };
+
+  const a = mk(null, { arrived: true });
+  await a.k.closeOnQuarry({ id: 7 });
+  ok('the no-approach site announces the ban',
+     a.notes.includes('ignoring prey we cannot walk to'));
+
+  const b = mk({ col: 5, row: 9, steps: 1 }, { arrived: false, reason: 'start_has_no_floor' });
+  await b.k.closeOnQuarry({ id: 7 });
+  ok('and so does the TERMINAL-movement site, which used to be silent',
+     b.notes.includes('ignoring prey we cannot walk to'),
+     `notes seen: ${JSON.stringify(b.notes)}`);
+  ok('and it banned the square too, so note and ban agree',
+     b.k.unreachablePreyIn(1016)?.has('4,9') === true);
+}
+
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
