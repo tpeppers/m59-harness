@@ -9,7 +9,6 @@
 // and `y` in protocol/KOD units (64 per square). Positional native AGENT, ENTITY,
 // and EXIT records preserve col before row as part of their versioned wire contract.
 
-import { rtsSafeSpellRule } from './m59-rts-safety.mjs';
 
 export const RTS_SCHEMA = 'm59-rts/v1';
 export const RTS_NATIVE_VERSION = 7;
@@ -60,7 +59,11 @@ function normalizeSpell(value) {
   const id = integer(row.id);
   const name = text(row.name, 160);
   const targets = integer(row.targets);
-  if (id === null || !name || !rtsSafeSpellRule(name, targets)) return null;
+  // THE SPELL ALLOWLIST WAS RETIRED 2026-09-19 — see the header of m59-rts-safety.mjs. This
+  // filter used to drop every spell but create food, create weapon and blink, so an RTS spell
+  // list showed three entries however many the character really knew. It now reports them all,
+  // and only a malformed row is dropped.
+  if (id === null || !name || !Number.isSafeInteger(targets) || targets < 0) return null;
   return {
     id,
     name,

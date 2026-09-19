@@ -7,27 +7,36 @@ import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
+import { rtsCastArityOk } from './m59-rts-safety.mjs';
 import { standToAct } from './m59-skills.mjs';
 
-assert.ok(rtsSafeSpellRule('create food', 0));
-assert.ok(rtsSafeSpellRule('CREATE WEAPON', 0));
-assert.ok(rtsSafeSpellRule('blink', 0));
-assert.equal(rtsSafeSpellRule('earthquake', 0), null,
-  'zero-target Earthquake is not safe merely because it has no explicit target');
-assert.equal(rtsSafeSpellRule('resist magic', 1), null,
-  'target spells remain fail-closed until separately audited');
-assert.equal(rtsSafeSpellRule('create weapon', 1), null,
-  'an allowlisted name with a changed wire arity fails closed');
-assert.equal(rtsSpellTargetAllowed({ target_mode: 'pve' }, {
-  targetId: 900, selfId: 501, targetIsPlayer: true,
-}), false, 'a PvE spell rule refuses a server-classified player');
-assert.equal(rtsSpellTargetAllowed({ target_mode: 'pve' }, {
-  targetId: 900, selfId: 501, targetIsPlayer: null,
-}), false, 'a PvE spell rule refuses an unknown object kind');
-assert.equal(rtsSpellTargetAllowed({ target_mode: 'pve' }, {
-  targetId: 900, selfId: 501, targetIsPlayer: false,
-}), true, 'a PvE spell rule accepts only an exact non-player classification');
+// THE SPELL ALLOWLIST WAS RETIRED 2026-09-19 on the operator's instruction: "we've progressed far
+// enough we can cast on other players at will." What this block used to pin — that Earthquake was
+// refused for having no explicit target, that every targeted spell was fail-closed, that a PvE
+// rule refused a server-classified player — is gone deliberately, not by accident, and
+// m59-rts-safety.mjs's header records what was given up.
+//
+// WHAT IS LEFT IS PACKET SHAPE, AND THAT IS WHAT THIS PINS NOW. The server states each spell's
+// target count; sending any other number is malformed however harmless the spell is.
+assert.equal(rtsCastArityOk(0, false), true, 'a zero-target spell sent with no target');
+assert.equal(rtsCastArityOk(0, true), false, 'a zero-target spell may not carry a target');
+assert.equal(rtsCastArityOk(1, true), true, 'a one-target spell sent with a target');
+assert.equal(rtsCastArityOk(1, false), false, 'a one-target spell may not be sent bare');
+// A PLAYER TARGET IS NOW ALLOWED, and that is the whole point of the retirement. The arity check
+// does not know or care what kind of object the target is.
+assert.equal(rtsCastArityOk(1, true), true, 'nothing here inspects whether the target is a player');
+// A missing or nonsense arity is still refused: it means the spell list was not read, and a
+// guessed arity is exactly the malformed packet this survives to prevent.
+assert.equal(rtsCastArityOk(undefined, true), false, 'an unknown arity is refused, not guessed');
+assert.equal(rtsCastArityOk(-1, true), false, 'a negative arity is refused');
+assert.equal(rtsCastArityOk(1.5, true), false, 'a non-integer arity is refused');
+
+// STRIP COMMENTS BEFORE ASSERTING AN ABSENCE. Both the broker and the keeper deliberately
+// describe the retired spell allowlist in their comments — that account is the point of keeping
+// it — so a doesNotMatch over the raw source fails on the documentation rather than on a
+// reinstated gate. These scan what executes.
+const codeOnly = (src) => src.split('\n')
+  .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
 
 let standPackets = 0;
 await assert.rejects(() => standToAct({
@@ -228,10 +237,14 @@ try {
   assert.ok(castPolicyStart >= 0 && castPolicyEnd > castPolicyStart,
     'shared broker cast-selection policy is present');
   const castPolicySource = source.slice(castPolicyStart, castPolicyEnd);
-  assert.match(castPolicySource, /rtsSafeSpellRule[(]known[.]name, count[)]/,
-    'broker repeats the shared safe-spell check before either dispatch path');
-  assert.match(castPolicySource, /not classified as safe for RTS casting/,
-    'broker explicitly refuses Earthquake and every other unclassified spell');
+  assert.match(castPolicySource, /rtsCastArityOk[(]count, hasTarget[)]/,
+    'broker checks the server-stated arity before either dispatch path');
+  assert.doesNotMatch(codeOnly(castPolicySource), /not classified as safe for RTS casting/,
+    'the retired allowlist has not crept back into the broker cast policy');
+  assert.doesNotMatch(codeOnly(castPolicySource), /rtsSafeSpellRule|rtsSpellTargetAllowed/,
+    'and neither retired predicate is called there any more');
+  assert.match(castPolicySource, /is no longer perceived/,
+    'broker still refuses a target it can no longer see, which was never the allowlist');
   const contextStart = source.indexOf("name: 'context_intent'");
   const contextEnd = source.indexOf("name: 'cancel_action'", contextStart);
   assert.ok(contextStart >= 0 && contextEnd > contextStart,
@@ -245,11 +258,17 @@ try {
     'broker independently enforces the seven-square grab radius');
   assert.ok(contextSource.indexOf("const acceptedCast = action === 'cast'") <
     contextSource.indexOf('if (s instanceof KeeperProxy)'),
-  'broker applies the shared safe-spell rule before crossing into a keeper process');
-  assert.match(keeperProcess, /rtsSafeSpellRule[(]observedSpellName, Number[(]spell[.]numTargets[)][)]/,
-    'keeper independently classifies the live spell name and arity');
-  assert.match(keeperProcess, /rtsSpellTargetAllowed[(]currentRule,[\s\S]*?live[.]cast/s,
-    'keeper repeats target policy inside the final cast pacer callback');
+  'broker resolves the exact spell before crossing into a keeper process');
+  assert.match(keeperProcess, /rtsCastArityOk[(]Number[(]spell[.]numTargets[)], spellHasTarget[)]/,
+    'keeper independently checks the live spell arity');
+  assert.match(keeperProcess, /rtsCastArityOk[(]spellIdentity[.]targets[\s\S]*?live[.]cast/s,
+    'keeper rechecks arity inside the final cast pacer callback');
+  assert.match(keeperProcess, /exact target [$][{]target[}] is absent or changed/,
+    'keeper still rechecks the exact target identity, which was never the allowlist');
+  assert.doesNotMatch(codeOnly(keeperProcess), /not classified as safe for RTS casting/,
+    'the retired allowlist has not crept back into the keeper');
+  assert.doesNotMatch(codeOnly(keeperProcess), /rtsSafeSpellRule|rtsSpellTargetAllowed/,
+    'and neither retired predicate is called there any more');
   assert.match(contextSource, /expected_item_name/,
     'exact inventory actions recheck the gateway-observed item identity');
   assert.match(contextSource, /weaponScore\(inventoryName\).*armourKind\(inventoryName\)/s,

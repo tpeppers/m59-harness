@@ -1,39 +1,35 @@
-// Fail-closed policy for spells exposed through the RTS control surface.
+// Shape checks for spells sent through the RTS control surface.
 //
-// A zero-target wire arity does not mean a spell is harmless: Earthquake is the
-// important counterexample.  Names here are therefore an audited exact allowlist,
-// and the observed wire arity must also match.  Callers retain and send the exact
-// server-observed spelling; this module only classifies it case-insensitively.
-
-const SAFE_SPELLS = new Map(Object.entries({
-  // creafood.kod / creaweap.kod: create inventory for the caster, zero targets.
-  'create food': { targets: 0, target_mode: 'none' },
-  'create weapon': { targets: 0, target_mode: 'none' },
-  // blink.kod teleports only the caster to the room's local place of power.
-  'blink': { targets: 0, target_mode: 'none' },
-}).map(([name, rule]) => [name, Object.freeze({ ...rule })]));
-
-export function rtsSafeSpellRule(name, targets) {
-  if (typeof name !== 'string' || !name.trim() || !Number.isSafeInteger(targets)) return null;
-  const rule = SAFE_SPELLS.get(name.trim().toLowerCase());
-  return rule && rule.targets === targets ? rule : null;
+// THE SPELL ALLOWLIST WAS RETIRED, DELIBERATELY, 2026-09-19, ON THE OPERATOR'S INSTRUCTION:
+// "Let's retire the RTS safety allowlist -- we've progressed far enough we can cast on other
+// players at will."
+//
+// WHAT IT USED TO BE, so nobody has to reconstruct it from a diff: a fail-closed `SAFE_SPELLS`
+// map holding exactly three names — create food, create weapon, blink — each
+// `{targets: 0, target_mode: 'none'}`, read through `rtsSafeSpellRule(name, targets)`, plus
+// `rtsSpellTargetAllowed(rule, …)` with modes 'none' | 'self' | 'pve' of which only 'none' was
+// ever reachable. Anything else was refused 409 "is not classified as safe for RTS casting". It
+// also filtered the RTS spell LIST in m59-rts-contract.mjs, so a fleet character appeared to know
+// three spells however many it actually had.
+//
+// WHAT WAS GIVEN UP. An autonomous keeper may now aim ANY spell the character really knows at ANY
+// object it can see, a player included. That covers the harmful ones — the attack spells, mana
+// bomb, and Earthquake, which was this module's own cited counterexample for why a zero-target
+// arity does not imply a harmless spell. The blast radius is no longer bounded here. It is
+// bounded by what the fleet is told to cast, and by `requireRtsLocalCaller` below — a DIFFERENT
+// control, untouched, answering "may this caller drive a character at all" rather than "what may
+// it cast".
+//
+// WHAT IS KEPT, because it was never policy. The server states each spell's target count on the
+// wire (`numTargets`). Sending a targeted packet for a zero-target spell — or an untargeted one
+// for a spell that wants a target — is a malformed packet rather than a policy question, and the
+// client has no business emitting either. That check stays, and it is now all this part does.
+// Every identity and staleness check at the call sites stays too: those guard against a spell or
+// target changing underfoot between intent and packet, which retiring a policy does not make safe.
+export function rtsCastArityOk(targets, hasTarget) {
+  if (!Number.isSafeInteger(targets) || targets < 0) return false;
+  return targets === 0 ? !hasTarget : !!hasTarget;
 }
-
-export function rtsSpellTargetAllowed(rule, {
-  targetId = null,
-  selfId = null,
-  targetIsPlayer = null,
-} = {}) {
-  if (!rule) return false;
-  if (rule.target_mode === 'none') return targetId === null;
-  if (!Number.isSafeInteger(targetId) || targetId < 1) return false;
-  if (rule.target_mode === 'self')
-    return Number.isSafeInteger(selfId) && selfId > 0 && targetId === selfId;
-  if (rule.target_mode === 'pve') return targetIsPlayer === false;
-  return false;
-}
-
-export const RTS_SAFE_SPELL_NAMES = Object.freeze([...SAFE_SPELLS.keys()]);
 
 // THE CONTROL PLANE IS LOCAL; THE GAME SERVER NEED NOT BE.
 //

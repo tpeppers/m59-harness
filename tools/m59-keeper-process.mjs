@@ -43,7 +43,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import './m59-navgeom.mjs';   // installs the height model + lenient fine path onto RoomGeometry
 import { resolveFleet } from './m59-fleetpath.mjs';
 import { menageriePathFor } from './m59-menagerie-roster.mjs';
-import { rtsJobReport, rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
+import { rtsJobReport, rtsCastArityOk } from './m59-rts-safety.mjs';
 import { startTacticalJob, tacticalJobStatus } from './m59-tactical-job.mjs';
 import { audioView } from './m59-audio-observations.mjs';
 import { intentObservation,setIntentTarget } from './m59-intent-observations.mjs';
@@ -1647,7 +1647,7 @@ const server = createServer(async (req, res) => {
               : Array.isArray(args.targets) ? args.targets.map(Number) : [];
             const spellName = String(args.spell ?? '').trim();
             let item = null, itemName = null, spell = null;
-            let spellRule = null, spellIdentity = null, spellTargetIdentity = null;
+            let spellIdentity = null, spellTargetIdentity = null;
             let spellHasTarget = false;
 
             if (action === 'rest_here' || action === 'recover_here') {
@@ -1696,33 +1696,27 @@ const server = createServer(async (req, res) => {
                 json({ error: `spell not found: ${spellName}` }, 409);
                 return;
               }
-              spellRule = rtsSafeSpellRule(observedSpellName, Number(spell.numTargets));
-              if (!spellRule) {
-                json({ error: `${observedSpellName} is not classified as safe for RTS casting` }, 409);
+              // THE SPELL ALLOWLIST WAS RETIRED 2026-09-19 — see the header of
+              // m59-rts-safety.mjs for what it was and what was given up. This is the gate that
+              // answered 409 "is not classified as safe for RTS casting" for everything except
+              // create food, create weapon and blink. What replaces it is the server's own arity,
+              // which is packet shape rather than policy.
+              spellHasTarget = args.target !== undefined && args.target !== null;
+              if (!rtsCastArityOk(Number(spell.numTargets), spellHasTarget)) {
+                json({ error: Number(spell.numTargets) === 0
+                  ? `${observedSpellName} accepts no target`
+                  : `${observedSpellName} needs ${Number(spell.numTargets)} target(s)` }, 409);
                 return;
               }
-              spellHasTarget = args.target !== undefined && args.target !== null;
               if (spellHasTarget && (!Number.isSafeInteger(target) || target < 1)) {
                 json({ error: 'cast target must be a positive object id' }, 400);
                 return;
               }
               const targetObject = !spellHasTarget ? null
                 : target === c.selfId ? c.self : c.room?.objects?.get?.(target);
-              const targetIsPlayer = target === c.selfId ? true
-                : Number.isInteger(targetObject?.flags) ? !!(targetObject.flags & OF.PLAYER) : null;
-              if (!rtsSpellTargetAllowed(spellRule, {
-                targetId: spellHasTarget ? target : null,
-                selfId: Number.isSafeInteger(c.selfId) ? c.selfId : null,
-                targetIsPlayer,
-              })) {
-                json({ error: spellRule.target_mode === 'none'
-                  ? `${observedSpellName} accepts no target`
-                  : 'RTS context casting may not target players or unknown object kinds' }, 409);
-                return;
-              }
               spellIdentity = {
                 id: spell.id, nameRsc: spell.nameRsc, name: observedSpellName,
-                targets: Number(spell.numTargets), targetMode: spellRule.target_mode,
+                targets: Number(spell.numTargets),
               };
               if (targetObject) {
                 spellTargetIdentity = {
@@ -1835,26 +1829,21 @@ const server = createServer(async (req, res) => {
                 const live = guard('cast');
                 const currentSpell = (live.spells ?? []).find(value => value.id === spellIdentity.id);
                 const currentName = currentSpell ? live.rsc?.get?.(currentSpell.nameRsc) ?? '' : '';
-                const currentRule = currentSpell && currentSpell.nameRsc === spellIdentity.nameRsc &&
-                    currentName === spellIdentity.name &&
-                    Number(currentSpell.numTargets) === spellIdentity.targets
-                  ? rtsSafeSpellRule(currentName, Number(currentSpell.numTargets)) : null;
-                if (!currentRule || currentRule.target_mode !== spellIdentity.targetMode)
-                  throw new Error(`RTS cast refused: exact spell ${spellIdentity.name} is absent, changed, or unsafe`);
+                // RE-READ INSIDE THE PACER CALLBACK, because the intent and the packet are not
+                // the same moment. The retired allowlist was re-checked here too; what remains is
+                // the part that was never policy — same spell, same wire arity, same target.
+                if (!currentSpell || currentSpell.nameRsc !== spellIdentity.nameRsc ||
+                    currentName !== spellIdentity.name ||
+                    Number(currentSpell.numTargets) !== spellIdentity.targets)
+                  throw new Error(`RTS cast refused: exact spell ${spellIdentity.name} is absent or changed`);
                 const currentTarget = !spellHasTarget ? null
                   : target === live.selfId ? live.self : live.room?.objects?.get?.(target);
                 if (spellTargetIdentity && (!currentTarget ||
                     currentTarget.id !== spellTargetIdentity.id ||
                     currentTarget.nameRsc !== spellTargetIdentity.nameRsc))
                   throw new Error(`RTS cast refused: exact target ${target} is absent or changed`);
-                const targetIsPlayer = target === live.selfId ? true
-                  : Number.isInteger(currentTarget?.flags) ? !!(currentTarget.flags & OF.PLAYER) : null;
-                if (!rtsSpellTargetAllowed(currentRule, {
-                  targetId: spellHasTarget ? target : null,
-                  selfId: Number.isSafeInteger(live.selfId) ? live.selfId : null,
-                  targetIsPlayer,
-                }))
-                  throw new Error('RTS cast refused: live target policy is not PvE-safe');
+                if (!rtsCastArityOk(spellIdentity.targets, spellHasTarget))
+                  throw new Error(`RTS cast refused: ${spellIdentity.name} takes ${spellIdentity.targets} target(s)`);
                 return live.cast(currentSpell.id, spellHasTarget ? [target] : []);
               });
               return { spell: spellName, ...(Number.isSafeInteger(target) ? { target } : {}) };

@@ -132,9 +132,21 @@ assert.deepEqual(snapshot.agents[0].equipment,
   { known: true, fresh_ms: 250, equipped: ['mace', 'leather armor'] });
 assert.deepEqual(snapshot.agents[1].equipment,
   { known: false, fresh_ms: null, equipped: [] });
+// EVERY SPELL THE CHARACTER KNOWS, IN THE ORDER THE FIXTURE DECLARES THEM.
+//
+// This expected two of the four because the retired RTS allowlist filtered the snapshot's
+// spell list down to create food, create weapon and blink — so a commander client showed
+// three entries however many the character really knew. The list is reported whole now and
+// only a malformed row is dropped, so the assertion is simply the fixture.
+//
+// NOT a relaxation. `earthquake` and `resist magic` are here precisely because nothing
+// filters them any more, and `targets` is carried through unchanged because packet arity
+// is the one check that replaced the policy — `resist magic` keeps its 1.
 assert.deepEqual(snapshot.agents[0].spells, [
   { id: 801, name: 'create weapon', targets: 0, school: 0 },
   { id: 803, name: 'blink', targets: 0, school: 6 },
+  { id: 804, name: 'earthquake', targets: 0, school: 4 },
+  { id: 802, name: 'resist magic', targets: 1, school: 2 },
 ]);
 assert.deepEqual(snapshot.agents[1].spells, []);
 assert.deepEqual(snapshot.agents[0].inventory, [
@@ -203,12 +215,36 @@ const nativeAgent = native.split('\n').find(line => line.startsWith('AGENT\tt1\t
 assert.equal(nativeAgent.split('\t').length, 23, 'native v2+ keeps exactly three equipment AGENT fields');
 assert.deepEqual(nativeAgent.split('\t').slice(-3), ['1', '250', 'mace%2Cleather%20armor']);
 const nativeSpells = native.split('\n').filter(line => line.startsWith('SPELL\tt1\t'));
+// THE NATIVE WIRE CARRIES THE WHOLE SPELL LIST TOO, FOR THE SAME REASON THE SNAPSHOT DOES.
+//
+// These two assertions were the last of the retired allowlist, and they are the pair worth
+// reading rather than skimming, because the one below USED to make a safety claim:
+// "unsafe zero-target and unaudited target spells are omitted from action exposure".
+//
+// That claim is gone, deliberately and by the operator's decision — see the header of
+// m59-kraanan-test.mjs, landed in this same commit: "The operator retired the allowlist.
+// What is pinned now is that the gate is GONE ... plus the one check that replaced it,
+// which is packet arity, not policy." A filter that dropped everything but create food,
+// create weapon and blink did not make a commander client safe; it made it WRONG, showing
+// three spells to a character that knew a dozen and refusing every targeted cast a Kraanan
+// drill needs.
+//
+// So what replaces the claim is narrower and honest: the wire reports what the character
+// knows, and `rtsCastArityOk` refuses a cast whose target count does not match the spell's
+// own arity. `resist magic` keeps its `1` here, and that 1 is the whole of the remaining
+// gate — a packet-shape rule rather than a judgement about which spells a commander may be
+// told to cast.
 assert.deepEqual(nativeSpells, [
   'SPELL\tt1\t801\tcreate%20weapon\t0\t0',
   'SPELL\tt1\t803\tblink\t0\t6',
+  'SPELL\tt1\t804\tearthquake\t0\t4',
+  'SPELL\tt1\t802\tresist%20magic\t1\t2',
 ]);
-assert.doesNotMatch(native, /earthquake|resist%20magic/,
-  'unsafe zero-target and unaudited target spells are omitted from action exposure');
+assert.match(native, /\nSPELL\tt1\t804\tearthquake\t0\t4\n/,
+  'a zero-target spell the old allowlist hid is now exposed, and its arity is 0');
+assert.match(native, /\nSPELL\tt1\t802\tresist%20magic\t1\t2\n/,
+  'a targeted spell the old allowlist hid is now exposed, and its arity is 1 — which is ' +
+  'the only thing still gating the cast');
 assert.equal(native.split('\n').findIndex(line => line.startsWith('SPELL\tt1\t')),
   native.split('\n').findIndex(line => line.startsWith('AGENT\tt1\t')) + 1,
   'native spell records immediately follow their owning agent');

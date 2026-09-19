@@ -398,25 +398,52 @@ await dispatchContextOrder(contextReader, {
 }, { now, sceneStore });
 assert.equal(calls[beforeContext].args.spell, 'blink');
 assert.equal(Object.hasOwn(calls[beforeContext].args, 'target'), false);
-const beforeUnrestrictedCast = calls.length;
-await assert.rejects(() => dispatchContextOrder(contextReader, {
+// THE SPELL ALLOWLIST WAS RETIRED 2026-09-19 on the operator's instruction: "we've progressed far
+// enough we can cast on other players at will." These three used to reject with
+// /not classified as safe/ — an unlisted zero-target spell, a targeted spell, and a spell aimed
+// at a player. All three now dispatch, and that is the change.
+beforeContext = calls.length;
+await dispatchContextOrder(contextReader, {
   type: 'context', action: 'cast', generation, order_id: 'context-cast-quake',
   orders: [{ agent: 't1', room: 200, spell: 'earthquake' }],
-}, { now, sceneStore }), /not classified as safe/);
-await assert.rejects(() => dispatchContextOrder(contextReader, {
+}, { now, sceneStore });
+assert.equal(calls[beforeContext].args.spell, 'earthquake',
+  'a zero-target spell that was never on the allowlist now dispatches');
+
+beforeContext = calls.length;
+await dispatchContextOrder(contextReader, {
   type: 'context', action: 'cast', generation, order_id: 'context-cast-target',
   orders: [{ agent: 't1', room: 200, spell: 'resist magic', target_id: 501 }],
-}, { now, sceneStore }), /not classified as safe/);
-await assert.rejects(() => dispatchContextOrder(contextReader, {
+}, { now, sceneStore });
+assert.equal(calls[beforeContext].args.spell, 'resist magic');
+assert.equal(calls[beforeContext].args.target, 501, 'a targeted spell now dispatches');
+
+beforeContext = calls.length;
+await dispatchContextOrder(contextReader, {
   type: 'context', action: 'cast', generation, order_id: 'context-cast-player',
   orders: [{ agent: 't1', room: 200, spell: 'resist magic', target_id: 1200 }],
-}, { now, sceneStore }), /not classified as safe/);
+}, { now, sceneStore });
+assert.equal(calls[beforeContext].args.target, 1200,
+  'and so does one aimed at a player, which is the whole point of the retirement');
+
+// WHAT SURVIVED THE RETIREMENT IS PACKET SHAPE, NOT POLICY. The server states each spell's
+// target count; sending any other number is malformed however harmless the spell is.
+const beforeArityCast = calls.length;
 await assert.rejects(() => dispatchContextOrder(contextReader, {
   type: 'context', action: 'cast', generation, order_id: 'context-cast-arity',
   orders: [{ agent: 't1', room: 200, spell: 'create weapon', target_id: 900 }],
 }, { now, sceneStore }), /accepts no target/);
-assert.equal(calls.length, beforeUnrestrictedCast,
-  'unsafe, targeted, player-targeted, and invalid-arity casts dispatch nothing');
+await assert.rejects(() => dispatchContextOrder(contextReader, {
+  type: 'context', action: 'cast', generation, order_id: 'context-cast-bare',
+  orders: [{ agent: 't1', room: 200, spell: 'resist magic' }],
+}, { now, sceneStore }), /needs 1 target/);
+// And a target the agent can no longer see is still refused — that was never the allowlist.
+await assert.rejects(() => dispatchContextOrder(contextReader, {
+  type: 'context', action: 'cast', generation, order_id: 'context-cast-gone',
+  orders: [{ agent: 't1', room: 200, spell: 'resist magic', target_id: 999999 }],
+}, { now, sceneStore }), /no longer perceives spell target/);
+assert.equal(calls.length, beforeArityCast,
+  'invalid-arity and stale-target casts still dispatch nothing');
 await assert.rejects(() => dispatchContextOrder(contextReader, {
   type: 'context', action: 'cast', generation, order_id: 'context-cast-unkn',
   orders: [{ agent: 't1', room: 200, spell: 'not a spell' }],
@@ -680,10 +707,11 @@ try {
   const contract = await fetch(url.replace('/v1/orders', '/v1/contract'));
   assert.equal(contract.status, 200);
   const contractBody = await contract.json();
+  // The published policy tracks the retirement: both of these were false under the allowlist.
   assert.deepEqual(contractBody.rts_cast_policy, {
     exact_known_spells: true,
-    target_spells: false,
-    player_targets: false,
+    target_spells: true,
+    player_targets: true,
   });
   assert.deepEqual(contractBody.action_catalogue.context, [
     'stand', 'rest_here', 'recover_here', 'grab_nearby', 'take', 'cast',

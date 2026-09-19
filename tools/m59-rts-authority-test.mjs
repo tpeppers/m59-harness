@@ -172,8 +172,10 @@ for (const expected of [
   /CURSED_ITEMS[.]test/,
   /outside pickup range/,
   /brokenSet[(]c[)]/,
-  /rtsSafeSpellRule/,
-  /rtsSpellTargetAllowed/,
+  // The spell allowlist was retired 2026-09-19; the arity check is what took its place, and the
+  // identity rechecks around it were never part of it.
+  /rtsCastArityOk/,
+  /sameRtsIdentity[(]c, currentSpell, spellIdentity[)]/,
   /beforeCleanup/,
   /beforeMutation,/,
 ]) assert.match(context, expected);

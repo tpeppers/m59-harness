@@ -20,7 +20,7 @@ import {
   RTS_SCENE_BINDING_SCHEMA, RTS_SCENE_V3_NATIVE_VERSION, RTS_SCENE_V3_SCHEMA,
   RoomSceneV3Store, toNativeRoomSceneV3,
 } from './m59-rts-scene-v3.mjs';
-import { rtsSafeSpellRule, rtsSpellTargetAllowed } from './m59-rts-safety.mjs';
+import { rtsCastArityOk } from './m59-rts-safety.mjs';
 import { perf } from './m59-perf.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
@@ -1261,26 +1261,19 @@ export async function dispatchContextOrder(reader, body, { now = Date.now(), sce
       const targets = Number(spell.targets);
       if (!Number.isSafeInteger(targets) || targets < 0)
         throw orderError(409, `${order.agent}'s cached target count for ${spell.name} is unavailable`);
-      const rule = rtsSafeSpellRule(spell.name, targets);
-      if (!rule)
-        throw orderError(409, `${spell.name} is not classified as safe for RTS casting`);
+      // THE SPELL ALLOWLIST WAS RETIRED 2026-09-19 — see the header of m59-rts-safety.mjs. What
+      // is left is the server's own arity, a packet-shape rule rather than a policy.
+      if (!rtsCastArityOk(targets, order.target !== null))
+        throw orderError(409, targets === 0
+          ? `${spell.name} accepts no target`
+          : `${spell.name} needs ${targets} target(s)`);
       const target = order.target === null ? null
         : objects.find(entity => Number(entity?.id) === order.target) || null;
       const selfId = Number(look.you?.object_id);
+      // KEPT, AND NOT THE RETIRED POLICY: this asks whether the target is still PERCEIVED, not
+      // whether it is a permitted kind of thing.
       if (order.target !== null && order.target !== selfId && !target)
         throw orderError(409, `${order.agent} no longer perceives spell target ${order.target}`);
-      const targetIsPlayer = order.target === selfId ? true
-        : target?.is_player === true ? true : target?.is_player === false ? false : null;
-      if (!rtsSpellTargetAllowed(rule, {
-        targetId: order.target, selfId: Number.isSafeInteger(selfId) ? selfId : null,
-        targetIsPlayer,
-      })) {
-        if (rule.target_mode === 'none')
-          throw orderError(409, `${spell.name} accepts no target`);
-        if (rule.target_mode === 'self')
-          throw orderError(409, `${spell.name} may target only ${order.agent}'s controlled character`);
-        throw orderError(409, `${spell.name} may not target a player or unknown object kind`);
-      }
       // Send the server-observed spelling, never a free-form or partial client label.
       order.spell = spell.name;
     }
@@ -1874,10 +1867,15 @@ export function createGatewayServer({ reader, reconcileMs = 250, hub = null, sce
             browser_origins: false,
             idempotency: 'order_id exact-payload dedupe',
           },
+          // WHAT A CLIENT MAY CAST THROUGH THIS GATEWAY. The spell allowlist was retired
+          // 2026-09-19; `target_spells` and `player_targets` were both false under it and are
+          // both true now. `exact_known_spells` outlives it and is the remaining rule: the spell
+          // must be one the character really knows, sent under the server's own spelling and
+          // with the server's own target count.
           rts_cast_policy: {
             exact_known_spells: true,
-            target_spells: false,
-            player_targets: false,
+            target_spells: true,
+            player_targets: true,
           },
           scene_contracts: atlasGeneration && boundSceneStore ? {
             available: boundSceneStore.status?.ready === true,

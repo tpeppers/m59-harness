@@ -197,7 +197,7 @@ import { inboxIfAny, dropInbox, sanitizeInbound, unwrapSpeech } from './m59-inbo
 import { localClients, soleClientAgent, createClientWatch,
          identifyClients, clientsHoldingRoster } from './m59-localclient.mjs';
 import { chatTools } from './m59-chat-tools.mjs';
-import { rtsSafeSpellRule, rtsSpellTargetAllowed, rtsJobReport,
+import { rtsCastArityOk, rtsJobReport,
          rtsPacketAuthorityCheck, rtsCleanupAuthorityCheck,
          requireRtsLocalCaller } from './m59-rts-safety.mjs';
 import { COMMANDER_SCHEMA, COMMERCE_SCHEMA, COMMANDER_FACULTIES,
@@ -6162,32 +6162,28 @@ function safeRtsCastSelection(c, a) {
   if (!known)
     throw new Error(`stale cast intent: ${a.agent} does not know the exact spell "${wanted}"`);
   const count = Number(known.value.numTargets);
-  const rule = rtsSafeSpellRule(known.name, count);
-  if (!rule)
-    throw new Error(`${known.name} is not classified as safe for RTS casting`);
+  // THE SPELL ALLOWLIST WAS RETIRED 2026-09-19 — see the header of m59-rts-safety.mjs for what it
+  // was and what was given up. What is left is the server's own arity, which is a packet-SHAPE
+  // rule rather than a policy: the spell list states how many targets this spell takes, and
+  // anything else is malformed.
   const hasTarget = a.target !== undefined && a.target !== null;
+  if (!rtsCastArityOk(count, hasTarget))
+    throw new Error(count === 0
+      ? `${known.name} accepts no target`
+      : `${known.name} needs ${count} target(s) — pass one`);
   let target = null, targetObject = null;
   if (hasTarget) {
     target = Number(a.target);
     if (!Number.isSafeInteger(target) || target < 1)
       throw new Error('cast target must be a positive object id');
     targetObject = target === c.selfId ? c.self : c.room.objects.get(target);
-  }
-  const targetIsPlayer = target === c.selfId ? true
-    : Number.isInteger(targetObject?.flags) ? !!(targetObject.flags & OF.PLAYER) : null;
-  if (!rtsSpellTargetAllowed(rule, {
-    targetId: hasTarget ? target : null,
-    selfId: Number.isSafeInteger(c.selfId) ? c.selfId : null,
-    targetIsPlayer,
-  })) {
-    if (rule.target_mode === 'none') throw new Error(`${known.name} accepts no target`);
-    if (rule.target_mode === 'self')
-      throw new Error(`${known.name} may target only ${a.agent}'s own controlled character`);
+    // KEPT, AND IT IS NOT THE RETIRED POLICY. This asks whether the thing being aimed at is still
+    // PERCEIVED, not whether it is a permitted KIND of thing. An id the room no longer holds
+    // names something else, or nothing, by the time the packet lands.
     if (!targetObject)
       throw new Error(`stale cast intent: target ${target} is no longer perceived`);
-    throw new Error('RTS context casting may not target players or unknown object kinds');
   }
-  return { known, count, rule, target, targetObject };
+  return { known, count, target, targetObject };
 }
 
 function resolveTarget(s, arg) {
@@ -8671,7 +8667,7 @@ const TOOLS = [
 
       let col = null, row = null, target = null, targets = [], spell = null;
       let inventoryItem = null, inventoryName = null, inventoryIdentity = null;
-      let targetIdentity = null, spellIdentity = null, spellRule = null;
+      let targetIdentity = null, spellIdentity = null;
       const floorIdentities = new Map();
       if (action === 'rest_here' || action === 'recover_here') {
         col = Number(a.col); row = Number(a.row);
@@ -8739,11 +8735,10 @@ const TOOLS = [
         if (action === 'item_unuse' && !using?.has(item))
           throw new Error(`item_unuse refused: ${inventoryName || item} is not currently equipped`);
       } else if (action === 'cast') {
-        const { known, count, rule, target: acceptedTarget, targetObject } = acceptedCast;
+        const { known, count, target: acceptedTarget, targetObject } = acceptedCast;
         spellIdentity = {
           ...rtsIdentity(c, known.value), targets: count,
         };
-        spellRule = rule;
         target = acceptedTarget;
         if (targetObject) targetIdentity = rtsIdentity(c, targetObject);
         spell = known.name;
@@ -8832,24 +8827,21 @@ const TOOLS = [
           return;
         }
         if (action === 'cast') {
+          // RE-READ AT PACKET TIME, BECAUSE THE INTENT AND THE PACKET ARE NOT THE SAME MOMENT.
+          // The retired allowlist used to be re-checked here as well; what remains is the part
+          // that was never policy — the spell must still be the SAME spell, with the same wire
+          // arity, and the target must still be the same object.
           const currentSpell = (Array.isArray(c.spells) ? c.spells : [])
             .find(value => value.id === spellIdentity.id);
-          const currentRule = currentSpell && sameRtsIdentity(c, currentSpell, spellIdentity) &&
-            Number(currentSpell.numTargets) === spellIdentity.targets
-            ? rtsSafeSpellRule(c.rsc.get(currentSpell.nameRsc), Number(currentSpell.numTargets)) : null;
-          if (!currentRule || currentRule.target_mode !== spellRule.target_mode)
-            throw new Error(`RTS ${packet} refused: exact spell ${spell} is absent, changed, or no longer safe`);
+          if (!currentSpell || !sameRtsIdentity(c, currentSpell, spellIdentity) ||
+              Number(currentSpell.numTargets) !== spellIdentity.targets)
+            throw new Error(`RTS ${packet} refused: exact spell ${spell} is absent or changed`);
           const currentTarget = target == null ? null
             : target === c.selfId ? c.self : c.room.objects.get(target);
           if (targetIdentity && !sameRtsIdentity(c, currentTarget, targetIdentity))
             throw new Error(`RTS ${packet} refused: exact cast target ${target} is absent or changed`);
-          const targetIsPlayer = target === c.selfId ? true
-            : Number.isInteger(currentTarget?.flags) ? !!(currentTarget.flags & OF.PLAYER) : null;
-          if (!rtsSpellTargetAllowed(currentRule, {
-            targetId: target, selfId: Number.isSafeInteger(c.selfId) ? c.selfId : null,
-            targetIsPlayer,
-          }))
-            throw new Error(`RTS ${packet} refused: spell target policy no longer allows this target`);
+          if (!rtsCastArityOk(spellIdentity.targets, target != null))
+            throw new Error(`RTS ${packet} refused: ${spell} takes ${spellIdentity.targets} target(s)`);
           return;
         }
         if (detail?.item_id != null) {
@@ -12224,19 +12216,22 @@ const TOOLS = [
       // THE KEEPER'S ANSWER WAS THROWN AWAY, AND A REFUSAL READ AS A SUCCESS.
       //
       // On a keeper-backed character `c.cast` is KeeperProxy.cast, which posts to the
-      // keeper's `/action` — an RTS safety surface with a FAIL-CLOSED allowlist of three
-      // spells (create food, create weapon, blink; m59-rts-safety.mjs). Anything else comes
-      // back 409 `{error: "... is not classified as safe for RTS casting"}`, and
-      // `keeperAction` hands that back as a VALUE rather than throwing. This discarded the
-      // return, so the tool answered `cast: true` for a spell the keeper had just refused
-      // to send, and the only visible symptom was that nothing happened — which is also
-      // what a legitimately resisted spell looks like. Hours went into the difference.
+      // keeper's `/action`, and `keeperAction` hands a refusal back as a VALUE rather than
+      // throwing. This discarded the return, so the tool answered `cast: true` for a spell
+      // the keeper had just refused to send, and the only visible symptom was that nothing
+      // happened — which is also what a legitimately resisted spell looks like. Hours went
+      // into the difference.
+      //
+      // WHAT THE KEEPER STILL REFUSES, now that the spell allowlist is retired (2026-09-19):
+      // a spell the character does not know, a wire arity that does not match the spell list,
+      // and a spell or target whose identity changed between the intent and the packet. It no
+      // longer refuses a spell for BEING a particular spell, or a target for being a player.
       if (sent && typeof sent === 'object' && sent.error)
         return { cast: false, reason: sent.error, refused_by: 'the keeper process',
                  spell: mine.name, targets,
                  note: 'the broker never touches the wire for a keeper-backed character: the ' +
-                       'cast is forwarded to that keeper, and its safety allowlist decides. ' +
-                       'Widening it is a deliberate change to m59-rts-safety.mjs, not a flag.' };
+                       'cast is forwarded to that keeper, which re-checks that the spell and ' +
+                       'target are still exactly what the intent named before it sends.' };
       // AND WHAT IT SAID WHEN IT DID NOT REFUSE, because "accepted" is not "done": the
       // keeper runs a cast as a background JOB and can still refuse inside it, after the
       // HTTP reply has gone. Carried through so a caller can tell a queued cast from a
