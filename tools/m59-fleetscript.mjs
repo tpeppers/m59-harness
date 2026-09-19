@@ -3639,6 +3639,9 @@ async function runStep(ctx, agent, rawStep, state) {
       // waiting and started walking around. A detour is only working if the first comes below
       // the second.
       let arounds = 0, bestAway = Infinity, awayAtDetour = Infinity;
+      // Consecutive status reads that carried no position. See the guard in the loop.
+      let blind = 0;
+      const blindTries = step.blindTries ?? 5;
       const recent = [];
       let lastGround = [];
 
@@ -3672,10 +3675,48 @@ async function runStep(ctx, agent, rawStep, state) {
         if (Number.isFinite(p.room) && Number.isFinite(wantRoom) && p.room !== wantRoom)
           return { ok: false, outcome: 'left_the_room', room: p.room,
                    why: `the crawl ended in room ${p.room}, not ${wantRoom}` };
-        if (p.row != null && chebyshev(p, goal) <= within)
+        // A CRAWL THAT CANNOT SEE WHERE IT IS MUST STOP, NOT KEEP HOPPING.
+        //
+        // `you` can come back EMPTY on a keeper-backed character while everything around it
+        // looks healthy. The broker fills it from the keeper's `/room-view`, and when that
+        // fetch does not land it says so in `source` — "keeper snapshot — /room-view on the
+        // keeper has the room contents" instead of "...plus the keeper's own room view" — and
+        // returns `you: null` with `fresh: true`. Nothing errors.
+        //
+        // What that did to this loop before the check below: `chebyshev(null, goal)` is NaN,
+        // every comparison against NaN is false, so the arrival test never fires, `crawlChoice`
+        // finds nothing "closer" and nothing "blocking", and falls through to a SIDESTEP onto
+        // whichever neighbour /movecheck offered. The body then wanders one square at a time
+        // for the whole deadline and the step reports `out_of_time, at: rnullcnull` — a
+        // sentence naming the symptom in a field that is literally the word null.
+        //
+        // Measured 2026-09-19 on shadow22 at the Temple of Qor's trigger square: 32 hops,
+        // `away: 26`, deadline spent, nothing learned. Five of six characters read `you: null`
+        // in the same minute while shadow01 read `r14c20` — so it is per-call rather than
+        // fleet-wide, which is exactly what makes it survivable and invisible.
+        //
+        // Retried rather than refused on the first miss, because it IS transient; but bounded,
+        // because a walk that reports progress it cannot see is worse than one that stops.
+        if (p.row == null || p.col == null) {
+          blind++;
+          if (blind >= blindTries)
+            return { ok: false, outcome: 'position_unreadable', at: null,
+                     hops, waited, healed, arounds, readdressed, blind,
+                     why: `the broker answered ${blind} status reads in a row with no position ` +
+                          `(\`you\` empty, \`source\` says /room-view did not land). A crawl ` +
+                          `cannot aim without knowing where it is, and hopping anyway spends ` +
+                          `the deadline walking at random. The keeper is up — this is the ` +
+                          `room-view fetch, not the character.` };
+          ctx.log(agent, `crawl_to: no position in the status reply (${blind}/${blindTries}) — ` +
+                         `re-reading rather than hopping blind`);
+          await sleep(step.blindWaitMs ?? 1500);
+          continue;
+        }
+        blind = 0;
+        if (chebyshev(p, goal) <= within)
           return { ok: true, outcome: 'arrived', at: `r${p.row}c${p.col}`,
                    hops, waited, healed, sidesteps, arounds, probed, readdressed };
-        if (p.row != null) bestAway = Math.min(bestAway, chebyshev(p, goal));
+        bestAway = Math.min(bestAway, chebyshev(p, goal));
 
         // HEAL WHEREVER IT BECOMES NECESSARY, not once at the top. `rest` walks to a safe wall
         // and refuses the open; "nowhere here is safe" is a true answer and is not fatal.

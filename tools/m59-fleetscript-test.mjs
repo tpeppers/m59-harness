@@ -1998,6 +1998,37 @@ console.log('\ncrawl_to gives up on a body that never moves, and SAYS it was a b
      /wait\(s\)/.test(out.why) && /walk around it/.test(out.why), out.why);
 }
 
+console.log('\ncrawl_to REFUSES when the status reply carries no position');
+{
+  // `you` comes back EMPTY on a keeper-backed character when the broker's /room-view fetch
+  // does not land — `you: null`, `fresh: true`, nothing erroring, and `source` is the only
+  // place that says so. `chebyshev(null, goal)` is NaN, every comparison against NaN is
+  // false, so the arrival test never fires and crawlChoice falls through to a sidestep onto
+  // whatever /movecheck offered. Measured on shadow22 at the Temple of Qor's trigger square
+  // 2026-09-19: 32 hops, the whole deadline, `at: "rnullcnull"`, nothing learned — and five
+  // of six characters read null in the same minute while the sixth read a real square, which
+  // is what makes it survivable and invisible.
+  const world = { at: { row: 10, col: 10 }, refuse: () => null };
+  // No `positions` entry for a1, so the fake answers `you: null` exactly as production does.
+  const sent = fakeBroker({ rooms: { a1: 39 },
+    onShortHop: ({ to_col, to_row }) => { world.at.row = to_row; world.at.col = to_col; } });
+  const restore = fakeKeeper({ world });
+  const r = await fleetScript({ name: 'crawl-blind', fleet: 'testfleet', agents: ['a1'],
+    steps: [crawlTo(13, 10, { blindTries: 3, blindWaitMs: 5, deadlineMs: 20000,
+                              settleMs: 5, maxSteps: 30 })],
+    onLog: quiet });
+  restore();
+  const out = r.results.a1.state['0:crawl_to'];
+  ok('it fails rather than hopping at a NaN goal', r.results.a1.ok === false);
+  ok('and it names the INSTRUMENT, not the ground',
+     out.outcome === 'position_unreadable', String(out.outcome));
+  ok('and it stops after the retries it was given', out.blind === 3, String(out.blind));
+  ok('and it never sent a hop', !sent.some(x => x.name === 'short_hop'),
+     String(sent.filter(x => x.name === 'short_hop').length));
+  ok('and the reason points at /room-view rather than at the character',
+     /room-view/.test(out.why ?? ''), out.why);
+}
+
 console.log('\ncrawl_to walks AROUND a body that will not move, when there is a way around');
 {
   // A pillar of one body: the square due east of the START is refused for ever, and nothing
