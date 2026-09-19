@@ -1315,3 +1315,33 @@ Pinned: the second write lands on the same file rather than leaving two halves o
 a finished run reads back with its outcome and with what she actually said, the ask index
 collapses instances into shapes so the list is a specification rather than a log, and a corrupt
 transcript is REPORTED rather than silently counting as a run that never happened.
+
+- `node tools/m59-unarmed-refuge-test.mjs` (16 — **the gate an unarmed character could never
+  satisfy**. `passArm`'s unarmed branch called `townTripIfCornered()`, whose third line is
+  `if ((this.fledInARow || 0) <= 2) return false;`. `fledInARow` is incremented in exactly ONE
+  place in the file — `gotOut()` in `passFleeAndRest`, after a successful `leaveViaAny` — so it
+  counts successful FLEES. Being unarmed is not fleeing, so the precondition could never be met
+  and the call was refused silently on every pass. Measured on prod 2026-09-19: Beaker 1,850
+  consecutive repeats of the note and Animal 1,100, both bare-handed with a spider ONE SQUARE
+  away. The case it pins hardest is not the fix but the DIAGNOSABILITY: the old note printed
+  `went_to_town: false` for "refused by a gate", "no sanctuary within three hops" and "walked
+  and failed" alike, so 1,850 identical lines said nothing. The test asserts the three outcomes
+  are distinct strings, that a refusal reports `noProgress` rather than `progress` — the
+  `retreat_to_inn` mistake, which hides a stuck body from every stall detector — and that the
+  flee ladder is neither read nor written, because sharing that counter between the two callers
+  is the tidy-up a later reader will be tempted into.)
+- `node tools/m59-clearblockers-test.mjs` (17 — **killing the small thing standing in the way**.
+  `tradeInPlaceIfWedged` is the one survival rung that does not answer being stuck with
+  movement, and two gates made it unreachable in the state it exists for. `crowded()` was its
+  FIRST line, so a room at or over `travelStopMaxThreats` (6) refused the swing before anything
+  asked whether the character could still walk — and `crowded()` implements "in a crowd the only
+  wall is the EXIT", which rests on the exit being reachable. A wedge is precisely the state
+  where it is not. It also required the character to be BELOW its flee line, so a routine jam was
+  unanswerable until somebody was nearly dead, by which point the room is always crowded too.
+  Measured over 3,665 postmortems with a threat list: 3,131 (85.4%) died with six or more threats
+  present and 3,057 (83.4% of ALL deaths) did so with `swinging: false`. The cases it pins are
+  the two halves of the doctrine: a healthy wedged character now clears an IN-BAND blocker
+  (`refuseEngagement`, the operator's own viDifficulty ceiling) and must NOT pick a fight with an
+  out-of-band troll it merely bumped into, while below the flee line the band is dropped because
+  there is no better option left. `tradeInPlaceWhenCrowded: false` restores the old precedence
+  without a deploy, because the aggro argument for the veto is real.)
