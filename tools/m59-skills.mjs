@@ -2205,7 +2205,7 @@ export async function standUp(s) {
 // creature whose name happens to contain the letters is how an `ant` keeper spent its
 // day on giant rats. Callers with a catalogue pass `huntMatcher(spawns, want)` in.
 export function findCreature(s, needle, { attackableOnly = true, includePlayers = false,
-                                          match = null } = {}) {
+                                          match = null, avoid = null } = {}) {
   const c = s.need();
   const me = c.self;
   const low = String(needle ?? '').toLowerCase();
@@ -2214,6 +2214,12 @@ export function findCreature(s, needle, { attackableOnly = true, includePlayers 
   if (attackableOnly) list = list.filter(o => o.flags & OF.ATTACKABLE);
   if (match) list = list.filter(o => match(c.rsc.get(o.nameRsc) || ''));
   else if (low) list = list.filter(o => c.rsc.get(o.nameRsc).toLowerCase().includes(low));
+  // `match` ANSWERS ABOUT THE NAME; `avoid` ANSWERS ABOUT THE OBJECT, and they are not the
+  // same question. `match` is handed a string and replaces the needle filter, so it cannot
+  // express "not that one, over there" -- which is what a caller needs to skip a creature it
+  // has already proved it cannot walk to. This runs AFTER the name filter and never replaces
+  // it, so avoiding something can only ever narrow a hunt, never widen it.
+  if (avoid) list = list.filter(o => !avoid(o));
   if (me) {
     const d = o => Math.hypot(o.col - me.col, o.row - me.row);
     list.sort((a, b) => d(a) - d(b));
@@ -2289,6 +2295,9 @@ async function fightWithIntent(s, {
   // "battered skeleton,zombie", matches nothing in the room, and the whole fleet reports
   // "nothing here matches" while standing in a room full of both.
   match = null,
+  // A predicate over the OBJECT: true means "do not consider this one". The keeper passes
+  // prey it has already failed to reach; see noteUnreachablePrey in m59-autopilot.mjs.
+  avoid = null,
 } = {}) {
   const c = s.need();
   const log = [];
@@ -2305,7 +2314,7 @@ async function fightWithIntent(s, {
     await c.waitFor({ kinds: ['room-contents'], timeoutMs: 2500 });
   }
 
-  let candidates = findCreature(s, target, { includePlayers, match });
+  let candidates = findCreature(s, target, { includePlayers, match, avoid });
   if (exactTargetId != null) candidates = candidates.filter(object => object.id === Number(exactTargetId));
   if (!candidates.length) {
     const present = [...c.room.objects.values()]

@@ -1798,6 +1798,19 @@ export class Autopilot {
       // parsing. To choose a COMBAT posture, use `pullToSafeWall`.
       useSafeSpots: true,
 
+      // SKIP PREY THIS CHARACTER HAS PROVED IT CANNOT WALK TO. On by default, because the
+      // failure it prevents is silent and total: the keeper ranks the nearest creature,
+      // cannot reach it, breaks off, and ranks it again -- for ever, while every board reads
+      // "hunting". Declared here rather than left implicit so `status` reports it, per the
+      // rule that a setting which silently does nothing is how `purpose` stayed out of a
+      // schema for a year with every keeper's audit switched off.
+      //
+      // Set false to make the keeper keep trying, which is the right choice exactly when you
+      // suspect the MODEL is wrong rather than the world -- an undeclared jump, a missing
+      // fall, a door the bake does not know. Turning it off is how you reproduce the stall on
+      // purpose. It is never a fix for a room that is genuinely walled off.
+      ignoreUnreachablePrey: true,
+
       // WHERE YOU STOP IS NOT THE SAME QUESTION AS HOW YOU FIGHT, AND CONFLATING THEM COST
       // FOUR DEATHS.
       //
@@ -5022,7 +5035,16 @@ export class Autopilot {
     if (!foe) return { closed: false, why: 'it is not in the room any more' };
     const name = c.rsc.get(foe.nameRsc);
     const approach = s.world?.approachSquare?.(foe.col, foe.row);
-    if (!approach) return { closed: false, target: name, why: 'no square beside it that we can reach' };
+    if (!approach) {
+      // The geometric answer, and the definitive one: there is no square adjacent to it that
+      // this map says we can stand on. Nothing about the next pass will change that.
+      this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
+      this.note('ignoring prey we cannot walk to', {
+        target: name, at: `r${foe.row}c${foe.col}`,
+        why: 'no square beside it that this map says we can stand on',
+        how: 'remembered by SQUARE for a few minutes, so a respawn in the same corner is ' +
+             'skipped too and the next pass picks something reachable instead' });
+    }
     this.doing = 'fighting';
     const out = await s.walkTo(approach.col, approach.row, { maxSteps: approach.steps + 8 })
                        .catch(e => ({ arrived: false, reason: e.message }));
@@ -5031,7 +5053,14 @@ export class Autopilot {
       // TERMINAL_MOVEMENT_REASONS propagate rather than loop — a heading no other heading
       // can fix is reported, not retried, which is what stops a bad route being learned.
       const terminal = this.terminalMovement(out, 'close-on movement');
-      if (terminal) return { closed: false, target: name, ...terminal };
+      if (terminal) {
+        // TERMINAL means no other heading fixes it, which is precisely the claim this memory
+        // wants. A NON-terminal failure is deliberately NOT remembered: a body in the doorway
+        // is the commonest one and it walks away by itself, so forgetting it after one try
+        // would ban a perfectly good creature for five minutes.
+        this.noteUnreachablePrey(s.world?.room?.num ?? null, foe.col, foe.row);
+        return { closed: false, target: name, ...terminal };
+      }
       return { closed: false, target: name, why: out.reason || 'could not get to it' };
     }
     this.note('closed on the quarry', {
@@ -8747,6 +8776,64 @@ export class Autopilot {
     // Bounded, because a long session in a bad room must not grow this without limit.
     if (forRoom.size > 256) forRoom.clear();
     forRoom.set(`${col},${row}`, Date.now());
+  }
+
+  // PREY WE HAVE PROVED WE CANNOT WALK TO, REMEMBERED BY SQUARE.
+  //
+  // `closeOnQuarry` already DETECTS this and then forgets it, which is the whole defect: a
+  // null `approachSquare` returns "no square beside it that we can reach", the next pass
+  // ranks the same creature nearest again, and the keeper walks at it for ever. Measured on
+  // prod 2026-09-18, a character in the Mausoleum (1016) with mummies behind a locked-off
+  // corner: `stuck` repeats 23, lever null, "broke off without a landed hit or a kill",
+  // twenty-five minutes, zero kills and zero damage TAKEN -- it never got close enough to be
+  // hit. It escalated to STALL_NO_LEVER, which is correct and useless, because the only
+  // lever is "stop choosing that one" and nothing could express it.
+  //
+  // THE KEY IS THE SQUARE, NOT THE OBJECT, and that is the whole reason this works. An
+  // object id is a temporary handle -- renumbered on every system save, recycled within
+  // hours -- so a remembered id would name a different monster by morning AND would miss the
+  // replacement that spawns in the same corner thirty seconds later. The corner is the
+  // durable fact. Keyed "col,row" per room, exactly like noteUnreachableSpot above.
+  //
+  // AND IT EXPIRES, for the reason the critic rubric insists on: "unreachable" is a fact
+  // about our model of the world, never about the world. A door opens, a body moves, a jump
+  // gets declared -- so this is a few minutes of local memory and not a verdict. Same TTL as
+  // the spot memory, and a square gets another chance once the reason has had time to move.
+  noteUnreachablePrey(room, col, row) {
+    if (room == null || col == null || row == null) return;
+    const per = (this.unreachablePreySpots ??= new Map());
+    const forRoom = per.get(room) ?? per.set(room, new Map()).get(room);
+    if (forRoom.size > 256) forRoom.clear();
+    forRoom.set(`${col},${row}`, Date.now());
+  }
+
+  /** Squares in this room where prey has recently proved unreachable, or null. */
+  unreachablePreyIn(room) {
+    const ttl = this.policy.unreachableSpotMs ?? UNREACHABLE_SPOT_MS;
+    const now = Date.now();
+    const forRoom = this.unreachablePreySpots?.get(room);
+    if (!forRoom) return null;
+    const live = new Set();
+    for (const [k, at] of forRoom) {
+      if (now - at <= ttl) live.add(k);
+      else forRoom.delete(k);
+    }
+    if (!forRoom.size) this.unreachablePreySpots.delete(room);
+    return live.size ? live : null;
+  }
+
+  // The predicate `skills.fight` takes. Null when there is nothing to avoid, so the common
+  // case adds no filter at all rather than an always-true one.
+  //
+  // DELIBERATELY NOT FOLDED INTO `unreachableIn`. That set feeds the safe-spot selector, and
+  // "a square I could not walk to" and "a square something I cannot reach is standing on"
+  // are different claims -- the second square may be perfectly good to stand on. Same shape,
+  // same TTL, separate stores, because merging them would quietly shrink the wall book.
+  preyAvoid(room) {
+    if (this.policy.ignoreUnreachablePrey === false) return null;
+    const bad = this.unreachablePreyIn(room);
+    if (!bad) return null;
+    return o => o?.col != null && o?.row != null && bad.has(`${o.col},${o.row}`);
   }
 
   // A failed rest must choose somewhere else on the next attempt. This is local,
@@ -18860,6 +18947,10 @@ export class Autopilot {
                                         // otherwise substring against "battered skeleton,zombie"
                                         // and find nothing in a room full of both.
                                         match: this.huntMatch(engageName),
+                                        // Prey this character has already proved it cannot walk
+                                        // to, skipped by SQUARE so a respawn in the same corner
+                                        // is skipped too. Null when there is none.
+                                        avoid: this.preyAvoid(s.world?.room?.num ?? null),
                                         preferId: claimedSwing,
                                         exactTargetId: claimedSwing,
                                         disengageAt: safe.fleeAt, loot: true,

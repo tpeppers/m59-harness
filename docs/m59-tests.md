@@ -809,6 +809,16 @@ the records it describes.
   a sixteen-character ceiling that was ours rather than the server's, and a hyphen we
   admitted and the server refuses, which turned a readable error into a bare
   `BP_CHARINFO_NOT_OK` with nothing in it) and
+  `node tools/m59-preyreach-test.mjs` (13 — **prey the keeper has proved it cannot walk to**.
+  `closeOnQuarry` always detected it and never remembered it, so the next pass ranked the same
+  creature nearest and walked at it again, for ever, while every board read `hunting`. The case
+  it pins hardest is the KEY: the memory is a SQUARE, not an object id, because an id is
+  renumbered on every system save and recycled within hours — so an id-keyed memory would chase
+  each respawn in the same walled-off corner in turn. It also pins that the memory EXPIRES,
+  which is the critic rubric's rule that "unreachable" is a fact about our model of a room and
+  never about the room; that an empty memory yields no filter rather than an always-true one;
+  and that it does not leak into the safe-spot selector, because a square something unreachable
+  is standing on may be a perfectly good square to stand on. Offline) and
   `node tools/m59-buyers-test.mjs` (38 — **what a merchant will actually buy**: that a gem
   is also a reagent and the apothecaries' exclusion turns on it, that Marion's smith takes
   no body armour, that an exclusive rule excludes a sibling of the same family, and above
