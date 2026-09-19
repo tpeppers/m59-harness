@@ -219,7 +219,38 @@ export function keeperView(state, roomView, mapRoomFor = () => null) {
     ...stateOut,
     ...(projection ? projectionOut : {}),
     room: projectionRoom ?? stateRoom,
-    you: projection?.you ?? null,
+    // NO ROOM VIEW IS NOT THE SAME AS A DISAGREEING ONE, AND THIS LINE USED TO TREAT THEM
+    // ALIKE — while the line directly above it did not.
+    //
+    // `room` falls back to the keeper's own state and `you` did not, so an absent room view
+    // produced a character WITH a room and WITHOUT a position. That is the worst available
+    // shape: `chebyshev(null, goal)` is NaN, every comparison against NaN is false, and a
+    // caller that aims at a square therefore neither arrives nor fails. `crawl_to` sidestepped
+    // onto whatever /movecheck offered and wandered for its whole deadline, reporting
+    // `at: "rnullcnull"`.
+    //
+    // Measured 2026-09-19 on the live fleets: 21 of 23 shadow and 22 of 24 PROD characters
+    // answered `status` with `you: null`, intermittently and per-character — shadow01 and
+    // shadow02 were both in room 801 and only one had a position. It is NOT the keeper.
+    // Asked directly in the same second, shadow22's keeper served
+    // `/state.you = {col:3,row:45,x:224,y:2896}` and a `/room-view` whose `room_wire` was
+    // complete and byte-identical to `/state`'s. And `look`, which takes a different path,
+    // answered with a position for the same characters in the same second — never null where
+    // `status` was null, over seven characters sampled. So the position was present, correct,
+    // and discarded here.
+    //
+    // THE WITHHOLDING IS KEPT WHERE IT WAS EARNED. When `rv` exists and disagrees with the
+    // state's room, a position IS worse than none — it is an arrival report describing what
+    // stands next to you somewhere else, which is the note directly above `agrees` and the
+    // reason `stale_render` exists. That case still yields null. This only covers `!rv`,
+    // where there is no conflicting evidence at all and `s.you` came out of the same `/state`
+    // payload as `s.room`.
+    you: projection?.you ?? (rv ? null : (s.you ?? null)),
+    // AND IT SAYS WHICH CLOCK IT CAME OFF. The keeper's state `you` carries `id` where a
+    // rendered one carries `object_id`, and none of the appearance fields. Anything reading
+    // row/col/x/y cannot tell them apart and does not need to; anything reading an id can,
+    // and should be able to find out without guessing.
+    ...(projection?.you ? {} : (!rv && s.you ? { you_source: 'keeper state, not the room view' } : {})),
     // The shape `arrivalReport` reads, and the shape a real `World.snapshot()` returns.
     vitals: { health: s.hp ?? null, mana: s.mana ?? null, vigor: s.vigor ?? null },
     objects: projection?.objects ?? [],

@@ -315,6 +315,41 @@ for (const absent of [null, undefined, { error: 'no room data' }]) {
   is(bare.stale_render, undefined, 'an absent room view is not a stale one');
 }
 
+// ------------------------------------------------- NO room view, which is NOT a stale one
+//
+// The defect this pins, measured on both live fleets 2026-09-19: `status` answered
+// `you: null` for 21 of 23 shadow and 22 of 24 prod characters, intermittently and
+// per-character, while the keeper held the position all along and `look` — a different path —
+// returned it for the same characters in the same second. The cause was this function
+// treating "no room view" the same as "a room view that disagrees", on the one line where
+// `room` right above it already knew the difference.
+//
+// The consequence was not a missing field, it was a body with a ROOM and no POSITION, which
+// makes `chebyshev` NaN and turns every aim into a walk that neither arrives nor fails.
+const blind = keeperView({ ...STATE, you: { id: 77, row: 9, col: 4, x: 288, y: 608 } },
+                         null, mapFor);
+is(blind.you, { id: 77, row: 9, col: 4, x: 288, y: 608 },
+  'with NO room view the position falls back to the keeper state, as `room` always has');
+ok(blind.room?.num === STATE.room.num,
+  'and the room still comes from the state, so the pair is from ONE read');
+ok(blind.you_source === 'keeper state, not the room view',
+  'and it says which clock it came off, because the shapes differ by an id field');
+ok(blind.stale_render === undefined,
+  'nothing is stale — there was no second opinion to disagree with');
+
+// The withholding that was EARNED is untouched: a room view that names another room still
+// yields no position, because one from a room we have left is worse than none.
+const stale = keeperView({ ...STATE, room: { name: 'Cor Noth', num: 150 },
+                           you: { id: 77, row: 9, col: 4 } }, FAMILIARS, mapFor);
+is(stale.you, null,
+  'a DISAGREEING room view still withholds the position — the fallback must not reach it');
+ok(stale.you_source === undefined, 'and claims no source for a position it did not give');
+
+// And a state with no position of its own is still null rather than undefined.
+const neither = keeperView({ ...STATE, you: undefined }, null, mapFor);
+is(neither.you, null, 'no room view and no state position is null, not undefined');
+ok(neither.you_source === undefined, 'and carries no source');
+
 const nothing = keeperView(null, null, mapFor);
 is(nothing.room, null, 'no state and no room view is a shape, not a throw');
 is(nothing.objects, [], 'still an array');
