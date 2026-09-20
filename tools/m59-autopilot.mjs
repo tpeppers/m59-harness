@@ -3517,6 +3517,25 @@ export class Autopilot {
   // The bar is now "am I on a wall", which is the question every caller thought it was asking.
   holdWorks() { return !!this.hold; }
 
+  // ONE WALL-RUSH PER ROOM PER WINDOW, for the doomed rung in passFleeAndRest.
+  //
+  // That rung fires on EVERY pass while health is under `doomedInOpenBelow`, and the rush is a
+  // walk rather than a test — so without a bound, a room with no reachable wall turns the
+  // emergency into a treadmill that re-walks and re-fails while the freeze below it never gets
+  // asked. The window is deliberately short: this is an emergency, and a room whose occupancy
+  // changed may offer a wall it could not twenty seconds ago.
+  //
+  // Keyed on the ROOM, so walking into a new one is always allowed a fresh attempt. A rush that
+  // SUCCEEDS needs no bound of its own — `currentRecoveryWall()` answers on the next pass and
+  // the caller skips the rush entirely.
+  noteSpotRush(room) { this.spotRush = { room: room ?? null, at: Date.now() }; }
+
+  spotRushedAt(room) {
+    const last = this.spotRush;
+    if (!last || last.room !== (room ?? null)) return false;
+    return Date.now() - last.at < (this.policy.doomedSpotRetryMs ?? 20_000);
+  }
+
   // DOES THE SQUARE I AM ON SHELTER ME — ASKED OF THE GEOMETRY, NEVER OF THE LEDGER.
   //
   // Operator, 2026-09-10: "do *not* consult the safe spot ledger regarding safe walls, use the
@@ -16489,6 +16508,53 @@ export class Autopilot {
     // character that wants a smith, a teller or a bed. It is no longer a SURVIVAL strategy, and
     // `withdrawForFood` and the shop journeys keep it for what it is good at.
     if (doomed && this.policy.panicLogoff !== false) {
+      // MOVE TO THE NEAREST WALL FIRST, THEN FREEZE. Operator, 2026-09-20: "the fix imho is to
+      // move to the nearest safe spot and then play dead."
+      //
+      // THE HOLE THIS FILLS, and it is the one that was killing the fleet. `playDead` refuses
+      // outright in the open against monsters (2026-09-18: "it will not save you from
+      // monsters") and its own refusal note promises that "the ladder falls through to
+      // something that MOVES". For a character that is TRAVELLING that is true — the travel
+      // guard's shelter rungs move it. For a character standing in a farm room it was not true
+      // of anything: this rung noted and fell through, the rest gate below refuses to rest in
+      // the open, and no rung between here and the bottom of the ladder relocates the body.
+      // `continueSurvivalDecision`, which the refusal's own comment says "drains this
+      // replacement in the current pass", is never called anywhere in passFleeAndRest.
+      //
+      // Measured on prod over the 36 deaths of 2026-09-19/20: 36/36 died with
+      // `was.moving: false`, 35/36 at or below a quarter of health (most at 1-7 of ~55),
+      // 36/36 with `fled_in_time` under 0.25 against a recorded threshold of ~0.68, and
+      // 36/36 having taken ZERO shelter in the room they died in while every one of them
+      // carried a budget of 4. 19 of the 36 were `doing: "stalled"` — not travelling, so not
+      // covered by the travel guard's emergency, which is the only place `doomedInOpenBelow`
+      // had teeth.
+      //
+      // WHY THIS IS NOT THE TOWN RUN THE OPERATOR OVERTURNED ON 2026-09-10. That argument was
+      // against DISTANCE as a survival strategy — "dozens of seconds of being hit on the way
+      // out, through the rooms that were already killing us". The nearest safe wall is a few
+      // squares inside the room we are already standing in, and it is the precondition the
+      // freeze needs rather than an alternative to it. Nothing here runs for a town.
+      //
+      // AND IT DOES NOT RETURN. The spot is taken as a side effect and the pass carries on into
+      // the playDead immediately below, because moving to the wall is only half the sequence —
+      // the freeze, the turn and the heal are the other half, and a `return HANDLED` here would
+      // strand the character at a wall it never used. That is the same correction the vigor rung
+      // further down already carries in its own words.
+      const wallBefore = this.currentRecoveryWall();
+      if (!wallBefore && !this.spotRushedAt?.(room?.num)) {
+        this.noteSpotRush(room?.num);
+        const rushed = await this.takeSafeSpot(
+          `doomed at ${v.health.value}/${v.health.max} with ${near.length} adjacent — the ` +
+          `nearest wall first, because the freeze is refused in the open`,
+          null, { source: 'doomed', recovery: true, nearestOnly: true })
+          .catch(e => ({ took: false, why: e?.message ?? 'take_safe_spot threw' }));
+        this.note(rushed?.took ? 'ran to the nearest wall before freezing'
+                               : 'no wall to run to — freezing is all that is left', {
+          health: v.health.value, adjacent: near.length,
+          took: !!rushed?.took, why: rushed?.why ?? null,
+          doomed_below: this.policy.doomedInOpenBelow ?? 0.3,
+        });
+      }
       const wall = this.wallHere();
       if (await this.playDead('at ' + v.health.value + ' health with ' + near.length +
                               ' adjacent' + (wall?.ok ? ', behind a wall the geometry confirms'
