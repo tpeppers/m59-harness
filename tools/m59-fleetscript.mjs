@@ -1687,6 +1687,70 @@ export function crawlChoice({ neighbours = [], at, goal, avoid = [],
  */
 export const rest = (opts = {}) => ({ do: 'rest', ...opts });
 
+// ───────────────────────────────────────────────── SETTING A SCENARIO UP INSTEAD OF PLAYING IT
+//
+// THE FOUR STEPS BELOW EXIST FOR SPIKE SCRIPTS, and they were written the day the first one
+// could not run without them. A spike asks a question about the world — "does this kind of
+// square actually protect a body" — and the honest form of that question needs several
+// characters in a known place, in a known state, at the same moment. Walked there, none of that
+// holds: on 2026-09-20 six characters sent to three monster rooms took over seven minutes,
+// arrived at different times, one arrived at 2 of 54 health and another never reached a square
+// the keeper would call a safe spot at all. The measurement was of the roads, not of the walls.
+//
+// m59-dm.mjs already said why, in its own header: "setting a test scenario up by PLAYING it
+// does not scale ... the same placement over this socket is one packet and about a millisecond,
+// and it cannot fail halfway because there is no halfway." These wrap that for a step list.
+//
+// ═══ THESE ARE LAB POWERS AND THEY REFUSE TO TOUCH PRODUCTION ═══
+//
+// The DM socket has no authentication — the server's only protection is an IP mask — and it can
+// move a body, rewrite its health and set its stats. That is exactly right for a scenario on a
+// local test server and it is never right for the fleet people are actually playing. So every
+// step here refuses unless the fleet is one the operator has named as a lab in
+// `M59_LAB_FLEETS` (default: shadow). The refusal is a thrown error rather than a warning: a
+// guard that can be skipped by not reading the log is not a guard.
+//
+// It is deliberately NOT keyed on the server being loopback. m59-dm.mjs already enforces that
+// and it is a different question: "is this machine allowed to DM that server" versus "is this
+// FLEET one we are willing to rewrite". Prod runs against a remote server today and could run
+// against a local one tomorrow, and on the day it does, a loopback check would silently start
+// permitting this.
+const LAB_FLEETS = () => new Set(String(process.env.M59_LAB_FLEETS ?? 'shadow')
+  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
+
+export function assertLabFleet(what, fleet = fleetName()) {
+  const name = String(fleet ?? '').toLowerCase();
+  if (!LAB_FLEETS().has(name))
+    throw new Error(
+      `${what} is a LAB power and fleet "${fleet}" is not a lab. It moves bodies and rewrites ` +
+      `health over an unauthenticated socket, which is a scenario setup on a test server and ` +
+      `vandalism on a live one. Name the lab fleets in M59_LAB_FLEETS if this is wrong.`);
+}
+
+// PUT A BODY ON AN EXACT SQUARE. `at` is {row, col} in KOD/RoomGeometry order, which is the
+// order m59-dm.mjs's CLI contract states and the opposite of the {col,row} a look() prints —
+// the two orders are the single most reliable way to get a placement silently wrong, so this
+// takes the named fields and never a pair.
+export const place = (room, at = {}, opts = {}) =>
+  ({ do: 'place', room, row: at.row, col: at.col, ...opts });
+
+// BACK TO FULL, AND WITHOUT THE AILMENTS. A spike that starts one arm at 2 of 54 health has
+// measured the survival ladder rather than the thing it came to measure. Poison is cleared for
+// the same reason it is an EXCLUDED verdict rather than a failure in spike-safe-walls: a tick
+// gets through any geometry ever built, so it is noise in every experiment about walls.
+export const healUp = (opts = {}) => ({ do: 'heal', ...opts });
+
+// WRITE DOWN WHERE EVERYONE WAS, AND PUT THEM BACK AFTERWARDS.
+//
+// A spike is run repeatedly and must not cost a fleet its afternoon: `snapshot` records each
+// controlled character's room, square and health under a label, and `restore` puts them back.
+// It is deliberately a SHALLOW save — position and health, not inventory or abilities — because
+// those are what a scenario moves and restoring more than you moved is its own way to lose
+// work. The file lands in substrate/spikes/, which is gitignored like the rest of substrate.
+export const snapshot = (label, opts = {}) => ({ do: 'snapshot', label, ...opts });
+export const restore = (label, opts = {}) => ({ do: 'restore', label, ...opts });
+
+
 /**
  * FOUND A GUILD. Five thousand shillings, from the PURSE, standing next to Frular.
  *
@@ -2780,6 +2844,63 @@ async function runStep(ctx, agent, rawStep, state) {
         return { ok: false, said: out.said.slice(0, 120), amount,
                  why: `banker refused: ${out.said.slice(0, 80)}` };
       return { ...(await settled(amount)), said: out.said.slice(0, 120) };
+    }
+
+
+    // ─────────────────────────────────────────────── LAB SCENARIO STEPS. See `place` above for
+    // why these exist and why they refuse on any fleet not named in M59_LAB_FLEETS.
+    case 'place': {
+      assertLabFleet('place()', ctx.fleet);
+      const { row, col, room } = step;
+      if (!Number.isInteger(row) || !Number.isInteger(col) || !Number.isInteger(Number(room)))
+        return { ok: false, why: `place() needs an integer room and {row, col} — got ` +
+                                 `room=${room} row=${row} col=${col}` };
+      const D = await import('./m59-dm.mjs');
+      const who = (await observe(agent).catch(() => null))?.character ?? ctx.characterOf?.(agent) ?? agent;
+      const r = await D.relocate([who], Number(room), { row, col })
+        .catch(e => ({ ok: false, why: e.message }));
+      if (r?.ok === false) return { ok: false, why: `place(${room} @ ${col},${row}) refused: ${r.why}` };
+      // READ IT BACK. A relocate that names an object the server renumbered lands somewhere
+      // else and reports nothing — m59-dm.mjs's own header warns that ids move around a save.
+      const now = await observe(agent).catch(() => null);
+      const there = Number(now?.room) === Number(room);
+      return { ok: there, room: now?.room ?? null,
+               why: there ? undefined : `asked for room ${room}, ended in ${now?.room ?? 'nowhere'}` };
+    }
+
+    case 'heal': {
+      assertLabFleet('healUp()', ctx.fleet);
+      const D = await import('./m59-dm.mjs');
+      const who = (await observe(agent).catch(() => null))?.character ?? ctx.characterOf?.(agent) ?? agent;
+      await D.heal([who]).catch(() => null);
+      const now = await observe(agent).catch(() => null);
+      return { ok: true, health: now?.hpText ?? null };
+    }
+
+    case 'snapshot':
+    case 'restore': {
+      assertLabFleet(`${step.do}()`, ctx.fleet);
+      const { join } = await import('node:path');
+      const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import('node:fs');
+      const dir = join(REPO_ROOT, 'substrate', 'spikes');
+      const file = join(dir, `${String(step.label ?? 'default').replace(/[^\w.-]/g, '_')}.json`);
+      if (step.do === 'snapshot') {
+        const seen = await observe(agent).catch(() => null);
+        mkdirSync(dir, { recursive: true });
+        // One file, many agents, merged — each agent's step writes its own row, and the runner
+        // may be running them in parallel, so read-modify-write rather than overwrite.
+        const held = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+        held[agent] = { room: seen?.room ?? null, health: seen?.hpText ?? null, at: Date.now() };
+        writeFileSync(file, JSON.stringify(held, null, 1));
+        return { ok: !!seen, saved: held[agent] };
+      }
+      if (!existsSync(file)) return { ok: false, why: `no snapshot named "${step.label}"` };
+      const held = JSON.parse(readFileSync(file, 'utf8'))[agent];
+      if (!held?.room) return { ok: false, why: `snapshot "${step.label}" has no row for ${agent}` };
+      const D = await import('./m59-dm.mjs');
+      const who = (await observe(agent).catch(() => null))?.character ?? agent;
+      await D.relocate([who], Number(held.room), {}).catch(() => null);
+      return { ok: true, restored_to: held.room };
     }
 
     case 'rest': {
