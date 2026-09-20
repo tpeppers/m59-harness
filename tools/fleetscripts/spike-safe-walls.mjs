@@ -115,24 +115,69 @@
 // That is why the 411 all-refused-but-visible squares are not walls, and it is why clause two
 // cannot stand alone. It was never a rival definition — it is a subset marker inside clause one.
 //
-// ── THE STATE OF THE LIVE EXPERIMENT ───────────────────────────────────────────────────────
+// ── THE LIVE EXPERIMENT, AND WHAT IT PROVED — 2026-09-20 ───────────────────────────────────
 //
-// It has still never produced an admissible trial, and the last attempt says why in its own
-// output: a controlled reproduction placed one body on the square that "killed three people",
-// one on an all-refused square, and one on OPEN GROUND at `attackers: 28` — and all three lost
-// nothing over four minutes. When maximally exposed ground costs nothing, the room is not
-// attacking anybody and no verdict about walls can be read out of it. That is experimental
-// error, reported as such.
+// THE DEBT IS PAID. This section used to say the live half had never produced an admissible
+// trial. It has now, and the model survived it: `tools/m59-wallproof.mjs --collect --analyze`,
+// 23 agents, 22.8 minutes, 200 incoming attacks.
 //
-// So the model rests on the geometry, on the server's own reach test, and on the absence of a
-// single clean counterexample in 3,700 postmortems. It does NOT rest on the live half, which
-// remains a debt this file owes.
+// THE MEASUREMENT CHANGED, and that is why it finally worked. Six designs watched the health
+// bar and reasoned backwards to "was I attacked". The flight recorder makes it direct — the
+// server announces every swing in words ("You dodge the orc's attack", "The troll wounds you
+// with its attack") — so attacks are COUNTED. Poison then cannot enter at all, because a
+// poison tick emits no attack message; regeneration cannot hide a beating, because an attack
+// counts whether or not the damage was healed back; and a quiet room shows up honestly as an
+// empty control cell instead of as a silent pass.
+//
+// THE 2x2. Every second of exposure is gated the way the operator required the evidence to be:
+// counted only while a NON-POISONING MONSTER WAS WITHIN REACH AND OBSERVED CHANGING FINE
+// POSITION between polls. Seconds when nothing was near test no square on either kind of
+// ground, and leaving them in is what drove the earlier rounds' rates to zero.
+//
+//                          attacks   admissible seconds   squares    rate
+//     A  wall, NOT swinging      0          1290             19     0.000 /s
+//     B  wall, swinging         23           120              4     0.192 /s
+//     C  open, NOT swinging     15           223             19     0.067 /s
+//     D  open, swinging         22            15              3     1.446 /s
+//
+// Cell A is the claim. Twenty-one minutes of standing on `attackers === 0` across NINETEEN
+// distinct squares, not swinging, with a monster in reach and visibly moving, and NOT ONE
+// incoming attack. At cell C's rate that window predicts 87 attacks; Poisson P(0 | 87) is
+// 2.3e-38. The zero is not one lucky square: the largest contributor is 40% of the time.
+//
+// AND THE CONFOUND-FREE VERSION, which is the part that settles it. Two squares were observed
+// in BOTH states, so room, geometry, monsters and body are held constant by construction and
+// the only variable left is whether the body swung:
+//
+//     square        NOT swinging          swinging
+//     516:1,31      0 attacks / 965s      17 attacks / 79s
+//     516:1,28      0 attacks / 128s       4 attacks / 70s
+//
+// ── WHAT THIS SETTLES, INCLUDING AGAINST THIS FILE'S OWN EARLIER CLAIMS ────────────────────
+//
+// THE MODEL AT THE TOP IS CONFIRMED AS STATED — both clauses of it. `attackers === 0` is
+// sufficient, and it is sufficient ONLY while the body has not swung. Those are not two
+// findings; cell A and cell B are the same squares.
+//
+// "FREE SHOTS" ARE NOW DISPROVED IN PLAY, not merely by argument. Swinging from a safe wall
+// drew 0.192 attacks/s — slightly MORE than standing in the open doing nothing (0.067/s). A
+// safe wall does still help a great deal while fighting, 1.446 -> 0.192 against open ground,
+// a 7.5x reduction. But it is not free, and a policy that admits squares because they offer
+// `free_shots > 0` is selling a thing that does not exist.
+//
+// AN EARLIER VERSION OF THIS FILE REPORTED "THE WALL LEAKED" AND IT WAS AN INSTRUMENT FAULT.
+// `autopilot stop` returns `running:false` and is reverted by a watchdog within three seconds,
+// so a staged wall-versus-open comparison measured a farming keeper in both phases: 18 health
+// lost on the "wall" against 14 in the "open" was the difference between two fights, not two
+// squares. It is recorded here because the retraction is worth more than the claim was.
 //
 // ── WHAT WOULD KILL THIS MODEL ─────────────────────────────────────────────────────────────
 //
-//   A body whose FRAME POSITION equals a square with `attackers === 0`, with `swinging` false
-//   and `ms_since_swung` large, losing health to something `was_killed_by_player` says is not a
-//   player. One of those is enough. Nine deaths beside a wall are not one death on it.
+//   ONE incoming attack message, arriving at a body standing on a square with `attackers === 0`
+//   that has not swung within ten seconds, while a non-poisoning monster is within reach and
+//   observed at two or more distinct fine positions. `m59-wallproof.mjs --analyze` prints cell A
+//   with exactly that definition, so re-running it is the standing test. One is enough — and
+//   nine deaths recorded BESIDE a wall are still not one death ON it.
 //
 import { act, walk, rest, verify, place, healUp, snapshot } from '../m59-fleetscript.mjs';
 import { geometryFor, exposureAt, gridDisagreementAt } from '../m59-safespots.mjs';

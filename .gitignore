@@ -618,6 +618,14 @@ _verify2.mjs
 #    every .json in scripts/ and an example in there is an extra behaviour on the board.
 /substrate/menagerie/scripts/
 
+# THE SAFE-WALL PROOF RECORDING. Several megabytes of one afternoon's polls and combat
+# messages from one machine's shadow fleet — the raw material the 2x2 in
+# tools/fleetscripts/spike-safe-walls.mjs was computed from, not a fact about the tooling.
+# The CONCLUSION is committed, in that file's comments, where it can be read and argued with;
+# anybody who doubts it re-runs `m59-wallproof.mjs --collect` against their own fleet rather
+# than re-analysing ours. See tools/m59-wallproof.mjs.
+/substrate/wallproof.jsonl
+
 # THE CLEAN SAFE-WALL LEDGER. This machine's evidence about this machine's fleet: it names
 # agent slots and it is a measurement of a live roster, not a fact about the tooling. It is
 # also deliberately re-startable — the whole point of it is that `--report` counts only the
