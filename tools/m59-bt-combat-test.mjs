@@ -275,7 +275,11 @@ section('TakeSafeSpotAction — SUCCESS with no safe spots (stays put)');
   assert('safe_spot_taken set', !!bb.ws.safe_spot_taken);
 }
 
-section('TakeSafeSpotAction — walks to best spot by free_shots');
+// RANKED BY DISTANCE, NOT BY FREE SHOTS. A hurt character pays for every step it takes to
+// reach shelter; it does not get paid for the firing line it finds when it arrives, because
+// swinging from a wall draws 0.192 incoming attacks/s against 0.067/s for standing idle in
+// the open (tools/m59-wallproof.mjs, 2026-09-20). This case used to assert the opposite.
+section('TakeSafeSpotAction — walks to the NEAREST spot');
 {
   const walked = [];
   const s = {
@@ -285,8 +289,8 @@ section('TakeSafeSpotAction — walks to best spot by free_shots');
   const c = makeClient({ selfCol: 1, selfRow: 1 });
   const spots = [
     { col: 3, row: 3, free_shots: 2, steps_away: 4 },
-    { col: 5, row: 5, free_shots: 5, steps_away: 6 },   // best: highest free_shots
-    { col: 2, row: 2, free_shots: 1, steps_away: 1 },
+    { col: 5, row: 5, free_shots: 5, steps_away: 6 },   // the most free shots, and the furthest
+    { col: 2, row: 2, free_shots: 1, steps_away: 1 },   // best: nearest
   ];
   const bb = { _bt: {}, ws: { _safeSpots: spots }, session: { s }, client: c };
   const node = TakeSafeSpotAction();
@@ -294,8 +298,8 @@ section('TakeSafeSpotAction — walks to best spot by free_shots');
   ok('result is SUCCESS', result, SUCCESS);
   assert('walked to best spot', walked.length > 0, JSON.stringify(walked));
   if (walked.length) {
-    ok('walked to highest free_shots col', walked[0].col, 5);
-    ok('walked to highest free_shots row', walked[0].row, 5);
+    ok('walked to the nearest spot, col', walked[0].col, 2);
+    ok('walked to the nearest spot, row', walked[0].row, 2);
   }
   assert('safe_spot_taken set', !!bb.ws.safe_spot_taken);
 }

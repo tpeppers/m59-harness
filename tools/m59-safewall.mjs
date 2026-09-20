@@ -30,10 +30,40 @@
 //             is next to you and the BSP will not let it make the step. This is the
 //             operator's definition, and until now it only ever ORDERED the list.
 //
-// They overlap and neither implies the other. Which one actually keeps a character alive is
-// an open question, and it is open BECAUSE the only outcome data anyone had was the book.
-// `m59-restwatch.mjs` is the experiment that settles it: every predicate below is recorded
-// on every rest, and one clean week says which of them has a violation and which does not.
+// THE QUESTION IS CLOSED, AND SIGHT WON. 2026-09-20, tools/m59-wallproof.mjs.
+//
+// It was open because the only outcome data anyone had was the book, and the book could not
+// answer it — every row was filed against a keeper's HOLD rather than the body's position.
+// So the experiment was run in play instead, counting ATTACK MESSAGES rather than damage
+// (the server names every swing, and a poison tick emits none, so poison cannot enter):
+//
+//                          attacks   admissible seconds   squares    rate
+//     wall, NOT swinging        0          1290             19     0.000 /s
+//     wall, swinging           23           120              4     0.192 /s
+//     open, NOT swinging       15           223             19     0.067 /s
+//     open, swinging           22            15              3     1.446 /s
+//
+// Every second of exposure gated on a non-poisoning monster being within reach AND observed
+// changing fine position, so quiet time cannot pad the denominator. At the open-ground rate
+// the wall column predicts 87 attacks and observed none: P(0 | 87) = 2.3e-38. And two
+// squares were seen in BOTH states, which holds room, geometry and monsters constant and
+// leaves swinging as the only variable:
+//
+//     516:1,31   0 attacks / 965s not swinging   vs   17 attacks / 79s swinging
+//     516:1,28   0 attacks / 128s not swinging   vs    4 attacks / 70s swinging
+//
+// SIGHT IS SUFFICIENT AND APPROACH IS NOT A RIVAL. `attackers === 0` protects absolutely
+// while the body has not swung. APPROACH could never have stood alone anyway, by arithmetic
+// rather than evidence: `gridDisagreementAt` walks RING, the eight squares TOUCHING you —
+// radius 1 — while MONSTER_REACH is 3 and the server's test is `SquaredDistanceTo <= range^2`
+// (monster.kod:1682). "Every approach refused" says only that nothing can step into contact;
+// a monster two or three squares away with line of sight never needs to. It is a subset
+// marker inside sight, not a second mechanism.
+//
+// AND THE CONTRACT IS THE OTHER HALF OF THE RULE. A wall is not a place that is safe; it is
+// a place that is safe UNTIL YOU SWING. Swinging from one drew MORE incoming than standing
+// in the open doing nothing. `m59-restwatch.mjs` still records every predicate on every rest,
+// which is what would catch this being wrong.
 //
 // NOTHING HERE READS AN OUTCOME. This file is a function of geometry, and that is the whole
 // point — a verdict that consults a history is a verdict that can be poisoned by one.
@@ -61,10 +91,14 @@ export const SAFE_WALL_RULE = 'no_line_of_sight';
 export const PREDICATES = Object.freeze({
   // Nothing within radius 3 can see this square. The rule in force.
   no_line_of_sight: (m) => m.attackers === 0,
-  // ...and we can hit something that cannot hit back. `safeWalls()` requires this too, so
-  // it is recorded separately: a wall with no free shots is still a wall to REST in, and
-  // conflating "safe" with "useful to fight from" is why resting spots were scored on
-  // whether they made good gun positions.
+  // ...and we can hit something that cannot hit back. `safeWalls()` NO LONGER requires this
+  // — the warning this comment has carried all along was acted on 2026-09-20. A wall with no
+  // free shots is still a wall to REST in, and conflating "safe" with "useful to fight from"
+  // is why resting spots were scored on whether they made good gun positions. It is also a
+  // near-identity: PLAYER_DISC is a subset of MONSTER_DISC, so once `attackers === 0` this
+  // agrees with `no_line_of_sight` on 23,601 of 23,605 squares. And "cannot hit back" is
+  // false as a promise anyway — swinging from a wall drew 0.192 incoming/s. Still computed,
+  // because the column is cheap and a rival reading must stay falsifiable.
   no_los_with_free_shot: (m) => m.attackers === 0 && m.free_shots > 0,
   // The operator's definition: at least one approach the coarse grid offers, the mover
   // refuses. In room 39 this is 286 of 578 walkable squares (49.5%) — which is the reading

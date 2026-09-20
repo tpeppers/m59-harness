@@ -4561,10 +4561,15 @@ export class Autopilot {
   }
 
   currentRecoveryWall() {
-    // Exactly the safeWalls membership rule, evaluated only at our current square.
+    // Exactly the safeWalls membership rule, evaluated only at our current square — and it
+    // has to STAY exactly that, which is why the `free_shots > 0` test that used to be on
+    // this line is gone. This is the square a hurt character RECOVERS on; demanding a firing
+    // line from it was asking a resting spot to be a gun position, and the free shots it
+    // promised were disproved in play (0.192 incoming/s while swinging from a wall, against
+    // 0.067/s standing idle in the open — tools/m59-wallproof.mjs, 2026-09-20).
     if(this.s.client?.self?.predicted)return null;
     const wall=this.wallHere(),geo=this.s.world?.geometry;
-    return wall?.ok && wall.free_shots>0 && geo?.walkable?.(wall.row,wall.col) ? wall : null;
+    return wall?.ok && geo?.walkable?.(wall.row,wall.col) ? wall : null;
   }
 
   adoptRecoveryWall() {

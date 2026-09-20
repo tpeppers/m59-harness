@@ -224,12 +224,19 @@ export function TakeSafeSpotAction(opts = {}) {
             // No scored spots — stay put, mark taken.
             return true;
           }
-          // Walk to the best spot (highest free_shots, then lowest steps_away).
+          // Walk to the NEAREST spot, not the one with the most `free_shots`.
+          //
+          // Ranking by free shots sold a benefit that does not exist: swinging from a safe
+          // wall draws 0.192 incoming attacks/s, MORE than standing in the open doing
+          // nothing (0.067/s) — measured 2026-09-20, tools/m59-wallproof.mjs. And on a
+          // square with `attackers === 0`, free_shots is identically `our_ground`, so the
+          // old sort was ordering walls by how much floor happened to be near them.
+          // Distance is the thing that actually costs a hurt character something.
           const best = spots
             .filter(sp => sp.col != null && sp.row != null)
             .sort((a, b) =>
-              (b.free_shots ?? 0) - (a.free_shots ?? 0) ||
-              (a.steps_away ?? 0) - (b.steps_away ?? 0)
+              (a.steps_away ?? 0) - (b.steps_away ?? 0) ||
+              (b.back_cover ?? 0) - (a.back_cover ?? 0)
             )[0];
           if (!best) return true;
 

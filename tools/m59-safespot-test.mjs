@@ -1335,8 +1335,17 @@ console.log('THE SAFE WALLS ARE THE RED SQUARES IN THE CLIENT, AND NOTHING ELSE 
   ok('no membership gate survives in safeSpots — not the coarse-refusal one, not standability, not exposure',
      !/coarseRefusesIt/.test(fn) && !/standable\(r, c\)\) continue/.test(fn) &&
        !/our_ground === 0\) continue/.test(fn) && !/attackers >= MAX_ATTACKERS\) continue/.test(fn));
-  ok('safeWalls is the overlay rule: coarse-walkable, no attacker in monster reach, a free shot for us',
-     /if \(!geo\.walkable\(r, c\)\) continue;[\s\S]{0,200}ex\.attackers !== 0 \|\| \(ex\.free_shots \?\? 0\) <= 0\) continue/.test(src));
+  // THE RULE LOST ITS FREE-SHOT CLAUSE ON 2026-09-20 and this pin moved with it. It used to
+  // require `(ex.free_shots ?? 0) > 0` as well. That clause was inert where it mattered —
+  // PLAYER_DISC is a subset of MONSTER_DISC, so `attackers === 0` makes free_shots identical
+  // to our_ground on 23,601 of 23,605 squares — and backwards on the four where it bit: a
+  // square you cannot hit anything from is a perfect place to REST. The benefit it promised
+  // was disproved in play too (0.192 incoming/s swinging from a wall vs 0.067/s idle in the
+  // open). A caller that genuinely wants a firing position passes `mustReachSomething`.
+  ok('safeWalls is the overlay rule: coarse-walkable, and no attacker in monster reach',
+     /if \(!geo\.walkable\(r, c\)\) continue;[\s\S]{0,200}ex\.attackers !== 0\) continue/.test(src));
+  ok('and the free-shot test is opt-in, never the membership rule',
+     /mustReachSomething && \(ex\.free_shots \?\? 0\) <= 0\) continue/.test(src));
   ok('and the overlay paints exactly that function as the red layer',
      /for \(const w of safeWalls\(geometry\)\) put\(w\.row, w\.col, 'fortress'\)/.test(ovl));
   ok('the overlay has no separate "nominated" set that could drift from it',

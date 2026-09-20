@@ -373,21 +373,42 @@ function backCover(blocked) {
 //     line of sight — Room.LineOfSight, transcribed in lineOfSight() — arrive at it, so
 //     `attackers` is 0: as far as the monster's grid is concerned, nothing can ever get a
 //     swing at a body standing here;
-//   * and at least one square within OUR reach (PLAYER_DISC, radius 2) can be hit from
-//     here while its line back is blocked, so `free_shots` is above 0: we can fight from it.
+//   * and NOTHING ELSE. In particular, not `free_shots`.
 //
-// That is the coarse grid and the fine one disagreeing about the same square — the
-// monster's grid says "cannot reach", ours says "can hit" — and it is the whole of the
-// mechanism. Nothing else is a candidate, and nothing else removes one: not escape room,
-// not exposure, not standability, not the outer ring. Those are all still MEASURED, and
-// they ORDER the list (see safeSpots), because a wall you cannot leave or one on the room's
-// rim is a worse wall; they no longer decide what is a wall.
+// THE FREE-SHOT CLAUSE IS GONE, AND IT WAS TWO MISTAKES AT ONCE. It required "at least one
+// square within OUR reach (PLAYER_DISC, radius 2) can be hit from here while its line back
+// is blocked", on the reading that a wall is a place you shoot from with impunity.
+//
+//   IT WAS INERT WHERE IT MATTERED. PLAYER_DISC (radius 2) is a SUBSET of MONSTER_DISC
+//   (radius 3), so once `attackers === 0` nothing in our reach can see us back and
+//   `free_shots` is identically `our_ground`. Measured across the baked world: they agree
+//   on 23,601 of 23,605 safe squares. The clause therefore added nothing except on the four
+//   where `our_ground` is 0 — pockets from which nothing at all can be reached.
+//
+//   AND ON THOSE FOUR IT WAS BACKWARDS. A square you cannot hit anything from is a
+//   PERFECT place to rest, which is what a hurt character wants a wall for. Requiring a
+//   firing line scored resting spots on whether they made good gun positions — the exact
+//   conflation PREDICATES in m59-safewall.mjs warns about.
+//
+//   WORSE, THE BENEFIT IT PROMISED DOES NOT EXIST. "Free shots" were disproved in play on
+//   2026-09-20 (tools/m59-wallproof.mjs): swinging from a wall drew 0.192 incoming
+//   attacks/s — MORE than standing in the open doing nothing (0.067/s). A wall still helps
+//   enormously while fighting, 1.446/s -> 0.192/s against open ground, but it is not free.
+//   Callers that genuinely want a firing position ask for `mustReachSomething`, which is
+//   an honest name for what the clause actually tested.
+//
+// So a wall is the coarse grid and the fine one disagreeing about the same square — the
+// monster's grid says "cannot reach" — and it is the whole of the mechanism. Nothing else
+// is a candidate, and nothing else removes one: not escape room, not exposure, not
+// standability, not the outer ring. Those are all still MEASURED, and they ORDER the list
+// (see safeSpots), because a wall you cannot leave or one on the room's rim is a worse
+// wall; they no longer decide what is a wall.
 //
 // This replaced a scan that admitted only squares the coarse grid REFUSED (2026-08-23),
 // which was the opposite set and disjoint from the picture by construction — 506
 // candidates in the Valley of Ileria and not one of them a red square. The fleet stood next
 // to hundreds of verified walls and was told there were none it could use.
-export function safeWalls(geo, { los = 0 } = {}) {
+export function safeWalls(geo, { los = 0, mustReachSomething = false } = {}) {
   if (!geo) return [];
   // Which grid governs the thing trying to hit us. LOS_OLD is the server default, so
   // monsters move and see on the COARSE grid — see RoomGeometry.LOS.
@@ -398,7 +419,11 @@ export function safeWalls(geo, { los = 0 } = {}) {
       if (!geo.walkable(r, c)) continue;
       let ex = null;
       try { ex = exposureAt(geo, r, c, { fine }); } catch { continue; }
-      if (!ex || ex.attackers !== 0 || (ex.free_shots ?? 0) <= 0) continue;
+      if (!ex || ex.attackers !== 0) continue;
+      // Opt-in, and only for a caller that wants somewhere to FIGHT from rather than
+      // somewhere to be safe. `free_shots` is identically `our_ground` here — see above —
+      // so this reads as "there is something within our reach at all".
+      if (mustReachSomething && (ex.free_shots ?? 0) <= 0) continue;
       out.push({ row: r, col: c, ...ex });
     }
   return out;
