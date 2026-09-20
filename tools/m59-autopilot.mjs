@@ -4020,7 +4020,7 @@ export class Autopilot {
         damage, swung: didSwing, ailing, rested_ms: Math.max(0, settledMs),
         // `at` is the body, `held` is the reservation, `off_by` is the Chebyshev gap. A row
         // with off_by > 0 is NOT evidence about the square it names — see above.
-        at, held, off_by: offBy,
+        body: at, held, off_by: offBy,
         // AILING IS A DEFAULT, NOT A MEASUREMENT, WHENEVER THIS IS NULL. `client.ailments()`
         // is absent on this build — `look` reports the field as undefined — so `ailing:false`
         // has been asserting something nobody checked, on a ledger whose whole purpose is to

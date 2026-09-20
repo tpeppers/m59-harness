@@ -303,4 +303,21 @@ console.log('\nTHE LEDGER MAY NOT BE READ BY ANYTHING THAT CHOOSES A SQUARE');
      !/from\s+['"]\.\/m59-(autopilot|broker|game)\.mjs['"]/.test(led));
 }
 
+
+// THE ROW'S CLOCK IS NOT A PLACE. A position field called `at` silently overwrote
+// `at: new Date().toISOString()`, so forty rows on prod carry a {col,row} where their
+// timestamp belongs. The field did not fail — it produced a plausible-looking value,
+// which is the shape of every evidence bug found on 2026-09-20.
+{
+  const tmp = `${process.env.TEMP || '/tmp'}/m59-restwatch-shape-${process.pid}.jsonl`;
+  const row = recordRest({ agent: 'x', room: 1, damage: 0, rested_ms: 9999,
+                           body: { col: 4, row: 7 }, held: { col: 4, row: 7 }, off_by: 0,
+                           ailing_known: true, file: tmp });
+  ok('the row timestamp is a parseable ISO string, not a position',
+     typeof row?.at === 'string' && !Number.isNaN(Date.parse(row.at)), JSON.stringify(row?.at));
+  ok('the body position rides in `body`', row?.body?.col === 4 && row?.body?.row === 7);
+  ok('off_by rides alongside it', row?.off_by === 0);
+  ok('and whether the ailment check was even possible', row?.ailing_known === true);
+  try { rmSync(tmp, { force: true }); } catch {}
+}
 console.log(`\nrestwatch: ${n} assertions, ${process.exitCode ? 'FAILED' : 'PASS'}`);

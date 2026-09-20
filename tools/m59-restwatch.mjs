@@ -93,7 +93,7 @@ export function recordRest({ agent = null, room = null, verdict = null,
                              // `off_by` is what an analysis filters on: 0 means the body was
                              // on its hold and the row IS about that square; anything else
                              // means the row is about a reservation.
-                             at = null, held = null, off_by = null,
+                             body = null, held = null, off_by = null,
                              // False when `client.ailments()` does not exist on this build,
                              // in which case `ailing: false` is a DEFAULT and not a
                              // measurement — which matters on a ledger whose whole job is to
@@ -116,7 +116,12 @@ export function recordRest({ agent = null, room = null, verdict = null,
       predicates: verdict?.predicates ?? null,
       measured: verdict?.measured ?? null,
       outcome, damage, swung, ailing, rested_ms,
-      at, held, off_by, ailing_known,
+      // `body`, NOT `at`. The first version of this called it `at` and silently
+      // OVERWROTE the row's timestamp — `at: new Date().toISOString()` six lines up — so
+      // every row written between the 2026-09-20-7 deploy and this fix carries a {col,row}
+      // where its clock should be. Forty rows on prod. The same lesson as everything else
+      // today: the field did not fail, it produced a plausible-looking value.
+      body, held, off_by, ailing_known,
     };
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');
