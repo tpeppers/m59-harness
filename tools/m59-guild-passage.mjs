@@ -7,10 +7,33 @@ import { loadMap } from './m59-map.mjs';
 
 let closed;
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
+// EVERY DOOR IN THIS HALL IS SPOKEN, NOT PRESSED — INCLUDING ON THE WAY OUT.
+//
+// Operator, 2026-09-20: "It's not a traditional 'press space' door, you have to say the guild
+// hall password to open it (even to get out!)". Only sector 3 carried `secret: true`, so the
+// crossing below sent `c.go()` for 59, 55 and 53 — the branch is literally
+// `if (door.secret) sayHallPassword() else c.go()`. Pressing space at a door that answers only
+// to a word does nothing, three times over, and then reports `guild door 59 could not be
+// crossed` — which reads as geometry and is a verb.
+//
+// WHAT IT COST. `reagent_coop` is the ONLY caller of `getFromContainer` in this repository, and
+// its `approach()` crosses these doors to get within the 7 squares `user.kod UserGet` wants. So
+// this one flag is the whole reason a character standing in its own guild hall cannot draw on
+// it: 543 elderberry, 446 mushroom and 490 red mushroom sitting in the chests, none reachable.
+// DEPOSITS WERE EQUALLY DEAD — `transfer()` runs the same `approach()` for both directions and
+// only then branches on `put` vs `getFromContainer` — so "contribute" never worked either.
+// Nobody had noticed because nothing had asked it to.
+//
+// It also re-reads the older sighting this file already records: Zoot spending an hour on door
+// 59's OUTWARD trigger with the hall's only exit two squares away, logged at the time as a
+// geometry race. The trigger was reached every pass. The door was never asked to open.
+//
+// `secret` stays a per-door flag rather than becoming a hall-wide assumption, so a hall with a
+// genuinely pressed door can still say so.
 export const doors = [
-  { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]] },
-  { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]] },
-  { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]] },
+  { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]], secret: true },
+  { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]], secret: true },
+  { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]], secret: true },
   { sector: 3, inward: [[7,8],[7,4]], outward: [[7,4],[7,8]], secret: true },
 ];
 export function guildSection(row, col) {

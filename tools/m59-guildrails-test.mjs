@@ -180,5 +180,28 @@ console.log('\n7. THE SPELLINGS ROUND-TRIP, because a coordinate carries its uni
      JSON.stringify(centre(EXIT)));
 }
 
+// EVERY DOOR IN THIS HALL IS SPOKEN, NOT PRESSED.
+//
+// Operator, 2026-09-20: "It's not a traditional 'press space' door, you have to say the guild
+// hall password to open it (even to get out!)". Only sector 3 carried `secret: true`, so
+// m59-guild-passage sent `c.go()` at 59, 55 and 53 — the branch is
+// `if (door.secret) sayHallPassword() else c.go()`, i.e. pressing space at a door that answers
+// only to a word. Three attempts, then `guild door 59 could not be crossed`, which reads as
+// geometry and is a verb.
+//
+// Worth an assertion rather than a comment because of what hangs off it: `reagent_coop` is the
+// ONLY caller of `getFromContainer` in this repository, its `approach()` crosses these doors to
+// reach the 7-square range `user.kod UserGet` wants, and `transfer()` runs that same approach
+// for BOTH directions. So one missing flag made the hall's 543 elderberry, 446 mushroom and
+// 490 red mushroom unreachable AND silently disabled every deposit — the deposit half unnoticed
+// because nothing had asked it to run.
+{
+  const pressed = passageDoors.filter(d => d.secret !== true);
+  ok('every Bookmakers hall door is opened by SAYING the password',
+     pressed.length === 0,
+     pressed.length ? `sector(s) ${pressed.map(d => d.sector).join(', ')} would press space`
+                    : `all ${passageDoors.length} doors are spoken`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
