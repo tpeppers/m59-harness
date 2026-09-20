@@ -603,6 +603,14 @@ async function travelTo(agent, room, { tries = 3, hops = 20 } = {}) {
 const KEEP_ACROSS_RESTART = {
   assignedRoom: 'assigned_room', roam: 'roam', roamLimit: 'roam_limit',
   partner: 'partner', bankAbove: 'bank_above', restBelow: 'rest_below',
+  // ADDED 2026-09-20 WITH THE ARGUMENT THAT MADE IT SETTABLE, because a setting this map
+  // does not carry has a half-life of one stall restart — about ninety seconds. That is the
+  // same defect `hunt` had and it is why this file says "anything missing from this map has
+  // a half-life of about a minute" below. `restAnywhere` is a DELIBERATE exception to the
+  // safe-wall rule, granted per character for a room with no spawn table; dropping it does
+  // not merely lose a preference, it silently re-imposes a refusal to rest at all on a
+  // character that was parked somewhere peaceful precisely so it could.
+  restAnywhere: 'rest_anywhere',
   walkingMoney: 'walking_money', sellAtLoad: 'sell_at_load',
   dropAtLoad: 'drop_at_load',
   sellWhenBroke: 'sell_when_broke', sellWhenBrokeUnder: 'sell_when_broke_under',

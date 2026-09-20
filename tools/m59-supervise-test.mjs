@@ -153,5 +153,38 @@ console.log('\n--- the stall restart carries the policy hunt rather than inventi
      'or a failed read restarts that keeper from defaults and reports success');
 }
 
+console.log('\n--- a settable order must survive the stall restart ---');
+{
+  // AN ARGUMENT THAT EXISTS BUT IS NOT CARRIED HAS A HALF-LIFE OF ONE RESTART -- ~90s.
+  // Exactly the defect `hunt` had, and this file's own comment says it: "anything missing
+  // from this map has a half-life of about a minute". So when 2026-09-20 made rest_anywhere
+  // settable -- it had been absent from the autopilot schema, from m59-localpolicy's
+  // overridable keys, and from policy_control, which answered "unknown policy restAnywhere"
+  // -- it had to join KEEP_ACROSS_RESTART in the same change, or the order would evaporate
+  // on the next sweep and read as the broker ignoring it.
+  //
+  // And it is not a preference: restAnywhere is a DELIBERATE exception to the safe-wall
+  // rule, granted for a room with no spawn table. Dropping it re-imposes a refusal to rest
+  // at all on a character parked somewhere peaceful precisely so that it could.
+  const HERE2 = dirname(fileURLToPath(import.meta.url));
+  const sup = readFileSync(join(HERE2, 'm59-supervise.mjs'), 'utf8');
+  ok('restAnywhere is carried across a stall restart',
+     /restAnywhere:\s*'rest_anywhere'/.test(sup),
+     'a policy this map omits survives about ninety seconds');
+
+  // AND THE ARGUMENT NAME MUST EXIST ON THE OTHER SIDE. KEEP_ACROSS_RESTART maps policy
+  // keys to ARGUMENT names, so a carry naming an argument `start` does not accept reads as
+  // carried and is dropped -- a value that looks present and is not.
+  let broker = null;
+  try { broker = readFileSync(join(HERE2, 'm59-broker.mjs'), 'utf8'); } catch { /* not here */ }
+  if (broker) {
+    ok('...and the broker accepts that argument name',
+       /rest_anywhere:\s*\{\s*type:\s*'boolean'/.test(broker));
+    ok('...and maps it onto the policy field',
+       /a\.rest_anywhere\s*!==\s*undefined\)\s*p\.policy\.restAnywhere/.test(broker),
+       'a schema entry with no mapping validates and does nothing');
+  }
+}
+
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);

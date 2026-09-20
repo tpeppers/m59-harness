@@ -10881,6 +10881,26 @@ const TOOLS = [
       require_safe_wall: { type: 'boolean',
         description: 'LEGACY SPELLING of pull_to_safe_wall, still accepted because it is what is ' +
           'persisted in the live roster. Sets the same thing. Prefer the new name' },
+      rest_anywhere: { type: 'boolean',
+        description: 'SIT WHERE YOU STAND, rather than refusing to rest without a safe wall. ' +
+          'Default false and it should stay that way: the operator rule of 2026-09-10 is that ' +
+          'safe-wall behaviour is ALWAYS the default, because every rung of the survival ladder ' +
+          'presupposes you already walked somewhere nothing can reach you. Waldorf died four ' +
+          'times on 2026-09-08 resting where things could reach him — 5-10 health of 51, six ' +
+          'hostiles in the room, the ladder quiet because that presupposition was never ' +
+          'enforced. So this is the named, deliberate exception and never a convenience. ' +
+          'WHAT IT IS FOR: A ROOM THAT SPAWNS NOTHING. A safe spot is a wall the keeper LEARNED ' +
+          'by fighting in that room, so a peaceful room has none by construction — and a ' +
+          'character parked somewhere quiet to rest, drill a spell or hold a post therefore ' +
+          'cannot rest there however safe it actually is. Measured 2026-09-20: a caster parked ' +
+          'in 801, the Temple of Kraanan, whose entire spawn table is one priestess, had every ' +
+          'rest skipped with "the keeper still does not report us in a working safe spot" — ' +
+          'capped at one mana bar, five casts, with the other fifteen steps reported ok. ' +
+          'CHECK THE SPAWN TABLE, not the room name and not what is visible right now: an empty ' +
+          'room that spawns is a room that will not stay empty. Until now this was settable ' +
+          'NOWHERE — absent from this schema, from m59-localpolicy\'s overridable keys, and ' +
+          'from policy_control, which answered "unknown policy restAnywhere" — so the code ' +
+          'described a per-character order that had no handle to pull' },
       wall_at_attackers: { type: 'number',
         description: 'WHAT "NOT REQUIRED" MEANS, and it is only read while pull_to_safe_wall is ' +
           'false. Default 2: hold a wall once this many creatures are inside melee reach, and ' +
@@ -11807,6 +11827,14 @@ const TOOLS = [
         p.policy.requireSafeWall = !!a.require_safe_wall;
         p.policy.pullToSafeWall = !!a.require_safe_wall;
       }
+      // SIT WHERE YOU STAND. Separate from the wall flags above on purpose: those are about
+      // opening a FIGHT, this is about being allowed to rest at all. `restingSquare` refuses
+      // to seat anybody without a safe wall unless this is true, and a safe wall is LEARNED by
+      // fighting in that room — so a character parked somewhere peaceful can never rest there,
+      // which is the case this exists for and the reason it had to become settable. The danger
+      // is the opposite case and it is real (Waldorf, four deaths), so it stays default-false
+      // and the caller carries the argument for the room. See the schema entry.
+      if (a.rest_anywhere !== undefined) p.policy.restAnywhere = !!a.rest_anywhere;
       // The bar that gives "not required" its meaning. 0 or a negative is refused rather than
       // stored: "hold a wall once zero creatures are attacking" is REQUIRED spelled another
       // way, and a setting that silently means the opposite of its name is the failure the
