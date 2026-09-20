@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { M59Client, BP } from './m59-client.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
-import { attachStepMasks, applyDoorState } from './m59-routes.mjs';
+import { attachStepMasks, applyDoorState, doorStates } from './m59-routes.mjs';
 import { applyCeilingDoors, installDoorObserver } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 const fresh = () => {
@@ -94,4 +94,46 @@ test('actual baked hall supports every inward and outward trigger even when door
   assert.equal(guildSection(c.self.row, c.self.col), 0);
   assert.deepEqual(opened, [59,55,53,3,3,53,55,59]);
   await assert.rejects(guildPassage(k, 4, () => true), /survival/);
+});
+
+// A CEILING ROOM HAS TO BE ABLE TO SAY IT HAS A STATE APPLIED, AND COULD NOT.
+//
+// `DOOR_STATE` — what `doorStates()` returns — was written only by `applyDoorState`, the FLOOR
+// path. `installDoorObserver` runs `const result = ceiling ?? applyDoorState(...)`, so in a
+// room whose doors are moving ceilings the floor path never runs and the map was never
+// written. `applyCeilingDoors` recorded its state in a WeakMap private to its own file, so
+// nothing outside could see it.
+//
+// TWO READERS WERE GETTING NULL, AND ONE OF THEM COSTS A WALK.
+//
+//   * the keeper's `doors.applied`, which is therefore structurally null in 714 whether or not
+//     the mask was applied — a blind instrument rather than a failure, and one that was read
+//     on prod as evidence the mover was enforcing the shipped geometry;
+//   * `reachableByDoor`, which gates the LIVE reachability answer on
+//     `doorStates()[roomNum] != null` and so always fell back to the BAKED, doors-shut reach.
+//     Its own comment names the cost: "the failure it fixes strands a fleet outside an open
+//     door."
+//
+// Measured on prod 2026-09-20: door 59 opened (observed 100 -> 190) and a character inside the
+// hall still could not reach door 55's trigger, because the router was reasoning about a hall
+// with every door closed. Generalising the ceiling bake took this from one blind room to 26.
+test('an applied ceiling state is visible to doorStates(), not just to its own WeakMap', () => {
+  const { map, observed } = fresh();
+  // Everything shut: the state the .roo ships 714 in.
+  applyCeilingDoors(map, 714, observed);
+  const shut = doorStates()[714];
+  assert.ok(shut != null,
+    'even the resting state must be recorded — `reachableByDoor` asks whether this room has ' +
+    'ANY live state before it will consult live geometry, so null means "use the baked answer"');
+
+  // Now open the main door, the way the server reports it.
+  observed.set(59, { type: 5, height: 190 });
+  applyCeilingDoors(map, 714, observed, { type: 5, sector: 59, speed: 50 }, { now: 1000 });
+  const open = doorStates()[714];
+  assert.ok(open != null, 'and the open state is recorded too');
+  assert.notEqual(open, shut,
+    'and it CHANGES — a key that does not move cannot invalidate a cached reach, so the ' +
+    'router would go on answering from the geometry it had before the door opened');
+  assert.ok(String(open).includes('190'),
+    'the recorded key names the height the server actually reported');
 });

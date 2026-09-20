@@ -1,7 +1,7 @@
 // Exact precomputed ceiling geometry, separate from legacy floor door variants.
 import { readFileSync } from 'node:fs';
 import { sharedRoomGeometry, applySectorHeights, STEP_MASK_VERSION } from './m59-roo.mjs';
-import { forgetReach, applyDoorState } from './m59-routes.mjs';
+import { forgetReach, applyDoorState, noteDoorState } from './m59-routes.mjs';
 
 const table = JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)));
 const current = new WeakMap();
@@ -57,6 +57,14 @@ export function applyCeilingDoors(map, roomNum, observed, event = null, { geomet
     changed = result.moved > 0; current.set(geometry, key);
     if (changed) forgetReach(roomNum);
   }
+  // RECORDED WHERE THE REST OF THE SYSTEM LOOKS. `current` is a WeakMap private to this file,
+  // so until now nothing outside could tell that a ceiling room had a state applied at all.
+  // Two things read `doorStates()` and both were getting `null` for every one of these rooms:
+  // the keeper's `doors.applied` report, and — the one that costs a walk — the gate in
+  // `reachableByDoor` that decides whether to ask the LIVE geometry or fall back to the baked,
+  // doors-shut answer. Set unconditionally rather than only on `changed`, because "the room is
+  // in this state" is true whether or not this call is what put it there.
+  noteDoorState(roomNum, key);
   const door = event?.type === 5 && definition.doors.find(d => d.id === event.sector);
   // Stock client MoveSector: duration = abs(dest-source) / speed seconds.
   // Use the full open/closed span even for a reversal part way through a lift.

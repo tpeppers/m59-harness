@@ -398,6 +398,38 @@ export function assertDoorStates(map, assertions = {}, { geometryOf } = {}) {
 /** What state each room's doors are currently modelled in. For the boards and the tests. */
 export const doorStates = () => Object.fromEntries(DOOR_STATE);
 
+// THE CEILING PATH HAS TO BE ABLE TO SAY IT APPLIED SOMETHING, AND COULD NOT.
+//
+// `DOOR_STATE` was written only by `applyDoorState` — the FLOOR path. A room whose doors are
+// moving ceilings is handled by `applyCeilingDoors` instead, and `installDoorObserver` reads
+// `const result = ceiling ?? applyDoorState(...)`, so for those rooms `applyDoorState` never
+// runs and this map is never written.
+//
+// That is not only a reporting gap, though it is that too — `doors.applied` reads
+// `doorStates()` and is therefore structurally null in room 714 whether or not the mask was
+// applied, which is a blind instrument rather than a failure. The behavioural half is worse:
+// `reachableByDoor` gates the LIVE reachability answer on `doorStates()[roomNum] != null`, so
+// a ceiling-door room always fell through to the BAKED reach — the shipped, doors-closed
+// geometry — even with the server reporting a door open. The comment on that gate says what
+// it costs: "the failure it fixes strands a fleet outside an open door."
+//
+// Measured on prod 2026-09-20: door 59 in the Bookmakers hall opened (observed 100 -> 190) and
+// a character standing inside still could not walk to door 55's trigger, because the router
+// was reasoning about a hall with every door shut.
+//
+// Widened from one room to twenty-six when the ceiling bake was generalised, so this was one
+// blind room and is now twenty-six.
+export function noteDoorState(roomNum, key) {
+  const n = Number(roomNum);
+  if (!Number.isFinite(n)) return false;
+  if (DOOR_STATE.get(n) === key) return false;
+  DOOR_STATE.set(n, key);
+  // Same as the floor path: a changed door invalidates whatever reach was cached for the
+  // geometry it was computed against.
+  forgetReach(n);
+  return true;
+}
+
 /**
  * Put every door back where the .roo shipped it, then forget them.
  *
