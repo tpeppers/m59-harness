@@ -126,6 +126,31 @@ console.log('\n--- the stall restart carries the policy hunt rather than inventi
   ok('...and that guard is before ITS start call too',
      src.indexOf('if (!st?.policy) return false;') <
      src.indexOf("{ agent, action: 'start', mode: 'farm'"));
+
+  // AND THERE WAS A THIRD, WHICH IS WHY THIS ASSERTION IS COUNTED RATHER THAN NAMED.
+  //
+  // The two checks above name the two sites somebody had already found. A third -- the
+  // one-sided-pairing clearer -- had the identical shape and no guard, and naming sites one
+  // at a time is exactly the method that missed it. So this asserts the INVARIANT: every
+  // place that spreads `carriedPolicy(...)` into a start call sits behind a policy guard.
+  // A fourth site added later fails this without anybody having to remember it exists.
+  //
+  // `carriedPolicy(null)` is `{}` -- indistinguishable at the call site from "this character
+  // genuinely has no policy" -- so an unguarded spread rebuilds a keeper from DEFAULTS and
+  // reports success. That is the whole bug class, and it is a fact about the CALL SITES
+  // rather than about any one function.
+  const spreads = [...src.matchAll(/\.\.\.carriedPolicy\(\s*(st|cur)\s*\)/g)];
+  const unguarded = spreads.filter(m => {
+    const before = src.slice(0, m.index);
+    const guard = Math.max(before.lastIndexOf('!st?.policy'), before.lastIndexOf('!cur?.policy'));
+    const read = before.lastIndexOf("action: 'status'");
+    return !(read > -1 && guard > read);
+  });
+  ok('every carriedPolicy spread sits behind a guard on its own status read',
+     spreads.length >= 3 && unguarded.length === 0,
+     `${spreads.length} spread(s), ${unguarded.length} unguarded -- each needs a ` +
+     '!st?.policy / !cur?.policy guard between its status read and its start call, ' +
+     'or a failed read restarts that keeper from defaults and reports success');
 }
 
 console.log(failed ? `\n${failed} failed` : '\nall passed');

@@ -1047,6 +1047,28 @@ async function reconcilePartners() {
   for (const r of rows) {
     if (!r.partner || r.partner_ok) continue;
     const st = await call('autopilot', { agent: r.agent, action: 'status' }).catch(() => null);
+    // THE THIRD SITE, AND IT IS THE SAME HOLE AS THE OTHER TWO. A failed read gives a null
+    // `st`, and then `carriedPolicy(null)` is `{}` and `hunt` is undefined — so clearing a
+    // one-sided pairing would restart the keeper from DEFAULTS, dropping every carried
+    // field, exactly as `ensureKeeper` and the stall restart did before their guards.
+    //
+    // NARROWER THAN THOSE TWO, WHICH IS WHY IT SURVIVED THE FIRST PASS. It is gated on an
+    // actually one-sided pairing, and when the broker is blocked badly enough that the
+    // `fleet` read above fails, `rows` is empty and this loop never runs at all. The window
+    // that bites is a fleet read that SUCCEEDS while a per-agent status read FAILS — the
+    // partial degradation a loaded broker actually sits in, and the state every measurement
+    // on 2026-09-20 came from.
+    //
+    // The comment above already named the symptom before anyone had seen it: "a partner
+    // setting that flickers between two processes that each log success". Flickering,
+    // logged as success, no actor named — which is how 232 hunt flips on one character
+    // reached a 2.5GB broker heap without a single error being reported.
+    if (!st?.policy) {
+      out.push(`${r.character}: could not read the policy, so the one-sided partnership ` +
+               `with ${r.partner} was left alone — a failed read is "I could not ask", ` +
+               `never "there is nothing there"`);
+      continue;
+    }
     const ok = await call('autopilot', { agent: r.agent, action: 'start', mode: 'farm',
                                          ...carriedPolicy(st), partner: null,
                                          hunt: st?.policy?.hunt || undefined })
