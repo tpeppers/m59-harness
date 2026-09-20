@@ -173,6 +173,18 @@ import { combatOrder } from './m59-combat-order.mjs';
 export { attackPlayer, killPlayer, ambushPlayer } from './m59-combat-orders.mjs';
 export { combatOrder } from './m59-combat-order.mjs';
 
+// READING A FIGHT OFF THE SERVER'S PROSE — who swung, and did it land.
+//
+// Re-exported here because this is the import every fleetscript already has open, and four
+// separate call sites each grew their own half-right regex for want of somewhere obvious to
+// find one. Damage arrives as a stat packet naming nobody, so the words are the only record
+// of WHO attacked WHOM: `isEnemySwing` is how a script asks whether anything is actually
+// fighting it, and `isMySwing` is how it asks whether IT threw the first punch — which is the
+// whole of the safe-wall contract, since a square protects a body only until it swings.
+export { classifyCombatLine, isMySwing, isEnemySwing, isEnemyHit, isEnemyMiss, isPoisonTick,
+         combatCounterparty, tallyCombat, VERB_TABLE, DAMAGE_VERBS, EVADE_VERBS,
+         stripCodes as stripTextCodes } from './m59-combatlog.mjs';
+
 // Explicit urgent entry point. The broker checks roster identity in the same
 // request that dispatches the order; no health/snapshot preflight round trip.
 export async function fleetCombat({ agents, room, rooms, order, fleet = fleetName(), beforeDispatch = null } = {}) {

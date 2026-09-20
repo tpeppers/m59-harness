@@ -22,9 +22,12 @@
 // estimate of it. Reported as a range, never as a single number.
 //
 // ATTACKS ARE COUNTED AS SWINGS, NOT DAMAGE. A swing is deterministic evidence that
-// something reached us; damage is a second roll bounded to [10,95]%. Counting
-// `You dodge the ...'s attack.` off the flight recorder gives many more events per
-// journey and cannot be erased by healing. Same rule as m59-provewall.
+// something reached us; damage is a second roll bounded to [10,95]%. Counting swings off the
+// flight recorder gives many more events per journey and cannot be erased by healing. Same
+// rule as m59-provewall — and, since 2026-09-20, the same PARSER: this file used to carry a
+// copy of that tool's regex, which matched only `You dodge the ...'s attack.` and therefore
+// counted incoming blows that MISSED while dropping every one that LANDED. Both now read
+// fights through tools/m59-combatlog.mjs, which covers all four of battler.kod's templates.
 //
 // IT NEVER TOUCHES PROD. The broker port defaults to the arena's 8961 and every verb
 // here is addressed to a named agent; there is no fleet-wide anything.
@@ -139,8 +142,8 @@ export async function broker(name, args, { timeoutMs = 300000 } = {}) {
   }
 }
 
-const INCOMING_SWING = /^You\s+\w+\s+.+'s attack\.?$/i;
-export const isIncomingSwing = t => INCOMING_SWING.test(String(t ?? '').trim());
+import { isEnemySwing } from './m59-combatlog.mjs';
+export const isIncomingSwing = t => isEnemySwing(t);
 
 /** Where a character is, and how much it has been swung at since `mark`. */
 export async function probe(agent, mark = 0) {

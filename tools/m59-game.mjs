@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { bindPacketScope } from './m59-packet-scope.mjs';
 import { withBodyCommand, bodyAuthority } from './m59-body-command.mjs';
 import { CombatMode } from './m59-combat-mode.mjs';
+import { classifyCombatLine } from './m59-combatlog.mjs';
 import { groundEffectOnSegment, groundEffectSquares } from './m59-ground-effects.mjs';
 import { traceSurvival } from './m59-survival-trace.mjs';
 import { cancelSurvivalDecision, observeSurvivalDecision, currentSurvivalDecision,
@@ -1487,10 +1488,16 @@ class Session {
   // lands in a `by` LIST on the segment rather than a `killed_by` field that would read as
   // authoritative. The death broadcast is the authoritative one and the post-mortem
   // already has it.
+  // The parser used to live here as `/^(?:The|An?) ([a-z' -]+?) (?:[a-z]+s) you\b/i`, which
+  // saw "The fungus beast nicks you with its attack." and NOT "You dodge the giant rat's
+  // attack." — the exact complement of the blind spot m59-provewall and m59-circuit had, and
+  // between the three of them the repository could see every incoming blow twice and none of
+  // them completely. A swing that MISSED still names an attacker and is still evidence of who
+  // was on us, which is precisely what `by` is for. Shared parser since 2026-09-20.
   noteCombatLine(ev) {
-    // "The fungus beast nicks you with its attack." / "The troll hits you."
-    const m = /^(?:The|An?) ([a-z' -]+?) (?:[a-z]+s) you\b/i.exec(ev.text || '');
-    if (m) this.lastCombatLine = { at: ev.at ?? Date.now(), who: m[1].toLowerCase() };
+    const c = classifyCombatLine(ev.text || '');
+    if (c?.kind === 'enemy-swing' && c.other)
+      this.lastCombatLine = { at: ev.at ?? Date.now(), who: String(c.other).toLowerCase() };
   }
 
   // ONE HEALTH READING. Called for every health stat the server sends.

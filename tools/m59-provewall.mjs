@@ -125,12 +125,27 @@ export async function vitalsOf(name) {
 //     loop, a keeper, or ordinary regeneration cannot erase the measurement. That was a
 //     standing hazard of the damage version and had already invalidated a live run.
 //
-// `battler.rsc` carries exactly two templates: `%s%s%s %s your attack.` for a swing WE
-// made, and `%sYou %s %s%s's attack.` for one made at US. Only the second is counted, and
-// the distinction matters — a test that counted our own misses would score every square
-// we ever fought from as unsafe.
-const INCOMING_SWING = /^You\s+\w+\s+.+'s attack\.?$/i;
-export const isIncomingSwing = text => INCOMING_SWING.test(String(text ?? '').trim());
+// CORRECTION, 2026-09-20 — THIS FILE WAS READING HALF THE COMBAT LOG.
+//
+// It used to say: "`battler.rsc` carries exactly two templates: `%s%s%s %s your attack.` for a
+// swing WE made, and `%sYou %s %s%s's attack.` for one made at US." Both of those are the MISS
+// lines. There are FOUR, and the hits are separate resources (battler.kod:42-45):
+//
+//   battler_attacker_hit  = "%sYour %s %s %s%s."        Your scimitar wounds Psychochild.
+//   battler_attacker_miss = "%s%s%s %s your attack."    Psychochild blocks your attack.
+//   battler_defender_hit  = "%s%s%s %s you with %s %s." Psychochild wounds you with his scimitar.
+//   battler_defender_miss = "%sYou %s %s%s's attack."   You block Psychochild's attack.
+//
+// So the old regex counted every incoming blow that MISSED and dropped every one that LANDED.
+// For a test whose entire claim is "nothing can swing at me here", that undercount pointed the
+// wrong way: a monster reaching through and CONNECTING is the most disqualifying thing that
+// can happen on a candidate square, and it was the one thing not being counted.
+//
+// The distinction this file was right about — ours versus theirs — is kept. It is now the
+// shared module's `isEnemySwing`, which spans both halves and is the same parser every other
+// tool in the repo reads fights with. See tools/m59-combatlog.mjs.
+import { isEnemySwing } from './m59-combatlog.mjs';
+export const isIncomingSwing = text => isEnemySwing(text);
 
 export async function recordingTail(agent, { limit = 400 } = {}) {
   const r = await broker('recording', { agent, action: 'tail', limit });

@@ -87,35 +87,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── the server's combat vocabulary ───────────────────────────────────────────────────────────
 //
-// THE VERB LIST WAS A BUG AND IT FAILED TOWARD THE ANSWER THE MODEL WANTED. An enumerated list
-// missed "Your mace CRUSHES the spider", scoring 22 of the body's own swings as unrecognised —
-// which would have counted those intervals as "standing there not swinging". Both directions
-// are matched structurally now, and `--analyze` PRINTS whatever it still cannot classify rather
-// than assuming it is harmless.
-const IN_MISS  = /^You (?:dodge|avoid|parry|block|deflect) the (.+?)'s attack\.$/;
-const IN_HIT   = /^The (.+?) \w+ you with (?:its|his|her|their) attack\.$/;
-const IN_ALT   = /^The (.+?) (?:hits|misses|strikes|attacks) you\b/;
-const OUT_MISS = /^The (.+?) (?:dodges|avoids|parries|blocks|deflects) your attack\.$/;
-const OUT_KILL = /^You killed the (.+?)\.$/;
-const OUT_ECHO = /^The (.+?) (?:staggers backwards from the blow|laughs off your pitiful blow|falls back to recover for a moment, then returns to the fight|is (?:clearly injured|seriously wounded|slightly wounded|weak, and near death|barely hurt|almost dead))\.$/;
-const OUT_FAR  = /^The (.+?) is too far away to hit with/;
-const OUT_ALT  = /^You (?:miss|hit|swing at|strike) the (.+?)\b/;
-const OUT_HIT  = /^Your [\w' ]+ \w+ the (.+?)\.$/;
-// Named so it can be counted and SHOWN to be irrelevant rather than merely assumed so.
-const POISON   = /^(?:Fresh poison courses through your veins|You feel the poison|The poison )/;
-const NOISE    = /^(Welcome to the world|You have \d+ piece|You open the door|You were unsuccessful|You aren't daring enough|Yum-yum|You focus your whole will|A [\w ]+ appears|[A-Z]\w+ murmurs something|The \w[\w ]* seems to cling|You feel|You are now|You pick up|You drop|You cannot|You're unable|You try to pick up|There is|You see|You sense|Nothing happens|You gained|You advanced|You have improved|You learn|You spit on|[A-Z]\w+ has valiantly slain)/;
+// THIS USED TO CARRY ITS OWN PARSER AND THE VERB LIST WAS A BUG THAT FAILED TOWARD THE ANSWER
+// THE MODEL WANTED. An enumerated list of damage verbs missed "Your mace CRUSHES the spider",
+// scoring 22 of the body's own swings as unrecognised — which counts those intervals as
+// "standing there not swinging", the direction that manufactures a safe-looking wall.
+//
+// It is gone. `tools/m59-combatlog.mjs` builds its patterns from battler.kod's four templates
+// and its closed 81-verb table, so the vocabulary is the game's rather than a sample of it, and
+// the same parser now reads fights for every tool in this repo. `--analyze` still PRINTS
+// whatever it cannot classify rather than assuming it is harmless.
+import { classifyCombatLine } from './m59-combatlog.mjs';
 
+// This tool's own two-way shape, on top of the shared classifier. `kill`, the resisted/staggered
+// reactions and an out-of-range swing all count as OUT: the question here is "did this body
+// swing", not "did it connect", because a whiffed swing voids a safe wall exactly as a landed
+// one does.
 export const classifyMessage = text => {
-  let m;
-  if (POISON.test(text)) return { dir: 'poison' };
-  if ((m = text.match(IN_MISS))) return { dir: 'in', who: m[1], hit: false };
-  if ((m = text.match(IN_HIT)))  return { dir: 'in', who: m[1], hit: true };
-  if ((m = text.match(IN_ALT)))  return { dir: 'in', who: m[1], hit: /hits|strikes/.test(text) };
-  if ((m = text.match(OUT_MISS)) || (m = text.match(OUT_KILL)) || (m = text.match(OUT_ECHO)) ||
-      (m = text.match(OUT_FAR))  || (m = text.match(OUT_ALT))  || (m = text.match(OUT_HIT)))
-    return { dir: 'out', who: m[1] };
-  if (NOISE.test(text)) return { dir: 'noise' };
-  return null;                                     // printed by --analyze, never silently dropped
+  const c = classifyCombatLine(text);
+  if (!c) return null;
+  if (c.kind === 'poison') return { dir: 'poison' };
+  if (c.kind === 'enemy-swing') return { dir: 'in', who: c.other, hit: c.landed === true };
+  if (c.kind === 'my-swing' || c.kind === 'kill' || c.kind === 'karma')
+    return { dir: 'out', who: c.other };
+  return null;
 };
 
 const POISONER = /spider/i;
@@ -255,11 +249,18 @@ function report(R) {
   console.log(`${R.rows.length} records, ${Object.keys(R.byAgent).length} agents, ${span.toFixed(1)} min`);
   console.log(`${R.inTot} incoming attacks; ${R.poison} poison ticks excluded (a tick is not an attack); ` +
               `${R.unknown.length} on squares the bake calls NOT WALKABLE`);
+  // THE AUDIT SHOWS COMBAT-SHAPED LINES ONLY, and that is not a way of hiding the rest.
+  // Most of what a session says is doors, food and spell fizzles; listing all of it buried the
+  // one thing the audit exists to catch — a combat line the parser does not understand, which
+  // would drop either a swing of ours (inflating cell A) or a blow against us (deflating it).
+  // So the filter is "mentions attacking", and the total is still printed beside it.
   const un = Object.entries(R.unparsed).sort((a, b) => b[1] - a[1]);
-  if (un.length) {
-    console.log(`\nUNCLASSIFIED MESSAGES (${un.reduce((a, b) => a + b[1], 0)}) — audit these before trusting the verdict:`);
-    for (const [k, v] of un.slice(0, 10)) console.log(`  ${String(v).padStart(4)}  ${k.slice(0, 96)}`);
-  }
+  const combatish = un.filter(([k]) => /\battack\b|\byou with\b|your (?:attack|blow)\b|\bswings?\b/i.test(k));
+  const total = un.reduce((a, b) => a + b[1], 0);
+  console.log(`\n${total} message(s) are not combat lines (doors, food, spells); ` +
+              `${combatish.length} of them are COMBAT-SHAPED and unparsed:`);
+  if (!combatish.length) console.log('  none — every line mentioning an attack was classified.');
+  for (const [k, v] of combatish.slice(0, 10)) console.log(`  ${String(v).padStart(4)}  ${k.slice(0, 96)}`);
   console.log('\n──────── THE 2x2 ────────');
   const line = (k, label) => {
     const n = R.cells[k].length, s = R.secs[k], st = R.strict[k];
@@ -312,8 +313,13 @@ function report(R) {
   }
 }
 
+// RUN AS A SCRIPT, IMPORTABLE AS A LIBRARY. The first version dereferenced `process.argv[1]`
+// unguarded, so `import { analyze } from './m59-wallproof.mjs'` threw before it could export
+// anything — which defeated the point of exporting `analyze` and `classifyMessage` at all.
 const argv = process.argv.slice(2);
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || argv.length) {
+const invokedDirectly = typeof process.argv[1] === 'string' &&
+  import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+if (invokedDirectly || argv.length) {
   const want = k => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : null };
   if (argv.includes('--collect')) {
     await collect(Number(want('--minutes') ?? 20), Number(want('--tick') ?? 5000));
