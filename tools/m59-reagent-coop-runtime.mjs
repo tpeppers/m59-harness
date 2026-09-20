@@ -319,8 +319,12 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
   // instrument was running before the fix, on characters that were not taking the fallback.
   // Turning the recorder on at the same moment as the behaviour would leave nothing to compare.
   if (mode === 'supply') {
+    // The pack is read HERE rather than inferred from the transfers, because "it stopped
+    // taking" has two causes and only one of them is about the chest.
+    let roomFor = null;
+    try { roomFor = carryCapacity(k.s.need()).room_for ?? null; } catch { /* unknown is not full */ }
     const verdict = coopSupplyOutcome({ reason: state.result.reason, took: state.result.took,
-      plan: state.result.plan, reagents: cfg.reagents });
+      plan: state.result.plan, reagents: cfg.reagents, room_for: roomFor });
     const row = { at: Date.now(), agent: k.name ?? k.s.name, kind: 'coop_supply_outcome',
       room: room(k), ...verdict };
     try { coopAppend(fleet, row); } catch (e) { k.note('coop ledger unwritable', { why: e.message }); }

@@ -99,7 +99,8 @@ export function coopConfig(raw) {
 export const COOP_FALLBACK_ATTEMPTS = 3;
 
 /** Classify ONE supply visit. Pure: takes what the visit returned, returns what it means. */
-export function coopSupplyOutcome({ reason = null, took = [], plan = null, reagents = [] } = {}) {
+export function coopSupplyOutcome({ reason = null, took = [], plan = null, reagents = [],
+                                    room_for = null } = {}) {
   const names = new Set((reagents.length ? reagents : COOP_REAGENTS).map(coopKey));
   const lines = [...(plan?.lines ?? []), ...(plan?.unpriced ?? [])]
     .filter(l => names.has(coopKey(l.item)) && Number(l.amount) > 0);
@@ -109,9 +110,31 @@ export function coopSupplyOutcome({ reason = null, took = [], plan = null, reage
   // reached there is nothing to say about what the chest held — reading `took: []` as "the
   // chest was empty" would blame the stock for a door.
   if (reason) return { outcome: 'chest_unreachable', why: String(reason), short, took_units: gained };
-  if (short > 0) return { outcome: 'chest_empty', why: gained
-    ? `the chest held ${gained} but is ${short} short of what was wanted`
-    : 'the chest held none of what was wanted', short, took_units: gained };
+  if (short > 0) {
+    // A FULL PACK IS NOT AN EMPTY CHEST, AND THE FALLBACK MUST NEVER FIRE ON IT.
+    //
+    // Found live 2026-09-20, the first draw after the door fix landed. Camilla took 307
+    // elderberry and 58 herb out of a chest still holding ~236 more, and stopped because her
+    // pack was at 1810 of 2000 bulk. The plan still wanted 569, so this classified as
+    // `chest_empty` — a SUCCESSFUL draw filed as a stock failure, which with `self_fund` on
+    // would have sent her to buy 569 elderberry for 15,932 shillings she does not have.
+    //
+    // And buying could not have helped even if she could pay: the constraint is what she can
+    // CARRY. A trip whose whole purpose is to acquire something there is no room for is the
+    // shape CLAUDE.md already names — "a trip that cannot fix the thing that opened it will
+    // run for ever, and every lap reports success". So this is not merely mislabelled, it is
+    // the one outcome that must never reach the fallback.
+    const fits = lines.some(l => {
+      const unit = weighItem(coopKey(l.item));
+      if (!unit || !room_for) return true;           // unknown capacity is not a refusal
+      return (room_for.weight ?? Infinity) >= unit.weight && (room_for.bulk ?? Infinity) >= unit.bulk;
+    });
+    if (!fits) return { outcome: 'pack_full', short, took_units: gained,
+      why: `carried ${gained} away and is ${short} short, but has no room for another unit` };
+    return { outcome: 'chest_empty', why: gained
+      ? `the chest held ${gained} but is ${short} short of what was wanted`
+      : 'the chest held none of what was wanted', short, took_units: gained };
+  }
   return { outcome: 'ok', why: null, short: 0, took_units: gained };
 }
 
@@ -125,9 +148,12 @@ export function coopFallbackDecision({ rows = [], agent = null, attempts = COOP_
   // THE EPISODE IS WHAT COUNTS, and it begins at the later of the last success and the last
   // fallback. Everything before that has been answered — either the chest worked, or a trip was
   // already made for it — so carrying those rows forward would fire on history.
+  // `pack_full` closes an episode exactly as a success does. The chest WAS usable and it did
+  // hand over everything the character could carry — the limit was the pack, and no trip fixes
+  // that. Letting it sit in the run instead would leave a stale failure that fires later.
   let start = 0;
   mine.forEach((r, i) => {
-    if (r.kind === 'coop_self_funding' || r.outcome === 'ok') start = i + 1;
+    if (r.kind === 'coop_self_funding' || r.outcome === 'ok' || r.outcome === 'pack_full') start = i + 1;
   });
   const run = mine.slice(start).filter(r => r.kind === 'coop_supply_outcome');
   const empty = run.find(r => r.outcome === 'chest_empty');

@@ -418,6 +418,38 @@ test('a chest that was read and came up short is chest_empty, partial fill inclu
   assert.equal(some.short, 260);
 });
 
+test('A FULL PACK IS NOT AN EMPTY CHEST — found live, the first draw after the door fix', () => {
+  // Camilla, 2026-09-20: took 307 elderberry and 58 herb from a chest still holding ~236 more
+  // and stopped at 1810 of 2000 bulk. The plan still wanted 569, so this read as `chest_empty`
+  // — a successful draw filed as a stock failure. With self_fund on it would have sent her to
+  // buy 569 elderberry for 15,932 shillings she does not have AND could not have carried.
+  const unit = weighItem('elderberry');
+  const starved = coopSupplyOutcome({ reason: null, took: [{ item: 'elderberry', amount: 307 }],
+    plan: { lines: [{ item: 'elderberry', amount: 569 }], unpriced: [] },
+    room_for: { weight: unit.weight - 1, bulk: unit.bulk - 1 } });
+  assert.equal(starved.outcome, 'pack_full');
+  assert.equal(starved.took_units, 307, 'and it still records what the draw actually achieved');
+  // The same numbers with room to spare stay chest_empty — the pack is the only difference.
+  const roomy = coopSupplyOutcome({ reason: null, took: [{ item: 'elderberry', amount: 307 }],
+    plan: { lines: [{ item: 'elderberry', amount: 569 }], unpriced: [] },
+    room_for: { weight: unit.weight * 100, bulk: unit.bulk * 100 } });
+  assert.equal(roomy.outcome, 'chest_empty');
+  // Unknown capacity must not be read as full: that would silence the fallback everywhere.
+  assert.equal(coopSupplyOutcome({ reason: null, took: [],
+    plan: { lines: [{ item: 'elderberry', amount: 569 }], unpriced: [] } }).outcome, 'chest_empty');
+});
+
+test('pack_full never fires the fallback, and closes the episode like a success', () => {
+  // Buying cannot fix "no room to carry it", so a trip for it is a lap that reports success
+  // and changes nothing — the exact shape the one-off rule exists to prevent.
+  assert.equal(coopFallbackDecision({ rows: [outcomeRow('t9', 'pack_full')], agent: 't9' }).fund, false);
+  const rows = [outcomeRow('t9', 'chest_unreachable'), outcomeRow('t9', 'chest_unreachable'),
+                outcomeRow('t9', 'pack_full'), outcomeRow('t9', 'chest_unreachable')];
+  const d = coopFallbackDecision({ rows, agent: 't9' });
+  assert.equal(d.fund, false);
+  assert.equal(d.consecutive, 1, 'a usable chest closes the run even when the pack was the limit');
+});
+
 test('a satisfied draw is ok and nothing fires', () => {
   const v = coopSupplyOutcome({ reason: null, took: [{ item: 'elderberry', amount: 300 }],
     plan: { lines: [], unpriced: [] } });
