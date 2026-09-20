@@ -819,7 +819,7 @@ the records it describes.
   never about the room; that an empty memory yields no filter rather than an always-true one;
   and that it does not leak into the safe-spot selector, because a square something unreachable
   is standing on may be a perfectly good square to stand on. Offline) and
-  `node tools/m59-fs-test.mjs` (12 — **the /fs column, and the width is the point**. The
+  `node tools/m59-fs-test.mjs` (14 — **the /fs column, and the width is the point**. The
   operator's constraint was a line rather than a number, and it measured 43; a layout rule
   in a comment lasts one commit. `render()` is pure so the money columns can be tested
   against a hundred million banked and a three-digit roster without waiting months for

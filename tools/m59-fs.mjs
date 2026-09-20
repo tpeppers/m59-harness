@@ -43,6 +43,14 @@ const arg = (name, fallback) => {
 
 const CONTROL = process.env.M59_CONTROL_URL || 'http://127.0.0.1:8901';
 
+async function fleetName() {
+  try {
+    const r = await fetch(`${CONTROL}/health`);
+    const j = await r.json();
+    return String(j.fleet || 'prod');
+  } catch { return 'prod'; }
+}
+
 async function fleetRows() {
   const res = await fetch(`${CONTROL}/mcp`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -66,9 +74,14 @@ function minimal(minutes) {
 const comma = n => Number(n ?? 0).toLocaleString('en-US');
 const days = ms => Math.floor(ms / 86_400_000);
 
-export function render({ chars, kpm, hp, purse, banked, bankedFrom, bankedOf, oldestMs }) {
+export function render({ fleet = 'prod', chars, kpm, hp, purse, banked, bankedFrom, bankedOf, oldestMs }) {
   const L = [];
-  L.push(`FLEET ${chars}`.padEnd(22) + `kills/min ${kpm.toFixed(2)}`);
+  // NAME THE FLEET ON THE FACE OF IT. Every number here is prod-only — the board comes from
+  // the broker holding substrate/fleets/prod.json and nothing else can get into it — but an
+  // unlabelled total invites the question anyway, and `m59-bank.mjs` DOES span fleets (45
+  // characters across prod and shadow), so the doubt is well earned. Saying which fleet is
+  // cheaper than being asked.
+  L.push(`FLEET ${fleet} ${chars}`.padEnd(22) + `kills/min ${kpm.toFixed(2)}`);
   L.push(`max hp    ${hp.min} / ${Math.round(hp.avg)} / ${hp.max}`.padEnd(30) + 'lo/av/hi');
   L.push('');
   L.push('purse'.padEnd(12) + comma(purse).padStart(12));
@@ -83,6 +96,7 @@ export function render({ chars, kpm, hp, purse, banked, bankedFrom, bankedOf, ol
 async function main() {
   const minutes = Number(arg('minutes', 30));
   const rows = await fleetRows();
+  const fleet = await fleetName();
   const m = minimal(minutes);
 
   let purse = 0, banked = 0, bankedFrom = 0, oldest = null;
@@ -102,6 +116,7 @@ async function main() {
   }
 
   const data = {
+    fleet,
     characters: rows.length,
     window_minutes: minutes,
     kills_per_minute_fleet: m.kills_per_minute_fleet ?? 0,
@@ -112,7 +127,7 @@ async function main() {
   };
 
   const lines = render({
-    chars: rows.length, kpm: data.kills_per_minute_fleet, hp: m.max_health,
+    fleet, chars: rows.length, kpm: data.kills_per_minute_fleet, hp: m.max_health,
     purse, banked, bankedFrom, bankedOf: rows.length, oldestMs: oldest,
   });
   const widest = Math.max(...lines.map(l => l.length));

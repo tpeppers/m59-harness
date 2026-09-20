@@ -20,7 +20,7 @@ const ok = (label, cond, detail = '') => {
 const widestOf = (o) => Math.max(...render(o).map(l => l.length));
 
 const base = {
-  chars: 24, kpm: 0.37, hp: { min: 20, avg: 51.17, max: 62 },
+  fleet: 'prod', chars: 24, kpm: 0.37, hp: { min: 20, avg: 51.17, max: 62 },
   purse: 21766, banked: 84710, bankedFrom: 23, bankedOf: 24,
   oldestMs: 9 * 86_400_000,
 };
@@ -45,6 +45,11 @@ ok('a balance a year old', widestOf(stale) <= MAX_WIDTH, `${widestOf(stale)} col
 console.log('\n--- and it still says the things it is for ---');
 {
   const out = render(base).join('\n');
+  // NAME THE FLEET. Every number is prod-only, but `m59-bank.mjs` spans fleets (45
+  // characters across prod and shadow), so an unlabelled total earns the doubt it gets.
+  ok('the fleet is named on the face of it', /FLEET prod 24/.test(out));
+  ok('and a longer fleet name still fits',
+     Math.max(...render({ ...base, fleet: 'shadow-ab' }).map(l => l.length)) <= MAX_WIDTH);
   ok('kills per minute is present', /kills\/min\s+0\.37/.test(out));
   ok('max health is min, average and max', /max hp\s+20 \/ 51 \/ 62/.test(out));
   ok('the total is purse plus banked', /TOTAL\s+106,476/.test(out),
