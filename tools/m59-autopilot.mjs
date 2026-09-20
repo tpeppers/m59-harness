@@ -7202,6 +7202,15 @@ export class Autopilot {
       // moving", not "what was the clock".
       moved_ms: this.movedAt ? nowT - this.movedAt : null,
       swung_ms: this.swungAt ? nowT - this.swungAt : null,
+      // NEVER SWUNG IS NOT THE SAME FACT AS WE DO NOT KNOW, and collapsing them cost a whole
+      // analysis. `swung_ms` is null in both cases — there is no `swungAt` to subtract from —
+      // so `was.swinging` came out FALSE either way. Asked of the 268 deaths that happened on
+      // a square the geometry calls a safe wall, 242 read `swinging: false`, which reads as a
+      // refutation of "nothing can hit you unless you swing first" and is in fact 172 rows
+      // saying nothing at all. This separates them: false HERE means the body genuinely never
+      // swung in this keeper session, which is knowable, and is the shape a real
+      // counterexample has to have.
+      ever_swung: Number(this.swungAt) > 0,
       // WHICH RUNG WAS RUNNING WHEN THIS FRAME WAS WRITTEN.
       //
       // The death summary used to read `this.passStage` LIVE, and by the time a death is
@@ -9550,6 +9559,10 @@ export class Autopilot {
         swinging: last?.swung_ms != null && last.swung_ms < 12_000,
         ms_since_moved: last?.moved_ms ?? null,
         ms_since_swung: last?.swung_ms ?? null,
+        // THE FIELD THAT MAKES A DEATH ON A WALL ATTRIBUTABLE. `swinging: false` with
+        // `ms_since_swung: null` used to mean either "never swung" or "no frame to read",
+        // and only the first of those is evidence. Null here is the honest "no frame".
+        ever_swung: last ? (last.ever_swung ?? null) : null,
       },
       where: last ? { room: last.room, num: last.num, col: last.col, row: last.row } : null,
       vitals: {
