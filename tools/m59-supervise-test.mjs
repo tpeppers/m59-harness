@@ -168,6 +168,16 @@ console.log('\n--- a settable order must survive the stall restart ---');
   // at all on a character parked somewhere peaceful precisely so that it could.
   const HERE2 = dirname(fileURLToPath(import.meta.url));
   const sup = readFileSync(join(HERE2, 'm59-supervise.mjs'), 'utf8');
+  // The coop joins it for the same reason, from a measured loss: the broker never nulls
+  // `reagentCoop` deliberately -- it only writes it when passed -- so the
+  // `reagentCoop {...} -> null` the broker log records on t3, t8 and t9 was this map being
+  // short, not a second writer. It matters more than most: the coop is the ONLY path that
+  // withdraws from a guild chest, so a character stationed at the hall to draw reagents
+  // loses that ability ~90s after being granted it.
+  ok('reagentCoop is carried across a stall restart',
+     /reagentCoop:\s*'reagent_coop'/.test(sup),
+     'the only path that withdraws from a guild chest');
+
   ok('restAnywhere is carried across a stall restart',
      /restAnywhere:\s*'rest_anywhere'/.test(sup),
      'a policy this map omits survives about ninety seconds');

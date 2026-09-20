@@ -611,6 +611,19 @@ const KEEP_ACROSS_RESTART = {
   // not merely lose a preference, it silently re-imposes a refusal to rest at all on a
   // character that was parked somewhere peaceful precisely so it could.
   restAnywhere: 'rest_anywhere',
+  // AND THE COOP, FOR THE SAME REASON AND FROM A MEASURED LOSS. The broker only writes
+  // `reagentCoop` when `reagent_coop` is passed, so nothing NULLS it deliberately — but a
+  // stall restart rebuilds the policy from THIS MAP, and a key the map omits is simply not
+  // in the new policy. That is what the broker log records as
+  // `policy reagentCoop {...} -> null (rememberAutopilot)`: not a second writer, this map
+  // being short. Observed on t3, t8 and t9 within one evening.
+  //
+  // It matters because the coop is the ONLY code path that withdraws from a guild chest
+  // (`getFromContainer` has exactly one caller, m59-reagent-coop-runtime.mjs). A character
+  // stationed at the hall to draw its reagents from the chests loses that ability roughly
+  // ninety seconds after being granted it, and then stands in a room full of what it needs
+  // reporting itself healthy.
+  reagentCoop: 'reagent_coop',
   walkingMoney: 'walking_money', sellAtLoad: 'sell_at_load',
   dropAtLoad: 'drop_at_load',
   sellWhenBroke: 'sell_when_broke', sellWhenBrokeUnder: 'sell_when_broke_under',
