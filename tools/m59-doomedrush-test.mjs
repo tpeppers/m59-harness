@@ -108,6 +108,62 @@ console.log('the call site: rush BEFORE the freeze, and do not return between th
 }
 
 console.log('');
+console.log('the shelter counter, which counted nothing for its whole life');
+{
+  // ab4ebaf (2026-09-10) introduced `shelterStops.taken` and, in the same commit, deleted the
+  // mid-hop rung that would have incremented it. Nothing wrote to it afterwards, so 615 of 615
+  // postmortems carrying the field read `taken 0 of 4` — an instrument wired to nothing.
+  const a = Object.create(Autopilot.prototype);
+  a.policy = {}; a.s = { world: { room: { num: 39 } } };
+
+  ok('a stop counts', a.recordShelterStop() === 1);
+  ok('and stops accumulate within a room', a.recordShelterStop() === 2);
+  // SELF-INITIALISING: the only other maker of this bucket is passTravelling, and the doomed
+  // rush is taken by a character that is precisely not travelling.
+  const fresh = Object.create(Autopilot.prototype);
+  fresh.policy = {}; fresh.s = { world: { room: { num: 7 } } };
+  ok('it makes its own bucket when no journey ever did',
+     fresh.recordShelterStop() === 1 && fresh.shelterStops.room === 7);
+  // Counted against the room the WALL is in, so a take that crosses an exit starts the new
+  // room's budget rather than finishing the old one's.
+  a.s.world.room.num = 599;
+  ok('a new room starts a new budget', a.recordShelterStop() === 1);
+  ok('and the bucket names that room', a.shelterStops.room === 599);
+
+  // ONLY SURVIVAL TAKES SPEND THE SURVIVAL BUDGET. takeSafeSpot is also how a hunter positions
+  // against a quarry; counting those would spend a survival budget on hunting.
+  ok('the increment is gated on the recovery flag',
+     /if \(result\?\.took && options\.recovery\) this\.recordShelterStop\(\)/.test(SRC));
+  // It must not be able to refuse shelter — the only way wiring this up could do harm.
+  const spentLine = SRC.slice(SRC.indexOf('const shelterSpent ='), SRC.indexOf('const shelterSpent =') + 120);
+  ok('the budget still exempts a character in real trouble', /!inRealTrouble/.test(spentLine));
+  // CODE ONLY — the comment in takeSafeSpot explains this counter and names shelterSpent in
+  // prose, so a raw count over the file measures the documentation rather than the wiring.
+  const CODE = SRC.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  ok('and shelterSpent still gates nothing but a note — one declaration, one reader',
+     (CODE.match(/shelterSpent/g) ?? []).length === 2,
+     String((CODE.match(/shelterSpent/g) ?? []).length));
+}
+
+console.log('');
+console.log('the postmortem cannot attribute one room\'s shelter to another');
+{
+  // 19 of the 36 deaths of 2026-09-19/20 reported `this_room` naming a room the character did
+  // not die in, because the bucket is only re-made by rungs that happened to run.
+  const at = SRC.indexOf('taken_this_room:');
+  const block = SRC.slice(at - 900, at + 260);
+  ok('the report compares the bucket against the room they died in', /at\?\.num/.test(block));
+  // Compared against `at`, never the live room: by report time the body is in the Underworld.
+  ok('and not against the live room, which is the Underworld by then',
+     !/taken_this_room:[\s\S]{0,160}world\?\.room/.test(block));
+  ok('an unknown death room is not treated as evidence of staleness',
+     /at\?\.num != null/.test(block));
+  // The contract m59-death-observation-test pins.
+  ok('and it is still always a number',
+     /\? 0 : \(this\.shelterStops\?\.taken \?\? 0\)/.test(block));
+}
+
+console.log('');
 console.log('the threshold is the one the operator named');
 {
   const start = SRC.indexOf('const doomedAt = Math.round(');

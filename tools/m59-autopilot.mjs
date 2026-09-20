@@ -3536,6 +3536,27 @@ export class Autopilot {
     return Date.now() - last.at < (this.policy.doomedSpotRetryMs ?? 20_000);
   }
 
+  // ONE SURVIVAL SHELTER STOP, COUNTED AGAINST THE ROOM IT WAS TAKEN IN.
+  //
+  // SELF-INITIALISING ON PURPOSE. The only other place `shelterStops` is created is inside
+  // `passTravelling`, so a character that is standing and fighting rather than crossing has
+  // never had the bucket made for it — and the doomed rush in `passFleeAndRest` is exactly a
+  // stop taken by a character that is not travelling. Creating it here on the same rule the
+  // travel guard uses means the counter means the same thing whichever rung filled it.
+  //
+  // The room is read AFTER the take, because the stop belongs to the room the wall is in: a
+  // take that crosses an exit (`the first wall after the exit`) shelters us in the next room
+  // and should start that room's budget rather than finish the old one's.
+  //
+  // `noted` is deliberately not preserved across the reset — it is the once-per-room latch on
+  // the `walking on` line, and a new room is a new thing worth saying once.
+  recordShelterStop() {
+    const room = this.s?.world?.room?.num ?? null;
+    if (this.shelterStops?.room !== room) this.shelterStops = { room, taken: 0 };
+    this.shelterStops.taken = (this.shelterStops.taken ?? 0) + 1;
+    return this.shelterStops.taken;
+  }
+
   // DOES THE SQUARE I AM ON SHELTER ME — ASKED OF THE GEOMETRY, NEVER OF THE LEDGER.
   //
   // Operator, 2026-09-10: "do *not* consult the safe spot ledger regarding safe walls, use the
@@ -4451,6 +4472,32 @@ export class Autopilot {
     }, () => this.takeSafeSpotObserved(why, quarry, options))
       .catch(e => ({took:false,why:e.message}));
     if (options.shouldInterrupt?.()) return {...result,took:false,cancelled:true};
+    // COUNT THE SHELTER STOP, because for its whole life this counter has counted nothing.
+    //
+    // `shelterStops.taken` was introduced by ab4ebaf (2026-09-10) — the same commit that
+    // deleted the mid-hop rung which would have incremented it — and nothing in this file has
+    // ever written to it since. It is set to 0 on entering a room, read by `shelterSpent`, and
+    // reported into every postmortem as `summary.shelter.taken_this_room` beside a
+    // `budget_per_room: 4`. So 615 of 615 death records that carry the field read
+    // `taken 0 of 4`: a live-looking instrument wired to nothing, which reads as "this
+    // character never needed shelter" when it means "nobody has ever counted".
+    //
+    // ONLY THE SURVIVAL TAKES COUNT, which is what the budget was always about: the comment on
+    // `travel_shelter_per_room` bounds repeated DETOURS during one crossing — "a character that
+    // has already taken shelter twice in this room has had the benefit; a third detour is not
+    // survival, it is a loop". `takeSafeSpot` is also how a hunter positions against a quarry
+    // (`a new wall for the next quarry`, `a wall the quarry can be pulled to`), and counting
+    // those would spend a survival budget on hunting and mean something different in every
+    // postmortem. `recovery` is the existing flag that separates the two, and it is the flag
+    // the travel guard's own shelter path already sets.
+    //
+    // THIS CANNOT SUPPRESS SHELTER, which is the only way wiring it up could do harm.
+    // `shelterSpent` has exactly one reader — the `walking on` note below it — and gates no
+    // action, because the rung it used to gate was the one ab4ebaf removed. And it is
+    // `!inRealTrouble && taken >= budget`, so a character under `doomedInOpenBelow` is exempt
+    // by construction: the doomed rush in passFleeAndRest increments this and can never be
+    // refused by it.
+    if (result?.took && options.recovery) this.recordShelterStop();
     if (decision && currentSurvivalDecision(this.s)?.id === decision.id) {
       if (result?.took) {
         if(!decision.selected_at)this.recordSurvivalPath(decision.id,result.spot??this.hold);
@@ -14416,7 +14463,33 @@ export class Autopilot {
             // end of the hop", so a death with a spent budget is a different story from one
             // with an untouched budget and no stops at all.
             this_room: this.shelterStops?.room ?? null,
-            taken_this_room: this.shelterStops?.taken ?? 0,
+            // COUNTED ONLY WHEN THE BUCKET IS ABOUT THE ROOM WE ARE STANDING IN.
+            //
+            // `shelterStops` is re-made on entering a room, but only by the rungs that run —
+            // so a character that left the bucket's room without one of them firing carries a
+            // stale bucket, and this field then reported another room's spend as this room's.
+            // Measured over the 36 deaths of 2026-09-19/20: 19 of 36 had `this_room` naming a
+            // room the character did not die in, which is a reading nobody can act on and one
+            // that silently understates or overstates the budget it sits next to.
+            //
+            // STILL ALWAYS A NUMBER. `m59-death-observation-test` pins that — "is always a
+            // number, never absent" — and it is right to: a field that is sometimes missing
+            // reads as 0 in every analysis that does `?? 0`, which is the same silent
+            // misreading in the other direction. So a stale bucket reports 0 rather than null,
+            // and `this_room` beside it is what says which room the bucket was actually about.
+            //
+            // COMPARED AGAINST THE ROOM THEY DIED IN, NOT THE LIVE ONE. By the time this record
+            // is written the character is in the Underworld, so `world.room.num` is 1 and every
+            // bucket would look stale. `at` is the last frame that was not the Underworld — the
+            // same source `room_num` and `died_in` above are taken from — which is the room the
+            // budget is actually a statement about.
+            //
+            // AND ONLY WHEN BOTH ROOMS ARE KNOWN. An unreadable death room is not evidence that
+            // the bucket is stale, and zeroing a good count because the frame ring happened to
+            // be empty would be inventing a second wrong reading to fix the first.
+            taken_this_room: (at?.num != null && this.shelterStops?.room != null
+                              && this.shelterStops.room !== at.num)
+              ? 0 : (this.shelterStops?.taken ?? 0),
             budget_per_room: this.policy.travelShelterPerRoom ?? 4,
             // The threshold the shelter rung compares health against, recorded because it is
             // zone-dependent — it returns 1 (any scratch at all) where the zone outranks the
