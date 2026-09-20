@@ -478,4 +478,46 @@ test('THE TRIGGERS STAY COUNTABLE APART — the reason this ledger is worth keep
                'and the two unreachable rows on their own are still only two');
 });
 
+// AND THE ROW HAS TO LAND, not merely be computable. Everything above tests the decision as a
+// pure function; this drives the real runtime against a chest that holds nothing and then reads
+// the file back. A recorder that is never called is a blind instrument, and this session already
+// spent an hour reading a structurally-null field as a measurement.
+const ledgerRows = agent => {
+  const file = join(process.env.M59_COOP_DIR, 'coop-test.coop.ndjson');
+  let text = '';
+  try { text = readFileSync(file, 'utf8'); } catch { return []; }
+  return text.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.agent === agent);
+};
+
+test('an empty chest writes its outcome and fires the fallback when self_fund is on', async () => {
+  const { k } = keeper({ purse: 0, boxHerbs: 0 });
+  k.name = 'fallback-on';
+  k.policy.reagentCoop = { ...cfg, self_fund: true };
+  const result = await runReagentCoop(k, 'supply', { plan: shopping }, 'coop-test');
+  assert.deepEqual(result.took, [], 'the chest held nothing to take');
+  const rows = ledgerRows('fallback-on');
+  const outcome = rows.find(r => r.kind === 'coop_supply_outcome');
+  assert.ok(outcome, `no outcome row was written: ${JSON.stringify(rows)}`);
+  assert.equal(outcome.outcome, 'chest_empty');
+  assert.equal(outcome.short, 10, 'the shortfall is the herb the plan still wants');
+  const fired = rows.find(r => r.kind === 'coop_self_funding');
+  assert.ok(fired, 'self_fund:true must record the fallback it took');
+  assert.equal(fired.trigger, 'chest_empty');
+  assert.ok(result.self_funding, 'and the caller that asked for the draw must be told');
+  assert.equal(k.selfFundReagents.trigger, 'chest_empty');
+});
+
+test('with self_fund off the outcome is still recorded — that is the baseline', async () => {
+  const { k } = keeper({ purse: 0, boxHerbs: 0 });
+  k.name = 'fallback-off';
+  k.policy.reagentCoop = { ...cfg, self_fund: false };
+  const result = await runReagentCoop(k, 'supply', { plan: shopping }, 'coop-test');
+  const rows = ledgerRows('fallback-off');
+  assert.ok(rows.some(r => r.kind === 'coop_supply_outcome' && r.outcome === 'chest_empty'),
+            'the recorder runs whether or not anybody is acting on it');
+  assert.equal(rows.filter(r => r.kind === 'coop_self_funding').length, 0,
+               'but an opt-out character must never be sent shopping');
+  assert.equal(result.self_funding, undefined);
+});
+
 test.after(() => rmSync(root, { recursive: true, force: true }));
