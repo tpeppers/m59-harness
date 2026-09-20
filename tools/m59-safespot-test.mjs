@@ -16,7 +16,8 @@ import './m59-test-ledger.mjs';        // FIRST — the keeper records casts; se
 import { unlinkSync, readFileSync } from 'node:fs';
 import { Autopilot, farmRoomDenials,
          shouldRelocateToAssignedRoom } from './m59-autopilot.mjs';
-import { shelterAhead, gridDisagreementAt, returnReachableTo } from './m59-safespots.mjs';
+import { shelterAhead, gridDisagreementAt, returnReachableTo, hasAnyFooting,
+         geometryFor as geoFor, safeWalls, nearestSafeSpot, reachableFrom } from './m59-safespots.mjs';
 import { returnToSpot } from './m59-skills.mjs';
 
 const BOOK = `${process.env.TEMP || '/tmp'}/m59-safespot-test-${process.pid}.json`;
@@ -1547,5 +1548,48 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
 // (a group here drove SafeSpotBook.discredited / discreditedForPull directly, pinning that a
 //  failure — even a hundred of them — never condemns a square, and that the pull verdict is
 //  the same verdict. Gone with the book: nothing can condemn a square.)
+
+// NOBODY MAY BE SENT TO SHELTER THEY CANNOT REACH.
+//
+// The reachability flood does not catch an ISLAND on its own. `reachableFrom` walks with
+// `moverStepLands`, which answers whether a STEP LANDS and not whether the destination is
+// ground anybody could be standing on to take it -- so a walkable square whose eight
+// neighbours are all void still enters the flood. Ukgoth r18c50 is the live case: seven of
+// its eight neighbours admit a step in and every one of them is unwalkable, so the square
+// came back reachable from a normal standing position, in the room the fleet dies in most.
+console.log('\n--- an island is never offered as shelter ---');
+{
+  const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url), 'utf8'));
+  const roomOf = n => Object.values(map.rooms ?? map).find(r => Number(r?.num) === n);
+  const islands = [[41, 2, 2], [47, 18, 50], [599, 18, 50], [802, 24, 1]];
+  let flooded = 0;
+  for (const [num, row, col] of islands) {
+    const g = geoFor(roomOf(num));
+    ok('room ' + num + ' r' + row + 'c' + col + ' has no footing',
+       hasAnyFooting(g, row, col) === false);
+    ok('  ...and is still a safe wall by the definition',
+       safeWalls(g).some(w => w.row === row && w.col === col),
+       'an island IS unreachable by monsters; the overlay is right to paint it');
+    let from = null;
+    for (let r = 1; r <= g.rows && !from; r++) for (let c = 1; c <= g.cols; c++)
+      if (g.walkable(r, c)) { from = { row: r, col: c }; break; }
+    if (reachableFrom(g, from) && reachableFrom(g, from).has(row + ',' + col)) flooded++;
+  }
+  ok('at least one island fools the reachability flood, which is why this filter exists',
+     flooded > 0, flooded + ' of ' + islands.length + ' came back "reachable"');
+
+  const g = geoFor(roomOf(599));
+  const offered = nearestSafeSpot(g, { col: 50, row: 17 },
+                                  { within: Math.max(g.rows, g.cols), room: 599 });
+  ok('nearestSafeSpot does not hand back the island even standing beside it',
+     !(offered && offered.row === 18 && offered.col === 50),
+     offered ? ('offered r' + offered.row + 'c' + offered.col) : 'offered nothing');
+
+  const walls = safeWalls(g);
+  const footed = walls.filter(w => hasAnyFooting(g, w.row, w.col)).length;
+  ok('and it costs exactly one square in room 599',
+     walls.length - footed === 1, (walls.length - footed) + ' excluded of ' + walls.length);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

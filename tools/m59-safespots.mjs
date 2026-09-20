@@ -963,6 +963,29 @@ export function nearestSafeSpot(geo, from, {
     // / "leaving the room to recover safely" / "could not leave", and then the character
     // died. Nothing recorded the failure, so every pass made the identical choice.
     if (unreachable?.has(key(s.col, s.row))) continue;
+    // NOR AN ISLAND — A SQUARE WITH NOWHERE TO STEP IN FROM.
+    //
+    // NOBODY MAY BE SENT TO SHELTER THEY CANNOT REACH, and the reachability flood below does
+    // not catch this case on its own. `reachableFrom` walks with `moverStepLands`, which
+    // answers whether a STEP LANDS and not whether the destination is ground anybody can be
+    // standing on to take it. So a walkable square whose eight neighbours are all unwalkable
+    // still enters the flood — in Ukgoth (room 599, the fleet's worst room for deaths)
+    // `moverStepLands` admits a step into r18c50 from SEVEN of its eight neighbours, every
+    // one of which is void, and the square duly comes back as reachable. It is not: to take
+    // any of those steps a body would already have to be standing somewhere it cannot stand.
+    //
+    // Four squares in the whole baked world are like this and three of them are excluded by
+    // the flood already; this one was not, and it sat in the room the fleet dies in most.
+    // A hurt character offered it walks at a corner it can never enter, and the measured
+    // shape of that is the Twisted Wood trail below — the same choice made every pass until
+    // the character died.
+    //
+    // Deliberately NOT fixed by making the flood require `geo.walkable()` on each step:
+    // 1.8% of the squares bodies were actually OBSERVED standing on fail that test, so
+    // walkability is the wrong arbiter for where a body can be, and tightening the flood
+    // that way would refuse real shelter on real ground. Adjacency is the narrow, checkable
+    // claim — you cannot enter a square with nowhere to enter it from.
+    if (!hasAnyFooting(geo, s.row, s.col)) { unreachableToUs++; continue; }
     // AND NOT ONE THE MOVER CANNOT GET TO AT ALL. The measured case is a shelter offered in
     // a disconnected component while a real wall sat one square from the character.
     if (canWalkThere && !canWalkThere.has(`${s.row},${s.col}`)) { unreachableToUs++; continue; }
@@ -1160,6 +1183,27 @@ export function geometryFor(mapRoom) {
 // and has outlived it: `unreachable` sets are keyed the same way, and THAT is a fact about
 // the walk in progress rather than about a square's history, so it stays.
 const key = (col, row) => `${col},${row}`;
+
+/**
+ * Is there anywhere a body could be standing in order to step into this square?
+ *
+ * The narrowest possible reachability claim, and deliberately so. It does NOT ask whether a
+ * route exists — `reachableFrom` does that — only whether the square has any adjacent ground
+ * at all. A square with eight unwalkable neighbours cannot be entered by anything that has to
+ * stand somewhere first, whatever the mover's step test says about the step itself.
+ *
+ * Exported so the rollout watch can count offers of unreachable shelter without re-deriving
+ * the rule, and so a test can pin it against the four squares in the world that fail it.
+ */
+export function hasAnyFooting(geo, row, col) {
+  if (!geo || typeof geo.walkable !== 'function') return true;   // cannot tell is not a refusal
+  for (const [dr, dc] of RING) {
+    const r = row + dr, c = col + dc;
+    if (typeof geo.inBounds === 'function' && !geo.inBounds(r, c)) continue;
+    try { if (geo.walkable(r, c)) return true; } catch { return true; }
+  }
+  return false;
+}
 
 // ------------------------------------------------- the book (RETIRED 2026-09-20)
 //

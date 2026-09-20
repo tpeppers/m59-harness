@@ -46,7 +46,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { geometryFor, safeWalls } from './m59-safespots.mjs';
+import { geometryFor, safeWalls, hasAnyFooting } from './m59-safespots.mjs';
 import { epochFor } from './m59-epoch.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -150,8 +150,31 @@ function reach() {
   return { present: true, checked, bad, pct: checked ? (100 * bad / checked) : 0, which };
 }
 
+// ── 5. ISLANDS: shelter with nowhere to step in from ──────────────────────────────────────
+//
+// A square whose eight neighbours are all void cannot be entered by anything that has to be
+// standing somewhere first. The reachability flood does not catch these on its own —
+// `moverStepLands` reports whether a STEP LANDS without asking whether the square it departs
+// from is ground — so in Ukgoth, the fleet's worst room for deaths, r18c50 came back
+// "reachable" from seven neighbours that are all void. Counted here so that the selector's
+// refusal to offer them cannot regress silently.
+function islands() {
+  const map = JSON.parse(readFileSync(join(SUB, 'm59-map.json'), 'utf8'));
+  let offered = 0, total = 0; const which = [];
+  for (const r of Object.values(map.rooms ?? map)) {
+    if (r?.num == null) continue;
+    let g; try { g = geometryFor(r) } catch { continue }
+    if (!g?.collisionReady) continue;
+    for (const w of safeWalls(g)) {
+      total++;
+      if (!hasAnyFooting(g, w.row, w.col)) { offered++; which.push(`${r.num}:${w.col},${w.row}`); }
+    }
+  }
+  return { total, offered, which };
+}
+
 // ── report ────────────────────────────────────────────────────────────────────────────────
-const E = epochCheck(), R = restwatch(), D = deaths(), X = reach();
+const E = epochCheck(), R = restwatch(), D = deaths(), X = reach(), I = islands();
 const CHANGED_IN = '8da4210';              // the commit that dropped the free-shot clause
 
 const findings = [];
@@ -159,7 +182,7 @@ const stale = E.spots && E.movement && E.spots.at && E.movement.at &&
               new Date(E.spots.at) < new Date(E.movement.at);
 
 if (has('json')) {
-  console.log(JSON.stringify({ epoch: E, restwatch: R, deaths: D, reach: X }, null, 1));
+  console.log(JSON.stringify({ epoch: E, restwatch: R, deaths: D, reach: X, islands: I }, null, 1));
   process.exit(0);
 }
 
@@ -217,6 +240,14 @@ else {
   for (const w of X.which.slice(0, has('verbose') ? 50 : 6)) console.log(`      ${w}`);
   if (X.pct > 5) findings.push(`${X.pct.toFixed(1)}% of real standing ground is invisible to the ` +
                                'bake, which caps how much shelter can ever be offered.');
+}
+
+console.log('\n5. ISLANDS — safe walls with nowhere to step in from');
+console.log(`   ${I.offered} of ${I.total} safe walls have no adjacent ground`);
+for (const w of I.which.slice(0, has('verbose') ? 50 : 6)) console.log(`      ${w}`);
+if (I.offered) {
+  console.log('   (genuine walls — nothing can reach them, including us. The selector refuses');
+  console.log('    to offer them; this line is here so that refusal cannot regress silently.)');
 }
 
 console.log('\n──────── VERDICT ────────');
