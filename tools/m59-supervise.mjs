@@ -637,6 +637,13 @@ async function ensureKeeper(agent, hunt) {
   try {
     const st = await call('autopilot', { agent, action: 'status' }).catch(() => null);
     if (st?.running) return true;
+    // SAME HOLE AS THE STALL RESTART, AND IT FAILS TWICE OVER. On a failed read `st` is
+    // null, so `st?.running` is undefined — falsy — and we fall through and start a keeper
+    // we cannot confirm is stopped, from `carriedPolicy(null)` which is {}, i.e. DEFAULTS.
+    // So a blocked broker turns this into "restart everything from scratch", which is the
+    // load that blocked it. See the 2026-09-20 note at the stall restart for the numbers.
+    // Not knowing whether it is running is a reason to leave it alone, not to start it.
+    if (!st?.policy) return false;
     await call('autopilot', { agent, action: 'start', mode: 'farm', ...carriedPolicy(st), hunt });
     return true;
   } catch { return false; }
@@ -866,6 +873,30 @@ async function round(n) {
     // it is the one most likely to erase a deliberate placement. Read the policy back
     // and carry it, rather than rebuilding the keeper from defaults.
     const cur = await call('autopilot', { agent: r.agent, action: 'status' }).catch(() => null);
+    // A FAILED READ IS NOT PERMISSION TO INVENT ORDERS — AND IT IS SELF-AMPLIFYING.
+    //
+    // This read fails exactly when the broker is blocked, and then `carriedPolicy(null)`
+    // is {} and `cur?.policy?.hunt` is undefined, so the line below rebuilt the keeper
+    // from DEFAULTS plus a level-guessed hunt — the precise thing the comment above says
+    // it exists to prevent. It does not degrade gracefully, it degrades into the failure.
+    //
+    // Measured 2026-09-20. Beaker: 232 hunt flips against 56 for the next worst and
+    // single digits elsewhere, each flip two full 128KB roster serializations
+    // (rememberAutopilot AND saveFleetState). The broker reached a 2.5GB working set and
+    // 1481s of CPU in 28 minutes, then blocked hard enough that /health took 85s and it
+    // could no longer reach its own keepers — while those keepers answered a direct probe
+    // in 72ms. So the write storm starves the reads that would have prevented it: blocked
+    // broker -> status read fails -> orders invented -> two roster writes -> more load.
+    // It also explains the frames nobody could attribute, like `fightAboveVigor 60 -> 0`:
+    // that is not a second writer, it is `carriedPolicy({})` dropping a carried field.
+    //
+    // So: no read, no restart. Waiting one round costs 90 seconds; guessing costs the
+    // deliberate placement AND feeds the thing that broke the read.
+    if (!cur?.policy) {
+      console.log(`   NOT restarting ${r.character}: could not read its policy back, and a ` +
+                  'restart without it rebuilds from defaults — waiting for the next round');
+      continue;
+    }
     await call('autopilot', { agent: r.agent, action: 'start', mode: 'farm',
                               ...carriedPolicy(cur),
                               // Its own hunt first; only fall back when we genuinely do

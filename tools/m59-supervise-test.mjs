@@ -92,6 +92,40 @@ console.log('\n--- the stall restart carries the policy hunt rather than inventi
      'a deliberate placement must survive the 90s stall sweep');
   ok('fallbackHunt applies the ceiling to CAVE',
      /g\.level\s*>\s*l\s*&&\s*g\.level\s*<=\s*ceiling/.test(src));
+
+  // A FAILED READ IS NOT PERMISSION TO INVENT ORDERS, AND THIS ONE IS SELF-AMPLIFYING.
+  //
+  // 2026-09-20: carrying the policy only helps when the policy can be READ. The status
+  // call fails exactly when the broker is blocked, and `carriedPolicy(null)` is {} while
+  // `cur?.policy?.hunt` is undefined — so the restart rebuilt from DEFAULTS plus a
+  // level-guessed hunt, which is the thing the carry exists to prevent. Beaker took 232
+  // hunt flips against 56 for the next worst, each one two full 128KB roster writes
+  // (rememberAutopilot AND saveFleetState). The broker hit a 2.5GB working set, 1481s of
+  // CPU in 28 minutes, an 85s /health, and could no longer reach keepers that answered a
+  // direct probe in 72ms. The storm starves the reads that would have stopped it.
+  ok('a restart is SKIPPED when the policy could not be read back',
+     /if\s*\(!cur\?\.policy\)\s*\{[\s\S]{0,400}?continue;/.test(src),
+     'no read, no restart — guessing costs the placement AND feeds the thing that broke the read');
+  ok('and it says why rather than skipping silently',
+     /could not read its policy back/.test(src));
+  // lastIndexOf, not indexOf: `ensureKeeper` carries an EARLIER `action: 'start'` and the
+  // first match is that one, which made this assert the wrong ordering entirely.
+  ok('the skip comes BEFORE the start call, not after',
+     src.indexOf('could not read its policy back') <
+     src.lastIndexOf("action: 'start', mode: 'farm'"),
+     'a guard after the write is not a guard');
+
+  // AND THE OTHER CALLER HAD THE SAME HOLE, found only because the ordering test tripped
+  // over it. `ensureKeeper` read status, and on a null read `st?.running` is undefined —
+  // falsy — so it started a keeper it could not confirm was stopped, from
+  // `carriedPolicy(null)` === {}, i.e. defaults. A blocked broker turned the unstick into
+  // "restart everything from scratch", which is the load that blocked it.
+  ok('ensureKeeper also refuses to start from an unread policy',
+     /if\s*\(!st\?\.policy\)\s*return false;/.test(src),
+     'not knowing whether it is running is a reason to leave it alone, not to start it');
+  ok('...and that guard is before ITS start call too',
+     src.indexOf('if (!st?.policy) return false;') <
+     src.indexOf("{ agent, action: 'start', mode: 'farm'"));
 }
 
 console.log(failed ? `\n${failed} failed` : '\nall passed');
