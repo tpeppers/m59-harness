@@ -83,6 +83,34 @@ const last = new Map();
 //
 // So the identity fields are applied AFTER the spread. A caller that puts `kind` in a
 // detail is always making a mistake; this makes the mistake inert rather than silent.
+// WAS THIS DEATH A TRAVEL DEATH? Two signals, because each catches what the other drops.
+//
+// Exported so it can be tested without a fleet, and because the answer is a judgement rather
+// than a field read — the shape that used to be a single `===` and was wrong for nineteen
+// deaths in twenty.
+//
+//   `doing`        the last frame before the Underworld. Survives the survival ladder
+//                  cancelling the journey, which is what made the old reading fail.
+//   `doctrine`     the keeper's live travel flag AT THE INSTANT OF DEATH. Catches the case
+//                  the old comment was right about: a character resting at a wall mid-journey
+//                  is still travelling, and no frame says so.
+//
+// Returns `null` — never `false` — when NEITHER signal is present, because a death nobody
+// classified and a death classified as stationary are different records, and
+// `deaths_per_1000_journeys` is required to be null rather than 0 in the first case. `false`
+// written where `null` belonged is what defeated that guard: `unclassified` stayed 0, so the
+// metric reported a confident zero over a window with four deaths in it.
+export function travellingAtDeath(d = {}) {
+  const doing = d.doing ?? null;
+  const doctrine = d.governed_by?.doctrine ?? null;
+  if (doing == null && doctrine == null) return null;
+  // `startsWith` rather than `===`: the frame has carried both `travelling` and, on the
+  // journey chassis, longer forms. An exact match silently drops the longer ones.
+  if (typeof doing === 'string' && doing.toLowerCase().startsWith('travel')) return true;
+  if (doctrine === 'travel') return true;
+  return false;
+}
+
 export function recordEvent(character, kind, detail = {}) {
   if (!character) return;
   append({ t: Date.now(), iso: new Date().toISOString(), ...detail,
@@ -254,12 +282,42 @@ export function recordSample(rows = []) {
           // of the postmortem STORE — so every window aggregate had to either re-open 3,600
           // files or go without, and it went without.
           //
-          // Read off `governed_by`, which the keeper sets to the travel doctrine while a
-          // journey is live, rather than off a room or a strategy name: a character resting
-          // at a wall mid-journey is still travelling, and only the doctrine knows that.
-          // `null` when the keeper had not filled it in, never `false` — a death nobody
-          // classified and a death classified as stationary are different records.
-          was_travelling: d.governed_by ? d.governed_by.doctrine === 'travel' : null,
+          // CORRECTED 2026-09-20. This read `governed_by.doctrine === 'travel'` alone, and
+          // that field answers a DIFFERENT QUESTION than the one the metric asks. The keeper
+          // sets it from `this.travelling` AT THE INSTANT OF DEATH — and the survival ladder
+          // clears `this.travelling` when it cancels a journey, which is precisely what
+          // happens when travel goes wrong. So the record lost exactly the deaths it exists
+          // to count: the worse the trouble, the less likely it was counted.
+          //
+          // Measured on prod over 50 deaths in 27 hours:
+          //
+          //     19  doing: travelling  governed_by: ordinary ladder   -> written FALSE
+          //      1  doing: travelling  governed_by: travel            -> the only one counted
+          //      1  doing: stalled     governed_by: travel            -> counted, was not
+          //     26  doing: stalled     governed_by: ordinary ladder
+          //
+          // Nineteen of twenty travelling deaths were recorded as stationary, `unclassified`
+          // stayed 0 because `false` IS a classification, and so the null-guard below could
+          // never fire. `travel deaths per 1000 journeys` read 0 through a window with 136
+          // journeys and four deaths in it.
+          //
+          // TWO SIGNALS, OR-ED, BECAUSE EACH CATCHES WHAT THE OTHER DROPS. `doing` comes off
+          // the last frame before the Underworld and survives the ladder taking over.
+          // `governed_by` keeps the case the original comment was right about — a character
+          // resting at a wall mid-journey is still travelling, and only the doctrine knows
+          // that. Neither alone is sufficient and the old code had the weaker one.
+          //
+          // `null` only when NEITHER signal is present, never `false` — a death nobody
+          // classified and a death classified as stationary are different records, which is
+          // what the guard on `deaths_per_1000_journeys` depends on.
+          was_travelling: travellingAtDeath(d),
+          // AND THE RAW SIGNALS, so the next question does not need 3,600 files re-opened.
+          // The open one is `doing: 'stalled'` — 26 of those 50, and whether a character that
+          // stalled DURING a journey should count is a judgement nobody has made yet. It is
+          // deliberately NOT folded into `was_travelling` here; it is left visible instead.
+          travelling_signal: d.doing != null || d.governed_by
+            ? { doing: d.doing ?? null, doctrine: d.governed_by?.doctrine ?? null }
+            : null,
           // AND WAS IT ON A WALL WE HAD PROMISED WAS SAFE. `in_safe_spot` above is the
           // book's answer; this is the keeper's own, flagged at the moment of death because
           // `hold` is cleared by several paths and cannot be reconstructed afterwards. They

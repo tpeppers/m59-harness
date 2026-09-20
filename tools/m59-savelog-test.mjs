@@ -288,4 +288,88 @@ const row = (t, kind, extra = {}) => ({ t, type: 'event', kind, character: 'Alph
   rmSync(dir, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------------------------------
+// WAS IT A TRAVEL DEATH? The classifier, because it was wrong for nineteen deaths in twenty.
+//
+// `was_travelling` was read off `governed_by.doctrine === 'travel'` alone. That field is set
+// from the keeper's `this.travelling` AT THE INSTANT OF DEATH, and the survival ladder clears
+// it when it cancels a journey — which is exactly what happens when travel goes wrong. So the
+// record lost the deaths it exists to count, and lost them in proportion to how badly the
+// journey failed.
+//
+// Measured on prod across 50 deaths in 27 hours: 19 with `doing: travelling` were written as
+// stationary, 1 was caught, and `travel deaths per 1000 journeys` read 0 through a window
+// holding 136 journeys and four deaths. Re-running the corrected classifier over the same 50
+// moves it from 2 travelling to 21.
+{
+  const { travellingAtDeath } = await import('./m59-ledger.mjs');
+
+  // THE CASE THAT WAS BROKEN, and it is the common one rather than an edge.
+  ok(travellingAtDeath({ doing: 'travelling', governed_by: { doctrine: 'ordinary ladder' } }) === true,
+     'a character whose last frame says travelling IS a travel death even when the ladder ' +
+     'had taken over by the time it died — the ladder taking over is the symptom, not a ' +
+     'reason to stop counting');
+
+  // THE CASE THE ORIGINAL COMMENT WAS RIGHT ABOUT, which is why this is an OR and not a
+  // replacement: a character resting at a wall mid-journey is still travelling, and no frame
+  // says so. Dropping `governed_by` to fix the above would have broken this instead.
+  ok(travellingAtDeath({ doing: 'resting', governed_by: { doctrine: 'travel' } }) === true,
+     'the live travel doctrine still counts when the frame does not say travelling');
+
+  ok(travellingAtDeath({ doing: 'farming', governed_by: { doctrine: 'ordinary ladder' } }) === false,
+     'neither signal travelling is a real false, not a shrug');
+
+  // NULL IS NOT FALSE, AND THE WHOLE GUARD DEPENDS ON IT. `deaths_per_1000_journeys` is
+  // required to be null rather than 0 when nothing in the window was classified. Writing
+  // `false` where `null` belonged is what defeated it: `unclassified` stayed 0, so the metric
+  // reported a confident zero over a window with deaths in it.
+  ok(travellingAtDeath({}) === null,
+     'neither signal PRESENT is null — a death nobody classified and a death classified as ' +
+     'stationary are different records');
+  ok(travellingAtDeath({ doing: null, governed_by: null }) === null,
+     'explicit nulls are still "nobody asked"');
+
+  // A PREFIX, NOT AN EQUALITY. The frame has carried `travelling` and longer forms; an exact
+  // match silently drops the longer ones, which is the same class of bug as the original.
+  ok(travellingAtDeath({ doing: 'travelling to Castle Victoria' }) === true,
+     'a longer travelling verb still counts');
+
+  ok(travellingAtDeath({ doing: 'stalled', governed_by: { doctrine: 'ordinary ladder' } }) === false,
+     'a stalled character is NOT silently promoted to travelling — 26 of the 50 read stalled ' +
+     'and whether a stall during a journey counts is a judgement nobody has made; the raw ' +
+     'signals are recorded instead so it can be asked later without re-opening 3,600 files');
+}
+
+// AND ACROSS THE SEAM, because the unit test above would pass on a ledger that never carries
+// `doing` at all — which is precisely the state this fix had to repair. The keeper computes
+// `doing`, the ledger was handed `lastDeath` without it, and every window aggregate went
+// without. A green classifier over an empty field is the failure this asserts against.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'm59-travelseam-'));
+  process.env.M59_LEDGER_DIR = dir;
+  // THE REAL SEAM IS `recordSample`, NOT `recordEvent`. recordEvent writes whatever detail
+  // it is handed, so asserting through it would have proved only that an object survives a
+  // JSON round trip. The classifier runs where the keeper's `last_death` is turned into a
+  // row, and a death fires only on a CHANGE of `death_sig` — hence two samples.
+  const { recordSample } = await import('./m59-ledger.mjs?seam=travel');
+  recordSample([{ character: 'Gamma', level: 40 }]);
+  recordSample([{ character: 'Gamma', level: 39, last_death: {
+    at: Date.now(),
+    died_in: 'Ukgoth, Holy Land of Trolls', level: 40, last_health: 3,
+    killed_by: ['troll'],
+    // The shape that was being lost: the frame says travelling, the ladder had taken over.
+    doing: 'travelling',
+    governed_by: { doctrine: 'ordinary ladder', flee_at: 0.7 },
+  } }]);
+  const rows = readLedger(dir).filter(e => e.kind === 'died');
+  ok(rows.length === 1, 'the death reached the ledger');
+  ok(rows[0].was_travelling === true,
+     'and `doing` survives the keeper-to-ledger carry — a ledger that drops the field leaves ' +
+     'the classifier correct and the record still wrong, which is the state this fix repaired');
+  ok(rows[0].travelling_signal?.doing === 'travelling'
+     && rows[0].travelling_signal?.doctrine === 'ordinary ladder',
+     'both raw signals are kept beside the verdict, so the stalled question stays answerable');
+  rmSync(dir, { recursive: true, force: true });
+}
+
 console.log(`m59-savelog-test: ${n} assertions passed`);

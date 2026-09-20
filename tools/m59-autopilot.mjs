@@ -14352,6 +14352,17 @@ export class Autopilot {
           //
           // A postmortem that reports a threshold has to report which policy was live, or the
           // reader reconstructs the wrong doctrine from the right number.
+          // WHAT IT WAS DOING, CARRIED INTO THE SUMMARY BECAUSE `governed_by` CANNOT ANSWER IT.
+          //
+          // The postmortem has had this all along in its `was` block, and the ledger has not,
+          // because the ledger is handed `lastDeath` and `doing` was never on it. So the one
+          // field that survives the survival ladder taking over was unavailable to every
+          // window aggregate. Same shape as the `in_safe_spot` omission recorded below it:
+          // the keeper computed it and nothing carried it across.
+          //
+          // `at` is the last frame before the Underworld, so this is what the character was
+          // doing when it was last seen alive — not what it was doing after it died.
+          doing: at?.doing ?? this.doing ?? this.lastDoing ?? null,
           governed_by: this.travelling
             ? { doctrine: 'travel', flee_from: this.policy.travelFleeFrom ?? 'players',
                 divert_below: this.policy.travelDivertBelow ?? 1,
