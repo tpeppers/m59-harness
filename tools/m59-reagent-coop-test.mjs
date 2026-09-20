@@ -6,7 +6,8 @@ import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { coopConfig, COOP_REAGENTS, coopDepositPlan, coopTithePlan, coopFundingAmount,
-  coopRemainingPlan, coopCount, coopKey, REAGENT_COOP_SCHEMA } from './m59-reagent-coop.mjs';
+  coopRemainingPlan, coopCount, coopKey, REAGENT_COOP_SCHEMA,
+  coopSupplyOutcome, coopFallbackDecision } from './m59-reagent-coop.mjs';
 import { M59Client, BP } from './m59-client.mjs';
 import { weighItem } from './m59-items.mjs';
 import { reflectPolicy, validateValue } from './m59-policy-controls.mjs';
@@ -373,6 +374,108 @@ test('combined town tithe finishes on the street and pays once', async () => {
   assert.equal(result.shillings, 120, JSON.stringify(result));
   assert.equal(k.s.world.room.num, 101);
   assert.equal(k.purseNow(), 880);
+});
+
+// ---------------------------------------------------------------- the self-funding fallback
+//
+// The fallback SPENDS MONEY, so every gate on it is pinned here rather than left to the live
+// fleet to discover. The assertion that matters most is the last one: the two triggers must
+// stay countable apart, because only one of them is supposed to disappear when a code fix lands.
+const outcomeRow = (agent, outcome, extra = {}) =>
+  ({ agent, kind: 'coop_supply_outcome', outcome, short: 12, ...extra });
+
+test('self_fund is off unless asked for, and only a real boolean turns it on', () => {
+  assert.equal(coopConfig({ enabled: true }).self_fund, false);
+  assert.equal(coopConfig({ enabled: true, self_fund: true }).self_fund, true);
+  // A truthy STRING must not enable something that spends shillings — `!!raw.self_fund`
+  // would have read the string "false" as yes.
+  for (const bad of ['true', 'false', 1, 0, null])
+    assert.throws(() => coopConfig({ enabled: true, self_fund: bad }), /self_fund/,
+                  `self_fund: ${JSON.stringify(bad)} must be refused`);
+});
+
+test('a visit that never reached the chest is not evidence the chest was empty', () => {
+  // THE BLAME POINT. `took: []` is identical in both cases, so the reason has to outrank the
+  // arithmetic — otherwise a door failure is filed against the fleet's stock, and the ledger
+  // records "nobody stocked it" about a chest holding 543 elderberry.
+  const v = coopSupplyOutcome({ reason: 'guild door 59 could not be crossed', took: [],
+    plan: { lines: [{ item: 'elderberry', amount: 300 }], unpriced: [] } });
+  assert.equal(v.outcome, 'chest_unreachable');
+  assert.equal(v.short, 300);
+});
+
+test('a chest that was read and came up short is chest_empty, partial fill included', () => {
+  const none = coopSupplyOutcome({ reason: null, took: [],
+    plan: { lines: [{ item: 'elderberry', amount: 300 }], unpriced: [] } });
+  assert.equal(none.outcome, 'chest_empty');
+  assert.equal(none.took_units, 0);
+  // A partial draw still leaves the character short, and the units are recorded so that "held
+  // some" and "held none" stay distinguishable in the file afterwards.
+  const some = coopSupplyOutcome({ reason: null, took: [{ item: 'elderberry', amount: 40 }],
+    plan: { lines: [{ item: 'elderberry', amount: 260 }], unpriced: [] } });
+  assert.equal(some.outcome, 'chest_empty');
+  assert.equal(some.took_units, 40);
+  assert.equal(some.short, 260);
+});
+
+test('a satisfied draw is ok and nothing fires', () => {
+  const v = coopSupplyOutcome({ reason: null, took: [{ item: 'elderberry', amount: 300 }],
+    plan: { lines: [], unpriced: [] } });
+  assert.equal(v.outcome, 'ok');
+  assert.equal(coopFallbackDecision({ rows: [outcomeRow('t9', 'ok')], agent: 't9' }).fund, false);
+});
+
+test('unreachable needs three, and two is not three', () => {
+  const two = ['chest_unreachable', 'chest_unreachable'].map(o => outcomeRow('t9', o));
+  assert.equal(coopFallbackDecision({ rows: two, agent: 't9' }).fund, false);
+  const three = [...two, outcomeRow('t9', 'chest_unreachable')];
+  const d = coopFallbackDecision({ rows: three, agent: 't9' });
+  assert.equal(d.fund, true);
+  assert.equal(d.trigger, 'chest_unreachable');
+});
+
+test('chest_empty fires at once, because a retry cannot change the answer', () => {
+  const d = coopFallbackDecision({ rows: [outcomeRow('t9', 'chest_empty')], agent: 't9' });
+  assert.equal(d.fund, true);
+  assert.equal(d.trigger, 'chest_empty');
+});
+
+test('one-off is one trip per episode, and a fresh episode may fire again', () => {
+  const fired = { agent: 't9', kind: 'coop_self_funding', trigger: 'chest_empty' };
+  assert.equal(coopFallbackDecision({ rows: [outcomeRow('t9', 'chest_empty'), fired], agent: 't9' }).fund,
+               false, 'a fallback must not re-fire on the failure that caused it');
+  // But it must not be suppressed FOREVER. While the chest stays broken there is never another
+  // success, so suppressing until one would starve the character with the ledger reading normal.
+  const again = [outcomeRow('t9', 'chest_empty'), fired, outcomeRow('t9', 'chest_empty')];
+  assert.equal(coopFallbackDecision({ rows: again, agent: 't9' }).fund, true,
+               'a new episode after the trip must be allowed to fund again');
+});
+
+test('a success clears the run', () => {
+  const rows = [outcomeRow('t9', 'chest_unreachable'), outcomeRow('t9', 'chest_unreachable'),
+                outcomeRow('t9', 'ok'), outcomeRow('t9', 'chest_unreachable')];
+  const d = coopFallbackDecision({ rows, agent: 't9' });
+  assert.equal(d.fund, false);
+  assert.equal(d.consecutive, 1, 'the two before the success must not carry forward');
+});
+
+test('one character’s failures never fund another', () => {
+  const rows = ['t1', 't2', 't3'].map(a => outcomeRow(a, 'chest_unreachable'));
+  assert.equal(coopFallbackDecision({ rows, agent: 't9' }).fund, false);
+  assert.equal(coopFallbackDecision({ rows, agent: 't1' }).fund, false);
+});
+
+test('THE TRIGGERS STAY COUNTABLE APART — the reason this ledger is worth keeping', () => {
+  // Two unreachable and one empty is not "three failures". If they summed, the unreachable
+  // trigger would fire on an episode that was mostly about stock, and — the real cost — the
+  // count could never show whether a door fix worked, because it would keep moving for the
+  // other reason. Rolled together, this instrument cannot answer the one question it exists for.
+  const mixed = [outcomeRow('t9', 'chest_unreachable'), outcomeRow('t9', 'chest_unreachable'),
+                 outcomeRow('t9', 'chest_empty')];
+  const d = coopFallbackDecision({ rows: mixed, agent: 't9' });
+  assert.equal(d.trigger, 'chest_empty', 'an episode containing an empty read is not an unreachable one');
+  assert.equal(coopFallbackDecision({ rows: mixed.slice(0, 2), agent: 't9' }).fund, false,
+               'and the two unreachable rows on their own are still only two');
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));

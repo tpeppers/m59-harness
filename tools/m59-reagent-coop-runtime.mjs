@@ -1,6 +1,6 @@
 // Keeper adapter for the reagent coop. Every transfer is serialized, based on
 // fresh server contents, quantity-bounded, and confirmed on both sides.
-import { mkdirSync, appendFileSync } from 'node:fs';
+import { mkdirSync, appendFileSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { claimFleetLock } from './runtime/fleet-lock.mjs';
 import { StorageCache, chestKey } from './m59-storage.mjs';
@@ -12,7 +12,7 @@ import { hallPassword } from './m59-hallsecret.mjs';
 import { guildPassage } from './m59-guild-passage.mjs';
 import { NORTH_BARLOQUE, withGuildSecrecy } from './m59-guild-secrecy.mjs';
 import { coopConfig, coopKey, coopCount, coopDepositPlan, coopTithePlan,
-  coopFundingAmount, coopRemainingPlan } from './m59-reagent-coop.mjs';
+  coopFundingAmount, coopRemainingPlan, coopSupplyOutcome, coopFallbackDecision } from './m59-reagent-coop.mjs';
 
 const pending = reason => ({ pending: true, ready: false, reason });
 const interrupted = k => k.travelInterrupted() || k.suspendedJourney ||
@@ -26,6 +26,35 @@ const sale = k => inventorySalePlan(k.s, { keep: MARKET_KEEP,
   .map(i => ({ ...i, amount: i.sale_amount }));
 const ownFloor = (k, name) => reagentFloorFor({ loadout: k.loadout(), policy: {
   reagentTarget: ['herb', 'elderberry'].includes(name) ? k.policy.reagentTarget : null } }, name);
+
+// THE COOP LEDGER, read as well as written. `transact` has always appended transfer receipts
+// here; the self-funding fallback needs to READ them back, because its count has to survive the
+// keeper restarts that happen roughly once a minute.
+const coopDir = () => {
+  const dir = resolve(process.env.M59_COOP_DIR ?? 'substrate/stockpile');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
+const coopFile = fleet => resolve(coopDir(), `${String(fleet).replace(/[^A-Za-z0-9_-]/g, '_')}.coop.ndjson`);
+const coopAppend = (fleet, row) => appendFileSync(coopFile(fleet), JSON.stringify(row) + '\n');
+
+// BOUNDED, AND THE FIRST LINE IS DROPPED ON PURPOSE. This file grows for ever, so the tail is
+// read rather than the whole of it — and a byte-offset read almost always lands mid-line, which
+// `JSON.parse` would throw on. Dropping one line costs nothing here: the decision only looks
+// back to the last success, which is far inside this window.
+function coopTail(fleet, bytes = 256 * 1024) {
+  const file = coopFile(fleet);
+  let size = 0;
+  try { size = statSync(file).size; } catch { return []; }
+  const from = Math.max(0, size - bytes);
+  let text = '';
+  try { text = readFileSync(file, 'utf8').slice(from); } catch { return []; }
+  const lines = text.split('\n').filter(Boolean);
+  if (from > 0) lines.shift();
+  const rows = [];
+  for (const line of lines) { try { rows.push(JSON.parse(line)); } catch { /* a torn line is not a row */ } }
+  return rows;
+}
 
 async function inventory(k) {
   const c = k.s.need(), since = c.evSeq;
@@ -282,6 +311,35 @@ async function executeCoop(k, mode, { plan = null, bankable = 0, requestId = nul
     k.doing = 'travelling';
     const r = await (journey ?? k.travel.bind(k))(state.origin, { maxHops: 30 });
     if (!r?.arrived || room(k) !== state.origin) return pending('returning from reagent coop');
+  }
+  // WHAT THIS DRAW MEANT, RECORDED WHETHER OR NOT ANYBODY IS ACTING ON IT.
+  //
+  // The outcome row is written even with `self_fund` off, and that is deliberate: it is the
+  // BASELINE. "The fallback stopped firing" is only evidence that a fix worked if the same
+  // instrument was running before the fix, on characters that were not taking the fallback.
+  // Turning the recorder on at the same moment as the behaviour would leave nothing to compare.
+  if (mode === 'supply') {
+    const verdict = coopSupplyOutcome({ reason: state.result.reason, took: state.result.took,
+      plan: state.result.plan, reagents: cfg.reagents });
+    const row = { at: Date.now(), agent: k.name ?? k.s.name, kind: 'coop_supply_outcome',
+      room: room(k), ...verdict };
+    try { coopAppend(fleet, row); } catch (e) { k.note('coop ledger unwritable', { why: e.message }); }
+    k.coopOutcome = verdict;
+    if (cfg.self_fund && verdict.outcome !== 'ok') {
+      const decision = coopFallbackDecision({ rows: [...coopTail(fleet), row], agent: row.agent });
+      if (decision.fund) {
+        const fired = { at: Date.now(), agent: row.agent, kind: 'coop_self_funding',
+          trigger: decision.trigger, consecutive: decision.consecutive,
+          short: decision.short ?? verdict.short, why: decision.why };
+        try { coopAppend(fleet, fired); } catch (e) { k.note('coop ledger unwritable', { why: e.message }); }
+        // The RESULT carries it so the caller that asked for the draw can run the trip. The
+        // coop does not walk to town itself: buying is the town circuit's job and it already
+        // knows how, and a second buyer would be a second opinion about the same purse.
+        state.result.self_funding = fired;
+        k.selfFundReagents = fired;
+        k.note('reagent coop falling back to self-funding', fired);
+      } else k.note('reagent coop draw failed, not yet funding', decision);
+    }
   }
   k.coopStatus = { at: Date.now(), mode, ...state.result };
   k.note('reagent coop visit completed', { mode, took: state.result.took,

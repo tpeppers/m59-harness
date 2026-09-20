@@ -27,6 +27,7 @@ export const REAGENT_COOP_SCHEMA = {
     hall_room: { type: 'integer', minimum: 1, description: 'Guild hall map number. Default 714, Bookmaker’s Guild House.' },
     chest_keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' }, description: 'Chest squares to read before transfers, such as r18c2. All must be readable for the shared shilling cap.' },
     retry_ms: { type: 'integer', minimum: 10000, maximum: 3600000, description: 'Delay before retrying an unavailable coop within the same shopping trip. Default 300000.' },
+    self_fund: { type: 'boolean', description: 'Opt in to the self-funding fallback: when the chest fails this character, buy the shortfall in town ONCE instead of waiting for the next retry. Off by default. Two triggers, recorded separately — chest_unreachable (three consecutive failed visits) and chest_empty (the chest was read and did not hold what was wanted).' },
   },
 };
 
@@ -35,7 +36,11 @@ export function coopConfig(raw) {
   if (typeof raw !== 'object' || Array.isArray(raw) || raw.enabled !== true) throw new Error('reagent_coop needs enabled:true or null');
   for (const key of Object.keys(raw)) if (!(key in REAGENT_COOP_SCHEMA.properties)) throw new Error(`unknown reagent_coop option: ${key}`);
   const c = { enabled: true, bulk_fraction: 0.9, reagents: [...COOP_REAGENTS], shilling_tithe_pct: 20,
-    shilling_cap: 75000, hall_room: BOOKMAKERS_HALL_ROOM, chest_keys: [...BOOKMAKERS_CHEST_SQUARES], retry_ms: 300000, ...raw };
+    shilling_cap: 75000, hall_room: BOOKMAKERS_HALL_ROOM, chest_keys: [...BOOKMAKERS_CHEST_SQUARES], retry_ms: 300000,
+    self_fund: false, ...raw };
+  // OFF BY DEFAULT AND STRICTLY BOOLEAN. A truthy string here would enable a fallback that
+  // SPENDS MONEY, so `"false"` must not read as yes — the coercion `!!raw.self_fund` would.
+  if (typeof c.self_fund !== 'boolean') throw new Error('invalid reagent_coop.self_fund');
   for (const key of ['bulk_fraction', 'shilling_tithe_pct', 'shilling_cap', 'hall_room', 'retry_ms']) {
     const spec = REAGENT_COOP_SCHEMA.properties[key], n = c[key];
     if (!Number.isFinite(n) || n < spec.minimum || n > (spec.maximum ?? Infinity)
@@ -48,6 +53,98 @@ export function coopConfig(raw) {
       || c.chest_keys.some(k => !/^r\d+c\d+$/.test(k))) throw new Error('invalid reagent_coop.chest_keys');
   c.chest_keys = [...new Set(c.chest_keys)];
   return c;
+}
+
+// ------------------------------------------------- the self-funding fallback, and its ledger
+//
+// THE ERRAND IT EXISTS FOR. A character stationed at the hall to draw reagents has exactly one
+// supply line, and when it fails it fails SILENTLY — `took: []` with a reason nobody reads, and
+// the drill it was feeding simply stops. The fallback is: buy the shortfall in town once, on
+// this character's own money, rather than wait out `retry_ms` forever.
+//
+// TWO TRIGGERS, DELIBERATELY COUNTED APART, AND THAT SEPARATION IS THE WHOLE POINT.
+//
+//   chest_unreachable   three consecutive visits that could not USE the chest — a door that
+//                       would not cross, a hall not reached, a transfer that threw. This is
+//                       the one a code fix makes go away.
+//   chest_empty         the chest was read successfully and did not hold what was wanted.
+//                       No code fix touches this; it means the fleet has not stocked it.
+//
+// Measured 2026-09-20: Camilla's two supply visits returned `guild door 59 could not be crossed`
+// and `guild door 55 trigger not reached` with 543 elderberry sitting in the chest. Both were
+// `chest_unreachable`. If those two classes were summed into one "supply failed" number, the
+// ledger could never show whether the door fix worked — the count would keep moving for the
+// other reason. Rolled together, this instrument would be unable to answer the only question
+// it was built to answer.
+//
+// ONE-OFF MEANS ONE TRIP PER EPISODE, NOT ONE TRIP EVER, AND THE DIFFERENCE IS STARVATION.
+//
+// A fallback that re-fires every visit is a character that walks to town for ever, spending
+// money each lap and reporting success each lap — the shape CLAUDE.md already names ("a trip
+// that cannot fix the thing that opened it will run for ever"). But suppressing it until the
+// next SUCCESSFUL draw is the opposite failure and it is worse: while the chest stays broken
+// there is never another success, so the character funds itself once and then starves with the
+// instrument reading normal.
+//
+// So the run resets at the later of the last success and the last fallback. After a fallback
+// fires it takes a FRESH episode — another `chest_empty`, or another three unreachable visits —
+// to fire again. At the default `retry_ms` of five minutes that bounds the unreachable trigger
+// to about one trip per quarter hour, which is a supply line rather than a treadmill.
+//
+// THE COUNT LIVES IN THE NDJSON, NOT ON THE KEEPER. Keepers restart about once a minute, so an
+// in-memory counter would never reach three — it would read 0 or 1 for ever and the
+// unreachable trigger could not fire at all. The coop already appends receipts to
+// `<fleet>.coop.ndjson`; these rows go beside them, which also means the evidence survives the
+// restart that would have destroyed the counter.
+export const COOP_FALLBACK_ATTEMPTS = 3;
+
+/** Classify ONE supply visit. Pure: takes what the visit returned, returns what it means. */
+export function coopSupplyOutcome({ reason = null, took = [], plan = null, reagents = [] } = {}) {
+  const names = new Set((reagents.length ? reagents : COOP_REAGENTS).map(coopKey));
+  const lines = [...(plan?.lines ?? []), ...(plan?.unpriced ?? [])]
+    .filter(l => names.has(coopKey(l.item)) && Number(l.amount) > 0);
+  const short = lines.reduce((n, l) => n + Number(l.amount), 0);
+  const gained = took.reduce((n, t) => n + Math.max(0, Number(t.amount) || 0), 0);
+  // A REASON IS THE VISIT'S OWN VERDICT AND OUTRANKS THE ARITHMETIC. When the hall was never
+  // reached there is nothing to say about what the chest held — reading `took: []` as "the
+  // chest was empty" would blame the stock for a door.
+  if (reason) return { outcome: 'chest_unreachable', why: String(reason), short, took_units: gained };
+  if (short > 0) return { outcome: 'chest_empty', why: gained
+    ? `the chest held ${gained} but is ${short} short of what was wanted`
+    : 'the chest held none of what was wanted', short, took_units: gained };
+  return { outcome: 'ok', why: null, short: 0, took_units: gained };
+}
+
+/**
+ * Should this character fund itself now? Reads the coop ledger rows for ONE agent, oldest
+ * first, and answers from the run since its last successful draw.
+ */
+export function coopFallbackDecision({ rows = [], agent = null, attempts = COOP_FALLBACK_ATTEMPTS } = {}) {
+  const mine = rows.filter(r => r && (agent == null || r.agent === agent) &&
+                           ['coop_supply_outcome', 'coop_self_funding'].includes(r.kind));
+  // THE EPISODE IS WHAT COUNTS, and it begins at the later of the last success and the last
+  // fallback. Everything before that has been answered — either the chest worked, or a trip was
+  // already made for it — so carrying those rows forward would fire on history.
+  let start = 0;
+  mine.forEach((r, i) => {
+    if (r.kind === 'coop_self_funding' || r.outcome === 'ok') start = i + 1;
+  });
+  const run = mine.slice(start).filter(r => r.kind === 'coop_supply_outcome');
+  const empty = run.find(r => r.outcome === 'chest_empty');
+  const unreachable = run.filter(r => r.outcome === 'chest_unreachable').length;
+  if (!run.length)
+    return { fund: false, trigger: null, consecutive: 0, why: 'nothing has failed since the last draw or trip' };
+  // EMPTY OUTRANKS UNREACHABLE AND DOES NOT WAIT. Retrying a chest that was read and did not
+  // hold the item cannot produce a different answer; retrying a door can.
+  if (empty)
+    return { fund: true, trigger: 'chest_empty', consecutive: run.length, short: empty.short ?? null,
+             why: 'the chest was readable and did not hold it, so retrying changes nothing' };
+  if (unreachable >= attempts)
+    return { fund: true, trigger: 'chest_unreachable', consecutive: unreachable,
+             short: run[run.length - 1]?.short ?? null,
+             why: `${unreachable} consecutive visits could not use the chest` };
+  return { fund: false, trigger: null, consecutive: unreachable,
+           why: `${unreachable} of ${attempts} consecutive failures` };
 }
 
 export function coopDepositPlan({ config, chests, pack, saleItems, keepFloor = () => 0 }) {
