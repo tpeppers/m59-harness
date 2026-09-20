@@ -14492,6 +14492,32 @@ export class Autopilot {
             expectation: 'a death at a safe wall should be PVP. A monster here means the wall '
                        + 'was not one, and the safe-spot book needs to hear about it.',
           } : null,
+          // WHY IT DID NOT FIRE, BECAUSE NULL WAS THREE DIFFERENT FACTS WEARING ONE VALUE.
+          //
+          // `at_a_safe_wall` is null on 114 of 114 deaths reviewed on 2026-09-20, and an
+          // analysis reading `?? false` scores every one of them as "not at a wall". That is
+          // the right default and the wrong record: null here means ANY of
+          //
+          //   the character was not holding a wall at all        — says nothing about walls
+          //   it held one and died somewhere else                — the interesting case, and
+          //                                                        the one this session spent
+          //                                                        hours reconstructing by hand
+          //   the position could not be read                     — says nothing about anything
+          //
+          // Only the second is evidence, and it was indistinguishable from the other two. So
+          // the reason is recorded, with the GAP: `left_the_wall` carries how far the body
+          // had strayed from the square it had reserved, which is the number that decides
+          // whether a death belongs to a wall or to the open ground beside one.
+          at_a_safe_wall_absent: (diedHolding && at
+                                  && diedHolding.col === at.col && diedHolding.row === at.row)
+            ? null
+            : !diedHolding ? { why: 'not_holding' }
+            : !at ? { why: 'position_unknown', held: { col: diedHolding.col, row: diedHolding.row } }
+            : { why: 'left_the_wall',
+                held: { col: diedHolding.col, row: diedHolding.row },
+                died_at: { col: at.col, row: at.row },
+                off_by: Math.max(Math.abs(diedHolding.col - at.col),
+                                 Math.abs(diedHolding.row - at.row)) },
           // AND WHAT THAT NUMBER ACTUALLY GOVERNED, because on its own it misleads and it
           // misled the operator on 2026-08-27. `flee_threshold: 0.7` next to a travelling
           // death reads as "it should have fled at 70% and did not", and the truth is the

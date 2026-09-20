@@ -69,6 +69,7 @@
 // four rounds report that everything was safe.
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { geometryFor, exposureAt } from './m59-safespots.mjs';
+import { poisons } from './m59-ailments.mjs';
 
 const BROKER = process.env.M59_CONTROL_URL || 'http://127.0.0.1:8971';
 const STORE = process.env.WALLPROOF_FILE || 'substrate/wallproof.jsonl';
@@ -112,7 +113,14 @@ export const classifyMessage = text => {
   return null;
 };
 
-const POISONER = /spider/i;
+// WHICH CREATURES POISON IS A FACT ABOUT THEIR CLASS, NOT THEIR NAME.
+//
+// This was `/spider/i`, and it was wrong in both directions. It MISSED `dusk rat`
+// (DuskRat applies SID_POISON and no spider regex will ever match it), which is the
+// dangerous direction -- its ticks would have counted as blows that got through a wall.
+// And it excluded `baby spider`, which is `SpiderBaby is Monster` and poisons nothing, so
+// that only threw evidence away. See tools/m59-ailments.mjs, whose test re-derives the
+// list from kod on every run.
 
 // ── COLLECT ───────────────────────────────────────────────────────────────────────────────────
 async function collect(minutes, tick) {
@@ -226,7 +234,7 @@ export function analyze(file = STORE, mapFile = 'substrate/m59-map.json') {
       const dt = (q.t - p.t) / 1000;
       let near = false, moved = false;
       for (const m of (p.mon || [])) {
-        if (POISONER.test(m.name) || m.d > REACH) continue;
+        if (poisons(m.name) || m.d > REACH) continue;
         near = true;
         const m2 = (q.mon || []).find(x => x.id === m.id);
         if (m2 && (m2.x !== m.x || m2.y !== m.y)) moved = true;
