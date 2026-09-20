@@ -54,7 +54,7 @@ import { recordRest } from './m59-restwatch.mjs';
 // `exposureAt` is the FORMULA for a safe wall and `RoomGeometry` says which grid the monster
 // uses. Imported so the survival ladder can ask the geometry directly instead of asking the
 // safe-spot book what used to work -- see wallHere().
-import { nearestSafeSpot, safeSpotBook, coarseCombatReachFrom, PLAYER_REACH,
+import { nearestSafeSpot, coarseCombatReachFrom, PLAYER_REACH,
          exposureAt }
   from './m59-safespots.mjs';
 import { activeRoutes, anchorFor } from './m59-routes.mjs';
@@ -142,9 +142,8 @@ export function partialFightMadeProgress(result = {}) {
 // Built by: node tools/m59-spawns.mjs
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
-// Learned by standing in them. See SafeSpotBook.
-const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
-  fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
+// (a SAFESPOT_FILE was read from here into a per-square outcome book. Retired 2026-09-20 —
+// see the tombstone in m59-safespots.mjs. Walls are computed from geometry and nothing else.)
 // One file per death. Gitignored, like everything a running fleet writes.
 export const POSTMORTEM_DIR = process.env.M59_POSTMORTEM_DIR ||
   fileURLToPath(new URL('../substrate/postmortems', import.meta.url));
@@ -2278,7 +2277,6 @@ export class Autopilot {
     // Set after a reconnect made while holding: health regeneration is gated on
     // having acted since entering the room, and in a safe spot we can afford to act.
     this.needsArming = false;
-    this.book = safeSpotBook(SAFESPOT_FILE);
     // EVERY WINDOW WE ADJUDICATED, INCLUDING THE ONES WE THREW AWAY.
     //
     // The verdict is the cheap thing to report and the useless thing to check. If
@@ -3858,18 +3856,23 @@ export class Autopilot {
           const wasProven = this.hold.proven;
           this.hold.proven = false;
           this.noteFailedRestSpot(this.hold.room, this.hold.col, this.hold.row);
-          this.book.failed(this.hold.room, {
-            col: this.hold.col, row: this.hold.row, damage: lost, attackers: company,
-            settledMs, source: this.hold.source ?? 'fight' });
-          this.book.save();
           // THE ONE OBSERVATION THAT DISPROVES THE DEFINITION, WRITTEN SOMEWHERE CLEAN.
           //
-          // The `book.failed` call above is kept for now because other things still read the
-          // book's shape, but it is not evidence: 78% of that file's failure events carry
-          // `failed_via: "fight"` — retaliation, which is the mechanic WORKING — and a further
-          // 11% were recorded before the character arrived. This row is the same event
-          // recorded under the four qualifiers that make it mean something, and nothing that
-          // chooses a square may ever read it. See tools/m59-restwatch.mjs.
+          // A `book.failed(...)` write stood here and is gone. The note beside it already
+          // conceded it was not evidence — 78% of that file's failure events carry
+          // `failed_via: "fight"`, which is retaliation and therefore the mechanic WORKING,
+          // and a further 11% were recorded before the character even arrived — and it was
+          // kept only because other code still read the book's shape. Nothing does now.
+          //
+          // The deeper reason it could not be salvaged: it filed the row against
+          // `this.hold.col/row`, the square this keeper had RESERVED, which in nine of ten
+          // reviewed deaths was 5 to 68 squares from where the body actually stood. A
+          // per-square outcome record whose writer does not know where the body was is not
+          // a record about squares.
+          //
+          // This row is the same event recorded under the four qualifiers that make it mean
+          // something, and nothing that chooses a square may ever read it. See
+          // tools/m59-restwatch.mjs.
           this.recordRestOutcome({ damage: lost, settledMs, since: prev?.at ?? null });
           this.note('THIS IS NOT A SAFE SPOT', {
             where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
@@ -3895,11 +3898,9 @@ export class Autopilot {
           if (!this.hold.proven && this.hold.quietMs >= PROOF_MS) {
             this.hold.proven = true;
             this.hold.provenAt = now;
-            this.book.held(this.hold.room, {
-              col: this.hold.col, row: this.hold.row, x: this.hold.x, y: this.hold.y,
-              seconds: this.hold.quietMs / 1000, attackers: this.hold.mostAttackers,
-              source: this.hold.source ?? 'fight' });
-            this.book.save();
+            // A `book.held(...)` write stood here. It recorded the same hold coordinates the
+            // failure path did, so its successes were as unattributable as its failures —
+            // and a square's past quiet was never the reason to trust it anyway.
             // THE CASE THE DEFINITION PREDICTS: things stood next to us for PROOF_MS and not
             // one of them landed a blow. Recorded so `clean` has a denominator — a rule with
             // no violations and no observations says nothing at all.
@@ -4011,7 +4012,6 @@ export class Autopilot {
     this.pullsWithoutContact = 0;
     this.pulledLastPass = false; // compatibility with state created by older code
     releaseSpot(this.s.name);
-    this.book.save();
   }
 
   // What level is this thing, so we can ask whether killing it pays.
@@ -5047,37 +5047,34 @@ export class Autopilot {
     }
 
     const now = c.self;
-    const known = this.book.get(room.num, spot.col, spot.row);
-    // The VERDICT on this square, which is not the same as its failure tally — see the note
-    // beside `proven_before` below, and `SafeSpotBook.discredited`. Computed once here so
-    // the report and any future decision cannot drift apart by consulting different things.
-    const condemned = this.book.discredited(known, { reachable: spot.can_reach_you ?? null });
-    // A SAFE WALL IS TRUSTED ON ARRIVAL UNLESS IT HAS ACTUALLY FAILED HERE.
+    // GEOMETRY DECIDES, AND NOTHING ELSE DOES. THE LEDGER IS GONE.
     //
-    // This used to require `known.held` — the square had to have been stood on and
-    // survived BEFORE it counted, so a wall the geometry had never offered anyone was
-    // "unproven: it will be treated as open floor". That inverts the burden of proof
-    // against an algorithm that has never been wrong: the safe-wall calculation is
-    // derived from the same two grids the mover enforces, and no algorithmically-offered
-    // wall has ever been disproved by standing on it. Meanwhile the cost of disbelief is
-    // paid in deaths — Pepe went to a wall in The Twisted Wood at 13/20 with
-    // `can_reach_you: 0, free_shots: 6, back_cover: 5`, was told it was open floor
-    // because nobody had tested it, gave the square up after ONE second, and was dead
-    // four samples later with fifteen trolls on him.
+    // This used to read a per-square history — `book.get()`, then `book.discredited()` — and
+    // the belief was walked back by inches over four separate corrections until it could no
+    // longer condemn anything the geometry called unreachable. It is now removed outright,
+    // for a reason stronger than "nothing depends on it any more": IT COULD NEVER HAVE BEEN
+    // RIGHT. The writer recorded `this.hold.col/row` — the square this keeper had RESERVED,
+    // not the square the body was standing on when the blow landed. Of ten deaths reviewed
+    // on 2026-09-20, nine had the body between 5 and 68 squares from the hold it was filed
+    // against. Every failure row is a statement about a square the character may never have
+    // occupied, so the column cannot be repaired, only retired.
     //
-    // So the law is inverted to match the evidence: BELIEVED unless this exact square has
-    // failed under attack. `discredited()` is that record and a single failure is
-    // permanent, which is the "unless we can prove otherwise" half — the disproof path at
-    // `THIS IS NOT A SAFE SPOT` below is untouched and still clears `proven` the instant
-    // something lands a blow while we sit. The PROOF_MS timer also still runs and still
-    // settles, so the ledger keeps collecting evidence about the law; it simply no longer
-    // gates the shelter on having collected it first.
-    // Geometry decides whether this is a wall; the ledger only records what happened
-    // while we stood on it. A square nothing can reach is not made reachable by a bad
-    // afternoon on it, so `can_reach_you === 0` outranks the failure row for the
-    // question this line asks, which is 'may I shelter here'.
-    const trusted = !this.book.discredited(known,
-      { reachable: Number.isInteger(spot?.can_reach_you) ? spot.can_reach_you : null });
+    // AND THE QUESTION IT EXISTED TO ARBITRATE IS SETTLED. It was kept because nobody knew
+    // which mechanism actually protects a body. tools/m59-wallproof.mjs answered it in play:
+    // 1,290 seconds on `attackers === 0` across 19 squares, not swinging, with a
+    // non-poisoning monster in reach and visibly moving, took ZERO attacks — against 0.067/s
+    // on open ground under the identical rule. Two squares were observed in BOTH states,
+    // which holds room, geometry and monsters constant:
+    //
+    //     516:1,31   0 attacks / 965s not swinging   vs   17 attacks / 79s swinging
+    //     516:1,28   0 attacks / 128s not swinging   vs    4 attacks / 70s swinging
+    //
+    // So a wall does not have a per-square reliability to look up. It has a CONTRACT, and
+    // the contract is about what this body does, not about what the square did last Tuesday:
+    // nothing can reach you here until you swing. `proven` below is therefore a statement of
+    // that contract rather than an inherited belief, and the disproof path at `THIS IS NOT A
+    // SAFE SPOT` still clears it the instant something lands a blow while we sit — which,
+    // per the run above, is the signature of having swung, not of a bad square.
     this.hold = {
       source,
       room: room.num, col: spot.col, row: spot.row,
@@ -5086,14 +5083,11 @@ export class Autopilot {
       quarry_id: quarry?.id ?? null,
       x: now?.x ?? null, y: now?.y ?? null,
       takenAt: Date.now(), quietMs: 0, damageWhileIdle: 0, failures: 0, mostAttackers: 0,
-      // Walls do not move, so a square that held on a previous visit is believed on
-      // arrival — that is the entire point of writing the book down. The experiment
-      // still runs, and a single failure takes the belief straight back off it.
-      // Inherit belief only from a CLEAN record. A square that has ever failed is
-      // discredited for good, and nearestSafeSpot will not offer one — but this is also
-      // reached by hand-picked and remembered spots, and trusting `held` alone would
-      // walk a character back onto the square that killed the last one.
-      proven: trusted, inherited: trusted, provenAt: trusted ? Date.now() : null,
+      // Walls do not move and they are not remembered — they are COMPUTED, from the same
+      // two grids the mover enforces, and the live proof says an offered one holds without
+      // exception while the body does not swing. There is nothing to inherit and nothing to
+      // look up, so this is trusted on arrival, full stop.
+      proven: true, inherited: false, provenAt: Date.now(),
       canReachYou: spot.can_reach_you, freeShots: spot.free_shots, backCover: spot.back_cover,
       // THE NUMBERS THIS DECISION WAS MADE WITH, carried so the outcome can be recorded
       // against them. Re-measuring at the moment of the outcome would record a different
@@ -5109,37 +5103,26 @@ export class Autopilot {
                    { cap: shareCap, partner: this.policy.partner ?? null });
     this.note('took a safe spot', {
       where: { col: spot.col, row: spot.row }, why,
-      can_reach_you: spot.can_reach_you, free_shots: spot.free_shots, back_cover: spot.back_cover,
-      // ASK THE PREDICATE, NOT THE RAW COUNT. `known.failed` is a tally; `discredited()` is
-      // the verdict, and since 2026-09-02 they disagree on purpose: a failure row cannot
-      // condemn a square that geometry says nothing can reach, because a failure records
-      // only that something went wrong WHILE WE STOOD THERE — a crowd on the square, a
-      // blow resolved before we arrived, a poison tick — none of which are facts about the
-      // wall. Room 39 had 142 unreachable squares condemned that way; believing them again
-      // took fleet kills from 20 per 30 minutes to 48 and deaths from ~4 an hour to 0.6.
+      can_reach_you: spot.can_reach_you, back_cover: spot.back_cover,
+      // WHAT A READER OF THIS LINE USED TO BE TOLD, AND WHY IT IS GONE.
       //
-      // This line kept reading the tally, so a perfectly good square announced itself as
-      // "DISCREDITED — failed 319 time(s) here ... should not have been offered" in every
-      // postmortem it appeared in. It is the first thing a reader sees and it points at the
-      // wrong culprit: it sent this session hunting a bug in the offering code that does not
-      // exist, while the actual killer — an unguarded `pull` in a crowd — sat two lines
-      // further down the same trail.
-      proven_before: condemned ? `DISCREDITED — failed ${known.failed} time(s) here`
-                   : known?.failed ? `failed ${known.failed} time(s) here, but nothing can ` +
-                       `reach this square (can_reach_you 0) so those are not the wall's doing`
-                   : known?.held   ? `held ${known.held} time(s) before`
-                   :                 'never tested',
-      note: condemned
-        ? 'this square has failed before; it is treated as open floor and should not have ' +
-          'been offered — a failure is permanent'
-        : known?.failed
-        ? 'the failure rows here predate the geometry, or were somebody else standing on ' +
-          'the square. Unreachable is unreachable: only geometry may condemn a place to HEAL'
-        : known?.held
-        ? 'this square has held under attack before and never failed, so it is trusted on arrival'
-        : 'trusted on arrival: the geometry says nothing can reach it, and an algorithmically ' +
-          'offered wall has never been disproved. Still under test — ' +
-          Math.round(PROOF_MS / 1000) + 's quiet confirms it, one landed blow discredits it',
+      // This reported a per-square history, and at its worst a perfectly good square
+      // announced itself as "DISCREDITED — failed 319 time(s) here ... should not have been
+      // offered" in every postmortem it appeared in. It is the first thing a reader sees and
+      // it pointed at the wrong culprit: it sent one whole session hunting a bug in the
+      // offering code that does not exist, while the actual killer — an unguarded `pull` in
+      // a crowd — sat two lines further down the same trail.
+      //
+      // The tally was never a fact about the square. It was filed against the keeper's HOLD,
+      // which in nine of ten reviewed deaths was 5 to 68 squares from where the body actually
+      // was. So there is no history to report, and inventing one is worse than silence.
+      // What is true of this square is true of every offered wall, and it is a contract
+      // rather than a reputation:
+      proven_before: 'not applicable — walls are computed, not remembered',
+      note: 'nothing within reach has line of sight to this square, so nothing can attack ' +
+            'the body standing on it UNTIL IT SWINGS. Measured 2026-09-20: 1,290s across 19 ' +
+            'such squares with monsters in reach and moving took 0 attacks, while swinging ' +
+            'from the same squares drew 0.192/s. Swinging is what ends it, not the square.',
     });
     return { took: true, spot: this.hold };
   }
@@ -7557,15 +7540,12 @@ export class Autopilot {
     let spot = null;
     if (geo && me) {
       try {
-        // `this.book`, the keeper's own handle on the safe-spot book. Reading it here means
-        // a square the book has already discredited is never offered to travel either.
-        //
-        // Writing back happens too, through the ordinary hold machinery, and a square that
-        // fails under a travel hold is discredited PERMANENTLY — a blow that got through is
-        // a bad square however we came to be standing on it, and being wrong about a bad
-        // square costs a character while being wrong about a good one costs a walk to the
-        // next corner. The verdict is tagged `failed_by.travel` so the travel-only
-        // rejections can be fished back out. See docs/m59-safe-travel-plan.md.
+        // THE SAFE-SPOT BOOK IS RETIRED AND NOTHING IS CONSULTED HERE BUT GEOMETRY.
+        // A handle on it used to be read at this point so that "a square the book has
+        // already discredited is never offered to travel either", and written back on
+        // failure so a travel hold could condemn a square PERMANENTLY. Both are gone: the
+        // record was filed against the hold rather than the body, so it condemned squares
+        // nobody had stood on. See the tombstone in m59-safespots.mjs.
         const onward = this.onwardExit(at.room?.num ?? null, at.destination ?? null);
         // book: null -- see the note at the shelter selector. The formula answers this, not
         // the ledger, and that is the operator's instruction rather than an optimisation.
@@ -11044,7 +11024,6 @@ export class Autopilot {
     this.inert = { why, at: Date.now(), maxMs, by };
     // Everything learned about which squares hold, in case the process goes away while
     // we are in this state. Same reason stop() does it.
-    this.book.save();
     // The ledger gets it too, so a death in this window is attributable. Deliberately a
     // DIFFERENT event from 'stop': the whole point is that this outage is not one.
     uptime.record(this.s.name, 'inert', { why, room: this.s.world?.room?.num ?? null });
@@ -11142,7 +11121,6 @@ export class Autopilot {
     // NOW rather than about when the journey started.
     if (allow.safe_spot) {
       this.s.shelterPolicy = {
-        book: this.book,
         onFallback: context => this.recoverFromTravelFallback(context),
         unreachable: room => this.unreachableIn(room),
         // NO DISTANCE CAP BY DEFAULT (operator, 2026-09-01): a wall along the route that the
@@ -11382,7 +11360,6 @@ export class Autopilot {
     // prevent. Cleared here rather than at the resume site so it is true for every caller,
     // including the ones that never resume anything.
     this.suspendedJourney = null;
-    this.book.save();
     uptime.record(this.s.name, 'travelling',
                   { why, room: this.s.world?.room?.num ?? null, guard: allow });
     this.note('travelling — standing down from choosing, not from surviving', {
@@ -11931,7 +11908,6 @@ export class Autopilot {
       });
     }
     // Everything learned about which squares hold, before this keeper goes away.
-    this.book.save();
     // The character is about to be left standing exactly where it is, in whatever room
     // it is in, while everything already swinging at it carries on. That is a fact about
     // the world, not about this keeper, so it goes in the ledger that outlives it.
@@ -14753,13 +14729,14 @@ export class Autopilot {
           this.tally.deaths_in_safe_spot = (this.tally.deaths_in_safe_spot || 0) + 1;
           if (diedHolding.proven)
             this.tally.deaths_in_proven_safe_spot = (this.tally.deaths_in_proven_safe_spot || 0) + 1;
-          // A square that got somebody killed has failed the only test that counts,
-          // whatever it had done before.
-          this.book.failed(diedHolding.room, {
-            col: diedHolding.col, row: diedHolding.row,
-            damage: diedHolding.proven ? 99 : 1, attackers: diedHolding.mostAttackers,
-            source: diedHolding.source ?? 'fight' });
-          this.book.save();
+          // A `book.failed(...)` write stood here, on the reasoning that "a square that got
+          // somebody killed has failed the only test that counts". That reasoning is what
+          // the death review of 2026-09-20 broke: it filed against `diedHolding.col/row`,
+          // the HOLD, and nine of the ten deaths examined had the body 5 to 68 squares away
+          // from it — Robin by 68, Kermit by 47. So the squares this path condemned were
+          // mostly squares nobody died on, and the one character genuinely standing on its
+          // wall had swung 22 seconds earlier. The post-mortem below records the death with
+          // the position it actually happened at, which is the record worth having.
         }
         // THE FULL RECORD, WRITTEN BEFORE ANYTHING ELSE HAPPENS. Everything below this
         // point — escaping the Underworld, walking back, rejoining — overwrites the
@@ -20948,10 +20925,8 @@ export class Autopilot {
     // Evidence first, while we still know which square failed.
     if (this.hold && near.length) {
       this.noteFailedRestSpot(this.hold.room, this.hold.col, this.hold.row);
-      this.book.failed(this.hold.room, {
-        col: this.hold.col, row: this.hold.row, damage: 1, attackers: near.length,
-        source: this.hold.source ?? 'fight' });
-      this.book.save();
+      // (a `book.failed(...)` write stood here; the ledger is retired — see the note at the
+      // matching site in the rest-interruption path)
       this.note('THIS IS NOT A SAFE SPOT', {
         where: { col: this.hold.col, row: this.hold.row }, room: room?.num,
         attackers: near.length, proven_against: this.hold.mostAttackers ?? 0,

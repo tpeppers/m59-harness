@@ -34,7 +34,9 @@
 //
 //   fortress   a SAFE WALL — the red squares: no monster-reach square has line of sight
 //              and we have a free shot. The keeper chooses from exactly this set
-//   safe       a square the fleet has STOOD ON and taken nothing — the recorded book
+//   (`safe`, `burned` and `lucky` were painted from the retired safe-spot book and are gone;
+//    `walls` is the answer now — see the note in layersFor)
+//   was-safe   REMOVED: a square the fleet had STOOD ON and taken nothing — the recorded book
 //   burned     a square that held at least once AND failed at least once
 //   trap       the body can walk IN and cannot walk back OUT. The one that costs a
 //              character, and the one the fleet walks into on purpose
@@ -56,20 +58,12 @@ import { fileURLToPath } from 'node:url';
 import { RoomGeometry, protocolToClient } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
 import { wedgesIn } from './m59-wedges.mjs';
-import { safeWalls, safeSpotBook } from './m59-safespots.mjs';
+import { safeWalls } from './m59-safespots.mjs';
 import { movementMapFile } from './m59-map-path.mjs';
 import { WALKS_DIR } from './m59-crossings.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OVERLAY_DIR = () => join(HERE, '..', 'substrate', 'overlay');
-
-// THE SAME PATH THE KEEPER READS, AND THE SAME ENVIRONMENT OVERRIDE. `safeSpotBook()`
-// with no argument returns an EMPTY book rather than failing — it is a singleton the
-// broker fills — so calling it that way here produced a perfectly well-formed overlay
-// with the two evidence layers silently missing, which is exactly the class of failure
-// this tool exists to catch somebody else making.
-const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
-  fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
 
 // THE PALETTE IS A CONTRACT WITH A PERSON'S MEMORY, so it lives in one place and the
 // legend, the file and the terminal all read it. The char is what appears in the grid
@@ -217,7 +211,6 @@ export function walkedVoid(geometry, roomNum) {
 export function layersFor(geometry, {
   room = 0,
   wedges = null,
-  book = null,
   route = null,
   want = DEFAULT_LAYERS,
 } = {}) {
@@ -298,41 +291,25 @@ export function layersFor(geometry, {
   // Computed even when the layer is not wanted, because `safe` versus `lucky` turns on
   // it — see below.
 
-  // THE BOOK IS EVIDENCE, AND IT IS MUCH WEAKER EVIDENCE THAN ITS COLOUR USED TO SUGGEST.
+  // THE BOOK LAYER IS GONE, AND THE MEASUREMENT THAT KILLED IT IS WORTH KEEPING.
   //
-  // Measured over the whole book, 2026-08-17: ALL 256 squares that held and never failed
-  // held EXACTLY ONCE — the maximum anywhere is 2, reached by two squares. Median hold is
-  // 16 seconds (min 12, max 36) and 206 of the 256 faced a SINGLE attacker; exactly one
-  // square in the world was held 30s or more against two or more. So "proven safe wall"
-  // meant "one character stood here for a quarter of a minute with one thing swinging at
-  // it and was not hit", and the hit chance is bounded to [10,95]% (battler.kod:331) —
-  // a short quiet window is something ordinary floor produces regularly.
+  // Three colours were painted from the safe-spot book here — `safe`, `burned` and `lucky`
+  // — and what they were painted from did not support them. Measured over the whole book,
+  // 2026-08-17: ALL 256 squares that held and never failed held EXACTLY ONCE. Median hold
+  // was 16 seconds and 206 of the 256 faced a SINGLE attacker, so "proven safe wall" meant
+  // "one character stood here for a quarter of a minute with one thing swinging at it and
+  // was not hit" — and the hit chance is bounded to [10,95]% (battler.kod:331), so a short
+  // quiet window is something ordinary floor produces regularly. 114 of the 256 (44.5%)
+  // were not in the geometry's top 200 for their own room, and some admitted SEVENTEEN
+  // attackers while being painted the same colour as a genuine corner. Nothing in the
+  // record separated the two: every false positive had the identical shape to a true one.
   //
-  // IN AGGREGATE THE BOOK IS STILL REAL: those 256 average 3.24 unanswerable shots
-  // against 1.27 for ordinary floor. PER SQUARE it is not: 114 of the 256 (44.5%) are not
-  // in the geometry's top 200 for their own room, and some admit SEVENTEEN attackers with
-  // ZERO free shots while being painted the same colour as a genuine corner.
-  //
-  // AND NOTHING IN THE RECORD SEPARATES THE TWO, which is the whole problem — every
-  // false positive has the identical shape to a true one (held 1, ~16s, one attacker), so
-  // no amount of reading the book more carefully would have told them apart. The second
-  // opinion has to come from outside it. So the two are painted APART: agreement is
-  // `safe`, disagreement is `lucky`, and a person looking at the map can see which reds
-  // to trust. This was found by an operator standing on one of them and saying "this
-  // isn't a safe spot" — which the geometry had been saying all along and the colour was
-  // hiding.
-  if (book && (wanted.has('safe') || wanted.has('burned') || wanted.has('lucky'))) {
-    // `recall` rather than reaching into `.rooms`, which is a Map of Number -> Map and
-    // indexes as neither an object nor a string key.
-    const rec = book.recall?.(room) ?? null;
-    for (const entry of rec ? rec.values() : []) {
-      if (!entry || typeof entry.row !== 'number' || typeof entry.col !== 'number') continue;
-      if ((entry.held ?? 0) <= 0) continue;
-      if ((entry.failed ?? 0) > 0) { put(entry.row, entry.col, 'burned'); continue; }
-      put(entry.row, entry.col,
-          walls.has(`${entry.row},${entry.col}`) ? 'safe' : 'lucky');
-    }
-  }
+  // `lucky` existed precisely to show that disagreement, and it is no longer needed,
+  // because there is no second opinion to disagree WITH. The book is retired (tombstone in
+  // m59-safespots.mjs: every row was filed against a keeper's HOLD, not the body's
+  // position) and the geometry it was being checked against has since been proven in play
+  // — 1,290s on `attackers === 0`, not swinging, monsters in reach and moving, zero
+  // attacks. The walls layer IS the answer now, so there is nothing to overlay on it.
 
   for (const s of route ?? []) put(s.row, s.col, 'route');
 
@@ -426,7 +403,7 @@ export function loadWorld({ mapFile = movementMapFile() } = {}) {
 }
 
 export function writeOverlay(world, room, {
-  dir = OVERLAY_DIR(), want = DEFAULT_LAYERS, book = null, route = null, marks = [],
+  dir = OVERLAY_DIR(), want = DEFAULT_LAYERS, route = null, marks = [],
 } = {}) {
   const geometry = world.geometryOf(room);
   if (!geometry) return { room, written: false, why: 'no geometry for that room' };
@@ -434,7 +411,7 @@ export function writeOverlay(world, room, {
     return { room, written: false, why: 'no baked step mask — run node tools/setup.mjs routes' };
 
   const objId = world.objIdOf(room);
-  const cells = layersFor(geometry, { room, book, route, want });
+  const cells = layersFor(geometry, { room, route, want });
   const text = renderOverlay(geometry, cells, {
     room, name: world.nameOf(room), marks, objId, security: geometry.security ?? 0 });
   mkdirSync(dir, { recursive: true });
@@ -492,7 +469,6 @@ if (process.argv[1]?.endsWith('m59-overlay.mjs')) {
 
   process.stderr.write('loading the baked map (this takes a few seconds)...\n');
   const world = loadWorld({ mapFile });
-  const book = safeSpotBook(SAFESPOT_FILE);
   process.stderr.write(`step masks: ${JSON.stringify(world.attached)}\n`);
 
   const rooms = has('all')
@@ -505,18 +481,16 @@ if (process.argv[1]?.endsWith('m59-overlay.mjs')) {
       const geometry = world.geometryOf(room);
       if (!geometry?.hasStepMask) continue;
       const w = wedgesIn(geometry);
-      const held = Object.values(book.rooms?.[String(room)] ?? {})
-        .filter(e => (e?.held ?? 0) > 0).length;
       if (!w) continue;
       rows.push({ room, name: world.nameOf(room), traps: w.traps.length,
-                  isolated: w.isolated.length, detours: w.detours.length, held });
+                  isolated: w.isolated.length, detours: w.detours.length });
     }
-    rows.sort((a, b) => (b.traps + b.held) - (a.traps + a.held));
-    console.log('room  traps  isol  det  held  name');
+    rows.sort((a, b) => b.traps - a.traps);
+    console.log('room  traps  isol  det  name');
     for (const r of rows.slice(0, Number(flag('top', 40))))
       console.log(`${String(r.room).padStart(4)}  ${String(r.traps).padStart(5)}  ` +
                   `${String(r.isolated).padStart(4)}  ${String(r.detours).padStart(3)}  ` +
-                  `${String(r.held).padStart(4)}  ${r.name}`);
+                  `${r.name}`);
     process.exit(0);
   }
 
@@ -558,7 +532,7 @@ if (process.argv[1]?.endsWith('m59-overlay.mjs')) {
 
   let wrote = 0, skipped = 0;
   for (const room of rooms) {
-    const r = writeOverlay(world, room, { dir, want, book, route, marks });
+    const r = writeOverlay(world, room, { dir, want, route, marks });
     if (!r.written) { skipped++; if (rooms.length === 1) console.log(`${room}: ${r.why}`); continue; }
     wrote++;
     if (rooms.length <= 12) {

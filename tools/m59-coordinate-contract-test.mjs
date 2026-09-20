@@ -13,7 +13,6 @@ import { Reader, extractCoordinates } from './m59-parse.mjs';
 import { BP, M59Client } from './m59-client.mjs';
 import { sharedRoomGeometry } from './m59-roo.mjs';
 import { bakedPivots } from './m59-routes.mjs';
-import { SafeSpotBook } from './m59-safespots.mjs';
 
 // Protocol ExtractCoordinates is Y first, then X. The adapter must expose named
 // x/y and col/row fields rather than leak that wire order to callers.
@@ -64,13 +63,11 @@ assert.equal(
   bakedPivots(encodedRoutes, 900, { row: 65, col: 34 }, { row: 61, col: 30 }), null,
   'route keys and pivot tuples must not be interpreted as col,row');
 
-// SafeSpotBook deliberately persists the movement-facing spelling: col,row.
-const book = new SafeSpotBook();
-const spot = book.touch(900, 65, 34);
-assert.deepEqual([...book.recall(900).keys()], ['65,34']);
-assert.equal(book.get(900, 65, 34), spot);
-assert.equal(book.get(900, 34, 65), null,
-  'safe-spot keys must not be interpreted as row,col');
+// The SafeSpotBook case that stood here is gone with the book (retired 2026-09-20 — see the
+// tombstone in m59-safespots.mjs). It asserted that persisted square keys were col,row and
+// not row,col. The contract it was guarding still holds and is still covered: `bakedPivots`
+// above and the edgeApproach stages below both pin the same col,row spelling, and there is
+// no longer a persisted safe-spot key for anyone to misread.
 
 // Baked edge-approach tuples start with KOD x/y points, but their nested stage
 // pairs are [col,row]. The reader restores named fields before geometry uses them.

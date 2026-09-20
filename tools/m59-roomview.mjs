@@ -234,8 +234,10 @@ export function collectRoom(roomNum, { fleets = null } = {}) {
                  : Array.isArray(jumpFile) ? jumpFile : [];
   const jumps = jumpList.filter(j => (j.room ?? j.roomNum) === Number(roomNum));
 
-  const ledger = readJson(sub('m59-safespots.json'), { rooms: {} });
-  const safespots = ledger.rooms?.[String(roomNum)] || {};
+  // (a `safespots` layer was read from substrate/m59-safespots.json here and drawn beside
+  //  the ranked walls. The book is retired — see the tombstone in m59-safespots.mjs — and
+  //  `ranked` below, which is computed from geometry, is what it was being checked against.)
+  const safespots = {};
   let ranked = [];
   try { ranked = safeSpots(geo, { limit: 60 }) || []; } catch { ranked = []; }
 
@@ -1196,7 +1198,7 @@ function main(argv) {
   if (rail.length) console.log('  rail crossings        ' + railOk + ' worked / ' + rail.length + ' tried');
   console.log('  tactics rows          ' + data.tacticsRows.length +
               ', crossings ' + data.crossings.length +
-              ', safe spots tested ' + Object.keys(data.safespots).length);
+              ', safe walls ranked ' + (data.ranked ? data.ranked.length : 0));
   if (!Object.keys(data.refusals).length)
     console.log('  refusal layer         empty — ' +
                 (data.tracePresent ? 'trace holds no rows for this room' : 'collision trace off') +

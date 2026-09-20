@@ -41,11 +41,11 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dm, isLoopbackHost, adminTarget, roomObject, relocateCmd, rejections,
          clampSquare, resolve, heal } from './m59-dm.mjs';
-import { safeSpotBook } from './m59-safespots.mjs';
+import { safeWalls, geometryFor } from './m59-safespots.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOOK = HERE + '/../substrate/safewalk.json';
-const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE || HERE + '/../substrate/m59-safespots.json';
+const MAP_FILE = process.env.M59_MAP_FILE || HERE + '/../substrate/m59-map.json';
 
 const load = () => { try { return JSON.parse(readFileSync(BOOK, 'utf8')); } catch { return { spawned: [] }; } };
 const save = b => { mkdirSync(dirname(BOOK), { recursive: true }); writeFileSync(BOOK, JSON.stringify(b, null, 1)); };
@@ -61,21 +61,31 @@ export const PLACES = {
 };
 
 /**
- * The squares in a room that have HELD and never failed, best first.
+ * The squares in a room worth demonstrating on, best first.
  *
- * HELD-AND-NEVER-FAILED, not merely held. A square with both is the most interesting
- * one in the room and the worst one to demonstrate on: the whole point of standing here
- * is that nothing lands, and picking a square that has already failed once means the
- * first hit proves nothing either way.
+ * COMPUTED, NOT REMEMBERED. This used to return the squares the safe-spot book recorded as
+ * held-and-never-failed. That book is retired (tombstone in m59-safespots.mjs), and for this
+ * particular job it was the wrong source even while it existed: its "proven" squares were
+ * single ~16-second windows against a single attacker, which is something ordinary floor
+ * produces regularly. Geometry is both available and now proven in play — 1,290s standing on
+ * `attackers === 0` with monsters in reach and moving took zero attacks — so the demonstration
+ * picks the squares the rule actually names.
  */
-export function provenIn(room, book = null) {
-  const b = book ?? safeSpotBook(SAFESPOT_FILE);
-  const rec = b.recall?.(room);
-  if (!rec) return [];
-  return [...rec.values()]
-    .filter(e => e && (e.held ?? 0) > 0 && (e.failed ?? 0) === 0
-                 && Number.isFinite(e.row) && Number.isFinite(e.col))
-    .sort((a, b2) => (b2.held ?? 0) - (a.held ?? 0));
+export function provenIn(room, geo = null) {
+  const g = geo ?? geometryForRoom(room);
+  if (!g) return [];
+  return (safeWalls(g) ?? [])
+    .filter(w => Number.isFinite(w.row) && Number.isFinite(w.col))
+    .map(w => ({ ...w, held: null }));
+}
+
+let _map = null;
+function geometryForRoom(room) {
+  try {
+    _map ??= JSON.parse(readFileSync(MAP_FILE, 'utf8'));
+    const r = Object.values(_map.rooms ?? _map).find(x => Number(x?.num) === Number(room));
+    return r ? geometryFor(r) : null;
+  } catch { return null; }
 }
 
 /**
@@ -154,15 +164,14 @@ if (process.argv[1]?.endsWith('m59-safewalk.mjs')) {
   const klass = flag('class', 'GiantRat');
   const count = Number(flag('monsters', 6));
   const radius = Number(flag('radius', 3));
-  const book = safeSpotBook(SAFESPOT_FILE);
-  const proven = provenIn(room, book);
+  const proven = provenIn(room);
 
   if (has('list')) {
     console.log(`room ${room}${PLACES[room] ? ' — ' + PLACES[room].name : ''}: ` +
-                `${proven.length} square(s) that held and never failed\n`);
+                `${proven.length} square(s) the geometry calls a safe wall\n`);
     for (const e of proven)
       console.log(`  row ${String(e.row).padStart(3)}  col ${String(e.col).padStart(3)}` +
-                  `   held ${e.held}   fine ${e.x ?? '?'},${e.y ?? '?'}`);
+                  `   attackers ${e.attackers ?? '?'}   back cover ${e.back_cover ?? '?'}`);
     console.log('\nrooms worth trying:');
     for (const [n, p] of Object.entries(PLACES))
       console.log(`  --room ${n}  ${p.name} — ${p.why}`);

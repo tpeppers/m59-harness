@@ -57,8 +57,10 @@ if (IS_ENTRY && argv.includes('--help')) {
 // when the picture would change.
 function ledgerStamp() {
   let newest = 0;
+  // m59-safespots.json is no longer in this list: the book is retired and no page is drawn
+  // from it, so its mtime changing would have been a stamp on nothing.
   for (const p of ['substrate/transits', 'substrate/tactics', 'substrate/m59-routes.json',
-                   'substrate/m59-map.json', 'substrate/m59-safespots.json']) {
+                   'substrate/m59-map.json']) {
     const full = join(REPO, p);
     try {
       const st = statSync(full);

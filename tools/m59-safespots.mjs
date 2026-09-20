@@ -539,11 +539,11 @@ export function returnReachableTo(geo, to, { cap = 20000 } = {}) {
 // walking thirty squares across a monster room to reach a marginally better corner
 // is how you die on the way to safety.
 //
-// `book` is the memory of what has actually been tried here, and it OUTRANKS the
-// geometry, because the geometry is a hypothesis and the book is a result. A square
-// that held under attack is worth more than a better-looking square that has never
-// been stood on, and a square that failed is worth nothing at all however good it
-// looks — which is the whole reason for keeping the book.
+// THERE IS NO `book` PARAMETER ANY MORE. It used to be "the memory of what has actually
+// been tried here", and it OUTRANKED the geometry on the grounds that "the geometry is a
+// hypothesis and the book is a result". The memory was filed against the keeper's HOLD rather
+// than the body's position, so it was never a result about a square — see the tombstone at the
+// foot of this file, and the live proof that settled what it was kept to arbitrate.
 // `toward` is where the fight has to happen — the prey. Without it this picks the
 // most defensible square near US, which in a big outdoor room is a wall on the far
 // side of the field from anything worth killing: the keeper walks to a perfect corner,
@@ -640,7 +640,7 @@ const CORNER_BONUS = 24;
  * Costs nothing at runtime: a route that never needs a stop never looks at the list.
  */
 export function sheltersAlong(geo, steps, {
-  within = 6, book = null, room = null, minBackCover = 1, limit = 24, unreachable = null,
+  within = 6, room = null, minBackCover = 1, limit = 24, unreachable = null,
 } = {}) {
   if (!geo || !Array.isArray(steps) || !steps.length) return [];
   const out = [];
@@ -655,7 +655,7 @@ export function sheltersAlong(geo, steps, {
     let spot = null;
     try {
       spot = nearestSafeSpot(geo, { row: st.row, col: st.col },
-                             { within, book, room, minBackCover, reachable, unreachable });
+                             { within, room, minBackCover, reachable, unreachable });
     } catch { spot = null; }
     if (!spot) continue;
     const k = `${spot.col},${spot.row}`;
@@ -816,7 +816,7 @@ export function preferSafeSpotCandidate(candidate, current, { closestToToward = 
 }
 
 export function nearestSafeSpot(geo, from, {
-  within = 12, minAvoided = 20, reach = null, book = null, room = null, toward = null,
+  within = 12, minAvoided = 20, reach = null, room = null, toward = null,
   quarryReach = null, strictQuarryReach = false, stats = null, los = 0,
   rule = 'wall', minBackCover = 1, fromFightWeight = 0.3,
   closestToToward = false,
@@ -915,7 +915,6 @@ export function nearestSafeSpot(geo, from, {
   // "one-way" and a character under attack was told there was nothing to take.
   const canComeBack = returnReachableTo(geo, from);
   const reachesOnward = onwardSquare ? returnReachableTo(geo, onwardSquare) : null;
-  const known = book && room != null ? book.recall(room) : null;
   let best = null;
   let bestPredictedUnreachable = null;
   let unreachableByQuarry = 0;
@@ -927,14 +926,12 @@ export function nearestSafeSpot(geo, from, {
   let exitConsidered = false;
   let partitionRejected = 0;
   for (const s of (wallsAllowed ? all : [])) {
-    const seen = known?.get(key(s.col, s.row)) || null;
-    // NO SQUARE IS DISQUALIFIED BY ITS HISTORY. `discredited` is unconditionally false now
-    // — see the argument on it — so this filter is a no-op and is kept only so the shape of
-    // the loop still says where the question used to be asked. Geometry has already decided
-    // that everything in `all` is a wall; what follows filters on REACHABILITY, which is
-    // about this walk rather than about the square.
-    if (seen && book.discredited(seen)) continue;
-    // NOR TO ONE WE HAVE JUST FAILED TO WALK TO. A wall that cannot be reached is not
+    // NO SQUARE IS DISQUALIFIED BY ITS HISTORY, and there is no longer a history to consult.
+    // A `book.discredited()` filter stood here; it had already been reduced to a documented
+    // no-op, and the record behind it is retired outright (see the tombstone at the foot of
+    // this file). Geometry decides that everything in `all` is a wall; what follows filters
+    // on REACHABILITY, which is about this walk rather than about the square.
+    // NOT TO ONE WE HAVE JUST FAILED TO WALK TO. A wall that cannot be reached is not
     // shelter, and offering it again is how a hurt character spends a whole room choosing
     // the same unreachable square: measured in the Western border of the Twisted Wood, the
     // decision trail read "could not reach the safe spot" / "will not rest in the open here"
@@ -970,12 +967,10 @@ export function nearestSafeSpot(geo, from, {
     // `minBackCover` used to gate here and are still accepted so callers need not change;
     // they no longer remove a wall the picture shows. Corrected 2026-08-27.
     void rule; void minAvoided; void minBackCover;
-    // `retest` keeps a REINSTATED square eligible without making it trusted. A square
-    // put back by m59-safespot-retest.mjs has had its held count zeroed — it is being
-    // asked to prove itself again from nothing — and zeroing it would otherwise drop any
-    // square that qualified only BECAUSE it had held, so the reassessment could never
-    // happen. It grants no proof bonus below, and it does not survive discredited()
-    // above: fail again and the square is out for good, exactly as before.
+    // (a `retest` flag kept a REINSTATED square eligible here — one whose held count
+    // m59-safespot-retest.mjs had zeroed so it could prove itself again from nothing. The
+    // flag and that tool are both gone with the book: there is no history to reinstate,
+    // and every wall the geometry names is eligible on its own account.)
     eligible++;
 
     // THE MONSTER GRID IS A PRIOR, NOT A VERDICT.
@@ -1014,18 +1009,14 @@ export function nearestSafeSpot(geo, from, {
       continue;
     }
     // Prefer defensibility, then closeness. A spot two squares further away that
-    // halves the number of attackers is worth the two squares. Proof is worth more
-    // than either — a square that has held under attack beats any amount of
-    // promising-looking wall.
-    // A marked square outranks any amount of promising-looking wall, and outranks a
-    // square that merely held — holding is our own measurement, marking is somebody's
-    // judgement made from inside the game.
-    // `proof` — 60 points for a marked square, up to 30 for one that had held — used to be
-    // added to the ranking. It is gone with the rest of it: a wall that held is not a
-    // better wall, it is a wall that was stood on, and grading them is the thing being
-    // removed here. The book still discredits squares outright above, which is a fact
-    // about a square rather than a grade.
-    void seen;
+    // halves the number of attackers is worth the two squares.
+    //
+    // NOTHING ABOUT A SQUARE'S HISTORY ENTERS THE RANKING. A `proof` term — 60 points for a
+    // square an operator had marked, up to 30 for one that had held — used to be added here,
+    // and a `void seen;` stood in its place after it was removed. Both are gone with the
+    // book: a wall that was stood on is not a better wall, it is a wall that was stood on,
+    // and there is no longer a record to grade it from. See the tombstone at the foot of
+    // this file.
     // Distance from the fight is a TIE-BREAK, not a filter.
     //
     // This was 1.2 a square, which is heavier than it sounds: at that weight a wall
@@ -1070,10 +1061,12 @@ export function nearestSafeSpot(geo, from, {
       // afternoon read as disproved for ever. There is one kind of safe wall now and the
       // geometry above has already established this is one, so anything asking "can I
       // trust this" gets the same answer the selection just gave itself.
-      proven: true, held_before: seen?.held ?? 0,
-      // The fine coordinate is what we actually want to stand on; see SafeSpotBook.
-      // The square is only how we get there.
-      fine: seen?.x != null ? { x: seen.x, y: seen.y } : null,
+      // `held_before` and `fine` were read off this square's book record and are gone with
+      // it. Nothing consulted `held_before` to DECIDE anything — it was a tally carried for
+      // reporting — and the remembered fine coordinate was one operator's exact footing on
+      // one past visit, which is not a property of the square. Kept in the shape so callers
+      // need not change; a caller wanting fine footing computes it from the square.
+      proven: true, held_before: null, fine: null,
     };
     if (predictedUnreachable) {
       if (preferSafeSpotCandidate(candidate, bestPredictedUnreachable, { closestToToward }))
@@ -1138,345 +1131,47 @@ export function geometryFor(mapRoom) {
   return mapRoom?.roo ? RoomGeometry.fromJSON(mapRoom.roo) : null;
 }
 
-// ---------------------------------------------------------------- the book
-//
-// Persistent square keys use the public, 1-based "col,row" order.
-
+// Square keys in the public, 1-based "col,row" order. This used to live with the book below
+// and has outlived it: `unreachable` sets are keyed the same way, and THAT is a fact about
+// the walk in progress rather than about a square's history, so it stays.
 const key = (col, row) => `${col},${row}`;
 
-// WHAT ACTUALLY WORKED, WRITTEN DOWN.
+// ------------------------------------------------- the book (RETIRED 2026-09-20)
 //
-// Everything above this line is inference from a one-byte-per-square movement grid,
-// and the real mechanic is not in that grid. So the grid proposes and experience
-// disposes: stand somewhere, be attacked, and see whether anything lands. That test
-// is cheap, it is unambiguous, and until it is run the answer is genuinely unknown.
+// `SafeSpotBook`, `safeSpotBook()`, `selectForRetest()` and `reinstateUntested()` lived here
+// and are gone. What stood in this place was a per-square outcome record: stand somewhere, be
+// attacked, write down whether anything landed, and let that memory OUTRANK the geometry on
+// the grounds that "the geometry is a hypothesis and the book is a result".
 //
-// Two things make it worth persisting rather than keeping in a process:
+// IT COULD NOT HAVE BEEN RIGHT, whatever was done to it, and that is why it was removed rather
+// than repaired. The writer filed each outcome against the keeper's HOLD — the square it had
+// reserved — not against the square the body occupied when the blow landed. Of ten deaths
+// reviewed on 2026-09-20, NINE had the body between 5 and 68 squares from the hold the row was
+// filed under (Robin by 68, Kermit by 47). A per-square record whose writer does not know
+// where the body was is not a record about squares, so neither its failure column nor its
+// success column can be trusted, and no amount of cleaning reaches that.
 //
-//   * a proven square is durable. Walls do not move, so a spot that held last week
-//     holds today, and a character arriving in a room it has never seen can inherit
-//     what another character learned there.
-//   * a DISPROVED square is worth more than a proven one, because the geometry will
-//     keep recommending it. The top-scoring square in a room can be one where the
-//     BSP walls do not line up with the grid at all, and without a memory the keeper
-//     walks back to it every time it wants to feel safe.
+// It had already been argued down to nothing in stages: 78% of its failure events carried
+// `failed_via: "fight"`, which is retaliation and therefore the mechanic WORKING; another 11%
+// were recorded before the character arrived; `discredited()` had been made unconditionally
+// false; and the filter that consulted it in `nearestSafeSpot` was a documented no-op. The
+// better the wall, the more the fleet fought from it, and the more failures it accrued — the
+// column was not noisy, it was INVERTED.
 //
-// The unit of memory is the FINE coordinate, not the square. moveToSquare puts you
-// at the square's centre (col*64+32); a spot that works by hugging a wall may be
-// forty fine units off that centre, and a square-move to "the same place" quietly
-// lands you somewhere else. So the book records where we were standing to the fine
-// unit and hands that back.
-export class SafeSpotBook {
-  constructor(file = null) {
-    this.file = file;
-    this.rooms = new Map();          // room number -> Map(key -> record)
-    this.dirty = false;
-    this.load();
-  }
-
-  load() {
-    if (!this.file) return;
-    try {
-      const raw = JSON.parse(readFileSync(this.file, 'utf8'));
-      for (const [num, spots] of Object.entries(raw.rooms || {}))
-        this.rooms.set(Number(num), new Map(Object.entries(spots)));
-    } catch { /* no book yet, or unreadable — start empty rather than fail */ }
-  }
-
-  save() {
-    if (!this.file || !this.dirty) return false;
-    const rooms = {};
-    for (const [num, spots] of this.rooms) rooms[num] = Object.fromEntries(spots);
-    try {
-      mkdirSync(dirname(this.file), { recursive: true });
-      writeFileSync(this.file, JSON.stringify({ rooms }));
-      this.dirty = false;
-      return true;
-    } catch { return false; }   // a read-only substrate must not break a fight
-  }
-
-  recall(room) { return this.rooms.get(Number(room)) || null; }
-
-  get(room, col, row) { return this.recall(room)?.get(key(col, row)) || null; }
-
-  // ONE FAILURE IS ENOUGH. A spot that has ever let something through is out, for good,
-  // however many times it held first.
-  //
-  // The old rule wanted two failures AND more failures than holds, on the reasoning that
-  // poison or a stray archer can look like a spot that does not work and a good corner
-  // is expensive to throw away. That has the cost backwards. Godfrey stood on a square
-  // recorded held:1 — "proven" — and died there: it had been tested against two
-  // attackers and met six, and went 24/24 to 9/24 in a single pass. Under the old rule
-  // that square stayed proven and stayed recommended, to him and to everyone who
-  // inherited the book.
-  //
-  // The asymmetry is the point. Being wrong about a bad spot costs a character; being
-  // wrong about a good one costs a walk to the next corner. Spots seem safe at first and
-  // turn out not to be — a crowd big enough simply reaches around the wall — and the
-  // number of squares in a room is large. So a failure is permanent and there is no
-  // route back into the recommendations.
-  // A HUMAN STOOD HERE AND SAYS IT WORKS.
-  //
-  // Ground truth, and it outranks everything this file infers. The model reasons from a
-  // one-byte-per-square grid and a transcription of the server's reach test; a person
-  // playing the character sees the actual geometry and, more to the point, has fought
-  // from the square. Every automatic judgement in this book has been wrong at least once
-  // — the reach model condemned 560 squares it should not have, including all 132 in the
-  // Valley of Ileria — and a marked square is the one kind of record that was not
-  // produced by a model that might be wrong.
-  //
-  // Failures are still COUNTED on a verified square, because a human can be wrong too
-  // and the record should say so. They just do not retire it: unmarking is a human's job.
-  verify(room, { col, row, by = null, note = null }) {
-    const rec = this.touch(room, col, row);
-    rec.verified = true;
-    rec.verified_by = by;
-    rec.verified_at = Date.now();
-    if (note) rec.verified_note = note;
-    this.dirty = true;
-    return rec;
-  }
-
-  unverify(room, { col, row }) {
-    const rec = this.touch(room, col, row);
-    delete rec.verified; delete rec.verified_by; delete rec.verified_at; delete rec.verified_note;
-    this.dirty = true;
-    return rec;
-  }
-
-  // WHAT JUDGED THIS SQUARE. A failure is permanent and that stays true however it was
-  // found — a square that let a blow through is a bad square whether the character was
-  // fighting from it or resting at it part-way through a journey, and the conservative
-  // direction is the cheap one: being wrong about a bad square costs a character, being
-  // wrong about a good one costs a walk to the next corner.
-  //
-  // But the two are not the same evidence. A travel hold is taken in a room nobody chose,
-  // with whatever followed you through the door, on a wall derived from geometry that has
-  // never been stood on. So the provenance is written down: `failed_via` is the most recent
-  // judge and `failed_by` counts them, which is enough to fish the travel-only rejections
-  // back out later without having to reconstruct anything.
-  // GEOMETRY OUTRANKS THE LEDGER, AND A FAILURE IS ABOUT THE FIGHT RATHER THAN THE WALL.
-  //
-  // The comment above is the reasoning from when this book existed to DISCOVER what a safe
-  // wall is. That question is settled: a safe wall is a square where nothing can stand
-  // within melee reach — `can_reach_you === 0`, off the .roo, against the server's own
-  // reach test (SquaredDistanceTo <= range^2, range 2-3, monster.kod:1682). Once geometry
-  // can answer, a failure row cannot overrule it, because a failure records only that
-  // something went wrong WHILE WE STOOD THERE. A crowd on the square, a swing we took
-  // first, an archer, a poison tick, a blow resolved before we arrived — none of those are
-  // facts about the wall, and none of them make an unreachable square reachable.
-  //
-  // What that mistake cost, measured on prod 2026-09-02: room 39 had 185 squares with
-  // can_reach_you === 0 and 142 of them were discredited, including r3c17 with 431
-  // failures and r3c27 with 410 — squares nothing can physically reach, recorded as having
-  // failed hundreds of times. Nearly all of it accrued while max_bots_per_safe_spot was 21
-  // and the whole fleet was entitled to one square, which is a crowd standing on the wall
-  // rather than a wall that leaks. With the south row believed again, fleet kills went from
-  // 20 per 30 minutes to 48 and deaths from about 4 an hour to 0.6.
-  //
-  // SO THERE ARE TWO VERDICTS, AND ONLY ONE OF THEM IS PERMANENT.
-  //
-  //   * as a place to HEAL — to stop swinging, sit, and let the room mill about outside
-  //     reach — a square is condemned only by geometry. This is the one that must never be
-  //     revoked by a failure: it is the whole mechanism by which a losing fight becomes a
-  //     draw, and taking it away is what leaves a character dying in the open.
-  //   * as a place to FIGHT FROM against a particular area, a failure is still decisive.
-  //     `discreditedForPull` keeps the old strict rule, unchanged and still permanent,
-  //     because "I could not hold this while swinging at that" is a real observation about
-  //     the pull even when the wall is sound.
-  //
-  // `reachable` is the geometric verdict when the caller has it and null when it does not.
-  // Absent it, the old behaviour stands — this must not quietly believe squares nobody has
-  // any evidence about.
-  discredited(rec, { reachable = null } = {}) {
-    // THERE IS ONLY ONE KIND OF SAFE WALL, AND GEOMETRY DECIDES IT. Operator, 2026-09-06.
-    //
-    // This used to be an experiential verdict with a geometric override bolted on. The
-    // override kept winning, which was the clue: room 39 had 142 squares nothing could
-    // physically reach recorded as having FAILED, one of them 431 times. Believing the
-    // geometry again took fleet kills from 20 per 30 minutes to 48 and deaths from about
-    // four an hour to 0.6. Square 24,7 in that room carries 309 failures, all of them
-    // `failed_via: "fight"`, on a square an operator had verified by hand.
-    //
-    // A failure row never recorded a fact about the WALL. It recorded that something went
-    // wrong while we stood there — a crowd on the square, a blow resolved before we
-    // arrived, an archer, a poison tick, another character's swing. None of those make an
-    // unreachable square reachable, and all of them are things the wall was never going
-    // to stop. So the ledger was measuring the afternoon, not the geometry, and then
-    // condemning the geometry for it. PERMANENTLY: one bad tick burned a good wall for
-    // the life of the fleet.
-    //
-    // So the answer is unconditional now. What makes a square a safe wall is that nothing
-    // can reach it, and that is a property of the .roo and the melee disc — a calculation,
-    // repeatable, with no history in it. Nothing that happens while a character stands
-    // there can change whether a monster can reach the square.
-    //
-    // The ledger is kept loadable so old files still parse and the boards still render,
-    // and it is no longer consulted by anything that decides.
-    return false;
-  }
-
-  // The strict, permanent rule, for choosing somewhere to fight FROM. Unchanged: being
-  // wrong about a bad pull spot costs a character and being wrong about a good one costs
-  // a walk to the next corner, and that asymmetry still holds for the fighting question.
-  discreditedForPull(rec) {
-    // AND THE FIGHTING QUESTION IS THE SAME QUESTION. This kept the old strict rule on the
-    // argument that "I could not hold this while swinging at that" is a real observation
-    // about the pull even when the wall is sound. It is not a separate law, and the
-    // operator's reason is the one that settles it:
-    //
-    //   A safe spot is the only place THE LOGOFF TRICK WORKS. You log off so the monster
-    //   disengages and you do not die; you reconnect, turn so the server registers the
-    //   move, and heal to full before re-engaging. That only works somewhere nothing can
-    //   reach you — which is the geometric test and nothing else.
-    //
-    // So "somewhere to fight from" is not a second property a square earns by surviving
-    // fights. It is the FIRST property, used for a second purpose: a wall you can pull to
-    // is a wall you can log off at, and both are `can_reach_you === 0`. A square that
-    // "failed a pull" failed because a fight went badly on it, which is what fights do.
-    return false;
-  }
-
-  // NOTHING DECIDES ON THESE ANY MORE — see `discredited`. They still record, because a
-  // read-only history is worth having for the boards and for asking after the fact whether
-  // the geometry was right; what they may never do again is gate a shelter.
-  //
-  // If this branch's A/B holds, the next step is deleting the writes as well: a ledger
-  // nobody reads is a file that will eventually be believed by somebody.
-  held(room, { col, row, x = null, y = null, seconds = 0, attackers = 0, source = null }) {
-    const rec = this.touch(room, col, row);
-    rec.held++;
-    if (source) mark(rec, 'held', source);
-    rec.held_seconds = (rec.held_seconds || 0) + Math.round(seconds);
-    rec.most_attackers = Math.max(rec.most_attackers || 0, attackers);
-    if (x != null) { rec.x = x; rec.y = y; }     // the exact place that worked
-    rec.at = Date.now();
-    this.dirty = true;
-    return rec;
-  }
-
-  // We stood here under attack and were hit anyway. The spot does not work, or does
-  // not work from the angle we were standing at.
-  failed(room, { col, row, damage = 0, attackers = 0, settledMs = null, source = null }) {
-    const rec = this.touch(room, col, row);
-    rec.failed++;
-    if (source) mark(rec, 'failed', source);
-    rec.damage_taken = (rec.damage_taken || 0) + damage;
-    rec.most_attackers = Math.max(rec.most_attackers || 0, attackers);
-    // HOW SETTLED WE WERE WHEN THE WINDOW THAT CONDEMNED THIS SQUARE OPENED.
-    //
-    // A failure is permanent, so the one way this book can be quietly wrong is by
-    // blaming a square for a blow that was resolved before we reached it and only
-    // arrived afterwards. SETTLE_GRACE_MS in m59-autopilot.mjs is what stops that, and
-    // this is the evidence for whether it is wide enough: the tightest margin any real
-    // failure was recorded at. If that number sits just above the grace, the grace is
-    // too narrow and squares are still being retired by packet timing.
-    if (settledMs != null && Number.isFinite(settledMs)) {
-      rec.settled_ms = Math.max(0, Math.round(settledMs));
-      rec.min_settled_ms = Math.min(rec.min_settled_ms ?? Infinity, rec.settled_ms);
-    }
-    rec.at = Date.now();
-    this.dirty = true;
-    return rec;
-  }
-
-  touch(room, col, row) {
-    const num = Number(room);
-    if (!this.rooms.has(num)) this.rooms.set(num, new Map());
-    const spots = this.rooms.get(num);
-    const k = key(col, row);
-    if (!spots.has(k)) spots.set(k, { col, row, held: 0, failed: 0 });
-    return spots.get(k);
-  }
-
-  // Everything known about a room, best first, for reporting.
-  list(room) {
-    const spots = this.recall(room);
-    if (!spots) return [];
-    return [...spots.values()]
-      // THE VERDICT IS A HISTORY NOW, NOT A JUDGEMENT. `does not work` is gone with the
-      // concept: geometry decides whether a square is a wall, and this list is a record of
-      // what happened on squares that were already walls. `stood_on` and `never_stood_on`
-      // say what the rows actually contain without implying a square is disqualified.
-      .map(r => ({ ...r, verdict: r.held > 0 ? 'stood_on'
-                                : r.failed > 0 ? 'stood_on' : 'never_stood_on' }))
-      .sort((a, b) => (a.failed - b.failed) || (b.held - a.held));
-  }
-}
-
-// Provenance for one outcome — the most recent judge, and a count per judge. Kept tiny and
-// additive so an old book without it reads exactly as it always did.
-function mark(rec, kind, source) {
-  rec[`${kind}_via`] = source;
-  const by = rec[`${kind}_by`] ?? {};
-  by[source] = (by[source] || 0) + 1;
-  rec[`${kind}_by`] = by;
-}
-
-let theBook = null;
-export function safeSpotBook(file = null) {
-  if (!theBook) theBook = new SafeSpotBook(file);
-  return theBook;
-}
-
-// PUTTING BACK A SQUARE THAT WAS RETIRED BY A PACKET RATHER THAN BY A WALL.
+// AND THE QUESTION IT EXISTED TO ANSWER IS ANSWERED. It was kept because nobody knew which
+// mechanism actually protects a body, and the book was the only outcome data anyone had.
+// tools/m59-wallproof.mjs settled it in play on 2026-09-20: 1,290 seconds on `attackers === 0`
+// across 19 squares, not swinging, with a non-poisoning monster in reach and visibly moving,
+// took ZERO attacks — against 0.067/s in the open under the identical rule. Two squares were
+// observed in BOTH states, holding room, geometry and monsters constant:
 //
-// These two live here, next to discredited(), rather than in m59-safespot-retest.mjs
-// where they are used: that file is a script with no entry-point guard, so importing it
-// to test the rule would run it against the real book. The rule is the part worth
-// pinning, so the rule lives with the data it describes.
+//     516:1,31   0 attacks / 965s not swinging   vs   17 attacks / 79s swinging
+//     516:1,28   0 attacks / 128s not swinging   vs    4 attacks / 70s swinging
 //
-// The subset is narrow on purpose. A square that HELD and was then retired on at most a
-// point of damage is the shape a single late packet makes — see SETTLE_GRACE_MS in
-// m59-autopilot.mjs, which did not exist when these were judged. A square that lost six
-// is one something genuinely reached, and stays out.
-export function selectForRetest(rooms, { maxDamage = 1 } = {}) {
-  const picked = [];
-  for (const [room, spots] of Object.entries(rooms || {})) {
-    for (const [k, r] of Object.entries(spots || {})) {
-      // A mark already outranks our arithmetic, so a verified square is not discredited
-      // and needs no rescuing. Zeroing a person's held record to fix a problem they do
-      // not have would be a loss rather than a repair.
-      if (r.verified) continue;
-      if (!((r.held || 0) > 0)) continue;
-      if (!((r.failed || 0) > 0)) continue;
-      if ((r.damage_taken || 0) > maxDamage) continue;
-      picked.push({ room: Number(room), key: k, rec: r });
-    }
-  }
-  return picked;
-}
-
-// UNTESTED, NOT TRUSTED, AND THAT DISTINCTION IS THE WHOLE POINT.
+// So a wall has no per-square reliability to look up. It has a contract — nothing can reach
+// you until you swing — and that is a fact about what the BODY does, not about the square's
+// history. Geometry proposes and there is nothing left for experience to dispose of.
 //
-// The pardon in m59-safespot-retest.mjs clears `failed` and keeps `held`, on the sound
-// reasoning that holding is holding wherever you stood. Applied here that would be
-// exactly wrong: takeSafeSpot inherits `proven` from a clean held record, so the keeper
-// would go and REST on these squares — trusting a judgement we have just decided was
-// unreliable, without ever re-testing it. So `held` goes too, and the square has to earn
-// its twelve quiet seconds again from nothing.
-// `from` is the record the DECISION was made against, which is not always the record
-// being rewritten. The failures that identify this subset were cleared out of the live
-// book by the pardon in m59-safespot-retest.mjs before this ran, so the selection has to
-// be made against an older snapshot — and the history worth keeping is that snapshot's,
-// not the pardoned record's zeroes. Defaults to the record itself, which is the ordinary
-// case.
-export function reinstateUntested(rec, { why = 'retired before SETTLE_GRACE_MS existed',
-                                         from = rec } = {}) {
-  const out = { ...rec, held: 0, failed: 0 };
-  delete out.damage_taken;
-  delete out.held_seconds;
-  // Keeps it eligible where the geometry cutoff alone would not offer it — see the gate
-  // in nearestSafeSpot. Grants no proof bonus, and does not survive a fresh failure.
-  out.retest = true;
-  out.retest_at = Date.now();
-  out.retest_why = why;
-  out.retest_from = {
-    held: from.held || 0, failed: from.failed || 0,
-    damage_taken: from.damage_taken || 0,
-    held_seconds: from.held_seconds || 0,
-    most_attackers: from.most_attackers || 0,
-    at: from.at ?? null,
-  };
-  return out;
-}
+// Outcomes are still recorded, because a rule with no observations says nothing: they go to
+// tools/m59-restwatch.mjs, under the qualifiers that make them mean something, and NOTHING
+// THAT CHOOSES A SQUARE MAY READ THEM.

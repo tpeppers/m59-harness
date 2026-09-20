@@ -98,7 +98,8 @@ export const CATEGORIES = [
       { from: 'substrate/tougher', to: 'records/tougher', kind: 'dir' },
       { from: 'substrate/descriptions', to: 'records/descriptions', kind: 'dir' },
       { from: 'substrate/safespots.json', to: 'records/safespots.json', kind: 'file' },
-      { from: 'substrate/m59-safespots.json', to: 'records/m59-safespots.json', kind: 'file' },
+      // (substrate/m59-safespots.json was backed up here. The safe-spot book is retired —
+      //  see the tombstone in m59-safespots.mjs — so there is nothing left to preserve.)
     ] },
   { key: 'history', required: false, bulky: true,
     what: 'The ledger and the post mortems. Large, and the part most likely to be skipped ' +

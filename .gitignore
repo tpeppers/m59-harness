@@ -769,3 +769,8 @@ substrate/magic-keep.json
 # `node tools/m59-noderails.mjs bake` writes it; `show`, `check` and `m59-fineclimb --rail`
 # all say so by name when it is absent.
 /substrate/node-rails.json
+
+# THE SAFE-SPOT BOOK, RETIRED 2026-09-20. Nothing reads or writes it any more (tombstone
+# in tools/m59-safespots.mjs). Ignored rather than merely deleted so a running fleet that
+# still has one on disk does not show up as an untracked file for ever.
+/substrate/m59-safespots.json

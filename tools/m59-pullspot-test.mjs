@@ -81,11 +81,9 @@ await test('coarse reach rejects a nearby disconnected wall and accepts a reacha
 });
 
 const mapFile = new URL('../substrate/m59-map.json', import.meta.url);
-const bookFile = new URL('../substrate/m59-safespots.json', import.meta.url);
-if (existsSync(mapFile) && existsSync(bookFile)) {
+if (existsSync(mapFile)) {
   await test('Valley chooses the closest coarse-reachable wall and skips an occupied winner', () => {
     const map = JSON.parse(readFileSync(mapFile, 'utf8'));
-    const records = JSON.parse(readFileSync(bookFile, 'utf8'));
     const geo = geometryFor(map.rooms['544']);
     assert.ok(geo, 'room 544 geometry is missing');
 
@@ -93,13 +91,13 @@ if (existsSync(mapFile) && existsSync(bookFile)) {
     const quarry = { col: 17, row: 74 };
     const quarryReach = coarseCombatReachFrom(geo, quarry);
     assert.ok(quarryReach, 'coarse quarry component could not be built');
-    const known = new Map(Object.entries(records.rooms?.['544'] || {}));
-    const book = {
-      recall: () => known,
-      discredited: record => !!record?.failed,
-    };
+    // THE FAKE BOOK THAT USED TO BE BUILT HERE IS GONE. It stubbed `recall`/`discredited`
+    // off the real substrate file so this test could check that a discredited square was
+    // skipped. Nothing discredits a square any more (tombstone in m59-safespots.mjs), so the
+    // assertion below is now purely about REACHABILITY — which is what it was really for:
+    // the closest coarse-reachable wall, skipping one an ally already occupies.
     const options = {
-      within: Math.max(geo.rows, geo.cols), book, room: 544,
+      within: Math.max(geo.rows, geo.cols), room: 544,
       toward: quarry, quarryReach, strictQuarryReach: true, closestToToward: true,
     };
     const picked = nearestSafeSpot(geo, from, options);
@@ -107,9 +105,7 @@ if (existsSync(mapFile) && existsSync(bookFile)) {
 
     const playerReach = reachableFrom(geo, from);
     const valid = safeSpots(geo, { limit: Infinity }).filter(spot => {
-      const seen = known.get(`${spot.col},${spot.row}`);
-      return !(seen && book.discredited(seen))
-        && (!playerReach || playerReach.has(`${spot.row},${spot.col}`))
+      return (!playerReach || playerReach.has(`${spot.row},${spot.col}`))
         && quarryReach(spot.col, spot.row).reachable;
     });
     const nearest = Math.min(...valid.map(spot =>

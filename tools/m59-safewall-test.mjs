@@ -248,14 +248,15 @@ console.log('\nthe choice itself still lands on a proven wall');
     const from = { col: Math.max(2, target.col - 3), row: Math.max(2, target.row - 3) };
     if (!geometry.walkable(from.row, from.col)) continue;
     asked++;
+    // The `book` option this used to pass is gone from nearestSafeSpot's signature along
+    // with the book itself, so the chooser is asked with geometry alone — which is all it
+    // consults now.
     const picked = nearestSafeSpot(geometry, from, {
       within: Math.max(geometry.rows, geometry.cols),
-      book: { recall: room => new Map(Object.entries(book.rooms[String(room)] || {})),
-              discredited: rec => !!rec?.failed },
       room: Number(num),
     });
     if (!picked) continue;
-    if (picked.proven) provenPicked++;
+    if ((picked.attackers ?? picked.can_reach_you ?? 1) === 0) provenPicked++;
     // A safe wall is a tight square, so the pick should have wall at its back. This is
     // the assertion that goes red if anything ever starts preferring open ground.
     if (picked.back_cover >= 3) tightPicked++;
@@ -263,8 +264,16 @@ console.log('\nthe choice itself still lands on a proven wall');
   ok('the chooser was asked in real rooms', asked > 5, `${asked} rooms`);
   ok('and it lands on a square with wall at its back',
      tightPicked / asked > 0.8, `${tightPicked}/${asked}`);
-  ok('and prefers one that has already held where the book has one',
-     provenPicked > 0, `${provenPicked}/${asked} proven`);
+  // THIS ASSERTION WAS VACUOUS FOR AS LONG AS IT TOOK TO NOTICE. It read
+  // `if (picked.proven) provenPicked++` and claimed the chooser "prefers one that has
+  // already held where the book has one". `proven` is now unconditionally true for every
+  // wall the geometry names — there is no history left to inherit it from — so the counter
+  // could not fail, and a test that cannot fail is worse than no test. It now counts what
+  // actually matters and what the live proof is about: that the square picked is one
+  // NOTHING WITHIN REACH CAN SEE.
+  ok('and every square it picks is one nothing within reach can see',
+     provenPicked === asked || provenPicked > asked * 0.95,
+     `${provenPicked}/${asked} with attackers === 0`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed, ${skipped} skipped`);

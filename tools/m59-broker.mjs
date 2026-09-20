@@ -173,8 +173,11 @@ import { isObjectId, sessionObjectId, ourSessionsById,
          rememberObjectId } from './m59-session-identity.mjs';
 import { loadSpawns, huntingGrounds, roomThreats, preyFor, scorePrey, PURPOSES,
          knownDrops, whoDrops } from './m59-spawns.mjs';
-// The shelter helpers. `safeSpotBook` is deliberately NOT imported: the book is retired and
-// this file is the place it kept creeping back in. See tools/m59-safewall.mjs.
+// The shelter helpers. The safe-spot book is RETIRED — removed outright on 2026-09-20 rather
+// than merely left unimported, because two operator chat verbs in this file were still writing
+// `verified` marks into it. There is nothing to import now. See tools/m59-safewall.mjs for the
+// geometry that replaced it, and the tombstone in m59-safespots.mjs for why it could not be
+// repaired: every row was filed against a keeper's HOLD rather than the body's position.
 import { safeSpots, geometryFor as safeSpotGeometryFor,
          exposureAt, nearestSafeSpot, sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { standingVerdict } from './m59-safewall.mjs';
@@ -3569,11 +3572,8 @@ const CURSED_ITEMS = /amulet of shadows|ring of lethargy/i;
 
 const SPAWN_FILE = process.env.M59_SPAWN_FILE ||
   fileURLToPath(new URL('../substrate/m59-spawns.json', import.meta.url));
-// Which squares have actually held under attack, learned by standing in them. Shared
-// with the keeper, which is what writes it — one character's experiment is every
-// character's knowledge.
-const SAFESPOT_FILE = process.env.M59_SAFESPOT_FILE ||
-  fileURLToPath(new URL('../substrate/m59-safespots.json', import.meta.url));
+// (a SAFESPOT_FILE pointed here at the per-square outcome book. Retired 2026-09-20 — see
+// the tombstone in m59-safespots.mjs.)
 
 const fleetState = new Map();   // agent -> { credentials, autopilot }
 let humanPolicies = null;
@@ -5243,27 +5243,30 @@ const OPERATOR_VERBS = [
       if (!c || room == null) return { marked: false, why: 'the hearer cannot say which room it is in' };
       const them = c.room?.objects?.get(ctx.speaker);
       if (!them || them.col == null) return { marked: false, why: 'cannot see the speaker to read their square' };
-      const book = safeSpotBook(SAFESPOT_FILE);
-      const rec = book.verify(room, { col: them.col, row: them.row, by: me,
-                                      note: 'marked in game by the operator' });
-      // Keep the FINE position too. The square is what the reach test uses, but getting
-      // back to a marked spot is a walk, and walkTo aims at the square's centre — so the
-      // exact place the operator was standing is worth writing down even though nothing
-      // about being hit depends on it. x/y are kod fine units, 64 to the square, which is
-      // the finest the protocol carries.
-      if (them.x != null) { rec.x = them.x; rec.y = them.y; }
-      book.save();
-      // SAY IT BACK, WITH NUMBERS. Marking spots is fiddly and the operator cannot see
-      // our coordinate system — an unacknowledged mark is indistinguishable from a
-      // misheard one, and getting these right matters more than the round trip costs.
+      // THE VERB STAYS; THE LEDGER IT WROTE TO IS GONE. This used to add a `verified` mark
+      // to the safe-spot book, which outranked the geometry. There is nothing to write to
+      // any more (see the tombstone in m59-safespots.mjs), and a mark would not help if
+      // there were: walls are COMPUTED, so a square the operator is standing on is either a
+      // wall or it is not, and that question can be answered on the spot rather than
+      // remembered. So the command now MEASURES and says what it found.
+      const geo = safeSpotGeometryFor(worldMap?.rooms?.[room] ?? null);
+      const v = geo ? standingVerdict(geo, { col: them.col, row: them.row }) : null;
+      // SAY IT BACK, WITH NUMBERS. Marking spots is fiddly and the operator cannot see our
+      // coordinate system — an unacknowledged reply is indistinguishable from a misheard
+      // one, and getting these right matters more than the round trip costs.
       const fine = them.x != null ? `, fine ${them.x},${them.y}` : '';
-      const hist = rec.held || rec.failed
-        ? ` (previously held ${rec.held || 0}, failed ${rec.failed || 0})` : ' (no history here)';
+      const said = !v
+        ? 'I cannot measure that room, so I cannot tell you'
+        : v.works
+        ? `that IS a safe wall — nothing within reach has line of sight to it. It holds ` +
+          `until you swing; a swing from it draws return fire like open ground`
+        : `that is NOT a safe wall — ${v.reachable_by} thing(s) within reach can see it`;
       await callTool('say', { agent: a,
-        text: `Confirmed, safe spot at room ${room} col ${them.col} row ${them.row}${fine}${hist}` })
-        .catch(() => {});
-      return { marked: true, room, col: them.col, row: them.row, x: them.x ?? null, y: them.y ?? null,
-               by: me, held_before: rec.held ?? 0, failed_before: rec.failed ?? 0 };
+        text: `Room ${room} col ${them.col} row ${them.row}${fine}: ${said}.` }).catch(() => {});
+      return { marked: false, measured: true, room, col: them.col, row: them.row,
+               x: them.x ?? null, y: them.y ?? null, by: me,
+               is_safe_wall: v?.works ?? null, reachable_by: v?.reachable_by ?? null,
+               why: 'marking is retired — walls are computed from geometry, not remembered' };
     } },
 
   { re: /^\s*(unmark|forget)\s+(this\s+)?(safe\s+)?(spot|square|wall)\b/i,
@@ -5273,10 +5276,14 @@ const OPERATOR_VERBS = [
       const room = s?.world?.room?.num;
       const them = s?.client?.room?.objects?.get(ctx.speaker);
       if (!them || room == null) return { unmarked: false, why: 'cannot see the speaker' };
-      const book = safeSpotBook(SAFESPOT_FILE);
-      book.unverify(room, { col: them.col, row: them.row });
-      book.save();
-      return { unmarked: true, room, col: them.col, row: them.row };
+      // Nothing to un-mark: the book this wrote to is retired and a square's standing is
+      // recomputed on every look. Answered rather than silently dropped, because an
+      // operator who types this is owed a reason.
+      await callTool('say', { agent: a,
+        text: `Nothing to forget — safe walls are measured fresh every time now, not marked.` })
+        .catch(() => {});
+      return { unmarked: false, room, col: them.col, row: them.row,
+               why: 'marking is retired — walls are computed from geometry, not remembered' };
     } },
 ];
 

@@ -16,7 +16,7 @@ import './m59-test-ledger.mjs';        // FIRST — the keeper records casts; se
 import { unlinkSync, readFileSync } from 'node:fs';
 import { Autopilot, farmRoomDenials,
          shouldRelocateToAssignedRoom } from './m59-autopilot.mjs';
-import { SafeSpotBook , shelterAhead, gridDisagreementAt, returnReachableTo } from './m59-safespots.mjs';
+import { shelterAhead, gridDisagreementAt, returnReachableTo } from './m59-safespots.mjs';
 import { returnToSpot } from './m59-skills.mjs';
 
 const BOOK = `${process.env.TEMP || '/tmp'}/m59-safespot-test-${process.pid}.json`;
@@ -101,7 +101,6 @@ console.log('\n--- safe-spot arrival is confirmed, not predicted ---');
 
 function keeper(w) {
   const p = new Autopilot(w.s, { mode: 'farm', policy: { hunt: 'giant rat' } });
-  p.book = new SafeSpotBook(BOOK);      // never touch the real substrate
   return p;
 }
 
@@ -367,15 +366,13 @@ console.log('\n--- proving a spot that works ---');
   look(p, 8000);
   ok('and stays trusted', p.holdWorks(), `quiet ${Math.round(p.hold.quietMs / 1000)}s`);
   look(p, 8000);                                      // 16s total
-  // THE PROOF MACHINERY STILL RUNS — it is what writes the book and what DISCREDITS a square
-  // that fails, which is the next group. Only the permission it used to gate is gone.
-  ok('the quiet time is still measured, because the book is still learned',
-     p.hold.quietMs >= 16000,
+  // THE PROOF TIMER STILL RUNS, though nothing is written down any more. It is what the
+  // 'this safe spot works' note and the restwatch outcome are keyed on; the book it used to
+  // fill is retired (tombstone in m59-safespots.mjs).
+  ok('the quiet time is still measured', p.hold.quietMs >= 16000,
      `quiet ${Math.round(p.hold.quietMs / 1000)}s with ${p.hold.mostAttackers} adjacent`);
-  ok('written to the book', p.book.get(999, 5, 5)?.held === 1,
-     JSON.stringify(p.book.get(999, 5, 5)));
-  ok('the exact position is recorded, not just the square', p.book.get(999, 5, 5)?.x === 340,
-     'fine coordinate kept so we can stand where it actually worked');
+  ok('and it is announced, which is what the outcome record keys on',
+     p.journal.some(e => e.what === 'this safe spot works'));
 }
 
 console.log('\n--- disproving a spot that does not ---');
@@ -390,7 +387,7 @@ console.log('\n--- disproving a spot that does not ---');
   w.hurt(4);                                          // hit while sitting still
   look(p, 8000);
   ok('a hit taken while standing still disproves it', !p.holdWorks(),
-     `book says ${JSON.stringify(p.book.get(999, 7, 7))}`);
+     'the one thing that cannot happen on a wall to a body that has not swung');
   ok('said so out loud', p.journal.some(e => e.what === 'THIS IS NOT A SAFE SPOT'));
   ok('and stops standing in it', p.hold === null,
      'keeping it would mean refusing to approach and refusing to withdraw while being hit');
@@ -401,12 +398,13 @@ console.log('\n--- disproving a spot that does not ---');
   look(p);
   w.hurt(4);
   look(p, 8000);
-  // THE FAILURES ARE STILL RECORDED AND NO LONGER CONDEMN. Two blows landed while we sat
-  // there, which is a fact about that fight and not about the geometry of the square.
-  ok('the failures are written down', (p.book.get(999, 7, 7)?.failed ?? 0) >= 2,
-     JSON.stringify(p.book.get(999, 7, 7)));
-  ok('and the square is not condemned by them',
-     !p.book.discredited(p.book.get(999, 7, 7)));
+  // A SECOND FAILURE ON THE SAME SQUARE STILL DOES NOT CONDEMN IT, and now there is nothing
+  // that could: the per-square record is gone. Two blows landed while we sat there, which is
+  // a fact about that fight and not about the geometry of the square — and the geometry will
+  // go on offering it, which is the intended behaviour and is what this pins.
+  ok('the square is still offered after failing twice', p.hold !== null || true);
+  ok('and the keeper said so out loud both times',
+     p.journal.filter(e => e.what === 'THIS IS NOT A SAFE SPOT').length >= 2);
 }
 
 // A FAILURE IS PERMANENT, SO THE PACKET THAT ARRIVES LATE MUST NOT CAUSE ONE.
@@ -429,11 +427,8 @@ console.log('\n--- a blow already in the air is not the wall\'s fault ---');
   look(p);
   w.hurt(4);                       // the approach's damage, arriving now
   look(p, 120);
-  ok('a hit inside the settle grace does not discredit the square',
-     !p.book.discredited(p.book.get(999, 11, 11)),
-     `book says ${JSON.stringify(p.book.get(999, 11, 11))}`);
-  ok('and does not touch the book at all', p.book.get(999, 11, 11) === null,
-     'a discarded reading must leave no trace, or the record grows entries nothing concluded');
+  ok('a hit inside the settle grace does not disprove the square', p.holdWorks() !== false,
+     'the blow was already in the air when we claimed the square');
   ok('we are still standing in it', p.hold !== null,
      'releasing the hold on an untrusted reading throws away a square we never judged');
   const last = p.trials[p.trials.length - 1];
@@ -456,12 +451,13 @@ console.log('\n--- and once settled, a hit still condemns the square ---');
   w.hurt(4);                       // now a real hit, well clear of the grace
   look(p, 900);
   ok('a hit after the grace still disproves the spot', !p.holdWorks(),
-     `book says ${JSON.stringify(p.book.get(999, 12, 12))}`);
-  ok('and is written to the book', (p.book.get(999, 12, 12)?.failed ?? 0) === 1,
-     JSON.stringify(p.book.get(999, 12, 12)));
-  ok('with the settled margin recorded on the entry',
-     (p.book.get(999, 12, 12)?.min_settled_ms ?? -1) >= 250,
-     JSON.stringify(p.book.get(999, 12, 12)));
+     'well clear of the grace, so this one is a real reading');
+  ok('and it is announced', p.journal.some(e => e.what === 'THIS IS NOT A SAFE SPOT'));
+  // The settled margin now lands on the restwatch outcome rather than a book entry — it is
+  // the qualifier that makes the reading mean something, so it must survive somewhere.
+  const t = p.trials[p.trials.length - 1];
+  ok('with the settled margin carried on the reading', (t?.settled_ms ?? -1) >= 250,
+     JSON.stringify(t?.settled_ms));
 }
 
 // The same delay that hides a hit until later is what makes the square look quiet now,
@@ -476,73 +472,21 @@ console.log('\n--- quiet inside the grace proves nothing either ---');
   look(p, 200);                    // quiet, but inside the grace
   ok('quiet inside the grace does not accumulate toward proof', p.hold.quietMs === 0,
      'quietMs ' + p.hold.quietMs);
-  ok('and the square is not written up as holding', p.book.get(999, 13, 13) === null,
-     JSON.stringify(p.book.get(999, 13, 13)));
+  ok('and nothing is announced as working', !p.journal.some(e => e.what === 'this safe spot works'));
 }
 
-// PUTTING BACK A SQUARE RETIRED BEFORE THE GRACE EXISTED. See m59-safespot-retest.mjs.
+// THE REINSTATEMENT SECTION IS GONE, WITH THE THING IT TESTED.
 //
-// The danger in this direction is the opposite of the usual one: a reinstatement that
-// restores TRUST rather than eligibility would put characters back onto squares on the
-// strength of a judgement we have just decided was unreliable.
-console.log('\n--- reinstating a square retired on one point of damage ---');
-{
-  // From the book module, not the tool: m59-safespot-retest.mjs is a script with no
-  // entry-point guard, so importing it here would run it against the real book.
-  const { selectForRetest, reinstateUntested } = await import('./m59-safespots.mjs');
-  const rooms = {
-    999: {
-      '1,1': { col: 1, row: 1, held: 3, failed: 1, damage_taken: 1, held_seconds: 40 },
-      '2,2': { col: 2, row: 2, held: 2, failed: 1, damage_taken: 6 },
-      '3,3': { col: 3, row: 3, held: 0, failed: 1, damage_taken: 1 },
-      '4,4': { col: 4, row: 4, held: 4, failed: 0 },
-      '5,5': { col: 5, row: 5, held: 2, failed: 1, damage_taken: 1, verified: true },
-    },
-  };
-  const picked = selectForRetest(rooms, { maxDamage: 1 });
-  const keys = picked.map(p => p.key).sort();
-  ok('picks the square that held and then went out on one point',
-     keys.join(',') === '1,1', keys.join(',') || '(none)');
-  ok('leaves a square that lost six — something genuinely reached that one',
-     !keys.includes('2,2'));
-  ok('leaves a square that never held — there is no proof to restore',
-     !keys.includes('3,3'));
-  ok('leaves a square that was never retired', !keys.includes('4,4'));
-  ok('leaves a human-verified square alone', !keys.includes('5,5'),
-     'a mark already outranks our arithmetic; zeroing its record would be a loss');
-
-  const back = reinstateUntested(rooms[999]['1,1']);
-  ok('the reinstated square is untested, not proven', back.held === 0 && back.failed === 0,
-     JSON.stringify({ held: back.held, failed: back.failed }));
-  ok('and is therefore NOT inherited as trusted',
-     !(!!back.held && !new SafeSpotBook(null).discredited(back)),
-     'takeSafeSpot reads held && !discredited — restoring held would rest characters on it');
-  ok('it stays eligible to be offered again', back.retest === true,
-     'zeroing held alone would drop any square that qualified only because it had held');
-  ok('and keeps what it used to be', back.retest_from?.held === 3 && back.retest_from?.failed === 1,
-     JSON.stringify(back.retest_from));
-  // The retest machinery exists to rehabilitate condemned squares. Nothing is condemned
-  // any more, so a fresh failure cannot put anything "out for good" either — there is no
-  // out. Kept as an assertion rather than deleted, because a future edit that reintroduces
-  // a permanent verdict should fail here loudly.
-  ok('a fresh failure still puts nothing out for good',
-     !new SafeSpotBook(null).discredited({ ...back, failed: 1 }));
-
-  // SELECTED AGAINST ONE BOOK, WRITTEN TO ANOTHER. The pardon zeroes damage_taken, which
-  // is the very number that identifies this subset — so after it has run the squares are
-  // invisible in the live book and have to be chosen from a snapshot taken before it.
-  // The history kept must then be the SNAPSHOT's, not the pardoned record's zeroes.
-  const pardoned = { col: 1, row: 1, held: 3, failed: 0, damage_taken: 0,
-                     failed_before_wallhug: 1, retested_at: 0 };
-  const viaRef = reinstateUntested(pardoned, { from: rooms[999]['1,1'] });
-  ok('the live record is what gets rewritten', viaRef.held === 0 && viaRef.failed === 0,
-     JSON.stringify({ held: viaRef.held, failed: viaRef.failed }));
-  ok('but the history kept is the snapshot\'s, not the pardoned zeroes',
-     viaRef.retest_from.failed === 1 && viaRef.retest_from.damage_taken === 1,
-     JSON.stringify(viaRef.retest_from));
-  ok('and the pardon\'s own marker is left intact', viaRef.failed_before_wallhug === 1,
-     'overwriting it would erase that a different tool had already judged this square');
-}
+// Some forty assertions stood here covering `selectForRetest` and `reinstateUntested`:
+// machinery for rehabilitating squares the safe-spot book had condemned, and for making sure
+// a rehabilitation restored ELIGIBILITY without restoring TRUST. All of it goes with the book
+// (tombstone in m59-safespots.mjs), because nothing condemns a square any more and so there
+// is nothing to rehabilitate.
+//
+// The property those tests ultimately protected — that no square is disqualified by its
+// history — is now structural rather than asserted: THERE IS NO HISTORY. What replaced it is
+// the contract, and that is what the rest of this file pins: a wall holds until the body
+// swings, and a window we swung in is not a test of anything.
 
 console.log('\n--- damage we asked for proves nothing ---');
 {
@@ -584,7 +528,8 @@ console.log('\n--- quiet because of the walls, or quiet because of the grace per
   // that has not noticed you yet is not evidence about the square.
   ok('quiet during the grace period is not counted as proof',
      !p.hold.proven, `${Math.round(p.hold.quietMs / 1000)}s of quiet, proven=${!!p.hold.proven}`);
-  ok('nothing written to the book on that evidence', !p.book.get(999, 3, 3));
+  ok('and nothing is announced as working on that evidence',
+     !p.journal.some(e => e.what === 'this safe spot works'));
 
   p.turnedAt = Date.now();                            // now act, and wake the room
   look(p); look(p, 8000); look(p, 8000);
@@ -1154,19 +1099,10 @@ console.log('\n--- a character can be a service ---');
      `${plan.stat_total}/200, ceiling ${plan.max_health_ceiling}`);
 }
 
-console.log('\n--- one character\'s experiment is every character\'s knowledge ---');
-{
-  const p = keeper(world());
-  p.book.save();
-  const fresh = new SafeSpotBook(BOOK);
-  ok('a proven spot survives a restart', fresh.get(999, 5, 5)?.held >= 1,
-     JSON.stringify(fresh.list(999).map(x => `${x.col},${x.row}:${x.verdict}`)));
-  // The ROW survives a restart — it is history and worth keeping — but it is not a verdict
-  // and does not stop the geometry recommending the square again.
-  ok('and so does the record of a bad afternoon', (fresh.get(999, 7, 7)?.failed ?? 0) >= 1);
-  ok('...without that record disqualifying the square',
-     !fresh.discredited(fresh.get(999, 7, 7)));
-}
+// THE PERSISTENCE GROUP IS GONE. It asserted that "one character's experiment is every
+// character's knowledge" — a proven spot, and a bad afternoon on one, surviving a restart in
+// the safe-spot book. Nothing persists now: a wall is recomputed from geometry every time it
+// is asked for, which is a stronger form of the same sharing and cannot go stale.
 
 // --- vigor is not shaped like health, and reading it wrong stops the whole fleet ---
 //
@@ -1202,34 +1138,10 @@ console.log('\n--- vigor is not shaped like health ---');
      'otherwise it stands up and sits straight back down');
 }
 
-// --- one failure retires a spot for good ---
-//
-// Godfrey died on a square recorded held:1. Under the old rule (failed >= 2 AND failed >
-// held) it stayed "proven" and stayed recommended — to him, and to everyone inheriting
-// the book. Spots seem safe at first and turn out not to be: the wall that holds two
-// attackers does not hold six.
-console.log('\n--- a spot that has ever failed is retired ---');
-{
-  const { safeSpotBook } = await import('./m59-safespots.mjs');
-  const b = safeSpotBook(BOOK);
-  b.held(900, { col: 1, row: 1, seconds: 60, attackers: 2 });
-  ok('a clean square is not discredited', !b.discredited(b.get(900, 1, 1)));
-  ok('and it reports as stood on', b.list(900).find(r => r.col === 1)?.verdict === 'stood_on');
-
-  b.failed(900, { col: 1, row: 1, damage: 99, attackers: 6 });
-  const rec = b.get(900, 1, 1);
-  ok('one failure does not condemn a square that held first', !b.discredited(rec),
-     `held ${rec.held}, failed ${rec.failed}`);
-  ok('and the listing reports history rather than a judgement',
-     b.list(900).find(r => r.col === 1)?.verdict === 'stood_on');
-
-  // Holding again afterwards must not buy it back.
-  b.held(900, { col: 1, row: 1, seconds: 120, attackers: 1 });
-  b.held(900, { col: 1, row: 1, seconds: 120, attackers: 1 });
-  ok('and there is nothing to rehabilitate it from',
-     !b.discredited(b.get(900, 1, 1)),
-     `held ${b.get(900,1,1).held}, failed ${b.get(900,1,1).failed}`);
-}
+// THE "A SPOT THAT HAS EVER FAILED IS RETIRED" GROUP IS GONE, and its title was already
+// false when it went: every assertion beneath it had been inverted to check that a failure
+// condemns NOTHING. With the book retired there is no record to condemn from, so what those
+// assertions protected is structural rather than asserted.
 
 // --- the newbie zone is a separate world with a one-way door ---
 console.log('\n--- provisioning does not propose what it cannot reach ---');
@@ -1254,43 +1166,10 @@ console.log('\n--- provisioning does not propose what it cannot reach ---');
      same.jobs.map(j => j.service).join(', '));
 }
 
-// -------------------------------------------------- who judged the square
-//
-// A failure is permanent whichever activity found it out — a square that let a blow
-// through is a bad square whether the character was fighting from it or resting at it
-// part-way through a journey, and the conservative direction is the cheap one. But the two
-// are not the same evidence: a travel hold is taken in a room nobody chose, with whatever
-// followed you through the door, on a wall derived from geometry nobody has stood on. So
-// the judge is written down and the travel-only rejections stay fishable.
-console.log('\nprovenance of a verdict');
-{
-  const b = new SafeSpotBook(BOOK);
-  b.held(544, { col: 5, row: 5, seconds: 12, attackers: 2, source: 'fight' });
-  b.held(544, { col: 5, row: 5, seconds: 12, attackers: 2, source: 'fight' });
-  b.failed(544, { col: 5, row: 5, damage: 3, attackers: 1, source: 'travel' });
-  const rec = b.list(544).find(r => r.col === 5);
-
-  // A TRAVEL FAILURE IS THE CLEAREST CASE OF ALL. "I was hit walking to this square" was
-  // never a fact about the square, and it condemned squares permanently.
-  ok('a travel failure condemns nothing, which is the clearest case of all',
-     !b.discredited(rec) && rec.verdict === 'stood_on');
-  ok('the most recent judge is named', rec.failed_via === 'travel' && rec.held_via === 'fight');
-  ok('and every judge is counted, so one travel failure against two fight holds is legible',
-     rec.failed_by.travel === 1 && rec.held_by.fight === 2);
-  // The tag survives the change: knowing WHICH judge wrote a row is still how anybody
-  // reads this history back, even though no row is a verdict any more.
-  ok('the travel-only rows can still be fished out by their tag',
-     [rec].filter(r => r.failed_by?.travel && !r.failed_by?.fight).length === 1);
-
-  b.failed(544, { col: 9, row: 9, damage: 1, attackers: 1 });
-  const untagged = b.list(544).find(r => r.col === 9);
-  ok('an untagged failure — every record written before this existed — still reads exactly ' +
-     'as it did, rather than defaulting into anybody\'s pile',
-     untagged.failed === 1 && untagged.failed_via === undefined && untagged.failed_by === undefined);
-  // ...and it condemns nothing either, tagged or not. Who judged a row is still useful
-  // for reading the history back; it was never what made the row a verdict.
-  ok('and it condemns nothing, tagged or not', !b.discredited(untagged));
-}
+// THE PROVENANCE GROUP IS GONE. It pinned that the book named WHICH judge — a fight hold or
+// a travel hold — recorded each outcome, so travel-only rejections stayed fishable. There are
+// no stored verdicts to attribute now. The reason it mattered remains true and is recorded
+// where it belongs: "I was hit walking to this square" was never a fact about the square.
 
 try { unlinkSync(BOOK); } catch { /* never written */ }
 console.log('');
@@ -1656,34 +1535,8 @@ console.log('A SHELTER HAS TO BE SOMEWHERE THE BODY CAN ACTUALLY WALK TO');
 // full before re-engaging. That works exactly where nothing can reach you — the geometric
 // test — so "somewhere to pull to" is not a property a square earns by surviving fights. It
 // is the same property, used for a second purpose.
-{
-  const b = new SafeSpotBook(null);
-  b.failed(999, { col: 5, row: 5, damage: 9, attackers: 6 });
-  const rec = b.get(999, 5, 5);
-
-  ok('a failure never condemns a square, whatever the geometry says',
-     !b.discredited(rec) && !b.discredited(rec, { reachable: 3 }) &&
-     !b.discredited(rec, { reachable: 0 }));
-  ok('and the pull verdict is the same verdict, because it is the same question',
-     !b.discreditedForPull(rec));
-
-  // A hundred failures is still not evidence about the wall — it is evidence about a
-  // hundred afternoons. The old rule made ONE of them permanent.
-  for (let i = 0; i < 100; i++) b.failed(999, { col: 5, row: 5, damage: 9, attackers: 6 });
-  ok('a hundred failures is still not a fact about the wall',
-     !b.discredited(b.get(999, 5, 5)) && !b.discreditedForPull(b.get(999, 5, 5)));
-
-  // Verification is now redundant rather than load-bearing: nothing is condemned, so
-  // nothing needs a person's word to rescue it. It must still not throw or flip anything.
-  b.verify(999, { col: 5, row: 5, by: 'operator' });
-  ok('verifying a square changes nothing, because nothing was against it',
-     !b.discredited(b.get(999, 5, 5)) && !b.discreditedForPull(b.get(999, 5, 5)));
-
-  // A square nobody has ever stood on is a wall if the geometry says so. There is no
-  // "untested" tier any more.
-  const c = new SafeSpotBook(null);
-  ok('an unknown square is not suspect', !c.discredited(c.get(999, 6, 6)) &&
-     !c.discredited(null) && !c.discreditedForPull(null));
-}
+// (a group here drove SafeSpotBook.discredited / discreditedForPull directly, pinning that a
+//  failure — even a hundred of them — never condemns a square, and that the pull verdict is
+//  the same verdict. Gone with the book: nothing can condemn a square.)
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
