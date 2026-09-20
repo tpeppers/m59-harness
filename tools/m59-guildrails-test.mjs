@@ -196,11 +196,25 @@ console.log('\n7. THE SPELLINGS ROUND-TRIP, because a coordinate carries its uni
 // 490 red mushroom unreachable AND silently disabled every deposit — the deposit half unnoticed
 // because nothing had asked it to run.
 {
+  // CORRECTED: exactly ONE door is spoken, and asserting otherwise is worse than asserting
+  // nothing. Operator, 2026-09-20: "not EVERY door is a secret door in the hall. The west-most
+  // door in that hall is the secret door. The rest of the doors are normal doors but open slow:
+  // all guild hall doors open slow, only the chest room requires the password."
+  //
+  // The all-secret assertion would have held a fleet saying its guild password aloud at three
+  // ordinary doors on a shared server. It also contradicted the kod, which `m59-doors.mjs`
+  // reads: 59, 55, 53 and 58 come from `SomethingTryGo`, sector 3 alone from `SomeoneSaid`
+  // matching the guild password. Two independent sources said pressed and the assertion said
+  // spoken.
+  const spoken = passageDoors.filter(d => d.secret === true).map(d => d.sector);
+  ok('exactly one door in the hall is opened by SAYING the password — the chest room\'s',
+     spoken.length === 1 && spoken[0] === 3,
+     `spoken door(s): ${spoken.join(', ') || 'none'} — expected exactly sector 3`);
   const pressed = passageDoors.filter(d => d.secret !== true);
-  ok('every Bookmakers hall door is opened by SAYING the password',
-     pressed.length === 0,
-     pressed.length ? `sector(s) ${pressed.map(d => d.sector).join(', ')} would press space`
-                    : `all ${passageDoors.length} doors are spoken`);
+  ok('and the rest are pressed — they are ordinary doors that merely open SLOWLY',
+     pressed.length === passageDoors.length - 1,
+     `pressed: ${pressed.map(d => d.sector).join(', ') || 'none'} of ` +
+     `${passageDoors.length} doors — only the chest room's should speak`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

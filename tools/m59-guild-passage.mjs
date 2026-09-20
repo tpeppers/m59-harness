@@ -10,6 +10,26 @@ export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
 // EVERY DOOR IN THIS HALL IS SPOKEN, NOT PRESSED — INCLUDING ON THE WAY OUT.
 //
 // Operator, 2026-09-20: "It's not a traditional 'press space' door, you have to say the guild
+// CORRECTED 2026-09-20 by the operator, and the earlier note here was overboard.
+//
+// It read "every door in this hall is SPOKEN, not pressed" and set `secret: true` on 59, 55
+// and 53 as well as 3. That is wrong and it is the expensive direction of wrong: it makes a
+// character SAY THE GUILD PASSWORD at three ordinary doors, out loud, in a hall on a shared
+// server, to open something that only needed a press and a wait.
+//
+// What is actually true, in the operator's words: "not EVERY door is a secret door in the
+// hall. The west-most door in that hall is the secret door. The rest of the doors are normal
+// doors but open slow: all guild hall doors open slow, only the chest room requires the
+// password."
+//
+// So the failure the earlier note was chasing -- `guild door 59 could not be crossed` after
+// three attempts -- is a door that had not finished opening yet, not a door listening for a
+// word. The verb was right and the patience was not. This matches the kod: `m59-doors.mjs`
+// derives 59, 55, 53 and 58 from `SomethingTryGo` handlers, and only sector 3 -- SECRET_DOOR
+// in guildh14.kod -- is reached through `SomeoneSaid` comparing against the guild password.
+//
+// `secret` therefore stays a per-door flag and sector 3 is the only door that carries it.
+// The old note follows, kept because the reagent_coop consequence it records is real:
 // hall password to open it (even to get out!)". Only sector 3 carried `secret: true`, so the
 // crossing below sent `c.go()` for 59, 55 and 53 — the branch is literally
 // `if (door.secret) sayHallPassword() else c.go()`. Pressing space at a door that answers only
@@ -31,9 +51,9 @@ export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
 // `secret` stays a per-door flag rather than becoming a hall-wide assumption, so a hall with a
 // genuinely pressed door can still say so.
 export const doors = [
-  { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]], secret: true },
-  { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]], secret: true },
-  { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]], secret: true },
+  { sector: 59, inward: [[3,28],[5,28]], outward: [[4,28],[2,28]] },
+  { sector: 55, inward: [[19,10],[17,10]], outward: [[18,10],[20,10]] },
+  { sector: 53, inward: [[13,13],[11,13]], outward: [[11,13],[13,13]] },
   { sector: 3, inward: [[7,8],[7,4]], outward: [[7,4],[7,8]], secret: true },
 ];
 export function guildSection(row, col) {
