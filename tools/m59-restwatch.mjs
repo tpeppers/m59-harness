@@ -81,6 +81,24 @@ export function classify({ damage = 0, swung = false, ailing = false,
  */
 export function recordRest({ agent = null, room = null, verdict = null,
                              damage = 0, swung = false, ailing = false, rested_ms = 0,
+                             // WHERE THE BODY WAS, WHERE IT HAD RESERVED, AND THE GAP.
+                             //
+                             // A row used to name the square the keeper had RESERVED and say
+                             // nothing about where the body actually stood — the same defect
+                             // that retired substrate/m59-safespots.json, inherited here
+                             // unnoticed. The first three violations after the 2026-09-20
+                             // deploy named 10,29 / 21,4 / 21,10 in room 554 while the body
+                             // was at 14,31, so not one of them was evidence about a square.
+                             //
+                             // `off_by` is what an analysis filters on: 0 means the body was
+                             // on its hold and the row IS about that square; anything else
+                             // means the row is about a reservation.
+                             at = null, held = null, off_by = null,
+                             // False when `client.ailments()` does not exist on this build,
+                             // in which case `ailing: false` is a DEFAULT and not a
+                             // measurement — which matters on a ledger whose whole job is to
+                             // keep poison out of the violation column.
+                             ailing_known = null,
                              file = RESTWATCH_FILE } = {}) {
   try {
     const outcome = classify({ damage, swung, ailing, rested_ms });
@@ -98,6 +116,7 @@ export function recordRest({ agent = null, room = null, verdict = null,
       predicates: verdict?.predicates ?? null,
       measured: verdict?.measured ?? null,
       outcome, damage, swung, ailing, rested_ms,
+      at, held, off_by, ailing_known,
     };
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, JSON.stringify(row) + '\n');

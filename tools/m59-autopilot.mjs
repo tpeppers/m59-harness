@@ -3965,10 +3965,33 @@ export class Autopilot {
         : Date.now() - Math.max(0, Number(settledMs) || 0);
       const didSwing = swung != null ? !!swung
         : (Number(this.swungAt) > 0 && this.swungAt >= windowStart);
-      let verdict = null, room = null;
+      // WHERE THE BODY ACTUALLY WAS, MEASURED, NOT WHERE IT HAD RESERVED.
+      //
+      // This is the defect that retired the old safe-spot book, and this ledger inherited it
+      // unnoticed: the hold branch below attributes the outcome to `this.hold.col/row`, which
+      // is the square this keeper RESERVED. A hold is not a position. Nine of ten deaths
+      // reviewed on 2026-09-20 had the body between 5 and 68 squares from the hold filed
+      // against them, and the first three violations recorded after this rule went to prod
+      // were filed against 10,29 / 21,4 / 21,10 in room 554 while the body was at 14,31 —
+      // so not one of them can be read as evidence about those squares.
+      //
+      // The fix is not to guess which is right. It is to record BOTH and the gap between
+      // them, so a row says whether it is about a square at all. `off_by` is the number an
+      // analysis must filter on: 0 means the body was on its hold and the row is evidence;
+      // anything else means it was somewhere else and the row is about a hold.
+      const body = this.s.client?.self;
+      const at = (Number.isInteger(body?.row) && Number.isInteger(body?.col))
+        ? { col: body.col, row: body.row } : null;
+      let verdict = null, room = null, offBy = null, held = null;
       if (this.hold) {
         room = this.hold.room ?? null;
-        verdict = verdictFromRow({
+        held = { col: this.hold.col, row: this.hold.row };
+        if (at) offBy = Math.max(Math.abs(at.col - held.col), Math.abs(at.row - held.row));
+        // MEASURE THE SQUARE THE BODY IS ON, falling back to the hold only when the client
+        // cannot say where it is. Measuring the hold while standing elsewhere is how a wall
+        // gets blamed for a beating taken in the open.
+        const geo = this.s.world?.geometry;
+        verdict = (at && geo) ? safeWallVerdict(geo, at.row, at.col) : verdictFromRow({
           col: this.hold.col, row: this.hold.row,
           can_reach_you: this.hold.canReachYou, free_shots: this.hold.freeShots,
           refused_approaches: this.hold.refusedApproaches,
@@ -3995,6 +4018,14 @@ export class Autopilot {
       recordRest({
         agent: this.s.name ?? null, room, verdict,
         damage, swung: didSwing, ailing, rested_ms: Math.max(0, settledMs),
+        // `at` is the body, `held` is the reservation, `off_by` is the Chebyshev gap. A row
+        // with off_by > 0 is NOT evidence about the square it names — see above.
+        at, held, off_by: offBy,
+        // AILING IS A DEFAULT, NOT A MEASUREMENT, WHENEVER THIS IS NULL. `client.ailments()`
+        // is absent on this build — `look` reports the field as undefined — so `ailing:false`
+        // has been asserting something nobody checked, on a ledger whose whole purpose is to
+        // exclude poison. Recorded so a reader can tell the two apart.
+        ailing_known: typeof this.s.client?.ailments === 'function',
       });
     } catch { /* a ledger may never take a character down */ }
   }

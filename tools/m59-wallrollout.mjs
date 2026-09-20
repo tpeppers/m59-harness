@@ -77,8 +77,19 @@ function restwatch() {
   const mine = epoch ? rows.filter(r => (r.epoch?.id ?? r.epoch ?? null) === epoch) : rows;
   const by = {};
   for (const r of mine) by[r.outcome ?? 'unknown'] = (by[r.outcome ?? 'unknown'] ?? 0) + 1;
+  // A VIOLATION IS ONLY EVIDENCE IF THE BODY WAS ON THE SQUARE THE ROW NAMES.
+  //
+  // Rows written before 2026-09-20 carry no `off_by`, because the writer recorded the
+  // keeper's RESERVED square and never asked where the body was — the same defect that
+  // retired the old safe-spot book. The first three violations after this rule reached prod
+  // named 10,29 / 21,4 / 21,10 in room 554 while the body stood at 14,31. Those cannot be
+  // counted against the model, and they cannot be waved away either; they are simply not
+  // about squares. So they are separated here rather than summed.
+  const v = mine.filter(r => r.outcome === 'violation');
   return { present: true, total: rows.length, thisEpoch: mine.length, by,
-           violations: mine.filter(r => r.outcome === 'violation') };
+           violations: v.filter(r => r.off_by === 0),
+           unattributable: v.filter(r => r.off_by !== 0),
+           blindAiling: mine.filter(r => r.ailing_known === false).length };
 }
 
 // ── 3. DEATHS ON WALLS, SPLIT BY WHETHER THE BODY EVER SWUNG ──────────────────────────────
@@ -206,11 +217,27 @@ else {
     console.log(`     ${String(v).padStart(5)}  ${k}`);
   if (!R.thisEpoch) findings.push('No restwatch rows in this epoch yet — the falsification ' +
                                   'test has no observations, so it is not passing, it is silent.');
-  else if (R.violations.length) {
-    findings.push(`${R.violations.length} VIOLATION(S): a body took damage resting on a wall ` +
-                  'without swinging. That is the one observation that sinks the model.');
-    for (const v of R.violations.slice(0, has('verbose') ? 50 : 5))
-      console.log(`   !! ${v.character ?? '?'} room ${v.room ?? '?'} ${v.col},${v.row}`);
+  else {
+    if (R.unattributable?.length) {
+      console.log(`   ${R.unattributable.length} violation(s) NOT COUNTED: the body was not on the`);
+      console.log('   square the row names, so the row is about a keeper\'s reservation and not');
+      console.log('   about a square. Rows written before 2026-09-20 have no position at all.');
+      for (const v of R.unattributable.slice(0, has('verbose') ? 50 : 3))
+        console.log(`      room ${v.room ?? '?'} names ${v.col},${v.row}` +
+                    (v.at ? `, body at ${v.at.col},${v.at.row} (off by ${v.off_by})` : ', position unrecorded'));
+    }
+    if (R.blindAiling) {
+      findings.push(`${R.blindAiling} row(s) recorded ailing:false without being able to check — ` +
+                    '`client.ailments()` is absent on this build, so poison cannot be excluded ' +
+                    'from the violation column on those rows.');
+    }
+    if (R.violations.length) {
+      findings.push(`${R.violations.length} VIOLATION(S) WITH THE BODY CONFIRMED ON THE SQUARE: ` +
+                    'damage taken resting on a wall without swinging. That is the one ' +
+                    'observation that sinks the model.');
+      for (const v of R.violations.slice(0, has('verbose') ? 50 : 5))
+        console.log(`   !! room ${v.room ?? '?'} ${v.col},${v.row}  damage ${v.damage}  rested ${v.rested_ms}ms`);
+    }
   }
 }
 
