@@ -365,7 +365,22 @@ export function fallbackHunt(level) {
   // what we cannot judge and fall through to the level table, which is the safe direction:
   // being wrong there costs a walk, being wrong here costs the character its advancement
   // and points it at Forest of Farol.
-  const here = CAVE.find(g => g.level != null && g.level > l);
+  // AND "IT CAN ADVANCE ME" IS ONLY HALF THE TEST — THE BAND IS THE OTHER HALF.
+  //
+  // `g.level > l` asks whether the prey still pays. It does not ask whether the character
+  // can survive it, and CLAUDE.md is explicit that the engagement ceiling is not a safety
+  // net: "a lv21 character has ceiling 31, so lv30 giant rats are in band — but they are
+  // still too tough", and each death costs 1-2 max health, which starts a spiral.
+  //
+  // Every CAVE row is level 50, so `g.level > l` was TRUE for every character below 50 and
+  // the ladder underneath was unreachable for exactly them — the same shape as the
+  // `g.level == null` bug above, one predicate along. Measured 2026-09-19: all six
+  // characters carrying 'living tree' were under 50 (20, 20, 21, 46, 47, 48) and not one
+  // over 50 had it. Raphael at 21 was being handed a level-50 tree.
+  //
+  // So the ceiling is applied here too: floor(level/2) above own level, armed.
+  const ceiling = l + Math.floor(l / 2);
+  const here = CAVE.find(g => g.level != null && g.level > l && g.level <= ceiling);
   if (here?.hunt) return here.hunt;
   if (l < 30) return 'giant rat';          // L30
   if (l < 50) return 'fungus beast';       // L50 — gentlest thing in the game, rating 210
@@ -855,7 +870,25 @@ async function round(n) {
                               ...carriedPolicy(cur),
                               // Its own hunt first; only fall back when we genuinely do
                               // not know, and then by level rather than to a constant.
-                              hunt: r.hunting || fallbackHunt(r.level) }).catch(() => {});
+                              //
+                              // THE POLICY'S HUNT COUNTS AS KNOWING. `r.hunting` is the
+                              // LIVE hunting activity, and it is empty exactly when the
+                              // character is stranded — which is the only time this line
+                              // runs. So "we genuinely do not know" was never true: the
+                              // deliberate placement is sitting in the policy this block
+                              // has already read back, and `hunt` is the one field
+                              // KEEP_ACROSS_RESTART deliberately does not carry.
+                              //
+                              // 2026-09-19: six characters were pinned on 'living tree'
+                              // by this line and re-pinned every 90s. Raphael is the
+                              // proof — geofenced into the Raza maps (1011-1018) hunting
+                              // mummy at 1016, restarted onto 'living tree', which spawns
+                              // only in 536/556 where he can never walk. That leaves him
+                              // stranded, so `r.hunting` is empty, so the next pass does
+                              // it again. The unstick manufactured the stall it exists to
+                              // clear, and survived three pushes and a keeper restart.
+                              hunt: r.hunting || cur?.policy?.hunt
+                                    || fallbackHunt(r.level) }).catch(() => {});
     console.log(`   restarted ${r.character}: ${why}`);
   }
 
