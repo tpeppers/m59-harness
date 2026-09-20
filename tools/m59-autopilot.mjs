@@ -7214,6 +7214,18 @@ export class Autopilot {
       // moving", not "what was the clock".
       moved_ms: this.movedAt ? nowT - this.movedAt : null,
       swung_ms: this.swungAt ? nowT - this.swungAt : null,
+      // WHICH RUNG WAS RUNNING WHEN THIS FRAME WAS WRITTEN.
+      //
+      // The death summary used to read `this.passStage` LIVE, and by the time a death is
+      // noticed the body is already in the Underworld — the death is complete, the penalties
+      // are applied, and the ladder has moved on to the rung that walks it home. So the field
+      // recorded the clean-up, not the killing: 14 of 50 deaths on 2026-09-20 read
+      // `passUnderworld`, which is a stage no living character dies in.
+      //
+      // Carried on the frame instead, so it goes through the same underworld filter as room,
+      // health and `doing` and is pre-death by construction.
+      stage: this.passStage ?? null,
+      stage_ms: this.passStageAt ? nowT - this.passStageAt : null,
       // COUNT SEPARATELY FROM NAMING, because the cap on the names was silently becoming
       // the answer. `most_at_once` is derived from this list's LENGTH, and the list was
       // sliced to 6 — so every swarm death recorded "6 on them at the end", 55 times out
@@ -9462,6 +9474,30 @@ export class Autopilot {
   // How fast health was going, in points per second, over the frames we have. Negative
   // means losing. A death at -0.3/s is attrition somebody should have withdrawn from;
   // a death at -4/s was not survivable by fleeing and the mistake was earlier.
+  // IS THIS BODY DYING RIGHT NOW? Cheap, allocation-free, no I/O — it is called at the top
+  // of every pass.
+  //
+  // Two conditions, and BOTH are required. Below the flee line alone is an ordinary state
+  // that a resting character sits in for minutes; losing health alone is an ordinary fight.
+  // Together they are the shape every death in this fleet has: a body under the line with
+  // the bar still moving down.
+  //
+  // `fleeAt` rather than a new number, because inventing a second threshold would mean two
+  // answers to "when is this character in trouble" and the keeper already has one.
+  mortalDanger() {
+    let frac = null, rate = null;
+    try { frac = pct(this.s?.client?.vitals?.()?.health); } catch { return null; }
+    if (frac === null) return null;
+    let fleeAt = null;
+    try { fleeAt = this.safety().fleeAt; } catch { return null; }
+    if (!(frac < fleeAt)) return null;
+    // Over the frame ring, so a single unlucky sample cannot trigger it and a steady
+    // grind does. Negative is losing.
+    try { rate = this.healthRate(this.recent5 ?? []); } catch { rate = null; }
+    if (rate == null || rate >= 0) return null;
+    return { frac, fleeAt, rate };
+  }
+
   healthRate(frames) {
     const f = (frames || []).filter(x => x.health != null && x.at);
     if (f.length < 2) return null;
@@ -14188,7 +14224,96 @@ export class Autopilot {
     // returns on its first line — and run-length collapsed when on, so a character stuck
     // for six minutes is one row saying so rather than four hundred saying nothing.
     const ran = [];
+    // ---------------------------------------------------------------- SURVIVAL GOES FIRST
+    //
+    // A BODY BELOW ITS FLEE LINE AND STILL LOSING HEALTH DOES NOT WAIT ITS TURN.
+    //
+    // The ladder is ordered, and `passFleeAndRest` sits fifth. Everything above it is bounded
+    // at fifteen seconds, which is the right bound for a HUNG rung and far too long for a
+    // dying one: the measured rate on these deaths is 2 to 8.2 health per second, so fifteen
+    // seconds is 30 to 120 damage against characters whose whole bar is 50 to 60. A rung that
+    // is merely slow — not hung, so no deadline fires and nothing looks wrong — can therefore
+    // spend a character's entire remaining health before the rung that would have saved it is
+    // reached.
+    //
+    // Measured 2026-09-20, on the clean pre-death fields only: 49 of 50 deaths had six or
+    // more threats at the worst moment, and three of the last four entered the recorded
+    // window already at or below 17% health. Rowlf held 3/50 across four samples in a room
+    // with eight threats — not overwhelmed suddenly, but parked at death's door while the
+    // ladder did other things.
+    //
+    // So this runs the survival rung BEFORE the walk, and the walk then skips it. It is the
+    // same rung, with the same body of work behind it — the route-adjacent safe spot, the
+    // rest, and playing dead in a proven spot — because that tactic is the only one this
+    // fleet has ever shown to work, and reimplementing a second copy of it here would be a
+    // second thing to keep correct.
+    //
+    // NOT A NEW POLICY SURFACE. It fires on `safety().fleeAt`, the threshold the keeper
+    // already owns, so an operator who moves the flee line moves this with it.
+    const danger = this.mortalDanger?.();
+    let survivalRanEarly = false;
+    if (danger && !this.stageInFlight?.has('passFleeAndRest')) {
+      survivalRanEarly = true;
+      ran.push('passFleeAndRest');
+      this.passStage = 'passFleeAndRest';
+      this.passStageAt = Date.now();
+      this.tally.survival_preempted = (this.tally.survival_preempted || 0) + 1;
+      // Said once per occurrence rather than per pass, so a long recovery is one line.
+      if (this.lastPreemptPass !== this.passes) {
+        this.lastPreemptPass = this.passes;
+        this.note('survival ran before its turn', {
+          at: `${Math.round(danger.frac * 100)}%`,
+          flee_line: `${Math.round(danger.fleeAt * 100)}%`,
+          losing_per_s: danger.rate,
+          why: 'below the flee line and still losing — the rungs above this one are bounded '
+             + 'at 15s each, which is longer than this body has',
+        });
+      }
+      // AND NOTHING WAITS FOR A WALK THAT IS ABOUT TO BE THROWN AWAY.
+      //
+      // If a movement is in flight when this fires, its destination was chosen by a rung
+      // that did not know the body was dying — a hunt approach, a town leg, a pull. The
+      // survival rung is about to choose a different destination, so every second spent
+      // waiting for the old one is spent at 2 to 8 health per second, and the result is
+      // discarded on arrival anyway.
+      //
+      // CANCEL AND ACT IN THE SAME BREATH, which is the distinction that matters here.
+      // Cancelling alone is what killed a character in Ukgoth: the rail was "cancelled by
+      // the watchdog rescuing a stalled driver", the ordinary ladder then ran through
+      // "could not reach the safe spot", "will not rest in the open here", "could not
+      // leave", and the body walked zero squares in fifteen seconds. The cancel is only
+      // safe because the rung that will act runs on the very next line rather than on some
+      // later pass.
+      //
+      // This is also the direction the travel guard already takes for a mid-hop trigger —
+      // "CANCEL the journey rather than fighting the mover for the body" — and the opposite
+      // of what killed Cccc, which was holding the keeper inert THROUGH the trouble.
+      const inFlight = this.s?.job && !this.s.job.done ? this.s.job : null;
+      if (inFlight && typeof this.s.cancelMovement === 'function') {
+        try {
+          this.s.cancelMovement(null,
+            `below the flee line (${Math.round(danger.frac * 100)}%) and still losing ` +
+            `${Math.abs(danger.rate)}/s — the survival rung is choosing a different ` +
+            'destination, so this walk is already void');
+          this.tally.survival_preempt_cancels = (this.tally.survival_preempt_cancels || 0) + 1;
+        } catch { /* a handbrake that throws must not stop the rescue */ }
+      }
+      const verdict = await this.runStageBounded('passFleeAndRest', ctx);
+      // The same three outcomes the loop below honours, for the same reasons.
+      if (verdict === STAGE_OVERRAN || this.travelInterrupted()) {
+        this.traceThisPass(ctx, ran, 'passFleeAndRest');
+        return 'passFleeAndRest';
+      }
+      if (verdict !== CONTINUE) {
+        this.traceThisPass(ctx, ran, 'passFleeAndRest');
+        return 'passFleeAndRest';
+      }
+      // CONTINUE means the rung looked and had nothing to do. Fall through to the ordinary
+      // ladder rather than ending the tick on a rung that declined.
+    }
     for (const stage of PASS_STAGES) {
+      // Already given its turn above, and a rung must never be invoked twice in one pass.
+      if (survivalRanEarly && stage === 'passFleeAndRest') continue;
       ran.push(stage);
       // WHICH RUNG THE PASS IS SITTING IN, FOR THE POSTMORTEM TO READ.
       //
@@ -14362,7 +14487,12 @@ export class Autopilot {
           //
           // `at` is the last frame before the Underworld, so this is what the character was
           // doing when it was last seen alive — not what it was doing after it died.
-          doing: at?.doing ?? this.doing ?? this.lastDoing ?? null,
+          // NO LIVE FALLBACK. `this.doing`/`this.lastDoing` are read after the body is in
+          // the Underworld, so falling back to them answers the question with the clean-up
+          // state — and this field is what `travellingAtDeath` classifies on. Null is the
+          // honest answer when no living frame survives; the classifier treats null as
+          // "nobody asked" and lets `governed_by` answer instead.
+          doing: at?.doing ?? null,
           governed_by: this.travelling
             ? { doctrine: 'travel', flee_from: this.policy.travelFleeFrom ?? 'players',
                 divert_below: this.policy.travelDivertBelow ?? 1,
@@ -14519,9 +14649,21 @@ export class Autopilot {
           // `runPassLadder`. `stage` is the rung that was awaiting; `in_stage_ms` is how long
           // it has been in it, which is the number to compare against `pass_blocked_ms` —
           // when they match, the stage named here is the one that stopped the keeper.
-          blocked_in: this.passStage
+          //
+          // READ OFF THE LAST PRE-UNDERWORLD FRAME, NOT LIVE. `at` is the same source
+          // `room_num`, `died_in` and the health trail come from, so this now answers "what
+          // was the ladder doing while the character was dying" rather than "what is it doing
+          // now that the character is dead". The live reading is kept beside it under a name
+          // that cannot be mistaken for the other, because it is still the right answer when
+          // the question is why the keeper is quiet THIS second.
+          blocked_in: at?.stage
+            ? { stage: at.stage, in_stage_ms: at.stage_ms ?? null, from: 'last living frame' }
+            : null,
+          blocked_in_after_death: this.passStage
             ? { stage: this.passStage,
-                in_stage_ms: this.passStageAt ? Date.now() - this.passStageAt : null }
+                in_stage_ms: this.passStageAt ? Date.now() - this.passStageAt : null,
+                note: 'the body is in the Underworld by now — this is the clean-up rung, '
+                    + 'never the one that failed to save it' }
             : null,
           watchdog: (() => {
             const w = this.watch;

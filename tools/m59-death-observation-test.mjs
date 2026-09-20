@@ -153,7 +153,14 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
   const walled = Object.assign(Object.create(Autopilot.prototype), {
     s, policy: { travelShelterPerRoom: 4 }, tally: { deaths: 0 },
     money: { carried_at_death: 0 }, lastSeenPurse: 0,
-    passes: 7, passStartedAt: Date.now() - 97_000, recent5: [],
+    passes: 7, passStartedAt: Date.now() - 97_000,
+    // THE LAST LIVING FRAME, which is where `blocked_in` is read from. It carries the rung
+    // that was running while the character was still alive; `passStage` below is what the
+    // ladder moved on to once the body was in the Underworld. They are deliberately
+    // different here, because that difference is the bug this pins.
+    recent5: [{ at: Date.now() - 97_000, room: 'Ukgoth, Holy Land of Trolls', num: 599,
+                health: 4, max: 52, vigor: 10, doing: 'travelling',
+                stage: 'passFarm', stage_ms: 97_000 }],
     who: () => null, safety: () => ({ fleeAt: 0.4 }), recentText: () => [],
     note: () => {},
     writePostMortem: record => { mine.push(structuredClone(record)); return 'offline'; },
@@ -162,7 +169,9 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
     travelSafeStops: 3, travelHopWallStops: 2, travelSanctuaryStops: 1,
     travelRouteStops: 0, travelTrackStops: 0, travelShelterHeldMs: 41_000,
     shelterStops: { room: 599, taken: 4 }, wallTriedAt: Date.now() - 12_000,
-    passStage: 'passFarm', passStageAt: Date.now() - 97_000,
+    // What the ladder is doing AFTER the death: walking the body out of the Underworld.
+    // This must not reach `blocked_in`.
+    passStage: 'passUnderworld', passStageAt: Date.now() - 1_000,
   });
   await walled.passUnderworld({ s, c: client, room: { num: 1, name: 'The Underworld' } })
               .catch(() => {});
@@ -182,6 +191,18 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
   const b2 = mine[0].summary.blocked_in;
   assert.equal(b2.stage, 'passFarm', 'the blocked pass names the stage it was sitting in');
   assert.ok(b2.in_stage_ms >= 97_000, 'and how long it had been there');
+  // A CHARACTER IN THE UNDERWORLD HAS ALREADY DIED, so the rung running by then is the
+  // clean-up, never the one that failed to save it. `blocked_in` read `this.passStage` live
+  // and therefore reported exactly that: 14 of 50 deaths on 2026-09-20 named `passUnderworld`,
+  // a stage no living character can die in, and every reading built on it was of the wrong
+  // moment. It is read off the last pre-Underworld frame now, the same source as `room_num`,
+  // `died_in` and the health trail.
+  assert.notEqual(b2.stage, 'passUnderworld',
+                  'the post-death clean-up rung must never be reported as the blocking stage');
+  assert.equal(b2.from, 'last living frame', 'and the record says where it came from');
+  const after = mine[0].summary.blocked_in_after_death;
+  assert.equal(after.stage, 'passUnderworld',
+               'the live reading is kept, under a name that cannot be mistaken for the other');
 }
 
 // AND THE FIELD HAS TO BE FED, IN THE RIGHT ORDER. `blocked_in` is worth nothing if the
@@ -189,8 +210,13 @@ assert.equal(notes.filter(n => n.what === 'DIED').length, 4);
 // finished, which is precisely the stage that did NOT block.
 {
   const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  // MATCHED AGAINST THE CURRENT DISPATCHER. This asserted `await this[stage](ctx)`, the
+  // shape before the ladder gained a per-stage deadline; the call is
+  // `runStageBounded(stage, ctx)` now, so the assertion had been silently red rather
+  // than guarding anything. The PROPERTY is unchanged and is what is pinned: the stage
+  // is recorded immediately before it is awaited, never after.
   assert.match(src,
-    /this\.passStage = stage;\s*\n\s*this\.passStageAt = Date\.now\(\);\s*\n\s*const verdict = await this\[stage\]\(ctx\);/,
+    /this\.passStage = stage;\s*\n\s*this\.passStageAt = Date\.now\(\);\s*\n\s*const verdict = await this\.runStageBounded\(stage, ctx\);/,
     'runPassLadder records the stage IMMEDIATELY BEFORE awaiting it');
 }
 
