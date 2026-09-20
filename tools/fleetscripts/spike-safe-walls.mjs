@@ -42,105 +42,97 @@
 // SINGULAR theory of reality, the way an experiment settles aether or Copernicus. Its worth is
 // that the output is a coherent system that can be reasoned about and disproved against the
 // record. Historical data is checked by REPRODUCTION, and historical data that cannot be
-// reproduced is treated as measurement error or as an anomaly — a human under `morph` appears as
-// a monster and then obeys the human-attack rules, so one day this corpus will contain deaths
-// that look like monster kills and are not.
+// reproduced is treated as measurement error or as an anomaly.
 //
 // THE MODEL, stated so it can be attacked:
 //
-//   A square protects a body from monsters when BOTH hold:
-//     (A)  nothing within melee reach has line of sight to it   — `attackers === 0`
-//     (B)  nothing can physically step into contact with it     — every approach refused,
-//                                                                 `refused === offered`
-//   and the body has NOT SWUNG since the monster last moved. Swinging forfeits the protection;
-//   that is the contract, not a caveat.
+//   A square protects a body from monsters when nothing within melee reach has line of sight
+//   to it — `attackers === 0` — and the body has NOT SWUNG since the monster last moved.
 //
-//   (A) ALONE IS NOT ENOUGH. That is the correction this spike exists to record, and it is the
-//   opposite of what this file said when it was written.
+//   There is ONE kind of safe wall. It does not leak. A failure on one is a measurement error
+//   until somebody produces a body standing on the square, not swinging, losing health.
 //
-// ── WHAT KILLED THE OLD MODEL ──────────────────────────────────────────────────────────────
+// THIS FILE ARGUED THE OPPOSITE TWICE AND BOTH TIMES IT WAS WRONG, which is the whole reason the
+// wrong versions are left visible. First it said `attackers === 0` was sufficient on the strength
+// of eleven live trials that turned out to be inadmissible. Then, corrected by postmortem
+// evidence, it said `attackers === 0` was NOT sufficient and that a second clause — every
+// adjacent approach refused — was the real mechanism. That second correction was also wrong, and
+// the operator's objection is what caught it: he has never seen or heard of a safe wall failing.
 //
-// The old model was (A) alone, with `free_shots > 0` beside it. Three independent lines of
-// evidence, none of them the live experiment, all agree it is wrong:
+// ── WHY THE SECOND MODEL DIED: THE EVIDENCE FOR IT WAS AN ATTRIBUTION BUG ──────────────────
 //
-//   1. TEN DEATHS ON "SAFE" SQUARES, NINE OF THEM WITH THE CONTRACT INTACT. Over the 114 deaths
-//      since 2026-09-18, ten characters were holding a wall in their last living frame, every
-//      one flagged `proven: true`, every one `was_killed_by_player: false`. Killed by ants,
-//      spiders, trolls, a zombie, the Guardian of Zjiria.
+// The case against `attackers === 0` rested on ten deaths since 09-18 where the character was
+// "holding a wall" in its last living frame, every one flagged `proven: true`. The check nobody
+// ran was whether the BODY was on the square it was holding:
 //
-//      The contract does not excuse them. `swinging` is false on all ten and `ms_since_swung`
-//      runs to 55 and 64 MINUTES — Kermit 3,297,243ms, Scooter 3,841,444ms — with five carrying
-//      no swing record at all. Exactly one had swung within a minute of dying. These are not
-//      characters who broke the no-swing rule; they are characters who kept it and died anyway.
+//     who      room  holding@   body@     off by
+//     Kermit    599   62,1      15,46        47
+//     Robin     579   3,45      71,39        68
+//     Piggy     599   11,54     30,57        19
+//     Waldorf   584   34,47     30,35        12
+//     Scooter   584   37,38     30,35         7
+//     Bunsen    584   37,38     32,35         5
+//     ... 9 of 10 NOT on the wall. Gonzo (70 @ 8,8) is the only one that was.
 //
-//   2. EVERY ONE OF THOSE SQUARES SATISFIES (A) AND FAILS (B). Six of the eight walkable death
-//      squares compute `attackers === 0`, and NOT ONE is all-refused:
+// `holding` is a keeper's record of a spot it has RESERVED. It is not a statement that the body
+// is standing on it. Nine of those ten characters died in the open with a stale hold recorded
+// beside them, and reading `holding` as "was on a safe wall" turned nine open-ground deaths into
+// a refutation of the geometry. The one character who was genuinely on its square, Gonzo, had
+// swung 22 seconds earlier — the contract, not the wall.
 //
-//        584 37,38  attackers 0  refused 1/6   <- killed THREE separate characters
-//        599 11,54  attackers 0  refused 0/7
-//        599 62,1   attackers 0  refused 0/4
-//        584 35,34  attackers 0  refused 0/4
-//        599 48,26  attackers 0  refused 1/5
-//         70 8,8    attackers 0  refused 3/8
+// ZERO CLEAN COUNTEREXAMPLES SURVIVE. Not one death in the corpus shows a body standing on a
+// square with `attackers === 0`, not swinging, losing health to a monster.
 //
-//   3. THE LEDGER'S OWN RESIDUE SAYS THE SAME THING, UNANIMOUSLY. The safe-spot book looked like
-//      noise for a reason: 96.4% of its failure rows carry `failed_via: "fight"`, which under the
-//      contract is US BREAKING IT, not the wall leaking. Strip those and the residue is the
-//      genuine leaks — failures recorded while the character was not swinging. Of the 15 such
-//      squares that still have geometry:
+// ── AND THE SAFE-SPOT LEDGER CANNOT ATTRIBUTE DAMAGE TO A SQUARE AT ALL ────────────────────
 //
-//        attackers === 0 (the old model calls them safe)   15 / 15
-//        ALL approaches refused                             0 / 15
-//        some approach OPEN                                15 / 15
+// The same bug, in the writer, structurally:
 //
-//      Fifteen out of fifteen. The residue is not scattered; it sits entirely in the gap between
-//      (A) and (B), which is precisely where the model predicts leaks and nowhere else.
+//     this.book.failed(this.hold.room, { col: this.hold.col, row: this.hold.row, ... })
 //
-//   That also dissolves the old paradox. The 2026-09-06 note found 142 unreachable squares in
-//   room 39 recorded as failed, one 431 times, and concluded the ledger was measuring the
-//   afternoon. It was — those are `fight` rows, contract breaks. Believing geometry again took
-//   kills 20 -> 48 and deaths 4/hr -> 0.6 because it discarded the contract breaks. It did not
-//   show that walls never leak; it showed that swinging on one is not evidence about it.
+// It records the HOLD's coordinates. So when Kermit took damage 47 squares from the wall it
+// held, the ledger wrote that damage against the wall. Every failure row in that file is a
+// statement about a square the character may not have been standing on — the 96.4% carrying
+// `failed_via: "fight"` and the 58 non-fight rows alike. I used those 58 as the "genuine leak"
+// residue and reported that 15 of 15 of them landed in the gap between the two clauses. That
+// number is real and it means nothing, because the squares it names are not where the damage
+// happened.
 //
-// ── WHAT THE MODEL FORBIDS, SO IT CAN BE KILLED IN TURN ────────────────────────────────────
+// THIS IS THE ARGUMENT FOR RETIRING THE LEDGER, and it is stronger than the one the retirement
+// was originally asked for. It is not that nothing reads it. It is that it CANNOT BE RIGHT: a
+// per-square failure record whose writer does not know where the body was is not evidence about
+// squares, and every conclusion drawn from it — including two of mine, in this file — has been
+// wrong in the same direction.
 //
-//   * A body that has not swung, on a square satisfying (A) AND (B), must not be damaged by a
-//     monster. One clean counterexample kills this model.
-//   * The non-fight failure residue must stay inside the (A)-but-not-(B) gap. A non-fight
-//     failure on an all-refused square is a counterexample.
-//   * A death on a "safe wall" with a recent swing is NOT a counterexample — it is the contract
-//     working as described, and must be excluded before counting.
-//   * A death to something that only appears to be a monster — `morph` — is an anomaly, not
-//     evidence. `was_killed_by_player` is the field that discriminates and it is false on all
-//     ten above, so none of them is that case today.
+// ── WHY NOT CLAUSE TWO ON ITS OWN ──────────────────────────────────────────────────────────
 //
-// ── WHAT THE MODEL DOES *NOT* LICENCE ──────────────────────────────────────────────────────
+// Asked directly, and the answer is arithmetic rather than evidence. `gridDisagreementAt` walks
+// `RING`, which is the EIGHT SQUARES TOUCHING YOU — radius 1. `MONSTER_REACH` is 3, and the
+// server's own test is `SquaredDistanceTo <= range^2` (monster.kod:1682). So "every approach
+// refused" says only that nothing can step into contact; a monster standing two or three squares
+// away with line of sight never needs to. Refusal covers radius 1, reach extends to radius 3, and
+// the gap between them is a square that admits attacks nothing walked into.
 //
-// It does not licence making (B) the admission test. Over every baked room, requiring
-// `refused === offered` leaves 94 of 257 rooms with NO refuge at all — including room 38
-// (Castle Victoria, 112 LOS walls and zero all-refused), 544 and 534 which are hunt stations,
-// and 377, 536, 537, 556, 586, 587. Those are the rooms this fleet actually stands in. A model
-// being right about the mechanism does not make it safe to use as a filter.
+// That is why the 411 all-refused-but-visible squares are not walls, and it is why clause two
+// cannot stand alone. It was never a rival definition — it is a subset marker inside clause one.
 //
-// So the shipping rule is: ADMIT on (A), because coverage matters and an (A)-only square still
-// beats open floor; RANK on (B); and stop calling an (A)-only square `proven`, because the
-// record says it is not. `free_shots > 0` is deleted outright — it is implied by (A) on 23,601
-// of 23,605 squares, the four exceptions having nothing walkable in reach at all.
+// ── THE STATE OF THE LIVE EXPERIMENT ───────────────────────────────────────────────────────
 //
-// ── THE STATE OF THE LIVE EXPERIMENT, STATED PLAINLY ───────────────────────────────────────
+// It has still never produced an admissible trial, and the last attempt says why in its own
+// output: a controlled reproduction placed one body on the square that "killed three people",
+// one on an all-refused square, and one on OPEN GROUND at `attackers: 28` — and all three lost
+// nothing over four minutes. When maximally exposed ground costs nothing, the room is not
+// attacking anybody and no verdict about walls can be read out of it. That is experimental
+// error, reported as such.
 //
-// It has never produced an admissible trial. Four rounds reported HELD everywhere and the fourth
-// proved why: its positive control — a square with `can_reach_you: 20` — also reported HELD,
-// which means the rooms were too quiet to test anything. The corrected protocol could not get a
-// monster to pursue at all (`frogman never closed`, on all four arms). A reproduction on the
-// exact lethal squares, paired against all-refused squares in the same room with nobody swinging,
-// showed 584 @ 37,38 losing nothing over four minutes.
+// So the model rests on the geometry, on the server's own reach test, and on the absence of a
+// single clean counterexample in 3,700 postmortems. It does NOT rest on the live half, which
+// remains a debt this file owes.
 //
-// UNDER THE OPERATOR'S OWN RULE that is not yet a disproof of the record — it is a failure to
-// reproduce, and the reproduction has no positive control either: neither square bled, including
-// the one that killed three people. A run in which nothing is attacked measures nothing. The
-// model above therefore rests on the record and on geometry, and the live half is a debt this
-// file owes, recorded here rather than dressed up.
+// ── WHAT WOULD KILL THIS MODEL ─────────────────────────────────────────────────────────────
+//
+//   A body whose FRAME POSITION equals a square with `attackers === 0`, with `swinging` false
+//   and `ms_since_swung` large, losing health to something `was_killed_by_player` says is not a
+//   player. One of those is enough. Nine deaths beside a wall are not one death on it.
 //
 import { act, walk, rest, verify, place, healUp, snapshot } from '../m59-fleetscript.mjs';
 import { geometryFor, exposureAt, gridDisagreementAt } from '../m59-safespots.mjs';
