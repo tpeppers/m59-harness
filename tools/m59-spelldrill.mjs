@@ -125,7 +125,28 @@ const countIn = (items, want) => (items ?? [])
 // waiting costs nothing: try each in order and take whichever actually spends reagents.
 const book = await call('spells', { agent: AGENT });
 const me0 = await call('status', { agent: AGENT }).catch(() => null);
-const SELF = me0?.character ?? null;
+// `self` IS AN OBJECT ID, NOT A NAME, AND THE NAME FAILS SILENTLY.
+//
+// Measured on prod 2026-09-20. Camilla, drilling night vision on herself, `--target self`:
+//
+//     holding t9 (lease lease_HoJmC5)
+//       refused (1): no reason given
+//
+// and her mana sat at 33/33 for the whole run. Mana is the proof, per CLAUDE.md: a cast that
+// spends nothing did not happen. Re-run against her object id with everything else identical
+// and the first round reported `1 cast(s) [night vision x1]`, mana falling 33 -> 13.
+//
+// The caster's own NAME does not resolve for a self-cast, so `me0?.character` handed the server
+// something it answered with nothing. That is this game's whole idiom -- refusal by silence --
+// and here it is indistinguishable from "no reagents" or "still enchanted", which is why it
+// read as a game rule rather than a bug across two sessions.
+//
+// AN OBJECT ID IS A TEMPORARY HANDLE (CLAUDE.md): renumbered on every system save, recycled
+// within hours. Resolved once, which is right for a run measured in minutes; a drill that
+// straddles a server save would have to re-resolve it. The name stays as a LAST resort rather
+// than a hard failure -- if `status` could not answer, attempting the old behaviour is better
+// than refusing to start.
+const SELF = me0?.you?.id ?? me0?.intent_observation?.player_id ?? me0?.character ?? null;
 
 const ROWS = SPELLS.map((want, idx) => {
   const found = (book.spells ?? []).find(s => String(s.name).toLowerCase() === want)
