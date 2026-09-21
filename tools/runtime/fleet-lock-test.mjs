@@ -516,6 +516,53 @@ try {
       assert.deepEqual(onDisk.guard_started, { 7001: 1_700_000_111_000 });
     }
 
+    // 7b. A CALLER THAT ALREADY KNOWS IS NOT MADE TO SHELL OUT FOR IT.
+    //
+    // `startTimes` is a synchronous PowerShell spawn — 492ms idle on the prod machine, and the
+    // broker's stall profiler caught it at 3.2 to 9.2 SECONDS under load, once per keeper, on
+    // the event loop that keepers need to answer readiness. A parent holding a live child's
+    // handle cannot have that pid recycled underneath it, which is the only thing this field
+    // detects, so the broker passes the moment it spawned. The OS path must remain for every
+    // caller that did NOT create the process.
+    {
+      const path = file('guard-known-start.lock');
+      assert.equal(claimFleetLock(path, {
+        pid: 916, token: 'owner-token-916-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+        guards: [], isPidLive: pid => pid === 916,
+      }).ok, true);
+      let asked = 0;
+      const added = addFleetLockGuard(path, {
+        pid: 916, token: 'owner-token-916-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+        guardPid: 7011, guardStartedAt: 1_700_000_222_000,
+        isPidLive: pid => pid === 916 || pid === 7011,
+        startTimes: pids => { asked++; return new Map(pids.map(p => [p, 1_700_000_999_000])); },
+      });
+      assert.equal(added.ok, true);
+      assert.equal(asked, 0, 'a supplied start time must not spawn anything');
+      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).guard_started,
+                       { 7011: 1_700_000_222_000 }, 'and it is what gets written');
+
+      // ABSENT, ZERO AND NONSENSE ALL FALL BACK. A caller that cannot say must not be able to
+      // write a zero into the field and have it read as "registered at the epoch".
+      for (const bogus of [null, 0, -1, 1.5, NaN, '1700000222000']) {
+        const p2 = file(`guard-fallback-${String(bogus)}.lock`);
+        assert.equal(claimFleetLock(p2, {
+          pid: 917, token: 'owner-token-917-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+          guards: [], isPidLive: pid => pid === 917,
+        }).ok, true);
+        let used = 0;
+        assert.equal(addFleetLockGuard(p2, {
+          pid: 917, token: 'owner-token-917-aaaa', kind: BROKER_FLEET_LOCK_KIND,
+          guardPid: 7012, guardStartedAt: bogus,
+          isPidLive: pid => pid === 917 || pid === 7012,
+          startTimes: pids => { used++; return new Map(pids.map(p => [p, 1_700_000_333_000])); },
+        }).ok, true);
+        assert.equal(used, 1, `guardStartedAt ${String(bogus)} must fall back to the OS`);
+        assert.deepEqual(JSON.parse(readFileSync(p2, 'utf8')).guard_started,
+                         { 7012: 1_700_000_333_000 });
+      }
+    }
+
     // 8. AND DROPS IT WITH THE GUARD, so the field cannot grow for ever.
     {
       const path = file('guard-pruning.lock');

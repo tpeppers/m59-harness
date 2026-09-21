@@ -328,6 +328,52 @@ console.log('\nthe guard: what a journey leaves switched on');
     const notPinned = keeper({ adjacent: 1 });
     ok('and covering ground is not a jam, however crowded',
        notPinned.clearPathCheck(notPinned.watch, hp, Date.now()) === null);
+
+    // A BLOCKED JOURNEY STOPS SAYING "travelling" LONG BEFORE IT STOPS BEING ONE.
+    //
+    // `GOING_STATES` is travelling/pulling/converging/zoning, and a body stopped for long
+    // enough degrades to `doing: "stalled"` — so this rung used to refuse precisely the
+    // characters it exists for. Measured over 48h of prod post-mortems, 2026-09-20: of the 28
+    // Flatlands deaths to a spider or an ant, 24 were `stalled` and ALL 28 still carried a
+    // suspended journey. Ukgoth is the control — 20 of 22 troll deaths were GOING, so the rung
+    // armed there and the engagement band declined the troll on its own merits.
+    //
+    // Operator: "we want those battered skeletons and the icky spiders to be active for the
+    // 'fight your way out' strategy if possible".
+    const stalledOnAJourney = pinned(keeper({ adjacent: 1 }));
+    stalledOnAJourney.doing = 'stalled';
+    stalledOnAJourney.suspendedJourney = { to: 39, why: 'travelling to 39' };
+    const blocked = stalledOnAJourney.clearPathCheck(stalledOnAJourney.watch, hp, Date.now());
+    ok('a STALLED body that still owes a destination arms clear_path',
+       !!blocked && blocked.reason === 'blocked', JSON.stringify(blocked));
+
+    // THE SUSPENDED JOURNEY IS THE WHOLE OF THE WIDENING. Without it this is "fight whenever
+    // stuck", which is the doctrine this repository spent months removing — a character
+    // standing at a counter or parked at its station is stalled too.
+    const stalledGoingNowhere = pinned(keeper({ adjacent: 1 }));
+    stalledGoingNowhere.doing = 'stalled';
+    stalledGoingNowhere.suspendedJourney = null;
+    ok('but a stalled body that owes nobody a destination does not',
+       stalledGoingNowhere.clearPathCheck(stalledGoingNowhere.watch, hp, Date.now()) === null);
+
+    // And every other gate still holds for the widened state — the players one especially.
+    const stalledAmongPeople = pinned(keeper({ adjacent: 0, players: 3 }));
+    stalledAmongPeople.doing = 'stalled';
+    stalledAmongPeople.suspendedJourney = { to: 39, why: 'travelling to 39' };
+    ok('a stalled journey among three PLAYERS still arms nothing',
+       stalledAmongPeople.clearPathCheck(stalledAmongPeople.watch, hp, Date.now()) === null);
+
+    const stalledNotPinned = keeper({ adjacent: 1 });
+    stalledNotPinned.doing = 'stalled';
+    stalledNotPinned.suspendedJourney = { to: 39, why: 'travelling to 39' };
+    ok('and a stalled journey that has not been pinned long enough still waits',
+       stalledNotPinned.clearPathCheck(stalledNotPinned.watch, hp, Date.now()) === null);
+
+    const stalledAndHurt = pinned(keeper({ adjacent: 1, health: 5, max: 48 }));
+    stalledAndHurt.doing = 'stalled';
+    stalledAndHurt.suspendedJourney = { to: 39, why: 'travelling to 39' };
+    ok('and below the flee line the ladder still owns it',
+       stalledAndHurt.clearPathCheck(stalledAndHurt.watch, { value: 5, max: 48 }, Date.now()) === null);
   }
 
   const boundary = TRAVEL_GUARD_KEYS.filter(key => TRAVEL_GUARD_CLOCK[key] === 'hop boundary');

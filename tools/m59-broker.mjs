@@ -1338,7 +1338,16 @@ async function spawnKeeperInner(agent, index, credentials) {
       console.error(`[keeper] ${agent} child spawn returned no valid PID`);
     return false;
   }
-  const guarded = installKeeperOwnershipGuards(agent, child.pid);
+  // THE MOMENT THIS PROCESS CAME INTO EXISTENCE, TAKEN FROM OUR OWN CLOCK.
+  //
+  // We just created this child and hold its handle, so its pid cannot have been recycled
+  // underneath us — which is the only thing `guard_started` is there to detect. Passing the
+  // time we know skips a synchronous PowerShell spawn per keeper: measured 492ms idle on this
+  // machine and caught by the broker's own stall profiler at 3.2 to 9.2 SECONDS under load,
+  // twenty-four times per rejoin, on the event loop that keepers need to answer readiness.
+  // `guardStillOurs` compares with a 2000ms tolerance precisely because these readers are
+  // second-granular, and our clock and the OS's differ by single-digit milliseconds here.
+  const guarded = installKeeperOwnershipGuards(agent, child.pid, Date.now());
   if (!guarded.ok) {
     console.error(`[keeper] ${agent} ownership guard failed (${guarded.reason}); ` +
       'terminating child before login');
@@ -4263,7 +4272,7 @@ function keeperOwnershipPermit(agent) {
   });
 }
 
-function installKeeperOwnershipGuards(agent, guardPid) {
+function installKeeperOwnershipGuards(agent, guardPid, guardStartedAt = null) {
   // Account first is the fail-closed order. If the broker dies between the two writes,
   // an alias roster still cannot take the endpoint/account and kick this socket. The
   // exact fleet successor will then encounter that guarded account and refuse without
@@ -4275,6 +4284,10 @@ function installKeeperOwnershipGuards(agent, guardPid) {
     token: brokerFleetClaim.lock.token,
     kind: brokerFleetClaim.lock.kind,
     guardPid,
+    // Absent for the migration path above, which registers a guard for a process it did NOT
+    // create — exactly the case where the pid might not be what the caller thinks, so that one
+    // still pays for the OS's own answer.
+    guardStartedAt,
   });
   if (!fleet?.ok) return { ok: false, reason: `fleet-${fleet?.reason ?? 'not-owned'}` };
   return { ok: true };

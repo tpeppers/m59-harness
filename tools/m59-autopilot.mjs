@@ -9447,7 +9447,36 @@ export class Autopilot {
   clearPathCheck(w, hp, now) {
     if (!w) return null;
     if (!this.travelAllows('clear_path')) return null;
-    if (!GOING_STATES.includes(this.doing ?? null)) return null;
+    // A BLOCKED JOURNEY STOPS SAYING "travelling" LONG BEFORE IT STOPS BEING ONE, AND THIS GATE
+    // WAS READING THE WORD RATHER THAN THE COMMITMENT.
+    //
+    // `GOING_STATES` is travelling/pulling/converging/zoning. A body that has been stopped by
+    // something for long enough degrades to `doing: "stalled"` — so the population this rung
+    // exists for had already left the state it requires, and clear_path refused exactly the
+    // characters it was written to rescue.
+    //
+    // MEASURED over 48 hours of prod post-mortems, 2026-09-20:
+    //
+    //     The Flatlands, killed by a spider   24 deaths   20 `stalled`, 4 GOING, 24 suspended
+    //     The Flatlands, killed by an ant      4 deaths    4 `stalled`, 0 GOING,  4 suspended
+    //     Ukgoth, killed by a troll           22 deaths    2 `stalled`, 20 GOING
+    //
+    // 24 of 28 in the Flatlands — 86% — were in the one state this returned null for, and ALL
+    // 28 still carried a suspended journey. Ukgoth is the control: those bodies were GOING, so
+    // the rung armed and the engagement band correctly declined to pick a fight with a troll.
+    //
+    // THE SUSPENDED JOURNEY IS THE COMMITMENT, and it is what makes this narrow rather than
+    // "fight when stuck": the body is between travelling states and still owes a destination.
+    // Nothing else is relaxed — an errand still owns the body through `inert`, a swing already
+    // in progress still short-circuits, the six-second pin still applies, the flee line still
+    // applies, the target is still chosen by `passFightBack`'s engagement band, and `near` is
+    // still filtered of players by its caller. A troll does not become fightable because the
+    // body stopped moving.
+    //
+    // Operator, 2026-09-20: "we want those battered skeletons and the icky spiders to be
+    // active for the 'fight your way out' strategy if possible".
+    const blockedMidJourney = this.doing === 'stalled' && !!this.suspendedJourney;
+    if (!GOING_STATES.includes(this.doing ?? null) && !blockedMidJourney) return null;
     // Already swinging is not a jam; an errand owns the body; once per pass.
     if (this.doing === 'fighting' || this.inert) return null;
     if (w.clearPathPass === this.passes) return null;

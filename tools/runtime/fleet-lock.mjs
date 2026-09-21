@@ -584,6 +584,31 @@ export function addFleetLockGuard(lockPath, {
   token,
   kind,
   guardPid,
+  // WHEN THE CALLER ALREADY KNOWS, BECAUSE ASKING WINDOWS COSTS SECONDS ON THE EVENT LOOP.
+  //
+  // `startTimes` shells out to PowerShell with `execFileSync`. Its own comment budgets "a
+  // third of a second" for twenty-one pids; measured idle on the prod machine it is 492 ms
+  // for ONE, and the broker's stall profiler caught it at 3.2 to 9.2 SECONDS under real load
+  // on 2026-09-20 — once per keeper, synchronously, while 24 keepers were being spawned.
+  // That is one to three minutes of dead event loop per rejoin, during which the broker
+  // cannot answer a keeper's readiness probe, so it declares live keepers dead and the fleet
+  // collapses to three or four characters. The profiler named it:
+  //
+  //     [loop] broker event loop was blocked ~10202ms  hot: spawn :0 9159ms
+  //            | callers: spawnKeeperInner 9159ms, installKeeperOwnershipGuards 9132ms
+  //
+  // A PARENT'S OWN CLOCK IS AS GOOD AN ANSWER HERE, and the reason is specific rather than
+  // convenient. `guard_started` exists to tell a genuine claim from a RECYCLED pid wearing
+  // the same number. A parent holding a live, unreaped child cannot have that child's pid
+  // recycled underneath it — the OS will not reissue it while the handle is open. So for a
+  // child the caller just spawned, the caller's `Date.now()` and the OS's start time are the
+  // same event, and `guardStillOurs` compares with a 2000 ms tolerance precisely because
+  // these readers are second-granular.
+  //
+  // OPTIONAL, AND ABSENT MEANS THE OLD PATH. Anything that does not pass it — an adoption, a
+  // sweep, a caller registering a guard for a process it did not create — still asks the OS,
+  // because those are exactly the cases where the pid might not be what the caller thinks.
+  guardStartedAt = null,
   isPidLive = isProcessLive,
   startTimes = processStartTimes,
 } = {}) {
@@ -639,7 +664,9 @@ export function addFleetLockGuard(lockPath, {
     // which is the only moment it can be recorded correctly. Carried forward for guards
     // that were already there, dropped for ones just pruned. A reader that cannot see this
     // field falls back to the image check, so an old broker and a new one can share a lock.
-    const startedNow = startTimes([childPid]).get(childPid) ?? null;
+    const startedNow = Number.isSafeInteger(guardStartedAt) && guardStartedAt > 0
+      ? guardStartedAt
+      : startTimes([childPid]).get(childPid) ?? null;
     const merged = { ...(lock.guard_started ?? {}) };
     if (Number.isSafeInteger(startedNow) && startedNow > 0) merged[childPid] = startedNow;
     const guard_started = prunedGuardStarts(guardStarts(merged, { optional: false }) || null, guards);
