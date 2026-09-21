@@ -774,3 +774,6 @@ substrate/magic-keep.json
 # in tools/m59-safespots.mjs). Ignored rather than merely deleted so a running fleet that
 # still has one on disk does not show up as an untracked file for ever.
 /substrate/m59-safespots.json
+
+# Live wallproof collections, same reasoning as wallproof.jsonl above.
+/substrate/wallproof-*.jsonl
