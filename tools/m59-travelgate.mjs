@@ -55,6 +55,7 @@ export const UNDERWORLD = 1;
 export const REASONS = Object.freeze({
   WAIVED: 'waived',
   UNDERWORLD: 'leaving_the_underworld',
+  INTO_THE_UNDERWORLD: 'destination_is_the_underworld',
   FLOOR_OFF: 'floor_off',
   RECOVERING: 'destination_is_home',
   WHOLE_ENOUGH: 'whole_enough',
@@ -78,6 +79,31 @@ export function mayStartJourney({ health = null, floor = null, from = null, to =
                                   floorFrom = null } = {}) {
   const pct = (x) => (x == null ? 'unreadable' : Math.round(x * 100) + '%');
   const out = (ok, code, why) => ({ ok, code, why, floor, health });
+
+  // 0. THE UNDERWORLD IS NOT A DESTINATION, AND THIS ONE IS NOT WAIVABLE.
+  //
+  // Rule 2 below says a body may always LEAVE room 1. The complement was missing, and it is
+  // not a matter of risk: the Underworld has no inbound graph edges at all. You arrive by
+  // dying and you leave by walking onto a portal, so `route(1)` can only ever answer "no route
+  // from X to 1 in the graph" — which is exactly what it answered 767 times in two hours.
+  //
+  // MEASURED, prod 2026-09-20. Zoot died in The Flatlands at 20:50:01 and woke in room 1. Once
+  // out, a travel job was left holding `to: 1`, and from 21:05:33 to 23:04:54 it re-issued that
+  // journey every 8.7 seconds — 767 attempts, every one refused instantly, `legs: 0` and
+  // `planned_legs: 0` on all of them, `cancelled_ms_ago` climbing past two hours without ever
+  // resetting because nothing in the loop was new. It stopped when the keeper restarted, not
+  // because anything noticed. That was 13% of the fleet's entire journey traffic for the day.
+  //
+  // IT IS CHECKED BEFORE THE WAIVER, which no other rule here is, and the reason is the
+  // difference between a RISK and an IMPOSSIBILITY. Every other refusal in this file says "this
+  // body should not do that yet", and an operator with a corpse run or a rescue can reasonably
+  // overrule it. There is no argument that makes room 1 reachable, so a waiver here would not
+  // buy a journey — it would buy the loop above, wearing a reason.
+  if (to != null && Number(to) === UNDERWORLD)
+    return out(false, REASONS.INTO_THE_UNDERWORLD,
+               'the Underworld has no way in that a route can use — a body gets there by dying ' +
+               'and leaves by a portal, so a journey to room 1 can only fail. If a job is ' +
+               'holding this destination, clear the job rather than retrying it');
 
   // 1. AN EXPLICIT WAIVER WINS, AND IT MUST SAY WHY.
   //

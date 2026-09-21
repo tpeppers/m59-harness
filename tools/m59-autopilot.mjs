@@ -7915,6 +7915,25 @@ export class Autopilot {
 
   async travel(room, opts) {
     const { holdBetweenRooms = true, onHop, ...sessionOpts } = opts ?? {};
+    // NOTHING TRAVELS TO THE UNDERWORLD, AND A JOB HOLDING IT MUST BE DROPPED RATHER THAN
+    // RETRIED. The gate in m59-travelgate.mjs says the same thing for the broker's `travel`
+    // tool and for fleetScript, and it is repeated here because the KEEPER's own travel does
+    // not go through that gate — which is why the loop it describes ran for two hours on a
+    // keeper-backed character with the gate already in the tree.
+    //
+    // Zoot, prod 2026-09-20: died at 20:50:01, woke in room 1, escaped, and then re-issued
+    // `travel(1)` 767 times between 21:05 and 23:05 — one every 8.7 seconds, `legs: 0` and
+    // `planned_legs: 0` every time, until a keeper restart cleared it. Refusing is only half
+    // the fix: the suspended journey is what kept handing the destination back, so it goes too.
+    if (room != null && Number(room) === UNDERWORLD) {
+      const held = this.suspendedJourney?.to;
+      this.suspendedJourney = null;
+      this.note('refusing a journey to the Underworld and dropping the job that held it', {
+        to: Number(room), was_suspended_to: held ?? null,
+        why: 'room 1 has no inbound route: a body arrives by dying and leaves by a portal, so ' +
+             'this destination can only ever be refused, and retrying it is the whole defect' });
+      return { arrived: false, reason: 'the Underworld is not a travel destination' };
+    }
     // A cancelled stockpile leg used to fall through into an apothecary leg in
     // the same awaited errand. Give the next survival pass the body first.
     if (this.travelInterrupted())

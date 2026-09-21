@@ -191,5 +191,54 @@ console.log('ONE DECISION, TWO CALLERS — and neither keeps a copy');
 }
 
 console.log('');
+console.log('AND THE UNDERWORLD IS NOT A DESTINATION — Zoot, 767 journeys in two hours');
+{
+  // Zoot died in The Flatlands at 20:50:01 on 2026-09-20 and woke in room 1. Once out, a
+  // travel job was left holding `to: 1` and re-issued it every 8.7 seconds until a keeper
+  // restart — 767 attempts, `legs: 0` and `planned_legs: 0` on every one, 13% of the whole
+  // fleet's journey traffic for the day, and nothing anywhere said so.
+  const into = mayStartJourney({ health: 1, floor: 0.5, from: 714, to: 1 });
+  ok('a journey INTO the Underworld is refused', into.ok === false);
+  ok('and it is named rather than folded into the health floor',
+     into.code === REASONS.INTO_THE_UNDERWORLD, into.code);
+  ok('the refusal says what to do instead of retrying', /clear the job/.test(into.why), into.why);
+
+  // A FULLY HEALTHY BODY IS STILL REFUSED. Every other rule in this gate is about how hurt
+  // the traveller is; this one is about the map, so health must not be able to satisfy it.
+  ok('full health does not make it reachable',
+     mayStartJourney({ health: 1, floor: null, from: 39, to: 1 }).ok === false);
+  ok('nor does switching the floor off',
+     mayStartJourney({ health: 1, floor: 0, from: 39, to: 1 }).code === REASONS.INTO_THE_UNDERWORLD);
+
+  // NOT WAIVABLE, WHICH NO OTHER RULE HERE IS. A waiver overrules a RISK. This is an
+  // impossibility, and a waiver that cannot buy a journey buys the retry loop instead.
+  const waived = mayStartJourney({ health: 0.1, floor: 0.5, from: 39, to: 1,
+                                   waiver: { reason: 'a corpse run' } });
+  ok('a waiver with a good reason still cannot travel to room 1',
+     waived.ok === false && waived.code === REASONS.INTO_THE_UNDERWORLD, JSON.stringify(waived));
+
+  // AND THE COMPLEMENT STILL HOLDS, because the gate causing what it prevents is the one
+  // failure worse than the one above.
+  ok('leaving the Underworld is untouched',
+     mayStartJourney({ health: 0.05, floor: 0.5, from: 1, to: 39 }).code === REASONS.UNDERWORLD);
+  ok('and from 1 to 1 leaves rather than refuses',
+     mayStartJourney({ health: 0.05, floor: 0.5, from: 1, to: 1 }).ok === false,
+     'a body already there is not travelling anywhere');
+
+  // An ordinary destination is unaffected.
+  ok('every other room is still decided on health',
+     mayStartJourney({ health: 1, floor: 0.5, from: 714, to: 39 }).ok === true);
+
+  // THE KEEPER'S OWN TRAVEL DOES NOT GO THROUGH THIS GATE, which is why the loop ran for two
+  // hours with the gate already in the tree. The guard is repeated at the top of
+  // `Autopilot.travel`, and it drops the suspended journey as well as refusing — refusing
+  // alone leaves the thing that keeps handing the destination back.
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('Autopilot.travel refuses room 1 too', /Number\(room\) === UNDERWORLD/.test(AP));
+  ok('and clears the suspended journey rather than only refusing',
+     /Number\(room\) === UNDERWORLD[\s\S]{0,600}?this\.suspendedJourney = null/.test(AP));
+}
+
+console.log('');
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
