@@ -178,7 +178,16 @@ console.log('a death says whether it happened at a wall');
   // counters instead.
   const SRC = readFileSync(new URL('./m59-ledger.mjs', import.meta.url), 'utf8');
   const at = SRC.indexOf("recordEvent(name, 'died'");
-  const body = SRC.slice(at, at + 2600);
+  // A FIXED BYTE WINDOW IS A TRIPWIRE ON COMMENTS, NOT ON BEHAVIOUR. 2600 put one
+  // assertion's field just outside the slice the moment a comment was added above it, and the
+  // suite reported a missing field that was still there four lines further down. Bumping the
+  // number would only move the tripwire, so the slice is now bounded by the CALL: from this
+  // `recordEvent(name, 'died'` to the next `recordEvent(` in the file, which is the emitter
+  // and nothing else.
+  const body = (() => {
+    const next = SRC.indexOf('recordEvent(', at + 12);
+    return SRC.slice(at, next > at ? next : SRC.length);
+  })();
   ok('the died event carries in_safe_spot', /in_safe_spot: d\.in_safe_spot/.test(body));
   ok('with whether the wall was PROVEN, since an unproven one failing is a different fact',
      /proven: !!d\.in_safe_spot\.proven/.test(body));
@@ -188,6 +197,20 @@ console.log('a death says whether it happened at a wall');
   // missing field and a negative answer looked identical.
   ok('false means asked-and-no, null means nobody asked',
      /d\.in_safe_spot === false \? false : null/.test(body));
+  // A ROW THAT LOOKS COMPLETE AND KNOWS NOTHING ABOUT THE KILLING MUST SAY SO.
+  // 15 of 102 `died` rows over 48h on prod had a room, a level and a last health, and no
+  // killer, no how, no broadcast and no trail — and nothing marked them. None carried the
+  // paired `level_lost` that every real death does. They inflated every death rate computed
+  // from this ledger, including one reported to the operator as a spike.
+  ok('an unattributed death is marked rather than counted as an ordinary one',
+     /const unattributed = !thin && d\.killed_by == null && d\.how_died == null/.test(SRC));
+  ok('and it is flagged in the row, not only computed',
+     /unattributed: true/.test(body) && /detail_missing: true, unattributed/.test(body));
+  ok('and the note tells the reader not to treat it as a death',
+     /treat it as unconfirmed, not as a death/.test(body));
+  // `false` beside a null killer asserts certainty about an observation never made.
+  ok('killer_is_a_guess is null when there is no killer to be certain about',
+     /d\.killed_by == null \? null : false/.test(body));
   ok('and how hurt it was when it should have fled comes along too',
      /fled_in_time/.test(body));
 }

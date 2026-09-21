@@ -231,6 +231,26 @@ export function recordSample(rows = []) {
         // that much and mark the rest as not-yet-known rather than as nothing.
         const d = r.last_death || {};
         const thin = !d.died_in && d.last_health == null;
+        // AND THE COMMONER GAP: THE ROOM AND THE HEALTH ARRIVED AND THE KILLING NEVER DID.
+        //
+        // `thin` only catches the earliest instant, before `died_in` or `last_health` are
+        // filled. Sampling a beat later produces a row that LOOKS complete — it has a room, a
+        // level, a last health — and carries nothing whatever about the death: no killer, no
+        // `how_died`, no broadcast, no nearby list, no health trail. Nothing marked it, so
+        // every reader counted it as a death like any other.
+        //
+        // MEASURED on prod, 2026-09-21: 15 of 102 `died` rows over 48 hours — 15% — were this
+        // shape. They arrive in batches on a five-minute cadence for characters that merely
+        // have low health, and NONE of them carries the paired `level_lost` that every real
+        // death does (53->52, 47->46, ...). A death costs max health; these cost nothing. They
+        // inflated every death rate computed from this ledger, including one I reported to the
+        // operator as a 4x spike caused by a change of my own.
+        //
+        // This does not decide whether such a row is a death — that question needs the keeper,
+        // not the sampler. It marks the row as UNATTRIBUTED so a reader can tell the two apart
+        // at all, which is the thing that was impossible.
+        const unattributed = !thin && d.killed_by == null && d.how_died == null
+          && !d.death_broadcast && !d.health_trail;
         // CARRY `how` ALONGSIDE `killed_by`, because a null killer is not one fact.
         //
         // Three of the broadcast forms name nobody — "murdered in cold blood" (a player
@@ -255,7 +275,11 @@ export function recordSample(rows = []) {
           // What was standing nearby, kept beside the authoritative answer rather than
           // instead of it — it is still the right answer to "how outnumbered were we".
           was_nearby: d.was_nearby ? d.was_nearby.join(', ') : null,
-          killer_is_a_guess: d.killed_by_is_a_guess ?? false,
+          // `false` ASSERTS CERTAINTY, AND A ROW WITH NO KILLER HAS NONE TO BE CERTAIN OF.
+          // This defaulted to false beside `killed_by: null`, which reads as "we know, and
+          // it is not a guess" about an observation that was never made. Null is the honest
+          // third answer and the one the reader needs.
+          killer_is_a_guess: d.killed_by_is_a_guess ?? (d.killed_by == null ? null : false),
           unattended: d.unattended ?? false,
           hunting: d.hunting, strategy: d.strategy, flee_threshold: d.flee_threshold,
           // WAS IT AT A WALL, AND WAS THAT WALL PROVEN? The keeper reconstructs this into
@@ -331,6 +355,13 @@ export function recordSample(rows = []) {
                        note: 'the keeper had not finished reconstructing this death when the ' +
                              'sample caught it — room and level come from the sampler, the ' +
                              'rest was not known yet' } : {}),
+          ...(unattributed ? { detail_missing: true, unattributed: true,
+                               note: 'the room, level and last health came from the sampler and ' +
+                                     'NOTHING about the killing was ever observed — no killer, ' +
+                                     'no how, no broadcast, no trail. This row looks complete ' +
+                                     'and is not. 15% of died rows were this shape on ' +
+                                     '2026-09-21 and none carried the level_lost every real ' +
+                                     'death does; treat it as unconfirmed, not as a death' } : {}),
         });
       } else if (now.room !== was.room && /Underworld/i.test(now.room || '') &&
                  !/Underworld/i.test(was.room || '')) {
