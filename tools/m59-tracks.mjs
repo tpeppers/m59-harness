@@ -439,8 +439,41 @@ export const STRIKES_FILE = process.env.M59_TRACK_STRIKES ||
   path.join(HERE, '..', 'substrate', 'm59-track-strikes.json');
 export const STRIKES_BEFORE_REJECT = Number(process.env.M59_TRACK_STRIKES_MAX || 3);
 
+// A BOOK READ ON EVERY CALL IS READ ON EVERY CALL, AND THE DEFAULT PARAMETER HID IT.
+//
+// `recallTrack(room, from, to, tracks = loadTracks(), strikes = loadStrikes())` evaluates both
+// defaults EVERY time a caller omits them, and the broker's only call site omits them
+// (m59-broker.mjs, the track recall in the movement tool). So a crossing lookup — which reads
+// nothing and decides nothing — was a synchronous read and a full `JSON.parse` of two files,
+// on the event loop, per call. A default parameter looks like a fallback and is a function
+// call; that is the whole reason this went unnoticed.
+//
+// Cached exactly the way `loadMap` already does it (m59-map.mjs:523): keyed on path, mtime and
+// size, so an external edit is still picked up on the next call and a `saveStrikes` from this
+// process invalidates itself through the same key. Same pattern, same file tree, so there is
+// one way to think about "a book on disk that code re-reads" rather than two.
+//
+// SCALE, MEASURED 2026-09-20, so nobody over-claims this as the fix for the wedge: the books
+// are 0.18 MB and 0.01 MB. This is a real and pointless cost and it is NOT 86 MB/s — the
+// broker's read storm is a separate, still-unattributed caller. Fixing this does not close
+// that, and saying so here is cheaper than somebody re-measuring to find out.
+const _bookCache = new Map();
+function readBook(file, pick) {
+  let st = null;
+  try { st = fs.statSync(file); } catch { return {}; }
+  const key = `${path.resolve(file)}\0${st.mtimeMs}\0${st.size}`;
+  const hit = _bookCache.get(key);
+  if (hit) return hit;
+  let value = {};
+  try { value = pick(JSON.parse(fs.readFileSync(file, 'utf8'))) ?? {}; } catch { return {}; }
+  // One entry per file: a book that changed is a new key, and the old one is dead weight.
+  for (const k of _bookCache.keys()) if (k.startsWith(`${path.resolve(file)}\0`)) _bookCache.delete(k);
+  _bookCache.set(key, value);
+  return value;
+}
+
 export function loadStrikes(file = STRIKES_FILE) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')).strikes ?? {}; } catch { return {}; }
+  return readBook(file, doc => doc.strikes);
 }
 
 function saveStrikes(strikes, file = STRIKES_FILE) {
@@ -458,7 +491,11 @@ function saveStrikes(strikes, file = STRIKES_FILE) {
 
 /** A ride failed with nothing in the way. Returns the new count. */
 export function strikeTrack(room, from, to, { file = STRIKES_FILE } = {}) {
-  const strikes = loadStrikes(file);
+  // READERS SHARE THE CACHED BOOK, WRITERS TAKE A COPY. `loadStrikes` now returns the cached
+  // object rather than a fresh parse, so mutating it in place would edit what every other
+  // reader sees — and if `saveStrikes` then failed (it swallows its own errors) the cache
+  // would hold a count that is not on disk. One spread is cheaper than that class of bug.
+  const strikes = { ...loadStrikes(file) };
   const key = trackKey(room, from, to);
   strikes[key] = (strikes[key] ?? 0) + 1;
   saveStrikes(strikes, file);
@@ -467,16 +504,16 @@ export function strikeTrack(room, from, to, { file = STRIKES_FILE } = {}) {
 
 /** A ride worked. Forget the strikes — they are consecutive by definition. */
 export function clearStrikes(room, from, to, { file = STRIKES_FILE } = {}) {
-  const strikes = loadStrikes(file);
   const key = trackKey(room, from, to);
-  if (!strikes[key]) return 0;
+  if (!loadStrikes(file)[key]) return 0;      // the common case: read, decide, touch nothing
+  const strikes = { ...loadStrikes(file) };   // copy only when about to write — see strikeTrack
   delete strikes[key];
   saveStrikes(strikes, file);
   return 0;
 }
 
 export function loadTracks(file = TRACKS_FILE) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')).tracks ?? {}; } catch { return {}; }
+  return readBook(file, doc => doc.tracks);
 }
 
 /** The track for this crossing, or null — and null means "plan it as you always did". */
