@@ -33,8 +33,8 @@ process.env.M59_TRAILS_DIR = DIR;
 process.env.M59_TRAIL_MAX_BYTES = '4096';          // small enough to test, same code path
 process.env.M59_FLEET = 'trailsizetest';
 
-const { rotateTrailIfHuge, readSamples, trailsFile, flushTrails, recordSeen, MAX_TRAIL_BYTES } =
-  await import('./m59-trails.mjs');
+const { rotateTrailIfHuge, readSamples, trailsFile, flushTrails, recordSeen, MAX_TRAIL_BYTES,
+        ROTATE_TRAIL_AT } = await import('./m59-trails.mjs');
 
 // Capture the warnings, because "said so" is half of every assertion below.
 const said = [];
@@ -159,6 +159,48 @@ try {
 } finally {
   console.error = realError;
   try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* temp dir */ }
+}
+
+// A ROTATED ARCHIVE MUST STILL BE READABLE, WHICH IS THE ONE THING ROTATION PROMISED.
+//
+// `rotateTrailIfHuge`'s docstring says a rotated file "stays in the answer" because readers
+// enumerate every `.jsonl` in the directory. That was FALSE while it rolled at
+// MAX_TRAIL_BYTES: the archive was, by construction, always a byte past the size `readSamples`
+// accepts, so the reader guard skipped every archive rotation had ever produced — for ever.
+// Two halves of one change, each correct alone, contradicting each other.
+//
+// Testable cheaply only because the cap is an env var read at module load: with a 4096-byte
+// ceiling the rotation threshold is 3686, so a 4000-byte file exercises the exact window that
+// used to be wrong. At the real ceiling this window is 460.8 MiB to 512 MiB.
+console.log('');
+console.log('a rotated archive is readable, not born past the ceiling');
+{
+  ok('rotation fires below the reader ceiling', ROTATE_TRAIL_AT < MAX_TRAIL_BYTES,
+     `rotate ${ROTATE_TRAIL_AT} vs ceiling ${MAX_TRAIL_BYTES}`);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'm59-trailroll-'));
+  try {
+    const f = path.join(dir, 'prod.jsonl');
+    // Between the rotation threshold and the reader ceiling: the window that was broken.
+    const line = JSON.stringify({ t: 1, body: 'a', room: 1, x: 64, y: 64 }) + '\n';
+    let text = '';
+    while (text.length < ROTATE_TRAIL_AT + 1) text += line;
+    fs.writeFileSync(f, text);
+    const size = fs.statSync(f).size;
+    ok('the fixture sits in that window', size > ROTATE_TRAIL_AT && size < MAX_TRAIL_BYTES,
+       `${size} bytes`);
+    const rolled = rotateTrailIfHuge(f);
+    spoke();
+    ok('it rotates', !!rolled, String(rolled));
+    ok('and the ARCHIVE is under the reader ceiling',
+       rolled && fs.statSync(rolled).size < MAX_TRAIL_BYTES);
+    // The assertion that would have caught the original bug: read the archive back.
+    const rows = readSamples(rolled);
+    const warned = spoke();
+    ok('so a reader can actually read it', rows.length > 0, `${rows.length} row(s)`);
+    ok('...without being told it is too big', !/past the/.test(warned), warned.slice(0, 80));
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* temp dir */ }
+  }
 }
 
 console.log('');

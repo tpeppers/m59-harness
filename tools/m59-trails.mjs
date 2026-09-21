@@ -119,6 +119,24 @@ export const MAX_WIRE_PER_SECOND = Number(process.env.M59_TRAIL_MAX_SPEED || 640
 export const MAX_TRAIL_BYTES =
   Number(process.env.M59_TRAIL_MAX_BYTES || bufferConstants.MAX_STRING_LENGTH);
 
+// ROTATE BELOW THE CEILING, OR EVERY ARCHIVE IS BORN UNREADABLE.
+//
+// `rotateTrailIfHuge` used to roll when `size > MAX_TRAIL_BYTES`, so the file it moved aside
+// was — by construction — always just PAST the size `readSamples` will accept. Its own
+// docstring promised the opposite: "the readers here already enumerate every `.jsonl` in the
+// directory, so a rotated file stays in the answer." It does not stay in the answer. Every
+// archive rotation produced was skipped by the reader guard added in the same change, for
+// ever, and the two halves contradicted each other while both looked right in isolation.
+//
+// Rolling at 90% leaves ~53 MB of headroom against appends that are one JSON line each, so an
+// archive lands comfortably under the ceiling and can still be read. The gap only has to
+// exceed one append, and this exceeds it by five orders of magnitude.
+//
+// Measured 2026-09-21: the four oversized trails on this machine were 26.15 GB, 4.45 GB,
+// 1.07 GB and 0.82 GB, and `readSamples` refused all four in 0 ms. That refusal is correct;
+// what was wrong is that rotation was manufacturing more of them.
+export const ROTATE_TRAIL_AT = Math.floor(MAX_TRAIL_BYTES * 0.9);
+
 export function trailsFile(fleet = FLEET()) {
   return path.join(TRAILS_DIR, String(fleet).replace(/[^\w.-]/g, '_') + '.jsonl');
 }
@@ -129,13 +147,17 @@ export function trailsFile(fleet = FLEET()) {
  *
  * ROTATED, NEVER TRUNCATED. A trail is evidence about walks that really happened, and the
  * readers here already enumerate every `.jsonl` in the directory, so a rotated file stays in
- * the answer. What is lost by rotating is only the ability to read the whole history in ONE
- * string, which is exactly the thing that was not possible anyway.
+ * the answer — which is true ONLY because this rolls at `ROTATE_TRAIL_AT` rather than at the
+ * reader's ceiling. Rolling at the ceiling made that sentence false: the archive was always a
+ * byte past what `readSamples` accepts, so every one was skipped for ever. See ROTATE_TRAIL_AT.
+ *
+ * What is lost by rotating is only the ability to read the whole history in ONE string, which
+ * is exactly the thing that was not possible anyway.
  *
  * It never throws: a rotation that fails leaves the append to carry on into the big file,
  * which is the behaviour that was there before this existed.
  */
-export function rotateTrailIfHuge(file, max = MAX_TRAIL_BYTES) {
+export function rotateTrailIfHuge(file, max = ROTATE_TRAIL_AT) {
   try {
     if (!(max > 0)) return null;
     const size = fs.statSync(file).size;
