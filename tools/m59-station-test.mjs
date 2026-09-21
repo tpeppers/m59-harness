@@ -193,7 +193,14 @@ console.log('\nthe pull refuses a crowd and refuses to run below the flee line')
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   const at = AP.indexOf('  async pull(want) {');
   const body = AP.slice(at, AP.indexOf("this.doing = 'fighting'", at));
-  ok('it asks crowded() before walking anywhere', body.includes('if (this.crowded())'));
+  // `forFighting: true` since 2026-09-21: a crowd of things that cannot advance this body is
+  // not a reason to refuse to go and fight. Operator: "the fight your way out should not
+  // block/skip because of other monsters being nearby if they're lower level (no
+  // advancement)". The gate is still asked — what changed is what it counts.
+  ok('it asks crowded() before walking anywhere',
+     body.includes('if (this.crowded({ forFighting: true }))'));
+  ok('...and asks it about what can actually advance us, not every body in the room',
+     /crowded\(\{\s*forFighting:\s*true\s*\}\)/.test(body));
   ok('...and says so in the ledger rather than refusing in silence',
      body.includes("noteCrowdRefusal('pulling quarry to the wall')"));
   ok('it refuses below the flee line', body.includes('frac < this.safety().fleeAt'));

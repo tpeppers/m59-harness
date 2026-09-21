@@ -784,6 +784,32 @@ function ratingOfCreature(name) {
   const hit = all[q] || Object.values(all).find(v => q.includes(String(v.name).toLowerCase()));
   return hit?.attack_rating ?? null;
 }
+/** Same lookup, for the level. Null when the table has no row — never a guess. */
+function levelOfCreature(name) {
+  const all = loadSpawns(SPAWN_FILE)?.creatures;
+  const q = String(name || '').toLowerCase();
+  if (!all || !q) return null;
+  const hit = all[q] || Object.values(all).find(v => q.includes(String(v.name).toLowerCase()));
+  return Number.isFinite(hit?.level) ? hit.level : null;
+}
+
+/**
+ * Does killing this creature still raise max health for a body of `maxHealth`?
+ *
+ * The game's rule, which this repository's own doctrine files state in as many words: a kill
+ * advances only while the creature's level is STRICTLY above max health. A fungus beast at 50
+ * pays everyone under 50 and nobody at or over it.
+ *
+ * UNKNOWN COUNTS AS ADVANCING, and the direction is deliberate. This is used to decide which
+ * bodies may be IGNORED when counting a crowd, so a creature the table cannot identify must
+ * stay in the count — discounting an unrecognised thing is how a crowd guard is talked out of
+ * the one case it exists for.
+ */
+function advancesUs(name, maxHealth) {
+  if (!Number.isFinite(maxHealth) || maxHealth <= 0) return true;
+  const level = levelOfCreature(name);
+  return level == null ? true : level > maxHealth;
+}
 
 // WHICH PRECONDITION IS ACTUALLY MISSING FOR `create weapon`, AS A PURE FUNCTION.
 //
@@ -5213,7 +5239,9 @@ export class Autopilot {
     //
     // Below the flee line the survival ladder owns the body. This crowd guard only
     // refuses walking OUT to fetch another monster; it never refuses taking shelter.
-    if (this.crowded()) {
+    // forFighting: a crowd of things that cannot advance this body is not a reason to refuse
+    // to go and fight. See `advancingThreatCountHere`.
+    if (this.crowded({ forFighting: true })) {
       this.noteCrowdRefusal('pulling quarry to the wall');
       return { pulled: false, why: 'too many things in this room to walk out and back through' };
     }
@@ -9081,11 +9109,58 @@ export class Autopilot {
     }
     return n;
   }
-  crowded() {
+  /**
+   * The same count, minus everything in the room that cannot advance this body.
+   *
+   * Operator, 2026-09-21: "the fight your way out should not block/skip because of other
+   * monsters being nearby if they're lower level (no advancement)".
+   *
+   * MEASURED, and this is why it is a live suppressor rather than a nicety. `crowd_combat_refusal`
+   * has fired 162 times, and it was still firing while this was written — Waldorf in room 39,
+   * Marco in 534 — under the trigger "pulling quarry to the wall". That refusal is the keeper
+   * declining to GO AND FIGHT. Bunsen's 8 "threats" in the Flatlands were spider, ant, spider,
+   * ant, spider, spider: levels 40 and 50 against his 53 max health, so not one of them could
+   * raise anything, and together they talked him out of fighting his way off the square he died
+   * on. Room 39 is the mixed case — the battered skeleton at 60 still counts for a 58-max body,
+   * the zombie at 55 no longer does.
+   *
+   * UNKNOWN CREATURES STILL COUNT (`advancesUs` returns true when the table has no row), because
+   * this decides who may be IGNORED and an unidentifiable body is exactly what a crowd guard is
+   * for. Players are already excluded by `threatCountHere`, and nothing here changes that.
+   */
+  advancingThreatCountHere() {
+    const c = this.s?.client;
+    if (!c?.room?.objects) return 0;
+    const maxHealth = c?.vitals?.()?.health?.max ?? null;
+    if (!Number.isFinite(maxHealth) || maxHealth <= 0) return this.threatCountHere();
+    let n = 0;
+    for (const o of c.room.objects.values()) {
+      if (o.id === c.selfId) continue;
+      if (!(o.flags & OF.ATTACKABLE) || (o.flags & OF.PLAYER)) continue;
+      const name = o.name ?? c?.rsc?.get?.(o.nameRsc) ?? null;
+      if (advancesUs(name, maxHealth)) n++;
+    }
+    return n;
+  }
+  /**
+   * `forFighting` counts only what can advance us; the default counts every body.
+   *
+   * THE SPLIT IS PROSPECTIVE, AND SAYING SO IS THE POINT. Both of this method's callers today
+   * are combat gates — the pull refusal and the trade-in-place veto — and both now pass
+   * `forFighting: true`, so the advancing-only count is in practice the only one used. The
+   * parameter exists because the threshold is called `travelStopMaxThreats` and CLAUDE.md
+   * describes a journey that "makes no stops" and a retreat that "considers only the exit" at
+   * or above it: if that rule is ever wired through here, it must NOT inherit this filter. Six
+   * weak things in a doorway are still six things between a body and the road, and that rule
+   * was written from 57 road deaths in one day. Deciding whether to SWING is a different
+   * question from deciding whether to WALK, and only the first one is being changed.
+   */
+  crowded({ forFighting = false } = {}) {
     const cap = this.travelStopMaxThreats();
     if (!(cap > 0)) return false;
     let n = 0;
-    try { n = this.threatCountHere(); } catch { return false; }
+    try { n = forFighting ? this.advancingThreatCountHere() : this.threatCountHere(); }
+    catch { return false; }
     return n >= cap;
   }
   // One ledger row per room per minute when a combat crowd guard fires.
@@ -13754,7 +13829,7 @@ export class Autopilot {
     //
     // The player exclusion is untouched and is not negotiable: `near` is filtered on
     // `!(o.flags & OF.PLAYER)` by the caller, so nothing here can ever swing at a person.
-    const crowd = this.crowded();
+    const crowd = this.crowded({ forFighting: true });
     if (crowd && this.policy?.tradeInPlaceWhenCrowded === false) {
       this.noteCrowdRefusal('trading in place');
       return false;
