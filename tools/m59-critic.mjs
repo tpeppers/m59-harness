@@ -151,6 +151,17 @@ export const DEFECT_CLASSES = Object.freeze({
                 + 'repair is the doctrine, and it needs the operator.',
   arrived_unfit: 'the body set out or pressed on below what the road costs — health, vigor, '
                + 'flasks, buffs. The defect is upstream of the death, in whatever let it leave.',
+  stopped_for_beatable_prey: 'BLOCKED BY A CREATURE IT SHOULD HAVE KILLED AND DIDN\'T. The '
+                           + 'operator\'s reading of the Flatlands, 2026-09-20: "weak enough '
+                           + 'anyone in the fleet could kill them with any weapon and just '
+                           + 'continue walking". Thirty deaths there in 48h — spider x24, ant x4 '
+                           + '— against a fleet whose OWN station quarry is the battered '
+                           + 'skeleton, which is harder on every number (lv60/diff4/atk420 '
+                           + 'against the spider\'s 50/4/390 and the ant\'s 40/4/360). So the '
+                           + 'spider is not what killed it. Stopping for a spider it kills at '
+                           + 'work every day, and never resuming, is what killed it. The repair '
+                           + 'is whatever turned a fight it wins into a halt — name the halt, '
+                           + 'not the animal.',
   instrument_missing: 'the record cannot support any of the above. Name the field that is absent '
                     + 'and where it would be written. A blind spot is a finding.',
   pvp: 'a person killed it, or a monster landed the last blow during a fight with one. NOT a '

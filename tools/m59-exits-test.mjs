@@ -48,6 +48,7 @@ import { describeWhen, deadWhen, ambiguousWhen, exitsFor, inboundFor, unifiedRoo
          mayArrive,
          KINDS } from './m59-exits.mjs';
 import { loadMap, movementMapFile, findPath } from './m59-map.mjs';
+import { announceMovementMap } from './m59-map-path.mjs';
 // The evaluator itself, asked directly: the claim under test is that it and the sentence agree.
 import { inRegion } from './m59-codeexits.mjs';
 
@@ -135,6 +136,7 @@ console.log('   AND THE AMBIGUOUS SHAPE IS REPORTED — a defect in the data, no
   ok('a null predicate is not ambiguous', ambiguousWhen(null) === null);
 }
 console.log('2. THE TEMPLE OF SHAL\'ILLE — the room an exit report called unreachable');
+announceMovementMap();   // which map — see m59-map-path.mjs
 const map = loadMap(movementMapFile());
 {
   const u = unifiedRoom(map, 48);

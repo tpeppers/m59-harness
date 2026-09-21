@@ -181,7 +181,17 @@ console.log('\nblockedEdges — a wall is between two squares, not on one of the
 
 // ---------------------------------------------------------------- against the real map
 console.log('\nagainst the baked world map');
-const { movementMapFile } = await import('./m59-map-path.mjs');
+// SAY WHICH MAP THIS PLANNED ON, BEFORE ASSERTING ANYTHING ABOUT IT.
+//
+// This suite reads 141 passed / 1 failed / 3 skipped on a checkout carrying
+// substrate/m59-map.local.json, and 158 passed / 0 failed in a fresh worktree at the
+// IDENTICAL COMMIT — the local bake and the committed reference disagree about a pocket at
+// r1c16, which is exactly what the exits() assertion further down is about. Bisected
+// 2026-09-21 from 124 live substrate files down to that one. Neither map is wrong; the
+// silence was. Two sessions spent an evening on it and a wrong cause reached two commit
+// messages, because a red run here looks exactly like a red run anywhere.
+const { movementMapFile, announceMovementMap } = await import('./m59-map-path.mjs');
+announceMovementMap();
 const mapFile = movementMapFile();
 if (!existsSync(mapFile)) {
   skip('the mover view keeps a room in one piece', 'no baked map on this machine');

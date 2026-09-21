@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { RoomGeometry } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
-import { movementMapFile } from './m59-map-path.mjs';
+import { movementMapFile, announceMovementMap } from './m59-map-path.mjs';
 import { nearestSafeSpot, safeSpots } from './m59-safespots.mjs';
 
 let pass = 0, fail = 0;
@@ -28,6 +28,9 @@ const ok = (name, cond, detail = '') => {
   else { fail++; console.log('  FAIL ' + name + (detail ? '  ' + detail : '')); }
 };
 
+// Which map this planned on. A #movement suite that does not say is a gate whose red and
+// green mean different things on different checkouts — see m59-map-path.mjs.
+announceMovementMap();
 const map = JSON.parse(readFileSync(movementMapFile(), 'utf8'));
 const byRoom = new Map();
 attachStepMasks(map, { geometryOf: room => {

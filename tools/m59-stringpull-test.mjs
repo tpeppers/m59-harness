@@ -24,7 +24,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { RoomGeometry, CLIENT_FINENESS } from './m59-roo.mjs';
 import { attachStepMasks } from './m59-routes.mjs';
-import { movementMapFile } from './m59-map-path.mjs';
+import { movementMapFile, announceMovementMap } from './m59-map-path.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail) => {
@@ -32,6 +32,9 @@ const ok = (what, cond, detail) => {
   else { fail++; console.log(`  FAIL ${what}${detail ? ' — ' + detail : ''}`); }
 };
 
+// Which map this planned on. See m59-map-path.mjs: the local bake and the committed
+// reference disagree, and a suite that does not say which it used cannot be compared.
+announceMovementMap();
 const mapFile = movementMapFile();
 if (!existsSync(mapFile)) {
   console.log('no baked map — skipping (this suite is about real geometry, not a fixture)');
