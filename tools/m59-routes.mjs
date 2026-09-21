@@ -60,6 +60,66 @@ export function routesFor(mapManifest) {
 }
 
 /**
+ * WHY THE TABLE WAS REFUSED, AS A SENTENCE — BECAUSE THE REFUSAL IS SILENT AND EXPENSIVE.
+ *
+ * `routesFor()` returning null is correct and says nothing. Downstream a room with no
+ * anchors makes `reachableExits` decline to narrow — deliberately, because narrowing to
+ * nothing on a missing answer would strand a character at a boundary it could have crossed
+ * — and `exits()` then publishes every opening on that boundary, island included.
+ *
+ * MEASURED 2026-09-21. Every part of that chain works as designed, and end to end it reads
+ * as a geometry bug:
+ *
+ *   m59-map.local.json present -> its manifest differs from the baked table's
+ *     -> routesFor() refuses the table -> room 567 has no anchors
+ *     -> reachableExits returns { reachable: null } -> exits() offers all openings -> r1c16
+ *
+ * m59-routing-test's r1c16 assertion fails on exactly that, and it is not an assertion about
+ * geometry at all: it incidentally asserts THE BAKE IS FRESH. Three sessions spent an evening
+ * on it. It was blamed on an uncommitted edit, then on the local map's geometry, then on
+ * mutation of the shared map object through loadMap's cache. All three were wrong, and each
+ * was a reasonable reading of a red that never said which precondition it had lost.
+ *
+ * So: a boolean, with the command that fixes it. Cheap — `load()` is cached and the caller
+ * already holds the map.
+ */
+export function routeTableStatus(map) {
+  const mapManifest = typeof map === 'string' ? map : (map?.geometryManifestSha256 ?? null);
+  const t = load();
+  const tableManifest = t?.geometryManifestSha256 ?? null;
+  const BAKE = 'node tools/m59-routebake.mjs';
+  if (!t) return { usable: false, mapManifest, tableManifest, remedy: BAKE,
+                   why: 'there is no baked route table on this checkout' };
+  if (!mapManifest) return { usable: false, mapManifest, tableManifest, remedy: null,
+                             why: 'the map in play carries no geometryManifestSha256' };
+  if (!tableManifest) return { usable: false, mapManifest, tableManifest, remedy: BAKE,
+                               why: 'the baked table carries no manifest' };
+  if (tableManifest !== mapManifest)
+    return { usable: false, mapManifest, tableManifest, remedy: BAKE,
+             why: 'the baked table was built against a DIFFERENT map than the one in play, so ' +
+                  'it is refused and every room reads as having no anchors' };
+  return { usable: true, mapManifest, tableManifest, remedy: null,
+           why: 'the baked table matches the map in play' };
+}
+
+/**
+ * The other half of "which map did this plan on": whether the TABLE for that map is usable.
+ *
+ * Quiet when it is and loud when it is not — the same asymmetry as announceMovementMap(),
+ * and meant to be printed beside it. One says which geometry; this says whether anything
+ * can route on it.
+ */
+export function announceRouteTable(map, log = console.log) {
+  const s = routeTableStatus(map);
+  if (s.usable) log('routes: baked table matches the map in play');
+  else log(`routes: TABLE REFUSED — ${s.why}.\n` +
+           '        Rooms read as having no anchors, so exits() cannot narrow and will offer\n' +
+           '        every opening on a boundary, including ones a body cannot reach.' +
+           (s.remedy ? `\n        Remedy: ${s.remedy}` : ''));
+  return s;
+}
+
+/**
  * Was this table's mask built by the predicate this build reads it with?
  *
  * THE MANIFEST CANNOT ANSWER THIS AND THAT IS THE WHOLE PROBLEM. It hashes the GEOMETRY,

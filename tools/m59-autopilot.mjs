@@ -9480,7 +9480,33 @@ export class Autopilot {
     // Already swinging is not a jam; an errand owns the body; once per pass.
     if (this.doing === 'fighting' || this.inert) return null;
     if (w.clearPathPass === this.passes) return null;
-    const pinnedFor = w.pinnedSince ? now - w.pinnedSince : 0;
+    // AND THE DURATION HAS TO COME FROM SOMEWHERE THE WATCHDOG HAS NOT ALREADY NULLED.
+    //
+    // `w.pinnedSince` is maintained by the watchdog under the SAME GOING assumption this rung
+    // used to carry — `m59-watchdog.mjs`: `const eligible = GOING.includes(host.doing) && ...;
+    // if (!eligible) { w.pinnedSince = null; }`. So widening the arming gate above achieved
+    // nothing on its own: the rung armed for a stalled body and then failed here, because the
+    // signal it measures is cleared by the transition into `stalled`.
+    //
+    // MEASURED, and this is why it is worth the second fix rather than a claim. After rolling
+    // all 24 prod keepers onto the widened gate, `clear_path_interrupts` was ZERO across the
+    // fleet at 14 minutes average uptime — and Bunsen died in the Flatlands at 03:46:07 with
+    // `doing: "stalled"`, `suspended_journey: {to: 38, attempts: 2}`, `clear_path: true`, a
+    // spider on him, and health falling 35 -> 4 over thirty seconds on ONE SQUARE (r35c32,
+    // `squares_per_second_at_the_end: 0`). Every gate passed except this one.
+    //
+    // THE SUSPENDED JOURNEY ALREADY CARRIES ITS OWN CLOCK, so nothing new is bookkept: `at`
+    // is when the ladder took the body off the road. Bunsen's read 58 seconds at death. The
+    // watchdog's own measure is still preferred when it has one — this is a floor under it for
+    // exactly the state the watchdog declines to measure, not a replacement.
+    //
+    // Deliberately NOT widening `eligible` in the watchdog: `pinnedSince` is also what the
+    // wedge ladder and `wedgedInPlace` read, and those cancel movement and count breaks at a
+    // place. Changing the meaning of one signal for four consumers to fix one of them is how
+    // this file grew two height rules.
+    const suspendedFor = blockedMidJourney && Number.isFinite(this.suspendedJourney?.at)
+      ? now - this.suspendedJourney.at : 0;
+    const pinnedFor = Math.max(w.pinnedSince ? now - w.pinnedSince : 0, suspendedFor);
     if (pinnedFor < CLEAR_PATH_MS) return null;
     const frac = pct(hp);
     if (frac === null || frac < this.safety().fleeAt) return null;

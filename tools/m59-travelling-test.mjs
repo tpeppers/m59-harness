@@ -363,6 +363,35 @@ console.log('\nthe guard: what a journey leaves switched on');
     ok('a stalled journey among three PLAYERS still arms nothing',
        stalledAmongPeople.clearPathCheck(stalledAmongPeople.watch, hp, Date.now()) === null);
 
+    // THE DURATION MUST NOT COME FROM `pinnedSince` ALONE FOR THIS STATE. The watchdog clears
+    // it under the same GOING assumption — `if (!eligible) { w.pinnedSince = null; }` — so the
+    // widened gate above armed and then died here. Measured on prod: 24 keepers rolled onto the
+    // gate alone produced ZERO clear_path interrupts in 14 minutes, while Bunsen died stalled
+    // on one square with a spider on him and a journey suspended 58 seconds earlier.
+    const stalledNoPin = keeper({ adjacent: 1 });          // watchdog has nulled pinnedSince
+    stalledNoPin.watch.pinnedSince = null;
+    stalledNoPin.doing = 'stalled';
+    stalledNoPin.suspendedJourney = { to: 39, why: 'travelling to 39', at: Date.now() - 58000 };
+    const viaJourney = stalledNoPin.clearPathCheck(stalledNoPin.watch, hp, Date.now());
+    ok('the suspended journey supplies the duration when pinnedSince has been cleared',
+       !!viaJourney && viaJourney.reason === 'blocked', JSON.stringify(viaJourney));
+
+    // And it is still a DURATION, not a licence: a journey suspended a moment ago is not a jam.
+    const justSuspended = keeper({ adjacent: 1 });
+    justSuspended.watch.pinnedSince = null;
+    justSuspended.doing = 'stalled';
+    justSuspended.suspendedJourney = { to: 39, why: 'travelling to 39', at: Date.now() - 500 };
+    ok('a journey suspended half a second ago is not yet a jam',
+       justSuspended.clearPathCheck(justSuspended.watch, hp, Date.now()) === null);
+
+    // A suspended journey with no clock on it cannot manufacture one.
+    const noClock = keeper({ adjacent: 1 });
+    noClock.watch.pinnedSince = null;
+    noClock.doing = 'stalled';
+    noClock.suspendedJourney = { to: 39, why: 'travelling to 39' };
+    ok('and a suspended journey carrying no `at` supplies no duration',
+       noClock.clearPathCheck(noClock.watch, hp, Date.now()) === null);
+
     const stalledNotPinned = keeper({ adjacent: 1 });
     stalledNotPinned.doing = 'stalled';
     stalledNotPinned.suspendedJourney = { to: 39, why: 'travelling to 39' };

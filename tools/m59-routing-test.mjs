@@ -786,6 +786,11 @@ console.log('\nthe last step into the goal — strict first, exemption as a fall
   const realMap = existsSync(MAP_ON_DISK) ? await loadMap() : null;
   // The masks are what `path` plans on; without attaching them this asserts nothing.
   if (realMap) attachStepMasks(realMap, {});
+  // AND WHETHER ANYTHING CAN ROUTE ON IT — the other half of the map announcement at the top.
+  // A table built against a different map is refused SILENTLY, every room then reads as
+  // having no anchors, exits() stops narrowing, and that surfaces five hundred lines down as
+  // the r1c16 assertion failing on what looks like a geometry bug. See routeTableStatus().
+  if (realMap) (await import('./m59-routes.mjs')).announceRouteTable(realMap);
   const raw556 = realMap?.rooms?.['556'] ?? realMap?.rooms?.[556];
   const g556 = raw556 ? sharedRoomGeometry(raw556) : null;
   if (!g556?.hasStepMask) {
