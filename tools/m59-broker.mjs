@@ -126,6 +126,7 @@ import {
   assertCanonicalAccountLeaseNamespace,
 } from './runtime/account-leases.mjs';
 import { KeeperLiveness, validateKeeperSample } from './runtime/keeper-liveness.mjs';
+import { startLoopStallMonitor } from './runtime/loop-stalls.mjs';
 import { deadlineFrom, shouldAttempt, recordToolMs, toolTimings, recordAbandoned,
          recordDeclined, recordFailed, unusedTools } from './runtime/deadlines.mjs';
 import { allocateKeeperBand, lookupKeeperBand,
@@ -17458,6 +17459,35 @@ function loopLag() {
            p99: ms(LOOP_LAG.percentile(99)), max: ms(LOOP_LAG.max) };
 }
 
+// AND WHO STOPPED IT, WHICH THE HISTOGRAM ABOVE CANNOT SAY.
+//
+// `max: 117440.5` says this loop stopped for nearly two minutes. It does not say by what, and
+// on 2026-09-20 three sessions read that same histogram and produced three incompatible
+// diagnoses of the same wedge. The argument, the mechanism, and why the keeper solved this
+// first are in tools/runtime/loop-stalls.mjs; `m59-loopstall-test.mjs` is the guard.
+//
+// THE THRESHOLD IS 2s RATHER THAN THE KEEPER'S 1.5s because the geometry this process runs is
+// legitimately bursty — `path()` costs 7-88ms a call and a fleet plans constantly — and a
+// report on every one of those is a report nobody reads. M59_BROKER_STALL_MS overrides it and
+// M59_BROKER_PROFILE=0 drops back to a plain lateness line.
+const LOOP_STALL_MONITOR = await startLoopStallMonitor({
+  label: 'broker',
+  reportOverMs: Number(process.env.M59_BROKER_STALL_MS || 2000),
+  profile: process.env.M59_BROKER_PROFILE !== '0',
+  // Read when a stall is REPORTED, never on the hot path. `sessions.size` is the one number
+  // that changes what a stall means: a two-minute block during a 24-character rejoin and the
+  // same block on a settled fleet are different findings.
+  context: () => ({ sessions: sessions.size }),
+});
+
+/**
+ * The last few times this loop stopped, each with the frames that owned the gap.
+ *
+ * On /health beside `loop_lag_ms` on purpose: the histogram says HOW BAD and this says WHO,
+ * and reading either alone is what produced three incompatible diagnoses in one day.
+ */
+function loopStalls() { return LOOP_STALL_MONITOR.stalls(); }
+
 function liveSessionIdentity(readiness) {
   const sessionCharacters = {};
   const sessionObjectIds = {};
@@ -17527,6 +17557,10 @@ function brokerHealth() {
     // "nobody has tried to move" are different, so this carries the count either way.
     geometry_drift: geometryDriftReport(),
     loop_lag_ms: loopLag(),
+    // WHO STOPPED IT, not just how long for. Empty is the ordinary answer and is worth
+    // saying: "nothing blocked this loop for two seconds" and "nobody was watching" are
+    // different claims, and this file spent 2026-09-20 unable to tell them apart.
+    loop_stalls: loopStalls(),
     // The geometry cache, reported so the cap can be judged rather than guessed at. A
     // hit_rate that collapses means M59_LRU_MAX is set below the fleet's working set of
     // rooms and the broker is re-parsing `.roo` files on the shared event loop — which is

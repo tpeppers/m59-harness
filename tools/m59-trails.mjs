@@ -44,6 +44,7 @@
 // returned trail points remain in protocol units.
 import fs from 'node:fs';
 import path from 'node:path';
+import { constants as bufferConstants } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 import { KOD_FINENESS, protocolToClient } from './m59-roo.mjs';
 import { fleetName } from './m59-fleetpath.mjs';
@@ -93,8 +94,61 @@ export const REJOIN_MS = Number(process.env.M59_TRAIL_REJOIN_MS || 120000);
 // not walk.
 export const MAX_WIRE_PER_SECOND = Number(process.env.M59_TRAIL_MAX_SPEED || 640);
 
+// THE SIZE AT WHICH A LEDGER STOPS BEING READABLE, WHICH IS A FACT ABOUT V8 AND NOT A TASTE.
+//
+// `readSamples` below reads a whole file into a string, and V8's MAX_STRING_LENGTH is
+// 536,870,888 characters. One byte past that the read cannot succeed — but it does not fail
+// FAST, and that is the whole reason this constant exists.
+//
+// Measured on prod, 2026-09-20, against this fleet's own trail:
+//
+//     readFileSync('substrate/trails/prod.jsonl', 'utf8')  ->  ERR_STRING_TOO_LONG
+//     elapsed: 102,639 ms      size: 26.15 GB      node v25.2.1
+//
+// Node reads all 26 GB — a hundred and two seconds of blocked event loop, at 255 MB/s — and
+// only then fails converting the buffer to a string. In a process that is also a fleet's
+// broker, a hundred seconds of silence is long enough for blakserv to log every character out
+// (INACTIVE_GAME is 30s), and the fleet earns nothing while it happens.
+//
+// Nothing rotated this file for weeks because nothing here ever has. So: the WRITER rotates at
+// the size the READER can still hold, which keeps the two ends of this file honest with each
+// other, and makes the cap one number rather than two that can drift apart.
+// Taken from the RUNTIME rather than written down: MAX_STRING_LENGTH is 536,870,888 here
+// and is a V8 build constant that has moved before. A hand-typed 512MiB is 536,870,912 —
+// twenty-four bytes OVER the ceiling, which is a cap that does not cap.
+export const MAX_TRAIL_BYTES =
+  Number(process.env.M59_TRAIL_MAX_BYTES || bufferConstants.MAX_STRING_LENGTH);
+
 export function trailsFile(fleet = FLEET()) {
   return path.join(TRAILS_DIR, String(fleet).replace(/[^\w.-]/g, '_') + '.jsonl');
+}
+
+/**
+ * Move the active trail aside once it passes the size a reader can hold. Returns the name it
+ * was rotated to, or null when nothing needed doing.
+ *
+ * ROTATED, NEVER TRUNCATED. A trail is evidence about walks that really happened, and the
+ * readers here already enumerate every `.jsonl` in the directory, so a rotated file stays in
+ * the answer. What is lost by rotating is only the ability to read the whole history in ONE
+ * string, which is exactly the thing that was not possible anyway.
+ *
+ * It never throws: a rotation that fails leaves the append to carry on into the big file,
+ * which is the behaviour that was there before this existed.
+ */
+export function rotateTrailIfHuge(file, max = MAX_TRAIL_BYTES) {
+  try {
+    if (!(max > 0)) return null;
+    const size = fs.statSync(file).size;
+    if (size <= max) return null;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, 'Z');
+    const rolled = file.replace(/\.jsonl$/, '') + `-${stamp}.jsonl`;
+    fs.renameSync(file, rolled);
+    // Said out loud, because a file quietly changing name under a reader is its own trap, and
+    // because this line is the only warning anybody gets that a ledger got away from us.
+    console.error(`[trails] rotated ${path.basename(file)} at ` +
+                  `${(size / 1073741824).toFixed(2)}GB -> ${path.basename(rolled)}`);
+    return rolled;
+  } catch { return null; }      // no trail file yet, or a reader holding it: not our problem
 }
 
 let buffer = [], timer = null, lastOf = new Map();
@@ -168,15 +222,42 @@ export function flushTrails(fleet = FLEET()) {
   const rows = buffer; buffer = [];
   try {
     fs.mkdirSync(TRAILS_DIR, { recursive: true });
-    fs.appendFileSync(trailsFile(fleet), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+    const file = trailsFile(fleet);
+    // Checked on the FLUSH rather than on a timer, because the flush is the only moment this
+    // module is guaranteed to run and the only moment the file grows. A stat per 128 samples
+    // is nothing against the append it is guarding.
+    rotateTrailIfHuge(file);
+    fs.appendFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + '\n');
     return rows.length;
   } catch { return 0; }
 }
 
 /** Read samples with protocol/KOD x/y and optional 1-based col/row from either ledger shape. */
 export function readSamples(file) {
+  // REFUSED OUT LOUD, BECAUSE THE ALTERNATIVE IS A HUNDRED SECONDS AND A SILENCE.
+  //
+  // A file over MAX_TRAIL_BYTES cannot be read into a string at all, and finding that out
+  // costs a full read of it — 102.6 s and 26 GB on prod on 2026-09-20 — after which the
+  // `catch` below returned `[]` and the caller reported "no samples". Empty and unreadable
+  // are not the same answer and must not look the same, so this says which it is, names the
+  // size, and does not spend the hundred seconds discovering it.
+  try {
+    const size = fs.statSync(file).size;
+    if (size > MAX_TRAIL_BYTES) {
+      console.error(`[trails] ${path.basename(file)} is ` +
+                    `${(size / 1073741824).toFixed(2)}GB, past the ` +
+                    `${(MAX_TRAIL_BYTES / 1073741824).toFixed(2)}GB a reader can hold — ` +
+                    `skipped. Rotate it, or raise M59_TRAIL_MAX_BYTES and expect to wait.`);
+      return [];
+    }
+  } catch { /* no file is an ordinary answer; let the read below settle it */ }
   let text = '';
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  try { text = fs.readFileSync(file, 'utf8'); }
+  catch (e) {
+    // A read that failed is a fact about this run, not a trail with nothing in it.
+    if (e?.code !== 'ENOENT') console.error(`[trails] cannot read ${path.basename(file)}: ${e?.code ?? e?.message}`);
+    return [];
+  }
   const out = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
