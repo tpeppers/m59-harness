@@ -22,6 +22,7 @@
 
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
 import * as skills from './m59-skills.mjs';
+import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
 import { recoveryRefugeReach, recoveryOccupiedSquares } from './m59-recovery-refuge.mjs';
@@ -2523,7 +2524,24 @@ export class Autopilot {
    * succeeds, every result is refused by `equipBest`, and the pack fills with them. A full
    * pack then answers `receiver_full` to every `supply`, so the character cannot even be
    * handed a weapon it IS allowed to use.
+   *
+   * THIS COMMENT SAT ON TOP OF `hostilePlayersInReach()` WITH NO METHOD UNDER IT until
+   * 2026-09-20 — written for a function that was never added, or removed with the comment
+   * left. So the diagnostic the 2026-09-18 incident asked for ("the diagnostic is
+   * `bannedWeapons` ∩ pack contents, not the refusal text") did not exist, and `m59-rearm.mjs`
+   * walked donors across the map to characters that could not keep what they were given. The
+   * predicate is in `m59-arming.mjs` so `m59-rearm.mjs` can ask it too without importing
+   * thirteen thousand lines of keeper; this is the keeper's door onto it.
    */
+  bannedWeaponsHeld() {
+    return bannedWeaponsHeld({
+      items: this.s?.client?.inventory ?? [],
+      banned: this.bannedWeaponsNow(),
+      weaponScore: skills.weaponScore,
+      isBannedWeapon: skills.isBannedWeapon,
+    });
+  }
+
   /**
    * Hostile PLAYERS within melee reach — the same predicate the survival ladder's
    * `strangers` uses: a player flag, attackable, and NOT a fleetmate. The fleetmate

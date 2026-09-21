@@ -4,6 +4,7 @@
 //   node tools/m59-rearm.mjs                  # who is unarmed, who can spare one (dry)
 //   node tools/m59-rearm.mjs --go             # actually hand them out
 //   node tools/m59-rearm.mjs --go --agents t1,t16
+//   node tools/m59-rearm.mjs --go --force     # ignore trainingStyle and bannedWeapons
 //
 // WHY THIS EXISTS.
 //
@@ -37,6 +38,9 @@ const PORT = Number(arg('port', 8901));
 const RPC = `http://127.0.0.1:${PORT}/`;
 const GO = !!arg('go', false);
 const ONLY = arg('agents', null);
+// Hand a weapon to somebody whose own policy will not let it keep one. Off by default,
+// because doing it silently is the bug this flag exists to make deliberate.
+const FORCE = !!arg('force', false);
 // WHAT TO MOVE. The fleet hoards every resource the same way — whoever killed the thing
 // keeps it — so weapons and reagents are the same errand with a different filter.
 //
@@ -82,6 +86,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const CREATE_WEAPON_MANA = Number(arg('conjure-mana', 15));
 
 const skills = await import('./m59-skills.mjs');
+const { armingRefusal } = await import('./m59-arming.mjs');
 
 // Spend the donor's stock, and retire a stack only when what is left cannot cover
 // another delivery. Shifting the whole stack after one handover let a donor holding
@@ -336,6 +341,38 @@ async function main() {
     // being wrong.
     unarmed = rows.filter(r => !r.wielding).filter(inTheWorld)
                   .filter(r => !only || only.includes(r.agent));
+
+    // AND NOT WANTING ONE IS A DIFFERENT THING FROM NOT HAVING ONE.
+    //
+    // This tool used to stop at `!r.wielding` and walk a donor across the map to a character
+    // that could never keep what it was given. Two settings do that, and both are silent:
+    // `trainingStyle: 'unarmed'` (the keeper takes it off on the first swing — Statler,
+    // 2026-09-11, three weapons, three silences) and a `bannedWeapons` list covering
+    // everything on offer (Rizzo, 2026-09-18, 24 long swords with `long sword` banned, 4,293
+    // idle passes). Every call in both cases reported success.
+    //
+    // So ASK FIRST, and say who was skipped and why. A character quietly left out of a
+    // hand-out reads as a character that did not need one, which is how the ban list stayed
+    // invisible for a day. `--force` runs the old behaviour for anyone who wants it.
+    if (!FORCE) {
+      const kept = [];
+      for (const r of unarmed) {
+        const st = await call('autopilot', { agent: r.agent, action: 'status' }, 60_000)
+                     .catch(() => null);
+        const why = armingRefusal({
+          policy: st?.policy ?? {},
+          items: packs.get(r.agent) || [],
+          vigor: st?.policy ? (r.vigor ?? null) : null,
+          weaponScore: skills.weaponScore,
+          isBannedWeapon: skills.isBannedWeapon,
+        });
+        // Carried forward so the donor pick can honour it too — the status call is the
+        // expensive part and it has already been made.
+        if (!why) { kept.push({ ...r, __banned: st?.policy?.bannedWeapons ?? null }); continue; }
+        console.log(`  skipping ${r.character}: ${why.detail}  [${why.reason}]`);
+      }
+      unarmed = kept;
+    }
     // A donor keeps the one it is using plus one in reserve — a fleet that strips its
     // fighters bare to arm the idle has not gained anything.
     donors = rows.filter(inTheWorld).map(r => ({ r, spare: (packs.get(r.agent) || []).slice(r.wielding ? 1 : 2) }))
@@ -427,8 +464,20 @@ async function main() {
           const short = /elder/i.test(sp.name) ? (need.eb ?? 0) : (need.hb ?? 0);
           return short < WANT_REAGENTS;
         })
-      : [pick.d.spare[0]].filter(Boolean);
-    if (!carry.length) { console.log(`  ${need.character}: donor has nothing it is short of`); continue; }
+      // AND THE RECEIVER'S BAN LIST DECIDES WHICH SPARE, NOT THE DONOR'S PACK ORDER. A donor
+      // whose best spare is a long sword and a receiver that bans long swords is a seven-hop
+      // walk ending in `equipBest` refusing it — the whole errand spent to move a banned
+      // weapon from one pack to another.
+      : (FORCE ? [pick.d.spare[0]]
+               : [pick.d.spare.find(sp => !skills.isBannedWeapon(sp.name, need.__banned))]
+        ).filter(Boolean);
+    if (!carry.length) {
+      console.log(`  ${need.character}: donor has nothing it is short of` +
+                  (!isReagents && !FORCE && pick.d.spare.length
+                    ? ` that it is allowed to wield (offered: ${[...new Set(pick.d.spare.map(s => s.name))].join(', ')})`
+                    : ''));
+      continue;
+    }
     const give = carry[0];
     const amount = give.give ?? 1;
     if (!GO) {
