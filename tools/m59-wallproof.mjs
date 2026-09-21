@@ -50,6 +50,23 @@
 //   `player-moved` carries OTHER players. So the poll is the position stream, and an attack is
 //   attributed to a square only when the polls either side of it agree on that square.
 //
+//   THE COLLECTOR LOSES MESSAGES, SO EVERY ATTACK COUNT HERE IS A FLOOR. Found 2026-09-21 by
+//   cross-checking health drops against attack messages: a body fighting a troll continuously
+//   for twenty minutes yielded NINE "Your mace bashes the troll" lines. `--collect` polls
+//   `recording --tail limit:500` every 5s and dedupes by seq, and the recorder's buffer is
+//   dominated by stat updates — its own documentation says "one fight is ninety stat updates"
+//   — so combat lines are evicted between polls.
+//
+//   WHAT THAT DOES AND DOES NOT INVALIDATE. It makes absolute rates UNDERESTIMATES, and it
+//   makes "this body did not swing" unreliable when inferred from an absence of outgoing
+//   messages. It does NOT break the 2x2, because every cell is sampled through the same lossy
+//   channel: cell C still collected 8 attacks in 86s while cell A collected 0 in 3,053s, and
+//   uniform loss cannot manufacture a 35x difference in exposure with a zero on one side.
+//   Read the cells against each other, never as absolute rates.
+//
+//   THE FIX, when it matters: poll faster, raise the limit, or have the recorder filter to
+//   `kinds:["message"]` server-side so stat traffic cannot crowd the words out.
+//
 //   THE BAKED GEOMETRY CALLS ~2.5% OF REAL STANDING GROUND UNWALKABLE. 12 of 480 squares that
 //   live bodies were observed standing on fail `geo.walkable()`. Those squares can never be
 //   offered as safe walls, and any analysis that classifies a death square by the bake will

@@ -985,10 +985,20 @@ export function nearestSafeSpot(geo, from, {
     // walkability is the wrong arbiter for where a body can be, and tightening the flood
     // that way would refuse real shelter on real ground. Adjacency is the narrow, checkable
     // claim — you cannot enter a square with nowhere to enter it from.
-    if (!hasAnyFooting(geo, s.row, s.col)) { unreachableToUs++; continue; }
+    //
+    // ORDERED AFTER THE SET LOOKUPS, and that ordering is not incidental. This costs eight
+    // `geo.walkable()` probes per candidate; the two filters below are Set lookups. The
+    // first version of this sat ABOVE them and so paid the geometry on every candidate the
+    // cheap tests were about to reject anyway — roughly a fifth of a 38ms call in room 200,
+    // which has 445 walls. The loop's own note two screens down says CHEAP TESTS FIRST for
+    // exactly this reason, and it applied here the moment this line existed.
+    //
+    // It stays a filter rather than a precomputation because it is four squares in the
+    // world: caching it per room would cost more than it saves.
     // AND NOT ONE THE MOVER CANNOT GET TO AT ALL. The measured case is a shelter offered in
     // a disconnected component while a real wall sat one square from the character.
     if (canWalkThere && !canWalkThere.has(`${s.row},${s.col}`)) { unreachableToUs++; continue; }
+    if (!hasAnyFooting(geo, s.row, s.col)) { unreachableToUs++; continue; }
     // NOR ONE WE COULD NOT COME BACK FROM. Now that distance is the whole ranking, the
     // nearest wall is sometimes over a one-way drop — the mover walks a character off a
     // ledge it cannot climb, the character rests, and the journey that diverted has no
