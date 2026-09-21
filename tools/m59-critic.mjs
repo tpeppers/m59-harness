@@ -377,9 +377,52 @@ export function strangersPresent(pm, fleet) {
 
 // THE SIGNATURES. Each is a mechanical fact with a citation, and each is the reason a given
 // defect class is worth considering FIRST. None of them is a verdict; they are where to look.
-export function signatures(pm) {
+export function signatures(pm, { creatures = null } = {}) {
   const s = pm?.summary || {}, w = s.watchdog || {}, mv = s.movement || {}, out = [];
   const push = (name, cite, says, suggests) => out.push({ name, cite, says, suggests });
+
+  // BLOCKED BY SOMETHING IT KILLS AT WORK, ON A JOURNEY IT NEVER RESUMED.
+  //
+  // The operator's reading of The Flatlands, and it is a READING rather than an observation,
+  // which is the whole point of this file: the deaths there are spiders and ants, and "spiders
+  // and ants are weak enough anyone in the fleet could kill them with any weapon and just
+  // continue walking". So `killed by a spider` is inadmissible twice over — once as a
+  // restatement of the broadcast, and once because the animal is not the surprising part.
+  //
+  // MECHANISED AGAINST THE CHARACTER'S OWN QUARRY rather than a hand-written weak list, because
+  // a list of harmless creatures would be wrong the first time the fleet levels. The comparison
+  // is `viDifficulty` first and attack rating second — CLAUDE.md's own rule that a creature's
+  // LEVEL is not how dangerous it is. A spider is diff 4 / atk 390 against the battered
+  // skeleton's 4 / 420, so it fires. A troll is 8 / 750 and does not, which is correct: Ukgoth
+  // is a genuinely harder room and its deaths belong to other classes.
+  //
+  // AND IT REQUIRES THE JOURNEY, which is what keeps it off the seventeen deaths at the station
+  // itself. Dying to a battered skeleton in room 39 is dying at work; dying to a spider in the
+  // Flatlands with `suspended_journey.why = "travelling to 39"` is being stopped on the way.
+  const quarry = [].concat(pm?.was?.hunting ?? []).filter(x => typeof x === 'string');
+  // THE SAME RESOLVER `killerOf` USES, not a field read off the record. A post-mortem does not
+  // carry `killed_by` at the top level — the killer is parsed out of the server's own broadcast
+  // by `attributeDeath`, and the first draft of this signature read a field that is never there
+  // and fired on nothing, silently, across all 96 deaths in the window. A signature that cannot
+  // fire looks exactly like a signature with nothing to say.
+  const killedBy = attributeDeath(pm)?.killer ?? null;
+  const journey = pm?.survival_trace?.current?.suspended_journey ?? null;
+  if (creatures && killedBy && quarry.length && journey) {
+    const k = creatures[String(killedBy).toLowerCase()] ?? creatures[killedBy] ?? null;
+    // The HARDEST thing it is sent to fight, because that is the bar it clears every day.
+    const bar = quarry.map(q => creatures[String(q).toLowerCase()] ?? creatures[q] ?? null)
+      .filter(c => c && Number.isFinite(c.difficulty))
+      .sort((a, b) => (b.difficulty - a.difficulty) || (b.attack_rating - a.attack_rating))[0] ?? null;
+    if (k && bar && Number.isFinite(k.difficulty)
+        && (k.difficulty < bar.difficulty
+            || (k.difficulty === bar.difficulty && (k.attack_rating ?? 0) <= (bar.attack_rating ?? 0))))
+      push('beatable_blocker',
+           `killed_by "${k.name}" (diff ${k.difficulty}, atk ${k.attack_rating}) against its own `
+           + `quarry "${bar.name}" (diff ${bar.difficulty}, atk ${bar.attack_rating}); `
+           + `survival_trace.current.suspended_journey.why = ${JSON.stringify(journey.why ?? null)}`,
+           `blocked by a creature it kills at its own station, on a journey it never resumed`,
+           'stopped_for_beatable_prey');
+  }
 
   if (Number.isFinite(w.longest_block_ms) && w.longest_block_ms > 60_000)
     push('keeper_blind', `summary.watchdog.longest_block_ms = ${w.longest_block_ms}`,
@@ -434,6 +477,7 @@ export function signatures(pm) {
 // were going somewhere and stopped, which is the same defect wearing the keeper's word for it
 // rather than the router's.
 export function travelCandidates(records, { monsters, fleet, since = 0, character = null,
+                                            creatures = null,
                                             doings = ['travelling', 'stalled'] } = {}) {
   const out = [];
   for (const pm of records || []) {
@@ -452,7 +496,7 @@ export function travelCandidates(records, { monsters, fleet, since = 0, characte
     const pvp = killer.confirmed_player || (strangers.length > 0 && !(killer.is_monster && killer.observed));
     const contested = strangers.length > 0 && !pvp;
 
-    const sigs = signatures(pm);
+    const sigs = signatures(pm, { creatures });
     out.push({
       id: `travel/${pm.character}/${new Date(Number(pm.at) || 0).toISOString()}`,
       lens: 'travel',
@@ -471,6 +515,10 @@ export function travelCandidates(records, { monsters, fleet, since = 0, characte
             + (sigs.some(x => x.suggests === 'wedged') ? 50 : 0)
             + (sigs.some(x => x.suggests === 'guard_did_not_fire') ? 20 : 0)
             + (sigs.some(x => x.suggests === 'routed_into_a_crowd') ? 10 : 0)
+            // ABOVE A CROWD, BELOW A WEDGE. A body stopped by something it beats every day is a
+            // sharper finding than a room that happened to be busy — the crowd is a condition,
+            // this is a contradiction — but a refusing mover still explains more.
+            + (sigs.some(x => x.suggests === 'stopped_for_beatable_prey') ? 30 : 0)
             + (pvp ? -1000 : 0),
       default_verdict: pvp ? 'not_a_defect (PVP — and SHOW the person)' : 'defect',
       asks: pvp
@@ -668,6 +716,28 @@ export function readPostmortems(dir, { since = 0, limit = 0 } = {}) {
     catch { /* a half-written postmortem is a keeper that died mid-write, not a complaint. */ }
   }
   return out;
+}
+
+// THE LEVELS, DIFFICULTIES AND ATTACK RATINGS, keyed by creature name.
+//
+// `loadMonsters` above answers "is this string a monster at all" and returns a Set of names,
+// which cannot say whether the thing that killed somebody was easier than the thing it was
+// sent to fight. The baked spawn index already carries viLevel, viDifficulty and the attack
+// rating for all 123 creatures, so this reads that rather than re-deriving anything. Missing
+// file means the one signature that needs it simply does not fire — a report is not worth a
+// crash, and a signature that cannot be computed must be absent rather than guessed.
+export function loadCreatureStats(file = join(REPO, 'substrate/m59-spawns.json')) {
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    const out = Object.create(null);
+    for (const [name, c] of Object.entries(j.creatures || {})) {
+      const row = { name: c.name ?? name, level: c.level ?? null,
+                    difficulty: c.difficulty ?? null, attack_rating: c.attack_rating ?? null };
+      out[String(name).toLowerCase()] = row;
+      if (c.name) out[String(c.name).toLowerCase()] = row;
+    }
+    return out;
+  } catch { return null; }
 }
 
 function loadMonsters() {
@@ -872,6 +942,7 @@ async function main(argv) {
     // short window with a fleet-mate's name.
     const fleet = new Set([...rosterFromStore(store.dir), ...roster(all)]);
     const cands = travelCandidates(all, { monsters: loadMonsters(), fleet, since,
+                                          creatures: loadCreatureStats(),
                                           character: flag('char', null) });
     bundle.candidates.push(...cands);
     // The bundle carries the address too — a worklist handed to an agent has to say which

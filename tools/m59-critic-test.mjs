@@ -158,6 +158,69 @@ console.log('\nsignatures: mechanical facts, each with a citation');
   check('and does not invent a keeper block', !thin.includes('keeper_blind'));
 }
 
+console.log('\nsignatures: blocked by a creature it should have killed');
+{
+  // The operator's reading of The Flatlands, 2026-09-20: "spiders/ants that are weak enough
+  // anyone in the fleet could kill them with any weapon and just continue walking". Measured
+  // against the live store the same evening, this fires on 25 of 25 spider deaths and 5 of 5
+  // ant deaths there, and on NONE of the 22 trolls in Ukgoth, the 18 battered skeletons at the
+  // station, or the 4 skeletons in 38.
+  const CREATURES = {
+    spider: { name: 'spider', level: 50, difficulty: 4, attack_rating: 390 },
+    ant: { name: 'ant', level: 40, difficulty: 4, attack_rating: 360 },
+    troll: { name: 'troll', level: 90, difficulty: 8, attack_rating: 750 },
+    'black spider': { name: 'black spider', level: 75, difficulty: 5, attack_rating: 525 },
+    zombie: { name: 'zombie', level: 55, difficulty: 4, attack_rating: 405 },
+    'battered skeleton': { name: 'battered skeleton', level: 60, difficulty: 4, attack_rating: 420 },
+  };
+  const death = (killer, { journey = 'travelling to 39', hunting = ['zombie', 'battered skeleton'] } = {}) => ({
+    reason: 'died', character: 'Rowlf', was: { hunting, doing: 'stalled' },
+    where: { room: 'The Flatlands', num: 584 },
+    // The shape `attributeDeath` actually reads — a PARSED broadcast, not the raw sentence.
+    killed_by_broadcast: { who: 'Rowlf', killer, how: 'killed',
+                           text: `### Rowlf was just killed by a ${killer}.` },
+    survival_trace: journey ? { current: { suspended_journey: { why: journey } } } : {},
+  });
+  const names = pm => signatures(pm, { creatures: CREATURES }).map(x => x.name);
+
+  check('a spider blocking a journey fires', names(death('spider')).includes('beatable_blocker'));
+  check('an ant does too', names(death('ant')).includes('beatable_blocker'));
+  // A TROLL IS GENUINELY HARDER AND UKGOTH IS A GENUINELY HARDER ROOM. If this ever fires on
+  // one, the class has become "died while travelling" and stops being a reading at all.
+  check('a troll does NOT', !names(death('troll')).includes('beatable_blocker'));
+  check('nor does a black spider, which is diff 5 against the quarry\'s 4',
+        !names(death('black spider')).includes('beatable_blocker'));
+
+  // DYING AT WORK IS NOT BEING BLOCKED ON THE WAY TO IT. Without a suspended journey this is a
+  // character losing a fight it was sent to have, which is a different finding entirely — and
+  // it is what keeps the eighteen station deaths out of this class.
+  check('the same killer with no suspended journey does not fire',
+        !names(death('spider', { journey: null })).includes('beatable_blocker'));
+  check('and its own quarry killing it at its station does not fire',
+        !names(death('battered skeleton', { journey: null })).includes('beatable_blocker'));
+  // The equal case is deliberately included — the quarry itself, met on the road, is still
+  // something the character kills every day.
+  check('the quarry met ON THE ROAD does fire',
+        names(death('battered skeleton')).includes('beatable_blocker'));
+
+  // A PLAYER IS NOT A CREATURE. `attributeDeath` resolves a murder to a person's name, which is
+  // not in the table, so the lookup must miss rather than guess.
+  check('a named player never fires this', !names(death('Morpheus')).includes('beatable_blocker'));
+
+  const sig = signatures(death('spider'), { creatures: CREATURES })
+    .find(x => x.name === 'beatable_blocker');
+  check('it cites both animals and the journey',
+        /spider.*diff 4.*battered skeleton.*diff 4/s.test(sig.cite) && /suspended_journey/.test(sig.cite));
+  check('it suggests a class in the vocabulary',
+        Object.prototype.hasOwnProperty.call(DEFECT_CLASSES, sig.suggests));
+
+  // WITHOUT THE TABLE IT MUST BE ABSENT, NOT GUESSED. The first draft read a `killed_by` field
+  // that post-mortems do not carry and fired on nothing across all 96 deaths in the window,
+  // which looked exactly like a signature with nothing to say.
+  check('no creature table means the signature is simply absent',
+        !signatures(death('spider')).map(x => x.name).includes('beatable_blocker'));
+}
+
 console.log('\nsignatures: net-zero movement outranks a slow crawl');
 {
   const still = { summary: { movement: { net_squares: 0, seconds: 132.2, squares_per_second: 0,
