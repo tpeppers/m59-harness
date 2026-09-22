@@ -4737,7 +4737,6 @@ export class Autopilot {
     if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80) {
       finishSurvivalDecision(s,d.id,'recovered','health and resting vigor restored');return false;
     }
-    if (d.retry_at && Date.now()<d.retry_at) return true;
     // A director leases movement for its entire run, while survival/recovery remain
     // with this keeper. Only an actual handoff (busy/inert or a protected faculty)
     // may end this recovery. A routine movement claim must not cancel it every pass.
@@ -4747,6 +4746,16 @@ export class Autopilot {
       chooseSurvivalDecision(s,{strategy:'yield_to_controller',reason:'survival control explicitly handed to another controller',
         reason_code:'controller_ownership',status:'yielded'},{because:'external control takes precedence'});return false;
     }
+    // Pending recovery runs before passFleeAndRest. Without its blocker rung,
+    // a pinned body can exhaust refuge alternatives forever without reaching
+    // the ordinary ladder's stationary fight. Keep the recovery intent, clear
+    // only a known in-band monster in reach, and reassess on the next pass.
+    // This also gives a blocked retry delay useful work without another walk.
+    if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
+        && this.armedForSure()
+        && await this.tradeInPlaceIfWedged({near:this.inReachOfUs(),v,inBandOnly:true}))
+      return true;
+    if (d.retry_at && Date.now()<d.retry_at) return true;
     if (d.status==='recovering') {
       if (this.checkFreeze()) return true;
       if (!this.currentRecoveryWall()) {
@@ -13828,7 +13837,7 @@ export class Autopilot {
   // Gated on being BELOW THE FLEE LINE with something in swing range and no working wall,
   // because above it the ordinary fight rung is the right one and behind a wall the rest
   // rung is. `trade_in_place_when_wedged: false` switches it off per character.
-  async tradeInPlaceIfWedged({ near = [], v = null } = {}) {
+  async tradeInPlaceIfWedged({ near = [], v = null, inBandOnly = false } = {}) {
     if (this.policy?.tradeInPlaceWhenWedged === false) return false;
     if (!near.length || this.hold || this.holdWorks()) return false;
     const frac = pct(v?.health);
@@ -13903,7 +13912,10 @@ export class Autopilot {
     // line the filter is dropped: there we are not declining a fight in favour of a better
     // option, only in favour of dying.
     const ordered = [...near].sort((a, b) => dist(a) - dist(b));
-    const pool = desperate ? ordered : ordered.filter(o => !this.refuseEngagement(nameOf(o)));
+    // A pending refuge may clear a weak blocker even while hurt, but must not
+    // inherit the ordinary ladder's last-resort permission to hit anything.
+    const pool = desperate && !inBandOnly ? ordered
+      : ordered.filter(o => nameOf(o) && !this.refuseEngagement(nameOf(o)));
     if (!pool.length) {
       // Say so rather than failing silently — "wedged next to something I may not hit" is a
       // different fact from "nothing is in reach", and only one of them is a doctrine choice.
@@ -13923,7 +13935,8 @@ export class Autopilot {
       target: name, target_id: target.id ?? null, in_reach: near.length,
       // Named so a sweep can count how often the crowd veto would have refused this.
       crowd_overridden: crowd,
-      mode: desperate ? 'below the flee line — anything in reach' : 'in-band blockers only',
+      mode: desperate && !inBandOnly ? 'below the flee line — anything in reach' : 'in-band blockers only',
+      pending_survival: inBandOnly,
       threats_here: (() => { try { return this.threatCountHere(); } catch { return null; } })(),
       health: v?.health ? `${v.health.value}/${v.health.max}` : null,
       flee_at: Math.round(this.safety().fleeAt * 100) + '%',
