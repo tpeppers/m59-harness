@@ -6,11 +6,11 @@ export function sameJamPocket(a,b) {
 export function jamObservation(k) {
   const s=k.s,c=s?.client,p=c?.self;
   return {room:s?.world?.room?.num,row:p?.row,col:p?.col,client:c,
-    generation:s?.movementGeneration,deaths:k.tally?.deaths??0};
+    generation:s?.movementGeneration,deaths:k.tally?.deaths??0,lifeBoundary:s?.lifeBoundary??0};
 }
 export function validJamOwner(k,e,now=Date.now()) {
   const o=jamObservation(k),hp=k.s?.client?.vitals?.()?.health?.value;
-  return !!e && e.client===o.client && e.generation===o.generation && e.deaths===o.deaths
+  return !!e && e.client===o.client && e.generation===o.generation && e.deaths===o.deaths && e.lifeBoundary===o.lifeBoundary
     && sameJamPocket(e,o) && now<e.expires && hp!==0 && o.room!==1
     && !k.stopping && !(k.busy?.until>now) && !(k.inert&&!k.inert.travelling)
     && !k.facultyHeld('survival') && !k.facultyHeld('combat') && !k.facultyHeld('recovery')

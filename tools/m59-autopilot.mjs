@@ -21,7 +21,7 @@
 //     find itself somewhere else can find out why.
 
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
-import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
+import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,sameJamPocket,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
 import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
 import * as skills from './m59-skills.mjs';
@@ -13396,7 +13396,7 @@ export class Autopilot {
     const now = Date.now();
     this.backUps = (this.backUps || []).filter(b => now - b.at < WINDOW_MS
       && (!b.jam_id || b.jam_id===episode?.id)
-      && (!b.failed || watchdog.sameWedgePlace(b, place)));
+      && (!b.failed || (b.jam_id && b.jam_id===episode?.id) || watchdog.sameWedgePlace(b, place)));
     // Survival must escalate failures, not just successful escapes. Keep those
     // attempts out of the ordinary mover's history so a hurt episode cannot make
     // a later healthy journey skip its cheap first option.
@@ -13438,18 +13438,37 @@ export class Autopilot {
                  why: 'below the flee line — the survival ladder owns the body' };
     }
 
+    const episode = owner === 'survival' ? this.survivalJam() : null;
+    const pocket = episode ? {room:episode.room,row:episode.row,col:episode.col} : from;
     const rung = this.stuckRung(from, { owner });
     const tried = [];
     // Every fallback belongs to the same command. A cancelled retreat must not
     // acquire a fresh generation and resume over a newer rescue or human command.
     const movementGeneration = s?.movementGeneration;
     const ownerRevision=this._survivalOwnerRevision??0;
-    const cancelled = () => !!s?.movementWasCancelled?.(movementGeneration)
-      || (owner==='survival' && ((this._survivalOwnerRevision??0)!==ownerRevision
-        || this.stopping || this.busy?.until>Date.now() || (this.inert&&!this.inert.travelling)
-        || this.facultyHeld('survival') || this.facultyHeld('combat') || this.facultyHeld('recovery')));
+    const client = s.client, lifeBoundary = s.lifeBoundary ?? 0, deaths = this.tally?.deaths ?? 0;
+    let interrupted = null;
+    const interruption = () => {
+      if (interrupted) return interrupted;
+      if (s.client !== client) return interrupted = 'client replaced';
+      if ((s.lifeBoundary ?? 0) !== lifeBoundary || (this.tally?.deaths ?? 0) !== deaths
+          || s.world?.room?.num === 1 || client?.vitals?.()?.health?.value <= 0)
+        return interrupted = 'death during retreat';
+      if (owner === 'survival' && ((this._survivalOwnerRevision??0)!==ownerRevision
+          || this.stopping || this.busy?.until>Date.now() || (this.inert&&!this.inert.travelling)
+          || this.facultyHeld('survival') || this.facultyHeld('combat') || this.facultyHeld('recovery')))
+        return interrupted = 'survival owner changed';
+      return null;
+    };
+    // A scoped lease cancels the paced mover itself, without cancelling a newer
+    // command or the post-death recovery owner. Death persists across respawn.
+    const controlToken = Symbol('retreat life and owner lease');
+    (s.movementCancellationChecks ??= new Map()).set(controlToken, interruption);
+    const cancelled = () => !!interruption() || !!s?.movementWasCancelled?.(movementGeneration, controlToken);
+    try {
     const terminalReason = () => tried.find(t => isTerminalMovementReason(t.reason))?.reason;
-    const canContinue = () => !cancelled() && !terminalReason() && !this.hold && !this.holdWorks();
+    const canContinue = () => !cancelled() && !terminalReason() && !this.hold && !this.holdWorks()
+      && !this.currentRecoveryWall?.();
     // WHICH RUNG ACTUALLY FREED IT, not which rung ran after one that did.
     //
     // `worked` used to be `moved()`, which compares against the position captured when the
@@ -13473,6 +13492,10 @@ export class Autopilot {
       if (!at || !from) return false;
       return at.room !== from.room || at.col !== from.col || at.row !== from.row;
     };
+
+    const escaped = () => !cancelled() && (owner !== 'survival' ? moved()
+      : !!this.currentRecoveryWall?.() || this.holdWorks()
+        || (!!this.wedgePlace() && !!pocket && !sameJamPocket(pocket, this.wedgePlace())));
 
     // ---- rung 1.5: back onto the RAIL, not merely back a few squares.
     //
@@ -13506,7 +13529,7 @@ export class Autopilot {
       // the exits flood. Declining is the honest answer: rung 1 is right there.
       const aim = this.onwardExit(from?.room, to, { cachedOnly: true });
       if (aim && Number.isFinite(Number(aim.row)) && Number.isFinite(Number(aim.col))) {
-        const out = await s.retreatToRail({ toSquare: { row: aim.row, col: aim.col }, maxCrumbs: 12, movementGeneration })
+        const out = await s.retreatToRail({ toSquare: { row: aim.row, col: aim.col }, maxCrumbs: 12, movementGeneration, controlToken })
           .catch(e => ({ moved: false, reason: e.message }));
         // REJOINING IS THE POINT; MOVING IS NOT. `near()` is a Chebyshev-2 box around any
         // rail square, so a body three squares off the lane can walk ONE crumb back, open
@@ -13514,7 +13537,7 @@ export class Autopilot {
         // unwind and rungs 2 and 3 on it — leaving the character one square from the place
         // that wedged it, recorded `freed: true`, having spent a level of `stuckRung`'s
         // budget for the next episode in this room. Moved-but-not-rejoined falls through.
-        railed = out?.rejoined === true && moved();
+        railed = out?.rejoined === true && escaped();
         tried.push({ rung: 1.5, how: 'back onto the rail', steps: out?.steps ?? 0,
                      rejoined: out?.rejoined === true, rail_squares: out?.rail_squares ?? null,
                      reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: railed });
@@ -13524,31 +13547,31 @@ export class Autopilot {
     // ---- rung 1: undo the last few validated steps. The fallback when there was no rail to
     // aim at, or aiming at it moved nothing.
     if (canContinue() && !railed && typeof s?.retreatAlongBreadcrumbs === 'function') {
-      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12, movementGeneration })
+      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12, movementGeneration, controlToken })
         .catch(e => ({ moved: false, reason: e.message }));
       tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
-                   reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: moved() });
+                   reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: escaped() });
     }
 
     // ---- rung 2: the square we came in by. `enteredVia` is the session's own memory of the
     // crossing, so it is only usable while it still describes the room we are standing in.
     const back = s?.enteredVia;
     const entryIsHere = back && Number(back.room) === Number(from?.room) && back.door;
-    if (canContinue() && rung >= 2 && !moved() && entryIsHere && typeof s?.walkTo === 'function') {
+    if (canContinue() && rung >= 2 && !escaped() && entryIsHere && typeof s?.walkTo === 'function') {
       const d = back.door;
       const already = from && d.col === from.col && d.row === from.row;
       if (already) {
         tried.push({ rung: 2, how: 'the door we came in by', skipped: 'already standing on it' });
       } else {
-        const w = await s.walkTo(d.col, d.row, { movementGeneration }).catch(e => ({ arrived: false, reason: e.message }));
+        const w = await s.walkTo(d.col, d.row, { movementGeneration, controlToken }).catch(e => ({ arrived: false, reason: e.message }));
         tried.push({ rung: 2, how: 'the door we came in by', to: `${d.col},${d.row}`,
-                     arrived: !!w?.arrived, reason: w?.reason ?? null, worked: moved() });
+                     arrived: !!w?.arrived, reason: w?.reason ?? null, worked: escaped() });
       }
     }
 
     // ---- rung 3: back through it, into the room we came from. The journey re-plans from
     // there, which is the whole objective — not undoing the trip, changing where it starts.
-    if (canContinue() && rung >= 3 && !moved() && entryIsHere && Number.isFinite(Number(back.from)) &&
+    if (canContinue() && rung >= 3 && !escaped() && entryIsHere && Number.isFinite(Number(back.from)) &&
         typeof s?.travel === 'function') {
       const prev = Number(back.from);
       // ONE HOP, NOT A JOURNEY. The previous room is adjacent by construction — we walked
@@ -13556,16 +13579,16 @@ export class Autopilot {
       // this runs at the gate BEFORE the real journey is issued. `maxStumbles` is low for the
       // same reason: if the door we came in by will not take us back, that is the finding,
       // and the answer is the hold below rather than grinding on it.
-      const t = await s.travel(prev, { maxHops: 2, maxStumbles: 2, movementGeneration })
+      const t = await s.travel(prev, { maxHops: 2, maxStumbles: 2, movementGeneration, controlToken })
         .catch(e => ({ arrived: false, reason: e.message }));
       const at = this.wedgePlace();
       tried.push({ rung: 3, how: 'back through the door, into the previous room', room: prev,
                    arrived: !!t?.arrived, reason: t?.reason ?? null,
-                   worked: Number(at?.room) === prev });
+                   worked: escaped() && Number(at?.room) === prev });
     }
 
     const at = this.wedgePlace();
-    const freed = moved();
+    const freed = escaped();
     // A blocked breadcrumb trail otherwise retries rung 1 forever: the old
     // success-only counter never unlocked the entry / previous-room fallbacks.
     // Supersession is not a failed escape and must not advance this history.
@@ -13610,7 +13633,7 @@ export class Autopilot {
       // the ones where a character was below the flee line with something in reach, and they
       // are the rows worth reading first.
       owner,
-      cancelled: cancelled(), terminal_reason: terminalReason() ?? null,
+      cancelled: cancelled(), interruption: interruption(), displaced: moved(), pocket, terminal_reason: terminalReason() ?? null,
       rung_allowed: rung, tried, freed,
       ended: at ? { room: at.room, square: `${at.col},${at.row}` } : null,
       monsters: near, monsters_in_room: th?.near?.length ?? null,
@@ -13627,10 +13650,12 @@ export class Autopilot {
             'square, and fix the ones that repeat',
     });
 
-    return { attempted: true, owner, rung, tried, freed, cancelled: cancelled(),
+    return { attempted: true, owner, rung, tried, freed, displaced: moved(), pocket,
+             cancelled: cancelled(), interruption: interruption(),
              terminal_reason: terminalReason() ?? null,
              from: from ? `${from.col},${from.row}` : null,
              ended: at ? { room: at.room, col: at.col, row: at.row } : null };
+    } finally { s.movementCancellationChecks.delete(controlToken); }
   }
 
   async answerWedge(to = null) {
@@ -14031,9 +14056,14 @@ export class Autopilot {
     if (strong) {
       // Never provoke a larger body without an escape already proved. Prose is
       // name-only, so do not infer selected-target aggro among identical names.
-      if (frac<this.safety().fleeAt || [...c.room.objects.values()]
-          .filter(o=>nameOf(o).toLowerCase()===name.toLowerCase()).length!==1) {
-        event('refusal',{reason:'low health or ambiguous retaliation identity'});return false;
+      const namesakes=[...c.room.objects.values()]
+        .filter(o=>nameOf(o).toLowerCase()===name.toLowerCase());
+      const lowHealth=frac<this.safety().fleeAt, ambiguous=namesakes.length!==1;
+      if (lowHealth || ambiguous) {
+        event('refusal',{reason:lowHealth?'below flee line':'ambiguous retaliation identity',
+          low_health:lowHealth,ambiguous_retaliation:ambiguous,health:hp.value,max_health:hp.max,
+          flee_at:this.safety().fleeAt,namesakes:namesakes.map(o=>({id:o.id,row:o.row,col:o.col,
+            distance:Math.hypot(o.col-me.col,o.row-me.row)}))});return false;
       }
       retreat=this.planBlockerLure(target,origin);
       if (!retreat) {
@@ -14091,6 +14121,10 @@ export class Autopilot {
         lastResort=true;
       }
       if (strong) {
+        if ([...c.room.objects.values()].filter(o=>nameOf(o).toLowerCase()===name.toLowerCase()).length!==1) {
+          event('refusal',{reason:'retaliation identity became ambiguous',swings});
+          await retreatNow('retaliation identity became ambiguous');return true;
+        }
         // Bodies/claims can change during the fight. Revalidate before each
         // provocation, then claim and revalidate once more during the actual walk.
         retreat=this.planBlockerLure(live,origin);

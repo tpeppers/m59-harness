@@ -2,7 +2,7 @@
 // retreat ladder. Only wire movement/attacks and geometry observations are fixtures.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {mkdtempSync} from 'node:fs';
+import {mkdtempSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFile} from 'node:child_process';
@@ -12,6 +12,7 @@ process.env.M59_WATCHDOG_PINNED_MS='20000';
 process.env.M59_LEDGER_DIR=scratch;process.env.M59_UPTIME_FILE=join(scratch,'uptime.jsonl');
 const {Autopilot}=await import('./m59-autopilot.mjs');
 const {Session}=await import('./m59-game.mjs');
+const {geometryFor,coarseCombatReachFrom}=await import('./m59-safespots.mjs');
 const {recordBlockerClearance}=await import('./m59-blocker-events.mjs');
 const {OF}=await import('./m59-parse.mjs');
 const {freshState}=await import('./m59-watchdog.mjs');
@@ -25,7 +26,7 @@ function fixture() {
     walkable:()=>true};
   const s={name:null,live:true,client:c,world:{room:{num:584},geometry:geo},movementGeneration:0,
     cancelledMovementTokens:new Set(),cancelMovement:Session.prototype.cancelMovement,
-    movementWasCancelled(g){return g!==this.movementGeneration;},
+    movementWasCancelled:Session.prototype.movementWasCancelled,
     retreatAlongBreadcrumbs:async()=>({moved:false,reason:'object_blocked'}),
     walkTo:async()=>({arrived:false,reason:'object_blocked'}),
     travel:async()=>({arrived:false,reason:'object_blocked'}),
@@ -224,3 +225,147 @@ test('separate keeper processes cannot both emit the canonical shared clearance'
   assert.ok(receipts.every(r=>r.duplicate!==null||r.unavailable==='EEXIST'));
 });
 
+
+
+test('one-square oscillations retain the measured episode and escalate through all rungs',async()=>{
+  const f=fixture();await handoff(f);f.health.value=10;const {k,s,self}=f;
+  const episode=k.survivalJam().id,results=[];let flip=false,exits=0;
+  s.retreatAlongBreadcrumbs=async()=>{self.col=(flip=!flip)?33:32;return {steps:1};};
+  s.travel=async()=>{exits++;return {arrived:false};};
+  for(let n=0;n<3;n++)results.push(await k.backUpToUnstick('shuffle',{owner:'survival'}));
+  assert.deepEqual(results.map(r=>r.rung),[1,2,3]);
+  assert.ok(results.every(r=>r.displaced&&!r.freed));assert.equal(exits,1);
+  assert.equal(k.survivalJam().id,episode);
+  assert.ok(k.backUps.every(b=>b.failed&&b.jam_id===episode));
+});
+
+for(const phase of ['breadcrumbs','entry','previous'])for(const respawn of [false,true]) {
+  test('death during '+phase+(respawn?' followed by immediate respawn':'' )+' never counts as escape',async()=>{
+    const f=fixture();await handoff(f);const {k,s,health,self}=f;health.value=10;
+    await k.backUpToUnstick('prime one',{owner:'survival'});
+    await k.backUpToUnstick('prime two',{owner:'survival'});
+    const before=JSON.stringify(k.backUps),calls=[];
+    const move=async(name,opts)=>{
+      calls.push(name);
+      if(name!==phase)return {arrived:false};
+      s.lastHealth=null;health.value=0;
+      Session.prototype.noteHealth.call(s,{value:0,max:55});
+      s.world.room.num=1;
+      if(respawn){health.value=55;Session.prototype.noteHealth.call(s,{value:55,max:55});
+        s.world.room.num=585;self.col=20;}
+      assert.equal(s.movementWasCancelled(opts.movementGeneration,opts.controlToken),true,
+        'the paced mover must see the lease cancellation, even after respawn');
+      assert.equal(s.movementWasCancelled(s.movementGeneration),false,'new recovery owner is not cancelled');
+      return {arrived:true,steps:2};
+    };
+    s.retreatAlongBreadcrumbs=o=>move('breadcrumbs',o);
+    s.walkTo=(_c,_r,o)=>move('entry',o);s.travel=(_room,o)=>move('previous',o);
+    const out=await k.backUpToUnstick('fatal retreat',{owner:'survival'});
+    assert.equal(out.freed,false);assert.equal(out.cancelled,true);
+    assert.equal(out.interruption,'death during retreat');
+    assert.ok(out.tried.every(r=>!r.worked));assert.equal(calls.at(-1),phase);
+    assert.equal(JSON.stringify(k.backUps),before,'stale retreat cannot change failure history');
+    assert.equal(s.movementCancellationChecks.size,0,'lease released after completion');
+    assert.equal(k.survivalJam(),null);
+  });
+}
+
+test('a live departure from the original pocket stops fallbacks and preserves the journey',async()=>{
+  const f=fixture();await handoff(f);f.health.value=10;const journey=f.k.suspendedJourney;
+  f.s.retreatAlongBreadcrumbs=async()=>{f.self.col=29;return {steps:3};};
+  f.s.walkTo=()=>assert.fail('already escaped');f.s.travel=()=>assert.fail('already escaped');
+  const out=await f.k.backUpToUnstick('real escape',{owner:'survival'});
+  assert.equal(out.freed,true);assert.equal(out.cancelled,false);assert.equal(f.k.suspendedJourney,journey);
+});
+
+test('a client replacement cancels the paced retreat lease without cancelling the replacement',async()=>{
+  const f=fixture();await handoff(f);
+  f.s.retreatAlongBreadcrumbs=async opts=>{
+    f.s.client={...f.c};f.self.col=20;
+    assert.equal(f.s.movementWasCancelled(opts.movementGeneration,opts.controlToken),true);
+    return {steps:12};
+  };
+  const out=await f.k.backUpToUnstick('reconnect',{owner:'survival'});
+  assert.equal(out.cancelled,true);assert.equal(out.freed,false);assert.equal(out.interruption,'client replaced');
+});
+
+test('a namesake arriving during a larger fight stops provocation and keeps refuge safety',async()=>{
+  const f=fixture();await handoff(f);f.target.name='troll';let swings=0,retreats=0;
+  f.k.planBlockerLure=()=>({spot:{row:35,col:25},filter:()=>true});
+  f.k.fightNow=async()=>{swings++;f.c.room.objects.set(3,{...f.target,id:3,col:34});
+    return {fought:true,landed_hits:1,combat:[]};};
+  f.k.takeSafeSpotObserved=async()=>{retreats++;return {took:false};};
+  await f.k.continueSurvivalDecision();assert.equal(swings,1);assert.ok(retreats>=1);
+  assert.ok(f.events.some(e=>e.phase==='refusal'&&e.reason==='retaliation identity became ambiguous'));
+  assert.equal(f.events.some(e=>e.phase==='retaliation'),false);
+});
+
+
+test('real Flatlands geometry and real lure selector support exact retaliation, refuge and chase',async()=>{
+  const f=fixture();await handoff(f);const {k,s,self,target,events}=f;target.name='troll';
+  const map=JSON.parse(readFileSync(new URL('../substrate/m59-map.json',import.meta.url),'utf8'));
+  s.world.geometry=geometryFor(map.rooms['584']);assert.ok(s.world.geometry);
+  const origin={row:self.row,col:self.col},blocked={row:target.row,col:target.col};
+  const plan=k.planBlockerLure(target,origin);assert.ok(plan,'real planner must find an eligible refuge');
+  assert.ok(plan.filter(plan.spot.col,plan.spot.row));
+  const landing=coarseCombatReachFrom(s.world.geometry,target)(plan.spot.col,plan.spot.row).attack_position;
+  assert.ok(landing);let swings=0;
+  k.fightNow=async opts=>{assert.equal(opts.exactTargetId,target.id);return {fought:true,landed_hits:1,
+    combat:++swings===3?["You dodge the troll's attack."]:[]};};
+  k.takeSafeSpotObserved=async(_reason,_quarry,opts)=>{
+    assert.ok(opts.candidateFilter(plan.spot.col,plan.spot.row));
+    Object.assign(self,plan.spot);Object.assign(target,landing);k.wall={ok:true,...plan.spot};
+    return {took:true,spot:k.wall};
+  };
+  await k.continueSurvivalDecision();assert.equal(swings,3);
+  assert.ok(events.some(e=>e.phase==='retaliation'&&e.target_id===target.id));
+  assert.ok(events.some(e=>e.phase==='refuge_arrival'&&e.chase_observed));
+  assert.ok(events.some(e=>e.phase==='clearance'&&e.path_clear));
+  assert.equal(k.blockerPathClear(blocked),true);assert.equal(k.suspendedJourney.to,110);
+});
+
+for(const type of ['health','identity','both'])test('lure refusal distinguishes '+type,async()=>{
+  const f=fixture();await handoff(f);f.target.name='troll';
+  if(type!=='identity')f.health.value=10;
+  if(type!=='health')f.c.room.objects.set(3,{...f.target,id:3,col:34});
+  f.k.fightNow=()=>assert.fail('unsafe provocation');
+  await f.k.tradeInPlaceIfWedged({near:[f.target],v:f.c.vitals()});
+  const refusal=f.events.find(e=>e.phase==='refusal');assert.ok(refusal);
+  assert.equal(refusal.low_health,type!=='identity');
+  assert.equal(refusal.ambiguous_retaliation,type!=='health');
+});
+
+
+test('opposite edges of the same pocket cannot discard the failed-retreat history',async()=>{
+  const f=fixture();await handoff(f);f.health.value=10;
+  let flip=false;f.s.retreatAlongBreadcrumbs=async()=>{f.self.col=(flip=!flip)?34:30;return {steps:4};};
+  const r=[];for(let i=0;i<4;i++)r.push(await f.k.backUpToUnstick('same episode',{owner:'survival'}));
+  assert.deepEqual(r.map(x=>x.rung),[1,2,3,3]);assert.ok(r.every(x=>!x.freed));
+});
+
+test('new safe cover during a rail attempt prevents all remaining fallback movement',async()=>{
+  const f=fixture();await handoff(f);f.health.value=10;
+  f.k.onwardExit=()=>({row:35,col:25});
+  f.s.retreatToRail=async()=>{f.k.wall={ok:true};return {rejoined:false};};
+  f.s.retreatAlongBreadcrumbs=()=>assert.fail('safe cover must end movement');
+  const out=await f.k.backUpToUnstick('covered',{owner:'survival',to:110});
+  assert.equal(out.freed,true);assert.equal(out.displaced,false);
+});
+
+
+test('real breadcrumb executor observes death after an awaited step and sends no second move',async()=>{
+  const f=fixture();await handoff(f);const {k,s,c,self,health}=f;
+  Object.assign(self,{x:32,y:35});s.need=()=>c;
+  s.breadcrumbs=[{roomId:c.room.id,from:{x:30,y:35},to:{x:31,y:35}},
+    {roomId:c.room.id,from:{x:31,y:35},to:{x:32,y:35}}];
+  let sent=0;s.queueValidatedMove=async()=>{
+    sent++;s.lastHealth=null;health.value=0;Session.prototype.noteHealth.call(s,{value:0,max:55});
+    health.value=55;s.world.room.num=585;
+    return {sent:true,target:{x:31,y:35}};
+  };
+  c.predictSelf=()=>assert.fail('stale retreat must not predict a post-respawn position');
+  s.retreatAlongBreadcrumbs=Session.prototype.retreatAlongBreadcrumbs;
+  const out=await k.backUpToUnstick('paced fatal step',{owner:'survival'});
+  assert.equal(sent,1);assert.equal(out.cancelled,true);assert.equal(out.freed,false);
+  assert.equal(s.movementCancellationChecks.size,0);
+});

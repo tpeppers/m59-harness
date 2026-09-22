@@ -1517,6 +1517,7 @@ class Session {
     const before = this.lastHealth;
     this.lastHealth = value;
     observeSurvivalDecision(this, value);
+    if (value <= 0) this.lifeBoundary = (this.lifeBoundary ?? 0) + 1;
     if (value <= 0) finishSurvivalDecision(this, currentSurvivalDecision(this)?.id, 'died', 'health reached zero');
     if (before == null || value >= before) return;      // a heal, or the first reading
     // TOOK A HIT. STAMP IT, BECAUSE THE WALKER NEEDS TO KNOW *NOW* AND NOT AT THE END OF
@@ -2079,6 +2080,7 @@ class Session {
 
   movementWasCancelled(generation, controlToken) {
     return generation !== this.movementGeneration ||
+      (!!controlToken && !!this.movementCancellationChecks?.get(controlToken)?.()) ||
       (!!controlToken && this.cancelledMovementTokens.has(controlToken));
   }
 
@@ -2250,6 +2252,7 @@ class Session {
       // pass. Observe the authoritative room event while it is still here. The
       // observer records only; the current movement owner remains the only escape.
       if (ev.kind === 'room-entered' && this.client === c) {
+        if (/underworld/i.test(ev.roomName ?? '')) this.lifeBoundary = (this.lifeBoundary ?? 0) + 1;
         const keeper = autopilotIfAny(this.name);
         if (keeper?.s === this)
           keeper.observeDeathRoom(ev)?.catch(e => keeper.note('death record failed', { why: e.message }));
