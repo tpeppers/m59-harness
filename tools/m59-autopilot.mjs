@@ -45,7 +45,7 @@ import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
 import { findPath, roomsWithin } from './m59-map.mjs';
-import { sameRoomIslandBridgePlan } from './m59-world.mjs';
+import { sameRoomDoorPlan, sameRoomIslandBridgePlan } from './m59-world.mjs';
 import { notePreySide, preySideFor } from './m59-preyside.mjs';
 import { isTerminalMovementReason } from './m59-movement.mjs';
 import { recordTactic } from './m59-tactics.mjs';
@@ -4286,6 +4286,39 @@ export class Autopilot {
   // vitals captured before a crossing are stale, even when the room number repeats.
   async bridgeToQuarry(quarry) {
     const s = this.s;
+    const room = s.world?.room;
+    const internal = sameRoomDoorPlan(s.world?.map, room?.num,
+      s.world?.geometry, s.client?.self, quarry);
+    if (internal?.doors?.length) {
+      const generation = s.movementGeneration;
+      const door = internal.doors[0];
+      // A shelter belongs to the side we are leaving. Retain the ordinary health
+      // gate, then let the existing executor stand, approach and confirm the go.
+      const released = await this.leaveHold('taking an internal door to the quarry');
+      if (released?.refused || s.movementWasCancelled?.(generation)) return true;
+      this.doing = 'approaching';
+      const result = await s.crossSameRoomDoor(door, { movementGeneration: generation })
+        .catch(e => ({ crossed: false, reason: e.message }));
+      this.movedAt = Date.now();
+      if (result.cancelled || s.movementWasCancelled?.(generation)) return true;
+      this.note('taking an internal door to the quarry', {
+        room: room.num, target_id: quarry.id,
+        stand_on: { row: door.row, col: door.col },
+        lands: { row: door.arriveRow, col: door.arriveCol },
+        doors_planned: internal.doors.length, crossed: result.crossed === true,
+        at: result.at, why: result.reason,
+      });
+      if (result.crossed) {
+        this.foeId = quarry.id;
+        this.progress('crossed an internal door — reassess the live quarry before engaging');
+      } else {
+        this.deferPullTarget(room.num, quarry.id, result.reason);
+        this.noProgress('internal door crossing did not complete');
+      }
+      // One door per pass: both the quarry and the landing may have moved. A
+      // second chamber is reached by replanning from the confirmed new position.
+      return true;
+    }
     const plan = sameRoomIslandBridgePlan(s.world?.map, s.world?.room?.num,
       s.world?.geometry, s.client?.self, quarry);
     if (!plan) return false;
@@ -25301,6 +25334,9 @@ export function quarryPermittedByConfinement({
   const roomNum = Number(room?.num ?? room);
   const bridge = sameRoomIslandBridgePlan(map, roomNum, geo, from, target);
   if (!bridge) return true;       // same component, or no route that would leave the room
+  // An internal door keeps the entire journey in this room. Prefer it over a
+  // neighbouring-room detour before treating the quarry as outside confinement.
+  if (sameRoomDoorPlan(map, roomNum, geo, from, target)?.doors?.length) return true;
   const permitted = new Set(confineRooms.map(Number));
   return permitted.has(Number(bridge.viaRoom));
 }
