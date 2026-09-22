@@ -17591,6 +17591,12 @@ export class Autopilot {
     // never reaches [passFarm], because this stage handles the pass and returns first."
     if (this.hold) await this.releaseRestedHold();
 
+    // A posted room caster works from its refuge. Ordinary errands are below this
+    // recovery stage and cannot run while it is holding a wall.
+    if (this.isRoomEnchantPost() && this.holdWorks() && hp !== null && hp >= 0.9) {
+      if (await this.maintainRoomEnchantPost()) return HANDLED;
+    }
+
     // A HEALER BEHIND A WALL NEVER HEALED ANYBODY, AND THAT IS THIS STAGE'S DOING.
     //
     // `medic()` is called from the WORK pass, several stages below. The note above says why
@@ -18420,6 +18426,12 @@ export class Autopilot {
   }
 
   async passErrand(ctx) {
+    // Acquire shelter even at full health; a stationary caster must not wait for
+    // the first hit before finding its post. Survival has already had its turn.
+    if (this.isRoomEnchantPost()) {
+      await this.maintainRoomEnchantPost({ acquire: true });
+      return HANDLED;
+    }
     // A JOURNEY IS ALREADY A DIRECTIONAL DECISION. THE ERRANDS STAND DOWN UNDER ONE.
     //
     // Every branch in this stage WALKS THE CHARACTER SOMEWHERE — the bank, the vault, a
@@ -18642,6 +18654,8 @@ export class Autopilot {
   }
 
   async releaseRestedHold() {
+    // Full health does not finish a stationary room-enchantment assignment.
+    if (this.isRoomEnchantPost()) return false;
     if (!this.hold) return false;
     const v = this.s.client?.vitals?.();
     const hp = v?.health?.max ? v.health.value / v.health.max : null;
@@ -21215,9 +21229,48 @@ export class Autopilot {
                              'so this is either a slow land or a refused cast that said nothing' };
   }
 
+  isRoomEnchantPost() {
+    return this.mode === 'idle' && this.policy.roomEnchant?.enabled === true
+      && Number.isInteger(this.policy.assignedRoom)
+      && this.s.world?.room?.num === this.policy.assignedRoom
+      && !this.inert && !this.suspendedJourney && !this.busyStatus()
+      && !this.facultyHeld('work') && !this.facultyHeld('movement');
+  }
+
+  async maintainRoomEnchantPost({ acquire = false } = {}) {
+    if (!this.isRoomEnchantPost()) return false;
+    if (!this.holdWorks()) {
+      if (acquire && !this.hold && (!this.enchantWallTriedAt || Date.now() - this.enchantWallTriedAt > 10000)) {
+        this.enchantWallTriedAt = Date.now();
+        await this.takeRecoverySpot('stationary room caster needs shelter');
+      }
+      return true;
+    }
+    const v = this.s.client?.vitals?.();
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9
+        || (this.frozenUntil && Date.now() < this.frozenUntil)
+        || this.threat().landing > 0) return false;
+    if (this.policy.acceptDonations) await this.acceptDonations();
+    await this.roomEnchant();
+    // Short mana rests let the enchantment timer be checked again promptly.
+    // A damaged refuge still goes through the existing rest-interruption path.
+    const mana = this.s.client?.vitals?.()?.mana;
+    if (this.holdWorks() && mana?.max > 0 && mana.value < mana.max * 0.95) {
+      const r = await skills.restUntil(this.s, {
+        health: 0.99, vigor: REST_VIGOR_CAP, mana: 0.95, maxSeconds: 5,
+      });
+      if (r.interrupted) await this.restBroken(this.s.world?.room, this.inReachOfUs());
+    }
+    return true;
+  }
+
   async roomEnchant() {
     const cfg = this.policy.roomEnchant;
     if (!cfg || cfg.enabled === false) return;
+    // A posted caster must not spend its supplies in the room it logs into while
+    // the operator is still placing it, or after survival evacuates the post.
+    if (this.mode === 'idle' && this.policy.assignedRoom != null
+        && this.s.world?.room?.num !== this.policy.assignedRoom) return;
     const s = this.s, c = s.need();
 
     const wanted = [].concat(cfg.spells ?? Autopilot.ROOM_ENCHANTS.map(e => e.name))
@@ -21260,10 +21313,21 @@ export class Autopilot {
         continue;
       }
 
-      this._enchantedAt.set(`${roomId}:${ench.name}`, Date.now());
+      // Resting blocks magic. Standing changes posture, not the refuge position.
+      if (this.frozenUntil && Date.now() < this.frozenUntil) return;
+      await skills.standToAct(s);
+      const beforeReagents = ench.reagents.map(([n]) => this.reagentOnHand(n));
       // NO TARGET. This is the whole difference from buffAllies -- see ROOM_ENCHANTS.
       await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
       await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+      const paid = ench.reagents.every(([n, k], i) => beforeReagents[i] - this.reagentOnHand(n) >= k);
+      // An early renewal can be refused while the old enchantment is still up.
+      // That must not start another full-duration timer and leave the room dark.
+      if (!paid) {
+        this._enchantedAt.set(`${roomId}:${ench.name}`, Date.now() - holdMs + 3000);
+        return;
+      }
+      this._enchantedAt.set(`${roomId}:${ench.name}`, Date.now());
       this.tally.room_enchants = (this.tally.room_enchants || 0) + 1;
       const left = Math.min(...ench.reagents.map(([n, k]) => Math.floor(this.reagentOnHand(n) / k)));
       this.note('room enchantment cast', { spell: ench.name, room: roomId,
