@@ -43,6 +43,7 @@ import { attachStepMasks } from './m59-routes.mjs';
 // taking the fleet lock (unlike m59-broker.mjs), so the real prototypes are reachable.
 import { Session, bodyWalkArrives } from './m59-game.mjs';
 import { Autopilot, engagementRefusal } from './m59-autopilot.mjs';
+import {OF} from './m59-parse.mjs';
 import { loadSpawns, attackRating, FORGIVING_RATING } from './m59-spawns.mjs';
 
 let pass = 0, fail = 0;
@@ -227,13 +228,16 @@ console.log('\nEND TO END: WEDGED IN THAT CORRIDOR, IN A CROWD, THE RUNG SWINGS'
 {
   const rig = (maxHealth, health) => {
     const calls = { fights: [], notes: [] };
-    const ant = { id: 1, name: 'ant', col: 27, row: ROW };
+    const ant = { id: 1, name: 'ant', col: 27, row: ROW, flags:OF.ATTACKABLE };
     const self = {
       policy: {}, hold: null, tally: {},
       s: { client: { self: { col: 28, row: ROW }, rsc: { get: () => null },
                      vitals: () => ({ health: { value: health, max: maxHealth } }) } },
       safety: () => ({ fleeAt: 0.7 }),
       holdWorks: () => false,
+      armedForSure:()=>true,facultyHeld:()=>false,checkFreeze:()=>false,currentRecoveryWall:()=>null,
+      weaponPriorityNow:()=>[],bannedWeaponsNow:()=>[],ledgerEvent:()=>{},
+      planBlockerLure:()=>null,takeRecoverySpot:async()=>({took:false}),
       // The corridor jam the fixture captured, as the watchdog would report it.
       wedgedInPlace: () => ({ why: 'covered no ground for 25s', for_ms: 25000 }),
       threatCountHere: () => 8,                       // the room's own spawn cap
@@ -245,8 +249,9 @@ console.log('\nEND TO END: WEDGED IN THAT CORRIDOR, IN A CROWD, THE RUNG SWINGS'
       noteCrowdRefusal: () => {},
       note: (what, data) => calls.notes.push({ what, ...data }),
       progress: () => {},
-      async fightInPlace(t, n) { calls.fights.push(n); return { killed: true }; },
+      async fightNow(opts) { calls.fights.push(opts.target); return { fought:true,killed: true }; },
     };
+    self.s.client.room={objects:new Map([[ant.id,ant]])};
     return { self, ant, calls, v: { health: { value: health, max: maxHealth } } };
   };
   // A BUILT CHARACTER, HEALTHY, WITH AN ANT IN THE WAY AND THE ROOM AT ITS CAP.
@@ -256,7 +261,7 @@ console.log('\nEND TO END: WEDGED IN THAT CORRIDOR, IN A CROWD, THE RUNG SWINGS'
     ok('it clears the ant rather than standing there', r === true, 'swung at ' + calls.fights.join(','));
     ok('the crowd did not veto it', calls.notes[0]?.crowd_overridden === true);
     ok('and it used the in-band rule, not desperation',
-       calls.notes[0]?.mode === 'in-band blockers only', String(calls.notes[0]?.mode));
+       calls.notes[0]?.mode === 'fight until clear', String(calls.notes[0]?.mode));
   }
   // THE SAME CHARACTER AT ONE HEALTH — the Clifford case, which must also swing.
   {
@@ -272,7 +277,7 @@ console.log('\nEND TO END: WEDGED IN THAT CORRIDOR, IN A CROWD, THE RUNG SWINGS'
     const r = await Autopilot.prototype.tradeInPlaceIfWedged.call(self, { near: [ant], v });
     ok('a 20-health character is NOT sent to fight a level-40 ant', r === false);
     ok('and it says the band refused, rather than failing silently',
-       /nothing inside the engagement band/.test(String(calls.notes[0]?.what)),
+       /without a reachable refuge/.test(String(calls.notes[0]?.what)),
        String(calls.notes[0]?.what));
   }
 }

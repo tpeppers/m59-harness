@@ -21,6 +21,7 @@
 //     find itself somewhere else can find out why.
 
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
+import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
 import * as skills from './m59-skills.mjs';
 import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
@@ -4748,12 +4749,12 @@ export class Autopilot {
     }
     // Pending recovery runs before passFleeAndRest. Without its blocker rung,
     // a pinned body can exhaust refuge alternatives forever without reaching
-    // the ordinary ladder's stationary fight. Keep the recovery intent, clear
-    // only a known in-band monster in reach, and reassess on the next pass.
+    // the ordinary ladder's stationary fight. Keep the recovery intent and
+    // enter the same health-aware blocker operation as an ordinary jam.
     // This also gives a blocked retry delay useful work without another walk.
     if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && this.armedForSure()
-        && await this.tradeInPlaceIfWedged({near:this.inReachOfUs(),v,inBandOnly:true}))
+        && await this.tradeInPlaceIfWedged({near:this.inReachOfUs(),v}))
       return true;
     if (d.retry_at && Date.now()<d.retry_at) return true;
     if (d.status==='recovering') {
@@ -4813,7 +4814,8 @@ export class Autopilot {
   async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false, recovery = false,
                                            recoveryRoute = false, decisionId = null, shouldInterrupt = null, shelterOnly = false,
-                                           onward: onwardGiven = null, destination: destinationGiven = null } = {}) {
+                                           onward: onwardGiven = null, destination: destinationGiven = null,
+                                           candidateFilter = null } = {}) {
     const s = this.s, c = s.client;
     const movementGeneration = s.movementGeneration;
     let claimedHere = false;
@@ -4978,7 +4980,7 @@ export class Autopilot {
         spot = this.searchSafeSpot(geo, me, room, {
           within, quarryReach, strictQuarryReach, los, quarry,
           stats: spotStats, shareCap, nearQuarry, exclusiveClaim, recovery,
-          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1, wallsAllowed });
+          onward, forwardBias: onward ? TRAVEL_FORWARD_BIAS : 1, wallsAllowed, candidateFilter });
         if (!spot) break;
         const claimed = exclusiveClaim
           ? claimExclusiveSpot(this.s.name, room.num, spot.col, spot.row)
@@ -7087,7 +7089,7 @@ export class Autopilot {
   searchSafeSpot(geo, me, room, { within, quarryReach, strictQuarryReach = false,
                                   los, quarry, stats, shareCap = 1, nearQuarry = false,
                                   exclusiveClaim = false, onward = null, forwardBias = 1,
-                                  wallsAllowed = true, recovery = false }) {
+                                  wallsAllowed = true, recovery = false, candidateFilter = null }) {
     const s = this.s;
     // One room search can inspect hundreds of candidate squares. Reading the shared
     // claim directory for every candidate would turn that into hundreds of lock/file
@@ -7133,6 +7135,8 @@ export class Autopilot {
       // Both are expressed as "unreachable" because that is the question the ranking
       // already asks, and neither is worth a second mechanism.
       reach: (col, r2) => {
+        if (candidateFilter && !candidateFilter(col,r2))
+          return {reachable:false,reason:'outside the blocker retreat plan'};
         const claimed = exclusiveClaim
           ? spotClaimedByAnotherExclusive(this.s.name, room.num, col, r2, spotClaims)
           : spotTakenByAnother(this.s.name, room.num, col, r2, shareCap, spotClaims);
@@ -13834,133 +13838,136 @@ export class Autopilot {
   // at what is hitting us is the only rung that changes anything from here, and it is
   // strictly better than standing still being hit.
   //
-  // Gated on being BELOW THE FLEE LINE with something in swing range and no working wall,
-  // because above it the ordinary fight rung is the right one and behind a wall the rest
-  // rung is. `trade_in_place_when_wedged: false` switches it off per character.
-  async tradeInPlaceIfWedged({ near = [], v = null, inBandOnly = false } = {}) {
-    if (this.policy?.tradeInPlaceWhenWedged === false) return false;
-    if (!near.length || this.hold || this.holdWorks()) return false;
-    const frac = pct(v?.health);
-    if (frac === null) return false;
-    // BEING HURT IS NO LONGER THE TICKET IN, IT ONLY DECIDES WHAT WE MAY SWING AT.
-    //
-    // This used to read `frac >= fleeAt -> return false`, so clearing a body out of the way
-    // was available ONLY to a character already below its flee line. That made a routine jam
-    // — the operator's own report was bots piled up behind "a few spiders and ants clogging
-    // the needle" — unanswerable until somebody was nearly dead, and then answerable only if
-    // the room was not crowded, which by that point it always is.
-    //
-    // So the health test now selects the TARGET RULE instead of gating the rung:
-    //   at or above the flee line   clear only what the engagement band already permits —
-    //                               the small things actually blocking the corridor
-    //   below it                    desperation: anything in reach, because every other rung
-    //                               is movement-shaped and the body is not moving
-    const desperate = frac < this.safety().fleeAt;
-    const wedge = this.wedgedInPlace();
-    if (!wedge) return false;
-
-    // THE CROWD RULE ASSUMES LEAVING IS AVAILABLE, AND A WEDGE IS THE STATE WHERE IT IS NOT.
-    //
-    // This test used to be the FIRST line of this function, above every other gate, so a room
-    // with six attackable bodies in it refused the swing before anything asked whether the
-    // character could still walk. That is backwards exactly here: `crowded()` implements "IN A
-    // CROWD THE ONLY WALL IS THE EXIT", which is right doctrine and rests on a premise — that
-    // the exit can be reached. `wedgedInPlace()` above is the measurement that says it cannot.
-    //
-    // WHAT IT COST, measured over 3,665 postmortems carrying a threat list:
-    //
-    //     >= 6 threats at the end (the cap, so the veto fired)   3,131   85.4%
-    //     ...and died with `swinging: false`                     3,057   83.4% of ALL deaths
-    //
-    // Clifford, lv55, The Flatlands, 2026-09-19: six spiders and an ant inside melee reach,
-    // 36 wedges, `gross_squares: 0` across all eight sampled passes, `rooms_crossed: 0`, sixty
-    // seconds, health 1/55, `swinging: false`, trail ending "survival alternatives exhausted
-    // for the current observation". Every movement rung had already declined; this one was
-    // refused for the crowd; there was nothing below it. Sweetums died the same way in the
-    // same room thirty-six minutes earlier.
-    //
-    // THE DEADLOCK IT CLOSES. `clear_path` defers below the flee line because "running is the
-    // answer and the ladder owns it"; the ladder's rungs are all movement-shaped and the body
-    // cannot move; this rung was the fallback and the crowd switched it off. Three rungs each
-    // deferring to the next, and the fleet dies without swinging.
-    //
-    // THE ORDER IS THE FIX, NOT THE DELETION. The veto still exists and still fires for a
-    // character that is merely hurt in a busy room — it is now BELOW `wedgedInPlace()`, so it
-    // can only be reached by a body that has been pinned for WATCHDOG_PINNED_MS, or has had
-    // walks cancelled here, or has given up walking from this square. `tradeInPlaceWhenCrowded:
-    // false` restores the old precedence without a deploy, because the aggro argument for the
-    // veto is real — swinging can wake bodies that were only standing there — and an operator
-    // who would rather take that risk than this one must be able to say so.
-    //
-    // The player exclusion is untouched and is not negotiable: `near` is filtered on
-    // `!(o.flags & OF.PLAYER)` by the caller, so nothing here can ever swing at a person.
-    const crowd = this.crowded({ forFighting: true });
-    if (crowd && this.policy?.tradeInPlaceWhenCrowded === false) {
-      this.noteCrowdRefusal('trading in place');
-      return false;
+  // Available before low health as well: do not wait for a routine jam to become
+  // lethal. `trade_in_place_when_wedged: false` switches it off per character.
+  // A measured jam grants defensive combat, never a general hunting order.
+  // Keep one exact body until it dies/leaves reach; reassess survival every swing.
+  async tradeInPlaceIfWedged({ near = [], v = null } = {}) {
+    const s=this.s,c=s.client,me=c?.self;
+    if (this.policy?.tradeInPlaceWhenWedged===false || !me || this.hold || this.holdWorks()
+        || !this.armedForSure() || !this.wedgedInPlace()) return false;
+    if (this.crowded({forFighting:true}) && this.policy?.tradeInPlaceWhenCrowded===false) {
+      this.noteCrowdRefusal('clearing a blocker');return false;
     }
-    const c = this.s.client, me = c?.self;
-    if (!me) return false;
-    const dist = o => Math.hypot((o.col ?? 0) - me.col, (o.row ?? 0) - me.row);
-    const nameOf = o => o.name ?? c?.rsc?.get?.(o.nameRsc) ?? null;
-    // NEAREST FIRST, BUT ONLY AMONG THINGS WE ARE ALLOWED TO FIGHT.
-    //
-    // `refuseEngagement` is the operator's own ceiling on viDifficulty — "smaller than you is
-    // the engagement band, NOT the level" — and it is what makes this safe to run at full
-    // health. Without it a healthy character wedged beside a troll would start a fight it was
-    // never going to win, because the troll happened to be the nearest body. Below the flee
-    // line the filter is dropped: there we are not declining a fight in favour of a better
-    // option, only in favour of dying.
-    const ordered = [...near].sort((a, b) => dist(a) - dist(b));
-    // A pending refuge may clear a weak blocker even while hurt, but must not
-    // inherit the ordinary ladder's last-resort permission to hit anything.
-    const pool = desperate && !inBandOnly ? ordered
-      : ordered.filter(o => nameOf(o) && !this.refuseEngagement(nameOf(o)));
-    if (!pool.length) {
-      // Say so rather than failing silently — "wedged next to something I may not hit" is a
-      // different fact from "nothing is in reach", and only one of them is a doctrine choice.
-      this.note('wedged with something in reach but nothing inside the engagement band', {
-        in_reach: ordered.length, nearest: nameOf(ordered[0]),
-        health: v?.health ? `${v.health.value}/${v.health.max}` : null,
-        wedged: wedge.why,
-        why: 'the band refused every body beside us and we are not below the flee line, so ' +
-             'this rung declines and the movement rungs keep the pass',
-      });
-      return false;
+    const nameOf=o=>o.name ?? c.rsc?.get?.(o.nameRsc) ?? '';
+    // Spawn identity must be exact; an unknown name containing "ant" is not an ant.
+    const known=Object.values(loadSpawns(SPAWN_FILE)?.creatures ?? {});
+    const infoOf=o=>known.find(x=>String(x.name).toLowerCase()===nameOf(o).toLowerCase());
+    const candidates=near.filter(o=>(o.flags & OF.ATTACKABLE) && !(o.flags & OF.PLAYER)
+      && infoOf(o)?.level!=null
+      && Math.hypot(o.col-me.col,o.row-me.row)<=REACH);
+    const hp=(v ?? c.vitals())?.health,frac=pct(hp);
+    if (frac==null || !(hp?.max>0)) return false;
+    const weak=o=>infoOf(o).level<hp.max && !this.refuseEngagement(nameOf(o));
+    candidates.sort((a,b)=>Number(weak(b))-Number(weak(a))
+      || Math.hypot(a.col-me.col,a.row-me.row)-Math.hypot(b.col-me.col,b.row-me.row));
+    const target=candidates[0];
+    if (!target) return false;
+    const strong=!weak(target), name=nameOf(target), room=s.world?.room?.num;
+    const origin={row:me.row,col:me.col};
+    const cancelled=()=>this.stopping || s.client!==c || s.world?.room?.num!==room
+      || this.busy?.until>Date.now() || (this.inert && !this.inert.travelling)
+      || this.facultyHeld('survival') || this.facultyHeld('combat')
+      || this.checkFreeze() || this.currentRecoveryWall()
+      || s.movementWasCancelled?.(generation);
+    const generation=s.movementGeneration;
+    if (cancelled()) return false;
+    let retreat=null;
+    if (strong) {
+      // Never provoke a larger body without an escape already proved. Prose is
+      // name-only, so do not infer selected-target aggro among identical names.
+      if (frac<this.safety().fleeAt || [...c.room.objects.values()]
+          .filter(o=>nameOf(o).toLowerCase()===name.toLowerCase()).length!==1) return false;
+      retreat=this.planBlockerLure(target,origin);
+      if (!retreat) {
+        this.note('blocker lure refused without a reachable refuge outside the needle',{target:name,target_id:target.id});
+        return false;
+      }
     }
-    const target = pool[0];
-    const name = nameOf(target);
-    this.tally.wedge_trades = (this.tally.wedge_trades || 0) + 1;
-    this.note('wedged and hurt with something in reach — trading in place', {
-      target: name, target_id: target.id ?? null, in_reach: near.length,
-      // Named so a sweep can count how often the crowd veto would have refused this.
-      crowd_overridden: crowd,
-      mode: desperate && !inBandOnly ? 'below the flee line — anything in reach' : 'in-band blockers only',
-      pending_survival: inBandOnly,
-      threats_here: (() => { try { return this.threatCountHere(); } catch { return null; } })(),
-      health: v?.health ? `${v.health.value}/${v.health.max}` : null,
-      flee_at: Math.round(this.safety().fleeAt * 100) + '%',
-      wedged: wedge.why, wedged_for_s: Math.round(wedge.for_ms / 1000),
-      why: 'every rung from here is movement-shaped and the body has not moved. A freeze ' +
-           'recovers no health and a rest is refused with something in swing range, so a ' +
-           'swing at the thing hitting us is the only rung left that changes anything',
-    });
-    const f = await this.fightInPlace(target, name).catch(e => ({ killed: false, note: e.message }));
-    if (f?.killed) this.note('killed it from the square we were wedged on', { target: name });
-    this.progress('traded blows in place while wedged');
-    return true;
+    this.tally.wedge_trades=(this.tally.wedge_trades||0)+1;
+    this.note('starting sustained blocker combat',{target:name,target_id:target.id,
+      mode:strong?'provoke then lure':'fight until clear',origin,refuge:retreat?.spot ?? null,
+      crowd_overridden:!!this.crowded({forFighting:true}),threats_here:this.threatCountHere()});
+    const started=Date.now();
+    let swings=0,misses=0;
+    const retreatNow=async(reason)=>{
+      if (cancelled()) return {cancelled:true};
+      const result=retreat
+        ? await this.takeSafeSpot(reason,null,{source:'recovery',recovery:true,nearestOnly:true,
+            candidateFilter:retreat.filter})
+        : await this.takeRecoverySpot(reason);
+      this.note('blocker combat retreat',{target:name,target_id:target.id,
+        reason,took:!!result?.took,cancelled:!!result?.cancelled,swings});
+      return result;
+    };
+    while (!cancelled()) {
+      const live=c.room.objects.get(target.id),at=c.self,health=c.vitals()?.health;
+      if (!live || !(live.flags & OF.ATTACKABLE) || (live.flags & OF.PLAYER)
+          || nameOf(live)!==name || !at
+          || Math.hypot(live.col-at.col,live.row-at.row)>REACH) break;
+      const fraction=pct(health),fleeAt=this.safety().fleeAt;
+      if (fraction==null || fraction<=0) break;
+      let lastResort=false;
+      if (fraction<fleeAt) {
+        const r=await retreatNow('blocker combat reached the flee line');
+        if (r?.took || r?.cancelled || cancelled() || strong) return true;
+        // If every reachable refuge is refused while pinned, a weak body can be
+        // the only escape. One defensive swing, then retry the ladder next pass.
+        lastResort=true;
+      }
+      if (strong) {
+        // Bodies/claims can change during the fight. Revalidate before each
+        // provocation, then claim and revalidate once more during the actual walk.
+        retreat=this.planBlockerLure(live,origin);
+        if (!retreat) { await retreatNow('lure escape became unavailable');return true; }
+      }
+      this.doing=strong?'provoking a blocker for retreat':'clearing a monster blocker';
+      const f=await this.fightNow({target:name,exactTargetId:target.id,rounds:1,
+        disengageAt:lastResort?0:fleeAt,loot:false,holdPosition:true,reach:REACH,
+        weaponPriority:this.weaponPriorityNow(),bannedWeapons:this.bannedWeaponsNow()});
+      swings++;
+      if (f?.cancelled || f?.died || cancelled()) return true;
+      if (f?.killed) {
+        this.tally.kills=(this.tally.kills||0)+1;
+        this.ledgerEvent('killed',{creature:name,target_id:target.id,room_num:room,
+          rounds:swings,travel_blocker:true,from_safe_spot:false});
+        this.note('killed a travel blocker',{target:name,target_id:target.id,swings});
+        this.progress('killed a travel blocker');
+        return true;
+      }
+      if (strong && blockerRetaliated(f?.combat ?? [],name,
+          [...c.room.objects.values()].map(nameOf))) {
+        this.note('blocker retaliated; drawing it away from the needle',
+          {target:name,target_id:target.id,swings,refuge:retreat.spot,evidence:'unique-name enemy swing'});
+        await retreatNow('blocker retaliated; retreat behind the jam');
+        return true;
+      }
+      if (pct(c.vitals()?.health)<fleeAt && !lastResort) {
+        await retreatNow('blocker combat reached the flee line');return true;
+      }
+      if (lastResort || !f?.fought || f?.out_of_reach || f?.weapon_loss) return true;
+      misses=f.landed_hits>0?0:misses+1;
+      // No arbitrary three-swing end to a productive weak fight. Bound only a
+      // nonproductive fight / unconfirmed lure so an immune body cannot own us.
+      if (misses>=20 || (strong && Date.now()-started>=30000)) {
+        await retreatNow(strong?'lure retaliation not observed':'blocker fight made no progress');
+        return true;
+      }
+    }
+    return swings>0;
   }
 
-  // The swing itself, separated so the rung can be driven without a socket. `holdPosition`
-  // is the whole point — we are not going anywhere — and `disengageAt: 0` because the
-  // caller has already established that disengaging is what is not working.
-  fightInPlace(target, name = null) {
-    return skills.fight(this.s, {
-      ...(name ? { target: name } : {}), exactTargetId: target.id,
-      rounds: 3, disengageAt: 0, loot: false, holdPosition: true, reach: REACH,
-      weaponPriority: this.weaponPriorityNow(),
-      bannedWeapons: this.bannedWeaponsNow(),
-    });
+  planBlockerLure(target,origin) {
+    const s=this.s,geo=s.world?.geometry,room=s.world?.room,me=s.client?.self;
+    if (!geo || !room || !me) return null;
+    const quarryReach=coarseCombatReachFrom(geo,target);
+    const outside=lureRefugeFilter(geo,origin,target,quarryReach);
+    const spot=this.searchSafeSpot(geo,me,room,{within:Math.max(geo.rows,geo.cols)||64,
+      quarryReach,strictQuarryReach:true,los:this.policy.los??0,
+      exclusiveClaim:true,shareCap:1,recovery:true,candidateFilter:outside});
+    if (!spot) return null;
+    return {spot:{row:spot.row,col:spot.col},
+      filter:(col,row)=>col===spot.col && row===spot.row && outside(col,row)};
   }
 
   // THE TWO HALVES OF `last_error`'s LIFECYCLE, NAMED, so that the rule can be driven
