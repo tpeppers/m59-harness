@@ -24,7 +24,11 @@ Turning to heal remains restricted to an actual safe wall.
 
 Open-ground farming must run `bridgeToQuarry` before safe-wall selection. A
 `requireSafeWall: false` character can still need the exact door route through a
-connecting room. Prefer quarry reachable on the current side; when none remains,
+connecting room. Internal same-room doors are checked first, including Castle
+Victoria's four ground-floor chambers. Take one door per pass, confirm the
+landing, and replan against the live quarry before fighting or taking another
+door. Release the old shelter through the normal health gate; an internal route
+does not leave a room confinement. Prefer quarry reachable on the current side; when none remains,
 cross out and back through the doors whose landing reaches the selected quarry.
 Finish the pass after a crossing attempt so combat uses refreshed room objects.
 `m59-farm-bridge-test.mjs` covers this alongside the confinement and door-side tests.

@@ -23,7 +23,7 @@
 // are 64-units-per-square kod wire points unless explicitly labelled client/BSP.
 
 import { sharedRoomGeometry, roomHasDeclaredFallJump, protocolToClient } from './m59-roo.mjs';
-import { finePath, pointOfSquare, boundsAround } from './m59-finepath.mjs';
+import { finePath, pointOfSquare, boundsAround, CLIENT_PER_SQUARE } from './m59-finepath.mjs';
 import { exitsOf, findPath, inferredExits, codeExits, edgeExitsOf, edgeCandidatesOf, LEAVE,
          AVOID_IN_TRANSIT, selectedEdgeAt, routingRevision } from './m59-map.mjs';
 import { inRegion, describeWhen } from './m59-codeexits.mjs';
@@ -270,9 +270,8 @@ export function sameRoomDoors(room) {
 /**
  * Which internal doors join where we are standing to any of these squares.
  *
- * Returns `null` when no door is needed (a plain walk reaches one of them) and equally
- * when no sequence of doors reaches any - the two are told apart by `walkable`, because a
- * caller must never read "no doors needed" as "go and walk it" without checking.
+ * Returns a walkable plan with no doors for a plain walk, or `null` when the
+ * bounded search finds no route. A null result is not permission to walk through a wall.
  *
  * @param {object} map
  * @param {number} roomNum
@@ -289,6 +288,9 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
   const doors = sameRoomDoors(room);
   if (!doors.length) return null;
 
+  const liveFine = Number.isFinite(from.x) && Number.isFinite(from.y) && geo.collisionReady;
+  const walking = new Map();
+
   // SNAPPING TO THE FLOOR IS BOUNDED, and its neighbour above does not bound it.
   //
   // A `go` square is very often a pocket the coarse grid calls unwalkable — that is what
@@ -298,6 +300,9 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
   // squares from real floor; anything further away is not the square that was named.
   const SNAP = 3;
   const onFloor = p => {
+    // Fine geometry can reach a sliver the coarse grid marks solid. Snapping a
+    // live body or a quarry may silently put it on the other side of a wall.
+    if (liveFine) return geo.inBounds(p.row, p.col) ? { row: p.row, col: p.col } : null;
     if (geo.walkable(p.row, p.col)) return { row: p.row, col: p.col };
     const near = geo.nearestWalkable(p.row, p.col);
     if (!near) return null;
@@ -307,6 +312,20 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
   const canWalk = (a, b) => {
     if (!a || !b) return false;
     if (a.row === b.row && a.col === b.col) return true;
+    if (liveFine) {
+      // Prove EVERY leg, including the walk after a teleport. The square grid
+      // joins Castle's chambers through stand points the actual body cannot use.
+      // Use the observed body for the first leg and the server's square center
+      // for a declared landing; never start a leg on a nearby raised stand point.
+      const origin = Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? { x: protocolToClient(a.x), y: protocolToClient(a.y) }
+        : { x: (a.col - 0.5) * CLIENT_PER_SQUARE, y: (a.row - 0.5) * CLIENT_PER_SQUARE };
+      const key = `${origin.x}:${origin.y}>r${b.row}c${b.col}`;
+      if (!walking.has(key)) walking.set(key, finePath(geo, origin,
+        pointOfSquare(geo, b.row, b.col),
+        { bounds: boundsAround([a, b], 4), maxNodes: 4000, goalSquare: b }).found);
+      return walking.get(key);
+    }
     return geo.path(a.row, a.col, b.row, b.col, { fine: true }).found;
   };
 
@@ -316,6 +335,9 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
   // square beside it against the fine BSP. So reaching any neighbour counts as reaching it.
   const reachesDoor = (origin, door) => {
     if (canWalk(origin, { row: door.row, col: door.col })) return true;
+    // With fine geometry the exact trigger square must be reachable. A neighbour
+    // across the wall is not a usable approach to this side's door.
+    if (liveFine) return false;
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
       if (!dr && !dc) continue;
       const p = { row: door.row + dr, col: door.col + dc };
@@ -326,60 +348,25 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
 
   const start = onFloor(from);
   if (!start) return null;
+  if (liveFine) Object.assign(start, { x: from.x, y: from.y });
   const goals = wanted.map(t => ({ want: t, at: onFloor(t) })).filter(g => g.at);
   if (!goals.length) return null;
-  const arrived = origin => goals.find(g => canWalk(origin, g.at)) ?? null;
-
-  const liveFine = Number.isFinite(from.x) && Number.isFinite(from.y) && geo.collisionReady;
-  // A portal only helps if it reaches ground the body cannot already walk to.
-  // A bounded fine search to a distant exit can fail at a doorway pocket or its
-  // node budget. That must not send a body back through an internal door whose
-  // landing it already occupies (Blackstone's r10c15 loop).
-  const walkingLandings = new Set();
-  if (liveFine) for (const door of doors) {
-    const landing = onFloor({ row: door.arriveRow, col: door.arriveCol });
-    if (!landing) continue;
-    const key = `${landing.row},${landing.col}`;
-    if (walkingLandings.has(key)) continue;
-    if ((start.row === landing.row && start.col === landing.col) ||
-        (canWalk(start, landing) && finePath(geo,
-          { x: protocolToClient(from.x), y: protocolToClient(from.y) },
-          pointOfSquare(geo, landing.row, landing.col),
-          { bounds: boundsAround([from, landing], 4), maxNodes: 4000 }).found))
-      walkingLandings.add(key);
-  }
+  const arrived = origin => goals.find(g => {
+    if (canWalk(origin, g.at)) return true;
+    // A room-changing exit may have an unoccupiable center; its executor can
+    // finish from the lip. A monster target must be reached on its own side.
+    if (!liveFine || !room.goExits?.some(d => Number(d.to) !== Number(roomNum) &&
+        d.row === g.want.row && d.col === g.want.col)) return false;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const p = { row: g.want.row + dr, col: g.want.col + dc };
+      if (geo.walkable(p.row, p.col) && canWalk(origin, p)) return true;
+    }
+    return false;
+  }) ?? null;
 
   const here = arrived(start);
-  if (here) {
-    // A square path can step down from a stand point the actual body cannot reach.
-    // In rooms with internal doors, prove the direct walk from the live fine position
-    // before deciding that no door is needed (Castle's north-east room exposed this).
-    const allLandingsWalkable = doors.every(d => walkingLandings.has(`${d.arriveRow},${d.arriveCol}`));
-    const approaches = [here.at];
-    // A published go square can be a doorway pocket, with no occupiable stand
-    // point at its center. Prove reaching the lip as well, just as reachesDoor
-    // does below. Otherwise the south side of Castle's wall loops north again
-    // even though the body can walk to r3c19 beside the stairs.
-    if (room.goExits?.some(d => d.row === here.want.row && d.col === here.want.col)) {
-      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-        if (!dr && !dc) continue;
-        const p = { row: here.want.row + dr, col: here.want.col + dc };
-        if (geo.walkable(p.row, p.col) && canWalk(start, p)) approaches.push(p);
-      }
-    }
-    approaches.sort((a, b) => Math.hypot(a.row-from.row,a.col-from.col) - Math.hypot(b.row-from.row,b.col-from.col));
-    let nodesLeft = 6000;
-    const proved = !liveFine || allLandingsWalkable || approaches.some(at => {
-      if (nodesLeft <= 0) return false;
-      const route = finePath(geo,
-        { x: protocolToClient(from.x), y: protocolToClient(from.y) },
-        pointOfSquare(geo, at.row, at.col),
-        { bounds: boundsAround([from, at], 4), maxNodes: Math.min(2000, nodesLeft) });
-      nodesLeft -= route.nodes ?? 0;
-      return route.found;
-    });
-    if (proved) return { doors: [], target: here.want, walkable: true };
-  }
+  if (here) return { doors: [], target: here.want, walkable: true };
 
   // Breadth first over LANDINGS, so the plan that uses fewest doors wins. The state is the
   // square a door put us on; a door is never taken twice in one plan, which bounds this at
@@ -396,7 +383,9 @@ export function sameRoomDoorPlan(map, roomNum, geo, from, targets = [], { maxDoo
         const landing = onFloor({ row: door.arriveRow, col: door.arriveCol });
         if (!landing) continue;
         const landKey = `${landing.row},${landing.col}`;
-        if (!node.used.length && walkingLandings.has(landKey)) continue;
+        // A bounded search missing a distant goal must not loop through a door
+        // whose landing we can already walk to (Blackstone's r10c15 case).
+        if (liveFine && !node.used.length && canWalk(start, landing)) continue;
         if (seen.has(landKey)) continue;
         seen.add(landKey);
         const used = [...node.used, door];

@@ -1030,6 +1030,29 @@ improving. See also the standing rule in [`CLAUDE.md`](../CLAUDE.md):
 
 ## A door that leads back into the room it is in
 
+### Ground-floor combat must plan every walking leg
+
+Castle Victoria (38) has four internal doors, with eight directional trigger
+squares. Farming now consults `sameRoomDoorPlan` before combat or safe-wall
+selection and executes one `crossSameRoomDoor` per pass. A chamber-to-chamber
+route leaves the first chamber and enters the second; a confirmed crossing
+refreshes the decision from the live position and quarry. Refused doors briefly
+cool the target, while recovery and movement cancellation retain control.
+
+The earlier square-grid observations below are insufficient for a live body.
+Checking only the direct walk left subsequent door approaches and post-door
+walks on the square grid. That sent targets in all four chambers toward the
+northeast door at r9c32. With a live fine position, every graph leg now uses the
+collision trace through `finePath`, including walks from declared landings.
+Internal triggers must be reachable on their exact square; a neighbouring
+square across the wall is not an approach to that side's door. The existing
+square-only planning behavior remains available for callers without a live pose.
+
+`node tools/m59-castle-chambers-test.mjs` checks all 25 ordered pairs of the
+hall and four chambers, plus keeper crossing, replanning, refusal, recovery,
+cancellation and confinement behavior. `m59-innerdoor-test.mjs` also protects
+the basement route, exit lips and Blackstone's already-reachable landing.
+
 **A room number is not necessarily one connected floor, and four rooms in this map are cut
 in two by a wall with a door in it that the router could not see.**
 
