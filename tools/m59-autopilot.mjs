@@ -21,6 +21,8 @@
 //     find itself somewhere else can find out why.
 
 import { applyDeathAttribution } from './m59-death-attribution.mjs';
+import {JAM_TTL_MS,JAM_MEASURE_MS,REPLAN_MS,jamObservation,validJamOwner,recoveryObservationKey} from './m59-survival-jam.mjs';
+import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
 import * as skills from './m59-skills.mjs';
 import { bannedWeaponsHeld } from './m59-arming.mjs';
@@ -4606,6 +4608,10 @@ export class Autopilot {
     // `!inRealTrouble && taken >= budget`, so a character under `doomedInOpenBelow` is exempt
     // by construction: the doomed rush in passFleeAndRest increments this and can never be
     // refused by it.
+    if(options.recovery) {
+      if(result?.took)this.clearSurvivalJam('safe refuge reached');
+      else if(!result?.cancelled)this.rememberSurvivalJam({failed:true});
+    }
     if (result?.took && options.recovery) this.recordShelterStop();
     if (decision && currentSurvivalDecision(this.s)?.id === decision.id) {
       if (result?.took) {
@@ -4630,6 +4636,60 @@ export class Autopilot {
       mitigation:destination?'try the onward exit or another reachable refuge toward it':'reassess from the current position'};
   }
 
+  clearSurvivalJam(reason) {
+    const e=this.survivalJamEpisode;
+    this.survivalJamEpisode=null;
+    this._survivalReplan=null;
+    if(e) {
+      if(this.watch) {this.watch.wedged=null;this.watch.pinnedSince=null;this.watch.pinnedAnchor=null;this.watch.wedgeBreak=null;}
+      this.wedgeHold=null;
+      this.backUps=(this.backUps??[]).filter(b=>b.jam_id!==e.id);
+      this.ledgerEvent('survival_jam',{phase:'ended',episode_id:e.id,reason});
+    }
+  }
+
+  survivalJam(now=Date.now()) {
+    const e=this.survivalJamEpisode;
+    if(e && !validJamOwner(this,e,now))this.clearSurvivalJam('position, cover, owner, generation or lifetime changed');
+    return this.survivalJamEpisode??null;
+  }
+
+  rememberSurvivalJam({failed=false,now=Date.now()}={}) {
+    let e=this.survivalJam(now);
+    const measured=this.measuredWedgeInPlace(now);
+    if(!e && (measured||failed)) {
+      const o=jamObservation(this);
+      if(!Number.isFinite(o.row)||!Number.isFinite(o.col))return null;
+      e={...o,id:(this.s.name??'keeper')+'-'+now+'-'+(this._jamSequence=(this._jamSequence??0)+1),
+        at:now,expires:now+JAM_TTL_MS,measured:!!measured,failures:0};
+      if(!validJamOwner(this,e,now))return null;
+      this.survivalJamEpisode=e;
+      this.ledgerEvent('survival_jam',{phase:'started',episode_id:e.id,
+        room:o.room,row:o.row,col:o.col,measured:!!measured});
+    }
+    if(e && failed) {
+      e.failures++;
+      if(!e.measured && e.failures>=2 && now-e.at>=JAM_MEASURE_MS) {
+        e.measured=true;
+        this.ledgerEvent('survival_jam',{phase:'measured',episode_id:e.id,
+          failures:e.failures,for_ms:now-e.at});
+      }
+    }
+    return e;
+  }
+
+  // Only survival call sites may transfer an episode to the new movement generation.
+  cancelForSurvival(token,why,options={}) {
+    const e=this.rememberSurvivalJam(),generation=this.s.movementGeneration;
+    const result=this.s.cancelMovement(token,why,options);
+    if(e && result?.cancelled && this.s.movementGeneration===generation+1) {
+      e.generation=this.s.movementGeneration;
+      this.ledgerEvent('survival_jam',{phase:'transferred',episode_id:e.id,
+        previous_generation:generation,generation:e.generation});
+    }
+    return result;
+  }
+
   async recoverFromTravelFallback({movementGeneration=this.s.movementGeneration,controlToken=null,
     why='pivot route did not reach its destination'}={}) {
     const s=this.s;
@@ -4652,7 +4712,7 @@ export class Autopilot {
     const next=chooseSurvivalDecision(s,choice,{because:reason,outcome:'interrupted'});
     this.suspendJourney(reason);
     this.revive(reason);
-    s.cancelMovement(controlToken,reason,{preserveId:next.id});
+    this.cancelForSurvival(controlToken,reason,{preserveId:next.id});
     await this.continueSurvivalDecision();
     return true;
   }
@@ -4684,6 +4744,7 @@ export class Autopilot {
   adoptRecoveryWall() {
     const wall=this.currentRecoveryWall(),room=this.s.world?.room?.num;
     if (!wall?.ok) return false;
+    this.clearSurvivalJam('safe cover');
     this.wantsForwardShelter=null;
     this.resumeShelterWaits=0;
     if (!this.hold || this.hold.room!==room || this.hold.row!==wall.row || this.hold.col!==wall.col)
@@ -4702,6 +4763,15 @@ export class Autopilot {
     // Drain distinct alternatives serially, with fresh ownership/health checks in
     // each step. Stop when an action is stable or the same failed state recurs;
     // a cycle with no new information must not become an unbounded busy loop.
+    this.observeBlockerLure();
+    this.survivalJam();
+    const observed=recoveryObservationKey(this);
+    const d0=currentSurvivalDecision(this.s);
+    const owned=d0 && d0.strategy!=='yield_to_controller' && !this.stopping
+      && !(this.busy?.until>Date.now()) && !(this.inert&&!this.inert.travelling)
+      && !this.facultyHeld('survival') && !this.facultyHeld('recovery') && !this.facultyHeld('combat');
+    if(owned && this._survivalReplan?.key===observed && this._survivalReplan.geometry===this.s.world?.geometry
+        && Date.now()<this._survivalReplan.until)return true;
     const attempted=new Set();
     let handled=false;
     try {
@@ -4714,11 +4784,13 @@ export class Autopilot {
         if(attempted.has(key)) {
           this.note('survival alternatives exhausted for the current observation',{
             decision_id:d.id,strategy:d.strategy,reason:d.reason,attempts:attempted.size});
+          this._survivalReplan={key:recoveryObservationKey(this),geometry:this.s.world?.geometry,until:Date.now()+REPLAN_MS};
           return handled;
         }
         attempted.add(key);
-        const before={id:d.id,status:d.status,phase:d.phase};
+        const before={id:d.id,status:d.status,phase:d.phase,generation:this.s.movementGeneration};
         handled=await this.continueSurvivalDecisionStep();
+        if(this.s.movementGeneration!==before.generation)return true;
         const next=currentSurvivalDecision(this.s);
         if(!handled || !next || next.strategy==='yield_to_controller')return false;
         if(next.id===before.id && next.status===before.status && next.phase===before.phase)return true;
@@ -4733,6 +4805,7 @@ export class Autopilot {
     observeSurvivalDecision(s);
     const v=s.client?.vitals?.(),hp=pct(v?.health);
     if (s.world?.room?.num===1 || hp===0) {
+      this.clearSurvivalJam('death');
       finishSurvivalDecision(s,d.id,'died','entered the Underworld');return false;
     }
     if (d.status==='recovering' && hp!=null && hp>=1 && (vigorOf(v)??0)>=80) {
@@ -4752,6 +4825,9 @@ export class Autopilot {
     // the ordinary ladder's stationary fight. Keep the recovery intent and
     // enter the same health-aware blocker operation as an ordinary jam.
     // This also gives a blocked retry delay useful work without another walk.
+    this.rememberSurvivalJam();
+    if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
+        && await this.escapeIfWedgedAndHurt({near:this.inReachOfUs(),v}))return true;
     if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && this.armedForSure()
         && await this.tradeInPlaceIfWedged({near:this.inReachOfUs(),v}))
@@ -11282,6 +11358,7 @@ export class Autopilot {
   // The 15-minute cap always bounded it. What was missing was the ability to ask "is this
   // still real" without waiting the cap out.
   goInert(why = null, { maxMs = INERT_MAX_MS, by = null } = {}) {
+    this.clearSurvivalJam('inert handoff');
     if (this.inert) return this.inertStatus();
     this.inert = { why, at: Date.now(), maxMs, by };
     // Everything learned about which squares hold, in case the process goes away while
@@ -11521,7 +11598,7 @@ export class Autopilot {
               {because:why,outcome});
             this.suspendJourney(why);
             this.revive(why);
-            this.s.cancelMovement(null,why,{preserveId:next.id});
+            this.cancelForSurvival(null,why,{preserveId:next.id});
             await this.continueSurvivalDecision();
             return true;
           };
@@ -12008,6 +12085,12 @@ export class Autopilot {
       // old for ever, and "who has been driving this character for the last two hours" is
       // the question the board is actually asked.
       const prev = this.claims?.get(f);
+      if(['movement','survival','recovery','combat'].includes(f)
+          && (!prev || prev.owner!==(by||'unnamed') || prev.until<=Date.now())) {
+        this._survivalOwnerRevision=(this._survivalOwnerRevision??0)+1;
+        this.pendingBlockerLure=null;
+        this.clearSurvivalJam('faculty handoff: '+f);
+      }
       (this.claims ??= new Map()).set(f, {
         owner: by || 'unnamed', until: Date.now() + Math.max(1_000, leaseMs), why,
         at: (prev && prev.owner === (by || 'unnamed') && prev.until > Date.now())
@@ -12033,6 +12116,11 @@ export class Autopilot {
       // an operator taking a character back from a bot that is gone.
       if (by && c.owner !== by && !all) continue;
       this.claims.delete(f); released.push(f);
+      if(['movement','survival','recovery','combat'].includes(f)) {
+        this._survivalOwnerRevision=(this._survivalOwnerRevision??0)+1;
+        this.pendingBlockerLure=null;
+        this.clearSurvivalJam('faculty released: '+f);
+      }
     }
     if (released.length) this.note('faculties released', { released, by });
     return { released, faculties: this.facultyStatus() };
@@ -12147,6 +12235,7 @@ export class Autopilot {
   // is still a running loop holding a session, and dropAutopilot must be able to get rid
   // of one. See goInert for why everything else should not.
   stop(why = null, { hard = false } = {}) {
+    this.clearSurvivalJam('keeper stopped');
     if (currentSurvivalDecision(this.s)) {
       const options={replacement:{strategy:'yield_to_controller',reason:why??'keeper stopped',status:'yielded',reason_code:'keeper_stop'}};
       if(this.s.cancelMovement)this.s.cancelMovement(null,why??'keeper stopped',options);
@@ -12877,7 +12966,7 @@ export class Autopilot {
           attempts: (journey.attempts ?? 0) + 1,
           deaths_at: this.tally?.deaths ?? 0,
         };
-        try { s.cancelMovement(null, 'wedged below the flee line while travelling'); } catch {}
+        try { this.cancelForSurvival(null, 'wedged below the flee line while travelling'); } catch {}
         // Mend at a wall FORWARD on the route rather than idling where it was dying — the
         // same landing the watchdog's other rescue takes, and for the same reason.
         this.wantsForwardShelter = 'wedged below the flee line while travelling';
@@ -12906,7 +12995,7 @@ export class Autopilot {
         w.rescues = (w.rescues ?? 0) + 1;
         this.tally.inert_rescues = (this.tally.inert_rescues || 0) + 1;
         const stopped = (() => {
-          try { return s.cancelMovement(null, 'the watchdog rescuing a stalled driver'); } catch (e) { return { cancelled: false, why: e.message }; }
+          try { return this.cancelForSurvival(null, 'the watchdog rescuing a stalled driver'); } catch (e) { return { cancelled: false, why: e.message }; }
         })();
         const was = this.inert?.why ?? `movement held by ${this.facultyOwner('movement')}`;
         // A RESCUED JOURNEY IS PAUSED, NOT CANCELLED.
@@ -13162,7 +13251,7 @@ export class Autopilot {
     w.interrupts++;
     this.tally.watchdog_interrupts = (this.tally.watchdog_interrupts || 0) + 1;
     const stopped = (() => {
-      try { return s.cancelMovement(null, 'the watchdog pulling us out of a blind walk below the flee line'); } catch (e) { return { cancelled: false, why: e.message }; }
+      try { return this.cancelForSurvival(null, 'the watchdog pulling us out of a blind walk below the flee line'); } catch (e) { return { cancelled: false, why: e.message }; }
     })();
     this.note('WATCHDOG — pulled the character out of a blind walk', {
       health: `${hp.value}/${hp.max}`, at_fraction: Math.round(frac * 100) + '%',
@@ -13220,6 +13309,12 @@ export class Autopilot {
   // arm is gated on full health: a character being eaten on one square for eighteen
   // minutes never tripped it, and that is the incident this exists for.
   wedgedInPlace(now = Date.now()) {
+    const e=this.survivalJam(now);
+    if(e?.measured)return {why:'survival-owned jam',for_ms:now-e.at,repeats:e.failures,episode_id:e.id};
+    return this.measuredWedgeInPlace(now);
+  }
+
+  measuredWedgeInPlace(now = Date.now()) {
     const w = this.watch;
     if (!w) return null;
     const here = this.wedgePlace();
@@ -13296,9 +13391,11 @@ export class Autopilot {
     // ROOM rather than the square: a character that bounces between three bad squares in one
     // room is having one problem, not three, and answering each with rung 1 is how it spends
     // ten minutes there.
+    const episode=this.survivalJam();
     const WINDOW_MS = 10 * 60_000;
     const now = Date.now();
     this.backUps = (this.backUps || []).filter(b => now - b.at < WINDOW_MS
+      && (!b.jam_id || b.jam_id===episode?.id)
       && (!b.failed || watchdog.sameWedgePlace(b, place)));
     // Survival must escalate failures, not just successful escapes. Keep those
     // attempts out of the ordinary mover's history so a hurt episode cannot make
@@ -13346,7 +13443,11 @@ export class Autopilot {
     // Every fallback belongs to the same command. A cancelled retreat must not
     // acquire a fresh generation and resume over a newer rescue or human command.
     const movementGeneration = s?.movementGeneration;
-    const cancelled = () => !!s?.movementWasCancelled?.(movementGeneration);
+    const ownerRevision=this._survivalOwnerRevision??0;
+    const cancelled = () => !!s?.movementWasCancelled?.(movementGeneration)
+      || (owner==='survival' && ((this._survivalOwnerRevision??0)!==ownerRevision
+        || this.stopping || this.busy?.until>Date.now() || (this.inert&&!this.inert.travelling)
+        || this.facultyHeld('survival') || this.facultyHeld('combat') || this.facultyHeld('recovery')));
     const terminalReason = () => tried.find(t => isTerminalMovementReason(t.reason))?.reason;
     const canContinue = () => !cancelled() && !terminalReason() && !this.hold && !this.holdWorks();
     // WHICH RUNG ACTUALLY FREED IT, not which rung ran after one that did.
@@ -13473,7 +13574,7 @@ export class Autopilot {
       this.backUps.push({ room: from?.room, col: from?.col, row: from?.row, at: t0 });
     } else if (canContinue() && owner === 'survival' && tried.length && rung < 3) {
       this.backUps.push({ room: from?.room, col: from?.col, row: from?.row,
-                          at: t0, failed: true });
+                          at: t0, failed: true, jam_id:this.survivalJam()?.id });
     }
 
     // WHAT THE ROOM LOOKED LIKE, so the recurring ones can be diagnosed without being caught
@@ -13812,6 +13913,8 @@ export class Autopilot {
 
     const out = await this.backUpToUnstick('wedged and hurt with something in reach',
                                            { owner: 'survival' }).catch(() => null);
+    this.blockerEvent('retreat',{source:'survival_ladder',rung:out?.rung??null,
+      freed:!!out?.freed,cancelled:!!out?.cancelled,targets:near.map(o=>o.id)});
     if (out?.cancelled) return true; // a newer owner gets the pass; do not trade over it
     if (!out?.freed) return false;
 
@@ -13842,6 +13945,53 @@ export class Autopilot {
   // lethal. `trade_in_place_when_wedged: false` switches it off per character.
   // A measured jam grants defensive combat, never a general hunting order.
   // Keep one exact body until it dies/leaves reach; reassess survival every swing.
+  observeBlockerLure() {
+    const p=this.pendingBlockerLure,s=this.s,c=s.client;
+    if(!p)return;
+    if(c!==p.client || s.movementGeneration!==p.generation || s.world?.room?.num!==p.room
+        || Date.now()>p.until || this.stopping || (this.busy?.until>Date.now())
+        || (this.inert&&!this.inert.travelling) || this.facultyHeld('survival')
+        || this.facultyHeld('combat') || this.facultyHeld('recovery')
+        || (c.vitals()?.health?.value??0)<=0) {this.pendingBlockerLure=null;return;}
+    const body=c.room.objects.get(p.target_id);
+    if(!body || (body.name??c.rsc?.get?.(body.nameRsc))!==p.target)return;
+    const displaced=Math.hypot(body.col-p.blocked.col,body.row-p.blocked.row)>=4;
+    const arrived=Math.hypot(body.col-p.refuge.col,body.row-p.refuge.row)<=REACH+1;
+    if(displaced && arrived) {
+      this.pendingBlockerLure=null;
+      this.blockerEvent('chase',{operation_id:p.operation_id,target:p.target,target_id:p.target_id,
+        observed:true,target_position:{row:body.row,col:body.col},refuge:p.refuge,
+        evidence:'same retaliating object observed beside refuge, outside original pocket'});
+      this.finishClearedBlocker(p.blocked,{operation_id:p.operation_id,target:p.target,target_id:p.target_id,mode:'lure'});
+    }
+  }
+
+  blockerEvent(phase,detail={}) {
+    this.ledgerEvent('blocker_event',{phase,room_num:this.s.world?.room?.num,
+      episode_id:this.survivalJamEpisode?.id??null,...detail});
+  }
+
+  blockerPathClear(origin) {
+    const s=this.s,c=s.client;
+    try {
+      return recoveryRefugeReach(s.world?.geometry,c?.self,c?.room?.objects,c?.selfId,
+        c?.playersOnline)(origin.col,origin.row)?.reachable===true;
+    } catch {return false;}
+  }
+
+  finishClearedBlocker(origin,detail) {
+    const clear=this.blockerPathClear(origin),v=this.s.client?.vitals?.();
+    this.blockerEvent('clearance',{...detail,path_clear:clear,
+      scope:'body-aware path to original blocker square; full journey not yet proved'});
+    if(clear && pct(v?.health)>=1 && (vigorOf(v)??0)>=80) {
+      const d=currentSurvivalDecision(this.s);
+      if(d?.status==='pending')finishSurvivalDecision(this.s,d.id,'blocker_cleared','local path clear and fully recovered');
+      this.wantsForwardShelter=null;
+      this.clearSurvivalJam('local path cleared while recovered');
+    }
+    return clear;
+  }
+
   async tradeInPlaceIfWedged({ near = [], v = null } = {}) {
     const s=this.s,c=s.client,me=c?.self;
     if (this.policy?.tradeInPlaceWhenWedged===false || !me || this.hold || this.holdWorks()
@@ -13865,9 +14015,14 @@ export class Autopilot {
     if (!target) return false;
     const strong=!weak(target), name=nameOf(target), room=s.world?.room?.num;
     const origin={row:me.row,col:me.col};
-    const cancelled=()=>this.stopping || s.client!==c || s.world?.room?.num!==room
+    const blockedSquare={row:target.row,col:target.col};
+    const operation_id=process.pid+'-'+Date.now()+'-'+(this._blockerSequence=(this._blockerSequence??0)+1);
+    const event=(phase,detail={})=>this.blockerEvent(phase,{operation_id,target:name,target_id:target.id,
+      mode:strong?'lure':'weak_fight',...detail});
+    const ownerRevision=this._survivalOwnerRevision??0;
+    const cancelled=()=>this.stopping || (this._survivalOwnerRevision??0)!==ownerRevision || s.client!==c || s.world?.room?.num!==room
       || this.busy?.until>Date.now() || (this.inert && !this.inert.travelling)
-      || this.facultyHeld('survival') || this.facultyHeld('combat')
+      || this.facultyHeld('survival') || this.facultyHeld('combat') || this.facultyHeld('recovery')
       || this.checkFreeze() || this.currentRecoveryWall()
       || s.movementWasCancelled?.(generation);
     const generation=s.movementGeneration;
@@ -13877,13 +14032,17 @@ export class Autopilot {
       // Never provoke a larger body without an escape already proved. Prose is
       // name-only, so do not infer selected-target aggro among identical names.
       if (frac<this.safety().fleeAt || [...c.room.objects.values()]
-          .filter(o=>nameOf(o).toLowerCase()===name.toLowerCase()).length!==1) return false;
+          .filter(o=>nameOf(o).toLowerCase()===name.toLowerCase()).length!==1) {
+        event('refusal',{reason:'low health or ambiguous retaliation identity'});return false;
+      }
       retreat=this.planBlockerLure(target,origin);
       if (!retreat) {
+        event('refusal',{reason:'no reachable refuge outside the needle'});
         this.note('blocker lure refused without a reachable refuge outside the needle',{target:name,target_id:target.id});
         return false;
       }
     }
+    event('start',{origin,blocked_square:blockedSquare,refuge:retreat?.spot??null});
     this.tally.wedge_trades=(this.tally.wedge_trades||0)+1;
     this.note('starting sustained blocker combat',{target:name,target_id:target.id,
       mode:strong?'provoke then lure':'fight until clear',origin,refuge:retreat?.spot ?? null,
@@ -13891,11 +14050,24 @@ export class Autopilot {
     const started=Date.now();
     let swings=0,misses=0;
     const retreatNow=async(reason)=>{
-      if (cancelled()) return {cancelled:true};
+      if (cancelled()) {event('cancelled',{reason});return {cancelled:true};}
       const result=retreat
         ? await this.takeSafeSpot(reason,null,{source:'recovery',recovery:true,nearestOnly:true,
             candidateFilter:retreat.filter})
         : await this.takeRecoverySpot(reason);
+      event('retreat',{reason,took:!!result?.took,cancelled:!!result?.cancelled,swings,
+        refuge:result?.spot??retreat?.spot??null});
+      if(strong && result?.took) {
+        const body=c.room.objects.get(target.id);
+        const chased=!!body && nameOf(body)===name &&
+          Math.hypot(body.col-blockedSquare.col,body.row-blockedSquare.row)>=4
+          && Math.hypot(body.col-retreat.spot.col,body.row-retreat.spot.row)<=REACH+1;
+        event('refuge_arrival',{observed:!!this.currentRecoveryWall(),target_visible:!!body,
+          chase_observed:chased,target_position:body?{row:body.row,col:body.col}:null});
+        this.pendingBlockerLure={operation_id,client:c,generation:s.movementGeneration,room,
+          target:name,target_id:target.id,blocked:blockedSquare,refuge:retreat.spot,until:Date.now()+30000};
+        this.observeBlockerLure();
+      }
       this.note('blocker combat retreat',{target:name,target_id:target.id,
         reason,took:!!result?.took,cancelled:!!result?.cancelled,swings});
       return result;
@@ -13904,7 +14076,10 @@ export class Autopilot {
       const live=c.room.objects.get(target.id),at=c.self,health=c.vitals()?.health;
       if (!live || !(live.flags & OF.ATTACKABLE) || (live.flags & OF.PLAYER)
           || nameOf(live)!==name || !at
-          || Math.hypot(live.col-at.col,live.row-at.row)>REACH) break;
+          || Math.hypot(live.col-at.col,live.row-at.row)>REACH) {
+        event('target_left',{visible:!!live});
+        this.finishClearedBlocker(blockedSquare,{operation_id,target:name,target_id:target.id});break;
+      }
       const fraction=pct(health),fleeAt=this.safety().fleeAt;
       if (fraction==null || fraction<=0) break;
       let lastResort=false;
@@ -13926,17 +14101,20 @@ export class Autopilot {
         disengageAt:lastResort?0:fleeAt,loot:false,holdPosition:true,reach:REACH,
         weaponPriority:this.weaponPriorityNow(),bannedWeapons:this.bannedWeaponsNow()});
       swings++;
-      if (f?.cancelled || f?.died || cancelled()) return true;
+      if (f?.cancelled || f?.died || cancelled()) {event('cancelled',{died:!!f?.died,swings});return true;}
       if (f?.killed) {
-        this.tally.kills=(this.tally.kills||0)+1;
-        this.ledgerEvent('killed',{creature:name,target_id:target.id,room_num:room,
-          rounds:swings,travel_blocker:true,from_safe_spot:false});
-        this.note('killed a travel blocker',{target:name,target_id:target.id,swings});
-        this.progress('killed a travel blocker');
+        const receipt=recordBlockerClearance(this.who(),{target:name,target_id:target.id,room_num:room,
+          room_object_id:c.room?.id,server:[s.credentials?.host,s.credentials?.port],
+          rounds:swings,travel_blocker:true});
+        this.tally.blocker_clearances=(this.tally.blocker_clearances||0)+(receipt.duplicate===false?1:0);
+        event('target_disappeared',{swings,...receipt,kill_credit:'unattributed'});
+        this.finishClearedBlocker(blockedSquare,{target:name,target_id:target.id,clearance_id:receipt.id,operation_id});
+        this.progress('travel blocker disappeared');
         return true;
       }
       if (strong && blockerRetaliated(f?.combat ?? [],name,
           [...c.room.objects.values()].map(nameOf))) {
+        event('retaliation',{swings,evidence:'unique-name enemy swing',refuge:retreat.spot});
         this.note('blocker retaliated; drawing it away from the needle',
           {target:name,target_id:target.id,swings,refuge:retreat.spot,evidence:'unique-name enemy swing'});
         await retreatNow('blocker retaliated; retreat behind the jam');
@@ -13954,6 +14132,7 @@ export class Autopilot {
         return true;
       }
     }
+    if(cancelled())event('cancelled',{swings});
     return swings>0;
   }
 
@@ -15466,7 +15645,7 @@ export class Autopilot {
     // about, and it is the same argument here.
     const takeBack = (what, why, detail = {}, { abandon = false } = {}) => {
       const stopped = (() => {
-        try { return s.cancelMovement(null, 'a travel guard rung taking the character back'); } catch (e) { return { cancelled: false, why: e.message }; }
+        try { return this.cancelForSurvival(null, 'a travel guard rung taking the character back'); } catch (e) { return { cancelled: false, why: e.message }; }
       })();
       const was = held.why ?? 'travelling';
       this.tally.travel_takebacks = (this.tally.travel_takebacks || 0) + 1;
@@ -18689,6 +18868,8 @@ export class Autopilot {
   }
 
   cancelJourney(why = 'external movement cancellation', controlToken = null) {
+    this.pendingBlockerLure=null;
+    this.clearSurvivalJam('external cancellation');
     // A watchdog pauses a route through Session.cancelMovement. An external
     // cancellation withdraws its destination too; otherwise the next healthy
     // pass resurrects the order that the director has already abandoned.

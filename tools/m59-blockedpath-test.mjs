@@ -251,6 +251,7 @@ console.log('\nEND TO END: WEDGED IN THAT CORRIDOR, IN A CROWD, THE RUNG SWINGS'
       progress: () => {},
       async fightNow(opts) { calls.fights.push(opts.target); return { fought:true,killed: true }; },
     };
+    Object.setPrototypeOf(self,Autopilot.prototype);
     self.s.client.room={objects:new Map([[ant.id,ant]])};
     return { self, ant, calls, v: { health: { value: health, max: maxHealth } } };
   };

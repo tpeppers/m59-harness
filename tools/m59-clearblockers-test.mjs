@@ -53,6 +53,7 @@ const rig = ({ health = 0.9, wedged = { why: 'covered no ground for 25s', for_ms
   };
   const v = { health: { value: Math.round(health * 55), max: 55 } };
   self.s.client.vitals=()=>v;
+  Object.setPrototypeOf(self,Autopilot.prototype);
   self.s.client.room={objects:new Map(near.map(o=>[o.id,o]))};
   return { self, v, near, calls };
 };
