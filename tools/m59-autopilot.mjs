@@ -13245,15 +13245,20 @@ export class Autopilot {
   // `m59-stucks.mjs` reads them back grouped by square, so the recurring ones can be fixed
   // properly and the workaround can stop being needed there. A workaround that is not
   // recorded is a bug that never gets fixed.
-  stuckRung(place) {
+  stuckRung(place, { owner = 'movement' } = {}) {
     // How many back-ups this character has already needed in this room lately. Keyed on the
     // ROOM rather than the square: a character that bounces between three bad squares in one
     // room is having one problem, not three, and answering each with rung 1 is how it spends
     // ten minutes there.
     const WINDOW_MS = 10 * 60_000;
     const now = Date.now();
-    this.backUps = (this.backUps || []).filter(b => now - b.at < WINDOW_MS);
-    const here = this.backUps.filter(b => b.room === place?.room).length;
+    this.backUps = (this.backUps || []).filter(b => now - b.at < WINDOW_MS
+      && (!b.failed || watchdog.sameWedgePlace(b, place)));
+    // Survival must escalate failures, not just successful escapes. Keep those
+    // attempts out of the ordinary mover's history so a hurt episode cannot make
+    // a later healthy journey skip its cheap first option.
+    const here = this.backUps.filter(b => b.room === place?.room
+      && (!b.failed || owner === 'survival')).length;
     return Math.min(here + 1, 3);
   }
 
@@ -13290,8 +13295,14 @@ export class Autopilot {
                  why: 'below the flee line — the survival ladder owns the body' };
     }
 
-    const rung = this.stuckRung(from);
+    const rung = this.stuckRung(from, { owner });
     const tried = [];
+    // Every fallback belongs to the same command. A cancelled retreat must not
+    // acquire a fresh generation and resume over a newer rescue or human command.
+    const movementGeneration = s?.movementGeneration;
+    const cancelled = () => !!s?.movementWasCancelled?.(movementGeneration);
+    const terminalReason = () => tried.find(t => isTerminalMovementReason(t.reason))?.reason;
+    const canContinue = () => !cancelled() && !terminalReason() && !this.hold && !this.holdWorks();
     // WHICH RUNG ACTUALLY FREED IT, not which rung ran after one that did.
     //
     // `worked` used to be `moved()`, which compares against the position captured when the
@@ -13343,12 +13354,12 @@ export class Autopilot {
     // built for. `onwardExit` takes the first hop of the route, and is memoised because
     // `world.route()` runs the room's exits flood and can block the loop for seconds.
     let railed = false;
-    if (to != null && typeof s?.retreatToRail === 'function') {
+    if (canContinue() && to != null && typeof s?.retreatToRail === 'function') {
       // `cachedOnly`, because this is the survival ladder and `onwardExit` can otherwise run
       // the exits flood. Declining is the honest answer: rung 1 is right there.
       const aim = this.onwardExit(from?.room, to, { cachedOnly: true });
       if (aim && Number.isFinite(Number(aim.row)) && Number.isFinite(Number(aim.col))) {
-        const out = await s.retreatToRail({ toSquare: { row: aim.row, col: aim.col }, maxCrumbs: 12 })
+        const out = await s.retreatToRail({ toSquare: { row: aim.row, col: aim.col }, maxCrumbs: 12, movementGeneration })
           .catch(e => ({ moved: false, reason: e.message }));
         // REJOINING IS THE POINT; MOVING IS NOT. `near()` is a Chebyshev-2 box around any
         // rail square, so a body three squares off the lane can walk ONE crumb back, open
@@ -13365,8 +13376,8 @@ export class Autopilot {
 
     // ---- rung 1: undo the last few validated steps. The fallback when there was no rail to
     // aim at, or aiming at it moved nothing.
-    if (!railed && typeof s?.retreatAlongBreadcrumbs === 'function') {
-      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12 })
+    if (canContinue() && !railed && typeof s?.retreatAlongBreadcrumbs === 'function') {
+      const out = await s.retreatAlongBreadcrumbs({ maxCrumbs: 12, movementGeneration })
         .catch(e => ({ moved: false, reason: e.message }));
       tried.push({ rung: 1, how: 'breadcrumbs', steps: out?.steps ?? out?.crumbs ?? 0,
                    reason: out?.reason ?? null, moved_here: sinceLastRung(), worked: moved() });
@@ -13376,13 +13387,13 @@ export class Autopilot {
     // crossing, so it is only usable while it still describes the room we are standing in.
     const back = s?.enteredVia;
     const entryIsHere = back && Number(back.room) === Number(from?.room) && back.door;
-    if (rung >= 2 && !moved() && entryIsHere && typeof s?.walkTo === 'function') {
+    if (canContinue() && rung >= 2 && !moved() && entryIsHere && typeof s?.walkTo === 'function') {
       const d = back.door;
       const already = from && d.col === from.col && d.row === from.row;
       if (already) {
         tried.push({ rung: 2, how: 'the door we came in by', skipped: 'already standing on it' });
       } else {
-        const w = await s.walkTo(d.col, d.row).catch(e => ({ arrived: false, reason: e.message }));
+        const w = await s.walkTo(d.col, d.row, { movementGeneration }).catch(e => ({ arrived: false, reason: e.message }));
         tried.push({ rung: 2, how: 'the door we came in by', to: `${d.col},${d.row}`,
                      arrived: !!w?.arrived, reason: w?.reason ?? null, worked: moved() });
       }
@@ -13390,7 +13401,7 @@ export class Autopilot {
 
     // ---- rung 3: back through it, into the room we came from. The journey re-plans from
     // there, which is the whole objective — not undoing the trip, changing where it starts.
-    if (rung >= 3 && entryIsHere && Number.isFinite(Number(back.from)) &&
+    if (canContinue() && rung >= 3 && !moved() && entryIsHere && Number.isFinite(Number(back.from)) &&
         typeof s?.travel === 'function') {
       const prev = Number(back.from);
       // ONE HOP, NOT A JOURNEY. The previous room is adjacent by construction — we walked
@@ -13398,7 +13409,7 @@ export class Autopilot {
       // this runs at the gate BEFORE the real journey is issued. `maxStumbles` is low for the
       // same reason: if the door we came in by will not take us back, that is the finding,
       // and the answer is the hold below rather than grinding on it.
-      const t = await s.travel(prev, { maxHops: 2, maxStumbles: 2 })
+      const t = await s.travel(prev, { maxHops: 2, maxStumbles: 2, movementGeneration })
         .catch(e => ({ arrived: false, reason: e.message }));
       const at = this.wedgePlace();
       tried.push({ rung: 3, how: 'back through the door, into the previous room', room: prev,
@@ -13408,7 +13419,16 @@ export class Autopilot {
 
     const at = this.wedgePlace();
     const freed = moved();
-    if (freed) this.backUps.push({ room: from?.room, col: from?.col, row: from?.row, at: t0 });
+    // A blocked breadcrumb trail otherwise retries rung 1 forever: the old
+    // success-only counter never unlocked the entry / previous-room fallbacks.
+    // Supersession is not a failed escape and must not advance this history.
+    if (!cancelled() && freed) {
+      this.backUps = this.backUps.filter(b => !b.failed);
+      this.backUps.push({ room: from?.room, col: from?.col, row: from?.row, at: t0 });
+    } else if (canContinue() && owner === 'survival' && tried.length && rung < 3) {
+      this.backUps.push({ room: from?.room, col: from?.col, row: from?.row,
+                          at: t0, failed: true });
+    }
 
     // WHAT THE ROOM LOOKED LIKE, so the recurring ones can be diagnosed without being caught
     // live. Positions are relative to where the character was stuck: an absolute list of
@@ -13443,6 +13463,7 @@ export class Autopilot {
       // the ones where a character was below the flee line with something in reach, and they
       // are the rows worth reading first.
       owner,
+      cancelled: cancelled(), terminal_reason: terminalReason() ?? null,
       rung_allowed: rung, tried, freed,
       ended: at ? { room: at.room, square: `${at.col},${at.row}` } : null,
       monsters: near, monsters_in_room: th?.near?.length ?? null,
@@ -13459,7 +13480,8 @@ export class Autopilot {
             'square, and fix the ones that repeat',
     });
 
-    return { attempted: true, owner, rung, tried, freed,
+    return { attempted: true, owner, rung, tried, freed, cancelled: cancelled(),
+             terminal_reason: terminalReason() ?? null,
              from: from ? `${from.col},${from.row}` : null,
              ended: at ? { room: at.room, col: at.col, row: at.row } : null };
   }
@@ -13744,6 +13766,7 @@ export class Autopilot {
 
     const out = await this.backUpToUnstick('wedged and hurt with something in reach',
                                            { owner: 'survival' }).catch(() => null);
+    if (out?.cancelled) return true; // a newer owner gets the pass; do not trade over it
     if (!out?.freed) return false;
 
     this.tally.wedge_escapes = (this.tally.wedge_escapes || 0) + 1;
