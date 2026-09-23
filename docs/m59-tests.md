@@ -1457,4 +1457,6 @@ fixtures: this is not a live-server mortality or chase result. See
 `node tools/m59-tougher-observation-test.mjs` runs the production Session callback
 against an offline client. It checks immediate persistence without an autopilot, paired
 message deduplication, event-ring eviction, late kill attribution, names with spaces,
-restart durability, multi-point sample recovery and honest page labels.
+restart durability, multi-point sample recovery and honest page labels. It also checks
+combat-message attribution before and after the gain, special kill prose, same-millisecond
+ordering, and exclusion of distant, incoming and other-player combat.

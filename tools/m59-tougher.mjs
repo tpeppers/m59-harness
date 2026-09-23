@@ -37,6 +37,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
+import { tougherCombatMessage, guessTougherCreature, TOUGHER_MESSAGE_WINDOW_MS } from './m59-tougher-attribution.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -151,10 +152,10 @@ export function recordDeath(character, { at = Date.now(), killer = null, observe
 // THE POINT ITSELF. `to` is the new maximum health; `creature` is whatever killed for it,
 // which may not be known yet — see the pending path above.
 export function recordGain(character, { at = Date.now(), from = null, to = null, room = null,
-                                        room_num = null, creature = null, said = null } = {}) {
+                                        room_num = null, creature = null, said = null, attribution = null } = {}) {
   const f = feedOf(character);
   if (creature) return commitGain(character, { at, from, to, room, room_num, creature, said,
-                                               attributed: 'named at the moment of the gain' });
+                                               attribution, attributed: attribution?.guessed ? 'guessed from adjacent combat message' : 'named at the moment of the gain' });
   // The nearest kill either side of the announcement. See ATTRIBUTE_MS for why "either
   // side" rather than "before".
   const recent = nearestKill(f.feed, at);
@@ -181,7 +182,7 @@ export function recordGain(character, { at = Date.now(), from = null, to = null,
 const DEDUPE_MS = 1000;
 
 export function commitGain(character, g) {
-  const ev = push(character, { kind: 'gain', ...g });
+  const ev = { kind: 'gain', ...g };
   const book = loadGains(character);
   const dup = (book.gains || []).find(x => g.recovery_id
     ? x.recovery_id === g.recovery_id
@@ -190,18 +191,26 @@ export function commitGain(character, g) {
   if (dup) {
     // Do not lose an attribution that arrived late. A gain first written with no cause,
     // then claimed by the kill that paid for it, should end up naming the creature.
-    if (!dup.creature && g.creature) {
+    const betterMessage = g.attribution?.source === 'combat_message' &&
+      (dup.attribution?.source !== 'combat_message' ||
+       g.attribution.distance_ms < dup.attribution.distance_ms);
+    if (g.creature && (!dup.creature || betterMessage)) {
       dup.creature = g.creature;
       dup.room = dup.room ?? g.room ?? null;
       dup.room_num = dup.room_num ?? g.room_num ?? null;
       dup.attributed = g.attributed ?? dup.attributed;
+      if (g.attribution) dup.attribution = g.attribution;
+      const shown = feedOf(character).feed.find(e => e.kind === 'gain' && e.at === dup.at && e.to === dup.to);
+      if (shown) Object.assign(shown, dup);
       saveGains(book);
     }
     return ev;
   }
+  push(character, ev);
   book.gains.push({ at: g.at, from: g.from, to: g.to, creature: g.creature ?? null,
                     room: g.room ?? null, room_num: g.room_num ?? null,
                     attributed: g.attributed ?? null,
+                    ...(g.attribution ? { attribution: g.attribution } : {}),
                     ...(g.source ? { source: g.source } : {}),
                     ...(g.recovery_id ? { recovery_id: g.recovery_id,
                       interval_start: g.interval_start } : {}) });
@@ -226,9 +235,25 @@ export function flushPending(character, now = Date.now()) {
 // long awaits, event-ring eviction and autopilot replacement. The stat push precedes
 // the announcement; capture its max here, never at the next keeper pass.
 const announcements = new WeakMap();
+const combatContexts = new WeakMap();
 export function observeAnnouncement(client, event, room = null) {
-  if (event.kind !== 'message' || !isTougherText(event.text) || !client.me?.name) return null;
+  if (event.kind !== 'message' || !client.me?.name) return null;
   const at = event.at ?? Date.now();
+  let context = combatContexts.get(client);
+  if (!context) { context = { messages: [], gains: [] }; combatContexts.set(client, context); }
+  context.messages = context.messages.filter(m => Math.abs(at - m.at) <= TOUGHER_MESSAGE_WINDOW_MS);
+  context.gains = context.gains.filter(g => Math.abs(at - g.at) <= TOUGHER_MESSAGE_WINDOW_MS);
+  const combat = tougherCombatMessage({ ...event, at }, client.me.name);
+  if (combat) {
+    context.messages.push(combat);
+    context.messages = context.messages.slice(-16);
+    // Some killing-blow text follows the gain. Enrich the same durable point.
+    for (const gain of context.gains) {
+      const guess = guessTougherCreature(context.messages, gain);
+      if (guess) commitGain(client.me.name, { ...gain, ...guess });
+    }
+  }
+  if (!isTougherText(event.text)) return null;
   const previous = announcements.get(client);
   const max = client.vitals?.()?.health?.max ?? null;
   if (previous && Math.abs(at - previous.at) <= DEDUPE_MS &&
@@ -236,8 +261,10 @@ export function observeAnnouncement(client, event, room = null) {
   announcements.set(client, { at, max });
   const gain = { at, from: max == null ? null : max - 1, to: max,
     room: room?.name ?? client.rsc?.get?.(client.roomNameRsc) ?? null,
-    room_num: room?.num ?? null, said: event.text };
-  recordGain(client.me.name, gain);
+    room_num: room?.num ?? null, said: event.text, seq: event.seq };
+  const guess = guessTougherCreature(context.messages, gain);
+  context.gains.push(gain);
+  recordGain(client.me.name, { ...gain, ...guess });
   return gain;
 }
 

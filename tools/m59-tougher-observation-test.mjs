@@ -68,5 +68,49 @@ try {
   assert.equal(plan.additions.length, 3, 'recover samples once, excluding other fleets and derived ledger events');
   for (const {character,...gain} of plan.additions) t.commitGain(character, gain);
   assert.equal((await recoveryPlan(options)).additions.length, 0, 'full recovery rerun makes no additions');
+  // The production callback sees combat even when no keeper pass ever runs.
+  c.me.name = 'Combat Tester';
+  c.emit('message', {at: at + 10000, text:'Your punch thrashes the fungus beast.'});
+  c.emit('message', {at: at + 10001, text:'The fungus beast crumples to the ground, never to rise again.'});
+  c.emit('message', {at: at + 10002, text:'You suddenly feel a little tougher.'});
+  let attributed = t.loadGains(c.me.name).gains[0];
+  assert.equal(attributed.creature, 'fungus beast');
+  assert.equal(attributed.attribution.guessed, true);
+  assert.equal(attributed.attribution.kind, 'kill');
+  assert.match(attributed.attribution.text, /crumples/);
+  assert.match(renderTougher({characters:new Set([c.me.name])}), /\(guess\)/);
+  // With the announcement first, a following combat line updates the same gain.
+  c.emit('message', {at: at + 20000, text:'You suddenly feel a little tougher.'});
+  c.emit('message', {at: at + 20001, text:'Your hammer crushes the troll.'});
+  assert.equal(t.loadGains(c.me.name).gains.at(-1).creature, 'troll');
+  assert.equal(t.loadGains(c.me.name).gains.length, 2);
+  // Distant combat, incoming swings and other players' kills do not claim gains.
+  c.emit('message', {at: at + 30000, text:'The rat bites you with its attack.'});
+  c.emit('message', {at: at + 30001, text:'Someone Else has slain the rat!'});
+  c.emit('message', {at: at + 30002, text:'You suddenly feel a little tougher.'});
+  assert.equal(t.loadGains(c.me.name).gains.at(-1).creature, null);
+  const {tougherCombatMessage, guessTougherCreature} = await import('./m59-tougher-attribution.mjs');
+  for(const text of ['You have slain the troll!', 'Combat Tester has slain the troll!',
+    'You have slain the troll with your black dagger!', 'With a quick thrust, you finish off the troll.',
+    "The troll is knocked to the ground by your kick - and doesn't get up."])
+    assert.equal(tougherCombatMessage({kind:'message',text},c.me.name)?.creature,'troll',text);
+  assert.equal(tougherCombatMessage({kind:'said',text:'You killed the troll.'},c.me.name),null);
+  assert.equal(tougherCombatMessage({kind:'message',text:'Your weapon takes on a duller cast.'},c.me.name),null);
+  const msgs = [
+    {at:40000,seq:1,creature:'rat',evidence_kind:'attack'},
+    {at:40000,seq:4,creature:'troll',evidence_kind:'attack'},
+  ];
+  assert.equal(guessTougherCreature(msgs,{at:40000,seq:5}).creature,'troll');
+  assert.equal(guessTougherCreature(msgs,{at:43000}),null);
+  t.recordGain('History', {at:40000,from:23,to:24});
+  const withEvidence = { ...options, combatEvidence: [{character:'History',
+    event:{at:40000,seq:8,text:'You suddenly feel a little tougher.'},
+    guess:{attribution:{at:39999,seq:6,text:'You killed the skeleton.'}} }] };
+  const repair = await recoveryPlan(withEvidence);
+  assert.equal(repair.updates.length, 1);
+  assert.equal(repair.updates[0].creature, 'skeleton');
+  for(const {character,...gain} of repair.updates) t.commitGain(character,gain);
+  assert.equal(t.loadGains('History').gains.length, 4, 'attribution repair never adds a gain');
+  assert.equal((await recoveryPlan(withEvidence)).updates.length, 0, 'attribution repair is idempotent');
   console.log('Tougher packet recording, persistence, recovery and rendering checks passed');
 } finally { rmSync(scratch, {recursive:true,force:true}); }

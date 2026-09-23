@@ -1,11 +1,13 @@
 // Recover only gains proved by retained evidence. Dry run unless --apply is given.
 // --history DIR --characters names.json [--announcements gains.json] [--apply]
-// M59_TOUGHER_DIR must explicitly name the book being repaired.
+// --combat-evidence evidence.json also enriches exact announcements from retained combat text.
+// M59_TOUGHER_DIR must explicitly name the book being repaired. Apply while writers are stopped.
 import { createReadStream, readFileSync, readdirSync, mkdirSync, copyFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadGains, commitGain, TOUGHER_DIR } from './m59-tougher.mjs';
+import { tougherCombatMessage, guessTougherCreature } from './m59-tougher-attribution.mjs';
+import { loadGains, commitGain, TOUGHER_DIR, TOUGHER_LINE } from './m59-tougher.mjs';
 
 export function recoverInterval(before, after, known) {
   if (!Number.isInteger(before.level) || !Number.isInteger(after.level) ||
@@ -27,7 +29,7 @@ export function recoverInterval(before, after, known) {
   }));
 }
 
-export async function recoveryPlan({ history, characters, announcements = [] }) {
+export async function recoveryPlan({ history, characters, announcements = [], combatEvidence = [] }) {
   const books = new Map([...characters].map(c => [c, loadGains(c).gains]));
   const additions = [];
   for (const g of announcements) {
@@ -57,7 +59,19 @@ export async function recoveryPlan({ history, characters, announcements = [] }) 
       }
     }
   }
-  return { additions, latest: Object.fromEntries(last) };
+  const updates = [];
+  for (const evidence of combatEvidence) {
+    if (!characters.has(evidence.character) || !TOUGHER_LINE.test(evidence.event?.text ?? '')) continue;
+    const found = books.get(evidence.character).find(g => !g.recovery_id && g.at === evidence.event.at);
+    if (!found) continue; // A sample interval has no exact announcement to pair.
+    const message = evidence.guess?.attribution;
+    const candidate = tougherCombatMessage({ ...message, kind: 'message' }, evidence.character);
+    const guess = candidate && guessTougherCreature([candidate], evidence.event);
+    if (!guess || (found.attribution?.source === 'combat_message' &&
+        found.attribution.distance_ms <= guess.attribution.distance_ms)) continue;
+    updates.push({ character: evidence.character, ...found, ...guess });
+  }
+  return { additions, updates, latest: Object.fromEntries(last) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -66,18 +80,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     throw new Error('Required: --history DIR --characters names.json and M59_TOUGHER_DIR');
   const characters = new Set(JSON.parse(readFileSync(arg('--characters'), 'utf8')));
   const announcements = arg('--announcements') ? JSON.parse(readFileSync(arg('--announcements'), 'utf8')) : [];
-  const plan = await recoveryPlan({ history: arg('--history'), characters, announcements });
+  const combatEvidence = arg('--combat-evidence') ? JSON.parse(readFileSync(arg('--combat-evidence'), 'utf8')) : [];
+  const plan = await recoveryPlan({ history: arg('--history'), characters, announcements, combatEvidence });
   const counts = {};
   for (const g of plan.additions) counts[g.character] = (counts[g.character] ?? 0) + 1;
-  console.log(JSON.stringify({ additions: plan.additions.length, by_character: counts,
+  console.log(JSON.stringify({ additions: plan.additions.length, attributions_updated: plan.updates.length, by_character: counts,
     last72h: plan.additions.filter(g => g.at >= Date.now() - 72 * 3600000).length,
     latest_total_hp: Object.values(plan.latest).reduce((n, s) => n + s.level, 0) }, null, 2));
-  if (process.argv.includes('--apply') && plan.additions.length) {
+  if (process.argv.includes('--apply') && (plan.additions.length || plan.updates.length)) {
     const backup = join(TOUGHER_DIR, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
     mkdirSync(backup, { recursive: true });
     for (const file of readdirSync(TOUGHER_DIR).filter(f => f.endsWith('.json')))
       copyFileSync(join(TOUGHER_DIR, file), join(backup, file));
-    for (const { character, ...gain } of plan.additions) commitGain(character, gain);
+    for (const { character, ...gain } of [...plan.additions, ...plan.updates]) commitGain(character, gain);
     console.log(`Applied; original books backed up to ${backup}`);
   }
 }

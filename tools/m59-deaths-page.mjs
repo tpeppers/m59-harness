@@ -263,7 +263,7 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
 
   const FACETS = {
     creature: { children: s.by_creature, total: s.total, unit: 'points',
-                note: 'What actually paid. A kill only rolls for a point when the creature is at ' +
+                note: 'Monsters inferred from combat messages beside each tougher announcement, or a nearby recorded kill. These attributions are guesses. A kill only rolls for a point when the creature is at ' +
                       'or above your own level, so a creature that appears here is one worth ' +
                       'hunting and one that never does is a creature the fleet is killing for free.',
                 empty: 'nothing yet' },
@@ -281,7 +281,7 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
       <td class="dim" title="${esc(g.interval_start ? new Date(g.interval_start).toISOString() + ' to ' + new Date(g.at).toISOString() : new Date(g.at).toISOString())}">${esc(ago(g.at))}${g.source === 'sample_recovery' ? ' <span class="pill">by this time · recovered</span>' : ''}</td>
       <td>${esc(g.character)}</td>
       <td class="good">${g.from != null && g.to != null ? `${g.from} → <b>${g.to}</b>` : (g.to ?? '—')}</td>
-      <td>${g.creature ? lore(g.creature) : '<span class="guess">cause not recorded</span>'}</td>
+      <td>${g.creature ? lore(g.creature) + ' <span class="guess" title="' + esc(g.attribution?.text ?? g.attributed ?? 'Inferred from a nearby kill') + '">(guess)</span>' : '<span class="guess">cause not recorded</span>'}</td>
       <td>${g.room ? roomLink(g.room, g.room_num) : '<span class="dim">—</span>'}</td>
     </tr>`).join('');
 

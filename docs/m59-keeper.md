@@ -149,6 +149,10 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Postmortems, the watchdog, the yield c
   survival), skipped the first ring on startup, and could lose messages to ring eviction.
   `Session.noteToughness()` now saves each announcement immediately, including when no
   autopilot is running. Kill attribution enriches the durable record afterwards.
+  The nearest outgoing attack or kill message within two seconds of the announcement
+  supplies a guessed monster, including kill text that arrives just after it. The record
+  keeps the exact supporting line; the board labels creature attribution as a guess.
+  Incoming attacks and other players' kills do not claim the point.
   `m59-tougher-recover.mjs` repairs retained announcements and minimum gains proved by
   consecutive ledger samples; sample rows carry time intervals and no guessed kill or room.
 
