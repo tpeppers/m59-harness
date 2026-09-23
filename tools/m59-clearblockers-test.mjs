@@ -18,6 +18,7 @@
 // gross_squares 0 over 60s, health 1/55, never swung, trail ending "survival alternatives
 // exhausted for the current observation".
 import { Autopilot } from './m59-autopilot.mjs';
+import {OF} from './m59-parse.mjs';
 
 let failed = 0;
 const ok = (label, cond, detail = '') => {
@@ -25,8 +26,8 @@ const ok = (label, cond, detail = '') => {
   if (!cond) failed++;
 };
 
-const SPIDER = { id: 1, name: 'spider', col: 11, row: 10 };
-const TROLL  = { id: 2, name: 'troll',  col: 11, row: 10 };
+const SPIDER = { id: 1, name: 'spider', col: 11, row: 10, flags:OF.ATTACKABLE };
+const TROLL  = { id: 2, name: 'troll',  col: 11, row: 10, flags:OF.ATTACKABLE };
 
 const rig = ({ health = 0.9, wedged = { why: 'covered no ground for 25s', for_ms: 25000 },
                threats = 8, near = [SPIDER], overCeiling = ['troll'],
@@ -37,6 +38,9 @@ const rig = ({ health = 0.9, wedged = { why: 'covered no ground for 25s', for_ms
     s: { client: { self: { col: 10, row: 10 }, rsc: { get: () => null } } },
     safety: () => ({ fleeAt: 0.7 }),
     holdWorks: () => false,
+    armedForSure:()=>true,facultyHeld:()=>false,checkFreeze:()=>false,currentRecoveryWall:()=>null,
+    weaponPriorityNow:()=>[],bannedWeaponsNow:()=>[],ledgerEvent:()=>{},
+    planBlockerLure:()=>null,takeRecoverySpot:async()=>({took:false}),
     wedgedInPlace: () => wedged,
     threatCountHere: () => threats,
     travelStopMaxThreats: () => 6,
@@ -45,9 +49,12 @@ const rig = ({ health = 0.9, wedged = { why: 'covered no ground for 25s', for_ms
     noteCrowdRefusal: (w) => calls.crowdRefusals.push(w),
     note: (what, data) => calls.notes.push({ what, ...data }),
     progress: (w) => calls.progress.push(w),
-    async fightInPlace(t, n) { calls.fights.push(n); return { killed: true }; },
+    async fightNow(opts) { calls.fights.push(opts.target); return { fought:true,killed: true }; },
   };
   const v = { health: { value: Math.round(health * 55), max: 55 } };
+  self.s.client.vitals=()=>v;
+  Object.setPrototypeOf(self,Autopilot.prototype);
+  self.s.client.room={objects:new Map(near.map(o=>[o.id,o]))};
   return { self, v, near, calls };
 };
 const call = (self, near, v) => Autopilot.prototype.tradeInPlaceIfWedged.call(self, { near, v });
@@ -69,7 +76,7 @@ console.log('\n--- NOT THAT LAST RESORT: full health, small thing in the way ---
   const r = await call(self, near, v);
   ok('a healthy wedged character clears the blocker', r === true, 'fought ' + calls.fights.join(','));
   ok('and says it was running the in-band rule, not desperation',
-     calls.notes[0]?.mode === 'in-band blockers only', String(calls.notes[0]?.mode));
+     calls.notes[0]?.mode === 'fight until clear', String(calls.notes[0]?.mode));
 }
 
 console.log('\n--- AND IT IS "SMALL CRITTERS", NOT "EVERYTHING ON THE ROAD" ---');
@@ -79,7 +86,7 @@ console.log('\n--- AND IT IS "SMALL CRITTERS", NOT "EVERYTHING ON THE ROAD" ---'
   ok('a healthy character does NOT pick a fight with an out-of-band troll', r === false);
   ok('nothing was swung at', calls.fights.length === 0);
   ok('and it says WHY, which is a doctrine choice not an absence',
-     /nothing inside the engagement band/.test(String(calls.notes[0]?.what)), String(calls.notes[0]?.what));
+     /without a reachable refuge/.test(String(calls.notes[0]?.what)), String(calls.notes[0]?.what));
 }
 {
   const { self, v, near, calls } = rig({ health: 1.0, near: [TROLL, { ...SPIDER, col: 12 }] });
@@ -90,10 +97,8 @@ console.log('\n--- AND IT IS "SMALL CRITTERS", NOT "EVERYTHING ON THE ROAD" ---'
 {
   const { self, v, near, calls } = rig({ health: 1 / 55, near: [TROLL] });
   const r = await call(self, near, v);
-  ok('below the flee line the band is dropped — a troll is better than nothing',
-     r === true && calls.fights[0] === 'troll');
-  ok('and the note says it was desperation',
-     /below the flee line/.test(String(calls.notes[0]?.mode)), String(calls.notes[0]?.mode));
+  ok('a dying character does not newly provoke a larger blocker',
+     r === false && calls.fights.length === 0);
 }
 
 console.log('\n--- the gates that must still hold ---');
@@ -119,7 +124,7 @@ console.log('\n--- the gates that must still hold ---');
   const { self, v, near, calls } = rig({ policy: { tradeInPlaceWhenCrowded: false }, threats: 8 });
   const r = await call(self, near, v);
   ok('tradeInPlaceWhenCrowded:false restores the OLD precedence', r === false);
-  ok('and it is recorded as a crowd refusal', calls.crowdRefusals[0] === 'trading in place');
+  ok('and it is recorded as a crowd refusal', calls.crowdRefusals[0] === 'clearing a blocker');
 }
 {
   const { self, v, near, calls } = rig({ policy: { tradeInPlaceWhenCrowded: false }, threats: 2 });

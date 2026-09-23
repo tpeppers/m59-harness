@@ -1438,3 +1438,16 @@ carries `bound` and `closure_squares`.
 
 **It should fail the day a rail is emitted that its own edge would refuse, or the day a slide
 onto a different shelf is accepted as a step.**
+
+## m59-survival-jam-test.mjs — survival ownership across a travel jam
+
+Offline integration through the real watchdog pulse, cancellation, pending recovery
+and retreat dispatcher. Covers loss of the old travel wedge when doing becomes null,
+repeated failed recovery without watchdog evidence, sustained exact weak-target combat,
+low-health retreat, safe-wall protection, ownership and expiry invalidation, escalation
+across replacement decisions, changed-observation retry bypass, and resumption of the
+original suspended journey. Larger-target fixtures cover retaliation, immediate/delayed
+chase observations and body-aware local clearance; shared disappearance accounting is
+also tested across separate keeper-like Node processes. Wire actions and geometry are
+fixtures: this is not a live-server mortality or chase result. See
+[the follow-up report](reports/2026-09-22-survival-jam-followup.md) for bounds and limitations.

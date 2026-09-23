@@ -37,6 +37,8 @@ import { clientToProtocol, CLIENT_FINENESS, elideLoops, protocolToClient } from 
 import { fineRouteDetour, pullFine, pointOfSquare } from './m59-finepath.mjs';
 import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
+import { recordEvent } from './m59-ledger.mjs';
+import { chooseTrafficBlink } from './m59-blink-rung.mjs';
 import { recallTrack, strikeTrack, clearStrikes } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
 import { activeRoutes, anchorFor, bakedPath } from './m59-routes.mjs';
@@ -3572,14 +3574,14 @@ export function sessionWalkPrototype(deps) {
                                .catch(e => ({ rested: false, why: e.message }))
                   : { rested: false, why: 'no autopilot to rest with' };
               }
-              const out = await this.blinkOut({ expect: answer.answer.expect }).catch(() => null);
+              const out = await this.blinkOut({ expect: answer.answer.expect, movementGeneration, controlToken }).catch(() => null);
               recordTactic({ character: who2, room: Number(this.world?.room?.num ?? 0),
                              tactic: 'blink_escape', trigger: `${answer.strategy} (walker)`,
                              // ALWAYS TRUE NOW: nothing left can turn this into a decision
                              // rather than an attempt. This read `castable` until that
                              // variable was deleted, leaving a ReferenceError AFTER the
                              // await — the spell went off and the walk then threw.
-                             worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: true,
+                             worked: !!out?.arrived, ms: out?.ms??0, hp_lost: 0, attempted: !!out?.cast,
                              note: `blocked at ${next.row},${next.col} for ${Math.round(stuckMs / 1000)}s; ${answer.answer.why}; ` +
                                    (answer.answer.need_safe_spot
                                      ? (wall?.took ? 'took a wall first; '
@@ -6529,10 +6531,62 @@ export function sessionWalkPrototype(deps) {
         if (problems.length)
           console.error('[strategies] ' + problems.map(p => `${p.file}: ${p.why}`).join('; '));
       }
-      if (!Session._strategies || !Session._firstAnswer) return null;
-      return await Session._firstAnswer(Session._strategies, hook, ctx,
+      const answer = await Session._firstAnswer?.(Session._strategies, hook, ctx,
         { onError: e => console.error(`[strategies] ${e.strategy} threw: ${e.why}`) });
-    } catch { return null; }
+      if (hook !== 'whenStuck') return answer ?? null;
+      const privateBlink = Session._strategies?.strategies?.find(s=>s.name==='blink-escape');
+      const blinkLoadError=Session._strategies?.problems?.some(p=>p.file==='blink-escape.mjs');
+      const full = this._trafficBlinkContext(ctx);
+      const candidate = chooseTrafficBlink(full);
+      // Explicit local policy retains precedence, even when it is disabled or
+      // declines. Never turn an allow-list refusal into a built-in permission.
+      const selected = answer ?? (!privateBlink && !blinkLoadError && candidate.can
+        ? {strategy:'builtin-blink-escape',answer:candidate.answer} : null);
+      this._recordBlinkRung({phase:'decision',from:ctx.from,reason:blinkLoadError && !answer
+        ? 'private_policy_load_error' : privateBlink && !answer
+        ? (privateBlink.enabled?'private_policy_declined':'private_policy_disabled') : candidate.reason,
+        selected:selected?.answer?.do==='blink',goal:ctx.goal,landing:ctx.blink,
+        position:ctx.self?{row:ctx.self.row,col:ctx.self.col}:null,bodies:ctx.bodies??[],
+        verdict:candidate.verdict??null});
+      if (selected?.answer?.do==='blink') {
+        this._blinkProposal={ctx:full,generation:this.movementGeneration,room:this.world?.room?.num,
+          client:this.client,life:this.lifeBoundary??0};
+      }
+      return selected;
+    } catch (e) {
+      this._recordBlinkRung({phase:'decision',reason:'strategy_error',why:e.message,selected:false});
+      return null;
+    }
+  }
+
+  _trafficBlinkContext(ctx) {
+    const c=this.client;
+    return {...ctx,knowsBlink:(c?.spells??[]).some(sp=>
+      String(c.rsc?.get?.(sp.nameRsc)??sp.name??'').toLowerCase()==='blink'),
+      disabled:process.env.M59_TRAFFIC_BLINK==='0',
+      cooldown:Date.now()-(this._lastTrafficBlinkAt??0)<30000};
+  }
+
+  _recordBlinkRung(event) {
+    const stats=this.blinkRungStats??={decisions:0,selected:0,casts:0,arrivals:0,refusals:{},cast_refusals:{}};
+    if(event.phase==='decision') {
+      stats.decisions++; if(event.selected)stats.selected++;
+      else stats.refusals[event.reason]=(stats.refusals[event.reason]??0)+1;
+    }
+    if(event.phase==='outcome') {
+      if(event.cast)stats.casts++;
+      else stats.cast_refusals[event.reason]=(stats.cast_refusals[event.reason]??0)+1;
+      if(event.arrived)stats.arrivals++;
+    }
+    stats.last={at:Date.now(),...event};
+    // Count every ask, persist identical refusals at most every 30 seconds.
+    const key=JSON.stringify([this.world?.room?.num,event.phase,event.reason,event.goal]);
+    if(event.phase==='decision'&&!event.selected&&this._blinkReceipt?.key===key
+        &&Date.now()-this._blinkReceipt.at<30000)return;
+    this._blinkReceipt={key,at:Date.now()};
+    recordEvent(this.client?.me?.name??this.name,'blink_rung',{
+      room:this.world?.room?.num??null,...event,counts:{decisions:stats.decisions,
+        selected:stats.selected,casts:stats.casts,arrivals:stats.arrivals}});
   }
 
   /** Bodies in this room that block movement, as squares — the shape a strategy expects. */
@@ -6592,40 +6646,50 @@ export function sessionWalkPrototype(deps) {
    * believed the message would report success in every room that has no blink point at all.
    * What is believed here is the `moved` EVENT and the position read back after it.
    */
-  async blinkOut({ expect = null, holdMs = 15000 } = {}) {
-    const c = this.client;
-    if (!c) return { cast: false, why: 'no client' };
-    const spell = (c.spells ?? []).find(sp => {
-      const n = c.rsc?.get?.(sp.nameRsc) ?? sp.name ?? '';
-      return String(n).toLowerCase() === 'blink';
-    });
-    if (!spell) return { cast: false, why: 'this character does not know blink' };
-    const loop = this._tickLoop;
-    const since = c.evSeq;
-    let waited = null;
+  async blinkOut({ expect = null, holdMs = 15000,
+                   movementGeneration = this.movementGeneration, controlToken = null } = {}) {
+    const c=this.client, proposal=this._blinkProposal;
+    this._blinkProposal=null;
+    const finish=out=>{this._recordBlinkRung({phase:'outcome',...out});return out;};
+    const cancelled=()=>this.client!==c || c!==proposal?.client
+      || this.movementWasCancelled?.(movementGeneration,controlToken)
+      || (this.lifeBoundary??0)!==proposal?.life
+      || this.world?.room?.num!==proposal?.room || !(c?.vitals?.()?.health?.value>0);
+    if(!c || !proposal || proposal.generation!==movementGeneration || cancelled())
+      return finish({cast:false,arrived:false,reason:'ownership_or_life_changed',why:'stale blink proposal'});
+    const ctx=this._trafficBlinkContext({...proposal.ctx,self:c.self,room:this.world?.room,
+      geo:this.world?.geometry,bodies:this._blockingBodies(),vitals:c.vitals?.(),
+      underFire:proposal.ctx.underFire || Date.now()-(this.damagedAt??0)<5000});
+    const gate=chooseTrafficBlink(ctx);
+    if(!gate.can)return finish({cast:false,arrived:false,reason:gate.reason,why:gate.reason});
+    const spell=(c.spells??[]).find(sp=>String(c.rsc?.get?.(sp.nameRsc)??sp.name??'').toLowerCase()==='blink');
+    const loop=this._tickLoop, frozen=loop?._frozen, since=c.evSeq, from={...c.self},
+      started=Date.now(), room=this.world?.room?.num;
+    let cast=false, waited=null;
+    const freezeLease={loop,generation:movementGeneration,frozen};
     try {
-      if (loop) loop._frozen = true;
-      c.cast(spell.id, []);
-      waited = await c.waitFor({ since, kinds: ['moved'], timeoutMs: holdMs });
-    } catch (e) {
-      return { cast: false, why: 'the cast threw: ' + e.message };
-    } finally {
-      // ALWAYS UNFROZEN. A loop left frozen is a character that never moves again, which is
-      // a far worse outcome than a failed cast, so this is a finally and not a happy-path
-      // line.
-      if (loop) loop._frozen = false;
+      if(loop) {this._blinkFreeze=freezeLease;loop._frozen=true;}
+      if(cancelled())return finish({cast:false,arrived:false,reason:'cancelled',why:'cancelled before cast'});
+      c.cast(spell.id,[]);cast=true;this._lastTrafficBlinkAt=Date.now();
+      do {
+        waited=await c.waitFor({since,kinds:['moved'],timeoutMs:Math.min(500,holdMs-(Date.now()-started))});
+      } while(!cancelled() && !(waited?.events??[]).some(e=>e.kind==='moved') && Date.now()-started<holdMs);
+      const at=c.self?{row:c.self.row,col:c.self.col}:null;
+      const relocated=!cancelled() && (waited?.events??[]).some(e=>e.kind==='moved') && !!at
+        && (at.row!==from.row || at.col!==from.col);
+      const arrived=relocated && !!expect && at.row===expect.row && at.col===expect.col;
+      return finish({cast,relocated,arrived,at,expect,room,ms:Date.now()-started,
+        reason:cancelled()?'cancelled':arrived?'landed':relocated?'unexpected_landing':'no_displacement',
+        why:arrived?'blinked to the room teleport point':'blink did not verify the expected relocation'});
+    } catch(e) { return finish({cast,arrived:false,reason:'cast_error',why:e.message}); }
+    finally {
+      // Restore the pre-cast pause only while still owning this exact driver.
+      if(this._blinkFreeze===freezeLease) {
+        if(loop && this._tickLoop===loop)loop._frozen=frozen;
+        this._blinkFreeze=null;
+      }
     }
-    const moved = (waited?.events ?? []).filter(e => e.kind === 'moved');
-    const at = c.self ? { row: c.self.row, col: c.self.col } : null;
-    const arrived = !!expect && !!at && at.row === expect.row && at.col === expect.col;
-    return { cast: true, relocated: moved.length > 0, timedOut: !!waited?.timedOut,
-             at, expect, arrived,
-             why: moved.length ? (arrived ? 'blinked to the room teleport point'
-                                          : 'moved, but not to the square expected')
-                               : 'no move event: the cast was interrupted, or this room ' +
-                                 'declares no teleport point' };
   }
-
 
   // WHERE THIS BODY HAS ACTUALLY BEEN DURING THIS CROSSING, and whether that is a walk.
   //
@@ -7269,7 +7333,7 @@ export function sessionWalkPrototype(deps) {
           : { rested: false, why: 'no autopilot to rest with' };
       }
       const out = !tookTheExit
-        ? await this.blinkOut({ expect: stuckAnswer.answer.expect }).catch(() => null)
+        ? await this.blinkOut({ expect: stuckAnswer.answer.expect, movementGeneration, controlToken }).catch(() => null)
         : { cast: false, arrived: false, why: 'did not cast: the nearest wall was the exit and it was taken' };
       if (this.movementWasCancelled(movementGeneration, controlToken))
         return finish(this.cancelledMovement({ tried }));
@@ -7277,7 +7341,7 @@ export function sessionWalkPrototype(deps) {
       recordTactic({ character: this.client?.me?.name ?? this.name ?? null,
                      room: Number(this.world?.room?.num ?? 0),
                      tactic: 'blink_escape', trigger: stuckAnswer.strategy,
-                     worked: !!out?.arrived, ms: 0, hp_lost: 0, attempted: !tookTheExit,
+                     worked: !!out?.arrived, ms: out?.ms??0, hp_lost: 0, attempted: !!out?.cast,
                      note: `${stuckAnswer.answer.why}; ` +
                            (stuckAnswer.answer.need_safe_spot
                               ? (wall?.took ? 'took a wall first; '
