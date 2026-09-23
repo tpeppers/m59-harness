@@ -48,6 +48,7 @@ import { loadMerchants } from './m59-merchants.mjs';
 import { loadSpells, karmaAllows, requiredKarma, SCHOOLS } from './m59-spells.mjs';
 import * as abilities from './m59-abilities.mjs';
 import * as hitbook from './m59-hits.mjs';
+import { observeAnnouncement } from './m59-tougher.mjs';
 import * as transits from './m59-transits.mjs';
 import * as bankbook from './m59-bank.mjs';
 // Write-only, and safe to import anywhere: the ledger pulls in no keeper and no hook loader
@@ -1500,6 +1501,13 @@ class Session {
       this.lastCombatLine = { at: ev.at ?? Date.now(), who: String(c.other).toLowerCase() };
   }
 
+  noteToughness(ev, client) {
+    const gain = observeAnnouncement(client, ev, this.client === client ? this.world?.room : null);
+    if (!gain) return;
+    const keeper = autopilotIfAny(this.name);
+    if (keeper?.s === this) keeper.noteToughness(gain);
+  }
+
   // ONE HEALTH READING. Called for every health stat the server sends.
   //
   // A DROP IS A HIT AND A RISE IS NOT, and that is the whole of the logic that cannot live
@@ -2217,6 +2225,7 @@ class Session {
     c.onEvent = ev => {
       if (!c.combatReady && ev.kind === 'message') loginCombatEvents.push(ev);
       else this.combat?.event(ev, c);
+      if (ev.kind === 'message') this.noteToughness?.(ev, c);
       this.recorder.line('event', ev);
       this.playerEvidence?.event(ev,c);
       if (ev.kind === 'ability') this.noteAdvancement(ev);

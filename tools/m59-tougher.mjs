@@ -35,7 +35,7 @@
 //   fleet produces and the only ones that survive a death, so losing one to a restart is
 //   losing the record of a whole evening's work.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -108,7 +108,9 @@ function saveGains(book) {
   if (!book?.character) return null;
   try {
     mkdirSync(TOUGHER_DIR, { recursive: true });
-    writeFileSync(fileFor(book.character), JSON.stringify(book, null, 2));
+    const temp = fileFor(book.character) + `.${process.pid}.tmp`;
+    writeFileSync(temp, JSON.stringify(book, null, 2));
+    renameSync(temp, fileFor(book.character));
     return fileFor(book.character);
   } catch { return null; }              // a failed write must never stop play
 }
@@ -162,11 +164,12 @@ export function recordGain(character, { at = Date.now(), from = null, to = null,
                                    room: room ?? recent.room, room_num: room_num ?? recent.room_num,
                                    attributed: 'the kill nearest the announcement, ' +
                                      Math.abs(at - recent.at) + 'ms away' });
-  // Otherwise hold it and let the next kill claim it. Held rather than written with a
-  // null creature, because a gain with no cause is the thing this file exists to stop
-  // producing — and if nothing claims it, flushPending() writes it honestly as unknown.
+  // Keep it available for a later kill to claim, but persist it now with unknown
+  // attribution. Attribution must never gate durability.
   f.pendingGain = { at, from, to, room, room_num, said };
-  return null;
+  // Save before waiting for attribution: a keeper restart must not erase the point.
+  return commitGain(character, { ...f.pendingGain,
+    attributed: 'no kill was recorded near it — cause unknown' });
 }
 
 // THE SAME POINT MUST NOT BE WRITTEN TWICE. The gains file is the long memory and it is
@@ -176,10 +179,12 @@ export function recordGain(character, { at = Date.now(), from = null, to = null,
 // one already on the books is the same gain.
 const DEDUPE_MS = 1000;
 
-function commitGain(character, g) {
+export function commitGain(character, g) {
   const ev = push(character, { kind: 'gain', ...g });
   const book = loadGains(character);
-  const dup = (book.gains || []).find(x => Math.abs((x.at ?? 0) - g.at) <= DEDUPE_MS);
+  const dup = (book.gains || []).find(x => g.recovery_id
+    ? x.recovery_id === g.recovery_id
+    : !x.recovery_id && Math.abs((x.at ?? 0) - g.at) <= DEDUPE_MS);
   if (dup) {
     // Do not lose an attribution that arrived late. A gain first written with no cause,
     // then claimed by the kill that paid for it, should end up naming the creature.
@@ -194,7 +199,10 @@ function commitGain(character, g) {
   }
   book.gains.push({ at: g.at, from: g.from, to: g.to, creature: g.creature ?? null,
                     room: g.room ?? null, room_num: g.room_num ?? null,
-                    attributed: g.attributed ?? null });
+                    attributed: g.attributed ?? null,
+                    ...(g.source ? { source: g.source } : {}),
+                    ...(g.recovery_id ? { recovery_id: g.recovery_id,
+                      interval_start: g.interval_start } : {}) });
   book.gains.sort((a, b) => a.at - b.at);
   saveGains(book);
   return ev;
@@ -210,6 +218,24 @@ export function flushPending(character, now = Date.now()) {
   f.pendingGain = null;
   return commitGain(character, { ...g, creature: null,
                                  attributed: 'no kill was recorded near it — cause unknown' });
+}
+
+// Called synchronously by Session's packet callback, independent of keeper mode,
+// long awaits, event-ring eviction and autopilot replacement. The stat push precedes
+// the announcement; capture its max here, never at the next keeper pass.
+const announcements = new WeakMap();
+export function observeAnnouncement(client, event, room = null) {
+  if (event.kind !== 'message' || !isTougherText(event.text) || !client.me?.name) return null;
+  const at = event.at ?? Date.now();
+  const previous = announcements.get(client);
+  if (previous != null && Math.abs(at - previous) <= DEDUPE_MS) return null;
+  announcements.set(client, at);
+  const max = client.vitals?.()?.health?.max ?? null;
+  const gain = { at, from: max == null ? null : max - 1, to: max,
+    room: room?.name ?? client.rsc?.get?.(client.roomNameRsc) ?? null,
+    room_num: room?.num ?? null, said: event.text };
+  recordGain(client.me.name, gain);
+  return gain;
 }
 
 // ------------------------------------------------------------------ reading it back
@@ -232,9 +258,13 @@ export const allFeeds = ({ characters = null } = {}) => [...feeds.values()]
 export function allGains({ sinceMs = null, limit = 2000, characters = null } = {}) {
   const cutoff = sinceMs ? Date.now() - sinceMs : null;
   const out = [];
-  for (const c of listCharacters().filter(c => !characters || characters.has(c)))
-    for (const g of loadGains(c).gains || [])
-      if (!cutoff || g.at >= cutoff) out.push({ character: c, ...g });
+  for (const c of listCharacters()) {
+    const book = loadGains(c);
+    const character = book.character ?? c;
+    if (characters && !characters.has(character)) continue;
+    for (const g of book.gains || [])
+      if (!cutoff || g.at >= cutoff) out.push({ character, ...g });
+  }
   out.sort((a, b) => b.at - a.at);
   return out.slice(0, limit);
 }

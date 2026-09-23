@@ -256,9 +256,10 @@ pickFacet('cause');
 // ------------------------------------------------------------------ /tougher
 
 export function renderTougher({ hours = 168, characters = null } = {}) {
-  const gains = allGains({ sinceMs: hours * 3600 * 1000, characters });
+  const gains = allGains({ sinceMs: hours * 3600 * 1000, characters, limit: Infinity });
   const s = toughSummary(gains);
   const feeds = allFeeds({ characters });
+  const recovered = gains.filter(g => g.source === 'sample_recovery').length;
 
   const FACETS = {
     creature: { children: s.by_creature, total: s.total, unit: 'points',
@@ -268,8 +269,8 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
                 empty: 'nothing yet' },
     room: { children: s.by_room, total: s.total, unit: 'points',
             note: 'Where the points were earned. The positive image of the deaths map — and unlike ' +
-                  'that one, every row here is exact: a gain is announced the instant it happens, ' +
-                  'so the room is where the character was standing, not where it was last seen.',
+                  'that one, announcement rows capture the room when the message arrives. ' +
+                  'Recovered sample gains leave the room unknown.',
             empty: 'nothing yet' },
     character: { children: s.by_character, total: s.total, unit: 'points',
                  note: 'Who earned them.', empty: 'nothing yet' },
@@ -277,7 +278,7 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
 
   const gainRows = gains.slice(0, 60).map(g => `
     <tr>
-      <td class="dim">${esc(ago(g.at))}</td>
+      <td class="dim" title="${esc(g.interval_start ? new Date(g.interval_start).toISOString() + ' to ' + new Date(g.at).toISOString() : new Date(g.at).toISOString())}">${esc(ago(g.at))}${g.source === 'sample_recovery' ? ' <span class="pill">by this time · recovered</span>' : ''}</td>
       <td>${esc(g.character)}</td>
       <td class="good">${g.from != null && g.to != null ? `${g.from} → <b>${g.to}</b>` : (g.to ?? '—')}</td>
       <td>${g.creature ? lore(g.creature) : '<span class="guess">cause not recorded</span>'}</td>
@@ -311,7 +312,7 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
 <style>${STYLE}</style>
 </head><body><div class="wrap">
   <h1>Tougher</h1>
-  <div class="sub">Every point of maximum health the fleet has earned, and what died for it ·
+  <div class="sub">Recorded maximum-health gains and the evidence for them ·
     ${esc(FLEET_LABEL)} fleet</div>
   ${NAV('tougher')}
 
@@ -323,18 +324,15 @@ export function renderTougher({ hours = 168, characters = null } = {}) {
     <div class="card"><div class="k">rooms that paid</div><div class="v">${s.by_room.length}</div>
       <div class="n">where the work actually is</div></div>
     <div class="card"><div class="k">cause not recorded</div><div class="v ${s.unattributed ? 'bad' : 'dim'}">${s.unattributed}</div>
-      <div class="n">announced, but no kill near it</div></div>
+      <div class="n">kill attribution unavailable</div></div>
   </div>
+
+  ${recovered ? `<div class="caveat">${recovered} points recovered from increases between max-health samples. These are a minimum: gains offset by deaths between samples cannot be recovered. Times mark the end of each observation interval; kills and rooms are unknown.</div>` : ''}
 
   ${nothingYet ? `
   <div class="panel">
     <div class="caveat">
-      <b>Nothing on record yet, and that is expected.</b> A gain is caught from the server's own
-      announcement — "You suddenly feel a little tougher." (<code>player.kod:144</code>) — which
-      arrived on the wire for months with nothing listening. This record starts the first time a
-      broker running this code sees one, and <b>it cannot be backfilled</b>: the ledger's
-      <code>level_up</code> events were derived by diffing five-minute samples, so they know the
-      net change and not the kill that caused it. Expect the first rows within a few hours of play.
+      <b>No gains recorded in this time window.</b> Server announcements are saved as they arrive. Older gaps can be recovered from retained announcements and max-health samples; sample recovery provides a minimum count with an approximate time window.
     </div>
   </div>` : `
   <div class="panel">

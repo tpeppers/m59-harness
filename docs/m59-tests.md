@@ -1451,3 +1451,10 @@ chase observations and body-aware local clearance; shared disappearance accounti
 also tested across separate keeper-like Node processes. Wire actions and geometry are
 fixtures: this is not a live-server mortality or chase result. See
 [the follow-up report](reports/2026-09-22-survival-jam-followup.md) for bounds and limitations.
+
+## Tougher recording
+
+`node tools/m59-tougher-observation-test.mjs` runs the production Session callback
+against an offline client. It checks immediate persistence without an autopilot, paired
+message deduplication, event-ring eviction, late kill attribution, names with spaces,
+restart durability, multi-point sample recovery and honest page labels.

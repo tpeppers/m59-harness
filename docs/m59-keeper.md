@@ -144,6 +144,14 @@ Split out of [`CLAUDE.md`](../CLAUDE.md). Postmortems, the watchdog, the yield c
   broker outage never happened. `m59-tougher.mjs` catches the line and attributes it to the
   kill that paid for it — which the diff could never do.
 
+  **Record at the packet boundary, never by polling the event ring.** The old
+  `Autopilot.noteToughness()` ran below early returns (GOAP, behavior trees, combat and
+  survival), skipped the first ring on startup, and could lose messages to ring eviction.
+  `Session.noteToughness()` now saves each announcement immediately, including when no
+  autopilot is running. Kill attribution enriches the durable record afterwards.
+  `m59-tougher-recover.mjs` repairs retained announcements and minimum gains proved by
+  consecutive ledger samples; sample rows carry time intervals and no guessed kill or room.
+
   **Attribution is symmetric in time and that is not fussiness.** The kill is written down
   after `fight()` returns; the message is read off the event ring on the next pass. So the
   kill usually lands a few milliseconds AFTER the announcement it caused. Requiring it to

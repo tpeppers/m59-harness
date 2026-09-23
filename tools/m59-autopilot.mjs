@@ -11803,65 +11803,16 @@ export class Autopilot {
   // book — has to agree on this or it silently keeps two sets of books.
   who() { return this.s.client?.me?.name ?? this.s.name ?? null; }
 
-  // "YOU SUDDENLY FEEL A LITTLE TOUGHER." — the only announcement of the only thing this
-  // fleet is for, and nothing was listening for it.
-  //
-  // The point is rolled inside the killing blow (player.kod:7827) and announced on the
-  // spot, so this scans the client's own event ring for the line and hands it to the
-  // record, which attributes it to the kill on either side of it. Everything else about
-  // a gain — the full heal, the 200 nutrition — is a consequence the server applies for
-  // free; it is this string that says a point was earned rather than restored.
-  //
-  // Watermarked rather than time-windowed. A pass can take minutes (a travel is one
-  // await), so "events in the last N seconds" would miss gains outright; a sequence
-  // number cannot. Only ever moves forward, so a gain is counted exactly once.
-  noteToughness() {
-    const c = this.s.client;
-    if (!c) return;
-    const evs = c.events || [];
-    // THE FIRST CALL ONLY SETS THE WATERMARK. The client keeps its last 500 events and
-    // outlives the keeper — `autopilot stop` then `start` hands back the same client —
-    // so starting from zero would re-scan a ring that may already contain a gain this
-    // record has, and write it twice. A keeper that starts mid-session is not entitled
-    // to claim what happened before it was watching.
-    const high0 = evs.reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
-    if (this.toughSeen == null) { this.toughSeen = high0; return; }
-    const from = this.toughSeen;
-    let high = from;
-    for (const e of evs) {
-      // `call` events carry no seq; every message does. Treating a missing seq as 0
-      // skips it, which is right for the only kind that lacks one.
-      const seq = e.seq ?? 0;
-      if (seq <= from) continue;
-      if (seq > high) high = seq;
-      if (e.kind !== 'message' || !tougher.TOUGHER_LINE.test(e.text || '')) continue;
-      const room = this.s.world?.room;
-      const max = c.vitals?.()?.health?.max ?? null;
-      tougher.recordGain(this.who(), {
-        at: e.at ?? Date.now(), from: max == null ? null : max - 1, to: max,
-        room: room?.name ?? null, room_num: room?.num ?? null, said: e.text,
-      });
-      this.tally.toughened = (this.tally.toughened || 0) + 1;
-      this.progress('gained a point of maximum health');
-      this.note('TOUGHER', {
-        now: max, room: room?.name,
-        why: 'the server announced a maximum-health gain — the one thing being farmed',
-      });
-      // MAX HEALTH IS THE LEVEL, SO A GAIN CAN INVALIDATE THE REASON WE ARE STANDING
-      // HERE. Advancement needs the creature's level STRICTLY above base max health, so
-      // the prey that was paying a minute ago may now be worth nothing — and the keeper's
-      // own answer to that is to carry on hunting it, reporting kills, indefinitely.
-      // Which monster to switch to is a directional decision and belongs to whoever is
-      // directing; this is where they get told the question has been asked.
-      this.pendingImprovement = { what: 'max_health', from: max == null ? null : max - 1, to: max,
-                                  hunting: this.policy?.hunt ?? null,
-                                  room: room?.num ?? null };
-    }
-    this.toughSeen = high;
-    // A gain nothing claimed within the window is written with its cause left null. Done
-    // here rather than on a timer so it costs a comparison on a pass we were running
-    // anyway.
-    tougher.flushPending(this.who());
+  // Session has already persisted the announcement at the packet boundary.
+  // React without polling the disposable client event ring.
+  noteToughness(gain) {
+    if (!gain) return;
+    this.tally.toughened = (this.tally.toughened || 0) + 1;
+    this.progress('gained a point of maximum health');
+    this.note('TOUGHER', { now: gain.to, room: gain.room,
+      why: 'the server announced a maximum-health gain' });
+    this.pendingImprovement = { what: 'max_health', from: gain.from, to: gain.to,
+      hunting: this.policy?.hunt ?? null, room: gain.room_num };
   }
 
   // WHAT THE FLEET IS USING THIS CHARACTER FOR, if anything. One place, because two
@@ -14601,12 +14552,6 @@ export class Autopilot {
     // and running for a door at 6 health are the same three numbers and opposite
     // mistakes, and only the second column tells them apart.
     this.recordFrame();
-
-    // DID WE GET TOUGHER? Read before any branch that can return, because most passes
-    // end early — in a safe spot, resting, mid-errand — and a gain announced during one
-    // of those is still a gain. It is a scan of an in-memory ring against a watermark
-    // and sends nothing.
-    this.noteToughness();
 
     // Answer people and take hand-outs before anything else. Cheap, and a player
     // trying to help should not have to wait for a fight to finish.
