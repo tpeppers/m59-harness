@@ -29,6 +29,7 @@ export function installDoorObserver(client, map, roomNumber, report = () => {}) 
     report(num, result);
   };
   client.onEvent = event => { previous?.(event); update(event); };
+  update({ kind: 'room-entered' });
   // join has already received the room's replay before this observer attaches.
   for (const [sector, data] of client.room.sectorHeights ?? []) update({ kind: 'sector-height', sector, ...data });
 }

@@ -1545,3 +1545,8 @@ travel. Live verification exposed a second failure: blind exit walking blinks
 into the inner hall, where the nearest operable sector is a lift, not the
 entrance. The known section sequence chooses the exit doors and verifies each
 crossing; a refused passage returns its reason without trying that detour.
+
+The door observer belongs to each Session login, including recovery reconnects.
+Attaching it only during keeper startup left Camilla's replacement client recording
+opening packets while its movement geometry stayed shut. Replacement clients reset
+and replay door geometry; events from the retired client cannot change it.

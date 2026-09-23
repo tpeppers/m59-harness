@@ -36,7 +36,6 @@ import { policyDiff, formatPolicyDiff, coerceSpotPair } from './m59-policydiff.m
 // The operator teleport, and the loopback check that is the reason it may exist at all.
 import { relocate, isLoopbackHost } from './m59-dm.mjs';
 import { attachStepMasks, applyDoorState, doorStates, assertDoorStates } from './m59-routes.mjs';
-import { installDoorObserver } from './m59-ceiling-doors.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import inspector from 'node:inspector';
 import * as watchdog from './m59-watchdog.mjs';
@@ -499,13 +498,7 @@ async function joinGenerationOnce(generation) {
     // to a user "when gets into new room" — so a character walking into a room whose door
     // opened yesterday is told about it, and this fires on that just as it does on a door
     // moving in front of us.
-    installDoorObserver(session.client, session.world.map, () => session.world?.room?.num, (num, out) => {
-      if (out.changed) {
-        session.impossibleEdges?.delete(num);
-        console.error('[keeper] ' + agent + ' room ' + num + ' doors -> ' + (out.state ?? 'as shipped'));
-      }
-      else if (out.unbaked) console.error('[keeper] ' + agent + ' room ' + num + ' ' + out.why);
-    });
+    // Session owns the observer so recovery reconnects attach it to the new client too.
 
     // LISTEN. THIS IS WHERE THE SOCKET IS, AND FOR A YEAR IT WAS NOWHERE.
     //

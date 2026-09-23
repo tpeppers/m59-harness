@@ -7,11 +7,32 @@ import { sharedRoomGeometry } from './m59-roo.mjs';
 import { attachStepMasks, applyDoorState, doorStates } from './m59-routes.mjs';
 import { applyCeilingDoors, installDoorObserver } from './m59-ceiling-doors.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
+import { Session } from './m59-session.mjs';
 const fresh = () => {
   const map = JSON.parse(readFileSync(new URL('../substrate/m59-map.json', import.meta.url)));
   attachStepMasks(map);
   return { map, g: sharedRoomGeometry(map.rooms[714]), observed: new Map() };
 };
+test('a replacement session client keeps live door geometry and ignores the old socket', () => {
+  const { map, g } = fresh();
+  const client = () => new M59Client({ host: '127.0.0.1', port: 1, log: () => {} });
+  const old = client(), s = Object.assign(Object.create(Session.prototype), {
+    client: old, world: { map, room: { num: 714 } }, recorder: { line() {} },
+  });
+  s.observeDoorGeometry(old);
+  old.onGameMessage(BP.SECTOR_MOVE, Buffer.from([5,59,0,190,0,0]));
+  assert.equal(g.path(3,28,5,28).found, true);
+  s.client = client();
+  s.observeDoorGeometry(s.client);
+  assert.equal(g.path(3,28,5,28).found, false, 'replacement starts with shipped geometry');
+  old.onGameMessage(BP.SECTOR_MOVE, Buffer.from([5,59,0,190,0,0]));
+  assert.equal(g.path(3,28,5,28).found, false, 'old socket cannot mutate the replacement map');
+  s.client.onGameMessage(BP.SECTOR_MOVE, Buffer.from([5,59,0,190,0,50]));
+  assert.equal(g.path(3,28,5,28).found, true, 'replacement opening updates the mover');
+  const source = readFileSync(new URL('./m59-game.mjs', import.meta.url), 'utf8');
+  assert.equal((source.match(/this\.world = new World\(c, worldMap\);\s*this\.observeDoorGeometry\(c\);/g) ?? []).length, 2,
+    'both login paths attach the observer when constructing their new world');
+});
 test('ceiling packet keeps type and speed, and listeners can set the actual settling deadline', () => {
   const c = new M59Client({ host: '127.0.0.1', port: 1, log: () => {} });
   const { map, g } = fresh(); let recorded = 0;

@@ -369,6 +369,7 @@ let worldMap = loadMap();
 // Attach baked step masks so pathfinding uses the mover's own geometry
 // (fine BSP) instead of the coarse grid (monster perspective).
 import { attachStepMasks } from './m59-routes.mjs';
+import { installDoorObserver } from './m59-ceiling-doors.mjs';
 let geometryStartupMode = 'eager';
 try {
   const masks = attachStepMasks(worldMap, {
@@ -2197,6 +2198,18 @@ class Session {
     return rtsJobReport(this.job);
   }
 
+  observeDoorGeometry(c) {
+    // Recovery creates a new client inside the same keeper process. Attaching
+    // only at process startup leaves its replacement with a frozen door mask.
+    installDoorObserver(c, this.world.map,
+      () => this.client === c ? this.world?.room?.num : NaN, (num, out) => {
+        if (out?.changed) {
+          this.impossibleEdges?.delete(num);
+          this.recorder?.line('note', { what: 'door geometry changed', room: num, state: out.state });
+        }
+      });
+  }
+
   async join(args) {
     return joinSessionOnce(this, args, value => this.joinOnce(value));
   }
@@ -2296,6 +2309,7 @@ class Session {
         code: 'GROUND_EFFECT_BLOCKED', ground_effect: hazard.ground_effect });
     };
     this.world = new World(c, worldMap);
+    this.observeDoorGeometry(c);
     attachPlayerEvidence(this).reset();
     this.playerEvidence.event({kind:'room-contents',at:Date.now()},c);
 
@@ -2486,6 +2500,7 @@ class Session {
     await c.login(account, password).catch(e => { throw new Error(`creation login failed: ${e.message}`); });
     this.client = c;
     this.world = new World(c, worldMap);
+    this.observeDoorGeometry(c);
     attachPlayerEvidence(this).reset();
     this.playerEvidence.event({kind:'room-contents',at:Date.now()},c);
     this.credentials = { ...this.credentials, character: plan.name };
