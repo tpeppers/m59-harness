@@ -4828,6 +4828,8 @@ export class Autopilot {
     this.rememberSurvivalJam();
     if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && await this.escapeIfWedgedAndHurt({near:this.inReachOfUs(),v}))return true;
+    if(d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
+        && await this.blinkPastSurvivalJam())return true;
     if (d.status==='pending' && !this.currentRecoveryWall() && !this.checkFreeze()
         && this.armedForSure()
         && await this.tradeInPlaceIfWedged({near:this.inReachOfUs(),v}))
@@ -4870,6 +4872,27 @@ export class Autopilot {
     await this.takeRecoverySpot(d.reason,{source:d.strategy==='route_refuge'?'travel':d.source,
       route:d.strategy==='route_refuge',decisionId:d.id});
     return true;
+  }
+
+  async blinkPastSurvivalJam() {
+    const s=this.s,e=this.survivalJam();
+    if(!e || !this.wedgedInPlace() || !s._askStrategies || !s.blinkOut
+        || Date.now()<(this._nextSurvivalBlinkAsk??0))return false;
+    this._nextSurvivalBlinkAsk=Date.now()+5000;
+    const generation=s.movementGeneration,d=currentSurvivalDecision(s);
+    const goal=this.onwardExit(s.world?.room?.num,this.suspendedJourney?.to,{cachedOnly:true});
+    const answer=await s._askStrategies('whenStuck',{room:s.world?.room,geo:s.world?.geometry,
+      self:s.client?.self,goal,bodies:s._blockingBodies?.()??[],blink:s._blinkPointHere?.(),
+      vitals:s.client?.vitals?.(),stuck_ms:Date.now()-e.at,
+      underFire:Date.now()-(s.damagedAt??0)<5000,healthFloor:this.safety().fleeAt,
+      from:'pending_survival',agent:s.name});
+    if(answer?.answer?.do!=='blink')return false;
+    if(currentSurvivalDecision(s)?.id!==d?.id || s.movementWasCancelled?.(generation)
+        || this.checkFreeze() || this.currentRecoveryWall())return false;
+    const out=await s.blinkOut({expect:answer.answer.expect,movementGeneration:generation});
+    this.ledgerEvent('survival_blink',{episode_id:e.id,resume_to:this.suspendedJourney?.to??null,...out});
+    this.survivalJam(); // actual relocation invalidates the old pocket; no invented clearance
+    return !!out?.cast;
   }
 
   // Healing chooses the shortest clear approach to an exclusive local wall. Combat
@@ -5960,7 +5983,7 @@ export class Autopilot {
       outcome = 'no_sanctuary_within_3_hops';
     } else {
       this.doing = 'travelling';
-      const t = await this.travel(best.room, { maxHops: 6 })
+      const t = await this.recoveryTravel(best.room, { maxHops: 6 })
                           .catch(e => ({ arrived: false, reason: e.message }));
       if (t.arrived) { went = true; outcome = 'arrived'; }
       else {
@@ -6124,7 +6147,7 @@ export class Autopilot {
         : 'fled more than twice with neither the vigor nor the food to fight — the ' +
           'wilderness cannot fix that, and a town can: resting is safe there and the ' +
           'counters sell bread, which is the only way past the resting cap of 80' });
-    const t = await this.travel(best.room, { maxHops: 6 }).catch(e => ({ arrived: false, reason: e.message }));
+    const t = await this.recoveryTravel(best.room, { maxHops: 6 }).catch(e => ({ arrived: false, reason: e.message }));
     this.fledInARow = 0;
     if (!t.arrived) { this.noProgress('could not reach town: ' + (t.reason || 'refused')); return false; }
     this.progress(best.preferred ? 'reached a monster-free retreat' : 'reached town to resupply');
@@ -8063,8 +8086,27 @@ export class Autopilot {
       || (this.frozenUntil != null && Date.now() < this.frozenUntil);
   }
 
+  // A sanctuary is a detour, not a replacement order. Keep the parent note in
+  // place throughout the await: cancellation/death may delete it, and we must
+  // never resurrect it from a saved local after control changes.
+  async recoveryTravel(room, opts = {}) {
+    if (!this.suspendedJourney) this.suspendJourney('recovery detour');
+    if (this.inert?.travelling) {
+      this.cancelForSurvival(null,'recovery detour retains the destination',
+        {preserveId:currentSurvivalDecision(this.s)?.id});
+      this.revive('recovery detour retains the destination');
+    }
+    this.ledgerEvent('travel_recovery_detour', {
+      to: room, resume_to: this.suspendedJourney?.to ?? null,
+    });
+    return this.travel(room, { ...opts, recoveryDetour: true });
+  }
+
   async travel(room, opts) {
-    const { holdBetweenRooms = true, onHop, ...sessionOpts } = opts ?? {};
+    // Explicit orders enter through travelJob/goTravelling and retire the old
+    // objective there. Keeper rungs (including provisioning) are subordinate to
+    // an existing suspended objective, even if they use ordinary travel().
+    const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop, ...sessionOpts } = opts ?? {};
     // NOTHING TRAVELS TO THE UNDERWORLD, AND A JOB HOLDING IT MUST BE DROPPED RATHER THAN
     // RETRIED. The gate in m59-travelgate.mjs says the same thing for the broker's `travel`
     // tool and for fleetScript, and it is repeated here because the KEEPER's own travel does
@@ -8154,7 +8196,7 @@ export class Autopilot {
           this.wedgeHold = null;
           this.wantsForwardShelter = null;
           this.survivalInterruptedPass = this.passes;
-          this.suspendedJourney = { to: Number(room), why: `travelling to ${room}`,
+          this.suspendedJourney ??= { to: Number(room), why: `travelling to ${room}`,
             at: Date.now(), trigger: why, attempts: (this.inert?.attempts ?? 0) + 1,
             deaths_at: this.tally?.deaths ?? 0 };
           this.s.cancelMovement?.(null, why);
@@ -8279,7 +8321,9 @@ export class Autopilot {
     let ourTravelHold = null;
     let holdTimer = null;
     if (!this.inert) {
-      this.goTravelling(`travelling to ${room}`, { to: room });
+      if(recoveryDetour && this.suspendedJourney)
+        this.ledgerEvent('travel_parent_retained',{to:room,resume_to:this.suspendedJourney.to});
+      this.goTravelling(`travelling to ${room}`, { to: room, recoveryDetour });
       ourTravelHold = this.inert;
       // Renew only this live owner's lease. Recreating a revoked hold erased the
       // watchdog's suspended destination while the cancelled mover was unwinding.
@@ -11090,6 +11134,7 @@ export class Autopilot {
       //
       // A record that cannot answer a question is worse than one that says "I do not know",
       // because it answers anyway.
+      blink_rung: this.s.blinkRungStats ?? null,
       suspended_journey: this.suspendedJourney
         ? { to: this.suspendedJourney.to,
             trigger: this.suspendedJourney.trigger ?? null,
@@ -11415,7 +11460,7 @@ export class Autopilot {
   // journey taken back mid-hop could not be resumed even in principle: the destination had
   // never been stored anywhere a later pass could read. `takeBack` even reported it as
   // `was_travelling_to: <the why string>`, which reads like a destination and is not one.
-  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0 } = {}) {
+  goTravelling(why = null, { maxMs = INERT_MAX_MS, guard = null, to = null, attempts = 0, recoveryDetour = false } = {}) {
     // Already travelling for this reason: refresh nothing, the deadline is the caller's.
     // A NEW JOURNEY RETIRES A SUSPENDED ONE, and this early return is why the rule below
     // could not do it. Restored after the 2026-09-04 merge dropped it.
@@ -11429,7 +11474,7 @@ export class Autopilot {
     // restores a decision already made rather than making a new one — and that is sound
     // only if a new travel actually retires the old decision. This is what makes it so.
     if (this.inert?.travelling) {
-      if (to != null && this.suspendedJourney && Number(to) !== Number(this.suspendedJourney.to)) {
+      if (!recoveryDetour && to != null && this.suspendedJourney && Number(to) !== Number(this.suspendedJourney.to)) {
         this.note('retired a suspended journey that a new instruction replaced', {
           was: this.suspendedJourney.to, now: Number(to),
           why: 'an older objective resuming underneath a live instruction is two directions ' +
@@ -11698,7 +11743,7 @@ export class Autopilot {
     // instruction is two directions on one body — the thing this whole boundary exists to
     // prevent. Cleared here rather than at the resume site so it is true for every caller,
     // including the ones that never resume anything.
-    this.suspendedJourney = null;
+    if (!recoveryDetour) this.suspendedJourney = null;
     uptime.record(this.s.name, 'travelling',
                   { why, room: this.s.world?.room?.num ?? null, guard: allow });
     this.note('travelling — standing down from choosing, not from surviving', {
@@ -12387,6 +12432,7 @@ export class Autopilot {
   // stall: the destination went with the driver, the ordinary ladder had nothing to offer
   // in a bad room, and the character stood there until it died.
   suspendJourney(trigger) {
+    if (this.suspendedJourney) return true; // a recovery detour cannot replace its parent
     const journey = this.travelling;
     if (journey?.to == null) return false;
     this.suspendedJourney = {
@@ -12960,7 +13006,7 @@ export class Autopilot {
         w.rescues = (w.rescues ?? 0) + 1;
         this.tally.wedged_journey_rescues = (this.tally.wedged_journey_rescues || 0) + 1;
         const journey = this.travelling;
-        if (journey?.to != null) this.suspendedJourney = {
+        if (journey?.to != null) this.suspendedJourney ??= {
           to: journey.to, why: journey.why ?? 'travelling', at: Date.now(),
           trigger: 'wedged below the flee line while travelling',
           attempts: (journey.attempts ?? 0) + 1,
@@ -13015,7 +13061,7 @@ export class Autopilot {
         // puts the character back on the same line once it is well enough to walk it.
         const journey = this.travelling;
         if (journey?.to != null) {
-          this.suspendedJourney = {
+          this.suspendedJourney ??= {
             to: journey.to, why: journey.why ?? 'travelling', at: Date.now(),
             trigger: 'the watchdog rescued a stalled driver',
             attempts: (journey.attempts ?? 0) + 1,
@@ -15698,7 +15744,7 @@ export class Autopilot {
       // keeps taking the character back cannot resume for ever — see resumeSuspendedJourney.
       if (abandon) this.suspendedJourney = null;
       else if (held.to != null) {
-        this.suspendedJourney = {
+        this.suspendedJourney ??= {
           to: held.to, why: was, at: Date.now(), trigger: what,
           attempts: (held.attempts ?? 0) + 1,
           // The death count AT SUSPENSION. Resuming a journey the character died on is the
@@ -25141,7 +25187,7 @@ export class Autopilot {
       // guard would correctly see that as no route progress and cancel it. Keep those
       // experimental holds out of this last-resort path rather than teaching the guard
       // to ignore a long period in which a genuinely blocked exit could kill us.
-      const result = await this.travel(room, { reason: 'retreat', holdBetweenRooms: false });
+      const result = await this.recoveryTravel(room, { reason: 'retreat', holdBetweenRooms: false });
       return { ...(result ?? {}), retreat_guard: guard };
     } finally {
       clearInterval(timer);

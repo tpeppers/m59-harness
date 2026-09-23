@@ -1905,8 +1905,12 @@ class Session {
           const h = v?.health?.value, m = v?.health?.max;
           if (Number.isFinite(h) && (lowHealth === null || h < lowHealth)) { lowHealth = h; lowMax = m; }
         } catch { /* a vitals read is never worth ending a journey over */ }
-        if (!keeper || keeper.inert) return;
+        if (!keeper) return;
         if (this.movementWasCancelled(movementGeneration)) return;
+        // A live driver is not an abandoned 15-minute lease. Refresh only our
+        // own hold; neither a survival takeover nor a new owner is ours to renew.
+        if (ours && keeper.inert === ours && !ours.cancelled) ours.at = Date.now();
+        if (keeper.inert) return;
         keeper.goTravelling(`travelling to ${where}`, { to: dest });
         ours = keeper.inert;
       };
@@ -2146,6 +2150,13 @@ class Session {
     const job = this.job && !this.job.done ? this.job : null;
     this.lastMovementCancel = { why, at: Date.now(),
                                 room: this.world?.room?.num ?? null };
+    // Release the old cast's pacing pause before a new controller takes over.
+    // Its asynchronous finally must not change a new owner's pause later.
+    if(this._blinkFreeze) {
+      const lease=this._blinkFreeze;
+      if(this._tickLoop===lease.loop)lease.loop._frozen=lease.frozen;
+      this._blinkFreeze=null;
+    }
     this.movementGeneration++;
     const replacement = cancelSurvivalDecision(this, why, survival);
     if (controlToken) {

@@ -369,7 +369,7 @@ console.log('AN INJURED LEG USES SHARED RECOVERY AND KEEPS ITS DESTINATION');
   ok('the watchdog rescue asks for that stop',
      /wantsForwardShelter =/.test(rescue) || /wantForwardShelter\?\.\(/.test(rescue));
   ok('and still keeps the journey',
-     /suspendedJourney = \{/.test(rescue) || /suspendJourney\?\.\(/.test(rescue));
+     /suspendedJourney (?:\?\?)?= \{/.test(rescue) || /suspendJourney\?\.\(/.test(rescue));
 
   // TRIGGER TWO. Poison takes a character to 1 health and then makes it rest to full anyway
   // once the enchantment ends — the rest is coming either way, and the only question is
@@ -462,7 +462,7 @@ console.log('A WATCHDOG RESCUE PAUSES A JOURNEY — IT DOES NOT THROW THE DESTIN
                 src.indexOf('  wantForwardShelter(why)'))
     : '';
   ok('the rescue records a suspended journey before reviving',
-     /suspendedJourney = \{/.test(rescue) || /suspendedJourney = \{/.test(hostSuspend),
+     /suspendedJourney (?:\?\?)?= \{/.test(rescue) || /suspendedJourney (?:\?\?)?= \{/.test(hostSuspend),
      rescue.slice(-200));
   ok('and only when a journey is what was holding the character',
      /const journey = this\.travelling/.test(rescue)

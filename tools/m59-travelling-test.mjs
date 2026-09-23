@@ -933,7 +933,7 @@ console.log('NOT EVEN THE WATCHDOG STOPS A JOURNEY');
      /const heldByOther = !!this\.inert \|\| this\.facultyHeld\('movement'\);/.test(AUTOPILOT_SRC));
   ok('and a wedged journey below the flee line is SUSPENDED rather than ended',
      /WEDGED AND DYING MID-JOURNEY — the trip is suspended, not ended/.test(AUTOPILOT_SRC) &&
-     /suspendedJourney = \{[\s\S]{0,200}wedged below the flee line/.test(AUTOPILOT_SRC));
+     /suspendedJourney (?:\?\?)?= \{[\s\S]{0,200}wedged below the flee line/.test(AUTOPILOT_SRC));
   ok('a wedged journey says so rather than going quiet',
      /wedged mid-journey, and the journey stands/.test(AUTOPILOT_SRC));
   ok('once, not every pass — this runs on a 500ms clock',
