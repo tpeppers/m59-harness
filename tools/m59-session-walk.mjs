@@ -60,6 +60,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
 import { waitForDoorOpen } from './m59-door-wait.mjs';
+import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 
 export function sessionWalkPrototype(deps) {
   const {
@@ -4773,6 +4774,23 @@ export function sessionWalkPrototype(deps) {
    *
    * Returns `{ opened, sector, reason }` and never throws — the caller records it.
    */
+  async exitGuildHall({ movementGeneration = this.movementGeneration, controlToken } = {}) {
+    if (Number(this.world?.room?.num) !== 714) return { attempted: false };
+    const c = this.need();
+    if (guildSection(c.self.row, c.self.col) === 0) return { attempted: false };
+    const cancelled = () => this.movementWasCancelled(movementGeneration, controlToken);
+    const keeper = autopilotIfAny(this.name);
+    try {
+      await guildPassage({ s: this,
+        note: (what, facts) => keeper?.note(what, facts),
+        sayHallPassword: () => keeper?.sayHallPassword() ?? { ok: false },
+      }, 0, cancelled);
+      return { attempted: true, crossed: !cancelled() && guildSection(c.self.row, c.self.col) === 0 };
+    } catch (e) {
+      return { attempted: true, crossed: false, reason: e.message, cancelled: cancelled() };
+    }
+  }
+
   async openOperableDoor({ movementGeneration = this.movementGeneration, controlToken,
                            isInterrupted = () => false } = {}) {
     const c = this.need?.();

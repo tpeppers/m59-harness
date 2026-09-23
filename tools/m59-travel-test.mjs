@@ -498,6 +498,21 @@ console.log('a room the server bars is routed around, not retried');
 // route between them needs a 1280-unit climb in one step against a limit of 384. The room
 // graph is right that 545 connects to 556; it just does not connect FROM THERE.
 console.log('a doorway this side of the room cannot reach is replanned around');
+{
+  const s = fakeSession({ rooms: [714, 101] });
+  let prepared = false;
+  s.exitGuildHall = async () => { prepared = true; return { attempted: true, crossed: true }; };
+  s.leaveViaAny = async () => { assert.ok(prepared, 'the hall passage runs before a blind exit walk');
+    s.at++; return { left: true }; };
+  ok('hall departures cross the known doors before attempting the outside exit',
+    (await travel.call(s, 101)).arrived);
+  const blocked = fakeSession({ rooms: [714, 101] });
+  blocked.exitGuildHall = async () => ({ attempted: true, crossed: false, reason: 'door refused' });
+  blocked.leaveViaAny = async () => { throw new Error('must not walk or blink after a refused hall passage'); };
+  const refused = await travel.call(blocked, 101);
+  ok('a refused hall passage ends with its reason instead of wandering to a lift',
+    refused.outcome === 'guild_exit_failed' && refused.reason === 'door refused');
+}
 for (const strict of [false, true]) {
   const s = fakeSession({ rooms: [714, 101] });
   let opened = false, presses = 0, failures = 0;

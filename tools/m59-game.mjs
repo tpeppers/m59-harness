@@ -4790,6 +4790,7 @@ class Session {
     // after the first failed is a five-second cycle spent on the same refusal, which is the
     // loop this whole change exists to end rather than to relocate.
     let doorTried = false;
+    let guildExitTried = false;
     // A WRONG-ROOM LANDING DOES NOT BAN THE HOP IT AIMED FOR.
     //
     // This kept a journey-scoped set and added to it whenever a crossing landed in the wrong
@@ -5083,6 +5084,21 @@ class Session {
       }
       if (here.num === toRoomNum)
         return { arrived: true, room: { num: here.num, name: here.name }, hops, stumbles: totalStumbles, log };
+
+      // Leave the Bookmakers hall through its known sequence of doors before an
+      // ordinary exit walk tries to cross the shut entrance or blinks into a lift.
+      if (here.num === 714 && !guildExitTried && this.exitGuildHall) {
+        guildExitTried = true;
+        const passage = await this.exitGuildHall({ movementGeneration, controlToken });
+        if (this.movementWasCancelled(movementGeneration, controlToken))
+          return this.cancelledMovement({ log });
+        if (passage.attempted) {
+          log.push({ outcome: 'guild_exit_passage', ...passage });
+          if (!passage.crossed)
+            return arrivedIfHere({ arrived: false, reason: passage.reason ?? 'guild exit passage failed',
+              outcome: 'guild_exit_failed', room: here, log, hops, stumbles: totalStumbles });
+        }
+      }
 
       const route = this.world.route(toRoomNum, {
         avoid: this.barredRooms?.size ? new Set(this.barredRooms) : null,

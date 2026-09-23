@@ -1539,3 +1539,9 @@ room and replans. This recovery also applies when the route planner returns a
 relaxed route through an already exhausted hop. Otherwise the executor rejects
 the same exit after changing the geometry that made it fail. Camilla and Waldorf
 were stuck in room 714's shopping retry loop on this path.
+
+Room 714 departures now use `guildPassage` to reach the foyer before ordinary
+travel. Live verification exposed a second failure: blind exit walking blinks
+into the inner hall, where the nearest operable sector is a lift, not the
+entrance. The known section sequence chooses the exit doors and verifies each
+crossing; a refused passage returns its reason without trying that detour.
