@@ -176,7 +176,8 @@ export function recordGain(character, { at = Date.now(), from = null, to = null,
 // append-only in practice, so a duplicate is permanent and inflates the one number this
 // fleet is judged on. The server sends two lines per gain and a reconnect can re-deliver
 // events, so this is a real path rather than a theoretical one: a gain within a second of
-// one already on the books is the same gain.
+// one already on the books is the same gain only if the resulting max HP agrees.
+// Two real +1 gains can arrive in the same second and must remain separate.
 const DEDUPE_MS = 1000;
 
 export function commitGain(character, g) {
@@ -184,7 +185,8 @@ export function commitGain(character, g) {
   const book = loadGains(character);
   const dup = (book.gains || []).find(x => g.recovery_id
     ? x.recovery_id === g.recovery_id
-    : !x.recovery_id && Math.abs((x.at ?? 0) - g.at) <= DEDUPE_MS);
+    : !x.recovery_id && Math.abs((x.at ?? 0) - g.at) <= DEDUPE_MS &&
+      (x.to == null || g.to == null || x.to === g.to));
   if (dup) {
     // Do not lose an attribution that arrived late. A gain first written with no cause,
     // then claimed by the kill that paid for it, should end up naming the creature.
@@ -228,9 +230,10 @@ export function observeAnnouncement(client, event, room = null) {
   if (event.kind !== 'message' || !isTougherText(event.text) || !client.me?.name) return null;
   const at = event.at ?? Date.now();
   const previous = announcements.get(client);
-  if (previous != null && Math.abs(at - previous) <= DEDUPE_MS) return null;
-  announcements.set(client, at);
   const max = client.vitals?.()?.health?.max ?? null;
+  if (previous && Math.abs(at - previous.at) <= DEDUPE_MS &&
+      (max == null || previous.max == null || max === previous.max)) return null;
+  announcements.set(client, { at, max });
   const gain = { at, from: max == null ? null : max - 1, to: max,
     room: room?.name ?? client.rsc?.get?.(client.roomNameRsc) ?? null,
     room_num: room?.num ?? null, said: event.text };

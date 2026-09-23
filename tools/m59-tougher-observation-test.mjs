@@ -47,6 +47,10 @@ try {
   assert.match(html, /3 points recovered/);
   assert.match(html, /by this time/);
   assert.match(html, /minimum/);
+  c.vitals = () => ({ health: {value: 42, max: 42} });
+  c.emit('message', {at: at + 2100, text: 'You suddenly feel a little tougher.'});
+  c.emit('message', {at: at + 2101, text: 'You are invigorated by your success.'});
+  assert.equal(t.loadGains(c.me.name).gains.length, 3, 'distinct max-HP gains in one second are not duplicate messages');
   // Missing kill attribution must survive a fresh module instance (process restart).
   t.recordGain('Restart', {at,from:50,to:51});
   const fresh = await import('./m59-tougher.mjs?restart');
