@@ -4,6 +4,8 @@
 import { readFileSync } from 'node:fs';
 import { RoomGeometry, applySectorHeights } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
+import { doorsFor } from './m59-doorplan.mjs';
+import { waitForDoorOpen } from './m59-door-wait.mjs';
 
 let closed;
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
@@ -144,12 +146,25 @@ export async function guildPassage(k, destination, isInterrupted) {
       if (door.secret) {
         if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
       } else await s.pacer.submit('move', () => { guard(); return c.go(); });
-      await c.waitFor({ since, kinds: ['sector-height'], timeoutMs: 350 });
-      // Known ceiling animations settle in at most 1.9s. Never wait out a
-      // generic 8s invalidation: that would miss this door's five-second window.
-      const until = Math.min(Date.now() + 2200, c.room.collisionInvalidated?.until ?? Date.now());
-      while (Date.now() < until && !isInterrupted()) await sleep(Math.min(100, until - Date.now()));
+      const plans = doorsFor(714, { row: c.self.row, col: c.self.col });
+      // The password-operated door is not in SomethingTryGo's table.
+      const definition = [...plans.on, ...plans.others].find(p => p.sector === door.sector)
+        ?? JSON.parse(readFileSync(new URL('../substrate/m59-ceiling-doors.json', import.meta.url)))
+          .rooms[714].doors.find(d => d.id === door.sector);
+      const plan = definition?.to_height != null ? definition : {
+        sector: door.sector, from_height: definition?.closed, to_height: definition?.open,
+        within_ms: 8000,
+      };
+      const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted });
       if (isInterrupted()) throw new Error('guild passage paused for survival');
+      if (!opening.opened) {
+        k.note?.('guild door opening not verified', { sector: door.sector, reason: opening.reason });
+        if (attempt < 2) {
+          const retryAt = Date.now() + 5200;
+          while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
+        }
+        continue;
+      }
       // Do not coalesce across the entrance: its first and second hotplates
       // occupy consecutive squares and must be crossed in order. Confirm each
       // short step, then plan from the body's actual position.

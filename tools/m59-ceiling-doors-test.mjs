@@ -56,9 +56,14 @@ test('a ceiling update cannot masquerade as the floor of a legacy door', () => {
 });
 test('actual baked hall supports every inward and outward trigger even when doors close between legs', async () => {
   const { map, g, observed } = fresh(), opened = [];
-  const c = { self: { row: 2, col: 32 }, room: {}, evSeq: 0, waitFor: async () => ({ events: [] }) };
+  const c = { self: { row: 2, col: 32 }, room: { id: 2572, sectorHeights: observed }, evSeq: 0,
+    events: [], waitFor: async ({ since, match }) => ({
+      events: c.events.filter(e => e.seq > since && (!match || match(e))),
+    }) };
   const open = id => {
     opened.push(id); observed.set(id, { type: 5, height: ({ 59:190,55:230,53:240,3:250 })[id] });
+    c.events.push({ kind: 'sector-height', sector: id, room: 2572,
+      height: observed.get(id).height, speed: 0, at: Date.now(), seq: ++c.evSeq });
     applyCeilingDoors(map, 714, observed);
   };
   c.go = () => {

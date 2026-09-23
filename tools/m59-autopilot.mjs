@@ -26,6 +26,7 @@ import {recordBlockerClearance} from './m59-blocker-events.mjs';
 import {blockerRetaliated, lureRefugeFilter} from './m59-blocker-combat.mjs';
 import * as skills from './m59-skills.mjs';
 import { bannedWeaponsHeld } from './m59-arming.mjs';
+import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
 import { recoveryRefugeReach, recoveryOccupiedSquares } from './m59-recovery-refuge.mjs';
@@ -3124,7 +3125,34 @@ export class Autopilot {
                  'item that will be refused',
             doing: 'un-ban one of them, or hand this character a weapon it may hold' });
       const hoard = this.bannedConjurablesHeld();
-      if (hoard >= CONJURE_HOARD_LIMIT)
+      let rouletteCleared = false;
+      if (hoard >= CONJURE_HOARD_LIMIT && reachable.length === 1) {
+        // An explicit single eligible outcome is weapon roulette. Keep real loot,
+        // but discard verified temporary misses so the name-based cap cannot stall it.
+        const generation = s.movementGeneration;
+        const originalBan = JSON.stringify(bannedNow);
+        const cancelled = () => s.movementGeneration !== generation ||
+          JSON.stringify(this.bannedWeaponsNow()) !== originalBan;
+        const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+        const candidates = (c.inventory ?? []).filter(o =>
+          CONJURABLE_WEAPONS.some(w => nameOf(o).includes(w)) &&
+          bannedNow.some(b => nameOf(o).includes(String(b).toLowerCase())));
+        const eligible = o => {
+          const equipment = c.equipment?.();
+          return this.policy.dropJunk !== false && equipment?.known === true &&
+            !equipment.equipped.some(e => e.id === o.id) && !this.wontDrop?.has(o.id) &&
+            !skills.itemIsProtected(nameOf(o), this.protectedItemNames()) &&
+            this.bannedWeaponUseless(nameOf(o));
+        };
+        const cleanup = await clearConjureHoard(s, candidates, { eligible, cancelled });
+        this.note('cleared ineligible summons for weapon roulette', {
+          target: reachable[0], ...cleanup,
+          why: 'only description-confirmed summons are dropped; ordinary weapons stay in the pack',
+        });
+        if (cancelled()) return false;
+        rouletteCleared = cleanup.cleared;
+      }
+      if (hoard >= CONJURE_HOARD_LIMIT && !rouletteCleared)
         // NOT NECESSARILY CONJURED, AND THE OLD WORDING SENT AN OPERATOR AFTER THE WRONG
         // THING. This counts weapons whose NAME a conjure could also produce, so an orc's
         // hammer counts exactly like one the fleet made. Beaker's three were all orc drops.
@@ -3217,13 +3245,10 @@ export class Autopilot {
         made: madeNames, mana_left: c.vitals?.()?.mana?.value,
         banned_weapons: blockedByBan ? banned : undefined,
         why: blockedByBan
-          ? 'create weapon made something this character\'s own ban list forbids, so ' +
-            'equipBest refused it — and the next pass will conjure another one. The loop ' +
-            'cannot end while the ban and the spell disagree'
+          ? 'create weapon rolled an ineligible weapon, so equipBest refused it'
           : 'the weapon was made but nothing would wield it',
         doing: blockedByBan
-          ? 'not counting this as armed — un-ban what create weapon produces, or give this ' +
-            'character a weapon it is allowed to hold'
+          ? 'not counting this as armed; single-weapon roulette clears verified temporary misses at the hoard limit'
           : 'not counting this as armed' });
       return false;
     }

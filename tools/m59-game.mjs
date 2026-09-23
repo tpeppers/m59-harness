@@ -5089,7 +5089,7 @@ class Session {
         blockedHops: exhaustedHops.size ? new Set(exhaustedHops.keys()) : null,
         allowHazard,
       });
-      if (!route.found) {
+      if (!route.found || exhaustedHops.has(`${here.num}>${route.hops?.[0]?.to}`)) {
         // BEFORE DECLARING A ROOM SEALED, TRY ITS DOORS. Once per journey, like the safe-wall
         // pocket escape below and for the same reason: the thing it fixes either works the
         // first time or is not what was wrong, and a second go would be a loop rather than a
@@ -5108,6 +5108,10 @@ class Session {
                 .catch(e => ({ opened: false, reason: e?.message ?? String(e) }))
             : null;
           if (opened?.opened) {
+            // A failed crossing while the door was shut is stale evidence now.
+            // Leaving it in blockedHops makes route() reject the exit we just opened.
+            for (const key of exhaustedHops.keys())
+              if (key.startsWith(`${here.num}>`)) exhaustedHops.delete(key);
             log.push({ outcome: 'operated_a_door', room: here.num, sector: opened.sector,
                        name: opened.name, at: opened.at, shuts_after_ms: opened.shuts_after_ms,
                        note: 're-planning against the geometry this opened — the exits were ' +

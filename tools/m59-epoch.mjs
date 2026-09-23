@@ -81,6 +81,9 @@ export const DOMAINS = Object.freeze({
     tag: '#movement',
     files: Object.freeze([
       'tools/m59-game.mjs',       // leaveVia, walkTo, walkFine, step, followRail, railAcross
+      'tools/m59-session-walk.mjs',
+      'tools/m59-door-wait.mjs',
+      'tools/m59-guild-passage.mjs',
       'tools/m59-movement.mjs',   // the terminal reasons and the packet validator
       'tools/m59-roo.mjs',        // the collision model, step masks, edge crossings
       'tools/m59-routes.mjs',     // the baked table and its accessors

@@ -1527,3 +1527,15 @@ outbound rail ends 1,344 below its door, which for a door is a false arrival and
 N jump(s)`, the largest closure the search reached, and the wall clock — because a bounded
 search answering no is a statement about the bound. `node tools/m59-nodegap.mjs` is the tool
 that names the missing affordance.
+# Timed guild doors: confirm the opening before retrying an exit
+
+`waitFor` resolves with `timedOut: true`; it does not throw on silence. Door callers
+must find a matching sector and open-height event, then allow the animation's
+height-span/speed duration. A fixed 2.2-second cap is insufficient for slow doors,
+and an unrelated sector moving is not evidence that this door opened.
+
+After a verified opening, travel clears exhausted outgoing hops for the current
+room and replans. This recovery also applies when the route planner returns a
+relaxed route through an already exhausted hop. Otherwise the executor rejects
+the same exit after changing the geometry that made it fail. Camilla and Waldorf
+were stuck in room 714's shopping retry loop on this path.

@@ -59,6 +59,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // The door table and the decision about which door is in the way. Pure and file-backed; it
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
+import { waitForDoorOpen } from './m59-door-wait.mjs';
 
 export function sessionWalkPrototype(deps) {
   const {
@@ -4759,9 +4760,8 @@ export function sessionWalkPrototype(deps) {
    *     Never a duration: a geometry read taken mid-swing sees a shut door, which is the race
    *     guild-passage records as `no live path across the open door` — a sentence that reads
    *     exactly like "there is no way out of this room";
-   *   * the settle is CAPPED at 2.2s. Ceiling animations land inside 1.9s and the door shuts
-   *     5s after the PRESS, so waiting out a generic 8s collision invalidation would miss the
-   *     window entirely;
+   *   * the settle follows this door's height span and the server's animation speed;
+   *     slow guild doors must not inherit a fixed 2.2s cap or another sector's timer;
    *   * a second `go` while the door is already open does NOT restart its timer, so a retry
    *     waits the cycle out first.
    *
@@ -4776,7 +4776,7 @@ export function sessionWalkPrototype(deps) {
   async openOperableDoor({ movementGeneration = this.movementGeneration, controlToken,
                            isInterrupted = () => false } = {}) {
     const c = this.need?.();
-    const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken);
+    const cancelled = () => this.movementWasCancelled?.(movementGeneration, controlToken) || isInterrupted();
     if (!c) return { opened: false, reason: 'no client' };
     const roomNum = Number(this.world?.room?.num ?? NaN);
     if (!Number.isFinite(roomNum)) return { opened: false, reason: 'room unknown' };
@@ -4818,24 +4818,19 @@ export function sessionWalkPrototype(deps) {
       const since = c.evSeq;
       await (this.pacer?.submit ? this.pacer.submit('move', () => c.go()) : c.go())
         .catch(() => {});
-      const moved = await c.waitFor({ since, kinds: ['sector-height'], timeoutMs: 350 })
-        .then(() => true, () => false);
-      if (moved) {
-        // Let the animation land, but never past the window the door itself allows.
-        const until = Math.min(Date.now() + 2200,
-                               c.room?.collisionInvalidated?.until ?? Date.now());
-        while (Date.now() < until && !isInterrupted() && !cancelled())
-          await new Promise(r => setTimeout(r, Math.min(100, Math.max(1, until - Date.now()))));
+      const opening = await waitForDoorOpen(c, pick, { since, cancelled });
+      if (cancelled()) return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
+      if (opening.opened) {
         return { opened: true, sector: pick.sector, name: pick.name, at: target,
+                 animation_ms: opening.animation_ms,
                  shuts_after_ms: pick.within_ms,
                  reason: `sector ${pick.sector} moved; the live geometry has changed and the ` +
                          'route can be planned again' };
       }
       if (pick.gate)
         return { opened: false, sector: pick.sector, gate: pick.gate,
-                 reason: `no sector moved and this door asks ${pick.gate} — a refusal in this ` +
-                         'game is silence, so this is very likely a door this character is not ' +
-                         'entitled to open. Not retried' };
+                 reason: `${opening.reason}; this door asks ${pick.gate}. ` +
+                         'The opening was not verified; access or an existing door cycle may be responsible' };
       if (attempt < 2) {
         // A `go` while it is already open does not restart the five-second timer.
         const retryAt = Date.now() + 5200;

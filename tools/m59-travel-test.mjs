@@ -498,6 +498,22 @@ console.log('a room the server bars is routed around, not retried');
 // route between them needs a 1280-unit climb in one step against a limit of 384. The room
 // graph is right that 545 connects to 556; it just does not connect FROM THERE.
 console.log('a doorway this side of the room cannot reach is replanned around');
+for (const strict of [false, true]) {
+  const s = fakeSession({ rooms: [714, 101] });
+  let opened = false, presses = 0, failures = 0;
+  const route = s.world.route.bind(s.world);
+  s.world.route = (to, opts) => strict && opts?.blockedHops?.has('714>101')
+    ? { found: false, reason: 'blocked' } : route(to, opts);
+  s.openOperableDoor = async () => { presses++; opened = true; return { opened: true, sector: 59 }; };
+  s.leaveViaAny = async () => {
+    if (!opened) { failures++; return { left: false, outcome: 'exit_candidates_exhausted',
+      attempts: 1, tried: [{ stage: 'walk', why: 'shut door' }], reason: 'shut door' }; }
+    s.at++; return { left: true };
+  };
+  const result = await travel.call(s, 101);
+  ok(`opening a shut door retries the exhausted exit (${strict ? 'strict' : 'relaxed'} route)`,
+    result.arrived === true && presses === 1 && failures === 1);
+}
 {
   // Every attempt on the 2 -> 3 doorway reports the walk never got there.
   const s = fakeSession({ rooms: [1, 2, 3, 4] });

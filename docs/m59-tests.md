@@ -18,6 +18,14 @@ These tests are offline. They do not execute a raid or shut down a server.
 
 ## Travel and combat regressions
 
+- `m59-door-wait-test.mjs` and `m59-dooropen-test.mjs`: matched sector/height
+  evidence, resolved timeouts, slow animations, cancellation and early closure.
+  `m59-travel-test.mjs` also verifies that a confirmed opening permits another
+  attempt at an exit exhausted while the door was shut, including relaxed routes.
+- `m59-conjure-cleanup-test.mjs`: single-weapon roulette clears only summons
+  confirmed by an item-matched description, verifies removal, preserves ordinary
+  loot and protected equipment, and stops on unknown observations or cancellation.
+
 Travel survival regressions:
 
 - `m59-failed-hop-test.mjs`: 13 cases against the real fallback walker. Refused

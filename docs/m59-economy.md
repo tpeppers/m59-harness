@@ -797,3 +797,16 @@ down needs a reproduction before anything is decided on it — is in
   subject walks away mid-experiment.** Five candidates in a row were walked out of the
   shop before a second buy. That is not a flaky test, it is the bot holding movement —
   and it is why the controlled reading has to happen on the private server.
+# Weapon roulette and the unusable-weapon cap
+
+When bans leave exactly one Create Weapon outcome eligible, reaching the three-item
+unusable-weapon cap triggers inspection. Only ineligible summons whose own LOOK
+description says “shimmers insubstantially” may be dropped. Equipped or protected
+items remain protected, and an unknown description or refused drop cannot clear
+the guard. Removal is verified from inventory before another roll.
+
+Ordinary weapons are retained and do not block this specific roulette operation
+once inspected; they still consume capacity. This matters for Lew's three looted
+long swords, which the old name-only guard counted as failed summons. Beaker's
+two short swords and axe were confirmed summons. The all-outcomes-banned and
+deliberate-unarmed guards still prevent pointless casts.

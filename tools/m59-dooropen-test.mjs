@@ -11,6 +11,7 @@
 // worked and strand the next character.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { waitForDoorOpen } from './m59-door-wait.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail = '') => {
@@ -29,7 +30,7 @@ const end = source.indexOf('\n  // WHICH INTERNAL DOOR', start);
 assert.ok(start >= 0, 'openOperableDoor is not in m59-session-walk.mjs — this test is stale');
 assert.ok(end > start, 'the end marker after openOperableDoor moved — this test is stale');
 const body = source.slice(start, end);
-assert.ok(/sector-height/.test(body), 'the extracted body is not the door opener');
+assert.ok(/waitForDoorOpen/.test(body), 'the extracted body is not the door opener');
 
 const DOORS = {
   rooms: { 714: { name: 'hall', rows: 40, cols: 40, doors: [
@@ -44,8 +45,11 @@ const DOORS = {
 const { doorsFor } = await import('./m59-doorplan.mjs');
 const scopedDoorsFor = (room, at) => doorsFor(room, at, { table: DOORS });
 
-const Session = new Function('doorsFor', 'setTimeout',
-  `return class { ${body} }`)(scopedDoorsFor, fn => fn());
+let clock = 0;
+const sleep = async ms => { clock += ms; };
+const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen',
+  `return class { ${body} }`)(scopedDoorsFor, (fn, ms) => { clock += ms; fn(); },
+    { now: () => clock }, (c, p, opts) => waitForDoorOpen(c, p, { ...opts, now: () => clock, sleep }));
 
 /** A body in room 714, with every live thing the opener touches and nothing else. */
 function body714({ at = { row: 4, col: 28 }, sectorMoves = true, cancel = false,
@@ -62,9 +66,13 @@ function body714({ at = { row: 4, col: 28 }, sectorMoves = true, cancel = false,
   s.need = () => ({
     get self() { return pos; },
     evSeq: 0,
-    room: { collisionInvalidated: { until: Date.now() + invalidatedFor } },
+    room: { id: 2572, collisionInvalidated: { until: clock + invalidatedFor } },
     go: async () => { seen.go++; },
-    waitFor: async () => { seen.waited++; if (!sectorMoves) throw new Error('timeout'); },
+    waitFor: async ({ timeoutMs }) => { seen.waited++;
+      if (!sectorMoves) { clock += timeoutMs; return { events: [], timedOut: true }; }
+      const sector = pos.row === 18 ? 55 : 59;
+      return { events: [{ sector, height: sector === 55 ? 230 : 190, speed: 50, at: clock }] };
+    },
   });
   return { s, seen, where: () => pos };
 }
