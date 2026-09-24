@@ -501,7 +501,15 @@ if (!STAGES.includes(from)) {
   console.error(`--from must be one of: ${STAGES.join(', ')}`);
   process.exit(2);
 }
-const at = (s) => STAGES.indexOf(s) >= STAGES.indexOf(from);
+// --until <stage>: stop after that stage. `--until play` is "rebuild the shadow fleet and leave it
+// logged in", which is what a rehearsal driver (m59-ghostraid.mjs rehearse) wants before it runs
+// its own errand — rather than naming a throwaway script for stage 5 to run.
+const until = arg('--until', 'run');
+if (!STAGES.includes(until)) {
+  console.error(`--until must be one of: ${STAGES.join(', ')}`);
+  process.exit(2);
+}
+const at = (s) => STAGES.indexOf(s) >= STAGES.indexOf(from) && STAGES.indexOf(s) <= STAGES.indexOf(until);
 
 say(`m59-shadow-run — "${name ?? '(list)'}" against fleet "${FLEET}" on ${GAME_HOST}:${GAME_PORT}`);
 if (DRY) say('DRY RUN: nothing is started, created, dressed or driven.');
