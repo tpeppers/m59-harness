@@ -177,14 +177,31 @@ async function setup(cfg) {
   const rows = ((await rpc('fleet', {}, 40_000))?.fleet ?? []).filter(r => cfg.agents.includes(r.agent));
   const names = rows.map(r => r.character).filter(Boolean);
   if (!cfg.commit) { console.log(`would heal ${names.length} and${flag('--place') ? '' : ' NOT'} place them in room ${cfg.stage}`); return; }
-  // FIDELITY, NOT HELP. Prod's Loial has 65 maximum mana (surveyed 2026-09-12) and his shadow
-  // clone was built with 25 — which decides how often the room can be relit. Mirror prod's
-  // number; max mana is recomputed at login, so this lasts the session and no longer.
-  const lightMana = Number(opt('--light-mana', cfg.fleet === 'shadow' ? 65 : 0));
+  // FIDELITY, NOT HELP: make the light-bearer the caster prod actually has.
+  //
+  // MANA COMES FROM MANA NODES, NOT FROM A NUMBER. Max mana is recomputed from the melded-node
+  // bitmask (player.kod ComputeMaxMana: base + each node's GetManaAdjust), so writing
+  // piMax_Mana directly reverted to 25 within minutes on the second rehearsal. Prod's Loial
+  // reads 65 against the clone's base 25: +40, which at mysticism 50 is five standard nodes of
+  // (5+50)/10+3 = 8 each (mananode.kod). Which five does not matter to a fight; 0x1F is
+  // H9, G9, Victoria, Badlands and the Orc Caves (blakston.khd NODE_*). `--light-nodes`
+  // overrides.
+  //
+  // AND KARMA: forces of light refuses a caster under +40 ("your karma is 0; forces of light
+  // needs >= +40"); the shadow was built at 0 while prod's Loial reads 64 (2026-09-24).
   const light = rows.find(r => r.agent === cfg.lightbearer)?.character;
-  if (lightMana && light) {
-    const k = await dm.kit(light, { mana: lightMana });
-    console.log(`${light}: max mana set to ${lightMana} to match prod (${k.ok ? 'ok' : k.why})`);
+  const lightNodes = Number(opt('--light-nodes', cfg.fleet === 'shadow' ? 0x1F : 0));
+  const lightKarma = Number(opt('--light-karma', cfg.fleet === 'shadow' ? 64 : 0));
+  if (light && (lightNodes || lightKarma)) {
+    const obj = (await dm.resolve([light]))[light];
+    if (obj != null) {
+      if (lightKarma) await dm.kit(light, { karma: lightKarma });
+      if (lightNodes) await dm.dm([`set object ${obj} piNodelist INT ${lightNodes}`,
+                                   `send object ${obj} ComputeMaxMana`, `send object ${obj} NewMana`]);
+      const show = String(await dm.dm([`show object ${obj}`]));
+      const maxMana = /piMax_Mana\s+= INT (-?\d+)/.exec(show)?.[1];
+      console.log(`${light}: nodes 0x${lightNodes.toString(16)}, karma ${lightKarma} -> max mana ${maxMana} (prod: 65)`);
+    }
   }
   const h = await dm.heal(names);
   console.log(`healed ${h.healed.length}${h.missing.length ? `, missing ${h.missing.join(', ')}` : ''}`);

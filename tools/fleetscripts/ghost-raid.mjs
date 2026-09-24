@@ -110,6 +110,24 @@ async function fleetNow() {
   return FLEET.inFlight;
 }
 
+// A SPELL TARGET IS AN OBJECT ID, NEVER A NAME. The caster's own name does not resolve at all
+// ("nothing here matches"), and on the second rehearsal every bless and super strength cast at
+// the door by name came back `nothing_happened` with the mana untouched. The broker's /health
+// publishes every session's current object id; ids are renumbered on every server save, so
+// this is read fresh (ten seconds at most) and never stored across a run.
+let IDS = { at: 0, map: {} };
+async function objectIdOf(agent) {
+  if (Date.now() - IDS.at > 10_000) {
+    try {
+      const h = await (await fetch(new URL('health', process.env.M59_CONTROL_URL ?? 'http://127.0.0.1:8901/'),
+                                   { signal: AbortSignal.timeout(10_000) })).json();
+      IDS = { at: Date.now(), map: h?.session_object_ids ?? IDS.map };
+    } catch { /* keep the last answer; a stale id is refused by the server, not misapplied */ }
+  }
+  const id = IDS.map[agent];
+  return Number.isFinite(Number(id)) ? Number(id) : null;
+}
+
 /** Enough mana for `need`? Lab: refill (at the door only). Prod: wait, bounded. */
 async function manaFor(agent, need, { p, patient }) {
   const mana = async () => Number((await call('status', { agent, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
@@ -144,10 +162,11 @@ async function buffShare({ agent, duty, p, where, patient }) {
   const jobs = [...duty.strength.map(a => [STRENGTH, a]), ...duty.bless.map(a => [BLESS, a])];
   for (const [buff, target] of jobs) {
     const who = here.get(target);
-    if (!who) { tally.skipped++; continue; }
+    const oid = await objectIdOf(target);
+    if (!who || oid == null) { tally.skipped++; continue; }
     if (!(await manaFor(agent, buff.mana, { p, patient }))) { tally.skipped++; continue; }
     await call('rest', { agent, stand: true }, 30_000).catch(() => {});
-    const r = await castVerified(agent, buff.spell, { target: who, cost: buff.mana });
+    const r = await castVerified(agent, buff.spell, { target: oid, cost: buff.mana });
     if (r.landed) tally[buff === BLESS ? 'bless' : 'strength']++;
     else if (r.in_effect) tally.already++;
     else {
@@ -177,7 +196,9 @@ async function medicTick(agent, below) {
   if (!hurt) return null;
   if (!(await manaFor(agent, HEAL.mana, { patient: false }))) return null;
   await call('rest', { agent, stand: true }, 30_000).catch(() => {});
-  const r = await castVerified(agent, HEAL.spell, { target: hurt.who, cost: HEAL.mana });
+  const oid = await objectIdOf(hurt.agent);
+  if (oid == null) return null;
+  const r = await castVerified(agent, HEAL.spell, { target: oid, cost: HEAL.mana });
   FLEET.at = 0;                                     // the picture just changed
   if (!r.landed) event('heal_failed', { agent, on: hurt.who, outcome: r.outcome ?? null, why: String(r.why ?? '').slice(0, 80) });
   return { on: hurt.who, at: Number(hurt.frac.toFixed(2)), landed: r.landed, outcome: r.outcome };
@@ -219,6 +240,25 @@ async function windDown(agent, p) {
   await restorePosture(agent);
 }
 
+/**
+ * RETREAT TO A WALL IN THE ROOM, NOT OUT OF IT. Operator, 2026-09-24: "raiders [should] not
+ * leave the throne room voluntarily (it's unsafe outside, too)". The keeper's own safe-spot
+ * finder names two squares in room 40 that nothing can swing at — r1c1 and r1c9, the ledge
+ * corners by the entrance (can_reach_you 0 of 28) — so a hurt raider walks to the nearer one,
+ * sits until return_at, and goes back to the fight from inside the room. Asked of the keeper
+ * each time rather than hard-coded: it reads the room's real geometry and the live book.
+ * Falls back to the door only when the room offers nothing.
+ */
+async function retreatInRoom(agent, p) {
+  const r = await call('safe_spots', { agent }, 40_000).catch(() => null);
+  const spot = (r?.spots ?? []).filter(x => (x.can_reach_you ?? 99) === 0)
+    .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0];
+  if (!spot) { await hop(agent, DOOR_ROOM); return { to: 'door' }; }
+  await call('walk_to', { agent, col: spot.col, row: spot.row }, 60_000).catch(() => {});
+  await restUntil(agent, Number(p.return_at), p);
+  return { to: `r${spot.row}c${spot.col}` };
+}
+
 /** Find the ghost (and everything else attackable) from where this agent stands. */
 async function lookAround(agent, target) {
   const look = await call('look', { agent }, 40_000).catch(() => null);
@@ -244,9 +284,16 @@ async function confirmedDead(agent) {
 }
 
 /** One hop between adjacent rooms, read back. The keeper may be holding a job: retry briefly. */
-async function hop(agent, to) {
-  for (let i = 0; i < 3; i++) {
-    const r = await call('travel', { agent, to, background: true, run_errands: false,
+async function hop(agent, to, { tries = 3 } = {}) {
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    // health_floor 0, ALWAYS. Omitted, the broker applies the character's own
+    // travel_start_health — FULL health by default — and refuses the journey in silence. On the
+    // second rehearsal that stopped the light-bearer (14/20) re-entering to relight, and every
+    // raider who rested to 85% from walking back in: returns=0 across the board. These hops are
+    // two rooms inside a castle, the script has already decided the body is fit (return_at),
+    // and a RETREAT refused for being hurt is the worst refusal there is.
+    const r = await call('travel', { agent, to, background: true, run_errands: false, health_floor: 0,
                                      ...(to === GHOST_ROOM ? { despite_hazard: { reason: HAZARD } } : {}) }, 60_000)
       .catch(e => ({ error: e.message }));
     const until = Date.now() + 75_000;
@@ -256,11 +303,16 @@ async function hop(agent, to) {
       if (Number(o.room) === Number(to)) return { ok: true };
       await sleep(1500);
     }
-    if (!/busy/i.test(String(r?.error ?? r?.why ?? ''))) break;
+    last = r;
+    // KEEP TRYING WHATEVER THE REFUSAL SAID. This used to give up on anything but "busy", and
+    // the second rehearsal's light-bearer then failed to cross 38 -> 40 three times running
+    // while the keeper logged "entering a hazard room on purpose" each time: the door off 38 is
+    // one square wide and sixteen raiders stood around it. Patience is cheap; a dark room is not.
     await sleep(3000);
   }
   const o = await observe(agent);
-  return { ok: Number(o.room) === Number(to), room: o.room };
+  return { ok: Number(o.room) === Number(to), room: o.room,
+           reply: String(last?.error ?? last?.why ?? last?.reason ?? '').slice(0, 120) || null };
 }
 
 /** Sit until healthy enough, or until the window ends. The keeper sits people too; stand after. */
@@ -427,10 +479,10 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
           await say('Resting before the next light.');
           await restUntil(agent, 0.95, p);
         }
-        const h = await hop(agent, GHOST_ROOM);
+        const h = await hop(agent, GHOST_ROOM, { tries: 5 });
         if (!h.ok) {
           log.push({ t: Date.now(), outcome: 'could not enter', ...h });
-          event('light', { outcome: 'could not enter', why, room: h.room ?? null });
+          event('light', { outcome: 'could not enter', why, room: h.room ?? null, reply: h.reply ?? null });
           console.log(`  ${agent} forces of light: could not enter the throne room (${why}; standing in ${h.room ?? '?'})`);
           return !h.dead;
         }
@@ -464,8 +516,12 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         }
         // After the kill: heal from inside the room, and step out to rest when hurt.
         if ((o.health ?? 0) < Number(p.light_rest_below)) {
-          if (Number(o.room) === GHOST_ROOM) { event('retreat', { agent, health: o.health }); await hop(agent, Number(p.light_wait_room)); }
-          await restUntil(agent, 0.95, p); continue;
+          // After the kill the wall in the room, like everyone else; before it, out of the room.
+          if (Number(o.room) === GHOST_ROOM) {
+            const where = await retreatInRoom(agent, { ...p, return_at: 0.95 });
+            event('retreat', { agent, health: o.health, to: where.to });
+          } else await restUntil(agent, 0.95, p);
+          continue;
         }
         if (Number(o.room) !== GHOST_ROOM) { await hop(agent, GHOST_ROOM); continue; }
         const h = await medicTick(agent, Number(p.heal_below));
@@ -500,8 +556,9 @@ async function farmLoop({ agent, p, st, say, duty }) {
       continue;
     }
     if ((o.health ?? 1) < Number(p.retreat_at)) {
-      tally.retreats++; event('retreat', { agent, health: o.health });
-      await hop(agent, DOOR_ROOM);
+      tally.retreats++;
+      const where = await retreatInRoom(agent, p);
+      event('retreat', { agent, health: o.health, to: where.to });
       continue;
     }
     // BETWEEN SWINGS: a medic heals whoever is worst hurt under medic_below, at most every 4s,
@@ -567,7 +624,11 @@ async function healLoop({ agent, p, st, say, duty }) {
       await hop(agent, GHOST_ROOM);
       continue;
     }
-    if ((o.health ?? 1) < Number(p.retreat_at)) { event('retreat', { agent, health: o.health }); await hop(agent, DOOR_ROOM); continue; }
+    if ((o.health ?? 1) < Number(p.retreat_at)) {
+      const where = await retreatInRoom(agent, p);
+      event('retreat', { agent, health: o.health, to: where.to });
+      continue;
+    }
     if (duty?.bless?.length && Date.now() - lastBless > Number(p.bless_every_s) * 1000) {
       lastBless = Date.now();
       await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: GHOST_ROOM, patient: false });
