@@ -2235,6 +2235,9 @@ class Session {
     // recorded as one enormous hit in whatever room it woke up in.
     this.lastHealth = null;
     this.lastCombatLine = null;
+    // The server's logoff-penalty clock counts from the last LOGIN (`piLastLoginTime`), and
+    // the autopilot's logoff gate asks the same question. See LOGOFF_REFRESH_MS.
+    this.loggedInAt = Date.now();
     c.onEvent = ev => {
       if (!c.combatReady && ev.kind === 'message') loginCombatEvents.push(ev);
       else this.combat?.event(ev, c);

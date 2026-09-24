@@ -417,6 +417,34 @@ const RECOVER_MAX_MS = 12 * 60_000;
 // well under a minute at any decent vigor; three is generous and still bounded.
 const HOLD_WHILE_HURT_MAX_MS = 3 * 60_000;
 
+// A LOGOFF IS A SERVER EVENT WITH A PRICE, AND IT BUYS EXACTLY ONE THING.
+//
+// What it buys: whatever is hitting us stops, because a reconnect is a fresh room entry and
+// monsters hold off until we act. What it costs is in the kod, not in this file. Logging off
+// anywhere but an inn leaves a LogoffGhost (`user.kod` UserLogoff) whose timer fires at a
+// DEADLINE about ten minutes out, and if we are offline at that instant the ghost takes
+// items, spell and skill points and base max health (`logghost.kod` InflictPenalties),
+// escalating with every penalty toward the cost of a death. The deadline is only moved when
+// the old one has passed or we have been logged in for a fifth of the ghost time — so a
+// character that logs off again within two minutes of logging in keeps the OLD deadline,
+// and every reconnect is another roll at being offline when it lands.
+//
+// MEASURED ON PROD, 2026-09-24, from substrate/survival-decisions: 13,573 logoffs in 19.7
+// hours, 31 per character per hour, median 54 seconds apart, 89% within two minutes of the
+// previous one — 32% of them at FULL health and 90% at 70% or better. Rizzo logged off six
+// times in twenty-five seconds at 75/75 on chalice duty. Each reconnect keeps the character
+// offline ~3.2s. Meanwhile 31 max-health losses since 2026-09-15 match no death at all,
+// 13 of them on 2026-09-23.
+//
+// So a logoff has to be FOR something. Nothing hitting us means there is nothing for it to
+// stop, and a character at a wall that is not being hit should simply rest there: its
+// moved-since-entry flag is already set, so the health timer is already running. And a
+// second logoff inside the server's no-refresh window is reserved for below the flee line.
+const LOGOFF_UNDER_ATTACK_MS = 6_000;
+// `LogoffPenaltyGhostTime / 5` at the stock ten minutes: log in for less than this and the
+// next logoff inherits the previous ghost's deadline instead of starting a new one.
+const LOGOFF_REFRESH_MS = 120_000;
+
 // THE WATCHDOG'S THREE NUMBERS. See startWatchdog() for what it is for.
 //
 // The tick is fast because it is free: it reads `client.vitals()`, which the server
@@ -25161,6 +25189,21 @@ export class Autopilot {
       s.cancelMovement?.(null,'continue healing at the safe wall',{preserveId:currentSurvivalDecision(s)?.id});
       return false;
     }
+    const declined=this.logoffDeclined(why,atWall);
+    if (declined) {
+      const active=currentSurvivalDecision(s);
+      if (active?.strategy!=='rest_safe') chooseSurvivalDecision(s,{strategy:'rest_safe',reason:why,
+        reason_code:declined.code,status:'recovering',chosen_refuge:this.hold,
+        mitigation:declined.why},{because:'a logoff would buy nothing here; rest at the wall'});
+      // A reconnect clears PFLAG_MOVED_SINCE_ENTRY and only a turn sets it again; if the
+      // last thing we did here was come back, the turn is still owed before rest pays.
+      const rest=currentSurvivalDecision(s);
+      if (rest?.strategy==='rest_safe' && this.rejoinedAt>(this.turnedAt??0))
+        updateSurvivalDecision(s,rest.id,{phase:'turn_required'});
+      this.survivalInterruptedPass=this.passes;
+      s.cancelMovement?.(null,'rest at the safe wall instead of logging off',{preserveId:currentSurvivalDecision(s)?.id});
+      return false;
+    }
     let d=currentSurvivalDecision(s);
     const strategy=atWall?'logoff_safe':'logoff_open';
     if (!d || d.strategy!==strategy || d.status!=='pending') d=chooseSurvivalDecision(s,{
@@ -25186,6 +25229,44 @@ export class Autopilot {
       }
     }
     return did;
+  }
+
+  // WHETHER A LOGOFF AT THIS WALL WOULD BUY ANYTHING. See LOGOFF_UNDER_ATTACK_MS for the
+  // server's side of the bargain. Returns null to allow it, or {code, why} to rest instead.
+  //
+  // Only ever consulted AT a wall: the open freeze is already refused against monsters above,
+  // and with a player in the room a logoff is the answer to a person, so both of those pass.
+  // Below the flee line the "is anything hitting us" window is wider, because a body that
+  // hurt should not bet on a quiet six seconds — but even there, nothing hitting us at a
+  // wall that holds is a character that should be resting, not reconnecting.
+  logoffDeclined(why, atWall) {
+    if (!atWall || this.playerThreatPresent()) return null;
+    const s=this.s,now=Date.now();
+    const frac=pct(s.client?.vitals?.()?.health);
+    let fleeAt=null; try { fleeAt=this.safety()?.fleeAt; } catch { /* no policy yet */ }
+    fleeAt ??= this.policy?.fleeBelow ?? 0.35;
+    const low=frac!=null && frac<fleeAt;
+    const hitAgo=now-(s.damagedAt||0);
+    const loggedIn=Math.max(s.loggedInAt||0,this.rejoinedAt||0);
+    let out=null;
+    if (hitAgo>=(low?3:1)*LOGOFF_UNDER_ATTACK_MS)
+      out={code:'logoff_not_under_attack',
+        why:'nothing has hit us for '+Math.round(hitAgo/1000)+'s, so there is no attack for a logoff to stop — '+
+            'rest at the wall; every logoff outside an inn is a roll against the logoff-penalty ghost'};
+    else if (!low && loggedIn && now-loggedIn<LOGOFF_REFRESH_MS)
+      out={code:'logoff_too_soon',
+        why:'logged in '+Math.round((now-loggedIn)/1000)+'s ago and above the flee line — a logoff this soon keeps the '+
+            'previous ghost\'s penalty deadline; reserved for below '+Math.round(fleeAt*100)+'%'};
+    if (!out) return null;
+    this.tally.logoffs_declined=(this.tally.logoffs_declined||0)+1;
+    // Once per half-minute per reason: this is asked every pass while a character rests.
+    if (this._logoffDeclinedNote?.code!==out.code || now-this._logoffDeclinedNote.at>30_000) {
+      this._logoffDeclinedNote={code:out.code,at:now};
+      this.note('not logging off — resting at the wall instead',{wanted_to:why,code:out.code,why:out.why,
+        health:s.client?.vitals?.()?.health?.value??null,hit_ms_ago:Number.isFinite(hitAgo)?hitAgo:null,
+        logged_in_ms_ago:loggedIn?now-loggedIn:null});
+    }
+    return out;
   }
 
   async playDeadObserved(why, decisionId) {

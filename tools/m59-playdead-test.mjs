@@ -49,6 +49,9 @@ function fakeSession({ health = 12, max = 40, backAt = SPOT } = {}) {
     world: { room: { num: 39 } },
     // where the character comes back standing, after the reconnect
     comeBackAt: backAt,
+    // Every case here is "hurt with things adjacent", i.e. being hit. A logoff with nothing
+    // hitting us is refused before any of this runs — that is m59-logoffgate-test.mjs.
+    damagedAt: Date.now(),
   };
   return s;
 }

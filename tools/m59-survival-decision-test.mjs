@@ -24,7 +24,9 @@ function fixture({row=8,col=16}={}) {
     vitals:()=>({health,vigor:{value:80}}),face:()=>calls.push('turn'),stats(){},rest(){},stand(){},waitFor:async()=>({})};
   const s=Object.assign(Object.create(Session.prototype),{name:null,client:c,movementGeneration:0,
     cancelledMovementTokens:new Set(),world:{room:map.rooms[39],geometry:geometryFor(map.rooms[39]),map},
-    need:()=>c,pacer:{submit:async(_lane,fn)=>fn()}});
+    need:()=>c,pacer:{submit:async(_lane,fn)=>fn()},
+    // Hurt AND being hit: a logoff with nothing to stop is refused (m59-logoffgate-test.mjs).
+    damagedAt:Date.now()});
   const k=Object.assign(Object.create(Autopilot.prototype),{s,policy:{},passes:1,tally:{},claims:new Map(),
     journal:[],book:{save(){},get:()=>null,discredited:()=>false},safety:()=>({fleeAt:0.7}),
     tellPilot:async()=>{},note(){},noProgress(){},

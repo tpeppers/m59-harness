@@ -106,6 +106,8 @@ console.log('\nthe two cases that are still allowed');
 {
   // A WALL: the freeze is half of reconnect-turn-heal, so it keeps its meaning.
   const wall = keeper({ atWall: true, occupants: [MONSTER] });
+  // Being hit right now — a logoff with nothing to stop is refused (m59-logoffgate-test.mjs).
+  wall.s.damagedAt = Date.now();
   let reached = false;
   wall.playDeadObserved = async () => { reached = true; return true; };
   await wall.playDead('at a proven wall');
