@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
-         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted } from './m59-chalice.mjs';
+         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -174,6 +174,55 @@ section('forces of light: who asks');
   eq(folWanted({ cfg, here: 38, fol: { until: 8_000 }, now: 5_000 }), true, 'inside the lead time: ask');
   eq(folWanted({ cfg, here: 39, fol: {}, now: 5 }), false, 'not in the room: not our business');
   eq(folWanted({ cfg, here: 38, fol: {}, role: 'holder' }), false, 'the holder never asks itself');
+}
+
+section("buying the holder's restock: the plan");
+{
+  // THE OPERATOR'S ORDER, 2026-09-24: buy the reagents after selling and tip those on the way
+  // back, rather than waiting on a guild-chest draw that only a chalice RIDE can trigger. The
+  // chest held 4,551 elderberries that day and had been drawn from zero times.
+  const cfg = normalizeChalice({
+    holder: 'Loial the Ogier',
+    holder_supply: { elderberry: 200, emerald: 110, 'orc tooth': 30 },
+    supply_shops: { elderberry: { room: 104, seller: 'Joguer' },
+                    emerald: { room: 109, seller: 'Herbutte' } },
+    restock_per_trip: 60,
+  });
+  eq(cfg.problems.length, 0, 'the config is accepted: ' + JSON.stringify(cfg.problems));
+  const stops = restockBuyPlan({ shortfall: { elderberry: 179, emerald: 86, 'orc tooth': 5 }, cfg });
+  eq(stops.length, 2, 'one stop per counter');
+  eq(stops[0].room, 104, 'and in a deterministic order');
+  eq(stops[0].lines[0].amount, 60, 'capped at restock_per_trip, not the whole shortfall');
+  eq(stops[1].seller, 'Herbutte', 'the gem comes from the gem merchant');
+  // THE TWO HALVES ARE NOT SOLD BY ONE PERSON. A plan that assumed they were would come home
+  // able to keep the holder casting exactly as long as it left.
+  ok(!stops.some(st => st.lines.length > 1), 'and neither counter is asked for the other half');
+  // An item nobody sells is not a gap: it is donated, drawn from the chest, or farmed.
+  ok(!stops.some(st => st.lines.some(l => l.item === 'orc tooth')), 'orc teeth have no counter, so no line');
+}
+
+section("buying the holder's restock: the refusals");
+{
+  const off = normalizeChalice({ holder: 'x', holder_supply: { elderberry: 200 } });
+  eq(restockBuyPlan({ shortfall: { elderberry: 50 }, cfg: off }).length, 0,
+     'no supply_shops, no buying — off is the default');
+  const bad = normalizeChalice({ holder: 'x', supply_shops: { elderberry: { seller: 'Joguer' } } });
+  ok(bad.problems.some(p => /supply_shops\.elderberry needs/.test(p)),
+     'a counter with no room is refused, and says which item');
+  eq(Object.keys(bad.supply_shops).length, 0, 'and is not half-applied');
+  const partial = normalizeChalice({ holder: 'x',
+    supply_shops: { elderberry: { room: 104, seller: 'Joguer' }, emerald: { room: 0, seller: '' } } });
+  eq(Object.keys(partial.supply_shops).join(','), 'elderberry',
+     'one bad entry does not lose the good one');
+  // `Number(null)` IS 0 AND 0 IS FINITE, so a default-guard written the obvious way capped
+  // every line at nothing and the plan came back empty with no problem reported. Caught by
+  // this suite before it shipped; the same trap `buyLines` carries a note about.
+  eq(restockBuyPlan({ shortfall: { elderberry: 179 }, perTrip: null,
+    cfg: normalizeChalice({ holder: 'x', restock_per_trip: 60,
+      supply_shops: { elderberry: { room: 104, seller: 'Joguer' } } }) })[0].lines[0].amount,
+    60, 'an unspecified per-trip cap falls back to the config, not to zero');
+  eq(restockBuyPlan({ shortfall: {}, cfg: normalizeChalice({ holder: 'x',
+    supply_shops: { elderberry: { room: 104, seller: 'Joguer' } } }) }).length, 0, 'nothing short');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

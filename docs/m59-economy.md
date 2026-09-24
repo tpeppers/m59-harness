@@ -533,6 +533,25 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
   traveller that LANDS IN THE HALL — beside the chests — pledges part of the remaining
   shortfall, draws it with `withdrawFromStockpile`, and hands it over at the station on the
   way back. Pledges stop two travellers carrying the same shortfall and expire in an hour.
+- **AND IT BUYS THE REST, BECAUSE THE CHEST DRAW NEEDS A RIDE** (`supply_shops`,
+  `restock_budget`). The draw above runs at exactly one moment — a traveller that rode the
+  chalice and landed in the hall — so it is gated behind the very service it exists to keep
+  running. Measured on prod 2026-09-24: the chest held **4,551 elderberries and 2,028
+  emeralds and had been drawn from zero times**, because the service had never completed a
+  single ride, while the holder ran down to nine castings on a nineteen-shilling purse.
+
+  So a town trip now buys part of the shortfall after its own restocking —
+  `chaliceBuyCargo`, the step after `buy reagents` — and tips it at the station on the way
+  home, through the same `_holderCargo` path. It needs no ride and no landing. `supply_shops`
+  names one counter per item because **the two halves of a room enchantment are not sold by
+  the same merchant**: the apothecary has the berries and does not stock a gem, so a trip to
+  one of them comes home able to keep the holder casting exactly as long as it left.
+
+  What stops the fleet tipping itself broke is the order of subtraction: `walking_money` and
+  the trip's own `shoppingPlan().required_purse` come out first, `restock_budget` caps what
+  is left, and `restock_per_trip` caps each line. What actually arrives is measured off the
+  PACK and never off the counter's reply — `buyItems` completes the handshake whether or not
+  the purse could cover it.
 
 ## Standing orders: one-time tasks for the next town stop
 

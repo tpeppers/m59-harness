@@ -72,7 +72,7 @@ import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
-         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder } from './m59-chalice.mjs';
+         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan } from './m59-chalice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -21420,6 +21420,119 @@ export class Autopilot {
     this.note('carrying the holder\'s restock back', { items: got });
   }
 
+  // BUY THE HOLDER'S RESTOCK WITH THE MONEY THIS TRIP JUST MADE, and carry it back as the tip.
+  //
+  // The operator's order, 2026-09-24. `chaliceTakeCargo` above draws the same goods from the
+  // guild chest for nothing, and is the better source -- but it runs at exactly ONE moment: a
+  // traveller that rode the chalice and landed in the hall. Measured that day, the chest held
+  // 4,551 elderberries and 2,028 emeralds and had been drawn from ZERO times, because the
+  // service had never completed a ride. The holder's supply was gated behind the very service
+  // his supply keeps running, and he ran down to nine castings while the fleet stood on 4,551.
+  //
+  // So this is the source that needs no ride: every town trip that sells something can spend a
+  // little of it at a counter it is already near. It runs AFTER the sale and after the trip's
+  // own restocking, out of what is left over -- the character's own food and reagents are a
+  // floor, not a share -- and it hands over through the same `_holderCargo` path the chest
+  // draw uses, so there is one delivery and one place it can go wrong.
+  async chaliceBuyCargo() {
+    const cfg = this.chaliceCfg;
+    if (!cfg?.enabled) return;
+    // THE SERVER DOES NOT TIP ITSELF. A holder or an on-duty alternate buying its own restock
+    // is just a supply trip, and the supply trip is the thing this exists to make unnecessary.
+    if (this.chaliceRole() !== 'traveller') return;
+    if (!Object.keys(cfg.holder_supply ?? {}).length) return;
+    if (!Object.keys(cfg.supply_shops ?? {}).length) return;
+    if (!purchaseEnabled(this.policy, 'reagents')) return;
+    const store = this.chaliceStore();
+    const short = holderShortfall(store.supply(), { except: this.who() });
+    if (!Object.keys(short).length) return;
+
+    // WHAT IS LEFT AFTER THIS CHARACTER'S OWN NEEDS, and the order of subtraction is the
+    // point: walking money and the trip's own shopping come out first, and the holder gets
+    // what survives. A fleet that tips itself broke stops farming, and a holder with no
+    // farmers has nothing to serve.
+    const ownPlan = this.shoppingPlan();
+    const keep = Math.max(Number(this.policy.walkingMoney ?? 400), Number(ownPlan.required_purse) || 0);
+    let budget = Math.min(Number(cfg.restock_budget) || 0, Math.max(0, this.purseNow() - keep));
+    if (budget <= 0) {
+      this.note('nothing to spare for the holder this trip',
+        { purse: this.purseNow(), keeping: keep, short });
+      return;
+    }
+
+    const stops = restockBuyPlan({ shortfall: short, cfg });
+    if (!stops.length) return;
+    const pledged = store.pledge(this.who(),
+      Object.fromEntries(stops.flatMap(st => st.lines.map(l => [l.item, l.amount]))));
+    if (!Object.keys(pledged).length) return;
+
+    const s = this.s, c = s.need();
+    const got = {};
+    for (const stop of stops) {
+      if (this.travelInterrupted() || this.suspendedJourney) break;
+      if (budget <= 0) break;
+      if (this.hereRoom() !== stop.room) {
+        const walked = await this.travel(stop.room, { maxHops: 12 })
+          .catch(error => ({ arrived: false, reason: error.message }));
+        if (!walked?.arrived) {
+          this.note('could not reach a counter for the holder', { room: stop.room, why: walked?.reason });
+          continue;
+        }
+      }
+      await this.makeRoomToBuy(null, { wantSlots: Math.max(4, stop.lines.length * 2) }).catch(() => {});
+      const before = c.evSeq;
+      const pick = await this.sellerHere({ want: new RegExp(stop.lines.map(l => l.match).join('|'), 'i') })
+        .catch(() => null);
+      if (!pick) { this.note('nobody at that counter opened a list', { room: stop.room, seller: stop.seller }); continue; }
+      await s.pacer.submit('buy', () => c.buy(pick.seller.id ?? pick.seller));
+      const ev = await c.waitFor({ since: before, kinds: ['shop', 'message'], timeoutMs: 4000 })
+        .catch(() => ({ events: [] }));
+      const shop = ev.events?.find(e => e.kind === 'shop');
+      if (!shop) { this.note("no shop list for the holder's restock", { room: stop.room }); continue; }
+      for (const line of stop.lines) {
+        if (budget <= 0) break;
+        const row = (shop.items ?? []).find(i => new RegExp(line.match, 'i').test(String(i.name ?? '')));
+        // NOT A FAILURE. The two halves are sold by different people, so "this counter does not
+        // stock it" is the ordinary case at either one.
+        if (!row || !(Number(row.id) > 0)) continue;
+        const unit = Number(row.cost) || 0;
+        // AN UNPRICED ROW IS NOT A FREE ONE. Skipped rather than bought blind: the clamp below
+        // is the only thing standing between a tip and this character's own food money.
+        if (!(unit > 0)) continue;
+        const amount = Math.min(line.amount, Math.floor(budget / unit));
+        if (amount <= 0) continue;
+        const held = this.countOfKind(line.item);
+        for (const l of buyLines([{ id: Number(row.id), amount }])) {
+          await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [l]));
+          const seq = c.evSeq;
+          await s.pacer.submit('read', () => c.requestInventory());
+          await c.waitFor({ since: seq, kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        }
+        // RULE 6: WHAT ENTERED THE PACK. `buyItems` completes the handshake whether or not the
+        // purse could cover it -- the counter clamps and says so -- so the gain is the evidence
+        // and the reply is not.
+        const gained = Math.max(0, this.countOfKind(line.item) - held);
+        if (gained > 0) {
+          got[line.item] = (got[line.item] ?? 0) + gained;
+          budget -= gained * unit;
+        }
+      }
+    }
+
+    if (!Object.keys(got).length) { store.unpledge(this.who()); return; }
+    // Merge rather than replace: a traveller may already be carrying a chest draw, and the
+    // delivery path hands over whatever is in `_holderCargo` in one trade.
+    const carrying = this._holderCargo?.items ?? {};
+    const items = { ...carrying };
+    for (const [k, n] of Object.entries(got)) items[k] = (items[k] ?? 0) + n;
+    store.pledge(this.who(), items);
+    this._holderCargo = { items, at: Date.now(), tries: this._holderCargo?.tries ?? 0 };
+    this.tally.chalice_restock_bought = (this.tally.chalice_restock_bought || 0) + 1;
+    this.chaliceEvent('cargo_bought', { items: got, spent: (cfg.restock_budget || 0) - budget });
+    this.note("bought the holder's restock to tip on the way home",
+      { items: got, left_to_spend: budget });
+  }
+
   /**
    * DELIVER THE RESTOCK on the way back to the castle. Runs after the town trip is over;
    * the station is on the road from the hall to Castle Victoria, so this is a stop, not a trip.
@@ -23753,10 +23866,16 @@ export class Autopilot {
       ['restock here', () => this.restockInTown()],
       ['buy food', () => this.buyFoodInTown()],
       ['buy reagents', () => this.buyReagentsInTown()],
+      // THE HOLDER'S RESTOCK, BOUGHT OUT OF WHAT IS LEFT. Deliberately after this character's
+      // own food and reagents: the tip comes from the surplus, never from the floor. See
+      // `chaliceBuyCargo` — it is carried home and handed over at the station by the same
+      // path the guild-chest draw uses.
+      ["buy the holder's restock", () => this.chaliceBuyCargo()],
       ['buy delivery cargo', () => this.buyFarmDeliveryCargo()],
       ['vault', () => this.vaultRunIfPassing()],
     ];
-    const coopBusiness = new Set(['sell', 'restock here', 'buy food', 'buy reagents', 'buy delivery cargo', 'vault']);
+    const coopBusiness = new Set(['sell', 'restock here', 'buy food', 'buy reagents',
+      "buy the holder's restock", 'buy delivery cargo', 'vault']);
     while (trip.nextService < steps.length) {
       const [name, run] = steps[trip.nextService];
       if (this.policy.reagentCoop?.enabled && !trip.coopDone && coopBusiness.has(name) &&

@@ -107,6 +107,27 @@ export const CHALICE_DEFAULTS = Object.freeze({
   holder_supply: Object.freeze({}),
   // How much of the holder's shortfall one traveller takes on per trip, per item.
   restock_per_trip: 60,
+  // WHERE TO BUY WHAT THE HOLDER IS SHORT OF, so a town trip can restock him with money
+  // instead of with a chest draw. Keyed by the same names as `holder_supply`:
+  //
+  //   supply_shops: { elderberry: { room: 104, seller: 'Joguer' },
+  //                   emerald:    { room: 109, seller: 'Herbutte' } }
+  //
+  // WHY BUYING AND NOT ONLY THE CHEST. The chest draw (`chaliceTakeCargo`) runs at exactly one
+  // moment: a traveller that rode the chalice and landed in the guild hall. Measured on prod
+  // 2026-09-24 the chest held 4,551 elderberries and 2,028 emeralds and had been drawn from
+  // ZERO times, because the service had never completed a single ride — so the holder's
+  // restock was gated behind the very service the restock exists to keep running. A purchase
+  // on the ordinary town trip needs no ride and no landing: every trip that sells can carry
+  // some back.
+  //
+  // It does not replace the chest draw, which is free and is the better source whenever a
+  // traveller does land in the hall. Empty is off, and off is the default.
+  supply_shops: Object.freeze({}),
+  // MOST A TRAVELLER MAY SPEND ON THE HOLDER IN ONE TRIP, after its own restocking and its
+  // walking money. A cap rather than a fraction, because what is being protected is the
+  // character's ability to buy its OWN food and reagents — which is a floor, not a share.
+  restock_budget: 3000,
   // The holder's services at the station, asked for while the traveller holds the cup.
   uncurse: true,
   reveal: true,
@@ -119,6 +140,7 @@ const NUMBERS = {
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
+  restock_budget: [0, 100_000],
 };
 
 /**
@@ -145,6 +167,30 @@ export function normalizeChalice(cfg = null) {
         }
       else if (v != null) problems.push('holder_supply must be {item: count}');
       out.holder_supply = supply;
+      continue;
+    }
+    if (k === 'supply_shops') {
+      const shops = {};
+      if (v && typeof v === 'object' && !Array.isArray(v))
+        for (const [item, where] of Object.entries(v)) {
+          const room = Math.floor(Number(where?.room));
+          const seller = String(where?.seller ?? '').trim();
+          // A COUNTER WITH NO ROOM OR NO NAME IS A PURCHASE NOBODY CAN MAKE, and one that
+          // silently did nothing would read on the board as a fleet restocking the holder
+          // while he ran dry. Refused per item, so one bad entry does not lose the others.
+          if (!String(item).trim()) { problems.push('supply_shops has an unnamed item'); continue; }
+          if (!Number.isFinite(room) || room <= 0 || !seller) {
+            problems.push(`supply_shops.${item} needs {room, seller}`);
+            continue;
+          }
+          shops[String(item).trim().toLowerCase()] = { room, seller,
+            // Optional: the pattern the shelf is searched with, when the merchant spells it
+            // differently from the item name. `ElderBerry`, `elderberry` and `Elder Berry` are
+            // all the same shelf.
+            ...(where.match ? { match: String(where.match) } : {}) };
+        }
+      else if (v != null) problems.push('supply_shops must be {item: {room, seller}}');
+      out.supply_shops = shops;
       continue;
     }
     if (k === 'post_room' || k === 'fol_room') {
@@ -178,6 +224,46 @@ export const sameName = (a, b) => a != null && b != null &&
  * Pure. A pledge older than an hour is a traveller that never came back and counts for
  * nothing.
  */
+/**
+ * WHICH COUNTERS TO VISIT FOR THE HOLDER, and how much to ask for at each.
+ *
+ * Pure: the keeper supplies the shortfall and the config, and gets back a shopping list
+ * grouped by counter. Prices are not here on purpose — a price is only knowable once the
+ * shop is open, so the amount this returns is what is WANTED and the clamping to purse,
+ * weight and bulk happens at the counter, where the answer is real.
+ *
+ * ONE COUNTER PER ITEM, because the two halves of a room enchantment are not sold by the
+ * same merchant: the apothecary has the berries and does not stock a gem. A list that
+ * assumed one shop would come home able to keep the holder casting exactly as long as it
+ * left (see `supply_shops`).
+ */
+export function restockBuyPlan({ shortfall = {}, cfg = null, perTrip = null } = {}) {
+  const shops = cfg?.supply_shops ?? {};
+  // `perTrip != null` FIRST, because `Number(null)` is 0 and 0 is finite — so a plain
+  // `Number.isFinite(Number(perTrip))` accepts the default and caps every line at nothing.
+  // The same trap `buyLines` in m59-parse.mjs carries its own note about.
+  const cap = perTrip != null && Number.isFinite(Number(perTrip)) ? Number(perTrip)
+            : Number(cfg?.restock_per_trip ?? CHALICE_DEFAULTS.restock_per_trip);
+  const stops = [];
+  for (const [item, short] of Object.entries(shortfall)) {
+    const where = shops[String(item).toLowerCase()];
+    // An item nobody sells is not a gap in this plan: it is donated, drawn from the chest,
+    // or farmed. Skipped silently rather than reported, because the ordinary case for a
+    // fleet is that most of `holder_supply` has no counter at all.
+    if (!where) continue;
+    const amount = Math.max(0, Math.min(Math.floor(short), Math.floor(cap)));
+    if (!amount) continue;
+    const stop = stops.find(s => s.room === where.room && s.seller === where.seller);
+    const line = { item, amount, match: where.match ?? item };
+    if (stop) stop.lines.push(line);
+    else stops.push({ room: where.room, seller: where.seller, lines: [line] });
+  }
+  // Nearest room number first is not a route, and is not pretending to be one: it only makes
+  // the plan deterministic so two runs of the same shortfall visit the counters in the same
+  // order and a test can say what it expects.
+  return stops.sort((a, b) => a.room - b.room);
+}
+
 export function holderShortfall(supply = {}, { now = Date.now(), except = null } = {}) {
   const out = {};
   const pledged = {};

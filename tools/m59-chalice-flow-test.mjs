@@ -24,7 +24,11 @@ function makeWorld() {
   let nextId = 5000;
   const names = new Map();              // rsc -> name
   const rsc = (name) => { const r = 90000 + names.size; names.set(r, name); return r; };
-  const world = { players: new Map(), floor: new Map(), names, landings: [] };
+  const world = { players: new Map(), floor: new Map(), names, landings: [], counters: new Map() };
+  // A COUNTER: what one merchant room sells and for how much. Enough for chaliceBuyCargo,
+  // which opens a shop, matches a row by name and buys it.
+  world.counter = (room, items) => world.counters.set(room, { sellerId: 7000 + room,
+    items: items.map(([name, cost]) => ({ id: nextId++, name, cost })) });
   world.item = (name, amount = 1) => ({ id: nextId++, nameRsc: rsc(name), amount });
   world.nameOf = (o) => names.get(o.nameRsc) ?? '';
 
@@ -38,6 +42,21 @@ function makeWorld() {
       get room() { return { num: p.room, objects: world.objectsFor(p) }; },
       stand() {},
       requestInventory() {},
+      buy(_sellerId) { client._openShop = world.counters.get(p.room) ?? null; },
+      buyItems(_sellerId, lines) {
+        const shop = client._openShop; if (!shop) return;
+        for (const line of [].concat(lines)) {
+          const row = shop.items.find(i => i.id === line.id); if (!row) continue;
+          const purse = client.inventory.find(x => /shilling/i.test(world.nameOf(x)));
+          // THE COUNTER CLAMPS TO THE PURSE and reports success either way, which is the
+          // whole reason the caller judges itself on the pack.
+          const afford = row.cost > 0 ? Math.floor((purse?.amount ?? 0) / row.cost) : line.amount;
+          const take = Math.min(line.amount, afford); if (take <= 0) continue;
+          if (purse) purse.amount -= take * row.cost;
+          const into = client.inventory.find(x => world.nameOf(x) === row.name);
+          if (into) into.amount += take; else client.inventory.push(world.item(row.name, take));
+        }
+      },
       offer(toId, items) { client._offer = { toId, items }; },
       cancelOffer() { client._offer = null; },
       async waitFor({ kinds = [] } = {}) {
@@ -46,6 +65,9 @@ function makeWorld() {
           if (to && to.room === p.room && to.client.accepts) return { events: [{ kind: 'countered' }] };
           return { events: [] };
         }
+        if (kinds.includes('shop') && client._openShop)
+          return { events: [{ kind: 'shop', sellerId: client._openShop.sellerId,
+                              items: client._openShop.items }] };
         return { events: [{ kind: kinds[0] ?? 'x' }] };
       },
       acceptOffer() {
@@ -423,6 +445,92 @@ try {
     await loial.chaliceDuty();
     ok(store.duty().paused === false, 'a pause left behind by a dead keeper is cleared by the next one');
   }
+
+  // ---------------------------------------------------------------------------------------
+  section("the town trip buys the holder's restock and tips it on the way home");
+  {
+    // THE OPERATOR'S ORDER, 2026-09-24. The chest draw only ever runs for a traveller that
+    // rode the chalice and landed in the hall — measured that day the chest held 4,551
+    // elderberries and had been drawn from ZERO times, because no ride had ever completed.
+    // Buying on the ordinary town trip needs no ride at all.
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'buy' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2,
+      holder_supply: { elderberry: 200, emerald: 110 },
+      supply_shops: { elderberry: { room: 104, seller: 'Joguer' },
+                      emerald: { room: 109, seller: 'Herbutte' } },
+      restock_per_trip: 60, restock_budget: 3000 });
+    world.counter(104, [['elderberry', 10], ['herbs', 8]]);
+    world.counter(109, [['emerald', 20]]);
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [
+      world.item('chalice of the rain'), world.item('elderberry', 21), world.item('emerald', 24)] });
+    const kermitP = world.add('Kermit', { room: 104, inventory: [world.item('shillings', 5000)] });
+    const loial = keeper(world, loialP, { cfg, store });
+    const kermit = keeper(world, kermitP, { cfg, store });
+    kermit.sellerHere = async () => ({ seller: { id: 1 } });
+    kermit.makeRoomToBuy = async () => {};
+    await loial.chaliceDuty();                       // publishes have/target
+    ok(store.supply().have?.elderberry === 21, 'the holder published what it is short of');
+
+    await kermit.chaliceBuyCargo();
+    const bought = kermit._holderCargo?.items ?? {};
+    ok(bought.elderberry === 60 && bought.emerald === 60,
+       `both halves bought, capped at restock_per_trip (${JSON.stringify(bought)})`);
+    // THE TWO COUNTERS ARE NOT ONE MERCHANT. A traveller that stopped at the apothecary only
+    // would come home with berries and no gem, and the gem is the half that binds.
+    ok(kermitP.room === 109, 'and it walked to the second counter for the half the first does not stock');
+    ok(store.supply().pledged?.some(p => p.by === 'Kermit'), 'pledged, so a second traveller does not double it');
+    ok(kermit.events.some(e => e.what === 'cargo_bought'), 'and it is on the ledger');
+
+    // ...then handed over at the station on the way back, by the same path the chest draw uses.
+    kermit.townTrip = null;
+    const before = loialP.client.inventory.filter(x => world.nameOf(x) === 'elderberry')
+      .reduce((a, x) => a + x.amount, 0);
+    await runUntil(() => !kermit._holderCargo, [async () => { await kermit.chaliceDeliverCargo(); }], { limit: 20 });
+    ok(!kermit._holderCargo, 'the restock was delivered');
+    const after = loialP.client.inventory.filter(x => world.nameOf(x) === 'elderberry')
+      .reduce((a, x) => a + x.amount, 0);
+    ok(after >= before + 60, `and the holder has the berries (${before} -> ${after})`);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  section("buying the holder's restock never spends what the trip itself needs");
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'budget' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2,
+      holder_supply: { elderberry: 200 },
+      supply_shops: { elderberry: { room: 104, seller: 'Joguer' } },
+      restock_per_trip: 60, restock_budget: 3000 });
+    world.counter(104, [['elderberry', 10]]);
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [
+      world.item('chalice of the rain'), world.item('elderberry', 21)] });
+    const loial = keeper(world, loialP, { cfg, store });
+    await loial.chaliceDuty();
+
+    // A PURSE THAT IS ALL WALKING MONEY BUYS THE HOLDER NOTHING. The character's own float is
+    // a floor, not a share: a fleet that tips itself broke stops farming, and a holder with no
+    // farmers has nothing to serve.
+    const brokeP = world.add('Statler', { room: 104, inventory: [world.item('shillings', 350)] });
+    const broke = keeper(world, brokeP, { cfg, store });
+    broke.sellerHere = async () => ({ seller: { id: 1 } });
+    broke.makeRoomToBuy = async () => {};
+    await broke.chaliceBuyCargo();
+    ok(!broke._holderCargo, 'nothing was bought out of the walking money');
+    ok(broke.notes.some(n => /nothing to spare/.test(n.what)), 'and it said so rather than going quiet');
+
+    // AND THE BUDGET IS A CEILING, not a suggestion: 3000 at 10 a berry is 300, but the
+    // per-trip cap is 60, and the tighter of the two wins.
+    const richP = world.add('Waldorf', { room: 104, inventory: [world.item('shillings', 50_000)] });
+    const rich = keeper(world, richP, { cfg, store });
+    rich.sellerHere = async () => ({ seller: { id: 1 } });
+    rich.makeRoomToBuy = async () => {};
+    await rich.chaliceBuyCargo();
+    ok(rich._holderCargo?.items?.elderberry === 60, 'a rich traveller still buys only its share');
+    const spent = 50_000 - richP.client.inventory.find(x => /shilling/i.test(world.nameOf(x))).amount;
+    ok(spent === 600, `and paid for exactly what arrived (${spent})`);
+  }
+
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
