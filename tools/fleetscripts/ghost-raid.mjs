@@ -39,7 +39,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
 import { script as raidAction } from './raid-action.mjs';
-import { GHOST_ROOM, DOOR_ROOM, STAGE_ROOM, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
+import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
          buddyAssignments, expect, barrier, leave }
   from '../m59-ghostraid-lib.mjs';
 
@@ -50,6 +50,9 @@ const HAZARD = 'Ghost of Far\'Nohl raid: a whole fleet with dedicated hammers, h
 const RUN = {
   dir: null, startAt: null, killAt: null, ghostSeen: false,
   light: { lastCast: 0, expired: false, casts: 0 },
+  // THE BOSS'S ROOMS, per run: the raid is written for the ghost of Far'Nohl (40 off 38) but
+  // nothing in it is specific to those numbers — `room=` and `door=` retarget it.
+  room: DEFAULT_BOSS_ROOM, door: DEFAULT_DOOR_ROOM,
   sampler: null, samplerStop: false, done: new Set(), agents: [],
   saved: new Map(), restored: new Set(), focus: null,
 };
@@ -86,7 +89,7 @@ function startSampler(p) {
       });
       // WHAT IS IN THE ROOM, by name — from a raider's own look, so it works on prod too. This is
       // the measurement that says whether sparing zombies moves the room towards them.
-      const inside = rows.find(r => Number(r.room_num) === GHOST_ROOM && r.hp > 0);
+      const inside = rows.find(r => Number(r.room_num) === RUN.room && r.hp > 0);
       if (inside && RUN.dir) {
         const look = await call('look', { agent: inside.agent }, 20_000).catch(() => null);
         const count = {};
@@ -200,7 +203,7 @@ async function buffShare({ agent, duty, p, where, patient }) {
 async function medicTick(agent, below) {
   const rows = await fleetNow();
   const me = rows.find(r => r.agent === agent);
-  const hurt = rows.filter(r => RUN.agents.includes(r.agent) && r.room === GHOST_ROOM && r.room === me?.room
+  const hurt = rows.filter(r => RUN.agents.includes(r.agent) && r.room === RUN.room && r.room === me?.room
                                 && r.frac != null && r.frac < below)
     .sort((a, b) => a.frac - b.frac)[0];
   if (!hurt) return null;
@@ -275,7 +278,7 @@ async function retreatInRoom(agent, p) {
   const r = await call('safe_spots', { agent }, 40_000).catch(() => null);
   const spot = (r?.spots ?? []).filter(x => (x.can_reach_you ?? 99) === 0)
     .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0];
-  if (!spot) { await hop(agent, DOOR_ROOM); return { to: 'door' }; }
+  if (!spot) { await hop(agent, RUN.door); return { to: 'door' }; }
   await call('walk_to', { agent, col: spot.col, row: spot.row }, 60_000).catch(() => {});
   await restUntil(agent, Number(p.return_at), p);
   return { to: `r${spot.row}c${spot.col}` };
@@ -342,7 +345,7 @@ async function hop(agent, to, { tries = 3 } = {}) {
     // two rooms inside a castle, the script has already decided the body is fit (return_at),
     // and a RETREAT refused for being hurt is the worst refusal there is.
     const r = await call('travel', { agent, to, background: true, run_errands: false, health_floor: 0,
-                                     ...(to === GHOST_ROOM ? { despite_hazard: { reason: HAZARD } } : {}) }, 60_000)
+                                     ...(to === RUN.room ? { despite_hazard: { reason: HAZARD } } : {}) }, 60_000)
       .catch(e => ({ error: e.message }));
     const until = Date.now() + 75_000;
     while (Date.now() < until) {
@@ -390,6 +393,8 @@ export const script = {
   params: {
     agents: { type: 'agents', required: true },
     target: { type: 'string', default: 'ghost of Far', describe: 'the boss, as a name pattern' },
+    room: { type: 'number', default: DEFAULT_BOSS_ROOM, describe: 'the boss room (40, the Throne Room of Victoria Castle)' },
+    door: { type: 'number', default: DEFAULT_DOOR_ROOM, describe: 'the room the raid gathers in before the boss room (38)' },
     stage: { type: 'number', default: STAGE_ROOM },
     lightbearer: { type: 'string', default: '' },
     healers: { type: 'string', default: '' },
@@ -437,6 +442,8 @@ export const script = {
     const agent = agentArg ?? p.agent;
     const agents = Array.isArray(p.agents) ? p.agents : String(p.agents).split(',').map(s => s.trim()).filter(Boolean);
     RUN.agents = agents;
+    RUN.room = Number(p.room) || DEFAULT_BOSS_ROOM;
+    RUN.door = Number(p.door) || DEFAULT_DOOR_ROOM;
     if (p.run_dir && !RUN.dir) { RUN.dir = p.run_dir; fs.mkdirSync(RUN.dir, { recursive: true }); }
     expect('enter', agents.length);
     const say = text => call('say', { agent, type: p.channel, text: String(text).slice(0, 220) }, 30_000).catch(() => {});
@@ -469,7 +476,7 @@ export const script = {
     const atDoor = verify(async ({ state: st }) => {
       if (agent !== roles.lightbearer) st.posture = await raidPosture(agent, p);
       const b = await barrier('at-door', agent, { ms: Number(p.enter_wait_s) * 1000 });
-      st.buffs = await buffShare({ agent, duty, p, where: DOOR_ROOM, patient: true });
+      st.buffs = await buffShare({ agent, duty, p, where: RUN.door, patient: true });
       st.at_door = b;
       return true;
     }, 'the door buffs could not be read back');
@@ -488,19 +495,19 @@ export const script = {
     const base = await raidAction.steps({
       // stage_room 0 when ghost-arm already mustered us in this same run: raid-action decides its
       // muster walk when its steps are COMPILED, which in a composed run is before the muster.
-      target: p.target, room: GHOST_ROOM, via: `${DOOR_ROOM},${GHOST_ROOM}`,
+      target: p.target, room: RUN.room, via: `${RUN.door},${RUN.room}`,
       stage_room: p.mustered === true || p.mustered === 'true' ? 0 : Number(p.stage),
       room_caster: '', healers: roles.healers.join(','), escort: '', heal_spell: 'minor heal',
       heal_below: Number(p.heal_below), require_enchanted: false, despite_hazard: HAZARD, channel: p.channel,
       rounds: Number(p.rounds), disengage_at: Number(p.retreat_at),
     }, agent, state ?? {});
-    const i40 = base.findIndex(s => s?.do === 'walk' && Number(s.to) === GHOST_ROOM);
+    const i40 = base.findIndex(s => s?.do === 'walk' && Number(s.to) === RUN.room);
     const steps = i40 >= 0 ? [...base.slice(0, i40), atDoor, theDoor, ...base.slice(i40)] : [atDoor, theDoor, ...base];
 
     // The melee loop ends on "the boss is gone from here" — which is the kill, if it saw it.
     steps.push(verify(async ({ state: st }) => {
       const o = await observe(agent);
-      if (Number(o.room) === GHOST_ROOM) {
+      if (Number(o.room) === RUN.room) {
         const { ghost } = await lookAround(agent, p.target);
         if (ghost) RUN.ghostSeen = true;
         else if (st.melee || st.approach) { RUN.ghostSeen = true; ghostGone(agent); }
@@ -517,7 +524,7 @@ export const script = {
 
 function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
   return [
-    walk(DOOR_ROOM),
+    walk(RUN.door),
     atDoor,
     theDoor,
     verify(async ({ state: st }) => {
@@ -531,7 +538,7 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
           await say('Resting before the next light.');
           await restUntil(agent, 0.95, p);
         }
-        const h = await hop(agent, GHOST_ROOM, { tries: 5 });
+        const h = await hop(agent, RUN.room, { tries: 5 });
         if (!h.ok) {
           log.push({ t: Date.now(), outcome: 'could not enter', ...h });
           event('light', { outcome: 'could not enter', why, room: h.room ?? null, reply: h.reply ?? null });
@@ -573,19 +580,19 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         const o = await observe(agent);
         if (o.dead) { event('died', { agent }); break; }
         if (!RUN.killAt || !(p.light_heals === true || p.light_heals === 'true')) {
-          if (Number(o.room) === GHOST_ROOM) await hop(agent, Number(p.light_wait_room));
+          if (Number(o.room) === RUN.room) await hop(agent, Number(p.light_wait_room));
           await sleep(3000); continue;
         }
         // After the kill: heal from inside the room, and step out to rest when hurt.
         if ((o.health ?? 0) < Number(p.light_rest_below)) {
           // After the kill the wall in the room, like everyone else; before it, out of the room.
-          if (Number(o.room) === GHOST_ROOM) {
+          if (Number(o.room) === RUN.room) {
             const where = await retreatInRoom(agent, { ...p, return_at: 0.95 });
             event('retreat', { agent, health: o.health, to: where.to });
           } else await restUntil(agent, 0.95, p);
           continue;
         }
-        if (Number(o.room) !== GHOST_ROOM) { await hop(agent, GHOST_ROOM); continue; }
+        if (Number(o.room) !== RUN.room) { await hop(agent, RUN.room); continue; }
         const h = await medicTick(agent, Number(p.heal_below));
         if (h) heals.push(h); else await sleep(2500);
       }
@@ -610,10 +617,10 @@ async function farmLoop({ agent, p, st, say, duty }) {
     const o = await observe(agent);
     if (o.dead) { tally.died = true; event('died', { agent }); await say('I am down.'); break; }
     const room = Number(o.room);
-    if (room !== GHOST_ROOM) {
-      if (room !== DOOR_ROOM) { tally.left = room; event('left', { agent, room }); break; }   // fled far; the keeper has it
+    if (room !== RUN.room) {
+      if (room !== RUN.door) { tally.left = room; event('left', { agent, room }); break; }   // fled far; the keeper has it
       if ((o.health ?? 0) < Number(p.return_at)) { await restUntil(agent, Number(p.return_at), p); continue; }
-      const h = await hop(agent, GHOST_ROOM);
+      const h = await hop(agent, RUN.room);
       if (h.ok) { tally.returns++; event('return', { agent }); }
       continue;
     }
@@ -632,12 +639,12 @@ async function farmLoop({ agent, p, st, say, duty }) {
     }
     if (duty?.bless?.length && Date.now() - lastBless > Number(p.bless_every_s) * 1000) {
       lastBless = Date.now(); tally.buff_rounds++;
-      await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: GHOST_ROOM, patient: false });
+      await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: RUN.room, patient: false });
       continue;
     }
     if (duty?.strength?.length && Date.now() - lastStrength > Number(p.strength_every_s) * 1000) {
       lastStrength = Date.now();
-      await buffShare({ agent, duty: { ...duty, bless: [] }, p, where: GHOST_ROOM, patient: false });
+      await buffShare({ agent, duty: { ...duty, bless: [] }, p, where: RUN.room, patient: false });
       continue;
     }
     const { ghost, others } = await lookAround(agent, p.target);
@@ -680,10 +687,10 @@ async function healLoop({ agent, p, st, say, duty }) {
   while (Date.now() < endAt(p)) {
     const o = await observe(agent);
     if (o.dead) { event('died', { agent }); break; }
-    if (Number(o.room) !== GHOST_ROOM) {
-      if (Number(o.room) !== DOOR_ROOM) { event('left', { agent, room: o.room }); break; }
+    if (Number(o.room) !== RUN.room) {
+      if (Number(o.room) !== RUN.door) { event('left', { agent, room: o.room }); break; }
       if ((o.health ?? 0) < Number(p.return_at)) { await restUntil(agent, Number(p.return_at), p); continue; }
-      await hop(agent, GHOST_ROOM);
+      await hop(agent, RUN.room);
       continue;
     }
     if ((o.health ?? 1) < Number(p.retreat_at)) {
@@ -693,7 +700,7 @@ async function healLoop({ agent, p, st, say, duty }) {
     }
     if (duty?.bless?.length && Date.now() - lastBless > Number(p.bless_every_s) * 1000) {
       lastBless = Date.now();
-      await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: GHOST_ROOM, patient: false });
+      await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: RUN.room, patient: false });
       continue;
     }
     // Anyone being hit, not only the badly hurt: under heal_below, worst first.

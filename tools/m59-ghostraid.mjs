@@ -9,6 +9,9 @@
 //   node tools/m59-ghostraid.mjs all   --fleet prod --commit      the same code, no DM powers
 //   node tools/m59-ghostraid.mjs arm|prep|fight --fleet <f> --commit      one phase
 //   node tools/m59-ghostraid.mjs report --run substrate/raids/ghost-<stamp>
+//   node tools/m59-ghostraid.mjs rehearse --fleet shadow --commit   rebuild a faithful clone, run it with NO DM
+//   node tools/m59-ghostraid.mjs muster --fleet prod                 job 0, previewed (read-only)
+//   ... room=<n> door=<n> target=<pattern> retarget the fight; armorers=a,b trips=n spare=zombie tune it
 //
 // ============================================================================
 // ONE SCRIPT, TWO FLEETS, AND THE LINE BETWEEN THEM
@@ -274,6 +277,8 @@ const prepParams = cfg => ({ target: 'Ghost', buffs: cfg.buffs, channel: cfg.cha
 const fightParams = (cfg, dir, mustered) => ({
   stage: cfg.stage, lightbearer: cfg.lightbearer, healers: cfg.healers, channel: cfg.channel,
   minutes: cfg.minutes, run_dir: cfg.commit ? dir : '', lab: cfg.lab, mustered,
+  ...(opt('--room') ? { room: Number(opt('--room')) } : {}), ...(opt('--door') ? { door: Number(opt('--door')) } : {}),
+  ...(opt('--target') ? { target: opt('--target') } : {}),
 });
 
 async function arm(cfg) {
@@ -445,6 +450,44 @@ function buffNote(events) {
          `super strength ${sum(40, 'strength')}`;
 }
 
+// ---------------------------------------------------------------------------------- rehearse
+
+/**
+ * THE WHOLE REHEARSAL, ONE COMMAND: rebuild a faithful shadow clone of prod, then run the raid on
+ * it with NO DM power at all, then write the report.
+ *
+ *   node tools/m59-ghostraid.mjs rehearse --fleet shadow --commit
+ *
+ * The rebuild (m59-shadow-run.mjs --until play) is where DM powers belong: creating characters is
+ * a DM act, and the clone copies prod's purses, reagents, packs, the chalice, worn gear and the
+ * guild with its hall and chests. The run that follows is `all` WITHOUT --lab: every weapon,
+ * armour, shield and reagent is walked, pooled, bought and handed over exactly as on prod. That
+ * split is the point — a rehearsal that borrows a DM power in the run rehearses something prod
+ * cannot do.
+ *
+ * --skip-rebuild runs the raid against the shadow fleet as it stands.
+ */
+async function rehearse(cfg) {
+  const { assertLabFleet } = await import('./m59-fleetscript.mjs');
+  assertLabFleet('m59-ghostraid rehearse');
+  if (cfg.lab) throw new Error('rehearse runs the raid WITHOUT DM powers; drop --lab (the rebuild uses them on its own)');
+  const roster = process.env.M59_STATE_FILE;
+  if (!roster) throw new Error('set M59_STATE_FILE to the shadow roster (e.g. .../prod-deploy/substrate/fleets/shadow.json)');
+  if (!flag('--skip-rebuild')) {
+    const shim = opt('--shadow-run', path.join(HERE, 'm59-shadow-run.mjs'));
+    const host = process.env.M59_HOST ?? '127.0.0.1', port = process.env.M59_PORT ?? '15959';
+    const args = [shim, '--until', 'play', '--roster', roster, '--server', `${host}:${port}`,
+                  '--admin', `${process.env.M59_ADMIN_HOST ?? host}:${process.env.M59_ADMIN_PORT ?? '19998'}`,
+                  '--http', String(cfg.port), '--dashboard', String(Number(opt('--dashboard', cfg.port + 1))),
+                  ...(cfg.commit ? [] : ['--dry'])];
+    console.log(`rebuilding the shadow fleet: node ${args.join(' ')}`);
+    const { spawnSync } = await import('node:child_process');
+    const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
+    if (r.status !== 0) throw new Error(`the shadow rebuild stopped (exit ${r.status}); the raid was not run`);
+  }
+  return fight({ ...cfg, lab: false }, { composed: true });
+}
+
 // ---------------------------------------------------------------------------------- restore
 
 /**
@@ -470,6 +513,7 @@ async function main() {
   const verb = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'plan';
   if (verb === 'report') return report({ ledger: opt('--ledger') });
   if (verb === 'restore') return restoreSettings(configure());
+  if (verb === 'rehearse') return rehearse(configure());
   const cfg = configure();
   if (cfg.lab) { const { assertLabFleet } = await import('./m59-fleetscript.mjs'); assertLabFleet('m59-ghostraid --lab'); }
   if (verb === 'plan') return plan(cfg);
