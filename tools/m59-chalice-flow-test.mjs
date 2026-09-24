@@ -382,12 +382,23 @@ try {
     loial.chaliceFit = () => false;
     await loial.chaliceDuty();
     ok(loialP.room === 2 && casts === 1, 'a holder under its flee line does not step in');
+    // A cast that never pays (already infused, or declined): four tries, then lit-for-a-while
+    // on the shared clock -- never a time in the past that brings it straight back in.
+    loial.chaliceFit = () => true;
+    loial.roomEnchant = async () => { casts++; return { cast: false, why: 'refused' }; };
+    await runUntil(() => loialP.room === 2 && !loial._chaliceServe && casts >= 5, [async () => { await loial.chaliceDuty(); }]);
+    ok(casts === 5, `gave up after four unpaid attempts (${casts - 1})`);
+    ok(store.fol().until > Date.now() + 20_000, 'and the shared clock is in the future, so nobody asks again at once');
+    loial.roomEnchant = async ({ remote } = {}) => { casts++; castIn = loialP.room; return remote ? { cast: true, holdMs: 60_000, casts_left: 99 } : undefined; };
+    store.litFol({ room: 38, until: 0, by: 'x' });
+    kermit._folLookedAt = 0; kermit._folAskedAt = 0; kermit.chaliceFolWatch();
+    const c0 = casts;
     loial.chaliceFit = () => true; loial.busyStatus = () => ({ by: 'dum' });
     await loial.chaliceDuty();
-    ok(loialP.room === 2 && casts === 1, 'nor while its own supply errand owns the body');
+    ok(loialP.room === 2 && casts === c0, 'nor while its own supply errand owns the body');
     loial.busyStatus = () => null; loial.facultyHeld = f => f === 'movement';
     await loial.chaliceDuty();
-    ok(loialP.room === 2 && casts === 1, 'nor while a script (a raid) holds its movement');
+    ok(loialP.room === 2 && casts === c0, 'nor while a script (a raid) holds its movement');
     ok(store.duty().paused === true, 'and the duty record says it is not serving, so travellers walk');
     loial.facultyHeld = () => false;
     await loial.chaliceDuty();

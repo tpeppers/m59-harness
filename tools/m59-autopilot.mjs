@@ -21860,17 +21860,14 @@ export class Autopilot {
           st.ticket = null; st.stage = 'back';
           return true;
         }
-        // NOTHING CAST because our own clock says it is still up: put that on the shared
-        // clock so the occupants stop asking, and leave.
-        if (r == null) {
-          const lit = [...(this._enchantedAt?.entries?.() ?? [])].find(([k]) => k.endsWith(':forces of light'));
-          try { store.litFol({ room: cfg.fol_room, until: (lit?.[1] ?? Date.now()) + 30_000, by: me }); } catch {}
-          st.ticket = null; st.stage = 'back';
-          return true;
-        }
+        // NOTHING PAID. Declined before casting (mana, reagents: `r` is empty) or refused by
+        // the server — and the commonest refusal is "already infused", which means lit. After
+        // four tries, say lit-for-a-while on the shared clock so the occupants stop calling a
+        // 20-health character into the room every few seconds, and go back out.
         if (++st.attempts >= 4) {
-          this.chaliceEvent('fol_failed', { why: r.why ?? null, attempts: st.attempts });
-          st.stage = 'back';
+          try { store.litFol({ room: cfg.fol_room, until: Date.now() + 30_000, by: me }); } catch {}
+          this.chaliceEvent('fol_unpaid', { why: r?.why ?? 'declined before casting', attempts: st.attempts });
+          st.ticket = null; st.stage = 'back';
         }
         return true;
       }
@@ -22074,7 +22071,9 @@ export class Autopilot {
       const margin = Number(cfg.margin_ms) >= 0 ? Number(cfg.margin_ms) : 8000;
       const holdMs = Math.max(5000, ench.durationMs(power) - margin);
       const last = this._enchantedAt.get(`${roomId}:${ench.name}`);
-      if (last && Date.now() - last < holdMs) continue;        // still up, by our own clock
+      // A REMOTE CAST WAS ASKED FOR BY SOMEBODY STANDING IN THE ROOM, whose shared clock says it
+      // is dark. Our own clock is not a reason to walk in and do nothing.
+      if (!remote && last && Date.now() - last < holdMs) continue;  // still up, by our own clock
 
       const mana = c.vitals()?.mana;
       const floor = Number(cfg.mana_floor) >= 0 ? Number(cfg.mana_floor) : ench.mana + 4;
