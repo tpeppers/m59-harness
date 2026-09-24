@@ -256,6 +256,7 @@ export function servingCharacter(duty, cfg, now = Date.now()) {
   const d = duty ?? {};
   if (!d.with) return cfg?.holder ?? null;          // never recorded: the holder, by default
   if (d.lost) return null;
+  if (d.paused) return null;                         // its body is somebody else's right now
   // A record nobody has refreshed for a long while is a keeper that stopped, not a server.
   if (Number.isFinite(d.seen_at) && now - d.seen_at > 15 * 60_000) return null;
   return d.with;

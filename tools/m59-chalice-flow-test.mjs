@@ -385,6 +385,13 @@ try {
     loial.chaliceFit = () => true; loial.busyStatus = () => ({ by: 'dum' });
     await loial.chaliceDuty();
     ok(loialP.room === 2 && casts === 1, 'nor while its own supply errand owns the body');
+    loial.busyStatus = () => null; loial.facultyHeld = f => f === 'movement';
+    await loial.chaliceDuty();
+    ok(loialP.room === 2 && casts === 1, 'nor while a script (a raid) holds its movement');
+    ok(store.duty().paused === true, 'and the duty record says it is not serving, so travellers walk');
+    loial.facultyHeld = () => false;
+    await loial.chaliceDuty();
+    ok(store.duty().paused === false, 'released, it is serving again');
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });

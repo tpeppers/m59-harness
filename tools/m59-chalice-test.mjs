@@ -65,6 +65,8 @@ section('which trips ride');
      'a holder unheard-from for twenty minutes is a stopped keeper, not a server');
   eq(shouldRide({ ...base, stationHops: null }).ride, false, 'no route to the station: walk');
   eq(servingCharacter({}, CFG), 'Loial the Ogier', 'never recorded: the holder, by default');
+  eq(shouldRide({ ...base, duty: { with: 'Loial the Ogier', paused: true, seen_at: Date.now() } }).ride, false,
+     'a holder whose body a raid or errand has claimed serves nobody: walk now');
   eq(servingCharacter({ with: 'Rizzo', seen_at: Date.now() }, CFG), 'Rizzo', 'the alternate while the holder is away');
 }
 

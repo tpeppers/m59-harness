@@ -21718,10 +21718,23 @@ export class Autopilot {
     const role = this.chaliceRole();
     if (!cfg || (role !== 'holder' && role !== 'alternate')) return false;
     if (this.townTrip || this.travelInterrupted() || this.suspendedJourney) return false;
-    // SOMEBODY ELSE'S ERRAND OWNS THE BODY (the holder's own supply trip, driven by DUM):
-    // finish a step already in flight, but never start one.
-    if (!this._chaliceServe && this.busyStatus?.()) return false;
     const store = this.chaliceStore();
+    // SOMEBODY ELSE OWNS THE BODY — the holder's own supply trip (busy), or a script that has
+    // claimed its work or movement (a raid posting it elsewhere): finish a step already in
+    // flight, never start one, and say so on the duty record, so travellers walk at once
+    // instead of waiting out `wait_ms` for a server who is not coming.
+    const taken = !!(this.busyStatus?.() || this.facultyHeld?.('work') || this.facultyHeld?.('movement'));
+    if (!this._chaliceServe && taken) {
+      if (!this._chalicePausedSaid) {
+        this._chalicePausedSaid = true;
+        try { store.setDuty({ paused: true }); } catch {}
+      }
+      return false;
+    }
+    if (this._chalicePausedSaid) {
+      this._chalicePausedSaid = false;
+      try { store.setDuty({ paused: false }); } catch {}
+    }
     const me = this.who();
     const now = Date.now();
     const cup = this.chaliceInPack();
