@@ -8,6 +8,8 @@
 //   node tools/m59-shadow-run.mjs farm-loop-test --dry         say what it would do, touch nothing
 //   node tools/m59-shadow-run.mjs farm-loop-test --from run    the fleet is already up, just run it
 //   node tools/m59-shadow-run.mjs farm-loop-test --no-skills   a bare body, to isolate geometry
+//   node tools/m59-shadow-run.mjs farm-loop-test --no-items --no-guild   no pack, gear or guild
+//   node tools/m59-shadow-run.mjs farm-loop-test --trim-items  also delete what prod does not carry
 //
 // WHAT THIS IS FOR. "Will twenty-three production characters survive this errand" is a
 // question nobody should answer by running it on production. A shadow fleet is the answer:
@@ -29,7 +31,8 @@
 //
 //   preflight  prod is readable, the test server is up, the maintenance socket answers,
 //              and the fleet about to be written is NOT prod.
-//   snapshot   read production READ-ONLY: names, attributes, max health, gear, abilities.
+//   snapshot   read production READ-ONLY: names, attributes, max health, abilities, the whole
+//              pack with amounts, what is worn, the purse, guild + rank, the hall's chests.
 //   build      a CONSTRUCTION broker (see below), then create, then dress.
 //   play       swap to an ordinary broker and wait for the characters to reach the world.
 //   run        compile the named FleetScript and drive the shadow fleet with it.
@@ -174,6 +177,17 @@ const sh = (cmd, args, { cwd = REPO, env = {}, label = '' } = {}) => new Promise
 
 const node = (tool, args, opts) => sh(process.execPath, [tool, ...args], opts);
 
+// THE SHADOW TOOL IS TOLD WHICH ROSTER, TOO. It keeps its snapshot, its sheets and the
+// credentials it writes beside the roster it is given, so a copy of it in a worktree still
+// builds the fleet whose passwords it holds — rather than a fresh roster in the worktree that
+// has none, where every existing account reads "exists, password not held" for ever.
+const shadowToolEnv = () => ({ M59_STATE_FILE: ROSTER });
+
+// Which dress flags this run passes through. Exported for the test: a flag the shim accepts
+// and silently does not forward is a flag that does nothing while reading as though it did.
+export const DRESS_FLAGS = ['--no-skills', '--no-items', '--trim-items', '--no-guild'];
+export const dressFlags = (args) => ['dress', ...DRESS_FLAGS.filter(f => args.includes(f))];
+
 // EVERY BROKER THIS FILE STARTS IS TOLD THREE THINGS, and leaving any of them out has cost
 // a session: which roster (or it holds someone else's fleet), which game server (or it
 // falls back to 5959), and which two ports (or `stop` quiesces production).
@@ -258,7 +272,7 @@ async function preflight() {
 async function snapshot() {
   stage(2, 'snapshot production (READ ONLY)');
   if (has('--skip-snapshot')) { say('  skipped (--skip-snapshot): using the snapshot on disk'); return true; }
-  const r = await node(SHADOW_TOOL, ['snapshot'], { cwd: dirname(dirname(SHADOW_TOOL)) });
+  const r = await node(SHADOW_TOOL, ['snapshot'], { cwd: dirname(dirname(SHADOW_TOOL)), env: shadowToolEnv() });
   return r.code === 0;
 }
 
@@ -271,14 +285,14 @@ async function build() {
   if (up.code !== 0) return false;
 
   const cwd = dirname(dirname(SHADOW_TOOL));
-  const made = await node(SHADOW_TOOL, ['create'], { cwd });
+  const made = await node(SHADOW_TOOL, ['create'], { cwd, env: shadowToolEnv() });
   // `create` exits non-zero when ANY character failed, including ones that were already
   // there and correct. Read the fleet back instead of trusting the exit code — that is this
   // repository's own rule, and the reason `verify` is handed `call` at run time.
   if (made.code !== 0) say('  note: create reported failures — see the lines above');
 
-  const dressArgs = has('--no-skills') ? ['dress', '--no-skills'] : ['dress'];
-  const dressed = await node(SHADOW_TOOL, dressArgs, { cwd });
+  const dressArgs = dressFlags(argv);
+  const dressed = await node(SHADOW_TOOL, dressArgs, { cwd, env: shadowToolEnv() });
   if (dressed.code !== 0) { say('  dress FAILED'); return false; }
   return true;
 }
@@ -477,7 +491,7 @@ async function run(name, params) {
 if (import.meta.filename === process.argv[1]) {
 const positional = argv.filter((a, i) =>
   !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') &&
-                           !['--dry', '--list', '--no-skills', '--skip-snapshot', '--down'].includes(argv[i - 1])));
+                           !['--dry', '--list', '--skip-snapshot', '--down', '--no-settle', ...DRESS_FLAGS].includes(argv[i - 1])));
 const name = positional.find(a => !a.includes('=')) ?? null;
 const params = Object.fromEntries(positional.filter(a => a.includes('='))
   .map(a => { const i = a.indexOf('='); return [a.slice(0, i), a.slice(i + 1)]; }));

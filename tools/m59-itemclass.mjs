@@ -68,7 +68,10 @@ export function itemClassIndex({ koddb = KODDB, db = null } = {}) {
     const res = c.resources ?? {};
     const names = new Set();
     for (const [rk, rv] of Object.entries(res)) {
-      if (!/_name(_plural)?_rsc$/i.test(rk)) continue;
+      // `_name_one_rsc` / `_name_many_rsc` is MONEY's spelling of the same pair
+      // (numbitem/money.kod:19-20). Without it the one item every character carries —
+      // `shilling` — resolved to nothing, and a clone's purse was the thing it could not copy.
+      if (!/_name(_plural|_one|_many)?_rsc$/i.test(rk)) continue;
       if (rv?.kind !== 'string' || !rv.value) continue;
       names.add(norm(rv.value));
     }

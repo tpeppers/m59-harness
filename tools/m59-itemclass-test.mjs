@@ -87,6 +87,13 @@ if (!existsSync(KODDB)) {
     ok(r.ok && r.class === cls, `"${name}" -> ${cls}${r.ok && r.class !== cls ? ` (got ${r.class})` : ''}`);
   }
   ok(resolveItemClass('elderberry', real).stack === true, 'a reagent is a stack, so one object carries the pile');
+  // MONEY NAMES ITSELF WITH A DIFFERENT PAIR OF RESOURCES (money_name_one_rsc /
+  // money_name_many_rsc), so `shilling` — the one thing every character carries — used to
+  // resolve to nothing and a shadow clone could not be given a purse.
+  const coin = resolveItemClass('shilling', real);
+  ok(coin.ok && coin.class === 'Money' && coin.stack === true, '"shilling" -> Money, a stack');
+  ok(resolveItemClass('shillings', real).class === 'Money', 'and so does the plural');
+  ok(resolveItemClass('Chalice of the Rain', real).class === 'Chalice', '"Chalice of the Rain" -> Chalice');
   // Ambiguity is real here and must stay refused: creating Arsenic where prod carried a
   // Flask is a poisoning, not a rounding error.
   ok(resolveItemClass('flask', real).ok === false, '"flask" is genuinely ambiguous in this kod and refuses');

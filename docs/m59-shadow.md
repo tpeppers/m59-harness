@@ -10,6 +10,7 @@ node tools/m59-shadow-run.mjs farm-loop-test          # build a fresh copy, then
 node tools/m59-shadow-run.mjs farm-loop-test --dry    # say what it would do, touch nothing
 node tools/m59-shadow-run.mjs --list                  # what can be run, pads included
 node tools/m59-shadow-run.mjs farm-loop-test --from run    # the fleet is up; just run it again
+node tools/m59-shadow-run.mjs farm-loop-test --no-items --no-guild   # skip the pack/gear and the guild
 ```
 
 `m59-shadow-run.mjs` is the whole bring-up in one command — the **FleetScript shim**. The
@@ -137,9 +138,10 @@ the keeper's policy, so a keeper errand nobody has thought of still reads as act
 ahead anyway and **says so**, because the old behaviour drove thirteen of twenty-three
 perfectly well — what was missing was anybody saying why the other ten ignored the errand.
 
-**The deeper fix is worth doing and is not done:** prod characters *have* reagents, so a
-shadow that starts with none is a less faithful mirror, not a more neutral one. Copying the
-reagent stock in `dress` would remove the shopping trip and the confound together.
+**The deeper fix is now in `dress` (2026-09-24):** prod characters *have* reagents, so a
+shadow that starts with none is a less faithful mirror, not a more neutral one. `dress` copies
+the whole pack, reagents included, so a fresh clone should no longer need the shopping trip —
+but the settle stays, because a keeper can still find another errand of its own.
 
 ## A SHADOW WITHOUT SKILLS ANSWERS THE WRONG QUESTION
 
@@ -162,8 +164,75 @@ Three parts, in different states:
 | | state |
 |---|---|
 | **abilities** (skills + spells) | **done.** `dress` grants each at the number prod actually has — 317 across 22 characters on the first run. `--no-skills` opts out deliberately |
-| **items** | **done for the common case.** `dress` recreates the recorded pack; `--no-items` opts out |
-| **guild and hall** | **half done.** The snapshot now records name, id, rank and rank title. Nothing yet recreates the guild on the lab |
+| **items** | **done 2026-09-24.** Every pack row by kod class and amount, the purse, the chalice; worn gear put on. `--no-items` opts out, `--trim-items` also deletes what prod does not carry |
+| **guild and hall** | **done 2026-09-24.** Prod's guild founded on the lab, every shadow member at prod's rank, hall 714 claimed, its three chests filled to prod's cached contents. `--no-guild` opts out |
+
+**Until 2026-09-24 the "items: done" row above was false.** The doc said `dress` recreated the
+recorded pack and that `--no-items` opted out; no copy of `m59-shadow.mjs` on disk had either.
+`dress` created only the wielded weapon — and created it on EVERY run, because it asked the
+construction broker (which plays nobody) for `inventory`, got nothing, and concluded nobody was
+armed. The snapshot's `equipment` list was always empty too: it read `eq.worn`, and the
+`equipment` tool answers `equipped`. The live shadow fleet that day held 3,769 shillings
+against prod's 57,244 and no chalice at all.
+
+## FULL FIDELITY — what `dress` now copies, and how
+
+The decisions live in [`tools/m59-shadow-fidelity.mjs`](../tools/m59-shadow-fidelity.mjs), which
+is committed and pure; `m59-shadow-fidelity-test.mjs` pins the replies it reads, the classes it
+picks and the exact maintenance-socket commands for a sample snapshot and lab state. The
+gitignored `m59-shadow.mjs` only reads prod and moves bytes.
+
+**Snapshot (prod, read-only).** Per character: `equipment` from `equipped` (an unresolved
+`<rsc undefined>` — measured on Zoot — is repaired from the same pass's inventory by item id);
+every `inventory` row with its amount and any non-normal grade; the purse; `guild status`.
+Once per fleet: the guild's name, ten rank titles, roster with ranks, master and hall password
+(never printed), plus the hall's **chests and rent credit from prod's own cache**
+(`<prod root>/substrate/storage/chests/*.json`, `rent.json`) — a chest's contents are never
+pushed, so the cached reading is the only one there is, and it is dated in the snapshot.
+`guild` is allowed on the prod side for actions `status/list/halls/may` only.
+
+**Slots are stable.** Shadows were assigned by fleet-row index, and the row order moves — prod
+gained hk3 and reordered, which would have re-pointed Aaaa (built as Statler) at Floyd.
+`assignShadowSlots` keeps every agent in the slot the previous snapshot gave it; newcomers take
+the lowest free slot, and a departed agent's slot stays reserved.
+
+**Pack and gear (lab, DM).** Read back with `show` only, then: a stack is SET to prod's number
+(a purse is a state, not a top-up); a missing non-stack is created and handed over with
+`NewHold`; a worn item is put on with `send object <player> TryUseItem what OBJECT <item>` —
+`UserUseItem`'s own path (user.kod:4629), so slot conflicts are the game's; a worn item prod
+is not wearing is taken off with `TryUnuseItem` and stays in the pack. Surplus is **reported**
+and deleted only under `--trim-items`. Afterwards the lab is read again and re-planned — any
+residue is printed as STILL DIFFERENT (e.g. a `TryUseItem` the server refused for an offline
+body), because no error has never meant success here.
+
+**Names are never guessed.** `shilling` now resolves (`Money` names itself with
+`_name_one_rsc`/`_name_many_rsc`, which `m59-itemclass.mjs` did not index). `flask`/`wand` stay
+ambiguous and are reported. **`scroll` is refused**: every real scroll is one of fifteen
+subclasses that name themselves only once identified (`_label_name_rsc`), and the base
+`Scroll` is a scroll of light — creating it would be a guess wearing a class name. An
+uncommon long sword or an unidentified hammer is created as its class and reported
+APPROXIMATED (its attributes are not on the wire). The chalice is an ordinary `Chalice` in
+Loial's shadow's pack; its charges are rolled fresh (3-5), not copied.
+
+**The guild (lab, DM), from the kod.** A player founds a guild with
+`Create(&Guild,#master=…,#guildname=…)` (user.kod:1695); the admin socket can pass only one
+quoted string, last, as a TEMP string, so the name goes in as a **dynamic resource**
+(`create resource`), exactly as `m59-scene-guilds.mjs` already does for its temporary lab
+guilds. At most nine blakod parms per `create` — the admin parser writes into a 10-slot array
+with no bound check (adminfn.c:45, :849) — so the ten titles are `set` afterwards. Then
+`piMature 0` (a hall refuses an immature guild), `piRentDue` = minus prod's credit,
+`piGuildRejoinTimestamp 0` and `InductNewMember` per member, `ChangeRank` to prod's rank (no
+promoter, so no cap check; prod's two lieutenants are the cap), and
+`ClaimGuildHall oGuild … rep … password RESOURCE …` on hall 714 — what renting does once paid
+(user.kod:1827). The chests are the three `Chest` objects in the hall's `plActive` at r20c4,
+r18c2, r18c6 (ghall/guildh14.kod:518); items go in with `NewHold`. Re-running reuses a guild of
+prod's name the shadows already belong to, inducts nobody twice, and never takes a hall owned
+by another guild.
+
+**Not copied, deliberately or because it cannot be:** bank balances (prose, stale, and a
+per-account ledger nothing here writes); item attributes and charges; which spell an
+unidentified scroll holds; the rent counter and maintenance timer phase; shield colours; a
+character prod has with no attribute sheet (`create` still refuses it — hk3 on 2026-09-24).
 
 **The save/load code cannot do the reading half, and that is worth knowing before reaching for
 it.** `m59-scene-loadout.mjs` captures a player's carried items as portable native state, which
@@ -181,7 +250,7 @@ wire sends back — covering 324 item classes and 332 names. Singular *and* plur
 because `Herbs` is named `herb` and pluralised `herbs` and a table built from one misses the
 other. Seven names are genuinely ambiguous and **all seven refuse rather than guess**: `flask`
 is `Arsenic`, `Flask` or `DenialPotion`, and creating the first where prod carried the second is
-a poisoning, not a rounding error. `m59-itemclass-test.mjs` (30) pins it.
+a poisoning, not a rounding error. `m59-itemclass-test.mjs` (33) pins it.
 
 **A stack is one object with a count, not N objects** — `piNumber` is the pile, and sixty
 separate `Herbs` would bury a fourteen-slot pack. `amount: 0` on the wire is the "not a stack"
@@ -205,6 +274,13 @@ action added upstream stays refused until somebody decides it is a read.
 `tools/m59-shadow.mjs` is **gitignored on purpose** — it carries the shape of a real roster —
 so it lives in whichever checkout built the fleet and **does not travel with a deploy**. The
 shim looks for it beside itself, then `--shadow-tool`/`M59_SHADOW_TOOL`, then the deploy.
+
+The shim hands it the roster as `M59_STATE_FILE`, and the tool keeps its snapshot, sheets and
+chatter file **beside that roster** (`dirname(dirname(roster))`). So a copy in a worktree still
+builds the fleet whose passwords it holds, instead of starting a fresh roster there in which
+every existing account reads "exists, password not held" for ever. It refuses a roster that is
+not a `shadow.json`, so a shell left pointing at `prod.json` cannot have shadow credentials
+merged into it.
 
 A roster file **is** the credential store. `set account <n> password` does not work on this
 server; it was tried. An account whose password is no longer held is unreachable for ever, and
