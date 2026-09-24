@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { RoomGeometry, applySectorHeights } from './m59-roo.mjs';
 import { loadMap } from './m59-map.mjs';
 import { doorsFor } from './m59-doorplan.mjs';
-import { waitForDoorOpen } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
 
 let closed;
 export const anchors = [[2,32],[5,28],[17,10],[7,8],[18,4]];
@@ -122,6 +122,23 @@ export function bakedCrossing(from, to, sector) {
   if (out.length && out[0].row === from[0] && out[0].col === from[1]) out.shift();
   return out.length ? out : null;
 }
+// STAND UP BEFORE EVERY WALK AND EVERY PRESS — THE THIRD TIME THIS HAS HAD TO BE WRITTEN.
+//
+// A resting character carries PFLAG_NO_MOVE (player.kod:1162): the server snaps every move
+// back and answers every `go` with "You are unable to go anywhere." without ever asking the
+// room. `standBeforeGo` exists for exactly this and every crossing in m59-session-walk uses
+// it; this file called `c.go()` bare. Measured 2026-09-24 on prod: Kermit and Robin sat on
+// door 55's trigger (r18c10) for eight and three hours, 1,900 failed journeys between them,
+// each press refused while Zoot stood up on the same square and walked out. Animal, seated
+// on the far side at r19c10, could not walk to door 59 (`no_ground_gained`) for twelve.
+// A character already ON the trigger never walks, so nothing else ever stood it up.
+//
+// Per attempt, not once: the keeper sits between journeys, and a redundant stand is one packet.
+async function standUp(s, isInterrupted) {
+  if (typeof s.standBeforeGo === 'function')
+    await s.standBeforeGo({ shouldCancel: isInterrupted }).catch(() => null);
+}
+
 export async function guildPassage(k, destination, isInterrupted) {
   const s = k.s, c = s.need();
   const guard = () => { if (isInterrupted()) throw new Error('guild passage paused for survival'); };
@@ -132,6 +149,7 @@ export async function guildPassage(k, destination, isInterrupted) {
     if (section < 0) throw new Error('guild position is outside the known passage');
     const inward = section < destination, door = doors[inward ? section : section - 1];
     const [trigger, across] = inward ? door.inward : door.outward;
+    await standUp(s, isInterrupted);
     const approach = await s.walkTo(trigger[1], trigger[0], { maxSteps: 50, hardCap: 60, beforeMutation: guard });
     await s.confirmPosition?.();
     if (c.self.row !== trigger[0] || c.self.col !== trigger[1]) {
@@ -139,9 +157,10 @@ export async function guildPassage(k, destination, isInterrupted) {
         at: { row: c.self.row, col: c.self.col }, target: { row: trigger[0], col: trigger[1] } });
       throw new Error(`guild door ${door.sector} trigger not reached`);
     }
-    let crossed = false;
+    let crossed = false, refused = 0;
     for (let attempt = 0; attempt < 3 && !crossed; attempt++) {
       if (isInterrupted()) throw new Error('guild passage paused for survival');
+      await standUp(s, isInterrupted);
       const since = c.evSeq;
       if (door.secret) {
         if (!(await k.sayHallPassword()).ok) throw new Error('guild chest key unavailable');
@@ -158,7 +177,11 @@ export async function guildPassage(k, destination, isInterrupted) {
       const opening = await waitForDoorOpen(c, plan, { since, cancelled: isInterrupted });
       if (isInterrupted()) throw new Error('guild passage paused for survival');
       if (!opening.opened) {
-        k.note?.('guild door opening not verified', { sector: door.sector, reason: opening.reason });
+        const cantGo = refusedToGo(c, since);
+        if (cantGo) refused++;
+        k.note?.('guild door opening not verified', { sector: door.sector,
+          reason: cantGo ? 'the server refused the press: "You are unable to go anywhere." ' +
+                           '(seated, held or webbed), not a slow door' : opening.reason });
         if (attempt < 2) {
           const retryAt = Date.now() + 5200;
           while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
@@ -202,7 +225,8 @@ export async function guildPassage(k, destination, isInterrupted) {
         while (Date.now() < retryAt && !isInterrupted()) await sleep(100);
       }
     }
-    if (!crossed) throw new Error(`guild door ${door.sector} could not be crossed`);
+    if (!crossed) throw new Error(`guild door ${door.sector} could not be crossed` +
+      (refused ? `: the server refused ${refused} of 3 presses as "unable to go anywhere"` : ''));
   }
   throw new Error('guild passage exceeded its door limit');
 }

@@ -163,3 +163,62 @@ test('an applied ceiling state is visible to doorStates(), not just to its own W
   assert.ok(String(open).includes('190'),
     'the recorded key names the height the server actually reported');
 });
+
+// A SEATED CHARACTER ON THE TRIGGER, 2026-09-24. Kermit and Robin rested on door 55's outward
+// trigger (r18c10) and every press came back "You are unable to go anywhere." — PFLAG_NO_MOVE,
+// set for as long as a character rests — while the passage reported "no matching opening
+// event" for eight hours. Already on the trigger, they never walked, so nothing stood them up.
+// Animal, seated at r19c10, could not walk to door 59 at all. The server here is modelled the
+// way user.kod is: a seated body neither walks nor presses, and `stand` is the only way out.
+function seatedHall(start, { standWorks = true } = {}) {
+  const { map, g, observed } = fresh(), opened = [], log = [];
+  let seated = true, stands = 0;
+  const c = { self: { ...start }, room: { id: 2572, sectorHeights: observed }, evSeq: 0, events: [],
+    waitFor: async ({ since, match }) => ({ events: c.events.filter(e => e.seq > since && (!match || match(e))) }) };
+  const emit = e => c.events.push({ ...e, at: Date.now(), seq: ++c.evSeq });
+  const open = id => {
+    opened.push(id); observed.set(id, { type: 5, height: ({ 59:190,55:230,53:240,3:250 })[id] });
+    emit({ kind: 'sector-height', sector: id, room: 2572, height: observed.get(id).height, speed: 0 });
+    applyCeilingDoors(map, 714, observed);
+  };
+  c.go = () => {
+    if (seated) return emit({ kind: 'message', text: 'You are unable to go anywhere.' });
+    const { row, col } = c.self;
+    if (col === 28 && [3,4].includes(row)) open(59);
+    else if (col === 10 && [18,19].includes(row)) open(55);
+    else if (col === 13 && [11,13].includes(row)) open(53);
+  };
+  const s = { need: () => c, world: { geometry: g }, pacer: { submit: async (_kind, fn) => fn() },
+    async standBeforeGo() { stands++; if (standWorks) seated = false; },
+    async step(col, row) { if (seated) return { moved: false, reason: 'snapped back' };
+      c.self = { row, col }; return { moved: true }; },
+    async walkTo(col, row) {
+      if (seated && (c.self.row !== row || c.self.col !== col)) return { reason: 'no_ground_gained' };
+      c.self = { row, col }; observed.clear(); applyCeilingDoors(map, 714, observed);
+    } };
+  const k = { s, note: (what, facts) => log.push({ what, ...facts }), sayHallPassword: async () => ({ ok: true }) };
+  return { k, c, opened, log, stands: () => stands };
+}
+
+test('a character seated on the hall door trigger stands up and leaves', async () => {
+  const { k, c, opened, stands } = seatedHall({ row: 18, col: 10 });
+  await guildPassage(k, 0, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col), 0, 'out through 55 and 59 to the foyer');
+  assert.deepEqual(opened, [55, 59]);
+  assert.ok(stands() >= 2, 'stood before each leg, not once per journey');
+});
+
+test('a character seated beyond the hall door can walk to the entrance trigger', async () => {
+  const { k, c } = seatedHall({ row: 19, col: 10 });
+  await guildPassage(k, 0, () => false);
+  assert.equal(guildSection(c.self.row, c.self.col), 0, 'Animal\'s square, r19c10, reaches the foyer');
+});
+
+test('a press the server refuses is named as a refusal, not a slow door', async () => {
+  const { k, log } = seatedHall({ row: 18, col: 10 }, { standWorks: false });
+  await assert.rejects(guildPassage(k, 0, () => false),
+    /guild door 55 could not be crossed: the server refused 3 of 3 presses as "unable to go anywhere"/);
+  const notes = log.filter(e => e.what === 'guild door opening not verified');
+  assert.equal(notes.length, 3);
+  assert.ok(notes.every(e => /unable to go anywhere/.test(e.reason)), 'each note says the server refused');
+});

@@ -59,7 +59,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // The door table and the decision about which door is in the way. Pure and file-backed; it
 // answers empty when a checkout has no table, so this is inert wherever there are no doors.
 import { doorsFor } from './m59-doorplan.mjs';
-import { waitForDoorOpen } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
 import { guildPassage, guildSection } from './m59-guild-passage.mjs';
 
 export function sessionWalkPrototype(deps) {
@@ -4833,11 +4833,18 @@ export function sessionWalkPrototype(deps) {
                            (walked?.reason ? ` (${walked.reason})` : '') };
       }
 
+      // Stand first: a seated press is refused before the room ever hears it (see
+      // standBeforeGo, and m59-guild-passage's standUp for the 2026-09-24 incident).
+      if (this.standBeforeGo)
+        await this.standBeforeGo({ shouldCancel: () => cancelled() || isInterrupted() }).catch(() => null);
       const since = c.evSeq;
       await (this.pacer?.submit ? this.pacer.submit('move', () => c.go()) : c.go())
         .catch(() => {});
       const opening = await waitForDoorOpen(c, pick, { since, cancelled });
       if (cancelled()) return { opened: false, sector: pick.sector, reason: 'movement cancelled' };
+      if (!opening.opened && refusedToGo(c, since))
+        opening.reason = 'the server refused the press: "You are unable to go anywhere." ' +
+                         '(seated, held or webbed), not a door that stayed shut';
       if (opening.opened) {
         return { opened: true, sector: pick.sector, name: pick.name, at: target,
                  animation_ms: opening.animation_ms,

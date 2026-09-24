@@ -11,7 +11,7 @@
 // worked and strand the next character.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { waitForDoorOpen } from './m59-door-wait.mjs';
+import { waitForDoorOpen, refusedToGo } from './m59-door-wait.mjs';
 
 let pass = 0, fail = 0;
 const ok = (what, cond, detail = '') => {
@@ -47,9 +47,10 @@ const scopedDoorsFor = (room, at) => doorsFor(room, at, { table: DOORS });
 
 let clock = 0;
 const sleep = async ms => { clock += ms; };
-const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen',
+const Session = new Function('doorsFor', 'setTimeout', 'Date', 'waitForDoorOpen', 'refusedToGo',
   `return class { ${body} }`)(scopedDoorsFor, (fn, ms) => { clock += ms; fn(); },
-    { now: () => clock }, (c, p, opts) => waitForDoorOpen(c, p, { ...opts, now: () => clock, sleep }));
+    { now: () => clock }, (c, p, opts) => waitForDoorOpen(c, p, { ...opts, now: () => clock, sleep }),
+    refusedToGo);
 
 /** A body in room 714, with every live thing the opener touches and nothing else. */
 function body714({ at = { row: 4, col: 28 }, sectorMoves = true, cancel = false,

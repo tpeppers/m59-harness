@@ -37,3 +37,15 @@ export async function waitForDoorOpen(c, plan, { since, cancelled = () => false,
     return { opened: false, reason: 'door closed before crossing' };
   return { opened: true, animation_ms: duration, waited_ms: now() - began };
 }
+
+// A PRESS THE SERVER REFUSED IS NOT A DOOR THAT STAYED SHUT.
+// `UserGo` (user.kod:5657) answers "You are unable to go anywhere." when PFLAG_NO_MOVE is
+// set -- which `ResetPlayerFlagList` (player.kod:1162) does for as long as the character
+// is RESTING -- and never reaches the room's SomethingTryGo at all. From the door's side
+// that is indistinguishable from a slow door, so without this a seated character reports
+// "no matching opening event" for ever. Kermit and Robin did, 1,900 times, 2026-09-24.
+export const CANT_GO = /unable to go anywhere/i;
+export function refusedToGo(c, since) {
+  const events = c.eventsSince?.(since) ?? (c.events ?? []).filter(e => e.seq > since);
+  return events.some(e => e.kind === 'message' && CANT_GO.test(String(e.text ?? '')));
+}

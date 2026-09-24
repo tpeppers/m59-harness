@@ -1546,6 +1546,18 @@ into the inner hall, where the nearest operable sector is a lift, not the
 entrance. The known section sequence chooses the exit doors and verifies each
 crossing; a refused passage returns its reason without trying that detour.
 
+**Stand before every press, including in the hall.** `guildPassage` and
+`openOperableDoor` sent a bare `go`. A seated character carries PFLAG_NO_MOVE, so
+the server answers "You are unable to go anywhere." and never asks the room. A
+character already on a trigger never walks, so nothing stood it up. On 2026-09-24
+Kermit and Robin sat on door 55's outward trigger (r18c10) for 8 and 3 hours, about
+1,900 failed journeys, all reported as `no matching opening event`, while Zoot stood
+on the same square and walked out. Animal, seated at r19c10, could not walk to door
+59 for 12 hours. The two fleet-mates facing each other across the doorway were the
+visible symptom, not the cause. Both callers now stand before each walk and press,
+and a refused press is reported as a refusal. Blink would not have helped:
+resting also sets PFLAG_NO_MAGIC.
+
 The door observer belongs to each Session login, including recovery reconnects.
 Attaching it only during keeper startup left Camilla's replacement client recording
 opening packets while its movement geometry stayed shut. Replacement clients reset
