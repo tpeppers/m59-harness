@@ -1,0 +1,393 @@
+// CHALICE FARMING: A FREE RESCUE HOME FOR EVERY TOWN TRIP, SERVED BY ONE CHARACTER.
+//
+// The operator's plan, 2026-09-23. One character (the HOLDER) carries the fleet's Chalice of
+// the Rain and stands by a STATION room. A farmer starting a town trip walks to the station,
+// is handed the Chalice, applies it (one sip starts a power-1 Rescue, chalice.kod:189), drops
+// it on the floor, and the holder picks it back up. The farmer lands in the guild hall
+// 15-25 seconds later instead of walking home, and pays the holder a small tip if it can.
+//
+// WHY THE STATION MUST BE A REFILL ROOM. The Chalice refills to its own maximum whenever it
+// is picked up off the floor of a room whose `GetShalilleBonus() > 20` — every forest or
+// jungle room (chalice.kod:71; m59-research reports/chalice-of-the-rain.md lists all 73). A
+// hand-off that ends in drop-and-pick-up in such a room therefore never drains the cup, and
+// a cup on its LAST sip is deleted when it is drunk (chalice.kod:189), so a station that
+// does not refill would eventually destroy the fleet's only one. Outside Castle Victoria
+// (room 2, `castle1c.kod:30`, MOUNTAIN/FOREST) qualifies and is the default.
+//
+// WHERE RESCUE LANDS FROM THERE. `DoRescue` goes to the guild hall when it is in the same
+// region as the drinker (rescue.kod:124-139). Room 2 and every mainland hall return
+// RID_DEFAULT from `Room.GetRegion` (room.kod:900-943) — only halls 12, 13 and 15 override
+// it, to Ko'catan — so a fleet guilded to the Bookmaker's hall (714) lands in 714.
+//
+// THE ALTERNATE. The holder has its own trips (a room caster runs out of reagents). Before
+// one it hands the cup to the ALTERNATE, who serves in its place and may not start a town
+// trip of its own until the holder is back and has the cup again — two keepers both out of
+// the castle is a fleet with no chalice at all.
+//
+// THIS FILE IS PURE PLUS ONE SMALL FILE STORE. The keepers are separate processes and have
+// no other way to see each other, so the ticket queue and the duty record live in one JSON
+// file under a `wx` lock — the same arrangement m59-spotclaims.mjs uses for walls. Everything
+// that talks to the game is in m59-autopilot.mjs; this file decides and remembers.
+//
+// `m59-chalice-test.mjs` pins the config, the roles, the store and the two plans offline.
+
+import {
+  closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync,
+  statSync, unlinkSync, writeFileSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { unitCost, scoreItem } from './m59-overfarm.mjs';
+
+// ------------------------------------------------------------------------------ the item
+export const CHALICE = Object.freeze({
+  name: 'chalice of the rain',
+  match: /chalice/i,
+  // chalice.kod: vrName "chalice of the rain", viWeight 20, viBulk 20. Both ceilings count:
+  // a pack full by bulk refuses it exactly as a pack full by weight does.
+  weight: 20, bulk: 20,
+});
+
+// Every room whose terrain makes `GetShalilleBonus() > 20`, i.e. every room a drop and a
+// pick-up refills the cup in. From reports/chalice-of-the-rain.md ("Every map that refills
+// it"); a station outside this set is refused rather than trusted, because it would drain
+// the cup to its last sip and the last sip deletes it.
+export const REFILL_ROOMS = Object.freeze(new Set([
+  2, 4, 6, 24, 26, 28, 48, 49, 200, 511, 516, 521, 522, 531, 532, 533, 534, 535, 536, 537,
+  541, 542, 544, 545, 546, 547, 552, 554, 555, 556, 557, 562, 563, 564, 566, 567, 568, 574,
+  575, 576, 583, 584, 586, 587, 593, 596, 597, 603, 712, 1002, 1012,
+  2111, 2112, 2113, 2114, 2115, 2121, 2122, 2123, 2124, 2125, 2131, 2132, 2133, 2134, 2135,
+  2141, 2142, 2143, 2144, 2151, 2152, 2154,
+]));
+
+export const GUILD_HALL_ROOM = 714;
+
+// Beside the harness, not the working directory: every keeper of one deploy must share one
+// file whatever directory it was started from.
+const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', '.chalice');
+
+// ------------------------------------------------------------------------------ config
+export const CHALICE_DEFAULTS = Object.freeze({
+  enabled: false,
+  station_room: 2,
+  // Named, never derived: a character name on a shared server is an instruction, and the
+  // private strategy file is where this machine keeps its instructions.
+  holder: null,
+  alternate: null,
+  // Where the holder goes back to between hand-offs (a posted caster's own room), and where
+  // an on-duty alternate waits. null means "wherever it already is".
+  post_room: null,
+  // A traveller uses the chalice only when the station is on the way: no further than this
+  // many hops away, and nearer than the town it is heading for.
+  max_detour_hops: 2,
+  // How long a traveller stands at the station waiting for the cup before walking instead.
+  wait_ms: 180_000,
+  // Rescue lands 15-25s after the sip (rescue.kod:94); past this the walk is taken.
+  landing_ms: 45_000,
+  // How long the server waits for the traveller to show up, and then for the cup to hit
+  // the floor, before giving up on that ticket.
+  serve_ms: 90_000,
+  // THE TIP. Offered after the cup arrives, only out of money the trip does not need.
+  tip_amount: 300,
+  tip_min: 50,
+  // The holder hands the cup to the alternate once its own supply falls this low — a
+  // holder that is about to leave must not leave with the fleet's only chalice.
+  handover_below_casts: 12,
+  // A ticket older than this is abandoned, whoever holds it.
+  ticket_ttl_ms: 300_000,
+});
+
+const NUMBERS = {
+  station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
+  landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
+  tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
+};
+
+/**
+ * Normalise a strategy's answer. Unknown keys and unusable values are REPORTED, and an
+ * unusable value keeps the default rather than unsetting it (docs/m59-policy.md).
+ */
+export function normalizeChalice(cfg = null) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg))
+    return { ...CHALICE_DEFAULTS, problems: [] };
+  const out = { ...CHALICE_DEFAULTS, enabled: cfg.enabled !== false };
+  const problems = [];
+  for (const [k, v] of Object.entries(cfg)) {
+    if (k === 'enabled') continue;
+    if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
+    if (k === 'holder' || k === 'alternate') { out[k] = v == null ? null : String(v).trim() || null; continue; }
+    if (k === 'post_room') {
+      if (v == null) { out.post_room = null; continue; }
+      const n = Number(v);
+      if (Number.isInteger(n) && n > 0) out.post_room = n; else problems.push('post_room must be a room number');
+      continue;
+    }
+    const n = Number(v), [lo, hi] = NUMBERS[k];
+    if (!Number.isFinite(n) || n < lo || n > hi) { problems.push(`${k} must be between ${lo} and ${hi} (kept ${CHALICE_DEFAULTS[k]})`); continue; }
+    out[k] = n;
+  }
+  if (!REFILL_ROOMS.has(out.station_room)) {
+    problems.push(`station_room ${out.station_room} does not refill the chalice, so every sip ` +
+                  'would drain it toward the last one, which deletes it — chalice farming is OFF');
+    out.enabled = false;
+  }
+  if (!out.holder) { problems.push('no holder named — chalice farming is OFF'); out.enabled = false; }
+  if (out.alternate && sameName(out.alternate, out.holder)) {
+    problems.push('the alternate is the holder — no alternate'); out.alternate = null;
+  }
+  if (out.tip_min > out.tip_amount) out.tip_min = out.tip_amount;
+  return { ...out, problems };
+}
+
+export const sameName = (a, b) => a != null && b != null &&
+  String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+
+/** 'holder', 'alternate' or 'traveller'. Everybody not named is a traveller. */
+export function roleOf(character, cfg) {
+  if (!cfg?.enabled || !character) return null;
+  if (sameName(character, cfg.holder)) return 'holder';
+  if (sameName(character, cfg.alternate)) return 'alternate';
+  return 'traveller';
+}
+
+// ------------------------------------------------------------------------------ plans
+
+/**
+ * Should THIS town trip go by chalice? Pure: the keeper supplies the facts.
+ *
+ * `stationHops`/`targetHops` are from where the character stands now. The station has to be
+ * on the way — a farmer in the Valley of Ileria does not walk to Castle Victoria to save a
+ * walk to Barloque.
+ */
+export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
+                             carrying = false, duty = null, now = Date.now() } = {}) {
+  if (!cfg?.enabled) return { ride: false, why: 'chalice farming is off' };
+  if (role === 'holder') return { ride: false, why: 'the holder serves; its own trips are its own' };
+  if (role === 'alternate' && carrying)
+    return { ride: false, why: 'the alternate is on duty with the cup' };
+  if (carrying) return { ride: false, why: 'already carrying a chalice — nobody needs to hand one over' };
+  if (!Number.isFinite(stationHops)) return { ride: false, why: 'no route to the station' };
+  if (stationHops > cfg.max_detour_hops)
+    return { ride: false, why: `the station is ${stationHops} hops away (limit ${cfg.max_detour_hops})` };
+  if (Number.isFinite(targetHops) && stationHops >= targetHops)
+    return { ride: false, why: 'the town is no further than the station' };
+  const server = servingCharacter(duty, cfg, now);
+  if (!server) return { ride: false, why: 'nobody is on chalice duty right now' };
+  return { ride: true, server, why: `${server} is on duty at ${cfg.station_room}` };
+}
+
+/** Who is carrying the cup and serving, per the duty record. null when nobody is. */
+export function servingCharacter(duty, cfg, now = Date.now()) {
+  const d = duty ?? {};
+  if (!d.with) return cfg?.holder ?? null;          // never recorded: the holder, by default
+  if (d.lost) return null;
+  // A record nobody has refreshed for a long while is a keeper that stopped, not a server.
+  if (Number.isFinite(d.seen_at) && now - d.seen_at > 15 * 60_000) return null;
+  return d.with;
+}
+
+/**
+ * The tip: `tip_amount`, cut to what the trip can spare, or nothing below `tip_min`.
+ * `keep` is what the trip needs to hold on to — walking money and the shopping bill.
+ */
+export function tipPlan({ purse = 0, keep = 0, cfg = CHALICE_DEFAULTS } = {}) {
+  const spare = Math.max(0, Math.floor(Number(purse) || 0) - Math.max(0, Number(keep) || 0));
+  const amount = Math.min(Number(cfg.tip_amount) || 0, spare);
+  if (amount <= 0 || amount < (Number(cfg.tip_min) || 0))
+    return { amount: 0, why: spare <= 0 ? 'no money beyond what the trip needs — offer-nothing'
+                                       : `only ${spare} spare, under the ${cfg.tip_min} minimum — offer-nothing` };
+  return { amount, why: amount < cfg.tip_amount ? `cut to ${amount}: that is all the trip can spare` : 'the standard tip' };
+}
+
+/**
+ * WHAT TO PUT DOWN SO THE CUP FITS.
+ *
+ * After overfarming a pack is full by design, and an enfeeble lowers might and with it the
+ * capacity (1700 + might*20, player.kod:10456), so a pack that fitted at the farm may not
+ * at the station. The chalice needs 20 weight AND 20 bulk.
+ *
+ * Candidates are ranked by the overfarm score — shillings per unit of binding cost times the
+ * operator's preference — cheapest first, exactly the order overfarming evicts in. Protected
+ * items, unrankable items (no price or no weight: unknown is not worthless) and anything
+ * named in `never` are not candidates at any score. A partial stack is dropped when that is
+ * enough. Returns `{drops, freed, enough}`; `enough: false` means even every candidate would
+ * not make room, and the caller should walk instead of giving its whole pack away.
+ */
+export function planRoom({ pack = [], roomFor = null, need = CHALICE, protect = [],
+                           never = [], policy = undefined } = {}) {
+  if (!roomFor) return { drops: [], freed: { weight: 0, bulk: 0 }, enough: null,
+                         why: 'capacity is unreadable — try the hand-off and walk if it is refused' };
+  const short = { weight: Math.max(0, need.weight - roomFor.weight),
+                  bulk: Math.max(0, need.bulk - roomFor.bulk) };
+  if (short.weight <= 0 && short.bulk <= 0)
+    return { drops: [], freed: { weight: 0, bulk: 0 }, enough: true, why: 'already room' };
+  const barred = [...protect, ...never].map(x => String(x).toLowerCase());
+  const isBarred = n => barred.some(b => b && n.includes(b));
+  const ranked = [];
+  for (const it of pack) {
+    const name = String(it.name ?? '').toLowerCase();
+    if (!name || CHALICE.match.test(name) || /shilling/.test(name) || it.equipped || isBarred(name)) continue;
+    const s = scoreItem(name, policy);
+    const c = unitCost(name);
+    if (!s.rankable || !c.known) continue;
+    ranked.push({ ...it, name, score: s.score, weight: c.weight, bulk: c.bulk });
+  }
+  ranked.sort((a, b) => a.score - b.score);
+  const drops = [];
+  const freed = { weight: 0, bulk: 0 };
+  for (const it of ranked) {
+    if (freed.weight >= short.weight && freed.bulk >= short.bulk) break;
+    const have = Math.max(1, Number(it.amount) || 1);
+    let take = have;
+    // As few units as covers the worse of the two shortfalls.
+    const perW = it.weight || 0, perB = it.bulk || 0;
+    const needW = Math.max(0, short.weight - freed.weight), needB = Math.max(0, short.bulk - freed.bulk);
+    const units = Math.max(perW > 0 ? Math.ceil(needW / perW) : 0, perB > 0 ? Math.ceil(needB / perB) : 0);
+    if (units > 0) take = Math.min(have, units);
+    drops.push({ id: it.id, name: it.name, amount: take, partial: take < have, score: it.score });
+    freed.weight += take * perW; freed.bulk += take * perB;
+  }
+  const enough = freed.weight >= short.weight && freed.bulk >= short.bulk;
+  return { drops: enough ? drops : [], freed, enough, short,
+           why: enough ? `drop ${drops.length} cheapest item(s) to fit the chalice`
+                       : 'nothing droppable would make room — walk instead' };
+}
+
+// ------------------------------------------------------------------------------ the store
+//
+// ONE FILE, READ-MODIFY-WRITE UNDER A LOCK, because every writer is a different process.
+//
+//   { v: 1,
+//     duty:    { with, since, seen_at, lost, holder_away, why },
+//     tickets: [{ id, traveller, room, at, status, by, updated_at, note }] }
+//
+// `status`: open -> claimed -> handed -> dropped -> done, or abandoned. A relief ticket
+// (`kind: 'relief'`) is the holder asking the alternate to take the cup.
+
+const LOCK_TIMEOUT_MS = 3_000;
+const BROKEN_LOCK_MS = 5_000;
+const LOCK_WAIT = new Int32Array(new SharedArrayBuffer(4));
+
+export class ChaliceStore {
+  constructor({ directory = DEFAULT_DIR, namespace = 'default' } = {}) {
+    this.dir = join(resolve(String(directory)), String(namespace).replace(/[^\w.-]+/g, '_'));
+    this.path = join(this.dir, 'state.json');
+    this.lockPath = join(this.dir, '.lock');
+  }
+
+  read() {
+    try {
+      const s = JSON.parse(readFileSync(this.path, 'utf8'));
+      return { v: 1, duty: s.duty ?? {}, tickets: Array.isArray(s.tickets) ? s.tickets : [] };
+    } catch { return { v: 1, duty: {}, tickets: [] }; }
+  }
+
+  /** Apply `fn(state) -> result` atomically. `fn` mutates the state it is given. */
+  update(fn, now = Date.now()) {
+    mkdirSync(this.dir, { recursive: true });
+    const fd = this.#lock();
+    try {
+      const state = this.read();
+      const result = fn(state, now);
+      // Old tickets go, so the file cannot grow for ever.
+      state.tickets = state.tickets.filter(t =>
+        now - (t.updated_at ?? t.at ?? 0) < 60 * 60_000 &&
+        !(['done', 'abandoned'].includes(t.status) && now - (t.updated_at ?? 0) > 10 * 60_000));
+      const tmp = this.path + '.' + process.pid + '.tmp';
+      writeFileSync(tmp, JSON.stringify(state, null, 1));
+      renameSync(tmp, this.path);
+      return result;
+    } finally {
+      try { closeSync(fd); } catch {}
+      try { unlinkSync(this.lockPath); } catch {}
+    }
+  }
+
+  #lock() {
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        const fd = openSync(this.lockPath, 'wx');
+        writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+        fsyncSync(fd);
+        return fd;
+      } catch (e) {
+        if (e?.code !== 'EEXIST') throw e;
+        try {
+          const owner = JSON.parse(readFileSync(this.lockPath, 'utf8'));
+          const dead = owner?.pid && owner.pid !== process.pid && !pidAlive(owner.pid);
+          if (dead || Date.now() - statSync(this.lockPath).mtimeMs > BROKEN_LOCK_MS) unlinkSync(this.lockPath);
+        } catch {}
+        if (Date.now() >= deadline) throw new Error(`chalice store stayed locked for ${LOCK_TIMEOUT_MS}ms`);
+        Atomics.wait(LOCK_WAIT, 0, 0, 5);
+      }
+    }
+  }
+
+  // ---- travellers
+  request(traveller, { room, kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms } = {}, now = Date.now()) {
+    return this.update(s => {
+      expire(s, now, ttlMs);
+      const live = s.tickets.find(t => sameName(t.traveller, traveller) && t.kind === kind && isLive(t));
+      if (live) return { ...live };
+      const t = { id: `${kind}-${now}-${Math.random().toString(36).slice(2, 7)}`, kind, traveller,
+                  room, at: now, status: 'open', by: null, updated_at: now };
+      s.tickets.push(t);
+      return { ...t };
+    }, now);
+  }
+
+  ticket(id) { return this.read().tickets.find(t => t.id === id) ?? null; }
+
+  mark(id, status, extra = {}, now = Date.now()) {
+    return this.update(s => {
+      const t = s.tickets.find(x => x.id === id);
+      if (!t) return null;
+      Object.assign(t, extra, { status, updated_at: now });
+      return { ...t };
+    }, now);
+  }
+
+  // ---- servers
+  /** The oldest open ticket of `kind`, claimed for `by`; null when there is none. */
+  claimNext(by, { kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms } = {}, now = Date.now()) {
+    return this.update(s => {
+      expire(s, now, ttlMs);
+      const t = s.tickets.filter(x => x.kind === kind && x.status === 'open' && !sameName(x.traveller, by))
+        .sort((a, b) => a.at - b.at)[0];
+      if (!t) return null;
+      Object.assign(t, { status: 'claimed', by, updated_at: now });
+      return { ...t };
+    }, now);
+  }
+
+  openCount(kind = 'ride') { return this.read().tickets.filter(t => t.kind === kind && t.status === 'open').length; }
+
+  // ---- duty
+  duty() { return this.read().duty ?? {}; }
+
+  setDuty(patch, now = Date.now()) {
+    return this.update(s => { s.duty = { ...s.duty, ...patch, seen_at: now }; return { ...s.duty }; }, now);
+  }
+}
+
+const isLive = t => !['done', 'abandoned'].includes(t.status);
+
+function expire(s, now, ttlMs) {
+  for (const t of s.tickets)
+    if (isLive(t) && now - (t.updated_at ?? t.at) > ttlMs)
+      Object.assign(t, { status: 'abandoned', note: 'expired', updated_at: now });
+}
+
+function pidAlive(pid) {
+  try { process.kill(Number(pid), 0); return true; }
+  catch (e) { return e?.code === 'EPERM'; }
+}
+
+/** The store a keeper should use, scoped to its fleet. */
+export function chaliceStoreFor({ fleet = null, directory = null } = {}) {
+  return new ChaliceStore({
+    directory: directory || process.env.M59_CHALICE_DIR || DEFAULT_DIR,
+    namespace: fleet || process.env.M59_FLEET || 'default',
+  });
+}

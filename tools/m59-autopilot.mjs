@@ -70,6 +70,8 @@ import { arenaCall } from './m59-chatter.mjs';
 import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
+         tipPlan, planRoom, chaliceStoreFor } from './m59-chalice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -4400,6 +4402,9 @@ export class Autopilot {
       ...this.guildWantedNames(),
       ...this.stockpileKeptNames(),
       ...this.chestSourcedNames(),
+      // The fleet's chalice is never sold, eaten or evicted for loot. The hand-off drops it
+      // deliberately, by id, which none of the protect lists govern.
+      ...(this.chaliceCfg ? [CHALICE.name] : []),
     ].map(String).filter(Boolean))];
   }
 
@@ -8131,7 +8136,8 @@ export class Autopilot {
     // Explicit orders enter through travelJob/goTravelling and retire the old
     // objective there. Keeper rungs (including provisioning) are subordinate to
     // an existing suspended objective, even if they use ordinary travel().
-    const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop, ...sessionOpts } = opts ?? {};
+    const { holdBetweenRooms = true, recoveryDetour = !!this.suspendedJourney, onHop,
+            chalice: _chalice, chaliceRoom: _chaliceRoom, ...sessionOpts } = opts ?? {};
     // NOTHING TRAVELS TO THE UNDERWORLD, AND A JOB HOLDING IT MUST BE DROPPED RATHER THAN
     // RETRIED. The gate in m59-travelgate.mjs says the same thing for the broker's `travel`
     // tool and for fleetScript, and it is repeated here because the KEEPER's own travel does
@@ -8174,7 +8180,13 @@ export class Autopilot {
     //
     // Silence is the old behaviour: with no `confineRooms` this costs one array check.
     const confine = Array.isArray(this.policy?.confineRooms) ? this.policy.confineRooms : null;
-    if (confine?.length && !confine.map(Number).includes(Number(room))) {
+    // THE ONE EXCEPTION IS CHALICE DUTY, and only to its own rooms: the station, the post,
+    // or the room a hand-off was arranged in. A confined holder that could not step out to
+    // the station would hold the fleet's only chalice and never hand it to anybody.
+    const chaliceRooms = opts?.chalice && this.chaliceCfg
+      ? [this.chaliceCfg.station_room, this.chaliceCfg.post_room, opts.chaliceRoom].filter(r => r != null).map(Number)
+      : [];
+    if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))) {
       this.note('refused to leave the confinement', {
         wanted: Number(room), confined_to: confine.map(Number),
         here: this.s.world?.room?.num ?? null, doing: this.doing,
@@ -11848,7 +11860,9 @@ export class Autopilot {
     return describeCommitment({
       // The director must also leave the keeper's own shopping operation alone
       // between travel legs, while it quotes, trades, banks and restocks.
-      errand: this.errand ?? (this.townTrip ? { kind: 'selling and restocking',
+      errand: this.errand ?? (this.chaliceBusy?.() ? { kind: 'chalice hand-off',
+        at: this._chaliceServe?.since ?? this.townTrip?.startedAt ?? Date.now() } : null)
+        ?? (this.townTrip ? { kind: 'selling and restocking',
         at: this.townTrip.startedAt } : null),
       inert: this.inertStatus(),
       parked: this.parkStatus(),
@@ -14580,6 +14594,9 @@ export class Autopilot {
 
     // Answer people and take hand-outs before anything else. Cheap, and a player
     // trying to help should not have to wait for a fight to finish.
+    // CHALICE FARMING'S CONFIGURATION comes from a private strategy and is re-read at most
+    // every 30s; everything that consults it reads the cached copy synchronously.
+    await this.refreshChaliceConfig().catch(() => {});
     await this.social().catch(e => this.note('social failed', { why: e.message }));
 
     // GIVE BACK ANY SIGNET RING WHOSE OWNER IS STANDING HERE.
@@ -18396,6 +18413,10 @@ export class Autopilot {
   }
 
   async passErrand(ctx) {
+    // THE CHALICE HOLDER AND ALTERNATE serve before anything else directional — a
+    // traveller is standing at the station waiting on them.
+    if (await this.chaliceDuty().catch(e => { this.note('chalice duty failed', { why: e.message }); return false; }))
+      return HANDLED;
     // Acquire shelter even at full health; a stationary caster must not wait for
     // the first hit before finding its post. Survival has already had its turn.
     if (this.isRoomEnchantPost()) {
@@ -20951,6 +20972,10 @@ export class Autopilot {
 
     const takes = [].concat(cfg.reagents ?? Autopilot.DONATION_TAKES)
       .map(x => String(x).trim().toLowerCase()).filter(Boolean);
+    // CHALICE FARMING PASSES THROUGH HERE BOTH WAYS: the cup itself, handed between the
+    // holder and the alternate, and the traveller's tip. Refusing either would cancel a
+    // hand-off the fleet arranged, with every log on both sides reading "declined".
+    if (this.chaliceCfg) takes.push('chalice', 'shilling');
     const offered = (t.theirs || []).map(i => String(i.name || '').toLowerCase());
 
     const refuse = async (why) => {
@@ -21199,6 +21224,499 @@ export class Autopilot {
                              'so this is either a slow land or a refused cast that said nothing' };
   }
 
+  // ================================================================== CHALICE FARMING
+  //
+  // A free Rescue home for every town trip that starts near the station. The protocol, the
+  // roles and why the station must be a refill room are in tools/m59-chalice.mjs; this is
+  // the half that talks to the game. The configuration comes from a PRIVATE strategy's
+  // `chalice` hook, because it names characters.
+  //
+  // Everything here is a RESUMABLE STAGE MACHINE that does one short step per pass and
+  // returns, so the survival ladder above keeps its turn between steps — a hand-off takes
+  // a minute and a character that could not flee for a minute is how this fleet dies.
+
+  /** The configuration, refreshed from the strategies at most every 30s. Sync to read. */
+  get chaliceCfg() { return this._chaliceCfg?.enabled ? this._chaliceCfg : null; }
+
+  async refreshChaliceConfig(now = Date.now()) {
+    if (this._chaliceCfgAt && now - this._chaliceCfgAt < 30_000) return this.chaliceCfg;
+    this._chaliceCfgAt = now;
+    let answer = null;
+    try {
+      answer = await this.s?._askStrategies?.('chalice', { agent: this.s?.name ?? null, character: this.who() });
+    } catch { answer = null; }
+    const cfg = answer?.answer ? normalizeChalice(answer.answer) : null;
+    const said = JSON.stringify(cfg?.problems ?? []);
+    if (cfg?.problems?.length && said !== this._chaliceProblemsSaid) {
+      this._chaliceProblemsSaid = said;
+      this.note('chalice farming configuration problems', { strategy: answer.strategy, problems: cfg.problems });
+    }
+    this._chaliceCfg = cfg;
+    this._chaliceStrategy = answer?.strategy ?? null;
+    return this.chaliceCfg;
+  }
+
+  chaliceStore() { return (this._chaliceStoreObj ??= chaliceStoreFor({ fleet: TITHE_FLEET })); }
+
+  chaliceRole() { return roleOf(this.who(), this.chaliceCfg); }
+
+  chaliceInPack() {
+    const c = this.s?.client;
+    return (c?.inventory || []).find(o => CHALICE.match.test(String(c.rsc.get(o.nameRsc) || ''))) ?? null;
+  }
+
+  chaliceOnFloor() {
+    const c = this.s?.client;
+    return [...(c?.room?.objects?.values?.() ?? [])].find(o => (o.flags & OF.GETTABLE) && !(o.flags & OF.PLAYER)
+      && CHALICE.match.test(String(c.rsc.get(o.nameRsc) || ''))) ?? null;
+  }
+
+  playerHere(name) {
+    const c = this.s?.client;
+    if (!name) return null;
+    return [...(c?.room?.objects?.values?.() ?? [])].find(o => (o.flags & OF.PLAYER)
+      && sameName(c.rsc.get(o.nameRsc) || '', name)) ?? null;
+  }
+
+  hereRoom() { return Number(this.s?.world?.room?.num ?? this.s?.client?.room?.num ?? NaN); }
+
+  hopsTo(room) {
+    try { const r = this.s.world.route(Number(room)); return Number.isFinite(r?.hops) ? r.hops : null; }
+    catch { return null; }
+  }
+
+  /** Is a chalice step in flight? Read by `commitment()` so DUM steps over the character. */
+  chaliceBusy() {
+    const trip = this.townTrip?.chalice;
+    // A holder WAITING for its cup back is not busy — the post keeps casting meanwhile.
+    const serving = this._chaliceServe && this._chaliceServe.kind !== 'reclaim';
+    // AND THE ALTERNATE WHILE IT CARRIES THE CUP: it is standing in for the holder, and a
+    // doctrine that re-stationed it to hunt would take the fleet's only server with it.
+    const onDuty = this.chaliceRole() === 'alternate' && !!this.chaliceInPack();
+    return !!(serving || onDuty || (trip && !['off', 'done'].includes(trip.stage)));
+  }
+
+  /** Forces-of-light casts on hand, the holder's own supply clock. */
+  chaliceCastsLeft() {
+    return Math.min(Math.floor(this.reagentOnHand('elderberry') / 2), this.reagentOnHand('emerald'));
+  }
+
+  chaliceEvent(what, detail = {}) {
+    try { recordEvent(this.who(), 'chalice', { what, room: this.hereRoom(), ...detail }); } catch {}
+  }
+
+  // THE TWO-SIDED GIFT. Offer, wait for the other keeper's empty counter (social() makes it,
+  // and acceptDonations lets a chalice and shillings through), accept, read the pack back.
+  // Verified by what LEFT the pack, never by the handshake: a trade that completes and moves
+  // nothing reads exactly like one that worked.
+  async chaliceGive(toName, items, { stillHave }) {
+    const s = this.s, c = s.need();
+    const them = this.playerHere(toName);
+    if (!them) return { gave: false, why: `${toName} is not in the room` };
+    const before = c.evSeq;
+    await s.pacer.submit('trade', () => c.offer(them.id, items));
+    const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 })
+      .catch(() => ({ events: [] }));
+    if (!ev.events?.some(e => e.kind === 'countered')) {
+      await s.pacer.submit('trade', () => c.cancelOffer()).catch(() => {});
+      return { gave: false, why: `${toName} never countered — busy, full, or not running` };
+    }
+    const accepting = c.evSeq;
+    await s.pacer.submit('trade', () => c.acceptOffer());
+    await c.waitFor({ since: accepting, kinds: ['trade-ended'], timeoutMs: 4000 }).catch(() => {});
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+    return stillHave() ? { gave: false, why: 'the handshake ended and nothing left the pack' } : { gave: true };
+  }
+
+  // ------------------------------------------------------------------ the traveller
+
+  /**
+   * RIDE THE CHALICE HOME. Called from `continueTownTrip` before the outbound walk.
+   *
+   * Returns `{pending}` to hold the trip for another pass, `{done}` once the character has
+   * landed (the walk that follows plans from wherever that is), or `{skip}` — which is never
+   * a failure of the trip, only a return to walking it.
+   */
+  async chaliceRide(trip) {
+    const cfg = this.chaliceCfg;
+    if (!cfg) return { skip: true, why: 'chalice farming is off' };
+    const st = (trip.chalice ??= { stage: 'decide', at: Date.now() });
+    const now = Date.now();
+    const store = this.chaliceStore();
+    const me = this.who();
+    const skip = (why, detail = {}) => {
+      if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: why }); } catch {}
+      st.stage = 'off';
+      this.note('chalice ride skipped — walking instead', { why, ...detail });
+      this.chaliceEvent('ride_skipped', { why, ...detail });
+      return { skip: true, why };
+    };
+    const pending = (ms = 1500) => { trip.nextTryAt = now + ms; return { pending: true }; };
+
+    switch (st.stage) {
+      case 'off': case 'done': return { skip: true, why: 'already decided' };
+
+      case 'decide': {
+        const d = shouldRide({ cfg, role: this.chaliceRole(), stationHops: this.hereRoom() === cfg.station_room
+            ? 0 : this.hopsTo(cfg.station_room),
+          targetHops: this.hopsTo(trip.target.room), carrying: !!this.chaliceInPack(),
+          duty: store.duty(), now });
+        if (!d.ride) { st.stage = 'off'; st.why = d.why; return { skip: true, why: d.why }; }
+        st.server = d.server;
+        st.stage = 'to_station';
+        this.note('riding the chalice home', { server: d.server, station: cfg.station_room, why: d.why });
+        return pending(0);
+      }
+
+      case 'to_station': {
+        if (this.hereRoom() === cfg.station_room) { st.stage = 'room'; return pending(0); }
+        const r = await this.travel(cfg.station_room, { maxHops: cfg.max_detour_hops + 2 })
+          .catch(e => ({ arrived: false, reason: e.message }));
+        if (r.arrived) { st.stage = 'room'; return pending(0); }
+        if (r.paused || r.cancelled || this.travelInterrupted()) return pending(5000);
+        return skip('could not reach the station', { reason: r.reason ?? r.why ?? null });
+      }
+
+      case 'room': {
+        // MAKE ROOM BEFORE ASKING. After an overfarm lap the pack is full by design, and an
+        // enfeeble can shrink it further on the way here.
+        const c = this.s.client;
+        const cap = skills.carryCapacity(c);
+        const worn = new Set((c.equipment?.()?.equipped ?? []).map(e => e.id));
+        const pack = (c.inventory || []).map(o => ({ id: o.id, amount: o.amount,
+          name: c.rsc.get(o.nameRsc) || '', equipped: worn.has(o.id) }));
+        const plan = planRoom({ pack, roomFor: cap?.room_for ?? null, protect: this.protectedItemNames(),
+          policy: this.policy.overfarm ?? undefined });
+        if (plan.enough === false) return skip('no room for the chalice and nothing cheap enough to drop');
+        if (plan.drops.length) {
+          for (const d of plan.drops) {
+            const o = (c.inventory || []).find(x => x.id === d.id);
+            if (o) await this.s.pacer.submit('act', () => c.drop([dropSpecFor(o, d.partial ? d.amount : null)])).catch(() => {});
+          }
+          this.note('made room for the chalice', { dropped: plan.drops.map(d => `${d.name} x${d.amount}`),
+            why: 'the cheapest loot by the overfarm ranking; the chalice is 20 weight and 20 bulk' });
+          this.chaliceEvent('made_room', { dropped: plan.drops.map(d => ({ name: d.name, amount: d.amount })) });
+        }
+        const t = store.request(me, { room: cfg.station_room, ttlMs: cfg.ticket_ttl_ms });
+        st.ticket = t.id;
+        st.deadline = now + cfg.wait_ms;
+        st.stage = 'wait';
+        this.chaliceEvent('requested', { ticket: t.id, server: st.server });
+        return pending(1000);
+      }
+
+      case 'wait': {
+        if (this.chaliceInPack()) {
+          st.gotAt = now;
+          st.stage = 'tip';
+          this.chaliceEvent('received', { ticket: st.ticket, waited_ms: now - (st.deadline - cfg.wait_ms) });
+          return pending(0);
+        }
+        const t = store.ticket(st.ticket);
+        if (!t || t.status === 'abandoned') return skip('the ticket was dropped', { note: t?.note ?? null });
+        if (now > st.deadline) return skip(`nobody brought the chalice in ${Math.round(cfg.wait_ms / 1000)}s`);
+        if (this.hereRoom() !== cfg.station_room) { st.stage = 'to_station'; return pending(0); }
+        return pending(1500);
+      }
+
+      case 'tip': {
+        st.stage = 'drink';
+        const giver = store.ticket(st.ticket)?.by ?? st.server;
+        const plan = tipPlan({ purse: this.purseNow(), cfg,
+          keep: Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan().required_purse ?? 0) });
+        if (!plan.amount || !this.playerHere(giver)) {
+          this.chaliceEvent('tip', { amount: 0, to: giver, why: plan.why });
+          return pending(0);
+        }
+        const c = this.s.client;
+        const coins = (c.inventory || []).find(o => /shilling/i.test(c.rsc.get(o.nameRsc) || ''));
+        if (!coins) return pending(0);
+        const before = this.purseNow();
+        const r = await this.chaliceGive(giver, [{ id: coins.id, amount: plan.amount }],
+          { stillHave: () => this.purseNow() >= before });
+        this.chaliceEvent('tip', { amount: r.gave ? plan.amount : 0, to: giver, why: r.gave ? plan.why : r.why });
+        return pending(0);
+      }
+
+      case 'drink': {
+        const c = this.s.client;
+        const cup = this.chaliceInPack();
+        if (!cup) return skip('the chalice left the pack before it was drunk');
+        // RESTING SETS PFLAG_NO_FIGHT, AND THE CHALICE REFUSES A CHARACTER WITH IT SET
+        // (chalice.kod:166), silently. Stand first.
+        try { c.stand(); } catch {}
+        await new Promise(r => setTimeout(r, 400));
+        await this.s.pacer.submit('act', () => c.apply(cup.id, c.selfId));
+        await new Promise(r => setTimeout(r, 1200));
+        // DROP IT WHETHER OR NOT THE SIP TOOK. The cup is the fleet's, not this trip's: on
+        // the floor the holder picks it up (and the pick-up refills it); in this pack it
+        // would ride home with a farmer and the station would have nothing to hand out.
+        const still = this.chaliceInPack();
+        if (still) await this.s.pacer.submit('act', () => c.drop([still.id])).catch(() => {});
+        try { store.mark(st.ticket, 'dropped'); } catch {}
+        st.drankAt = Date.now();
+        st.stage = 'landing';
+        this.chaliceEvent('drank', { ticket: st.ticket, cup_left_pack: !still || !this.chaliceInPack() });
+        return pending(1000);
+      }
+
+      case 'landing': {
+        const here = this.hereRoom();
+        if (Number.isFinite(here) && here !== cfg.station_room) {
+          st.stage = 'done';
+          const ms = Date.now() - st.drankAt;
+          // THE TOWN WAS RANKED FROM THE FARM. Re-rank the leg from where we stand now.
+          const hops = this.hopsTo(trip.target.room);
+          if (Number.isFinite(hops)) trip.target = { ...trip.target, hops };
+          this.tally.chalice_rides = (this.tally.chalice_rides || 0) + 1;
+          this.note('landed by chalice', { landed_in: here, ms, onward_hops: hops ?? null,
+            to: trip.target.room });
+          this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === GUILD_HALL_ROOM });
+          return { done: true, landed: here };
+        }
+        if (Date.now() - st.drankAt > cfg.landing_ms)
+          return skip(`no landing ${Math.round(cfg.landing_ms / 1000)}s after the sip — refused ` +
+                      '(recent PvP, or resting) or cancelled by an attack');
+        return pending(1000);
+      }
+    }
+    return { skip: true, why: `unknown stage ${st.stage}` };
+  }
+
+  // ------------------------------------------------------------------ the holder and alternate
+
+  /**
+   * THE SERVING SIDE. Called at the top of `passErrand` and of the room-caster post. Returns
+   * true when it did something this pass (the caller then treats the pass as handled).
+   */
+  async chaliceDuty() {
+    const cfg = this.chaliceCfg;
+    const role = this.chaliceRole();
+    if (!cfg || (role !== 'holder' && role !== 'alternate')) return false;
+    if (this.townTrip || this.travelInterrupted() || this.suspendedJourney) return false;
+    const store = this.chaliceStore();
+    const me = this.who();
+    const now = Date.now();
+    const cup = this.chaliceInPack();
+
+    // WHO HAS IT, kept current by whoever carries it — the travellers read this to decide
+    // whether anybody is serving at all.
+    if (cup && (!this._chaliceDutySaidAt || now - this._chaliceDutySaidAt > 60_000)) {
+      this._chaliceDutySaidAt = now;
+      try { store.setDuty({ with: me, lost: false, holder_away: role === 'alternate' }); } catch {}
+    }
+
+    let st = this._chaliceServe;
+    if (st && now > st.expires) {
+      this.note('chalice duty step timed out', { kind: st.kind, stage: st.stage });
+      if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: `timed out at ${st.stage}` }); } catch {}
+      st = this._chaliceServe = null;
+      this._chaliceCooldownUntil = now + 30_000;
+    }
+    if (!st) {
+      if (now < (this._chaliceCooldownUntil ?? 0)) return this.chaliceParked(cfg, role, cup);
+      st = this.chaliceNextJob(cfg, role, cup, store, me, now);
+      if (!st) return this.chaliceParked(cfg, role, cup);
+      this._chaliceServe = st;
+    }
+    return this.chaliceStep(cfg, st, store, me);
+  }
+
+  chaliceNextJob(cfg, role, cup, store, me, now) {
+    const ttl = { ttlMs: cfg.ticket_ttl_ms };
+    const job = (kind, stage, ticket = null, extra = {}) =>
+      ({ kind, stage, ticket: ticket?.id ?? null, traveller: ticket?.traveller ?? null,
+         room: ticket?.room ?? null, back: this.hereRoom(), expires: now + cfg.serve_ms * 2, ...extra });
+    if (cup) {
+      // THE HOLDER IS ABOUT TO LEAVE: hand the cup over first, at the holder's own post.
+      if (role === 'holder' && cfg.alternate && this.chaliceCastsLeft() <= cfg.handover_below_casts) {
+        const t = store.request(me, { room: this.hereRoom(), kind: 'relief', ...ttl });
+        return job('relief', 'await', t);
+      }
+      // THE HOLDER IS BACK: the alternate returns the cup to it.
+      if (role === 'alternate') {
+        const back = store.claimNext(me, { kind: 'return', ...ttl });
+        if (back) return job('return', 'go', back);
+      }
+      const t = store.claimNext(me, { kind: 'ride', ...ttl });
+      if (t) return job('ride', 'go', t);
+      return null;
+    }
+    if (role === 'alternate') {
+      const relief = store.claimNext(me, { kind: 'relief', ...ttl });
+      if (relief) return job('take', 'go', relief);
+      return null;
+    }
+    // A HOLDER WITHOUT THE CUP, BACK AND STOCKED, ASKS FOR IT. Once per minute at most.
+    const duty = store.duty();
+    if (role === 'holder' && cfg.alternate && sameName(duty.with, cfg.alternate)
+        && this.chaliceCastsLeft() > cfg.handover_below_casts
+        && (cfg.post_room == null || this.hereRoom() === cfg.post_room)
+        && (!this._chaliceAskedAt || now - this._chaliceAskedAt > 60_000)) {
+      this._chaliceAskedAt = now;
+      const t = store.request(me, { room: this.hereRoom(), kind: 'return', ...ttl });
+      return job('reclaim', 'await', t);
+    }
+    return null;
+  }
+
+  // THE ALTERNATE ON DUTY DOES NOT FARM AND DOES NOT GO TO TOWN. It waits somewhere safe
+  // near the station until the holder is back — the operator's order, 2026-09-23: two
+  // characters away from the castle at once is a fleet with no chalice.
+  async chaliceParked(cfg, role, cup) {
+    if (role !== 'alternate' || !cup) return false;
+    const park = cfg.post_room ?? cfg.station_room;
+    if (this.hereRoom() !== park) {
+      await this.travel(park, { maxHops: 6, chalice: true }).catch(() => {});
+      return true;
+    }
+    if (!this.hold) await this.takeRecoverySpot('on chalice duty while the holder is away').catch(() => {});
+    return true;
+  }
+
+  async chaliceStep(cfg, st, store, me) {
+    const now = Date.now();
+    const done = (status = 'done', extra = {}) => {
+      if (st.ticket) try { store.mark(st.ticket, status, extra); } catch {}
+      this._chaliceServe = null;
+      return true;
+    };
+    const goto = async (room, next) => {
+      if (this.hereRoom() === Number(room)) { st.stage = next; st.since = now; return true; }
+      const r = await this.travel(Number(room), { maxHops: 8, chalice: true, chaliceRoom: Number(room) })
+        .catch(e => ({ arrived: false, reason: e.message }));
+      if (r.arrived) { st.stage = next; st.since = Date.now(); }
+      else if (!(r.paused || r.cancelled)) {
+        this.note('chalice duty could not walk', { to: room, why: r.reason ?? r.why ?? null });
+        return done('abandoned', { note: `could not reach ${room}` });
+      }
+      return true;
+    };
+
+    switch (`${st.kind}:${st.stage}`) {
+      // ---- a traveller wants a ride
+      case 'ride:go': return goto(cfg.station_room, 'offer');
+      case 'ride:offer': {
+        if (!this.playerHere(st.traveller)) {
+          if (now - (st.since ?? now) > cfg.serve_ms) {
+            st.stage = 'back';
+            if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: 'traveller never arrived' }); } catch {}
+            st.ticket = null;
+          }
+          return true;
+        }
+        const cup = this.chaliceInPack();
+        if (!cup) { st.stage = 'back'; return true; }
+        const r = await this.chaliceGive(st.traveller, [cup.id], { stillHave: () => !!this.chaliceInPack() });
+        if (!r.gave) { this.note('chalice hand-off did not complete', { to: st.traveller, why: r.why }); return true; }
+        try { store.mark(st.ticket, 'handed'); } catch {}
+        this.chaliceEvent('handed', { ticket: st.ticket, to: st.traveller });
+        st.stage = 'pickup'; st.since = Date.now();
+        return true;
+      }
+      case 'ride:pickup': {
+        const floor = this.chaliceOnFloor();
+        if (floor) {
+          await this.chaliceMakeRoom();
+          await this.s.lootFloor({ ids: [floor.id], maxItems: 1, overfarm: null }).catch(() => {});
+          await this.s.pacer.submit('read', () => this.s.client.requestInventory()).catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
+          if (this.chaliceInPack()) {
+            try { store.setDuty({ with: me, lost: false }); } catch {}
+            this.tally.chalice_served = (this.tally.chalice_served || 0) + 1;
+            this.chaliceEvent('picked_up', { ticket: st.ticket, for: st.traveller, refilled: REFILL_ROOMS.has(this.hereRoom()) });
+            if (st.ticket) try { store.mark(st.ticket, 'done'); } catch {}
+            st.ticket = null;
+            st.stage = 'back';
+          }
+          return true;
+        }
+        if (now - (st.since ?? now) > cfg.serve_ms) {
+          // THE CUP DID NOT COME BACK. Said loudly: the fleet has one, and a traveller that
+          // walked off with it — or a stranger who picked it up — is the whole service gone.
+          try { store.setDuty({ with: st.traveller, lost: !this.playerHere(st.traveller) }); } catch {}
+          this.note('THE CHALICE DID NOT COME BACK', { from: st.traveller, ticket: st.ticket,
+            why: 'handed over and never dropped where this character could see it' });
+          this.chaliceEvent('lost', { ticket: st.ticket, traveller: st.traveller });
+          if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: 'cup never came back' }); } catch {}
+          st.ticket = null;
+          st.stage = 'back';
+        }
+        return true;
+      }
+      case 'ride:back': {
+        const home = cfg.post_room ?? st.back;
+        if (!Number.isFinite(Number(home)) || this.hereRoom() === Number(home)) return done();
+        return goto(home, 'home').then(() => (st.stage === 'home' ? done() : true));
+      }
+
+      // ---- the holder is leaving: give the cup to the alternate, here
+      case 'relief:await': {
+        const t = store.ticket(st.ticket);
+        if (!t || t.status === 'abandoned') return done('abandoned');
+        if (!this.playerHere(cfg.alternate)) return true;
+        const cup = this.chaliceInPack();
+        if (!cup) return done();
+        const r = await this.chaliceGive(cfg.alternate, [cup.id], { stillHave: () => !!this.chaliceInPack() });
+        if (!r.gave) return true;
+        try { store.setDuty({ with: cfg.alternate, holder_away: true }); } catch {}
+        this.chaliceEvent('relieved', { to: cfg.alternate, casts_left: this.chaliceCastsLeft() });
+        this.note('handed the chalice to the alternate before the supply trip', { to: cfg.alternate });
+        return done();
+      }
+      // ---- the alternate goes to the holder to take the cup
+      case 'take:go': return goto(st.room, 'await');
+      case 'take:await':
+        if (this.chaliceInPack()) {
+          try { store.setDuty({ with: me, holder_away: true }); } catch {}
+          this.chaliceEvent('on_duty', { from: st.traveller });
+          return done();
+        }
+        return true;
+      // ---- the alternate returns the cup to the holder
+      case 'return:go': return goto(st.room, 'offer');
+      case 'return:offer': {
+        if (!this.playerHere(cfg.holder)) return true;
+        const cup = this.chaliceInPack();
+        if (!cup) return done();
+        const r = await this.chaliceGive(cfg.holder, [cup.id], { stillHave: () => !!this.chaliceInPack() });
+        if (!r.gave) return true;
+        try { store.setDuty({ with: cfg.holder, holder_away: false }); } catch {}
+        this.chaliceEvent('returned', { to: cfg.holder });
+        return done();
+      }
+      // ---- the holder waits for its cup
+      case 'reclaim:await':
+        if (this.chaliceInPack()) {
+          try { store.setDuty({ with: me, holder_away: false }); } catch {}
+          this.chaliceEvent('reclaimed', {});
+          return done();
+        }
+        // Nothing to do but wait; the post keeps casting meanwhile.
+        return false;
+    }
+    this._chaliceServe = null;
+    return false;
+  }
+
+  // THE SERVER NEEDS ROOM TOO. The holder carries the fleet's collection and its reagents
+  // and drops nothing; the alternate is a farmer and puts down its cheapest loot.
+  async chaliceMakeRoom() {
+    if (this.chaliceRole() !== 'alternate') return;
+    const c = this.s.client;
+    const cap = skills.carryCapacity(c);
+    const worn = new Set((c.equipment?.()?.equipped ?? []).map(e => e.id));
+    const pack = (c.inventory || []).map(o => ({ id: o.id, amount: o.amount, name: c.rsc.get(o.nameRsc) || '',
+      equipped: worn.has(o.id) }));
+    const plan = planRoom({ pack, roomFor: cap?.room_for ?? null, protect: this.protectedItemNames(),
+      policy: this.policy.overfarm ?? undefined });
+    for (const d of plan.drops) {
+      const o = (c.inventory || []).find(x => x.id === d.id);
+      if (o) await this.s.pacer.submit('act', () => c.drop([dropSpecFor(o, d.partial ? d.amount : null)])).catch(() => {});
+    }
+  }
+
   isRoomEnchantPost() {
     return this.mode === 'idle' && this.policy.roomEnchant?.enabled === true
       && Number.isInteger(this.policy.assignedRoom)
@@ -21209,6 +21727,9 @@ export class Autopilot {
 
   async maintainRoomEnchantPost({ acquire = false } = {}) {
     if (!this.isRoomEnchantPost()) return false;
+    // A posted caster may also be the CHALICE HOLDER; a hand-off in flight outranks a recast.
+    if (await this.chaliceDuty().catch(e => { this.note('chalice duty failed', { why: e.message }); return false; }))
+      return true;
     if (!this.holdWorks()) {
       if (acquire && !this.hold && (!this.enchantWallTriedAt || Date.now() - this.enchantWallTriedAt > 10000)) {
         this.enchantWallTriedAt = Date.now();
@@ -22827,6 +23348,13 @@ export class Autopilot {
         trip.coopInitial = true;
         trip.coopOpportunity = 1; // sell is the next real task; do it before retrying
         if (!donation.deferred) trip.coopDone = true;
+      }
+      // RIDE THE CHALICE HOME when the station is on the way. After the first optional
+      // donation and before the walk; a skip is never a failed trip, only the old walk.
+      if (!trip.chaliceDecided && this.chaliceCfg) {
+        const ride = await this.chaliceRide(trip).catch(e => ({ skip: true, why: e.message }));
+        if (ride.pending) return true;
+        trip.chaliceDecided = true;
       }
       const alreadyThere = Number(this.s.world?.room?.num) === Number(trip.target.room);
       const r = alreadyThere

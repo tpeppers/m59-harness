@@ -71,11 +71,17 @@ export const EXAMPLE = join(HERE, '..', 'substrate', 'strategies.example.mjs');
 //     // `neverSellsWhatItGives`, which is arithmetic over `spare_before` rather than a name
 //     // match, because a PARTIAL give is correct and costs nothing.
 //     async atTownStop(ctx) { return null; },
+//     // Asked by every keeper about CHALICE FARMING — a free Rescue home for each town trip,
+//     // handed out by one named holder at a refill-room station (tools/m59-chalice.mjs).
+//     //   ctx = { agent, character }
+//     // Return the configuration, `normalizeChalice`'s shape, or null for "not here". The
+//     // names of the holder and alternate are why this lives in a private strategy.
+//     async chalice(ctx) { return null; },
 //     // CONVOY strategies use beforeCrossing too, but are asked a group question — "should
 //     // we all go now" rather than "how do I get through". See substrate/strategies.example.mjs.
 //   }
 export const REQUIRED = ['name', 'kind', 'enabled'];
-export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop'];
+export const HOOKS = ['whenStuck', 'beforeCrossing', 'atTownStop', 'chalice'];
 // 'town' was added when the sell/buy filter moved out of m59-sellrun.mjs's private copy.
 // A KIND IS NOT A HOOK: the kind says what a strategy is about and the hook says when it is
 // asked, and keeping them separate is what lets a town strategy be listed, enabled and

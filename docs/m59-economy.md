@@ -479,6 +479,44 @@ event. Both halves are blind to the same unpriced items, so the COMPARISON holds
 the absolute shillings are an estimate off `viValue_average`; the row says `estimated: true`
 and the number must never be reported as takings.
 
+## Chalice farming: a free Rescue home instead of the walk
+
+Operator's plan, 2026-09-23. One named HOLDER carries the fleet's Chalice of the Rain at a
+STATION room; a farmer starting a town trip near it walks over, is handed the cup, tips the
+holder if the trip can spare it, drinks (one sip is a power-1 Rescue, `chalice.kod:189`) and
+drops the cup; the holder picks it up. The farmer lands in the guild hall 15-25s later and the
+town leg starts from there. `tools/m59-chalice.mjs` has the protocol and its refusals,
+`m59-chalice-test.mjs` (53) and `m59-chalice-flow-test.mjs` (28, three keepers against a fake
+world) pin it offline.
+
+```bash
+node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
+```
+
+- **THE STATION MUST BE A REFILL ROOM.** Picking the cup up off a forest/jungle floor restores
+  it to full (`GetShalilleBonus() > 20`), so drop-and-pick-up at such a station never drains
+  it — and the LAST sip deletes the cup. A non-refill station is refused and farming turns
+  itself off. Outside Castle Victoria (2) is MOUNTAIN/FOREST and qualifies.
+- **IT LANDS IN THE HALL** because room 2 and every mainland hall share `RID_DEFAULT`
+  (`room.kod:900-943`; only halls 12/13/15 are Ko'catan). `Session.travel` already walks out
+  of 714 through the passage, so nothing downstream changed.
+- **THE CONFIGURATION IS A PRIVATE STRATEGY** — hook `chalice`, because it names characters.
+  No strategy, or one that answers null, is the old behaviour exactly.
+- **A SKIP IS NEVER A FAILED TRIP.** No server on duty, a station too far off the route
+  (`max_detour_hops`), no room and nothing cheap to drop, a wait past `wait_ms`, or no landing
+  inside `landing_ms` (a refused sip: recent PvP, or resting) — each returns the trip to the
+  walk it always took, and says why in a `chalice`/`ride_skipped` ledger row.
+- **ROOM IS MADE, NOT ASSUMED.** An overfarmed pack is full by design and an enfeeble shrinks
+  it further (capacity is `1700 + might*20`). The cup is 20 weight and 20 bulk; the traveller
+  drops its cheapest loot by the overfarm ranking until it fits — never protected, worn or
+  unrankable items.
+- **THE ALTERNATE.** When the holder's own supply falls to `handover_below_casts` it hands the
+  cup over at its post; the alternate serves, parks on a safe spot and neither farms nor goes
+  to town until the holder is back and has asked for it. Both are marked busy in
+  `commitment()` so DUM steps over them for the duration.
+- **THE CONFINEMENT HAS ONE EXCEPTION**: chalice duty may walk to the station and the post and
+  nowhere else. A confined holder that could not step out would hold the only cup for ever.
+
 ## Guild wants and the four containers
 
 - **A GUILD WANT IS AN END STATE, NOT AN ERRAND, AND THAT IS WHAT MAKES IT SAFE TO GIVE TO
