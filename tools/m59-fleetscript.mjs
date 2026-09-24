@@ -1395,6 +1395,24 @@ export const fight = (target, opts = {}) => ({ do: 'fight', target, ...opts });
 // the goal is met or the budget runs out. The keeper does the fighting, because the keeper is
 // the thing with the socket and the one-second clock, and it has always known how.
 export const harvest = (opts = {}) => ({ do: 'harvest', ...opts });
+
+// STAND A CHARACTER AT A POST AND HAND THE BODY BACK — the standing-still twin of `harvest`,
+// and it exists for the same reason: the keeper is the thing with the socket and the
+// one-second clock, and the behaviour being asked for is already inside it.
+//
+// `Autopilot.maintainRoomEnchantPost` takes a safe spot ("stationary room caster needs
+// shelter"), keeps a room enchantment standing off its own clock, rests for mana between
+// throws and accepts reagents a fleetmate walks over and offers. What it will NOT do is run
+// while anything else is steering: `isRoomEnchantPost` requires `!facultyHeld('work') &&
+// !facultyHeld('movement')`, so a script that set the posture and kept the lease would leave
+// a character standing in the right room casting nothing, with every call in the transcript
+// reporting success. THE `free` AT THE END IS THE STEP, not the tidy-up after it.
+//
+// WHY A CASTER IS NOT A FARMER, in one line: `harvest` needs `mode: 'farm'` because the hunt
+// list is read in farm mode and nowhere else; a post needs `mode: 'idle'` for the mirror
+// reason, and `isRoomEnchantPost` tests it by name.
+export const post = (room, opts = {}) => ({ do: 'post', room, ...opts });
+
 /** Cast a spell and prove it landed from the world, never from the reply. */
 export const cast = (spell, opts = {}) => ({ do: 'cast', spell, ...opts });
 export const verify = (fn, why) => ({ do: 'verify', fn, why });
@@ -3570,6 +3588,88 @@ async function runStep(ctx, agent, rawStep, state) {
                why: met ? undefined
                   : `farmed ${gained} of ${target} ${want || 'item(s)'} in ` +
                     `${Math.round(budgetMs / 60_000)} min` };
+    }
+
+    // STAND STILL AND KEEP THE ROOM LIT. See the `post` constructor for the argument.
+    case 'post': {
+      const room = Number(step.room);
+      if (!Number.isInteger(room))
+        return { ok: false, why: 'post() needs the room number to stand in' };
+      const spells = [].concat(step.enchant ?? []).map(s => String(s).trim().toLowerCase())
+        .filter(Boolean);
+      if (!spells.length)
+        // REQUIRED, NEVER GUESSED — the same rule `harvest` states for its quarry. "All the
+        // room enchantments it happens to know" is a policy that spends whatever reagents
+        // the character is carrying on whatever it can afford.
+        return { ok: false, why: 'post() needs `enchant`: which room enchantment to keep up' };
+
+      // A CASTER WITH NO REAGENTS IS A CHARACTER STANDING IN A ROOM, and the refusal is free
+      // here and expensive later. `forces of light` is 2 elderberry AND 1 emerald a throw
+      // (forceslt.kod:57-58) and the pair is unbalanced in practice, so the count that
+      // matters is the BINDING half rather than the total.
+      if (Array.isArray(step.needs) && step.needs.length) {
+        const inv = await call('inventory', { agent }, 60_000).catch(() => null);
+        if (!inv?.items)
+          // Unknown is not zero, and it is not permission either: posting a caster whose pack
+          // could not be read is how a room reads as lit and is dark.
+          return { ok: false, why: 'could not read the pack, so how many casts this character ' +
+                                   'can pay for is unknown — which is not the same as enough' };
+        const held = re => (inv.items ?? []).filter(i => new RegExp(re, 'i').test(String(i.name ?? '')))
+          .reduce((n, i) => n + (Number(i.amount) || 1), 0);
+        const casts = Math.min(...step.needs.map(n => Math.floor(held(n.match) / (n.per_cast || 1))));
+        const floor = Number(step.minCasts ?? 1);
+        if (!(casts >= floor)) {
+          const have = step.needs.map(n => `${n.match} ${held(n.match)}`).join(', ');
+          return { ok: false, result: { casts, have },
+                   why: `${casts} cast(s) payable and the post wants at least ${floor} (${have})` };
+        }
+      }
+
+      // MODE IS THE WHOLE THING, exactly as it is for `harvest` and for the mirror reason:
+      // `isRoomEnchantPost` tests `mode === 'idle'` by name, so a posture pushed without it
+      // leaves the keeper wherever it was and the post never runs.
+      const orders = {
+        agent, action: 'start', mode: 'idle',
+        assigned_room: room, confine_rooms: [room], roam: false,
+        // The flag that buys `takeRecoverySpot` — the safe spot is the whole request.
+        use_safe_spots: true,
+        room_enchant: { enabled: true, spells,
+                        margin_ms: Number(step.marginMs ?? 8000),
+                        ...(step.manaFloor == null ? {} : { mana_floor: Number(step.manaFloor) }) },
+        ...(step.restBelow == null ? {} : { rest_below: Number(step.restBelow) }),
+        ...(step.fleeBelow == null ? {} : { flee_below: Number(step.fleeBelow) }),
+        ...(step.accept ? { accept_donations: { enabled: true, reagents: [].concat(step.accept),
+                                                drop_for_space: [], min_bulk_free: 40 } } : {}),
+        ...(step.protect ? { protect_items: [].concat(step.protect) } : {}),
+      };
+      const pushed = await call('autopilot', orders, 60_000).catch(e => ({ error: e.message }));
+      if (pushed?.error)
+        return { ok: false, result: pushed, why: `could not set the post: ${pushed.error}` };
+
+      // VERIFY THE VALUE, NOT THE INSTRUMENT. The push reports as delivered; what decides
+      // whether anything is cast is the mode the keeper is in and the policy it is holding.
+      const status = await call('autopilot', { agent, action: 'status' }, 60_000).catch(() => null);
+      const mode = status?.mode ?? status?.autopilot?.mode ?? null;
+      const live = status?.policy ?? status?.autopilot?.policy ?? null;
+      if (mode && mode !== 'idle')
+        return { ok: false, result: { pushed, mode },
+                 why: `the post was accepted but this keeper is in "${mode}" mode, not idle — ` +
+                      'isRoomEnchantPost tests the mode by name, so nothing would be cast' };
+      if (live && live.roomEnchant?.enabled !== true)
+        return { ok: false, result: { pushed, roomEnchant: live.roomEnchant ?? null },
+                 why: 'the orders were accepted and the keeper is not holding a room ' +
+                      'enchantment — read the policy back rather than the reply' };
+
+      // HAND THE BODY BACK. This is the step, not the tidy-up: the keeper will not maintain
+      // a post while anything else holds work or movement, and the lease this script runs
+      // under holds both.
+      await call('autopilot', { agent, action: 'free' }, 30_000).catch(() => {});
+      const at = await observe(agent).catch(() => null);
+      const there = Number(at?.room) === room;
+      return { ok: there, result: { room: at?.room ?? null, mode, spells, handed_back: true },
+               why: there ? undefined
+                  : `the post is set for room ${room} and this character is in ` +
+                    `${at?.room ?? 'a room nobody could read'} — walk it there first` };
     }
 
     // See the `fight` constructor above for why this does not go through `call`.
