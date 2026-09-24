@@ -243,9 +243,15 @@ export async function barrier(key, agent, { ms = 180_000, poll = 500, sleep = de
   const b = bar(key);
   b.arrived.add(agent);
   const t0 = Date.now();
+  // A DOOR THAT HAS OPENED STAYS OPEN. Whoever arrives after the barrier released (it filled, or
+  // its patience ran out) goes straight through. The third rehearsal's light-bearer reached the
+  // door four minutes after it had released the raid, found 21 of 22 still "missing", and waited
+  // out the whole timeout again — six minutes of throne room with no forces of light.
+  if (b.openedAt != null) return { opened: true, waited_ms: 0, arrived: b.arrived.size, expected: b.expected, late: true };
   const ready = () => b.arrived.size + [...b.left].filter(a => !b.arrived.has(a)).length >= b.expected;
   while (!ready() && Date.now() - t0 < ms) await sleep(poll);
-  if (ready() && b.openedAt == null) b.openedAt = Date.now();
+  // Released either way — filled, or out of patience — and from here on it stays open.
+  if (b.openedAt == null) b.openedAt = Date.now();
   return { opened: ready(), waited_ms: Date.now() - t0, arrived: b.arrived.size, expected: b.expected };
 }
 

@@ -198,7 +198,19 @@ async function medicTick(agent, below) {
   await call('rest', { agent, stand: true }, 30_000).catch(() => {});
   const oid = await objectIdOf(hurt.agent);
   if (oid == null) return null;
-  const r = await castVerified(agent, HEAL.spell, { target: oid, cost: HEAL.mana });
+  let r = await castVerified(agent, HEAL.spell, { target: oid, cost: HEAL.mana });
+  // OUT OF RANGE IS A WALK, NOT A FAILURE. The third rehearsal's healers stood at the back of a
+  // 23-row room and were refused "the target was out of range" for fleetmates at the far end.
+  // Find the target where it stands, step next to it, and cast once more.
+  if (!r.landed && r.outcome === 'out_of_range') {
+    const look = await call('look', { agent }, 40_000).catch(() => null);
+    const t = (look?.objects ?? []).find(o => o.is_player && String(o.name ?? '').toLowerCase() === String(hurt.who).toLowerCase());
+    if (t?.col != null) {
+      await call('walk_to', { agent, col: t.col, row: t.row + 1 }, 60_000).catch(() => {});
+      await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+      r = await castVerified(agent, HEAL.spell, { target: oid, cost: HEAL.mana });
+    }
+  }
   FLEET.at = 0;                                     // the picture just changed
   if (!r.landed) event('heal_failed', { agent, on: hurt.who, outcome: r.outcome ?? null, why: String(r.why ?? '').slice(0, 80) });
   return { on: hurt.who, at: Number(hurt.frac.toFixed(2)), landed: r.landed, outcome: r.outcome };
@@ -374,11 +386,13 @@ export const script = {
     bless_every_s: { type: 'number', default: 150, describe: 'blessers re-bless their share this often (bless lasts ~3-5 min)' },
     strength_every_s: { type: 'number', default: 540, describe: 'super strength self+buddy refresh (it lasts 5-15 min)' },
     door_mana_wait_s: { type: 'number', default: 180, describe: 'how long a buffer may wait at the door for mana (prod)' },
-    enter_wait_s: { type: 'number', default: 240, describe: 'how long the door waits for stragglers' },
+    enter_wait_s: { type: 'number', default: 480, describe: 'how long the door waits for stragglers. Long enough for seven Kraanan casters to finish the door buffs: at 240 s the third rehearsal went in with 15 of 22 and the late casters walked in one at a time and died' },
     // Room 2, not the door (38): the operator's standing order for Loial, 2026-09-24, is to wait
     // Outside Castle Victoria and step in only to cast — his DUM doctrine places him at 2 as well.
     // Two hops to the throne room instead of one; still well inside a ~3.4-minute light.
     light_wait_room: { type: 'number', default: STAGE_ROOM, describe: 'where the light-bearer waits between casts' },
+    light_heals: { type: 'boolean', default: false,
+                   describe: 'let the light-bearer heal from inside the room after the kill. Off: at 20 health he died 1.6 min into the third hold' },
   },
 
   async steps(p, agentArg, state) {
@@ -494,10 +508,11 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         log.push({ t: Date.now(), why, outcome });
         event('light', { outcome, why });
         console.log(`  ${agent} forces of light: ${outcome} (${why})`);
-        // While the ghost lives, out again at once: it is AI_FIGHT_WIZARD_KILLER and this body
-        // has twenty health. Once it is dead the escort is the only threat, and the light-bearer
-        // is one more healer — so it stays, and leaves only when it is hurt.
-        if (!RUN.killAt) await hop(agent, Number(p.light_wait_room));
+        // OUT AGAIN AT ONCE, before and after the kill. The third rehearsal had the light-bearer
+        // stay after the kill to heal, and he died 1.6 minutes into the hold: seven level-100
+        // tusked skeletons do not care that the ghost is gone, and he has twenty health. The
+        // operator's standing order is the same — wait outside, step in only to cast.
+        await hop(agent, Number(p.light_wait_room));
         return true;
       };
       const heals = [];
@@ -510,7 +525,7 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         }
         const o = await observe(agent);
         if (o.dead) { event('died', { agent }); break; }
-        if (!RUN.killAt) {
+        if (!RUN.killAt || !(p.light_heals === true || p.light_heals === 'true')) {
           if (Number(o.room) === GHOST_ROOM) await hop(agent, Number(p.light_wait_room));
           await sleep(3000); continue;
         }

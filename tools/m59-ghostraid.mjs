@@ -356,7 +356,10 @@ export async function report(cfg) {
     const { readLedger } = await import('./m59-savelog.mjs');
     const rows = readLedger(ledger, (entered ?? Date.now()) - 60_000);
     died = rows.filter(r => r.kind === 'died');
-    killed = rows.filter(r => r.kind === 'killed');
+    // THE THRONE ROOM'S KILLS, NOT THE FLEET'S. The keeper ledger records kills wherever they
+    // happen, and after a death a keeper walks its character home and goes on hunting: the
+    // third rehearsal's "30 kills in the window" were 12 ants and 17 spiders from other maps.
+    killed = rows.filter(r => r.kind === 'killed' && Number(r.room_num) === GHOST_ROOM);
   }
   // A death the ledger did not catch but the raid saw is still a death. The reverse is the
   // common case (a keeper records every death; the raid only sees the ones it was looking at).
@@ -383,6 +386,11 @@ export async function report(cfg) {
     agent: a, character: charOf.get(a) ?? a,
     role: a === meta.lightbearer ? 'light' : (String(meta.healers ?? '').split(',').includes(a) ? 'healer' : 'raider'),
   }));
+  // AND THE RAID'S OWN KILLS. Script-driven swings are not the keeper's fight, so the ledger
+  // does not see them; the farm loop records each "You killed ..." sentence as an event.
+  for (const e of events.filter(e => e.kind === 'kill'))
+    if (!killed.some(k => (k.agent === e.agent) && Math.abs(k.t - e.t) < 5000))
+      killed.push({ t: e.t, agent: e.agent, creature: e.creature, room_num: GHOST_ROOM, source: 'raid' });
   const endAt = samples.length ? Math.max(...samples.map(s => s.t)) : null;
   const rep = survivalReport({ participants, killAt, startAt: entered, windowMin: meta.minutes,
                                died, killed, samples, endAt });

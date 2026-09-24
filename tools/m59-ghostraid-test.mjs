@@ -90,6 +90,8 @@ resetBarriers();
 expect('door', 2);
 const lone = await barrier('door', 'a', { ms: 30, sleep });
 ok(!lone.opened, 'a barrier is bounded, and says it did not open');
+const late = await barrier('door', 'z', { ms: 5000, sleep });
+ok(late.opened && late.waited_ms < 100, 'a door that has released lets a late arrival straight through');
 
 // ---- the report
 const t0 = 1_000_000_000_000;
