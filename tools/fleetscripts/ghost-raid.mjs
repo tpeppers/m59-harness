@@ -51,7 +51,7 @@ const RUN = {
   dir: null, startAt: null, killAt: null, ghostSeen: false,
   light: { lastCast: 0, expired: false, casts: 0 },
   sampler: null, samplerStop: false, done: new Set(), agents: [],
-  saved: new Map(), restored: new Set(),
+  saved: new Map(), restored: new Set(), focus: null,
 };
 const endAt = p => {
   if (RUN.killAt) return RUN.killAt + Number(p.minutes) * 60_000;
@@ -84,6 +84,16 @@ function startSampler(p) {
         return { t, agent: r.agent, character: r.character, room_num: r.room_num ?? null,
                  hp: Number.isFinite(hp) ? hp : null, max: Number.isFinite(max) ? max : null };
       });
+      // WHAT IS IN THE ROOM, by name — from a raider's own look, so it works on prod too. This is
+      // the measurement that says whether sparing zombies moves the room towards them.
+      const inside = rows.find(r => Number(r.room_num) === GHOST_ROOM && r.hp > 0);
+      if (inside && RUN.dir) {
+        const look = await call('look', { agent: inside.agent }, 20_000).catch(() => null);
+        const count = {};
+        for (const o of look?.objects ?? [])
+          if ((o.can ?? []).includes('attack') && !o.is_player) count[o.name] = (count[o.name] ?? 0) + 1;
+        try { fs.appendFileSync(path.join(RUN.dir, 'events.jsonl'), JSON.stringify({ t, kind: 'room', count }) + '\n'); } catch {}
+      }
       if (RUN.dir && rows.length)
         try { fs.appendFileSync(path.join(RUN.dir, 'samples.jsonl'), rows.map(x => JSON.stringify(x)).join('\n') + '\n'); } catch {}
       await sleep(Number(p.sample_s) * 1000);
@@ -271,6 +281,32 @@ async function retreatInRoom(agent, p) {
   return { to: `r${spot.row}c${spot.col}` };
 }
 
+/**
+ * SPARE THE ZOMBIES, FOCUS THE SKELETONS. Operator, 2026-09-24: "is it really the case that 21
+ * attackers can't kill 10 defenders ... Perhaps intentionally leaving Zombies alive and only
+ * killing some of the skeletons would help decrease the incoming damage?"
+ *
+ * The arithmetic says yes (monster.kod GetMaxHitPoints / GetDamage / GetOffense, speeds from
+ * blakston.khd): a tusked skeleton is 120 hp, 7-10 a hit, to-hit 660, speed 16; a zombie is 66 hp,
+ * 4-5 a hit, to-hit 405, speed 4 — perhaps a fifth of the incoming damage. The room refills to a
+ * cap of TEN MONSTERS OF ANY KIND, 80% tusked / 20% zombie (throne1.kod plMonsters). So a zombie
+ * nobody kills is a slot a tusked skeleton cannot have, and killing only skeletons walks the room
+ * towards all-zombie.
+ *
+ * And FOCUS: the third hold dealt ~1,400 damage in 30 minutes, spread over whatever each raider
+ * happened to be nearest. One shared target at a time turns ten raiders' blows into one kill.
+ */
+function pickFocus(others, p) {
+  const spare = String(p.spare ?? '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+  const fair = others.filter(o => !spare.some(w => String(o.name ?? '').toLowerCase().includes(w)));
+  if (!fair.length) return null;
+  const f = RUN.focus && fair.find(o => o.id === RUN.focus.id);
+  if (f) return f;
+  const next = fair[0];                                    // nearest to whoever chose it
+  RUN.focus = { id: next.id, name: next.name, since: Date.now() };
+  return next;
+}
+
 /** Find the ghost (and everything else attackable) from where this agent stands. */
 async function lookAround(agent, target) {
   const look = await call('look', { agent }, 40_000).catch(() => null);
@@ -370,6 +406,8 @@ export const script = {
     raid_flee_below: { type: 'number', default: 0.15, describe: 'keeper flee point during the raid' },
     raid_rest_below: { type: 'number', default: 0.3, describe: 'keeper rest point during the raid' },
     swings: { type: 'number', default: 3, describe: 'swings per attack call in the farm loop' },
+    spare: { type: 'string', default: 'zombie',
+             describe: 'comma-separated creatures the farm never attacks, to hold room slots. Empty = fight everything' },
     return_at: { type: 'number', default: 0.85, describe: 'walk back in at this health fraction' },
     light_every_s: { type: 'number', default: 150, describe: 'recast forces of light at least this often' },
     light_rest_below: { type: 'number', default: 0.8, describe: 'the light-bearer rests in 38 below this' },
@@ -595,7 +633,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
     }
     const { ghost, others } = await lookAround(agent, p.target);
     if (ghost) RUN.ghostSeen = true; else ghostGone(agent);
-    const g = ghost ?? others[0];
+    const g = ghost ?? pickFocus(others, p);
     if (!g) { await sleep(3000); continue; }                 // nothing yet: the next one is ~12s off
     if ((g.distance ?? 99) > 2) {
       const off = RING[closes++ % RING.length];

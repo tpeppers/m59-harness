@@ -400,6 +400,7 @@ export async function report(cfg) {
       `${lightEvents.filter(e => e.outcome === 'still up').length} arrived while still lit`,
     `retreats to room 38: ${events.filter(e => e.kind === 'retreat').length}; walked back in: ${events.filter(e => e.kind === 'return').length}`,
     healNote(events),
+    roomNote(events, killAt),
     buffNote(events),
     `ledger read: ${ledger && fs.existsSync(ledger) ? ledger : 'NONE — deaths are only the ones the raid itself saw'}`,
     meta.lab ? 'LAB RUN: DM conveniences were on (healed/placed/granted/refilled); the fight itself was not assisted' : 'no DM powers were used',
@@ -421,6 +422,19 @@ function healNote(events) {
                 l.reduce((n, e) => n + (e.heals ?? 0), 0);
   return `minor heal in the window: ${landed}/${tried} landed (healers ${h.reduce((n, e) => n + (e.landed ?? 0), 0)}, ` +
          `medics between swings ${f.reduce((n, e) => n + (e.heals_landed ?? 0), 0)}, light-bearer ${l.reduce((n, e) => n + (e.heals_landed ?? 0), 0)})`;
+}
+
+// DID SPARING ZOMBIES MOVE THE ROOM? Average escort by kind over the first and last five minutes
+// of the window, from the raid's own look samples.
+function roomNote(events, killAt) {
+  const rooms = events.filter(e => e.kind === 'room' && killAt && e.t >= killAt);
+  if (!rooms.length) return 'room composition: not sampled';
+  const kinds = [...new Set(rooms.flatMap(r => Object.keys(r.count ?? {})))];
+  const avg = rs => Object.fromEntries(kinds.map(k => [k, rs.length ? Number((rs.reduce((n, r) => n + (r.count?.[k] ?? 0), 0) / rs.length).toFixed(1)) : 0]));
+  const t0 = rooms[0].t, t1 = rooms[rooms.length - 1].t;
+  const fmt = o => Object.entries(o).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty';
+  return `room composition (avg): first 5 min ${fmt(avg(rooms.filter(r => r.t - t0 < 300_000)))}; ` +
+         `last 5 min ${fmt(avg(rooms.filter(r => t1 - r.t < 300_000)))}`;
 }
 
 function buffNote(events) {
