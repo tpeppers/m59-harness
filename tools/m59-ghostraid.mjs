@@ -479,7 +479,10 @@ async function rehearse(cfg) {
     const args = [shim, '--until', 'play', '--roster', roster, '--server', `${host}:${port}`,
                   '--admin', `${process.env.M59_ADMIN_HOST ?? host}:${process.env.M59_ADMIN_PORT ?? '19998'}`,
                   '--http', String(cfg.port), '--dashboard', String(Number(opt('--dashboard', cfg.port + 1))),
-                  ...(cfg.commit ? [] : ['--dry'])];
+                  // --no-settle: take the fleet the moment it is logged in. Waiting for keepers to go quiet
+                  // is waiting for them to wander: the first no-DM rehearsal's light-bearer walked from
+                  // room 2 to Tos in that gap, and died crossing Ukgoth on the way back.
+                  '--no-settle', ...(cfg.commit ? [] : ['--dry'])];
     console.log(`rebuilding the shadow fleet: node ${args.join(' ')}`);
     const { spawnSync } = await import('node:child_process');
     const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });

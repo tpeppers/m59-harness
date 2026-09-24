@@ -68,6 +68,7 @@ const HANDED = new Map();              // dedicator -> [{ owner, character }] ha
 const RETURNED = new Set();            // owners who have their hammer back
 let DEDICATORS_DONE = 0;
 const CONVOY = new Set();              // agents whose muster crosses Ukgoth together
+const FRAGILE_WEST = new Set();        // fragile characters refused the Ukgoth crossing
 
 async function dmLab() {
   const dm = await import('../m59-dm.mjs');
@@ -100,6 +101,7 @@ export const script = {
     muster_min_health: { type: 'number', default: 1, describe: 'health fraction to set out on the muster walk' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
     rally: { type: 'number', default: 598, describe: 'where a convoy gathers before crossing Ukgoth (0 = no convoy)' },
+    fragile_below: { type: 'number', default: 30, describe: 'max health under which a character is never walked through Ukgoth' },
     rally_wait_s: { type: 'number', default: 600, describe: 'how long the convoy waits for its last member' },
     cross_min_health: { type: 'number', default: 0.7, describe: 'health a convoy member needs to cross from the rally room' },
     place: { type: 'boolean', default: false, describe: 'LAB: teleport to the stage room after the hold instead of walking' },
@@ -159,6 +161,20 @@ export const script = {
           call('travel_estimate', { from, to: Number(p.rally) }, 20_000).catch(() => null)]);
         convoy = Number.isFinite(toStage?.hops) && Number.isFinite(toRally?.hops) && toStage.hops === toRally.hops + 2;
       }
+    }
+    // A FRAGILE BODY DOES NOT TAKE THE CONVOY. The first no-DM rehearsal (2026-09-24) walked the
+    // 20-health light-bearer from 598 across Ukgoth inside a convoy of seventeen, and the trolls
+    // killed him on the way — taking the fleet's only chalice and its only forces of light with
+    // him. A convoy spreads the trolls' attention; it does not make twenty health survivable in
+    // 599. Such a character is refused here, loudly, and must be brought to the castle side by
+    // other means (on prod his post is room 2 already) before the raid is run.
+    const maxHp = Number(here?.hp?.max ?? here?.vitals?.health?.max ?? 0);
+    if (convoy && maxHp && maxHp < Number(p.fragile_below)) {
+      FRAGILE_WEST.add(agent);
+      return [verify(async () => ({ ok: false,
+        why: `${agent} has ${maxHp} max health and stands west of Ukgoth; the muster will not walk it ` +
+             `through 599. Bring it to room ${p.stage} first (on prod the light-bearer's post is there).` }),
+        'the fragile-body refusal')];
     }
     if (convoy) CONVOY.add(agent);
     return [
