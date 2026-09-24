@@ -51,6 +51,8 @@
 // throws on any fleet not named in M59_LAB_FLEETS, so `lab=true` against prod refuses before a
 // single DM packet. On prod the same steps rest for mana and report a shortfall instead.
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
+import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate }
+  from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
          planReagents, countFamily, assignRoles, blessAssignments, expect, reexpect, barrier, leave }
   from '../m59-ghostraid-lib.mjs';
@@ -110,6 +112,16 @@ export const script = {
     herbs_each: { type: 'number', default: 30, describe: 'herbs every minor-heal caster should carry (1 a cast)' },
     channel: { type: 'string', default: 'say' },
     wait_mana_s: { type: 'number', default: 900, describe: 'how long a dedicator may rest for mana, in all' },
+    // THE ARMORERS (ghost-outfit.mjs). Money pooled, a chalice ride to the guild hall, the Barloque
+    // smith, back through Ukgoth together. No DM power anywhere in it.
+    outfit: { type: 'boolean', default: true, describe: 'send armorers for shields, chain and missing hammers' },
+    armorers: { type: 'string', default: '', describe: 'comma-separated pair; empty = the two sturdiest non-casters' },
+    trips: { type: 'number', default: 2, describe: 'shopping trips at most' },
+    hall: { type: 'number', default: 714, describe: 'where the chalice lands a guild member (the Bookmakers hall)' },
+    shop_room: { type: 'number', default: 113, describe: 'the Barloque smith' },
+    smith: { type: 'string', default: "Fehr'loi Qan", describe: 'the merchant to sell to and buy from' },
+    keep_shillings: { type: 'number', default: 20, describe: 'what each raider keeps when pooling money' },
+    outfit_wait_s: { type: 'number', default: 3600, describe: 'how long the fleet waits for the armorers' },
   },
 
   async steps(p, agentArg, state) {
@@ -189,16 +201,53 @@ export const script = {
         const worn = (me?.equipment ?? []).find(e => isWeaponName(e)) ?? null;
         SURVEY.set(agent, { character: me?.character ?? agent, wielding: worn,
                             items: inv?.items ?? [], mana: manaOf(me), maxMana: Number(me?.mana?.max ?? 0),
+                            maxHealth: Number(me?.hp?.max ?? me?.vitals?.health?.max ?? 0),
+                            might: Number(me?.attributes?.might ?? 0),
                             spells: (sp?.spells ?? []).map(s => String(s.name ?? '').toLowerCase()) });
         // Long enough for a real muster (a convoy through 598 is ten-plus minutes), short when
         // the lab has teleported everyone. A character that failed its muster never arrives, and
         // everything after this barrier stops waiting for it (reexpect below).
         const b = await barrier('survey', agent, { ms: Number(p.muster_wait_s) * 1000 });
         // Whoever did not make the survey will not make anything after it.
-        for (const k of ['hammers', 'reagents-moved', 'reagents', 'dropped', 'armed']) reexpect(k, SURVEY.size);
+        for (const k of ['hammers', 'reagents-moved', 'reagents', 'dropped', 'armed', 'pooled']) reexpect(k, SURVEY.size);
         st.survey = { wielding: worn, fleet_seen: SURVEY.size, barrier: b };
         return true;
       }, 'the survey could not be read'),
+
+      // ---- 1b. THE ARMORERS: everyone hands its money to one of the pair, and one plan is made.
+      ...(outfitOn(p) ? [verify(async ({ state: st }) => {
+        const pair = armorersOf(agents, p);
+        const roles = rolesNow(agents, p);
+        if (!pair.length) { st.pool = { skipped: 'no armorers' }; OUTFIT_RUN.done = true; return true; }
+        if (!pair.includes(agent)) {
+          const to = pair[[...agents].sort().indexOf(agent) % pair.length];
+          st.pool = { to, ...(await poolMoney(agent, to, Number(p.keep_shillings))) };
+        }
+        await barrier('pooled', agent, { ms: 300_000 });
+        if (agent === pair[0] && !OUTFIT_RUN.plan) {
+          // ONE plan for the whole fleet, from fresh packs, so the armorers split it without overlap.
+          const needs = {}, packs = {};
+          await Promise.all(agents.filter(a => a !== roles.lightbearer && SURVEY.has(a)).map(async a => {
+            packs[a] = (await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? [];
+            needs[a] = outfitNeeds(packs[a]);
+          }));
+          const budget = pair.reduce((n, a) => n + (packs[a] ?? []).filter(i => /^shilling/i.test(String(i.name ?? '')))
+            .reduce((m, i) => m + (Number(i.amount) || 1), 0), 0);
+          // Planned against the pack as it will be AFTER selling: money, reagents, the cup and the
+          // weapon are what stay.
+          const capacity = pair.map(a => ({ agent: a, ...packRoom(SURVEY.get(a)?.might,
+            (packs[a] ?? []).filter(i => /shilling|elderberr|herb|mushroom|orc tooth|emerald|sapphire|chalice|hammer|mace/i.test(String(i.name ?? '')))) }));
+          // One load per trip; `trips` loads in all.
+          const trips = Math.max(1, Number(p.trips));
+          const bigCap = capacity.map(c => ({ ...c, weight: c.weight * trips, bulk: c.bulk * trips }));
+          OUTFIT_RUN.plan = planOutfit(needs, { budget, capacity: bigCap });
+          const pl = OUTFIT_RUN.plan;
+          console.log(`  armorers ${pair.join(' + ')}: budget ${budget}, buying ${pl.buys.length} piece(s) for ${pl.spend}` +
+                      (pl.cut.length ? `; cut ${pl.cut.length} (${[...new Set(pl.cut.map(c => c.why))].join(', ')})` : ''));
+        }
+        st.pool = { ...(st.pool ?? {}), armorers: pair };
+        return true;
+      }, 'the money pool could not be read back')] : []),
 
       // ---- 2. A HAMMER IN EVERY HAND.
       verify(async ({ state: st }) => {
@@ -342,6 +391,26 @@ export const script = {
           st.dedicate = { skipped: 'no dedicator' };
           return true;
         }
+        // THE ARMORERS SHOP WHILE THE FLEET DEDICATES. Their own hammers are dedicated when they
+        // come back (lateDedicate): a hammer with a dedicator cannot be on the road as well.
+        if (outfitOn(p) && armorersOf(agents, p).includes(agent) && !dedicators.includes(agent)) {
+          leave('dropped', agent);
+          const pair = armorersOf(agents, p);
+          const lines = OUTFIT_RUN.plan?.byCarrier?.[agent] ?? [];
+          await say(`Armorer: off to Barloque for ${lines.length} piece(s).`);
+          // FINISHED IN A finally: an errand that throws must not leave twenty characters waiting
+          // out the whole outfit_wait_s for a delivery that is never coming.
+          try {
+            st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: roles.lightbearer, lines, p });
+          } catch (e) {
+            st.armorer = { error: e?.message ?? String(e) };
+          } finally {
+            OUTFIT_RUN.log.push({ agent, ...st.armorer });
+            OUTFIT_RUN.finished = (OUTFIT_RUN.finished ?? 0) + 1;
+            if (OUTFIT_RUN.finished >= pair.length) OUTFIT_RUN.done = true;
+          }
+          return true;
+        }
         return dedicators.includes(agent)
           ? dedicate({ agent, st, say, dedicators, agents, lab, p })
           : handIn({ agent, st, say, dedicators, agents, p });
@@ -358,9 +427,38 @@ export const script = {
         await barrier('armed', agent, { ms: 60_000 });
         return true;
       }, 'the armed state could not be read back'),
+
+      // ---- 6. DRESS: wait for the armorers, wear shield and chain, dedicate a hammer that came late.
+      ...(outfitOn(p) ? [verify(async ({ state: st }) => {
+        const roles = rolesNow(agents, p);
+        const until = Date.now() + Number(p.outfit_wait_s) * 1000;
+        // EVERYONE WAITS, THE CUP-HOLDER INCLUDED: a second trip starts with the cup handed over in
+        // room 2, and a light-bearer who had moved on to the door would strand it.
+        while (!OUTFIT_RUN.done && Date.now() < until) await sleep(5000);
+        if (agent === roles.lightbearer) { st.outfit = { skipped: 'light-bearer (held the cup)' }; return true; }
+        st.outfit = await wearOutfit(agent);
+        const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || armorersOf(agents, p).includes(agent);
+        if (late) st.outfit.dedicate = await lateDedicate(agent, roles.dedicators,
+          { lab, dm: lab ? await dmLab() : null });
+        console.log(`  ${String(SURVEY.get(agent)?.character ?? agent).padEnd(8)} dressed: ${st.outfit.wore.join('+') || 'nothing new'}` +
+                    (st.outfit.dedicate ? `; hammer ${st.outfit.dedicate.ok ? st.outfit.dedicate.outcome : 'NOT dedicated: ' + st.outfit.dedicate.why}` : ''));
+        return true;
+      }, 'the outfit could not be read back')] : []),
     ];
   },
 };
+
+const outfitOn = p => p.outfit === true || p.outfit === 'true';
+
+/** The pair: named, or the two sturdiest characters who are not a caster, a healer or the light. */
+function armorersOf(agents, p) {
+  const named = String(p.armorers ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  if (named.length) return named;
+  const roles = rolesNow(agents, p);
+  return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && !roles.dedicators.includes(a) && !roles.healers.includes(a))
+    .sort((a, b) => (SURVEY.get(b).maxHealth - SURVEY.get(a).maxHealth) || a.localeCompare(b))
+    .slice(0, 2);
+}
 
 function rolesNow(agents, p) {
   const spells = Object.fromEntries([...SURVEY.entries()].map(([a, s]) => [a, s.spells]));

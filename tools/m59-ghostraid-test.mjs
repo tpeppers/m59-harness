@@ -132,5 +132,25 @@ const none = survivalReport({ participants, startAt: t0, killAt: null, windowMin
 ok(!none.ghost_killed && none.fight_seconds === null, 'no kill is reported as no kill');
 ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' })), 'the markdown carries the headline');
 
+// ---- the armorers
+{
+  const { outfitNeeds, planOutfit, packRoom } = await import('./fleetscripts/ghost-outfit.mjs');
+  const bare = outfitNeeds([{ name: 'long sword' }, { name: 'leather armor' }]);
+  ok(bare.shield && bare.chain && bare.hammer, 'a swordsman in leather needs shield, chain and a hammer');
+  const set = outfitNeeds([{ name: 'mace' }, { name: 'small round shield' }, { name: 'chain armor' }]);
+  ok(!set.shield && !set.chain && !set.hammer, 'a mace counts as blunt; a worn shield and chain need nothing');
+  const needs = { a: { shield: true, chain: true, hammer: true }, b: { shield: true, chain: true, hammer: false } };
+  const rich = planOutfit(needs, { budget: 100000, capacity: [{ agent: 'x', weight: 5000, bulk: 5000 }] });
+  ok(rich.buys.length === 5 && rich.spend === 2 * 288 + 2 * 1800 + 810, 'with enough money and room, everything is bought');
+  ok(rich.buys[0].kind === 'shield' && rich.buys[1].kind === 'shield', 'shields for everyone come first');
+  const poor = planOutfit(needs, { budget: 288 * 2 + 1800, capacity: [{ agent: 'x', weight: 5000, bulk: 5000 }] });
+  ok(poor.buys.filter(b => b.kind === 'shield').length === 2 && poor.buys.filter(b => b.kind === 'chain').length === 1,
+     'short of money: every shield, then chain until it runs out');
+  ok(poor.cut.some(c => c.why === 'money'), 'and what was cut is said, with why');
+  const tight = planOutfit(needs, { budget: 100000, capacity: [{ agent: 'x', weight: 300, bulk: 400 }] });
+  ok(tight.buys.length === 3 && tight.cut.filter(c => c.why === 'pack').length === 2, 'the pack caps it: two shields and a hammer fit, two chain do not');
+  ok(packRoom(50, [{ name: 'hammer' }]).weight === 1700 + 1000 - 80, 'pack room: 1700 + 20 x might, less what is carried');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

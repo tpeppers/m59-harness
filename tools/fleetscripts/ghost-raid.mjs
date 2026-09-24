@@ -539,7 +539,16 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
           return !h.dead;
         }
         await call('rest', { agent, stand: true }, 30_000).catch(() => {});
-        const r = await castVerified(agent, LIGHT.spell, { target: null, cost: LIGHT.mana });
+        // RETRY WHAT IS RETRYABLE, THERE AND THEN. The fourth rehearsal's opening light came back
+        // `nothing_happened` — most likely interrupted, since the ghost goes for casters — and the
+        // loop then waited out the whole relight timer with the room dark. A broken cast is a
+        // second cast, not a two-and-a-half-minute wait.
+        let r = await castVerified(agent, LIGHT.spell, { target: null, cost: LIGHT.mana });
+        for (let i = 0; i < 2 && !r.landed && !r.in_effect && r.retryable !== false
+                         && /nothing_happened|interrupt/.test(String(r.outcome ?? '')); i++) {
+          await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+          r = await castVerified(agent, LIGHT.spell, { target: null, cost: LIGHT.mana });
+        }
         const outcome = r.landed ? 'cast' : r.in_effect ? 'still up' : `failed: ${String(r.why ?? '').slice(0, 60)}`;
         if (r.landed || r.in_effect) { RUN.light.lastCast = Date.now(); RUN.light.expired = false; }
         if (r.landed) RUN.light.casts++;

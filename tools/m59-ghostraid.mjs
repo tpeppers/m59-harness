@@ -487,4 +487,4 @@ async function main() {
 }
 
 const isEntryPoint = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isEntryPoint) main().then(() => process.exit(0), e => { console.error(`m59-ghostraid: ${e.message}`); process.exit(1); });
+if (isEntryPoint) main().then(() => { process.exitCode = 0; }, e => { console.error(`m59-ghostraid: ${e.message}`); process.exitCode = 1; });
