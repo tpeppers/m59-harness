@@ -487,4 +487,7 @@ async function main() {
 }
 
 const isEntryPoint = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isEntryPoint) main().then(() => { process.exitCode = 0; }, e => { console.error(`m59-ghostraid: ${e.message}`); process.exitCode = 1; });
+if (isEntryPoint) main().then(() => { process.exitCode = 0; }, e => { console.error(`m59-ghostraid: ${e.message}`); process.exitCode = 1; })
+  // Exit on our own once the work is done, but let libuv close its handles first: process.exit
+  // inside a promise continuation trips "handle->flags & UV_HANDLE_CLOSING" on Windows.
+  .finally(() => setTimeout(() => process.exit(process.exitCode ?? 0), 10_000).unref());
