@@ -93,6 +93,10 @@ export function configure(env = process.env) {
     // everyone (vigor over 80 has to be eaten). Name buffs here to self-cast them in room 2 too.
     buffs: opt('--buffs', ''),
     ledger: opt('--ledger', env.M59_LEDGER_DIR ?? null),
+    // THE DUM RAID PROFILE (meridian59-dum-bot, branch raid-profiles): a running DUM's
+    // operation-profile overlay, switched on for the raid and off when it officially ends.
+    dumUrl: opt('--dum-url', null),
+    dumProfile: opt('--dum-profile', null),
   };
 }
 
@@ -255,6 +259,11 @@ async function runPhases(cfg, phases, extra = {}) {
     // Loial has 20 maximum health. fragileBody refuses a journey for a body that small, which is
     // right on a road and wrong for two rooms of a castle — see fleetlib's note on fragileBelow.
     fragileBelow: extra.fragileBelow ?? 15,
+    // A WALK'S PATIENCE, FLOORED AT TEN MINUTES. The harness sizes a walk's budget from its p90 with
+    // a three-minute floor, and a convoy crossing Ukgoth under troll fire takes longer: the first
+    // no-DM rehearsal re-issued walks that were still in progress, got 'busy', and dropped live
+    // raiders from the run. Ten minutes is the rally's own patience.
+    budgetFloorMs: extra.budgetFloorMs ?? 600_000,
     steps: compile,
   });
 }
@@ -279,6 +288,7 @@ const fightParams = (cfg, dir, mustered) => ({
   minutes: cfg.minutes, run_dir: cfg.commit ? dir : '', lab: cfg.lab, mustered,
   ...(opt('--room') ? { room: Number(opt('--room')) } : {}), ...(opt('--door') ? { door: Number(opt('--door')) } : {}),
   ...(opt('--target') ? { target: opt('--target') } : {}),
+  dum_profile: !!cfg.dumUrl,
 });
 
 async function arm(cfg) {
@@ -310,11 +320,19 @@ async function fight(cfg, { composed = false } = {}) {
     }, null, 1));
     console.log(`raid directory: ${dir}`);
   }
-  const res = composed
-    ? await runPhases(cfg, [{ file: 'ghost-arm.mjs', params: armParams(cfg) },
-                            { file: 'raid-prep.mjs', params: prepParams(cfg) },
-                            { file: 'ghost-raid.mjs', params: fightParams(cfg, dir, true) }])
-    : await runPhase(cfg, 'ghost-raid.mjs', fightParams(cfg, dir, false));
+  // The DUM raid profile, ON before the script touches anyone (see dumOn) and OFF however this ends.
+  const roles = cfg.dumUrl && cfg.commit ? await plan(cfg) : null;
+  if (roles) await dumOn(cfg, roles, dir);
+  let res;
+  try {
+    res = composed
+      ? await runPhases(cfg, [{ file: 'ghost-arm.mjs', params: armParams(cfg) },
+                              { file: 'raid-prep.mjs', params: prepParams(cfg) },
+                              { file: 'ghost-raid.mjs', params: fightParams(cfg, dir, true) }])
+      : await runPhase(cfg, 'ghost-raid.mjs', fightParams(cfg, dir, false));
+  } finally {
+    if (roles) await dumOff(cfg);
+  }
   summarise(composed ? 'muster+arm+prep+fight' : 'fight', res);
   if (res) {
     fs.writeFileSync(path.join(dir, 'results.json'), JSON.stringify(res, null, 1));
@@ -491,6 +509,80 @@ async function rehearse(cfg) {
   return fight({ ...cfg, lab: false }, { composed: true });
 }
 
+// ---------------------------------------------------------------------------------- the DUM raid profile
+
+/**
+ * SWITCH THE RAID PROFILE ON FOR THE RAID, AND OFF WHEN IT ENDS.
+ *
+ * A running DUM holds every character's normal role — its station, its hunt, its shifts. For the
+ * raid it takes an OPERATION PROFILE instead (`POST /overlay` on its loopback control port): it
+ * snapshots each raider's settings to disk, holds them to the raid role, and on `off` puts back
+ * exactly what was there. DUM steps over any character the raid script holds, so switching it on
+ * at the start is harmless and switching it on FIRST is the point: the snapshot must be of the
+ * normal settings, before the script applies its own raid posture at the door.
+ *
+ * It is the SAFETY FLOOR, not the fighter: the script still drives the hold (focus fire and
+ * two-second heals are not keeper abilities). If the script dies mid-raid its lease lapses and
+ * the raiders fall to the raid profile INSIDE the throne room, instead of back to their shifts
+ * and out through the castle. Loial is left out by default: on prod DUM does not drive him.
+ *
+ * Optional throughout: no --dum-url, or a DUM that does not answer, is a warning and the raid
+ * goes on exactly as before.
+ */
+const stripJsonc = t => String(t).replace(/("(?:\\.|[^"\\])*")|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (m, str) => str ?? '');
+
+async function dumOverlay(cfg, body) {
+  const r = await fetch(new URL('/overlay', cfg.dumUrl), body
+    ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) }
+    : { signal: AbortSignal.timeout(60_000) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+  return j;
+}
+
+export async function dumOn(cfg, roles, dir) {
+  if (!cfg.dumUrl) return null;
+  try {
+    if (!cfg.dumProfile) throw new Error('--dum-url needs --dum-profile <path to raid-hold.jsonc>');
+    const h = await (await fetch(new URL('/health', cfg.dumUrl), { signal: AbortSignal.timeout(10_000) })).json();
+    if (h?.fleet && h.fleet !== cfg.fleet) throw new Error(`the DUM on ${cfg.dumUrl} drives fleet ${h.fleet}, not ${cfg.fleet}`);
+    const profile = JSON.parse(stripJsonc(fs.readFileSync(cfg.dumProfile, 'utf8')));
+    const members = {};
+    for (const a of roles.raiders ?? []) members[a] = 'raider';
+    for (const a of roles.healers ?? []) members[a] = 'healer';
+    const out = await dumOverlay(cfg, { action: 'on', profile, members, expected_fleet: cfg.fleet,
+                                        by: 'm59-ghostraid', why: 'ghost of Far\'Nohl raid' });
+    if (dir) fs.writeFileSync(path.join(dir, 'overlay-on.json'), JSON.stringify(out, null, 1));
+    console.log(`DUM raid profile ON for ${Object.keys(members).length} raider(s) via ${cfg.dumUrl}`);
+    return out;
+  } catch (e) {
+    console.log(`WARNING: the DUM raid profile was NOT switched on (${e.message}); the raid runs without it`);
+    return null;
+  }
+}
+
+export async function dumOff(cfg) {
+  if (!cfg.dumUrl) return null;
+  try {
+    await dumOverlay(cfg, { action: 'off', expected_fleet: cfg.fleet, by: 'm59-ghostraid', why: 'the raid has ended' });
+    const until = Date.now() + 3 * 60_000;
+    let st = null;
+    while (Date.now() < until) {
+      st = await dumOverlay(cfg, null);
+      if (!st?.active || st.clearable) break;
+      await new Promise(r => setTimeout(r, 5000));
+    }
+    if (st?.clearable) await dumOverlay(cfg, { action: 'clear' });
+    console.log(`DUM raid profile OFF${st?.clearable ? ' and cleared: everyone is back on their own role'
+      : ` — ${st?.unrestored?.length ?? '?'} not yet restored; check \`dum.mjs overlay status\``}`);
+    return st;
+  } catch (e) {
+    console.log(`WARNING: could not switch the DUM raid profile off (${e.message}). Do it by hand: ` +
+                'node bin/dum.mjs overlay off --commit (from the DUM checkout)');
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------------- restore
 
 /**
@@ -515,7 +607,7 @@ async function restoreSettings(cfg) {
 async function main() {
   const verb = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'plan';
   if (verb === 'report') return report({ ledger: opt('--ledger') });
-  if (verb === 'restore') return restoreSettings(configure());
+  if (verb === 'restore') { const c = configure(); await dumOff(c); return restoreSettings(c); }
   if (verb === 'rehearse') return rehearse(configure());
   const cfg = configure();
   if (cfg.lab) { const { assertLabFleet } = await import('./m59-fleetscript.mjs'); assertLabFleet('m59-ghostraid --lab'); }

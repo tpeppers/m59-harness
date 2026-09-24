@@ -260,6 +260,10 @@ async function restorePosture(agent) {
  * he died. So every role ends by walking to the stage room, then its settings are put back.
  */
 async function windDown(agent, p) {
+  // WITH THE DUM RAID PROFILE ON, DUM OWNS THE WAY OUT. It snapshotted this character's normal
+  // settings before the raid and restores them on `off`; it also holds the raider inside the
+  // throne room until then. Walking it out and restoring here would be two owners of one body.
+  if (p.dum_profile === true || p.dum_profile === 'true') return;
   const o = await observe(agent);
   if (!o.dead && Number(o.room) !== Number(p.stage)) await hop(agent, Number(p.stage));
   await restorePosture(agent);
@@ -419,6 +423,7 @@ export const script = {
     sample_s: { type: 'number', default: 15 },
     run_dir: { type: 'string', default: '' },
     mustered: { type: 'boolean', default: false, describe: 'the fleet was mustered earlier in this same run' },
+    dum_profile: { type: 'boolean', default: false, describe: 'a DUM raid profile is on: leave the wind-down and restore to it' },
     channel: { type: 'string', default: 'say' },
     lab: { type: 'boolean', default: false,
            describe: 'LAB ONLY: refill a buffer mana at the door instead of waiting for it. Never during the fight' },
