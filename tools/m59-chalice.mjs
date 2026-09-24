@@ -95,12 +95,30 @@ export const CHALICE_DEFAULTS = Object.freeze({
   handover_below_casts: 12,
   // A ticket older than this is abandoned, whoever holds it.
   ticket_ttl_ms: 300_000,
+  // FORCES OF LIGHT ON REQUEST. When set, the holder waits at its post and lights THIS room
+  // only when a fleetmate standing in it asks -- stepping in, casting until a cast pays, and
+  // stepping straight back out. A 20-health caster is safe at the post and not in the room.
+  fol_room: null,
+  // Ask for a recast this long before the holder's own clock says it lapses.
+  fol_lead_ms: 5_000,
+  // WHAT THE HOLDER SHOULD CARRY, so the fleet can keep it there instead of the holder
+  // walking to town. Travellers donate spares toward it at the station, and restock it from
+  // the guild chest when they land in the hall and hand it over on the way back.
+  holder_supply: Object.freeze({}),
+  // How much of the holder's shortfall one traveller takes on per trip, per item.
+  restock_per_trip: 60,
+  // The holder's services at the station, asked for while the traveller holds the cup.
+  uncurse: true,
+  reveal: true,
+  // Unrevealed items one traveller may drop for revealing in one visit (3 orc teeth each).
+  reveal_max: 3,
 });
 
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
+  fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
 };
 
 /**
@@ -116,10 +134,23 @@ export function normalizeChalice(cfg = null) {
     if (k === 'enabled') continue;
     if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
     if (k === 'holder' || k === 'alternate') { out[k] = v == null ? null : String(v).trim() || null; continue; }
-    if (k === 'post_room') {
-      if (v == null) { out.post_room = null; continue; }
+    if (k === 'uncurse' || k === 'reveal') { out[k] = v !== false; continue; }
+    if (k === 'holder_supply') {
+      const supply = {};
+      if (v && typeof v === 'object' && !Array.isArray(v))
+        for (const [item, n] of Object.entries(v)) {
+          const want = Math.floor(Number(n));
+          if (String(item).trim() && Number.isFinite(want) && want > 0) supply[String(item).trim().toLowerCase()] = want;
+          else problems.push(`holder_supply.${item} must be a positive count`);
+        }
+      else if (v != null) problems.push('holder_supply must be {item: count}');
+      out.holder_supply = supply;
+      continue;
+    }
+    if (k === 'post_room' || k === 'fol_room') {
+      if (v == null) { out[k] = null; continue; }
       const n = Number(v);
-      if (Number.isInteger(n) && n > 0) out.post_room = n; else problems.push('post_room must be a room number');
+      if (Number.isInteger(n) && n > 0) out[k] = n; else problems.push(`${k} must be a room number`);
       continue;
     }
     const n = Number(v), [lo, hi] = NUMBERS[k];
@@ -141,6 +172,50 @@ export function normalizeChalice(cfg = null) {
 
 export const sameName = (a, b) => a != null && b != null &&
   String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+
+/**
+ * WHAT THE HOLDER IS SHORT OF, net of what other travellers have already pledged to bring.
+ * Pure. A pledge older than an hour is a traveller that never came back and counts for
+ * nothing.
+ */
+export function holderShortfall(supply = {}, { now = Date.now(), except = null } = {}) {
+  const out = {};
+  const pledged = {};
+  for (const p of supply.pledged ?? [])
+    if (now - (p.at ?? 0) < 60 * 60_000 && !sameName(p.by, except))
+      pledged[p.item] = (pledged[p.item] ?? 0) + (p.amount ?? 0);
+  for (const [item, target] of Object.entries(supply.target ?? {})) {
+    const short = target - (supply.have?.[item] ?? 0) - (pledged[item] ?? 0);
+    if (short > 0) out[item] = short;
+  }
+  return out;
+}
+
+/**
+ * What a traveller can spare toward the holder: what it carries beyond its own floor, capped
+ * by what the holder is short of. Pure. `floors` is the traveller's own keep-at-least counts.
+ */
+export function donationPlan({ have = {}, floors = {}, shortfall = {} } = {}) {
+  const out = {};
+  for (const [item, short] of Object.entries(shortfall)) {
+    const spare = Math.max(0, (have[item] ?? 0) - (floors[item] ?? 0));
+    const give = Math.min(spare, short);
+    if (give > 0) out[item] = give;
+  }
+  return out;
+}
+
+/**
+ * Should a character standing in the forces-of-light room ask for a cast? Pure. The holder's
+ * clock is the only one there is -- occupants cannot see the enchantment, only hear it -- so
+ * "lapsed by that clock, or never recorded" is the whole test.
+ */
+export function folWanted({ cfg, here, fol = {}, now = Date.now(), role = null } = {}) {
+  if (!cfg?.enabled || cfg.fol_room == null) return false;
+  if (role === 'holder') return false;
+  if (Number(here) !== cfg.fol_room) return false;
+  return !(Number(fol.until) > now + (cfg.fol_lead_ms ?? 0));
+}
 
 /** 'holder', 'alternate' or 'traveller'. Everybody not named is a traveller. */
 export function roleOf(character, cfg) {
@@ -184,6 +259,11 @@ export function servingCharacter(duty, cfg, now = Date.now()) {
   // A record nobody has refreshed for a long while is a keeper that stopped, not a server.
   if (Number.isFinite(d.seen_at) && now - d.seen_at > 15 * 60_000) return null;
   return d.with;
+}
+
+/** Whoever should receive the holder's restock: the server on duty, else the holder. */
+export function servingOrHolder(duty, cfg) {
+  return servingCharacter(duty, cfg) ?? cfg?.holder ?? null;
 }
 
 /**
@@ -278,8 +358,9 @@ export class ChaliceStore {
   read() {
     try {
       const s = JSON.parse(readFileSync(this.path, 'utf8'));
-      return { v: 1, duty: s.duty ?? {}, tickets: Array.isArray(s.tickets) ? s.tickets : [] };
-    } catch { return { v: 1, duty: {}, tickets: [] }; }
+      return { v: 1, duty: s.duty ?? {}, fol: s.fol ?? {}, supply: s.supply ?? {},
+               tickets: Array.isArray(s.tickets) ? s.tickets : [] };
+    } catch { return { v: 1, duty: {}, fol: {}, supply: {}, tickets: [] }; }
   }
 
   /** Apply `fn(state) -> result` atomically. `fn` mutates the state it is given. */
@@ -325,13 +406,13 @@ export class ChaliceStore {
   }
 
   // ---- travellers
-  request(traveller, { room, kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms } = {}, now = Date.now()) {
+  request(traveller, { room, kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms, items = null } = {}, now = Date.now()) {
     return this.update(s => {
       expire(s, now, ttlMs);
       const live = s.tickets.find(t => sameName(t.traveller, traveller) && t.kind === kind && isLive(t));
       if (live) return { ...live };
       const t = { id: `${kind}-${now}-${Math.random().toString(36).slice(2, 7)}`, kind, traveller,
-                  room, at: now, status: 'open', by: null, updated_at: now };
+                  room, at: now, status: 'open', by: null, updated_at: now, ...(items ? { items } : {}) };
       s.tickets.push(t);
       return { ...t };
     }, now);
@@ -363,11 +444,63 @@ export class ChaliceStore {
 
   openCount(kind = 'ride') { return this.read().tickets.filter(t => t.kind === kind && t.status === 'open').length; }
 
+  /** Open tickets of `kinds` filed by `traveller`, oldest first. */
+  openFrom(traveller, kinds = []) {
+    return this.read().tickets.filter(t => kinds.includes(t.kind) && t.status === 'open'
+      && sameName(t.traveller, traveller)).sort((a, b) => a.at - b.at);
+  }
+
   // ---- duty
   duty() { return this.read().duty ?? {}; }
 
   setDuty(patch, now = Date.now()) {
     return this.update(s => { s.duty = { ...s.duty, ...patch, seen_at: now }; return { ...s.duty }; }, now);
+  }
+
+  // ---- the holder's supply, and the travellers' pledges to restock it
+  supply() { return this.read().supply ?? {}; }
+
+  setSupply({ have, target }, now = Date.now()) {
+    return this.update(s => {
+      s.supply = { ...(s.supply ?? {}), have, target, at: now,
+                   pledged: (s.supply?.pledged ?? []).filter(p => now - (p.at ?? 0) < 60 * 60_000) };
+      return { ...s.supply };
+    }, now);
+  }
+
+  /** Take on part of the shortfall. Returns what was granted, never more than is short. */
+  pledge(by, wants, now = Date.now()) {
+    return this.update(s => {
+      const supply = (s.supply ??= {});
+      supply.pledged = (supply.pledged ?? []).filter(p => !sameName(p.by, by));
+      const short = holderShortfall(supply, { now });
+      const granted = {};
+      for (const [item, n] of Object.entries(wants)) {
+        const g = Math.min(n, short[item] ?? 0);
+        if (g > 0) { granted[item] = g; supply.pledged.push({ by, item, amount: g, at: now }); }
+      }
+      return granted;
+    }, now);
+  }
+
+  unpledge(by, now = Date.now()) {
+    return this.update(s => {
+      if (s.supply?.pledged) s.supply.pledged = s.supply.pledged.filter(p => !sameName(p.by, by));
+      return true;
+    }, now);
+  }
+
+  // ---- forces of light: the holder's clock, shared so the room's occupants can ask in time
+  fol() { return this.read().fol ?? {}; }
+
+  /** Record a lit room and close every open request for it -- one cast answers them all. */
+  litFol({ room, until, by }, now = Date.now()) {
+    return this.update(s => {
+      s.fol = { room, until, by, at: now };
+      for (const t of s.tickets)
+        if (t.kind === 'fol' && isLive(t)) Object.assign(t, { status: 'done', updated_at: now, by });
+      return { ...s.fol };
+    }, now);
   }
 }
 

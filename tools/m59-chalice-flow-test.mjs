@@ -286,6 +286,106 @@ try {
     const free = await rizzo.chaliceDuty();
     ok(free === false, 'Rizzo is released back to farming');
   }
+
+  // ---------------------------------------------------------------------------------------
+  section('services and supply: uncursed and revealed at the station, donates, restocks from the chest');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'seven' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2,
+      holder_supply: { elderberry: 200, emerald: 110, 'orc tooth': 30 } });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain'),
+      world.item('elderberry', 100), world.item('emerald', 110), world.item('orc tooth', 9)] });
+    const ring = world.item('ring of lethargy'); ring.rarity = 200;
+    const sword = world.item('long sword'); sword.rarity = 100;
+    const kermitP = world.add('Kermit', { room: 38, inventory: [world.item('shillings', 1000), ring, sword,
+      world.item('elderberry', 90), world.item('orc tooth', 12)] });
+    kermitP.client.equipment = () => ({ equipped: [{ id: ring.id }] });
+    const loial = keeper(world, loialP, { cfg, store });
+    const kermit = keeper(world, kermitP, { cfg, store });
+    kermit.carryFloors = () => ({});
+    kermit.policy.guildWants = { enabled: true };
+    const cast = [];
+    loial.chaliceCast = async (name, target) => {
+      cast.push({ name, target });
+      if (name === 'remove curse') ring.rarity = 0;
+      if (name === 'reveal') for (const it of world.floor.get(2) ?? []) if (it.id === target) it.rarity = 0;
+      return { cast: true };
+    };
+    kermit.withdrawFromStockpile = async (need) => {
+      for (const { item, amount } of need) kermitP.client.inventory.push(world.item(item, amount));
+      return { took: need };
+    };
+    await loial.chaliceDuty();                         // publishes the supply
+    ok(store.supply().target?.elderberry === 200, 'the holder published its supply and target');
+    const trip = { target: { room: 113, hops: 9 } };
+    await runUntil(() => trip.chalice?.stage === 'done', [
+      async () => { world.tick(); if (!['done', 'off'].includes(trip.chalice?.stage)) await kermit.chaliceRide(trip); },
+      async () => { await loial.chaliceDuty(); },
+    ]);
+    ok(kermitP.room === GUILD_HALL_ROOM, `landed (${trip.chalice?.stage} ${trip.chalice?.why ?? ''})`);
+    ok(cast.some(c => c.name === 'remove curse' && c.target === kermitP.self.id), 'remove curse was cast on the traveller');
+    ok(ring.rarity !== 200, 'and the ring is no longer cursed');
+    ok(cast.some(c => c.name === 'reveal' && c.target === sword.id), 'reveal was cast on the sword where it lay');
+    ok(kermitP.client.inventory.some(x => x.id === sword.id), 'and the traveller picked its sword back up');
+    const loialBerries = loialP.client.inventory.filter(x => world.nameOf(x) === 'elderberry').reduce((a, x) => a + x.amount, 0);
+    ok(loialBerries > 100, `spare berries were donated (${loialBerries})`);
+    const teeth = loialP.client.inventory.filter(x => world.nameOf(x) === 'orc tooth').reduce((a, x) => a + x.amount, 0);
+    ok(teeth >= 21, `and all twelve spare orc teeth, which pay for reveals (${teeth})`);
+    ok(kermit._holderCargo, `landing in the hall, it took on a restock (${JSON.stringify(kermit._holderCargo?.items ?? null)})`);
+    ok(store.supply().pledged?.some(p => p.by === 'Kermit'), 'and pledged it, so nobody doubles it');
+
+    // Back from town: the road to the castle passes the station.
+    const cargo = { ...kermit._holderCargo.items };
+    kermit.townTrip = null;
+    const before = Object.fromEntries(Object.keys(cargo).map(k =>
+      [k, loialP.client.inventory.filter(x => world.nameOf(x) === k).reduce((a, x) => a + x.amount, 0)]));
+    await runUntil(() => !kermit._holderCargo, [async () => { await kermit.chaliceDeliverCargo(); }], { limit: 20 });
+    ok(!kermit._holderCargo, 'the restock was delivered');
+    ok(Object.keys(cargo).every(k => loialP.client.inventory.filter(x => world.nameOf(x) === k)
+      .reduce((a, x) => a + x.amount, 0) >= before[k] + cargo[k]), 'every unit of it reached the holder');
+    ok(!store.supply().pledged?.some(p => p.by === 'Kermit'), 'and the pledge is released');
+  }
+
+  // ---------------------------------------------------------------------------------------
+  section('forces of light on request: an occupant asks, the holder steps in, casts, steps out');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'six' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2, fol_room: 38 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    const kermitP = world.add('Kermit', { room: 38 });
+    const loial = keeper(world, loialP, { cfg, store });
+    const kermit = keeper(world, kermitP, { cfg, store });
+    let casts = 0, castIn = null;
+    loial.chaliceFit = () => true;
+    loial.busyStatus = () => null;
+    loial.roomEnchant = async ({ remote } = {}) => { casts++; castIn = loialP.room; return remote ? { cast: true, holdMs: 60_000, casts_left: 99 } : undefined; };
+
+    ok(await loial.chaliceDuty() === false, 'nobody asked: the holder stays at its post and casts nothing');
+    ok(loialP.room === 2 && casts === 0, 'still in room 2');
+    kermit.chaliceFolWatch();
+    ok(store.read().tickets.some(t => t.kind === 'fol' && t.status === 'open'), 'an occupant of 38 with no lit clock asks');
+    const lit = await runUntil(() => casts > 0 && loialP.room === 2 && !loial._chaliceServe, [async () => { await loial.chaliceDuty(); }]);
+    ok(lit, 'the holder went in, cast, and came back to room 2');
+    ok(castIn === 38, `and the cast was made in 38 (was ${castIn})`);
+    ok(casts === 1, 'one paid cast is enough');
+    ok(store.fol().until > Date.now() + 50_000, 'the shared clock says lit for the cast duration');
+    ok(store.read().tickets.filter(t => t.kind === 'fol').every(t => t.status === 'done'), 'every request for it is closed');
+    kermit._folLookedAt = 0; kermit._folAskedAt = 0;
+    kermit.chaliceFolWatch();
+    ok(!store.read().tickets.some(t => t.kind === 'fol' && t.status === 'open'), 'and a lit room is not asked for again');
+
+    // Hurt, or mid-errand: no trip into the room.
+    store.litFol({ room: 38, until: 0, by: 'x' });
+    kermit._folLookedAt = 0; kermit._folAskedAt = 0; kermit.chaliceFolWatch();
+    loial.chaliceFit = () => false;
+    await loial.chaliceDuty();
+    ok(loialP.room === 2 && casts === 1, 'a holder under its flee line does not step in');
+    loial.chaliceFit = () => true; loial.busyStatus = () => ({ by: 'dum' });
+    await loial.chaliceDuty();
+    ok(loialP.room === 2 && casts === 1, 'nor while its own supply errand owns the body');
+  }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

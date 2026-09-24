@@ -44,7 +44,7 @@ import * as watchdog from './m59-watchdog.mjs';
 import { OF, affordances, dropSpec as dropSpecFor, buyLines,
          playerClassName, flaggedAggressor } from './m59-parse.mjs';
 import * as grudge from './m59-grudge.mjs';
-import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP } from './m59-items.mjs';
+import { isFood, foodValue, weighItem, foodSurplusOf, MARKET_KEEP, isWeaponName } from './m59-items.mjs';
 import { loadSpawns, huntingGrounds, huntMatcher, huntedCreatures, huntLabel,
          roomThreats, goalYield, roomCap, karmaSafe, huntRoomYield, farmSourcesFor,
          FORGIVING_RATING as GENTLE_RATING } from './m59-spawns.mjs';
@@ -71,7 +71,7 @@ import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
-         tipPlan, planRoom, chaliceStoreFor } from './m59-chalice.mjs';
+         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder } from './m59-chalice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -4405,6 +4405,8 @@ export class Autopilot {
       // The fleet's chalice is never sold, eaten or evicted for loot. The hand-off drops it
       // deliberately, by id, which none of the protect lists govern.
       ...(this.chaliceCfg ? [CHALICE.name] : []),
+      // AND THE HOLDER'S RESTOCK while it is being carried: it is somebody else's.
+      ...(this._holderCargo ? Object.keys(this._holderCargo.items) : []),
     ].map(String).filter(Boolean))];
   }
 
@@ -8184,7 +8186,8 @@ export class Autopilot {
     // or the room a hand-off was arranged in. A confined holder that could not step out to
     // the station would hold the fleet's only chalice and never hand it to anybody.
     const chaliceRooms = opts?.chalice && this.chaliceCfg
-      ? [this.chaliceCfg.station_room, this.chaliceCfg.post_room, opts.chaliceRoom].filter(r => r != null).map(Number)
+      ? [this.chaliceCfg.station_room, this.chaliceCfg.post_room, this.chaliceCfg.fol_room, opts.chaliceRoom]
+          .filter(r => r != null).map(Number)
       : [];
     if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))) {
       this.note('refused to leave the confinement', {
@@ -14597,6 +14600,7 @@ export class Autopilot {
     // CHALICE FARMING'S CONFIGURATION comes from a private strategy and is re-read at most
     // every 30s; everything that consults it reads the cached copy synchronously.
     await this.refreshChaliceConfig().catch(() => {});
+    try { this.chaliceFolWatch(); } catch {}
     await this.social().catch(e => this.note('social failed', { why: e.message }));
 
     // GIVE BACK ANY SIGNET RING WHOSE OWNER IS STANDING HERE.
@@ -18417,6 +18421,8 @@ export class Autopilot {
     // traveller is standing at the station waiting on them.
     if (await this.chaliceDuty().catch(e => { this.note('chalice duty failed', { why: e.message }); return false; }))
       return HANDLED;
+    if (this._holderCargo && await this.chaliceDeliverCargo().catch(e => { this.note('restock delivery failed', { why: e.message }); return false; }))
+      return HANDLED;
     // Acquire shelter even at full health; a stationary caster must not wait for
     // the first hit before finding its post. Survival has already had its turn.
     if (this.isRoomEnchantPost()) {
@@ -20975,7 +20981,7 @@ export class Autopilot {
     // CHALICE FARMING PASSES THROUGH HERE BOTH WAYS: the cup itself, handed between the
     // holder and the alternate, and the traveller's tip. Refusing either would cancel a
     // hand-off the fleet arranged, with every log on both sides reading "declined".
-    if (this.chaliceCfg) takes.push('chalice', 'shilling');
+    if (this.chaliceCfg) takes.push('chalice', 'shilling', ...Object.keys(this.chaliceCfg.holder_supply ?? {}));
     const offered = (t.theirs || []).map(i => String(i.name || '').toLowerCase());
 
     const refuse = async (why) => {
@@ -21296,6 +21302,189 @@ export class Autopilot {
     return !!(serving || onDuty || (trip && !['off', 'done'].includes(trip.stage)));
   }
 
+  /** Worn items the server grades cursed (rarity 200), or that this session learned are. */
+  chaliceCursedWorn() {
+    const c = this.s?.client;
+    const worn = new Set((c?.equipment?.()?.equipped ?? []).map(e => e.id));
+    return (c?.inventory || []).filter(o => worn.has(o.id) &&
+      (Number(o.rarity) === 200 || skills.isCursedItem(c, o)));
+  }
+
+  /** Unrevealed single items (rarity 100), at most `max`. Weapons first. */
+  chaliceUnrevealed(max) {
+    const rows = skills.unrevealedHeldBack(this.s?.client);
+    rows.sort((a, b) => Number(!isWeaponName(a.name)) - Number(!isWeaponName(b.name)));
+    return rows.slice(0, max);
+  }
+
+  chaliceAskServices(cfg, store, me) {
+    const asked = [], dropped = [];
+    if (cfg.uncurse && this.chaliceCursedWorn().length) {
+      store.request(me, { room: cfg.station_room, kind: 'uncurse' });
+      asked.push('uncurse');
+    }
+    const unread = cfg.reveal ? this.chaliceUnrevealed(cfg.reveal_max) : [];
+    if (unread.length) {
+      const c = this.s.client;
+      try { c.drop(unread.map(u => u.id)); } catch {}
+      dropped.push(...unread.map(u => u.id));
+      store.request(me, { room: cfg.station_room, kind: 'reveal', items: unread.map(u => ({ id: u.id, name: u.name })) });
+      asked.push('reveal');
+    }
+    return { asked, dropped, at: Date.now() };
+  }
+
+  /** What this character can spare toward the holder's supply, from its own spares. */
+  chaliceDonation(store) {
+    const cfg = this.chaliceCfg;
+    if (!cfg || !Object.keys(cfg.holder_supply ?? {}).length) return {};
+    const short = holderShortfall(store.supply(), { except: this.who() });
+    const floors = { ...this.carryFloors() };
+    // Our own casting floor where we have one (elderberry, herb); everything else is kept only
+    // to the loadout's own `carry` minimum.
+    for (const k of Object.keys(short))
+      if (k in REAGENT_TARGET_BY_KIND)
+        floors[k] = Math.max(floors[k] ?? 0, Number(reagentTargetFor(k, this.policy.reagentTarget)) || 0);
+    const have = Object.fromEntries(Object.keys(short).map(k => [k, this.reagentOnHand(k)]));
+    return donationPlan({ have, floors, shortfall: short });
+  }
+
+  /** Trade specs for `{item: amount}` out of this pack, stack-aware. */
+  chaliceSpecs(gift) {
+    const c = this.s.client, specs = [];
+    for (const [item, amount] of Object.entries(gift)) {
+      let left = amount;
+      for (const o of (c.inventory || []).filter(x => this.matchesKind(c.rsc.get(x.nameRsc) || '', item))) {
+        if (left <= 0) break;
+        const n = Math.min(left, Number(o.amount) || 1);
+        specs.push(dropSpecFor(o, n));
+        left -= n;
+      }
+    }
+    return specs;
+  }
+
+  // THE RESTOCK: pledge part of the holder's shortfall, draw it from the guild's chests (we
+  // are standing beside them), and carry it back through the station.
+  async chaliceTakeCargo(cfg, store) {
+    if (!Object.keys(cfg.holder_supply ?? {}).length) return;
+    if (!this.policy.guildWants?.enabled && !this.policy.reagentCoop?.enabled) return;
+    const short = holderShortfall(store.supply(), { except: this.who() });
+    const wants = Object.fromEntries(Object.entries(short)
+      .map(([k, n]) => [k, Math.min(n, cfg.restock_per_trip)]).filter(([, n]) => n > 0));
+    if (!Object.keys(wants).length) return;
+    const granted = store.pledge(this.who(), wants);
+    if (!Object.keys(granted).length) return;
+    const before = Object.fromEntries(Object.keys(granted).map(k => [k, this.reagentOnHand(k)]));
+    await this.withdrawFromStockpile(Object.entries(granted).map(([item, amount]) => ({ item, amount })));
+    const got = Object.fromEntries(Object.keys(granted)
+      .map(k => [k, Math.max(0, this.reagentOnHand(k) - before[k])]).filter(([, n]) => n > 0));
+    if (!Object.keys(got).length) { store.unpledge(this.who()); return; }
+    store.pledge(this.who(), got);
+    this._holderCargo = { items: got, at: Date.now(), tries: 0 };
+    this.chaliceEvent('cargo_taken', { items: got });
+    this.note('carrying the holder\'s restock back', { items: got });
+  }
+
+  /**
+   * DELIVER THE RESTOCK on the way back to the castle. Runs after the town trip is over;
+   * the station is on the road from the hall to Castle Victoria, so this is a stop, not a trip.
+   */
+  async chaliceDeliverCargo() {
+    const cfg = this.chaliceCfg, cargo = this._holderCargo;
+    if (!cfg || !cargo || this.townTrip) return false;
+    const store = this.chaliceStore();
+    const give = Object.fromEntries(Object.entries(cargo.items)
+      .map(([k, n]) => [k, Math.min(n, this.reagentOnHand(k))]).filter(([, n]) => n > 0));
+    const drop = () => { this._holderCargo = null; try { store.unpledge(this.who()); } catch {} return false; };
+    if (!Object.keys(give).length || Date.now() - cargo.at > 60 * 60_000 || cargo.tries > 6) return drop();
+    const server = servingOrHolder(store.duty(), cfg);
+    const hops = this.hereRoom() === cfg.station_room ? 0 : this.hopsTo(cfg.station_room);
+    if (!Number.isFinite(hops) || hops > cfg.max_detour_hops + 8) return false;   // not on our road yet
+    if (hops > 0) {
+      const r = await this.travel(cfg.station_room, { maxHops: hops + 4 }).catch(e => ({ arrived: false }));
+      if (!r.arrived) { cargo.tries++; return true; }
+    }
+    if (!this.playerHere(server)) { cargo.tries++; return false; }
+    const before = Object.fromEntries(Object.keys(give).map(k => [k, this.reagentOnHand(k)]));
+    const r = await this.chaliceGive(server, this.chaliceSpecs(give),
+      { stillHave: () => Object.keys(give).every(k => this.reagentOnHand(k) >= before[k]) });
+    cargo.tries++;
+    if (r.gave) {
+      this.chaliceEvent('cargo_delivered', { to: server, items: give });
+      this.note('restocked the holder', { to: server, items: give });
+      return drop() || true;
+    }
+    return true;
+  }
+
+  /** Cast one targeted spell by name. `{cast, why}`; verified by the caller. */
+  async chaliceCast(name, targetId) {
+    const s = this.s, c = s.need();
+    const spell = (c.spells || []).find(sp => String(c.rsc.get(sp.nameRsc) || '').toLowerCase() === name);
+    if (!spell) return { cast: false, why: `does not know ${name}` };
+    try { await skills.standToAct(s); } catch {}
+    await s.pacer.submit('cast', () => c.cast(spell.id, [targetId]), 1050);
+    await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+    return { cast: true };
+  }
+
+  /** Serve one traveller's uncurse and reveal tickets. True while there is work left. */
+  async chaliceServeServices(traveller, store) {
+    const open = store.openFrom(traveller, ['uncurse', 'reveal']);
+    if (!open.length) return false;
+    const t = open[0];
+    const them = this.playerHere(traveller);
+    if (t.kind === 'uncurse') {
+      if (them && this.reagentOnHand('emerald') >= 1)
+        for (let i = 0; i < 3; i++) await this.chaliceCast('remove curse', them.id);
+      store.mark(t.id, 'done', { note: them ? 'cast remove curse x3' : 'traveller not here' });
+      this.chaliceEvent('uncursed', { for: traveller, cast: !!them });
+      return true;
+    }
+    // REVEAL reaches only the caster's own pack or the floor it stands on (reveal.kod:94), so
+    // the traveller dropped the items here. Three orc teeth and thirty mana each.
+    const floorIds = new Set([...(this.s.client?.room?.objects?.values?.() ?? [])].map(o => o.id));
+    let done = 0;
+    for (const item of t.items ?? []) {
+      if (!floorIds.has(item.id)) continue;
+      if (this.reagentOnHand('orc tooth') < 3) break;
+      const r = await this.chaliceCast('reveal', item.id);
+      if (r.cast) done++;
+    }
+    store.mark(t.id, 'done', { note: `reveal cast on ${done} of ${(t.items ?? []).length}` });
+    this.chaliceEvent('revealed', { for: traveller, cast_on: done, asked: (t.items ?? []).length });
+    return true;
+  }
+
+  /**
+   * Fit to leave the post for a forces-of-light cast: the doctrine's own flee line (0.9 of a
+   * 20-health body), mana for the cast, and a cast's worth of reagents.
+   */
+  chaliceFit() {
+    const v = this.s?.client?.vitals?.();
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return false;
+    const ench = Autopilot.ROOM_ENCHANTS.find(e => e.name === 'forces of light');
+    if (v.mana && v.mana.value < (Number(this.policy.roomEnchant?.mana_floor) || ench.mana)) return false;
+    return ench.reagents.every(([n, k]) => this.reagentOnHand(n) >= k);
+  }
+
+  /**
+   * ANYONE STANDING IN THE FORCES-OF-LIGHT ROOM ASKS FOR IT when the shared clock says it has
+   * lapsed. Cheap: one file read every ten seconds, and a request at most every thirty.
+   */
+  chaliceFolWatch(now = Date.now()) {
+    const cfg = this.chaliceCfg;
+    if (!cfg?.fol_room || this.hereRoom() !== cfg.fol_room) return;
+    if (this._folLookedAt && now - this._folLookedAt < 10_000) return;
+    this._folLookedAt = now;
+    const store = this.chaliceStore();
+    if (!folWanted({ cfg, here: this.hereRoom(), fol: store.fol(), now, role: this.chaliceRole() })) return;
+    if (this._folAskedAt && now - this._folAskedAt < 30_000) return;
+    this._folAskedAt = now;
+    try { store.request(this.who(), { room: cfg.fol_room, kind: 'fol', ttlMs: 120_000 }); } catch {}
+  }
+
   /** Forces-of-light casts on hand, the holder's own supply clock. */
   chaliceCastsLeft() {
     return Math.min(Math.floor(this.reagentOnHand('elderberry') / 2), this.reagentOnHand('emerald'));
@@ -21409,7 +21598,7 @@ export class Autopilot {
       case 'wait': {
         if (this.chaliceInPack()) {
           st.gotAt = now;
-          st.stage = 'tip';
+          st.stage = 'services';
           this.chaliceEvent('received', { ticket: st.ticket, waited_ms: now - (st.deadline - cfg.wait_ms) });
           return pending(0);
         }
@@ -21418,6 +21607,37 @@ export class Autopilot {
         if (now > st.deadline) return skip(`nobody brought the chalice in ${Math.round(cfg.wait_ms / 1000)}s`);
         if (this.hereRoom() !== cfg.station_room) { st.stage = 'to_station'; return pending(0); }
         return pending(1500);
+      }
+
+      case 'services': {
+        // WHILE THE HOLDER IS STANDING HERE ANYWAY: uncurse what we wear, reveal what we
+        // cannot read. Asked once; waited for up to serve_ms; never a reason not to ride.
+        const svc = (st.svc ??= this.chaliceAskServices(cfg, store, me));
+        const open = store.openFrom(me, ['uncurse', 'reveal']);
+        if (open.length && now - svc.at < cfg.serve_ms) return pending(1500);
+        if (svc.dropped?.length) {
+          await this.s.lootFloor({ ids: svc.dropped, maxItems: svc.dropped.length, overfarm: null }).catch(() => {});
+          await this.s.pacer.submit('read', () => this.s.client.requestInventory()).catch(() => {});
+        }
+        for (const t of open) try { store.mark(t.id, 'abandoned', { note: 'the traveller moved on' }); } catch {}
+        if (svc.asked.length)
+          this.chaliceEvent('services', { asked: svc.asked, unserved: open.map(t => t.kind),
+            still_cursed: this.chaliceCursedWorn().length, still_unrevealed: this.chaliceUnrevealed(99).length });
+        st.stage = 'donate';
+        return pending(0);
+      }
+
+      case 'donate': {
+        st.stage = 'tip';
+        const giver = store.ticket(st.ticket)?.by ?? st.server;
+        const gift = this.chaliceDonation(store);
+        if (!Object.keys(gift).length || !this.playerHere(giver)) return pending(0);
+        const specs = this.chaliceSpecs(gift);
+        const before = Object.fromEntries(Object.keys(gift).map(k => [k, this.reagentOnHand(k)]));
+        const r = await this.chaliceGive(giver, specs,
+          { stillHave: () => Object.keys(gift).every(k => this.reagentOnHand(k) >= before[k]) });
+        this.chaliceEvent('donated', { to: giver, gave: r.gave ? gift : {}, why: r.why ?? null });
+        return pending(0);
       }
 
       case 'tip': {
@@ -21473,6 +21693,9 @@ export class Autopilot {
           this.note('landed by chalice', { landed_in: here, ms, onward_hops: hops ?? null,
             to: trip.target.room });
           this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === GUILD_HALL_ROOM });
+          // STANDING BESIDE THE GUILD'S CHESTS: take on part of what the holder is short of.
+          if (here === GUILD_HALL_ROOM) await this.chaliceTakeCargo(cfg, store).catch(e =>
+            this.note('could not draw the holder\'s restock', { why: e.message }));
           return { done: true, landed: here };
         }
         if (Date.now() - st.drankAt > cfg.landing_ms)
@@ -21495,6 +21718,9 @@ export class Autopilot {
     const role = this.chaliceRole();
     if (!cfg || (role !== 'holder' && role !== 'alternate')) return false;
     if (this.townTrip || this.travelInterrupted() || this.suspendedJourney) return false;
+    // SOMEBODY ELSE'S ERRAND OWNS THE BODY (the holder's own supply trip, driven by DUM):
+    // finish a step already in flight, but never start one.
+    if (!this._chaliceServe && this.busyStatus?.()) return false;
     const store = this.chaliceStore();
     const me = this.who();
     const now = Date.now();
@@ -21505,6 +21731,12 @@ export class Autopilot {
     if (cup && (!this._chaliceDutySaidAt || now - this._chaliceDutySaidAt > 60_000)) {
       this._chaliceDutySaidAt = now;
       try { store.setDuty({ with: me, lost: false, holder_away: role === 'alternate' }); } catch {}
+    }
+    if (role === 'holder' && Object.keys(cfg.holder_supply ?? {}).length
+        && (!this._chaliceSupplySaidAt || now - this._chaliceSupplySaidAt > 60_000)) {
+      this._chaliceSupplySaidAt = now;
+      const have = Object.fromEntries(Object.keys(cfg.holder_supply).map(k => [k, this.reagentOnHand(k)]));
+      try { store.setSupply({ have, target: cfg.holder_supply }); } catch {}
     }
 
     let st = this._chaliceServe;
@@ -21541,8 +21773,14 @@ export class Autopilot {
       }
       const t = store.claimNext(me, { kind: 'ride', ...ttl });
       if (t) return job('ride', 'go', t);
-      return null;
     }
+    // FORCES OF LIGHT, AFTER ANY RIDE: a traveller at the station is waiting on us now; an
+    // unlit room is costing the fleet accuracy, which is real but not a person standing there.
+    if (role === 'holder' && cfg.fol_room != null && this.chaliceFit()) {
+      const t = store.claimNext(me, { kind: 'fol', ...ttl });
+      if (t) return job('fol', 'go', t, { attempts: 0 });
+    }
+    if (cup) return null;
     if (role === 'alternate') {
       const relief = store.claimNext(me, { kind: 'relief', ...ttl });
       if (relief) return job('take', 'go', relief);
@@ -21595,6 +21833,39 @@ export class Autopilot {
     };
 
     switch (`${st.kind}:${st.stage}`) {
+      // ---- forces of light: in the door, cast until it pays, straight back out
+      case 'fol:go':
+        if (!this.chaliceFit()) { st.stage = 'back'; return true; }
+        return goto(cfg.fol_room, 'cast');
+      case 'fol:cast': {
+        // HURT IS OUT. The post is the refuge; a second cast is never worth a death.
+        if (!this.chaliceFit()) { st.stage = 'back'; return true; }
+        const r = await this.roomEnchant({ remote: true }).catch(e => ({ cast: false, why: e.message }));
+        if (r?.cast) {
+          try { store.litFol({ room: cfg.fol_room, until: Date.now() + r.holdMs, by: me }); } catch {}
+          this.chaliceEvent('fol_lit', { holds_ms: r.holdMs, casts_left: r.casts_left, attempts: st.attempts + 1 });
+          st.ticket = null; st.stage = 'back';
+          return true;
+        }
+        // NOTHING CAST because our own clock says it is still up: put that on the shared
+        // clock so the occupants stop asking, and leave.
+        if (r == null) {
+          const lit = [...(this._enchantedAt?.entries?.() ?? [])].find(([k]) => k.endsWith(':forces of light'));
+          try { store.litFol({ room: cfg.fol_room, until: (lit?.[1] ?? Date.now()) + 30_000, by: me }); } catch {}
+          st.ticket = null; st.stage = 'back';
+          return true;
+        }
+        if (++st.attempts >= 4) {
+          this.chaliceEvent('fol_failed', { why: r.why ?? null, attempts: st.attempts });
+          st.stage = 'back';
+        }
+        return true;
+      }
+      case 'fol:back': case 'fol:home': {
+        const home = cfg.post_room ?? st.back;
+        if (this.hereRoom() === Number(home)) return done();
+        return goto(home, 'home');
+      }
       // ---- a traveller wants a ride
       case 'ride:go': return goto(cfg.station_room, 'offer');
       case 'ride:offer': {
@@ -21616,6 +21887,9 @@ export class Autopilot {
         return true;
       }
       case 'ride:pickup': {
+        // THE TRAVELLER'S SERVICES FIRST: it is holding the cup and will not drink until
+        // these are answered or it gives up waiting. Each one restarts the pickup clock.
+        if (await this.chaliceServeServices(st.traveller, store)) { st.since = Date.now(); return true; }
         const floor = this.chaliceOnFloor();
         if (floor) {
           await this.chaliceMakeRoom();
@@ -21755,12 +22029,17 @@ export class Autopilot {
     return true;
   }
 
-  async roomEnchant() {
+  async roomEnchant({ remote = false } = {}) {
     const cfg = this.policy.roomEnchant;
     if (!cfg || cfg.enabled === false) return;
+    // A CHALICE HOLDER WITH A FORCES-OF-LIGHT ROOM casts only there, on request, by stepping
+    // in from its post (`chaliceDuty`, job `fol`). Standing at the post it casts nothing —
+    // lighting the room it waits in would spend the reagents on nobody.
+    const fol = this.chaliceCfg?.fol_room;
+    if (!remote && fol != null && this.chaliceRole() === 'holder') return;
     // A posted caster must not spend its supplies in the room it logs into while
     // the operator is still placing it, or after survival evacuates the post.
-    if (this.mode === 'idle' && this.policy.assignedRoom != null
+    if (!remote && this.mode === 'idle' && this.policy.assignedRoom != null
         && this.s.world?.room?.num !== this.policy.assignedRoom) return;
     const s = this.s, c = s.need();
 
@@ -21816,14 +22095,14 @@ export class Autopilot {
       // That must not start another full-duration timer and leave the room dark.
       if (!paid) {
         this._enchantedAt.set(`${roomId}:${ench.name}`, Date.now() - holdMs + 3000);
-        return;
+        return { cast: false, spell: ench.name, why: 'the cast did not pay — refused, or still up' };
       }
       this._enchantedAt.set(`${roomId}:${ench.name}`, Date.now());
       this.tally.room_enchants = (this.tally.room_enchants || 0) + 1;
       const left = Math.min(...ench.reagents.map(([n, k]) => Math.floor(this.reagentOnHand(n) / k)));
       this.note('room enchantment cast', { spell: ench.name, room: roomId,
         holds_for_ms: holdMs, casts_left: left });
-      return;                                  // one cast a pass; the rest can wait a tick
+      return { cast: true, spell: ench.name, holdMs, casts_left: left };   // one cast a pass
     }
   }
 

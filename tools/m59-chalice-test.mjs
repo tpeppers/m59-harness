@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
-         servingCharacter, tipPlan, planRoom, ChaliceStore } from './m59-chalice.mjs';
+         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -132,6 +132,46 @@ section('the store: tickets and duty across processes');
     eq(b.duty().holder_away, true, 'with its flags');
     eq(new ChaliceStore({ directory: dir, namespace: 'shadow' }).duty().with, undefined, 'fleets do not share a store');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+section('the holder\'s supply: shortfall net of pledges, and what a traveller can spare');
+{
+  const now = 10_000_000;
+  const supply = { have: { elderberry: 150, emerald: 110, 'orc tooth': 5 },
+                   target: { elderberry: 200, emerald: 110, 'orc tooth': 30 },
+                   pledged: [{ by: 'Pepe', item: 'elderberry', amount: 20, at: now - 1000 },
+                             { by: 'Gonzo', item: 'orc tooth', amount: 10, at: now - 2 * 3600_000 }] };
+  const s = holderShortfall(supply, { now });
+  eq(s.elderberry, 30, 'fifty short, twenty already pledged');
+  eq(s.emerald, undefined, 'at target: nothing wanted');
+  eq(s['orc tooth'], 25, 'an hour-old pledge counts for nothing');
+  eq(holderShortfall(supply, { now, except: 'Pepe' }).elderberry, 50, 'a traveller\'s own pledge is not somebody else\'s');
+  const d = donationPlan({ have: { elderberry: 70, 'orc tooth': 4 }, floors: { elderberry: 60 }, shortfall: s });
+  eq(d.elderberry, 10, 'gives only above its own floor');
+  eq(d['orc tooth'], 4, 'and all of what it has no floor for, up to the shortfall');
+  eq(Object.keys(donationPlan({ have: {}, shortfall: s })).length, 0, 'nothing spare, nothing given');
+
+  const dir = mkdtempSync(join(tmpdir(), 'chalice-supply-'));
+  try {
+    const st = new ChaliceStore({ directory: dir, namespace: 'p' });
+    st.setSupply({ have: supply.have, target: supply.target }, now);
+    const g1 = st.pledge('Kermit', { elderberry: 60, 'orc tooth': 10 }, now);
+    eq(g1.elderberry, 50, 'a pledge is cut to the shortfall');
+    const g2 = st.pledge('Robin', { elderberry: 60 }, now + 1);
+    eq(g2.elderberry, undefined, 'a second traveller is not granted what the first took on');
+    st.unpledge('Kermit', now + 2);
+    eq(st.pledge('Robin', { elderberry: 60 }, now + 3).elderberry, 50, 'released, it is available again');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+section('forces of light: who asks');
+{
+  const cfg = normalizeChalice({ holder: 'Loial the Ogier', fol_room: 38 });
+  eq(folWanted({ cfg, here: 38, fol: {}, now: 5 }), true, 'never lit: ask');
+  eq(folWanted({ cfg, here: 38, fol: { until: 100_000 }, now: 5 }), false, 'lit for a while yet: do not');
+  eq(folWanted({ cfg, here: 38, fol: { until: 8_000 }, now: 5_000 }), true, 'inside the lead time: ask');
+  eq(folWanted({ cfg, here: 39, fol: {}, now: 5 }), false, 'not in the room: not our business');
+  eq(folWanted({ cfg, here: 38, fol: {}, role: 'holder' }), false, 'the holder never asks itself');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -514,8 +514,25 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
   cup over at its post; the alternate serves, parks on a safe spot and neither farms nor goes
   to town until the holder is back and has asked for it. Both are marked busy in
   `commitment()` so DUM steps over them for the duration.
-- **THE CONFINEMENT HAS ONE EXCEPTION**: chalice duty may walk to the station and the post and
-  nowhere else. A confined holder that could not step out would hold the only cup for ever.
+- **THE CONFINEMENT HAS ONE EXCEPTION**: chalice duty may walk to the station, the post and
+  the forces-of-light room and nowhere else. A confined holder that could not step out would
+  hold the only cup for ever.
+- **THE HOLDER IS A SERVICE POST, NOT A CASTER IN A CROWD** (operator, 2026-09-23). It waits at
+  the post (Outside Castle Victoria, which has no monster generator) and:
+  - **forces of light on request** (`fol_room`): anyone standing there files a `fol` ticket
+    when the shared clock (`ChaliceStore.fol`, written only by a cast that PAID) says it has
+    lapsed; the holder steps in, casts until one pays (at most four), closes every request
+    and steps straight back out. Never below its flee line, without mana or reagents, or
+    while its own supply errand owns the body. At the post itself it casts nothing.
+  - **remove curse and reveal** for a traveller holding the cup: remove curse targets the
+    player and strips every cursed item (`remcurse.kod`); reveal reaches only the caster's
+    own pack or floor (`reveal.kod:94`), so the traveller drops up to `reveal_max`
+    unrevealed items at the holder's feet and picks them back up.
+- **THE FLEET KEEPS THE HOLDER STOCKED** (`holder_supply`). The holder publishes what it has
+  against its targets; a traveller at the station donates spares above its own floors, and a
+  traveller that LANDS IN THE HALL — beside the chests — pledges part of the remaining
+  shortfall, draws it with `withdrawFromStockpile`, and hands it over at the station on the
+  way back. Pledges stop two travellers carrying the same shortfall and expire in an hour.
 
 ## Guild wants and the four containers
 
