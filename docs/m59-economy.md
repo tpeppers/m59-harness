@@ -528,6 +528,28 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
     player and strips every cursed item (`remcurse.kod`); reveal reaches only the caster's
     own pack or floor (`reveal.kod:94`), so the traveller drops up to `reveal_max`
     unrevealed items at the holder's feet and picks them back up.
+- **EVERY RIDE DECISION IS RECORDED, INCLUDING THE ONES THAT WALK** (`ride_declined`). A
+  decline used to be the one step in the sequence that left no trace, so 105 chalice events
+  in a live day contained not a single ride decision and the ledger could not tell
+  "considered it and correctly walked" from "never considered it". It now carries the reason,
+  the hop count, and how long any wait has left.
+- **AND IT DECLINES BEFORE WALKING, FOR EVERY REASON THE CUP WOULD REFUSE.** The costly order
+  of events is the one to avoid: walk up to `max_detour_hops`, wait out the hand-over, pay the
+  tip, take the cup — and only then have the sip refused. `chalice.kod:168-177` is the gate,
+  and an item cast SKIPS `Rescue.CanPayCosts`, so that is the only gate that matters:
+  - **recently swung at a player** — `GetLastPlayerAttackTime + TeleportAttackDelaySec`, ten
+    minutes (`util/settings.kod:88`), the same clock rescue and elusion use. Nothing sends
+    that time to us, so the keeper stamps its OWN swing (`notePlayerSwing`, at the
+    self-defence path, the general swing when the target carries `OF.PLAYER`, and combat
+    mode's PvP attack). Rough on purpose: stamped at the swing rather than at a confirmed
+    hit, which errs early and errs safe. **An absent stamp means GO** — the reverse of this
+    repository's usual "unknown is not zero", because most keepers never swing at a person and
+    reading silence as a ban would switch the chalice off for the whole fleet for ever.
+  - **resting** (`PFLAG_NO_FIGHT`, refused *silently* by the kod) — handled at the drink stage,
+    which stands the character up first.
+  A **full pack is not a reason to decline**: `planRoom` drops the cheapest loot by the
+  overfarm ranking, protecting protected items, and only gives up when even dropping every
+  eligible candidate would not free the cup's 20 weight and 20 bulk.
 - **THE FLEET KEEPS THE HOLDER STOCKED** (`holder_supply`). The holder publishes what it has
   against its targets; a traveller at the station donates spares above its own floors, and a
   traveller that LANDS IN THE HALL — beside the chests — pledges part of the remaining

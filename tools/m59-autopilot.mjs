@@ -5503,6 +5503,9 @@ export class Autopilot {
       await s.faceToward(it);
       await s.pacer.submit('attack', () => c.attack(foe.id), 1050);
       this.swungAt = Date.now();
+      // ONLY WHEN THE THING SWUNG AT IS A PERSON. This path is nearly always a monster, and
+      // stamping every swing would ban the whole fleet from the chalice permanently.
+      if (it.flags & OF.PLAYER) this.notePlayerSwing();
       this.foeId = foe.id;
     }
 
@@ -9097,6 +9100,8 @@ export class Autopilot {
     await this.s.faceToward(still).catch(() => {});
     await this.s.pacer.submit('attack', () => c.attack(still.id), 1050).catch(() => {});
     this.swungAt = Date.now();
+    // A PLAYER BY CONSTRUCTION — this is the self-defence path. See notePlayerSwing.
+    this.notePlayerSwing();
     this.foeId = still.id;
     return { engaged: pick.name, why: pick.verdict.why };
   }
@@ -21636,6 +21641,32 @@ export class Autopilot {
    * Fit to leave the post for a forces-of-light cast: the doctrine's own flee line (0.9 of a
    * 20-health body), mana for the cast, and a cast's worth of reagents.
    */
+  // WHEN THIS CHARACTER LAST SWUNG AT A PLAYER, and why anything keeps it.
+  //
+  // The server bans teleporting for ten minutes after that (util/settings.kod:88), and the
+  // chalice obeys the same clock (chalice.kod:168) — so a traveller that fought somebody on
+  // the way to town will be refused the sip at the END of the whole detour: after walking,
+  // waiting for the hand-over, and paying the tip. `GetLastPlayerAttackTime` is server-side
+  // and nothing sends it to us, so the only way to know is to remember our own swing.
+  //
+  // ROUGH ON PURPOSE. It is stamped where we ISSUE the attack, not where the server confirms
+  // one landed, so it can be a little early and can record a swing that missed. Both errors
+  // are in the safe direction: the ban starts at the attack whether or not it connected, and
+  // being a second early costs nothing. It lives on the SESSION as well as on `this` because
+  // combat mode drives some swings through its own module and shares only the session.
+  notePlayerSwing(now = Date.now()) {
+    this._lastPlayerAttackAt = now;
+    if (this.s) this.s.lastPlayerAttackAt = now;
+  }
+
+  /** The stamp above, from wherever it was written. null when we have never swung at one. */
+  lastPlayerSwingAt() {
+    const mine = Number(this._lastPlayerAttackAt);
+    const theirs = Number(this.s?.lastPlayerAttackAt);
+    const best = [mine, theirs].filter(Number.isFinite);
+    return best.length ? Math.max(...best) : null;
+  }
+
   chaliceFit() {
     const v = this.s?.client?.vitals?.();
     if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return false;
@@ -21722,11 +21753,25 @@ export class Autopilot {
       case 'off': case 'done': return { skip: true, why: 'already decided' };
 
       case 'decide': {
-        const d = shouldRide({ cfg, role: this.chaliceRole(), stationHops: this.hereRoom() === cfg.station_room
-            ? 0 : this.hopsTo(cfg.station_room),
+        const stationHops = this.hereRoom() === cfg.station_room ? 0 : this.hopsTo(cfg.station_room);
+        const d = shouldRide({ cfg, role: this.chaliceRole(), stationHops,
           targetHops: this.hopsTo(trip.target.room), carrying: !!this.chaliceInPack(),
+          lastPlayerAttackAt: this.lastPlayerSwingAt(),
           duty: store.duty(), now });
-        if (!d.ride) { st.stage = 'off'; st.why = d.why; return { skip: true, why: d.why }; }
+        if (!d.ride) {
+          // SAY SO. This used to be the one decision in the whole sequence that left no trace:
+          // every later stage reports through `skip()`, but a decline HERE set the stage to
+          // 'off' and returned in silence — so the ledger could not tell "checked the chalice
+          // and correctly walked" from "never checked at all", and 105 chalice events in a day
+          // contained not one ride decision. Which is the shape this game fails in anyway, and
+          // not one a bot should add to.
+          st.stage = 'off'; st.why = d.why;
+          this.note('chalice ride declined — walking instead', { why: d.why, station_hops: stationHops });
+          this.chaliceEvent('ride_declined', { why: d.why, station_hops: stationHops,
+            target_room: trip.target?.room ?? null,
+            ...(d.wait_ms ? { wait_ms: Math.round(d.wait_ms) } : {}) });
+          return { skip: true, why: d.why };
+        }
         st.server = d.server;
         st.stage = 'to_station';
         this.note('riding the chalice home', { server: d.server, station: cfg.station_room, why: d.why });

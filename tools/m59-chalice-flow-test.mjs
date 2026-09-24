@@ -531,6 +531,65 @@ try {
     ok(spent === 600, `and paid for exactly what arrived (${spent})`);
   }
 
+
+  // ---------------------------------------------------------------------------------------
+  section('every ride decision is recorded, including the ones that walk');
+  {
+    // 105 chalice events in one live day contained not a single ride decision, because a
+    // decline at `decide` set the stage to 'off' and returned in silence. So the ledger could
+    // not tell "considered the chalice and correctly walked" from "never considered it" — and
+    // that is the failure mode this whole game has anyway, without a bot adding to it.
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'decline' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    const farP = world.add('Statler', { room: 578, inventory: [world.item('shillings', 900)] });
+    const loial = keeper(world, loialP, { cfg, store });
+    const far = keeper(world, farP, { cfg, store });
+    await loial.chaliceDuty();                            // somebody IS on duty
+    // The Cragged Mountains are eleven hops from the station: correct to walk.
+    far.hopsTo = (room) => (Number(room) === 2 ? 11 : 9);
+    const trip = { target: { room: 113, hops: 9 } };
+    const out = await far.chaliceRide(trip);
+    ok(out.skip, 'it walks');
+    ok(/11 hops away/.test(out.why), 'for the right reason: ' + out.why);
+    const declined = far.events.filter(e => e.what === 'ride_declined');
+    ok(declined.length === 1, `and the decision is on the ledger (${declined.length})`);
+    ok(declined[0]?.station_hops === 11, 'with the distance that decided it');
+    ok(far.notes.some(n => /ride declined/.test(n.what)), 'and in the keeper notes');
+  }
+
+  // ---------------------------------------------------------------------------------------
+  section('a traveller that just swung at a player does not set out at all');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'pvp' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    const kermitP = world.add('Kermit', { room: 38, inventory: [world.item('shillings', 900)] });
+    const loial = keeper(world, loialP, { cfg, store });
+    const kermit = keeper(world, kermitP, { cfg, store });
+    await loial.chaliceDuty();
+
+    // THE STAMP IS OUR OWN SWING, because `GetLastPlayerAttackTime` is server-side and nothing
+    // sends it to us. `notePlayerSwing` is called wherever a swing is aimed at a person.
+    kermit.notePlayerSwing();
+    ok(Number.isFinite(kermit.lastPlayerSwingAt()), 'the swing is remembered');
+    const trip = { target: { room: 113, hops: 9 } };
+    const out = await kermit.chaliceRide(trip);
+    ok(out.skip, 'so it does not set out');
+    ok(/chalice refuses a sip/.test(out.why), 'naming the ban: ' + out.why);
+    ok(kermitP.room === 38, 'and it never left the room, let alone walked to the station');
+    const ev = kermit.events.find(e => e.what === 'ride_declined');
+    ok(ev && ev.wait_ms > 0, `the ledger says how long is left (${ev?.wait_ms ?? '-'}ms)`);
+    // AND IT COMES BACK. The ban lapses; nothing has to be reset by hand.
+    kermit._lastPlayerAttackAt = Date.now() - (10 * 60_000 + 1000);
+    kermit.s.lastPlayerAttackAt = kermit._lastPlayerAttackAt;
+    const trip2 = { target: { room: 113, hops: 9 } };
+    const again = await kermit.chaliceRide(trip2);
+    ok(!again.skip, 'once it has lapsed the ride is on again');
+  }
+
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

@@ -903,7 +903,11 @@ export class CombatMode {
           o.firstAttackAt = this.now(); o.reactionMs = o.firstAttackAt - (o.triggeredAt ?? o.acceptedAt);
         }
         o.attacks++;
-        if (o.pvp) { o.pvp.attacks++; o.pvp.blocked_reason = null; this.record('pvp_attack_sent', o); }
+        if (o.pvp) { o.pvp.attacks++; o.pvp.blocked_reason = null; this.record('pvp_attack_sent', o);
+          // THE TELEPORT BAN STARTS HERE. Ten minutes in which the chalice refuses a sip
+          // (chalice.kod:168, util/settings.kod:88), and nothing tells us but our own swing.
+          // Stamped on the session because that is what this module and the keeper share.
+          try { this.s.lastPlayerAttackAt = this.now(); } catch {} }
         if (--o.remaining <= 0) this.nextAction(o);
       }, 1050);
       o.nextAt = this.now() + 1000;

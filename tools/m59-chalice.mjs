@@ -62,6 +62,14 @@ export const REFILL_ROOMS = Object.freeze(new Set([
 
 export const GUILD_HALL_ROOM = 714;
 
+// HOW LONG AFTER SWINGING AT A PLAYER THE CUP REFUSES A SIP. `util/settings.kod:88` —
+// `piTeleportAttackDelaySec = 10 * 60` — read by `chalice.kod:168`, `rescue.kod:68` and
+// `elusion.kod:79` alike. A constant here rather than a guess, and overridable per fleet
+// because it is a SERVER setting this harness cannot read: a shard that changed it would
+// otherwise make every traveller wait for a ban that had already lapsed, or walk into one
+// that had not.
+export const PVP_TELEPORT_BLOCK_MS = 10 * 60_000;
+
 // Beside the harness, not the working directory: every keeper of one deploy must share one
 // file whatever directory it was started from.
 const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'substrate', '.chalice');
@@ -84,6 +92,10 @@ export const CHALICE_DEFAULTS = Object.freeze({
   wait_ms: 180_000,
   // Rescue lands 15-25s after the sip (rescue.kod:94); past this the walk is taken.
   landing_ms: 45_000,
+  // The server's own teleport ban after attacking a player, which the cup obeys. Defaults to
+  // what this repository's kod carries; see PVP_TELEPORT_BLOCK_MS. 0 switches the check off,
+  // which is only right on a shard that has removed the ban.
+  pvp_block_ms: PVP_TELEPORT_BLOCK_MS,
   // How long the server waits for the traveller to show up, and then for the cup to hit
   // the floor, before giving up on that ticket.
   serve_ms: 90_000,
@@ -140,7 +152,7 @@ const NUMBERS = {
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
-  restock_budget: [0, 100_000],
+  restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000],
 };
 
 /**
@@ -321,12 +333,41 @@ export function roleOf(character, cfg) {
  * walk to Barloque.
  */
 export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
-                             carrying = false, duty = null, now = Date.now() } = {}) {
+                             carrying = false, duty = null, lastPlayerAttackAt = null,
+                             now = Date.now() } = {}) {
   if (!cfg?.enabled) return { ride: false, why: 'chalice farming is off' };
   if (role === 'holder') return { ride: false, why: 'the holder serves; its own trips are its own' };
   if (role === 'alternate' && carrying)
     return { ride: false, why: 'the alternate is on duty with the cup' };
   if (carrying) return { ride: false, why: 'already carrying a chalice — nobody needs to hand one over' };
+  // THE SERVER WILL REFUSE THE SIP FOR TEN MINUTES AFTER WE SWING AT A PLAYER, so find out
+  // here rather than at the counter. `chalice.kod:168-177` is the gate — not the spell's
+  // `CanPayCosts`, which an item cast skips — and it is the same clock `rescue.kod:68` and
+  // `elusion.kod:79` use: `GetLastPlayerAttackTime + TeleportAttackDelaySec > GetTime()`,
+  // where the setting is `10 * 60` seconds (util/settings.kod:88).
+  //
+  // WHAT IT COSTS TO LEARN THIS LATE. The refusal lands at the very END of the sequence: the
+  // traveller has already walked up to `max_detour_hops`, waited out the hand-over, paid the
+  // tip, and taken the cup — and then the sip is refused, the cup goes on the floor, and it
+  // stands there for `landing_ms` waiting for a rescue that was never started before walking
+  // the whole way anyway. Every part of that is wasted, and the holder's cup was out of
+  // circulation for the duration.
+  //
+  // UNKNOWN MEANS GO, AND THAT IS THE OPPOSITE OF THIS REPOSITORY'S USUAL RULE. "Unknown is
+  // not zero" is right when the cheap error is to wait; here it is reversed. A keeper that
+  // has never swung at a player has nothing to report, so treating silence as a refusal
+  // would turn the chalice off for the whole fleet for ever. Being wrong the other way costs
+  // one detour.
+  const blockMs = Number(cfg.pvp_block_ms ?? PVP_TELEPORT_BLOCK_MS);
+  const since = Number(lastPlayerAttackAt);
+  if (Number.isFinite(since) && blockMs > 0) {
+    const left = blockMs - (Number(now) - since);
+    if (left > 0)
+      return { ride: false, wait_ms: left,
+               why: `attacked a player ${Math.round((Number(now) - since) / 1000)}s ago — the ` +
+                    `chalice refuses a sip for ${Math.round(blockMs / 60_000)} minutes after ` +
+                    `that (chalice.kod:168), ${Math.ceil(left / 1000)}s left` };
+  }
   if (!Number.isFinite(stationHops)) return { ride: false, why: 'no route to the station' };
   if (stationHops > cfg.max_detour_hops)
     return { ride: false, why: `the station is ${stationHops} hops away (limit ${cfg.max_detour_hops})` };

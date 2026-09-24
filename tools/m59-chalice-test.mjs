@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
-         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan } from './m59-chalice.mjs';
+         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -223,6 +223,34 @@ section("buying the holder's restock: the refusals");
     60, 'an unspecified per-trip cap falls back to the config, not to zero');
   eq(restockBuyPlan({ shortfall: {}, cfg: normalizeChalice({ holder: 'x',
     supply_shops: { elderberry: { room: 104, seller: 'Joguer' } } }) }).length, 0, 'nothing short');
+}
+
+section("a ride is refused while the server's teleport ban is running");
+{
+  // chalice.kod:168-177 -- `GetLastPlayerAttackTime + TeleportAttackDelaySec > GetTime()`
+  // refuses the sip, and the item cast SKIPS `Rescue.CanPayCosts`, so this gate is the one
+  // that matters. util/settings.kod:88 makes the delay ten minutes.
+  const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2 });
+  const duty = { with: 'Rizzo', seen_at: Date.now() };
+  const base = { cfg, role: 'traveller', stationHops: 1, targetHops: 9, carrying: false, duty };
+  eq(PVP_TELEPORT_BLOCK_MS, 10 * 60_000, 'ten minutes, from the kod');
+  const now = 5_000_000;
+  const fresh = shouldRide({ ...base, now, lastPlayerAttackAt: now - 60_000 });
+  eq(fresh.ride, false, 'a minute after swinging at somebody, no ride');
+  ok(/chalice refuses a sip/.test(fresh.why), 'and it says why: ' + fresh.why);
+  ok(fresh.wait_ms > 0 && fresh.wait_ms <= 10 * 60_000, 'with how long is left, so a caller can wait');
+  // THE POINT OF CHECKING EARLY: the refusal lands at the END of the sequence otherwise --
+  // after the walk, the hand-over and the tip.
+  eq(shouldRide({ ...base, now, lastPlayerAttackAt: now - (10 * 60_000 + 1) }).ride, true,
+     'once the ban has lapsed the ride is on again');
+  // UNKNOWN MEANS GO. Most keepers never swing at a player, so a missing stamp must not read
+  // as a ban -- that would switch the chalice off for the whole fleet for ever.
+  eq(shouldRide({ ...base, now, lastPlayerAttackAt: null }).ride, true, 'never swung at anybody: ride');
+  eq(shouldRide({ ...base, now }).ride, true, 'and an absent field is the same as null');
+  // A shard that removed the ban can say so.
+  const off = normalizeChalice({ holder: 'x', station_room: 2, pvp_block_ms: 0 });
+  eq(shouldRide({ ...base, cfg: off, now, lastPlayerAttackAt: now - 1000 }).ride, true,
+     'pvp_block_ms 0 switches the check off');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
