@@ -117,5 +117,29 @@ section('THE TACTICS LEDGER TRIMS BY EPOCH, AND BY THE CLOCK ONLY WHERE IT MUST'
   delete process.env.M59_TACTICS_DIR;
 }
 
+section('A TRIM THAT DROPS NOTHING DOES NOT RUN AGAIN ON THE NEXT FLUSH');
+{
+  // 2026-09-24: a 171 MB all-current-epoch ledger was re-read and re-parsed on EVERY flush in
+  // every keeper — 5 GB/min of allocation each, and the reason 47 keepers ran a 64 GB box dry.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tac2-'));
+  process.env.M59_TACTICS_DIR = dir;
+  process.env.M59_TACTICS_TRIM_BYTES = '1000';
+  const { trimTactics, tacticsFile } = await import('./m59-tactics.mjs?throttle');
+  const file = tacticsFile('u');
+  const mine = epochId('movement');
+  const rows = n => Array.from({ length: n }, (_, i) => JSON.stringify({ t: Date.now(), epoch: mine, tactic: 'x' + i })).join('\n') + '\n';
+  fs.writeFileSync(file, rows(200));
+  ok('the first look over the threshold drops nothing from a current-epoch ledger', trimTactics('u') === 0);
+  // Poison the file: if the next call reads it, the torn line gets dropped and the file changes.
+  fs.appendFileSync(file, 'a torn write\n');
+  const before = fs.readFileSync(file, 'utf8');
+  trimTactics('u');
+  ok('and the next flush does NOT re-read it', fs.readFileSync(file, 'utf8') === before);
+  ok('force still trims regardless of the throttle', trimTactics('u', { force: true }) === 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+  delete process.env.M59_TACTICS_DIR;
+  delete process.env.M59_TACTICS_TRIM_BYTES;
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

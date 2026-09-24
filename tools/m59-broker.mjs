@@ -1147,6 +1147,19 @@ async function allocateKeeperPort(agent, index, credentials = null) {
                   `${portBand.base}-${portBand.end}; refusing to borrow another fleet's range`);
 }
 
+// A CEILING ON EACH KEEPER'S HEAP. Node sizes the default from the machine — 4.2 GB per
+// process on a 64 GB box — and V8 then has no reason to collect until it is far above what a
+// keeper holds (211 MB live, measured 2026-09-24). Forty-seven keepers each drifting to
+// ~0.9 GB of uncollected garbage is what ran this machine out of memory. A ceiling makes V8
+// collect sooner; it does not make the keeper need less. Keep it well above live + the
+// largest transient (route planning; before the tactics-trim throttle, a 171 MB file parse):
+// set too low, a keeper dies with "JavaScript heap out of memory" instead of slowing down.
+// M59_KEEPER_HEAP_MB=0 leaves Node's own default.
+function keeperHeapArgs(env = process.env) {
+  const mb = Number(env.M59_KEEPER_HEAP_MB ?? 640);
+  return Number.isFinite(mb) && mb > 0 ? [`--max-old-space-size=${Math.round(mb)}`] : [];
+}
+
 function spawnKeeper(agent, index, credentials) {
   if (brokerStopping) return Promise.resolve(false);
   const existing = keeperSpawning.get(agent);
@@ -1298,7 +1311,8 @@ async function spawnKeeperInner(agent, index, credentials) {
   let childSpawnError = null;
   try {
     child = spawn(process.execPath,
-      [join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port), // `-` IS HOW YOU ASK FOR THE UNNAMED FLEET, and 'default' is how you ask for a file
+      [...keeperHeapArgs(),
+       join(HERE, 'm59-keeper-process.mjs'), '--agent', agent, '--port', String(port), // `-` IS HOW YOU ASK FOR THE UNNAMED FLEET, and 'default' is how you ask for a file
        // called default.json that has never existed. resolveFleet reads this argv, and it
        // treats any other word as a roster NAME under substrate/fleets/.
        '--fleet', FLEET ?? '-'],

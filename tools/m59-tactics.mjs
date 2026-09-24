@@ -164,6 +164,27 @@ export function recordTactic(row = {}) {
 const RETAIN_HOURS = Number(process.env.M59_TACTICS_RETAIN_HOURS || 48);
 const TRIM_ABOVE_BYTES = Number(process.env.M59_TACTICS_TRIM_BYTES || 4 * 1024 * 1024);
 
+// AND A TRIM THAT DROPS NOTHING MUST NOT RUN AGAIN FIVE SECONDS LATER.
+//
+// The byte threshold above assumed a trim brings the file back under it. It does not when
+// the rows are all from the CURRENT movement epoch, which the epoch rule keeps whatever
+// their age — and on a fleet whose code has not moved, that is every row. Measured
+// 2026-09-24 on the shadow lab: substrate/tactics/shadow.jsonl at 171 MB, 512,861 rows, one
+// epoch, four days old. Every flush (every 5 s or 64 rows) in every keeper then read and
+// JSON-parsed the whole 171 MB to drop nothing: a sampling heap profiler put 75% of a
+// travelling keeper's allocation in this function, about FIVE GIGABYTES A MINUTE, and that
+// churn is what walked each keeper's heap to ~900 MB between collections (live data: 211 MB).
+// Forty-seven keepers at that size is what ran a 64 GB machine out of memory.
+//
+// So each process remembers when it last looked and what the last trim left behind, and
+// looks again only when both enough time has passed AND the file has grown well past that.
+const TRIM_EVERY_MS = Number(process.env.M59_TACTICS_TRIM_EVERY_MS || 30 * 60_000);
+const TRIM_GROWTH = Number(process.env.M59_TACTICS_TRIM_GROWTH || 1.25);
+// NOT FIXED HERE: the file itself still grows ~40 MB a day on a quiet codebase, because the
+// epoch rule keeps every current-epoch row whatever its age (pinned in m59-epoch-test). That
+// costs disk and every reader's time; it no longer costs every keeper's heap every 5 s.
+const lastTrim = new Map();            // file -> { at, keptBytes }
+
 /**
  * Drop rows older than the retention window. Never throws — an instrument that can break
  * the thing it measures is worse than no instrument, and that applies to its housekeeping
@@ -178,6 +199,8 @@ export function trimTactics(fleet = FLEET(), { force = false } = {}) {
       let size = 0;
       try { size = fs.statSync(file).size; } catch { return 0; }
       if (size < TRIM_ABOVE_BYTES) return 0;
+      const last = lastTrim.get(file);
+      if (last && (Date.now() - last.at < TRIM_EVERY_MS || size < last.keptBytes * TRIM_GROWTH)) return 0;
     }
     const since = Date.now() - RETAIN_HOURS * 3600000;
     const text = fs.readFileSync(file, 'utf8');
@@ -200,6 +223,7 @@ export function trimTactics(fleet = FLEET(), { force = false } = {}) {
       if (known === true) { keep.push(line); continue; }
       if (t === null || t >= since) keep.push(line); else dropped++;
     }
+    lastTrim.set(file, { at: Date.now(), keptBytes: keep.reduce((n, l) => n + l.length + 1, 0) });
     if (!dropped) return 0;
     // Through a temp file, because this runs while the broker is writing: a truncate-then-
     // write leaves the ledger empty for as long as the write takes, and a crash in that
