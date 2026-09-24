@@ -21753,22 +21753,55 @@ export class Autopilot {
     if (!cfg || (role !== 'holder' && role !== 'alternate')) return false;
     if (this.townTrip || this.travelInterrupted() || this.suspendedJourney) return false;
     const store = this.chaliceStore();
-    // SOMEBODY ELSE OWNS THE BODY — the holder's own supply trip (busy), or a script that has
-    // claimed its work or movement (a raid posting it elsewhere): finish a step already in
-    // flight, never start one, and say so on the duty record, so travellers walk at once
-    // instead of waiting out `wait_ms` for a server who is not coming.
-    const taken = !!(this.busyStatus?.() || this.facultyHeld?.('work') || this.facultyHeld?.('movement'));
+    // SOMEBODY ELSE OWNS THE BODY — an operation IN FLIGHT, not merely a bot that owns the
+    // character: finish a step already started, never start a new one, and say so on the duty
+    // record so travellers walk at once instead of waiting out `wait_ms` for a server who is
+    // not coming.
+    //
+    // THIS USED TO READ `facultyHeld('work') || facultyHeld('movement')`, AND THAT DISABLED THE
+    // ALTERNATE COMPLETELY. m59-commitment.mjs states the distinction it got wrong, in its own
+    // header: "OWNING A CHARACTER AND BEING BUSY WITH IT ARE DIFFERENT FACTS, AND CONFLATING
+    // THEM DEADLOCKS THE BOT THAT ASKED FOR THIS. A directional bot claims `work` and
+    // `movement` on every character it manages and holds them for its whole run."
+    //
+    // Which is exactly what this fleet's own DUM does: `work: bot, movement: bot` on all
+    // twenty-one farmers, heartbeated for the life of the process. So `taken` was permanently
+    // true for the ALTERNATE, `chaliceNextJob` never ran for it, and it could not claim a
+    // relief ticket — ever. Measured on prod 2026-09-24: the holder raised one relief ticket at
+    // 17:23:20Z, nothing ever claimed it, it timed out at `await`, and nine minutes later the
+    // holder's own supply trip left the castle CARRYING THE FLEET'S ONLY CHALICE — the one
+    // thing `handover_below_casts` exists to prevent. The alternate's whole keeper state did
+    // not contain the word "chalice" once.
+    //
+    // A raid that posts the holder elsewhere is still caught, because a raid is a fleetscript
+    // and a fleetscript declares `busy` before its first step; so is the holder's own supply
+    // trip, for the same reason. What is no longer caught is mere OWNERSHIP — which is what the
+    // board calls `takeable`, and what this harness has always said may be taken.
+    //
+    // AND IT IS BUILT FROM THE PRIMITIVES RATHER THAN FROM `commitment()`, WHICH SELF-DEADLOCKS.
+    // `commitment()` folds `chaliceBusy()` in as an errand called "chalice hand-off" — so
+    // asking it whether somebody else owns the body answers YES while WE are the ones using
+    // it, and the alternate on duty stands itself down every pass. Six flow tests caught it.
+    // "Somebody ELSE" is the whole predicate, so the chalice's own state may not be in it.
+    //
+    // `townTrip`, `travelInterrupted` and `suspendedJourney` are already refused above.
+    const taken = !!(
+      this.busyStatus?.()                        // an outside operation declared itself
+      || this.errand                             // a keeper errand of our own: loot run, signet
+      || this.parking                            // getting behind a wall for a fleet update
+      || (this.inert && !this.inert.travelling)  // something else has the controls
+    );
+    // THE PAUSE FLAG LIVES IN A SHARED FILE AND THE "ALREADY SAID IT" FLAG LIVED IN THIS
+    // PROCESS. A keeper that restarted between the two therefore left `paused: true` on disk
+    // with nothing left in memory to clear it, and `servingCharacter` reads that as nobody on
+    // duty — for ever. Both directions now compare against the RECORD, which is the thing that
+    // outlives the keeper.
+    const paused = store.duty()?.paused === true;
     if (!this._chaliceServe && taken) {
-      if (!this._chalicePausedSaid) {
-        this._chalicePausedSaid = true;
-        try { store.setDuty({ paused: true }); } catch {}
-      }
+      if (!paused) { try { store.setDuty({ paused: true }); } catch {} }
       return false;
     }
-    if (this._chalicePausedSaid) {
-      this._chalicePausedSaid = false;
-      try { store.setDuty({ paused: false }); } catch {}
-    }
+    if (paused) { try { store.setDuty({ paused: false }); } catch {} }
     const me = this.who();
     const now = Date.now();
     const cup = this.chaliceInPack();

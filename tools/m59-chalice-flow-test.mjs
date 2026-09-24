@@ -396,13 +396,32 @@ try {
     loial.chaliceFit = () => true; loial.busyStatus = () => ({ by: 'dum' });
     await loial.chaliceDuty();
     ok(loialP.room === 2 && casts === c0, 'nor while its own supply errand owns the body');
-    loial.busyStatus = () => null; loial.facultyHeld = f => f === 'movement';
+    // A RAID THAT POSTS THE HOLDER ELSEWHERE still stands it down — but by the OPERATION it
+    // declares, not by the faculties it owns. A fleetscript marks the character busy before its
+    // first step, and the board reports that as a commitment that is not takeable.
+    loial.busyStatus = () => null;
+    loial.errand = { kind: 'lootrun' };
     await loial.chaliceDuty();
-    ok(loialP.room === 2 && casts === c0, 'nor while a script (a raid) holds its movement');
+    ok(loialP.room === 2 && casts === c0, 'nor while a raid holds the body for an operation');
     ok(store.duty().paused === true, 'and the duty record says it is not serving, so travellers walk');
-    loial.facultyHeld = () => false;
+    delete loial.errand;
+    // AND THE CASE THAT WAS BROKEN FOR A DAY. A bare bot claim is OWNERSHIP, not an operation —
+    // the board marks it `takeable`, and m59-commitment.mjs's header says conflating the two
+    // deadlocks the bot that asked for it. DUM claims work and movement on every character it
+    // manages for its whole run, so reading that as "somebody else is driving" meant the
+    // ALTERNATE could never take a relief ticket, and the holder's supply trip left the castle
+    // carrying the fleet's only chalice (prod, 2026-09-24).
+    loial.facultyHeld = f => f === 'work' || f === 'movement';
     await loial.chaliceDuty();
-    ok(store.duty().paused === false, 'released, it is serving again');
+    ok(store.duty().paused === false, 'a bare bot claim is ownership, not an operation — still serving');
+    // AND A PAUSE SURVIVES A RESTART, so it has to be cleared from the RECORD rather than from a
+    // flag in the process that set it. A keeper that died while paused used to leave
+    // `paused: true` on disk with nothing left in memory to clear it, and `servingCharacter`
+    // reads that as nobody on duty, for ever.
+    store.setDuty({ paused: true });
+    delete loial._chalicePausedSaid;
+    await loial.chaliceDuty();
+    ok(store.duty().paused === false, 'a pause left behind by a dead keeper is cleared by the next one');
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });
