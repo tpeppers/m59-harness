@@ -70,6 +70,7 @@ import { arenaCall } from './m59-chatter.mjs';
 import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
+import { pendingOrderFor, writeState as writeOrderState } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder } from './m59-chalice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
@@ -21302,6 +21303,39 @@ export class Autopilot {
     return !!(serving || onDuty || (trip && !['off', 'done'].includes(trip.stage)));
   }
 
+  // ================================================================== STANDING ORDERS
+  //
+  // One-time tasks for the next town stop (tools/m59-standing-orders.mjs). The keeper's half
+  // is the money: keep the price back from the bank and top the purse up from the guild's
+  // chests. The teacher leg is the learn-skill FleetScript, run by `m59-standing-orders watch`.
+
+  standingOrderReserve() {
+    try { const p = pendingOrderFor(this.who()); return p ? Number(p.order.price) || 0 : 0; }
+    catch { return 0; }
+  }
+
+  async fundStandingOrder() {
+    const p = (() => { try { return pendingOrderFor(this.who()); } catch { return null; } })();
+    if (!p) return;
+    const { order } = p;
+    const price = Number(order.price);
+    const want = price + (this.policy.walkingMoney ?? 400);
+    const need = want - this.purseNow();
+    if (need > 0) {
+      await this.withdrawFromStockpile([{ item: 'shilling', amount: need }]).catch(e =>
+        this.note('standing order: could not draw from the guild chest', { why: e.message }));
+      if (this.travelInterrupted()) return { pending: true };
+    }
+    const purse = this.purseNow();
+    const funded = purse >= price;
+    writeOrderState(this.who(), order.id, funded
+      ? { status: 'funded', purse, why: `carrying ${purse} for ${order.learn} (${price})` }
+      : { status: 'unfunded', purse, why: `only ${purse} after the chest; ${order.learn} costs ${price}` });
+    try { recordEvent(this.who(), 'standing_order', { id: order.id, funded, purse, price, drew: Math.max(0, need) }); } catch {}
+    this.note(funded ? 'standing order funded' : 'standing order still short',
+      { id: order.id, learn: order.learn, teacher: order.teacher, purse, price });
+  }
+
   /** Worn items the server grades cursed (rarity 200), or that this session learned are. */
   chaliceCursedWorn() {
     const c = this.s?.client;
@@ -21865,7 +21899,7 @@ export class Autopilot {
         // four tries, say lit-for-a-while on the shared clock so the occupants stop calling a
         // 20-health character into the room every few seconds, and go back out.
         if (++st.attempts >= 4) {
-          try { store.litFol({ room: cfg.fol_room, until: Date.now() + 30_000, by: me }); } catch {}
+          try { store.litFol({ room: cfg.fol_room, until: Date.now() + 60_000, by: me }); } catch {}
           this.chaliceEvent('fol_unpaid', { why: r?.why ?? 'declined before casting', attempts: st.attempts });
           st.ticket = null; st.stage = 'back';
         }
@@ -23679,6 +23713,9 @@ export class Autopilot {
       }],
       ['guild tithe', () => this.guildTitheFromSale(trip.sale)],
       ['bank surplus', () => this.bankSurplus()],
+      // AFTER banking, which keeps the order's price back (`standingOrderReserve`), so the
+      // chest is only asked for what the purse genuinely lacks.
+      ['standing orders', () => this.fundStandingOrder()],
       ['withdraw shopping money', () => this.ensurePurchaseFunds(this.shoppingPlan())],
       ['restock here', () => this.restockInTown()],
       ['buy food', () => this.buyFoodInTown()],
@@ -24805,7 +24842,7 @@ export class Autopilot {
     const foodMoney = purchaseEnabled(this.policy, 'food') && shortBy > 20
       ? Math.min(900, Math.round(shortBy * 4.5) + 100) : 0;
     const deliveryMoney = this.deliveryCashReserve();
-    const keep = Math.max(FLOAT + foodMoney + deliveryMoney,
+    const keep = Math.max(FLOAT + foodMoney + deliveryMoney + this.standingOrderReserve(),
       this.townTrip?.purchasePlan?.required_purse ?? 0,
       this.purchaseFunding?.pending ? this.purchaseFunding.required_purse : 0);
     if (carried <= keep) {

@@ -82,6 +82,9 @@ node_modules/
 /substrate/trips/
 # Before/after snapshots written when an order is applied: runtime evidence, not source.
 /substrate/order-receipts/
+# Standing orders name characters (private orders); their progress is runtime state.
+/substrate/town-orders.json
+/substrate/town-orders-state/
 
 # Every body's path through every room, ours and everyone else's. Names characters and
 # real people who happened to be in the room, so it never leaves this machine.

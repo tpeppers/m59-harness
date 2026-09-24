@@ -534,6 +534,17 @@ node tools/m59-chalice-test.mjs && node tools/m59-chalice-flow-test.mjs
   shortfall, draws it with `withdrawFromStockpile`, and hands it over at the station on the
   way back. Pledges stop two travellers carrying the same shortfall and expire in an hour.
 
+## Standing orders: one-time tasks for the next town stop
+
+`tools/m59-standing-orders.mjs`. An order in `substrate/town-orders.json` (private, it names
+characters) says "at your next town stop, learn X from teacher Y". The keeper funds it on the
+town trip — the bank step keeps the price back and a `standing orders` step tops the purse up
+from the guild chests — and `node tools/m59-standing-orders.mjs watch --fleet prod` runs the
+`learn-skill` FleetScript once that trip is over: walk, buy, VERIFY in the ability list, walk
+home. One at a time, because fleetScript holds one lock per fleet. Exit 1 from the teacher leg
+(attempted, not verified, money may have moved) marks the order `failed` and it is never
+retried by itself; exit 2 (never reached the counter) waits for the next trip.
+
 ## Guild wants and the four containers
 
 - **A GUILD WANT IS AN END STATE, NOT AN ERRAND, AND THAT IS WHAT MAKES IT SAFE TO GIVE TO
