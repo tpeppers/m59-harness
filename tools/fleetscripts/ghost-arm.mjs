@@ -623,8 +623,12 @@ function armorersOf(agents, p) {
   if (named.length) return named;
   const roles = rolesNow(agents, p);
   const cup = cupHolderOf(agents, roles);
+  const free = x => { const r = packRoom(SURVEY.get(x)?.might, SURVEY.get(x)?.items ?? []); return (r.weight ?? 0) + (r.bulk ?? 0); };
   return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && a !== cup && !roles.dedicators.includes(a) && !roles.healers.includes(a))
-    .sort((a, b) => (SURVEY.get(b).might - SURVEY.get(a).might) || (SURVEY.get(b).maxHealth - SURVEY.get(a).maxHealth)
+    // BY FREE ROOM, NOT BY MIGHT. Might sets how big a pack is; what an armorer can bring home is
+    // what is EMPTY in it. On the 2026-09-25 rehearsal a might-50 armorer reached the chests already
+    // over its bulk cap and took a fraction of its share. Free weight + bulk, from the survey's pack.
+    .sort((a, b) => (free(b) - free(a)) || (SURVEY.get(b).maxHealth - SURVEY.get(a).maxHealth)
                     || a.localeCompare(b))
     .slice(0, Math.max(1, Number(p.armorer_count) || 4));
 }
