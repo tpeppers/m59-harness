@@ -110,6 +110,16 @@ function rig({ pack = [], ability = 13, style = 'short_sword', weapon = 'hammer'
   ok(r.casts.length === 0 && out === null, 'and no second one is conjured beside it');
 }
 
+// ------------------------------------------------------------------ overfarm must not evict it
+{
+  const r = rig({ ability: 13 });
+  ok(r.ap.protectedItemNames().includes('hammer'), 'the training weapon is protected while the skill is under 70');
+  const done = rig({ ability: 70 });
+  ok(!done.ap.protectedItemNames().includes('hammer'), 'and released at 70');
+  const normal = rig({ style: 'normal' });
+  ok(!normal.ap.protectedItemNames().includes('hammer'), 'and never under a normal style');
+}
+
 // ------------------------------------------------------------------ the odds note
 {
   const r = rig();

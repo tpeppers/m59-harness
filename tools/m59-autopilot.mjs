@@ -3378,8 +3378,9 @@ export class Autopilot {
   // rolls `Random(sp/3, sp)` and a hammer is 30-44, so the best a caster can do is ~48% at
   // spell power 44-47. Create Weapon is Kraanan, whose bonus is the number of people in the
   // room (up to 30), so a crowded Castle Victoria pushes power to 75+ and the odds to ~27%.
-  async trainingWeaponRoulette() {
-    const s = this.s, c = s.client;
+  /** The weapon the roulette is working towards, or null when it is not in play. */
+  rouletteTarget() {
+    const c = this.s?.client;
     const style = this.policy?.trainingStyle ?? 'normal';
     if (!c || style === 'normal' || style === 'unarmed') return null;
     const want = String(this.policy?.trainingWeapon ?? '').trim().toLowerCase();
@@ -3390,6 +3391,14 @@ export class Autopilot {
     // UNKNOWN IS NOT PERMISSION: a skill the character does not hold, or whose ability has not
     // been read, does not justify spending mana on its weapon.
     if (!Number.isFinite(ability) || ability >= ROULETTE_UNTIL) return null;
+    return { want, skill, ability };
+  }
+
+  async trainingWeaponRoulette() {
+    const s = this.s, c = s.client;
+    const target = this.rouletteTarget();
+    if (!target) return null;
+    const { want, skill, ability } = target;
 
     const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
     const broken = skills.brokenSet(c);
@@ -4587,6 +4596,11 @@ export class Autopilot {
       ...(this.chaliceCfg ? [CHALICE.name] : []),
       // AND THE HOLDER'S RESTOCK while it is being carried: it is somebody else's.
       ...(this._holderCargo ? Object.keys(this._holderCargo.items) : []),
+      // AND THE WEAPON THE ROULETTE IS WORKING TOWARDS. A summon cannot be sold, so every
+      // value ranking prices it at nothing, and overfarm's trade-up dropped each conjured
+      // hammer between seconds and three minutes after the hit — Animal, Floyd and Sweetums on
+      // prod 2026-09-25, all with full packs. Held only while the skill is under 70.
+      ...(this.rouletteTarget?.()?.want ? [this.rouletteTarget().want] : []),
     ].map(String).filter(Boolean))];
   }
 
