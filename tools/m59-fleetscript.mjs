@@ -2163,7 +2163,7 @@ const isBusyRefusal = (r) => /\bis busy\b|\bbusy:/i.test(refusalText(r));
 const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
 
-async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null }) {
+async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null }) {
   // A WALK TO A NON-ROOM IS A REFUSAL, NOT A JOURNEY.
   //
   // Logged live on 2026-09-03: `t11 walking 53 -> null, budget 490s`. A destination that is
@@ -2246,6 +2246,19 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null })
       // THE REMEDY IS THIS FILE'S, NOT THE GATE'S. A script is patient: rest to the floor and
       // set out, rather than refusing an errand somebody asked for.
       const healed = await healToFloor(ctx, agent, minHealth, ctx.healMs);
+      // A PLATEAU ABOVE `plateauOk` IS AS HEALED AS THIS BODY GETS. A ring of lethargy caps a rest
+      // well short of full, and some rooms stop a rest altogether; resting there is not going to
+      // reach the floor, and refusing the walk drops the character from the errand for good. On
+      // the 2026-09-25 rehearsal a raider plateaued at 50/60 against a 0.9 floor and was lost to
+      // the muster. A step that declares `plateauOk` sets out from its plateau and says so.
+      if (!healed.ok && plateauOk != null && /stopped improving/.test(healed.why)) {
+        const now = await observe(agent);
+        if (now.health != null && now.health >= Number(plateauOk)) {
+          ctx.log(agent, `health plateaued at ${now.hpText}, above ${plateauOk} — setting out from there`);
+          minHealth = now.health - 0.001;
+          continue;
+        }
+      }
       if (!healed.ok) return { ok: false, why: `could not reach the health floor: ${healed.why}`,
                                hurt: true, dead: /died|dead/.test(healed.why) };
       continue;   // re-observe: it may have been moved while the keeper held it
@@ -2769,7 +2782,8 @@ async function runStep(ctx, agent, rawStep, state) {
   switch (step.do) {
     case 'walk':
       return compiledWalk(ctx, agent, step.to, { minHealth: step.minHealth ?? ctx.minHealth,
-                                                 despiteHazard: step.despiteHazard ?? null });
+                                                 despiteHazard: step.despiteHazard ?? null,
+                                                 plateauOk: step.plateauOk ?? null });
 
     // WAIT MY TURN AT A PLACE THAT ONLY FITS ONE. See the GATES block for the argument.
     case 'gate': {

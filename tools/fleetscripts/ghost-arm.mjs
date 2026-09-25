@@ -100,6 +100,7 @@ export const script = {
     lightbearer: { type: 'string', default: '', describe: 'agent who casts forces of light; empty = whoever knows it' },
     healers: { type: 'string', default: '', describe: 'comma-separated; empty = three who know minor heal' },
     lab: { type: 'boolean', default: false, describe: 'allow DM grants and mana refills. REFUSES on a non-lab fleet' },
+    plateau_ok: { type: 'number', default: 0.5, describe: 'a muster walk whose rest plateaus at or above this sets out from the plateau' },
     near_hops: { type: 'number', default: 2, describe: 'a muster walk this short (and not across Ukgoth) sets out at near_min_health' },
     near_min_health: { type: 'number', default: 0.3, describe: 'the floor for a short walk home; the stage room is where the raid rests' },
     muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
@@ -254,7 +255,7 @@ export const script = {
         // FULL HEALTH TO SET OUT, whatever the raid's own floor is: this is the one walk that may
         // cross open country (m59-muster.mjs, "THE HEALTH FLOOR" — seven died at 0.35).
         : convoy ? [
-          walk(Number(p.rally), { minHealth: Number(p.muster_min_health) }),
+          walk(Number(p.rally), { minHealth: Number(p.muster_min_health), plateauOk: Number(p.plateau_ok) }),
           verify(async ({ state: st }) => {
             // Everyone in the convoy, or the patience runs out — then whoever is here goes.
             reexpect('rally', CONVOY.size);
@@ -277,7 +278,7 @@ export const script = {
           // rally room sets out at muster_min_health), and it crosses at full or not at all.
           walk(Number(p.stage), { minHealth: fragile ? Math.max(0.95, Number(p.cross_min_health)) : Number(p.cross_min_health) }),
         ]
-        : [walk(Number(p.stage), { minHealth: nearHome ? Number(p.near_min_health) : Number(p.muster_min_health) })]),
+        : [walk(Number(p.stage), { minHealth: nearHome ? Number(p.near_min_health) : Number(p.muster_min_health), plateauOk: Number(p.plateau_ok) })]),
 
       // ---- 1. SURVEY. Everyone posts what it holds, then waits for everyone else, so the
       // hand-over plan below is computed from ONE picture of the fleet by every agent alike.
