@@ -550,8 +550,12 @@ export const script = {
         // now, and on the 2026-09-25 rehearsal one was planned as a hammer donor from Barloque
         // ("not in the room"). An armorer that comes back without one is lateDedicate's.
         const here = await presentOnce('hammers', agents, Number(p.stage));
-        const needs = agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && here.has(a))
-          .map(a => hammerNeed(a, { wielding: SURVEY.get(a).wielding, items: SURVEY.get(a).items }));
+        // FROM PACKS READ NOW, NOT THE SURVEY'S. Object ids are handles and packs have moved since the
+        // survey (make-room, the pool, the hall): on the 2026-09-25 rehearsal two spare hammers were
+        // offered by ids their donors no longer held ("carrying nothing matching those ids").
+        // Read once for the step and shared, so every agent plans the same hand-overs.
+        const packs = await packsOnce('hammers', agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && here.has(a)));
+        const needs = Object.entries(packs).map(([a, pk]) => hammerNeed(a, { wielding: pk.wielding ?? SURVEY.get(a).wielding, items: pk.items }));
         const { transfers, short } = matchHammers(needs);
 
         // Donors hand over; receivers wait to see the hammer arrive.
