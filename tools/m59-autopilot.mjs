@@ -70,7 +70,7 @@ import { arenaCall } from './m59-chatter.mjs';
 import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
-import { pendingOrderFor, writeState as writeOrderState } from './m59-standing-orders.mjs';
+import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan,
          reagentFloor, castsAbove } from './m59-chalice.mjs';
@@ -21326,9 +21326,18 @@ export class Autopilot {
 
   hereRoom() { return Number(this.s?.world?.room?.num ?? this.s?.client?.room?.num ?? NaN); }
 
+  // `World.route` answers `hops` as the LIST of hops, not a count. This read `Number.isFinite`
+  // of that array, which is false for every route there is, so the chalice's `shouldRide`
+  // declined every ride on prod as "no route to the station" — ~120 declines in two days,
+  // Castle Victoria (38) to the station next door (2) among them, and not one ride. The flow
+  // test stubs this method with a number, which is the only reason it ever passed.
   hopsTo(room) {
-    try { const r = this.s.world.route(Number(room)); return Number.isFinite(r?.hops) ? r.hops : null; }
-    catch { return null; }
+    try {
+      const r = this.s.world.route(Number(room));
+      if (r?.found === false) return null;
+      if (Array.isArray(r?.hops)) return r.hops.length;
+      return Number.isFinite(r?.hops) ? r.hops : null;
+    } catch { return null; }
   }
 
   /** Is a chalice step in flight? Read by `commitment()` so DUM steps over the character. */
@@ -21349,15 +21358,21 @@ export class Autopilot {
   // chests. The teacher leg is the learn-skill FleetScript, run by `m59-standing-orders watch`.
 
   standingOrderReserve() {
-    try { const p = pendingOrderFor(this.who()); return p ? Number(p.order.price) || 0 : 0; }
+    try { const p = pendingOrderFor(this.who()); return p ? orderPrice(p.order) : 0; }
     catch { return 0; }
+  }
+
+  /** An order nobody has taken a town trip for yet — the trigger that opens one. */
+  standingOrderUnstarted() {
+    try { const p = pendingOrderFor(this.who()); return p && !p.state?.status ? p.order : null; }
+    catch { return null; }
   }
 
   async fundStandingOrder() {
     const p = (() => { try { return pendingOrderFor(this.who()); } catch { return null; } })();
     if (!p) return;
     const { order } = p;
-    const price = Number(order.price);
+    const price = orderPrice(order);
     const want = price + (this.policy.walkingMoney ?? 400);
     const need = want - this.purseNow();
     if (need > 0) {
@@ -21366,11 +21381,17 @@ export class Autopilot {
       if (this.travelInterrupted()) return { pending: true };
     }
     const purse = this.purseNow();
-    const funded = purse >= price;
+    // THE BANK COUNTS. The teacher leg is the learn-skill FleetScript, which walks to a bank
+    // and withdraws `price - carrying` itself, so a character with the money banked is funded
+    // whatever the guild chest held. This used to be purse-only and parked Statler as
+    // `unfunded` for good with 1,289 in hand after an empty chest.
+    const banked = Number(this.s.bankKnown?.()?.balance) || 0;
+    const funded = purse >= price || purse + banked >= price;
+    const what = orderSkills(order).join(', ');
     writeOrderState(this.who(), order.id, funded
-      ? { status: 'funded', purse, why: `carrying ${purse} for ${order.learn} (${price})` }
-      : { status: 'unfunded', purse, why: `only ${purse} after the chest; ${order.learn} costs ${price}` });
-    try { recordEvent(this.who(), 'standing_order', { id: order.id, funded, purse, price, drew: Math.max(0, need) }); } catch {}
+      ? { status: 'funded', purse, banked, why: `carrying ${purse}${banked ? ` (+${banked} banked)` : ''} for ${what} (${price})` }
+      : { status: 'unfunded', purse, banked, why: `only ${purse} (+${banked} banked) after the chest; ${what} costs ${price}` });
+    try { recordEvent(this.who(), 'standing_order', { id: order.id, funded, purse, banked, price, drew: Math.max(0, need) }); } catch {}
     this.note(funded ? 'standing order funded' : 'standing order still short',
       { id: order.id, learn: order.learn, teacher: order.teacher, purse, price });
   }
@@ -22737,6 +22758,16 @@ export class Autopilot {
       const r = this.policy.shouldSell({ autopilot: this, client: c, windowOpen });
       if (r && typeof r === 'object') return { trigger: 'policy', ...r };
     }
+
+    // A STANDING ORDER NOBODY HAS STARTED IS A REASON TO GO TO TOWN NOW. Operator,
+    // 2026-09-25: "have anyone who can buy their next level of weaponcraft go take a town
+    // trip". Without this an order waited for the pack to fill, which on a quiet station is
+    // hours. It fires ONCE per order: `fundStandingOrder` writes a status on the trip, and a
+    // status is what switches this off, so a character that cannot be funded does not lap.
+    const order = this.standingOrderUnstarted();
+    if (order)
+      return { sell: true, trigger: 'standing_order', order: order.id,
+               why: `standing order ${order.id}: ${orderSkills(order).join(', ')} from ${order.teacher}` };
 
     const inv = c.inventory || [];
     const stacks = inv.length;

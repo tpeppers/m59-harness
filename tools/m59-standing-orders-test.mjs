@@ -4,7 +4,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadOrders, pendingOrderFor, readState, writeState, validOrder } from './m59-standing-orders.mjs';
+import { loadOrders, pendingOrderFor, readState, writeState, validOrder,
+         orderSkills, orderPrice } from './m59-standing-orders.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; console.log('  ok  ', what); } else { fail++; console.log('  FAIL', what); } };
@@ -31,6 +32,14 @@ try {
   ok(readState('Kermit', state)['parry-1'].purse === 4400, 'a later write keeps earlier fields');
   ok(readState('Pepe', state)['parry-1'].why.includes('charged'), 'and each character has its own file');
   ok(loadOrders(join(dir, 'missing.json')).length === 0 || true, 'a missing file is no orders');
+
+  // SEVERAL SKILLS FROM ONE TEACHER: `learn` is a list and `price` is per skill.
+  const wc3 = { id: 'wc3-1', characters: ['Fozzie'], learn: ['fencing', 'axe wielding', 'hammer wielding'],
+                teacher: 'Rook', teacher_room: 154, price: 2000 };
+  ok(validOrder(wc3), 'a list of skills is an order');
+  ok(orderSkills(wc3).length === 3 && orderPrice(wc3) === 6000, 'and it costs the price of each (6000)');
+  ok(orderSkills(parry).join() === 'parry' && orderPrice(parry) === 4000, 'a single skill is still a list of one');
+  ok(!validOrder({ ...wc3, learn: [] }), 'an empty list is not an order');
 } finally { rmSync(dir, { recursive: true, force: true }); }
 
 console.log(`\n${pass} passed, ${fail} failed`);

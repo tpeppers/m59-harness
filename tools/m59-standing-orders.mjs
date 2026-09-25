@@ -56,7 +56,13 @@ export function loadOrders(file = ORDERS_FILE) {
   } catch { return []; }
 }
 
-export const validOrder = (o) => o && o.id && Array.isArray(o.characters) && o.learn
+// ONE SKILL OR SEVERAL FROM THE SAME TEACHER. `learn` may be a list, and `price` is then PER
+// SKILL — the operator's order of 2026-09-25 bought all three Weaponcraft 3 skills from Rook
+// in one visit, and three orders would have been three round trips across the world.
+export const orderSkills = (o) => [].concat(o?.learn ?? []).map(String).filter(Boolean);
+export const orderPrice = (o) => (Number(o?.price) || 0) * orderSkills(o).length;
+
+export const validOrder = (o) => o && o.id && Array.isArray(o.characters) && orderSkills(o).length > 0
   && o.teacher && Number.isInteger(o.teacher_room) && Number(o.price) > 0;
 
 export function readState(character, dir = STATE_DIR) {
@@ -103,7 +109,7 @@ if (process.argv[1]?.endsWith('m59-standing-orders.mjs')) {
   if (argv[0] !== 'watch') {
     if (!orders.length) { console.log(`no orders in ${ORDERS_FILE}`); process.exit(0); }
     for (const o of orders) {
-      console.log(`\n${o.id}: learn "${o.learn}" from ${o.teacher} (${o.teacher_room}) for ${o.price}`);
+      console.log(`\n${o.id}: learn ${orderSkills(o).map(x => `"${x}"`).join(', ')} from ${o.teacher} (${o.teacher_room}) for ${o.price} each`);
       for (const c of o.characters) {
         const st = readState(c)[o.id];
         console.log(`  ${c.padEnd(24)} ${agentOf(c) ?? '?'.padEnd(4)}  ${st?.status ?? 'waiting for a town trip'}` +
@@ -141,16 +147,36 @@ if (process.argv[1]?.endsWith('m59-standing-orders.mjs')) {
       if (st?.status !== 'funded' || !tripDoneSince(c, st.at - 1)) continue;
       const agent = agentOf(c);
       if (!agent) { writeState(c, o.id, { status: 'failed', why: 'not on the roster' }); continue; }
-      console.log(`${new Date().toISOString()} ${c} (${agent}): to ${o.teacher} for ${o.learn}`);
-      const r = spawnSync(process.execPath, [join(HERE, 'm59-learn-run.mjs'), '--agent', agent,
-        '--skill', o.learn, '--price', String(o.price), '--teacher', o.teacher,
-        '--teacher-room', String(o.teacher_room), '--home', String(homeOf(agent)),
-        '--carrying', String(st.purse ?? o.price)], { encoding: 'utf8', timeout: 45 * 60_000 });
-      const said = String(r.stdout ?? '').split('\n')[0];
-      console.log(`  -> exit ${r.status}: ${said}`);
-      if (r.status === 0) writeState(c, o.id, { status: 'done', why: said });
-      else if (r.status === 1) writeState(c, o.id, { status: 'failed', why: 'attempted and not verified — money may have moved; NOT retried: ' + said });
-      else writeState(c, o.id, { status: 'funded', why: 'teacher leg did not start, will retry: ' + said, retries: (st.retries ?? 0) + 1 });
+      // SEVERAL SKILLS, ONE VISIT: every leg but the last names the teacher's own room as
+      // "home", so the character stays at the counter and the walk back happens once.
+      const learned = new Set((st.learned ?? []).map(x => x.toLowerCase()));
+      const todo = orderSkills(o).filter(x => !learned.has(x.toLowerCase()));
+      let carrying = Number(st.purse ?? orderPrice(o));
+      for (const [i, skill] of todo.entries()) {
+        const last = i === todo.length - 1;
+        console.log(`${new Date().toISOString()} ${c} (${agent}): to ${o.teacher} for ${skill}`);
+        const r = spawnSync(process.execPath, [join(HERE, 'm59-learn-run.mjs'), '--agent', agent,
+          '--skill', skill, '--price', String(o.price), '--teacher', o.teacher,
+          '--teacher-room', String(o.teacher_room),
+          '--home', String(last ? homeOf(agent) : o.teacher_room),
+          '--carrying', String(Math.max(0, carrying))], { encoding: 'utf8', timeout: 45 * 60_000 });
+        const said = String(r.stdout ?? '').split('\n')[0];
+        console.log(`  -> exit ${r.status}: ${said}`);
+        if (r.status === 0) {
+          learned.add(skill.toLowerCase());
+          carrying = Math.max(0, carrying - Number(o.price));
+          writeState(c, o.id, last ? { status: 'done', learned: [...learned], why: said }
+                                    : { learned: [...learned], purse: carrying });
+          continue;
+        }
+        if (r.status === 1)
+          writeState(c, o.id, { status: 'failed', learned: [...learned],
+            why: `${skill}: attempted and not verified — money may have moved; NOT retried: ` + said });
+        else
+          writeState(c, o.id, { status: 'funded', learned: [...learned],
+            why: `${skill}: teacher leg did not start, will retry: ` + said, retries: (st.retries ?? 0) + 1 });
+        break;
+      }
     }
     if (!pending) { console.log('every order is finished'); break; }
     await new Promise(r => setTimeout(r, 60_000));

@@ -590,6 +590,26 @@ try {
     ok(!again.skip, 'once it has lapsed the ride is on again');
   }
 
+  // ---------------------------------------------------------------------------------------
+  section('hopsTo reads the route the World actually returns');
+  // Every keeper above stubs `hopsTo` with a number, and that stub is why this passed while
+  // prod declined every ride as "no route to the station": `World.route` answers `hops` as
+  // the LIST of hops, and the method tested that list with Number.isFinite.
+  {
+    const ap = Object.create(Autopilot.prototype);
+    const routes = {
+      2: { found: true, hops: [{ from: 38, to: 39 }, { from: 39, to: 2 }] },
+      38: { found: true, hops: [] },
+      77: { found: false, reason: 'no path' },
+    };
+    ap.s = { world: { route: (n) => routes[n] ?? { found: false } } };
+    ok(ap.hopsTo(2) === 2, 'hopsTo counts the hops World.route returns as a list (got ' + ap.hopsTo(2) + ')');
+    ok(ap.hopsTo(38) === 0, 'standing in the room is zero hops, not "no route"');
+    ok(ap.hopsTo(77) === null, 'no route is null');
+    ap.s = { world: { route: () => { throw new Error('a snapshot, not a World'); } } };
+    ok(ap.hopsTo(2) === null, 'a World that cannot answer is null, never a number');
+  }
+
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
