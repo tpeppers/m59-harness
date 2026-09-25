@@ -431,12 +431,47 @@ export function safeWalls(geo, { los = 0, mustReachSomething = false } = {}) {
 
 // Every safe wall in a room, DESCRIBED and ORDERED. Membership is safeWalls() and nothing
 // here narrows it; everything computed below is for ranking and for the book.
+// ONE ANSWER PER ROOM, NOT ONE PER QUESTION.
+//
+// Everything `safeSpots` computes is a function of the geometry alone — the coarse grid, the
+// line-of-sight staircase, and the baked mover mask — and none of it changes while a character
+// walks. It was nevertheless recomputed from scratch on every call, and `sheltersAlong` calls
+// it once per STEP of a plan. Measured in Ukgoth (599, 71x66, 199 walls) on this bake: 9ms a
+// call, 114 calls for one crossing, and the keeper's own profiler put `sheltersAlong ->
+// nearestSafeSpot -> safeSpots -> exposureAt` in 32 of the 67 event-loop blocks it logged in
+// that room on 2026-09-24, the worst 5.2 seconds.
+//
+// Keyed on the geometry OBJECT and on the step mask it is carrying at that moment, because
+// the mask is the one input that can change — a moving door swaps in a variant (see
+// stepMaskVariants), and `escapes`/`refused_approaches` are read off it. A different `los`
+// or `minEscape` is a different question and gets its own entry. Callers are handed fresh
+// shallow copies: several of them write `steps_away` onto what they get back.
+const SPOT_CACHE = new WeakMap();
+function describedWalls(geo, los, minEscape) {
+  let byGeo = SPOT_CACHE.get(geo);
+  if (!byGeo) { byGeo = new Map(); SPOT_CACHE.set(geo, byGeo); }
+  const key = `${los}|${minEscape}`;
+  const mask = geo._stepMask ?? null;
+  const hit = byGeo.get(key);
+  if (hit && hit.mask === mask && hit.rows === geo.rows && hit.cols === geo.cols) return hit.list;
+  const list = describeWalls(geo, los, minEscape);
+  byGeo.set(key, { mask, rows: geo.rows, cols: geo.cols, list });
+  return list;
+}
+// For tests and for anything that mutates a geometry in place: forget what was worked out.
+export function forgetSafeSpots(geo) { if (geo) SPOT_CACHE.delete(geo); }
+
 export function safeSpots(geo, { limit = 8, mustReach = null, los = 0,
                                 // How many squares a shelter has to be able to reach before
                                 // it counts as somewhere you can leave. See escapeRoom.
                                 // Measured and scored, never a gate.
                                 minEscape = 24 } = {}) {
   if (!geo) return [];
+  const out = describedWalls(geo, los, minEscape).map(s => ({ ...s }));
+  return rankSpots(out, { limit, mustReach });
+}
+
+function describeWalls(geo, los, minEscape) {
   const out = [];
   for (const w of safeWalls(geo, { los })) {
     const { row: r, col: c, attackers, free_shots, our_ground } = w;
@@ -486,6 +521,10 @@ export function safeSpots(geo, { limit = 8, mustReach = null, los = 0,
       ledge,
     });
   }
+  return out;
+}
+
+function rankSpots(out, { limit, mustReach }) {
   // NEAREST FIRST, AND NOTHING ELSE. THERE IS NO SUCH THING AS A MORE DEFENSIBLE WALL.
   //
   // This used to carry a `score` — attackers avoided, plus free shots, plus back cover,
@@ -674,13 +713,25 @@ export function sheltersAlong(geo, steps, {
   // so asking per step is the same answer computed fifty times — and it froze the walker for
   // up to twenty-eight seconds at a stretch when the reachability filter was added.
   const reachable = reachableFrom(geo, { row: steps[0].row, col: steps[0].col });
+  // AND ONE REVERSE FLOOD, FROM THE ROUTE'S END. `nearestSafeSpot` used to ask, for every
+  // step, which squares can walk back to THAT step — a reverse flood per step, and with the
+  // per-step wall scan the whole of a 0.9-second computation in Ukgoth that ran on the keeper's
+  // event loop (measured 1.6 to 5.2 seconds live, with the loop blocked for all of it). A
+  // plan's steps are joined by walkable steps, so anything that can reach step i can reach the
+  // end through the rest of the plan: the end's return set contains every step's. What it adds
+  // is a wall that rejoins the route further ON rather than exactly where it was left, which
+  // is the direction a journey wants anyway.
+  const last = steps[steps.length - 1];
+  const canComeBack = Number.isFinite(last?.row) && Number.isFinite(last?.col)
+    ? returnReachableTo(geo, { row: last.row, col: last.col }) : null;
   for (let i = 0; i < steps.length; i++) {
     const st = steps[i];
     if (!Number.isFinite(st?.row) || !Number.isFinite(st?.col)) continue;
     let spot = null;
     try {
       spot = nearestSafeSpot(geo, { row: st.row, col: st.col },
-                             { within, room, minBackCover, reachable, unreachable });
+                             { within, room, minBackCover, reachable, unreachable,
+                               canComeBack: canComeBack ?? undefined });
     } catch { spot = null; }
     if (!spot) continue;
     const k = `${spot.col},${spot.row}`;
@@ -856,6 +907,11 @@ export function nearestSafeSpot(geo, from, {
   // THE REACHABLE SET, WHEN THE CALLER ALREADY HAS ONE — because computing it is expensive
   // and a whole path shares one answer. See `canWalkThere` below.
   reachable = null,
+  // AND THE RETURN SET, FOR THE SAME REASON. `sheltersAlong` asks this once per step of a
+  // plan, and `returnReachableTo(from)` is a 20,000-square reverse flood each time — 8ms in
+  // Ukgoth, times 114 steps. The caller that walks a whole plan supplies one set for all of
+  // it; see sheltersAlong for why the route's END answers for every step on it.
+  canComeBack: suppliedComeBack = null,
   // A JOURNEY HAS A DIRECTION, AND A WALL ON THE ROAD AHEAD IS WORTH MORE THAN ONE BEHIND.
   //
   // `onward` is the square the character is trying to leave the room by. When it is given
@@ -938,7 +994,7 @@ export function nearestSafeSpot(geo, from, {
   // "can it reach the exit", and from a pocket that cannot reach the exit at all (the Cragged
   // Mountains from r30c25: 185 of 196 walls unreachable, two eligible) every wall was then
   // "one-way" and a character under attack was told there was nothing to take.
-  const canComeBack = returnReachableTo(geo, from);
+  const canComeBack = suppliedComeBack ?? returnReachableTo(geo, from);
   const reachesOnward = onwardSquare ? returnReachableTo(geo, onwardSquare) : null;
   let best = null;
   let bestPredictedUnreachable = null;

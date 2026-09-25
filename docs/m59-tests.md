@@ -1468,3 +1468,23 @@ message deduplication, event-ring eviction, late kill attribution, names with sp
 restart durability, multi-point sample recovery and honest page labels. It also checks
 combat-message attribution before and after the gain, special kill prose, same-millisecond
 ordering, and exclusion of distant, incoming and other-player combat.
+
+## m59-safelegs-test.mjs (43) and m59-crossingtrial-test.mjs (17) — crossing a killing room
+
+`m59-safelegs-test` pins the pure leg planner (`tools/m59-safelegs.mjs`) on synthetic rooms:
+the exit one leg away needs no wall; a long corridor is walked in legs no longer than `maxLeg`,
+each ending on a wall; a gap no leg can bridge is `no_chain`, never walked blind; a wall beside
+a threat loses to one away from it; a chain much longer than the road is refused as `detour`;
+a spent budget answers `deadline`, never half a plan; a fleet-mate standing on the next wall
+does not break a convoy's chain (a held wall may be a later stop, never the first); a baked
+track's corridor keeps every stop on walked ground; and the room switch (`SAFE_LEG_ROOMS`,
+policy, `M59_SAFE_LEGS`, `M59_SAFE_LEG_ROOMS`). Against the baked map it checks Ukgoth both
+ways — a chain exists, no stop on the rim, a warm re-plan under 150 ms — and that
+`sheltersAlong` over a whole 599 crossing stays under 250 ms (it was 868 ms). It also pins that
+`threatsHere()` reads the object list and never builds the tactical view. Skips the map half
+loudly when there is no bake.
+
+`m59-crossingtrial-test` pins the harness's reading half: a `[loop]` line's lateness against
+the time OUR code spent in it (`code_ms` — an `(idle)`-dominated window is not a planning
+stall), the profiler's own analysis not charged as a stall, and a sample stream reduced to
+arrived / died / timeout / elsewhere with damage counted as every drop.

@@ -1562,3 +1562,130 @@ The door observer belongs to each Session login, including recovery reconnects.
 Attaching it only during keeper startup left Camilla's replacement client recording
 opening packets while its movement geometry stayed shut. Replacement clients reset
 and replay door geometry; events from the retired client cannot change it.
+
+## Safe-spot legs: cross a killing room wall to wall, and think on a wall
+
+Operator, 2026-09-24: *"Fix Ukgoth pathing. One way to do it would be to path the route plan
+'from safe spot to safe spot', such that time spent pausing for re-pathing is done from
+safety. Anything you put in we probably want as generally available travel solutions."*
+
+**What was wrong was two things, and the first one was ours.** A Ukgoth (599) crossing was one
+long plan made at the door, walked in one go, and re-planned wherever the body happened to be
+when the walker slid, was blocked or was hit. And the re-planning itself blocked the keeper's
+event loop for **1.6 to 5.2 seconds at a time**, in the open, with trolls in reach — the keeper
+profiler logged 67 such blocks in 599 on the day of the convoy rehearsal. Two callers owned
+nearly all of it:
+
+| caller | why it was slow | fix |
+|---|---|---|
+| `sheltersAlong -> nearestSafeSpot -> safeSpots -> exposureAt` | recomputed every wall in the room, and a 20,000-square reverse flood, **once per step of the plan** — 114 times for one crossing, 868 ms offline | `safeSpots` describes a room's walls once per geometry and step mask (`describedWalls`); `sheltersAlong` shares one return set, the route END's, for every step |
+| `threatsHere -> view -> snapshot -> approachSquare -> path` | built a whole tactical view — up to eight A* searches for each of forty objects — to read four fields per monster, on every walk and replan | `threatsHere()` reads `World.objects()` |
+
+`sheltersAlong` over a whole 599 crossing: **868 ms -> 6 ms** offline; live, the blocks with 250 ms
+or more of our code in them went from 570 to 4 over 22-23 forward crossings. `m59-safelegs-test` pins it
+under the 250 ms bound on the baked map.
+
+**The second thing is the leg.** In a room on the safe-leg list, `travel` hands the hop to
+`crossBySafeLegs` before the track and the exit walk. It plans the crossing as a chain of legs
+of at most `maxLeg` (14) mover steps, each ending on a safe wall — `safeSpots`, attackers 0,
+the squares `m59-wallproof` measured taking **zero** attacks in 1,290 seconds while the body did
+not swing — walks the first leg, and plans again **standing on the wall it reached**, with the
+monster positions of that moment. The last leg is the exit's and is left to `leaveViaAny`.
+
+- **The planner** (`m59-safelegs.mjs`, pure): Dijkstra over {start, walls, exit}; an edge is a
+  bounded flood on `neighbors({collision:true})` — the router's own step relation, falls and
+  declared jumps included — priced as steps + `legCost` (3) per stop + `threatWeight` (6) for
+  each step within `threatRadius` (4) of a live threat. Walls on the rim (StandardLeaveDir ejects
+  you) and squares with no footing are not stops. Floods are cached per geometry and mask, so a
+  re-plan from a wall is ~10 ms; a cold first plan in 599 is ~90 ms.
+- **Inside the walked corridor.** The router's step relation is a model, and in 599 it is wrong
+  exactly where the crossing starts: the first live run chose legs from the 598 door straight
+  down the east side (r8c58 -> r20c52 / r22c46 / r21c45), which the router believes in and the
+  walker could not make — `no_ground_gained` eighteen times over six characters, about a hundred
+  seconds each. So when the room has baked tracks to this exit, legs are planned inside the band
+  `corridorRadius` (4) squares either side of every one of them, struck tracks included (a strike
+  says riding it end to end failed, not that nobody walked it), and `walkTo` is kept inside the
+  band too (`avoidSquares`, which it relaxes before it gives up). 4 is measured: at 2 the band
+  holds too few walls for a 14-step leg, at 5 it readmits the shortcut.
+- **A convoy walks one chain.** A wall a fleet-mate is standing on may be a later stop but never
+  the first (dropping held walls from the graph left the second character with `no_chain`), and
+  a wall this crossing already stood on is never walked back to (threat pricing flipped
+  r15c7 <-> r17c8 as a troll moved).
+- **The door is still the track's.** After the legs hand over at the last wall, the track is
+  ridden from its nearest waypoint — the walked approach through the doorway — even if it has
+  been struck: Ukgoth's north door is a jump that fails two or three times as a matter of course,
+  so strikes pile up on it, and with the tail refused the bare exit walker timed out on four of
+  six characters that the legs had delivered to r8c14.
+- **The stop is bounded to the planning.** `deadlineMs` (150) per attempt, at most four attempts
+  with a `setImmediate` between them so the keeper's socket and survival clock run; a spent
+  budget answers `deadline` and the direct walk runs. Nothing here waits. A hurt character rests
+  on a wall only when the journey's own shelter policy says so (`shelterPolicy.need()` /
+  `onArrive`) — the fuel-stop doctrine's "a trip is refuge to refuge, and a rest stop is skipped
+  when it is not needed", unchanged.
+- **It never strands a hop.** No chain, a chain longer than `maxDetour` (1.8) x the direct
+  route + `slack` (12), a spent budget, or three legs that could not be walked all end the legs
+  and hand the rest to the ordinary walker from wherever the body is — after any completed leg,
+  a wall. A crossing that walked any leg does not ride the track (a track re-boards at its
+  nearest waypoint, usually behind the last wall).
+- **Which rooms.** `SAFE_LEG_ROOMS` is `[599]`. Not derived from the death ledger on purpose: a
+  room joins when `m59-crossingtrial.mjs` says legs beat the direct walk THERE. Per character,
+  `autopilot safe_legs=false` switches it off and `safe_legs={rooms:[...]}` replaces the list
+  (planner keys `maxLeg`, `legCost`, `threatWeight`, `threatRadius`, `maxDetour`, `slack`,
+  `deadlineMs` ride along); process-wide, `M59_SAFE_LEGS=0` and `M59_SAFE_LEG_ROOMS`.
+- **The record.** One `safe_legs` row per crossing in the tactics ledger (legs, walls, plans,
+  worst plan ms, failures, rests, fallback reason), and a `via: 'safe_legs'` entry in the
+  journey log.
+
+**Compatibility with the crowd rule.** CLAUDE.md's "IN A CROWD THE ONLY WALL IS THE EXIT" was
+written from characters that STOPPED at a wall in a room of 9-18 monsters and stood there for
+minutes. A leg stop is a plan, not a stand; the only stop longer than the plan is the existing
+shelter rest, which this does not widen. (`travelStopMaxThreats` itself now gates combat pulls
+only — see `Autopilot.crowded`.)
+
+### What it bought, measured on the shadow fleet (2026-09-24/25)
+
+Six characters (levels 37-74 max health) as one convoy, four trials each way, same harness,
+same lab server, track strikes reset before each condition, keepers in `survive` and held:
+
+| 598 -> 599 -> 2 (forward) | baseline (`6b6a131`) | safe legs |
+|---|---|---|
+| crossings | 23 | 22 |
+| arrived | 22% | **95%** |
+| stuck in 599 at the 6-minute timeout | 74% | 5% |
+| median / p90 seconds in 599 | 354 / 355 | **60 / 82** |
+| total damage taken in 599 | 724 | **36** |
+| keeper loop blocks per crossing (>= 200 ms) | 27.5 | 0.4 |
+| blocks with >= 250 ms of our own code | 570 | 4 (none from travel planning) |
+
+| 2 -> 599 -> 598 (back; the router leaves by 589) | baseline | safe legs |
+|---|---|---|
+| crossings, all left the room alive | 24 | 24 |
+| median / p90 seconds in 599 | 45 / 237 | 58 / 98 |
+| total damage | 222 | 295 |
+| blocks with >= 250 ms of our own code | 304 | 6 |
+
+Deaths inside 599 were 0 in both final runs (an earlier baseline run lost 1 of 18 forward and
+2 of 23 back; the rehearsal convoy lost 5 of 20). The back direction mostly lands where no
+corridor chain reaches the 589 door and falls back to the ordinary walk, so its gain is the
+stalls, not the route. What is left over 250 ms is not travel planning: the survival ladder's
+refuge search (`takeRecoverySpot -> searchSafeSpot`, an A* per candidate wall, 0.3-1.2 s) and one
+3.3 s synchronous open of the cross-process spot-claim file (`releaseSpot`).
+
+### Measuring it: `m59-crossingtrial.mjs`
+
+```bash
+M59_LOOP_STALL_MS=200 node tools/m59-crossingtrial.mjs --agents shadow03,shadow21,... \
+    --trials 4 --dir both --label legs --keeper-logs substrate      # lab only
+node tools/m59-crossingtrial.mjs --report
+node tools/m59-crossingtrial.mjs --restall --keeper-logs <dir>       # re-read stalls from logs
+```
+
+A trial is a convoy: K characters held (FleetScript's `holdKeeper`), DM-placed a few squares
+short of the door into the danger room, healed, and all sent `travel` to the far side; the
+harness then only watches, one `fleet` read a second. Per crossing it records outcome, seconds
+in the room, damage (every drop, regeneration does not cancel it), lowest health, and the
+keeper's own `[loop]` blocks in that room. **Start the broker with `M59_LOOP_STALL_MS=200`** or
+the keepers only log blocks over 1.5 s. The stall column charges only what OUR code spent inside
+the window (`code_ms`, the heaviest of our frames): on a machine running two fleets most late
+timers are `(idle)` — the process was descheduled, not computing — and a planning fix cannot
+move those.

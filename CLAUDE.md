@@ -705,6 +705,7 @@ Movement — [`docs/m59-routing.md`](docs/m59-routing.md):
 - `ms_since_moved` is about the KEEPER, not the character, and reads as a stall during every errand.
 - A stall detector that requires STILLNESS misses the commonest way to stand still: a two-square shuffle against a wall resets it on every sample. Ask the damage rate instead.
 - A keeper whose event loop is BLOCKED is silent, and the server logs it out at 30 s. The keeper profiles itself: a `loop_stall` row carries `hot:` and `callers:`, and the callers half is the cause. The needle solver is on a 400 ms clock (`M59_NEEDLE_MS`) because it was 29 s in a crowded room.
+- IN A KILLING ROOM THE CROSSING IS WALL TO WALL, AND ALL THE THINKING HAPPENS ON A WALL. In `SAFE_LEG_ROOMS` (Ukgoth, 599) `travel` walks legs of at most 14 steps between safe walls, inside the corridor baked tracks have walked, and re-plans only while standing on one (`m59-safelegs.mjs`); the stop is a plan of at most 150ms, never a wait. Before it, planning in that room (`sheltersAlong`, `threatsHere`) blocked the keeper loop 1.6-5.2s at a time, in the open. `m59-crossingtrial.mjs` is the measurement; docs/m59-routing.md "Safe-spot legs".
 - `start_has_no_floor` usually means the position and the geometry are from DIFFERENT ROOMS, not that the map has a hole — 1,535 of 2,361 hop failures in one window, mostly leaving a 10x13 room with every square walkable. It is `position_outside_room_geometry` when the coordinates are off the map.
 
 Boards, the compendium and the planner — [`docs/m59-boards.md`](docs/m59-boards.md):

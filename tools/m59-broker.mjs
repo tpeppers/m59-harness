@@ -11088,6 +11088,14 @@ const TOOLS = [
           'the behaviour before this existed. On, an organised group cannot hit and step back out ' +
           'of a 3-square disc; off, the fleet never leaves its wall to chase somebody. The melee ' +
           'reach itself belongs to the SERVER and is not a setting.' },
+      safe_legs: {
+        description: 'WHICH ROOMS A JOURNEY CROSSES WALL TO WALL. In those rooms the crossing is ' +
+          'walked as short legs between safe walls (squares no monster can reach — attackers 0), ' +
+          'and every re-plan is made standing on one; the stop is bounded to the planning, never ' +
+          'a wait. `false` switches it off for this character; `{rooms: [599, ...]}` replaces the ' +
+          'room list; `null` returns to the default, which is Ukgoth (599) only. Optional keys ' +
+          'maxLeg, legCost, threatWeight, threatRadius, maxDetour, slack, deadlineMs and corridorRadius tune the ' +
+          'planner — see tools/m59-safelegs.mjs. M59_SAFE_LEGS=0 turns it off process-wide.' },
       travel_hold_vigor: { type: 'number',
         description: 'OPTIONAL floor on vigor before a mid-journey rest at a wall. Default 0 — ' +
           'no floor, because vigor is not a reason to refuse refuge. It was 100 (above anything ' +
@@ -11730,6 +11738,24 @@ const TOOLS = [
                                    ...Object.fromEntries(Object.entries(want)
                                      .map(([k, val]) => [k, !!val])) };
         } else throw new Error('travel_guard must be an object of booleans, or "on"/"off"');
+      }
+      if (a.safe_legs !== undefined) {
+        const want = a.safe_legs;
+        if (want == null) p.policy.safeLegs = null;
+        else if (want === false || want === 'off') p.policy.safeLegs = false;
+        else if (typeof want === 'object' && !Array.isArray(want)) {
+          const KNOWN = ['rooms', 'maxLeg', 'legCost', 'threatWeight', 'threatRadius', 'maxDetour',
+                         'slack', 'deadlineMs', 'maxLegs', 'corridorRadius', 'off'];
+          const bad = Object.keys(want).filter(k => !KNOWN.includes(k));
+          if (bad.length)
+            throw new Error(`safe_legs: no such key ${bad.map(b => `"${b}"`).join(', ')} — it is one of ${KNOWN.join(', ')}`);
+          if (want.rooms !== undefined && !(Array.isArray(want.rooms) && want.rooms.every(r => Number.isFinite(Number(r)))))
+            throw new Error('safe_legs.rooms must be an array of room numbers');
+          for (const k of KNOWN.filter(k => k !== 'rooms' && k !== 'off'))
+            if (want[k] !== undefined && !(Number(want[k]) > 0))
+              throw new Error(`safe_legs.${k} must be a positive number — got ${want[k]}`);
+          p.policy.safeLegs = { ...want, ...(want.rooms ? { rooms: want.rooms.map(Number) } : {}) };
+        } else throw new Error('safe_legs must be false, null, or an object such as {rooms: [599]}');
       }
       if (a.travel_hold_vigor !== undefined) {
         if (a.travel_hold_vigor == null) p.policy.travelHoldVigor = null;

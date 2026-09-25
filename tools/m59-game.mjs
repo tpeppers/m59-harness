@@ -2624,7 +2624,16 @@ class Session {
   // is still a route, and refusing it would strand characters exactly as the coarse
   // grid does at doorways.
   threatsHere(view = null) {
-    const v = view ?? this.view();
+    // THE OBJECT LIST, NOT THE WHOLE VIEW. Everything below reads name, square, fine position
+    // and affordances, which `World.objects()` projects straight from the client's memory.
+    // `view()` adds the tactical half on top — exits, and an `approachSquare` (up to eight A*
+    // searches) for each of up to forty objects — and threw all of it away here. `walkTo` asks
+    // this on every walk and every replan, and on 2026-09-24 the keeper profiler put
+    // `threatsHere -> view -> snapshot -> approachSquare -> path` in a quarter of the event-loop
+    // blocks logged in Ukgoth, 1 to 2.7 seconds each, while trolls were in the room — which is
+    // exactly when the objects list is long and a blocked loop is expensive.
+    const v = view ?? (this.world && typeof this.world.objects === 'function'
+      ? { objects: this.world.objects() } : this.view());
     const creatures = loadSpawns(SPAWN_FILE)?.creatures ?? {};
     const out = [];
     for (const o of (v.objects ?? [])) {
@@ -5407,8 +5416,40 @@ class Session {
       // first and it is allowed to fail: `rode:false` costs nothing and falls straight
       // through to the ordinary exit walk below, which is the whole safety argument for
       // shipping a book whose keys mostly have one observation each.
-      const ridden = await this.rideTrack(cameFromRoom, nextHop.to, { movementGeneration, controlToken })
-        .catch(() => ({ rode: false, why: 'ride threw' }));
+      // SAFE-SPOT LEGS FIRST, IN THE ROOMS THAT ASK FOR THEM. See crossBySafeLegs and
+      // m59-safelegs.mjs: the crossing is walked wall to wall toward this exit and the last leg
+      // is left to the track and `leaveViaAny` below. Null (not such a room, or no geometry) changes nothing. `typeof` guard because this
+      // method is lifted by text into m59-travel-test against a fake without it.
+      let legged = null;
+      if (typeof this.crossBySafeLegs === 'function') {
+        legged = await this.crossBySafeLegs(exit, { movementGeneration, controlToken,
+                                                     fromRoom: cameFromRoom, toRoom: nextHop.to })
+          .catch(e => ({ ran: false, error: e?.message ?? String(e) }));
+        if (legged?.cancelled || this.movementWasCancelled(movementGeneration, controlToken))
+          return this.cancelledMovement({ log });
+        if (legged) log.push({ from: String(nextHop.from), to: nextHop.to_name, via: 'safe_legs',
+                               legs: legged.legs ?? 0, walls: legged.walls ?? [],
+                               planned_legs: legged.planned_legs ?? null,
+                               plan_ms_max: legged.plan_ms_max ?? null, failed: legged.failed ?? 0,
+                               rested: legged.rested ?? 0, fallback: legged.fallback ?? null,
+                               ...(legged.error ? { error: legged.error } : {}) });
+      }
+      // AND THEN THE TRACK, FROM WHERE THE LEGS LEFT US. A track joins at its nearest waypoint,
+      // and from the last wall that is the tail of the crossing — the part somebody actually
+      // walked through the doorway. Measured on the first live run: legs reached r8c14, twelve
+      // squares from Ukgoth's north door, and the bare exit walker could not make that door in
+      // the next three minutes, while the track's last four waypoints are exactly that approach.
+      const ridden = legged?.left_room
+        ? { rode: true, left_room: true, ms: legged.ms ?? 0, reached: legged.legs ?? 0 }
+        // A STRUCK TRACK IS STILL THE WALKED APPROACH TO THE DOOR. Three failed END-TO-END rides
+        // retire a track, and Ukgoth's north door fails often on its own (it is a jump; two or
+        // three attempts is normal). Measured: once 599:598>2 was struck, legs still brought five
+        // of six characters to r8c14 and the bare exit walker then timed out on four of them. So
+        // after legs have handed over at the last wall, the tail is ridden regardless; the ride's
+        // own strike and clear bookkeeping is unchanged.
+        : await this.rideTrack(cameFromRoom, nextHop.to, { movementGeneration, controlToken,
+                                                             ignoreStrikes: !!legged?.handed_over })
+            .catch(() => ({ rode: false, why: 'ride threw' }));
       if ((ridden.rested ?? 0) > 0 && onTrackRest) {
         try {
           await onTrackRest({ stops: ridden.rested, held_ms: ridden.rested_ms ?? 0,

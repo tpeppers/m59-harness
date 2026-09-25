@@ -39,8 +39,10 @@ import { traceMove } from './m59-collision-trace.mjs';
 import { recordTactic } from './m59-tactics.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { chooseTrafficBlink } from './m59-blink-rung.mjs';
-import { recallTrack, strikeTrack, clearStrikes } from './m59-tracks.mjs';
+import { recallTrack, strikeTrack, clearStrikes, loadTracks } from './m59-tracks.mjs';
 import { sheltersAlong, shelterAhead } from './m59-safespots.mjs';
+import { planSafeLegs, safeLegsFor, trackCorridor, SAFE_LEG_DEFAULTS } from './m59-safelegs.mjs';
+const SAFE_LEG_CORRIDORS = new Map();
 import { activeRoutes, anchorFor, bakedPath } from './m59-routes.mjs';
 import { autopilotIfAny } from './m59-autopilot.mjs';
 
@@ -6269,7 +6271,172 @@ export function sessionWalkPrototype(deps) {
    * and moves nothing that matters, because a book with one observation per key must never
    * be able to make travel worse than not having it.
    */
-  async rideTrack(fromRoom, toRoom, { movementGeneration = this.movementGeneration, controlToken } = {}) {
+  // CROSS THIS ROOM WALL TO WALL, AND DO THE THINKING ON A WALL. See m59-safelegs.mjs for the
+  // mechanism and docs/m59-routing.md ("Safe-spot legs") for the argument and the measurement.
+  //
+  // Called by `travel` for one hop, before the track and the exit walk, with the exit it chose.
+  // Returns null when this room is not one to cross by legs (the ordinary walk runs exactly as
+  // before), otherwise a record of what it did. It never takes the last step: the final leg is
+  // left to `leaveViaAny`, which owns crossing a boundary and everything learned about doing so.
+  //
+  // THE STOP IS BOUNDED TO THE PLANNING. Standing on a wall, it reads the room's threats, plans
+  // the chain from here (`planSafeLegs`, budgeted by `deadlineMs`, yielding to the event loop
+  // between attempts so the keeper's socket and survival clock keep ticking), and walks the
+  // first leg at once. It rests on a wall only when the journey's shelter policy says the body
+  // needs it — the same `need()`/`onArrive()` the fuel-stop divert already uses — so a whole
+  // character never waits, and a hurt one mends somewhere nothing can reach it.
+  //
+  // IT NEVER STRANDS THE HOP. No chain, a chain much longer than the road, a spent budget or
+  // three legs it could not walk all end the legs and hand the rest of the crossing to the
+  // ordinary walker, from wherever the body is — which, after any completed leg, is a wall.
+  async crossBySafeLegs(exit, { movementGeneration = this.movementGeneration, controlToken,
+                                policy = this.safeLegPolicy ?? null,
+                                fromRoom = null, toRoom = exit?.to ?? null } = {}) {
+    const c = this.need();
+    const room = this.world?.room;
+    const geo = this.world?.geometry;
+    const goal = exit?.stand_on;
+    if (!room || !geo?.collisionReady || !goal || !safeLegsFor(room.num, policy)) return null;
+    const opts = { ...(policy && typeof policy === 'object' ? policy : {}) };
+    const roomId = c.room?.id;
+    const started = Date.now();
+    const out = { ran: true, room: room.num, legs: 0, walls: [], plans: 0, plan_ms_max: 0,
+                  plan_ms_total: 0, failed: 0, rested: 0, fallback: null, handed_over: false };
+    const unreachable = new Set();
+    const visited = new Set();
+    const maxLegs = Number(opts.maxLegs ?? 24);
+    // THE WALKED CORRIDOR, WHEN THERE IS ONE. See trackCorridor: in Ukgoth the router believes in
+    // ground by the 598 door that no body has crossed, and a baked track is the evidence of where
+    // one has. EVERY track in this room to this exit, and struck ones too: a strike says riding
+    // that track end to end failed, not that nobody walked it — and the first live run lost its
+    // corridor exactly that way, three strikes on 599:598>2 leaving only a track that starts
+    // forty squares from the door, so no leg could begin. A corridor that does not reach the
+    // body is no corridor; the plan then says `no_chain` and the ordinary walk runs.
+    let corridor = null, avoid = null;
+    try {
+      const radius = Number(opts.corridorRadius ?? SAFE_LEG_DEFAULTS.corridorRadius);
+      const ck = `${room.num}>${toRoom}|${radius}`;
+      if (toRoom != null && !SAFE_LEG_CORRIDORS.has(ck)) {
+        const book = loadTracks() ?? {};
+        const set = new Set();
+        for (const [k, t] of Object.entries(book)) {
+          if (!k.startsWith(`${room.num}:`) || !k.endsWith(`>${toRoom}`) || !(t?.waypoints?.length >= 2)) continue;
+          for (const sq of trackCorridor(t.waypoints, { radius, rows: geo.rows, cols: geo.cols })) set.add(sq);
+        }
+        const off = [];
+        if (set.size) for (let r = 1; r <= geo.rows; r++) for (let cc = 1; cc <= geo.cols; cc++)
+          if (!set.has(`${r},${cc}`)) off.push(`${r},${cc}`);
+        SAFE_LEG_CORRIDORS.set(ck, set.size ? { set, off } : null);
+      }
+      const hit = SAFE_LEG_CORRIDORS.get(ck) ?? null;
+      if (hit) { corridor = hit.set; avoid = hit.off; out.corridor = corridor.size; }
+    } catch { corridor = null; avoid = null; }
+    const note = () => {
+      out.ms = Date.now() - started;
+      console.log(`[safe-legs] ${c.me?.name ?? this.name ?? '?'} room ${room.num} done: ${out.legs} leg(s) ` +
+        `${out.walls.join(' ')}, ${out.failed} failed, ${out.rested} rest(s), worst plan ${out.plan_ms_max}ms, ` +
+        `${out.handed_over ? 'handed to the exit walker' : out.left_room ? 'left the room' : 'fell back: ' + out.fallback}` +
+        ` after ${Math.round(out.ms / 1000)}s`);
+      try {
+        recordTactic({ character: c.me?.name ?? this.name ?? null, room: Number(room.num),
+                       tactic: 'safe_legs', trigger: `exit to ${exit.to ?? '?'}`,
+                       worked: out.handed_over || !!out.left_room, ms: out.ms,
+                       hp_lost: 0, attempted: true,
+                       note: `${out.legs} leg(s) ${out.walls.join(' ')}; ${out.plans} plan(s), worst ` +
+                             `${out.plan_ms_max}ms; ${out.failed} failed; ${out.rested} rest(s)` +
+                             (out.fallback ? `; fell back: ${out.fallback}` : '') });
+      } catch { /* evidence, not a dependency */ }
+      return out;
+    };
+    for (let n = 0; n < maxLegs; n++) {
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return { ...out, cancelled: true };
+      if (roomId != null && c.room?.id !== roomId) { out.left_room = true; return note(); }
+      const me = c.self;
+      if (!me) { out.fallback = 'own position unknown'; break; }
+      // WHAT IS IN THE ROOM NOW, read from the client's memory — the object list, not a view.
+      let threats = [];
+      try { threats = this.threatsHere() ?? []; } catch { threats = []; }
+      // A WALL ALREADY STOOD ON IS NOT THE NEXT STOP. Threat-priced re-planning can flip between
+      // two walls as a troll moves — measured live, r15c7 r17c8 r15c7 r17c8 — so a wall this
+      // crossing has used may still be passed through but may not be walked back to.
+      const occupied = new Set(visited);
+      for (const o of (c.room?.objects?.values?.() ?? [])) {
+        if (o.id === c.selfId || !blocksMovement(o.flags)) continue;
+        if (Number.isFinite(o.row) && Number.isFinite(o.col)) occupied.add(`${o.row},${o.col}`);
+      }
+      // BOUNDED WORK PER TICK. The floods a plan builds are cached per geometry, so a plan cut
+      // off by its deadline leaves the next attempt less to do; between attempts the event loop
+      // runs. Four attempts is the whole allowance, then the direct walk.
+      let plan = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        plan = planSafeLegs(geo, { row: me.row, col: me.col }, { row: goal.row, col: goal.col },
+                            { ...opts, threats, occupied, unreachable, corridor });
+        out.plans++;
+        out.plan_ms_total = Math.round(out.plan_ms_total + (plan.ms ?? 0));
+        out.plan_ms_max = Math.max(out.plan_ms_max, plan.ms ?? 0);
+        if (plan.reason !== 'deadline') break;
+        await new Promise(r => setImmediate(r));
+      }
+      // ONE LINE PER DECISION IN THE KEEPER LOG, because a crossing that goes wrong is read
+      // afterwards from there and the ledger row only says how it ended.
+      console.log(`[safe-legs] ${c.me?.name ?? this.name ?? '?'} room ${room.num} at r${me.row}c${me.col} -> ` +
+        `r${goal.row}c${goal.col}: ${plan?.found ? `${plan.legs.length} leg(s), next ${plan.legs[0].kind} ` +
+        `r${plan.legs[0].row}c${plan.legs[0].col}/${plan.legs[0].steps}` : `no plan (${plan?.reason})`} ` +
+        `in ${plan?.ms}ms, ${threats.length} threat(s)`);
+      if (!plan?.found) { out.fallback = plan?.reason ?? 'no plan'; out.direct_steps ??= plan?.direct_steps ?? null; break; }
+      if (n === 0) { out.planned_legs = plan.legs.length; out.planned_steps = plan.steps; out.direct_steps = plan.direct_steps; }
+      const next = plan.legs[0];
+      // The last leg is the exit's, and the exit walker owns it.
+      if (next.kind === 'exit') { out.handed_over = true; break; }
+      // Kept inside the corridor too: the walker plans its own route to the wall, and without
+      // this it plans the same unwalked shortcut the corridor exists to keep the legs off.
+      // `walkTo` relaxes occupancy before it gives up, so this can cost a detour and never a walk.
+      const walked = await this.walkTo(next.col, next.row,
+        { maxSteps: Math.max(20, next.steps * 2), movementGeneration, controlToken,
+          ...(avoid ? { avoidSquares: avoid } : {}) })
+        .catch(e => ({ arrived: false, reason: e.message }));
+      if (this.movementWasCancelled(movementGeneration, controlToken)) return { ...out, cancelled: true };
+      if (walked?.left_room || (roomId != null && c.room?.id !== roomId)) { out.left_room = true; return note(); }
+      let at = c.self;
+      // A WALL IS A POCKET, AND THE LAST STEP INTO ONE IS THE FINE GRID'S. See the handover in
+      // m59-skills.mjs: the square walker is best for the haul and worst for the last squares.
+      if (!(walked?.arrived && at?.row === next.row && at?.col === next.col)
+          && at && Math.max(Math.abs(at.row - next.row), Math.abs(at.col - next.col)) <= 3
+          && typeof this.approachFine === 'function') {
+        await this.approachFine(next.col, next.row, { movementGeneration, controlToken }).catch(() => null);
+        if (this.movementWasCancelled(movementGeneration, controlToken)) return { ...out, cancelled: true };
+        at = c.self;
+      }
+      if (!(at?.row === next.row && at?.col === next.col)) {
+        console.log(`[safe-legs] ${c.me?.name ?? this.name ?? '?'} did not reach r${next.row}c${next.col} ` +
+          `(at r${at?.row}c${at?.col}): ${walked?.reason ?? walked?.note ?? 'no reason'}`);
+        unreachable.add(`${next.row},${next.col}`);
+        out.failed++;
+        if (out.failed >= 3) { out.fallback = 'three legs could not be walked'; break; }
+        continue;          // re-plan from wherever that left us, without the wall it missed
+      }
+      out.legs++;
+      out.walls.push(`r${next.row}c${next.col}`);
+      visited.add(`${next.row},${next.col}`);
+      // ON A WALL. Mend here only if the journey's own shelter policy says the body needs it.
+      const sp = this.shelterPolicy;
+      let wants = false;
+      try { wants = !!sp?.need?.(); } catch { wants = false; }
+      if (wants && typeof sp.onArrive === 'function') {
+        const rested = await sp.onArrive({ col: next.col, row: next.row },
+          { source: 'safe_leg', movementGeneration, controlToken }).catch(() => false);
+        if (rested) out.rested++;
+        if (this.movementWasCancelled(movementGeneration, controlToken)) return { ...out, cancelled: true };
+      }
+    }
+    return note();
+  }
+
+  async rideTrack(fromRoom, toRoom, { movementGeneration = this.movementGeneration, controlToken,
+                                      // Ride even a struck track. Only `travel` passes it, and only
+                                      // after safe legs have brought the body to its last wall —
+                                      // see the note there.
+                                      ignoreStrikes = false } = {}) {
     const c = this.need();
     const here = Number(this.world?.room?.num ?? NaN);
     if (!Number.isFinite(here) || !Number.isFinite(Number(toRoom))) return { rode: false, why: 'no room' };
@@ -6281,7 +6448,9 @@ export function sessionWalkPrototype(deps) {
     // therefore arrive just after stepFine reports `left_room:false`.
     const roomId = c.room?.id;
     const leftTheRoom = () => roomId != null && c.room?.id !== roomId;
-    const track = recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
+    const track = ignoreStrikes
+      ? recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom), loadTracks(), {})
+      : recallTrack(here, fromRoom == null ? null : Number(fromRoom), Number(toRoom));
     if (!track?.waypoints?.length) return { rode: false, why: 'no track' };
     // AN UNPROVEN STITCH IS TRIED ONCE, WITH THE WALKED ROUTE STILL UNDERNEATH IT.
     //

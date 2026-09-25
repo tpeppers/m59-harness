@@ -11561,6 +11561,11 @@ export class Autopilot {
     // silence and got it — so the journey does not get to quietly upgrade itself.
     if (this.inert) return this.inertStatus();
     const allow = this.travelGuard(guard);
+    // WHICH ROOMS THIS JOURNEY CROSSES WALL TO WALL — see m59-safelegs.mjs. `safeLegs` is the
+    // roster policy (`autopilot safe_legs=...`): `false` switches it off for this character,
+    // `{rooms:[...]}` replaces the room list, and absent means the committed default. Handed to
+    // the mover for the journey, like the shelter policy below.
+    this.s.safeLegPolicy = this.policy?.safeLegs ?? null;
     // THE FUEL-STOP POLICY, HANDED TO THE MOVER FOR THE LENGTH OF THE JOURNEY.
     //
     // Without this the planner in `walkTo` is dead code — it checks `shelterPolicy` and
