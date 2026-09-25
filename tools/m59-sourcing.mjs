@@ -81,17 +81,30 @@ for (const m of menu) {
 }
 
 // ---- choose.
-const given = Object.fromEntries((opt('--choose') ?? '').split(',').map(x => x.split('=')).filter(x => x.length === 2).map(([k, v]) => [lower(k.trim()), Number(v)]));
+// --choose 'item=N' by option number, or 'item=creature@room' / 'item=buy' / 'item=chest' by NAME —
+// numbers shift when a chest or spare option appears, names do not.
+const givenRaw = Object.fromEntries((opt('--choose') ?? '').split(',').map(x => x.split('=')).filter(x => x.length === 2).map(([k, v]) => [lower(k.trim()), v.trim()]));
+const resolveChoice = (m, v) => {
+  if (v == null) return null;
+  if (/^\d+$/.test(v)) return Number(v);
+  if (lower(v) === 'buy') return 0;
+  if (lower(v) === 'chest') { const i = m.options.findIndex(o => o.kind === 'chest'); return i >= 0 ? i : null; }
+  const [c, r] = v.split('@');
+  const i = m.options.findIndex(o => lower(o.creature) === lower(c) && (r == null || (o.rooms ?? []).some(x => String(x.num) === r)));
+  return i >= 0 ? i : null;
+};
 const choices = {};
 const rl = has('--yes') ? null : createInterface({ input: process.stdin, output: process.stdout });
 console.log(`fleet levels: ${fleetLevels.length ? `${Math.min(...fleetLevels)}-${Math.max(...fleetLevels)} (${fleetLevels.length} fighters)` : 'unknown'}`);
 for (const m of menu) {
   const pref = preferredIndex(m, prefs[m.item]);
-  const dflt = given[lower(m.item)] ?? pref ?? 0;
+  const chosen = resolveChoice(m, givenRaw[lower(m.item)]);
+  if (givenRaw[lower(m.item)] != null && chosen == null) console.log(`  (--choose ${m.item}=${givenRaw[lower(m.item)]} matched no option)`);
+  const dflt = chosen ?? pref ?? 0;
   console.log(`\nHow would you like to get ${m.item} (need ${m.need})?`);
   m.options.forEach((o, i) => console.log(`  ${i === dflt ? '*' : ' '}${i}) ${o.label}`));
   let pick = dflt;
-  if (rl && given[lower(m.item)] == null) {
+  if (rl && chosen == null) {
     const a = (await rl.question(`  choice [${dflt}]: `)).trim();
     if (a !== '' && Number.isInteger(Number(a)) && m.options[Number(a)]) pick = Number(a);
   }
@@ -121,6 +134,17 @@ for (const j of jobs.farm) {
     console.log(`  prefarm-equipment agents=${who.join(',')} wants='${JSON.stringify(Object.fromEntries(j.items.map(i => [i.item, i.count])))}' faction=${j.faction}`);
   else for (const it of j.items)
     console.log(`  farm-to agents=${who.join(',')} room=${j.room} quarry="${j.creature}" want="${it.item}" count=${Math.ceil(it.count / Math.max(1, who.length))} to=guild minutes=${Math.max(20, Math.round(j.kills * 1.5 / Math.max(1, who.length)))}`);
+}
+// THE WHOLE FARM IN ONE HELD RUN: sourcing-run, each fighter on its own job.
+if (jobs.farm.length) {
+  const assign = {};
+  let n = 0;
+  jobs.farm.forEach((j, i) => { for (const f of fighters.slice(n, n + perJob)) assign[f.agent] = i; n += perJob; });
+  const slim = jobs.farm.map(j => ({ kind: j.kind, creature: j.creature, room: j.room, kills: j.kills, items: j.items }));
+  const mins = Math.max(20, Math.round(Math.max(...jobs.farm.map(j => j.kills)) * 1.5 / Math.max(1, perJob)));
+  console.log(`
+  ONE LINE FOR ALL OF IT:
+  sourcing-run agents=${Object.keys(assign).join(',')} assign='${JSON.stringify(assign)}' jobs='${JSON.stringify(slim)}' minutes=${mins}`);
 }
 const provisionList = [...jobs.chest, ...jobs.buy].map(x => ({ item: x.item, amount: x.amount }));
 if (provisionList.length) console.log(`  provision agents=<riders + the cup holder> wants='${JSON.stringify(provisionList)}'`);
