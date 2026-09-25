@@ -172,7 +172,7 @@ export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
   await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
   if (!(await grabFromFloor(armorer, /chalice/i)))
     return { ok: false, why: `${armorer} could not pick the cup up after ${holder} dropped it` };
-  const mine = (await inv(armorer)).find(i => /chalice/i.test(String(i.name ?? '')));
+  const mine = (await freshItems(armorer)).find(i => /chalice/i.test(String(i.name ?? '')));
   await call('rest', { agent: armorer, stand: true }, 30_000).catch(() => {});
   await call('act', { agent: armorer, verb: 'eat', target: mine.id }, 60_000).catch(() => {});
   await sleep(1500);
@@ -195,11 +195,16 @@ export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
  * a moment to appear in the room, and a single look 1.5 s after a drop left the chalice lying in
  * room 2 on the 2026-09-25 rehearsal. Found by what is on the floor now, never by a stored id.
  */
+// A FRESH READ OF THE PACK. `inventory` answers from the keeper's cache, and a cup that had just
+// arrived read as missing (2026-09-25: a rider gave up on a pick-up that may well have landed).
+// `look fresh:true` asks now (as_of_ms 0).
+const freshItems = async agent => (await call('look', { agent, fresh: true }, 40_000).catch(() => null))?.items ?? [];
+
 async function grabFromFloor(agent, re, tries = 10) {
   for (let i = 0; i < tries; i++) {
     await sleep(1500);
-    if ((await inv(agent)).some(x => re.test(String(x.name ?? '')))) return true;
-    const look = await call('look', { agent }, 40_000).catch(() => null);
+    if ((await freshItems(agent)).some(x => re.test(String(x.name ?? '')))) return true;
+    const look = await call('look', { agent, fresh: true }, 40_000).catch(() => null);
     const onFloor = (look?.objects ?? []).find(o => re.test(String(o.name ?? '')));
     if (!onFloor) continue;
     // WITHIN SEVEN SQUARES, OR THE GET IS REFUSED IN SILENCE. UserGet (user.kod:3576) refuses a
@@ -211,7 +216,7 @@ async function grabFromFloor(agent, re, tries = 10) {
     if (far) await call('walk_to', { agent, col: onFloor.col, row: onFloor.row }, 120_000).catch(() => {});
     await call('act', { agent, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
   }
-  return (await inv(agent)).some(x => re.test(String(x.name ?? '')));
+  return (await freshItems(agent)).some(x => re.test(String(x.name ?? '')));
 }
 
 /**
