@@ -52,9 +52,11 @@
 // single DM packet. On prod the same steps rest for mana and report a shortfall instead.
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
 import { weighItem } from '../m59-items.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
 import { handOver, earmark, eatTo } from '../m59-inventory.mjs';
 import { forge } from '../m59-foundry.mjs';
-import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
+import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
@@ -137,6 +139,8 @@ export const script = {
     hall_draw: { type: 'boolean', default: true, describe: 'armorers draw reagents, money and armour from the guild chests first' },
     hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
     hall_wait_s: { type: 'number', default: 1800, describe: 'how long the fleet waits for the hall draw' },
+    split_hall: { type: 'boolean', default: true, describe: 'armorers draw armour and shop in ONE trip while runners fetch the reagents (false: rehearsal 21 order)' },
+    hall_runners: { type: 'number', default: 1, describe: 'split_hall: how many raiders ride for the reagents' },
     trips: { type: 'number', default: 3, describe: 'shopping trips at most' },
     hall: { type: 'number', default: 714, describe: 'where the chalice lands a guild member (the Bookmakers hall)' },
     shop_room: { type: 'number', default: 113, describe: 'the Barloque smith' },
@@ -379,27 +383,6 @@ export const script = {
         return true;
       }, 'making room in the pack', 'arm.make-room'),
 
-      // ---- 1c. THE HALL DRAW. The armorers ride the chalice to the guild hall one after another,
-      // take the raid's reagents, the hall's money and whatever armour sits in its chests, and walk
-      // home together; everyone else rests in the stage room until they are back. It comes BEFORE
-      // the money pool and the reagent step so that both simply see fuller packs. On 2026-09-25
-      // prod carried 16 orc teeth and 51 elderberry between twenty-two characters, with 162 and
-      // 253 in the chests; without this the raid could dedicate five hammers.
-      ...(outfitOn(p) && hallOn(p) ? [verify(async ({ state: st }) => {
-        const crew = armorersOf(agents, p);
-        const roles = rolesNow(agents, p);
-        if (crew.includes(agent)) {
-          const wants = (() => { try { return JSON.parse(String(p.hall_wants || '')); } catch { return HALL_WANTS; } })();
-          // Each rider's free room as the server counted it at the survey: the split deals by it.
-          const room = Object.fromEntries(crew.map(a => { const r = SURVEY.get(a)?.roomFor; return [a, r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : undefined]; }));
-          const share = hallSplit(crew, wants, weighItem, room)[agent] ?? [];
-          st.hall = await hallDraw({ agent, crew, holder: cupHolderOf(agents, roles), share, p });
-        } else if (agent !== roles.lightbearer) {
-          await call('rest', { agent }, 30_000).catch(() => {});
-        }
-        await barrier('hall-drawn', agent, { ms: Number(p.hall_wait_s) * 1000 });
-        return true;
-      }, 'the hall draw could not be read back', 'arm.hall-draw')] : []),
 
       // ---- 1b. THE ARMORERS: everyone hands its money to one of the pair, and one plan is made.
       ...(outfitOn(p) ? [verify(async ({ state: st }) => {
@@ -415,7 +398,7 @@ export const script = {
           // THE HALL'S ARMOUR FIRST. Chain and shields drawn from the chests are in the armorers'
           // packs, where the planner would read them as the armorers' own. Each armorer keeps one
           // of a kind and hands the rest, here in the stage room, to raiders who have none.
-          {
+          if (!splitOn(p)) {
             const want = {};
             await Promise.all(agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && !pair.includes(a)).map(async a => {
               want[a] = outfitNeeds((await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? []);
@@ -456,9 +439,15 @@ export const script = {
           // One load per trip; `trips` loads in all.
           const trips = Math.max(1, Number(p.trips));
           const bigCap = capacity.map(c => ({ ...c, weight: c.weight * trips, bulk: c.bulk * trips }));
-          OUTFIT_RUN.plan = planOutfit(needs, { budget, capacity: bigCap });
+          // Split mode plans against what the CHESTS hold (the armorers fetch it on the same trip) and
+          // buys no hammer for anyone who can forge one while they are away.
+          const stock = splitOn(p) && hallOn(p) ? hallStock(readChests()) : [];
+          const canForge = foundryOn(p)
+            ? new Set(agents.filter(a => (SURVEY.get(a)?.spells ?? []).includes('create weapon'))) : new Set();
+          OUTFIT_RUN.plan = planOutfit(needs, { budget, capacity: bigCap, stock, canForge });
           const pl = OUTFIT_RUN.plan;
           console.log(`  armorers ${pair.join(' + ')}: budget ${budget}, buying ${pl.buys.length} piece(s) for ${pl.spend}` +
+                      (pl.fromHall?.length ? `, ${pl.fromHall.length} from the chests` : '') +
                       (pl.cut.length ? `; cut ${pl.cut.length} (${[...new Set(pl.cut.map(c => c.why))].join(', ')})` : ''));
           // EACH ARMORER PAYS FROM ITS OWN PURSE, and the hall's money arrived in one pack. So the
           // purses are levelled to each armorer's share of the bill before anyone leaves.
@@ -484,6 +473,67 @@ export const script = {
         st.pool = { ...(st.pool ?? {}), armorers: pair };
         return true;
       }, 'the money pool could not be read back', 'arm.pool')] : []),
+
+      // ---- 1c. THE HALL, SPLIT BY WHO IS WAITING FOR WHAT (split_hall, the default).
+      //
+      // Rehearsal 21 spent 92 minutes before the throne room. The four armorers rode to the hall,
+      // drew everything, rode HOME, sat through the pool, hammer and reagent steps, then rode back
+      // to the same hall to go shopping — and the fleet stood for 45 minutes waiting for that.
+      // Now, straight after the money pool:
+      //   ARMORERS leave every fleet barrier and go on ONE trip: the chests (armour by name, from
+      //     the plan), the smith (what the chests lacked), home. The fleet meets them at the dress.
+      //   RUNNERS (hall_runners, the roomiest raiders with no other job) draw only the REAGENTS and
+      //     come straight back — dedication cannot start without them, and it need not wait for a
+      //     shopping trip.
+      //   EVERYONE ELSE rests; the hammer and reagent steps follow as soon as the runners are home.
+      // split_hall=false is rehearsal 21's order: one hall draw by the armorers, then the rest.
+      ...(outfitOn(p) && hallOn(p) ? [verify(async ({ state: st }) => {
+        const roles = rolesNow(agents, p);
+        const pair = armorersOf(agents, p);
+        const wants = (() => { try { return JSON.parse(String(p.hall_wants || '')); } catch { return HALL_WANTS; } })();
+        if (splitOn(p)) {
+          if (pair.includes(agent)) {
+            for (const k of ['hall-drawn', 'hammers', 'reagents-moved', 'reagents', 'armed', 'dropped']) leave(k, agent);
+            const until = Date.now() + 180_000;
+            while (!OUTFIT_RUN.plan && Date.now() < until) await sleep(2000);
+            const lines = OUTFIT_RUN.plan?.byCarrier?.[agent] ?? [];
+            await say(`Armorer: off to the hall and the smith for ${lines.length} piece(s).`);
+            try {
+              st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: cupHolderOf(agents, roles),
+                                                 lines, p, crew: pair.length });
+            } catch (e) {
+              st.armorer = { error: e?.message ?? String(e) };
+            } finally {
+              OUTFIT_RUN.log.push({ agent, ...st.armorer });
+              OUTFIT_RUN.finished = (OUTFIT_RUN.finished ?? 0) + 1;
+              if (OUTFIT_RUN.finished >= pair.length) OUTFIT_RUN.done = true;
+            }
+            return true;
+          }
+          const runners = runnersOf(agents, p, roles, pair);
+          if (runners.includes(agent)) {
+            const reagents = wants.filter(w => !/shield|armou?r/i.test(String(w.item)));
+            const room = Object.fromEntries(runners.map(a => { const r = SURVEY.get(a)?.roomFor; return [a, r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : undefined]; }));
+            const share = hallSplit(runners, reagents, weighItem, room)[agent] ?? [];
+            st.hall = await hallDraw({ agent, crew: runners, holder: cupHolderOf(agents, roles), share, p });
+          } else if (agent !== roles.lightbearer) {
+            await call('rest', { agent }, 30_000).catch(() => {});
+          }
+          await barrier('hall-drawn', agent, { ms: Number(p.hall_wait_s) * 1000 });
+          return true;
+        }
+        const crew = pair;
+        if (crew.includes(agent)) {
+          // Each rider's free room as the server counted it at the survey: the split deals by it.
+          const room = Object.fromEntries(crew.map(a => { const r = SURVEY.get(a)?.roomFor; return [a, r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : undefined]; }));
+          const share = hallSplit(crew, wants, weighItem, room)[agent] ?? [];
+          st.hall = await hallDraw({ agent, crew, holder: cupHolderOf(agents, roles), share, p });
+        } else if (agent !== roles.lightbearer) {
+          await call('rest', { agent }, 30_000).catch(() => {});
+        }
+        await barrier('hall-drawn', agent, { ms: Number(p.hall_wait_s) * 1000 });
+        return true;
+      }, 'the hall draw could not be read back', 'arm.hall-draw')] : []),
 
       // ---- 2. A HAMMER IN EVERY HAND.
       verify(async ({ state: st }) => {
@@ -644,6 +694,11 @@ export const script = {
         }
         // THE ARMORERS SHOP WHILE THE FLEET DEDICATES. Their own hammers are dedicated when they
         // come back (lateDedicate): a hammer with a dedicator cannot be on the road as well.
+        if (outfitOn(p) && splitOn(p) && hallOn(p) && armorersOf(agents, p).includes(agent)) {
+          leave('dropped', agent);
+          st.dedicate = { skipped: 'armorer (left at the hall step)' };
+          return true;
+        }
         if (outfitOn(p) && armorersOf(agents, p).includes(agent) && !dedicators.includes(agent)) {
           leave('dropped', agent);
           const pair = armorersOf(agents, p);
@@ -727,6 +782,28 @@ export const script = {
 const outfitOn = p => p.outfit === true || p.outfit === 'true';
 const foundryOn = p => !(p.foundry === false || p.foundry === 'false');
 const hallOn = p => p.hall_draw === true || p.hall_draw === 'true';
+const splitOn = p => !(p.split_hall === false || p.split_hall === 'false');
+
+/** The guild chests as last observed (<roster dir>/../storage/chests/*.json), for the plan's stock. */
+function readChests() {
+  try {
+    const roster = process.env.M59_STATE_FILE;
+    if (!roster) return [];
+    const dir = path.join(path.dirname(path.dirname(roster)), 'storage', 'chests');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+  } catch { return []; }
+}
+
+/** split_hall's reagent riders: the roomiest raiders with no other job. */
+function runnersOf(agents, p, roles, pair) {
+  const cup = cupHolderOf(agents, roles);
+  const free = a => { const r = SURVEY.get(a)?.roomFor; return r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : 0; };
+  return agents.filter(a => SURVEY.has(a) && !pair.includes(a) && a !== roles.lightbearer && a !== cup
+                            && !roles.dedicators.includes(a) && !roles.healers.includes(a))
+    .sort((a, b) => free(b) - free(a) || a.localeCompare(b))
+    .slice(0, Math.max(1, Number(p.hall_runners) || 1));
+}
 
 /**
  * The armorers: named, or the `armorer_count` STRONGEST characters who are not needed to start

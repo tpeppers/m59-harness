@@ -78,26 +78,67 @@ export function outfitNeeds(items = []) {
  *   needs: { agent: {shield, chain, hammer} }
  *   budget: shillings; capacity: [{agent, weight, bulk}] free per armorer
  */
-export function planOutfit(needs = {}, { budget = 0, capacity = [], order = ['shield', 'chain', 'hammer'] } = {}) {
+export function planOutfit(needs = {}, { budget = 0, capacity = [], order = ['shield', 'chain', 'hammer'],
+                                          stock = [], canForge = new Set() } = {}) {
+  // THE CHESTS FIRST, THEN THE SMITH. `stock` is what the guild chests hold ([{name, kind, count}],
+  // from the last chest observation): a line drawn from it costs nothing and is fetched on the same
+  // trip as the shopping, so the fleet no longer waits for a separate hall run before planning.
+  // A HAMMER IS NOT BOUGHT FOR ANYONE WHO CAN FORGE ONE: create weapon makes one during the
+  // armorers' own trip (m59-foundry), and a hammer at the smith is 810 shillings.
   const agents = Object.keys(needs).sort((a, b) => lower(a).localeCompare(lower(b)));
   const cap = capacity.map(c => ({ ...c, lines: [] }));
+  const left = stock.map(x => ({ ...x }));
   let money = budget;
-  const buys = [], cut = [];
+  const buys = [], cut = [], fromHall = [];
   for (const kind of order) {
     const spec = OUTFIT[kind];
     for (const a of agents) {
       if (!needs[a]?.[kind]) continue;
-      if (money < spec.price) { cut.push({ agent: a, kind, why: 'money' }); continue; }
-      const carrier = cap.filter(c => c.weight >= spec.weight && c.bulk >= spec.bulk)
+      if (kind === 'hammer' && canForge.has(a)) { cut.push({ agent: a, kind, why: 'forges its own' }); continue; }
+      const st = left.find(x => x.kind === kind && x.count > 0);
+      const w = (st && weighItem(st.name)) || spec;
+      const carrier = cap.filter(c => c.weight >= w.weight && c.bulk >= w.bulk)
         .sort((x, y) => (y.weight + y.bulk) - (x.weight + x.bulk))[0];
       if (!carrier) { cut.push({ agent: a, kind, why: 'pack' }); continue; }
+      if (st) {
+        st.count--;
+        carrier.weight -= w.weight; carrier.bulk -= w.bulk;
+        carrier.lines.push({ agent: a, kind, source: 'hall', name: st.name });
+        fromHall.push({ agent: a, kind, name: st.name, carrier: carrier.agent });
+        continue;
+      }
+      if (money < spec.price) { cut.push({ agent: a, kind, why: 'money' }); continue; }
       carrier.weight -= spec.weight; carrier.bulk -= spec.bulk;
       carrier.lines.push({ agent: a, kind });
       money -= spec.price;
       buys.push({ agent: a, kind, carrier: carrier.agent });
     }
   }
-  return { buys, cut, spend: budget - money, byCarrier: Object.fromEntries(cap.map(c => [c.agent, c.lines])) };
+  return { buys, fromHall, cut, spend: budget - money, byCarrier: Object.fromEntries(cap.map(c => [c.agent, c.lines])) };
+}
+
+/** Armour the guild chests hold, as planOutfit's `stock`: [{name, kind, count}], shields and chain. */
+export function hallStock(chests = []) {
+  const by = new Map();
+  for (const it of chests.flatMap(c => c.items ?? [])) {
+    const name = lower(it.name).trim();
+    const kind = /^chain armor$/.test(name) ? 'chain' : SHIELDISH.test(name) ? 'shield' : null;
+    if (!kind) continue;
+    const k = `${kind}|${name}`;
+    by.set(k, { name, kind, count: (by.get(k)?.count ?? 0) + (Number(it.amount) || 1) });
+  }
+  return [...by.values()];
+}
+
+/** Which planned lines the pack can serve now: a hall line by its NAME, a bought line by its kind. */
+export function allocate(lines = [], items = []) {
+  const pool = items.filter(i => i.id != null).map(i => ({ ...i, used: false }));
+  const now = [], later = [];
+  for (const l of lines) {
+    const m = pool.find(i => !i.used && (l.name ? lower(i.name).trim() === lower(l.name) : OUTFIT[l.kind].match.test(String(i.name ?? '').trim())));
+    if (m) { m.used = true; now.push({ ...l, id: m.id }); } else later.push(l);
+  }
+  return { now, later };
 }
 
 /** Free weight and bulk in a pack, from the carry block the fleet row / status reports. */
@@ -188,7 +229,7 @@ export async function deliver(armorer, lines) {
   const out = [];
   for (const l of lines) {
     if (l.agent === armorer) { out.push({ ...l, ok: true, self: true }); continue; }
-    const piece = (await inv(armorer)).find(i => OUTFIT[l.kind].match.test(String(i.name ?? '').trim()));
+    const piece = (await inv(armorer)).find(i => l.name ? lower(i.name).trim() === lower(l.name) : OUTFIT[l.kind].match.test(String(i.name ?? '').trim()));
     if (!piece) { out.push({ ...l, ok: false, why: 'not in the pack' }); continue; }
     // A FULL RECEIVER MAKES ROOM AND IS ASKED AGAIN — m59-inventory handOver.
     const h = await handOver(armorer, l.agent, piece.id);
@@ -300,7 +341,7 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null, 
  * ONE ARMORER'S WHOLE ERRAND, up to `trips` times: ride (or walk) to Barloque, clear the pack,
  * buy its share, meet its partner at the rally room, cross Ukgoth together, deliver.
  */
-export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2, log = console.log }) {
+export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2, draw = [], log = console.log }) {
   const trips = [];
   let left = [...lines];
   for (let trip = 1; trip <= Number(p.trips) && left.length; trip++) {
@@ -325,15 +366,35 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
       if (t.stashed) log(`  ${agent} armorer trip ${trip}: stashed ${t.stashed} in the hall before shopping`);
     }
     log(`  ${agent} armorer trip ${trip}: ${t.ride}`);
+    // THE CHESTS ON THE SAME TRIP. The plan's hall lines (armour, by name) and, on the first trip,
+    // any reagent share are withdrawn here beside the chests: one ride instead of rehearsal 21's
+    // separate hall draw followed by a second ride to the same room. A hall line the chests could
+    // not supply becomes a purchase — the smith sells small round shields and chain.
+    const hallLines = left.filter(l => l.source === 'hall');
+    if ((ride.ok || ride.inHall) && (hallLines.length || (trip === 1 && draw.length))) {
+      const wants = new Map();
+      for (const l of hallLines) wants.set(l.name, (wants.get(l.name) ?? 0) + 1);
+      if (trip === 1) for (const d of draw) wants.set(d.item, (wants.get(d.item) ?? 0) + Number(d.amount || 0));
+      const ask = [...wants].map(([item, amount]) => ({ item, amount }));
+      const once = () => inHall(() => call('hall_withdraw', { agent, wants: ask, stash: HALL_STASH_KEEP }, 620_000)
+        .catch(e => ({ ok: false, why: e.message })));
+      let r = await once();
+      for (let i = 0; i < 3 && !r?.ok && /door|trigger|could not be crossed|unable to go/i.test(String(r?.why ?? '')); i++) {
+        await sleep(20_000);
+        r = await once();
+      }
+      t.withdrew = r?.took ?? {};
+      log(`  ${agent} armorer trip ${trip}: from the chests ${JSON.stringify(t.withdrew)}` + (r?.ok ? '' : ` (${r?.why ?? 'refused'})`));
+    }
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
     if (!at.ok) { t.failed = 'could not reach the smith'; trips.push(t); break; }
     t.sold = await clearPack(agent, p.smith);
-    const got = await buyShare(agent, p.smith, left);
+    const drawn = allocate(hallLines, await inv(agent));
+    const toBuy = [...left.filter(l => l.source !== 'hall'), ...drawn.later.map(l => ({ agent: l.agent, kind: l.kind }))];
+    const got = toBuy.length ? await buyShare(agent, p.smith, toBuy) : { bought: {} };
     t.bought = got.bought; t.clamped = got.clamped;
     // Only what is actually in the pack is deliverable; the rest waits for the next trip.
-    const have = { ...got.bought };
-    const now = [], later = [];
-    for (const l of left) (have[l.kind] > 0 ? (have[l.kind]--, now) : later).push(l);
+    const { now, later } = allocate([...drawn.now.map(({ id, ...l }) => l), ...toBuy], await inv(agent));
     // Home, together, through Ukgoth.
     await hopTo(agent, Number(p.rally), { floor: 1 });
     reexpect(`armorers-rally-${trip}`, crew);

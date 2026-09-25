@@ -156,6 +156,24 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   const tight = planOutfit(needs, { budget: 100000, capacity: [{ agent: 'x', weight: 300, bulk: 400 }] });
   ok(tight.buys.length === 3 && tight.cut.filter(c => c.why === 'pack').length === 2, 'the pack caps it: two shields and a hammer fit, two chain do not');
   ok(packRoom(50, [{ name: 'hammer' }]).weight === 1700 + 1000 - 80, 'pack room: 1700 + 20 x might, less what is carried');
+  // split_hall: the chests are drawn from first, and nobody who can forge is sold a hammer.
+  const { hallStock, allocate } = await import('./fleetscripts/ghost-outfit.mjs');
+  const stock = hallStock([{ items: [{ name: "knight's shield", amount: 1 }, { name: 'chain armor', amount: 1 }, { name: 'elderberry', amount: 90 }] },
+                           { items: [{ name: "Knight's shield", amount: 1 }] }]);
+  ok(stock.length === 2 && stock.find(x => x.kind === 'shield').count === 2 && stock.find(x => x.kind === 'chain').count === 1,
+     'hall stock: shields and chain by name, across chests; reagents are not armour');
+  const split = planOutfit(needs, { budget: 100000, capacity: [{ agent: 'x', weight: 5000, bulk: 5000 }], stock, canForge: new Set(['a']) });
+  ok(split.fromHall.length === 3 && split.fromHall.filter(h => h.kind === 'shield').length === 2, 'two shields and a chain come from the chests');
+  ok(split.buys.length === 1 && split.buys[0].kind === 'chain', 'only the chain the chests lack is bought');
+  ok(split.cut.some(c => c.kind === 'hammer' && c.why === 'forges its own') && !split.buys.some(b => b.kind === 'hammer'),
+     'a raider who knows create weapon is not sold a hammer');
+  ok(split.spend === 1800, 'and the bill is one chain');
+  const lines = [{ agent: 'a', kind: 'shield', source: 'hall', name: "knight's shield" }, { agent: 'b', kind: 'shield' }, { agent: 'b', kind: 'chain' }];
+  const al = allocate(lines, [{ id: 1, name: "Knight's shield" }, { id: 2, name: 'small round shield' }]);
+  ok(al.now.length === 2 && al.now[0].id === 1 && al.now[1].id === 2 && al.later.length === 1 && al.later[0].kind === 'chain',
+     'allocation: a hall line by its name, a bought line by its kind, the missing one waits');
+  ok(allocate([{ agent: 'a', kind: 'shield', source: 'hall', name: "knight's shield" }], [{ id: 2, name: 'small round shield' }]).later.length === 1,
+     'a small round shield does not satisfy a line for a knight’s shield');
 }
 
 {
