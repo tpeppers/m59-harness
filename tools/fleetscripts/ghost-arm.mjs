@@ -476,7 +476,11 @@ export const script = {
       verify(async ({ state: st }) => {
         const roles = rolesNow(agents, p);
         const isLight = roles.lightbearer === agent;
-        const needs = agents.filter(a => a !== roles.lightbearer && SURVEY.has(a))
+        // ONLY THE ONES STANDING HERE. A hand-over is one room; the armorers are out shopping by
+        // now, and on the 2026-09-25 rehearsal one was planned as a hammer donor from Barloque
+        // ("not in the room"). An armorer that comes back without one is lateDedicate's.
+        const here = await presentOnce('hammers', agents, Number(p.stage));
+        const needs = agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && here.has(a))
           .map(a => hammerNeed(a, { wielding: SURVEY.get(a).wielding, items: SURVEY.get(a).items }));
         const { transfers, short } = matchHammers(needs);
 
@@ -552,7 +556,13 @@ export const script = {
         // Herbs for everyone who can heal, the light-bearer included.
         for (const a of agents.filter(a => (SURVEY.get(a)?.spells ?? []).includes(HEAL.spell)))
           add(a, HEAL.reagents, Number(p.herbs_each));
-        const wants = [...wantBy.entries()].map(([a, per]) => {
+        // A RECEIVER MUST BE STANDING WITH THE FLEET TOO. The donor rule above was half of it: on
+        // the 2026-09-25 rehearsal five hand-overs went to the two armorers, who were in Barloque
+        // buying shields, and every one stopped at "not in the room". An absent character keeps
+        // what it carries; the rest is shared among those who are here.
+        const away = [...wantBy.keys()].filter(a => roomOf[a] !== Number(p.stage));
+        if (away.length && agent === agents[0]) console.log(`  reagents: not planning for ${away.join(', ')} — not in room ${p.stage}`);
+        const wants = [...wantBy.entries()].filter(([a]) => !away.includes(a)).map(([a, per]) => {
           const short = {};
           for (const [k, n] of Object.entries(per)) { const have = countFamily(packsNow[a], k); if (have < n) short[k] = n - have; }
           return { agent: a, short };
@@ -686,6 +696,24 @@ const hallOn = p => p.hall_draw === true || p.hall_draw === 'true';
  * the other preparation — not the light-bearer, a dedicator or a healer. Strongest by might,
  * because might is what a pack holds (1700 + 20 x might), then by health for the road home.
  */
+// ONE READING PER STEP, SHARED: every agent plans the same hand-outs, and two readings a second
+// apart can disagree about a character walking in — a receiver then waits for a hammer nobody sends.
+const PRESENT = new Map();
+const presentOnce = (key, agents, room) => {
+  if (!PRESENT.has(key)) PRESENT.set(key, presentIn(agents, room));
+  return PRESENT.get(key);
+};
+
+/** Who is standing in `room` right now, by the broker's own status. */
+async function presentIn(agents, room) {
+  const here = new Set();
+  await Promise.all(agents.map(async a => {
+    const s = await call('status', { agent: a, brief: true }, 30_000).catch(() => null);
+    if (Number(s?.where?.num ?? s?.room_num ?? NaN) === room) here.add(a);
+  }));
+  return here;
+}
+
 function armorersOf(agents, p) {
   const named = String(p.armorers ?? '').split(',').map(x => x.trim()).filter(Boolean);
   if (named.length) return named;
