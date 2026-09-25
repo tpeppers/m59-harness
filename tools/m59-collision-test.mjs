@@ -1473,6 +1473,9 @@ const rideTrack = compileSessionMethod(brokerSource,
     sheltersAlong: () => [],
     clearStrikes: () => {},
     strikeTrack: () => 1,
+    // The door tail of a struck track reads the whole book (7225998, safe-spot legs); these
+    // fixtures hand the ride its track through recallTrack, so the book itself can be empty.
+    loadTracks: () => ({}),
   });
 
 let leaveViaRoutesFixture = null;
