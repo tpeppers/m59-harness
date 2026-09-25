@@ -475,7 +475,9 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     if (!home.ok) { t.failed = home.dead ? 'died on the road home' : 'could not get home'; trips.push(t); break; }
     t.delivered = await deliver(agent, now);
     log(`  ${agent} armorer trip ${trip}: delivered ${t.delivered.filter(d => d.ok).length}/${now.length}` +
-        (later.length ? `, ${later.length} still owed` : ''));
+        (later.length ? `, ${later.length} still owed` : '') +
+        // WHY each one failed — the summary alone left a 0/2 trip unexplained.
+        (t.delivered.some(d => !d.ok) ? ` — not delivered: ${t.delivered.filter(d => !d.ok).map(d => `${d.kind}->${d.agent} (${String(d.why ?? '?').slice(0, 60)})`).join('; ')}` : ''));
     trips.push(t);
     left = later;
   }
