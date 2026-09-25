@@ -134,6 +134,8 @@ export const script = {
     trips: { type: 'number', default: 2, describe: 'shopping trips at most' },
     hall: { type: 'number', default: 714, describe: 'where the chalice lands a guild member (the Bookmakers hall)' },
     shop_room: { type: 'number', default: 113, describe: 'the Barloque smith' },
+    reagent_shop: { type: 'number', default: 104, describe: 'the Barloque apothecary, where a hall rider buys what the chests lacked (0 = do not buy)' },
+    apothecary: { type: 'string', default: 'Joguer', describe: 'the apothecary at reagent_shop' },
     smith: { type: 'string', default: "Fehr'loi Qan", describe: 'the merchant to sell to and buy from' },
     keep_shillings: { type: 'number', default: 20, describe: 'what each raider keeps when pooling money' },
     outfit_wait_s: { type: 'number', default: 3600, describe: 'how long the fleet waits for the armorers' },

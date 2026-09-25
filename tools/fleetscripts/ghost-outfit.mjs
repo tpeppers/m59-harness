@@ -468,6 +468,28 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   log(`  ${agent} hall draw: ${out.ride}` + (out.stashed ? `; stashed ${out.stashed}` : '') + (out.took ? `; took ${JSON.stringify(out.took)}` : '') +
       (out.short && Object.keys(out.short).length ? `; SHORT ${JSON.stringify(out.short)}` : '') +
       (out.why ? `; REFUSED ${out.why}` : ''));
+  // WHAT THE CHESTS COULD NOT GIVE, BUY — WE ARE IN BARLOQUE ALREADY. On 2026-09-25 prod's chests
+  // had fallen to 15 elderberry (the 238-stack drawn down by the fleet's own stockpile runs),
+  // against a raid that needs ~95. Joguer, the Barloque apothecary (room 104), sells reagents a
+  // short walk from the hall; the shortfall is bought there on the way home, before any hammer is
+  // dedicated. Reagents only: gear is the smith's job, on the armorers' own trips.
+  const buyable = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && /elderberr|herb|orc tooth|mushroom/i.test(k));
+  if (ride.ok && buyable.length && Number(p.reagent_shop)) {
+    const at = await hopTo(agent, Number(p.reagent_shop), { floor: 0.5 });
+    if (at.ok) {
+      out.bought = {};
+      const list = await call('shop', { agent, seller: p.apothecary }, 120_000).catch(() => null);
+      for (const [item, n] of buyable) {
+        const it = (list?.items ?? []).find(i => lower(i.name).replace(/ies$/, 'y').replace(/s$/, '') === lower(item).replace(/s$/, ''));
+        if (!it) continue;
+        const before = (await inv(agent)).filter(i => lower(i.name).startsWith(lower(item).slice(0, 5))).reduce((m, i) => m + (i.amount || 1), 0);
+        await call('shop', { agent, seller: p.apothecary, buy_ids: [{ id: it.id, amount: n }] }, 180_000).catch(() => null);
+        const after = (await inv(agent)).filter(i => lower(i.name).startsWith(lower(item).slice(0, 5))).reduce((m, i) => m + (i.amount || 1), 0);
+        out.bought[item] = after - before;
+      }
+      log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}`);
+    }
+  }
   if (Number((await observe(agent)).room) !== Number(p.stage)) {
     if (ride.ok) {
       await hopTo(agent, Number(p.rally), { floor: 1 });
