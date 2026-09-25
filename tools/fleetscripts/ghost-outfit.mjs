@@ -111,7 +111,14 @@ export const OUTFIT_RUN = { plan: null, delivered: new Map(), done: false, cupHo
 // picked back up in room 2 (which refills it), so a second rider's hand-over must wait for the
 // first rider's drop. Not `serially`: a ride calls `serially` inside itself.
 let CUP = Promise.resolve();
-export const rideCup = fn => { const p = CUP.then(fn, fn); CUP = p.catch(() => {}); return p; };
+// SPACED, TOO: a rider's Rescue lands 15-25 s after the drink, and the next hand-over waits a
+// breath after the last so two riders are never arriving in the hall on top of each other.
+const RIDE_GAP_MS = Number(process.env.M59_RIDE_GAP_MS ?? 20_000);
+export const rideCup = fn => {
+  const p = CUP.then(fn, fn);
+  CUP = p.catch(() => {}).then(() => new Promise(r => setTimeout(r, RIDE_GAP_MS)));
+  return p;
+};
 let HALL = Promise.resolve();
 const inHall = fn => { const p = HALL.then(fn, fn); HALL = p.catch(() => {}); return p; };
 
@@ -204,7 +211,17 @@ async function grabFromFloor(agent, re, tries = 10) {
   return (await inv(agent)).some(x => re.test(String(x.name ?? '')));
 }
 
-/** What an armorer never parts with — at the smith's counter or into a hall chest. */
+/**
+ * WHAT AN ARMORER KEEPS WHEN IT EMPTIES ITS PACK INTO A HALL CHEST — much less than it keeps at
+ * the smith, on the operator's word (2026-09-25): "armorers can empty/stash their packs, anything
+ * worth keeping can go into the chest". Armorers do not cast, and the hall holds the reagents; they
+ * keep the money, the cup, spare weapons for the hammer hand-out, and LIGHT food for a long trip.
+ * Pork and mutton — the heaviest thing most packs carry — go in the chest.
+ */
+export const HALL_STASH_KEEP = Object.freeze(['shilling', 'chalice', 'hammer', 'mace',
+  'bread', 'edible mushroom', 'apple', 'cheese']);
+
+/** What an armorer never parts with at the smith's counter. */
 export const PACK_KEEP = Object.freeze(['shilling', 'elderberry', 'herb', 'mushroom', 'orc tooth', 'emerald', 'sapphire', 'ruby',
   'hammer', 'mace', 'chain', 'shield', 'chalice', 'bread', 'pork', 'mutton', 'apple', 'cheese',
   'spider eye', 'edible']);
@@ -435,7 +452,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
     // ONE AT A TIME THROUGH THE HALL. The chest door opens for five seconds on a spoken word
     // (guildh14.kod DOOR_DELAY); riders arriving together contend for it, and on the 2026-09-25
     // rehearsal one was refused 3 of 3 presses as "unable to go anywhere".
-    const r = await inHall(() => call('hall_withdraw', { agent, wants: share, stash: [...PACK_KEEP, ...share.map(w => w.item)] }, 620_000)
+    const r = await inHall(() => call('hall_withdraw', { agent, wants: share, stash: [...HALL_STASH_KEEP, ...share.map(w => w.item)] }, 620_000)
       .catch(e => ({ ok: false, why: e.message })));
     out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0;
     if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
