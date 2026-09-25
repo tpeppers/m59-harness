@@ -147,16 +147,19 @@ async function hopTo(agent, to, { floor = 0 } = {}) {
 }
 
 /**
- * THE CHALICE RIDE, one armorer. The holder hands the cup over, the armorer drinks it and drops
+ * THE CHALICE RIDE, one armorer. The holder drops the cup, the armorer picks it up, drinks it and drops
  * it on the floor of room 2 at once — Rescue takes 15-25 s to land — and the holder picks it back
  * up, which refills it (room 2 is forest). Returns whether the armorer reached the hall.
  */
 export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
   const cup = (await inv(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
   if (!cup) return { ok: false, why: `${holder} is not carrying the chalice` };
-  const given = await serially(() => call('supply', { from: holder, to: armorer, what: [cup.id], who_travels: 'neither' }, 120_000)
-    .catch(e => ({ supplied: false, reason: e.message })));
-  if (!given?.supplied) return { ok: false, why: `could not hand the cup over: ${given?.reason ?? '?'}` };
+  // DROPPED AND GRABBED, NEVER HANDED OVER. The cup refuses a trade — on the 2026-09-25 rehearsal
+  // `supply` answered item_refuses_to_leave — and the operator's own method is use, drop, grab in
+  // room 2. So the holder drops it and the rider picks it up off the floor, read back each time.
+  await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
+  if (!(await grabFromFloor(armorer, /chalice/i)))
+    return { ok: false, why: `${armorer} could not pick the cup up after ${holder} dropped it` };
   const mine = (await inv(armorer)).find(i => /chalice/i.test(String(i.name ?? '')));
   await call('rest', { agent: armorer, stand: true }, 30_000).catch(() => {});
   await call('act', { agent: armorer, verb: 'eat', target: mine.id }, 60_000).catch(() => {});
@@ -165,14 +168,7 @@ export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
   // The holder picks it up off the floor — by what is on the floor now, not by a stored id — and
   // KEEPS TRYING until the cup is in its pack. One look 1.5 s after the drop left the cup lying in
   // room 2 on the 2026-09-25 rehearsal, and every rider after the first found no cup to ride.
-  let onFloor = null, cupBack = false;
-  for (let i = 0; i < 10 && !cupBack; i++) {
-    await sleep(1500);
-    const look = await call('look', { agent: holder }, 40_000).catch(() => null);
-    onFloor = (look?.objects ?? []).find(o => /chalice/i.test(String(o.name ?? ''))) ?? onFloor;
-    if (onFloor) await call('act', { agent: holder, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
-    cupBack = (await inv(holder)).some(x => /chalice/i.test(String(x.name ?? '')));
-  }
+  const cupBack = await grabFromFloor(holder, /chalice/i);
   const until = Date.now() + 60_000;
   while (Date.now() < until) {
     const o = await observe(armorer);
@@ -180,6 +176,22 @@ export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
     await sleep(2000);
   }
   return { ok: false, why: 'the ride did not land in the hall (not a guild member? teleport blocked after PVP?)', cupBack };
+}
+
+/**
+ * PICK SOMETHING UP OFF THE FLOOR, AND KEEP TRYING UNTIL IT IS IN THE PACK. A dropped object takes
+ * a moment to appear in the room, and a single look 1.5 s after a drop left the chalice lying in
+ * room 2 on the 2026-09-25 rehearsal. Found by what is on the floor now, never by a stored id.
+ */
+async function grabFromFloor(agent, re, tries = 10) {
+  for (let i = 0; i < tries; i++) {
+    await sleep(1500);
+    if ((await inv(agent)).some(x => re.test(String(x.name ?? '')))) return true;
+    const look = await call('look', { agent }, 40_000).catch(() => null);
+    const onFloor = (look?.objects ?? []).find(o => re.test(String(o.name ?? '')));
+    if (onFloor) await call('act', { agent, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
+  }
+  return (await inv(agent)).some(x => re.test(String(x.name ?? '')));
 }
 
 /** Sell what the smith buys, keeping money, reagents, food, the outfit and the cup. */
