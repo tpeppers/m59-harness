@@ -25,9 +25,10 @@
 // NOTHING HERE DOES ANY I/O ON THE WIRE. The cache below is disk, exactly like
 // `substrate/banks/` and for the same reason: none of these three quantities is pushed by
 // the server, so the only record of them is what was seen the last time somebody looked.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { weighPack } from './m59-items.mjs';
+import { chestDiff } from './m59-chest-eviction.mjs';
 
 // player.kod:737-738 declare both at 1700; :10458 and :10463 add might*20 to each. The
 // same formula the planner and `carryCapacity` use — imported rather than restated
@@ -200,10 +201,43 @@ export class StorageCache {
     const at2 = parseChestKey(key);
     if (!at2)
       throw new Error(`a chest is named by its square, like "r18c6" — got ${JSON.stringify(where)}`);
-    return writeJson(this.chestPath(key), { slot: key, row: at2.row, col: at2.col,
+    const prev = readJson(this.chestPath(key));
+    const next = writeJson(this.chestPath(key), { slot: key, row: at2.row, col: at2.col,
       object_id, room,
       items: items.map(i => ({ name: String(i.name ?? ''), amount: Number(i.amount) || 1 })),
       opened_by: by ?? null, observed_at: Number(at) || this.now() });
+    // THE READING OVERWRITES, SO THE DIFFERENCE IS RECORDED HERE OR NOWHERE. What left the chest
+    // between two readings is the only history a chest can have (see m59-chest-eviction.mjs), and
+    // it exists only at this moment. A failed append must never fail the reading it follows.
+    try {
+      const d = chestDiff(prev, next);
+      if (d && (d.left.length || d.arrived.length)) {
+        const path = this.chestHistoryPath(key);
+        mkdirSync(join(path, '..'), { recursive: true });
+        appendFileSync(path, JSON.stringify({ slot: key, room: next.room,
+          prev_at: prev.observed_at ?? null, at: next.observed_at, by: next.opened_by,
+          left: d.left, arrived: d.arrived }) + '\n');
+      }
+    } catch { /* the reading is what matters */ }
+    return next;
+  }
+
+  // Beside the readings, NOT among them: `allChests` takes every `*.json` in chests/ for a chest.
+  chestHistoryPath(key) { return join(this.dir, 'chest-history', `${String(key)}.jsonl`); }
+
+  /** The last `limit` changes seen in one chest, newest first. Missing file is an empty list. */
+  readChestHistory(where, { limit = 20 } = {}) {
+    const key = typeof where === 'string' ? where : chestKey(where);
+    if (!parseChestKey(key)) return [];
+    let text = '';
+    try { text = readFileSync(this.chestHistoryPath(key), 'utf8'); } catch { return []; }
+    const out = [];
+    for (const line of text.split('\n').reverse()) {
+      if (!line.trim()) continue;
+      try { out.push(JSON.parse(line)); } catch { continue; }
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   readChest(where) {

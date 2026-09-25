@@ -794,6 +794,12 @@ the records it describes.
   that the rent sign survives two overlapping negative sentences, and that the Bookmaker's
   own rent override is not the non-PK doubling in disguise. Founding costs 5,000 and cannot be
   undone and a hall is 25,000, so none of it can be learned live) and
+  `node tools/m59-chest-eviction-test.mjs` (22 — the guild chest's "would give up first"
+  ranking and its history on /inventory: unplanned before surplus, least value per bulk first,
+  an unpriced or unsized item LAST in its tier and never read as zero, shillings never ranked, a
+  history row only when a re-reading actually differs, and the history file never mistaken for a
+  chest. Nothing evicts from a chest yet — the server never does — so the ranking is a plan the
+  page shows, not a log) and
   `node tools/m59-economy-test.mjs` (73 — the Economy and Skills boards, the one
   tab bar all six boards share, and the pack drill-in: that it names what is in the pack
   rather than only how full it is, and that an EMPTY pack, a character the broker is not

@@ -31,6 +31,8 @@ import { esc, ago, num, NAV, STYLE, magicTag } from './m59-page-chrome.mjs';
 import { StorageCache, GUILD_CHEST_SLOTS, VAULT_BULK_MAX, CHEST_BULK_MAX,
          BOOKMAKERS_CHESTS } from './m59-storage.mjs';
 import { loadLooks, loadList, magicOf } from './m59-magicsort.mjs';
+import { guildPlan, normalisePlan } from './m59-guildwants.mjs';
+import { evictionOrder } from './m59-chest-eviction.mjs';
 
 const { label: FLEET_LABEL } = resolveFleet();
 
@@ -51,7 +53,13 @@ const EXTRA_STYLE = `
               line-height:1.5; }
   .itemgrid .it { white-space:nowrap; }
   .itemgrid .none { color:var(--dim); font-style:italic; white-space:normal; }
-  .chests { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:1rem; }
+  .chests { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:1rem; }
+  .chest h4 { margin:.7rem 0 .25rem 0; font-size:.75rem; text-transform:uppercase;
+              letter-spacing:.04em; color:var(--dim); }
+  .evict { margin:0; padding-left:1.6rem; font-size:.8rem; line-height:1.45; }
+  .evict .t { font-size:.7rem; color:var(--dim); }
+  .hist { font-size:.78rem; line-height:1.45; }
+  .hist .when { color:var(--dim); font-variant-numeric:tabular-nums; }
   .chest { background:var(--panel); border:1px solid var(--line); border-radius:10px;
            padding:.8rem 1rem; }
   .chest.empty { border-style:dashed; opacity:.72; }
@@ -92,6 +100,55 @@ function itemGrid(items, empty, ctx) {
   }).join('')}</div>`;
 }
 
+// A RANKING, NOT A LOG. Nothing evicts from a guild chest yet: the server never does
+// (chest.kod:29) and nothing in this repository withdraws by this order. So the card says
+// "would give up first", and the history underneath says "left between readings", which is
+// all two readings of a chest can know. See m59-chest-eviction.mjs.
+const EVICT_SHOWN = 12;
+function chestCard(ch, planItems, history, ctx) {
+  const f = ch.fullness;
+  const pctCls = f.percent >= 90 ? 'bad' : f.percent >= 70 ? 'warn' : '';
+  const ev = evictionOrder(ch, planItems);
+  const rows = ev.rows.slice(0, EVICT_SHOWN);
+  const more = ev.rows.length - rows.length;
+  const evictList = !ev.rows.length
+    ? `<div class="dim" style="font-size:.78rem">nothing: every stack is within its plan target</div>`
+    : `<ol class="evict">${rows.map(r => `<li>${esc(r.name)} <span class="dim">x${num(r.evict)}</span>
+         <span class="t">· ${r.tier} · ${r.bulk == null ? 'bulk unknown' : `${num(r.bulk)} bulk`}
+         · ${r.value_each == null ? 'no price' : `${num(r.value_each)} each`}</span></li>`).join('')}</ol>
+       ${more > 0 ? `<details><summary class="dim" style="font-size:.75rem">and ${more} more, in order</summary>
+         <ol class="evict" start="${EVICT_SHOWN + 1}">${ev.rows.slice(EVICT_SHOWN).map(r =>
+           `<li>${esc(r.name)} <span class="dim">x${num(r.evict)}</span>
+            <span class="t">· ${r.tier}</span></li>`).join('')}</ol></details>` : ''}
+       <div class="dim" style="font-size:.72rem;margin-top:.2rem">evicting all of it frees
+         ${num(ev.freeable_bulk)} bulk${ev.unknown_bulk.length ? ` plus ${ev.unknown_bulk.length}
+         item(s) the weight table cannot size` : ''} · ${planItems ? `${planItems.length} planned item(s) kept to target`
+         : 'no guild plan names this chest'}</div>`;
+  const hist = !history.length
+    ? `<div class="dim" style="font-size:.78rem">no change seen between readings yet. The history
+         starts with the first re-reading after this was deployed.</div>`
+    : `<div class="hist">${history.map(h => {
+        const out = h.left.map(x => `${esc(x.name)} x${num(x.amount)}`).join(', ');
+        const inn = h.arrived.map(x => `${esc(x.name)} x${num(x.amount)}`).join(', ');
+        return `<div><span class="when">${esc(ago(h.at))}</span>
+          ${out ? `<span class="bad">out</span> ${out}` : ''}${out && inn ? ' · ' : ''}${inn
+          ? `<span class="dim">in</span> ${inn}` : ''}</div>`;
+      }).join('')}</div>`;
+  return `<div class="chest"><h3>${esc(ch.slot)}
+      <span class="${pctCls}" style="font-weight:normal">${f.percent}%</span></h3>
+    ${bar(f.percent, `${f.bulk} of ${f.max} bulk`)}
+    <div class="dim" style="font-size:.75rem">${num(f.bulk)} of ${num(f.max)} bulk
+      · ${num(f.max - f.bulk)} free · ${ch.items.length} stack(s)
+      ${f.exact ? '' : ` · LOWER BOUND, ${f.unweighed.length} name(s) not in the weight table`}
+      · read ${esc(ago(ch.observed_at))}</div>
+    ${itemGrid(ch.items, 'empty', ctx)}
+    <h4>would give up first</h4>
+    ${evictList}
+    <h4>left or arrived between readings</h4>
+    ${hist}
+  </div>`;
+}
+
 export function renderInventory({ hours = 168, live = null, characters = null } = {}) {
   const e = economy({ sinceMs: hours * 3600 * 1000, live, characters });
   const storage = new StorageCache();
@@ -99,6 +156,12 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
   // READ ONCE, FOR THE WHOLE PAGE. The look cache and the keep list are files; opening them per
   // item would be a few thousand reads to render one board.
   const ctx = { looks: loadLooks(), list: loadList() };
+  // THE PLAN IS READ ONCE and its problems are not this page's to print: /planner owns them. A
+  // missing plan is null, and a chest with no plan ranks every stack as unplanned, which is true.
+  let plan = null;
+  try { const raw = guildPlan(); plan = !raw ? null : raw.chests instanceof Map ? raw : normalisePlan(raw); }
+  catch { plan = null; }
+  const planFor = (slot) => plan?.chests.get(slot) ?? null;
 
   const liveOf = new Map((live || []).map(x => [x.character, x]));
   const rows = e.rows.map(r => ({
@@ -196,7 +259,11 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
     Each is named by the SQUARE it stands on rather than by a slot number — an object id is
     a handle the server recycles and a chest cannot move — so only chests somebody has
     actually looked inside appear here. There is no list of every square a chest could
-    occupy, and inventing rows for the unopened ones would be inventing chests.</div>
+    occupy, and inventing rows for the unopened ones would be inventing chests.
+    <b>Nothing evicts from a chest yet</b> — a full one refuses the next deposit — so "would give
+    up first" is the order the guild plan implies (not in this chest's plan, then above its
+    target; least value per bulk first, unpriced last), and the history is what changed between
+    two readings, whoever took it.</div>
   <div class="chests">
     ${storage.allChests().length === 0
       ? `<div class="chest empty"><h3>nothing looked in yet</h3>
@@ -206,10 +273,7 @@ export function renderInventory({ hours = 168, live = null, characters = null } 
       ? `<div class="chest empty"><h3>${esc(ch.slot)}</h3>
            <div class="dim" style="font-size:.8rem">opened, but nothing has been read out of
            this chest. That is not the same as empty.</div></div>`
-      : `<div class="chest"><h3>${esc(ch.slot)}</h3>
-           <div class="dim" style="font-size:.75rem">${ch.items.length} item(s)
-             · read ${esc(ago(ch.observed_at))}</div>
-           ${itemGrid(ch.items, 'empty', ctx)}</div>`).join('')}
+      : chestCard(ch, planFor(ch.slot), storage.readChestHistory(ch.slot, { limit: 8 }), ctx)).join('')}
   </div>
 
   <div class="sub" style="margin-top:1.2rem">Magic markers come from the server's own rarity
