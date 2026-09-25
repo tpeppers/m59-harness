@@ -2161,6 +2161,7 @@ const isBusyRefusal = (r) => /\bis busy\b|\bbusy:/i.test(refusalText(r));
 // extra send costs 2.5s against the 180s of polling this replaces. A number that survives its
 // own justification being withdrawn has to be justified again, not just kept.
 const BUSY_RACE_TRIES = Number(process.env.M59_BUSY_RACE_TRIES ?? 2);
+const UNREADABLE_WAIT_MS = Number(process.env.M59_UNREADABLE_WAIT_MS ?? 60_000);
 const BUSY_RACE_MS = Number(process.env.M59_BUSY_RACE_MS ?? 2_500);
 
 async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null, plateauOk = null }) {
@@ -2211,7 +2212,15 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null, p
   let launched = 0, waitedOnOwn = false;
   const sends = [];
   for (let attempt = 0; attempt < 3; attempt++) {
-    const at = await observe(agent);
+    let at = await observe(agent);
+    // UNREADABLE IS A MOMENT, NOT A VERDICT — ASK AGAIN BEFORE REFUSING. Unknown health is still
+    // not permission to set out; but a keeper that did not answer ONE read (a reconnect, a busy
+    // loop) is not a dead keeper, and on the 2026-09-25 rehearsal shadow17 was dropped from the
+    // raid on its first muster read. Re-read for up to UNREADABLE_WAIT_MS before the gate decides.
+    for (const until = Date.now() + UNREADABLE_WAIT_MS; at.health == null && !at.dead && Date.now() < until;) {
+      await sleep(3000);
+      at = await observe(agent);
+    }
     if (!at.ok) return { ok: false, why: 'could not read the character' };
     // Numeric on both sides on purpose; see the coercion note above.
     if (Number(at.room) === to) return { ok: true, room: to };
