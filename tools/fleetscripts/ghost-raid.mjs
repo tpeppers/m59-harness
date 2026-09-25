@@ -420,6 +420,7 @@ export const script = {
     return_at: { type: 'number', default: 0.85, describe: 'walk back in at this health fraction' },
     light_every_s: { type: 'number', default: 150, describe: 'recast forces of light at least this often' },
     light_rest_below: { type: 'number', default: 0.8, describe: 'the light-bearer rests in 38 below this' },
+    door_min_health: { type: 'number', default: 0.8, describe: 'raiders rest in the stage room to this before walking to the door' },
     light_gate_s: { type: 'number', default: 180, describe: 'raiders hold at the door this long for the first light; 0 = do not wait' },
     sample_s: { type: 'number', default: 15 },
     run_dir: { type: 'string', default: '' },
@@ -521,8 +522,18 @@ export const script = {
       if (!RUN.light.ready) console.log(`  ${agent} going in without the light: not ready in ${p.light_gate_s}s`);
       return true;
     }, 'waiting at the door for the light-bearer to be ready');
-    const steps = i40 >= 0 ? [...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
-                           : [atDoor, theDoor, lightGate, ...base];
+    // REST IN THE STAGE ROOM BEFORE THE DOOR, HELD. The raid's walks carry a low health floor on
+    // purpose: under a floor the fleetscript FREES the keeper to heal, and a freed keeper follows
+    // its own orders — on the 2026-09-25 rehearsal a dedicator "healing" before the door walk went
+    // shopping in Barloque and every late dedication waited on it. So raiders sit down here, in
+    // place, to `door_min_health`, the way the light-bearer always has.
+    const restFirst = verify(async () => {
+      const o = await observe(agent);
+      if ((o.health ?? 1) < Number(p.door_min_health)) await restUntil(agent, Number(p.door_min_health), p);
+      return true;
+    }, 'rested in the stage room before the door');
+    const steps = i40 >= 0 ? [restFirst, ...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
+                           : [restFirst, atDoor, theDoor, lightGate, ...base];
 
     // The melee loop ends on "the boss is gone from here" — which is the kill, if it saw it.
     steps.push(verify(async ({ state: st }) => {

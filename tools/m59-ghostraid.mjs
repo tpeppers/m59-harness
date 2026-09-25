@@ -309,7 +309,10 @@ async function runPhases(cfg, phases, extra = {}) {
     name, agents: cfg.agents, provenance: loaded[0].s.provenance ?? null, unsafe: loaded[0].s.unsafe ?? null,
     // The raid's own floors. Full health to set out is the harness default and it is right for a
     // road; this errand's walks are 2 -> 38 -> 40 inside Castle Victoria, and it rests people itself.
-    minHealth: extra.minHealth ?? 0.6,
+    // LOW ON PURPOSE (was 0.6): under the floor a walk FREES the keeper to heal, and a freed keeper
+    // runs its own errands. The raid rests its raiders itself, held, in the stage room
+    // (ghost-raid door_min_health); the muster's long walks carry their own floors.
+    minHealth: extra.minHealth ?? 0.3,
     // Loial has 20 maximum health. fragileBody refuses a journey for a body that small, which is
     // right on a road and wrong for two rooms of a castle — see fleetlib's note on fragileBelow.
     fragileBelow: extra.fragileBelow ?? 15,
