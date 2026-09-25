@@ -148,7 +148,15 @@ export const script = {
       if (who) {
         const r = await dm.relocate([who], Number(mirror.room), { row: mirror.row, col: mirror.col, verify: true });
         console.log(`  ${agent} placed where prod stands: room ${mirror.room} (${r?.moved?.[who] ?? '?'})`);
-        await sleep(2000);
+        // WAIT FOR THE KEEPER TO SEE IT. A relocation leaves the keeper's picture of the body stale
+        // for a few seconds, and a walk that reads health in that gap refuses on "health is
+        // unreadable" — shadow14 lost its whole run to that on 2026-09-25.
+        const until = Date.now() + 30_000;
+        while (Date.now() < until) {
+          const o = await call('status', { agent, brief: true }, 20_000).catch(() => null);
+          if ((o?.hp?.max ?? o?.vitals?.health?.max) && Number(o?.where?.num ?? o?.room_num) === Number(mirror.room)) break;
+          await sleep(1500);
+        }
       }
     }
     const here = await call('status', { agent, brief: true }, 30_000).catch(() => null);
