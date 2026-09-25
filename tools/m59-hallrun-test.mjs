@@ -55,8 +55,8 @@ section('the run uses the passage routine that was measured, not a fresh guess')
   ok(/const GUILD_CHEST_SECTION = 4/.test(src), 'aiming at the chest section the coop also uses');
   ok(!/HALL_DOOR_MS/.test(src), 'the invented door delay is gone');
   ok(!/step: 'leave_foyer'/.test(src), 'and so is the hand-rolled foyer walk');
-  eq((src.match(/const hall = await this.reachHallChests/g) ?? []).length, 2,
-     'BOTH the deposit and the withdraw path go through it');
+  eq((src.match(/const hall = await this.reachHallChests/g) ?? []).length, 3,
+     'the deposit, the withdraw AND the errand withdrawal (hallWithdraw) all go through it');
   eq(src.split(String.raw`await this.sayHallPassword().catch(() => {})`).length - 1, 0,
      'and no call site throws the password result away');
 }
