@@ -165,6 +165,15 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   ok(Math.max(...crew.map(load)) <= 1200, 'no rider carries more than 1200 weight of the default draw');
   ok(crew.every(a => split[a].length), 'all four riders carry something');
   ok(Object.keys(hallSplit([], HALL_WANTS, weighItem)).length === 0, 'no crew, no split');
+  const all = s => Object.values(s).flat().reduce((m, w) => (m[w.item] = (m[w.item] ?? 0) + w.amount, m), {});
+  ok(HALL_WANTS.every(w => all(split)[w.item] === w.amount), 'every unit of every want is dealt out, split or not');
+  const reag = [{ item: 'elderberry', amount: 150 }, { item: 'herb', amount: 120 }, { item: 'mushroom', amount: 60 }];
+  const tight = hallSplit(['a', 'b', 'c'], reag, weighItem, { a: 400, b: 900, c: 50 });
+  const cost = a => tight[a].reduce((n, w) => n + Math.max(weighItem(w.item).weight, weighItem(w.item).bulk) * w.amount, 0);
+  ok(cost('a') <= 400 && cost('b') <= 900 && cost('c') <= 50, 'no rider is dealt more than its free room (the 2026-09-25 rider got 1,500 bulk at 0 free)');
+  ok(tight.b.find(w => w.item === 'elderberry') && tight.a.find(w => w.item === 'elderberry'), 'a reagent stack splits across riders');
+  const over = hallSplit(['a', 'b'], [{ item: 'chain armor', amount: 4 }], weighItem, { a: 300, b: 100 });
+  ok(Object.values(over).flat().reduce((n, w) => n + w.amount, 0) === 4, 'what fits nowhere is still dealt, so the draw reports it SHORT');
   const { chestPlan, raidNeeds } = await import('./m59-ghostraid-lib.mjs');
   const cp = chestPlan({ needs: { 'orc tooth': 30, elderberry: 10 }, fleet: { 'orc tooth': 10, elderberry: 20 },
     chests: [{ slot: 'r1c1', items: [{ name: 'orc tooth', amount: 162 }, { name: 'purple mushroom', amount: 9 }] }], weigh: weighItem });

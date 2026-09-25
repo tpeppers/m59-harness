@@ -31,7 +31,7 @@ import { weighItem } from '../m59-items.mjs';
 // PACK HANDLING LIVES IN m59-inventory.mjs — the cup, the floor, making room, hand-overs, buying,
 // walking, the hall. Re-exported under the names this file used to define, so callers are unchanged.
 import { rideCup, inHall, serially, walkRoom, cupRide, freshItems, grabFromFloor, makeRoom as invMakeRoom,
-         handOver, buyByName, HALL_STASH_KEEP, SELL_KEEP, hallStash, KEEP } from '../m59-inventory.mjs';
+         handOver, buyByName, HALL_STASH_KEEP, SELL_KEEP, hallStash, KEEP, roomFor } from '../m59-inventory.mjs';
 export { rideCup, buyByName, HALL_STASH_KEEP };
 export const chaliceRide = (armorer, holder, opts) => cupRide(armorer, holder, opts);
 export const PACK_KEEP = SELL_KEEP;
@@ -357,16 +357,34 @@ export const HALL_WANTS = Object.freeze([
  *
  *   wants: [{item, amount}], weigh: name -> {weight} | null  ->  { agent: [{item, amount}] }
  */
-export function hallSplit(crew = [], wants = [], weigh = () => null) {
+export function hallSplit(crew = [], wants = [], weigh = () => null, room = null) {
+  // BY ROOM, AND IN UNITS. The first version balanced WEIGHT between riders and never asked how
+  // much any of them could hold: on the 2026-09-25 rehearsal one rider was handed every reagent
+  // plus two gold shields — over 1,500 bulk against 0 free — drew 22 of 150 elderberry and then
+  // bought none, the apothecary's stack having nowhere to go. A unit costs max(weight, bulk), the
+  // tighter of the pack's two ceilings; each want is dealt out a stack-slice at a time to the rider
+  // with the most room LEFT, so reagents split across riders instead of piling on one. `room` is
+  // {agent: free room} from the server (min of weight and bulk); without it the riders are
+  // assumed equal and the draw is balanced. What fits nowhere still goes to the roomiest rider, so
+  // it surfaces as SHORT on the draw rather than vanishing from the plan.
   const out = Object.fromEntries(crew.map(a => [a, []]));
   if (!crew.length) return out;
-  const load = Object.fromEntries(crew.map(a => [a, 0]));
-  const w = x => (Number(weigh(x.item)?.weight) || 0) * (Number(x.amount) || 0);
-  for (const want of [...wants].sort((a, b) => w(b) - w(a) || String(a.item).localeCompare(String(b.item)))) {
-    const to = w(want) === 0 ? crew[0]
-      : [...crew].sort((a, b) => load[a] - load[b] || crew.indexOf(a) - crew.indexOf(b))[0];
-    out[to].push({ item: want.item, amount: want.amount });
-    load[to] += w(want);
+  const unit = x => { const w = weigh(x); return Math.max(Number(w?.weight) || 0, Number(w?.bulk) || 0); };
+  const total = wants.reduce((n, x) => n + unit(x.item) * (Number(x.amount) || 0), 0);
+  const even = Math.ceil(total / crew.length * 1.1);
+  const left = Object.fromEntries(crew.map(a => [a, room && Number.isFinite(Number(room[a])) ? Number(room[a]) : even]));
+  const give = (a, item, n) => { const e = out[a].find(x => x.item === item); if (e) e.amount += n; else out[a].push({ item, amount: n }); };
+  const sorted = [...wants].sort((x, y) => unit(y.item) * y.amount - unit(x.item) * x.amount || String(x.item).localeCompare(String(y.item)));
+  for (const want of sorted) {
+    const c = unit(want.item);
+    let n = Number(want.amount) || 0;
+    if (c === 0) { give(crew[0], want.item, n); continue; }
+    while (n > 0) {
+      const to = [...crew].sort((x, y) => left[y] - left[x] || crew.indexOf(x) - crew.indexOf(y))[0];
+      const fit = Math.min(n, Math.floor(left[to] / c));
+      if (fit <= 0) { give(to, want.item, n); left[to] -= n * c; break; }
+      give(to, want.item, fit); left[to] -= fit * c; n -= fit;
+    }
   }
   return out;
 }
@@ -419,12 +437,21 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
       for (const [item, n] of buyable) {
         const it = (list?.items ?? []).find(i => lower(i.name).replace(/ies$/, 'y').replace(/s$/, '') === lower(item).replace(/s$/, ''));
         if (!it) continue;
+        // ONLY WHAT FITS. A purchase the pack cannot take is refused whole and silently — the
+        // 2026-09-25 rider asked for 128 elderberry at -41 bulk and got nothing, and said nothing.
+        const r = await roomFor(agent);
+        const u = weighItem(item); const c = Math.max(Number(u?.weight) || 0, Number(u?.bulk) || 0) || 1;
+        const fits = r ? Math.max(0, Math.floor(Math.min(r.weight ?? 0, r.bulk ?? 0) / c)) : n;
+        const ask = Math.min(n, fits);
+        if (ask < n) (out.unbought ??= {})[item] = n - ask;
+        if (ask <= 0) { out.bought[item] = 0; continue; }
         const before = (await inv(agent)).filter(i => lower(i.name).startsWith(lower(item).slice(0, 5))).reduce((m, i) => m + (i.amount || 1), 0);
-        await call('shop', { agent, seller: p.apothecary, buy_ids: [{ id: it.id, amount: n }] }, 180_000).catch(() => null);
+        await call('shop', { agent, seller: p.apothecary, buy_ids: [{ id: it.id, amount: ask }] }, 180_000).catch(() => null);
         const after = (await inv(agent)).filter(i => lower(i.name).startsWith(lower(item).slice(0, 5))).reduce((m, i) => m + (i.amount || 1), 0);
         out.bought[item] = after - before;
       }
-      log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}`);
+      log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}` +
+          (out.unbought ? `; NO ROOM for ${JSON.stringify(out.unbought)}` : ''));
     }
   }
   // GEAR THE CHESTS LACKED, FROM THE SMITH — only when the caller asks (`buy_gear`). The ghost raid

@@ -106,7 +106,8 @@ export const script = {
         PROVISION_RUN.holder = holder; PROVISION_RUN.riders = crew;
         if (!holder) console.log('  provision: NOBODY carries the Chalice of the Rain — riders will walk to the hall');
         if (crew.includes(agent)) {
-          const share = hallSplit(crew, parseWants(p.wants), weighItem)[agent] ?? [];
+          const room = Object.fromEntries(crew.map(a => { const x = SURVEY.get(a); const r = packRoom(x?.might, x?.items ?? []); return [a, Math.min(r.weight ?? 0, r.bulk ?? 0)]; }));
+          const share = hallSplit(crew, parseWants(p.wants), weighItem, room)[agent] ?? [];
           st.draw = await hallDraw({ agent, crew, holder, share, p });
           PROVISION_RUN.draws.push({ agent, ...st.draw });
         } else if (agent !== holder) {

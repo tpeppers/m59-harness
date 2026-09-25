@@ -377,7 +377,9 @@ export const script = {
         const roles = rolesNow(agents, p);
         if (crew.includes(agent)) {
           const wants = (() => { try { return JSON.parse(String(p.hall_wants || '')); } catch { return HALL_WANTS; } })();
-          const share = hallSplit(crew, wants, weighItem)[agent] ?? [];
+          // Each rider's free room as the server counted it at the survey: the split deals by it.
+          const room = Object.fromEntries(crew.map(a => { const r = SURVEY.get(a)?.roomFor; return [a, r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : undefined]; }));
+          const share = hallSplit(crew, wants, weighItem, room)[agent] ?? [];
           st.hall = await hallDraw({ agent, crew, holder: cupHolderOf(agents, roles), share, p });
         } else if (agent !== roles.lightbearer) {
           await call('rest', { agent }, 30_000).catch(() => {});
