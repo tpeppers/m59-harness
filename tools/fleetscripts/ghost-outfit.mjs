@@ -318,7 +318,8 @@ export async function buyByName(agent, seller, lines = []) {
  * AND bulk. Returns what was dropped, or null.
  */
 export const RAID_KEEP = Object.freeze(['shilling', 'elderberr', 'herb', 'mushroom', 'orc tooth', 'emerald',
-  'sapphire', 'ruby', 'diamond', 'chalice', 'hammer', 'mace', 'sword', 'axe', 'scimitar', 'bow', 'arrow',
+  'sapphire', 'ruby', 'diamond', 'dragon scale', 'web moss', 'fairy wing', 'uncut seraphym', 'dark angel feather',
+  'polished seraphym', 'solagh', 'kriipa claw', 'eye of the', 'chalice', 'hammer', 'mace', 'sword', 'axe', 'scimitar', 'bow', 'arrow',
   'armor', 'armour', 'shield', 'robe', 'helm', 'gauntlet', 'ring', 'amulet', 'necklace', 'wand', 'potion', 'scroll']);
 const FOODS = /bread|pork|mutton|cheese|apple|meat|pie|stew|snack|berry|fish|grape|jerky|ration/i;
 export async function makeRoom(agent, { keep = 10, min = 400 } = {}) {
