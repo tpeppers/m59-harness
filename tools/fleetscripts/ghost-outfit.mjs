@@ -52,7 +52,9 @@ export function outfitNeeds(items = []) {
   const names = items.map(i => String(i.name ?? ''));
   return {
     shield: !names.some(n => SHIELDISH.test(n)),
-    chain: !names.some(n => /chain|plate|scale/i.test(n)),
+    // BODY ARMOUR, not a word in a name: "blue dragon scale" is a reagent, and /scale/ alone let
+    // two raiders in leather count as armoured on 2026-09-25.
+    chain: !names.some(n => /(chain|plate|scale)\s+(armou?r|mail)/i.test(n)),
     hammer: !names.some(n => BLUNT.test(n.trim())),
   };
 }

@@ -139,6 +139,8 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   ok(bare.shield && bare.chain && bare.hammer, 'a swordsman in leather needs shield, chain and a hammer');
   const set = outfitNeeds([{ name: 'mace' }, { name: 'small round shield' }, { name: 'chain armor' }]);
   ok(!set.shield && !set.chain && !set.hammer, 'a mace counts as blunt; a worn shield and chain need nothing');
+  ok(outfitNeeds([{ name: 'leather armor' }, { name: 'blue dragon scale' }]).chain, 'a blue dragon scale is a reagent, not body armour');
+  ok(!outfitNeeds([{ name: 'scale armor' }]).chain, 'scale armor counts as chain or better');
   const needs = { a: { shield: true, chain: true, hammer: true }, b: { shield: true, chain: true, hammer: false } };
   const rich = planOutfit(needs, { budget: 100000, capacity: [{ agent: 'x', weight: 5000, bulk: 5000 }] });
   ok(rich.buys.length === 5 && rich.spend === 2 * 288 + 2 * 1800 + 810, 'with enough money and room, everything is bought');
