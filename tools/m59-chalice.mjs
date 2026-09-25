@@ -153,7 +153,33 @@ export const CHALICE_DEFAULTS = Object.freeze({
   reveal: true,
   // Unrevealed items one traveller may drop for revealing in one visit (3 orc teeth each).
   reveal_max: 3,
+
+  // THE HUMAN DESK. Operator, 2026-09-25: logging in as the holder used to switch the service
+  // off for the whole fleet, because the keeper that served was the thing the login displaced.
+  // With this on, a server whose body a person is playing (the broker writes that into this
+  // store) stays listed as serving, and a request is sent to that person as a tell instead of
+  // waiting for a keeper that is not coming. m59-research design/research-spec-human-service-bot.md.
+  human_desk: true,
+  // How long a traveller waits for a PERSON to hand the cup over before walking. Shorter than
+  // `wait_ms` on purpose: a keeper that has claimed the ticket is coming; a person may be AFK.
+  human_wait_ms: 60_000,
+  // Each "hold on" from the person buys this much more...
+  human_hold_ms: 120_000,
+  // ...up to this much in all, counted from the request. Past it the walk is taken whatever
+  // was said, because a promise nobody keeps is how a traveller stands in room 2 for an hour.
+  human_max_wait_ms: 300_000,
+  // How long a BOT server holds its offer open for a PERSON to counter. A keeper counters
+  // inside a second; a person has to find the trade window first.
+  human_offer_ms: 45_000,
+  // One tell per kind per server per this long. Five farmers in room 38 each asking for
+  // forces of light is one tell to a person, not five every thirty seconds.
+  human_tell_gap_ms: 90_000,
 });
+
+// A HUMAN MARK IS LIVE ONLY WHILE IT IS FRESH. The broker refreshes it every thirty seconds
+// while the client runs; a broker that died with a mark on disk must not leave the fleet
+// telling a person who logged off hours ago.
+export const HUMAN_FRESH_MS = 90_000;
 
 const NUMBERS = {
   station_room: [1, 100_000], max_detour_hops: [0, 20], wait_ms: [10_000, 900_000],
@@ -161,6 +187,9 @@ const NUMBERS = {
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
   restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000], rescue_emeralds: [0, 100],
+  human_wait_ms: [10_000, 600_000], human_hold_ms: [10_000, 900_000],
+  human_max_wait_ms: [30_000, 1_800_000], human_offer_ms: [8_000, 180_000],
+  human_tell_gap_ms: [0, 900_000],
 };
 
 /**
@@ -176,7 +205,7 @@ export function normalizeChalice(cfg = null) {
     if (k === 'enabled') continue;
     if (!Object.hasOwn(CHALICE_DEFAULTS, k)) { problems.push(`unrecognised key ${k}, not applied`); continue; }
     if (k === 'holder' || k === 'alternate') { out[k] = v == null ? null : String(v).trim() || null; continue; }
-    if (k === 'uncurse' || k === 'reveal') { out[k] = v !== false; continue; }
+    if (k === 'uncurse' || k === 'reveal' || k === 'human_desk') { out[k] = v !== false; continue; }
     if (k === 'holder_supply') {
       const supply = {};
       if (v && typeof v === 'object' && !Array.isArray(v))
@@ -233,6 +262,7 @@ export function normalizeChalice(cfg = null) {
     problems.push('the alternate is the holder — no alternate'); out.alternate = null;
   }
   if (out.tip_min > out.tip_amount) out.tip_min = out.tip_amount;
+  if (out.human_max_wait_ms < out.human_wait_ms) out.human_max_wait_ms = out.human_wait_ms;
   return { ...out, problems };
 }
 
@@ -364,7 +394,7 @@ export function roleOf(character, cfg) {
  */
 export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
                              carrying = false, duty = null, lastPlayerAttackAt = null,
-                             now = Date.now() } = {}) {
+                             humans = null, now = Date.now() } = {}) {
   if (!cfg?.enabled) return { ride: false, why: 'chalice farming is off' };
   if (role === 'holder') return { ride: false, why: 'the holder serves; its own trips are its own' };
   if (role === 'alternate' && carrying)
@@ -403,25 +433,141 @@ export function shouldRide({ cfg, role, stationHops = null, targetHops = null,
     return { ride: false, why: `the station is ${stationHops} hops away (limit ${cfg.max_detour_hops})` };
   if (Number.isFinite(targetHops) && stationHops >= targetHops)
     return { ride: false, why: 'the town is no further than the station' };
-  const server = servingCharacter(duty, cfg, now);
-  if (!server) return { ride: false, why: 'nobody is on chalice duty right now' };
-  return { ride: true, server, why: `${server} is on duty at ${cfg.station_room}` };
+  const desk = servingDesk(duty, cfg, now, humans);
+  if (!desk) return { ride: false, why: 'nobody is on chalice duty right now' };
+  if (desk.human)
+    return { ride: true, server: desk.server, human: true,
+             why: `${desk.server} is on duty at ${cfg.station_room}, played by a person — asking by tell` };
+  return { ride: true, server: desk.server, why: `${desk.server} is on duty at ${cfg.station_room}` };
 }
 
 /** Who is carrying the cup and serving, per the duty record. null when nobody is. */
-export function servingCharacter(duty, cfg, now = Date.now()) {
+export function servingCharacter(duty, cfg, now = Date.now(), humans = null) {
+  return servingDesk(duty, cfg, now, humans)?.server ?? null;
+}
+
+/**
+ * `{server, human}` — who is serving, and whether a PERSON is at its controls. null when
+ * nobody is.
+ *
+ * A PERSON PLAYING THE SERVER KEEPS THE DESK OPEN. The login displaces the keeper, so every
+ * keeper-written fact about it goes stale at once: `paused` stays wherever it was left and
+ * `seen_at` stops moving. Neither is evidence the service stopped — the person is standing
+ * there with the cup. Only `lost` still closes it, because a person cannot hand over a cup
+ * nobody has.
+ */
+export function servingDesk(duty, cfg, now = Date.now(), humans = null) {
   const d = duty ?? {};
-  if (!d.with) return cfg?.holder ?? null;          // never recorded: the holder, by default
+  const who = d.with || cfg?.holder || null;
+  if (!who) return null;
+  if (cfg?.human_desk !== false && humanMark(humans, who, now)) {
+    if (d.lost) return null;
+    return { server: who, human: true };
+  }
+  if (!d.with) return { server: who, human: false };   // never recorded: the holder, by default
   if (d.lost) return null;
   if (d.paused) return null;                         // its body is somebody else's right now
   // A record nobody has refreshed for a long while is a keeper that stopped, not a server.
   if (Number.isFinite(d.seen_at) && now - d.seen_at > 15 * 60_000) return null;
-  return d.with;
+  return { server: d.with, human: false };
 }
 
 /** Whoever should receive the holder's restock: the server on duty, else the holder. */
-export function servingOrHolder(duty, cfg) {
-  return servingCharacter(duty, cfg) ?? cfg?.holder ?? null;
+export function servingOrHolder(duty, cfg, humans = null) {
+  return servingCharacter(duty, cfg, Date.now(), humans) ?? cfg?.holder ?? null;
+}
+
+// ------------------------------------------------------------------------------ the human desk
+//
+// The broker is the only process that knows a person is at a client, and the keepers cannot
+// ask it (importing the broker RUNS it), so it writes that fact here: one mark per piloted
+// character, refreshed while the client lives. Everything below reads those marks.
+
+/** The live mark for `name`, or null. A mark goes dead when stale or when its client exits. */
+export function humanMark(humans, name, now = Date.now(), alive = pidAlive) {
+  if (!humans || !name) return null;
+  const m = humans[String(name).trim().toLowerCase()];
+  if (!m) return null;
+  if (!(now - (Number(m.seen_at) || 0) < HUMAN_FRESH_MS)) return null;
+  if (m.pid && !alive(m.pid)) return null;
+  return m;
+}
+
+/** The tell a requester sends a person. The operator's format, 2026-09-25. */
+export const serviceTellText = (what) => `~B~k[Service Request] ~b ${String(what).trim()}`;
+/** And what a server says back to a person who asked it for something. */
+export const serviceReplyText = (what) => `~B~k[Service] ~b ${String(what).trim()}`;
+
+// WHAT THE DESK OFFERS, with the reason for anything it cannot do right now. Labels are
+// what the person types back, so they are also what `parseDeskRequest` matches.
+export const DESK_SERVICES = Object.freeze([
+  { kind: 'uncurse', label: 'Remove Curse' },
+  { kind: 'reveal', label: 'Reveal' },
+  { kind: 'ride', label: 'Chalice' },
+  { kind: 'fol', label: 'Forces of Light' },
+]);
+
+/**
+ * The menu, computed by the server from what it holds. Pure.
+ *
+ * `have` is reagent counts; `floor` is what the server keeps back (the Rescue emeralds, see
+ * `reagentFloor`); `casts` is forces-of-light casts on hand above that floor; `cup` is
+ * whether this server carries the chalice. remcurse.kod:55 is one emerald; reveal.kod:55 is
+ * three orc teeth.
+ */
+export function deskMenu({ cfg, have = {}, floor = {}, casts = 0, cup = false } = {}) {
+  const spare = (k) => Math.max(0, (Number(have[k]) || 0) - (Number(floor[k]) || 0));
+  const out = [];
+  for (const s of DESK_SERVICES) {
+    if (s.kind === 'uncurse' && cfg?.uncurse === false) continue;
+    if (s.kind === 'reveal' && cfg?.reveal === false) continue;
+    if (s.kind === 'fol' && cfg?.fol_room == null) continue;
+    let why = null;
+    if (s.kind === 'uncurse' && spare('emerald') < 1) why = 'Req. reagents';
+    if (s.kind === 'reveal' && spare('orc tooth') < 3) why = 'Req. reagents';
+    if (s.kind === 'fol' && !(casts >= 1)) why = 'Req. reagents';
+    if (s.kind === 'ride' && !cup) why = 'cup is elsewhere';
+    out.push({ kind: s.kind, label: s.label, ok: !why, why });
+  }
+  return out;
+}
+
+/** "Remove Curse, Reveal ~r(-Req. reagents)~k, Chalice, Forces of Light" */
+export const formatDeskMenu = (menu = []) =>
+  menu.map(m => (m.ok ? m.label : `${m.label} ~r(-${m.why})~k`)).join(', ');
+
+const words = (text) => String(text ?? '').toLowerCase().replace(/[.!?,;:"']+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * What a PERSON asked a server for, by tell. The whole message must be the request — this is
+ * a desk, not a parser, and "can you remove curse later" is chat. null when it is not one.
+ */
+export function parseDeskRequest(text) {
+  const t = words(text);
+  if (!t) return null;
+  if (/^(services?|menu|list|what do you (offer|have))$/.test(t)) return { kind: 'menu' };
+  if (/^(cancel|never ?mind|nvm|forget it)$/.test(t)) return { kind: 'cancel' };
+  if (/^(remove ?curse|uncurse|remcurse)$/.test(t)) return { kind: 'uncurse' };
+  if (/^reveal$/.test(t)) return { kind: 'reveal' };
+  if (/^(chalice|chalice of the rain|ride|cup)$/.test(t)) return { kind: 'ride' };
+  const fol = t.match(/^(forces of light|forces|fol|light)(?: (?:in|into|at|room) ?(\d+))?$/);
+  if (fol) return { kind: 'fol', ...(fol[2] ? { room: Number(fol[2]) } : {}) };
+  return null;
+}
+
+/**
+ * What a PERSON serving said back to a requester's tell. `hold`: I am coming, wait for me.
+ * `decline`: not now, walk. `done`: served. null: not an answer to a request.
+ */
+export function parseDeskReply(text) {
+  const t = words(text);
+  if (!t) return null;
+  if (/^(done|served|there you go|all done|lit|cast)$/.test(t)) return { kind: 'done' };
+  if (/^(no|nope|can ?t|cannot|not now|busy|walk|go ahead|go|decline|declined|sorry|skip)( .*)?$/.test(t))
+    return { kind: 'decline' };
+  if (/^(hold on|hold|wait|one sec|1 sec|a sec|sec|one min|1 min|a min|min|moment|coming|brb|on my way|omw|ok|okay|sure|yes|yep)( .*)?$/.test(t))
+    return { kind: 'hold' };
+  return null;
 }
 
 /**
@@ -516,9 +662,13 @@ export class ChaliceStore {
   read() {
     try {
       const s = JSON.parse(readFileSync(this.path, 'utf8'));
-      return { v: 1, duty: s.duty ?? {}, fol: s.fol ?? {}, supply: s.supply ?? {},
+      // THE REST IS KEPT. This used to rebuild the state from four known keys, so any writer
+      // on older code erased whatever a newer one had added. `human`, `desk` and `told` are
+      // written by the broker and must survive a keeper's read-modify-write.
+      return { ...s, v: 1, duty: s.duty ?? {}, fol: s.fol ?? {}, supply: s.supply ?? {},
+               human: s.human ?? {}, desk: s.desk ?? {}, told: s.told ?? {},
                tickets: Array.isArray(s.tickets) ? s.tickets : [] };
-    } catch { return { v: 1, duty: {}, fol: {}, supply: {}, tickets: [] }; }
+    } catch { return { v: 1, duty: {}, fol: {}, supply: {}, human: {}, desk: {}, told: {}, tickets: [] }; }
   }
 
   /** Apply `fn(state) -> result` atomically. `fn` mutates the state it is given. */
@@ -564,13 +714,17 @@ export class ChaliceStore {
   }
 
   // ---- travellers
-  request(traveller, { room, kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms, items = null } = {}, now = Date.now()) {
+  // `human`: a PERSON filed this (the broker, on their tell), so the server answers at a
+  // person's pace. `server`: a person is SERVING it, so it was sent to them as a tell.
+  request(traveller, { room, kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms, items = null,
+                       human = false, server = null } = {}, now = Date.now()) {
     return this.update(s => {
       expire(s, now, ttlMs);
       const live = s.tickets.find(t => sameName(t.traveller, traveller) && t.kind === kind && isLive(t));
-      if (live) return { ...live };
+      if (live) return { ...live, existing: true };
       const t = { id: `${kind}-${now}-${Math.random().toString(36).slice(2, 7)}`, kind, traveller,
-                  room, at: now, status: 'open', by: null, updated_at: now, ...(items ? { items } : {}) };
+                  room, at: now, status: 'open', by: null, updated_at: now, ...(items ? { items } : {}),
+                  ...(human ? { human: true } : {}), ...(server ? { human_server: server } : {}) };
       s.tickets.push(t);
       return { ...t };
     }, now);
@@ -589,10 +743,13 @@ export class ChaliceStore {
 
   // ---- servers
   /** The oldest open ticket of `kind`, claimed for `by`; null when there is none. */
-  claimNext(by, { kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms } = {}, now = Date.now()) {
+  // `humanOnly`: only a ticket a PERSON filed. Uncurse and reveal tickets a keeper files are
+  // served inside its ride and read as `open` there, so claiming one would take it from that ride.
+  claimNext(by, { kind = 'ride', ttlMs = CHALICE_DEFAULTS.ticket_ttl_ms, humanOnly = false } = {}, now = Date.now()) {
     return this.update(s => {
       expire(s, now, ttlMs);
-      const t = s.tickets.filter(x => x.kind === kind && x.status === 'open' && !sameName(x.traveller, by))
+      const t = s.tickets.filter(x => x.kind === kind && x.status === 'open' && !sameName(x.traveller, by)
+                                  && (!humanOnly || x.human))
         .sort((a, b) => a.at - b.at)[0];
       if (!t) return null;
       Object.assign(t, { status: 'claimed', by, updated_at: now });
@@ -660,13 +817,100 @@ export class ChaliceStore {
       return { ...s.fol };
     }, now);
   }
+
+  // ---- the human desk: who a person is playing, and what a person said back
+
+  /** Every mark, dead ones included; `humanMark` decides which are live. */
+  humans() { return this.read().human ?? {}; }
+
+  /** The broker's record that a person is playing `character`. Refreshed while it lasts. */
+  setHuman(character, { agent = null, pid = null, since = null } = {}, now = Date.now()) {
+    const key = String(character ?? '').trim().toLowerCase();
+    if (!key) return null;
+    return this.update(s => {
+      const prior = s.human?.[key];
+      s.human = { ...(s.human ?? {}),
+        [key]: { character, agent, pid, since: since ?? prior?.since ?? now, seen_at: now } };
+      return { ...s.human[key] };
+    }, now);
+  }
+
+  clearHuman(character, now = Date.now()) {
+    const key = String(character ?? '').trim().toLowerCase();
+    return this.update(s => {
+      const was = s.human?.[key] ?? null;
+      if (s.human) delete s.human[key];
+      return was;
+    }, now);
+  }
+
+  /**
+   * "Hold on": every live ticket from `traveller` waits `ms` longer, never past `maxMs` from
+   * when it was filed. Returns the tickets it touched.
+   */
+  hold(traveller, { by = null, ms = CHALICE_DEFAULTS.human_hold_ms,
+                    maxMs = CHALICE_DEFAULTS.human_max_wait_ms } = {}, now = Date.now()) {
+    return this.update(s => {
+      const out = [];
+      for (const t of s.tickets) {
+        if (!isLive(t) || !sameName(t.traveller, traveller)) continue;
+        const until = Math.min(now + ms, (t.at ?? now) + maxMs);
+        Object.assign(t, { hold_until: Math.max(t.hold_until ?? 0, until), holds: (t.holds ?? 0) + 1,
+                           held_by: by, updated_at: now });
+        out.push({ ...t });
+      }
+      return out;
+    }, now);
+  }
+
+  /** "Not now" or "done": close every live ticket from `traveller`, saying who closed it. */
+  closeFrom(traveller, status, { by = null, note = null, kinds = null } = {}, now = Date.now()) {
+    return this.update(s => {
+      const out = [];
+      for (const t of s.tickets) {
+        if (!isLive(t) || !sameName(t.traveller, traveller)) continue;
+        if (kinds && !kinds.includes(t.kind)) continue;
+        Object.assign(t, { status, updated_at: now, by: t.by ?? by, note: note ?? t.note ?? null,
+                           closed_by: by });
+        out.push({ ...t });
+      }
+      return out;
+    }, now);
+  }
+
+  /**
+   * One tell per `key` per `gapMs`, fleet-wide. True means "you send it"; the stamp is taken
+   * in the same locked write, so two keepers cannot both win.
+   */
+  claimTell(key, gapMs = CHALICE_DEFAULTS.human_tell_gap_ms, now = Date.now()) {
+    return this.update(s => {
+      s.told = Object.fromEntries(Object.entries(s.told ?? {}).filter(([, at]) => now - at < 60 * 60_000));
+      if (now - (s.told[key] ?? 0) < gapMs) return false;
+      s.told[key] = now;
+      return true;
+    }, now);
+  }
+
+  /** The server's own menu, so whoever answers "services?" answers from its facts. */
+  desk() { return this.read().desk ?? {}; }
+
+  // `limits`: the server's own hold and wait numbers, so the broker honours the strategy's
+  // configuration without having to load the strategy itself.
+  setDesk(server, { menu = [], room = null, fol_room = null, limits = null } = {}, now = Date.now()) {
+    const key = String(server ?? '').trim().toLowerCase();
+    if (!key) return null;
+    return this.update(s => {
+      s.desk = { ...(s.desk ?? {}), [key]: { server, menu, room, fol_room, ...(limits ? { limits } : {}), at: now } };
+      return { ...s.desk[key] };
+    }, now);
+  }
 }
 
 const isLive = t => !['done', 'abandoned'].includes(t.status);
 
 function expire(s, now, ttlMs) {
   for (const t of s.tickets)
-    if (isLive(t) && now - (t.updated_at ?? t.at) > ttlMs)
+    if (isLive(t) && now - (t.updated_at ?? t.at) > ttlMs && !(Number(t.hold_until) > now))
       Object.assign(t, { status: 'abandoned', note: 'expired', updated_at: now });
 }
 

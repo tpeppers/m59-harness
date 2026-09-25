@@ -14,6 +14,11 @@ import { join } from 'node:path';
 import { Autopilot } from './m59-autopilot.mjs';
 import { OF } from './m59-parse.mjs';
 import { ChaliceStore, normalizeChalice, GUILD_HALL_ROOM } from './m59-chalice.mjs';
+import * as party from './m59-party.mjs';
+
+// THE FLEET, for the human desk's fleetmate gate. Stranger is deliberately absent.
+party.setRosterSource(() => new Set(['Loial the Ogier', 'Rizzo', 'Kermit', 'Pepe', 'Gonzo', 'Zoot',
+  'Beaker', 'Bunsen', 'Animal', 'Floyd', 'Janice', 'Lew', 'Scooter', 'Statler', 'Clifford']));
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; console.log('  ok  ', what); } else { fail++; console.log('  FAIL', what); } };
@@ -24,7 +29,7 @@ function makeWorld() {
   let nextId = 5000;
   const names = new Map();              // rsc -> name
   const rsc = (name) => { const r = 90000 + names.size; names.set(r, name); return r; };
-  const world = { players: new Map(), floor: new Map(), names, landings: [], counters: new Map() };
+  const world = { players: new Map(), floor: new Map(), names, landings: [], counters: new Map(), tells: [] };
   // A COUNTER: what one merchant room sells and for how much. Enough for chaliceBuyCargo,
   // which opens a shop, matches a row by name and buys it.
   world.counter = (room, items) => world.counters.set(room, { sellerId: 7000 + room,
@@ -57,9 +62,25 @@ function makeWorld() {
           if (into) into.amount += take; else client.inventory.push(world.item(row.name, take));
         }
       },
+      // TELLS: the who list is everybody in the world; a tell is recorded and echoed.
+      players() {},
+      get playersOnline() {
+        return new Map([...world.players.values()].map(q => [q.self.id, { id: q.self.id, name: q.name }]));
+      },
+      sayGroup(ids, text) {
+        for (const id of ids) {
+          const to = [...world.players.values()].find(q => q.self.id === id);
+          if (to) world.tells.push({ from: name, to: to.name, text, at: Date.now() });
+        }
+        client._said = text;
+      },
       offer(toId, items) { client._offer = { toId, items }; },
       cancelOffer() { client._offer = null; },
       async waitFor({ kinds = [] } = {}) {
+        if (kinds.includes('said') && client._said != null) {
+          const text = client._said; client._said = null;
+          return { events: [{ kind: 'said', speaker: client.selfId, text }] };
+        }
         if (kinds.includes('countered') && client._offer) {
           const to = [...world.players.values()].find(q => q.self.id === client._offer.toId);
           if (to && to.room === p.room && to.client.accepts) return { events: [{ kind: 'countered' }] };
@@ -608,6 +629,199 @@ try {
     ok(ap.hopsTo(77) === null, 'no route is null');
     ap.s = { world: { route: () => { throw new Error('a snapshot, not a World'); } } };
     ok(ap.hopsTo(2) === null, 'a World that cannot answer is null, never a number');
+  }
+
+  // =======================================================================================
+  // THE HUMAN DESK (operator, 2026-09-25). A PERSON plays Loial: no keeper runs for him, the
+  // broker's mark in the store says so, and this test drives his hands the way a person would
+  // — reading tells, offering the cup, picking it up off the floor.
+  // =======================================================================================
+  const personAt = (store, name) => store.setHuman(name, { agent: 'hk1', pid: process.pid });
+  // One pass of a person at Loial's keyboard: answer a chalice tell by offering the cup to
+  // whoever sent it (if they are here), and pick the cup up when it is on the floor.
+  const personHands = (world, meP, { offer = true } = {}) => async () => {
+    const c = meP.client;
+    const cup = c.inventory.find(x => /chalice/i.test(world.nameOf(x)));
+    const ask = world.tells.find(t => t.to === meP.name && /\[Service Request\] ~b chalice/.test(t.text) && !t.seen);
+    if (offer && cup && ask) {
+      const them = world.players.get(ask.from);
+      if (them && them.room === meP.room) {
+        ask.seen = true;
+        c.offer(them.self.id, [cup.id]);
+        const ev = await c.waitFor({ kinds: ['countered'] });
+        if (ev.events.some(e => e.kind === 'countered')) c.acceptOffer();
+      }
+    }
+    const floor = world.floor.get(meP.room) ?? [];
+    const i = floor.findIndex(x => /chalice/i.test(world.nameOf(x)));
+    if (i >= 0) c.inventory.push(...floor.splice(i, 1));
+  };
+
+  section('a person plays Loial: the ride is asked for by tell, handed by hand, and nothing is tipped');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-ride' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    // HIS KEEPER'S LAST WORDS before the login displaced it: paused, and about to go stale.
+    store.setDuty({ with: 'Loial the Ogier', paused: true });
+    personAt(store, 'Loial the Ogier');
+    const kermitP = world.add('Kermit', { room: 38, inventory: [world.item('shillings', 1500)] });
+    const kermit = keeper(world, kermitP, { cfg, store });
+    const trip = { target: { room: 113, hops: 9 } };
+    await runUntil(() => ['done', 'off'].includes(trip.chalice?.stage), [
+      async () => { world.tick(); if (!['done', 'off'].includes(trip.chalice?.stage)) await kermit.chaliceRide(trip); },
+      personHands(world, loialP),
+    ]);
+    ok(trip.chalice?.stage === 'done', `Kermit landed (stage ${trip.chalice?.stage}, why ${trip.chalice?.why ?? '-'})`);
+    const tell = world.tells.find(t => t.from === 'Kermit' && t.to === 'Loial the Ogier');
+    ok(tell?.text === '~B~k[Service Request] ~b chalice', `the tell is the operator's format (${tell?.text})`);
+    ok(kermit.events.some(e => e.what === "desk_tell" && e.sent === true), `and the ledger says it was echoed (${JSON.stringify(kermit.events.filter(e => e.what === "desk_tell"))})`);
+    ok(kermit.events.some(e => e.what === 'requested' && e.human), 'the request is marked as to a person');
+    ok(kermit.events.some(e => e.what === 'received' && e.human && Number.isFinite(e.waited_ms)), 'so is the hand-over, with the wait');
+    ok(coins(world, kermitP) === 1500, 'no tip: a person is not sent a second trade window');
+    ok(kermit.events.some(e => e.what === 'tip' && e.human && e.amount === 0), 'and the ledger says why');
+    await personHands(world, loialP)();
+    ok(has(world, loialP, /chalice/i), 'the person picked the cup back up');
+    ok(store.read().tickets.every(t => t.status === 'done'), 'the ticket is closed by the traveller, not left to expire');
+  }
+
+  section('"hold on" keeps the traveller waiting; "not now" sends it walking at once');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-hold' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    personAt(store, 'Loial the Ogier');
+    const zootP = world.add('Zoot', { room: 38 });
+    const zoot = keeper(world, zootP, { cfg, store });
+    const trip = { target: { room: 113, hops: 9 } };
+    for (let i = 0; i < 4 && trip.chalice?.stage !== 'wait'; i++) await zoot.chaliceRide(trip);
+    ok(trip.chalice.stage === 'wait', `waiting for the person (${trip.chalice.stage})`);
+    ok(trip.chalice.deadline - trip.chalice.requestedAt === cfg.human_wait_ms, 'a person gets human_wait_ms, not wait_ms');
+    store.hold('Zoot', { by: 'Loial the Ogier', ms: cfg.human_hold_ms, maxMs: cfg.human_max_wait_ms });
+    trip.chalice.deadline = Date.now() - 1;          // the first minute is up
+    const r = await zoot.chaliceRide(trip);
+    ok(!r.skip && trip.chalice.stage === 'wait', 'held: still waiting past the first minute');
+    ok(zoot.events.some(e => e.what === 'desk_held'), 'and the hold is on the ledger');
+
+    const trip2 = { target: { room: 113, hops: 9 } };
+    const beakerP = world.add('Beaker', { room: 38 });
+    const beaker = keeper(world, beakerP, { cfg, store });
+    for (let i = 0; i < 4 && trip2.chalice?.stage !== 'wait'; i++) await beaker.chaliceRide(trip2);
+    store.closeFrom('Beaker', 'abandoned', { by: 'Loial the Ogier', note: 'declined by Loial the Ogier' });
+    const d = await beaker.chaliceRide(trip2);
+    ok(d.skip && /said not now/.test(d.why), `walked at once: ${d.why}`);
+    ok(beaker.events.some(e => e.what === 'ride_skipped' && e.declined), 'recorded as the person\'s decline');
+  }
+
+  section('an AFK person costs a minute, and says so; a person logging out hands back to the keeper');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-afk' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    personAt(store, 'Loial the Ogier');
+    const gonzoP = world.add('Gonzo', { room: 38 });
+    const gonzo = keeper(world, gonzoP, { cfg, store });
+    const trip = { target: { room: 113, hops: 9 } };
+    for (let i = 0; i < 4 && trip.chalice?.stage !== 'wait'; i++) await gonzo.chaliceRide(trip);
+    trip.chalice.deadline = Date.now() - 1;
+    const r = await gonzo.chaliceRide(trip);
+    ok(r.skip && /played by a person\) did not hand/.test(r.why), `walked: ${r.why}`);
+    ok(gonzo.events.some(e => e.what === 'ride_skipped' && e.human && Number.isFinite(e.waited_ms)),
+       'the ledger row names the person and the wait — this is the "am I blocking" row');
+
+    const trip2 = { target: { room: 113, hops: 9 } };
+    const pepeP = world.add('Pepe', { room: 38 });
+    const pepe = keeper(world, pepeP, { cfg, store });
+    for (let i = 0; i < 4 && trip2.chalice?.stage !== 'wait'; i++) await pepe.chaliceRide(trip2);
+    store.clearHuman('Loial the Ogier');
+    await pepe.chaliceRide(trip2);
+    ok(pepe.events.some(e => e.what === 'desk_human_left'), 'the logout is noticed mid-wait');
+    ok(trip2.chalice.deadline - trip2.chalice.requestedAt >= cfg.wait_ms, 'and it now waits as for a keeper');
+  }
+
+  section('forces of light: five in the room is one tell to a person, not five');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-fol' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2, fol_room: 38 });
+    world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    personAt(store, 'Loial the Ogier');
+    const farmers = ['Animal', 'Floyd', 'Janice', 'Lew', 'Scooter'].map(n => keeper(world, world.add(n, { room: 38 }), { cfg, store }));
+    for (const f of farmers) f.chaliceFolWatch();
+    await new Promise(r => setTimeout(r, 50));
+    const tells = world.tells.filter(t => t.to === 'Loial the Ogier');
+    ok(tells.length === 1, `one tell (${tells.length})`);
+    ok(/forces of light \(38\)/.test(tells[0]?.text ?? ''), `naming the room (${tells[0]?.text})`);
+    ok(store.read().tickets.filter(t => t.kind === 'fol').length === 5, 'every farmer still filed its ticket');
+  }
+
+  section('the reverse: a person asks bot Loial for remove curse, and he casts it on them');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-asks' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain'), world.item('emerald', 20)] });
+    const loial = keeper(world, loialP, { cfg, store });
+    const cast = [];
+    loial.chaliceCast = async (name, target) => { cast.push({ name, target }); return { cast: true }; };
+    // A keeper's own uncurse, filed during its ride, must stay with that ride.
+    store.request('Kermit', { kind: 'uncurse', room: 2 });
+    const bunsenP = world.add('Bunsen', { room: 39 });
+    store.request('Bunsen', { kind: 'uncurse', room: 2, human: true });
+    await loial.chaliceDuty();
+    ok(loial._chaliceServe?.kind === 'desk', `he took the person's ticket (${loial._chaliceServe?.kind})`);
+    ok(store.openFrom('Kermit', ['uncurse']).length === 1, 'and not the keeper\'s');
+    await loial.chaliceDuty();
+    ok(cast.length === 0, 'nothing is cast at an empty room');
+    bunsenP.room = 2;
+    await runUntil(() => !loial._chaliceServe, [async () => { await loial.chaliceDuty(); }], { limit: 20 });
+    ok(cast.filter(c => c.name === 'remove curse' && c.target === bunsenP.self.id).length === 3, 'remove curse x3 on Bunsen');
+    ok(loial.events.some(e => e.what === 'desk_served' && e.for === 'Bunsen'), 'recorded as served');
+    ok(store.read().desk?.['loial the ogier']?.menu?.some(m => m.kind === 'uncurse'), 'and his menu is published for "services?"');
+  }
+
+  section('the reverse, chalice: a person is told what to do with the window, and given longer to do it');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-asks-ride' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain')] });
+    const loial = keeper(world, loialP, { cfg, store });
+    world.add('Bunsen', { room: 2 });
+    let counterMs = null;
+    const give = loial.chaliceGive.bind(loial);
+    loial.chaliceGive = (to, items, o) => { counterMs = o.counterMs; return give(to, items, o); };
+    store.request('Bunsen', { kind: 'ride', room: 2, human: true });
+    await runUntil(() => loial.events.some(e => e.what === 'handed'), [async () => { await loial.chaliceDuty(); }], { limit: 20 });
+    ok(counterMs === cfg.human_offer_ms, `the offer waits human_offer_ms for a person to counter (${counterMs})`);
+    const told = world.tells.find(t => t.from === 'Loial the Ogier' && t.to === 'Bunsen');
+    ok(/^~B~k\[Service\] ~b offering you the chalice/.test(told?.text ?? ''), `and says how (${told?.text})`);
+    ok(loial.events.some(e => e.what === 'handed' && e.human), 'handed, marked as to a person');
+  }
+
+  section('fleetmates only: a person-filed ticket from a stranger is refused, not served');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'human-stranger' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain'), world.item('emerald', 20)] });
+    const loial = keeper(world, loialP, { cfg, store });
+    const cast = [];
+    loial.chaliceCast = async (name, target) => { cast.push({ name, target }); return { cast: true }; };
+    world.add('Stranger', { room: 2 });
+    const t = store.request('Stranger', { kind: 'uncurse', room: 2, human: true });
+    const r = store.request('Stranger', { kind: 'ride', room: 2, human: true });
+    for (let i = 0; i < 4; i++) await loial.chaliceDuty();
+    ok(cast.length === 0, 'nothing is cast for a stranger');
+    ok(store.ticket(t.id).status === 'abandoned' && store.ticket(r.id).status === 'abandoned', 'both tickets closed');
+    ok(has(world, loialP, /chalice/i), 'and the cup never left the pack');
+    ok(loial.events.some(e => e.what === 'desk_refused' && /not a fleetmate/.test(e.why)), 'with the reason on the ledger');
+    const told = await loial.chaliceTell('Stranger', 'chalice');
+    ok(told.sent === false && /not a fleetmate/.test(told.why), `and no tell goes to one (${told.why})`);
+    ok(!world.tells.some(x => x.to === 'Stranger'), 'none was sent');
   }
 
 } finally {

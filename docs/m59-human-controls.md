@@ -51,6 +51,19 @@ stranger gets replies. Replies are bounded private tells; general small talk sta
 under its existing opt-in policy. The chat reader consumes the keeper's real chat
 ring, including tells and other speech channels, independently of chatter opt-in.
 
+## Service desk (chalice, remove curse, reveal, forces of light)
+
+Playing a service character no longer switches its services off. The broker marks every
+piloted character in the chalice store; a traveller whose server is marked sends that person
+`~B~k[Service Request] ~b chalice` and waits `human_wait_ms` (60s). Reply to the bot:
+`hold on` (+2 min, capped at 5), `not now` (it walks at once), `done`. Playing anyone else,
+tell the serving bot `services?` for its menu, then the service name (`Remove Curse`,
+`Reveal`, `Chalice`, `Forces of Light`) or `cancel`. These are handled before `control`, by
+`tools/m59-desk-chat.mjs`, with the same pilot authentication. Ledger rows are `kind: chalice`,
+`what: desk_*`; `node tools/m59-desk-report.mjs --fleet <fleet>` answers whether a session at
+the controls left anybody unserved. Full spec: m59-research
+`design/research-spec-human-service-bot.md`.
+
 ## Ownership and restart semantics
 
 Keeper order edits become per-bot human overrides in DUM's ignored runtime control

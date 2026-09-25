@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
          servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS,
-         reagentFloor, castsAbove } from './m59-chalice.mjs';
+         reagentFloor, castsAbove, servingDesk, humanMark, HUMAN_FRESH_MS, deskMenu, formatDeskMenu,
+         parseDeskRequest, parseDeskReply, serviceTellText } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -274,6 +275,118 @@ section('the holder keeps its Rescue emeralds back from forces of light');
   eq(Object.keys(reagentFloor(off, 'holder')).length, 0, 'rescue_emeralds 0 switches the floor off');
   const bad = normalizeChalice({ holder: 'x', station_room: 2, rescue_emeralds: -4 });
   eq(bad.rescue_emeralds, 3, 'a negative floor keeps the default');
+}
+
+
+// ---------------------------------------------------------------------------------------
+section('the human desk: a person playing the server keeps the service listed');
+{
+  const now = Date.now();
+  const mark = { character: 'Loial the Ogier', agent: 'hk1', pid: process.pid, since: now - 60_000, seen_at: now - 5_000 };
+  const humans = { 'loial the ogier': mark };
+  // THE LOGIN DISPLACES THE KEEPER, so its own facts go stale together: paused where it was
+  // left, seen_at frozen. Neither may close the desk while a person is there.
+  const frozen = { with: 'Loial the Ogier', paused: true, seen_at: now - 60 * 60_000 };
+  eq(servingDesk(frozen, CFG, now, null), null, 'without the mark, the stale record reads as nobody serving');
+  const d = servingDesk(frozen, CFG, now, humans);
+  eq(d?.server, 'Loial the Ogier', 'with it, Loial is still serving');
+  eq(d?.human, true, 'and the desk knows a person is at the controls');
+  eq(servingDesk({ with: 'Loial the Ogier', lost: true }, CFG, now, humans), null, 'a lost cup still closes it');
+  eq(servingDesk({}, CFG, now, humans)?.human, true, 'never recorded: the holder, played by a person');
+  eq(servingDesk({ with: 'Rizzo' }, CFG, now, humans)?.human, false, 'the alternate with the cup is a keeper, not the person');
+  const stale = { 'loial the ogier': { ...mark, seen_at: now - HUMAN_FRESH_MS - 1 } };
+  eq(humanMark(stale, 'Loial the Ogier', now), null, 'a mark the broker stopped refreshing is dead');
+  eq(humanMark(humans, 'LOIAL THE OGIER', now) != null, true, 'names match without case');
+  eq(humanMark(humans, 'Loial the Ogier', now, () => false), null, 'a mark whose client exited is dead');
+  const off = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, human_desk: false });
+  eq(servingDesk(frozen, off, now, humans), null, 'human_desk: false restores the old behaviour');
+  const r = shouldRide({ cfg: CFG, role: 'traveller', stationHops: 1, targetHops: 9, duty: frozen, humans, now });
+  eq(r.ride, true, 'a traveller rides to a person');
+  eq(r.human, true, 'and knows to ask by tell');
+  eq(serviceTellText('chalice'), '~B~k[Service Request] ~b chalice', 'the operator\'s tell format, exactly');
+  eq(CFG.human_wait_ms, 60_000, 'a person gets a minute by default');
+  const clamp = normalizeChalice({ holder: 'x', station_room: 2, human_wait_ms: 200_000, human_max_wait_ms: 60_000 });
+  eq(clamp.human_max_wait_ms, 200_000, 'the cap is never below the first wait');
+}
+
+section('the desk menu says what cannot be done and why');
+{
+  const menu = deskMenu({ cfg: normalizeChalice({ holder: 'x', station_room: 2, fol_room: 38 }),
+    have: { emerald: 20, 'orc tooth': 1 }, floor: { emerald: 3 }, casts: 5, cup: true });
+  eq(formatDeskMenu(menu), 'Remove Curse, Reveal ~r(-Req. reagents)~k, Chalice, Forces of Light',
+     'the operator\'s example, word for word');
+  const dry = deskMenu({ cfg: CFG, have: { emerald: 3, 'orc tooth': 9 }, floor: { emerald: 3 }, casts: 0, cup: false });
+  eq(dry.find(m => m.kind === 'uncurse').ok, false, 'remove curse may not spend the rescue emeralds');
+  eq(dry.find(m => m.kind === 'reveal').ok, true, 'three teeth pay for a reveal');
+  eq(dry.find(m => m.kind === 'ride').why, 'cup is elsewhere', 'no cup, no chalice');
+  eq(deskMenu({ cfg: normalizeChalice({ holder: 'x', station_room: 2 }), have: {}, cup: true })
+       .some(m => m.kind === 'fol'), false, 'no fol_room, no forces of light on the menu');
+}
+
+section('what a person types is parsed whole, not searched');
+{
+  const k = (t) => parseDeskRequest(t)?.kind ?? null;
+  eq(k('services?'), 'menu', '"services?"');
+  eq(k('Services'), 'menu', '"Services"');
+  eq(k('Remove Curse'), 'uncurse', '"Remove Curse"');
+  eq(k('reveal'), 'reveal', '"reveal"');
+  eq(k('Chalice'), 'ride', '"Chalice"');
+  eq(k('Forces of Light'), 'fol', '"Forces of Light"');
+  eq(parseDeskRequest('fol in 39')?.room, 39, 'forces of light names its room');
+  eq(k('cancel'), 'cancel', '"cancel"');
+  eq(k('can you remove curse later'), null, 'a sentence that contains a service is chat');
+  eq(k('control'), null, '"control" belongs to the fleet controls');
+  const r = (t) => parseDeskReply(t)?.kind ?? null;
+  eq(r('hold on'), 'hold', '"hold on"');
+  eq(r('wait, coming'), 'hold', '"wait, coming"');
+  eq(r('1 min'), 'hold', '"1 min"');
+  eq(r('not now'), 'decline', '"not now"');
+  eq(r("can't"), 'decline', '"can\'t"');
+  eq(r('done'), 'done', '"done"');
+  eq(r('where are you going?'), null, 'anything else is not an answer');
+}
+
+section('the store: marks, holds, closes, one tell per gap, and nothing lost to an older writer');
+{
+  const dir2 = mkdtempSync(join(tmpdir(), 'chalice-human-'));
+  try {
+    const store = new ChaliceStore({ directory: dir2, namespace: 'h' });
+    const t0 = 1_000_000;
+    store.setHuman('Loial the Ogier', { agent: 'hk1', pid: 1 }, t0);
+    eq(store.humans()['loial the ogier'].since, t0, 'marked');
+    store.setHuman('Loial the Ogier', { agent: 'hk1', pid: 1 }, t0 + 30_000);
+    eq(store.humans()['loial the ogier'].since, t0, 'a refresh keeps when it started');
+    eq(store.humans()['loial the ogier'].seen_at, t0 + 30_000, 'and moves seen_at');
+    // AN OLDER KEEPER'S READ-MODIFY-WRITE used to rebuild the state from four keys.
+    store.setDuty({ with: 'Loial the Ogier' }, t0 + 31_000);
+    ok(store.humans()['loial the ogier'], 'a duty write does not erase the mark');
+
+    const t = store.request('Bunsen', { room: 2, server: 'Loial the Ogier' }, t0 + 40_000);
+    eq(t.human_server, 'Loial the Ogier', 'the ticket records who it was sent to');
+    const held = store.hold('Bunsen', { by: 'Loial the Ogier', ms: 120_000, maxMs: 300_000 }, t0 + 50_000);
+    eq(held[0].hold_until, t0 + 170_000, 'hold on: two more minutes');
+    const capped = store.hold('Bunsen', { ms: 900_000, maxMs: 300_000 }, t0 + 60_000);
+    eq(capped[0].hold_until, t0 + 40_000 + 300_000, 'never past the cap from the request');
+    eq(capped[0].holds, 2, 'and counted');
+    // A HELD TICKET OUTLIVES ITS TTL until the hold runs out.
+    store.claimNext('Nobody', { kind: 'fol', ttlMs: 60_000 }, t0 + 200_000);
+    eq(store.ticket(t.id).status, 'open', 'held past the ttl, still open');
+    const shut = store.closeFrom('Bunsen', 'abandoned', { by: 'Loial the Ogier', note: 'declined' }, t0 + 210_000);
+    eq(shut.length, 1, 'not now closes it');
+    eq(store.ticket(t.id).closed_by, 'Loial the Ogier', 'and says who');
+
+    eq(store.claimTell('fol:loial', 90_000, t0), true, 'the first tell goes');
+    eq(store.claimTell('fol:loial', 90_000, t0 + 30_000), false, 'the second inside the gap does not');
+    eq(store.claimTell('fol:loial', 90_000, t0 + 91_000), true, 'after the gap it does');
+
+    const mine = store.request('Kermit', { kind: 'uncurse', room: 2 }, t0 + 300_000);
+    const theirs = store.request('Bunsen', { kind: 'uncurse', room: 2, human: true }, t0 + 301_000);
+    const got = store.claimNext('Loial the Ogier', { kind: 'uncurse', humanOnly: true, ttlMs: 300_000 }, t0 + 302_000);
+    eq(got?.id, theirs.id, 'the desk claims only the ticket a person filed');
+    eq(store.ticket(mine.id).status, 'open', 'a keeper\'s own uncurse stays with its ride');
+    eq(store.clearHuman('Loial the Ogier')?.agent, 'hk1', 'unmarked');
+    eq(Object.keys(store.humans()).length, 0, 'and gone');
+  } finally { rmSync(dir2, { recursive: true, force: true }); }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

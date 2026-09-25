@@ -73,7 +73,7 @@ import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan,
-         reagentFloor, castsAbove } from './m59-chalice.mjs';
+         reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu } from './m59-chalice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -21605,7 +21605,18 @@ export class Autopilot {
       .map(([k, n]) => [k, Math.min(n, this.reagentOnHand(k))]).filter(([, n]) => n > 0));
     const drop = () => { this._holderCargo = null; try { store.unpledge(this.who()); } catch {} return false; };
     if (!Object.keys(give).length || Date.now() - cargo.at > 60 * 60_000 || cargo.tries > 6) return drop();
-    const server = servingOrHolder(store.duty(), cfg);
+    const humans = store.humans();
+    const server = servingOrHolder(store.duty(), cfg, humans);
+    // A PERSON AT THE SERVER'S CONTROLS WOULD HAVE TO COUNTER A TRADE NOBODY ASKED THEM FOR,
+    // inside eight seconds, six times over. The cargo keeps for an hour; it is delivered when
+    // the keeper is back rather than spent as `tries` against somebody playing.
+    if (humanMark(humans, server)) {
+      if (!cargo.humanSaid) {
+        cargo.humanSaid = true;
+        this.chaliceEvent('cargo_held', { to: server, why: 'the server is played by a person — delivering once the keeper is back' });
+      }
+      return false;
+    }
     const hops = this.hereRoom() === cfg.station_room ? 0 : this.hopsTo(cfg.station_room);
     if (!Number.isFinite(hops) || hops > cfg.max_detour_hops + 8) return false;   // not on our road yet
     if (hops > 0) {
@@ -21640,28 +21651,119 @@ export class Autopilot {
   async chaliceServeServices(traveller, store) {
     const open = store.openFrom(traveller, ['uncurse', 'reveal']);
     if (!open.length) return false;
-    const t = open[0];
+    await this.chaliceServeTicket(open[0], store);
+    return true;
+  }
+
+  /** Cast one uncurse or reveal ticket for whoever filed it, and close it. */
+  async chaliceServeTicket(t, store) {
+    const traveller = t.traveller;
     const them = this.playerHere(traveller);
     if (t.kind === 'uncurse') {
       if (them && this.reagentOnHand('emerald') >= 1)
         for (let i = 0; i < 3; i++) await this.chaliceCast('remove curse', them.id);
       store.mark(t.id, 'done', { note: them ? 'cast remove curse x3' : 'traveller not here' });
-      this.chaliceEvent('uncursed', { for: traveller, cast: !!them });
-      return true;
+      this.chaliceEvent('uncursed', { for: traveller, cast: !!them, ...(t.human ? { human: true } : {}) });
+      return;
     }
     // REVEAL reaches only the caster's own pack or the floor it stands on (reveal.kod:94), so
     // the traveller dropped the items here. Three orc teeth and thirty mana each.
-    const floorIds = new Set([...(this.s.client?.room?.objects?.values?.() ?? [])].map(o => o.id));
+    //
+    // A PERSON'S TICKET NAMES NO ITEMS — they said "reveal" and dropped things. So the floor is
+    // read for what is still unrevealed (rarity 100 travels on every object, m59-items.mjs),
+    // which also means nothing already identified costs a tooth.
+    const floor = [...(this.s.client?.room?.objects?.values?.() ?? [])];
+    const floorIds = new Set(floor.map(o => o.id));
+    const items = t.items ?? floor
+      .filter(o => (o.flags & OF.GETTABLE) && !(o.flags & OF.PLAYER) && skills.isUnrevealed(o))
+      .slice(0, this.chaliceCfg?.reveal_max ?? 3)
+      .map(o => ({ id: o.id, name: this.s.client?.rsc?.get?.(o.nameRsc) ?? '' }));
     let done = 0;
-    for (const item of t.items ?? []) {
+    for (const item of items) {
       if (!floorIds.has(item.id)) continue;
       if (this.reagentOnHand('orc tooth') < 3) break;
       const r = await this.chaliceCast('reveal', item.id);
       if (r.cast) done++;
     }
-    store.mark(t.id, 'done', { note: `reveal cast on ${done} of ${(t.items ?? []).length}` });
-    this.chaliceEvent('revealed', { for: traveller, cast_on: done, asked: (t.items ?? []).length });
-    return true;
+    store.mark(t.id, 'done', { note: `reveal cast on ${done} of ${items.length}` });
+    this.chaliceEvent('revealed', { for: traveller, cast_on: done, asked: items.length,
+      ...(t.human ? { human: true } : {}) });
+  }
+
+  // ------------------------------------------------------------------ the human desk
+  //
+  // Operator, 2026-09-25 (m59-research design/research-spec-human-service-bot.md). When a PERSON is
+  // playing the server, a request goes to them as a tell rather than waiting for a keeper the
+  // login displaced. Every tell is a ledger row — `desk_tell`, with whether the server echoed
+  // it — because "is the operator still blocking the fleet" is answered from those rows.
+
+  /**
+   * A ticket a PERSON filed is served only for a fleetmate. The broker already refuses anyone
+   * else; this is the server's own check, so a ticket that got into the store some other way
+   * is closed with a reason instead of served. Keeper-filed tickets pass untouched.
+   */
+  chaliceFleetOnly(t, store) {
+    if (!t || !t.human || party.isFleetmate(t.traveller)) return t;
+    try { store.mark(t.id, 'abandoned', { note: `${t.traveller} is not a fleetmate` }); } catch {}
+    this.chaliceEvent('desk_refused', { ticket: t.id, for: t.traveller, service: t.kind,
+      why: 'not a fleetmate', human: true });
+    return null;
+  }
+
+  /** The live human mark for the character serving, or null. */
+  chaliceHumanServer(store, server) {
+    const cfg = this.chaliceCfg;
+    if (!cfg || cfg.human_desk === false || !server) return null;
+    try { return humanMark(store.humans(), server); } catch { return null; }
+  }
+
+  /**
+   * `~B~k[Service Request] ~b <what>` to `to`, by name. A tell costs one mana and a refusal
+   * is prose, so `echoed` is the only evidence it went. Never throws.
+   */
+  async chaliceTell(to, what, detail = {}, { reply = false } = {}) {
+    const s = this.s, c = s?.client;
+    const text = reply ? serviceReplyText(what) : serviceTellText(what);
+    const record = (sent, why = null) => {
+      this.chaliceEvent('desk_tell', { to, said: what, sent, ...(reply ? { reply: true } : {}), ...(why ? { why } : {}), ...detail });
+      return { sent, why };
+    };
+    if (!c?.sayGroup) return record(false, 'no client to speak with');
+    // FLEETMATES ONLY (operator, 2026-09-25): a service tell goes to one of our own characters
+    // or nowhere. Every recipient here comes from the store, never from what somebody said,
+    // and this says so in code rather than trusting that it always will.
+    if (!party.isFleetmate(to)) return record(false, `${to} is not a fleetmate`);
+    try {
+      const asked = c.evSeq;
+      await s.pacer.submit('read', () => c.players());
+      await c.waitFor({ since: asked, kinds: ['who'], timeoutMs: 3000 }).catch(() => {});
+      const hit = [...(c.playersOnline?.values?.() ?? [])].find(p => sameName(p.name, to));
+      if (!hit) return record(false, `${to} is not on the who list`);
+      const sent = c.evSeq;
+      await s.pacer.submit('say', () => c.sayGroup([hit.id], text));
+      const ev = await c.waitFor({ since: sent, kinds: ['said', 'message'], timeoutMs: 2500 })
+        .catch(() => ({ events: [] }));
+      const echoed = (ev.events ?? []).some(e => e.kind === 'said' && e.speaker === c.selfId);
+      if (echoed) return record(true);
+      const said = (ev.events ?? []).find(e => e.kind === 'message' && e.text)?.text;
+      return record(false, said ? `server said: ${String(said).slice(0, 120)}` : 'not echoed — short of mana?');
+    } catch (e) { return record(false, e.message); }
+  }
+
+  /**
+   * THE SERVER'S MENU, written where the broker can read it. The broker answers a person's
+   * "services?" from this, so the answer comes from the facts of the body that serves —
+   * reagents, the rescue floor, whether it holds the cup — and not from a copy of them.
+   */
+  chalicePublishDesk(cfg, store, me, cup, now = Date.now()) {
+    if (this._chaliceDeskSaidAt && now - this._chaliceDeskSaidAt < 60_000) return;
+    this._chaliceDeskSaidAt = now;
+    const floor = this.chaliceReagentFloor();
+    const have = Object.fromEntries(['emerald', 'orc tooth', 'elderberry'].map(k => [k, this.reagentOnHand(k)]));
+    const menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup });
+    const limits = Object.fromEntries(['human_hold_ms', 'human_max_wait_ms', 'ticket_ttl_ms']
+      .map(k => [k, cfg[k]]));
+    try { store.setDesk(me, { menu, room: cfg.post_room ?? cfg.station_room, fol_room: cfg.fol_room, limits }, now); } catch {}
   }
 
   /**
@@ -21720,7 +21822,23 @@ export class Autopilot {
     if (!folWanted({ cfg, here: this.hereRoom(), fol: store.fol(), now, role: this.chaliceRole() })) return;
     if (this._folAskedAt && now - this._folAskedAt < 30_000) return;
     this._folAskedAt = now;
-    try { store.request(this.who(), { room: cfg.fol_room, kind: 'fol', ttlMs: 120_000 }); } catch {}
+    // A PERSON SERVING IS TOLD, ONCE PER `human_tell_gap_ms` FOR THE WHOLE FLEET. Everybody in
+    // 38 files a ticket; `claimTell` decides which one of them speaks.
+    const desk = (() => { try { return servingDesk(store.duty(), cfg, now, store.humans()); } catch { return null; } })();
+    const human = !!desk?.human && cfg.human_desk !== false;
+    try {
+      store.request(this.who(), { room: cfg.fol_room, kind: 'fol', ttlMs: 120_000,
+                                  ...(human ? { server: desk.server } : {}) });
+    } catch {}
+    if (human) {
+      let speak = false;
+      try { speak = store.claimTell(`fol:${desk.server.toLowerCase()}`, cfg.human_tell_gap_ms, now); } catch {}
+      if (speak) {
+        const waiting = (() => { try { return store.read().tickets.filter(t => t.kind === 'fol' && t.status === 'open').length; } catch { return 1; } })();
+        this.chaliceTell(desk.server, `forces of light (${cfg.fol_room}) — ${waiting} waiting`, { service: 'fol', human: true })
+          .catch(() => {});
+      }
+    }
   }
 
   /** Forces-of-light casts on hand, the holder's own supply clock. */
@@ -21740,13 +21858,15 @@ export class Autopilot {
   // and acceptDonations lets a chalice and shillings through), accept, read the pack back.
   // Verified by what LEFT the pack, never by the handshake: a trade that completes and moves
   // nothing reads exactly like one that worked.
-  async chaliceGive(toName, items, { stillHave }) {
+  // `counterMs`: a keeper counters inside a second, a PERSON has to find the window — see
+  // `human_offer_ms`.
+  async chaliceGive(toName, items, { stillHave, counterMs = 8000 }) {
     const s = this.s, c = s.need();
     const them = this.playerHere(toName);
     if (!them) return { gave: false, why: `${toName} is not in the room` };
     const before = c.evSeq;
     await s.pacer.submit('trade', () => c.offer(them.id, items));
-    const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: 8000 })
+    const ev = await c.waitFor({ since: before, kinds: ['countered', 'trade-ended'], timeoutMs: counterMs })
       .catch(() => ({ events: [] }));
     if (!ev.events?.some(e => e.kind === 'countered')) {
       await s.pacer.submit('trade', () => c.cancelOffer()).catch(() => {});
@@ -21793,7 +21913,7 @@ export class Autopilot {
         const d = shouldRide({ cfg, role: this.chaliceRole(), stationHops,
           targetHops: this.hopsTo(trip.target.room), carrying: !!this.chaliceInPack(),
           lastPlayerAttackAt: this.lastPlayerSwingAt(),
-          duty: store.duty(), now });
+          duty: store.duty(), humans: store.humans(), now });
         if (!d.ride) {
           // SAY SO. This used to be the one decision in the whole sequence that left no trace:
           // every later stage reports through `skip()`, but a decline HERE set the stage to
@@ -21809,8 +21929,10 @@ export class Autopilot {
           return { skip: true, why: d.why };
         }
         st.server = d.server;
+        st.human = !!d.human;
         st.stage = 'to_station';
-        this.note('riding the chalice home', { server: d.server, station: cfg.station_room, why: d.why });
+        this.note('riding the chalice home', { server: d.server, station: cfg.station_room, why: d.why,
+          ...(d.human ? { human: true } : {}) });
         return pending(0);
       }
 
@@ -21843,11 +21965,19 @@ export class Autopilot {
             why: 'the cheapest loot by the overfarm ranking; the chalice is 20 weight and 20 bulk' });
           this.chaliceEvent('made_room', { dropped: plan.drops.map(d => ({ name: d.name, amount: d.amount })) });
         }
-        const t = store.request(me, { room: cfg.station_room, ttlMs: cfg.ticket_ttl_ms });
+        // WHO IS SERVING IS ASKED AGAIN HERE, not carried from `decide`: the walk takes a
+        // minute and a person can log in or out of the holder in that minute.
+        const desk = servingDesk(store.duty(), cfg, now, store.humans());
+        st.human = !!desk?.human;
+        if (desk?.server) st.server = desk.server;
+        const t = store.request(me, { room: cfg.station_room, ttlMs: cfg.ticket_ttl_ms,
+                                      ...(st.human ? { server: st.server } : {}) });
         st.ticket = t.id;
-        st.deadline = now + cfg.wait_ms;
+        st.requestedAt = now;
+        st.deadline = now + (st.human ? cfg.human_wait_ms : cfg.wait_ms);
         st.stage = 'wait';
-        this.chaliceEvent('requested', { ticket: t.id, server: st.server });
+        this.chaliceEvent('requested', { ticket: t.id, server: st.server, ...(st.human ? { human: true } : {}) });
+        if (st.human) await this.chaliceTell(st.server, 'chalice', { service: 'ride', ticket: t.id, human: true });
         return pending(1000);
       }
 
@@ -21855,12 +21985,40 @@ export class Autopilot {
         if (this.chaliceInPack()) {
           st.gotAt = now;
           st.stage = 'services';
-          this.chaliceEvent('received', { ticket: st.ticket, waited_ms: now - (st.deadline - cfg.wait_ms) });
+          this.chaliceEvent('received', { ticket: st.ticket, waited_ms: now - (st.requestedAt ?? now),
+            ...(st.human ? { human: true, holds: store.ticket(st.ticket)?.holds ?? 0 } : {}) });
           return pending(0);
         }
         const t = store.ticket(st.ticket);
-        if (!t || t.status === 'abandoned') return skip('the ticket was dropped', { note: t?.note ?? null });
-        if (now > st.deadline) return skip(`nobody brought the chalice in ${Math.round(cfg.wait_ms / 1000)}s`);
+        if (!t || t.status === 'abandoned') {
+          // A PERSON SAYING "NOT NOW" IS THE FAST PATH HOME, and is recorded as theirs.
+          const declined = !!t?.closed_by;
+          return skip(declined ? `${t.closed_by} said not now` : 'the ticket was dropped',
+            { note: t?.note ?? null, ...(st.human ? { human: true, declined } : {}) });
+        }
+        if (st.human) {
+          // "HOLD ON" MOVES THE DEADLINE, never past `human_max_wait_ms` from the request.
+          const cap = (st.requestedAt ?? now) + cfg.human_max_wait_ms;
+          const held = Math.min(Number(t.hold_until) || 0, cap);
+          if (held > st.deadline) {
+            st.deadline = held;
+            this.chaliceEvent('desk_held', { ticket: st.ticket, server: st.server, holds: t.holds ?? 1,
+              waited_ms: now - (st.requestedAt ?? now), until_ms: held - now });
+          }
+          // THE PERSON LOGGED OUT: the keeper takes the body back and claims the ticket like
+          // any other, so this waits as for a keeper from here on.
+          if (!this.chaliceHumanServer(store, st.server)) {
+            st.human = false;
+            st.deadline = Math.max(st.deadline, (st.requestedAt ?? now) + cfg.wait_ms);
+            this.chaliceEvent('desk_human_left', { ticket: st.ticket, server: st.server });
+          }
+        }
+        if (now > st.deadline) {
+          const waited = Math.round((now - (st.requestedAt ?? now)) / 1000);
+          return skip(st.human ? `${st.server} (played by a person) did not hand the chalice over in ${waited}s`
+                               : `nobody brought the chalice in ${Math.round(cfg.wait_ms / 1000)}s`,
+            st.human ? { human: true, waited_ms: now - (st.requestedAt ?? now), holds: t.holds ?? 0 } : {});
+        }
         if (this.hereRoom() !== cfg.station_room) { st.stage = 'to_station'; return pending(0); }
         return pending(1500);
       }
@@ -21869,6 +22027,17 @@ export class Autopilot {
         // WHILE THE HOLDER IS STANDING HERE ANYWAY: uncurse what we wear, reveal what we
         // cannot read. Asked once; waited for up to serve_ms; never a reason not to ride.
         const svc = (st.svc ??= this.chaliceAskServices(cfg, store, me));
+        if (st.human && svc.asked.length && !svc.told) {
+          svc.told = true;
+          const what = svc.asked.map(k => (k === 'uncurse' ? 'remove curse'
+            : `reveal ${svc.dropped?.length ?? 0} item(s) at your feet`)).join(', ');
+          await this.chaliceTell(st.server, what, { service: 'services', ticket: st.ticket, human: true });
+        }
+        // A PERSON NEVER CLOSES A TICKET BY CASTING, so the uncurse is checked on our own body:
+        // nothing cursed worn is the service delivered, whoever delivered it.
+        if (st.human && !this.chaliceCursedWorn().length)
+          for (const t of store.openFrom(me, ['uncurse']))
+            try { store.mark(t.id, 'done', { note: 'verified: nothing cursed is worn' }); } catch {}
         const open = store.openFrom(me, ['uncurse', 'reveal']);
         if (open.length && now - svc.at < cfg.serve_ms) return pending(1500);
         if (svc.dropped?.length) {
@@ -21885,6 +22054,14 @@ export class Autopilot {
 
       case 'donate': {
         st.stage = 'tip';
+        // A PERSON SERVING IS NOT OFFERED ANYTHING BACK. The operator's sequence is "they offer
+        // nothing back, I accept" — a tip or a donation is a second trade window for a person to
+        // find and counter, and it would cost them more than it pays. Both wait for the keeper.
+        if (st.human) {
+          this.chaliceEvent('donated', { to: st.server, gave: {}, human: true,
+            why: 'the server is played by a person — nothing offered back' });
+          return pending(0);
+        }
         const giver = store.ticket(st.ticket)?.by ?? st.server;
         const gift = this.chaliceDonation(store);
         if (!Object.keys(gift).length || !this.playerHere(giver)) return pending(0);
@@ -21898,6 +22075,11 @@ export class Autopilot {
 
       case 'tip': {
         st.stage = 'drink';
+        if (st.human) {
+          this.chaliceEvent('tip', { amount: 0, to: st.server, human: true,
+            why: 'the server is played by a person — offer-nothing' });
+          return pending(0);
+        }
         const giver = store.ticket(st.ticket)?.by ?? st.server;
         const plan = tipPlan({ purse: this.purseNow(), cfg,
           keep: Math.max(this.policy.walkingMoney ?? 400, this.shoppingPlan().required_purse ?? 0) });
@@ -21930,10 +22112,14 @@ export class Autopilot {
         // would ride home with a farmer and the station would have nothing to hand out.
         const still = this.chaliceInPack();
         if (still) await this.s.pacer.submit('act', () => c.drop([still.id])).catch(() => {});
-        try { store.mark(st.ticket, 'dropped'); } catch {}
+        // A KEEPER CLOSES ITS TICKET WHEN IT PICKS THE CUP UP. A person does not close anything,
+        // so a person's ticket is closed here, or it would expire and read as a failure.
+        try { store.mark(st.ticket, st.human ? 'done' : 'dropped',
+                         st.human ? { note: 'drunk and dropped for the person to pick up' } : {}); } catch {}
         st.drankAt = Date.now();
         st.stage = 'landing';
-        this.chaliceEvent('drank', { ticket: st.ticket, cup_left_pack: !still || !this.chaliceInPack() });
+        this.chaliceEvent('drank', { ticket: st.ticket, cup_left_pack: !still || !this.chaliceInPack(),
+          ...(st.human ? { human: true } : {}) });
         return pending(1000);
       }
 
@@ -21948,7 +22134,8 @@ export class Autopilot {
           this.tally.chalice_rides = (this.tally.chalice_rides || 0) + 1;
           this.note('landed by chalice', { landed_in: here, ms, onward_hops: hops ?? null,
             to: trip.target.room });
-          this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === GUILD_HALL_ROOM });
+          this.chaliceEvent('landed', { ticket: st.ticket, landed_in: here, ms, guild_hall: here === GUILD_HALL_ROOM,
+            ...(st.human ? { human: true } : {}) });
           // STANDING BESIDE THE GUILD'S CHESTS: take on part of what the holder is short of.
           if (here === GUILD_HALL_ROOM) await this.chaliceTakeCargo(cfg, store).catch(e =>
             this.note('could not draw the holder\'s restock', { why: e.message }));
@@ -22040,6 +22227,7 @@ export class Autopilot {
       const have = Object.fromEntries(Object.keys(cfg.holder_supply).map(k => [k, this.reagentOnHand(k)]));
       try { store.setSupply({ have, target: cfg.holder_supply }); } catch {}
     }
+    if (role === 'holder' || cup) this.chalicePublishDesk(cfg, store, me, cup, now);
 
     let st = this._chaliceServe;
     if (st && now > st.expires) {
@@ -22059,9 +22247,13 @@ export class Autopilot {
 
   chaliceNextJob(cfg, role, cup, store, me, now) {
     const ttl = { ttlMs: cfg.ticket_ttl_ms };
+    // A PERSON'S TICKET GETS A PERSON'S PATIENCE: they were told where to come, and walking
+    // there takes them longer than it takes a keeper already standing at the station.
     const job = (kind, stage, ticket = null, extra = {}) =>
       ({ kind, stage, ticket: ticket?.id ?? null, traveller: ticket?.traveller ?? null,
-         room: ticket?.room ?? null, back: this.hereRoom(), expires: now + cfg.serve_ms * 2, ...extra });
+         room: ticket?.room ?? null, back: this.hereRoom(),
+         ...(ticket?.human ? { human: true } : {}),
+         expires: now + (ticket?.human ? cfg.human_max_wait_ms + cfg.serve_ms : cfg.serve_ms * 2), ...extra });
     if (cup) {
       // THE HOLDER IS ABOUT TO LEAVE: hand the cup over first, at the holder's own post.
       if (role === 'holder' && cfg.alternate && this.chaliceCastsLeft() <= cfg.handover_below_casts) {
@@ -22073,7 +22265,7 @@ export class Autopilot {
         const back = store.claimNext(me, { kind: 'return', ...ttl });
         if (back) return job('return', 'go', back);
       }
-      const t = store.claimNext(me, { kind: 'ride', ...ttl });
+      const t = this.chaliceFleetOnly(store.claimNext(me, { kind: 'ride', ...ttl }), store);
       if (t) return job('ride', 'go', t);
     }
     // FORCES OF LIGHT, AFTER ANY RIDE: a traveller at the station is waiting on us now; an
@@ -22081,6 +22273,14 @@ export class Autopilot {
     if (role === 'holder' && cfg.fol_room != null && this.chaliceFit()) {
       const t = store.claimNext(me, { kind: 'fol', ...ttl });
       if (t) return job('fol', 'go', t, { attempts: 0 });
+    }
+    // A PERSON ASKED FOR A CAST BY TELL (the broker filed it). A keeper's own uncurse and
+    // reveal are served inside its ride; these have no ride, so they are jobs of their own.
+    if (role === 'holder') {
+      for (const kind of ['uncurse', 'reveal']) {
+        const t = this.chaliceFleetOnly(store.claimNext(me, { kind, humanOnly: true, ...ttl }), store);
+        if (t) return job('desk', 'go', t, { service: kind });
+      }
     }
     if (cup) return null;
     if (role === 'alternate') {
@@ -22168,22 +22368,58 @@ export class Autopilot {
       // ---- a traveller wants a ride
       case 'ride:go': return goto(cfg.station_room, 'offer');
       case 'ride:offer': {
+        const patience = st.human ? cfg.human_max_wait_ms : cfg.serve_ms;
         if (!this.playerHere(st.traveller)) {
-          if (now - (st.since ?? now) > cfg.serve_ms) {
+          if (now - (st.since ?? now) > patience) {
             st.stage = 'back';
             if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: 'traveller never arrived' }); } catch {}
+            this.chaliceEvent('desk_unserved', { ticket: st.ticket, for: st.traveller, service: 'ride',
+              why: 'never arrived at the station', ...(st.human ? { human: true } : {}) });
             st.ticket = null;
           }
           return true;
         }
         const cup = this.chaliceInPack();
         if (!cup) { st.stage = 'back'; return true; }
-        const r = await this.chaliceGive(st.traveller, [cup.id], { stillHave: () => !!this.chaliceInPack() });
+        // A PERSON IS TOLD WHAT TO DO WITH THE WINDOW THAT IS ABOUT TO OPEN, once.
+        if (st.human && !st.toldOffer) {
+          st.toldOffer = true;
+          await this.chaliceTell(st.traveller, 'offering you the chalice — counter with nothing; ' +
+            'then use it and drop it here', { service: 'ride', ticket: st.ticket, human: true }, { reply: true });
+        }
+        const r = await this.chaliceGive(st.traveller, [cup.id], { stillHave: () => !!this.chaliceInPack(),
+          counterMs: st.human ? cfg.human_offer_ms : 8000 });
         if (!r.gave) { this.note('chalice hand-off did not complete', { to: st.traveller, why: r.why }); return true; }
         try { store.mark(st.ticket, 'handed'); } catch {}
-        this.chaliceEvent('handed', { ticket: st.ticket, to: st.traveller });
+        this.chaliceEvent('handed', { ticket: st.ticket, to: st.traveller, ...(st.human ? { human: true } : {}) });
         st.stage = 'pickup'; st.since = Date.now();
         return true;
+      }
+
+      // ---- a person asked for remove curse or reveal: wait at the station for them, cast
+      case 'desk:go': return goto(cfg.station_room, 'serve');
+      case 'desk:serve': {
+        if (!this.playerHere(st.traveller)) {
+          if (now - (st.since ?? now) > cfg.human_max_wait_ms) {
+            if (st.ticket) try { store.mark(st.ticket, 'abandoned', { note: 'requester never arrived' }); } catch {}
+            this.chaliceEvent('desk_unserved', { ticket: st.ticket, for: st.traveller, service: st.service,
+              why: 'never arrived at the station', human: true });
+            st.ticket = null; st.stage = 'back';
+          }
+          return true;
+        }
+        const t = store.ticket(st.ticket);
+        if (!t || ['done', 'abandoned'].includes(t.status)) { st.ticket = null; st.stage = 'back'; return true; }
+        await this.chaliceServeTicket(t, store);
+        this.chaliceEvent('desk_served', { ticket: st.ticket, for: st.traveller, service: st.service,
+          waited_ms: Date.now() - (t.at ?? Date.now()), human: true });
+        st.ticket = null; st.stage = 'back';
+        return true;
+      }
+      case 'desk:back': case 'desk:home': {
+        const home = cfg.post_room ?? st.back;
+        if (!Number.isFinite(Number(home)) || this.hereRoom() === Number(home)) return done();
+        return goto(home, 'home').then(() => (st.stage === 'home' ? done() : true));
       }
       case 'ride:pickup': {
         // THE TRAVELLER'S SERVICES FIRST: it is holding the cup and will not drink until
@@ -22205,7 +22441,7 @@ export class Autopilot {
           }
           return true;
         }
-        if (now - (st.since ?? now) > cfg.serve_ms) {
+        if (now - (st.since ?? now) > (st.human ? cfg.human_max_wait_ms : cfg.serve_ms)) {
           // THE CUP DID NOT COME BACK. Said loudly: the fleet has one, and a traveller that
           // walked off with it — or a stranger who picked it up — is the whole service gone.
           try { store.setDuty({ with: st.traveller, lost: !this.playerHere(st.traveller) }); } catch {}

@@ -43,6 +43,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { PolicyControls } from './m59-policy-controls.mjs';
 import { REAGENT_COOP_SCHEMA, coopConfig } from './m59-reagent-coop.mjs';
 import { ChatControls } from './m59-chat-controls.mjs';
+import { DeskChat } from './m59-desk-chat.mjs';
+import { chaliceStoreFor } from './m59-chalice.mjs';
 import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
@@ -5044,6 +5046,10 @@ async function reconcileFleet() {
 // When the pid dies the claim is released and the character goes back to work, which is
 // the whole of requirement B.
 const piloted = new Map();     // agent -> { pid, since, objectId, character, keeperWasRunning }
+// The human desk's mark refresh, and its store (see markHumanDesk). Declared beside `piloted`
+// so nothing that can claim a pilot runs before they exist.
+const HUMAN_DESK_REFRESH_MS = 30_000;
+let humanDeskStore = null;
 const PILOT_POLL_MS = Number(process.env.M59_PILOT_POLL_MS || 4000);
 
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -5162,6 +5168,7 @@ function claimPilot(agent, pid, { character = null, keeperWasRunning: claimedRun
                        character: character ?? s?.client?.me?.name ?? null, keeperWasRunning });
   console.error(`[pilot] ${agent} claimed by pid ${pid}` +
                 ` (object ${objectId ?? '?'}, keeper ${keeperWasRunning ? 'was running' : 'was stopped'})`);
+  markHumanDesk(agent, { first: !prior });
   return { agent, pid, object_id: objectId, keeper_was_running: keeperWasRunning };
 }
 
@@ -5169,6 +5176,7 @@ function releasePilot(agent, why = 'released') {
   const p = piloted.get(agent);
   if (!p) return null;
   piloted.delete(agent);
+  unmarkHumanDesk(agent, p, why);
   // A CLIENT JUST STOPPED BEING THERE, which is the commonest moment for one to start
   // being there again — closing a client and opening it as somebody else is how an
   // evening of this actually goes. Worth exactly one more look; if that finds nothing
@@ -5205,6 +5213,50 @@ function releasePilot(agent, why = 'released') {
     } catch (e) { console.error(`[pilot] ${agent} keeper did not restart: ${e.message}`); }
   }
   return p;
+}
+
+// THE HUMAN DESK: A PERSON AT A CLIENT IS WRITTEN INTO THE CHALICE STORE.
+//
+// Operator, 2026-09-25 (m59-research design/research-spec-human-service-bot.md). Logging in as
+// Loial used to take his services off the fleet: the login displaces his keeper, and the
+// keeper was the only thing that ever said "serving". The keepers cannot ask this process
+// who is at a client (importing the broker RUNS it), so the answer goes where they already
+// look — one mark per piloted character in the fleet's chalice store, refreshed while the
+// client lives and removed when it goes. A travelling keeper that finds its server marked
+// sends that person a tell instead of waiting for a keeper that is not coming.
+//
+// Every character a person plays is marked, not only the holder: which character is serving
+// is the keepers' question (`servingDesk`), and a mark on anyone else is simply never read.
+const deskStore = () => (humanDeskStore ??= chaliceStoreFor({ fleet: titheFleet() }));
+
+function markHumanDesk(agent, { first = false } = {}) {
+  const p = piloted.get(agent);
+  if (!p) return;
+  const character = p.character ?? sessions.get(agent)?.client?.me?.name
+    ?? rosterEntry(agent)?.credentials?.character ?? null;
+  if (!character) return;
+  p.deskMarkedAt = Date.now();
+  try {
+    deskStore().setHuman(character, { agent, pid: p.pid, since: p.since });
+    if (first) {
+      console.error(`[desk] ${character} is played by a person — anything this character serves ` +
+                    'stays listed, and requests reach you as tells');
+      recordEvent(character, 'chalice', { what: 'desk_human_on', agent, pid: p.pid, human: true });
+    }
+  } catch (e) { console.error(`[desk] could not mark ${character} as played: ${e.message}`); }
+}
+
+function unmarkHumanDesk(agent, p, why) {
+  const character = p?.character ?? sessions.get(agent)?.client?.me?.name
+    ?? rosterEntry(agent)?.credentials?.character ?? null;
+  if (!character) return;
+  try {
+    deskStore().clearHuman(character);
+    const minutes = Math.round((Date.now() - (p.since ?? Date.now())) / 60_000);
+    console.error(`[desk] ${character} is back with its keeper after ${minutes}m — ${why}`);
+    recordEvent(character, 'chalice', { what: 'desk_human_off', agent, why,
+      played_ms: Date.now() - (p.since ?? Date.now()), human: true });
+  } catch (e) { console.error(`[desk] could not unmark ${character}: ${e.message}`); }
 }
 
 // WHAT THE OPERATOR CAN SAY TO A CHARACTER WHILE PLAYING BESIDE IT.
@@ -5387,6 +5439,20 @@ function startControlChatWatch() {
       if (s instanceof KeeperProxy) await keeperAction(agent, s._index, 'say', { to: [speaker], text });
     },
   });
+  // THE DESK GOES FIRST: "services?", "Remove Curse", "hold on", "not now" and "done" are
+  // service traffic, and anything the desk does not recognise falls through to `control`.
+  const desk = new DeskChat({
+    store: deskStore(),
+    reply: async (agent, speaker, text) => {
+      if (!pilotedSpeaker(speaker)) return;
+      const s = sessions.get(agent);
+      if (s instanceof KeeperProxy) await keeperAction(agent, s._index, 'say', { to: [speaker], text });
+    },
+    record: (character, detail) => { try { recordEvent(character, 'chalice', detail); } catch {} },
+    log: (line) => console.error(line),
+    roomName: (n) => worldMap?.rooms?.[n]?.name ?? null,
+    isFleetmate: (name) => parties.isFleetmate(name),
+  });
   let polling = false;
   controlChatTimer = setInterval(async () => {
     if (polling || ![...piloted.keys()].some(a => pilotOf(a))) return;
@@ -5401,9 +5467,15 @@ function startControlChatWatch() {
         cursors.set(s.name, { pid: r.pid, seq: r.seq });
         for (const line of r.messages ?? []) {
           if (line.seq <= since || line.at < sinceStarted || Date.now() - line.at > 30000) continue;
-          if (!pilotedSpeaker(line.speaker)) continue;
+          const from = pilotedSpeaker(line.speaker);
+          if (!from) continue;
           const flat = sanitizeInbound(line.text ?? '').text;
-          chat.handle(s.name, { ...line, text: unwrapSpeech(flat).said.trim() }).catch(e => console.error('[human control] ' + e.message));
+          const said = unwrapSpeech(flat).said.trim();
+          const handled = await desk.handle({ bot: s.name, botName: s.client?.me?.name ?? null,
+            from: from.pilot.character ?? sessions.get(from.agent)?.client?.me?.name ?? null,
+            speaker: line.speaker, text: said }).catch(e => { console.error('[desk] ' + e.message); return false; });
+          if (handled) continue;
+          chat.handle(s.name, { ...line, text: said }).catch(e => console.error('[human control] ' + e.message));
         }
       }));
     } catch (e) { console.error('[human control poll] ' + e.message); }
@@ -5424,6 +5496,7 @@ function startPilotWatch() {
     // whose client has exited must be released whether or not the watch is armed.
     for (const [agent, p] of [...piloted]) {
       if (!pidAlive(p.pid)) releasePilot(agent, `client pid ${p.pid} exited`);
+      else if (Date.now() - (p.deskMarkedAt ?? 0) > HUMAN_DESK_REFRESH_MS) markHumanDesk(agent);
     }
     // ...and then look for one to pick up. Releasing first matters: a client that exited
     // and was relaunched gets its new pid noticed on the same tick rather than the next.
