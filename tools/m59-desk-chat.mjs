@@ -118,7 +118,7 @@ export class DeskChat {
         { by: from, note: `declined by ${from}` }, now);
       this.record(botName, { what: 'desk_declined', by: from, services: closed.map(t => t.kind), human: true });
       this.log(`[desk] ${from} -> ${botName}: not now (${closed.map(t => t.kind).join(', ')}) — it walks`);
-      await say('ok — making my own way');
+      await say('ok — going on without it');
       return true;
     }
     // done

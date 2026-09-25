@@ -8,7 +8,8 @@
 // that goes to town while it is the only one serving.
 //
 // No socket. `node tools/m59-chalice-flow-test.mjs`.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Autopilot } from './m59-autopilot.mjs';
@@ -18,7 +19,7 @@ import * as party from './m59-party.mjs';
 
 // THE FLEET, for the human desk's fleetmate gate. Stranger is deliberately absent.
 party.setRosterSource(() => new Set(['Loial the Ogier', 'Rizzo', 'Kermit', 'Pepe', 'Gonzo', 'Zoot',
-  'Beaker', 'Bunsen', 'Animal', 'Floyd', 'Janice', 'Lew', 'Scooter', 'Statler', 'Clifford']));
+  'Beaker', 'Bunsen', 'Animal', 'Floyd', 'Janice', 'Lew', 'Scooter', 'Statler', 'Clifford', 'Rowlf', 'Robin']));
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; console.log('  ok  ', what); } else { fail++; console.log('  FAIL', what); } };
@@ -822,6 +823,167 @@ try {
     const told = await loial.chaliceTell('Stranger', 'chalice');
     ok(told.sent === false && /not a fleetmate/.test(told.why), `and no tell goes to one (${told.why})`);
     ok(!world.tells.some(x => x.to === 'Stranger'), 'none was sent');
+  }
+
+  // =======================================================================================
+  // PROD 2026-09-25 18:24-18:26Z, REPLAYED. The operator played Loial; Rowlf and Zoot took the
+  // cup, dropped unrevealed items, asked for reveal from a Loial with one orc tooth, and stood
+  // holding the cup until the operator logged in as them.
+  // =======================================================================================
+  section('the prod stall: a person-served rider asks for no reveal, waits 30s for an uncurse, then drinks');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'stall-replay' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('chalice of the rain'), world.item('orc tooth', 1)] });
+    // His menu as his keeper last published it, before the login: reveal unavailable.
+    store.setDesk('Loial the Ogier', { menu: [
+      { kind: 'uncurse', label: 'Remove Curse', ok: true, why: null },
+      { kind: 'reveal', label: 'Reveal', ok: false, why: 'Req. reagents' },
+      { kind: 'ride', label: 'Chalice', ok: true, why: null }], room: 2 });
+    personAt(store, 'Loial the Ogier');
+    const wand = world.item('wand'); wand.rarity = 100;
+    const ring = world.item('ring of lethargy'); ring.rarity = 200;
+    const rowlfP = world.add('Rowlf', { room: 38, inventory: [wand, ring] });
+    rowlfP.client.equipment = () => ({ equipped: [{ id: ring.id }] });
+    const rowlf = keeper(world, rowlfP, { cfg, store });
+    const trip = { target: { room: 113, hops: 9 } };
+    // Up to the point the cup is in the pack and the services are asked.
+    await runUntil(() => trip.chalice?.svc, [
+      async () => { world.tick(); await rowlf.chaliceRide(trip); },
+      personHands(world, loialP),
+    ]);
+    ok(rowlfP.client.inventory.some(x => x.id === wand.id), 'the wand stays in the pack — nothing dropped for a reveal');
+    ok(!store.read().tickets.some(t => t.kind === 'reveal'), 'and no reveal is asked of a person');
+    const tell = world.tells.filter(t => t.from === 'Rowlf').at(-1)?.text ?? '';
+    ok(/remove curse — I drink in 30s; "done" or "not now" to go sooner/.test(tell), `the person is told the deadline and the way out (${tell})`);
+    await rowlf.chaliceRide(trip);
+    ok(trip.chalice.stage === 'services', 'waiting on the uncurse');
+    trip.chalice.svc.at = Date.now() - cfg.human_service_ms - 1;   // the person does nothing for 30s
+    await runUntil(() => trip.chalice?.stage === 'done', [async () => { world.tick(); await rowlf.chaliceRide(trip); }]);
+    ok(rowlfP.room === GUILD_HALL_ROOM, `and then it drinks and lands without anybody logging in (${trip.chalice.stage})`);
+    const ev = rowlf.events.find(e => e.what === 'services');
+    ok(ev?.skipped?.some(s => s.service === 'reveal') && ev.human, 'the skipped reveal is on the ledger');
+  }
+
+  section('a keeper server whose menu says reveal is unavailable is not asked for one either');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'menu-gate' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    store.setDesk('Loial the Ogier', { menu: [{ kind: 'reveal', label: 'Reveal', ok: false, why: 'Req. reagents' }], room: 2 });
+    const sword = world.item('long sword'); sword.rarity = 100;
+    const kermitP = world.add('Kermit', { room: 2, inventory: [sword] });
+    const kermit = keeper(world, kermitP, { cfg, store });
+    const svc = kermit.chaliceAskServices(cfg, store, 'Kermit', { server: 'Loial the Ogier' });
+    ok(!svc.asked.includes('reveal') && svc.dropped.length === 0, 'nothing dropped, nothing asked');
+    ok(kermitP.client.inventory.some(x => x.id === sword.id), 'the sword stays in the pack');
+    const none = kermit.chaliceAskServices(cfg, new ChaliceStore({ directory: dir, namespace: 'menu-none' }), 'Kermit', { server: 'Loial the Ogier' });
+    ok(none.asked.includes('reveal'), 'with no menu published it asks, as it always did');
+  }
+
+  section('a rider displaced mid-wait does not "pick up" its items from the wrong room');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'displaced' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2 });
+    const zootP = world.add('Zoot', { room: 714, inventory: [world.item('chalice of the rain')] });
+    const zoot = keeper(world, zootP, { cfg, store });
+    let looted = 0;
+    zoot.s.lootFloor = async () => { looted++; return {}; };
+    const trip = { target: { room: 113, hops: 9 }, chalice: { stage: 'services', server: 'Loial the Ogier',
+      svc: { asked: ['reveal'], dropped: [9121, 8906, 8830], droppedIn: 2, skipped: [], at: Date.now() - 999_999 } } };
+    await zoot.chaliceRide(trip);
+    ok(looted === 0, 'no loot attempted in the guild hall');
+    ok(zoot.events.some(e => e.what === 'services_items_left' && e.left_in === 2 && e.ids.length === 3),
+       'and the three items left in room 2 are on the ledger');
+  }
+
+  // =======================================================================================
+  // THE RETURN-TRIP RESTOCK, 2026-09-25: never delivered once on prod.
+  // =======================================================================================
+  section('withdrawFromStockpile no longer throws before its first step (the snapshot crash)');
+  // A CHILD PROCESS, because the chest cache's directory is fixed when m59-storage.mjs loads.
+  // The chest is seeded with what the draw asks for; without that it returns before the line
+  // that crashed, and the test would pass against the bug (it did, the first time it was written).
+  {
+    const storage = join(dir, 'storage');
+    mkdirSync(join(storage, 'chests'), { recursive: true });
+    writeFileSync(join(storage, 'chests', 'r18c2.json'), JSON.stringify({ slot: 'r18c2', row: 18, col: 2,
+      room: GUILD_HALL_ROOM, items: [{ name: 'orc tooth', amount: 162 }] }));
+    const probe = `
+      import { Autopilot } from ${JSON.stringify(new URL('./m59-autopilot.mjs', import.meta.url).href)};
+      const ap = Object.create(Autopilot.prototype);
+      ap.policy = {}; ap.tally = {}; ap.note = () => {};
+      ap.s = { name: 'probe', client: { guild: { id: 1, rank: 3 }, inventory: [], rsc: { get: () => '' } },
+               need() { return this.client; } };
+      ap.who = () => 'Janice';
+      let travelled = false;
+      ap.travel = async () => { travelled = true; return { arrived: false, reason: 'the test stops here' }; };
+      try { await ap.withdrawFromStockpile([{ item: 'orc tooth', amount: 29 }]); console.log(JSON.stringify({ travelled })); }
+      catch (e) { console.log(JSON.stringify({ threw: e.message })); }`;
+    const out = spawnSync(process.execPath, ['--input-type=module', '-e', probe],
+      { env: { ...process.env, M59_STORAGE_DIR: storage }, encoding: 'utf8', timeout: 60_000 });
+    const line = (out.stdout || '').trim().split(/\r?\n/).filter(l => l.startsWith('{')).pop() ?? '{}';
+    const r = JSON.parse(line);
+    ok(!r.threw, `the draw does not throw (${r.threw ?? 'no throw'})`);
+    ok(r.travelled === true, 'it planned a draw from the seeded chest and set off for it');
+  }
+
+  section('a draw that fails releases its pledge, so the next traveller still sees the shortfall');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'pledge-leak' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, holder_supply: { 'orc tooth': 50 } });
+    store.setSupply({ have: { 'orc tooth': 1 }, target: { 'orc tooth': 50 } });
+    const janice = keeper(world, world.add('Janice', { room: GUILD_HALL_ROOM }), { cfg, store });
+    janice.policy.guildWants = { enabled: true };
+    janice.withdrawFromStockpile = async () => { throw new ReferenceError('snapshot is not defined'); };
+    await janice.chaliceTakeCargo(cfg, store);
+    ok(!(store.supply().pledged ?? []).some(p => p.by === 'Janice'), 'no pledge left behind by the crash');
+    ok(janice.events.some(e => e.what === 'cargo_draw_failed' && /snapshot/.test(e.why)), 'and the ledger says why');
+    const zoot = keeper(world, world.add('Zoot', { room: 2, inventory: [world.item('orc tooth', 40)] }), { cfg, store });
+    zoot.carryFloors = () => ({ 'orc tooth': 10 });
+    const gift = zoot.chaliceDonation(store);
+    ok(gift['orc tooth'] === 30, `so the next traveller donates its spare teeth (${JSON.stringify(gift)})`);
+
+    const pepe = keeper(world, world.add('Pepe', { room: GUILD_HALL_ROOM }), { cfg, store });
+    pepe.policy.guildWants = { enabled: true };
+    pepe.withdrawFromStockpile = async () => ({ took: [], why: 'no chest holds any' });
+    await pepe.chaliceTakeCargo(cfg, store);
+    ok(pepe.events.some(e => e.what === 'cargo_none' && e.why === 'no chest holds any'), 'an empty draw is a row too');
+  }
+
+  section('a draw that works is carried home and handed over at the station');
+  {
+    const world = makeWorld();
+    const store = new ChaliceStore({ directory: dir, namespace: 'cargo-ok' });
+    const cfg = normalizeChalice({ holder: 'Loial the Ogier', station_room: 2, post_room: 2, holder_supply: { 'orc tooth': 50 } });
+    const loialP = world.add('Loial the Ogier', { room: 2, inventory: [world.item('orc tooth', 1)] });
+    store.setSupply({ have: { 'orc tooth': 1 }, target: { 'orc tooth': 50 } });
+    const robinP = world.add('Robin', { room: GUILD_HALL_ROOM });
+    const robin = keeper(world, robinP, { cfg, store });
+    robin.policy.guildWants = { enabled: true };
+    robin.withdrawFromStockpile = async (need) => {
+      for (const { item, amount } of need) robinP.client.inventory.push(world.item(item, amount));
+      return { took: need };
+    };
+    await robin.chaliceTakeCargo(cfg, store);
+    ok(robin._holderCargo?.items?.['orc tooth'] === 49, `drew the 49 he is short (${JSON.stringify(robin._holderCargo?.items)})`);
+    robin.hopsTo = () => 1;
+    await robin.chaliceDeliverCargo();
+    const teeth = loialP.client.inventory.filter(x => world.nameOf(x) === 'orc tooth').reduce((a, x) => a + x.amount, 0);
+    ok(teeth === 50, `Loial is back to 50 teeth (${teeth})`);
+    ok(robin.events.some(e => e.what === 'cargo_delivered'), 'delivered, on the ledger');
+  }
+
+  section('orc teeth are never bought');
+  {
+    const cfg = normalizeChalice({ holder: 'x', station_room: 2,
+      supply_shops: { 'orc tooth': { room: 104, seller: 'Joguer' }, elderberry: { room: 104, seller: 'Joguer' } } });
+    ok(!cfg.supply_shops['orc tooth'], 'a shop entry for orc teeth is refused');
+    ok(cfg.problems.some(p => /orc teeth come from farming/.test(p)), 'and says why');
+    ok(cfg.supply_shops.elderberry, 'the berries stay');
   }
 
 } finally {

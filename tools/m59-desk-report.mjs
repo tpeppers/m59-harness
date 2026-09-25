@@ -79,6 +79,17 @@ export function summarise(all, { at = now } = {}) {
       fol_tells: count(r => r.what === 'desk_tell' && r.service === 'fol'),
       tells_not_delivered: count(r => r.what === 'desk_tell' && r.sent === false),
       cargo_held: count(r => r.what === 'cargo_held'),
+      items_left_on_floor: count(r => r.what === 'services_items_left'),
+    },
+    // THE RETURN-TRIP RESTOCK, whoever is serving: drawn or bought, delivered, or why not.
+    restock: {
+      drawn: count(r => r.what === 'cargo_taken'),
+      bought: count(r => r.what === 'cargo_bought'),
+      delivered: count(r => r.what === 'cargo_delivered'),
+      draw_failed: count(r => r.what === 'cargo_draw_failed'),
+      draw_empty: count(r => r.what === 'cargo_none'),
+      buy_skipped: count(r => r.what === 'cargo_buy_skipped' || r.what === 'cargo_buy_failed'),
+      donated_at_station: count(r => r.what === 'donated' && r.gave && Object.keys(r.gave).length),
     },
     a_person_asking_bots: {
       menus: count(r => r.what === 'desk_menu'),
@@ -115,6 +126,11 @@ if (process.argv[1]?.endsWith('m59-desk-report.mjs')) {
   console.log(`  held ${b.held}, declined fast ${b.declined_fast}, TIMED OUT ${b.timed_out}`);
   console.log(`  service tells ${b.services_asked}, forces-of-light tells ${b.fol_tells}, tells not delivered ${b.tells_not_delivered}`);
   if (b.cargo_held) console.log(`  restock deliveries held for the keeper: ${b.cargo_held}`);
+  if (b.items_left_on_floor) console.log(`  ITEMS LEFT ON THE STATION FLOOR: ${b.items_left_on_floor} time(s)`);
+  const k = s.restock;
+  console.log('\nreturn-trip restock for the holder:');
+  console.log(`  drawn ${k.drawn}, bought ${k.bought}, DELIVERED ${k.delivered}, donated at the station ${k.donated_at_station}`);
+  console.log(`  draws failed ${k.draw_failed}, draws empty ${k.draw_empty}, buys skipped ${k.buy_skipped}`);
   console.log('\na person asking bots:');
   console.log(`  menus ${p.menus}, requests ${p.requests} (refused ${p.refused}, cancelled ${p.cancelled}), ` +
               `served ${p.served + p.handed}, UNSERVED ${p.unserved}`);

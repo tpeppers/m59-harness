@@ -21621,13 +21621,41 @@ export class Autopilot {
     return rows.slice(0, max);
   }
 
-  chaliceAskServices(cfg, store, me) {
-    const asked = [], dropped = [];
+  // ASK ONLY FOR WHAT THE SERVER CAN DO, AND ONLY WHAT A PERSON CAN FINISH.
+  //
+  // Prod, 2026-09-25 18:24-18:26Z, with the operator playing Loial: Rowlf and Zoot each took
+  // the cup, dropped their unrevealed items (a wand; three scrolls) and asked for reveal — from
+  // a Loial holding ONE orc tooth, whose own published menu said `Reveal (-Req. reagents)`. The
+  // cast could never happen, a person has no way to close a reveal ticket but typing "done",
+  // and the tell did not say so; each stood holding the fleet's cup until the operator logged
+  // in as them to drink it. Now:
+  //   - a service the server's menu marks unavailable is not asked for (no menu: asked, as before);
+  //   - a person serving is never asked for reveal: it means dropping the pack's items on a
+  //     public floor for a cast nobody can verify, and it waits for the keeper instead.
+  chaliceAskServices(cfg, store, me, { server = null, human = false } = {}) {
+    const asked = [], dropped = [], skipped = [];
+    const menu = (() => { try { return store.desk()?.[String(server ?? '').trim().toLowerCase()]?.menu ?? null; } catch { return null; } })();
+    const unavailable = (kind) => {
+      const m = Array.isArray(menu) ? menu.find(x => x.kind === kind) : null;
+      return m && m.ok === false ? `${server} cannot: ${m.why ?? 'unavailable'}` : null;
+    };
     if (cfg.uncurse && this.chaliceCursedWorn().length) {
-      store.request(me, { room: cfg.station_room, kind: 'uncurse' });
-      asked.push('uncurse');
+      const no = unavailable('uncurse');
+      if (no) skipped.push({ service: 'uncurse', why: no });
+      else {
+        store.request(me, { room: cfg.station_room, kind: 'uncurse' });
+        asked.push('uncurse');
+      }
     }
-    const unread = cfg.reveal ? this.chaliceUnrevealed(cfg.reveal_max) : [];
+    let unread = cfg.reveal ? this.chaliceUnrevealed(cfg.reveal_max) : [];
+    if (unread.length && human) {
+      skipped.push({ service: 'reveal', why: 'a person is serving — reveal waits for the keeper' });
+      unread = [];
+    }
+    if (unread.length && unavailable('reveal')) {
+      skipped.push({ service: 'reveal', why: unavailable('reveal') });
+      unread = [];
+    }
     if (unread.length) {
       const c = this.s.client;
       try { c.drop(unread.map(u => u.id)); } catch {}
@@ -21635,7 +21663,7 @@ export class Autopilot {
       store.request(me, { room: cfg.station_room, kind: 'reveal', items: unread.map(u => ({ id: u.id, name: u.name })) });
       asked.push('reveal');
     }
-    return { asked, dropped, at: Date.now() };
+    return { asked, dropped, skipped, droppedIn: dropped.length ? this.hereRoom() : null, at: Date.now() };
   }
 
   /** What this character can spare toward the holder's supply, from its own spares. */
@@ -21679,11 +21707,24 @@ export class Autopilot {
     if (!Object.keys(wants).length) return;
     const granted = store.pledge(this.who(), wants);
     if (!Object.keys(granted).length) return;
+    // A PLEDGE THAT OUTLIVES A FAILED DRAW STARVES THE HOLDER FOR AN HOUR. `holderShortfall`
+    // subtracts every live pledge, so on 2026-09-25 one crashed draw that pledged 29 orc teeth
+    // told every other traveller Loial needed none -- and he sat on one tooth all day. So the
+    // pledge is released on EVERY way out that carries nothing, a throw included, and the
+    // reason is a ledger row rather than a note that scrolls away.
     const before = Object.fromEntries(Object.keys(granted).map(k => [k, this.reagentOnHand(k)]));
-    await this.withdrawFromStockpile(Object.entries(granted).map(([item, amount]) => ({ item, amount })));
+    let drew = null, failed = null;
+    try {
+      drew = await this.withdrawFromStockpile(Object.entries(granted).map(([item, amount]) => ({ item, amount })));
+    } catch (e) { failed = e?.message ?? String(e); }
     const got = Object.fromEntries(Object.keys(granted)
       .map(k => [k, Math.max(0, this.reagentOnHand(k) - before[k])]).filter(([, n]) => n > 0));
-    if (!Object.keys(got).length) { store.unpledge(this.who()); return; }
+    if (!Object.keys(got).length) {
+      try { store.unpledge(this.who()); } catch {}
+      this.chaliceEvent(failed ? 'cargo_draw_failed' : 'cargo_none',
+        { wanted: granted, why: failed ?? drew?.why ?? 'the chests gave nothing' });
+      return;
+    }
     store.pledge(this.who(), got);
     this._holderCargo = { items: got, at: Date.now(), tries: 0 };
     this.chaliceEvent('cargo_taken', { items: got });
@@ -21712,10 +21753,15 @@ export class Autopilot {
     if (this.chaliceRole() !== 'traveller') return;
     if (!Object.keys(cfg.holder_supply ?? {}).length) return;
     if (!Object.keys(cfg.supply_shops ?? {}).length) return;
-    if (!purchaseEnabled(this.policy, 'reagents')) return;
     const store = this.chaliceStore();
     const short = holderShortfall(store.supply(), { except: this.who() });
     if (!Object.keys(short).length) return;
+    // SAID ON THE LEDGER: a holder going short while every trip quietly declined to buy is
+    // exactly the state that took a day to notice on 2026-09-25.
+    if (!purchaseEnabled(this.policy, 'reagents')) {
+      this.chaliceEvent('cargo_buy_skipped', { short, why: 'this character may not buy reagents' });
+      return;
+    }
 
     // WHAT IS LEFT AFTER THIS CHARACTER'S OWN NEEDS, and the order of subtraction is the
     // point: walking money and the trip's own shopping come out first, and the holder gets
@@ -21727,6 +21773,8 @@ export class Autopilot {
     if (budget <= 0) {
       this.note('nothing to spare for the holder this trip',
         { purse: this.purseNow(), keeping: keep, short });
+      this.chaliceEvent('cargo_buy_skipped', { short, why: 'nothing to spare after own needs',
+        purse: this.purseNow(), keeping: keep });
       return;
     }
 
@@ -21738,58 +21786,68 @@ export class Autopilot {
 
     const s = this.s, c = s.need();
     const got = {};
-    for (const stop of stops) {
-      if (this.travelInterrupted() || this.suspendedJourney) break;
-      if (budget <= 0) break;
-      if (this.hereRoom() !== stop.room) {
-        const walked = await this.travel(stop.room, { maxHops: 12 })
-          .catch(error => ({ arrived: false, reason: error.message }));
-        if (!walked?.arrived) {
-          this.note('could not reach a counter for the holder', { room: stop.room, why: walked?.reason });
-          continue;
-        }
-      }
-      await this.makeRoomToBuy(null, { wantSlots: Math.max(4, stop.lines.length * 2) }).catch(() => {});
-      const before = c.evSeq;
-      const pick = await this.sellerHere({ want: new RegExp(stop.lines.map(l => l.match).join('|'), 'i') })
-        .catch(() => null);
-      if (!pick) { this.note('nobody at that counter opened a list', { room: stop.room, seller: stop.seller }); continue; }
-      await s.pacer.submit('buy', () => c.buy(pick.seller.id ?? pick.seller));
-      const ev = await c.waitFor({ since: before, kinds: ['shop', 'message'], timeoutMs: 4000 })
-        .catch(() => ({ events: [] }));
-      const shop = ev.events?.find(e => e.kind === 'shop');
-      if (!shop) { this.note("no shop list for the holder's restock", { room: stop.room }); continue; }
-      for (const line of stop.lines) {
+    try {
+      for (const stop of stops) {
+        if (this.travelInterrupted() || this.suspendedJourney) break;
         if (budget <= 0) break;
-        const row = (shop.items ?? []).find(i => new RegExp(line.match, 'i').test(String(i.name ?? '')));
-        // NOT A FAILURE. The two halves are sold by different people, so "this counter does not
-        // stock it" is the ordinary case at either one.
-        if (!row || !(Number(row.id) > 0)) continue;
-        const unit = Number(row.cost) || 0;
-        // AN UNPRICED ROW IS NOT A FREE ONE. Skipped rather than bought blind: the clamp below
-        // is the only thing standing between a tip and this character's own food money.
-        if (!(unit > 0)) continue;
-        const amount = Math.min(line.amount, Math.floor(budget / unit));
-        if (amount <= 0) continue;
-        const held = this.countOfKind(line.item);
-        for (const l of buyLines([{ id: Number(row.id), amount }])) {
-          await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [l]));
-          const seq = c.evSeq;
-          await s.pacer.submit('read', () => c.requestInventory());
-          await c.waitFor({ since: seq, kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        if (this.hereRoom() !== stop.room) {
+          const walked = await this.travel(stop.room, { maxHops: 12 })
+            .catch(error => ({ arrived: false, reason: error.message }));
+          if (!walked?.arrived) {
+            this.note('could not reach a counter for the holder', { room: stop.room, why: walked?.reason });
+            continue;
+          }
         }
-        // RULE 6: WHAT ENTERED THE PACK. `buyItems` completes the handshake whether or not the
-        // purse could cover it -- the counter clamps and says so -- so the gain is the evidence
-        // and the reply is not.
-        const gained = Math.max(0, this.countOfKind(line.item) - held);
-        if (gained > 0) {
-          got[line.item] = (got[line.item] ?? 0) + gained;
-          budget -= gained * unit;
+        await this.makeRoomToBuy(null, { wantSlots: Math.max(4, stop.lines.length * 2) }).catch(() => {});
+        const before = c.evSeq;
+        const pick = await this.sellerHere({ want: new RegExp(stop.lines.map(l => l.match).join('|'), 'i') })
+          .catch(() => null);
+        if (!pick) { this.note('nobody at that counter opened a list', { room: stop.room, seller: stop.seller }); continue; }
+        await s.pacer.submit('buy', () => c.buy(pick.seller.id ?? pick.seller));
+        const ev = await c.waitFor({ since: before, kinds: ['shop', 'message'], timeoutMs: 4000 })
+          .catch(() => ({ events: [] }));
+        const shop = ev.events?.find(e => e.kind === 'shop');
+        if (!shop) { this.note("no shop list for the holder's restock", { room: stop.room }); continue; }
+        for (const line of stop.lines) {
+          if (budget <= 0) break;
+          const row = (shop.items ?? []).find(i => new RegExp(line.match, 'i').test(String(i.name ?? '')));
+          // NOT A FAILURE. The two halves are sold by different people, so "this counter does not
+          // stock it" is the ordinary case at either one.
+          if (!row || !(Number(row.id) > 0)) continue;
+          const unit = Number(row.cost) || 0;
+          // AN UNPRICED ROW IS NOT A FREE ONE. Skipped rather than bought blind: the clamp below
+          // is the only thing standing between a tip and this character's own food money.
+          if (!(unit > 0)) continue;
+          const amount = Math.min(line.amount, Math.floor(budget / unit));
+          if (amount <= 0) continue;
+          const held = this.countOfKind(line.item);
+          for (const l of buyLines([{ id: Number(row.id), amount }])) {
+            await s.pacer.submit('buy', () => c.buyItems(shop.sellerId, [l]));
+            const seq = c.evSeq;
+            await s.pacer.submit('read', () => c.requestInventory());
+            await c.waitFor({ since: seq, kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+          }
+          // RULE 6: WHAT ENTERED THE PACK. `buyItems` completes the handshake whether or not the
+          // purse could cover it -- the counter clamps and says so -- so the gain is the evidence
+          // and the reply is not.
+          const gained = Math.max(0, this.countOfKind(line.item) - held);
+          if (gained > 0) {
+            got[line.item] = (got[line.item] ?? 0) + gained;
+            budget -= gained * unit;
+          }
         }
       }
-    }
 
-    if (!Object.keys(got).length) { store.unpledge(this.who()); return; }
+    } catch (e) {
+      // THE SAME RULE AS THE CHEST DRAW: a throw must not leave a pledge standing in for goods.
+      this.chaliceEvent('cargo_buy_failed', { why: e?.message ?? String(e), got });
+      if (!Object.keys(got).length) { try { store.unpledge(this.who()); } catch {} return; }
+    }
+    if (!Object.keys(got).length) {
+      store.unpledge(this.who());
+      this.chaliceEvent('cargo_buy_skipped', { short, why: 'the counters sold nothing within budget' });
+      return;
+    }
     // Merge rather than replace: a traveller may already be carrying a chest draw, and the
     // delivery path hands over whatever is in `_holderCargo` in one trade.
     const carrying = this._holderCargo?.items ?? {};
@@ -22236,12 +22294,16 @@ export class Autopilot {
       case 'services': {
         // WHILE THE HOLDER IS STANDING HERE ANYWAY: uncurse what we wear, reveal what we
         // cannot read. Asked once; waited for up to serve_ms; never a reason not to ride.
-        const svc = (st.svc ??= this.chaliceAskServices(cfg, store, me));
+        const svc = (st.svc ??= this.chaliceAskServices(cfg, store, me, { server: st.server, human: st.human }));
+        // A PERSON IS TOLD HOW LONG, AND HOW TO LET US GO SOONER. Only remove curse reaches
+        // here for a person (see chaliceAskServices), and it is checked on our own body.
+        const patience = st.human ? cfg.human_service_ms : cfg.serve_ms;
         if (st.human && svc.asked.length && !svc.told) {
           svc.told = true;
           const what = svc.asked.map(k => (k === 'uncurse' ? 'remove curse'
             : `reveal ${svc.dropped?.length ?? 0} item(s) at your feet`)).join(', ');
-          await this.chaliceTell(st.server, what, { service: 'services', ticket: st.ticket, human: true });
+          await this.chaliceTell(st.server, `${what} — I drink in ${Math.round(patience / 1000)}s; ` +
+            '"done" or "not now" to go sooner', { service: 'services', ticket: st.ticket, human: true });
         }
         // A PERSON NEVER CLOSES A TICKET BY CASTING, so the uncurse is checked on our own body:
         // nothing cursed worn is the service delivered, whoever delivered it.
@@ -22249,14 +22311,24 @@ export class Autopilot {
           for (const t of store.openFrom(me, ['uncurse']))
             try { store.mark(t.id, 'done', { note: 'verified: nothing cursed is worn' }); } catch {}
         const open = store.openFrom(me, ['uncurse', 'reveal']);
-        if (open.length && now - svc.at < cfg.serve_ms) return pending(1500);
+        if (open.length && now - svc.at < patience) return pending(1500);
         if (svc.dropped?.length) {
-          await this.s.lootFloor({ ids: svc.dropped, maxItems: svc.dropped.length, overfarm: null }).catch(() => {});
-          await this.s.pacer.submit('read', () => this.s.client.requestInventory()).catch(() => {});
+          // PICK UP ONLY WHERE WE DROPPED. A keeper displaced mid-wait (the operator logging in
+          // as the traveller to finish the ride) resumes this stage wherever it landed; looting
+          // "those ids" from the guild hall floor finds nothing and reads as done.
+          if (svc.droppedIn == null || this.hereRoom() === svc.droppedIn) {
+            await this.s.lootFloor({ ids: svc.dropped, maxItems: svc.dropped.length, overfarm: null }).catch(() => {});
+            await this.s.pacer.submit('read', () => this.s.client.requestInventory()).catch(() => {});
+          } else {
+            this.note('ITEMS LEFT ON THE STATION FLOOR', { room: svc.droppedIn, ids: svc.dropped, now_in: this.hereRoom() });
+            this.chaliceEvent('services_items_left', { left_in: svc.droppedIn, ids: svc.dropped });
+          }
         }
         for (const t of open) try { store.mark(t.id, 'abandoned', { note: 'the traveller moved on' }); } catch {}
-        if (svc.asked.length)
+        if (svc.asked.length || svc.skipped?.length)
           this.chaliceEvent('services', { asked: svc.asked, unserved: open.map(t => t.kind),
+            ...(svc.skipped?.length ? { skipped: svc.skipped } : {}), ...(st.human ? { human: true } : {}),
+            waited_ms: now - svc.at,
             still_cursed: this.chaliceCursedWorn().length, still_unrevealed: this.chaliceUnrevealed(99).length });
         st.stage = 'donate';
         return pending(0);
@@ -24839,7 +24911,12 @@ export class Autopilot {
                                 hallGuildId: g?.id ?? null });
     if (!door.ok) { this.note('cannot use the stockpile', { why: door.why }); return { took: [], saved: 0 }; }
 
-    const before = snapshot();
+    // A `const before = snapshot();` STOOD HERE from 5a487a5 (2026-09-17) until 2026-09-25, copied
+    // from the deposit run -- where `snapshot` is a local of THAT method. Here it was undefined,
+    // so every withdrawal that found something to take threw a ReferenceError before its first
+    // step: the fleet's own elderberry/herb draws, standing-order funding and every restock for
+    // Loial, for eight days. The value was never read. Found by running this against prod's
+    // chest cache with travel stubbed out.
     this.doing = 'travelling';
     const trip = await this.travel(BOOKMAKERS_HALL_ROOM, { maxHops: 14 })
       .catch(error => ({ arrived: false, reason: error.message }));

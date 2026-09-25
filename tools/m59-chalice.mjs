@@ -174,6 +174,10 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // One tell per kind per server per this long. Five farmers in room 38 each asking for
   // forces of light is one tell to a person, not five every thirty seconds.
   human_tell_gap_ms: 90_000,
+  // HOW LONG A TRAVELLER HOLDING A PERSON'S CUP WAITS FOR A REMOVE CURSE before drinking anyway.
+  // Measured on prod 2026-09-25: two riders stood in room 2 with the fleet's cup for 35-45s
+  // waiting on a service the person had no reason to know was holding them up.
+  human_service_ms: 30_000,
 });
 
 // A HUMAN MARK IS LIVE ONLY WHILE IT IS FRESH. The broker refreshes it every thirty seconds
@@ -189,7 +193,7 @@ const NUMBERS = {
   restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000], rescue_emeralds: [0, 100],
   human_wait_ms: [10_000, 600_000], human_hold_ms: [10_000, 900_000],
   human_max_wait_ms: [30_000, 1_800_000], human_offer_ms: [8_000, 180_000],
-  human_tell_gap_ms: [0, 900_000],
+  human_tell_gap_ms: [0, 900_000], human_service_ms: [5_000, 300_000],
 };
 
 /**
@@ -230,6 +234,12 @@ export function normalizeChalice(cfg = null) {
           if (!String(item).trim()) { problems.push('supply_shops has an unnamed item'); continue; }
           if (!Number.isFinite(room) || room <= 0 || !seller) {
             problems.push(`supply_shops.${item} needs {room, seller}`);
+            continue;
+          }
+          // ORC TEETH ARE FARMED, NEVER BOUGHT (operator, 2026-09-25). No merchant is known to
+          // stock them anyway; this makes the rule survive somebody adding one.
+          if (/orc\s*tooth|orc\s*teeth/i.test(String(item))) {
+            problems.push(`supply_shops.${item} refused: orc teeth come from farming, never a counter`);
             continue;
           }
           shops[String(item).trim().toLowerCase()] = { room, seller,
