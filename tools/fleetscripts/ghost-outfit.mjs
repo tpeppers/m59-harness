@@ -452,8 +452,16 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
     // ONE AT A TIME THROUGH THE HALL. The chest door opens for five seconds on a spoken word
     // (guildh14.kod DOOR_DELAY); riders arriving together contend for it, and on the 2026-09-25
     // rehearsal one was refused 3 of 3 presses as "unable to go anywhere".
-    const r = await inHall(() => call('hall_withdraw', { agent, wants: share, stash: [...HALL_STASH_KEEP, ...share.map(w => w.item)] }, 620_000)
+    const draw = () => inHall(() => call('hall_withdraw', { agent, wants: share, stash: [...HALL_STASH_KEEP, ...share.map(w => w.item)] }, 620_000)
       .catch(e => ({ ok: false, why: e.message })));
+    let r = await draw();
+    // A DOOR REFUSAL IS WORTH ONE MORE TRY. On the 2026-09-25 rehearsal a rider was refused
+    // "guild door 53 trigger not reached" — the passage's walk to the trigger square did not
+    // land, with the previous armorer still in the passage. The door itself is fine.
+    if (!r?.ok && /door|trigger|could not be crossed|unable to go/i.test(String(r?.why ?? ''))) {
+      await sleep(15_000);
+      r = await draw();
+    }
     out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0;
     if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
   }

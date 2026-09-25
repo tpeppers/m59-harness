@@ -24548,7 +24548,10 @@ export class Autopilot {
         await nearChest(chest);
         for (const o of [...spare]) {
           const before = (c.inventory ?? []).length;
-          await s.pacer.submit('trade', () => c.put(o.id, chest.id)).catch(() => {});
+          // A STACK NEEDS A SPEC — a bare id on a stack completes the handshake and moves
+          // nothing (see the coop deposit below). The first stash went out with bare ids and
+          // stashed none of the pork or reagents that were filling the packs.
+          await s.pacer.submit('trade', () => c.put(dropSpecFor(o), chest.id)).catch(() => {});
           await new Promise(r => setTimeout(r, 300));
           await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
           await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
@@ -24579,7 +24582,14 @@ export class Autopilot {
           .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
         for (const st of stacks) {
           if (have - start >= want) break;
-          await s.pacer.submit('trade', () => c.get(st.id)).catch(() => {});
+          // TAKE WHAT IS WANTED, NOT THE WHOLE STACK. REQ_GET_FROM_CONTAINER carries an amount
+          // (user.kod:977 -> UserGet #number), so forty teeth come out of a 162-stack as forty.
+          // A whole-stack REQ_GET was refused as too heavy on the 2026-09-25 rehearsal: 0 of 40
+          // teeth, 15 of 120 elderberry, with the stacks sitting in the chest.
+          const n = Math.min(want - (have - start), Number(st.amount) || 1);
+          const spec = dropSpecFor(st, Number(st.amount) >= 1 ? n : null);
+          await s.pacer.submit('trade', () => (typeof c.getFromContainer === 'function'
+            ? c.getFromContainer(spec) : c.get(st.id))).catch(() => {});
           await new Promise(r => setTimeout(r, 400));
           const now = await packCount(item);
           // Refused — usually too heavy for what the pack has left. A SMALLER stack may still fit, so
