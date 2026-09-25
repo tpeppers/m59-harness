@@ -221,7 +221,7 @@ async function grabFromFloor(agent, re, tries = 10) {
  * keep the money, the cup, spare weapons for the hammer hand-out, and LIGHT food for a long trip.
  * Pork and mutton — the heaviest thing most packs carry — go in the chest.
  */
-export const HALL_STASH_KEEP = Object.freeze(['shilling', 'chalice', 'hammer', 'mace',
+export const HALL_STASH_KEEP = Object.freeze(['shilling', 'chalice', 'hammer', 'mace', 'sword', 'axe', 'scimitar',
   'bread', 'edible mushroom', 'apple', 'cheese']);
 
 /** What an armorer never parts with at the smith's counter. */

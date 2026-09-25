@@ -24997,9 +24997,18 @@ export class Autopilot {
     if ((Array.isArray(stash) || dep) && chests.length) {
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
       await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
-      const using = skills.equippedNow(c) ?? new Set();
+      // UNKNOWN IS NOT EMPTY. An unread use list defaulted to an empty set, which let the stash put
+      // a WIELDED weapon in the chest — an armorer came home unarmed on the 2026-09-25 rehearsal.
+      // Ask once more; if the server's use list is still unknown, stash nothing.
+      let using = skills.equippedNow(c);
+      if (!using) {
+        await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+        await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 4000 }).catch(() => {});
+        using = skills.equippedNow(c);
+      }
+      if (!using) { this.note('stash refused: the use list is unknown', {}); }
       const keep = (stash ?? []).map(k => String(k).toLowerCase());
-      const spare = (c.inventory ?? []).filter(o => !using.has(o.id)
+      const spare = !using ? [] : (c.inventory ?? []).filter(o => !using.has(o.id)
         && (dep ? dep.some(d => nameOf(o).includes(d)) : !keep.some(k => nameOf(o).includes(k))));
       for (const chest of chests) {
         if (!spare.length) break;
