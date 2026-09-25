@@ -24509,7 +24509,7 @@ export class Autopilot {
    *
    *   wants: [{ item, amount }]  ->  { ok, took: {item: n}, short: {item: n}, steps }
    */
-  async hallWithdraw(wants = [], { stash = null } = {}) {
+  async hallWithdraw(wants = [], { stash = null, deposit = null } = {}) {
     const s = this.s, c = s.need();
     const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase().trim();
     const same = (a, b) => norm(a) === norm(b) || String(a).toLowerCase() === String(b).toLowerCase();
@@ -24535,14 +24535,17 @@ export class Autopilot {
     // and on the 2026-09-25 rehearsal one reached the chests with 126 bulk free — less than one
     // knight's shield. `stash` is a keep list (substrings); everything else that is not worn or
     // wielded goes into a chest before anything comes out. Measured by the pack, item by item.
+    // `deposit` is the other direction of the same step: put THESE named things in (a prefarm run
+    // bringing its gear home), rather than everything BUT a keep list.
     let stashed = 0;
-    if (Array.isArray(stash) && chests.length) {
+    const dep = Array.isArray(deposit) && deposit.length ? deposit.map(d => String(d).toLowerCase()) : null;
+    if ((Array.isArray(stash) || dep) && chests.length) {
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
       await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
       const using = skills.equippedNow(c) ?? new Set();
-      const keep = stash.map(k => String(k).toLowerCase());
+      const keep = (stash ?? []).map(k => String(k).toLowerCase());
       const spare = (c.inventory ?? []).filter(o => !using.has(o.id)
-        && !keep.some(k => nameOf(o).includes(k)));
+        && (dep ? dep.some(d => nameOf(o).includes(d)) : !keep.some(k => nameOf(o).includes(k))));
       for (const chest of chests) {
         if (!spare.length) break;
         await nearChest(chest);
