@@ -13505,11 +13505,13 @@ const TOOLS = [
       agent: { type: 'string' },
       wants: { type: 'array', items: { type: 'object', properties: {
         item: { type: 'string' }, amount: { type: 'number' } }, required: ['item', 'amount'] } },
+      stash: { type: 'array', items: { type: 'string' },
+        description: 'KEEP list (substrings). Before taking anything, put every pack item that matches none of these and is not worn or wielded into a chest, to make room.' },
     }, required: ['agent', 'wants'] },
     run: async (a) => {
       const s = session(a.agent);
       if (!(s instanceof KeeperProxy)) return { ok: false, why: 'hall_withdraw needs a keeper-backed character' };
-      return keeperAction(s.name, s._index, 'hall_withdraw', { wants: a.wants ?? [] }, { timeoutMs: 600_000 });
+      return keeperAction(s.name, s._index, 'hall_withdraw', { wants: a.wants ?? [], stash: a.stash ?? null }, { timeoutMs: 600_000 });
     },
   },
   {

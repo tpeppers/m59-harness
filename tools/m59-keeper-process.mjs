@@ -2573,7 +2573,8 @@ const server = createServer(async (req, res) => {
               json({ error: 'this keeper has no hall withdrawal' }, 409); return;
             }
             const wants = Array.isArray(args.wants) ? args.wants : [];
-            json(await autopilot.hallWithdraw(wants).catch(e => ({ ok: false, why: e?.message ?? String(e) })));
+            json(await autopilot.hallWithdraw(wants, { stash: Array.isArray(args.stash) ? args.stash : null })
+              .catch(e => ({ ok: false, why: e?.message ?? String(e) })));
             return;
           }
 

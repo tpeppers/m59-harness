@@ -24509,7 +24509,7 @@ export class Autopilot {
    *
    *   wants: [{ item, amount }]  ->  { ok, took: {item: n}, short: {item: n}, steps }
    */
-  async hallWithdraw(wants = []) {
+  async hallWithdraw(wants = [], { stash = null } = {}) {
     const s = this.s, c = s.need();
     const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase().trim();
     const same = (a, b) => norm(a) === norm(b) || String(a).toLowerCase() === String(b).toLowerCase();
@@ -24525,6 +24525,39 @@ export class Autopilot {
     const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
     if (!hall.ok) return { ok: false, why: hall.why, steps: hall.steps, took: {}, short: {} };
     const chests = [...(c.room?.objects?.values?.() ?? [])].filter(o => /chest/i.test(nameOf(o)));
+    const nearChest = async (chest) => {
+      const me = c.self;
+      if (me && Number.isFinite(chest.row) && Number.isFinite(chest.col)
+          && Math.abs(me.row - chest.row) + Math.abs(me.col - chest.col) > 5)
+        await s.walkTo(chest.col, chest.row, { maxSteps: 40, hardCap: 50 }).catch(() => {});
+    };
+    // MAKE ROOM FIRST: STASH WHAT THE ERRAND DOES NOT NEED. An armorer arrives with a working pack,
+    // and on the 2026-09-25 rehearsal one reached the chests with 126 bulk free — less than one
+    // knight's shield. `stash` is a keep list (substrings); everything else that is not worn or
+    // wielded goes into a chest before anything comes out. Measured by the pack, item by item.
+    let stashed = 0;
+    if (Array.isArray(stash) && chests.length) {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
+      const using = skills.equippedNow(c) ?? new Set();
+      const keep = stash.map(k => String(k).toLowerCase());
+      const spare = (c.inventory ?? []).filter(o => !using.has(o.id)
+        && !keep.some(k => nameOf(o).includes(k)));
+      for (const chest of chests) {
+        if (!spare.length) break;
+        await nearChest(chest);
+        for (const o of [...spare]) {
+          const before = (c.inventory ?? []).length;
+          await s.pacer.submit('trade', () => c.put(o.id, chest.id)).catch(() => {});
+          await new Promise(r => setTimeout(r, 300));
+          await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+          await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+          if (!(c.inventory ?? []).some(x => x.id === o.id) || (c.inventory ?? []).length < before) {
+            stashed++; spare.splice(spare.indexOf(o), 1);
+          } else break;                          // this chest is full or refusing; try the next
+        }
+      }
+    }
     const took = {}, short = {};
     for (const w of wants) {
       const item = String(w.item ?? ''), want = Math.max(0, Number(w.amount) || 0);
@@ -24537,10 +24570,7 @@ export class Autopilot {
         // the chest's, for an item inside one — and refuses past a row + column distance of 7 in
         // silence. The passage leaves us where the chest SECTION begins, not beside each chest; on
         // the 2026-09-25 rehearsal an armorer with room for four chain armours took none.
-        const me = c.self;
-        if (me && Number.isFinite(chest.row) && Number.isFinite(chest.col)
-            && Math.abs(me.row - chest.row) + Math.abs(me.col - chest.col) > 5)
-          await s.walkTo(chest.col, chest.row, { maxSteps: 40, hardCap: 50 }).catch(() => {});
+        await nearChest(chest);
         const since = c.evSeq;
         await s.pacer.submit('read', () => c.contents(chest.id)).catch(() => {});
         const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
@@ -24561,8 +24591,8 @@ export class Autopilot {
       took[item] = have - start;
       if (have - start < want) short[item] = want - (have - start);
     }
-    this.note('hall withdrawal for an errand', { took, short });
-    return { ok: true, took, short, chests: chests.length };
+    this.note('hall withdrawal for an errand', { took, short, stashed });
+    return { ok: true, took, short, stashed, chests: chests.length };
   }
 
   /**

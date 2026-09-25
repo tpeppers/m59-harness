@@ -204,11 +204,14 @@ async function grabFromFloor(agent, re, tries = 10) {
   return (await inv(agent)).some(x => re.test(String(x.name ?? '')));
 }
 
+/** What an armorer never parts with — at the smith's counter or into a hall chest. */
+export const PACK_KEEP = Object.freeze(['shilling', 'elderberry', 'herb', 'mushroom', 'orc tooth', 'emerald', 'sapphire', 'ruby',
+  'hammer', 'mace', 'chain', 'shield', 'chalice', 'bread', 'pork', 'mutton', 'apple', 'cheese',
+  'spider eye', 'edible']);
+
 /** Sell what the smith buys, keeping money, reagents, food, the outfit and the cup. */
 export async function clearPack(agent, merchant) {
-  const keep = ['shilling', 'elderberry', 'herb', 'mushroom', 'orc tooth', 'emerald', 'sapphire', 'ruby',
-                'hammer', 'mace', 'chain', 'shield', 'chalice', 'bread', 'pork', 'mutton', 'apple', 'cheese',
-                'spider eye', 'edible'];
+  const keep = PACK_KEEP;
   const r = await call('sell_all', { agent, merchant, keep }, 300_000).catch(e => ({ error: e.message }));
   return r?.error ? { error: r.error } : { sold: r?.sold ?? r?.count ?? null };
 }
@@ -432,12 +435,12 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
     // ONE AT A TIME THROUGH THE HALL. The chest door opens for five seconds on a spoken word
     // (guildh14.kod DOOR_DELAY); riders arriving together contend for it, and on the 2026-09-25
     // rehearsal one was refused 3 of 3 presses as "unable to go anywhere".
-    const r = await inHall(() => call('hall_withdraw', { agent, wants: share }, 620_000)
+    const r = await inHall(() => call('hall_withdraw', { agent, wants: share, stash: [...PACK_KEEP, ...share.map(w => w.item)] }, 620_000)
       .catch(e => ({ ok: false, why: e.message })));
-    out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok;
+    out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0;
     if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
   }
-  log(`  ${agent} hall draw: ${out.ride}` + (out.took ? `; took ${JSON.stringify(out.took)}` : '') +
+  log(`  ${agent} hall draw: ${out.ride}` + (out.stashed ? `; stashed ${out.stashed}` : '') + (out.took ? `; took ${JSON.stringify(out.took)}` : '') +
       (out.short && Object.keys(out.short).length ? `; SHORT ${JSON.stringify(out.short)}` : '') +
       (out.why ? `; REFUSED ${out.why}` : ''));
   if (Number((await observe(agent)).room) !== Number(p.stage)) {
