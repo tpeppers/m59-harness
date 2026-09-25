@@ -386,7 +386,12 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null, 
 export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2, draw = [], log = console.log }) {
   const trips = [];
   let left = [...lines];
-  for (let trip = 1; trip <= Number(p.trips) && left.length; trip++) {
+  // ANOTHER TRIP ONLY FOR A GAP WORTH A TRIP. Each trip is a ride, a walk home through Ukgoth and
+  // the whole fleet waiting at the dress join: on rehearsal 24 an armorer rode a third time for two
+  // shields while twenty raiders stood armed in the stage room. Past the first trip, fewer than
+  // `extra_trip_min` owed pieces are left owed — logged, and the raid goes without them.
+  const minExtra = Math.max(1, Number(p.extra_trip_min ?? 3));
+  for (let trip = 1; trip <= Number(p.trips) && left.length && (trip === 1 || left.length >= minExtra); trip++) {
     const t = { trip, want: left.length };
     // To Barloque: the cup if we can, the road if we cannot.
     const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) })) : { ok: false, why: 'no cup holder' };
@@ -455,6 +460,7 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     trips.push(t);
     left = later;
   }
+  if (left.length) log(`  ${agent} armorer: ${left.length} piece(s) left owed (${left.map(l => `${l.kind}->${l.agent ?? 'spare'}`).join(', ')}) — not worth another trip`);
   return { trips, owed: left };
 }
 

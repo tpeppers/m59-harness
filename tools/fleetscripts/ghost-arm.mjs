@@ -140,6 +140,7 @@ export const script = {
     hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
     hall_wait_s: { type: 'number', default: 1800, describe: 'how long the fleet waits for the hall draw' },
     outfit_profile: { type: 'string', default: 'light', describe: 'light: leather + small round shield from the chests, chain from the smith for a gap; chain: rehearsal 21-24' },
+    extra_trip_min: { type: 'number', default: 3, describe: 'after the first armorer trip, ride again only for at least this many owed pieces' },
     spare_hammers: { type: 'number', default: 6, describe: 'hammers the armorers carry unassigned, for raiders the foundry fails' },
     split_hall: { type: 'boolean', default: true, describe: 'armorers draw armour and shop in ONE trip while runners fetch the reagents (false: rehearsal 21 order)' },
     hall_runners: { type: 'number', default: 1, describe: 'split_hall: how many raiders ride for the reagents' },
