@@ -555,7 +555,11 @@ async function rehearse(cfg) {
                   // --no-settle: take the fleet the moment it is logged in. Waiting for keepers to go quiet
                   // is waiting for them to wander: the first no-DM rehearsal's light-bearer walked from
                   // room 2 to Tos in that gap, and died crossing Ukgoth on the way back.
-                  '--no-settle', ...(cfg.commit ? [] : ['--dry'])];
+                  // --trim-items: a clone carries what its prod character carries and NOTHING ELSE.
+                  // Top-up alone let a previous run's leftovers accumulate: on 2026-09-25 Gonzo's
+                  // clone held a second Chalice of the Rain that prod does not have, the raid took
+                  // HIM for the cup holder, and the ride failed. A rehearsal must be prod-shaped.
+                  '--no-settle', '--trim-items', ...(cfg.commit ? [] : ['--dry'])];
     console.log(`rebuilding the shadow fleet: node ${args.join(' ')}`);
     const { spawnSync } = await import('node:child_process');
     const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
