@@ -353,14 +353,19 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
 // ---------------------------------------------------------------------------------- the hall draw
 
 /** What the armorers take out of the hall's chests before anything else, if nobody says otherwise. */
+// Sized from `m59-ghostraid.mjs chests` against prod on 2026-09-25: short 21 teeth, 47 elderberry,
+// 43 herbs and 52 mushrooms, and 15 chain and 19 shields wanted. Money is NOT drawn by default —
+// the fleet's own purses covered the whole bill — so the hall's 75,000 stays where it is.
 export const HALL_WANTS = Object.freeze([
-  { item: 'shilling', amount: 60000 },
   { item: 'orc tooth', amount: 40 },
   { item: 'elderberry', amount: 120 },
   { item: 'herb', amount: 120 },
+  { item: 'mushroom', amount: 60 },
   { item: 'chain armor', amount: 4 },
-  { item: 'small round shield', amount: 2 },
   { item: "knight's shield", amount: 6 },
+  { item: 'small round shield', amount: 2 },
+  { item: 'gold round shield', amount: 2 },
+  { item: 'herald shield', amount: 1 },
 ]);
 
 /**

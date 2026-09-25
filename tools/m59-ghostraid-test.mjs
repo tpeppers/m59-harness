@@ -160,11 +160,22 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   const crew = ['a', 'b', 'c', 'd'];
   const split = hallSplit(crew, HALL_WANTS, weighItem);
   ok(Object.values(split).flat().length === HALL_WANTS.length, 'the hall split hands out every want exactly once');
-  ok(split.a.some(w => w.item === 'shilling'), 'money weighs nothing and goes to the first rider');
+  ok(hallSplit(crew, [{ item: 'shilling', amount: 5 }, { item: 'orc tooth', amount: 3 }], weighItem).a.some(w => w.item === 'shilling'), 'money weighs nothing and goes to the first rider');
   const load = a => split[a].reduce((n, w) => n + (weighItem(w.item)?.weight ?? 0) * w.amount, 0);
-  ok(Math.max(...crew.map(load)) <= 1100, 'no rider carries more than 1100 weight of the default draw');
+  ok(Math.max(...crew.map(load)) <= 1200, 'no rider carries more than 1200 weight of the default draw');
   ok(crew.every(a => split[a].length), 'all four riders carry something');
   ok(Object.keys(hallSplit([], HALL_WANTS, weighItem)).length === 0, 'no crew, no split');
+  const { chestPlan, raidNeeds } = await import('./m59-ghostraid-lib.mjs');
+  const cp = chestPlan({ needs: { 'orc tooth': 30, elderberry: 10 }, fleet: { 'orc tooth': 10, elderberry: 20 },
+    chests: [{ slot: 'r1c1', items: [{ name: 'orc tooth', amount: 162 }, { name: 'purple mushroom', amount: 9 }] }], weigh: weighItem });
+  const t = cp.rows.find(r => r.item === 'orc tooth');
+  ok(t.short === 20 && t.draws[0].take === 162 && t.surplus === 142, 'a whole-stack draw takes the stack and counts the surplus home');
+  ok(cp.chests[0].reserve === 142 * 3, 'and reserves the bulk to put it back in the chest it came from');
+  ok(cp.rows.find(r => r.item === 'elderberry').draws.length === 0, 'nothing is drawn for an item the fleet already carries');
+  ok(chestPlan({ needs: { mushroom: 5 }, chests: [{ slot: 'x', items: [{ name: 'purple mushroom', amount: 9 }] }] }).rows[0].unmet === 5,
+     'a purple mushroom is not a mushroom');
+  const need = raidNeeds(['a', 'b', 'L'], { lightbearer: 'L', healers: ['a'] }, { lightCasts: 2, herbsEach: 5 });
+  ok(need['orc tooth'] === 2 && need.elderberry === 2 * 3 + 2 * 2 && need.herb === 10, 'raid needs: a dedication per raider, the light, herbs per heal caster');
 }
 
 console.log(`${pass} passed, ${fail} failed`);

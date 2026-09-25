@@ -366,3 +366,84 @@ export function reportMarkdown(rep, { fleet = '?', startedIso = '', notes = [] }
   if (notes.length) { L.push('', '## Notes', ''); for (const n of notes) L.push(`- ${n}`); }
   return L.join('\n') + '\n';
 }
+
+// ---------------------------------------------------------------------------------- the guild chests
+
+/**
+ * WHAT THE RAID CONSUMES, from its roles. The same arithmetic the arm step provisions with, so
+ * the chest plan and the hand-out cannot disagree: a dedication per raider, the light's casts,
+ * bless and super strength per their assignments and rounds, herbs for every heal caster. Pure.
+ */
+export function raidNeeds(agents = [], roles = {}, { lightCasts = 16, blessRounds = 4, herbsEach = 30,
+                                                     healCasters = null } = {}) {
+  const need = {};
+  const add = (reagents, times) => { for (const [k, n] of Object.entries(reagents)) need[k] = (need[k] ?? 0) + n * times; };
+  const weapons = agents.filter(a => a !== roles.lightbearer).length;
+  add(DEDICATE.reagents, weapons);
+  if (roles.lightbearer) add(LIGHT.reagents, lightCasts);
+  const bless = blessAssignments(agents, roles.blessers ?? [], { lightbearer: roles.lightbearer });
+  add(BLESS.reagents, Object.values(bless).reduce((n, t) => n + t.length, 0) * blessRounds);
+  const strong = buddyAssignments(agents, roles.strongmen ?? [], { lightbearer: roles.lightbearer });
+  add(STRENGTH.reagents, Object.values(strong).reduce((n, t) => n + t.length, 0) * 2);
+  add(HEAL.reagents, (healCasters ?? ((roles.healers ?? []).length + (roles.lightbearer ? 1 : 0))) * herbsEach);
+  return need;
+}
+
+/**
+ * THE CHEST PLAN: need against what the fleet carries and what each chest held when last read,
+ * and where to take the shortfall from — plus what the draw leaves behind to be put back.
+ *
+ * A get takes a WHOLE STACK (REQ_GET has no amount), so drawing 40 teeth from a 162-stack takes
+ * 162, and 122 come home as surplus. That surplus has to go back in somewhere, so every chest the
+ * plan draws from is given a RESERVE — the bulk to keep free for the return — and a chest that is
+ * already too full to take its own surplus back is named, with the chest that has the room.
+ *
+ *   needs {item:n}; fleet {item:n}; chests [{slot, items:[{name, amount}]}]; weigh name->{bulk}
+ *   -> { rows: [{item, need, fleet, short, draws:[{slot, take}], surplus, unmet}], chests: [...], warnings }
+ */
+export function chestPlan({ needs = {}, fleet = {}, chests = [], weigh = () => null, bulkMax = 24000 } = {}) {
+  // EXACT, after folding a plural: "mushroom" is one class of five mushrooms here, and a reagent
+  // list that took a purple mushroom for a mushroom would plan a draw the cast then refuses.
+  const key = s => lower(s).trim().replace(/ies$/, 'y').replace(/s$/, '');
+  const matches = (name, item) => key(name) === key(item);
+  const bulkOf = (name, n) => (Number(weigh(name)?.bulk) || 0) * n;
+  const state = chests.map(c => ({ slot: c.slot, items: (c.items ?? []).map(i => ({ ...i })),
+    bulk: (c.items ?? []).reduce((b, i) => b + bulkOf(i.name, Number(i.amount) || 1), 0), reserve: 0, draws: [] }));
+  const rows = [], warnings = [];
+  for (const [item, need] of Object.entries(needs).sort()) {
+    const have = Number(fleet[item] ?? 0);
+    const short = Math.max(0, need - have);
+    const row = { item, need, fleet: have, short, draws: [], surplus: 0, unmet: 0 };
+    let left = short;
+    // Fewest trips into the chest: the largest stacks first, whichever chest they sit in.
+    const stacks = state.flatMap(c => c.items.filter(i => matches(i.name, item)).map(i => ({ c, i })))
+      .sort((a, b) => (Number(b.i.amount) || 1) - (Number(a.i.amount) || 1));
+    for (const { c, i } of stacks) {
+      if (left <= 0) break;
+      const take = Number(i.amount) || 1;
+      row.draws.push({ slot: c.slot, name: i.name, take });
+      c.draws.push({ item, take });
+      c.bulk -= bulkOf(i.name, take);
+      left -= take;
+    }
+    row.unmet = Math.max(0, left);
+    row.surplus = Math.max(0, -left);
+    if (row.surplus) {
+      const from = row.draws[row.draws.length - 1];
+      const home = state.find(c => c.slot === from.slot);
+      home.reserve += bulkOf(from.name, row.surplus);
+    }
+    if (row.unmet) warnings.push(`${item}: short ${row.unmet} even after every chest — buy it, or cut the plan`);
+    rows.push(row);
+  }
+  for (const c of state) {
+    const free = bulkMax - c.bulk;
+    c.free = free;
+    if (c.reserve > free) {
+      const other = state.filter(o => o !== c).sort((a, b) => (bulkMax - b.bulk - b.reserve) - (bulkMax - a.bulk - a.reserve))[0];
+      warnings.push(`chest ${c.slot} cannot take back its own surplus (${c.reserve} bulk, ${free} free)` +
+                    (other ? ` — put it in ${other.slot} (${bulkMax - other.bulk - other.reserve} free after its own)` : ''));
+    }
+  }
+  return { rows, chests: state.map(({ items, ...c }) => c), warnings };
+}

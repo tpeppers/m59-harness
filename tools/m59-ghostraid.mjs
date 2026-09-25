@@ -45,7 +45,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { survivalReport, reportMarkdown, GHOST_ROOM, STAGE_ROOM, assignRoles } from './m59-ghostraid-lib.mjs';
+import { survivalReport, reportMarkdown, GHOST_ROOM, STAGE_ROOM, assignRoles, raidNeeds, chestPlan } from './m59-ghostraid-lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
@@ -134,6 +134,60 @@ async function plan(cfg) {
   console.log('\n  phases: arm (hammers, reagents, dedicate) -> prep (buffs) -> fight (door, light, kill, ' +
               `${cfg.minutes} min farm) -> report`);
   return roles;
+}
+
+// ---------------------------------------------------------------------------------- the chest plan
+
+/**
+ * WHAT THE RAID WILL TAKE OUT OF THE GUILD CHESTS, AND WHAT TO KEEP FREE FOR IT COMING BACK.
+ * Read-only: the roles and the packs live, the chests from their last reading (a chest is never
+ * pushed; `open-the-chests` refreshes it). Prints need / fleet / short per item, which chest and
+ * stack each shortfall comes from, the surplus a whole-stack draw brings home, the bulk to
+ * RESERVE in each chest for putting that back, and anything the chests cannot cover at all.
+ */
+async function chestReport(cfg) {
+  const roles = await plan(cfg);
+  const { outfitNeeds, OUTFIT } = await import('./fleetscripts/ghost-outfit.mjs');
+  const { weighItem } = await import('./m59-items.mjs');
+  const fleet = {}, outfit = { chain: 0, shield: 0, hammer: 0 };
+  let purses = 0;
+  const count = (items, item) => items.filter(i => String(i.name ?? '').toLowerCase().replace(/s$/, '') === item.replace(/s$/, ''))
+    .reduce((n, i) => n + (Number(i.amount) || 1), 0);
+  const items = ['orc tooth', 'elderberry', 'herb', 'emerald', 'sapphire', 'mushroom'];
+  for (const a of cfg.agents) {
+    const inv = (await rpc('inventory', { agent: a }).catch(() => null))?.items ?? [];
+    for (const it of items) fleet[it] = (fleet[it] ?? 0) + count(inv, it);
+    purses += Math.max(0, count(inv, 'shilling') - 20);
+    if (a !== roles.lightbearer) { const n = outfitNeeds(inv); for (const k in n) if (n[k]) outfit[k]++; }
+  }
+  const needs = raidNeeds(cfg.agents, roles, { lightCasts: Number(opt('--light-casts', 16)),
+    blessRounds: Number(opt('--bless-rounds', 4)), herbsEach: Number(opt('--herbs-each', 30)) });
+  const dir = path.join(path.dirname(path.dirname(cfg.roster ?? process.env.M59_STATE_FILE ?? '.')), 'storage', 'chests');
+  const chests = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    return { slot: j.slot ?? f.replace(/\.json$/, ''), items: j.items ?? [], observed_at: j.observed_at ?? null };
+  }) : [];
+  // Armour the chests already hold goes first; what is left is bought, and paid for in shillings.
+  const onHand = (re) => chests.flatMap(c => c.items).filter(i => re.test(String(i.name ?? ''))).reduce((n, i) => n + (Number(i.amount) || 1), 0);
+  const chainIn = onHand(/^chain armor$/i), shieldIn = onHand(/shield/i);
+  const buyChain = Math.max(0, outfit.chain - chainIn), buyShield = Math.max(0, outfit.shield - shieldIn);
+  needs.shilling = buyChain * OUTFIT.chain.price + buyShield * OUTFIT.shield.price + outfit.hammer * OUTFIT.hammer.price;
+  fleet.shilling = purses;
+  const out = chestPlan({ needs, fleet, chests, weigh: weighItem });
+  console.log(`
+THE GUILD CHESTS  (last read: ${chests.map(c => `${c.slot} ${c.observed_at ? new Date(c.observed_at).toISOString().slice(0, 16) : '?'}`).join(', ') || 'NEVER — run open-the-chests'})`);
+  console.log(`  outfit: ${outfit.shield} want a shield (${Math.min(shieldIn, outfit.shield)} from the chests), ` +
+              `${outfit.chain} want chain (${Math.min(chainIn, outfit.chain)} from the chests), ${outfit.hammer} want a hammer`);
+  console.log('  item          need  fleet  short   from the chests (whole stacks)             surplus home');
+  for (const r of out.rows) {
+    console.log(`  ${r.item.padEnd(12)} ${String(r.need).padStart(6)} ${String(r.fleet).padStart(6)} ${String(r.short).padStart(6)}   ` +
+      `${(r.draws.map(d => `${d.slot}:${d.take}`).join(' ') || (r.short ? '-' : 'not needed')).padEnd(42)} ${r.surplus || ''}` +
+      (r.unmet ? `  UNMET ${r.unmet}` : ''));
+  }
+  console.log('  chest    bulk now   free   reserve for the return');
+  for (const c of out.chests) console.log(`  ${c.slot.padEnd(7)} ${String(Math.round(c.bulk)).padStart(9)} ${String(Math.round(c.free)).padStart(6)}   ${c.reserve ? `keep ${Math.round(c.reserve)} bulk free` : '-'}`);
+  for (const w of out.warnings) console.log(`  WARNING ${w}`);
+  return out;
 }
 
 // ---------------------------------------------------------------------------------- muster preview
@@ -626,6 +680,7 @@ async function main() {
   if (cfg.lab) { const { assertLabFleet } = await import('./m59-fleetscript.mjs'); assertLabFleet('m59-ghostraid --lab'); }
   if (verb === 'plan') return plan(cfg);
   if (verb === 'muster') return musterPreview(cfg);
+  if (verb === 'chests') return chestReport(cfg);
   if (verb === 'setup') return setup(cfg);
   if (verb === 'arm') return arm(cfg);
   if (verb === 'prep') return prep(cfg);
