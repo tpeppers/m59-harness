@@ -130,6 +130,7 @@ export const script = {
     // smith, back through Ukgoth together. No DM power anywhere in it.
     outfit: { type: 'boolean', default: true, describe: 'send armorers for shields, chain and missing hammers' },
     armorers: { type: 'string', default: '', describe: 'comma-separated; empty = the `armorer_count` strongest non-casters' },
+    armorer_min_room: { type: 'number', default: 300, describe: 'an armorer needs this much free weight AND bulk, as the server counts it' },
     armorer_count: { type: 'number', default: 4, describe: 'how many armorers when none are named. The cup carries any number, one at a time' },
     hall_draw: { type: 'boolean', default: true, describe: 'armorers draw reagents, money and armour from the guild chests first' },
     hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
@@ -324,16 +325,19 @@ export const script = {
       // ---- 1. SURVEY. Everyone posts what it holds, then waits for everyone else, so the
       // hand-over plan below is computed from ONE picture of the fleet by every agent alike.
       verify(async ({ state: st }) => {
-        const [me, inv, sp] = await Promise.all([
+        const [me, inv, sp, lk] = await Promise.all([
           call('status', { agent, brief: false }, 40_000).catch(() => null),
           call('inventory', { agent }, 40_000).catch(() => null),
           call('spells', { agent }, 40_000).catch(() => null),
+          call('look', { agent, fresh: true }, 40_000).catch(() => null),
         ]);
         const worn = (me?.equipment ?? []).find(e => isWeaponName(e)) ?? null;
         SURVEY.set(agent, { character: me?.character ?? agent, wielding: worn,
                             items: inv?.items ?? [], mana: manaOf(me), maxMana: Number(me?.mana?.max ?? 0),
                             maxHealth: Number(me?.hp?.max ?? me?.vitals?.health?.max ?? 0),
                             might: Number(me?.attributes?.might ?? 0),
+                            // THE SERVER'S free room, not our estimate of it (see armorersOf).
+                            roomFor: lk?.carry?.room_for ?? null,
                             spells: (sp?.spells ?? []).map(s => String(s.name ?? '').toLowerCase()) });
         // Long enough for a real muster (a convoy through 598 is ten-plus minutes), short when
         // the lab has teleported everyone. A character that failed its muster never arrives, and
@@ -685,8 +689,13 @@ function armorersOf(agents, p) {
   if (named.length) return named;
   const roles = rolesNow(agents, p);
   const cup = cupHolderOf(agents, roles);
-  const free = x => { const r = packRoom(SURVEY.get(x)?.might, SURVEY.get(x)?.items ?? []); return (r.weight ?? 0) + (r.bulk ?? 0); };
-  return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && a !== cup && !roles.dedicators.includes(a) && !roles.healers.includes(a))
+  // FREE ROOM AS THE SERVER COUNTS IT when the survey has it. Our own estimate chose an armorer
+  // 119 weight OVER its limit on 2026-09-25, and the server then refused it even the chalice.
+  const free = x => { const live = SURVEY.get(x)?.roomFor;
+    const r = live ?? packRoom(SURVEY.get(x)?.might, SURVEY.get(x)?.items ?? []);
+    return Math.min(r.weight ?? 0, r.bulk ?? 0); };
+  return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && a !== cup && !roles.dedicators.includes(a) && !roles.healers.includes(a)
+                           && free(a) >= Number(p.armorer_min_room))
     // BY FREE ROOM, NOT BY MIGHT. Might sets how big a pack is; what an armorer can bring home is
     // what is EMPTY in it. On the 2026-09-25 rehearsal a might-50 armorer reached the chests already
     // over its bulk cap and took a fraction of its share. Free weight + bulk, from the survey's pack.
