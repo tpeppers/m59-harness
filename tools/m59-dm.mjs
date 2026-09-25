@@ -522,7 +522,10 @@ export async function kit(name, want = {}, opts = {}) {
   if (want.stats != null) cmds.push(...statCmds(obj, want.stats));
   if (want.health != null) cmds.push(...healthCmds(obj, want.health));
   if (want.mana != null) cmds.push(...manaCmds(obj, want.mana));
-  if (want.karma != null) cmds.push(karmaCmd(obj, want.karma));
+  // NewKarma after the write: it bounds the value and DRAWS it to the client (player.kod NewKarma ->
+  // DrawKarma), the way every kod setter does. Without it the server held 6400 while the client —
+  // and the broker's own karma gate on `cast` — still read 9, and forces of light was refused.
+  if (want.karma != null) cmds.push(karmaCmd(obj, want.karma), `send object ${obj} NewKarma`);
   if (want.skills != null)
     cmds.push(...skillCmds(obj, want.skills, want.skill_ids || abilityIds('SKID')));
   if (want.spells != null)

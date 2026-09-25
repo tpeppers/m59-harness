@@ -202,7 +202,11 @@ export const script = {
               mm = await maxManaNow();
             }
           }
-          console.log(`  ${agent} mirrored prod: karma ${stats.karma ?? '-'}, max mana ${mm} (prod ${stats.max_mana ?? '-'})`);
+          // READ BACK, not the number we asked for: the first version printed prod's karma while the
+          // character still read 9, and the fight ran unlit.
+          await sleep(1500);
+          const kNow = (await call('status', { agent, brief: false }, 30_000).catch(() => null))?.karma?.value ?? '?';
+          console.log(`  ${agent} mirrored prod: karma ${kNow} (prod ${stats.karma ?? '-'}), max mana ${mm} (prod ${stats.max_mana ?? '-'})`);
         }
         if (String(p.start_cup || '') === agent) {
           const has = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
