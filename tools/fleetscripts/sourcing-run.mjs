@@ -15,6 +15,7 @@
 //   sourcing-run agents=t2,t5,t19 assign='{"t2":0,"t5":0,"t19":1}' jobs='[{...},{...}]'
 // (m59-sourcing.mjs prints this line, with the jobs and the assignment filled in.)
 import { walk, verify, harvest, call } from '../m59-fleetscript.mjs';
+import { hallDeposit } from '../m59-inventory.mjs';
 
 const SAVED = new Map();
 const parse = (v, d) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? d); } catch { return d; } };
@@ -63,7 +64,7 @@ export const script = {
       ...(truthy(p.deposit) ? [
         { ...walk(Number(p.hall)), always: true },
         { ...verify(async () => {
-          const r = await call('hall_withdraw', { agent, wants: [], deposit: names }, 620_000).catch(e => ({ ok: false, why: e.message }));
+          const r = await hallDeposit(agent, names);   // m59-inventory: one at a time through the hall door
           console.log(`  ${agent} (${job.creature} @${job.room}) deposited ${r?.stashed ?? 0} piece(s)${r?.ok ? '' : ` — REFUSED ${r?.why ?? '?'}`}`);
           return true;
         }, 'the job\'s drops deposited in the guild chests'), always: true }] : []),

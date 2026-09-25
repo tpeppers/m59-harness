@@ -23,6 +23,7 @@
 //   node tools/m59-prefarm.mjs plan --fleet prod --wants '{"chain armor":4,"long sword":4}'
 //   node tools/m59-prefarm.mjs run  --fleet prod --wants '...' --top 6 --minutes 90 --commit
 import { walk, verify, harvest, call } from '../m59-fleetscript.mjs';
+import { hallDeposit } from '../m59-inventory.mjs';
 import { planPrefarm, describePrefarm, SOLDIER, SMITHS } from '../m59-prefarm-lib.mjs';
 import { barrier, expect } from '../m59-ghostraid-lib.mjs';
 import { PACK_KEEP } from './ghost-outfit.mjs';
@@ -117,7 +118,7 @@ export const script = {
       ...(truthy(p.deposit) && !plan.keep_not_deposit ? [
         { ...walk(Number(p.hall)), always: true },
         { ...verify(async () => {
-          const r = await call('hall_withdraw', { agent, wants: [], deposit: names }, 620_000).catch(e => ({ ok: false, why: e.message }));
+          const r = await hallDeposit(agent, names);   // m59-inventory: one at a time through the hall door
           console.log(`  ${agent} deposited ${r?.stashed ?? 0} piece(s) of the list${r?.ok ? '' : ` — REFUSED ${r?.why ?? '?'}`}`);
           return true;
         }, 'the list deposited in the guild chests'), always: true }] : [

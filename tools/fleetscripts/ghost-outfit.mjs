@@ -28,6 +28,15 @@
 
 import { call, castVerified, observe } from '../m59-fleetscript.mjs';
 import { weighItem } from '../m59-items.mjs';
+// PACK HANDLING LIVES IN m59-inventory.mjs — the cup, the floor, making room, hand-overs, buying,
+// walking, the hall. Re-exported under the names this file used to define, so callers are unchanged.
+import { rideCup, inHall, serially, walkRoom, cupRide, freshItems, grabFromFloor, makeRoom as invMakeRoom,
+         handOver, buyByName, HALL_STASH_KEEP, SELL_KEEP, hallStash, KEEP } from '../m59-inventory.mjs';
+export { rideCup, buyByName, HALL_STASH_KEEP };
+export const chaliceRide = (armorer, holder, opts) => cupRide(armorer, holder, opts);
+export const PACK_KEEP = SELL_KEEP;
+/** The raid's make-room: the operator's rule (KEEP.raid), `keep` food of each kind, `min` free. */
+export const makeRoom = (agent, { keep = 10, min = 400 } = {}) => invMakeRoom(agent, { min, profile: KEEP.raid, keepFood: keep });
 import { barrier, reexpect } from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -108,27 +117,10 @@ export function packRoom(might, items = []) {
 /** One run's shared state across agents (fleetScript runs them in one process). */
 export const OUTFIT_RUN = { plan: null, delivered: new Map(), done: false, cupHolder: null, log: [] };
 
-// ONE CUP, ANY NUMBER OF RIDERS, ONE AT A TIME. The chalice is handed over, drunk, dropped and
-// picked back up in room 2 (which refills it), so a second rider's hand-over must wait for the
-// first rider's drop. Not `serially`: a ride calls `serially` inside itself.
-let CUP = Promise.resolve();
-// SPACED, TOO: a rider's Rescue lands 15-25 s after the drink, and the next hand-over waits a
-// breath after the last so two riders are never arriving in the hall on top of each other.
-const RIDE_GAP_MS = Number(process.env.M59_RIDE_GAP_MS ?? 20_000);
-export const rideCup = fn => {
-  const p = CUP.then(fn, fn);
-  CUP = p.catch(() => {}).then(() => new Promise(r => setTimeout(r, RIDE_GAP_MS)));
-  return p;
-};
-let HALL = Promise.resolve();
-const inHall = fn => { const p = HALL.then(fn, fn); HALL = p.catch(() => {}); return p; };
-
-let CHAIN = Promise.resolve();
-const serially = fn => { const p = CHAIN.then(fn, fn); CHAIN = p.catch(() => {}); return p; };
-
 const purseOf = items => items.filter(i => /^shilling/i.test(String(i.name ?? '')))
   .reduce((n, i) => n + (Number(i.amount) || 1), 0);
-const inv = async agent => (await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [];
+// FRESH, never the keeper's cached inventory (m59-inventory freshItems).
+const inv = freshItems;
 
 /** Hand everything but a small reserve to this raider's armorer. */
 export async function poolMoney(agent, armorer, keep = 20) {
@@ -142,111 +134,7 @@ export async function poolMoney(agent, armorer, keep = 20) {
   return { gave: r?.supplied ? give : 0, why: r?.supplied ? null : r?.reason };
 }
 
-async function hopTo(agent, to, { floor = 0 } = {}) {
-  for (let i = 0; i < 3; i++) {
-    await call('travel', { agent, to, background: true, run_errands: false, health_floor: floor }, 60_000).catch(() => {});
-    const until = Date.now() + 15 * 60_000;
-    while (Date.now() < until) {
-      const o = await observe(agent);
-      if (o.dead) return { ok: false, dead: true };
-      // ARRIVED: CLEAR THE JOURNEY. A background travel can stay registered after the body is
-      // there, and the raid's next walk is then refused "busy: walk to <here>" — on the
-      // 2026-09-25 rehearsal that dropped an armorer from the fight.
-      if (Number(o.room) === Number(to)) { await call('cancel_movement', { agent }, 30_000).catch(() => {}); return { ok: true }; }
-      await sleep(3000);
-    }
-  }
-  return { ok: Number((await observe(agent)).room) === Number(to) };
-}
-
-/**
- * THE CHALICE RIDE, one armorer. The holder drops the cup, the armorer picks it up, drinks it and drops
- * it on the floor of room 2 at once — Rescue takes 15-25 s to land — and the holder picks it back
- * up, which refills it (room 2 is forest). Returns whether the armorer reached the hall.
- */
-export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
-  const cup = (await freshItems(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
-  // A CUP ALREADY ON THE FLOOR IS AS GOOD AS ONE IN HAND. The holder's own keeper drops it in the
-  // stage room to refill it (the chalice-farming orders run under the raid's hold); on the
-  // 2026-09-25 rehearsal it lay at the holder's feet while three riders were told "not carrying".
-  if (!cup) {
-    const floor = ((await call('look', { agent: holder, fresh: true }, 40_000).catch(() => null))?.objects ?? [])
-      .find(o => /chalice/i.test(String(o.name ?? '')));
-    if (!floor) return { ok: false, why: `${holder} is not carrying the chalice, and none lies in its room` };
-  } else {
-    // DROPPED AND GRABBED, NEVER HANDED OVER. The cup refuses a trade — on the 2026-09-25 rehearsal
-    // `supply` answered item_refuses_to_leave — and the operator's own method is use, drop, grab in
-    // room 2. So the holder drops it and the rider picks it up off the floor, read back each time.
-    await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
-  }
-  if (!(await grabFromFloor(armorer, /chalice/i))) {
-    // THE HOLDER TAKES IT BACK, or the cup lies on the floor for the rest of the raid and every
-    // later rider finds none (2026-09-25: an overloaded rider could not lift it; three rides lost).
-    const back = await grabFromFloor(holder, /chalice/i);
-    return { ok: false, why: `${armorer} could not pick the cup up after ${holder} dropped it` +
-                             (back ? '' : ' — AND the holder could not take it back') };
-  }
-  const mine = (await freshItems(armorer)).find(i => /chalice/i.test(String(i.name ?? '')));
-  await call('rest', { agent: armorer, stand: true }, 30_000).catch(() => {});
-  await call('act', { agent: armorer, verb: 'eat', target: mine.id }, 60_000).catch(() => {});
-  await sleep(1500);
-  await call('act', { agent: armorer, verb: 'drop', target: mine.id }, 60_000).catch(() => {});
-  // The holder picks it up off the floor — by what is on the floor now, not by a stored id — and
-  // KEEPS TRYING until the cup is in its pack. One look 1.5 s after the drop left the cup lying in
-  // room 2 on the 2026-09-25 rehearsal, and every rider after the first found no cup to ride.
-  const cupBack = await grabFromFloor(holder, /chalice/i);
-  const until = Date.now() + 60_000;
-  while (Date.now() < until) {
-    const o = await observe(armorer);
-    if (Number(o.room) === hall) return { ok: true, cupBack };
-    await sleep(2000);
-  }
-  return { ok: false, why: 'the ride did not land in the hall (not a guild member? teleport blocked after PVP?)', cupBack };
-}
-
-/**
- * PICK SOMETHING UP OFF THE FLOOR, AND KEEP TRYING UNTIL IT IS IN THE PACK. A dropped object takes
- * a moment to appear in the room, and a single look 1.5 s after a drop left the chalice lying in
- * room 2 on the 2026-09-25 rehearsal. Found by what is on the floor now, never by a stored id.
- */
-// A FRESH READ OF THE PACK. `inventory` answers from the keeper's cache, and a cup that had just
-// arrived read as missing (2026-09-25: a rider gave up on a pick-up that may well have landed).
-// `look fresh:true` asks now (as_of_ms 0).
-const freshItems = async agent => (await call('look', { agent, fresh: true }, 40_000).catch(() => null))?.items ?? [];
-
-async function grabFromFloor(agent, re, tries = 10) {
-  for (let i = 0; i < tries; i++) {
-    await sleep(1500);
-    if ((await freshItems(agent)).some(x => re.test(String(x.name ?? '')))) return true;
-    const look = await call('look', { agent, fresh: true }, 40_000).catch(() => null);
-    const onFloor = (look?.objects ?? []).find(o => re.test(String(o.name ?? '')));
-    if (!onFloor) continue;
-    // WITHIN SEVEN SQUARES, OR THE GET IS REFUSED IN SILENCE. UserGet (user.kod:3576) refuses a
-    // pick-up whose row + column distance exceeds 7. On the 2026-09-25 rehearsal the rider stood 32
-    // squares from where the holder dropped the cup, every get came back empty, and nothing said why.
-    const me = look?.you;
-    const far = me && Number.isFinite(onFloor.col) && Number.isFinite(onFloor.row)
-      && Math.abs(me.col - onFloor.col) + Math.abs(me.row - onFloor.row) > 5;
-    if (far) await call('walk_to', { agent, col: onFloor.col, row: onFloor.row }, 120_000).catch(() => {});
-    await call('act', { agent, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
-  }
-  return (await freshItems(agent)).some(x => re.test(String(x.name ?? '')));
-}
-
-/**
- * WHAT AN ARMORER KEEPS WHEN IT EMPTIES ITS PACK INTO A HALL CHEST — much less than it keeps at
- * the smith, on the operator's word (2026-09-25): "armorers can empty/stash their packs, anything
- * worth keeping can go into the chest". Armorers do not cast, and the hall holds the reagents; they
- * keep the money, the cup, spare weapons for the hammer hand-out, and LIGHT food for a long trip.
- * Pork and mutton — the heaviest thing most packs carry — go in the chest.
- */
-export const HALL_STASH_KEEP = Object.freeze(['shilling', 'chalice', 'hammer', 'mace', 'sword', 'axe', 'scimitar',
-  'bread', 'edible mushroom', 'apple', 'cheese']);
-
-/** What an armorer never parts with at the smith's counter. */
-export const PACK_KEEP = Object.freeze(['shilling', 'elderberry', 'herb', 'mushroom', 'orc tooth', 'emerald', 'sapphire', 'ruby',
-  'hammer', 'mace', 'chain', 'shield', 'chalice', 'bread', 'pork', 'mutton', 'apple', 'cheese',
-  'spider eye', 'edible']);
+const hopTo = (agent, to, { floor = 0 } = {}) => walkRoom(agent, to, { floor });
 
 /** Sell what the smith buys, keeping money, reagents, food, the outfit and the cup. */
 export async function clearPack(agent, merchant) {
@@ -295,73 +183,6 @@ export async function buyShare(agent, merchant, lines) {
   return { bought, stopped: replies };
 }
 
-/**
- * BUY NAMED ITEMS FROM A MERCHANT, ONE EXCHANGE PER PIECE FOR GEAR, ONE FOR A STACK, READ BACK.
- * The general form of buyShare: `lines` is [{item, amount}] by NAME, so any raid's list works.
- * Returns {item: bought}. A line the merchant does not sell is reported as 0, never skipped.
- */
-export async function buyByName(agent, seller, lines = []) {
-  const list = await call('shop', { agent, seller }, 120_000).catch(() => null);
-  const norm = x => lower(x).trim().replace(/ies$/, 'y').replace(/s$/, '');
-  const count = (items, name) => items.filter(i => norm(i.name) === norm(name)).reduce((m, i) => m + (i.amount || 1), 0);
-  const out = {};
-  for (const { item, amount } of lines) {
-    const it = (list?.items ?? []).find(i => norm(i.name) === norm(item));
-    if (!it) { out[item] = 0; continue; }
-    const start = count(await inv(agent), item);
-    let have = start;
-    const stack = Number(it.amount) > 1;
-    for (let i = 0; i < (stack ? 1 : amount) && have - start < amount; i++) {
-      await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount : 1 }] }, 120_000).catch(() => null);
-      const now = count(await inv(agent), item);
-      if (now <= have) break;
-      have = now;
-    }
-    out[item] = have - start;
-  }
-  return out;
-}
-
-/**
- * MAKE ROOM IN A PACK — the operator's rule (2026-09-25): "junk loot + excess food". Raiders' packs
- * are full on prod (the shadow mirrors them), so chain and shields could not be handed over.
- * Kept, always: money, reagents (every mushroom), the cup, weapons, armour and shields, and
- * ANYTHING WORN (matched by name against the worn list — never drop what is on the body). Dropped,
- * heaviest first: everything else; then food past `keep` of each kind. Stops at `min` free weight
- * AND bulk. Returns what was dropped, or null.
- */
-export const RAID_KEEP = Object.freeze(['shilling', 'elderberr', 'herb', 'mushroom', 'orc tooth', 'emerald',
-  'sapphire', 'ruby', 'diamond', 'dragon scale', 'web moss', 'fairy wing', 'uncut seraphym', 'dark angel feather',
-  'polished seraphym', 'solagh', 'kriipa claw', 'eye of the', 'chalice', 'hammer', 'mace', 'sword', 'axe', 'scimitar', 'bow', 'arrow',
-  'armor', 'armour', 'shield', 'robe', 'helm', 'gauntlet', 'ring', 'amulet', 'necklace', 'wand', 'potion', 'scroll']);
-const FOODS = /bread|pork|mutton|cheese|apple|meat|pie|stew|snack|berry|fish|grape|jerky|ration/i;
-export async function makeRoom(agent, { keep = 10, min = 400 } = {}) {
-  const look = async () => call('look', { agent, fresh: true }, 40_000).catch(() => null);
-  let l = await look();
-  const enough = r => r && Math.min(r.weight ?? 0, r.bulk ?? 0) >= min;
-  if (!l || enough(l.carry?.room_for)) return null;
-  const worn = new Set((l.equipment ?? []).map(x => lower(typeof x === 'string' ? x : x?.name)));
-  const w = it => (Number(weighItem(it.name)?.weight) || 10) * (Number(it.amount) || 1);
-  const dropped = {};
-  const drop = async (it, amount) => {
-    await call('act', { agent, verb: 'drop', target: it.id, ...(amount ? { amount } : {}) }, 30_000).catch(() => {});
-    dropped[it.name] = (dropped[it.name] ?? 0) + (amount ?? (Number(it.amount) || 1));
-    l = await look();
-  };
-  // 1. Junk: not kept, not food, not worn — heaviest first.
-  const junk = (l.items ?? []).filter(it => it.id != null && !worn.has(lower(it.name))
-    && !RAID_KEEP.some(k => lower(it.name).includes(k)) && !FOODS.test(it.name)).sort((a, b) => w(b) - w(a));
-  for (const it of junk) { if (enough(l?.carry?.room_for)) break; await drop(it); }
-  // 2. Food past `keep` of each kind — heaviest stacks first.
-  // Never a kept thing: /berry/ matched ELDERBERRY and dropped 18 of a dedicator's reagents
-  // (2026-09-25). Food is food only when nothing on RAID_KEEP claims it.
-  const food = (l?.items ?? []).filter(it => it.id != null && FOODS.test(it.name) && !worn.has(lower(it.name))
-    && !RAID_KEEP.some(k => lower(it.name).includes(k))
-    && (Number(it.amount) || 1) > keep).sort((a, b) => w(b) - w(a));
-  for (const it of food) { if (enough(l?.carry?.room_for)) break; await drop(it, (Number(it.amount) || 1) - keep); }
-  return Object.keys(dropped).length ? dropped : null;
-}
-
 /** Hand each raider its pieces, by id, and record what arrived. */
 export async function deliver(armorer, lines) {
   const out = [];
@@ -369,16 +190,9 @@ export async function deliver(armorer, lines) {
     if (l.agent === armorer) { out.push({ ...l, ok: true, self: true }); continue; }
     const piece = (await inv(armorer)).find(i => OUTFIT[l.kind].match.test(String(i.name ?? '').trim()));
     if (!piece) { out.push({ ...l, ok: false, why: 'not in the pack' }); continue; }
-    const give = () => serially(() => call('supply', { from: armorer, to: l.agent, what: [piece.id], who_travels: 'neither' }, 120_000)
-      .catch(e => ({ supplied: false, reason: e.message })));
-    let r = await give();
-    // A FULL RECEIVER MAKES ROOM AND IS ASKED AGAIN. Packs fill AFTER the muster — the reagent
-    // hand-out comes between — so an up-front make-room is too early; on the 2026-09-25 rehearsal
-    // it never fired and half the armour came home undelivered. The receiver drops heavy food.
-    if (!r?.supplied && /receiver_full|cannot hold/i.test(String(r?.reason ?? ''))) {
-      const dropped = await makeRoom(l.agent);
-      if (dropped) r = await give();
-    }
+    // A FULL RECEIVER MAKES ROOM AND IS ASKED AGAIN — m59-inventory handOver.
+    const h = await handOver(armorer, l.agent, piece.id);
+    const r = { supplied: h.ok, reason: h.why };
     out.push({ ...l, ok: !!r?.supplied, why: r?.supplied ? null : r?.reason });
     if (r?.supplied) {
       const got = OUTFIT_RUN.delivered.get(l.agent) ?? [];
@@ -484,8 +298,7 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
       if (at.ok) ride.inHall = true;
     }
     if (ride.ok || ride.inHall) {
-      const r = await inHall(() => call('hall_withdraw', { agent, wants: [], stash: [...HALL_STASH_KEEP] }, 620_000)
-        .catch(e => ({ ok: false, why: e.message })));
+      const r = await hallStash(agent, HALL_STASH_KEEP);
       t.stashed = r?.stashed ?? 0;
       if (t.stashed) log(`  ${agent} armorer trip ${trip}: stashed ${t.stashed} in the hall before shopping`);
     }
