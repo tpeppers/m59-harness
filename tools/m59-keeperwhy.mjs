@@ -79,9 +79,30 @@ export const SIGNATURES = Object.freeze([
            'mover cannot enter — `node tools/m59-roomview.mjs <room>` and the waypoint rails.',
   },
   {
+    // BEFORE stranded-dry-room, because it is the same symptom with a different lever. While a
+    // bot leases movement the keeper picks NO destination ("movement is leased — not choosing
+    // where to go", noted once per holder, so it scrolls out of `recent` within minutes and the
+    // character looks like a keeper ignoring its station). The walk home is the bot's recall.
+    id: 'stranded-movement-leased',
+    stuck: 'stranded-while-a-bot-holds-movement',
+    test: (s) => {
+      const off = /^stranded in |^holding a |^waiting at a /.test(s.activity ?? '')
+        && Number.isFinite(s.assignedRoom) && s.room != null && s.assignedRoom !== s.room;
+      return off && s.movementOwner && s.movementOwner !== 'keeper'
+        ? { room: s.room, assigned: s.assignedRoom, held_by: s.movementOwner } : null;
+    },
+    says: 'off its station while a bot holds its movement lease. The keeper does not choose ' +
+          'destinations under a lease, so only the bot\'s recall can bring it home.',
+    lever: 'check the bot\'s recall covers the station: for DUM, `node bin/dum.mjs plan --agent <a>` ' +
+           'should say "walking back to <room>". If it does not, the room is missing from ' +
+           '`station.rooms`, and a DUM that predates 27f93d2 needs a restart (not a reload) for it.',
+  },
+  {
     id: 'stranded-dry-room',
     stuck: null,
-    test: (s) => /^stranded in /.test(s.activity ?? '') ? { activity: s.activity } : null,
+    test: (s) => /^stranded in /.test(s.activity ?? '')
+      && !(s.movementOwner && s.movementOwner !== 'keeper' && s.assignedRoom !== s.room)
+      ? { activity: s.activity } : null,
     says: 'standing in a room that cannot produce its quarry.',
     lever: 'usually a town trip in progress or just ended; the keeper walks back to its station. ' +
            'If it persists, check `assigned_room` and the spawn table for the hunt.',
@@ -119,6 +140,9 @@ export function digest(state = {}) {
     assignedRoom: ap.policy?.assignedRoom ?? null,
     hunt: ap.policy?.hunt ?? null,
     kills: ap.did?.kills ?? null,
+    // A faculty is either the string 'keeper' or `{owner, expires_in_ms, why}`.
+    movementOwner: typeof ap.faculties?.movement === 'string'
+      ? ap.faculties.movement : (ap.faculties?.movement?.owner ?? null),
     stall: ap.stuck ?? null,
     recent: Array.isArray(ap.recent) ? ap.recent : [],
   };

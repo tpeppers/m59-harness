@@ -276,6 +276,30 @@ export const ENTRIES = Object.freeze([
     state: 'fixed',
     since: '2026-09-25',
   },
+  {
+    id: 'stranded-while-a-bot-holds-movement',
+    rooms: [],
+    asked: 1,
+    symptom: 'Characters finish a town trip and stay in town -- "stranded in 114: no orc or ' +
+             'spider here" -- while their station is somewhere else. The keeper journal shows ' +
+             'nothing but "carrying, but under the banking threshold".',
+    answer: 'A bot (DUM) holds their movement lease, and under a lease the keeper picks NO ' +
+            'destination by design: it logs "movement is leased - not choosing where to go" ONCE ' +
+            'per holder, which scrolls out of `recent` in minutes. The only walk home is the ' +
+            "bot's recall, and DUM's recall ignores any station missing from `station.rooms`.",
+    measured: '2026-09-25: the Icky Cave (27) station was added to `station.rooms` and hot-' +
+              'reloaded; the reload applied `shift` and reported `station` unclassified, so the ' +
+              'recall kept its old list. Pepe and Bunsen sat in 114 and Scooter in 101. After a ' +
+              'DUM restart `dum plan --agent t2` read "walking back to 27" and Pepe set off.',
+    fix: 'DUM 27f93d2 / 193ddc3 classifies `station` as live-reloadable, so a reload now carries ' +
+         'both halves of a station edit. `m59-keeperwhy.mjs` names this signature and points ' +
+         'at the recall rather than the keeper.',
+    state: 'fixed',
+    since: '2026-09-25',
+    robustness: 'A lease moves the decision, and the silence has to move with it: the keeper ' +
+                'correctly says nothing, so the question "why is nobody walking this home" ' +
+                'belongs to whoever holds the lease.',
+  },
 ]);
 
 const load = () => {

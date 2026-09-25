@@ -45,6 +45,21 @@ console.log('\nthe re-tasked wall-holder');
      !ids(state({ room: 38, assignedRoom: 27, activity: 'travelling' })).includes('wall-vigil-off-station'));
 }
 
+console.log('\nstranded while a bot holds movement');
+{
+  // Barloque, 2026-09-25: Pepe and Bunsen in 114, Scooter in 101, all stationed in 27, every
+  // keeper quiet because DUM held movement and its recall did not list 27.
+  const leased = (s) => { s.autopilot_status.faculties = { movement: { owner: 'dum/prod bands@pid-1' } }; return s; };
+  const pepe = leased(state({ room: 114, assignedRoom: 27, activity: 'stranded in 114: no orc or spider here' }));
+  ok('stranded off-station under a DUM lease is the leased signature', ids(pepe).includes('stranded-movement-leased'));
+  ok('...and not the generic dry room, whose lever is wrong for it', !ids(pepe).includes('stranded-dry-room'));
+  ok('...and it names the holder', classify(pepe).findings[0]?.held_by === 'dum/prod bands@pid-1');
+  const own = state({ room: 114, assignedRoom: 27, activity: 'stranded in 114: no orc or spider here' });
+  own.autopilot_status.faculties = { movement: 'keeper' };
+  ok('with the keeper holding its own legs it is a plain dry room',
+     ids(own).includes('stranded-dry-room') && !ids(own).includes('stranded-movement-leased'));
+}
+
 console.log('\nthe rest');
 {
   ok('the new all-unreachable note is recognised',

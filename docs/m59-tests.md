@@ -836,7 +836,7 @@ the records it describes.
   a sixteen-character ceiling that was ours rather than the server's, and a hyphen we
   admitted and the server refuses, which turned a readable error into a bare
   `BP_CHARINFO_NOT_OK` with nothing in it) and
-  `node tools/m59-keeperwhy-test.mjs` (20 — **the signatures that name a keeper's loop**. Each
+  `node tools/m59-keeperwhy-test.mjs` (25 — **the signatures that name a keeper's loop**. Each
   fixture is a keeper `/state` trimmed from the one read on prod; the test fails if a signature
   goes quiet on its own case, if an honest broke-off is misread as the pinned-to-nothing loop, or
   if a signature points at an `m59-stuck` entry that does not exist) and
