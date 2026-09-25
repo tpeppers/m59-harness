@@ -639,17 +639,43 @@ async function rehearse(cfg) {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }), signal: AbortSignal.timeout(60_000) });
     return JSON.parse((await r.json()).result.content[0].text);
   };
+  // IN PARALLEL, AND QUICKLY. Every second between the rebuild's login and the raid's hold is a
+  // second of keepers roaming wherever the clones last stood; read one at a time with a minute's
+  // patience, against a prod broker that was restarting, this gap was four minutes on 2026-09-25
+  // and the light-bearer's clone died in it.
   const startStats = {};
-  for (const c of clones) {
-    const s = await prodRpc('status', { agent: c.prod_agent, brief: false }).catch(() => null);
+  await Promise.all(clones.map(async c => {
+    const s = await Promise.race([prodRpc('status', { agent: c.prod_agent, brief: false }).catch(() => null),
+                                  new Promise(r => setTimeout(() => r(null), 15_000))]);
     const karma = Number(s?.karma?.value), maxMana = Number(s?.mana?.max);
     if (Number.isFinite(karma) || Number.isFinite(maxMana))
       startStats[c.shadow_account] = { karma: Number.isFinite(karma) ? karma : null, max_mana: Number.isFinite(maxMana) ? maxMana : null };
-  }
+  }));
   console.log(`prod karma/mana read for ${Object.keys(startStats).length} clone(s)`);
+  // THE CUP, EVEN WHEN THE SNAPSHOT CAUGHT IT IN FLIGHT. The chalice is passed by dropping it, so a
+  // snapshot can land while it lies on a floor and no pack holds it: 2026-09-25 21:09, prod's cup
+  // was between two riders and the clone fleet was built without one. On prod the light-bearer
+  // keeps it (hk1 looted it back seconds later), so that is the fallback.
+  const cupIn = clones.find(c => JSON.stringify(c.inventory ?? []).match(/chalice/i))?.shadow_account;
+  const startCup = cupIn ?? light?.shadow_account ?? '';
+  if (!cupIn) console.log(`  no clone carries the chalice in the snapshot (a hand-off in flight?) — giving it to the light-bearer ${startCup}`);
+  // A CLONE THAT LOST ITS PACK IS NOT PROD. Between the rebuild's login and the raid's hold, keepers
+  // run free wherever their clones last stood; on 2026-09-25 the light-bearer's clone, left in the
+  // Cragged Mountains by the previous run, died there and came to the raid carrying a mace. Check
+  // every clone's pack against its snapshot before the hold, and refuse to rehearse a fleet that
+  // is not the one prod has (--allow-lost to run it anyway).
+  const lost = [];
+  await Promise.all(clones.map(async c => {
+    const want = (c.inventory ?? []).length;
+    const have = ((await rpc('inventory', { agent: c.shadow_account }).catch(() => null))?.items ?? []).length;
+    if (want >= 6 && have < want / 2) lost.push(`${c.shadow_account} (${c.prod_character}): ${have} of ${want} items`);
+  }));
+  if (lost.length) {
+    console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
+    if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);
+  }
   return fight({ ...cfg, lab: false, agents: clones.map(c => c.shadow_account),
-                 lightbearer: light?.shadow_account ?? '', startPositions, startStats,
-                 startCup: clones.find(c => JSON.stringify(c.inventory ?? []).match(/chalice/i))?.shadow_account ?? '' },
+                 lightbearer: light?.shadow_account ?? '', startPositions, startStats, startCup },
                { composed: true });
 }
 
