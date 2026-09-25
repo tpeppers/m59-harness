@@ -57,6 +57,11 @@ section('the run uses the passage routine that was measured, not a fresh guess')
   ok(!/step: 'leave_foyer'/.test(src), 'and so is the hand-rolled foyer walk');
   eq((src.match(/const hall = await this.reachHallChests/g) ?? []).length, 3,
      'the deposit, the withdraw AND the errand withdrawal (hallWithdraw) all go through it');
+  // Measured on prod 2026-09-25, first probe after the deploy: `this.world` does not exist on the
+  // Autopilot, so the room read NaN and every hall withdrawal refused "not in the hall".
+  const hw = src.slice(src.indexOf('async hallWithdraw('), src.indexOf('async hallWithdraw(') + 2500);
+  ok(/s\.world\?\.room\?\.num/.test(hw) && !/this\.world\?\.room/.test(hw),
+     'hallWithdraw reads the room off the session world, not this.world');
   eq(src.split(String.raw`await this.sayHallPassword().catch(() => {})`).length - 1, 0,
      'and no call site throws the password result away');
 }

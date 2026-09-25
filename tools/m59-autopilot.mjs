@@ -24488,7 +24488,7 @@ export class Autopilot {
       return (c.inventory ?? []).filter(o => same(nameOf(o), item))
         .reduce((n, o) => n + (Number(o.amount) || 1), 0);
     };
-    const roomNum = Number(this.world?.room?.num ?? c.room?.num ?? NaN);
+    const roomNum = Number(s.world?.room?.num ?? NaN);   // the SESSION's world; `this.world` is undefined and read NaN on prod
     if (roomNum !== BOOKMAKERS_HALL_ROOM)
       return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})`, took: {}, short: {} };
     const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
