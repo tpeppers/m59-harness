@@ -165,12 +165,20 @@ async function hopTo(agent, to, { floor = 0 } = {}) {
  * up, which refills it (room 2 is forest). Returns whether the armorer reached the hall.
  */
 export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
-  const cup = (await inv(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
-  if (!cup) return { ok: false, why: `${holder} is not carrying the chalice` };
-  // DROPPED AND GRABBED, NEVER HANDED OVER. The cup refuses a trade — on the 2026-09-25 rehearsal
-  // `supply` answered item_refuses_to_leave — and the operator's own method is use, drop, grab in
-  // room 2. So the holder drops it and the rider picks it up off the floor, read back each time.
-  await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
+  const cup = (await freshItems(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
+  // A CUP ALREADY ON THE FLOOR IS AS GOOD AS ONE IN HAND. The holder's own keeper drops it in the
+  // stage room to refill it (the chalice-farming orders run under the raid's hold); on the
+  // 2026-09-25 rehearsal it lay at the holder's feet while three riders were told "not carrying".
+  if (!cup) {
+    const floor = ((await call('look', { agent: holder, fresh: true }, 40_000).catch(() => null))?.objects ?? [])
+      .find(o => /chalice/i.test(String(o.name ?? '')));
+    if (!floor) return { ok: false, why: `${holder} is not carrying the chalice, and none lies in its room` };
+  } else {
+    // DROPPED AND GRABBED, NEVER HANDED OVER. The cup refuses a trade — on the 2026-09-25 rehearsal
+    // `supply` answered item_refuses_to_leave — and the operator's own method is use, drop, grab in
+    // room 2. So the holder drops it and the rider picks it up off the floor, read back each time.
+    await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
+  }
   if (!(await grabFromFloor(armorer, /chalice/i))) {
     // THE HOLDER TAKES IT BACK, or the cup lies on the floor for the rest of the raid and every
     // later rider finds none (2026-09-25: an overloaded rider could not lift it; three rides lost).
@@ -345,7 +353,10 @@ export async function makeRoom(agent, { keep = 10, min = 400 } = {}) {
     && !RAID_KEEP.some(k => lower(it.name).includes(k)) && !FOODS.test(it.name)).sort((a, b) => w(b) - w(a));
   for (const it of junk) { if (enough(l?.carry?.room_for)) break; await drop(it); }
   // 2. Food past `keep` of each kind — heaviest stacks first.
+  // Never a kept thing: /berry/ matched ELDERBERRY and dropped 18 of a dedicator's reagents
+  // (2026-09-25). Food is food only when nothing on RAID_KEEP claims it.
   const food = (l?.items ?? []).filter(it => it.id != null && FOODS.test(it.name) && !worn.has(lower(it.name))
+    && !RAID_KEEP.some(k => lower(it.name).includes(k))
     && (Number(it.amount) || 1) > keep).sort((a, b) => w(b) - w(a));
   for (const it of food) { if (enough(l?.carry?.room_for)) break; await drop(it, (Number(it.amount) || 1) - keep); }
   return Object.keys(dropped).length ? dropped : null;
