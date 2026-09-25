@@ -423,8 +423,8 @@ export const script = {
                 for (const piece of items.filter(i => re.test(String(i.name ?? '').trim())).slice(1)) {
                   const to = Object.keys(want).sort().find(a => want[a]?.[kind]);
                   if (!to) break;
-                  const r = await call('supply', { from: arm, to, what: [piece.id], who_travels: 'neither' }, 120_000)
-                    .catch(e => ({ supplied: false, reason: e.message }));
+                  // m59-inventory handOver: a full receiver makes room (junk, spare weapons, excess food) and is asked again.
+                  const r = await handOver(arm, to, piece.id, { makeRoomMin: 200 }).then(h => ({ supplied: h.ok, reason: h.why }));
                   console.log(`  hall ${kind} ${arm} -> ${to}: ${r?.supplied ? 'given' : `NOT given (${r?.reason ?? '?'})`}`);
                   // A full pack refuses the piece; the next raider in need gets it instead of the
                   // same full one being offered every remaining piece (2026-09-25: receiver_full).
@@ -495,9 +495,8 @@ export const script = {
 
         // Donors hand over; receivers wait to see the hammer arrive.
         for (const t of transfers.filter(t => t.from === agent)) {
-          const r = await serially(() => call('supply', { from: t.from, to: t.to, what: [t.id],
-                                                          who_travels: 'neither' }, 120_000)
-            .catch(e => ({ supplied: false, reason: e.message })));
+          // m59-inventory handOver: a full receiver makes room (junk, spare weapons, excess food) and is asked again.
+          const r = await handOver(t.from, t.to, t.id, { makeRoomMin: 200 }).then(h => ({ supplied: h.ok, reason: h.why }));
           console.log(`  ${agent} -> ${t.to}: spare hammer ${r?.supplied ? 'handed over' : `NOT moved (${r?.reason ?? '?'})`}`);
         }
         let got = null;
@@ -590,9 +589,8 @@ export const script = {
               .sort((a, b) => (b.amount || 1) - (a.amount || 1))[0];
             if (!stack) { why = 'none left in the pack'; break; }
             const n = Math.min(left, stack.amount || 1);
-            const r = await serially(() => call('supply', { from: agent, to: m.to, what: [{ id: stack.id, amount: n }],
-                                                            who_travels: 'neither' }, 180_000)
-              .catch(e => ({ supplied: false, reason: e.message })));
+            // m59-inventory handOver: a full receiver makes room (junk, spare weapons, excess food) and is asked again.
+            const r = await handOver(agent, m.to, { id: stack.id, amount: n }, { makeRoomMin: 200 }).then(h => ({ supplied: h.ok, reason: h.why }));
             if (!r?.supplied) { why = r?.reason ?? '?'; break; }
             left -= n; moved += n;
           }
@@ -807,8 +805,8 @@ async function handIn({ agent, st, say, dedicators, agents, p }) {
     await call('act', { agent, verb: 'drop', target: item.id }, 60_000).catch(() => {});
     (HANDED.get(to) ?? HANDED.set(to, []).get(to)).push({ owner: agent, id: item.id, floor: true, name: item.name });
   } else {
-    const r = await serially(() => call('supply', { from: agent, to, what: [item.id], who_travels: 'neither' }, 120_000)
-      .catch(e => ({ supplied: false, reason: e.message })));
+    // m59-inventory handOver: a full receiver makes room (junk, spare weapons, excess food) and is asked again.
+    const r = await handOver(agent, to, item.id, { makeRoomMin: 200 }).then(h => ({ supplied: h.ok, reason: h.why }));
     if (!r?.supplied) {
       await call('act', { agent, verb: 'use', target: item.id }, 60_000).catch(() => {});
       leave('dropped', agent);
