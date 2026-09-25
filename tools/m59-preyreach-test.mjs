@@ -200,6 +200,17 @@ console.log('--- quarry selection skips proved-unreachable prey, as fight() does
   const selected = [pocket, ours].filter(o => !avoid(o));
   ok('the pocket orc is dropped from selection', !selected.includes(pocket));
   ok('the orc on our side is kept', selected.length === 1 && selected[0] === ours);
+
+  // THE SECOND WAY fight() GETS PINNED TO NOTHING: a pending pull whose creature died to
+  // somebody else. plannedQuarryId prefers the pull's id over the selection, and the only
+  // check for a vanished pull lived under out_of_reach, which "nothing matches" never sets.
+  const planned = AP.indexOf('const plannedQuarryId = this.pendingPull?.target_id');
+  const guard = AP.lastIndexOf('const pulled = c.room.objects.get(this.pendingPull.target_id);', planned);
+  ok('a pending pull is re-checked against the room before its id is used',
+     guard > 0 && planned - guard < 1200);
+  ok('...and dropped when its quarry is gone or no longer attackable',
+     AP.slice(guard, planned).includes('!(pulled.flags & OF.ATTACKABLE)')
+       && AP.slice(guard, planned).includes('this.pendingPull = null;'));
 }
 
 console.log(failed ? `\n${failed} failed` : '\nall passed');

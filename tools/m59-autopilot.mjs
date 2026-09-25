@@ -20679,6 +20679,23 @@ export class Autopilot {
       // the swing means the first exchange of every fight is two characters choosing
       // independently, which is the one moment convergence is worth most — whoever
       // gets there first sets the target and the other joins on its next pass.
+      // A PULL WHOSE QUARRY IS GONE IS NOT A PLAN. The pending pull outranks the selection
+      // here, and fight() is pinned to the id it names (`exactTargetId`) — so when somebody
+      // else kills the pulled creature, or it despawns, fight() finds nothing, answers "try
+      // one of the names above" without `out_of_reach`, and the branch that would notice the
+      // missing quarry (pendingPullWait, which lives under out_of_reach) never runs. Sweetums,
+      // Icky Cave, prod 2026-09-25: `broke off` 367 passes in a row on a proven wall, ten live
+      // prey in the room, three orc corpses beside the pull. Drop it here, where the id is read.
+      if (this.pendingPull?.target_id != null) {
+        const pulled = c.room.objects.get(this.pendingPull.target_id);
+        if (!pulled || !(pulled.flags & OF.ATTACKABLE)) {
+          this.note('the pulled quarry is gone — choosing again', {
+            target: this.pendingPull.target, target_id: this.pendingPull.target_id,
+            why: pulled ? 'it is no longer attackable (dead)' : 'it is no longer in the room',
+            note: 'a vanished quarry says nothing about the wall, so the square is not charged' });
+          this.pendingPull = null;
+        }
+      }
       const plannedQuarryId = this.pendingPull?.target_id ?? selectedQuarry?.id ?? null;
       const swingAt = bystander ? bystander.id : (partyFoe ? partyFoe.id : plannedQuarryId);
       const claimedSwing = swingAt ?? null;
