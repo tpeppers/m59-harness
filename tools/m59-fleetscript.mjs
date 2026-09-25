@@ -2019,7 +2019,12 @@ async function healToFloor(ctx, agent, floor, budgetMs) {
       // NOT IMPROVING IS ITS OWN ANSWER. Some rooms prevent rest, and a character at its
       // ceiling is not going to get better by being watched; either is worth reporting
       // rather than burning the whole budget in silence.
-      if (now.health != null && now.health > best + 0.01) { best = now.health; stalledSince = Date.now(); }
+      // AN UNREADABLE READING IS NOT A STALL. On the 2026-09-25 rehearsal shadow15 was dropped from
+      // the raid with "stopped improving at ?" — the keeper did not answer for a while, and every
+      // blank sample counted as a sample that did not improve. Only real readings count; a body
+      // whose health never becomes readable still ends, at the budget, and says so.
+      if (now.health == null) continue;
+      if (now.health > best + 0.01) { best = now.health; stalledSince = Date.now(); }
       else if (Date.now() - stalledSince > Math.min(120_000, budgetMs / 2))
         return { ok: false, why: `health stopped improving at ${now.hpText} (floor ${floor})` };
     }
@@ -2203,7 +2208,7 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null })
   // same evidence as three that walked and failed, and they used to unwind identically -- so a
   // contention failure was filed as a movement defect. `#movement` ledgers are keyed on that
   // distinction being right.
-  let launched = 0;
+  let launched = 0, waitedOnOwn = false;
   const sends = [];
   for (let attempt = 0; attempt < 3; attempt++) {
     const at = await observe(agent);
@@ -2316,6 +2321,23 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null })
       sends.push(why);
       ctx.log(agent, `the walk to ${to} was NOT STARTED (${why}) — not waiting out a ` +
                      `${Math.round(budget / 1000)}s budget for a journey that never began`);
+      // OUR OWN JOURNEY, STILL RUNNING. Once this step has launched a walk, `is busy` on a retry is
+      // most often that walk — slower than its p90 budget, and not cleared by the cancel. On the
+      // 2026-09-25 rehearsal shadow16 was dropped from the raid with "busy: walk to Outside Castle
+      // Victoria" twice: the very walk it had been sent on. So it gets ONE more budget to arrive
+      // before the retry counts against it.
+      if (isBusyRefusal(sent) && launched && !waitedOnOwn) {
+        waitedOnOwn = true;
+        ctx.log(agent, `still busy with a walk it was sent on — waiting one more budget for it to arrive`);
+        const until2 = Date.now() + budget;
+        while (Date.now() < until2) {
+          await sleep(ctx.pollMs);
+          const now = await observe(agent);
+          if (Number(now.room) === to) return { ok: true, room: to, late: true };
+          if (now.dead) return { ok: false, why: 'died en route', dead: true };
+        }
+        continue;
+      }
       // A body the keeper will not let go of is worth one more OUTER attempt (it re-observes,
       // re-gates, and cancels again). Any other refusal is an answer and is returned.
       if (isBusyRefusal(sent)) continue;
