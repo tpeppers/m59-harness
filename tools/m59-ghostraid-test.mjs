@@ -174,6 +174,22 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
      'allocation: a hall line by its name, a bought line by its kind, the missing one waits');
   ok(allocate([{ agent: 'a', kind: 'shield', source: 'hall', name: "knight's shield" }], [{ id: 2, name: 'small round shield' }]).later.length === 1,
      'a small round shield does not satisfy a line for a knight’s shield');
+  // The light outfit (operator 2026-09-25): leather + small round shield from the chests, chain from
+  // the smith for a gap, spare hammers in the room that is left.
+  ok(!outfitNeeds([{ name: 'leather armor' }], { profile: 'light' }).chain, 'light: leather is body armour');
+  ok(outfitNeeds([{ name: 'leather armor' }], { profile: 'chain' }).chain, 'chain: leather is not enough');
+  const lstock = hallStock([{ items: [{ name: 'leather armor', amount: 1 }, { name: 'small round shield', amount: 2 },
+                                      { name: "knight's shield", amount: 4 }, { name: 'hammer', amount: 1 }] }],
+                           { names: ['leather armor', 'small round shield'] });
+  ok(!lstock.some(x => x.name === "knight's shield") && lstock.some(x => x.kind === 'hammer'),
+     'light: only leather and small round shields are handed out; the chests’ hammers are counted for spares');
+  const two = { a: { shield: true, chain: true, hammer: false }, b: { shield: true, chain: true, hammer: false } };
+  const lp = planOutfit(two, { budget: 100000, capacity: [{ agent: 'x', weight: 5000, bulk: 5000 }], stock: lstock, spares: 3 });
+  ok(lp.fromHall.filter(h => h.kind === 'chain' && h.name === 'leather armor').length === 1 && lp.buys.filter(b => b.kind === 'chain').length === 1,
+     'one leather from the chests; the second raider gets chain from the smith');
+  ok(lp.fromHall.filter(h => h.kind === 'shield').length === 2 && !lp.buys.some(b => b.kind === 'shield'), 'both shields from the chests');
+  ok(lp.spare.length === 3 && lp.spare[0].source === 'hall' && lp.spare[1].source === 'smith', 'spare hammers: the chest’s first, then bought');
+  ok(lp.byCarrier.x.filter(l => l.spare).every(l => l.agent == null), 'a spare belongs to nobody until the join');
 }
 
 {

@@ -56,7 +56,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { handOver, earmark, eatTo } from '../m59-inventory.mjs';
 import { forge } from '../m59-foundry.mjs';
-import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
+import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, profileOf, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
@@ -139,6 +139,8 @@ export const script = {
     hall_draw: { type: 'boolean', default: true, describe: 'armorers draw reagents, money and armour from the guild chests first' },
     hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
     hall_wait_s: { type: 'number', default: 1800, describe: 'how long the fleet waits for the hall draw' },
+    outfit_profile: { type: 'string', default: 'light', describe: 'light: leather + small round shield from the chests, chain from the smith for a gap; chain: rehearsal 21-24' },
+    spare_hammers: { type: 'number', default: 6, describe: 'hammers the armorers carry unassigned, for raiders the foundry fails' },
     split_hall: { type: 'boolean', default: true, describe: 'armorers draw armour and shop in ONE trip while runners fetch the reagents (false: rehearsal 21 order)' },
     hall_runners: { type: 'number', default: 1, describe: 'split_hall: how many raiders ride for the reagents' },
     trips: { type: 'number', default: 3, describe: 'shopping trips at most' },
@@ -401,7 +403,7 @@ export const script = {
           if (!splitOn(p)) {
             const want = {};
             await Promise.all(agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && !pair.includes(a)).map(async a => {
-              want[a] = outfitNeeds((await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? []);
+              want[a] = outfitNeeds((await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? [], { profile: p.outfit_profile });
             }));
             const kinds = { chain: /^chain armor$/i, shield: /shield/i };
             for (const arm of pair) {
@@ -428,7 +430,7 @@ export const script = {
           const needs = {}, packs = {};
           await Promise.all(agents.filter(a => a !== roles.lightbearer && SURVEY.has(a)).map(async a => {
             packs[a] = (await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? [];
-            needs[a] = outfitNeeds(packs[a]);
+            needs[a] = outfitNeeds(packs[a], { profile: p.outfit_profile });
           }));
           const budget = pair.reduce((n, a) => n + (packs[a] ?? []).filter(i => /^shilling/i.test(String(i.name ?? '')))
             .reduce((m, i) => m + (Number(i.amount) || 1), 0), 0);
@@ -441,13 +443,18 @@ export const script = {
           const bigCap = capacity.map(c => ({ ...c, weight: c.weight * trips, bulk: c.bulk * trips }));
           // Split mode plans against what the CHESTS hold (the armorers fetch it on the same trip) and
           // buys no hammer for anyone who can forge one while they are away.
-          const stock = splitOn(p) && hallOn(p) ? hallStock(readChests()) : [];
+          const stock = splitOn(p) && hallOn(p) ? hallStock(readChests(), { names: profileOf(p.outfit_profile).hall }) : [];
           const canForge = foundryOn(p)
             ? new Set(agents.filter(a => (SURVEY.get(a)?.spells ?? []).includes('create weapon'))) : new Set();
-          OUTFIT_RUN.plan = planOutfit(needs, { budget, capacity: bigCap, stock, canForge });
+          // Spare hammers for whoever the foundry fails: one per raider with no blunt weapon at the
+          // survey, capped by `spare_hammers` (0 = none).
+          const noBlunt = agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && !(SURVEY.get(a).items ?? []).some(i => isBlunt(i.name))).length;
+          const spares = Math.min(noBlunt, Number(p.spare_hammers ?? 0));
+          OUTFIT_RUN.plan = planOutfit(needs, { budget, capacity: bigCap, stock, canForge, spares });
           const pl = OUTFIT_RUN.plan;
           console.log(`  armorers ${pair.join(' + ')}: budget ${budget}, buying ${pl.buys.length} piece(s) for ${pl.spend}` +
                       (pl.fromHall?.length ? `, ${pl.fromHall.length} from the chests` : '') +
+                      (pl.spare?.length ? `, ${pl.spare.length} spare hammer(s)` : '') +
                       (pl.cut.length ? `; cut ${pl.cut.length} (${[...new Set(pl.cut.map(c => c.why))].join(', ')})` : ''));
           // EACH ARMORER PAYS FROM ITS OWN PURSE, and the hall's money arrived in one pack. So the
           // purses are levelled to each armorer's share of the bill before anyone leaves.
@@ -767,8 +774,22 @@ export const script = {
         }
         while (!OUTFIT_RUN.done && Date.now() < until) await sleep(5000);
         if (agent === roles.lightbearer) { st.outfit = { skipped: 'light-bearer (held the cup)' }; return true; }
-        st.outfit = await wearOutfit(agent);
-        const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || isArmorer || !!forged?.ok;
+        st.outfit = await wearOutfit(agent, { profile: p.outfit_profile });
+        // A SPARE FOR WHOEVER THE FOUNDRY FAILED. The armorers carried unassigned hammers; a raider
+        // still without a hammer or mace takes one, and it is dedicated like any late hammer.
+        let spareTaken = false;
+        if (!isArmorer && !(await call('inventory', { agent }, 40_000).catch(() => null))?.items?.some(i => isBlunt(i.name))) {
+          for (const arm of armorersOf(agents, p)) {
+            const r = await serially(async () => {
+              const hs = ((await call('inventory', { agent: arm }, 40_000).catch(() => null))?.items ?? []).filter(i => isHammer(i.name) && i.id != null);
+              if (hs.length < 2) return null;            // keep the armorer's own
+              return handOver(arm, agent, hs[hs.length - 1].id, { makeRoomMin: 200 });
+            });
+            if (r?.ok) { spareTaken = true; (OUTFIT_RUN.gear ??= []).push({ agent, kind: 'hammer', name: 'hammer', source: 'spare', by: arm }); break; }
+          }
+          console.log(`  ${agent} spare hammer: ${spareTaken ? 'taken' : 'none left'}`);
+        }
+        const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || isArmorer || !!forged?.ok || spareTaken;
         if (late) st.outfit.dedicate = await lateDedicate(agent, roles.dedicators,
           { lab, dm: lab ? await dmLab() : null, donors: agents.filter(a => a !== roles.lightbearer) });
         console.log(`  ${String(SURVEY.get(agent)?.character ?? agent).padEnd(8)} dressed: ${st.outfit.wore.join('+') || 'nothing new'}` +

@@ -350,6 +350,7 @@ const fightParams = (cfg, dir, mustered) => ({
   ...(opt('--room') ? { room: Number(opt('--room')) } : {}), ...(opt('--door') ? { door: Number(opt('--door')) } : {}),
   ...(opt('--target') ? { target: opt('--target') } : {}),
   dum_profile: !!cfg.dumUrl,
+  checkpoint: !!cfg.checkpoint,
 });
 
 async function arm(cfg) {
@@ -530,11 +531,32 @@ export async function report(cfg) {
     meta.lab ? 'LAB RUN: DM conveniences were on (healed/placed/granted/refilled); the fight itself was not assisted' : 'no DM powers were used',
   ];
   fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(rep, null, 1));
-  const md = reportMarkdown(rep, { fleet: meta.fleet, startedIso: entered ? new Date(entered).toISOString() : '', notes });
+  const md = reportMarkdown(rep, { fleet: meta.fleet, startedIso: entered ? new Date(entered).toISOString() : '', notes }) + gearMarkdown(events);
   fs.writeFileSync(path.join(dir, 'report.md'), md);
   console.log(md);
   console.log(`written: ${path.join(dir, 'report.md')}`);
   return rep;
+}
+
+// THE GEAR EACH RAIDER TOOK IN (operator, 2026-09-25: mixed leather and chain is fine as long as it
+// is documented). One row per raider from the `gear` events written when everyone was armed, with
+// where each piece came from; and the checkpoint the battle can be replayed from.
+function gearMarkdown(events) {
+  const g = events.filter(e => e.kind === 'gear');
+  if (!g.length) return '';
+  const cell = (item, from) => item ? `${item}${from && from !== 'own' ? ` *(${from})*` : ''}` : '—';
+  const count = re => g.filter(x => re.test(String(x.body ?? ''))).length;
+  const lines = ['', '## Gear', '',
+    `body armour: leather ${count(/leather/i)}, chain ${count(/chain/i)}, scale/plate ${count(/scale|plate/i)}, none ${g.filter(x => !x.body).length}; ` +
+    `shield ${g.filter(x => x.shield).length}/${g.length}; blunt weapon ${g.filter(x => /^(hammer|mace)$/i.test(String(x.weapon ?? ''))).length}/${g.length}`,
+    '', '| character | weapon | body armour | shield | health | mana | vigor |', '|---|---|---|---|---|---|---|'];
+  for (const x of g.sort((a, b) => String(a.character).localeCompare(String(b.character)))) {
+    const v = o => o == null ? '—' : (typeof o === 'object' ? `${o.value ?? '?'}${o.max != null ? `/${o.max}` : ''}` : String(o));
+    lines.push(`| ${x.character} | ${cell(x.weapon, x.weapon_from)} | ${cell(x.body, x.body_from)} | ${cell(x.shield, x.shield_from)} | ${v(x.health)} | ${v(x.mana)} | ${v(x.vigor)} |`);
+  }
+  const ck = events.find(e => e.kind === 'checkpoint');
+  if (ck) lines.push('', ck.ok ? `checkpoint before the door: \`${ck.name}\` — replay: ${ck.replay.join('; ')}` : `checkpoint NOT taken: ${ck.why}`);
+  return lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
 }
 
 function healNote(events) {
@@ -674,7 +696,7 @@ async function rehearse(cfg) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
     if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);
   }
-  return fight({ ...cfg, lab: false, agents: clones.map(c => c.shadow_account),
+  return fight({ ...cfg, lab: false, checkpoint: true, agents: clones.map(c => c.shadow_account),
                  lightbearer: light?.shadow_account ?? '', startPositions, startStats, startCup },
                { composed: true });
 }

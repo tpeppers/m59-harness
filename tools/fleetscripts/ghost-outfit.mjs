@@ -58,13 +58,30 @@ const BLUNT = /^(hammer|mace)$/i;
  * A raider holding ANY shield or ANY body armour at least as good as chain is left alone for
  * that slot; a mace counts as blunt, so only a raider with no blunt weapon at all gets a hammer.
  */
-export function outfitNeeds(items = []) {
+/**
+ * WHAT A RAIDER WEARS, AS A CHOICE. The `chain` key of a plan is the BODY-ARMOUR slot, whatever
+ * fills it.
+ *   light (operator, 2026-09-25): leather armour and a small round shield, drawn from the guild
+ *         chests (being stocked to 21 of each); any body armour already worn counts; a missing
+ *         piece is filled with chain from the Barloque smith. Lighter to carry, quicker to hand out.
+ *   chain: rehearsal 21-24's outfit — chain (or scale/plate) and any shield the chests hold.
+ */
+export const OUTFIT_PROFILES = Object.freeze({
+  light: { body: /\b(leather|chain|plate|scale)\s+(armou?r|mail)\b/i,
+           hall: ['leather armor', 'small round shield'], wear: [/^leather armor$/i, /^chain armor$/i, /^scale armor$/i, /^plate armor$/i] },
+  chain: { body: /\b(chain|plate|scale)\s+(armou?r|mail)\b/i,
+           hall: null, wear: [/^chain armor$/i, /^scale armor$/i, /^plate armor$/i] },
+});
+export const profileOf = name => OUTFIT_PROFILES[name] ?? OUTFIT_PROFILES.light;
+
+export function outfitNeeds(items = [], { profile = 'chain' } = {}) {
+  const pf = profileOf(profile);
   const names = items.map(i => String(i.name ?? ''));
   return {
     shield: !names.some(n => SHIELDISH.test(n)),
     // BODY ARMOUR, not a word in a name: "blue dragon scale" is a reagent, and /scale/ alone let
     // two raiders in leather count as armoured on 2026-09-25.
-    chain: !names.some(n => /\b(chain|plate|scale)\s+(armou?r|mail)\b/i.test(n)),
+    chain: !names.some(n => pf.body.test(n)),
     hammer: !names.some(n => BLUNT.test(n.trim())),
   };
 }
@@ -79,7 +96,7 @@ export function outfitNeeds(items = []) {
  *   budget: shillings; capacity: [{agent, weight, bulk}] free per armorer
  */
 export function planOutfit(needs = {}, { budget = 0, capacity = [], order = ['shield', 'chain', 'hammer'],
-                                          stock = [], canForge = new Set() } = {}) {
+                                          stock = [], canForge = new Set(), spares = 0 } = {}) {
   // THE CHESTS FIRST, THEN THE SMITH. `stock` is what the guild chests hold ([{name, kind, count}],
   // from the last chest observation): a line drawn from it costs nothing and is fetched on the same
   // trip as the shopping, so the fleet no longer waits for a separate hall run before planning.
@@ -114,16 +131,34 @@ export function planOutfit(needs = {}, { budget = 0, capacity = [], order = ['sh
       buys.push({ agent: a, kind, carrier: carrier.agent });
     }
   }
-  return { buys, fromHall, cut, spend: budget - money, byCarrier: Object.fromEntries(cap.map(c => [c.agent, c.lines])) };
+  // SPARE HAMMERS IN THE ROOM THAT IS LEFT (operator, 2026-09-25): the fleet forges its own, and a
+  // raider whose casts did not come up blunt in time takes one of these at the join. The chests'
+  // hammers first, then the smith's, while money and pack room last. `agent: null` = unassigned.
+  const spare = [];
+  for (let i = 0; i < spares; i++) {
+    const st = left.find(x => x.kind === 'hammer' && x.count > 0);
+    const w = OUTFIT.hammer;
+    const carrier = cap.filter(c => c.weight >= w.weight && c.bulk >= w.bulk)
+      .sort((x, y) => (y.weight + y.bulk) - (x.weight + x.bulk))[0];
+    if (!carrier) break;
+    if (st) { st.count--; carrier.lines.push({ agent: null, kind: 'hammer', source: 'hall', name: st.name, spare: true }); }
+    else if (money >= w.price) { money -= w.price; carrier.lines.push({ agent: null, kind: 'hammer', spare: true }); }
+    else break;
+    carrier.weight -= w.weight; carrier.bulk -= w.bulk;
+    spare.push({ carrier: carrier.agent, source: st ? 'hall' : 'smith' });
+  }
+  return { buys, fromHall, spare, cut, spend: budget - money, byCarrier: Object.fromEntries(cap.map(c => [c.agent, c.lines])) };
 }
 
 /** Armour the guild chests hold, as planOutfit's `stock`: [{name, kind, count}], shields and chain. */
-export function hallStock(chests = []) {
+export function hallStock(chests = [], { names = null } = {}) {
   const by = new Map();
   for (const it of chests.flatMap(c => c.items ?? [])) {
     const name = lower(it.name).trim();
-    const kind = /^chain armor$/.test(name) ? 'chain' : SHIELDISH.test(name) ? 'shield' : null;
+    const kind = /^hammer$/.test(name) ? 'hammer'
+      : /\b(leather|chain|plate|scale) armou?r$/.test(name) ? 'chain' : SHIELDISH.test(name) ? 'shield' : null;
     if (!kind) continue;
+    if (names && kind !== 'hammer' && !names.includes(name)) continue;
     const k = `${kind}|${name}`;
     by.set(k, { name, kind, count: (by.get(k)?.count ?? 0) + (Number(it.amount) || 1) });
   }
@@ -228,6 +263,7 @@ export async function buyShare(agent, merchant, lines) {
 export async function deliver(armorer, lines) {
   const out = [];
   for (const l of lines) {
+    if (l.spare || l.agent == null) { out.push({ ...l, ok: true, kept: true }); continue; }
     if (l.agent === armorer) { out.push({ ...l, ok: true, self: true }); continue; }
     const piece = (await inv(armorer)).find(i => l.name ? lower(i.name).trim() === lower(l.name) : OUTFIT[l.kind].match.test(String(i.name ?? '').trim()));
     if (!piece) { out.push({ ...l, ok: false, why: 'not in the pack' }); continue; }
@@ -238,17 +274,23 @@ export async function deliver(armorer, lines) {
     if (r?.supplied) {
       const got = OUTFIT_RUN.delivered.get(l.agent) ?? [];
       got.push(l.kind); OUTFIT_RUN.delivered.set(l.agent, got);
+      // WHERE EACH PIECE CAME FROM, for the battle report's gear section.
+      (OUTFIT_RUN.gear ??= []).push({ agent: l.agent, kind: l.kind, name: piece.name, source: l.source === 'hall' ? 'guild chest' : 'smith', by: armorer });
     }
   }
   return out;
 }
 
 /** Put on a shield and chain if carried. Read back. */
-export async function wearOutfit(agent) {
+export async function wearOutfit(agent, { profile = 'chain' } = {}) {
   const items = await inv(agent);
   const did = [];
+  const pf = profileOf(profile);
+  const pick = kind => kind === 'chain'
+    ? pf.wear.map(re => items.find(i => re.test(String(i.name ?? '').trim()))).find(Boolean)
+    : items.find(i => OUTFIT.shield.match.test(String(i.name ?? '').trim())) ?? items.find(i => SHIELDISH.test(String(i.name ?? '')));
   for (const kind of ['chain', 'shield']) {
-    const piece = items.find(i => OUTFIT[kind].match.test(String(i.name ?? '').trim()));
+    const piece = pick(kind);
     if (!piece) continue;
     await call('rest', { agent, stand: true }, 30_000).catch(() => {});
     await call('act', { agent, verb: 'use', target: piece.id }, 60_000).catch(() => {});

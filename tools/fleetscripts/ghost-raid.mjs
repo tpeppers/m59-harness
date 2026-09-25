@@ -37,10 +37,12 @@
 // ledger — never a tally this script kept in memory, which dies with the process.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { OUTFIT_RUN } from './ghost-outfit.mjs';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
 import { script as raidAction } from './raid-action.mjs';
 import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
-         buddyAssignments, expect, barrier, leave }
+         buddyAssignments, expect, barrier, leave, isWeaponName }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -54,13 +56,40 @@ const RUN = {
   // nothing in it is specific to those numbers — `room=` and `door=` retarget it.
   room: DEFAULT_BOSS_ROOM, door: DEFAULT_DOOR_ROOM,
   sampler: null, samplerStop: false, done: new Set(), agents: [],
-  saved: new Map(), restored: new Set(), focus: null,
+  saved: new Map(), restored: new Set(), focus: null, geared: new Set(), checkpoint: null,
 };
 const endAt = p => {
   if (RUN.killAt) return RUN.killAt + Number(p.minutes) * 60_000;
   if (RUN.startAt) return RUN.startAt + Number(p.fight_limit_s) * 1000 + Number(p.minutes) * 60_000;
   return Date.now() + 3600_000;
 };
+
+/**
+ * SAVE THE WORLD, SO THE BATTLE CAN BE PLAYED AGAIN FROM HERE. Loopback only: the maintenance port
+ * on this machine is the SHADOW server's, and a prod raid must never mistake it for prod's world.
+ * Uses m59-shutdown --checkpoint (a `save game`, archived under the savegame's checkpoints/).
+ * Replaying: stop the shadow server, `m59-shutdown --restore <name>`, start it, log the fleet in,
+ * then `m59-ghostraid fight --fleet shadow --commit` — the fight phase alone.
+ */
+async function takeCheckpoint(label) {
+  try {
+    const dm = await import('../m59-dm.mjs');
+    if (!dm.isLoopbackHost?.(process.env.M59_HOST ?? '127.0.0.1')) return { ok: false, why: 'not a loopback server' };
+    const { spawnSync } = await import('node:child_process');
+    const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'm59-shutdown.mjs');
+    const r = spawnSync(process.execPath, [tool, '--checkpoint', '--label', label], {
+      encoding: 'utf8', env: { ...process.env, M59_ADMIN_PORT: process.env.M59_ADMIN_PORT ?? '19998' }, timeout: 120_000 });
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    const name = /done\s*\S+\s*(\S+-checkpoint)/.exec(out)?.[1] ?? null;
+    const res = { ok: !!name, name, at: Date.now(), label,
+                  replay: name ? [`node tools/m59-shutdown.mjs --restore ${name}   (with the shadow server stopped)`,
+                                  'start the shadow server, log the shadow fleet in',
+                                  'node tools/m59-ghostraid.mjs fight --fleet shadow --commit'] : null,
+                  ...(name ? {} : { why: out.trim().split('\n').slice(-3).join(' | ').slice(0, 300) || `exit ${r.status}` }) };
+    if (RUN.dir) try { fs.writeFileSync(path.join(RUN.dir, 'checkpoint.json'), JSON.stringify(res, null, 1)); } catch {}
+    return res;
+  } catch (e) { return { ok: false, why: e.message }; }
+}
 
 function event(kind, data = {}) {
   if (!RUN.dir) return;
@@ -402,6 +431,7 @@ export const script = {
     cost: { risk: 'room 40 is a declared hazard: tusked skeletons are level 100' },
   },
   params: {
+    checkpoint: { type: 'boolean', default: false, describe: 'rehearsals only: save the (loopback) world once everyone is armed, before the door, for replay' },
     agents: { type: 'agents', required: true },
     target: { type: 'string', default: 'ghost of Far', describe: 'the boss, as a name pattern' },
     room: { type: 'number', default: DEFAULT_BOSS_ROOM, describe: 'the boss room (40, the Throne Room of Victoria Castle)' },
@@ -555,8 +585,59 @@ export const script = {
       }
       return true;
     }, 'rested (health and mana) in the stage room before the door', 'raid.rest-first');
-    const steps = i40 >= 0 ? [restFirst, ...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
-                           : [restFirst, atDoor, theDoor, lightGate, ...base];
+    // ---- ARMED, PREPPED, ON RECORD. Every raider writes down what it carries into the fight (the
+    // battle report's gear section: weapon, body armour, shield, and where each came from), and on a
+    // rehearsal the world is CHECKPOINTED here — after hand-outs, dedications, eating and resting,
+    // before the door buffs — so the battle can be replayed from this instant (operator, 2026-09-25).
+    // Nobody walks to the door until the save is on disk.
+    const gearAndCheckpoint = verify(async () => {
+      const me = await call('status', { agent, brief: false }, 40_000).catch(() => null);
+      const eq = (me?.equipment ?? []).map(String);
+      const weapon = eq.find(e => isWeaponName(e)) ?? null;
+      const body = eq.find(e => /\b(leather|chain|plate|scale)\s+(armou?r|mail)\b/i.test(e)) ?? null;
+      const shield = eq.find(e => /shield/i.test(e)) ?? null;
+      const src = (OUTFIT_RUN.gear ?? []).filter(g => g.agent === agent);
+      const from = kind => src.filter(g => g.kind === kind).map(g => `${g.source}${g.by ? ` (${g.by})` : ''}`).pop() ?? 'own';
+      event('gear', { agent, character: me?.character ?? agent, weapon, body, shield,
+                      weapon_from: from('hammer'), body_from: from('chain'), shield_from: from('shield'), equipment: eq,
+                      health: me?.health ?? me?.vitals?.health ?? null, mana: me?.mana ?? me?.vitals?.mana ?? null,
+                      vigor: me?.vigor ?? me?.vitals?.vigor ?? null });
+      RUN.geared.add(agent);
+      const expected = RUN.agents.filter(a => a !== p.lightbearer).length;
+      const leader = [...RUN.agents].filter(a => a !== p.lightbearer).sort()[0];
+      if (p.checkpoint === true || p.checkpoint === 'true') {
+        if (agent === leader) {
+          const until = Date.now() + 10 * 60_000;
+          while (RUN.geared.size < expected && Date.now() < until) await sleep(2000);
+          // THE FLEET'S OWN STATE, ALWAYS: where each raider stands, its vitals, what it wears and
+          // carries. A server save can fail (the lab container's savegame mount was broken on
+          // 2026-09-25 — `Save time is (0)`), and this is still enough to see what went into the
+          // fight and to dress a shadow fleet back into it.
+          const fleetState = {};
+          await Promise.all(RUN.agents.map(async a => {
+            const [st, inv] = await Promise.all([call('status', { agent: a, brief: false }, 40_000).catch(() => null),
+                                                 call('inventory', { agent: a }, 40_000).catch(() => null)]);
+            fleetState[a] = { character: st?.character ?? null, room: st?.where?.num ?? st?.room_num ?? null,
+                              row: st?.where?.row ?? null, col: st?.where?.col ?? null,
+                              health: st?.health ?? null, mana: st?.mana ?? null, vigor: st?.vigor ?? null,
+                              karma: st?.karma ?? null, equipment: st?.equipment ?? [],
+                              items: (inv?.items ?? []).map(i => ({ name: i.name, amount: i.amount ?? 1 })) };
+          }));
+          if (RUN.dir) try { fs.writeFileSync(path.join(RUN.dir, 'fleet-state.json'), JSON.stringify({ at: Date.now(), agents: fleetState }, null, 1)); } catch {}
+          RUN.checkpoint = await takeCheckpoint(`ghost raid ${path.basename(RUN.dir ?? '')} armed, before the door`);
+          RUN.checkpoint.fleet_state = RUN.dir ? path.join(RUN.dir, 'fleet-state.json') : null;
+          event('checkpoint', RUN.checkpoint);
+          console.log(`  checkpoint: ${RUN.checkpoint.ok ? RUN.checkpoint.name : 'NOT TAKEN — ' + RUN.checkpoint.why} (${RUN.geared.size}/${expected} raiders on record)`);
+        } else {
+          const until = Date.now() + 12 * 60_000;
+          while (!RUN.checkpoint && Date.now() < until) await sleep(2000);
+        }
+      }
+      return true;
+    }, 'the gear record and checkpoint could not be written', 'raid.checkpoint');
+
+    const steps = i40 >= 0 ? [restFirst, gearAndCheckpoint, ...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
+                           : [restFirst, gearAndCheckpoint, atDoor, theDoor, lightGate, ...base];
 
     // The melee loop ends on "the boss is gone from here" — which is the kill, if it saw it.
     steps.push(verify(async ({ state: st }) => {
