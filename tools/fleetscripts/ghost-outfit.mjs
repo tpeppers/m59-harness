@@ -458,8 +458,11 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
     // A DOOR REFUSAL IS WORTH ONE MORE TRY. On the 2026-09-25 rehearsal a rider was refused
     // "guild door 53 trigger not reached" — the passage's walk to the trigger square did not
     // land, with the previous armorer still in the passage. The door itself is fine.
-    if (!r?.ok && /door|trigger|could not be crossed|unable to go/i.test(String(r?.why ?? ''))) {
-      await sleep(15_000);
+    // Door 3 (the chest room's spoken door) was refused twice in a row on the next run, right after
+    // the previous rider came through it: saying the word while it is open does nothing, and it
+    // shuts five seconds later. So up to three more tries, twenty seconds apart.
+    for (let i = 0; i < 3 && !r?.ok && /door|trigger|could not be crossed|unable to go/i.test(String(r?.why ?? '')); i++) {
+      await sleep(20_000);
       r = await draw();
     }
     out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0;
