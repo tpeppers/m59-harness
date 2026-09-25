@@ -49,7 +49,7 @@ const HAZARD = 'Ghost of Far\'Nohl raid: a whole fleet with dedicated hammers, h
 // ---- one run's shared state
 const RUN = {
   dir: null, startAt: null, killAt: null, ghostSeen: false,
-  light: { lastCast: 0, expired: false, casts: 0 },
+  light: { lastCast: 0, expired: false, casts: 0, ready: false },
   // THE BOSS'S ROOMS, per run: the raid is written for the ghost of Far'Nohl (40 off 38) but
   // nothing in it is specific to those numbers — `room=` and `door=` retarget it.
   room: DEFAULT_BOSS_ROOM, door: DEFAULT_DOOR_ROOM,
@@ -420,6 +420,7 @@ export const script = {
     return_at: { type: 'number', default: 0.85, describe: 'walk back in at this health fraction' },
     light_every_s: { type: 'number', default: 150, describe: 'recast forces of light at least this often' },
     light_rest_below: { type: 'number', default: 0.8, describe: 'the light-bearer rests in 38 below this' },
+    light_gate_s: { type: 'number', default: 180, describe: 'raiders hold at the door this long for the first light; 0 = do not wait' },
     sample_s: { type: 'number', default: 15 },
     run_dir: { type: 'string', default: '' },
     mustered: { type: 'boolean', default: false, describe: 'the fleet was mustered earlier in this same run' },
@@ -507,7 +508,21 @@ export const script = {
       rounds: Number(p.rounds), disengage_at: Number(p.retreat_at),
     }, agent, state ?? {});
     const i40 = base.findIndex(s => s?.do === 'walk' && Number(s.to) === RUN.room);
-    const steps = i40 >= 0 ? [...base.slice(0, i40), atDoor, theDoor, ...base.slice(i40)] : [atDoor, theDoor, ...base];
+    // NOBODY GOES IN WITHOUT THE LIGHT FOLLOWING. On the 2026-09-25 no-DM rehearsal the light-
+    // bearer reached the door at 55% health and rested toward 95% AFTER the door opened; the
+    // raiders fought the ghost unlit and six died in two minutes with no light ever cast. The
+    // raiders still go in FIRST — the ghost takes the first caster it sees, and he has twenty
+    // health — but only once he is READY: rested, and three seconds behind them. `light_gate_s`
+    // bounds the wait, so a light-bearer who cannot get ready does not freeze the raid for ever.
+    const lightGate = verify(async () => {
+      if (!roles.lightbearer || !(Number(p.light_gate_s) > 0)) return true;
+      const until = Date.now() + Number(p.light_gate_s) * 1000;
+      while (!RUN.light.ready && Date.now() < until) await sleep(2000);
+      if (!RUN.light.ready) console.log(`  ${agent} going in without the light: not ready in ${p.light_gate_s}s`);
+      return true;
+    }, 'waiting at the door for the light-bearer to be ready');
+    const steps = i40 >= 0 ? [...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
+                           : [atDoor, theDoor, lightGate, ...base];
 
     // The melee loop ends on "the boss is gone from here" — which is the kill, if it saw it.
     steps.push(verify(async ({ state: st }) => {
@@ -529,12 +544,25 @@ export const script = {
 
 function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
   return [
+    // REST WHERE IT IS SAFE AND WHILE THE RAID IS STILL FORMING, not at the door with the raiders
+    // released and waiting on him. Twenty health heals slowly; this is the time to do it.
+    verify(async () => {
+      const o = await observe(agent);
+      if ((o.health ?? 1) < 0.95) { await say('Resting before the raid.'); await restUntil(agent, 0.95, p); }
+      return true;
+    }, 'the light-bearer rests before walking to the door'),
     walk(RUN.door),
     atDoor,
     theDoor,
     verify(async ({ state: st }) => {
       const log = [];
-      // Behind the raiders, not in front: the wizard-killer takes the first caster it sees.
+      // Rested BEFORE the raiders are let in (they wait on RUN.light.ready), then behind them, not
+      // in front: the wizard-killer takes the first caster it sees.
+      {
+        const o = await observe(agent);
+        if ((o.health ?? 1) < Math.max(0.95, Number(p.light_rest_below))) await restUntil(agent, 0.95, p);
+      }
+      RUN.light.ready = true;
       await sleep(3000);
       const castIn = async why => {
         const o = await observe(agent);
