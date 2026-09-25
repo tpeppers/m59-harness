@@ -28,6 +28,7 @@
 import { verify, castVerified, foodIn, countReagents } from '../m59-fleetscript.mjs';
 import { buffCatalogue } from '../m59-buffs.mjs';
 import { planPreparations, inEffect, writeStaging, recordPrep } from '../m59-raid.mjs';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export const script = {
   name: 'raid-prep',
@@ -79,13 +80,23 @@ export const script = {
           // Food class tree; a hand-written list has been wrong in four places at once).
           const inv0 = await call('inventory', { agent }, 40_000).catch(() => null);
           const meals = foodIn(inv0?.items ?? []);
+          // ONE BITE IS ONE ITEM, AND THE GAIN LANDS A MOMENT LATER. The first version ate once per
+          // STACK and read vigor straight back: on the 2026-09-25 rehearsal every raider reported
+          // `80->80` with 60 loaves in the pack, while a loaf measured 80 -> 98 read three seconds
+          // on. So: bite the same stack again until 180, reading after a settle, and move to the
+          // next stack only when a bite stops paying.
           let ate = null, vigorNow = vigor0;
+          if (meals.length) await say(`Vigor ${vigorNow}/200 — eating.`);
           for (const meal of meals) {
+            for (let bite = 0; bite < Math.max(1, Number(meal.amount) || 1) && bite < 12 && vigorNow < 180; bite++) {
+              ate = await call('act', { agent, verb: 'eat', target: meal.id }, 60_000)
+                .catch(e => ({ error: e.message }));
+              await sleep(2500);
+              const v = (await status())?.vigor?.value ?? vigorNow;
+              if (v <= vigorNow) { vigorNow = v; break; }
+              vigorNow = v;
+            }
             if (vigorNow >= 180) break;
-            await say(`Vigor ${vigorNow}/200 — eating ${meal.name}.`);
-            ate = await call('act', { agent, verb: 'eat', target: meal.id }, 60_000)
-              .catch(e => ({ error: e.message }));
-            vigorNow = (await status())?.vigor?.value ?? vigorNow;
           }
           if (!meals.length) ate = { error: 'nothing edible in the pack' };
           const vigor1 = vigorNow;
