@@ -101,6 +101,8 @@ export const script = {
     healers: { type: 'string', default: '', describe: 'comma-separated; empty = three who know minor heal' },
     lab: { type: 'boolean', default: false, describe: 'allow DM grants and mana refills. REFUSES on a non-lab fleet' },
     plateau_ok: { type: 'number', default: 0.5, describe: 'a muster walk whose rest plateaus at or above this sets out from the plateau' },
+    pack_room_min: { type: 'number', default: 400, describe: 'weight and bulk a raider must have free before hand-outs; heavy food is dropped to make it (0 = off)' },
+    keep_food: { type: 'number', default: 10, describe: 'slices of each food kept when making room' },
     near_hops: { type: 'number', default: 2, describe: 'a muster walk this short (and not across Ukgoth) sets out at near_min_health' },
     near_min_health: { type: 'number', default: 0.3, describe: 'the floor for a short walk home; the stage room is where the raid rests' },
     muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
@@ -305,6 +307,36 @@ export const script = {
         st.survey = { wielding: worn, fleet_seen: SURVEY.size, barrier: b };
         return true;
       }, 'the survey could not be read'),
+
+      // ---- 1a. MAKE ROOM. A full pack refuses everything handed to it — a shield, chain, and on
+      // the 2026-09-25 rehearsal the character's OWN weapon coming back from its dedicator, which
+      // left shadow15 unarmed at the door. The weight is pork (the fleet carries thousands of
+      // slices). A raider with less than `pack_room_min` weight or bulk free drops heavy food —
+      // pork, then mutton — keeping `keep_food` of each, until it has the room. Lossy on purpose:
+      // food is abundant and a weapon is not. pack_room_min=0 turns it off.
+      verify(async ({ state: st }) => {
+        const min = Number(p.pack_room_min);
+        if (!(min > 0)) return true;
+        const roomNow = async () => (await call('look', { agent }, 40_000).catch(() => null))?.carry?.room_for ?? null;
+        let room = await roomNow();
+        const dropped = {};
+        for (const food of ['slice of pork', 'mutton', 'pork', 'cheese']) {
+          if (!room || Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
+          const stacks = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
+            .filter(i => String(i.name ?? '').toLowerCase().includes(food) && i.id != null);
+          for (const it of stacks) {
+            const extra = (Number(it.amount) || 1) - Number(p.keep_food);
+            if (extra <= 0) continue;
+            await call('act', { agent, verb: 'drop', target: it.id, amount: extra }, 30_000).catch(() => {});
+            dropped[it.name] = (dropped[it.name] ?? 0) + extra;
+            room = await roomNow();
+            if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
+          }
+        }
+        if (Object.keys(dropped).length) console.log(`  ${agent} made room: dropped ${JSON.stringify(dropped)} (now ${JSON.stringify(room)})`);
+        st.room = { dropped, room };
+        return true;
+      }, 'making room in the pack'),
 
       // ---- 1c. THE HALL DRAW. The armorers ride the chalice to the guild hall one after another,
       // take the raid's reagents, the hall's money and whatever armour sits in its chests, and walk
