@@ -187,8 +187,15 @@ export const script = {
           if (Number.isFinite(stats.karma)) await dm.kit(who, { karma: stats.karma }).catch(() => {});
           const maxManaNow = async () => Number((await call('status', { agent, brief: false }, 30_000).catch(() => null))?.mana?.max ?? 0);
           let mm = await maxManaNow();
-          if (Number.isFinite(stats.max_mana) && mm < stats.max_mana) {
+          // BOTH DIRECTIONS: a clone can carry nodes from an earlier lab run (shadow20 had 44 max
+          // mana against prod's 19), so the mask is rebuilt from ZERO up to prod's figure.
+          if (Number.isFinite(stats.max_mana) && mm !== stats.max_mana) {
             const obj = (await dm.resolve([who]))[who];
+            if (obj != null) {
+              await dm.dm([`set object ${obj} piNodelist INT 0`, `send object ${obj} ComputeMaxMana`, `send object ${obj} NewMana`]);
+              await sleep(1200);
+              mm = await maxManaNow();
+            }
             for (let k = 1; k <= 12 && mm < stats.max_mana && obj != null; k++) {
               await dm.dm([`set object ${obj} piNodelist INT ${(1 << k) - 1}`, `send object ${obj} ComputeMaxMana`, `send object ${obj} NewMana`]);
               await sleep(1200);
