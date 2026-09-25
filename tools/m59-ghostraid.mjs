@@ -279,6 +279,7 @@ function summarise(label, res) {
 const armParams = cfg => ({
     stage: cfg.stage, lightbearer: cfg.lightbearer, healers: cfg.healers, lab: cfg.lab, channel: cfg.channel,
     place: cfg.lab && flag('--place'),
+    start_positions: cfg.startPositions ? JSON.stringify(cfg.startPositions) : '',
     muster_wait_s: cfg.lab && flag('--place') ? 240 : 1500,
     light_casts: Math.ceil((cfg.minutes + 10) * 60 / 150) + 2,
 });
@@ -506,7 +507,19 @@ async function rehearse(cfg) {
     const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
     if (r.status !== 0) throw new Error(`the shadow rebuild stopped (exit ${r.status}); the raid was not run`);
   }
-  return fight({ ...cfg, lab: false }, { composed: true });
+  // THE CLONE'S OWN ROSTER. Shadow names follow prod characters, not slot numbers, so the raiders and
+  // the light-bearer are read off the snapshot: the clones of prod's raiders, and the clone of hk1.
+  // Hardcoding shadow01..22 and shadow20 made a 75-health fighter the light-bearer on 2026-09-25.
+  const snapFile = path.join(path.dirname(path.dirname(roster)), 'shadow-snapshot.json');
+  const snap = JSON.parse(fs.readFileSync(snapFile, 'utf8'));
+  const prodRaid = new Set(FLEETS.prod.agents);
+  const clones = (snap.characters ?? []).filter(c => prodRaid.has(c.prod_agent) && c.shadow_account);
+  const light = clones.find(c => c.prod_agent === FLEETS.prod.lightbearer);
+  const startPositions = Object.fromEntries(clones.filter(c => c.room != null)
+    .map(c => [c.shadow_account, { room: c.room, row: c.row ?? null, col: c.col ?? null }]));
+  console.log(`clone roster: ${clones.length} raiders from ${snapFile}; light-bearer ${light?.shadow_account ?? 'NONE'} (${light?.prod_character ?? '-'})`);
+  return fight({ ...cfg, lab: false, agents: clones.map(c => c.shadow_account),
+                 lightbearer: light?.shadow_account ?? '', startPositions }, { composed: true });
 }
 
 // ---------------------------------------------------------------------------------- the DUM raid profile

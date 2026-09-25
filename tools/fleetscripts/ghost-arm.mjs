@@ -99,6 +99,7 @@ export const script = {
     healers: { type: 'string', default: '', describe: 'comma-separated; empty = three who know minor heal' },
     lab: { type: 'boolean', default: false, describe: 'allow DM grants and mana refills. REFUSES on a non-lab fleet' },
     muster_min_health: { type: 'number', default: 1, describe: 'health fraction to set out on the muster walk' },
+    start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
     rally: { type: 'number', default: 598, describe: 'where a convoy gathers before crossing Ukgoth (0 = no convoy)' },
     fragile_below: { type: 'number', default: 30, describe: 'max health under which a character is never walked through Ukgoth' },
@@ -133,6 +134,23 @@ export const script = {
     if (lab) assertLabFleet('ghost-arm lab=true');
     const say = text => call('say', { agent, type: p.channel, text: String(text).slice(0, 220) }, 30_000).catch(() => {});
 
+    // START WHERE PROD STANDS (lab rehearsals only). A clone logs in wherever its body was last saved
+    // on the lab server, not where its prod character is, because a DM placement does not stick to a
+    // character that is logged out. Two no-DM rehearsals mustered from the wrong map because of it.
+    // So `rehearse` hands in prod's positions and each clone is put there HERE — after the hold, so
+    // no keeper can walk it off again — and everything after (the muster included) is walked.
+    const mirror = (() => { try { return JSON.parse(String(p.start_positions || '{}'))[agent] ?? null; } catch { return null; } })();
+    if (mirror) {
+      assertLabFleet('ghost-arm start_positions');
+      const dm = await dmLab();
+      const me0 = await call('status', { agent, brief: true }, 30_000).catch(() => null);
+      const who = me0?.character;
+      if (who) {
+        const r = await dm.relocate([who], Number(mirror.room), { row: mirror.row, col: mirror.col, verify: true });
+        console.log(`  ${agent} placed where prod stands: room ${mirror.room} (${r?.moved?.[who] ?? '?'})`);
+        await sleep(2000);
+      }
+    }
     const here = await call('status', { agent, brief: true }, 30_000).catch(() => null);
     const inStage = Number(here?.where?.num ?? here?.room_num ?? NaN) === Number(p.stage);
     for (const k of ['survey', 'hammers', 'reagents', 'dropped', 'armed']) expect(k, agents.length);
