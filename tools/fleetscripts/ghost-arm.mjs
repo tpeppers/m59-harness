@@ -134,7 +134,7 @@ export const script = {
     hall_draw: { type: 'boolean', default: true, describe: 'armorers draw reagents, money and armour from the guild chests first' },
     hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
     hall_wait_s: { type: 'number', default: 1800, describe: 'how long the fleet waits for the hall draw' },
-    trips: { type: 'number', default: 2, describe: 'shopping trips at most' },
+    trips: { type: 'number', default: 3, describe: 'shopping trips at most' },
     hall: { type: 'number', default: 714, describe: 'where the chalice lands a guild member (the Bookmakers hall)' },
     shop_room: { type: 'number', default: 113, describe: 'the Barloque smith' },
     reagent_shop: { type: 'number', default: 104, describe: 'the Barloque apothecary, where a hall rider buys what the chests lacked (0 = do not buy)' },

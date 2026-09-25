@@ -303,6 +303,28 @@ export async function buyByName(agent, seller, lines = []) {
   return out;
 }
 
+/**
+ * MAKE ROOM IN A PACK by dropping heavy food past `keep` of each kind — pork first, then mutton,
+ * then cheese. Lossy on purpose: food is abundant, gear is not. Returns what was dropped, or null.
+ */
+export async function makeRoom(agent, { keep = 10, min = 400 } = {}) {
+  const roomNow = async () => (await call('look', { agent }, 40_000).catch(() => null))?.carry?.room_for ?? null;
+  let room = await roomNow();
+  const dropped = {};
+  for (const food of ['slice of pork', 'pork', 'mutton', 'cheese']) {
+    if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
+    for (const it of (await inv(agent)).filter(i => lower(i.name).includes(food) && i.id != null)) {
+      const extra = (Number(it.amount) || 1) - keep;
+      if (extra <= 0) continue;
+      await call('act', { agent, verb: 'drop', target: it.id, amount: extra }, 30_000).catch(() => {});
+      dropped[it.name] = (dropped[it.name] ?? 0) + extra;
+      room = await roomNow();
+      if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
+    }
+  }
+  return Object.keys(dropped).length ? dropped : null;
+}
+
 /** Hand each raider its pieces, by id, and record what arrived. */
 export async function deliver(armorer, lines) {
   const out = [];
@@ -310,8 +332,16 @@ export async function deliver(armorer, lines) {
     if (l.agent === armorer) { out.push({ ...l, ok: true, self: true }); continue; }
     const piece = (await inv(armorer)).find(i => OUTFIT[l.kind].match.test(String(i.name ?? '').trim()));
     if (!piece) { out.push({ ...l, ok: false, why: 'not in the pack' }); continue; }
-    const r = await serially(() => call('supply', { from: armorer, to: l.agent, what: [piece.id], who_travels: 'neither' }, 120_000)
+    const give = () => serially(() => call('supply', { from: armorer, to: l.agent, what: [piece.id], who_travels: 'neither' }, 120_000)
       .catch(e => ({ supplied: false, reason: e.message })));
+    let r = await give();
+    // A FULL RECEIVER MAKES ROOM AND IS ASKED AGAIN. Packs fill AFTER the muster — the reagent
+    // hand-out comes between — so an up-front make-room is too early; on the 2026-09-25 rehearsal
+    // it never fired and half the armour came home undelivered. The receiver drops heavy food.
+    if (!r?.supplied && /receiver_full|cannot hold/i.test(String(r?.reason ?? ''))) {
+      const dropped = await makeRoom(l.agent);
+      if (dropped) r = await give();
+    }
     out.push({ ...l, ok: !!r?.supplied, why: r?.supplied ? null : r?.reason });
     if (r?.supplied) {
       const got = OUTFIT_RUN.delivered.get(l.agent) ?? [];
