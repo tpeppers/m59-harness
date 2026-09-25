@@ -24533,6 +24533,14 @@ export class Autopilot {
       let have = start;
       for (const chest of chests) {
         if (have - start >= want) break;
+        // WITHIN SEVEN SQUARES OF THE CHEST. UserGet (user.kod:3576) measures the item's position —
+        // the chest's, for an item inside one — and refuses past a row + column distance of 7 in
+        // silence. The passage leaves us where the chest SECTION begins, not beside each chest; on
+        // the 2026-09-25 rehearsal an armorer with room for four chain armours took none.
+        const me = c.self;
+        if (me && Number.isFinite(chest.row) && Number.isFinite(chest.col)
+            && Math.abs(me.row - chest.row) + Math.abs(me.col - chest.col) > 5)
+          await s.walkTo(chest.col, chest.row, { maxSteps: 40, hardCap: 50 }).catch(() => {});
         const since = c.evSeq;
         await s.pacer.submit('read', () => c.contents(chest.id)).catch(() => {});
         const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
@@ -24544,7 +24552,9 @@ export class Autopilot {
           await s.pacer.submit('trade', () => c.get(st.id)).catch(() => {});
           await new Promise(r => setTimeout(r, 400));
           const now = await packCount(item);
-          if (now <= have) break;               // refused, or too heavy: stop asking this chest
+          // Refused — usually too heavy for what the pack has left. A SMALLER stack may still fit, so
+          // try the next one rather than giving up on the chest (stacks are largest first).
+          if (now <= have) continue;
           have = now;
         }
       }

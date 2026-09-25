@@ -112,6 +112,8 @@ export const OUTFIT_RUN = { plan: null, delivered: new Map(), done: false, cupHo
 // first rider's drop. Not `serially`: a ride calls `serially` inside itself.
 let CUP = Promise.resolve();
 export const rideCup = fn => { const p = CUP.then(fn, fn); CUP = p.catch(() => {}); return p; };
+let HALL = Promise.resolve();
+const inHall = fn => { const p = HALL.then(fn, fn); HALL = p.catch(() => {}); return p; };
 
 let CHAIN = Promise.resolve();
 const serially = fn => { const p = CHAIN.then(fn, fn); CHAIN = p.catch(() => {}); return p; };
@@ -427,7 +429,11 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
                       : { ok: false, why: 'no cup holder' };
   out.ride = ride.ok ? 'chalice' : `no ride (${ride.why})`;
   if (ride.ok && share.length) {
-    const r = await call('hall_withdraw', { agent, wants: share }, 620_000).catch(e => ({ ok: false, why: e.message }));
+    // ONE AT A TIME THROUGH THE HALL. The chest door opens for five seconds on a spoken word
+    // (guildh14.kod DOOR_DELAY); riders arriving together contend for it, and on the 2026-09-25
+    // rehearsal one was refused 3 of 3 presses as "unable to go anywhere".
+    const r = await inHall(() => call('hall_withdraw', { agent, wants: share }, 620_000)
+      .catch(e => ({ ok: false, why: e.message })));
     out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok;
     if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
   }
