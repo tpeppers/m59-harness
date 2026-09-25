@@ -70,7 +70,7 @@ const HANDED = new Map();              // dedicator -> [{ owner, character }] ha
 const RETURNED = new Set();            // owners who have their hammer back
 let DEDICATORS_DONE = 0;
 const CONVOY = new Set();              // agents whose muster crosses Ukgoth together
-const FRAGILE_WEST = new Set();        // fragile characters refused the Ukgoth crossing
+const FRAGILE_WEST = new Set();        // fragile characters crossing Ukgoth behind the convoy
 
 async function dmLab() {
   const dm = await import('../m59-dm.mjs');
@@ -104,7 +104,8 @@ export const script = {
     start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
     rally: { type: 'number', default: 598, describe: 'where a convoy gathers before crossing Ukgoth (0 = no convoy)' },
-    fragile_below: { type: 'number', default: 30, describe: 'max health under which a character is never walked through Ukgoth' },
+    fragile_below: { type: 'number', default: 30, describe: 'max health under which a character crosses Ukgoth BEHIND the convoy, at full health' },
+    fragile_lag_s: { type: 'number', default: 6, describe: 'how far behind the convoy a fragile character sets out across Ukgoth' },
     rally_wait_s: { type: 'number', default: 600, describe: 'how long the convoy waits for its last member' },
     cross_min_health: { type: 'number', default: 0.7, describe: 'health a convoy member needs to cross from the rally room' },
     place: { type: 'boolean', default: false, describe: 'LAB: teleport to the stage room after the hold instead of walking' },
@@ -194,19 +195,19 @@ export const script = {
         convoy = Number.isFinite(toStage?.hops) && Number.isFinite(toRally?.hops) && toStage.hops === toRally.hops + 2;
       }
     }
-    // A FRAGILE BODY DOES NOT TAKE THE CONVOY. The first no-DM rehearsal (2026-09-24) walked the
-    // 20-health light-bearer from 598 across Ukgoth inside a convoy of seventeen, and the trolls
-    // killed him on the way — taking the fleet's only chalice and its only forces of light with
-    // him. A convoy spreads the trolls' attention; it does not make twenty health survivable in
-    // 599. Such a character is refused here, loudly, and must be brought to the castle side by
-    // other means (on prod his post is room 2 already) before the raid is run.
+    // A FRAGILE BODY CROSSES TOO — BEHIND THE CONVOY, AT FULL HEALTH. The first no-DM rehearsal
+    // (2026-09-24) lost the 20-health light-bearer inside a convoy crossing Ukgoth, and this used
+    // to refuse such a character outright. That was before the crossing was rebuilt: since
+    // 7225998 a journey through 599 goes wall to wall on safe-spot legs (arrivals 22% -> 95%,
+    // damage 724 -> 36). And the operator's standing requirement is that the raid muster fetches
+    // the light-bearer from WHEREVER he is — on raid day nobody can promise he is at his post.
+    // So he walks: to the rally room with the rest, healed to full there, and released a few
+    // seconds after the convoy, so the trolls have somebody else to look at while he crosses.
     const maxHp = Number(here?.hp?.max ?? here?.vitals?.health?.max ?? 0);
-    if (convoy && maxHp && maxHp < Number(p.fragile_below)) {
+    const fragile = convoy && maxHp && maxHp < Number(p.fragile_below);
+    if (fragile) {
       FRAGILE_WEST.add(agent);
-      return [verify(async () => ({ ok: false,
-        why: `${agent} has ${maxHp} max health and stands west of Ukgoth; the muster will not walk it ` +
-             `through 599. Bring it to room ${p.stage} first (on prod the light-bearer's post is there).` }),
-        'the fragile-body refusal')];
+      console.log(`  ${agent}: ${maxHp} max health, west of Ukgoth — crossing behind the convoy at full health`);
     }
     if (convoy) CONVOY.add(agent);
     return [
@@ -231,10 +232,14 @@ export const script = {
             const b = await barrier('rally', agent, { ms: Number(p.rally_wait_s) * 1000 });
             await say(`Crossing Ukgoth with ${b.arrived} of ${CONVOY.size}.`);
             st.convoy = b;
+            // The fragile one goes last: a few seconds behind the convoy's lead.
+            if (fragile) await sleep(Number(p.fragile_lag_s) * 1000);
             return true;
           }, 'the convoy could not be read'),
-          // Nobody rests in 598 to top up: the convoy crosses together or it is not a convoy.
-          walk(Number(p.stage), { minHealth: Number(p.cross_min_health) }),
+          // Nobody rests in 598 to top up: the convoy crosses together or it is not a convoy. The
+          // fragile body is the exception — it was healed before the barrier (the walk to the
+          // rally room sets out at muster_min_health), and it crosses at full or not at all.
+          walk(Number(p.stage), { minHealth: fragile ? Math.max(0.95, Number(p.cross_min_health)) : Number(p.cross_min_health) }),
         ]
         : [walk(Number(p.stage), { minHealth: Number(p.muster_min_health) })]),
 
