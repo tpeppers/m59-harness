@@ -26602,6 +26602,9 @@ export class Autopilot {
   async applyMagicPreference(c = this.s.client, items = this.packWeapons(c)) {
     const on = this.policy?.preferMagicWeapon === true;
     const sum = this.weaponMagicBook().summary(items, this.wieldedWeaponId(c));
+    // WHAT WAS CONJURED, whatever the policy: the sale plan skips it (inventorySalePlan), because
+    // no merchant takes a made item and offering one is a refusal that reads like a bad price.
+    c._madeItemIds = new Set(sum.weapons.filter(w => w.made === true).map(w => w.id));
     c._magicWeaponIds = on
       ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
     const due = this._magicSwapDue; this._magicSwapDue = false;

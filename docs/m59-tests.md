@@ -800,12 +800,13 @@ the records it describes.
   that the rent sign survives two overlapping negative sentences, and that the Bookmaker's
   own rent override is not the non-PK doubling in disguise. Founding costs 5,000 and cannot be
   undone and a hall is 25,000, so none of it can be learned live) and
-  `node tools/m59-weapon-magic-test.mjs` (28 — whether a weapon bypasses a troll's NONMAGIC 80,
+  `node tools/m59-weapon-magic-test.mjs` (30 — whether a weapon bypasses a troll's NONMAGIC 80,
   as READ rather than assumed: an unread weapon is `unknown` and never mundane, born-magic and
   unflagged classes need no look, a lapse sentence re-opens every reading of that NAME because it
   names no id, a reading does not survive its id wearing another name, and the magic tie-break in
   `weaponRanking` wins a tie between two hammers but never lifts a magic long sword over a hammer
-  the priority ranks first — the operator's "don't force swords") and
+  the priority ranks first — the operator's "don't force swords" — and a conjured weapon is never
+  offered in a sale plan, because IA_MADE makes every merchant refuse it in silence) and
   `node tools/m59-chest-eviction-test.mjs` (22 — the guild chest's "would give up first"
   ranking and its history on /inventory: unplanned before surplus, least value per bulk first,
   an unpriced or unsized item LAST in its tier and never read as zero, shillings never ranked, a

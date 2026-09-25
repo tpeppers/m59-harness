@@ -3400,6 +3400,11 @@ export function inventorySalePlan(s, {keep=[],protect=[],loadout=null,maxWeapons
     let blocked=error||(!equipped?'equipment is not known':null);
     if(itemIsProtected(x.name,protect))blocked='protected item';
     else if(equipment.keep.has(x.id))blocked=equipment.keep.get(x.id);
+    // A CONJURED ITEM IS NEVER OFFERED. IA_MADE makes CanBeGivenToNPC false (item.kod:1110-1126),
+    // so a merchant refuses it in silence and the offer is a wasted round trip that reads like a
+    // low price. `c._madeItemIds` is the keeper's READING of "shimmers insubstantially"
+    // (m59-weapon-magic.mjs); an item nobody has looked at is offered as before.
+    else if(c._madeItemIds instanceof Set&&c._madeItemIds.has(x.id))blocked='conjured (IA_MADE): no merchant takes a made item';
     else if(!allowance.overflow&&!equipment.sell.has(x.id)&&interest.anyoneWants(x.name,{except:s.name})) {
       blocked='wanted by the fleet';
       if(recommended)held.push({name:x.name,wanted_by:interest.wantedBy(x.name,{except:s.name})});

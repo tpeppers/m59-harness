@@ -9,7 +9,7 @@
 //   - the swap stays inside the character's own weapon priority (no forced sword)
 import { classifyWeapon, lapsedWeapon, dedicatedWeapon, WeaponMagicBook, magicSwap }
   from './m59-weapon-magic.mjs';
-import { weaponRanking } from './m59-skills.mjs';
+import { weaponRanking, inventorySalePlan } from './m59-skills.mjs';
 import { Autopilot } from './m59-autopilot.mjs';
 
 let passed = 0, failed = 0;
@@ -128,6 +128,21 @@ console.log('Autopilot: the lapse re-opens, reports, and the status carries it')
   ok('the lapse is noted, ledgered, counted, and the swap made due',
      notes.includes('ENCHANTMENT LAPSED') && ledger.includes('enchant_lapse') &&
      st.lapses === 1 && rig._magicSwapDue === true);
+}
+
+console.log('inventorySalePlan: a conjured weapon is never offered');
+{
+  const c = { me: { id: 17, name: 'Fixture' },
+    inventory: [{ id: 41, nameRsc: 1, amount: 1 }, { id: 42, nameRsc: 1, amount: 1 }, { id: 43, nameRsc: 1, amount: 1 }],
+    rsc: new Map([[1, 'long sword']]), using: new Set([43]), statsById: new Map(), evSeq: 0,
+    eventsSince: () => [], _madeItemIds: new Set([42]) };
+  const s = { name: 'fixture', client: c, credentials: { host: 'fixture.invalid', port: 5959, account: 'fixture' },
+    need: () => c, pacer: { submit: async (k, fn) => fn() } };
+  // A weapon limit, or the equipment plan keeps every weapon and nothing is for sale at all.
+  const plan = inventorySalePlan(s, { maxWeapons: 1, weaponPriority: ['long sword'] });
+  const row = id => plan.items.find(i => i.id === id);
+  ok('the conjured long sword is blocked, and says why', /conjured/.test(String(row(42)?.blocked ?? '')));
+  ok('the real one is not blocked for being conjured', !/conjured/.test(String(row(41)?.blocked ?? '')));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
