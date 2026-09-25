@@ -110,6 +110,7 @@ export const script = {
     fragile_below: { type: 'number', default: 30, describe: 'max health under which a character crosses Ukgoth BEHIND the convoy, at full health' },
     fragile_lag_s: { type: 'number', default: 6, describe: 'how far behind the convoy a fragile character sets out across Ukgoth' },
     rally_wait_s: { type: 'number', default: 600, describe: 'how long the convoy waits for its last member' },
+    cross_gap_s: { type: 'number', default: 45, describe: 'seconds between characters crossing Ukgoth from the rally room (0 = all at once, a convoy)' },
     cross_min_health: { type: 'number', default: 0.7, describe: 'health a convoy member needs to cross from the rally room' },
     place: { type: 'boolean', default: false, describe: 'LAB: teleport to the stage room after the hold instead of walking' },
     handover: { type: 'string', default: 'hand', describe: '`hand` (supply to a dedicator and back) or `floor`' },
@@ -258,9 +259,16 @@ export const script = {
             // Everyone in the convoy, or the patience runs out — then whoever is here goes.
             reexpect('rally', CONVOY.size);
             const b = await barrier('rally', agent, { ms: Number(p.rally_wait_s) * 1000 });
-            await say(`Crossing Ukgoth with ${b.arrived} of ${CONVOY.size}.`);
             st.convoy = b;
-            // The fragile one goes last: a few seconds behind the convoy's lead.
+            // ONE AT A TIME, NOT A CONVOY. The safe-leg crossing (7225998: arrivals 22% -> 95%) was
+            // measured on single characters, wall to wall. Eight crossing at once on the 2026-09-25
+            // rehearsal drew fifteen trolls into the room: one died at 4 squares in 54 s with no
+            // wall reachable, and three were pushed back west. So the rally room is where they
+            // GATHER and heal; they cross `cross_gap_s` apart, strongest first, the fragile last.
+            const order = [...CONVOY].sort((x, y) => (FRAGILE_WEST.has(x) - FRAGILE_WEST.has(y)) || x.localeCompare(y));
+            const turn = Math.max(0, order.indexOf(agent));
+            await say(`Crossing Ukgoth alone, ${turn ? `after ${turn} ahead of me` : 'first'}.`);
+            if (turn) await sleep(turn * Number(p.cross_gap_s) * 1000);
             if (fragile) await sleep(Number(p.fragile_lag_s) * 1000);
             return true;
           }, 'the convoy could not be read'),
