@@ -27,6 +27,15 @@ let resumed = 0;
 keeper.resumeSuspendedJourney = async () => { resumed++; return HANDLED; };
 assert.equal(await keeper.passOutside({}), HANDLED);
 assert.equal(resumed, 1, 'a busy owner still gets its interrupted destination resumed');
+// ...but NOT the keeper's own journey from before the operation began (2026-09-25 rehearsal: a
+// held light-bearer resumed its pre-raid town trip and walked the raid's chalice out of the room).
+keeper.suspendedJourney = { to: 104, at: keeper.busy.at - 60_000, why: 'town trip' };
+assert.equal(await keeper.passOutside({}), HANDLED);
+assert.equal(resumed, 1, 'a journey suspended before the busy operation began is not resumed');
+assert.equal(keeper.suspendedJourney, null, 'and it is dropped, so it cannot resume later in the lease');
+keeper.suspendedJourney = { to: 114, at: keeper.busy.at + 1 };
+assert.equal(await keeper.passOutside({}), HANDLED);
+assert.equal(resumed, 2, "the owner's own leg, suspended after the operation began, still resumes");
 assert.deepEqual(call('autopilot_heartbeat', { by: 'director', lease_ms: 120000 }).renewed, ['work']);
 assert.equal(call('autopilot_free', { by: 'stranger' }).refused, 'director owns it');
 assert.equal(call('autopilot_free', { by: 'director' }).busy, null);

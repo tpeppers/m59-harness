@@ -18524,6 +18524,20 @@ export class Autopilot {
     // pass that begins afterwards.
     const outside = this.busyStatus();
     if (outside) {
+      // ONLY THE OWNER'S OWN LEG. A journey suspended BEFORE the outside operation began was the
+      // keeper's, not the owner's: on the 2026-09-25 rehearsal the light-bearer, held by the raid
+      // and holding the chalice in the stage room, resumed its own pre-raid town trip, walked
+      // toward the apothecary and ended in the Cragged Mountains — and both riders who needed the
+      // cup it dropped there went without. `busy.at` is the start of this holder's operation
+      // (kept across renewals); an older suspension is dropped, with a note, and the keeper
+      // plans afresh when the lease ends.
+      if (this.suspendedJourney?.at != null && Number(this.suspendedJourney.at) < Number(outside.at ?? 0)) {
+        this.note('a journey from before the outside operation is not resumed while it runs', {
+          to: this.suspendedJourney.to, why_it_was_travelling: this.suspendedJourney.why ?? null,
+          busy: outside.label ?? outside.kind ?? null,
+          why: 'the holder decides where this body goes; the keeper re-plans when it is released' });
+        this.suspendedJourney = null;
+      }
       // An interrupted leg is still the outside owner's destination. Blocking
       // its resume here strands a busy town runner before passFarm can reach it.
       if (this.suspendedJourney
