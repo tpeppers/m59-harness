@@ -25,6 +25,7 @@ These tests are offline. They do not execute a raid or shut down a server.
 - `m59-conjure-cleanup-test.mjs`: single-weapon roulette clears only summons
   confirmed by an item-matched description, verifies removal, preserves ordinary
   loot and protected equipment, and stops on unknown observations or cancellation.
+- `m59-desk-chat-test.mjs` (40): the human service desk, broker half: `services?`, requests, `hold on` / `not now` / `done`, the fleetmates-only gate, and `m59-desk-report.mjs` counting a timeout as blocked and a decline as not. The keeper half is in `m59-chalice-test.mjs` and `m59-chalice-flow-test.mjs` (a person at the holder's controls, simulated).
 - `m59-roulette-test.mjs` (24): the training-weapon roulette at the wall — off for
   normal/unarmed styles, a skill at 70 or unread, low mana and unconjurable weapons; a miss
   drops only its own summon and never real long swords; a hit wields our unidentified
