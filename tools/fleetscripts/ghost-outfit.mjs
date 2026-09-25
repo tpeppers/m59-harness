@@ -191,11 +191,32 @@ export async function buyShare(agent, merchant, lines) {
     if (it) buy.push({ id: it.id, amount: n });
   }
   if (!buy.length) return { bought: {}, why: list?.error ?? list?.note ?? 'the smith sells none of it' };
-  const r = await call('shop', { agent, seller: merchant, buy_ids: buy }, 180_000).catch(e => ({ error: e.message }));
+  // ONE PIECE PER EXCHANGE, READ BACK EACH TIME. Armour and shields do not stack, and on the
+  // 2026-09-25 rehearsal an order of six shields in one line bought ONE, and an order for the
+  // other armorer bought none, with nothing logged to say why. So: one at a time, count the
+  // pack after each, stop a kind at the first exchange that brings nothing, and log the reply.
+  const countKind = (items, k) => items.filter(i => OUTFIT[k].match.test(String(i.name ?? '').trim()))
+    .reduce((n, i) => n + (i.amount || 1), 0);
+  const start = await inv(agent);
+  const replies = [];
+  for (const line of buy) {
+    const kind = Object.keys(want).find(k => OUTFIT[k].match.test(String(items.find(i => i.id === line.id)?.name ?? '').trim()));
+    let have = countKind(start, kind);
+    for (let i = 0; i < line.amount; i++) {
+      const r = await call('shop', { agent, seller: merchant, buy_ids: [{ id: line.id, amount: 1 }] }, 120_000)
+        .catch(e => ({ error: e.message }));
+      const now = countKind(await inv(agent), kind);
+      if (now <= have) {
+        replies.push({ kind, at: i, error: r?.error ?? null, note: r?.note ?? null, clamped: r?.clamped ?? null });
+        break;
+      }
+      have = now;
+    }
+  }
   const after = await inv(agent);
-  const bought = Object.fromEntries(Object.keys(want).map(k =>
-    [k, after.filter(i => OUTFIT[k].match.test(String(i.name ?? '').trim())).reduce((n, i) => n + (i.amount || 1), 0)]));
-  return { bought, clamped: r?.clamped ?? null, error: r?.error ?? null };
+  const bought = Object.fromEntries(Object.keys(want).map(k => [k, countKind(after, k)]));
+  if (replies.length) console.log(`  ${agent} buy stopped: ${JSON.stringify(replies).slice(0, 400)}`);
+  return { bought, stopped: replies };
 }
 
 /** Hand each raider its pieces, by id, and record what arrived. */
