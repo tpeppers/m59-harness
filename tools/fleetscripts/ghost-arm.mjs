@@ -608,6 +608,9 @@ async function dedicate({ agent, st, say, dedicators, agents, lab, p }) {
     for (let i = 0; i < 4; i++) {
       r = await castVerified(agent, DEDICATE.spell, { target: id, cost: DEDICATE.mana });
       if (!r.retryable) break;
+      // A retryable miss has usually SPENT the mana (a fizzle costs it), so rest again first. The
+      // 2026-09-25 rehearsal retried at once and every retry read "costs 17, you have 4/7".
+      if (!(await haveMana())) break;
       await call('rest', { agent, stand: true }, 30_000).catch(() => {});
     }
     const outcome = r?.in_effect ? 'already' : r?.landed ? 'dedicated' : `failed: ${String(r?.why ?? '').slice(0, 60)}`;
