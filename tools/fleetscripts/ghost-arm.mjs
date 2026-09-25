@@ -688,7 +688,7 @@ export const script = {
         st.outfit = await wearOutfit(agent);
         const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || armorersOf(agents, p).includes(agent);
         if (late) st.outfit.dedicate = await lateDedicate(agent, roles.dedicators,
-          { lab, dm: lab ? await dmLab() : null });
+          { lab, dm: lab ? await dmLab() : null, donors: agents.filter(a => a !== roles.lightbearer) });
         console.log(`  ${String(SURVEY.get(agent)?.character ?? agent).padEnd(8)} dressed: ${st.outfit.wore.join('+') || 'nothing new'}` +
                     (st.outfit.dedicate ? `; hammer ${st.outfit.dedicate.ok ? st.outfit.dedicate.outcome : 'NOT dedicated: ' + st.outfit.dedicate.why}` : ''));
         return true;

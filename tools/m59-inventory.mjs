@@ -27,6 +27,7 @@
 // depositStep, drawStep, cupRideStep), so a script composes them like walk() and verify().
 import { call, observe, verify, foodIn, REAGENT_RE } from './m59-fleetscript.mjs';
 import { weighItem } from './m59-items.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const lower = s => String(s ?? '').toLowerCase().trim();
@@ -200,7 +201,14 @@ export async function makeRoom(agent, { min = 400, profile = KEEP.raid, keepFood
 
 let CHAIN = Promise.resolve();
 /** Trades one at a time across the whole process: two supplies to one receiver collide. */
-export const serially = fn => { const p = CHAIN.then(fn, fn); CHAIN = p.catch(() => {}); return p; };
+// REENTRANT. A serial step that calls another serial helper (lateDedicate's hand-back goes through
+// handOver) would otherwise queue behind itself and wait for ever. Inside the chain, run at once.
+const IN_CHAIN = new AsyncLocalStorage();
+export const serially = fn => {
+  if (IN_CHAIN.getStore()) return Promise.resolve().then(fn);
+  const run = () => IN_CHAIN.run(true, fn);
+  const p = CHAIN.then(run, run); CHAIN = p.catch(() => {}); return p;
+};
 
 /**
  * HAND ONE THING OVER (supply, verified both sides). A full receiver MAKES ROOM and is asked again —

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Offline tests for m59-inventory.mjs — the classifier and the drop plan. No socket, no roster.
-import { classify, dropCandidates, KEEP, HALL_STASH_KEEP, earmark, earmarkItem, isEarmarked, clearEarmarks } from './m59-inventory.mjs';
+import { classify, dropCandidates, KEEP, HALL_STASH_KEEP, earmark, earmarkItem, isEarmarked, clearEarmarks, serially } from './m59-inventory.mjs';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL', m); } };
@@ -55,6 +55,12 @@ ok(!isEarmarked('a', { id: 1, name: 'hammer' }) && !isEarmarked('d', { id: 7, na
 ok(dropCandidates(pack, [], { profile: KEEP.all }).every(p => classify(p.item.name) === 'junk'), 'KEEP.all still keeps every weapon');
 
 ok(HALL_STASH_KEEP.includes('chalice') && HALL_STASH_KEEP.includes('sword'), 'the hall stash keeps the cup and weapons');
+
+const nested = await Promise.race([serially(() => serially(async () => 'ok')), new Promise(r => setTimeout(() => r('deadlock'), 2000))]);
+ok(nested === 'ok', 'serially is reentrant: a serial step calling handOver does not wait on itself');
+const order = [];
+await Promise.all([serially(async () => { await new Promise(r => setTimeout(r, 50)); order.push(1); }), serially(async () => order.push(2))]);
+ok(order.join() === '1,2', 'separate serial calls still run one after another');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

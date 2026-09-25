@@ -37,7 +37,7 @@ export const chaliceRide = (armorer, holder, opts) => cupRide(armorer, holder, o
 export const PACK_KEEP = SELL_KEEP;
 /** The raid's make-room: the operator's rule (KEEP.raid), `keep` food of each kind, `min` free. */
 export const makeRoom = (agent, { keep = 10, min = 400 } = {}) => invMakeRoom(agent, { min, profile: KEEP.raid, keepFood: keep });
-import { barrier, reexpect } from '../m59-ghostraid-lib.mjs';
+import { barrier, reexpect, DEDICATE, countFamily, isReagent } from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const lower = s => String(s ?? '').toLowerCase();
@@ -223,7 +223,7 @@ export async function wearOutfit(agent) {
  * with it. The owner hands it to a dedicator with the mana, the dedicator casts, hands it back,
  * the owner wields it. Serialised: one dedicator trade at a time.
  */
-export async function lateDedicate(owner, dedicators, { lab = false, dm = null } = {}) {
+export async function lateDedicate(owner, dedicators, { lab = false, dm = null, donors = [] } = {}) {
   return serially(async () => {
     const weapon = (await inv(owner)).find(i => /^(hammer|mace)$/i.test(String(i.name ?? '').trim()));
     if (!weapon) return { ok: false, why: 'no blunt weapon to dedicate' };
@@ -234,8 +234,31 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null }
       return { a, room: Number(s?.where?.num ?? s?.room_num ?? NaN), mana: Number(s?.mana?.value ?? 0) }; };
     const me = await roomOf(owner);
     const here = (await Promise.all(dedicators.filter(x => x !== owner).map(roomOf))).filter(x => x.room === me.room);
-    const d = (here.find(x => x.mana >= 17) ?? here[0])?.a ?? null;
+    // ONE WHO CAN PAY. Enchant weapon costs 3 elderberry and an orc tooth as well as the mana, and
+    // by the time the armorers are back the dedicators have spent theirs: on the 2026-09-25
+    // rehearsal three late dedications went to dedicators with no elderberry left ("no mana and no
+    // reagents moved") while another in the same room still carried 13.
+    const pays = async a => { const it = await inv(a);
+      return Object.entries(DEDICATE.reagents).every(([k, n]) => countFamily(it, k) >= n); };
+    for (const x of here) x.pays = await pays(x.a);
+    let d = (here.find(x => x.pays && x.mana >= 17) ?? here.find(x => x.pays) ?? here.find(x => x.mana >= 17) ?? here[0])?.a ?? null;
     if (!d) return { ok: false, why: `no dedicator in room ${me.room} with the owner` };
+    // Nobody here can pay: top the chosen one up from whoever in the room can spare it (the owner
+    // first), stack by stack, by id — a hand-over is one room, which this already is.
+    if (!here.find(x => x.a === d)?.pays) {
+      for (const [k, n] of Object.entries(DEDICATE.reagents)) {
+        let need = n - countFamily(await inv(d), k);
+        for (const from of [owner, ...donors.filter(x => x !== owner && x !== d)]) {
+          if (need <= 0) break;
+          if ((await roomOf(from)).room !== me.room) continue;
+          const stack = (await inv(from)).filter(i => i.id != null && isReagent(i.name, k)).sort((a, b) => (b.amount || 1) - (a.amount || 1))[0];
+          if (!stack) continue;
+          const give = Math.min(need, Number(stack.amount) || 1);
+          const r = await call('supply', { from, to: d, what: [{ id: stack.id, amount: give }], who_travels: 'neither' }, 120_000).catch(() => null);
+          if (r?.supplied) need -= give;
+        }
+      }
+    }
     await call('act', { agent: owner, verb: 'unuse', target: weapon.id }, 60_000).catch(() => {});
     const g = await call('supply', { from: owner, to: d, what: [weapon.id], who_travels: 'neither' }, 120_000).catch(e => ({ supplied: false, reason: e.message }));
     if (!g?.supplied) return { ok: false, why: `hand-over failed: ${g?.reason ?? '?'}` };
