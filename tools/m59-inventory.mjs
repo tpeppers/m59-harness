@@ -125,6 +125,34 @@ export async function grabFromFloor(agent, re, tries = 10) {
  * past `keepFood` of each kind (the excess only), heaviest first. Never a kept class, never worn.
  * Returns [{item, amount|null}] — amount null means the whole stack.
  */
+// ------------------------------------------------------------------------- eating
+/**
+ * EAT UP TO `target` VIGOR (a tier, not a gate: no food means no eating, and the caller carries on).
+ * Resting stops awarding vigor at 80 of 200, so everything above it has to be eaten. One bite is
+ * one item and the gain lands a moment later (2026-09-25: a loaf took a raider 80 -> 98, visible
+ * three seconds on) — so bite a stack again until the target, reading after a settle, and move to
+ * the next stack only when a bite stops paying. Returns { before, after, bites }.
+ */
+export async function eatTo(agent, target = 180, { maxBites = 12, settleMs = 2500 } = {}) {
+  const vig = async () => Number((await call('status', { agent, brief: true }, 30_000).catch(() => null))?.vigor?.value ?? NaN);
+  const before = await vig();
+  let now = before, bites = 0;
+  if (!Number.isFinite(now) || now >= target) return { before, after: now, bites };
+  const meals = foodIn((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? []);
+  for (const meal of meals) {
+    for (let i = 0; i < Math.max(1, Number(meal.amount) || 1) && i < maxBites && now < target; i++) {
+      await call('act', { agent, verb: 'eat', target: meal.id }, 60_000).catch(() => {});
+      bites++;
+      await sleep(settleMs);
+      const v = await vig();
+      if (!(v > now)) { now = Number.isFinite(v) ? v : now; break; }
+      now = v;
+    }
+    if (now >= target) break;
+  }
+  return { before, after: now, bites, meals: meals.length };
+}
+
 // ------------------------------------------------------------------------- earmarks
 // WHAT THE CURRENT ERRAND HAS SPOKEN FOR. makeRoom never drops an earmarked item. An errand
 // earmarks a KIND for everyone (the ghost raid: every hammer) or one object for one agent (a

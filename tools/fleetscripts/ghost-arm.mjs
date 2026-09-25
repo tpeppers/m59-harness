@@ -52,7 +52,8 @@
 // single DM packet. On prod the same steps rest for mana and report a shortfall instead.
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
 import { weighItem } from '../m59-items.mjs';
-import { handOver, earmark } from '../m59-inventory.mjs';
+import { handOver, earmark, eatTo } from '../m59-inventory.mjs';
+import { forge } from '../m59-foundry.mjs';
 import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
@@ -144,6 +145,9 @@ export const script = {
     smith: { type: 'string', default: "Fehr'loi Qan", describe: 'the merchant to sell to and buy from' },
     keep_shillings: { type: 'number', default: 20, describe: 'what each raider keeps when pooling money' },
     outfit_wait_s: { type: 'number', default: 3600, describe: 'how long the fleet waits for the armorers' },
+    foundry: { type: 'boolean', default: true, describe: 'while the armorers are out, raiders with no blunt weapon make one with create weapon (m59-foundry)' },
+    foundry_after_s: { type: 'number', default: 600, describe: 'how long into the armorer wait the foundry starts (a made weapon lasts 2 x spell power minutes)' },
+    foundry_rooms: { type: 'string', default: '2,38', describe: 'rooms a caster may forge in; it picks the one whose head-count puts spell power nearest the hammer band' },
   },
 
   async steps(p, agentArg, state) {
@@ -679,12 +683,37 @@ export const script = {
       ...(outfitOn(p) ? [verify(async ({ state: st }) => {
         const roles = rolesNow(agents, p);
         const until = Date.now() + Number(p.outfit_wait_s) * 1000;
-        // EVERYONE WAITS, THE CUP-HOLDER INCLUDED: a second trip starts with the cup handed over in
-        // room 2, and a light-bearer who had moved on to the door would strand it.
+        // THE ARMORERS' ROUND TRIP IS THE LONGEST WAIT IN THE RAID (45 min of 92 in rehearsal 21),
+        // and it used to be spent standing still. Now whoever is not away uses it, in tiers that
+        // each do nothing when their input is missing (operator, 2026-09-25: optimisations that
+        // degrade gracefully):
+        //   1. EAT to 180 vigor, if there is food — raid-prep then finds it done.
+        //   2. FORGE a blunt weapon, if it has none and knows create weapon (m59-foundry) — after
+        //      `foundry_after_s`, so a weapon lasting 2 x P minutes still lasts through the fight.
+        //   3. REST, so health and mana are full before the door rather than after it.
+        // The cup-holder and the light-bearer only wait: a second trip starts from the cup.
+        const waitFrom = Date.now();
+        const isArmorer = armorersOf(agents, p).includes(agent);
+        let forged = null;
+        if (agent !== roles.lightbearer && !isArmorer && agent !== cupHolderOf(agents, roles)) {
+          if (!OUTFIT_RUN.done) st.ate = await eatTo(agent, 180).catch(() => null);
+          const wantsBlunt = !isBlunt(SURVEY.get(agent)?.wielding) &&
+            !(await call('inventory', { agent }, 40_000).catch(() => null))?.items?.some(i => isBlunt(i.name));
+          if (foundryOn(p) && wantsBlunt) {
+            while (!OUTFIT_RUN.done && Date.now() - waitFrom < Number(p.foundry_after_s) * 1000) await sleep(5000);
+            if (!OUTFIT_RUN.done) {
+              forged = await forge(agent, { rooms: String(p.foundry_rooms).split(',').map(Number).filter(Boolean),
+                                            deadline: until - 60_000 }).catch(e => ({ ok: false, why: e.message }));
+              st.forged = { ok: forged.ok, got: forged.got ?? null, casts: forged.casts?.length ?? 0, why: forged.why ?? null };
+              console.log(`  ${agent} foundry: ${forged.ok ? `made a ${forged.got} (P~${forged.P}, lasts ~${forged.lifetime_min} min)` : `nothing (${forged.why})`} in ${forged.casts?.length ?? 0} cast(s)`);
+            }
+          }
+          if (!OUTFIT_RUN.done) await call('rest', { agent }, 30_000).catch(() => {});
+        }
         while (!OUTFIT_RUN.done && Date.now() < until) await sleep(5000);
         if (agent === roles.lightbearer) { st.outfit = { skipped: 'light-bearer (held the cup)' }; return true; }
         st.outfit = await wearOutfit(agent);
-        const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || armorersOf(agents, p).includes(agent);
+        const late = (OUTFIT_RUN.delivered.get(agent) ?? []).includes('hammer') || isArmorer || !!forged?.ok;
         if (late) st.outfit.dedicate = await lateDedicate(agent, roles.dedicators,
           { lab, dm: lab ? await dmLab() : null, donors: agents.filter(a => a !== roles.lightbearer) });
         console.log(`  ${String(SURVEY.get(agent)?.character ?? agent).padEnd(8)} dressed: ${st.outfit.wore.join('+') || 'nothing new'}` +
@@ -696,6 +725,7 @@ export const script = {
 };
 
 const outfitOn = p => p.outfit === true || p.outfit === 'true';
+const foundryOn = p => !(p.foundry === false || p.foundry === 'false');
 const hallOn = p => p.hall_draw === true || p.hall_draw === 'true';
 
 /**
