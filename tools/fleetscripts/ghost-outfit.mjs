@@ -148,7 +148,10 @@ async function hopTo(agent, to, { floor = 0 } = {}) {
     while (Date.now() < until) {
       const o = await observe(agent);
       if (o.dead) return { ok: false, dead: true };
-      if (Number(o.room) === Number(to)) return { ok: true };
+      // ARRIVED: CLEAR THE JOURNEY. A background travel can stay registered after the body is
+      // there, and the raid's next walk is then refused "busy: walk to <here>" — on the
+      // 2026-09-25 rehearsal that dropped an armorer from the fight.
+      if (Number(o.room) === Number(to)) { await call('cancel_movement', { agent }, 30_000).catch(() => {}); return { ok: true }; }
       await sleep(3000);
     }
   }
@@ -273,6 +276,33 @@ export async function buyShare(agent, merchant, lines) {
   return { bought, stopped: replies };
 }
 
+/**
+ * BUY NAMED ITEMS FROM A MERCHANT, ONE EXCHANGE PER PIECE FOR GEAR, ONE FOR A STACK, READ BACK.
+ * The general form of buyShare: `lines` is [{item, amount}] by NAME, so any raid's list works.
+ * Returns {item: bought}. A line the merchant does not sell is reported as 0, never skipped.
+ */
+export async function buyByName(agent, seller, lines = []) {
+  const list = await call('shop', { agent, seller }, 120_000).catch(() => null);
+  const norm = x => lower(x).trim().replace(/ies$/, 'y').replace(/s$/, '');
+  const count = (items, name) => items.filter(i => norm(i.name) === norm(name)).reduce((m, i) => m + (i.amount || 1), 0);
+  const out = {};
+  for (const { item, amount } of lines) {
+    const it = (list?.items ?? []).find(i => norm(i.name) === norm(item));
+    if (!it) { out[item] = 0; continue; }
+    const start = count(await inv(agent), item);
+    let have = start;
+    const stack = Number(it.amount) > 1;
+    for (let i = 0; i < (stack ? 1 : amount) && have - start < amount; i++) {
+      await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount : 1 }] }, 120_000).catch(() => null);
+      const now = count(await inv(agent), item);
+      if (now <= have) break;
+      have = now;
+    }
+    out[item] = have - start;
+  }
+  return out;
+}
+
 /** Hand each raider its pieces, by id, and record what arrived. */
 export async function deliver(armorer, lines) {
   const out = [];
@@ -316,13 +346,15 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null }
   return serially(async () => {
     const weapon = (await inv(owner)).find(i => /^(hammer|mace)$/i.test(String(i.name ?? '').trim()));
     if (!weapon) return { ok: false, why: 'no blunt weapon to dedicate' };
-    let d = null;
-    for (const a of dedicators) {
-      const m = Number((await call('status', { agent: a, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
-      if (m >= 17) { d = a; break; }
-    }
-    d ??= dedicators[0];
-    if (!d) return { ok: false, why: 'no dedicator' };
+    // A DEDICATOR IN THE OWNER'S ROOM. A hand-over is one room; on the 2026-09-25 rehearsal four
+    // late dedications all chose the same dedicator, who was not in the stage room, and every one
+    // failed "not in the room". Same room first; the one with the mana for it before the rest.
+    const roomOf = async a => { const s = await call('status', { agent: a, brief: true }, 30_000).catch(() => null);
+      return { a, room: Number(s?.where?.num ?? s?.room_num ?? NaN), mana: Number(s?.mana?.value ?? 0) }; };
+    const me = await roomOf(owner);
+    const here = (await Promise.all(dedicators.filter(x => x !== owner).map(roomOf))).filter(x => x.room === me.room);
+    const d = (here.find(x => x.mana >= 17) ?? here[0])?.a ?? null;
+    if (!d) return { ok: false, why: `no dedicator in room ${me.room} with the owner` };
     await call('act', { agent: owner, verb: 'unuse', target: weapon.id }, 60_000).catch(() => {});
     const g = await call('supply', { from: owner, to: d, what: [weapon.id], who_travels: 'neither' }, 120_000).catch(e => ({ supplied: false, reason: e.message }));
     if (!g?.supplied) return { ok: false, why: `hand-over failed: ${g?.reason ?? '?'}` };
@@ -373,6 +405,16 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     // To Barloque: the cup if we can, the road if we cannot.
     const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) })) : { ok: false, why: 'no cup holder' };
     t.ride = ride.ok ? 'chalice' : `walked (${ride.why})`;
+    // EMPTY THE PACK IN THE HALL BEFORE SHOPPING. The ride lands in 714, beside the chests, and a
+    // smith will not buy reagents or food — so what an armorer carries at the counter is what it
+    // brought. On the 2026-09-25 rehearsal every armorer's buying stopped on "limited_by: bulk"
+    // after two or three pieces. Everything but the essentials goes in a chest first.
+    if (ride.ok) {
+      const r = await inHall(() => call('hall_withdraw', { agent, wants: [], stash: [...HALL_STASH_KEEP] }, 620_000)
+        .catch(e => ({ ok: false, why: e.message })));
+      t.stashed = r?.stashed ?? 0;
+      if (t.stashed) log(`  ${agent} armorer trip ${trip}: stashed ${t.stashed} in the hall before shopping`);
+    }
     log(`  ${agent} armorer trip ${trip}: ${t.ride}`);
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
     if (!at.ok) { t.failed = 'could not reach the smith'; trips.push(t); break; }
@@ -491,6 +533,17 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
         out.bought[item] = after - before;
       }
       log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}`);
+    }
+  }
+  // GEAR THE CHESTS LACKED, FROM THE SMITH — only when the caller asks (`buy_gear`). The ghost raid
+  // leaves gear to its armorers' own smith trips; a general provisioning run (provision.mjs) buys it
+  // here, on the same trip. One piece per exchange, read back (buyShare's rule).
+  const gearShort = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && !/elderberr|herb|orc tooth|mushroom|emerald|sapphire|ruby|shilling/i.test(k));
+  if (ride.ok && gearShort.length && (p.buy_gear === true || p.buy_gear === 'true') && Number(p.shop_room)) {
+    const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
+    if (at.ok) {
+      out.bought_gear = await buyByName(agent, p.smith, gearShort.map(([item, amount]) => ({ item, amount })));
+      log(`  ${agent} bought at the smith: ${JSON.stringify(out.bought_gear)}`);
     }
   }
   if (Number((await observe(agent)).room) !== Number(p.stage)) {

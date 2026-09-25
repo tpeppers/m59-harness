@@ -101,9 +101,12 @@ export const script = {
     healers: { type: 'string', default: '', describe: 'comma-separated; empty = three who know minor heal' },
     lab: { type: 'boolean', default: false, describe: 'allow DM grants and mana refills. REFUSES on a non-lab fleet' },
     plateau_ok: { type: 'number', default: 0.5, describe: 'a muster walk whose rest plateaus at or above this sets out from the plateau' },
+    pack_room_min: { type: 'number', default: 400, describe: 'weight and bulk a raider must have free before hand-outs; heavy food is dropped to make it (0 = off)' },
+    keep_food: { type: 'number', default: 10, describe: 'slices of each food kept when making room' },
     near_hops: { type: 'number', default: 2, describe: 'a muster walk this short (and not across Ukgoth) sets out at near_min_health' },
     near_min_health: { type: 'number', default: 0.3, describe: 'the floor for a short walk home; the stage room is where the raid rests' },
     muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
+    start_stats: { type: 'string', default: '', describe: 'LAB: JSON {agent:{karma,max_mana}} read from prod — mirrored at placement' },
     start_cup: { type: 'string', default: '', describe: 'LAB: the agent whose prod character holds the Chalice of the Rain; given a full one at placement if it has none' },
     start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
@@ -176,6 +179,31 @@ export const script = {
         // a charge and an empty cup is DELETED (chalice.kod NewApplied). On 2026-09-25 Loial's
         // clone came to the hold with none, and every armorer's ride found no cup. So the clone of
         // prod's cup holder is given a full one here, with the other start-of-run mirrors.
+        // KARMA AND MAX MANA, WHERE PROD HAS THEM (see rehearse in m59-ghostraid.mjs). Karma is set;
+        // mana is NODES — melded nodes are a bitmask ComputeMaxMana sums — so nodes are added one
+        // at a time until the clone's max mana reaches prod's.
+        const stats = (() => { try { return JSON.parse(String(p.start_stats || '{}'))[agent] ?? null; } catch { return null; } })();
+        if (stats) {
+          if (Number.isFinite(stats.karma)) await dm.kit(who, { karma: stats.karma }).catch(() => {});
+          const maxManaNow = async () => Number((await call('status', { agent, brief: false }, 30_000).catch(() => null))?.mana?.max ?? 0);
+          let mm = await maxManaNow();
+          // BOTH DIRECTIONS: a clone can carry nodes from an earlier lab run (shadow20 had 44 max
+          // mana against prod's 19), so the mask is rebuilt from ZERO up to prod's figure.
+          if (Number.isFinite(stats.max_mana) && mm !== stats.max_mana) {
+            const obj = (await dm.resolve([who]))[who];
+            if (obj != null) {
+              await dm.dm([`set object ${obj} piNodelist INT 0`, `send object ${obj} ComputeMaxMana`, `send object ${obj} NewMana`]);
+              await sleep(1200);
+              mm = await maxManaNow();
+            }
+            for (let k = 1; k <= 12 && mm < stats.max_mana && obj != null; k++) {
+              await dm.dm([`set object ${obj} piNodelist INT ${(1 << k) - 1}`, `send object ${obj} ComputeMaxMana`, `send object ${obj} NewMana`]);
+              await sleep(1200);
+              mm = await maxManaNow();
+            }
+          }
+          console.log(`  ${agent} mirrored prod: karma ${stats.karma ?? '-'}, max mana ${mm} (prod ${stats.max_mana ?? '-'})`);
+        }
         if (String(p.start_cup || '') === agent) {
           const has = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
             .some(i => /chalice/i.test(String(i.name ?? '')));
@@ -184,8 +212,15 @@ export const script = {
             const made = /Created object (\d+)/.exec(String(await dm.dm(['create object Chalice'])))?.[1];
             if (made && ids[who] != null) await dm.dm([`send object ${ids[who]} NewHold what OBJECT ${made}`]);
           }
-          const now = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
-            .some(i => /chalice/i.test(String(i.name ?? '')));
+          // READ BACK WITH PATIENCE: the keeper's inventory is a cache, and the first read after a
+          // DM give still shows the old pack — the 2026-09-25 run printed NOT GIVEN for a cup that
+          // had arrived, and a second give would have left two (a full cup refuses a second).
+          let now = false;
+          for (let i = 0; i < 5 && !now; i++) {
+            await sleep(1500);
+            now = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
+              .some(i2 => /chalice/i.test(String(i2.name ?? '')));
+          }
           console.log(`  ${agent} holds the cup where prod does: ${has ? 'already' : now ? 'given a full one' : 'NOT GIVEN'}`);
         }
       }
@@ -306,6 +341,36 @@ export const script = {
         return true;
       }, 'the survey could not be read'),
 
+      // ---- 1a. MAKE ROOM. A full pack refuses everything handed to it — a shield, chain, and on
+      // the 2026-09-25 rehearsal the character's OWN weapon coming back from its dedicator, which
+      // left shadow15 unarmed at the door. The weight is pork (the fleet carries thousands of
+      // slices). A raider with less than `pack_room_min` weight or bulk free drops heavy food —
+      // pork, then mutton — keeping `keep_food` of each, until it has the room. Lossy on purpose:
+      // food is abundant and a weapon is not. pack_room_min=0 turns it off.
+      verify(async ({ state: st }) => {
+        const min = Number(p.pack_room_min);
+        if (!(min > 0)) return true;
+        const roomNow = async () => (await call('look', { agent }, 40_000).catch(() => null))?.carry?.room_for ?? null;
+        let room = await roomNow();
+        const dropped = {};
+        for (const food of ['slice of pork', 'mutton', 'pork', 'cheese']) {
+          if (!room || Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
+          const stacks = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
+            .filter(i => String(i.name ?? '').toLowerCase().includes(food) && i.id != null);
+          for (const it of stacks) {
+            const extra = (Number(it.amount) || 1) - Number(p.keep_food);
+            if (extra <= 0) continue;
+            await call('act', { agent, verb: 'drop', target: it.id, amount: extra }, 30_000).catch(() => {});
+            dropped[it.name] = (dropped[it.name] ?? 0) + extra;
+            room = await roomNow();
+            if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
+          }
+        }
+        if (Object.keys(dropped).length) console.log(`  ${agent} made room: dropped ${JSON.stringify(dropped)} (now ${JSON.stringify(room)})`);
+        st.room = { dropped, room };
+        return true;
+      }, 'making room in the pack'),
+
       // ---- 1c. THE HALL DRAW. The armorers ride the chalice to the guild hall one after another,
       // take the raid's reagents, the hall's money and whatever armour sits in its chests, and walk
       // home together; everyone else rests in the stage room until they are back. It comes BEFORE
@@ -355,6 +420,9 @@ export const script = {
                   const r = await call('supply', { from: arm, to, what: [piece.id], who_travels: 'neither' }, 120_000)
                     .catch(e => ({ supplied: false, reason: e.message }));
                   console.log(`  hall ${kind} ${arm} -> ${to}: ${r?.supplied ? 'given' : `NOT given (${r?.reason ?? '?'})`}`);
+                  // A full pack refuses the piece; the next raider in need gets it instead of the
+                  // same full one being offered every remaining piece (2026-09-25: receiver_full).
+                  if (!r?.supplied) { want[to][kind] = false; continue; }
                   if (r?.supplied) {
                     want[to][kind] = false;
                     const got = OUTFIT_RUN.delivered.get(to) ?? []; got.push(kind); OUTFIT_RUN.delivered.set(to, got);

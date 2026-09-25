@@ -1400,6 +1400,40 @@ const CONJURABLE_WEAPONS = Object.freeze([
 // 14 mana against the 15 the spell costs.
 const CONJURE_HOARD_LIMIT = 3;
 
+// WHERE THE TRAINING-WEAPON ROULETTE STOPS. A proficiency stroke improves only while the
+// ability is under the TARGET's level (stroke.kod:115); this fleet's hardest quarry is the
+// level-75 skeleton, and the operator set the goal at 70 on 2026-09-25. Past it the conjured
+// weapon trains nothing and the priority list takes over again.
+const ROULETTE_UNTIL = 70;
+
+// THE BANDS create weapon ROLLS OVER (creaweap.kod:66-107), for the odds in the note.
+const CONJURE_BANDS = Object.freeze([
+  ['mace', 0, 20], ['short sword', 20, 30], ['hammer', 30, 45], ['axe', 45, 60],
+  ['long sword', 60, 75], ['scimitar', 75, 95], ['mystic sword', 95, Infinity]]);
+
+/**
+ * An ESTIMATE of this character's Create Weapon spell power and the chance of each weapon.
+ * Kraanan (spell.kod:2066-2205): half the ability, plus the number of active holders in the
+ * room bounded 0..30, plus health*10/max bounded 0..10; armour penalties count half. The room
+ * count is read off the client's room objects and is approximate, so this is for the ledger
+ * and the note, never a gate.
+ */
+export function conjurePowerEstimate(c, spell = null) {
+  const ability = Number(skills.abilityOf(c, 'create weapon') ?? spell?.ability);
+  const hp = c?.vitals?.()?.health ?? c?.vitals?.()?.hp ?? null;
+  const crowd = Math.max(0, Math.min(30, Number(c?.room?.objects?.size ?? 0)));
+  const healthBonus = hp?.max ? Math.max(0, Math.min(10, Math.floor((hp.value * 10) / hp.max))) : 10;
+  const power = Number.isFinite(ability) ? Math.floor(ability / 2) + crowd + healthBonus : null;
+  const chance = (name) => {
+    const band = CONJURE_BANDS.find(b => b[0] === name);
+    if (!band || !Number.isFinite(power) || power < 1) return null;
+    const lo = Math.floor(power / 3), hi = power;
+    const overlap = Math.min(band[2] - 1, hi) - Math.max(band[1], lo) + 1;
+    return Math.max(0, overlap) / (hi - lo + 1);
+  };
+  return { power, crowd, chance };
+}
+
 // WHERE THE MONEY GOES. Jasper and Tos share one banking system, so either counter
 // pays into the same balance and the only question is which is nearer — which really
 // does flip across this fleet's rooms: Jasper is closer to the Merchant Way rooms,
@@ -3311,11 +3345,127 @@ export class Autopilot {
         doing: 'fighting with fists, which is what the style asked for' });
       return true;
     }
+    const roulette = await this.trainingWeaponRoulette().catch(e => {
+      this.note('training-weapon roulette failed', { why: e.message }); return null; });
+    if (roulette?.armed) return true;
     if (skills.weaponsOf(c).length) {
       const eq = await skills.equipBest(this.s, { priority: this.weaponPriorityNow(), banned: this.bannedWeaponsNow() }).catch(() => null);
       if (eq?.wielding) return true;
     }
     return await this.makeWeapon('about to fight with nothing in hand').catch(() => false);
+  }
+
+  // THE TRAINING WEAPON, CONJURED AT THE WALL UNTIL THE SKILL IS DONE WITH IT.
+  //
+  // Operator, 2026-09-25: everyone under 50% hammer wielding trains hammers to 70 (the top of
+  // what a level-75 skeleton still teaches), and "conjuring weapons while standing in a safe
+  // spot should be the default behavior when using a weapon below a threshold".
+  //
+  // `training_weapon` already named the weapon, but only a TRAINING BOUT honoured it
+  // (`prepareTrainingStyle`), and the wall-fight path never runs one: it equips by priority
+  // from whatever is in the pack. A character told to train hammers and carrying only long
+  // swords therefore swung long swords for ever. Buying hammers is not the fix either — the
+  // spell makes one for 15 mana, it just does not make one EVERY time.
+  //
+  // So, before a pull, while standing where nothing reaches: if the armed training weapon is
+  // conjurable, its proficiency is still under ROULETTE_UNTIL, and the pack holds no usable
+  // one, cast `create weapon` once. A hit is wielded; a miss is dropped once its description
+  // confirms it is our own summon (the same clearConjureHoard the ban roulette uses), so the
+  // pack never fills with near-misses. One cast per call — mana is 21 to 33 on this fleet and
+  // the fight in front of us must not wait on a lottery. Real weapons are never dropped.
+  //
+  // WHAT THE ODDS ARE is written to the note, because the lever is not obvious: the spell
+  // rolls `Random(sp/3, sp)` and a hammer is 30-44, so the best a caster can do is ~48% at
+  // spell power 44-47. Create Weapon is Kraanan, whose bonus is the number of people in the
+  // room (up to 30), so a crowded Castle Victoria pushes power to 75+ and the odds to ~27%.
+  async trainingWeaponRoulette() {
+    const s = this.s, c = s.client;
+    const style = this.policy?.trainingStyle ?? 'normal';
+    if (!c || style === 'normal' || style === 'unarmed') return null;
+    const want = String(this.policy?.trainingWeapon ?? '').trim().toLowerCase();
+    if (!CONJURABLE_WEAPONS.includes(want)) return null;
+    if ((this.bannedWeaponsNow() ?? []).some(b => want.includes(String(b).toLowerCase()))) return null;
+    const skill = skills.proficiencyFor(want);
+    const ability = skills.abilityOf(c, skill);
+    // UNKNOWN IS NOT PERMISSION: a skill the character does not hold, or whose ability has not
+    // been read, does not justify spending mana on its weapon.
+    if (!Number.isFinite(ability) || ability >= ROULETTE_UNTIL) return null;
+
+    const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
+    const broken = skills.brokenSet(c);
+    const mine = c._summoned ??= new Set();
+    const isWant = o => nameOf(o) === want && !broken.has(o.id);
+    // A SUMMON IS SAFE TO WIELD UNREAD. It shows rarity 100 like any unidentified weapon, and
+    // the equip path refuses those because a cursed weapon can never be put down; one this
+    // keeper watched appear from its own cast cannot be cursed. Allowed only when every
+    // unread weapon of that name in the pack is one of ours.
+    const equipWant = async () => {
+      const unread = (c.inventory || []).filter(o => isWant(o) && skills.isUnrevealed(o));
+      const allowUnrevealed = unread.length > 0 && unread.every(o => mine.has(o.id));
+      const eq = await skills.equipBest(s, { priority: [want], banned: this.bannedWeaponsNow(),
+        allowUnrevealed }).catch(() => null);
+      return String(eq?.wielding ?? '').toLowerCase() === want;
+    };
+    const wielding = () => {
+      const using = skills.equippedNow(c);
+      return !!using && (c.inventory || []).some(o => using.has(o.id) && isWant(o));
+    };
+    if (wielding()) return { armed: true, already: true };
+    if ((c.inventory || []).some(isWant)) {
+      if (await equipWant()) return { armed: true, equipped: want };
+      return null;                     // we hold one we may not wield; do not add another
+    }
+
+    // THE CHECKS makeWeapon MAKES, in the same order: vigor, mana, room, the spell, standing.
+    const vigorNow = vigorOf(c.vitals?.());
+    const mana = c.vitals?.()?.mana?.value ?? 0;
+    if ((vigorNow ?? 0) < SPELL_EXERTION_VIGOR || mana < 15) return null;
+    const bulkFree = skills.carryCapacity(c)?.room_for?.bulk ?? null;
+    if (bulkFree != null && bulkFree < CONJURED_WEAPON_BULK) {
+      this.noteOnce?.('roulette-room', 'no room to conjure the training weapon', { bulk_free: bulkFree,
+        needs: CONJURED_WEAPON_BULK, want });
+      return null;
+    }
+    const spell = (c.spells || []).find(sp => (c.rsc.get(sp.nameRsc) || '').toLowerCase() === 'create weapon');
+    if (!spell) return null;
+
+    const power = conjurePowerEstimate(c, spell);
+    await skills.standToAct(s).catch(() => null);
+    this.sittingFor = null;
+    const had = new Set((c.inventory || []).map(o => o.id));
+    await s.pacer.submit('cast', () => c.cast(spell.id, []), 1050);
+    await c.waitFor({ kinds: ['message', 'inventory'], timeoutMs: 4000 }).catch(() => {});
+    await new Promise(x => setTimeout(x, 1000));
+    await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+    const made = (c.inventory || []).filter(o => !had.has(o.id) && CONJURABLE_WEAPONS.includes(nameOf(o)));
+    for (const o of made) mine.add(o.id);
+    this.tally.roulette_casts = (this.tally.roulette_casts || 0) + 1;
+    const hit = made.find(isWant);
+    this.recordCast('create weapon', { ok: made.length > 0, why: `training-weapon roulette for ${want}`,
+      made: made.map(nameOf), want, hit: !!hit, spell_power_estimate: power.power,
+      chance_estimate: power.chance?.(want) ?? null });
+    if (hit) {
+      this.tally.roulette_hits = (this.tally.roulette_hits || 0) + 1;
+      const armed = await equipWant();
+      this.note(`conjured a ${want} to train ${skill}`, { ability, until: ROULETTE_UNTIL,
+        casts: this.tally.roulette_casts, hits: this.tally.roulette_hits, wielding: armed,
+        spell_power_estimate: power.power });
+      return { armed, made: want };
+    }
+    const misses = made.filter(o => !isWant(o));
+    if (misses.length) {
+      const equipment = c.equipment?.();
+      await clearConjureHoard(s, misses, {
+        eligible: o => mine.has(o.id) && equipment?.known === true &&
+                       !equipment.equipped.some(e => e.id === o.id),
+      }).catch(() => null);
+    }
+    this.note(`training-weapon roulette: no ${want} this cast`, { made: made.map(nameOf),
+      ability, until: ROULETTE_UNTIL, spell_power_estimate: power.power,
+      chance_estimate: power.chance?.(want) ?? null,
+      why: 'create weapon rolls a band; the misses are dropped and the next pull is armed with ' +
+           'the best of the rest' });
+    return null;
   }
 
   knowsCreateWeapon() {
@@ -19665,6 +19815,14 @@ export class Autopilot {
       // demonstrably armed. It is done on `isArmed`, every pass, at the top of the arming
       // stage — see the note there. Carrying one it may not wield is exactly the state this
       // fleet is in, so the pack is the wrong evidence.
+      //
+      // THE TRAINING WEAPON FIRST, AND ON ARMED CHARACTERS TOO. The roulette was first hooked
+      // inside armSelf(), and every caller of armSelf() asks it only when the character is
+      // UNARMED — so a character holding a long sword and told to train hammers never reached
+      // it: prod, 2026-09-25, thirteen trainers, zero casts after the deploy. This is the one
+      // stage every farm pass crosses before a fight, armed or not.
+      await this.trainingWeaponRoulette().catch(e =>
+        this.note('training-weapon roulette failed', { why: e.message }));
       if (!skills.weaponsOf(this.s.client).length) {
         const armed = await this.armSelf().catch(() => false);
         if (!armed) {
@@ -22139,6 +22297,12 @@ export class Autopilot {
           // STANDING BESIDE THE GUILD'S CHESTS: take on part of what the holder is short of.
           if (here === GUILD_HALL_ROOM) await this.chaliceTakeCargo(cfg, store).catch(e =>
             this.note('could not draw the holder\'s restock', { why: e.message }));
+          // AND A STANDING ORDER'S MONEY, WHILE THE CHESTS ARE A FEW STEPS AWAY. The town trip
+          // funds it again later, but by then the character is in Barloque and the chests are
+          // a walk back across the city: Rowlf's order of 2026-09-25 landed here and was left
+          // unfunded there. The later call draws only if still short, so this cannot double.
+          if (here === GUILD_HALL_ROOM) await this.fundStandingOrder().catch(e =>
+            this.note('could not fund the standing order at the hall', { why: e.message }));
           return { done: true, landed: here };
         }
         if (Date.now() - st.drankAt > cfg.landing_ms)
@@ -24692,22 +24856,7 @@ export class Autopilot {
                                       timeoutMs: 5000 }).catch(() => null);
       const box = (reply?.events ?? []).find(e => e.kind === 'container');
       const inside = (box?.items ?? []).filter(o => norm(o.name) === norm(want.item));
-      let left = want.amount;
-      for (const item of inside) {
-        if (left <= 0) break;
-        const had = this.reagentCount();
-        await s.pacer.submit('trade', () => c.get(item.id)).catch(() => {});
-        await new Promise(r => setTimeout(r, 400));
-        await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
-        await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
-        // WHAT ARRIVED IN THE PACK, not what the get was asked for. A container refusal here
-        // is a sentence spoken to the room and never an error on the wire, so a `get` that
-        // reports nothing is not a `get` that worked — the same rule the deposit half follows.
-        const now = this.reagentCount();
-        const key = norm(want.item) === 'elderberry' ? 'elderberry' : 'herbs';
-        const moved = Math.max(0, (now[key] || 0) - (had[key] || 0));
-        if (!moved) break;                       // it refused; stop hammering the chest
-        left -= moved;
+      await this.takeFromChest({ target, want, inside, onTook: (moved) => {
         // PRICES ARE OBSERVED, NEVER ASSUMED — a missing one contributes zero rather than a
         // guess, because a ledger that guessed would always justify the hall it is judging.
         const entry = savingsOf({ item: want.item, amount: moved,
@@ -24716,7 +24865,7 @@ export class Autopilot {
         book.record({ ...entry, to: this.name ?? s.name, from: `chest ${want.slot}` });
         saved += entry.saved;
         took.push({ item: want.item, amount: moved, slot: want.slot });
-      }
+      } });
       // WHAT IS LEFT IN THERE, read back now rather than guessed at by subtraction. The
       // reading taken above is already stale -- we have just emptied part of it -- and
       // subtracting what we took would quietly diverge from the chest every time another
@@ -24727,6 +24876,62 @@ export class Autopilot {
     if (took.length) this.note('took reagents from the guild stockpile instead of buying', {
       took, saved, note: 'saved = buy price avoided + sell price forgone' });
     return { took, saved };
+  }
+
+  /**
+   * TAKE `want.amount` OF `want.item` OUT OF ONE CHEST, and only that. Calls `onTook(n)` for
+   * every stack that actually arrived, measured in the pack. Split out of
+   * withdrawFromStockpile so the whole-stack put-back can be tested on its own.
+   */
+  async takeFromChest({ target, want, inside, onTook = () => {} }) {
+    const s = this.s, c = s.need();
+    let left = want.amount;
+    // COUNT THE THING THAT WAS ASKED FOR. This read `reagentCount()` and mapped every item
+    // that was not elderberry onto HERBS, so a shilling draw measured the herb count, saw
+    // nothing move, and stopped — Rowlf's weaponcraft order on 2026-09-25 logged
+    // `drew: 6000` and left him holding 400 beside 75,000 in the chest.
+    const same = (a, b) => { const x = norm(a), y = norm(b);
+      return x === y || x === y + 's' || x + 's' === y; };
+    const held = () => this.packAsItems().filter(x => same(x.name, want.item))
+      .reduce((t, x) => t + (Number(x.amount) || 1), 0);
+    for (const item of inside) {
+      if (left <= 0) break;
+      const had = held();
+      await s.pacer.submit('trade', () => c.get(item.id)).catch(() => {});
+      await new Promise(r => setTimeout(r, 400));
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+      // WHAT ARRIVED IN THE PACK, not what the get was asked for. A container refusal here
+      // is a sentence spoken to the room and never an error on the wire, so a `get` that
+      // reports nothing is not a `get` that worked — the same rule the deposit half follows.
+      let moved = Math.max(0, held() - had);
+      if (!moved) break;                       // it refused; stop hammering the chest
+      // A GET HAS NO AMOUNT, SO IT TAKES THE WHOLE STACK. The guild's money is one stack of
+      // 75,000; taking it to buy a 6,000 lesson would walk the entire treasury down a road.
+      // The surplus goes back into the same chest before this character leaves the hall,
+      // and it is measured leaving the pack rather than assumed to have.
+      if (moved > left) {
+        const surplus = moved - left;
+        const stack = (c.inventory || []).filter(o => same(c.rsc.get(o.nameRsc) || '', want.item))
+          .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1))[0];
+        const beforePut = held();
+        if (stack) {
+          await s.pacer.submit('trade', () => c.put(this.dropSpec(stack, Math.min(surplus, stack.amount || 1)), target.id)).catch(() => {});
+          await new Promise(r => setTimeout(r, 400));
+          await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+          await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+        }
+        const returned = Math.max(0, beforePut - held());
+        moved -= returned;
+        this.note(returned >= surplus ? 'put the rest of the stack back in the chest'
+                                      : 'COULD NOT put the rest of the stack back', {
+          item: want.item, wanted: left, took: moved + returned, returned, chest: want.slot,
+          why: 'a chest get takes the whole stack; only what the errand needs leaves the hall' });
+      }
+      left -= moved;
+      onTook(moved);
+    }
+    return left;
   }
 
   /**
@@ -24745,7 +24950,7 @@ export class Autopilot {
    *
    *   wants: [{ item, amount }]  ->  { ok, took: {item: n}, short: {item: n}, steps }
    */
-  async hallWithdraw(wants = [], { stash = null } = {}) {
+  async hallWithdraw(wants = [], { stash = null, deposit = null } = {}) {
     const s = this.s, c = s.need();
     const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase().trim();
     const same = (a, b) => norm(a) === norm(b) || String(a).toLowerCase() === String(b).toLowerCase();
@@ -24771,14 +24976,17 @@ export class Autopilot {
     // and on the 2026-09-25 rehearsal one reached the chests with 126 bulk free — less than one
     // knight's shield. `stash` is a keep list (substrings); everything else that is not worn or
     // wielded goes into a chest before anything comes out. Measured by the pack, item by item.
+    // `deposit` is the other direction of the same step: put THESE named things in (a prefarm run
+    // bringing its gear home), rather than everything BUT a keep list.
     let stashed = 0;
-    if (Array.isArray(stash) && chests.length) {
+    const dep = Array.isArray(deposit) && deposit.length ? deposit.map(d => String(d).toLowerCase()) : null;
+    if ((Array.isArray(stash) || dep) && chests.length) {
       await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
       await c.waitFor({ kinds: ['inventory', 'equipment'], timeoutMs: 3000 }).catch(() => {});
       const using = skills.equippedNow(c) ?? new Set();
-      const keep = stash.map(k => String(k).toLowerCase());
+      const keep = (stash ?? []).map(k => String(k).toLowerCase());
       const spare = (c.inventory ?? []).filter(o => !using.has(o.id)
-        && !keep.some(k => nameOf(o).includes(k)));
+        && (dep ? dep.some(d => nameOf(o).includes(d)) : !keep.some(k => nameOf(o).includes(k))));
       for (const chest of chests) {
         if (!spare.length) break;
         await nearChest(chest);

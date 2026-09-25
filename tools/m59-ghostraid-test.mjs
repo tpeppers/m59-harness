@@ -178,5 +178,16 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   ok(need['orc tooth'] === 2 && need.elderberry === 2 * 3 + 2 * 2 && need.herb === 10, 'raid needs: a dedication per raider, the light, herbs per heal caster');
 }
 
+{
+  const { cupHolderIn, pickRiders } = await import('./fleetscripts/provision.mjs');
+  const s = new Map([['a', { items: [{ name: 'Chalice of the Rain' }], might: 50 }],
+                     ['b', { items: [], might: 50 }],
+                     ['c', { items: [{ name: 'pork', amount: 100 }], might: 50 }]]);
+  ok(cupHolderIn(s) === 'a', 'provision: the cup holder is whoever carries the chalice');
+  ok(pickRiders(s, { n: 1, holder: 'a' })[0] === 'b', 'provision: riders are the most free pack room, never the holder');
+  ok(pickRiders(s, { named: ['a', 'c'], holder: 'a' }).join() === 'c', 'provision: a named holder is dropped from the riders');
+  ok(cupHolderIn(new Map([['x', { items: [] }]])) === null, 'provision: no cup, no holder');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
