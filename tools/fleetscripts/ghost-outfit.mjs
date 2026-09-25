@@ -171,8 +171,13 @@ export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
   // `supply` answered item_refuses_to_leave — and the operator's own method is use, drop, grab in
   // room 2. So the holder drops it and the rider picks it up off the floor, read back each time.
   await call('act', { agent: holder, verb: 'drop', target: cup.id }, 60_000).catch(() => {});
-  if (!(await grabFromFloor(armorer, /chalice/i)))
-    return { ok: false, why: `${armorer} could not pick the cup up after ${holder} dropped it` };
+  if (!(await grabFromFloor(armorer, /chalice/i))) {
+    // THE HOLDER TAKES IT BACK, or the cup lies on the floor for the rest of the raid and every
+    // later rider finds none (2026-09-25: an overloaded rider could not lift it; three rides lost).
+    const back = await grabFromFloor(holder, /chalice/i);
+    return { ok: false, why: `${armorer} could not pick the cup up after ${holder} dropped it` +
+                             (back ? '' : ' — AND the holder could not take it back') };
+  }
   const mine = (await freshItems(armorer)).find(i => /chalice/i.test(String(i.name ?? '')));
   await call('rest', { agent: armorer, stand: true }, 30_000).catch(() => {});
   await call('act', { agent: armorer, verb: 'eat', target: mine.id }, 60_000).catch(() => {});
