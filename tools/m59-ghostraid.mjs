@@ -338,6 +338,7 @@ const armParams = cfg => ({
     place: cfg.lab && flag('--place'),
     start_positions: cfg.startPositions ? JSON.stringify(cfg.startPositions) : '',
     start_cup: cfg.startCup ?? '',
+    start_stats: cfg.startStats ? JSON.stringify(cfg.startStats) : '',
     muster_wait_s: cfg.lab && flag('--place') ? 240 : 1500,
     light_casts: Math.ceil((cfg.minutes + 10) * 60 / 150) + 2,
 });
@@ -580,8 +581,27 @@ async function rehearse(cfg) {
   const startPositions = Object.fromEntries(clones.filter(c => c.room != null)
     .map(c => [c.shadow_account, { room: c.room, row: c.row ?? null, col: c.col ?? null }]));
   console.log(`clone roster: ${clones.length} raiders from ${snapFile}; light-bearer ${light?.shadow_account ?? 'NONE'} (${light?.prod_character ?? '-'})`);
+  // KARMA AND MAX MANA, READ FROM PROD NOW (read-only) — the snapshot carries neither, and both
+  // decide spells: forces of light refuses under +40 karma, and max mana comes from the mana
+  // NODES a character has melded (recomputed on login, so it cannot simply be written). On
+  // 2026-09-25 Loial's clone reached the door at karma 9 and 33 max mana against prod's 64 and
+  // 65, and the room was never lit. The placement step mirrors both, with the positions.
+  const prodUrl = opt('--prod-control', 'http://127.0.0.1:8901');
+  const prodRpc = async (name, args) => {
+    const r = await fetch(new URL('/rpc', prodUrl), { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }), signal: AbortSignal.timeout(60_000) });
+    return JSON.parse((await r.json()).result.content[0].text);
+  };
+  const startStats = {};
+  for (const c of clones) {
+    const s = await prodRpc('status', { agent: c.prod_agent, brief: false }).catch(() => null);
+    const karma = Number(s?.karma?.value), maxMana = Number(s?.mana?.max);
+    if (Number.isFinite(karma) || Number.isFinite(maxMana))
+      startStats[c.shadow_account] = { karma: Number.isFinite(karma) ? karma : null, max_mana: Number.isFinite(maxMana) ? maxMana : null };
+  }
+  console.log(`prod karma/mana read for ${Object.keys(startStats).length} clone(s)`);
   return fight({ ...cfg, lab: false, agents: clones.map(c => c.shadow_account),
-                 lightbearer: light?.shadow_account ?? '', startPositions,
+                 lightbearer: light?.shadow_account ?? '', startPositions, startStats,
                  startCup: clones.find(c => JSON.stringify(c.inventory ?? []).match(/chalice/i))?.shadow_account ?? '' },
                { composed: true });
 }

@@ -106,6 +106,7 @@ export const script = {
     near_hops: { type: 'number', default: 2, describe: 'a muster walk this short (and not across Ukgoth) sets out at near_min_health' },
     near_min_health: { type: 'number', default: 0.3, describe: 'the floor for a short walk home; the stage room is where the raid rests' },
     muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
+    start_stats: { type: 'string', default: '', describe: 'LAB: JSON {agent:{karma,max_mana}} read from prod — mirrored at placement' },
     start_cup: { type: 'string', default: '', describe: 'LAB: the agent whose prod character holds the Chalice of the Rain; given a full one at placement if it has none' },
     start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
@@ -178,6 +179,24 @@ export const script = {
         // a charge and an empty cup is DELETED (chalice.kod NewApplied). On 2026-09-25 Loial's
         // clone came to the hold with none, and every armorer's ride found no cup. So the clone of
         // prod's cup holder is given a full one here, with the other start-of-run mirrors.
+        // KARMA AND MAX MANA, WHERE PROD HAS THEM (see rehearse in m59-ghostraid.mjs). Karma is set;
+        // mana is NODES — melded nodes are a bitmask ComputeMaxMana sums — so nodes are added one
+        // at a time until the clone's max mana reaches prod's.
+        const stats = (() => { try { return JSON.parse(String(p.start_stats || '{}'))[agent] ?? null; } catch { return null; } })();
+        if (stats) {
+          if (Number.isFinite(stats.karma)) await dm.kit(who, { karma: stats.karma }).catch(() => {});
+          const maxManaNow = async () => Number((await call('status', { agent, brief: false }, 30_000).catch(() => null))?.mana?.max ?? 0);
+          let mm = await maxManaNow();
+          if (Number.isFinite(stats.max_mana) && mm < stats.max_mana) {
+            const obj = (await dm.resolve([who]))[who];
+            for (let k = 1; k <= 12 && mm < stats.max_mana && obj != null; k++) {
+              await dm.dm([`set object ${obj} piNodelist INT ${(1 << k) - 1}`, `send object ${obj} ComputeMaxMana`, `send object ${obj} NewMana`]);
+              await sleep(1200);
+              mm = await maxManaNow();
+            }
+          }
+          console.log(`  ${agent} mirrored prod: karma ${stats.karma ?? '-'}, max mana ${mm} (prod ${stats.max_mana ?? '-'})`);
+        }
         if (String(p.start_cup || '') === agent) {
           const has = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
             .some(i => /chalice/i.test(String(i.name ?? '')));
