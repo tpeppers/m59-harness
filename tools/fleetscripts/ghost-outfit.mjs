@@ -162,18 +162,24 @@ export async function chaliceRide(armorer, holder, { hall = 714 } = {}) {
   await call('act', { agent: armorer, verb: 'eat', target: mine.id }, 60_000).catch(() => {});
   await sleep(1500);
   await call('act', { agent: armorer, verb: 'drop', target: mine.id }, 60_000).catch(() => {});
-  // The holder picks it up off the floor — by what is on the floor now, not by a stored id.
-  await sleep(1500);
-  const look = await call('look', { agent: holder }, 40_000).catch(() => null);
-  const onFloor = (look?.objects ?? []).find(o => /chalice/i.test(String(o.name ?? '')));
-  if (onFloor) await call('act', { agent: holder, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
+  // The holder picks it up off the floor — by what is on the floor now, not by a stored id — and
+  // KEEPS TRYING until the cup is in its pack. One look 1.5 s after the drop left the cup lying in
+  // room 2 on the 2026-09-25 rehearsal, and every rider after the first found no cup to ride.
+  let onFloor = null, cupBack = false;
+  for (let i = 0; i < 10 && !cupBack; i++) {
+    await sleep(1500);
+    const look = await call('look', { agent: holder }, 40_000).catch(() => null);
+    onFloor = (look?.objects ?? []).find(o => /chalice/i.test(String(o.name ?? ''))) ?? onFloor;
+    if (onFloor) await call('act', { agent: holder, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
+    cupBack = (await inv(holder)).some(x => /chalice/i.test(String(x.name ?? '')));
+  }
   const until = Date.now() + 60_000;
   while (Date.now() < until) {
     const o = await observe(armorer);
-    if (Number(o.room) === hall) return { ok: true, cupBack: !!onFloor };
+    if (Number(o.room) === hall) return { ok: true, cupBack };
     await sleep(2000);
   }
-  return { ok: false, why: 'the ride did not land in the hall (not a guild member? teleport blocked after PVP?)', cupBack: !!onFloor };
+  return { ok: false, why: 'the ride did not land in the hall (not a guild member? teleport blocked after PVP?)', cupBack };
 }
 
 /** Sell what the smith buys, keeping money, reagents, food, the outfit and the cup. */
