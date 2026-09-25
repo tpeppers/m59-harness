@@ -13493,6 +13493,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'hall_withdraw',
+    description:
+      'TAKE NAMED ITEMS OUT OF THE GUILD HALL\'S CHESTS (Bookmaker\'s hall, room 714). The ' +
+      'character must already be standing in 714 — a chalice ride lands there — and must be a ' +
+      'guild member of rank sir or above, or the door stays shut in silence. It walks out of the ' +
+      'foyer, speaks the hall password, and takes WHOLE STACKS of each named item (the server\'s ' +
+      'get has no amount) until the pack holds at least `amount` more than before. What arrived ' +
+      'is read off the pack, never assumed from the get. Returns {took, short}.',
+    schema: { type: 'object', properties: {
+      agent: { type: 'string' },
+      wants: { type: 'array', items: { type: 'object', properties: {
+        item: { type: 'string' }, amount: { type: 'number' } }, required: ['item', 'amount'] } },
+    }, required: ['agent', 'wants'] },
+    run: async (a) => {
+      const s = session(a.agent);
+      if (!(s instanceof KeeperProxy)) return { ok: false, why: 'hall_withdraw needs a keeper-backed character' };
+      return keeperAction(s.name, s._index, 'hall_withdraw', { wants: a.wants ?? [] }, { timeoutMs: 600_000 });
+    },
+  },
+  {
     name: 'vault',
     description:
       'STORE THINGS AT A VAULTMAN, or read back what is already there. This is the other half of ' +

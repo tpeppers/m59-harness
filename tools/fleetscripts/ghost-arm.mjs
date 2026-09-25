@@ -51,7 +51,9 @@
 // throws on any fleet not named in M59_LAB_FLEETS, so `lab=true` against prod refuses before a
 // single DM packet. On prod the same steps rest for mana and report a shortfall instead.
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
-import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate }
+import { weighItem } from '../m59-items.mjs';
+import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
+         hallDraw, hallSplit, HALL_WANTS, OUTFIT }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
          planReagents, countFamily, assignRoles, blessAssignments, expect, reexpect, barrier, leave }
@@ -118,7 +120,11 @@ export const script = {
     // THE ARMORERS (ghost-outfit.mjs). Money pooled, a chalice ride to the guild hall, the Barloque
     // smith, back through Ukgoth together. No DM power anywhere in it.
     outfit: { type: 'boolean', default: true, describe: 'send armorers for shields, chain and missing hammers' },
-    armorers: { type: 'string', default: '', describe: 'comma-separated pair; empty = the two sturdiest non-casters' },
+    armorers: { type: 'string', default: '', describe: 'comma-separated; empty = the `armorer_count` strongest non-casters' },
+    armorer_count: { type: 'number', default: 4, describe: 'how many armorers when none are named. The cup carries any number, one at a time' },
+    hall_draw: { type: 'boolean', default: true, describe: 'armorers draw reagents, money and armour from the guild chests first' },
+    hall_wants: { type: 'string', default: '', describe: 'JSON [{item, amount}] to take from the chests; empty = HALL_WANTS' },
+    hall_wait_s: { type: 'number', default: 1800, describe: 'how long the fleet waits for the hall draw' },
     trips: { type: 'number', default: 2, describe: 'shopping trips at most' },
     hall: { type: 'number', default: 714, describe: 'where the chalice lands a guild member (the Bookmakers hall)' },
     shop_room: { type: 'number', default: 113, describe: 'the Barloque smith' },
@@ -251,10 +257,30 @@ export const script = {
         // everything after this barrier stops waiting for it (reexpect below).
         const b = await barrier('survey', agent, { ms: Number(p.muster_wait_s) * 1000 });
         // Whoever did not make the survey will not make anything after it.
-        for (const k of ['hammers', 'reagents-moved', 'reagents', 'dropped', 'armed', 'pooled']) reexpect(k, SURVEY.size);
+        for (const k of ['hall-drawn', 'hammers', 'reagents-moved', 'reagents', 'dropped', 'armed', 'pooled']) reexpect(k, SURVEY.size);
         st.survey = { wielding: worn, fleet_seen: SURVEY.size, barrier: b };
         return true;
       }, 'the survey could not be read'),
+
+      // ---- 1c. THE HALL DRAW. The armorers ride the chalice to the guild hall one after another,
+      // take the raid's reagents, the hall's money and whatever armour sits in its chests, and walk
+      // home together; everyone else rests in the stage room until they are back. It comes BEFORE
+      // the money pool and the reagent step so that both simply see fuller packs. On 2026-09-25
+      // prod carried 16 orc teeth and 51 elderberry between twenty-two characters, with 162 and
+      // 253 in the chests; without this the raid could dedicate five hammers.
+      ...(outfitOn(p) && hallOn(p) ? [verify(async ({ state: st }) => {
+        const crew = armorersOf(agents, p);
+        const roles = rolesNow(agents, p);
+        if (crew.includes(agent)) {
+          const wants = (() => { try { return JSON.parse(String(p.hall_wants || '')); } catch { return HALL_WANTS; } })();
+          const share = hallSplit(crew, wants, weighItem)[agent] ?? [];
+          st.hall = await hallDraw({ agent, crew, holder: roles.lightbearer, share, p });
+        } else if (agent !== roles.lightbearer) {
+          await call('rest', { agent }, 30_000).catch(() => {});
+        }
+        await barrier('hall-drawn', agent, { ms: Number(p.hall_wait_s) * 1000 });
+        return true;
+      }, 'the hall draw could not be read back')] : []),
 
       // ---- 1b. THE ARMORERS: everyone hands its money to one of the pair, and one plan is made.
       ...(outfitOn(p) ? [verify(async ({ state: st }) => {
@@ -267,6 +293,32 @@ export const script = {
         }
         await barrier('pooled', agent, { ms: 300_000 });
         if (agent === pair[0] && !OUTFIT_RUN.plan) {
+          // THE HALL'S ARMOUR FIRST. Chain and shields drawn from the chests are in the armorers'
+          // packs, where the planner would read them as the armorers' own. Each armorer keeps one
+          // of a kind and hands the rest, here in the stage room, to raiders who have none.
+          {
+            const want = {};
+            await Promise.all(agents.filter(a => a !== roles.lightbearer && SURVEY.has(a) && !pair.includes(a)).map(async a => {
+              want[a] = outfitNeeds((await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? []);
+            }));
+            const kinds = { chain: /^chain armor$/i, shield: /shield/i };
+            for (const arm of pair) {
+              const items = (await call('inventory', { agent: arm }, 40_000).catch(() => null))?.items ?? [];
+              for (const [kind, re] of Object.entries(kinds)) {
+                for (const piece of items.filter(i => re.test(String(i.name ?? '').trim())).slice(1)) {
+                  const to = Object.keys(want).sort().find(a => want[a]?.[kind]);
+                  if (!to) break;
+                  const r = await call('supply', { from: arm, to, what: [piece.id], who_travels: 'neither' }, 120_000)
+                    .catch(e => ({ supplied: false, reason: e.message }));
+                  console.log(`  hall ${kind} ${arm} -> ${to}: ${r?.supplied ? 'given' : `NOT given (${r?.reason ?? '?'})`}`);
+                  if (r?.supplied) {
+                    want[to][kind] = false;
+                    const got = OUTFIT_RUN.delivered.get(to) ?? []; got.push(kind); OUTFIT_RUN.delivered.set(to, got);
+                  }
+                }
+              }
+            }
+          }
           // ONE plan for the whole fleet, from fresh packs, so the armorers split it without overlap.
           const needs = {}, packs = {};
           await Promise.all(agents.filter(a => a !== roles.lightbearer && SURVEY.has(a)).map(async a => {
@@ -286,6 +338,26 @@ export const script = {
           const pl = OUTFIT_RUN.plan;
           console.log(`  armorers ${pair.join(' + ')}: budget ${budget}, buying ${pl.buys.length} piece(s) for ${pl.spend}` +
                       (pl.cut.length ? `; cut ${pl.cut.length} (${[...new Set(pl.cut.map(c => c.why))].join(', ')})` : ''));
+          // EACH ARMORER PAYS FROM ITS OWN PURSE, and the hall's money arrived in one pack. So the
+          // purses are levelled to each armorer's share of the bill before anyone leaves.
+          const purse = a => (packs[a] ?? []).filter(i => /^shilling/i.test(String(i.name ?? '')))
+            .reduce((m, i) => m + (Number(i.amount) || 1), 0);
+          const bill = a => (pl.byCarrier?.[a] ?? []).reduce((m, l) => m + (OUTFIT[l.kind]?.price ?? 0), 0);
+          const bal = Object.fromEntries(pair.map(a => [a, purse(a) - bill(a)]));
+          for (const to of pair.filter(a => bal[a] < 0)) {
+            for (const from of pair.filter(a => bal[a] > 0).sort((x, y) => bal[y] - bal[x])) {
+              if (bal[to] >= 0) break;
+              const amount = Math.min(bal[from], -bal[to]);
+              const stack = (await call('inventory', { agent: from }, 40_000).catch(() => null))?.items
+                ?.filter(i => /^shilling/i.test(String(i.name ?? '')) && i.id != null)
+                .sort((x, y) => (y.amount || 1) - (x.amount || 1))[0];
+              if (!stack) continue;
+              const r = await call('supply', { from, to, what: [{ id: stack.id, amount }], who_travels: 'neither' }, 120_000)
+                .catch(e => ({ supplied: false, reason: e.message }));
+              console.log(`  purse ${from} -> ${to}: ${r?.supplied ? amount : 0}/${amount}${r?.supplied ? '' : ` (${r?.reason ?? '?'})`}`);
+              if (r?.supplied) { bal[from] -= amount; bal[to] += amount; }
+            }
+          }
         }
         st.pool = { ...(st.pool ?? {}), armorers: pair };
         return true;
@@ -450,7 +522,7 @@ export const script = {
           // FINISHED IN A finally: an errand that throws must not leave twenty characters waiting
           // out the whole outfit_wait_s for a delivery that is never coming.
           try {
-            st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: roles.lightbearer, lines, p });
+            st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: roles.lightbearer, lines, p, crew: pair.length });
           } catch (e) {
             st.armorer = { error: e?.message ?? String(e) };
           } finally {
@@ -498,15 +570,21 @@ export const script = {
 };
 
 const outfitOn = p => p.outfit === true || p.outfit === 'true';
+const hallOn = p => p.hall_draw === true || p.hall_draw === 'true';
 
-/** The pair: named, or the two sturdiest characters who are not a caster, a healer or the light. */
+/**
+ * The armorers: named, or the `armorer_count` STRONGEST characters who are not needed to start
+ * the other preparation — not the light-bearer, a dedicator or a healer. Strongest by might,
+ * because might is what a pack holds (1700 + 20 x might), then by health for the road home.
+ */
 function armorersOf(agents, p) {
   const named = String(p.armorers ?? '').split(',').map(x => x.trim()).filter(Boolean);
   if (named.length) return named;
   const roles = rolesNow(agents, p);
   return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && !roles.dedicators.includes(a) && !roles.healers.includes(a))
-    .sort((a, b) => (SURVEY.get(b).maxHealth - SURVEY.get(a).maxHealth) || a.localeCompare(b))
-    .slice(0, 2);
+    .sort((a, b) => (SURVEY.get(b).might - SURVEY.get(a).might) || (SURVEY.get(b).maxHealth - SURVEY.get(a).maxHealth)
+                    || a.localeCompare(b))
+    .slice(0, Math.max(1, Number(p.armorer_count) || 4));
 }
 
 function rolesNow(agents, p) {

@@ -154,5 +154,18 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   ok(packRoom(50, [{ name: 'hammer' }]).weight === 1700 + 1000 - 80, 'pack room: 1700 + 20 x might, less what is carried');
 }
 
+{
+  const { hallSplit, HALL_WANTS } = await import('./fleetscripts/ghost-outfit.mjs');
+  const { weighItem } = await import('./m59-items.mjs');
+  const crew = ['a', 'b', 'c', 'd'];
+  const split = hallSplit(crew, HALL_WANTS, weighItem);
+  ok(Object.values(split).flat().length === HALL_WANTS.length, 'the hall split hands out every want exactly once');
+  ok(split.a.some(w => w.item === 'shilling'), 'money weighs nothing and goes to the first rider');
+  const load = a => split[a].reduce((n, w) => n + (weighItem(w.item)?.weight ?? 0) * w.amount, 0);
+  ok(Math.max(...crew.map(load)) <= 1100, 'no rider carries more than 1100 weight of the default draw');
+  ok(crew.every(a => split[a].length), 'all four riders carry something');
+  ok(Object.keys(hallSplit([], HALL_WANTS, weighItem)).length === 0, 'no crew, no split');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

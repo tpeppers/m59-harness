@@ -24463,6 +24463,68 @@ export class Autopilot {
   }
 
   /**
+   * TAKE NAMED ITEMS OUT OF THE HALL'S CHESTS, FOR AN ERRAND THAT IS ALREADY STANDING IN 714.
+   *
+   * `withdrawFromStockpile` is the keeper's own restock and cannot serve an errand: it travels
+   * on its own, reads only its own wants, and measures what arrived with `reagentCount()`, which
+   * knows elderberry and herbs and nothing else — a tooth taken reads as "nothing moved" and it
+   * stops after one. The ghost raid needs orc teeth, emeralds and sapphires out of the same
+   * chests (162 teeth sat in r18c2 on 2026-09-25 while the whole fleet carried three).
+   *
+   * So this does only the in-room half: through the passage to the chests, then for each want,
+   * whole stacks (REQ_GET takes a stack and has no amount) until the pack holds the amount more
+   * than it did. WHAT ARRIVED IN THE PACK decides, never the get — a container refusal is a
+   * sentence, not an error. Does not travel; refuses outside 714 rather than guessing.
+   *
+   *   wants: [{ item, amount }]  ->  { ok, took: {item: n}, short: {item: n}, steps }
+   */
+  async hallWithdraw(wants = []) {
+    const s = this.s, c = s.need();
+    const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase().trim();
+    const same = (a, b) => norm(a) === norm(b) || String(a).toLowerCase() === String(b).toLowerCase();
+    const packCount = async (item) => {
+      await s.pacer.submit('read', () => c.requestInventory()).catch(() => {});
+      await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 }).catch(() => {});
+      return (c.inventory ?? []).filter(o => same(nameOf(o), item))
+        .reduce((n, o) => n + (Number(o.amount) || 1), 0);
+    };
+    const roomNum = Number(this.world?.room?.num ?? c.room?.num ?? NaN);
+    if (roomNum !== BOOKMAKERS_HALL_ROOM)
+      return { ok: false, why: `not in the hall (room ${roomNum}, want ${BOOKMAKERS_HALL_ROOM})`, took: {}, short: {} };
+    const hall = await this.reachHallChests().catch(e => ({ ok: false, why: e?.message ?? String(e) }));
+    if (!hall.ok) return { ok: false, why: hall.why, steps: hall.steps, took: {}, short: {} };
+    const chests = [...(c.room?.objects?.values?.() ?? [])].filter(o => /chest/i.test(nameOf(o)));
+    const took = {}, short = {};
+    for (const w of wants) {
+      const item = String(w.item ?? ''), want = Math.max(0, Number(w.amount) || 0);
+      if (!item || !want) continue;
+      const start = await packCount(item);
+      let have = start;
+      for (const chest of chests) {
+        if (have - start >= want) break;
+        const since = c.evSeq;
+        await s.pacer.submit('read', () => c.contents(chest.id)).catch(() => {});
+        const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
+        const box = (reply?.events ?? []).find(e => e.kind === 'container');
+        const stacks = (box?.items ?? []).filter(o => same(o.name, item))
+          .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
+        for (const st of stacks) {
+          if (have - start >= want) break;
+          await s.pacer.submit('trade', () => c.get(st.id)).catch(() => {});
+          await new Promise(r => setTimeout(r, 400));
+          const now = await packCount(item);
+          if (now <= have) break;               // refused, or too heavy: stop asking this chest
+          have = now;
+        }
+      }
+      took[item] = have - start;
+      if (have - start < want) short[item] = want - (have - start);
+    }
+    this.note('hall withdrawal for an errand', { took, short });
+    return { ok: true, took, short, chests: chests.length };
+  }
+
+  /**
    * WHAT THIS CHARACTER WANTS, CANNOT BUY, AND DOES NOT HAVE.
    *
    * Published rather than retried. `reagent_short` carries the item, how many casts it is worth,

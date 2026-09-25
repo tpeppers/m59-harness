@@ -107,6 +107,12 @@ export function packRoom(might, items = []) {
 /** One run's shared state across agents (fleetScript runs them in one process). */
 export const OUTFIT_RUN = { plan: null, delivered: new Map(), done: false, cupHolder: null, log: [] };
 
+// ONE CUP, ANY NUMBER OF RIDERS, ONE AT A TIME. The chalice is handed over, drunk, dropped and
+// picked back up in room 2 (which refills it), so a second rider's hand-over must wait for the
+// first rider's drop. Not `serially`: a ride calls `serially` inside itself.
+let CUP = Promise.resolve();
+export const rideCup = fn => { const p = CUP.then(fn, fn); CUP = p.catch(() => {}); return p; };
+
 let CHAIN = Promise.resolve();
 const serially = fn => { const p = CHAIN.then(fn, fn); CHAIN = p.catch(() => {}); return p; };
 
@@ -311,13 +317,13 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null }
  * ONE ARMORER'S WHOLE ERRAND, up to `trips` times: ride (or walk) to Barloque, clear the pack,
  * buy its share, meet its partner at the rally room, cross Ukgoth together, deliver.
  */
-export async function armorerErrand({ agent, partner, holder, lines, p, log = console.log }) {
+export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2, log = console.log }) {
   const trips = [];
   let left = [...lines];
   for (let trip = 1; trip <= Number(p.trips) && left.length; trip++) {
     const t = { trip, want: left.length };
     // To Barloque: the cup if we can, the road if we cannot.
-    const ride = holder ? await chaliceRide(agent, holder, { hall: Number(p.hall) }) : { ok: false, why: 'no cup holder' };
+    const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) })) : { ok: false, why: 'no cup holder' };
     t.ride = ride.ok ? 'chalice' : `walked (${ride.why})`;
     log(`  ${agent} armorer trip ${trip}: ${t.ride}`);
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
@@ -331,7 +337,7 @@ export async function armorerErrand({ agent, partner, holder, lines, p, log = co
     for (const l of left) (have[l.kind] > 0 ? (have[l.kind]--, now) : later).push(l);
     // Home, together, through Ukgoth.
     await hopTo(agent, Number(p.rally), { floor: 1 });
-    reexpect(`armorers-rally-${trip}`, 2);
+    reexpect(`armorers-rally-${trip}`, crew);
     await barrier(`armorers-rally-${trip}`, agent, { ms: 10 * 60_000 });
     const home = await hopTo(agent, Number(p.stage), { floor: 0.7 });
     if (!home.ok) { t.failed = home.dead ? 'died on the road home' : 'could not get home'; trips.push(t); break; }
@@ -342,4 +348,69 @@ export async function armorerErrand({ agent, partner, holder, lines, p, log = co
     left = later;
   }
   return { trips, owed: left };
+}
+
+// ---------------------------------------------------------------------------------- the hall draw
+
+/** What the armorers take out of the hall's chests before anything else, if nobody says otherwise. */
+export const HALL_WANTS = Object.freeze([
+  { item: 'shilling', amount: 60000 },
+  { item: 'orc tooth', amount: 40 },
+  { item: 'elderberry', amount: 120 },
+  { item: 'herb', amount: 120 },
+  { item: 'chain armor', amount: 4 },
+  { item: 'small round shield', amount: 2 },
+  { item: "knight's shield", amount: 6 },
+]);
+
+/**
+ * SPLIT THE HALL'S WANTS ACROSS THE CREW BY WEIGHT, heaviest want first onto the lightest-loaded
+ * rider, so no one pack takes all the chain. Shillings weigh nothing and go to the first rider,
+ * whom the money pool then treats like any other purse. Pure; deterministic in crew order.
+ *
+ *   wants: [{item, amount}], weigh: name -> {weight} | null  ->  { agent: [{item, amount}] }
+ */
+export function hallSplit(crew = [], wants = [], weigh = () => null) {
+  const out = Object.fromEntries(crew.map(a => [a, []]));
+  if (!crew.length) return out;
+  const load = Object.fromEntries(crew.map(a => [a, 0]));
+  const w = x => (Number(weigh(x.item)?.weight) || 0) * (Number(x.amount) || 0);
+  for (const want of [...wants].sort((a, b) => w(b) - w(a) || String(a.item).localeCompare(String(b.item)))) {
+    const to = w(want) === 0 ? crew[0]
+      : [...crew].sort((a, b) => load[a] - load[b] || crew.indexOf(a) - crew.indexOf(b))[0];
+    out[to].push({ item: want.item, amount: want.amount });
+    load[to] += w(want);
+  }
+  return out;
+}
+
+/**
+ * ONE RIDER'S HALL DRAW: the cup to 714, its share out of the chests, home to the stage room
+ * with the rest of the crew. A ride that does not land in the hall (no cup, no guild — the shadow
+ * clone has neither) draws nothing and says so; a rider the Rescue dropped somewhere else still
+ * walks home, because the raid is waiting for it.
+ */
+export async function hallDraw({ agent, crew = [], holder, share = [], p, log = console.log }) {
+  const out = { share };
+  const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) }))
+                      : { ok: false, why: 'no cup holder' };
+  out.ride = ride.ok ? 'chalice' : `no ride (${ride.why})`;
+  if (ride.ok && share.length) {
+    const r = await call('hall_withdraw', { agent, wants: share }, 620_000).catch(e => ({ ok: false, why: e.message }));
+    out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok;
+    if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
+  }
+  log(`  ${agent} hall draw: ${out.ride}` + (out.took ? `; took ${JSON.stringify(out.took)}` : '') +
+      (out.short && Object.keys(out.short).length ? `; SHORT ${JSON.stringify(out.short)}` : '') +
+      (out.why ? `; REFUSED ${out.why}` : ''));
+  if (Number((await observe(agent)).room) !== Number(p.stage)) {
+    if (ride.ok) {
+      await hopTo(agent, Number(p.rally), { floor: 1 });
+      reexpect('hall-rally', crew.length);
+      await barrier('hall-rally', agent, { ms: 10 * 60_000 });
+    }
+    const home = await hopTo(agent, Number(p.stage), { floor: 0.7 });
+    out.home = home.ok ? 'home' : home.dead ? 'died on the road home' : 'could not get home';
+  }
+  return out;
 }

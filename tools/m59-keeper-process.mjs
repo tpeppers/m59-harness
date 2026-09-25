@@ -2565,6 +2565,17 @@ const server = createServer(async (req, res) => {
             return;
           }
           case 'hold_status': { json({ hold: holdReport() }); return; }
+          // TAKE NAMED ITEMS OUT OF THE HALL'S CHESTS for an errand standing in 714. The passage
+          // and the chest reads live in the Autopilot (reachHallChests), so the door is opened
+          // the one way that has been measured to work; see Autopilot.hallWithdraw.
+          case 'hall_withdraw': {
+            if (typeof autopilot?.hallWithdraw !== 'function') {
+              json({ error: 'this keeper has no hall withdrawal' }, 409); return;
+            }
+            const wants = Array.isArray(args.wants) ? args.wants : [];
+            json(await autopilot.hallWithdraw(wants).catch(e => ({ ok: false, why: e?.message ?? String(e) })));
+            return;
+          }
 
           // The broker owns the short commander capability; this process owns the
           // Autopilot and its per-faculty claims. Preserve that ownership API across the
