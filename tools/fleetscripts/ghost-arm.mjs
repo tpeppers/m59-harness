@@ -103,6 +103,7 @@ export const script = {
     near_hops: { type: 'number', default: 2, describe: 'a muster walk this short (and not across Ukgoth) sets out at near_min_health' },
     near_min_health: { type: 'number', default: 0.3, describe: 'the floor for a short walk home; the stage room is where the raid rests' },
     muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
+    start_cup: { type: 'string', default: '', describe: 'LAB: the agent whose prod character holds the Chalice of the Rain; given a full one at placement if it has none' },
     start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
     rally: { type: 'number', default: 598, describe: 'where a convoy gathers before crossing Ukgoth (0 = no convoy)' },
@@ -165,6 +166,23 @@ export const script = {
           const o = await call('status', { agent, brief: true }, 20_000).catch(() => null);
           if ((o?.hp?.max ?? o?.vitals?.health?.max) && Number(o?.where?.num ?? o?.room_num) === Number(mirror.room)) break;
           await sleep(1500);
+        }
+        // THE CUP, WHERE PROD HAS IT. A clone runs free between the rebuild and the hold, and its
+        // keeper rides the Chalice of the Rain on its own chalice-farming orders — every drink is
+        // a charge and an empty cup is DELETED (chalice.kod NewApplied). On 2026-09-25 Loial's
+        // clone came to the hold with none, and every armorer's ride found no cup. So the clone of
+        // prod's cup holder is given a full one here, with the other start-of-run mirrors.
+        if (String(p.start_cup || '') === agent) {
+          const has = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
+            .some(i => /chalice/i.test(String(i.name ?? '')));
+          if (!has) {
+            const ids = await dm.resolve([who]);
+            const made = /Created object (\d+)/.exec(String(await dm.dm(['create object Chalice'])))?.[1];
+            if (made && ids[who] != null) await dm.dm([`send object ${ids[who]} NewHold what OBJECT ${made}`]);
+          }
+          const now = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
+            .some(i => /chalice/i.test(String(i.name ?? '')));
+          console.log(`  ${agent} holds the cup where prod does: ${has ? 'already' : now ? 'given a full one' : 'NOT GIVEN'}`);
         }
       }
     }

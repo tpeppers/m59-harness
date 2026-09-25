@@ -334,6 +334,7 @@ const armParams = cfg => ({
     stage: cfg.stage, lightbearer: cfg.lightbearer, healers: cfg.healers, lab: cfg.lab, channel: cfg.channel,
     place: cfg.lab && flag('--place'),
     start_positions: cfg.startPositions ? JSON.stringify(cfg.startPositions) : '',
+    start_cup: cfg.startCup ?? '',
     muster_wait_s: cfg.lab && flag('--place') ? 240 : 1500,
     light_casts: Math.ceil((cfg.minutes + 10) * 60 / 150) + 2,
 });
@@ -577,7 +578,9 @@ async function rehearse(cfg) {
     .map(c => [c.shadow_account, { room: c.room, row: c.row ?? null, col: c.col ?? null }]));
   console.log(`clone roster: ${clones.length} raiders from ${snapFile}; light-bearer ${light?.shadow_account ?? 'NONE'} (${light?.prod_character ?? '-'})`);
   return fight({ ...cfg, lab: false, agents: clones.map(c => c.shadow_account),
-                 lightbearer: light?.shadow_account ?? '', startPositions }, { composed: true });
+                 lightbearer: light?.shadow_account ?? '', startPositions,
+                 startCup: clones.find(c => JSON.stringify(c.inventory ?? []).match(/chalice/i))?.shadow_account ?? '' },
+               { composed: true });
 }
 
 // ---------------------------------------------------------------------------------- the DUM raid profile
