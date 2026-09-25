@@ -176,7 +176,11 @@ export async function buyByName(agent, seller, lines = []) {
   const out = {};
   for (const { item, amount } of lines) {
     const it = (list?.items ?? []).find(i => norm(i.name) === norm(item));
-    if (!it) { out[item] = 0; continue; }
+    // A LINE THAT BUYS NOTHING SAYS WHY. On the 2026-09-25 rehearsal a rider with 831 free bulk
+    // and 4,120 shillings bought 0 of 26 mushrooms from a shop that sells them, and the step had
+    // kept nothing that could say whether the shop did not open, did not list it, or clamped it.
+    if (!it) { out[item] = 0; (out.why ??= {})[item] = list?.items?.length ? `not on ${seller}'s list` : `the shop did not open: ${list?.note ?? 'no answer'}`; continue; }
+    let last = null;
     const start = countItem(await freshItems(agent), item);
     let have = start;
     const stack = Number(it.amount) > 1 || /elderberr|herb|mushroom|tooth|sapphire|emerald|ruby|berr/i.test(item);
@@ -185,12 +189,13 @@ export async function buyByName(agent, seller, lines = []) {
     // elderberry came back as 50 on the 2026-09-25 rehearsal with room and money to spare. The
     // pack decides; a round that adds nothing ends it. Gear still goes one piece per exchange.
     for (let i = 0; i < (stack ? Math.ceil(amount / 50) + 2 : amount) && have - start < amount; i++) {
-      await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount - (have - start) : 1 }] }, 180_000).catch(() => null);
+      last = await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount - (have - start) : 1 }] }, 180_000).catch(e => ({ error: e.message }));
       const now = countItem(await freshItems(agent), item);
       if (now <= have) break;
       have = now;
     }
     out[item] = have - start;
+    if (out[item] < amount) (out.why ??= {})[item] = JSON.stringify({ note: last?.note ?? last?.error, clamped: last?.clamped, bought: last?.bought }).slice(0, 300);
   }
   return out;
 }
