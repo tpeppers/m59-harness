@@ -52,7 +52,7 @@
 // single DM packet. On prod the same steps rest for mana and report a shortfall instead.
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
 import { weighItem } from '../m59-items.mjs';
-import { handOver } from '../m59-inventory.mjs';
+import { handOver, earmark } from '../m59-inventory.mjs';
 import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
@@ -152,6 +152,13 @@ export const script = {
     const lab = p.lab === true || p.lab === 'true';
     if (lab) assertLabFleet('ghost-arm lab=true');
     const say = text => call('say', { agent, type: p.channel, text: String(text).slice(0, 220) }, 30_000).catch(() => {});
+    // WHAT THIS RAID HAS SPOKEN FOR, so no make-room ever drops it (operator, 2026-09-25: never drop
+    // a sword earmarked for the current raid; any other weapon may go). Every hammer — the raid's
+    // weapon, handed out and dedicated — and every weapon in a dedicator's pack, which is somebody's
+    // weapon waiting for its dedication or on its way back.
+    earmark('ghost raid: hammers', it => isHammer(it?.name));
+    earmark('ghost raid: weapons a dedicator holds', (it, a) =>
+      isWeaponName(it?.name) && SURVEY.size > 0 && rolesNow(agents, p).dedicators.includes(a));
 
     // START WHERE PROD STANDS (lab rehearsals only). A clone logs in wherever its body was last saved
     // on the lab server, not where its prod character is, because a DM placement does not stick to a
@@ -359,8 +366,9 @@ export const script = {
       verify(async ({ state: st }) => {
         const min = Number(p.pack_room_min);
         if (!(min > 0)) return true;
-        // The operator's rule: junk loot and excess food go; money, reagents, the cup, weapons,
-        // armour and anything worn stay (ghost-outfit makeRoom).
+        // The operator's rule: junk loot, excess food and spare weapons go; money, reagents, the
+        // cup, armour, anything worn, one spare of a worn weapon and whatever this raid earmarked
+        // (every hammer, a dedicator's charges) stay (m59-inventory makeRoom).
         const dropped = await makeRoom(agent, { keep: Number(p.keep_food), min });
         if (dropped) console.log(`  ${agent} made room: dropped ${JSON.stringify(dropped)}`);
         st.room = { dropped };

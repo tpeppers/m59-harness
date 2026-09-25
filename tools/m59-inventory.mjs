@@ -60,7 +60,11 @@ export function classify(name) {
 /** Keep profiles: which classes are never dropped, and how much food to keep of each kind. */
 export const KEEP = Object.freeze({
   // A raider making room for raid gear (operator: "junk loot + excess food").
-  raid: Object.freeze({ keep: ['money', 'cup', 'reagent', 'weapon', 'armour', 'magic'], food: 10 }),
+  // Weapons are NOT kept wholesale (operator, 2026-09-25: "We never want to drop swords that are
+  // earmarked for use in the current raid, but it's fine to drop swords/weapons otherwise"). A
+  // raider carrying twenty-two long swords could not take a shield. What stays: anything worn,
+  // one spare of each worn weapon, and whatever the running errand has EARMARKED (see earmark()).
+  raid: Object.freeze({ keep: ['money', 'cup', 'reagent', 'armour', 'magic'], food: 10, spareWeapons: 1 }),
   // Everything but junk — the most conservative.
   all: Object.freeze({ keep: ['money', 'cup', 'reagent', 'weapon', 'armour', 'magic', 'food'], food: Infinity }),
 });
@@ -120,16 +124,52 @@ export async function grabFromFloor(agent, re, tries = 10) {
  * past `keepFood` of each kind (the excess only), heaviest first. Never a kept class, never worn.
  * Returns [{item, amount|null}] — amount null means the whole stack.
  */
-export function dropCandidates(items = [], worn = [], { profile = KEEP.raid, keepFood = profile.food } = {}) {
-  const wornSet = new Set(worn.map(x => lower(typeof x === 'string' ? x : x?.name)));
+// ------------------------------------------------------------------------- earmarks
+// WHAT THE CURRENT ERRAND HAS SPOKEN FOR. makeRoom never drops an earmarked item. An errand
+// earmarks a KIND for everyone (the ghost raid: every hammer) or one object for one agent (a
+// weapon a dedicator is holding for its owner), and clears its own marks when it is done.
+const EARMARK_ALL = new Map();            // label -> predicate(item, agent)
+const EARMARK_IDS = new Map();            // agent -> Set(id)
+export function earmark(label, predicate) { EARMARK_ALL.set(label, predicate); return () => EARMARK_ALL.delete(label); }
+export function earmarkItem(agent, id) {
+  if (!EARMARK_IDS.has(agent)) EARMARK_IDS.set(agent, new Set());
+  EARMARK_IDS.get(agent).add(Number(id));
+  return () => EARMARK_IDS.get(agent)?.delete(Number(id));
+}
+export function isEarmarked(agent, item) {
+  if (item?.id != null && EARMARK_IDS.get(agent)?.has(Number(item.id))) return true;
+  for (const p of EARMARK_ALL.values()) { try { if (p(item, agent)) return true; } catch {} }
+  return false;
+}
+export function clearEarmarks() { EARMARK_ALL.clear(); EARMARK_IDS.clear(); }
+
+export function dropCandidates(items = [], worn = [], { profile = KEEP.raid, keepFood = profile.food, earmarked = () => false } = {}) {
+  const wornNames = worn.map(x => lower(typeof x === 'string' ? x : x?.name));
+  const wornSet = new Set(wornNames);
   const w = it => (Number(weighItem(it.name)?.weight) || 10) * (Number(it.amount) || 1);
-  const kept = it => wornSet.has(lower(it.name)) || profile.keep.includes(classify(it.name));
+  const kept = it => earmarked(it) || profile.keep.includes(classify(it.name))
+    || (classify(it.name) !== 'weapon' && wornSet.has(lower(it.name)));
   const junk = items.filter(it => it.id != null && !kept(it) && classify(it.name) === 'junk')
     .sort((a, b) => w(b) - w(a)).map(it => ({ item: it, amount: null }));
+  // SPARE WEAPONS. The pack does not say WHICH copy is wielded, so a worn weapon's name keeps as
+  // many copies as are worn plus `spareWeapons`; makeRoom re-wields if the dropped copy was the one
+  // in hand. Other kinds keep none unless earmarked.
+  const weapons = [];
+  if (profile.spareWeapons != null && !profile.keep.includes('weapon')) {
+    const byName = new Map();
+    for (const it of items.filter(it => it.id != null && !kept(it) && classify(it.name) === 'weapon'))
+      byName.set(lower(it.name), [...(byName.get(lower(it.name)) ?? []), it]);
+    for (const [name, list] of byName) {
+      const keepN = wornNames.filter(n => n === name).length + (wornSet.has(name) ? profile.spareWeapons : 0);
+      weapons.push(...list.slice(keepN));
+    }
+    weapons.sort((a, b) => w(b) - w(a));
+  }
+
   const food = !Number.isFinite(keepFood) ? [] : items.filter(it => it.id != null && !kept(it)
       && classify(it.name) === 'food' && (Number(it.amount) || 1) > keepFood)
     .sort((a, b) => w(b) - w(a)).map(it => ({ item: it, amount: (Number(it.amount) || 1) - keepFood }));
-  return [...junk, ...food];
+  return [...junk, ...weapons.map(it => ({ item: it, amount: null })), ...food];
 }
 
 export async function makeRoom(agent, { min = 400, profile = KEEP.raid, keepFood = profile.food } = {}) {
@@ -137,11 +177,23 @@ export async function makeRoom(agent, { min = 400, profile = KEEP.raid, keepFood
   const enough = r => r && Math.min(r.weight ?? 0, r.bulk ?? 0) >= min;
   if (!l || enough(l.carry?.room_for)) return null;
   const dropped = {};
-  for (const { item: it, amount } of dropCandidates(l.items ?? [], l.equipment ?? [], { profile, keepFood })) {
+  const wornBefore = (l.equipment ?? []).map(x => lower(typeof x === 'string' ? x : x?.name));
+  let droppedWeapon = false;
+  for (const { item: it, amount } of dropCandidates(l.items ?? [], l.equipment ?? [], { profile, keepFood, earmarked: it => isEarmarked(agent, it) })) {
     if (enough(l?.carry?.room_for)) break;
     await call('act', { agent, verb: 'drop', target: it.id, ...(amount ? { amount } : {}) }, 30_000).catch(() => {});
     dropped[it.name] = (dropped[it.name] ?? 0) + (amount ?? (Number(it.amount) || 1));
+    if (classify(it.name) === 'weapon') droppedWeapon = true;
     l = await freshLook(agent);
+  }
+  // THE COPY IN HAND MAY HAVE BEEN ONE OF THOSE DROPPED — nothing on the wire says which copy is
+  // wielded, and dropping it unwields it. Put the spare in hand.
+  if (droppedWeapon) {
+    const nowWorn = new Set((l?.equipment ?? []).map(x => lower(typeof x === 'string' ? x : x?.name)));
+    for (const name of new Set(wornBefore.filter(n => classify(n) === 'weapon' && !nowWorn.has(n)))) {
+      const spare = (l?.items ?? []).find(i => lower(i.name) === name && i.id != null);
+      if (spare) await call('act', { agent, verb: 'use', target: spare.id }, 60_000).catch(() => {});
+    }
   }
   return Object.keys(dropped).length ? dropped : null;
 }
