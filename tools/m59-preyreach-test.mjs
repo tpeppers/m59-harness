@@ -171,5 +171,36 @@ console.log('--- EVERY ban announces itself, because a silent one cannot be inve
      b.k.unreachablePreyIn(1016)?.has('4,9') === true);
 }
 
+// THE SELECTION HAS TO ASK THE SAME QUESTION fight() ASKS.
+//
+// Icky Cave (27), prod 2026-09-25: the nearest orc sat in the one-way pocket, was proved
+// unreachable, and the pass kept SELECTING it — then pinned fight() to its exact id, which
+// fight()'s own avoid filter removed. "nothing here matches — try one of the names above",
+// no out_of_reach, so no pull and no close: `broke off` once a second, six characters, zero
+// landed hits. A source check, because the filter is inline in pass() and the failure it
+// guards is its deletion.
+console.log('--- quarry selection skips proved-unreachable prey, as fight() does ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const sel = AP.indexOf('const avoidPrey = this.preyAvoid(room?.num ?? null);');
+  const rank = AP.indexOf('found = rankQuarries(this.s.name, room?.num, found, { preferId });');
+  const pick = AP.indexOf('const selectedQuarry = found[0] ?? null;');
+  ok('the pass builds the avoid predicate from the same seam fight() gets', sel > 0);
+  ok('...before the quarries are ranked', sel > 0 && rank > sel);
+  ok('...and before the quarry is chosen', sel > 0 && pick > sel);
+  ok('it filters found by it', AP.slice(sel, sel + 400).includes('found.filter(o => !avoidPrey(o))'));
+
+  // And the predicate agrees with fight()'s: the same object that fight() would drop is the
+  // one selection now drops, and the one on our side survives both.
+  const k = keeper();
+  k.noteUnreachablePrey(27, 47, 31);
+  const avoid = k.preyAvoid(27);
+  const pocket = { id: 1, col: 47, row: 31 }, ours = { id: 2, col: 39, row: 34 };
+  const selected = [pocket, ours].filter(o => !avoid(o));
+  ok('the pocket orc is dropped from selection', !selected.includes(pocket));
+  ok('the orc on our side is kept', selected.length === 1 && selected[0] === ours);
+}
+
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);

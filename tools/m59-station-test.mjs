@@ -239,5 +239,20 @@ console.log('\nthe safe-spot report asks the verdict, not the tally');
      AP.includes('so those are not the wall'));
 }
 
+// A PROVEN WALL IS NOT A STATION. Prod 2026-09-25: six characters re-assigned from room 38 to
+// room 27 held their 38 walls for ten minutes at full health, because "holding a working spot
+// in a room that spawns — waiting is the job" returned before the station walk was reached.
+console.log('\nthe wall vigil yields to the station walk');
+{
+  const at = AUTOPILOT.indexOf('const waitingInASpot =');
+  const cond = AUTOPILOT.slice(at, AUTOPILOT.indexOf('if (waitingInASpot)', at));
+  ok('the vigil asks whether we are away from our station', cond.includes('!this.awayFromStation(room)'));
+  ok('...and whether this room makes our quarry', cond.includes('producesQuarry'));
+  ok('...but a room missing from the spawn table keeps its vigil', cond.includes('!spawnHere.length'));
+  ok('producesQuarry is declared once, before the vigil that reads it',
+     (AUTOPILOT.match(/const producesQuarry = /g) ?? []).length === 1
+       && AUTOPILOT.indexOf('const producesQuarry = ') < at);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

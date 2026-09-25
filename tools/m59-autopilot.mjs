@@ -19705,6 +19705,39 @@ export class Autopilot {
         return HANDLED;
       }
 
+      // PREY WE HAVE PROVED WE CANNOT WALK TO IS NOT A QUARRY, HERE AS IN fight().
+      //
+      // `preyAvoid` was only ever handed to fight(), never consulted by the selection that
+      // chooses what fight() is sent at. The two disagreed, and the disagreement is a loop:
+      // the selection ranks the nearest creature first, fight() is pinned to that exact id
+      // (`exactTargetId`), filters it out through the same avoid set, and answers "nothing
+      // here matches — try one of the names above". No `out_of_reach`, so no pull and no
+      // close; the pass logs "broke off" and the next pass picks the same creature again.
+      //
+      // Measured on prod 2026-09-25 in the Icky Cave (27): six characters on proven walls at
+      // r27-32 c41-45, the west lip of the one-way pocket (rows 17-34, cols 46-56) that holds
+      // two of the room's generators. The nearest orc was in the pocket every time, proved
+      // unreachable, and re-selected once a second — `broke off` x12 in every journal, zero
+      // landed hits, 0-2 kills in thirty minutes per character in a room at its cap of ten.
+      //
+      // Same predicate, same square key, same TTL as fight() uses, so this can only ever
+      // agree with it. When it empties the list the pass falls through to the ordinary
+      // empty-pass handling, which waits at a working wall for the next reachable spawn.
+      const avoidPrey = this.preyAvoid(room?.num ?? null);
+      if (avoidPrey && found.length) {
+        const reachable = found.filter(o => !avoidPrey(o));
+        if (!reachable.length && (!this.allPreyAvoidedAt || Date.now() - this.allPreyAvoidedAt > 60_000)) {
+          this.allPreyAvoidedAt = Date.now();
+          this.note('every visible quarry is somewhere we proved we cannot walk to', {
+            room: room?.name, skipped: found.length,
+            at: found.slice(0, 6).map(o => `r${o.row}c${o.col}`),
+            why: 'selecting one anyway would pin fight() to a creature its own avoid filter ' +
+                 'removes — a broke-off loop with no pull and no close. Waiting for one on ' +
+                 'our side instead; the memory expires in a few minutes and is re-tested' });
+        }
+        found = reachable;
+      }
+
       // ONE NEAREST TARGET PER KEEPER PRODUCES A PILE, NOT A FLEET.
       // Keep a wounded foe first, then a partner's deliberate shared target, otherwise
       // prefer the least-claimed creature while retaining findCreature's distance order
@@ -19780,7 +19813,25 @@ export class Autopilot {
         // empty pass is not counted at all. Everything that ends a vigil for a real
         // reason still fires: being hit in the spot releases it, the room going capped is
         // handled above, hunger and health run on their own clocks.
-        const waitingInASpot = !!this.hold && this.holdWorks() && !this.sanctuary(room);
+        //
+        // BUT ONLY WHERE THE WAIT CAN END. "This room spawns" is not "this room spawns OUR
+        // quarry", and neither is "this is where we were told to be". A keeper re-tasked while
+        // standing on a proven wall — new hunt, new assigned room — took this branch on every
+        // pass and never reached the station walk below it, because this returns first.
+        // Measured on prod 2026-09-25: six characters re-assigned from Castle Victoria (38)
+        // to the Icky Cave (27) held their 38 walls for ten minutes, full health, reading
+        // "holding a proven safe spot", hunting orcs and spiders in a room of skeletons and
+        // zombies, until a fleetscript walked them over. Both conditions are the ones the
+        // station walk below already tests, computed once and shared.
+        // Only when an order names a quarry — with policy.hunt unset every room fails this
+        // test and the fleet would walk home from everywhere.
+        const spawnHere = loadSpawns(SPAWN_FILE)?.rooms?.[room?.num] || [];
+        const producesQuarry = !this.policy.hunt ? true
+          : spawnHere.some(x => x.huntable && this.huntMatch()(x.creature));
+        // A room the spawn table does not list is a gap in the table, not a barren room, so it
+        // keeps the vigil it always had rather than being walked away from.
+        const waitingInASpot = !!this.hold && this.holdWorks() && !this.sanctuary(room)
+          && (producesQuarry || !spawnHere.length) && !this.awayFromStation(room);
         if (waitingInASpot) {
           this.doing = 'waiting';
           if (!this.waitedInSpotAt || Date.now() - this.waitedInSpotAt > 60_000) {
@@ -19825,11 +19876,7 @@ export class Autopilot {
         // anything here that I AM ALLOWED TO KILL". Both answers mean the same thing about
         // waiting: a respawn cannot fix it, because what respawns is not what we are for.
         //
-        // Only when an order names a quarry — with policy.hunt unset every room fails this
-        // test and the fleet would walk home from everywhere.
-        const spawnHere = loadSpawns(SPAWN_FILE)?.rooms?.[room?.num] || [];
-        const producesQuarry = !this.policy.hunt ? true
-          : spawnHere.some(x => x.huntable && this.huntMatch()(x.creature));
+        // `producesQuarry` is computed above, beside the wall vigil that needs it too.
         const inSanctuary = this.sanctuary(room);
         // A STATION IS AN ORDER, AND BEING SOMEWHERE ELSE IS REASON ENOUGH TO WALK.
         //
