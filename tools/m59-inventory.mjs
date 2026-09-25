@@ -179,9 +179,13 @@ export async function buyByName(agent, seller, lines = []) {
     if (!it) { out[item] = 0; continue; }
     const start = countItem(await freshItems(agent), item);
     let have = start;
-    const stack = Number(it.amount) > 1;
-    for (let i = 0; i < (stack ? 1 : amount) && have - start < amount; i++) {
-      await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount : 1 }] }, 120_000).catch(() => null);
+    const stack = Number(it.amount) > 1 || /elderberr|herb|mushroom|tooth|sapphire|emerald|ruby|berr/i.test(item);
+    // ASK AGAIN FOR THE REMAINDER UNTIL THE PACK SAYS DONE. The broker splits an order into
+    // chunks of 50 and stops at the first chunk whose arrival it did not see in time, so 125
+    // elderberry came back as 50 on the 2026-09-25 rehearsal with room and money to spare. The
+    // pack decides; a round that adds nothing ends it. Gear still goes one piece per exchange.
+    for (let i = 0; i < (stack ? Math.ceil(amount / 50) + 2 : amount) && have - start < amount; i++) {
+      await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount - (have - start) : 1 }] }, 180_000).catch(() => null);
       const now = countItem(await freshItems(agent), item);
       if (now <= have) break;
       have = now;

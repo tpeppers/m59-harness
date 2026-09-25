@@ -432,24 +432,18 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   if (ride.ok && buyable.length && Number(p.reagent_shop)) {
     const at = await hopTo(agent, Number(p.reagent_shop), { floor: 0.5 });
     if (at.ok) {
-      out.bought = {};
-      const list = await call('shop', { agent, seller: p.apothecary }, 120_000).catch(() => null);
+      // ONLY WHAT FITS. A purchase the pack cannot take is refused whole and silently — the
+      // 2026-09-25 rider asked for 128 elderberry at -41 bulk and got nothing, and said nothing.
+      const r = await roomFor(agent);
+      let free = r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : Infinity;
+      const lines = [];
       for (const [item, n] of buyable) {
-        const it = (list?.items ?? []).find(i => lower(i.name).replace(/ies$/, 'y').replace(/s$/, '') === lower(item).replace(/s$/, ''));
-        if (!it) continue;
-        // ONLY WHAT FITS. A purchase the pack cannot take is refused whole and silently — the
-        // 2026-09-25 rider asked for 128 elderberry at -41 bulk and got nothing, and said nothing.
-        const r = await roomFor(agent);
         const u = weighItem(item); const c = Math.max(Number(u?.weight) || 0, Number(u?.bulk) || 0) || 1;
-        const fits = r ? Math.max(0, Math.floor(Math.min(r.weight ?? 0, r.bulk ?? 0) / c)) : n;
-        const ask = Math.min(n, fits);
+        const ask = Math.min(n, Math.max(0, Math.floor(free / c)));
         if (ask < n) (out.unbought ??= {})[item] = n - ask;
-        if (ask <= 0) { out.bought[item] = 0; continue; }
-        const before = (await inv(agent)).filter(i => lower(i.name).startsWith(lower(item).slice(0, 5))).reduce((m, i) => m + (i.amount || 1), 0);
-        await call('shop', { agent, seller: p.apothecary, buy_ids: [{ id: it.id, amount: ask }] }, 180_000).catch(() => null);
-        const after = (await inv(agent)).filter(i => lower(i.name).startsWith(lower(item).slice(0, 5))).reduce((m, i) => m + (i.amount || 1), 0);
-        out.bought[item] = after - before;
+        if (ask > 0) { lines.push({ item, amount: ask }); free -= ask * c; }
       }
+      out.bought = lines.length ? await buyByName(agent, p.apothecary, lines) : {};
       log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}` +
           (out.unbought ? `; NO ROOM for ${JSON.stringify(out.unbought)}` : ''));
     }
