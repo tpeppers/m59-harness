@@ -447,8 +447,11 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
 // 43 herbs and 52 mushrooms, and 15 chain and 19 shields wanted. Money is NOT drawn by default —
 // the fleet's own purses covered the whole bill — so the hall's 75,000 stays where it is.
 export const HALL_WANTS = Object.freeze([
-  { item: 'orc tooth', amount: 40 },
-  { item: 'elderberry', amount: 120 },
+  // Generous on purpose: the reagent step hands dedicators a per-head allowance (weapons /
+  // dedicators) and ran out at 40 on the 2026-09-25 rehearsal, leaving four dedicators with no
+  // tooth for their own hammer. The chests hold ~160 and a tooth weighs 3.
+  { item: 'orc tooth', amount: 100 },
+  { item: 'elderberry', amount: 150 },
   { item: 'herb', amount: 120 },
   { item: 'mushroom', amount: 60 },
   { item: 'chain armor', amount: 4 },
