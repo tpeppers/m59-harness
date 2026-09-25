@@ -265,8 +265,7 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null }
     // THE WEAPON GOES BACK WHETHER OR NOT IT WAS DEDICATED. Returning early on a failed cast left
     // the owner's only weapon in the dedicator's pack, and the owner went into the throne room bare.
     const give = got ?? w2[0];
-    const back = give ? await call('supply', { from: d, to: owner, what: [give.id], who_travels: 'neither' }, 120_000)
-      .catch(e => ({ supplied: false, reason: e.message })) : null;
+    const back = give ? await handOver(d, owner, give.id, { makeRoomMin: 200 }).then(h => ({ supplied: h.ok, reason: h.why })) : null;
     const mine = (await inv(owner)).find(i => String(i.name).toLowerCase() === String(weapon.name).toLowerCase());
     if (mine) await call('act', { agent: owner, verb: 'use', target: mine.id }, 60_000).catch(() => {});
     if (got) return { ok: !!back?.supplied, by: d, outcome: r.landed ? 'dedicated' : 'already' };

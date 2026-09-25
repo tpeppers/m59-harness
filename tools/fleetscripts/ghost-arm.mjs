@@ -52,6 +52,7 @@
 // single DM packet. On prod the same steps rest for mana and report a shortfall instead.
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
 import { weighItem } from '../m59-items.mjs';
+import { handOver } from '../m59-inventory.mjs';
 import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
@@ -894,10 +895,11 @@ async function dedicate({ agent, st, say, dedicators, agents, lab, p }) {
       if (!target) { done.push({ on: w.owner, outcome: 'not in my pack' }); continue; }
       const o = await castOn(target.id, SURVEY.get(w.owner)?.character ?? w.owner);
       DEDICATED.set(w.owner, { weapon: w.name, outcome: o });
-      const r = await serially(() => call('supply', { from: agent, to: w.owner, what: [target.id], who_travels: 'neither' }, 120_000)
-        .catch(e => ({ supplied: false, reason: e.message })));
-      if (r?.supplied) RETURNED.add(w.owner);
-      else done.push({ on: w.owner, outcome: `hand-back failed: ${r?.reason ?? '?'}` });
+      // handOver makes room on a full receiver and tries again: on the 2026-09-25 rehearsal a
+      // dedicated sword stayed in the dedicator's pack on receiver_full, its owner unarmed.
+      const r = await handOver(agent, w.owner, target.id, { makeRoomMin: 200 });
+      if (r.ok) RETURNED.add(w.owner);
+      else done.push({ on: w.owner, outcome: `hand-back failed: ${r.why}` });
     }
   }
   DEDICATORS_DONE++;

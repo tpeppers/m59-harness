@@ -18685,6 +18685,19 @@ export class Autopilot {
       return CONTINUE;
     }
     this.errandsStoodDown = false;
+    // A TRIP ALREADY UNDER WAY IS STILL AN ECONOMIC DECISION. Claiming economy and movement
+    // cancelled the JOURNEY in flight, not the trip that issued it, and the trip's next leg went
+    // out as soon as the holder's own walk had arrived: on the 2026-09-25 rehearsal two raiders,
+    // held by the raid in the stage room, walked to Barloque, sold their gems, bought herbs and
+    // took a room at the inn while the raid handed them reagents they were not there to take.
+    // So a held trip is set aside — deferred, not dropped — and resumes when the lease ends.
+    if (this.townTrip && (this.facultyHeld('economy') || this.facultyHeld('movement'))) {
+      this.deferredShoppingTrip = this.townTrip;
+      this.townTrip = null;
+      this.note('town trip set aside — economy or movement is leased', {
+        economy: this.facultyOwner('economy'), movement: this.facultyOwner('movement'),
+        why: 'the holder decides where this body goes and what its purse does' });
+    }
     if (this.townTrip) { await this.continueTownTrip(); return HANDLED; }
 
     // An errand outranks farming and is outranked by everything above it: we are past
