@@ -839,6 +839,21 @@ const presentOnce = (key, agents, room) => {
   return PRESENT.get(key);
 };
 
+/** Every listed agent's pack and wielded weapon, read now, once per `key`, shared by all agents. */
+const PACKS = new Map();
+const packsOnce = (key, list) => {
+  if (!PACKS.has(key)) PACKS.set(key, (async () => {
+    const out = {};
+    await Promise.all(list.map(async a => {
+      const [inv, st] = await Promise.all([call('inventory', { agent: a }, 40_000).catch(() => null),
+                                           call('status', { agent: a, brief: false }, 40_000).catch(() => null)]);
+      out[a] = { items: inv?.items ?? [], wielding: (st?.equipment ?? []).find(e => isWeaponName(e)) ?? null };
+    }));
+    return Object.fromEntries(list.filter(a => out[a]).map(a => [a, out[a]]));
+  })());
+  return PACKS.get(key);
+};
+
 /** Who is standing in `room` right now, by the broker's own status. */
 async function presentIn(agents, room) {
   const here = new Set();
