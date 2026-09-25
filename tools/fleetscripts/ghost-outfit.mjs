@@ -189,7 +189,15 @@ async function grabFromFloor(agent, re, tries = 10) {
     if ((await inv(agent)).some(x => re.test(String(x.name ?? '')))) return true;
     const look = await call('look', { agent }, 40_000).catch(() => null);
     const onFloor = (look?.objects ?? []).find(o => re.test(String(o.name ?? '')));
-    if (onFloor) await call('act', { agent, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
+    if (!onFloor) continue;
+    // WITHIN SEVEN SQUARES, OR THE GET IS REFUSED IN SILENCE. UserGet (user.kod:3576) refuses a
+    // pick-up whose row + column distance exceeds 7. On the 2026-09-25 rehearsal the rider stood 32
+    // squares from where the holder dropped the cup, every get came back empty, and nothing said why.
+    const me = look?.you;
+    const far = me && Number.isFinite(onFloor.col) && Number.isFinite(onFloor.row)
+      && Math.abs(me.col - onFloor.col) + Math.abs(me.row - onFloor.row) > 5;
+    if (far) await call('walk_to', { agent, col: onFloor.col, row: onFloor.row }, 120_000).catch(() => {});
+    await call('act', { agent, verb: 'get', target: onFloor.id }, 60_000).catch(() => {});
   }
   return (await inv(agent)).some(x => re.test(String(x.name ?? '')));
 }
