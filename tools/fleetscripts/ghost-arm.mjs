@@ -100,6 +100,8 @@ export const script = {
     lightbearer: { type: 'string', default: '', describe: 'agent who casts forces of light; empty = whoever knows it' },
     healers: { type: 'string', default: '', describe: 'comma-separated; empty = three who know minor heal' },
     lab: { type: 'boolean', default: false, describe: 'allow DM grants and mana refills. REFUSES on a non-lab fleet' },
+    near_hops: { type: 'number', default: 2, describe: 'a muster walk this short (and not across Ukgoth) sets out at near_min_health' },
+    near_min_health: { type: 'number', default: 0.3, describe: 'the floor for a short walk home; the stage room is where the raid rests' },
     muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
     start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
@@ -184,7 +186,7 @@ export const script = {
     // room is the pattern that killed people; twenty at once is a fight the trolls lose. So anyone
     // whose road crosses 599 walks to the rally room, waits for the rest of the convoy, and crosses
     // with them. Characters on the castle side (38, 39) walk straight in.
-    let convoy = false;
+    let convoy = false, hopsHome = null;
     if (!inStage && !placeHere && Number(p.rally)) {
       const from = Number(here?.where?.num ?? here?.room_num ?? NaN);
       if (from === Number(p.rally)) convoy = true;
@@ -193,8 +195,16 @@ export const script = {
           call('travel_estimate', { from, to: Number(p.stage) }, 20_000).catch(() => null),
           call('travel_estimate', { from, to: Number(p.rally) }, 20_000).catch(() => null)]);
         convoy = Number.isFinite(toStage?.hops) && Number.isFinite(toRally?.hops) && toStage.hops === toRally.hops + 2;
+        hopsHome = Number.isFinite(toStage?.hops) ? toStage.hops : null;
       }
     }
+    // A SHORT WALK HOME SETS OUT HURT. The muster's full-health floor is for open country; below
+    // it the fleetscript hands the body back to its keeper to heal — and in the castle (38/39) the
+    // keeper HUNTS skeletons and zombies, which is where prod's raiders stand. On the 2026-09-25
+    // rehearsal that "heal" took Gonzo's clone from 48/72 to 1/72 and Robin's from 38 to 2/64,
+    // one room from the stage. A walk of `near_hops` or fewer that does not cross Ukgoth sets out
+    // at `near_min_health`, and the raid's own rest happens in the stage room, which is quiet.
+    const nearHome = !convoy && hopsHome != null && hopsHome <= Number(p.near_hops);
     // A FRAGILE BODY CROSSES TOO — BEHIND THE CONVOY, AT FULL HEALTH. The first no-DM rehearsal
     // (2026-09-24) lost the 20-health light-bearer inside a convoy crossing Ukgoth, and this used
     // to refuse such a character outright. That was before the crossing was rebuilt: since
@@ -241,7 +251,7 @@ export const script = {
           // rally room sets out at muster_min_health), and it crosses at full or not at all.
           walk(Number(p.stage), { minHealth: fragile ? Math.max(0.95, Number(p.cross_min_health)) : Number(p.cross_min_health) }),
         ]
-        : [walk(Number(p.stage), { minHealth: Number(p.muster_min_health) })]),
+        : [walk(Number(p.stage), { minHealth: nearHome ? Number(p.near_min_health) : Number(p.muster_min_health) })]),
 
       // ---- 1. SURVEY. Everyone posts what it holds, then waits for everyone else, so the
       // hand-over plan below is computed from ONE picture of the fleet by every agent alike.
