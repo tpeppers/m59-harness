@@ -148,7 +148,10 @@ async function hopTo(agent, to, { floor = 0 } = {}) {
     while (Date.now() < until) {
       const o = await observe(agent);
       if (o.dead) return { ok: false, dead: true };
-      if (Number(o.room) === Number(to)) return { ok: true };
+      // ARRIVED: CLEAR THE JOURNEY. A background travel can stay registered after the body is
+      // there, and the raid's next walk is then refused "busy: walk to <here>" — on the
+      // 2026-09-25 rehearsal that dropped an armorer from the fight.
+      if (Number(o.room) === Number(to)) { await call('cancel_movement', { agent }, 30_000).catch(() => {}); return { ok: true }; }
       await sleep(3000);
     }
   }
