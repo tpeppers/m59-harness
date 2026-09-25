@@ -444,7 +444,14 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     // smith will not buy reagents or food — so what an armorer carries at the counter is what it
     // brought. On the 2026-09-25 rehearsal every armorer's buying stopped on "limited_by: bulk"
     // after two or three pieces. Everything but the essentials goes in a chest first.
-    if (ride.ok) {
+    // A WALKER STASHES TOO: the hall is in the smith's town, so a rider who could not ride goes
+    // there first. On the 2026-09-25 rehearsal a walking armorer skipped the stash, reached the
+    // counter full and bought one piece of eight.
+    if (!ride.ok && Number(p.hall)) {
+      const at = await hopTo(agent, Number(p.hall), { floor: 0.5 });
+      if (at.ok) ride.inHall = true;
+    }
+    if (ride.ok || ride.inHall) {
       const r = await inHall(() => call('hall_withdraw', { agent, wants: [], stash: [...HALL_STASH_KEEP] }, 620_000)
         .catch(e => ({ ok: false, why: e.message })));
       t.stashed = r?.stashed ?? 0;
