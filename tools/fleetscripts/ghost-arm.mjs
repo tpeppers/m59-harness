@@ -53,7 +53,7 @@
 import { verify, walk, call, castVerified, assertLabFleet } from '../m59-fleetscript.mjs';
 import { weighItem } from '../m59-items.mjs';
 import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
-         hallDraw, hallSplit, HALL_WANTS, OUTFIT }
+         hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
          planReagents, countFamily, assignRoles, blessAssignments, expect, reexpect, barrier, leave }
@@ -354,24 +354,11 @@ export const script = {
       verify(async ({ state: st }) => {
         const min = Number(p.pack_room_min);
         if (!(min > 0)) return true;
-        const roomNow = async () => (await call('look', { agent }, 40_000).catch(() => null))?.carry?.room_for ?? null;
-        let room = await roomNow();
-        const dropped = {};
-        for (const food of ['slice of pork', 'mutton', 'pork', 'cheese']) {
-          if (!room || Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
-          const stacks = ((await call('inventory', { agent }, 40_000).catch(() => null))?.items ?? [])
-            .filter(i => String(i.name ?? '').toLowerCase().includes(food) && i.id != null);
-          for (const it of stacks) {
-            const extra = (Number(it.amount) || 1) - Number(p.keep_food);
-            if (extra <= 0) continue;
-            await call('act', { agent, verb: 'drop', target: it.id, amount: extra }, 30_000).catch(() => {});
-            dropped[it.name] = (dropped[it.name] ?? 0) + extra;
-            room = await roomNow();
-            if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
-          }
-        }
-        if (Object.keys(dropped).length) console.log(`  ${agent} made room: dropped ${JSON.stringify(dropped)} (now ${JSON.stringify(room)})`);
-        st.room = { dropped, room };
+        // The operator's rule: junk loot and excess food go; money, reagents, the cup, weapons,
+        // armour and anything worn stay (ghost-outfit makeRoom).
+        const dropped = await makeRoom(agent, { keep: Number(p.keep_food), min });
+        if (dropped) console.log(`  ${agent} made room: dropped ${JSON.stringify(dropped)}`);
+        st.room = { dropped };
         return true;
       }, 'making room in the pack'),
 

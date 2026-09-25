@@ -27,6 +27,7 @@
 //     80/75 — an empty pack holds about seven shield+chain kits.
 
 import { call, castVerified, observe } from '../m59-fleetscript.mjs';
+import { weighItem } from '../m59-items.mjs';
 import { barrier, reexpect } from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -309,24 +310,38 @@ export async function buyByName(agent, seller, lines = []) {
 }
 
 /**
- * MAKE ROOM IN A PACK by dropping heavy food past `keep` of each kind — pork first, then mutton,
- * then cheese. Lossy on purpose: food is abundant, gear is not. Returns what was dropped, or null.
+ * MAKE ROOM IN A PACK — the operator's rule (2026-09-25): "junk loot + excess food". Raiders' packs
+ * are full on prod (the shadow mirrors them), so chain and shields could not be handed over.
+ * Kept, always: money, reagents (every mushroom), the cup, weapons, armour and shields, and
+ * ANYTHING WORN (matched by name against the worn list — never drop what is on the body). Dropped,
+ * heaviest first: everything else; then food past `keep` of each kind. Stops at `min` free weight
+ * AND bulk. Returns what was dropped, or null.
  */
+export const RAID_KEEP = Object.freeze(['shilling', 'elderberr', 'herb', 'mushroom', 'orc tooth', 'emerald',
+  'sapphire', 'ruby', 'diamond', 'chalice', 'hammer', 'mace', 'sword', 'axe', 'scimitar', 'bow', 'arrow',
+  'armor', 'armour', 'shield', 'robe', 'helm', 'gauntlet', 'ring', 'amulet', 'necklace', 'wand', 'potion', 'scroll']);
+const FOODS = /bread|pork|mutton|cheese|apple|meat|pie|stew|snack|berry|fish|grape|jerky|ration/i;
 export async function makeRoom(agent, { keep = 10, min = 400 } = {}) {
-  const roomNow = async () => (await call('look', { agent }, 40_000).catch(() => null))?.carry?.room_for ?? null;
-  let room = await roomNow();
+  const look = async () => call('look', { agent, fresh: true }, 40_000).catch(() => null);
+  let l = await look();
+  const enough = r => r && Math.min(r.weight ?? 0, r.bulk ?? 0) >= min;
+  if (!l || enough(l.carry?.room_for)) return null;
+  const worn = new Set((l.equipment ?? []).map(x => lower(typeof x === 'string' ? x : x?.name)));
+  const w = it => (Number(weighItem(it.name)?.weight) || 10) * (Number(it.amount) || 1);
   const dropped = {};
-  for (const food of ['slice of pork', 'pork', 'mutton', 'cheese']) {
-    if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
-    for (const it of (await inv(agent)).filter(i => lower(i.name).includes(food) && i.id != null)) {
-      const extra = (Number(it.amount) || 1) - keep;
-      if (extra <= 0) continue;
-      await call('act', { agent, verb: 'drop', target: it.id, amount: extra }, 30_000).catch(() => {});
-      dropped[it.name] = (dropped[it.name] ?? 0) + extra;
-      room = await roomNow();
-      if (room && Math.min(room.weight ?? 0, room.bulk ?? 0) >= min) break;
-    }
-  }
+  const drop = async (it, amount) => {
+    await call('act', { agent, verb: 'drop', target: it.id, ...(amount ? { amount } : {}) }, 30_000).catch(() => {});
+    dropped[it.name] = (dropped[it.name] ?? 0) + (amount ?? (Number(it.amount) || 1));
+    l = await look();
+  };
+  // 1. Junk: not kept, not food, not worn — heaviest first.
+  const junk = (l.items ?? []).filter(it => it.id != null && !worn.has(lower(it.name))
+    && !RAID_KEEP.some(k => lower(it.name).includes(k)) && !FOODS.test(it.name)).sort((a, b) => w(b) - w(a));
+  for (const it of junk) { if (enough(l?.carry?.room_for)) break; await drop(it); }
+  // 2. Food past `keep` of each kind — heaviest stacks first.
+  const food = (l?.items ?? []).filter(it => it.id != null && FOODS.test(it.name) && !worn.has(lower(it.name))
+    && (Number(it.amount) || 1) > keep).sort((a, b) => w(b) - w(a));
+  for (const it of food) { if (enough(l?.carry?.room_for)) break; await drop(it, (Number(it.amount) || 1) - keep); }
   return Object.keys(dropped).length ? dropped : null;
 }
 
