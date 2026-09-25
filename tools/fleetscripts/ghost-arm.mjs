@@ -355,6 +355,9 @@ export const script = {
                   const r = await call('supply', { from: arm, to, what: [piece.id], who_travels: 'neither' }, 120_000)
                     .catch(e => ({ supplied: false, reason: e.message }));
                   console.log(`  hall ${kind} ${arm} -> ${to}: ${r?.supplied ? 'given' : `NOT given (${r?.reason ?? '?'})`}`);
+                  // A full pack refuses the piece; the next raider in need gets it instead of the
+                  // same full one being offered every remaining piece (2026-09-25: receiver_full).
+                  if (!r?.supplied) { want[to][kind] = false; continue; }
                   if (r?.supplied) {
                     want[to][kind] = false;
                     const got = OUTFIT_RUN.delivered.get(to) ?? []; got.push(kind); OUTFIT_RUN.delivered.set(to, got);
