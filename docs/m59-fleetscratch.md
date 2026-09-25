@@ -297,6 +297,17 @@ the character knows nothing. Fix the pads' usage lines when you adopt them.
 
 **`tools/m59-recorder.mjs`** — bounded per-session flight recorder, for the telemetry half.
 
+**`node tools/m59-keeperwhy.mjs [--agents a,b] [--room N]`** — **run this before you theorise.**
+Read-only: it finds every keeper on the fleet's port band (ports drift — never assume 9510+N),
+reads each one's own decision journal (`autopilot_status.recent` on the keeper's `/state`, which
+is *not* what the broker's `autopilot status` returns), and names the loop it is in, with the
+`m59-stuck` entry and the lever. `classify(state)` is a pure export, so a pad can call it on a
+body before driving it. On 2026-09-25 "they're stuck by the wall in the Icky Cave" took ~40 tool
+calls to become two keeper defects, and nearly all of them were rebuilding this by hand. The
+signature was one line: `broke off x12 · why: "try one of the names above"`. **When you find a
+new loop, add its signature there** (with a fixture in `m59-keeperwhy-test.mjs`) — that is how
+the next agent gets it in one call instead of forty.
+
 ---
 
 ## The lab toolkit: what does NOT exist, and is yours to build
@@ -804,6 +815,12 @@ This is the worked example, and it is the shape for the Marco Polo work.
 - **The deliverable is the prod walk.** A route that only works with spawns off is not done; it is
   diagnosed. Write down which of the lab's affordances the real route still depends on, because that
   list is the remaining work.
+- **"Stuck" is a symptom, not a movement verdict.** Ask the keeper what it decided before asking
+  the mover why it failed: `m59-keeperwhy.mjs` first. On 2026-09-25 characters "stuck by the wall"
+  in the Icky Cave were never asked to move at all — quarry selection and `fight()` disagreed about
+  which creatures existed, so the pull that would have walked them never ran. And a debug
+  `/findpath` from a wall square can answer `expanded: 1` because it plans from the square CENTRE,
+  which on a sliver has no floor; that is the probe, not the room.
 
 ---
 

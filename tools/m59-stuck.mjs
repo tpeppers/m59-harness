@@ -234,6 +234,48 @@ export const ENTRIES = Object.freeze([
                 'currently has, and it checks whether you set out whole -- not whether the road ' +
                 'can kill you before it ends.',
   },
+  {
+    id: 'fight-pinned-to-nothing',
+    rooms: [27],
+    asked: 1,
+    symptom: 'Characters stand on a wall in a room full of their quarry and never fight. The ' +
+             'journal reads "broke off" once a second with landed_hits 0 and why "try one of the ' +
+             'names above". It looks like a pathing problem ("stuck by the wall").',
+    answer: 'fight() is pinned to one exact creature id (exactTargetId) and that id is removed by ' +
+            'its own filters, so it finds nothing and returns without out_of_reach -- the pull and ' +
+            'close branches never run. Two ways in: (1) the pass SELECTED a creature on a square ' +
+            'already proved unreachable, which fight() then avoids; (2) a pending pull named a ' +
+            'creature that died to somebody else. Movement was never asked to do anything.',
+    measured: 'Icky Cave 2026-09-25: six characters on walls at r27-32 c41-45, the lip of the ' +
+              'one-way pocket (rows 17-34, cols 46-56) holding two generators; 12/12 journal ' +
+              'entries "broke off", 0-2 kills per 30 min, room at its cap. After 52053aa one ' +
+              'keeper still looped (367 passes) on cause (2); after 41d2b73 it took 4 kills.',
+    fix: 'Both causes fixed: 52053aa filters the selection by the same preyAvoid predicate fight() ' +
+         'uses; 41d2b73 drops a pending pull whose creature is gone before its id is used. ' +
+         '`node tools/m59-keeperwhy.mjs` names this signature on any keeper that still shows it.',
+    state: 'fixed',
+    since: '2026-09-25',
+    robustness: 'Two call sites answering one question with different filters is the whole ' +
+                'defect. When a callee takes an exact id, the caller has to have applied every ' +
+                'filter the callee applies, or the id can name something the callee cannot see.',
+  },
+  {
+    id: 're-tasked-wall-holder',
+    rooms: [],
+    asked: 1,
+    symptom: 'A character is given a new station (assigned_room) and hunt, reads the new policy ' +
+             'back correctly, and stays in the old room "holding a proven safe spot" at full health.',
+    answer: 'The wall vigil ("holding a working spot in a room that spawns - waiting is the job") ' +
+            'returned before the station walk, and it never asked whether this room makes the NEW ' +
+            'quarry or is the station. So a keeper re-tasked while on a proven wall never left it.',
+    measured: '2026-09-25: eight characters re-stationed 38 -> 27; six held their 38 walls for ' +
+              'ten minutes until a `come-home` fleetscript walked them.',
+    fix: '52053aa: the vigil also requires producesQuarry (unless the spawn table does not list ' +
+         'the room) and !awayFromStation, so the station walk below it runs. Until a keeper has ' +
+         'that code, `come-home agents=<a> home=<room>` is the workaround.',
+    state: 'fixed',
+    since: '2026-09-25',
+  },
 ]);
 
 const load = () => {
@@ -268,6 +310,13 @@ const show = (e, counted) => {
                                   `, operator says asked ~${e.asked}+ times`);
 };
 
+// IMPORTABLE FOR ITS ENTRIES. m59-keeperwhy.mjs points each live signature at an entry here, and
+// its test checks the pointer resolves -- which means importing this file, which used to run the
+// CLI below and exit the importer. Same guard m59-supervise.mjs grew for the same reason.
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) main();
+
+function main() {
 const args = process.argv.slice(2);
 const noCount = args.includes('--no-count');
 const roomIdx = args.indexOf('--room');
@@ -335,3 +384,4 @@ for (const e of hits) {
   show(e, null);
 }
 console.log('');
+}

@@ -836,7 +836,13 @@ the records it describes.
   a sixteen-character ceiling that was ours rather than the server's, and a hyphen we
   admitted and the server refuses, which turned a readable error into a bare
   `BP_CHARINFO_NOT_OK` with nothing in it) and
-  `node tools/m59-preyreach-test.mjs` (20 — **prey the keeper has proved it cannot walk to**.
+  `node tools/m59-keeperwhy-test.mjs` (20 — **the signatures that name a keeper's loop**. Each
+  fixture is a keeper `/state` trimmed from the one read on prod; the test fails if a signature
+  goes quiet on its own case, if an honest broke-off is misread as the pinned-to-nothing loop, or
+  if a signature points at an `m59-stuck` entry that does not exist) and
+  `node tools/m59-preyreach-test.mjs` (28 — **prey the keeper has proved it cannot walk to**, and
+  since 2026-09-25 that the pass SELECTS by the same avoid set fight() filters by, and drops a
+  pending pull whose creature is gone.
   `closeOnQuarry` always detected it and never remembered it, so the next pass ranked the same
   creature nearest and walked at it again, for ever, while every board read `hunting`. The case
   it pins hardest is the KEY: the memory is a SQUARE, not an object id, because an id is
