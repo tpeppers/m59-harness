@@ -341,9 +341,16 @@ export const script = {
         const each = Math.ceil(weapons / workers);
         const packsNow = {};
         // Re-read, not the survey: the hammer step moved things.
+        const roomOf = {};
         await Promise.all(agents.map(async a => {
           packsNow[a] = (await call('inventory', { agent: a }, 40_000).catch(() => null))?.items ?? SURVEY.get(a)?.items ?? [];
+          const s = await call('status', { agent: a, brief: true }, 30_000).catch(() => null);
+          roomOf[a] = Number(s?.where?.num ?? s?.room_num ?? NaN);
         }));
+        // A DONOR MUST BE STANDING WITH THE FLEET. `supply` is a hand-over in one room; on
+        // 2026-09-25 the plan chose Uuuu (42 teeth, but in room 109) for two dedicators, both
+        // hand-overs stopped at "not in the room", and neither could dedicate anything.
+        const donorPacks = Object.fromEntries(Object.entries(packsNow).filter(([a]) => roomOf[a] === Number(p.stage)));
         // One want per agent, merged across its jobs: a Kraanan caster may dedicate AND bless, and
         // two separate wants for one agent would plan two sets of hand-overs for the same stack.
         const wantBy = new Map();
@@ -369,7 +376,7 @@ export const script = {
           for (const [k, n] of Object.entries(per)) { const have = countFamily(packsNow[a], k); if (have < n) short[k] = n - have; }
           return { agent: a, short };
         }).filter(w => Object.keys(w.short).length);
-        const { moves, unmet } = planReagents(wants, packsNow);
+        const { moves, unmet } = planReagents(wants, donorPacks);
 
         // BY STACK ID, NOT BY NAME. `supply` matches a NAME whole, so asking for "mushroom" from a
         // donor holding only Inky-cap mushrooms moved nothing — six hand-overs failed that way on
