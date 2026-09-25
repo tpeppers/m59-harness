@@ -682,7 +682,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
                   heals: 0, heals_landed: 0, buff_rounds: 0 };
   let lastBless = Date.now(), lastStrength = Date.now(), lastHeal = 0;
   const RING = [[0, -1], [1, 0], [0, 1], [-1, 0], [1, -1], [1, 1], [-1, 1], [-1, -1]];
-  let closes = 0;
+  let closes = 0, lastTooFar = false;
   while (Date.now() < endAt(p)) {
     const o = await observe(agent);
     if (o.dead) { tally.died = true; event('died', { agent }); await say('I am down.'); break; }
@@ -721,7 +721,10 @@ async function farmLoop({ agent, p, st, say, duty }) {
     if (ghost) RUN.ghostSeen = true; else ghostGone(agent);
     const g = ghost ?? pickFocus(others, p);
     if (!g) { await sleep(3000); continue; }                 // nothing yet: the next one is ~12s off
-    if ((g.distance ?? 99) > 2) {
+    // A refusal on reach closes to adjacent before the next swing (raid-action's rule, same
+    // 2026-09-25 rehearsal: twenty swings from "distance 2", every one too far away).
+    if ((g.distance ?? 99) > (lastTooFar ? 1 : 2)) {
+      lastTooFar = false;
       const off = RING[closes++ % RING.length];
       await call('walk_to', { agent, col: g.col + off[0], row: g.row + off[1] }, 60_000).catch(() => {});
       continue;
@@ -734,6 +737,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
       continue;
     }
     if (!r?.error) tally.swings += Number(p.swings);
+    if (msgs.some(m => /too far away/i.test(m))) lastTooFar = true;
     if (msgs.some(m => /spirit of Shal'ille departs/i.test(m))) RUN.light.expired = true;
     for (const m of msgs) {
       const k = /^You killed (?:the |a |an )?(.+?)\.?$/i.exec(m);

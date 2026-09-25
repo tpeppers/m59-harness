@@ -555,7 +555,7 @@ export const script = {
                            name: g.name } : null;
             };
             const heard = [];
-            let swings = 0, closes = 0, landed = 0, tooFar = 0, roomCasts = 0, stuckAt = null;
+            let lastTooFar = false, swings = 0, closes = 0, landed = 0, tooFar = 0, roomCasts = 0, stuckAt = null;
             // A REFUSED CALL IS NOT A SWING, AND COUNTING IT AS ONE HID THE WHOLE PROBLEM.
             //
             // `swings += 2` used to run whether or not `attack` came back, and the call was
@@ -598,7 +598,13 @@ export const script = {
 
               const g = await ghostOf();
               if (!g) break;                                  // dead, or gone from the room
-              if (g.distance > 2) {
+              // A "TOO FAR AWAY" IS AN ORDER TO CLOSE, WHATEVER `look` SAID. The ghost staggers
+              // backwards from a blow, and reach at the fine grid is not two whole squares: on the
+              // 2026-09-25 rehearsal two raiders reported closes=0 too_far=10 — twenty swings from a
+              // square `look` called distance 2, none of them landing. After a refusal on reach,
+              // walk in until the ghost is adjacent before swinging again.
+              if (g.distance > (lastTooFar ? 1 : 2)) {
+                lastTooFar = false;
                 // ROTATE THE APPROACH SQUARE. Aiming at the same offset every round is how a
                 // raider sits at distance 4 for ever: measured, six consecutive walks to
                 // (col, row-1) against a ghost on its spawn point at r2c5, all six ending at
@@ -655,7 +661,7 @@ export const script = {
                 continue;                                   // the round was refused, not swung
               }
               swings += 2;
-              if (msgs.some(m => /too far away/i.test(m))) tooFar++;
+              if (msgs.some(m => /too far away/i.test(m))) { tooFar++; lastTooFar = true; }
               // THE SUBJECT IS THE WEAPON, NOT YOU. The server says "Your hammer crushes the
               // ghost of Far'Nohl." — so a pattern looking for "you crush" matches nothing and
               // reported landed=0 through a run that took the boss from 233 to 161. A counter
