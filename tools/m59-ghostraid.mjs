@@ -571,6 +571,11 @@ async function rehearse(cfg) {
   const light = clones.find(c => c.prod_agent === FLEETS.prod.lightbearer);
   const startPositions = Object.fromEntries(clones.filter(c => c.room != null)
     .map(c => [c.shadow_account, { room: c.room, row: c.row ?? null, col: c.col ?? null }]));
+  // THE LIGHT-BEARER STARTS AT HIS POST. Twenty health is never walked through Ukgoth by the
+  // muster, so a clone of a Loial caught mid-errand west of 599 (587 on 2026-09-25) refused at
+  // step 0 and the rehearsal had no light at all. On raid day prod's light-bearer stands in the
+  // stage room — getting him there is not the raid's job — so his clone starts there too.
+  if (light?.shadow_account) startPositions[light.shadow_account] = { room: cfg.stage, row: null, col: null };
   console.log(`clone roster: ${clones.length} raiders from ${snapFile}; light-bearer ${light?.shadow_account ?? 'NONE'} (${light?.prod_character ?? '-'})`);
   return fight({ ...cfg, lab: false, agents: clones.map(c => c.shadow_account),
                  lightbearer: light?.shadow_account ?? '', startPositions }, { composed: true });
