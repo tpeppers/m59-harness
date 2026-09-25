@@ -273,6 +273,33 @@ export async function buyShare(agent, merchant, lines) {
   return { bought, stopped: replies };
 }
 
+/**
+ * BUY NAMED ITEMS FROM A MERCHANT, ONE EXCHANGE PER PIECE FOR GEAR, ONE FOR A STACK, READ BACK.
+ * The general form of buyShare: `lines` is [{item, amount}] by NAME, so any raid's list works.
+ * Returns {item: bought}. A line the merchant does not sell is reported as 0, never skipped.
+ */
+export async function buyByName(agent, seller, lines = []) {
+  const list = await call('shop', { agent, seller }, 120_000).catch(() => null);
+  const norm = x => lower(x).trim().replace(/ies$/, 'y').replace(/s$/, '');
+  const count = (items, name) => items.filter(i => norm(i.name) === norm(name)).reduce((m, i) => m + (i.amount || 1), 0);
+  const out = {};
+  for (const { item, amount } of lines) {
+    const it = (list?.items ?? []).find(i => norm(i.name) === norm(item));
+    if (!it) { out[item] = 0; continue; }
+    const start = count(await inv(agent), item);
+    let have = start;
+    const stack = Number(it.amount) > 1;
+    for (let i = 0; i < (stack ? 1 : amount) && have - start < amount; i++) {
+      await call('shop', { agent, seller, buy_ids: [{ id: it.id, amount: stack ? amount : 1 }] }, 120_000).catch(() => null);
+      const now = count(await inv(agent), item);
+      if (now <= have) break;
+      have = now;
+    }
+    out[item] = have - start;
+  }
+  return out;
+}
+
 /** Hand each raider its pieces, by id, and record what arrived. */
 export async function deliver(armorer, lines) {
   const out = [];
@@ -491,6 +518,17 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
         out.bought[item] = after - before;
       }
       log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}`);
+    }
+  }
+  // GEAR THE CHESTS LACKED, FROM THE SMITH — only when the caller asks (`buy_gear`). The ghost raid
+  // leaves gear to its armorers' own smith trips; a general provisioning run (provision.mjs) buys it
+  // here, on the same trip. One piece per exchange, read back (buyShare's rule).
+  const gearShort = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && !/elderberr|herb|orc tooth|mushroom|emerald|sapphire|ruby|shilling/i.test(k));
+  if (ride.ok && gearShort.length && (p.buy_gear === true || p.buy_gear === 'true') && Number(p.shop_room)) {
+    const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
+    if (at.ok) {
+      out.bought_gear = await buyByName(agent, p.smith, gearShort.map(([item, amount]) => ({ item, amount })));
+      log(`  ${agent} bought at the smith: ${JSON.stringify(out.bought_gear)}`);
     }
   }
   if (Number((await observe(agent)).room) !== Number(p.stage)) {
