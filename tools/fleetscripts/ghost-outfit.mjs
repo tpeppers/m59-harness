@@ -251,28 +251,38 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null }
     await call('act', { agent: owner, verb: 'unuse', target: weapon.id }, 60_000).catch(() => {});
     const g = await call('supply', { from: owner, to: d, what: [weapon.id], who_travels: 'neither' }, 120_000).catch(e => ({ supplied: false, reason: e.message }));
     if (!g?.supplied) return { ok: false, why: `hand-over failed: ${g?.reason ?? '?'}` };
-    // Wait for mana on prod; the lab may refill. Bounded.
+    // Wait for mana on prod; the lab may refill. Bounded, and asked again before EVERY attempt,
+    // because a fizzle spends the 17 (2026-09-25: every retry read "costs 17, you have 4/7").
     const until = Date.now() + 10 * 60_000;
-    while (Date.now() < until) {
-      const m = Number((await call('status', { agent: d, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
-      if (m >= 17) break;
-      if (lab && dm) { const who = (await call('status', { agent: d, brief: true }, 30_000).catch(() => null))?.character; if (who) await dm.heal([who]); continue; }
-      await call('rest', { agent: d }, 30_000).catch(() => {});
-      await sleep(10_000);
-    }
-    await call('rest', { agent: d, stand: true }, 30_000).catch(() => {});
-    const w2 = (await inv(d)).filter(i => String(i.name).toLowerCase() === String(weapon.name).toLowerCase());
-    let r = null;
-    for (const cand of w2) {
-      r = await castVerified(d, 'enchant weapon', { target: cand.id, cost: 17 });
-      if (r.landed || r.in_effect) {
-        const back = await call('supply', { from: d, to: owner, what: [cand.id], who_travels: 'neither' }, 120_000).catch(e => ({ supplied: false, reason: e.message }));
-        const mine = (await inv(owner)).find(i => String(i.name).toLowerCase() === String(weapon.name).toLowerCase());
-        if (mine) await call('act', { agent: owner, verb: 'use', target: mine.id }, 60_000).catch(() => {});
-        return { ok: !!back?.supplied, by: d, outcome: r.landed ? 'dedicated' : 'already' };
+    const waitMana = async () => {
+      while (Date.now() < until) {
+        const m = Number((await call('status', { agent: d, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
+        if (m >= 17) break;
+        if (lab && dm) { const who = (await call('status', { agent: d, brief: true }, 30_000).catch(() => null))?.character; if (who) await dm.heal([who]); continue; }
+        await call('rest', { agent: d }, 30_000).catch(() => {});
+        await sleep(10_000);
       }
+      await call('rest', { agent: d, stand: true }, 30_000).catch(() => {});
+    };
+    const w2 = (await inv(d)).filter(i => String(i.name).toLowerCase() === String(weapon.name).toLowerCase());
+    let r = null, got = null;
+    for (const cand of w2) {
+      for (let i = 0; i < 3 && Date.now() < until; i++) {
+        await waitMana();
+        r = await castVerified(d, 'enchant weapon', { target: cand.id, cost: 17 });
+        if (r.landed || r.in_effect || !r.retryable) break;
+      }
+      if (r?.landed || r?.in_effect) { got = cand; break; }
     }
-    return { ok: false, why: `dedication failed: ${String(r?.why ?? '?').slice(0, 80)}` };
+    // THE WEAPON GOES BACK WHETHER OR NOT IT WAS DEDICATED. Returning early on a failed cast left
+    // the owner's only weapon in the dedicator's pack, and the owner went into the throne room bare.
+    const give = got ?? w2[0];
+    const back = give ? await call('supply', { from: d, to: owner, what: [give.id], who_travels: 'neither' }, 120_000)
+      .catch(e => ({ supplied: false, reason: e.message })) : null;
+    const mine = (await inv(owner)).find(i => String(i.name).toLowerCase() === String(weapon.name).toLowerCase());
+    if (mine) await call('act', { agent: owner, verb: 'use', target: mine.id }, 60_000).catch(() => {});
+    if (got) return { ok: !!back?.supplied, by: d, outcome: r.landed ? 'dedicated' : 'already' };
+    return { ok: false, returned: !!back?.supplied, why: `dedication failed: ${String(r?.why ?? '?').slice(0, 80)}` };
   });
 }
 
