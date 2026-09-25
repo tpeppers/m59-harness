@@ -56,7 +56,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { handOver, earmark, eatTo } from '../m59-inventory.mjs';
 import { forge } from '../m59-foundry.mjs';
-import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, profileOf, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
+import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, profileOf, deliver, packRoom, poolMoney, armorerErrand, wearOutfit, lateDedicate,
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
@@ -777,6 +777,17 @@ export const script = {
           if (!OUTFIT_RUN.done) await call('rest', { agent }, 30_000).catch(() => {});
         }
         while (!OUTFIT_RUN.done && Date.now() < until) await sleep(5000);
+        // THE PIECES WHOSE RECEIVER WAS AWAY. Everyone is in the stage room now; each armorer hands
+        // over what it still holds for a raider who was out forging when it came home (rehearsal 24:
+        // a chain and a shield for Dddd, "not in the room"), and nobody dresses until that is done.
+        if (isArmorer && OUTFIT_RUN.redeliver?.get(agent)?.length) {
+          const again = await deliver(agent, OUTFIT_RUN.redeliver.get(agent));
+          OUTFIT_RUN.redeliver.set(agent, []);
+          console.log(`  ${agent} redelivered ${again.filter(d => d.ok).length}/${again.length} to raiders who were away` +
+                      (again.some(d => !d.ok) ? ` — ${again.filter(d => !d.ok).map(d => `${d.kind}->${d.agent} (${String(d.why ?? '?').slice(0, 50)})`).join('; ')}` : ''));
+        }
+        reexpect('redelivered', agents.filter(a => SURVEY.has(a)).length);
+        await barrier('redelivered', agent, { ms: 180_000 });
         if (agent === roles.lightbearer) { st.outfit = { skipped: 'light-bearer (held the cup)' }; return true; }
         st.outfit = await wearOutfit(agent, { profile: p.outfit_profile });
         // A SPARE FOR WHOEVER THE FOUNDRY FAILED. The armorers carried unassigned hammers; a raider

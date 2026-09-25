@@ -444,6 +444,10 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     const home = await hopTo(agent, Number(p.stage), { floor: 0.7 });
     if (!home.ok) { t.failed = home.dead ? 'died on the road home' : 'could not get home'; trips.push(t); break; }
     t.delivered = await deliver(agent, now);
+    // A RECEIVER THAT WAS AWAY (forging in the next room, say) gets its piece at the dress join,
+    // when everyone is back in the stage room; the piece stays in this pack until then.
+    const away = t.delivered.filter(d => !d.ok && /not in the room/i.test(String(d.why ?? '')));
+    if (away.length) (OUTFIT_RUN.redeliver ??= new Map()).set(agent, [...(OUTFIT_RUN.redeliver.get(agent) ?? []), ...away.map(({ ok, why, ...l }) => l)]);
     log(`  ${agent} armorer trip ${trip}: delivered ${t.delivered.filter(d => d.ok).length}/${now.length}` +
         (later.length ? `, ${later.length} still owed` : '') +
         // WHY each one failed — the summary alone left a 0/2 trip unexplained.
