@@ -238,7 +238,7 @@ export const script = {
           results.map(r => `${r.buff}:${r.outcome}${r.detail ? `(${r.detail})` : ''}`).join('  ') +
           (warnings.length ? `   !! ${warnings.length} warning(s)` : ''));
         return true;
-      }, 'preparation could not be read back'),
+      }, 'preparation could not be read back', 'prep.buffs'),
     ];
   },
 };

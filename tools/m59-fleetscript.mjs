@@ -158,7 +158,7 @@ import { routePreflight, roomsNamedBy, formatRoutePreflight,
          warningMode } from './m59-routecheck.mjs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { takeAgentLocks } from './m59-runlock.mjs';
 import { declaredControl, controlViolation } from './m59-control-guard.mjs';
@@ -1415,7 +1415,21 @@ export const post = (room, opts = {}) => ({ do: 'post', room, ...opts });
 
 /** Cast a spell and prove it landed from the world, never from the reply. */
 export const cast = (spell, opts = {}) => ({ do: 'cast', spell, ...opts });
-export const verify = (fn, why) => ({ do: 'verify', fn, why });
+// `label` is the step's short, STABLE name for timing (see recordStepTime); `why` is the prose a
+// failure prints, and prose gets reworded — a timing history keyed on it would break its own trend.
+export const verify = (fn, why, label) => ({ do: 'verify', fn, why, ...(label ? { label } : {}) });
+
+/**
+ * EVERY STEP IS TIMED. With M59_STEP_TIMES naming a file, each step appends one JSON line:
+ * {script, agent, at, do, label, why, to, t0, ms, ok, dead, outcome}. The raid runner points it at
+ * the run directory and reduces it to p50/p90 per block against the git SHA that ran it — the
+ * only way to tell whether a change made the fleet faster or merely different.
+ */
+export function recordStepTime(ctx, row) {
+  const file = process.env.M59_STEP_TIMES;
+  if (!file) return;
+  try { appendFileSync(file, JSON.stringify({ script: ctx.name ?? null, ...row }) + String.fromCharCode(10)); } catch {}
+}
 
 /**
  * SAY SOMETHING, AND — WHEN IT IS AIMED AT AN NPC — STAND CLOSE ENOUGH TO BE HEARD FIRST.
@@ -4953,7 +4967,11 @@ They are driven by tools/m59-menagerie.mjs and ` +
           ctx.log(agent, `step ${at} (${step.do}) skipped: the cargo was lost on death`);
           continue;
         }
+        const stepT0 = Date.now();
         const r = await runStep(ctx, agent, step, state);
+        recordStepTime(ctx, { agent, at, do: step.do, label: step.label ?? null, why: step.why ?? null,
+                              to: step.to ?? null, t0: stepT0, ms: Date.now() - stepT0, ok: !!r.ok,
+                              dead: !!r.dead, outcome: r.outcome ?? null });
         state.results[`${at}:${step.do}`] = r;
         if (!r.ok) {
           // DEATH IS NOT A SKIPPED LEG, AND IT IS NOT THE END OF THE ERRAND EITHER.

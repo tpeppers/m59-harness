@@ -301,7 +301,7 @@ export const script = {
         const r = who ? await dm.relocate([who], Number(p.stage), { verify: true }) : { ok: false };
         st.placed = r?.moved?.[who] ?? 'unknown';
         return { ok: st.placed === 'in the room', why: `lab placement: ${st.placed}` };
-      }, 'the lab placement could not be read back')]
+      }, 'the lab placement could not be read back', 'arm.place')]
         // FULL HEALTH TO SET OUT, whatever the raid's own floor is: this is the one walk that may
         // cross open country (m59-muster.mjs, "THE HEALTH FLOOR" — seven died at 0.35).
         : convoy ? [
@@ -322,7 +322,7 @@ export const script = {
             if (turn) await sleep(turn * Number(p.cross_gap_s) * 1000);
             if (fragile) await sleep(Number(p.fragile_lag_s) * 1000);
             return true;
-          }, 'the convoy could not be read'),
+          }, 'the convoy could not be read', 'arm.convoy'),
           // Nobody rests in 598 to top up: the convoy crosses together or it is not a convoy. The
           // fragile body is the exception — it was healed before the barrier (the walk to the
           // rally room sets out at muster_min_health), and it crosses at full or not at all.
@@ -355,7 +355,7 @@ export const script = {
         for (const k of ['hall-drawn', 'hammers', 'reagents-moved', 'reagents', 'dropped', 'armed', 'pooled']) reexpect(k, SURVEY.size);
         st.survey = { wielding: worn, fleet_seen: SURVEY.size, barrier: b };
         return true;
-      }, 'the survey could not be read'),
+      }, 'the survey could not be read', 'arm.survey'),
 
       // ---- 1a. MAKE ROOM. A full pack refuses everything handed to it — a shield, chain, and on
       // the 2026-09-25 rehearsal the character's OWN weapon coming back from its dedicator, which
@@ -373,7 +373,7 @@ export const script = {
         if (dropped) console.log(`  ${agent} made room: dropped ${JSON.stringify(dropped)}`);
         st.room = { dropped };
         return true;
-      }, 'making room in the pack'),
+      }, 'making room in the pack', 'arm.make-room'),
 
       // ---- 1c. THE HALL DRAW. The armorers ride the chalice to the guild hall one after another,
       // take the raid's reagents, the hall's money and whatever armour sits in its chests, and walk
@@ -395,7 +395,7 @@ export const script = {
         }
         await barrier('hall-drawn', agent, { ms: Number(p.hall_wait_s) * 1000 });
         return true;
-      }, 'the hall draw could not be read back')] : []),
+      }, 'the hall draw could not be read back', 'arm.hall-draw')] : []),
 
       // ---- 1b. THE ARMORERS: everyone hands its money to one of the pair, and one plan is made.
       ...(outfitOn(p) ? [verify(async ({ state: st }) => {
@@ -479,7 +479,7 @@ export const script = {
         }
         st.pool = { ...(st.pool ?? {}), armorers: pair };
         return true;
-      }, 'the money pool could not be read back')] : []),
+      }, 'the money pool could not be read back', 'arm.pool')] : []),
 
       // ---- 2. A HAMMER IN EVERY HAND.
       verify(async ({ state: st }) => {
@@ -523,7 +523,7 @@ export const script = {
         await barrier('hammers', agent, { ms: 300_000 });
         st.hammer = { ...(st.hammer ?? {}), short_fleet_wide: short };
         return true;
-      }, 'the hammer hand-out could not be read back'),
+      }, 'the hammer hand-out could not be read back', 'arm.hammers'),
 
       // ---- 3. REAGENTS TO THE CASTERS. The dedicators need 3 elderberry + 1 orc tooth per
       // hammer they will do, and the light-bearer 2 elderberry + 1 emerald per casting.
@@ -625,7 +625,7 @@ export const script = {
         await barrier('reagents', agent, { ms: 400_000 });
         st.reagents = { moves: moves.filter(m => m.from === agent || m.to === agent), unmet: mine };
         return true;
-      }, 'the reagent hand-out could not be read back'),
+      }, 'the reagent hand-out could not be read back', 'arm.reagents'),
 
       // ---- 4. DEDICATE EVERY HAMMER.
       verify(async ({ state: st }) => {
@@ -661,7 +661,7 @@ export const script = {
         return dedicators.includes(agent)
           ? dedicate({ agent, st, say, dedicators, agents, lab, p })
           : handIn({ agent, st, say, dedicators, agents, p });
-      }, 'the dedication could not be read back'),
+      }, 'the dedication could not be read back', 'arm.dedicate'),
 
       // ---- 5. READ IT BACK. Wielding what, and did the dedication say so.
       verify(async ({ state: st }) => {
@@ -673,7 +673,7 @@ export const script = {
                     `dedicated=${st.armed.dedicated}`);
         await barrier('armed', agent, { ms: 60_000 });
         return true;
-      }, 'the armed state could not be read back'),
+      }, 'the armed state could not be read back', 'arm.read-back'),
 
       // ---- 6. DRESS: wait for the armorers, wear shield and chain, dedicate a hammer that came late.
       ...(outfitOn(p) ? [verify(async ({ state: st }) => {
@@ -690,7 +690,7 @@ export const script = {
         console.log(`  ${String(SURVEY.get(agent)?.character ?? agent).padEnd(8)} dressed: ${st.outfit.wore.join('+') || 'nothing new'}` +
                     (st.outfit.dedicate ? `; hammer ${st.outfit.dedicate.ok ? st.outfit.dedicate.outcome : 'NOT dedicated: ' + st.outfit.dedicate.why}` : ''));
         return true;
-      }, 'the outfit could not be read back')] : []),
+      }, 'the outfit could not be read back', 'arm.dress')] : []),
     ];
   },
 };

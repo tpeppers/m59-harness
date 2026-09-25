@@ -49,6 +49,7 @@ import { survivalReport, reportMarkdown, GHOST_ROOM, STAGE_ROOM, assignRoles, ra
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
+const NL = String.fromCharCode(10);
 
 const argv = process.argv.slice(2);
 const flag = f => argv.includes(f);
@@ -370,11 +371,19 @@ async function prep(cfg) {
 async function fight(cfg, { composed = false } = {}) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const dir = path.join(REPO, 'substrate', 'raids', `ghost-${cfg.fleet}-${stamp}`);
+  // A RUN IS A MEASUREMENT OF ONE COMMIT. Its timings go into a history keyed on the SHA, and a run
+  // on uncommitted code is a number nobody can reproduce (operator, 2026-09-25: record the git SHA,
+  // at least one commit per run). --allow-dirty runs it anyway and says so in the history.
+  const { gitState, summarise: summariseTimes, HISTORY } = await import('./m59-raidtimes.mjs');
+  const git = gitState();
+  if (cfg.commit && git.dirty && !flag('--allow-dirty'))
+    throw new Error(`the tree has ${git.dirty_files} uncommitted change(s) — commit first, so this run's timings belong to a SHA (or pass --allow-dirty)`);
   if (cfg.commit) {
     fs.mkdirSync(dir, { recursive: true });
+    process.env.M59_STEP_TIMES = path.join(dir, 'steps.jsonl');
     fs.writeFileSync(path.join(dir, 'raid.json'), JSON.stringify({
       fleet: cfg.fleet, agents: cfg.agents, lightbearer: cfg.lightbearer, healers: cfg.healers,
-      minutes: cfg.minutes, lab: cfg.lab, started: new Date().toISOString(),
+      minutes: cfg.minutes, lab: cfg.lab, started: new Date().toISOString(), git, composed,
       control_url: process.env.M59_CONTROL_URL, roster: process.env.M59_STATE_FILE ?? null,
       ledger: ledgerDir(cfg),
     }, null, 1));
@@ -397,8 +406,40 @@ async function fight(cfg, { composed = false } = {}) {
   if (res) {
     fs.writeFileSync(path.join(dir, 'results.json'), JSON.stringify(res, null, 1));
     await report({ ...cfg, run: dir });
+    // EVERY DEATH OF THE RUN, NOT ONLY THE WINDOW'S. A raid is an exercise for the movement and
+    // survival code as much as a kill, and a muster death on the road is exactly the evidence the
+    // post-mortem work wants. With the step each one was in, and its post-mortem file.
+    await recordDeaths(dir).catch(e => console.log(`  deaths not recorded: ${e.message}`));
+    const t = summariseTimes(dir);
+    fs.appendFileSync(HISTORY, JSON.stringify(t) + NL);
+    console.log(`timings: pre-raid ${t.pre_raid_ms == null ? '?' : (t.pre_raid_ms / 60000).toFixed(1) + ' min'} at ${git.short}${git.dirty ? ' (dirty)' : ''} — node tools/m59-raidtimes.mjs`);
   }
   return res;
+}
+
+async function recordDeaths(dir) {
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'raid.json'), 'utf8'));
+  const ledger = meta.ledger ?? await brokerLedgerDir();
+  if (!ledger || !fs.existsSync(ledger)) return;
+  const { readLedger } = await import('./m59-savelog.mjs');
+  const started = Date.parse(meta.started);
+  const steps = readJsonl(path.join(dir, 'steps.jsonl'));
+  const agents = new Set(meta.agents);
+  const pmDir = path.resolve(ledger, '..', '..', 'postmortems');
+  const pms = fs.existsSync(pmDir) ? fs.readdirSync(pmDir) : [];
+  const rows = readLedger(ledger, started).filter(r => r.kind === 'died' && agents.has(r.agent));
+  const out = rows.map(r => {
+    const inStep = steps.find(x => x.agent === r.agent && x.t0 <= r.t && r.t <= x.t0 + x.ms);
+    const pm = pms.filter(f => f.startsWith(`${r.character}-`))
+      .map(f => ({ f, t: Date.parse(f.slice(r.character.length + 1).replace(/\.json$/, '').replace(/T(\d\d)-(\d\d)-(\d\d)-(\d+)Z/, 'T$1:$2:$3.$4Z')) }))
+      .filter(x => Number.isFinite(x.t) && Math.abs(x.t - r.t) < 5 * 60_000).sort((a, b) => Math.abs(a.t - r.t) - Math.abs(b.t - r.t))[0];
+    return { t: r.t, iso: new Date(r.t).toISOString(), agent: r.agent, character: r.character ?? null,
+             killed_by: r.killed_by ?? r.by ?? null, room: r.room_num ?? r.room ?? null,
+             step: inStep ? (inStep.label ?? `${inStep.do}${inStep.to != null ? ':' + inStep.to : ''}`) : null,
+             postmortem: pm ? path.join(pmDir, pm.f) : null };
+  });
+  fs.writeFileSync(path.join(dir, 'deaths.jsonl'), out.map(d => JSON.stringify(d) + NL).join(''));
+  console.log(`deaths: ${out.length} in the whole run -> ${path.join(dir, 'deaths.jsonl')}`);
 }
 
 function ledgerDir(cfg) {
@@ -551,6 +592,12 @@ async function rehearse(cfg) {
   if (cfg.lab) throw new Error('rehearse runs the raid WITHOUT DM powers; drop --lab (the rebuild uses them on its own)');
   const roster = process.env.M59_STATE_FILE;
   if (!roster) throw new Error('set M59_STATE_FILE to the shadow roster (e.g. .../prod-deploy/substrate/fleets/shadow.json)');
+  // Refuse a dirty tree BEFORE the twenty-minute rebuild, not after it (fight() checks again).
+  if (cfg.commit && !flag('--allow-dirty')) {
+    const { gitState } = await import('./m59-raidtimes.mjs');
+    const g = gitState();
+    if (g.dirty) throw new Error(`the tree has ${g.dirty_files} uncommitted change(s) — commit first, so this rehearsal's timings belong to a SHA (or pass --allow-dirty)`);
+  }
   if (!flag('--skip-rebuild')) {
     const shim = opt('--shadow-run', path.join(HERE, 'm59-shadow-run.mjs'));
     const host = process.env.M59_HOST ?? '127.0.0.1', port = process.env.M59_PORT ?? '15959';

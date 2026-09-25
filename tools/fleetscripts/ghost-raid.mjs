@@ -495,7 +495,7 @@ export const script = {
       st.buffs = await buffShare({ agent, duty, p, where: RUN.door, patient: true });
       st.at_door = b;
       return true;
-    }, 'the door buffs could not be read back');
+    }, 'the door buffs could not be read back', 'raid.door-buffs');
 
     const theDoor = verify(async ({ state: st }) => {
       const b = await barrier('enter', agent, { ms: Number(p.enter_wait_s) * 1000 });
@@ -503,7 +503,7 @@ export const script = {
       startSampler(p);
       st.door = b;
       return true;
-    }, 'the door could not be read');
+    }, 'the door could not be read', 'raid.door');
 
     if (agent === roles.lightbearer) return lightbearerSteps({ agent, p, say, atDoor, theDoor });
 
@@ -530,7 +530,7 @@ export const script = {
       while (!RUN.light.ready && Date.now() < until) await sleep(2000);
       if (!RUN.light.ready) console.log(`  ${agent} going in without the light: not ready in ${p.light_gate_s}s`);
       return true;
-    }, 'waiting at the door for the light-bearer to be ready');
+    }, 'waiting at the door for the light-bearer to be ready', 'raid.light-gate');
     // REST IN THE STAGE ROOM BEFORE THE DOOR, HELD. The raid's walks carry a low health floor on
     // purpose: under a floor the fleetscript FREES the keeper to heal, and a freed keeper follows
     // its own orders — on the 2026-09-25 rehearsal a dedicator "healing" before the door walk went
@@ -554,7 +554,7 @@ export const script = {
         await call('rest', { agent, stand: true }, 30_000).catch(() => {});
       }
       return true;
-    }, 'rested (health and mana) in the stage room before the door');
+    }, 'rested (health and mana) in the stage room before the door', 'raid.rest-first');
     const steps = i40 >= 0 ? [restFirst, ...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
                            : [restFirst, atDoor, theDoor, lightGate, ...base];
 
@@ -567,7 +567,7 @@ export const script = {
         else if (st.melee || st.approach) { RUN.ghostSeen = true; ghostGone(agent); }
       }
       return true;
-    }, 'the kill could not be read'));
+    }, 'the kill could not be read', 'raid.fight'));
 
     steps.push(roles.healers.includes(agent)
       ? verify(async ({ state: st }) => healLoop({ agent, p, st, say, duty }), 'the healer could not be read back')
@@ -584,7 +584,7 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
       const o = await observe(agent);
       if ((o.health ?? 1) < 0.95) { await say('Resting before the raid.'); await restUntil(agent, 0.95, p); }
       return true;
-    }, 'the light-bearer rests before walking to the door'),
+    }, 'the light-bearer rests before walking to the door', 'raid.light-rest'),
     walk(RUN.door),
     atDoor,
     theDoor,
@@ -672,7 +672,7 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
                    heals: heals.length, heals_landed: heals.filter(x => x.landed).length };
       event('light_summary', { agent, ...st.light, log: undefined });
       return true;
-    }, 'the light-bearer could not be read back'),
+    }, 'the light-bearer could not be read back', 'raid.light'),
   ];
 }
 
