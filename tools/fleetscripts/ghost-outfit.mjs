@@ -343,13 +343,15 @@ export async function lateDedicate(owner, dedicators, { lab = false, dm = null }
   return serially(async () => {
     const weapon = (await inv(owner)).find(i => /^(hammer|mace)$/i.test(String(i.name ?? '').trim()));
     if (!weapon) return { ok: false, why: 'no blunt weapon to dedicate' };
-    let d = null;
-    for (const a of dedicators) {
-      const m = Number((await call('status', { agent: a, brief: true }, 30_000).catch(() => null))?.mana?.value ?? 0);
-      if (m >= 17) { d = a; break; }
-    }
-    d ??= dedicators[0];
-    if (!d) return { ok: false, why: 'no dedicator' };
+    // A DEDICATOR IN THE OWNER'S ROOM. A hand-over is one room; on the 2026-09-25 rehearsal four
+    // late dedications all chose the same dedicator, who was not in the stage room, and every one
+    // failed "not in the room". Same room first; the one with the mana for it before the rest.
+    const roomOf = async a => { const s = await call('status', { agent: a, brief: true }, 30_000).catch(() => null);
+      return { a, room: Number(s?.where?.num ?? s?.room_num ?? NaN), mana: Number(s?.mana?.value ?? 0) }; };
+    const me = await roomOf(owner);
+    const here = (await Promise.all(dedicators.filter(x => x !== owner).map(roomOf))).filter(x => x.room === me.room);
+    const d = (here.find(x => x.mana >= 17) ?? here[0])?.a ?? null;
+    if (!d) return { ok: false, why: `no dedicator in room ${me.room} with the owner` };
     await call('act', { agent: owner, verb: 'unuse', target: weapon.id }, 60_000).catch(() => {});
     const g = await call('supply', { from: owner, to: d, what: [weapon.id], who_travels: 'neither' }, 120_000).catch(e => ({ supplied: false, reason: e.message }));
     if (!g?.supplied) return { ok: false, why: `hand-over failed: ${g?.reason ?? '?'}` };
