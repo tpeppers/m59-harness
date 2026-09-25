@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { fleetName, stateFileFor } from './m59-fleetpath.mjs';
 import { OVERLAY_DIR } from './m59-overlay.mjs';
 import { SIGNAL_PORT } from './m59-signal.mjs';
+import { processStartedAt, START_TIME_TOLERANCE_MS } from './runtime/process-identity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -81,8 +82,21 @@ export function rosterFor(fleet) {
 // client cannot tell. So `m59-proxy.mjs` publishes what it fronts and this matches on the
 // endpoint, checks the pid is still alive, and falls back to a direct connection when there is
 // no match. Absent a proxy the launcher is exactly what it was.
-export function proxyFor(host, port) {
-  const dir = join(REPO, 'substrate', 'proxies');
+//
+// AND "ALIVE" MEANS THE PROCESS THAT WROTE THE ADVERT, NOT ANYTHING WEARING ITS PID. A live
+// pid is only evidence that SOMETHING runs under that number. 2026-09-24: a 5960 advert left
+// by a proxy killed on 2026-09-09 named pid 59560, which by then was a prod keeper started
+// that evening — so kill(pid, 0) said yes, and every `L` in the fleet terminal sent the client
+// to 127.0.0.1:5960, where nothing listened, for a fortnight. The advert carries `at`, the
+// moment it was written; a process that started AFTER that cannot have written it. Asked only
+// when a matching advert names a live pid, so a launch with no proxy spawns nothing. A start
+// time we cannot read keeps the old answer. Probing the port instead would have been worse: a
+// connection to a real proxy opens a session upstream to the game server.
+export function proxyFor(host, port, {
+  dir = join(REPO, 'substrate', 'proxies'),
+  isLive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } },
+  startedAt = processStartedAt,
+} = {}) {
   let names = [];
   try { names = readdirSync(dir); } catch { return null; }
   for (const name of names) {
@@ -95,7 +109,11 @@ export function proxyFor(host, port) {
     // A FILE OUTLIVES THE PROCESS THAT WROTE IT. An advert with a dead pid is a leftover
     // from a proxy that was killed, and routing a client at it is a connection refused
     // wearing the costume of a feature.
-    if (a.pid) { try { process.kill(a.pid, 0); } catch { continue; } }
+    if (a.pid) {
+      if (!isLive(a.pid)) continue;
+      const started = Number.isFinite(a.at) ? startedAt(a.pid) : null;
+      if (started && started > a.at + START_TIME_TOLERANCE_MS) continue;   // a recycled pid
+    }
     return { listen: Number(a.listen), server: a.server, pid: a.pid ?? null };
   }
   return null;

@@ -19,6 +19,9 @@
 //     prints the endpoint it resolved and the account it would log in as, and exits 0;
 //     with too few arguments it prints usage and exits 2. The endpoint lookup goes through
 //     `m59-devclient.mjs --endpoint`, which reads substrate/proxies and nothing else.
+//   * proxyFor refuses an advert whose pid has been RECYCLED — alive, but started after the
+//     advert was written. 2026-09-24: a dead proxy's pid had become a prod keeper, and every
+//     launch from the fleet terminal went to a localhost port where nothing listened.
 //
 // Opens no socket, reads no roster, starts no client.
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
@@ -27,6 +30,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   universalLauncherText, ensureUniversalLauncher, universalLauncherArgs, launcherText, UNIVERSAL_BAT,
+  proxyFor,
 } from './m59-devclient.mjs';
 
 let pass = 0, fail = 0;
@@ -122,6 +126,35 @@ try {
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------- whose proxy is it
+console.log('proxyFor');
+{
+  const pdir = mkdtempSync(join(tmpdir(), 'm59-proxies-'));
+  try {
+    // The advert that caused it, as it was on disk: written 2026-09-09, pid 59560.
+    const at = 1789004300612;
+    writeFileSync(join(pdir, '5960.json'),
+      JSON.stringify({ listen: 5960, server: { host: '76.214.42.186', port: 5959 }, pid: 59560, at }));
+    const live = () => true;
+    let asked = 0;
+    const find = (startedAt, isLive = live, h = '76.214.42.186', p = 5959) =>
+      proxyFor(h, p, { dir: pdir, isLive, startedAt: () => { asked++; return startedAt; } });
+
+    // 21:18 on 2026-09-24, when that pid was a prod keeper.
+    ok(find(Date.parse('2026-09-25T04:18:30Z')) === null,
+       'a live pid that started AFTER the advert was written is a recycled one: connect direct');
+    ok(find(at - 1500)?.listen === 5960, 'the proxy that wrote it, started just before: use it');
+    ok(find(at + 1000)?.listen === 5960, 'within the start-time tolerance: still the writer');
+    ok(find(null)?.listen === 5960, 'a start time that cannot be read keeps the old answer');
+    asked = 0;
+    ok(find(at - 1500, () => false) === null && asked === 0, 'a dead pid: no match, and no start-time lookup');
+    ok(find(at - 1500, live, '76.214.42.186', 15959) === null && asked === 0,
+       'a proxy for another server is not asked about at all');
+  } finally {
+    rmSync(pdir, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
