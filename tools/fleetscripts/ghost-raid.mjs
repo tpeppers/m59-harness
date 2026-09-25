@@ -348,10 +348,17 @@ async function hop(agent, to, { tries = 3 } = {}) {
     // raider who rested to 85% from walking back in: returns=0 across the board. These hops are
     // two rooms inside a castle, the script has already decided the body is fit (return_at),
     // and a RETREAT refused for being hurt is the worst refusal there is.
+    // CLEAR WHATEVER JOURNEY IS STILL REGISTERED FIRST — the hop that brought us in is the usual
+    // one — or this travel is refused "busy" and the loop below waits out 75 s standing still.
+    // On the 2026-09-25 rehearsal the light-bearer cast, could not get out, and was killed in the
+    // throne room 35 s later.
+    await call('cancel_movement', { agent, why: `hop to ${to}` }, 30_000).catch(() => {});
     const r = await call('travel', { agent, to, background: true, run_errands: false, health_floor: 0,
                                      ...(to === RUN.room ? { despite_hazard: { reason: HAZARD } } : {}) }, 60_000)
       .catch(e => ({ error: e.message }));
-    const until = Date.now() + 75_000;
+    // A REFUSED TRAVEL IS RETRIED AT ONCE, not after 75 seconds of standing in place.
+    const refused = r?.started === false || r?.error || /busy|refus/i.test(String(r?.reason ?? r?.why ?? ''));
+    const until = Date.now() + (refused ? 4_000 : 75_000);
     while (Date.now() < until) {
       const o = await observe(agent);
       if (o.dead && await confirmedDead(agent)) return { ok: false, dead: true };
@@ -420,6 +427,8 @@ export const script = {
     return_at: { type: 'number', default: 0.85, describe: 'walk back in at this health fraction' },
     light_every_s: { type: 'number', default: 150, describe: 'recast forces of light at least this often' },
     light_rest_below: { type: 'number', default: 0.8, describe: 'the light-bearer rests in 38 below this' },
+    door_min_mana: { type: 'number', default: 0.9, describe: 'casters rest to this fraction of max mana before the door' },
+    door_rest_s: { type: 'number', default: 600, describe: 'the longest a raider rests before the door' },
     door_min_health: { type: 'number', default: 0.8, describe: 'raiders rest in the stage room to this before walking to the door' },
     light_gate_s: { type: 'number', default: 180, describe: 'raiders hold at the door this long for the first light; 0 = do not wait' },
     sample_s: { type: 'number', default: 15 },
@@ -527,11 +536,25 @@ export const script = {
     // its own orders — on the 2026-09-25 rehearsal a dedicator "healing" before the door walk went
     // shopping in Barloque and every late dedication waited on it. So raiders sit down here, in
     // place, to `door_min_health`, the way the light-bearer always has.
+    // AND MANA: a caster walks to the door with enough to buff and heal. On the 2026-09-25 rehearsal
+    // the dedications had drained it — 32 door buffs failed "no mana", bless and strength barely
+    // landed, and the raid went in unbuffed.
     const restFirst = verify(async () => {
+      const readMana = async () => (await call('status', { agent, brief: true }, 30_000).catch(() => null))?.mana ?? null;
+      const needMana = async () => { const m = await readMana(); return m?.max > 0 && m.value < m.max * Number(p.door_min_mana); };
       const o = await observe(agent);
-      if ((o.health ?? 1) < Number(p.door_min_health)) await restUntil(agent, Number(p.door_min_health), p);
+      if ((o.health ?? 1) < Number(p.door_min_health) || await needMana()) {
+        await call('rest', { agent }, 30_000).catch(() => {});
+        const until = Date.now() + Number(p.door_rest_s) * 1000;
+        while (Date.now() < until) {
+          const h = (await observe(agent)).health ?? 1;
+          if (h >= Number(p.door_min_health) && !(await needMana())) break;
+          await sleep(5000);
+        }
+        await call('rest', { agent, stand: true }, 30_000).catch(() => {});
+      }
       return true;
-    }, 'rested in the stage room before the door');
+    }, 'rested (health and mana) in the stage room before the door');
     const steps = i40 >= 0 ? [restFirst, ...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
                            : [restFirst, atDoor, theDoor, lightGate, ...base];
 
@@ -610,7 +633,10 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         // stay after the kill to heal, and he died 1.6 minutes into the hold: seven level-100
         // tusked skeletons do not care that the ghost is gone, and he has twenty health. The
         // operator's standing order is the same — wait outside, step in only to cast.
-        await hop(agent, Number(p.light_wait_room));
+        // OUT BY THE NEAREST DOOR: 38 is one hop, and the throne room is where he dies. Then on to
+        // the wait room.
+        await hop(agent, Number(RUN.door), { tries: 6 });
+        if (Number(p.light_wait_room) !== Number(RUN.door)) await hop(agent, Number(p.light_wait_room));
         return true;
       };
       const heals = [];
