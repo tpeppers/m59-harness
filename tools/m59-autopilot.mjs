@@ -3393,7 +3393,7 @@ export class Autopilot {
 
     const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
     const broken = skills.brokenSet(c);
-    const mine = this._conjuredIds ??= new Set();
+    const mine = c._summoned ??= new Set();
     const isWant = o => nameOf(o) === want && !broken.has(o.id);
     // A SUMMON IS SAFE TO WIELD UNREAD. It shows rarity 100 like any unidentified weapon, and
     // the equip path refuses those because a cursed weapon can never be put down; one this
@@ -19815,6 +19815,14 @@ export class Autopilot {
       // demonstrably armed. It is done on `isArmed`, every pass, at the top of the arming
       // stage — see the note there. Carrying one it may not wield is exactly the state this
       // fleet is in, so the pack is the wrong evidence.
+      //
+      // THE TRAINING WEAPON FIRST, AND ON ARMED CHARACTERS TOO. The roulette was first hooked
+      // inside armSelf(), and every caller of armSelf() asks it only when the character is
+      // UNARMED — so a character holding a long sword and told to train hammers never reached
+      // it: prod, 2026-09-25, thirteen trainers, zero casts after the deploy. This is the one
+      // stage every farm pass crosses before a fight, armed or not.
+      await this.trainingWeaponRoulette().catch(e =>
+        this.note('training-weapon roulette failed', { why: e.message }));
       if (!skills.weaponsOf(this.s.client).length) {
         const armed = await this.armSelf().catch(() => false);
         if (!armed) {

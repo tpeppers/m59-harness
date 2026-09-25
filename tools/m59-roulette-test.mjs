@@ -88,6 +88,18 @@ function rig({ pack = [], ability = 13, style = 'short_sword', weapon = 'hammer'
   ok(r.drops.length === 0, 'and nothing is dropped');
   const again = await r.ap.trainingWeaponRoulette();
   ok(again?.already === true && r.casts.length === 1, 'next time it is already wielded: no second cast');
+  // EVERY OTHER EQUIP RANKS WITHOUT allowUnrevealed. The summon must stay at the top of the
+  // ranking or the next equipBest in the fight path swaps straight back to the long sword.
+  const { weaponRanking } = await import('./m59-skills.mjs');
+  const ranked = weaponRanking(r.c, { priority: ['hammer', 'long sword'] });
+  ok(ranked[0]?.name === 'hammer', `our summon ranks first in an ordinary equip (got ${ranked[0]?.name})`);
+}
+{
+  // ...and a foreign unread hammer still does not.
+  const r = rig({ pack: [{ name: 'hammer', rarity: 100 }, { name: 'long sword' }] });
+  const { weaponRanking } = await import('./m59-skills.mjs');
+  const ranked = weaponRanking(r.c, { priority: ['hammer', 'long sword'] });
+  ok(ranked[0]?.name === 'long sword', 'a foreign unread hammer is still ranked out');
 }
 
 // ------------------------------------------------------------------ not ours

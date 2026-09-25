@@ -557,7 +557,11 @@ export function weaponRanking(c, { priority = null, banned = null,
                  // AND NOT ONE NOBODY HAS READ. isCursedItem learns from the server's refusal to
                  // UNWIELD, which is one move too late for the only irreversible mistake in this
                  // game; the grade is knowable before the draw. See isUnrevealed.
-                 !(allowUnrevealed !== true && isUnrevealed(x.o)) &&
+                 // A SUMMON THIS CLIENT WATCHED APPEAR FROM ITS OWN create weapon IS NOT UNREAD
+                 // IN ANY WAY THAT MATTERS: it reads rarity 100 like loot, but it cannot be
+                 // cursed. Without this, every equip after the training-weapon roulette
+                 // wielded one ranked it out and swapped straight back to a long sword.
+                 !(allowUnrevealed !== true && isUnrevealed(x.o) && !c._summoned?.has(x.o.id)) &&
                  !isBannedWeapon(x.name, banned) &&
                  weaponScore(x.name) > 0 && !broken.has(x.o.id))
     .map(x => {
