@@ -83,6 +83,7 @@ import * as exitgap from './m59-exitgap.mjs';
 // there is no cycle here. Checked rather than assumed -- a cycle would leave this in the
 // temporal dead zone and throw only on the branch that calls it.
 import { autopilotIfAny } from './m59-autopilot.mjs';
+import { lapsedWeapon } from './m59-weapon-magic.mjs';
 import { tripStopPhrase } from './m59-trip-telemetry.mjs';
 // Session.join() calls joinSessionOnce and the Phase 3 extraction left it behind: the
 // BROKER imports it, and ESM modules do not share scope, so the reference here was free
@@ -1509,6 +1510,17 @@ class Session {
     if (keeper?.s === this) keeper.noteToughness(gain);
   }
 
+  // "Your %s suddenly seems a little more... ordinary." (waench.kod, waEnchant_gone) is the only
+  // word the server sends when an enchantment ends, and it goes to whoever holds the weapon at
+  // that moment. Caught here, at the packet boundary, because the client's event ring is small
+  // and a fight fills it; the keeper re-reads and swaps (Autopilot.noteEnchantLapse).
+  noteEnchantLapse(ev) {
+    const name = lapsedWeapon(ev?.text);
+    if (!name) return;
+    const keeper = autopilotIfAny(this.name);
+    if (keeper?.s === this) keeper.noteEnchantLapse(name);
+  }
+
   // ONE HEALTH READING. Called for every health stat the server sends.
   //
   // A DROP IS A HIT AND A RISE IS NOT, and that is the whole of the logic that cannot live
@@ -2245,7 +2257,7 @@ class Session {
       this.recorder.line('event', ev);
       this.playerEvidence?.event(ev,c);
       if (ev.kind === 'ability') this.noteAdvancement(ev);
-      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); }
+      if (ev.kind === 'message' && ev.text) { this.noteBanker(ev); this.noteCombatLine(ev); this.noteLoyalty(ev); this.noteEnchantLapse(ev); }
       // A VAULT ANSWERS ONCE AND ONLY WHEN ASKED, so this is caught off the stream for
       // exactly the reason a bank balance is: whatever walked a character to a vaultman
       // has already paid for the trip, and if the reply goes past unread the contents are

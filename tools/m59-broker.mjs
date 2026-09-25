@@ -10755,6 +10755,11 @@ const TOOLS = [
                      'the character\'s proficiency in each weapon\'s own skill, which only ever ' +
                      'rewards what it is already best at; set this to train a weak weapon skill. ' +
                      'Pass [] to go back to proficiency ranking.' },
+      prefer_magic_weapon: { type: 'boolean',
+        description: 'Between two weapons of the SAME priority rank, wield the one READ as ' +
+                     'bypassing NONMAGIC (enchanted, born magic, nerudite) — and swap to it at once ' +
+                     'when an enchantment lapses. Never outranks weapon_priority. Trolls resist ' +
+                     'NONMAGIC 80 (troll.kod:64-67). The readings are on the fleet row as weapon_magic.' },
       // DECLARED, BECAUSE AN UNDECLARED ARGUMENT IS REPORTED AS IGNORED AND IS NOT.
       //
       // `run()` below reads `banned_weapons` and sets policy.bannedWeapons from it, so the
@@ -11653,6 +11658,8 @@ const TOOLS = [
       if (a.weapon_priority !== undefined)
         p.policy.weaponPriority = Array.isArray(a.weapon_priority) && a.weapon_priority.length
           ? a.weapon_priority.map(String) : null;
+      if (a.prefer_magic_weapon !== undefined)
+        p.policy.preferMagicWeapon = a.prefer_magic_weapon === true;
       // A PROHIBITION, NOT A RANKING. Lower-cased at the door because isBannedWeapon
       // compares that way, and an empty list stores null so "no ban" and "a ban that
       // matches nothing" cannot be confused downstream.
@@ -16532,6 +16539,10 @@ const TOOLS = [
           // Populated by sweepGearCondition() which does look_at on equipped items every 90s.
           // Not pushed by the server; never looked up = null (renders as dash, not 0).
           gear_condition: ap ? ap.gearConditionStatus() : null,
+          // WHICH WEAPONS BYPASS NONMAGIC, AS READ. From the keeper's own status first, because `ap`
+          // is null for every keeper-backed character — which is every character on prod, and why
+          // gear_condition above reads null there. Null means "not answered", never "none magic".
+          weapon_magic: st?.weapon_magic ?? (ap ? ap.weaponMagicStatus() : null),
           // WHAT THIS CHARACTER CAN DO FOR THE OTHERS.
           //
           // Both Kraanan level-1 creation spells are services rather than personal

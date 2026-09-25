@@ -69,6 +69,7 @@ import { inboxIfAny, unwrapSpeech } from './m59-inbox.mjs';
 import { arenaCall } from './m59-chatter.mjs';
 import { describeCommitment } from './m59-commitment.mjs';
 import * as tougher from './m59-tougher.mjs';
+import { WeaponMagicBook, magicSwap } from './m59-weapon-magic.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
@@ -1857,6 +1858,11 @@ export class Autopilot {
       // quarry, then flips for the next one; changing hands while a creature is still
       // alive would reset the target/advancement flags the regimen is meant to train.
       trainingStyle: 'normal',
+      // PREFER A WEAPON READ AS MAGIC over a mundane one of the SAME priority rank. Off by
+      // default and inert when off. A troll resists ATCK_WEAP_NONMAGIC 80 (troll.kod:64-67), so
+      // on that quarry the enchanted twin is five times the weapon; the Ukgoth Trolls strategy
+      // turns this on. It never outranks the priority itself — see weaponRanking.
+      preferMagicWeapon: false,
       // KILL WHAT WE DO NOT WANT, TO KEEP THE ROOM PRODUCING WHAT WE DO. The spawn cap
       // is a room-wide total, so a creature we step over is a slot our prey cannot use.
       // Off makes the keeper ignore weak creatures and slowly suffocate its own hunting
@@ -11223,6 +11229,9 @@ export class Autopilot {
     const deniedFarmRooms = farmRoomDenials(this.noWallRooms, this.cappedRooms);
     return {
       running: this.running, mode: this.mode, policy: this.policy,
+      // WHICH OF THIS CHARACTER'S WEAPONS BYPASS NONMAGIC, as READ (look text, a lapse), never
+      // assumed. Rides out on status so the keeper-backed fleet row gets it with no rebuild.
+      weapon_magic: this.weaponMagicStatus(),
       survival_trace: survivalTraceSummary(this.s),
       survival_decisions: survivalDecisionSnapshot(this.s,{history:false}),
       survival_decision_log: this.survivalRecorder?.stats?.() ?? null,
@@ -19405,6 +19414,8 @@ export class Autopilot {
       // half and is asked only about SPARES, never the weapon in hand.
       await this.sweepBroken().catch(() => {});
       this.sweepGearCondition().catch(() => {});
+      // Read which weapons are magic, and keep a magic one in hand when the policy asks.
+      this.sweepWeaponMagic().catch(() => {});
 
       // KEEP SHELTER FARMERS ABLE TO PICK UP THE NEXT DROP WITHOUT OPENING A TOWN
       // ERRAND. sellAtLoad answers "when should I visit a merchant"; dropAtLoad is the
@@ -26410,6 +26421,102 @@ export class Autopilot {
 
   gearConditionStatus() {
     return this._gearCondition ?? null;
+  }
+
+  // ---------------------------------------------------------------- weapon magic
+  //
+  // WHETHER A WEAPON IS MAGIC IS A READING, and the only two things that say so are the item's
+  // look text and the owner's lapse sentence (m59-weapon-magic.mjs has the argument). The book
+  // lives on the autopilot so it survives a pass and is reported by status(); it does NOT survive
+  // a keeper restart, which costs one look per weapon to rebuild — cheap, and honest, because an
+  // enchantment may have lapsed in the meantime.
+  weaponMagicBook() { return (this._weaponMagic ??= new WeaponMagicBook()); }
+
+  packWeapons(c = this.s.client) {
+    return (c?.inventory ?? []).map(o => ({ id: o.id, name: c.rsc?.get?.(o.nameRsc) || '' }))
+      .filter(i => i.name && skills.weaponScore(i.name) > 0);
+  }
+
+  wieldedWeaponId(c = this.s.client) {
+    const eq = c?.equipment?.();
+    if (!eq?.known) return null;
+    const w = eq.equipped.find(e => e.name && skills.weaponScore(e.name) > 0);
+    return w?.id ?? null;
+  }
+
+  weaponMagicStatus() {
+    const c = this.s.client;
+    if (!c?.inventory) return null;
+    const sum = this.weaponMagicBook().summary(this.packWeapons(c), this.wieldedWeaponId(c));
+    return { ...sum, prefer_magic: this.policy?.preferMagicWeapon === true,
+             swapped_at: this._magicSwapAt ?? null, lapses: this._magicLapses ?? 0 };
+  }
+
+  // THE LAPSE, at the packet boundary. The sentence names a weapon and no id, so every reading
+  // of that name is re-opened and the next sweep runs NOW rather than on its minute clock.
+  noteEnchantLapse(name) {
+    if (!name) return;
+    const reopened = this.weaponMagicBook().lapse(name);
+    this._magicLapses = (this._magicLapses ?? 0) + 1;
+    this._weaponMagicAt = 0;
+    this._magicSwapDue = true;
+    this.note('ENCHANTMENT LAPSED', { weapon: name, readings_reopened: reopened.length,
+      why: 'the server said the weapon seems a little more ordinary; re-read and swap to a magic spare' });
+    this.ledgerEvent('enchant_lapse', { weapon: name });
+    this.sweepWeaponMagic().catch(() => {});
+  }
+
+  // A LOOK PER UNREAD WEAPON, at most two a sweep, on a one-minute clock (immediately after a
+  // lapse). Same id-checked shape as sweepGearCondition: a look reply carrying another id is
+  // discarded, never recorded against this one.
+  async sweepWeaponMagic() {
+    const gapMs = this._magicSwapDue ? 0 : 60_000;
+    if (Date.now() - (this._weaponMagicAt ?? 0) < gapMs) return;
+    if (this._weaponMagicBusy) return;
+    this._weaponMagicBusy = true;
+    this._weaponMagicAt = Date.now();
+    try {
+      const s = this.s, c = s.need();
+      const book = this.weaponMagicBook();
+      const items = this.packWeapons(c);
+      book.reconcile(items);
+      for (const item of book.needsLook(items).slice(0, 2)) {
+        const since = c.evSeq;
+        await s.pacer.submit('look', () => c.look(item.id)).catch(() => {});
+        const { events } = await c.waitFor({ since, kinds: ['look'], timeoutMs: 3000 })
+          .catch(() => ({ events: [] }));
+        const desc = events.find(e => e.id === item.id)?.description ?? null;
+        if (desc != null) book.record(item.id, item.name, desc);
+      }
+      await this.applyMagicPreference(c, items);
+    } finally { this._weaponMagicBusy = false; }
+  }
+
+  // THE ONE-SECOND HALF OF THE UKGOTH STRATEGY: keep the client's magic set current, and when the
+  // weapon in hand is not known magic but a same-rank spare is, wield the spare. equipBest does
+  // the swap and its verification; the ranking's tie-break is what makes it choose the spare.
+  async applyMagicPreference(c = this.s.client, items = this.packWeapons(c)) {
+    const on = this.policy?.preferMagicWeapon === true;
+    const sum = this.weaponMagicBook().summary(items, this.wieldedWeaponId(c));
+    c._magicWeaponIds = on
+      ? new Set(sum.weapons.filter(w => w.bypasses_nonmagic === true).map(w => w.id)) : null;
+    const due = this._magicSwapDue; this._magicSwapDue = false;
+    if (!on) return null;
+    const priority = this.weaponPriorityNow?.() ?? null;
+    const rank = n => {
+      if (!priority?.length) return 0;
+      const i = priority.findIndex(p => String(n).toLowerCase().includes(String(p).toLowerCase()));
+      return i === -1 ? priority.length : i;
+    };
+    const id = magicSwap(sum, rank);
+    if (id == null) return null;
+    if (!due && Date.now() - (this._magicSwapAt ?? 0) < 30_000) return null;
+    this._magicSwapAt = Date.now();
+    const r = await skills.equipBest(this.s, { priority, banned: this.bannedWeaponsNow?.() ?? null })
+      .catch(e => ({ ok: false, why: e.message }));
+    this.note('MAGIC SWAP', { to: id, result: r?.ok ?? null,
+      why: 'the weapon in hand is not read as magic and a same-rank spare is' });
+    return r;
   }
 
   // HOW MUCH FOOD IS ABOVE THE RESERVE. A thin adapter: the arithmetic is

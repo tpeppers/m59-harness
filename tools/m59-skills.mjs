@@ -568,17 +568,29 @@ export function weaponRanking(c, { priority = null, banned = null,
       const skill = proficiencyFor(x.name);
       return { ...x, skill, ability: abilityOf(c, skill), base: weaponScore(x.name) };
     });
+  // A MAGIC WEAPON BREAKS A TIE, AND NEVER MORE THAN A TIE. `c._magicWeaponIds` is the set the
+  // keeper has READ as bypassing ATCK_WEAP_NONMAGIC (m59-weapon-magic.mjs), set only while the
+  // policy says `preferMagicWeapon`. Against a troll an enchanted hammer lands five times what a
+  // mundane hammer does (troll.kod:64-67), so between two hammers the answer is not close. But a
+  // magic long sword never outranks a hammer the priority puts first: the operator's rule is that
+  // a character keeps the family it trains, and the magic choice happens inside that family.
+  // Stashed on the client for the same reason `_summoned` is: every equipBest call site then
+  // agrees, and a later equip cannot swap straight back to the mundane twin.
+  const magic = c._magicWeaponIds instanceof Set && c._magicWeaponIds.size ? c._magicWeaponIds : null;
+  const mundane = r => (magic?.has(r.o.id) ? 0 : 1);
   if (priority?.length) {
     const rank = (n) => {
       const i = priority.findIndex(p => n.toLowerCase().includes(String(p).toLowerCase()));
       return i === -1 ? priority.length : i;
     };
-    return rows.sort((a, b) => rank(a.name) - rank(b.name) || b.base - a.base);
+    return rows.sort((a, b) => rank(a.name) - rank(b.name) || mundane(a) - mundane(b) ||
+      b.base - a.base);
   }
   // Proficiency first — a weapon you are good with hits more often than a nominally
   // bigger one you are not. Unread abilities fall back to the crude name score rather
   // than sorting as zero, which would put the greatsword last on a fresh login.
-  return rows.sort((a, b) => (b.ability ?? -1) - (a.ability ?? -1) || b.base - a.base);
+  return rows.sort((a, b) => (b.ability ?? -1) - (a.ability ?? -1) || mundane(a) - mundane(b) ||
+    b.base - a.base);
 }
 
 // THE SERVER'S OWN LIST OF WHAT IS EQUIPPED, or null if this client does not keep one.
