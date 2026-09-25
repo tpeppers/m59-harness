@@ -2323,6 +2323,12 @@ async function compiledWalk(ctx, agent, to, { minHealth, despiteHazard = null, p
       // has had this whole errand to decide the character belongs in assignedRoom.
       await ctx.holds?.get(agent)?.cancelJourney?.(
         `clearing the way for the errand's own walk to ${to}`).catch(() => {});
+      // AND THE BROKER'S SLOT. The hold's cancel releases the KEEPER's job; the "<agent> is busy:
+      // walk to ..." refusal comes from the broker's job slot, which that does not always clear —
+      // on the 2026-09-25 rehearsal a raider was dropped from the muster refused three times by a
+      // journey to a room it was not going to. cancel_movement ends the broker's.
+      await call('cancel_movement', { agent, why: `clearing the way for the errand's own walk to ${to}` }, 30_000)
+        .catch(() => {});
       return call('travel', { agent, to, background: true, run_errands: false,
                               // A step that names a hazard room says WHY, and the keeper
                               // refuses the flag without it. See `walk(to, { despiteHazard })`.
