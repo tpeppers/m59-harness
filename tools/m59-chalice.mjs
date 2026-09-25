@@ -105,6 +105,14 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // The holder hands the cup to the alternate once its own supply falls this low — a
   // holder that is about to leave must not leave with the fleet's only chalice.
   handover_below_casts: 12,
+  // EMERALDS THE HOLDER NEVER SPENDS ON FORCES OF LIGHT, because they are his way out. His
+  // supply trip starts with a Rescue from the post (DUM's `caster-rescue-to-shop`), which
+  // costs one emerald (rescue.kod:56) and which DUM refuses unless one survives its own
+  // `emerald_reserve` of two -- so three on hand is the least that still rescues. Forces of
+  // light takes one emerald a cast and used to take the last one: measured on prod
+  // 2026-09-24, two of twelve supply trips walked out to Barloque because the pack held zero
+  // emeralds, and the 21:19Z one ended in a death in Ukgoth. 0 switches the floor off.
+  rescue_emeralds: 3,
   // A ticket older than this is abandoned, whoever holds it.
   ticket_ttl_ms: 300_000,
   // FORCES OF LIGHT ON REQUEST. When set, the holder waits at its post and lights THIS room
@@ -152,7 +160,7 @@ const NUMBERS = {
   landing_ms: [20_000, 120_000], serve_ms: [20_000, 600_000], tip_amount: [0, 100_000],
   tip_min: [0, 100_000], handover_below_casts: [0, 1000], ticket_ttl_ms: [60_000, 3_600_000],
   fol_lead_ms: [0, 60_000], restock_per_trip: [0, 1000], reveal_max: [0, 10],
-  restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000],
+  restock_budget: [0, 100_000], pvp_block_ms: [0, 3_600_000], rescue_emeralds: [0, 100],
 };
 
 /**
@@ -313,6 +321,28 @@ export function folWanted({ cfg, here, fol = {}, now = Date.now(), role = null }
   if (role === 'holder') return false;
   if (Number(here) !== cfg.fol_room) return false;
   return !(Number(fol.until) > now + (cfg.fol_lead_ms ?? 0));
+}
+
+/**
+ * What a character must keep back from its own spells, by reagent. Only the holder keeps
+ * anything: it is the one whose supply trip starts with a Rescue. See `rescue_emeralds`.
+ */
+export function reagentFloor(cfg, role) {
+  const n = Math.floor(Number(cfg?.rescue_emeralds) || 0);
+  return role === 'holder' && n > 0 ? { emerald: n } : {};
+}
+
+/**
+ * Casts of a spell the pack can pay for without dipping below `floor`. `have` maps a reagent
+ * to the count on hand; `reagents` is the spell's `[[name, per_cast], ...]`.
+ */
+export function castsAbove(have, reagents, floor = {}) {
+  let casts = Infinity;
+  for (const [name, per] of reagents) {
+    const spare = Math.max(0, (Number(have[name]) || 0) - (Number(floor[name]) || 0));
+    casts = Math.min(casts, Math.floor(spare / per));
+  }
+  return Number.isFinite(casts) ? casts : 0;
 }
 
 /** 'holder', 'alternate' or 'traveller'. Everybody not named is a traveller. */

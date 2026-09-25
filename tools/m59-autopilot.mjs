@@ -72,7 +72,8 @@ import * as tougher from './m59-tougher.mjs';
 import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
-         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan } from './m59-chalice.mjs';
+         tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan,
+         reagentFloor, castsAbove } from './m59-chalice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -21677,7 +21678,12 @@ export class Autopilot {
     if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return false;
     const ench = Autopilot.ROOM_ENCHANTS.find(e => e.name === 'forces of light');
     if (v.mana && v.mana.value < (Number(this.policy.roomEnchant?.mana_floor) || ench.mana)) return false;
-    return ench.reagents.every(([n, k]) => this.reagentOnHand(n) >= k);
+    return this.chaliceCastsLeft() >= 1;
+  }
+
+  /** Reagents this character keeps back from its own spells — the holder's Rescue emeralds. */
+  chaliceReagentFloor() {
+    return this.chaliceCfg ? reagentFloor(this.chaliceCfg, this.chaliceRole()) : {};
   }
 
   /**
@@ -21697,8 +21703,12 @@ export class Autopilot {
   }
 
   /** Forces-of-light casts on hand, the holder's own supply clock. */
+  // COUNTED ABOVE THE RESCUE FLOOR, so the hand-off to the alternate and the supply trip
+  // both happen while the holder can still Rescue out rather than walk.
   chaliceCastsLeft() {
-    return Math.min(Math.floor(this.reagentOnHand('elderberry') / 2), this.reagentOnHand('emerald'));
+    const ench = Autopilot.ROOM_ENCHANTS.find(e => e.name === 'forces of light');
+    const have = Object.fromEntries(ench.reagents.map(([n]) => [n, this.reagentOnHand(n)]));
+    return castsAbove(have, ench.reagents, this.chaliceReagentFloor());
   }
 
   chaliceEvent(what, detail = {}) {
@@ -22343,10 +22353,16 @@ export class Autopilot {
       // silent from here -- indistinguishable from one that worked. Report which one ran
       // out and how many are left, because the pair is unbalanced in practice and the
       // scarce half is not the one anybody watches.
-      const short = ench.reagents.filter(([n, k]) => this.reagentOnHand(n) < k);
+      //
+      // AND NOT OUT OF WHAT IS KEPT BACK. The chalice holder's last emeralds pay for the
+      // Rescue that starts his supply trip; spending them on the room is what made him walk.
+      const keep = this.chaliceReagentFloor();
+      const short = ench.reagents.filter(([n, k]) => this.reagentOnHand(n) - (keep[n] || 0) < k);
       if (short.length) {
-        const have = ench.reagents.map(([n, k]) => `${n} ${this.reagentOnHand(n)}/${k}`).join(', ');
-        const casts = Math.min(...ench.reagents.map(([n, k]) => Math.floor(this.reagentOnHand(n) / k)));
+        const have = ench.reagents.map(([n, k]) => `${n} ${this.reagentOnHand(n)}/${k}` +
+          (keep[n] ? ` (keeping ${keep[n]})` : '')).join(', ');
+        const casts = castsAbove(Object.fromEntries(ench.reagents.map(([n]) => [n, this.reagentOnHand(n)])),
+                                 ench.reagents, keep);
         this.declinedCast(ench.name, 'out of reagents',
           { have, casts_left: casts,
             note: 'a donation of the SHORT reagent extends this; the other half is not the limit' });

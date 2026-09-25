@@ -11,7 +11,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
-         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS } from './m59-chalice.mjs';
+         servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS,
+         reagentFloor, castsAbove } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -251,6 +252,28 @@ section("a ride is refused while the server's teleport ban is running");
   const off = normalizeChalice({ holder: 'x', station_room: 2, pvp_block_ms: 0 });
   eq(shouldRide({ ...base, cfg: off, now, lastPlayerAttackAt: now - 1000 }).ride, true,
      'pvp_block_ms 0 switches the check off');
+}
+
+section('the holder keeps its Rescue emeralds back from forces of light');
+{
+  // Forces of light is 2 elderberries + 1 emerald. The holder's supply trip starts with a
+  // Rescue, which DUM casts only with one emerald spare over its reserve of two -- so three.
+  const FOL = [['elderberry', 2], ['emerald', 1]];
+  eq(CFG.rescue_emeralds, 3, 'three by default: one to cast, two for the DUM reserve');
+  eq(reagentFloor(CFG, 'holder').emerald, 3, 'the holder keeps them');
+  eq(Object.keys(reagentFloor(CFG, 'alternate')).length, 0, 'the alternate does not rescue out');
+  eq(Object.keys(reagentFloor(CFG, 'traveller')).length, 0, 'nor does a traveller');
+  const keep = reagentFloor(CFG, 'holder');
+  // THE PROD CASE, 2026-09-24: berries to spare and the emeralds down to the last few.
+  eq(castsAbove({ elderberry: 40, emerald: 3 }, FOL, keep), 0, 'three emeralds: none to spend on the room');
+  eq(castsAbove({ elderberry: 40, emerald: 5 }, FOL, keep), 2, 'five: two casts, three kept');
+  eq(castsAbove({ elderberry: 5, emerald: 50 }, FOL, keep), 2, 'berries bind when they are short');
+  eq(castsAbove({ elderberry: 40, emerald: 1 }, FOL, keep), 0, 'below the floor is zero, not negative');
+  eq(castsAbove({ elderberry: 40, emerald: 3 }, FOL), 3, 'with no floor every emerald is a cast');
+  const off = normalizeChalice({ holder: 'x', station_room: 2, rescue_emeralds: 0 });
+  eq(Object.keys(reagentFloor(off, 'holder')).length, 0, 'rescue_emeralds 0 switches the floor off');
+  const bad = normalizeChalice({ holder: 'x', station_room: 2, rescue_emeralds: -4 });
+  eq(bad.rescue_emeralds, 3, 'a negative floor keeps the default');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
