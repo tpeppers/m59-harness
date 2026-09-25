@@ -18,6 +18,7 @@
 // the state was when it stopped.
 
 import { parseDeathBroadcast } from './m59-death-attribution.mjs';
+import { isEnemyHit } from './m59-combatlog.mjs';
 export { parseDeathBroadcast } from './m59-death-attribution.mjs';
 import { OF, isTeleporter, describeObject, dropSpec, KOD_FINENESS } from './m59-parse.mjs';
 import { traceSurvivalOperation, tracePoint } from './m59-survival-trace.mjs';
@@ -1360,6 +1361,14 @@ export function junkAndBroken(c) {
 const HEALER_ITEM = /flask/i;
 const HEAL_SPELL = /^(minor heal|heal|major heal|hospice)$/i;
 
+// Arsenic deliberately has the SAME name and icon as a healing flask. The
+// server's LOOK description is the distinguishing evidence (arsenic.kod).
+export function isHealingFlaskDescription(description) {
+  const text = String(description ?? '').replace(/~[a-z]/gi, '').replace(/\s+/g, ' ').trim();
+  return /^This flask, formed from clear glass and topped by a cork, contains a thick blue fluid\. It looks cool and refreshing\.(?:\s|$)/i.test(text)
+    && !/poison|arsenic|pungent|strange matter/i.test(text);
+}
+
 export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
   const c = s.need();
   const frac = () => { const h = c.vitals()?.health; return h && h.max ? h.value / h.max : null; };
@@ -1369,19 +1378,49 @@ export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
   await s.pacer.submit('read', () => c.requestInventory());
   await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
 
-  const used = [];
+  const used = [], skipped = [], inspected = new Set();
   let flasks = c.inventory.filter(o => HEALER_ITEM.test(c.rsc.get(o.nameRsc) || ''));
-  for (let i = 0; i < maxItems && flasks.length && (frac() ?? 1) < target; i++) {
+  for (let i = 0; i < maxItems && flasks.length && (frac() ?? 1) < target;) {
     const f = flasks.shift();
-    await s.pacer.submit('act', () => c.apply(f.id, c.selfId), 1050);
+    if (inspected.has(f.id)) continue;
+    if (inspected.size >= Math.max(8, maxItems * 2)) break;
+    inspected.add(f.id);
+    // Match both the requested object and a fresh reply; an unrelated LOOK or
+    // an old cached description cannot certify this consumable.
+    const since = c.evSeq;
+    let description = null;
+    try {
+      await s.pacer.submit('look', () => c.look(f.id));
+      const reply = await c.waitFor({ kinds: ['look'], since, timeoutMs: 1500,
+        match: e => e.id === f.id });
+      description = reply?.events?.find(e => e.id === f.id
+        && (since == null || e.seq > since))?.description;
+    } catch { /* unknown is not medicine */ }
+    if (s.client !== undefined && s.client !== c)
+      return { healed: false, used, skipped, cancelled: true, reason: 'healing client changed' };
+    if (!isHealingFlaskDescription(description)) {
+      skipped.push({ id: f.id, reason: description ? 'not a verified healing flask' : 'flask description unavailable' });
+      continue;
+    }
+    if ((s.client !== undefined && s.client !== c) || !c.inventory.some(o => o.id === f.id)) break;
+    let applied = false;
+    await s.pacer.submit('act', () => {
+      if ((s.client !== undefined && s.client !== c) || !c.inventory.some(o => o.id === f.id)
+          || (frac() ?? 1) >= target) return;
+      c.apply(f.id, c.selfId); applied = true;
+    }, 1050);
+    if (!applied) break;
     await c.waitFor({ kinds: ['stat', 'message'], timeoutMs: 2500 });
     used.push('flask');
+    i++;
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 2000 });
     flasks = c.inventory.filter(o => HEALER_ITEM.test(c.rsc.get(o.nameRsc) || ''));
   }
 
   // A heal spell is free but costs mana, and a Shal'ille character has one.
+  if (s.client !== undefined && s.client !== c)
+    return { healed: false, used, skipped, cancelled: true, reason: 'healing client changed' };
   const spell = (c.spells || []).find(sp => HEAL_SPELL.test(c.rsc.get(sp.nameRsc) || ''));
   if (spell && (frac() ?? 1) < target) {
     for (let i = 0; i < 3 && (frac() ?? 1) < target; i++) {
@@ -1395,7 +1434,7 @@ export async function healUp(s, { target = 0.9, maxItems = 8 } = {}) {
 
   const after = frac();
   return {
-    healed: after > before, used, health: { before, after },
+    healed: after > before, used, ...(skipped.length ? { skipped } : {}), health: { before, after },
     reached_target: after >= target,
     ...(after < target && !used.length ? {
       reason: 'nothing to heal with',
@@ -2064,6 +2103,10 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
                                      beforeMutation = null, beforeCleanup = null,
                                      shouldCancel = null } = {}) {
   const c = s.need();
+  const restStartedAt = Date.now(), restSequence = c.evSeq;
+  const incomingHit = () => (c.events ?? []).some(e => e.kind === 'message'
+    && (restSequence != null ? e.seq > restSequence : e.at >= restStartedAt)
+    && isEnemyHit(e.text));
   const read = async () => {
     await s.pacer.submit('read', () => c.stats(1));
     await c.waitFor({ kinds: ['stat'], timeoutMs: 2000 });
@@ -2097,6 +2140,12 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
       await sleep(3000);
       v = await read();
       const hp = v?.health?.value ?? null;
+      // Poison can coexist with a skeleton hitting us. Positive server attack
+      // evidence wins even when regeneration masks the net health loss.
+      if (abortOnDamage && incomingHit()) {
+        interrupted = 'attacked while resting — something is hitting us';
+        break;
+      }
       if (abortOnDamage && hp != null) {
         if (peak == null || hp > peak) peak = hp;
         else if (hp < peak) {
@@ -2106,8 +2155,8 @@ export async function restUntil(s, { health = DEFAULT_REST_UNTIL, vigor = DEFAUL
           // POISON IS NOT SOMETHING HITTING US. It drains with nobody adjacent and cannot
           // kill, so the inference this line rests on — "health only falls while resting if
           // something is hitting us" — is false for exactly as long as a character is
-          // poisoned. Aborting there ends a rest that was never in danger, and upstream the
-          // same reading discredits the square for good.
+          // poisoned and no attack was observed. Never use the ailment to erase
+          // the independent incoming-hit evidence checked above.
           const ailing = c.ailments?.() ?? [];
           if (ailing.length) {
             poisonDrain += peak - hp;

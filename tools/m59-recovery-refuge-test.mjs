@@ -123,14 +123,16 @@ await test('a corrected zero-step prediction walks back to the selected wall bef
     return {row:8,col:16};
   };
   k.s.standBeforeGo=async()=>calls.push('stand');
-  k.s.approachFine=async(col,row)=>{
-    calls.push('approach');assert.deepEqual({row,col},{row:7,col:16});
+  k.s.approachFine=async()=>assert.fail('recovery must use the clear route first');
+  k.s.walkTo=async(col,row,options)=>{
+    calls.push('route');assert.deepEqual({row,col},{row:7,col:16});
+    assert.ok(options.avoidSquares instanceof Set);
     k.s.client.self={...k.s.client.self,row,col,predicted:false};return {arrived:true};
   };
   k.playDead=async()=>{calls.push('logoff');assert.ok(k.currentRecoveryWall());return true;};
   const result=await k.takeRecoverySpot('recover after a corrected prediction');
   assert.equal(result.took,true);
-  assert.deepEqual(calls,['confirm','stand','approach','logoff']);
+  assert.deepEqual(calls,['confirm','stand','route','logoff']);
 });
 
 await test('forward recovery never computes a preview or requires a precomputed route shelter', async () => {

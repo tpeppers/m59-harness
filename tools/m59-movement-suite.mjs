@@ -34,6 +34,8 @@ import { existsSync } from 'node:fs';
 // The suites, worst-consequence first, each with the question it answers. A suite that does
 // not touch movement does not belong here — `npm test` is the place for the rest.
 const SUITES = [
+  ['m59-death-prevention-test.mjs',
+   'poison cannot mask attacks, arsenic is not medicine, and refuge retries need confirmed progress'],
   ['m59-blockedpath-test.mjs',
    'can a weak creature indefinitely block a fully built character — the 584 southeast corridor'],
   ['m59-unarmed-blocker-test.mjs',
@@ -67,6 +69,13 @@ const SUITES = [
 // Recorded 2026-09-19 against origin/main. Each one is somebody's open problem, not a licence:
 // if you are touching the code a line here guards, fix it and delete the line.
 const KNOWN_RED = {
+  // Reproduced unchanged on main b2d26f6, 2026-09-25. These older freeze
+  // expectations are independent of the poison and refuge-approach fixes.
+  'm59-safespot-test.mjs': [
+    'the first freeze is allowed — rejoined 0x',
+    'and it says why rather than looping quietly',
+    'freezing is allowed again once health has moved',
+  ],
   'm59-needle-test.mjs': [
     "and PLAYER_HEIGHT is still the client's own figure, imported rather than written out",
     "clearance is measured against MIN_NOMOVEON in wire units, not 1.5 squares",

@@ -29,7 +29,7 @@ import { bannedWeaponsHeld } from './m59-arming.mjs';
 import { clearConjureHoard } from './m59-conjure-cleanup.mjs';
 import { escapeGroundEffect } from './m59-combat-mode.mjs';
 import { effectsAt } from './m59-ground-effects.mjs';
-import { recoveryRefugeReach, recoveryOccupiedSquares } from './m59-recovery-refuge.mjs';
+import { recoveryRefugeReach, recoveryOccupiedSquares, observeRefugeProgress, REFUGE_PROGRESS_MS } from './m59-recovery-refuge.mjs';
 import { attachSurvivalDecisions, currentSurvivalDecision, chooseSurvivalDecision,
   updateSurvivalDecision, cancelSurvivalDecision, finishSurvivalDecision,
   observeSurvivalDecision, survivalDecisionSnapshot } from './m59-survival-decision.mjs';
@@ -5142,6 +5142,51 @@ export class Autopilot {
     return result;
   }
 
+  watchRecoveryApproach(spot) {
+    const s=this.s,client=s.client,room=s.world?.room?.num,decision=currentSurvivalDecision(s);
+    const generation=s.movementGeneration,life=s.lifeBoundary??0;
+    if (!decision || typeof s.cancelMovement!=='function') return ()=>{};
+    let memory=this.refugeApproachProgress;
+    if (!memory || memory.client!==client || memory.room!==room || memory.life!==life
+        || memory.episode!==decision.episode_id) {
+      memory=this.refugeApproachProgress={client,room,life,episode:decision.episode_id,targets:new Map()};
+    }
+    const key=`${spot.row},${spot.col}`,now=Date.now();
+    let progress=memory.targets.get(key);
+    if(progress && now-progress.startedAt>120000)progress=null;
+    progress=observeRefugeProgress(progress,s.world?.geometry,client.self,spot,now);
+    if(memory.targets.size>=32 && !memory.targets.has(key))memory.targets.delete(memory.targets.keys().next().value);
+    memory.targets.set(key,progress);
+    const timer=setInterval(()=>{
+      // An older await must never cancel a replacement, a human, or PvP.
+      if(s.client!==client || s.world?.room?.num!==room || s.movementGeneration!==generation
+          || (s.lifeBoundary??0)!==life || currentSurvivalDecision(s)?.id!==decision.id
+          || this.stopping || s.combat?.active?.pvp || this.busy?.until>Date.now()
+          || (this.inert&&!this.inert.travelling) || this.facultyHeld('survival')
+          || this.facultyHeld('recovery') || this.facultyHeld('combat')) {
+        clearInterval(timer);return;
+      }
+      observeRefugeProgress(progress,s.world?.geometry,client.self,spot);
+      const at=client.self;
+      if((at && !at.predicted && at.row===spot.row && at.col===spot.col)
+          || Date.now()-progress.progressedAt<REFUGE_PROGRESS_MS)return;
+      clearInterval(timer);
+      // Temporary local reachability evidence, never a global verdict on the wall.
+      this.noteUnreachableSpot(room,spot.col,spot.row);
+      this.rememberSurvivalJam({failed:true});
+      const why='shelter approach made no confirmed route progress';
+      this.note(why,{to:{row:spot.row,col:spot.col},room,
+        stalled_ms:Date.now()-progress.progressedAt,remaining_steps:progress.best});
+      this.cancelForSurvival(null,why);
+    },500);
+    timer.unref?.();
+    return ()=>{
+      clearInterval(timer);
+      const at=client.self;
+      if(at && !at.predicted && at.row===spot.row && at.col===spot.col)memory.targets.delete(key);
+    };
+  }
+
   async takeSafeSpotObserved(why, quarry = null, { source = 'fight', islandCrossings = 0, nearQuarry = false,
                                            nearestOnly = false, afterExit = false, recovery = false,
                                            recoveryRoute = false, decisionId = null, shouldInterrupt = null, shelterOnly = false,
@@ -5470,17 +5515,18 @@ export class Autopilot {
       // now a legitimate choice, and `walkTo` only raises a caller's cap to the plan's own
       // length once it has planned — so hand it a cap that already fits the walk asked for.
       const walkBudget = Math.max(24, Math.ceil((spot.steps_away ?? 0) * 2) + 12);
-      const approachOptions = { maxSteps: walkBudget, routeFirst: shelterOnly,
-        avoidSquares: shelterOnly ? recoveryOccupiedSquares(c.room?.objects,c.selfId,c.playersOnline) : null };
+      const approachOptions = { maxSteps: walkBudget, routeFirst: recovery || shelterOnly,
+        avoidSquares: recovery || shelterOnly ? recoveryOccupiedSquares(c.room?.objects,c.selfId,c.playersOnline) : null };
+      const stopProgressWatch=recovery?this.watchRecoveryApproach(spot):()=>{};
       const arrival = fine
         ? await skills.returnToSpot(s, { col: spot.col, row: spot.row, ...fine }, approachOptions)
-                      .catch(e => ({ arrived: false, why: e.message }))
+                      .catch(e => ({ arrived: false, why: e.message })).finally(stopProgressWatch)
         // Claiming a safe square is a correctness boundary, just like returning to one
         // after a pull. A plain walk can finish on a predicted position which a delayed
         // server update revokes on the next pass; use the shared confirmed arrival
         // contract for both remembered and newly-derived spots.
         : await skills.returnToSpot(s, { col: spot.col, row: spot.row }, approachOptions)
-                      .catch(e => ({ arrived: false, why: e.message }));
+                      .catch(e => ({ arrived: false, why: e.message })).finally(stopProgressWatch);
       if (arrival?.cancelled || interrupted()) return cancelled();
       this.movedAt = Date.now();
       if (!arrival.arrived) {

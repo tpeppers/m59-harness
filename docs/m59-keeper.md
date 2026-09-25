@@ -1,5 +1,29 @@
 # The keeper: what it can see, and what it cannot
 
+## Poison, healing flasks, and stalled shelter approaches
+
+`restUntil` checks fresh server incoming-hit messages before the poison exception.
+Poison alone may continue resting; poison plus an attack interrupts recovery even
+when healing hides the net health loss. The next recovery decision reads current
+health, so an earlier above-threshold logoff refusal cannot persist below the flee line.
+
+Arsenic has the same name and icon as a healing flask. `healUp` requires a fresh
+LOOK for that object matching the healing flask's blue-fluid description. Harmful,
+unknown, stale and mismatched descriptions are skipped and reported. Verification
+is per use, not cached by reusable object ID.
+
+Recovery wall approaches use the body-aware square route before the fine fallback.
+Eight seconds without a confirmed shorter remaining geometry route cancels that
+approach and temporarily excludes its target using the keeper's existing local
+reachability memory. Issuing a new command or replacing a decision in the same
+recovery episode cannot reset that progress clock; arrival, a new episode or a
+new client/life clears it. The existing recovery ladder selects the replacement.
+The watcher cannot cancel another decision, human control or PvP. Shelter departure
+and emergency-route ranking are unchanged.
+
+`node tools/m59-death-prevention-test.mjs` exercises these paths offline, including
+the real recovery selector, cancellation and selection of a different wall.
+
 ## Survival does not wait for the ordinary heartbeat
 
 A blocked or cancelled survival approach selects and executes its replacement in
