@@ -98,7 +98,7 @@ export const script = {
     lightbearer: { type: 'string', default: '', describe: 'agent who casts forces of light; empty = whoever knows it' },
     healers: { type: 'string', default: '', describe: 'comma-separated; empty = three who know minor heal' },
     lab: { type: 'boolean', default: false, describe: 'allow DM grants and mana refills. REFUSES on a non-lab fleet' },
-    muster_min_health: { type: 'number', default: 1, describe: 'health fraction to set out on the muster walk' },
+    muster_min_health: { type: 'number', default: 0.9, describe: 'health fraction to set out on the muster walk. NOT 1: a rest can plateau short of full (a ring of lethargy, a rounding step), and at 1 shadow12 (63/64) and shadow18 (57/60) were dropped from the 2026-09-25 rehearsal' },
     start_positions: { type: 'string', default: '', describe: 'LAB: JSON {agent:{room,row,col}} — place each clone where its prod character stands, after the hold' },
     muster_wait_s: { type: 'number', default: 1500, describe: 'how long the survey waits for the muster to finish' },
     rally: { type: 'number', default: 598, describe: 'where a convoy gathers before crossing Ukgoth (0 = no convoy)' },
