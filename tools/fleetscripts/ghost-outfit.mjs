@@ -400,6 +400,16 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     // To Barloque: the cup if we can, the road if we cannot.
     const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) })) : { ok: false, why: 'no cup holder' };
     t.ride = ride.ok ? 'chalice' : `walked (${ride.why})`;
+    // EMPTY THE PACK IN THE HALL BEFORE SHOPPING. The ride lands in 714, beside the chests, and a
+    // smith will not buy reagents or food — so what an armorer carries at the counter is what it
+    // brought. On the 2026-09-25 rehearsal every armorer's buying stopped on "limited_by: bulk"
+    // after two or three pieces. Everything but the essentials goes in a chest first.
+    if (ride.ok) {
+      const r = await inHall(() => call('hall_withdraw', { agent, wants: [], stash: [...HALL_STASH_KEEP] }, 620_000)
+        .catch(e => ({ ok: false, why: e.message })));
+      t.stashed = r?.stashed ?? 0;
+      if (t.stashed) log(`  ${agent} armorer trip ${trip}: stashed ${t.stashed} in the hall before shopping`);
+    }
     log(`  ${agent} armorer trip ${trip}: ${t.ride}`);
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
     if (!at.ok) { t.failed = 'could not reach the smith'; trips.push(t); break; }
