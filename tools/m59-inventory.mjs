@@ -294,7 +294,16 @@ export const rideCup = fn => { const p = CUP.then(fn, fn); CUP = p.catch(() => {
  *   - IF THE RIDER CANNOT LIFT IT, THE HOLDER TAKES IT BACK, or it lies there for every later rider.
  * Call inside rideCup(). Returns {ok, why?, cupBack}.
  */
-export async function cupRide(rider, holder, { hall = 714 } = {}) {
+export async function cupRide(rider, holder, { hall = 714, waitMs = 5 * 60_000 } = {}) {
+  // THE CUP IS HANDED ACROSS A FLOOR, SO BOTH MUST BE STANDING ON IT. On the 2026-09-25 rehearsal
+  // the holder had been walked off to another map; it dropped the cup there and two riders in the
+  // stage room each came back "could not pick the cup up". Wait a while for the holder to be here,
+  // and say where each of them is if it never comes — never drop a cup the rider cannot reach.
+  const roomOf = async a => Number((await observe(a)).room);
+  const meetBy = Date.now() + waitMs;
+  let hr = await roomOf(holder), rr = await roomOf(rider);
+  while (hr !== rr && Date.now() < meetBy) { await sleep(5000); hr = await roomOf(holder); rr = await roomOf(rider); }
+  if (hr !== rr) return { ok: false, why: `${holder} (the cup) is in room ${hr} and ${rider} in room ${rr} — the cup is not dropped` };
   const cup = (await freshItems(holder)).find(i => /chalice/i.test(String(i.name ?? '')));
   if (!cup) {
     const floor = ((await freshLook(holder))?.objects ?? []).find(o => /chalice/i.test(String(o.name ?? '')));
