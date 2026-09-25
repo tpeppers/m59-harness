@@ -274,7 +274,7 @@ export const script = {
         if (crew.includes(agent)) {
           const wants = (() => { try { return JSON.parse(String(p.hall_wants || '')); } catch { return HALL_WANTS; } })();
           const share = hallSplit(crew, wants, weighItem)[agent] ?? [];
-          st.hall = await hallDraw({ agent, crew, holder: roles.lightbearer, share, p });
+          st.hall = await hallDraw({ agent, crew, holder: cupHolderOf(agents, roles), share, p });
         } else if (agent !== roles.lightbearer) {
           await call('rest', { agent }, 30_000).catch(() => {});
         }
@@ -522,7 +522,7 @@ export const script = {
           // FINISHED IN A finally: an errand that throws must not leave twenty characters waiting
           // out the whole outfit_wait_s for a delivery that is never coming.
           try {
-            st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: roles.lightbearer, lines, p, crew: pair.length });
+            st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: cupHolderOf(agents, roles), lines, p, crew: pair.length });
           } catch (e) {
             st.armorer = { error: e?.message ?? String(e) };
           } finally {
@@ -581,10 +581,22 @@ function armorersOf(agents, p) {
   const named = String(p.armorers ?? '').split(',').map(x => x.trim()).filter(Boolean);
   if (named.length) return named;
   const roles = rolesNow(agents, p);
-  return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && !roles.dedicators.includes(a) && !roles.healers.includes(a))
+  const cup = cupHolderOf(agents, roles);
+  return agents.filter(a => SURVEY.has(a) && a !== roles.lightbearer && a !== cup && !roles.dedicators.includes(a) && !roles.healers.includes(a))
     .sort((a, b) => (SURVEY.get(b).might - SURVEY.get(a).might) || (SURVEY.get(b).maxHealth - SURVEY.get(a).maxHealth)
                     || a.localeCompare(b))
     .slice(0, Math.max(1, Number(p.armorer_count) || 4));
+}
+
+/**
+ * WHOEVER CARRIES THE CUP, read off the survey — not whoever is assumed to. On 2026-09-25 prod's
+ * Chalice of the Rain was with Rizzo in room 2 (the chalice-farming holder), not with Loial, and a
+ * raid that handed "Loial's" cup to its armorers would have walked every one of them. The holder
+ * is never an armorer: it stays in the stage room to pick the cup back up after each drink.
+ */
+function cupHolderOf(agents, roles) {
+  return agents.find(a => (SURVEY.get(a)?.items ?? []).some(i => /chalice/i.test(String(i.name ?? ''))))
+    ?? roles.lightbearer ?? null;
 }
 
 function rolesNow(agents, p) {
