@@ -81,9 +81,15 @@ export function matchHammers(needs = []) {
 // ---------------------------------------------------------------------------------- reagents
 
 /** Sum a reagent family out of an item list, matched as a substring (mushroom is five stacks). */
+// A REAGENT IS ONE CLASS, NOT A FAMILY. Bless and super strength each want two `&Mushroom`
+// (bless.kod:68, strength.kod:60) — the plain "mushroom" — and a blue, purple, red or Inky-cap
+// mushroom is a different class that pays for nothing. Counting by substring filed a caster with
+// 88 blue mushrooms and no plain ones as stocked, and on the 2026-09-25 rehearsal every bless and
+// strength at the door came back "no mana and no reagents moved". Plurals only.
+export const reagentName = n => lower(n).trim().replace(/teeth$/, 'tooth').replace(/ies$/, 'y').replace(/s$/, '');
+export const isReagent = (itemName, family) => reagentName(itemName) === reagentName(family);
 export function countFamily(items = [], family) {
-  const f = lower(family);
-  return items.filter(i => lower(i.name).includes(f)).reduce((n, i) => n + (Number(i.amount) || 1), 0);
+  return items.filter(i => isReagent(i.name, family)).reduce((n, i) => n + (Number(i.amount) || 1), 0);
 }
 
 /**

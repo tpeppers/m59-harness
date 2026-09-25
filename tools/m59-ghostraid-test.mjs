@@ -33,7 +33,11 @@ ok(JSON.stringify(matchHammers([need, rich, ...[]])) === JSON.stringify(matchHam
 
 // ---- reagents
 const pack = [{ name: 'elderberry', amount: 5 }, { name: 'red mushroom', amount: 2 }, { name: 'mushroom', amount: 3 }];
-ok(countFamily(pack, 'mushroom') === 5, 'mushroom is a family of stacks');
+ok(countFamily(pack, 'mushroom') === 3, 'a reagent is ONE class: a red mushroom pays for no bless (bless.kod:68)');
+ok(countFamily([{ name: 'herbs', amount: 4 }, { name: 'orc teeth', amount: 2 }, { name: 'elderberries', amount: 1 }], 'herb') === 4
+   && countFamily([{ name: 'orc teeth', amount: 2 }], 'orc tooth') === 2
+   && countFamily([{ name: 'elderberries', amount: 1 }], 'elderberry') === 1, 'plurals still count');
+ok(countFamily([{ name: 'Inky-cap mushroom', amount: 9 }, { name: 'blue mushroom', amount: 88 }], 'mushroom') === 0, 'Inky-cap and blue mushrooms are not mushrooms to a spell');
 const sf = reagentShortfall([{ name: 'elderberry', amount: 5 }], { elderberry: 3, 'orc tooth': 1 }, 3);
 ok(sf.elderberry === 4 && sf['orc tooth'] === 3, 'shortfall is per reagent for N casts');
 

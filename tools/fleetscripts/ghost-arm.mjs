@@ -57,7 +57,7 @@ import { OUTFIT_RUN, outfitNeeds, planOutfit, packRoom, poolMoney, armorerErrand
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
-         planReagents, countFamily, assignRoles, blessAssignments, expect, reexpect, barrier, leave }
+         planReagents, countFamily, isReagent, assignRoles, blessAssignments, expect, reexpect, barrier, leave }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -586,7 +586,7 @@ export const script = {
           let left = m.amount, moved = 0, why = null;
           for (let round = 0; left > 0 && round < 6; round++) {
             const inv = await call('inventory', { agent }, 40_000).catch(() => null);
-            const stack = (inv?.items ?? []).filter(i => i.id != null && String(i.name ?? '').toLowerCase().includes(m.what))
+            const stack = (inv?.items ?? []).filter(i => i.id != null && isReagent(i.name, m.what))
               .sort((a, b) => (b.amount || 1) - (a.amount || 1))[0];
             if (!stack) { why = 'none left in the pack'; break; }
             const n = Math.min(left, stack.amount || 1);
