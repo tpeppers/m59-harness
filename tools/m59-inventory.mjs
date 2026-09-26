@@ -248,7 +248,13 @@ export async function handOver(from, to, what, { makeRoomMin = 400 } = {}) {
     .catch(e => ({ supplied: false, reason: e.message })));
   let r = await give();
   if (!r?.supplied && /receiver_full|cannot hold/i.test(String(r?.reason ?? ''))) {
-    if (await makeRoom(to, { min: makeRoomMin })) r = await give();
+    // ASK AGAIN WHETHER OR NOT ANYTHING WAS DROPPED. makeRoom returns null when the receiver already
+    // has the room it measures, and the hand-over used to give up there: on rehearsal 26 a shield
+    // was refused "receiver_full" to a raider with 440 bulk free. A second offer after a moment is
+    // cheap, and a refusal that was transient (an exchange in flight) goes through.
+    await makeRoom(to, { min: makeRoomMin });
+    await sleep(1500);
+    r = await give();
   }
   return { ok: !!r?.supplied, why: r?.supplied ? null : (r?.reason ?? '?') };
 }
