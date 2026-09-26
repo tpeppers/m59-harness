@@ -23245,6 +23245,10 @@ export class Autopilot {
     const v = c.vitals?.();
     if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return false;
     if (this.threat().landing > 0) return false;
+    // A POSTED CASTER PRACTISES ONLY FROM ITS WALL. `maintainRoomEnchantPost` takes shelter before
+    // it casts anything, even at full health; practice must not be the one cast that happens in
+    // the open — the desk this was written for is a 20-max-health body.
+    if (this.isRoomEnchantPost?.() && !this.holdWorks()) return false;
 
     const spells = (c.spells || []).map(sp => ({
       id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0 }));

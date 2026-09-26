@@ -75,6 +75,28 @@ console.log('\nthe menu decides the reserve');
   ok('no desk, no floor: nothing kept, and it says so', none.mana === 0 && /nothing kept back/.test(none.why));
 }
 
+console.log('\nreserve_services narrows the reserve');
+{
+  const two = deskReserve({ practice: normalizePractice({ spells: ['purify'], reserve_services: ['uncurse', 'fol'] }),
+                            services: offeredServices(DESK), known: ALL, keep: { emerald: 4 } });
+  ok('uncurse + fol only: 2 x forces of light = 24, not 60', two.mana === 24, JSON.stringify(two));
+  ok('the why says which services it was for', /among uncurse, fol/.test(two.why), two.why);
+  ok('no orc teeth are kept when reveal is not reserved for', !two.reagents['orc tooth']);
+  ok('an unknown service is reported', normalizePractice({ spells: ['purify'], reserve_services: ['teleport'] })
+     .problems.some(p => /teleport/.test(p)));
+  // Loial, 2026-09-25: 65 max mana against two reveals.
+  const full = deskReserve({ services: offeredServices(DESK), known: ALL });
+  const stuck = choosePractice({ practice: normalizePractice({ spells: ['purify', 'holy symbol'] }),
+    spells: [{ name: 'purify', targets: 0 }, { name: 'holy symbol', targets: 0 }],
+    mana: { value: 65, max: 65 }, have: () => 99, reserve: full });
+  ok('65 max against a 60 reserve is named as never, not waiting', stuck.blocked === 'reserve_leaves_no_room'
+     && /leaves 5/.test(stuck.why), JSON.stringify(stuck));
+  const fits = choosePractice({ practice: normalizePractice({ spells: ['purify', 'holy symbol'] }),
+    spells: [{ name: 'purify', targets: 0 }, { name: 'holy symbol', targets: 0 }],
+    mana: { value: 65, max: 65 }, have: () => 99, reserve: two });
+  ok('and with the narrowed reserve he practises purify at 65', fits.cast?.name === 'purify', JSON.stringify(fits));
+}
+
 console.log('\nreagents the desk needs are kept back too');
 {
   const r = deskReserve({ services: offeredServices(DESK), known: ALL, keep: { emerald: 4 } });
@@ -244,6 +266,10 @@ console.log('\nthe keeper casts at the post and reads the mana back');
   ok('away from the post it does not practise', await away.practiceAtDesk() === false && !away.s.client.sent.length);
   const serving = makeAp(); serving._chaliceServe = { kind: 'desk' };
   ok('with a desk job in flight it does not practise', await serving.practiceAtDesk() === false && !serving.s.client.sent.length);
+  const post = makeAp(); post.isRoomEnchantPost = () => true;
+  ok('a posted caster off its wall does not practise', await post.practiceAtDesk() === false && !post.s.client.sent.length);
+  const walled = makeAp({ hold: true }); walled.isRoomEnchantPost = () => true;
+  ok('and on its wall it does', await walled.practiceAtDesk() === true);
   const errand = makeAp(); errand.errand = { kind: 'loot run' };
   ok('under an errand it does not practise', await errand.practiceAtDesk() === false);
   const off = makeAp({ practice: null });

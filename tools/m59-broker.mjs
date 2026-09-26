@@ -10708,6 +10708,8 @@ const TOOLS = [
           description: 'What to drill, tried in order. A name, or {name, target: "self"|"none"}; without a target a one-target spell is cast on self.' },
         reserve_casts: { type: 'number',
           description: 'Casts of the dearest service this desk offers AND knows, kept back in mana and in reagents. Default 2.' },
+        reserve_services: { type: 'array', items: { type: 'string' },
+          description: 'Which desk services (uncurse, reveal, fol) the reserve is for. Default: all offered. Name a subset when two of the dearest would leave no room to practise.' },
         mana_floor: { type: 'number', description: 'An absolute floor under the derived reserve; the larger wins. Default 0.' },
         gap_ms: { type: 'number', description: 'One practice cast per this long. Default 20000 (ADVANCEMENT_LIMIT makes faster pointless).' },
         refused_ms: { type: 'number', description: 'A cast that spent no mana sets that spell aside this long. Default 300000.' },

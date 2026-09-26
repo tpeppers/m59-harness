@@ -95,6 +95,11 @@ export const PRACTICE_DEFAULTS = Object.freeze({
   spells: Object.freeze([]),
   // THE OPERATOR'S NUMBER. Casts of the dearest offered service kept back in mana (and reagents).
   reserve_casts: 2,
+  // WHICH SERVICES THE RESERVE IS FOR. Empty means every service the desk offers. Naming a
+  // subset lets a small mana pool practise at all: Loial has 65 max mana, and two reveals (60)
+  // would leave five, so on the operator's order (2026-09-25) his reserve covers remove curse
+  // and forces of light (2 x 12 = 24) and a reveal may have to wait for mana.
+  reserve_services: Object.freeze([]),
   // An absolute mana floor under the derived one — for a character with no desk, or a desk
   // somebody wants to keep deeper than two casts. The larger of the two wins.
   mana_floor: 0,
@@ -146,6 +151,14 @@ export function normalizePractice(cfg) {
       out.spells = list;
       continue;
     }
+    if (k === 'reserve_services') {
+      const list = [].concat(v ?? []).map(x => String(x).trim().toLowerCase());
+      const bad = list.filter(x => !Object.hasOwn(SERVICE_SPELLS, x));
+      if (bad.length) out.problems.push(`reserve_services: ${bad.join(', ')} not a desk service ` +
+        `(${Object.keys(SERVICE_SPELLS).join(', ')})`);
+      out.reserve_services = list.filter(x => Object.hasOwn(SERVICE_SPELLS, x));
+      continue;
+    }
     if (k === 'rooms') {
       const rooms = [].concat(v ?? []).map(Number).filter(n => Number.isInteger(n) && n > 0);
       if (rooms.length !== [].concat(v ?? []).length) out.problems.push('rooms must be room numbers');
@@ -178,7 +191,9 @@ export function deskReserve({ practice = PRACTICE_DEFAULTS, services = [], known
   const casts = Number(practice.reserve_casts ?? PRACTICE_DEFAULTS.reserve_casts);
   const priced = [];
   const unpriced = [];
+  const only = new Set([].concat(practice.reserve_services ?? []));
   for (const kind of services) {
+    if (only.size && !only.has(kind)) continue;
     const svc = SERVICE_SPELLS[kind];
     if (!svc || !knows.has(svc.spell)) continue;
     const cost = spellCost(svc.spell, catalogue);
@@ -196,6 +211,7 @@ export function deskReserve({ practice = PRACTICE_DEFAULTS, services = [], known
 
   const why = dearest
     ? `${casts} x ${dearest.name} (${dearest.mana} mana), the dearest service this desk offers and knows` +
+      (only.size ? ` among ${[...only].join(', ')}` : '') +
       (floor > derived ? `; mana_floor ${floor} is higher and wins` : '')
     : (floor > 0 ? `no service this character can cast; mana_floor ${floor}`
                  : 'no service this character can cast, and no mana_floor: nothing kept back');
@@ -221,6 +237,18 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
   if (!practice) return { cast: null, why: 'practice is off', blocked: 'off' };
   if (!(mana && Number.isFinite(mana.value)))
     return { cast: null, why: 'mana is unreadable, so the reserve cannot be honoured', blocked: 'unreadable' };
+  // A RESERVE THAT LEAVES NO ROOM FOR ANY LISTED SPELL is not "waiting for mana" — it never
+  // fires, however long it waits. Said out loud, with the arithmetic, so it is not read as idle.
+  if (Number.isFinite(mana.max) && reserve.mana < mana.max) {
+    const known = new Set(spells.map(s => String(s.name).toLowerCase()));
+    const costs = practice.spells.filter(w => known.has(w.name))
+      .map(w => spellCost(w.name, catalogue)?.mana).filter(Number.isFinite);
+    if (costs.length && Math.min(...costs) > mana.max - reserve.mana)
+      return { cast: null, blocked: 'reserve_leaves_no_room',
+               why: `max mana ${mana.max} less the ${reserve.mana} reserve (${reserve.why}) leaves ` +
+                    `${mana.max - reserve.mana}, and the cheapest listed spell costs ${Math.min(...costs)} — ` +
+                    'nothing can ever be practised; lower reserve_casts or narrow reserve_services' };
+  }
   if (Number.isFinite(mana.max) && reserve.mana >= mana.max)
     return { cast: null, blocked: 'reserve_exceeds_max',
              why: `the reserve (${reserve.mana}: ${reserve.why}) is not below max mana ${mana.max} — ` +
