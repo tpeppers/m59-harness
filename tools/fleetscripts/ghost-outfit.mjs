@@ -602,6 +602,26 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
           (out.unbought ? `; NO ROOM for ${JSON.stringify(out.unbought)}` : ''));
     }
   }
+  // GEMS FROM HERBUTTE (the Sparkling Stone Shop, room 109). Bless costs two SAPPHIRES a cast and
+  // forces of light an emerald; the hall draw never asked for either, and on rehearsal 24 twenty
+  // door buffs failed "no mana and no reagents moved" with casters carrying mushrooms and no
+  // sapphires. What the chests could not give is bought here, sized to the pack like the rest.
+  const gems = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && /sapphire|emerald/i.test(k));
+  if (ride.ok && gems.length && Number(p.gem_shop)) {
+    const at = await hopTo(agent, Number(p.gem_shop), { floor: 0.5 });
+    if (at.ok) {
+      const r = await roomFor(agent);
+      let free = r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : Infinity;
+      const lines = [];
+      for (const [item, n] of gems) {
+        const u = weighItem(item); const c = Math.max(Number(u?.weight) || 0, Number(u?.bulk) || 0) || 1;
+        const ask = Math.min(n, Math.max(0, Math.floor(free / c)));
+        if (ask > 0) { lines.push({ item, amount: ask }); free -= ask * c; }
+      }
+      out.bought_gems = lines.length ? await buyByName(agent, p.gem_seller ?? 'Herbutte', lines) : {};
+      log(`  ${agent} bought at the gem shop: ${JSON.stringify(out.bought_gems)}`);
+    }
+  }
   // GEAR THE CHESTS LACKED, FROM THE SMITH — only when the caller asks (`buy_gear`). The ghost raid
   // leaves gear to its armorers' own smith trips; a general provisioning run (provision.mjs) buys it
   // here, on the same trip. One piece per exchange, read back (buyShare's rule).

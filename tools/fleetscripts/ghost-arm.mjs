@@ -60,7 +60,7 @@ import { OUTFIT_RUN, outfitNeeds, planOutfit, hallStock, profileOf, deliver, pac
          hallDraw, hallSplit, HALL_WANTS, OUTFIT, makeRoom }
   from './ghost-outfit.mjs';
 import { STAGE_ROOM, DEDICATE, LIGHT, BLESS, HEAL, STRENGTH, buddyAssignments, isHammer, isBlunt, isWeaponName, hammerNeed, matchHammers,
-         planReagents, countFamily, isReagent, assignRoles, blessAssignments, expect, reexpect, barrier, leave }
+         planReagents, countFamily, isReagent, assignRoles, raidNeeds, blessAssignments, expect, reexpect, barrier, leave }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -143,6 +143,7 @@ export const script = {
     dress_limit_s: { type: 'number', default: 900, describe: 'late dedications must finish this long after the first starts; a raider not served by then goes to the door with the weapon it has' },
     extra_trip_min: { type: 'number', default: 3, describe: 'after the first armorer trip, ride again only for at least this many owed pieces' },
     spare_hammers: { type: 'number', default: 6, describe: 'hammers the armorers carry unassigned, for raiders the foundry fails' },
+    gem_shop: { type: 'number', default: 109, describe: 'where a hall rider buys the sapphires and emeralds the chests lacked (Herbutte, the Sparkling Stone Shop; 0 = do not)' },
     split_hall: { type: 'boolean', default: true, describe: 'armorers draw armour and shop in ONE trip while runners fetch the reagents (false: rehearsal 21 order)' },
     hall_runners: { type: 'number', default: 1, describe: 'split_hall: how many raiders ride for the reagents' },
     trips: { type: 'number', default: 3, describe: 'shopping trips at most' },
@@ -521,7 +522,16 @@ export const script = {
           }
           const runners = runnersOf(agents, p, roles, pair);
           if (runners.includes(agent)) {
-            const reagents = wants.filter(w => !/shield|armou?r/i.test(String(w.item)));
+            // WHAT THE RAID NEEDS, LESS WHAT THE FLEET CARRIES — every reagent, gems included (operator:
+            // bring any and all required reagents). HALL_WANTS' reagent amounts are a floor. Rehearsal
+            // 24's fixed list had no sapphires, and bless (two a cast) failed twenty times at the door.
+            const need = raidNeeds(agents, roles, { lightCasts: Number(p.light_casts), blessRounds: Number(p.bless_rounds), herbsEach: Number(p.herbs_each) });
+            const carried = k => agents.reduce((n, a) => n + countFamily(SURVEY.get(a)?.items ?? [], k), 0);
+            const floor = Object.fromEntries(wants.filter(w => !/shield|armou?r|hammer/i.test(String(w.item))).map(w => [w.item, Number(w.amount) || 0]));
+            const keys = new Set([...Object.keys(need), ...Object.keys(floor)]);
+            const reagents = [...keys].map(k => ({ item: k, amount: Math.max(floor[k] ?? 0, Math.ceil((need[k] ?? 0) * 1.15) - carried(k)) }))
+              .filter(w => w.amount > 0);
+            console.log(`  ${agent} runner: drawing ${reagents.map(w => `${w.amount} ${w.item}`).join(', ')}`);
             const room = Object.fromEntries(runners.map(a => { const r = SURVEY.get(a)?.roomFor; return [a, r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : undefined]; }));
             const share = hallSplit(runners, reagents, weighItem, room)[agent] ?? [];
             st.hall = await hallDraw({ agent, crew: runners, holder: cupHolderOf(agents, roles), share, p });

@@ -427,7 +427,7 @@ async function fight(cfg, { composed = false } = {}) {
   return res;
 }
 
-async function recordDeaths(dir) {
+export async function recordDeaths(dir) {
   const meta = JSON.parse(fs.readFileSync(path.join(dir, 'raid.json'), 'utf8'));
   const ledger = meta.ledger ?? await brokerLedgerDir();
   if (!ledger || !fs.existsSync(ledger)) return;
@@ -437,15 +437,26 @@ async function recordDeaths(dir) {
   const agents = new Set(meta.agents);
   const pmDir = path.resolve(ledger, '..', '..', 'postmortems');
   const pms = fs.existsSync(pmDir) ? fs.readdirSync(pmDir) : [];
-  const rows = readLedger(ledger, started).filter(r => r.kind === 'died' && agents.has(r.agent));
+  // THE LEDGER'S DEATH ROWS NAME A CHARACTER, NOT AN AGENT — rehearsal 24's deaths.jsonl came out
+  // empty against seventeen deaths in its report because this matched on `agent` alone. The run's
+  // own samples and gear events say which character each agent is.
+  const charToAgent = new Map();
+  for (const e of [...readJsonl(path.join(dir, 'samples.jsonl')), ...readJsonl(path.join(dir, 'events.jsonl'))])
+    if (e.agent && e.character) charToAgent.set(String(e.character), e.agent);
+  const rows = readLedger(ledger, started).filter(r => r.kind === 'died')
+    .map(r => ({ ...r, agent: r.agent ?? charToAgent.get(String(r.character ?? '')) ?? null }))
+    .filter(r => agents.has(r.agent));
   const out = rows.map(r => {
-    const inStep = steps.find(x => x.agent === r.agent && x.t0 <= r.t && r.t <= x.t0 + x.ms);
+    // The step it died IN: the one spanning the death, else the last one to START before it (a
+    // death inside a long step — the fight itself — is recorded when that step ends, if it does).
+    const mine = steps.filter(x => x.agent === r.agent && x.t0 <= r.t).sort((a, b) => b.t0 - a.t0);
+    const inStep = mine.find(x => r.t <= x.t0 + x.ms) ?? mine[0];
     const pm = pms.filter(f => f.startsWith(`${r.character}-`))
       .map(f => ({ f, t: Date.parse(f.slice(r.character.length + 1).replace(/\.json$/, '').replace(/T(\d\d)-(\d\d)-(\d\d)-(\d+)Z/, 'T$1:$2:$3.$4Z')) }))
       .filter(x => Number.isFinite(x.t) && Math.abs(x.t - r.t) < 5 * 60_000).sort((a, b) => Math.abs(a.t - r.t) - Math.abs(b.t - r.t))[0];
     return { t: r.t, iso: new Date(r.t).toISOString(), agent: r.agent, character: r.character ?? null,
              killed_by: r.killed_by ?? r.by ?? null, room: r.room_num ?? r.room ?? null,
-             step: inStep ? (inStep.label ?? `${inStep.do}${inStep.to != null ? ':' + inStep.to : ''}`) : null,
+             step: inStep ? (inStep.label ?? inStep.why ?? `${inStep.do}${inStep.to != null ? ':' + inStep.to : ''}`) : null,
              postmortem: pm ? path.join(pmDir, pm.f) : null };
   });
   fs.writeFileSync(path.join(dir, 'deaths.jsonl'), out.map(d => JSON.stringify(d) + NL).join(''));
