@@ -883,7 +883,9 @@ export const armourScore = (a) => a ? a.defense + a.absorb * ABSORB_IS_WORTH : -
 // Everything wearable in the pack, best first, grouped by slot. Broken items are
 // excluded for the same reason weapons are: the server does not rename them, so the
 // only record that a thing has been refused is the one we keep.
-export function armourOf(c, { allowUnrevealed = false } = {}) {
+// `exclude(name)` — true for a piece that is being SAVED (guild stock, vault, protected cargo)
+// and so must not be worn. A worn piece is out of the pack's reach for a deposit or a hand-over.
+export function armourOf(c, { allowUnrevealed = false, exclude = null } = {}) {
   const broken = brokenSet(c);
   const out = { armour: [], shield: [], helm: [] };
   for (const o of c.inventory || []) {
@@ -897,6 +899,7 @@ export function armourOf(c, { allowUnrevealed = false } = {}) {
     // simply never got the same line.
     if (isCursedItem(c, o, name)) continue;
     if (allowUnrevealed !== true && isUnrevealed(o)) continue;
+    if (typeof exclude === 'function' && exclude(name)) continue;
     out[kind.slot].push({ o, name, kind, score: armourScore(kind) });
   }
   for (const k of ARMOUR_SLOTS) out[k].sort((a, b) => b.score - a.score);
@@ -909,14 +912,14 @@ export function armourOf(c, { allowUnrevealed = false } = {}) {
 // meant to wear is how a fleet ends up believing it is armoured. `equipped` here means
 // the id is in plUsing and the server said so, nothing weaker.
 export async function wearBest(s, { slots = ARMOUR_SLOTS, refresh = true,
-                                    allowUnrevealed = false,
+                                    allowUnrevealed = false, exclude = null,
                                     beforeMutation = null, shouldCancel = null } = {}) {
   const c = s.need();
   if (refresh) {
     await s.pacer.submit('read', () => c.requestInventory());
     await c.waitFor({ kinds: ['inventory'], timeoutMs: 3000 });
   }
-  const have = armourOf(c, { allowUnrevealed });
+  const have = armourOf(c, { allowUnrevealed, exclude });
   const broken = brokenSet(c);
   const worn = [], skipped = [], rejected = [];
   // Same reason as equipBest: an empty slot because everything for it is unread is a reveal

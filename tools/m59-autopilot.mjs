@@ -3520,11 +3520,33 @@ export class Autopilot {
   async wearLootedArmour(looted = []) {
     const piece = (looted || []).some(n => skills.armourKind(String(n).replace(/ x\d+$/, '')));
     if (!piece) return false;
+    return this.wearIntoEmptySlots('put on armour we just looted');
+  }
+
+  // SELL LOOT IS ALWAYS FIT TO WEAR; SAVED STOCK NEVER IS. Operator, 2026-09-25: "make sure
+  // they wear the leather and shields while they're farming if they aren't being saved".
+  // So a piece named by protectedItemNames() — vault items, protect_items, guild-plan wants,
+  // the stockpile, cargo held for somebody — is not a candidate: worn, it is out of reach of
+  // the deposit or hand-over it is being kept for. Everything else in the pack may fill an
+  // empty slot. Called after every loot, and from the farm pass on a one-minute clock so a
+  // character that looted before this existed, or restarted with a spare aboard, still dresses.
+  savedArmourName() {
+    const saved = (this.protectedItemNames?.() ?? []).map(s => String(s).toLowerCase().trim())
+      .filter(Boolean);
+    if (!saved.length) return null;
+    return (name) => {
+      const n = String(name || '').toLowerCase();
+      return saved.some(s => n === s || n.includes(s));
+    };
+  }
+
+  async wearIntoEmptySlots(what = 'put on armour we were carrying') {
     if (this.facultyHeld?.('economy')) return false;
     const c = this.s?.client;
     const using = skills.equippedNow(c);
     if (!c || !using) return false;           // no use list: cannot tell what is empty
-    const have = skills.armourOf(c);
+    const exclude = this.savedArmourName();
+    const have = skills.armourOf(c, { exclude });
     const wornSlots = new Set();
     for (const o of c.inventory || []) {
       if (!using.has(o.id)) continue;
@@ -3534,10 +3556,10 @@ export class Autopilot {
     const empty = skills.ARMOUR_SLOTS.filter(sl => have[sl]?.length && !wornSlots.has(sl));
     if (!empty.length) return false;
     // `_wearBest` is a test seam; production always takes skills.wearBest.
-    const r = await (this._wearBest ?? skills.wearBest)(this.s, { slots: empty }).catch(() => null);
+    const r = await (this._wearBest ?? skills.wearBest)(this.s, { slots: empty, exclude }).catch(() => null);
     if (r?.worn?.length) {
       this.tally.armour_worn = (this.tally.armour_worn || 0) + r.worn.length;
-      this.note('put on armour we just looted', {
+      this.note(what, {
         worn: r.worn.map(w => `${w.name} (${w.slot})`), empty_slots: empty,
         why: 'the slot was empty and the piece was in the pack; a character wearing no body ' +
              'armour can never sell a spare, and one wearing none is hit more' });
@@ -19360,6 +19382,13 @@ export class Autopilot {
                 'carries them out, and still owns survival, resting, re-arming and the ' +
                 'Underworld, which are decided far above this branch' });
       }
+    }
+    // DRESS FROM THE PACK, once a minute while farming. The loot sites catch a piece as it is
+    // picked up; this catches the spare that was already aboard. Free when no slot is empty,
+    // and it never swaps — see wearIntoEmptySlots.
+    if (this.mode === 'farm' && Date.now() - (this.dressedAt ?? 0) > 60_000) {
+      this.dressedAt = Date.now();
+      await this.wearIntoEmptySlots('put on armour we were carrying').catch(() => false);
     }
     if (this.mode === 'farm') {
       // EAT FIRST — BEFORE THE ROOM, THE PREY, THE PACK OR THE WALL.

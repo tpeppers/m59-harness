@@ -141,9 +141,10 @@ console.log('\nlooted armour is worn by an armed character too');
   // A client with an axe worn and, in the pack, a leather armour and a shield. `wearing` adds
   // names to the use list.
   const names = { 1: 'axe', 2: 'leather armor', 3: 'small round shield', 4: 'chain armor' };
-  const mk = ({ wearing = ['axe'], carrying = [1, 2, 3], economy = 'keeper' } = {}) => {
+  const mk = ({ wearing = ['axe'], carrying = [1, 2, 3], economy = 'keeper', saved = [] } = {}) => {
     const ap = Object.create(Autopilot.prototype);
     ap.policy = {}; ap.tally = {}; ap.note = () => {};
+    ap.protectedItemNames = () => saved;
     ap.facultyHeld = (f) => f === 'economy' && economy !== 'keeper';
     const ids = Object.keys(names).map(Number).filter(i => carrying.includes(i));
     ap.s = { client: {
@@ -152,7 +153,7 @@ console.log('\nlooted armour is worn by an armed character too');
       rsc: { get: (id) => names[id] },
     } };
     ap.asked = [];
-    ap._wearBest = async (_s, { slots }) => { ap.asked.push(slots); return { worn: slots.map(slot => ({ slot, name: slot })) }; };
+    ap._wearBest = async (_s, { slots, exclude }) => { ap.asked.push(slots); ap.exclude = exclude; return { worn: slots.map(slot => ({ slot, name: slot })) }; };
     return ap;
   };
 
@@ -175,8 +176,27 @@ console.log('\nlooted armour is worn by an armed character too');
   ap = mk();
   await ap.wearLootedArmour(undefined);
   ok('no loot at all is not an error', ap.asked.length === 0);
+
+  // SAVED STOCK IS NOT WORN. Operator: "wear the leather and shields ... if they aren't being
+  // saved". Leather on the protect list leaves the body slot alone; the shield still goes on.
+  ap = mk({ saved: ['orc tooth', 'leather armor'] });
+  await ap.wearIntoEmptySlots();
+  ok('a saved leather armour does not fill the body slot, the unsaved shield does',
+     ap.asked.length === 1 && !ap.asked[0].includes('armour') && ap.asked[0].includes('shield'),
+     JSON.stringify(ap.asked));
+  ok('...and wearBest is handed the same exclusion, so it cannot pick the saved piece',
+     typeof ap.exclude === 'function' && ap.exclude('leather armor') && !ap.exclude('small round shield'));
+  ap = mk({ saved: ['leather armor', 'small round shield'] });
+  await ap.wearIntoEmptySlots();
+  ok('everything saved: nothing is worn and nothing is sent', ap.asked.length === 0);
+  // A SPARE ALREADY ABOARD, with no loot event at all — the farm pass's own clock.
+  ap = mk();
+  await ap.wearIntoEmptySlots();
+  ok('a spare already in the pack is worn without a loot event', ap.asked.length === 1);
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('both loot sites call it', (AP.match(/await this\.wearLootedArmour\(looted\);/g) ?? []).length >= 2);
+  ok('the farm pass dresses from the pack on a one-minute clock',
+     /this\.mode === 'farm' && Date\.now\(\) - \(this\.dressedAt \?\? 0\) > 60_000[\s\S]{0,200}wearIntoEmptySlots/.test(AP));
 }
 
 console.log('');
