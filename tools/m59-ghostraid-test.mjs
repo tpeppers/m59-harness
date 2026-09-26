@@ -282,5 +282,17 @@ ok(/survival, 30 min after the kill/.test(reportMarkdown(rep, { fleet: 'shadow' 
   ok(cupHolderIn(new Map([['x', { items: [] }]])) === null, 'provision: no cup, no holder');
 }
 
+{
+  // A resting caster cannot cast (player.kod:1162, PFLAG_NO_MAGIC), and the keeper sits people
+  // down on its own. The keeper's cast action must hold the pacer, then stand, then cast.
+  const fsm = await import('node:fs');
+  const src = fsm.readFileSync(new URL('./m59-keeper-process.mjs', import.meta.url), 'utf8');
+  const at = src.indexOf("case 'cast': {");
+  const body = src.slice(at, src.indexOf("case 'rest':", at));
+  const hold = body.indexOf('holdForCast'), stand = body.indexOf('c.stand?.()'), cast = body.indexOf('c.cast(spell.id, targets)');
+  ok(at > 0 && hold > 0 && stand > hold && cast > stand,
+     'keeper cast: the pacer hold, then a stand, then the cast — a resting caster casts nothing');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

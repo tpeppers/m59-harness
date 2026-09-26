@@ -4188,6 +4188,15 @@ const server = createServer(async (req, res) => {
               if (loop) loop._frozen = true;
               session.pacer.holdForCast?.(hold, `casting ${spellName}`);
               try {
+                // STAND FIRST, INSIDE THE HOLD. A resting player cannot cast at all:
+                // player.kod:1162 sets PFLAG_NO_MAGIC while resting, and UserCast refuses
+                // before CanPayCosts — no trance, no mana, no reagent. The keeper's own
+                // recovery sits a caster down from paths the tick loop does not own, so a
+                // caller's `stand` a second earlier is no guarantee: rehearsal 29
+                // (2026-09-26) lost most of its dedications to "no mana and no reagents
+                // moved". The pacer hold above now suppresses any new sit, and this stand
+                // (a no-op on a standing body) goes out on the same socket ahead of the cast.
+                c.stand?.();
                 c.cast(spell.id, targets);
                 // Stop as soon as the server has DECIDED — blink relocates, everything else
                 // announces — and otherwise sit out the whole charge.
