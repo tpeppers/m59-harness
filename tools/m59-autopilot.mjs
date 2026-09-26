@@ -14989,6 +14989,19 @@ export class Autopilot {
     // Every stage takes the SAME context object, so the list can be a list of names —
     // which is what lets `m59-passorder-test.mjs` assert the order and the short-circuit
     // against this real function rather than against a copy of it.
+    //
+    // DRESS FROM THE PACK, once a minute while farming, BEFORE THE LADDER. The loot sites catch
+    // a piece as it is picked up; this catches the spare that was already aboard. It sat at the
+    // top of passFarm first, and Rizzo showed why that is too late: a character cycling
+    // "leaving the wall" / "gave up the safe spot" ends every pass in the rest rung and never
+    // reaches passFarm at all, so a chain armour sat in his pack for minutes. Here every pass
+    // sees it. Not while anything is in reach — nobody changes clothes mid-fight. Free when no
+    // slot is empty, never swaps, stands down under an economy lease: see wearIntoEmptySlots.
+    if (this.mode === 'farm' && Date.now() - (this.dressedAt ?? 0) > 60_000
+        && !(this.inReachOfUs?.()?.length)) {
+      this.dressedAt = Date.now();
+      await this.wearIntoEmptySlots('put on armour we were carrying').catch(() => false);
+    }
     return this.runPassLadder({ s, c, room, v, hp });
   }
 
@@ -19382,13 +19395,6 @@ export class Autopilot {
                 'carries them out, and still owns survival, resting, re-arming and the ' +
                 'Underworld, which are decided far above this branch' });
       }
-    }
-    // DRESS FROM THE PACK, once a minute while farming. The loot sites catch a piece as it is
-    // picked up; this catches the spare that was already aboard. Free when no slot is empty,
-    // and it never swaps — see wearIntoEmptySlots.
-    if (this.mode === 'farm' && Date.now() - (this.dressedAt ?? 0) > 60_000) {
-      this.dressedAt = Date.now();
-      await this.wearIntoEmptySlots('put on armour we were carrying').catch(() => false);
     }
     if (this.mode === 'farm') {
       // EAT FIRST — BEFORE THE ROOM, THE PREY, THE PACK OR THE WALL.

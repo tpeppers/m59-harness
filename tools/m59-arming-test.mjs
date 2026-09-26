@@ -195,8 +195,14 @@ console.log('\nlooted armour is worn by an armed character too');
   ok('a spare already in the pack is worn without a loot event', ap.asked.length === 1);
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('both loot sites call it', (AP.match(/await this\.wearLootedArmour\(looted\);/g) ?? []).length >= 2);
-  ok('the farm pass dresses from the pack on a one-minute clock',
-     /this\.mode === 'farm' && Date\.now\(\) - \(this\.dressedAt \?\? 0\) > 60_000[\s\S]{0,200}wearIntoEmptySlots/.test(AP));
+  ok('every farm-mode pass dresses from the pack on a one-minute clock, before the ladder',
+     /this\.mode === 'farm' && Date\.now\(\) - \(this\.dressedAt \?\? 0\) > 60_000[\s\S]{0,300}wearIntoEmptySlots[\s\S]{0,120}return this\.runPassLadder/.test(AP));
+  // Not inside passFarm: a character whose passes all end in an earlier rung never got there.
+  const farm = AP.slice(AP.indexOf('  async passFarm(ctx) {'));
+  ok('...and not inside passFarm, which a resting character never reaches',
+     !farm.slice(0, 20000).includes('this.dressedAt'));
+  ok('...and not while anything is in reach',
+     /dressedAt \?\? 0\) > 60_000\s*&& !\(this\.inReachOfUs\?\.\(\)\?\.length\)/.test(AP));
 }
 
 console.log('');
