@@ -21266,8 +21266,8 @@ export class Autopilot {
   // raises its own karma in one action. There is no reason not to take it.
   // THE HEAL LADDER, HIGHEST FIRST — and which rung is cast is the whole point.
   //
-  // Shal'ille has three: minor heal at level 1 (3 mana), hospice at level 3 (10 mana and
-  // 3 herbs), major heal at level 5 (20). This used to match `/^(minor heal|heal)$/` and so
+  // Shal'ille has three: minor heal at level 1 (3 mana, 1 herb), hospice at level 3 (10 mana
+  // and 3 herbs), major heal at level 5 (20 mana, 5 herbs). This used to match `/^(minor heal|heal)$/` and so
   // always cast the LEVEL ONE spell, whatever the caster knew.
   //
   // That is not a style point. `PlayerCanLearn` gates level N on the best THREE abilities at
@@ -21278,9 +21278,12 @@ export class Autopilot {
   // best rung instead turns every hurt fleet-mate into practice at the level that counts, and
   // needs no amulet, no dedicated patient and no second character held still for it.
   static HEALS = Object.freeze([
-    { name: 'major heal', mana: 20, reagents: [] },
+    // EVERY RUNG TAKES HERBS (heal.kod, hospice.kod, majheal.kod via substrate/m59-spells.json).
+    // Minor and major heal were listed with none, so a caster out of herbs sent casts the server
+    // refused in silence — which is exactly what the reagent check below exists to prevent.
+    { name: 'major heal', mana: 20, reagents: [['herb', 5]] },
     { name: 'hospice',    mana: 10, reagents: [['herb', 3]] },
-    { name: 'minor heal', mana: 3,  reagents: [] },
+    { name: 'minor heal', mana: 3,  reagents: [['herb', 1]] },
   ]);
 
   async medic() {

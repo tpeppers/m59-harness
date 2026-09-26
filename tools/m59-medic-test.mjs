@@ -63,11 +63,23 @@ console.log('the heal ladder is declared, ordered, and priced');
   ok('minor heal costs 3 mana', by['minor heal'].mana === 3);
   ok('hospice costs 10', by.hospice.mana === 10);
   ok('major heal costs 20', by['major heal'].mana === 20);
-  // ONLY HOSPICE TAKES REAGENTS, and a rung that cannot pay them must be skipped rather
-  // than cast — a cast that cannot pay is refused server-side and looks like one that landed.
-  ok('hospice needs 3 herbs and the others need none',
+  // EVERY RUNG TAKES HERBS, and a rung that cannot pay them must be skipped rather than cast —
+  // a cast that cannot pay is refused server-side and looks like one that landed. This used to
+  // assert "only hospice takes reagents", which pinned a wrong table in place; it now checks
+  // the table against the kod catalogue, so the two cannot drift apart again.
+  ok('minor heal 1 herb, hospice 3, major heal 5',
+     JSON.stringify(by['minor heal'].reagents) === JSON.stringify([['herb', 1]]) &&
      JSON.stringify(by.hospice.reagents) === JSON.stringify([['herb', 3]]) &&
-     by['minor heal'].reagents.length === 0 && by['major heal'].reagents.length === 0);
+     JSON.stringify(by['major heal'].reagents) === JSON.stringify([['herb', 5]]));
+  {
+    const { spellCost } = await import('./m59-deskpractice.mjs');
+    for (const h of A.HEALS) {
+      const kod = spellCost(h.name);
+      ok(`${h.name} matches the kod catalogue (mana and reagents)`,
+         kod && kod.mana === h.mana && JSON.stringify(kod.reagents) === JSON.stringify(h.reagents),
+         JSON.stringify({ table: h, kod }));
+    }
+  }
   ok('the ladder is frozen, so a policy cannot reorder it by accident',
      Object.isFrozen(A.HEALS));
 }
