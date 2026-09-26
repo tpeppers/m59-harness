@@ -541,6 +541,7 @@ export const script = {
             return true;
           }
           const runners = runnersOf(agents, p, roles, pair);
+          if (agent === [...agents].sort()[0]) console.log(`  hall: armorers ${pair.join(', ') || 'none'}; reagent runner(s) ${runners.join(', ') || 'NONE — nobody qualified, no reagents will be drawn'}`);
           if (runners.includes(agent)) {
             // WHAT THE RAID NEEDS, LESS WHAT THE FLEET CARRIES — every reagent, gems included (operator:
             // bring any and all required reagents). HALL_WANTS' reagent amounts are a floor. Rehearsal

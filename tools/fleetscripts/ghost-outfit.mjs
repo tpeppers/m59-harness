@@ -463,6 +463,7 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
       }
       t.withdrew = r?.took ?? {};
       log(`  ${agent} armorer trip ${trip}: from the chests ${JSON.stringify(t.withdrew)}` + (r?.ok ? '' : ` (${r?.why ?? 'refused'})`));
+      if (r?.diag && Object.values(r.short ?? {}).some(n => n > 0)) log(`  ${agent} armorer trip ${trip}: withdrawal diagnostics ${JSON.stringify(r.diag)}`);
       supply(agent, 'armorer', 'guild chest', t.withdrew);
     }
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
@@ -585,10 +586,11 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
       await sleep(20_000);
       r = await draw();
     }
-    out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0;
+    out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0; out.diag = r?.diag ?? null;
     if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
   }
   supply(agent, crew?.length ? 'hall rider' : 'rider', 'guild chest', out.took);
+  if (out.diag && Object.values(out.short ?? {}).some(n => n > 0)) log(`  ${agent} hall draw diagnostics: ${JSON.stringify(out.diag)}`);
   log(`  ${agent} hall draw: ${out.ride}` + (out.stashed ? `; stashed ${out.stashed}` : '') + (out.took ? `; took ${JSON.stringify(out.took)}` : '') +
       (out.short && Object.keys(out.short).length ? `; SHORT ${JSON.stringify(out.short)}` : '') +
       (out.why ? `; REFUSED ${out.why}` : ''));
