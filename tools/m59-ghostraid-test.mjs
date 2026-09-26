@@ -25,25 +25,34 @@ let pass = 0, fail = 0;
   const w = nextGhostWindow(0);
   ok0(GHOST_CYCLE_S === 7200 && w.lo === 6480_000 && w.hi === 7920_000, 'next ghost 108-132 minutes after a seen spawn');
 
-  // The valve: arm at everyone >= 50 %, open while the room is cleared, close under pressure.
-  const cfg = { startAt: 0.5, closeBelow: 0.35, stepMs: 60_000 };
-  let v = valveStep({ open: 0, armed: false, changedAt: 0 }, { minFrac: 0.4, monsters: 0, now: 1000, squares: 6 }, cfg);
-  ok0(!v.armed && v.open === 0, 'not armed while anyone is under half health');
-  v = valveStep(v, { minFrac: 0.6, monsters: 0, now: 2000, squares: 6 }, cfg);
+  // The valve: armed at everyone >= 50 %; opens a level only when the last was cleared EASILY.
+  const cfg = { startAt: 0.5, closeBelow: 0.35, easyHealth: 0.6, dwellMs: 180_000, maxOpen: 5 };
+  const R = (v, r) => valveStep(v, { squares: 6, incidents: 0, stranger: false, monsters: 0, minFrac: 0.9, ...r }, cfg);
+  let v = R({ open: 0, armed: false }, { minFrac: 0.4, now: 0 });
+  ok0(!v.armed, 'not armed while anyone is under half health');
+  v = R(v, { now: 1000 });
   ok0(v.armed && v.open === 0, 'arms once everyone is at half or better');
-  v = valveStep(v, { minFrac: 0.8, monsters: 0, now: 30_000, squares: 6 }, cfg);
-  ok0(v.open === 0, 'waits a whole step before opening');
-  v = valveStep(v, { minFrac: 0.8, monsters: 0, now: 70_000, squares: 6 }, cfg);
-  ok0(v.open === 1, 'opens one square when the room is empty and everyone is healthy');
-  v = valveStep(v, { minFrac: 0.8, monsters: 1, now: 140_000, squares: 6 }, cfg);
-  ok0(v.open === 2, 'and another while the fleet keeps up (one alive)');
-  v = valveStep(v, { minFrac: 0.8, monsters: 7, now: 150_000, squares: 6 }, cfg);
-  ok0(v.open === 1, 'closes one when more are alive than it can take (> 2 x open + 2)');
-  v = valveStep(v, { minFrac: 0.3, monsters: 0, now: 160_000, squares: 6 }, cfg);
-  ok0(v.open === 0, 'closes one when a raider is low');
-  let full = { open: 6, armed: true, changedAt: 0 };
-  full = valveStep(full, { minFrac: 0.9, monsters: 0, now: 1e9, squares: 6 }, cfg);
-  ok0(full.open === 6, 'never opens more squares than there are holders');
+  v = R(v, { now: 100_000 });
+  ok0(v.open === 0, 'a whole dwell (3 min) before the first square');
+  v = R(v, { now: 182_000 });
+  ok0(v.open === 1, 'opens one after a quiet dwell');
+  v = R(v, { now: 300_000, minFrac: 0.55 });
+  v = R(v, { now: 560_000 });
+  ok0(v.open === 1, 'NOT easy: somebody dipped under 60 %, so the dwell starts again');
+  v = R(v, { now: 900_000 });
+  ok0(v.open === 2, 'a clean dwell at level 1 (6 min, longer at every level) opens the second');
+  v = R(v, { now: 910_000, incidents: 1 });
+  ok0(v.open === 1, 'a death, retreat or departure shuts one at once');
+  v = R(v, { now: 920_000, incidents: 1, monsters: 5 });
+  ok0(v.open === 0, 'more alive than 2 x open + 2 shuts another');
+  let w6 = { open: 5, armed: true, changedAt: 0, incidentsAt: 0 };
+  w6 = R(w6, { now: 1e9 });
+  ok0(w6.open === 5, 'the sixth square stays shut unless maxOpen says otherwise');
+  const w7 = valveStep({ open: 5, armed: true, changedAt: 0, incidentsAt: 0 }, { now: 1e9, minFrac: 0.9, squares: 6 }, { ...cfg, maxOpen: 6 });
+  ok0(w7.open === 6, 'maxOpen 6 is the deliberate choice that opens it');
+  const s1 = R({ open: 3, armed: true, changedAt: 0, incidentsAt: 0 }, { now: 5000, stranger: true });
+  ok0(s1.open === 0, 'a stranger in the room shuts every square at once');
+  ok0(R(s1, { now: 1e9, stranger: true }).open === 0, 'and none opens while one is there');
 }
 const ok = (cond, name) => { if (cond) pass++; else { fail++; console.log(`FAIL ${name}`); } };
 

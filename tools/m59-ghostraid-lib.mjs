@@ -46,23 +46,42 @@ export const nextGhostWindow = spawnT => ({ lo: spawnT + Math.round(0.9 * GHOST_
 
 /**
  * THE SPAWN VALVE (operator, 2026-09-25): after the kill, spawn-square holders step off one at a
- * time so the fleet farms what the room makes — enough to keep killing, never so much it is
- * overwhelmed. Pure: given the state and one reading, the new number of open squares.
- *   armed only once everyone in the room is at `startAt` or better;
- *   CLOSE one when anyone is under `closeBelow` or live monsters exceed 2 x open + 2;
- *   OPEN one when the room is nearly empty (<= 1 monster), everyone is at `startAt`+, and the last
- *   change was `stepMs` ago.
+ * time so the fleet farms what the room makes — and the room stays TIGHTLY under control, because
+ * PVP can break out even on prod. Pure: given the state and one reading, the new state.
+ *
+ *   a STRANGER (a player who is not ours) in the room: every square shut, and none opens while one is;
+ *   a DEATH, RETREAT or DEPARTURE since the last change: one square shut, now;
+ *   anyone under `closeBelow`, or more alive than 2 x open + 2: one square shut;
+ *   ONE MORE opens only when the fleet has EASILY cleared the current level: a whole dwell at it
+ *     (dwellMs x (open + 1) — longer at every level), no incident in it, nobody under `easyHealth`
+ *     at any reading in it, and the room nearly empty now; and never past `maxOpen` (5 by default:
+ *     the sixth square is a deliberate choice).
+ * The valve arms only once everyone in the room is at `startAt` or better.
  */
-export function valveStep(v, { minFrac = 1, monsters = 0, now = Date.now(), squares = 6 } = {},
-                          { startAt = 0.5, closeBelow = 0.35, stepMs = 60_000 } = {}) {
+export function valveStep(v, { minFrac = 1, monsters = 0, now = Date.now(), squares = 6, incidents = 0, stranger = false } = {},
+                          { startAt = 0.5, closeBelow = 0.35, easyHealth = 0.6, dwellMs = 180_000, maxOpen = 5 } = {}) {
   const out = { ...v };
-  if (!out.armed) { if (minFrac >= startAt) { out.armed = true; out.changedAt = now; } return out; }
-  if (minFrac < closeBelow || monsters > 2 * out.open + 2) {
-    if (out.open > 0) { out.open--; out.changedAt = now; out.why = minFrac < closeBelow ? 'a raider is low' : 'too many alive'; }
+  const reset = why => { out.changedAt = now; out.dwellFrom = now; out.incidentsAt = incidents; out.why = why; };
+  if (!out.armed) {
+    if (minFrac >= startAt && !stranger) { out.armed = true; reset('armed: everyone is over half health'); }
     return out;
   }
-  if (monsters <= 1 && minFrac >= startAt && now - (out.changedAt ?? 0) >= stepMs && out.open < squares) {
-    out.open++; out.changedAt = now; out.why = 'the room is being cleared';
+  // A DIP UNDER easyHealth RESTARTS THE DWELL: the level was not cleared easily, so it has to be
+  // held cleanly for a whole dwell again before the next square.
+  if (minFrac < easyHealth) out.dwellFrom = now;
+  if (stranger) { if (out.open > 0) { out.open = 0; reset('a stranger is in the room'); } return out; }
+  if (incidents > (out.incidentsAt ?? 0)) {
+    if (out.open > 0) out.open--;
+    reset('a death, retreat or departure'); return out;
+  }
+  if (minFrac < closeBelow || monsters > 2 * out.open + 2) {
+    if (out.open > 0) { out.open--; reset(minFrac < closeBelow ? 'a raider is low' : 'too many alive'); }
+    return out;
+  }
+  const cap = Math.min(squares, maxOpen);
+  const dwelt = now - (out.dwellFrom ?? out.changedAt ?? 0) >= dwellMs * (out.open + 1);
+  if (out.open < cap && dwelt && monsters <= 1 && minFrac >= easyHealth) {
+    out.open++; reset(`level ${out.open - 1} cleared easily`);
   }
   return out;
 }

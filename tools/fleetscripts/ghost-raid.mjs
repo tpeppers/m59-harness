@@ -117,6 +117,8 @@ async function takeCheckpoint(label) {
 }
 
 function event(kind, data = {}) {
+  // INCIDENTS the valve answers to: a death, a retreat (low health) or a raider leaving the room.
+  if (kind === 'died' || kind === 'retreat' || kind === 'left') RUN.incidents = (RUN.incidents ?? 0) + 1;
   if (!RUN.dir) return;
   try { fs.appendFileSync(path.join(RUN.dir, 'events.jsonl'), JSON.stringify({ t: Date.now(), kind, ...data }) + '\n'); }
   catch { /* a lost event line must never stop a fight */ }
@@ -494,7 +496,9 @@ export const script = {
     valve: { type: 'boolean', default: true, describe: 'after the kill, open spawn squares one at a time to farm what the room makes (needs spawn_block)' },
     valve_start: { type: 'number', default: 0.5, describe: 'the valve arms, and opens, only with everyone in the room at this fraction of health or better' },
     valve_close_below: { type: 'number', default: 0.35, describe: 'close a square when anyone in the room falls under this' },
-    valve_step_s: { type: 'number', default: 60, describe: 'at least this long between opening one square and the next' },
+    valve_dwell_s: { type: 'number', default: 180, describe: 'a level must be held this long (x level+1) without incident before the next square opens' },
+    valve_easy_health: { type: 'number', default: 0.6, describe: 'a level counts as EASY only if nobody in the room fell under this during its dwell' },
+    valve_max: { type: 'number', default: 5, describe: 'the most spawn squares the valve opens; 6 (all) is a deliberate choice' },
     camp_next: { type: 'boolean', default: false, describe: 'stay in the throne room for the NEXT ghost: until its predicted window has passed (see GHOST_CYCLE_S)' },
     camp_max_min: { type: 'number', default: 150, describe: 'camp_next: the longest to stay after the first kill' },
     spawn_block: { type: 'number', default: 6, describe: 'how many of the throne room\'s 6 spawn squares raiders stand on (healers first, then the weakest); 0 = off' },
@@ -888,9 +892,17 @@ async function valveTick(agent, p) {
     RUN.countdownAt = now;
     console.log(`  countdown: next ghost in ${Math.max(0, Math.round((RUN.nextWindow.lo - now) / 60_000))}-${Math.max(0, Math.round((RUN.nextWindow.hi - now) / 60_000))} min (phase ${phase})`);
   }
-  const rows = (await fleetNow()).filter(r => RUN.agents.includes(r.agent) && r.room === RUN.room && r.frac != null);
+  const all = await fleetNow();
+  const rows = all.filter(r => RUN.agents.includes(r.agent) && r.room === RUN.room && r.frac != null);
   const minFrac = rows.length ? Math.min(...rows.map(r => r.frac)) : 1;
   const { others } = await lookAround(agent, p.target);
+  // A STRANGER: a player in the room who is none of ours. PVP can break out on prod, and a room full
+  // of spawns is the worst place to meet it, so every square shuts while one is here.
+  const ours = new Set(all.map(r => String(r.who ?? '').toLowerCase()).filter(Boolean));
+  const players = ((await call('look', { agent }, 40_000).catch(() => null))?.objects ?? []).filter(o => o.is_player);
+  const strangers = players.filter(o => !ours.has(String(o.name ?? '').toLowerCase())).map(o => o.name);
+  if (strangers.length && !RUN.strangerSeen) { RUN.strangerSeen = true; event('stranger', { names: strangers }); console.log(`  STRANGER in the throne room: ${strangers.join(', ')} — every spawn square shut`); }
+  if (!strangers.length) RUN.strangerSeen = false;
   if (phase === 'shut' || phase === 'prep') {
     RUN.valve = { ...RUN.valve, open: 0, why: phase === 'prep' ? 'preparing for the next ghost' : RUN.ghostAlive ? 'the ghost is up' : 'before the kill' };
     // READY: the room is empty and everyone in it is healthy. The lead this took is the fleet's
@@ -903,8 +915,9 @@ async function valveTick(agent, p) {
     }
   } else {
     const squares = phase === 'one' ? Math.min(RUN.blockerCount, Number(p.valve_before_spawn)) : RUN.blockerCount;
-    RUN.valve = valveStep(RUN.valve, { minFrac, monsters: others.length, squares },
-      { startAt: Number(p.valve_start), closeBelow: Number(p.valve_close_below), stepMs: Number(p.valve_step_s) * 1000 });
+    RUN.valve = valveStep(RUN.valve, { minFrac, monsters: others.length, squares, incidents: RUN.incidents ?? 0, stranger: strangers.length > 0 },
+      { startAt: Number(p.valve_start), closeBelow: Number(p.valve_close_below), easyHealth: Number(p.valve_easy_health),
+        dwellMs: Number(p.valve_dwell_s) * 1000, maxOpen: Number(p.valve_max) });
     if (RUN.valve.open > squares) RUN.valve = { ...RUN.valve, open: squares };
   }
   if (RUN.valve.open !== before) {
