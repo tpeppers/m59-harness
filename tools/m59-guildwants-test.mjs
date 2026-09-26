@@ -173,4 +173,17 @@ eq(guildShortfall({ plan: PLAN, chests: chestsWith(), rent: IN_GUILD })
   ok(mixed.chests.has('r18c2') && mixed.chests.has('r20c4'));
 }
 
+// THE CO-OP OWNS ITS REAGENTS AND NOTHING ELSE (2026-09-25). guildWantedNames returned [] for every
+// co-op member, so a non-reagent want (scimitars, raid armour) was dropped or sold by exactly the
+// characters the co-op was on for. Source check: the pass-level method is inline in the keeper.
+{
+  const { readFileSync } = await import('node:fs');
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = AP.indexOf('  guildWantedNames() {');
+  const body = AP.slice(at, AP.indexOf('\n  }', at));
+  ok(at > 0, 'guildWantedNames exists');
+  ok(!body.includes('reagentCoop?.enabled) return []'), 'a co-op member no longer gets an empty want list');
+  ok(body.includes('coopOwns') && body.includes('!coopOwns?.has(norm(item))'), 'only the co-op reagent list is excluded');
+}
+
 console.log(`guild wants: ${n} assertions passed`);

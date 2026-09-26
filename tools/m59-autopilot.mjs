@@ -4783,15 +4783,27 @@ export class Autopilot {
     } catch { return []; }
   }
 
+  // WHAT THE GUILD PLAN IS SHORT OF, KEPT FROM THE FLOOR AND THE MERCHANT UNTIL IT IS DEPOSITED.
+  //
+  // THE CO-OP OWNS ITS REAGENTS AND NOTHING ELSE. This returned [] for every co-op member, so a
+  // guild want that is not a co-op reagent — armour, weapons, raid stock — was unprotected for
+  // exactly the characters the co-op switched on: dropped as a banned weapon or sold on the
+  // next trip before the deposit could take it. Same backwards gate chestSourcedNames already
+  // records. Measured 2026-09-25: 7 of the 8 Icky Cave crew are co-op members, and the order
+  // was "drop scimitars as needed, but deposit 20+ in the guild chest" — scimitars are banned
+  // for them, so without this every one was dropped. Now only the co-op's own reagent list
+  // is excluded, and everything else the plan is short of is protected while it is short.
   guildWantedNames() {
-    if (this.policy.reagentCoop?.enabled) return [];
     if (!this.policy.guildWants?.enabled) return [];
     const plan = guildPlan();
     if (!plan) return [];
+    const coopOwns = this.policy.reagentCoop?.enabled
+      ? new Set((this.policy.reagentCoop.reagents ?? []).map(r => norm(r))) : null;
     try {
       const store = new StorageCache();
       const test = guildKeepTest({ plan, chests: store.allChests(), rent: store.readRent() });
-      return [...(test.shortfall ?? new Map())].filter(([, short]) => short > 0).map(([item]) => item);
+      return [...(test.shortfall ?? new Map())].filter(([, short]) => short > 0).map(([item]) => item)
+        .filter(item => !coopOwns?.has(norm(item)));
     } catch { return []; }
   }
 
