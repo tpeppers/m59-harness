@@ -846,7 +846,7 @@ async function rehearse(cfg) {
     // and a scroll names a family of fifteen classes the wire does not tell apart, so rehearsal 25's
     // first attempt refused a clone whose "14 of 29" was fifteen uncreatable scrolls.
     const lower = x => String(x ?? '').toLowerCase();
-    const uncreatable = /scroll/i;
+    const uncreatable = /scroll/i;
     const wantNames = [...new Set((c.inventory ?? []).map(i => lower(i.name)).filter(n => n && !uncreatable.test(n)))];
     const haveNames = new Set(((await rpc('inventory', { agent: c.shadow_account }).catch(() => null))?.items ?? []).map(i => lower(i.name)));
     const missing = wantNames.filter(n => !haveNames.has(n));
