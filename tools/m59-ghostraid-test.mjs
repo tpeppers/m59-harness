@@ -5,9 +5,20 @@
 //   node tools/m59-ghostraid-test.mjs
 import { hammerNeed, matchHammers, reagentShortfall, planReagents, assignRoles, countFamily,
          expect, barrier, leave, resetBarriers, survivalReport, reportMarkdown, GHOST_ROOM,
-         isHammer, isBlunt, blessAssignments, buddyAssignments } from './m59-ghostraid-lib.mjs';
+         isHammer, isBlunt, blessAssignments, buddyAssignments, spawnBlockers, THRONE_GENERATORS } from './m59-ghostraid-lib.mjs';
 
 let pass = 0, fail = 0;
+{
+  // Spawn blocking: the throne room's six generator squares (throne1.kod:61), held healers first.
+  const ok0 = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL', m); } };
+  ok0(THRONE_GENERATORS.length === 6 && THRONE_GENERATORS[0][0] === 5 && THRONE_GENERATORS[0][1] === 3, 'six spawn squares, [row, col], r5c3 first');
+  const b = spawnBlockers(['a', 'b', 'c', 'd', 'light', 'h'], { lightbearer: 'light', healers: ['h'],
+    maxHealth: { a: 75, b: 55, c: 60, d: 70, h: 66 }, count: 3 });
+  ok0(Object.keys(b).join() === 'h,b,c', 'healers first, then the weakest by max health, never the light-bearer');
+  ok0(b.h.row === 5 && b.h.col === 3 && b.c.row === 13 && b.c.col === 3, 'each holder gets its own square, in order');
+  ok0(Object.keys(spawnBlockers(['a', 'b'], { count: 6 })).length === 2, 'never more holders than raiders');
+  ok0(Object.keys(spawnBlockers(['a', 'b'], { count: 0 })).length === 0, 'count 0 is off');
+}
 const ok = (cond, name) => { if (cond) pass++; else { fail++; console.log(`FAIL ${name}`); } };
 
 // ---- weapons

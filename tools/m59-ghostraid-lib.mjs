@@ -23,6 +23,31 @@
 
 export const GHOST_ROOM = 40;          // The Throne Room of Victoria Castle
 export const DOOR_ROOM = 38;           // Castle Victoria — the room the throne room opens off
+
+/**
+ * THE THRONE ROOM'S SPAWN SQUARES, [row, col] — throne1.kod:61 `plGenerators`. MonsterRoom
+ * GenerateMonster (monsroom.kod:216-232) picks ONE generator at random per tick and refuses the
+ * spawn when a battler already stands on that square; nothing retries it. So k of these 6 held by
+ * raiders removes k/6 of the tusked skeletons, and all 6 held stops them (m59-research report
+ * theoretical-farming-maximum, "standing on a generator eats spawns"). The ghost itself is not a
+ * generator spawn: it appears at r2c5 on its own timer.
+ */
+export const THRONE_GENERATORS = Object.freeze([[5, 3], [9, 2], [13, 3], [5, 9], [9, 10], [13, 9]]);
+
+/**
+ * WHO HOLDS A SPAWN SQUARE: healers first (they stand back anyway and heal from where they are),
+ * then the weakest by max health (the raiders a swarm on the ghost can spare), never the light-
+ * bearer. -> { agent: { row, col } }, at most `count` of `squares`.
+ */
+export function spawnBlockers(agents = [], { lightbearer = '', healers = [], maxHealth = {}, squares = THRONE_GENERATORS, count = squares.length } = {}) {
+  const pool = agents.filter(a => a !== lightbearer);
+  const hs = pool.filter(a => healers.includes(a));
+  const rest = pool.filter(a => !healers.includes(a))
+    .sort((a, b) => (Number(maxHealth[a]) || 0) - (Number(maxHealth[b]) || 0) || a.localeCompare(b));
+  const order = [...hs, ...rest];
+  const n = Math.max(0, Math.min(Number(count) || 0, squares.length, order.length));
+  return Object.fromEntries(order.slice(0, n).map((a, i) => [a, { row: squares[i][0], col: squares[i][1] }]));
+}
 export const STAGE_ROOM = 2;           // Outside Castle Victoria — where the raid forms up
 
 // Forces of light: 12 mana, 2 elderberry + 1 emerald (forceslt.kod ResetReagents), and

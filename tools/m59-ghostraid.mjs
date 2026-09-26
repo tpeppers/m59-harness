@@ -525,6 +525,7 @@ export async function report(cfg) {
       `${lightEvents.filter(e => e.outcome === 'still up').length} arrived while still lit`,
     `retreats to room 38: ${events.filter(e => e.kind === 'retreat').length}; walked back in: ${events.filter(e => e.kind === 'return').length}`,
     healNote(events),
+    spawnBlockNote(events),
     roomNote(events, killAt),
     buffNote(events),
     `ledger read: ${ledger && fs.existsSync(ledger) ? ledger : 'NONE — deaths are only the ones the raid itself saw'}`,
@@ -557,6 +558,17 @@ function gearMarkdown(events) {
   const ck = events.find(e => e.kind === 'checkpoint');
   if (ck) lines.push('', ck.ok ? `checkpoint before the door: \`${ck.name}\` — replay: ${ck.replay.join('; ')}` : `checkpoint NOT taken: ${ck.why}`);
   return lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
+}
+
+function spawnBlockNote(events) {
+  const sb = events.find(e => e.kind === 'spawn_block');
+  if (!sb) return 'spawn blocking: off';
+  const sums = events.filter(e => (e.kind === 'farm_summary' || e.kind === 'heal_summary') && e.block);
+  const held = sums.map(e => {
+    const on = e.block_on ?? 0, off = e.block_off ?? 0;
+    return `${e.agent} r${e.block.row}c${e.block.col} ${on + off ? Math.round(100 * on / (on + off)) : '?'}% on${e.died ? ' (died)' : ''}`;
+  });
+  return `spawn blocking: ${Object.keys(sb.holders ?? {}).length} of 6 squares assigned — ${held.join(', ') || 'no summaries'}`;
 }
 
 function healNote(events) {

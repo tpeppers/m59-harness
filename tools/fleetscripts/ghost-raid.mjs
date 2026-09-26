@@ -42,7 +42,7 @@ import { OUTFIT_RUN } from './ghost-outfit.mjs';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
 import { script as raidAction } from './raid-action.mjs';
 import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
-         buddyAssignments, expect, barrier, leave, isWeaponName }
+         buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -431,6 +431,7 @@ export const script = {
     cost: { risk: 'room 40 is a declared hazard: tusked skeletons are level 100' },
   },
   params: {
+    spawn_block: { type: 'number', default: 6, describe: 'how many of the throne room\'s 6 spawn squares raiders stand on (healers first, then the weakest); 0 = off' },
     checkpoint: { type: 'boolean', default: false, describe: 'rehearsals only: save the (loopback) world once everyone is armed, before the door, for replay' },
     agents: { type: 'agents', required: true },
     target: { type: 'string', default: 'ghost of Far', describe: 'the boss, as a name pattern' },
@@ -513,6 +514,26 @@ export const script = {
       strength: buddyAssignments(agents, roles.strongmen, { lightbearer: roles.lightbearer })[agent] ?? [],
       medic: roles.medics.includes(agent) || roles.healers.includes(agent),
     };
+    // SPAWN BLOCKING (operator, 2026-09-25): some raiders stand ON the throne room's spawn squares,
+    // which makes each spawn that picks their square fail. Healers first, then the weakest — the
+    // ones a swarm on the ghost can spare. Computed once and shared; `spawn_block` is how many of
+    // the six squares to hold (0 = off). Only meaningful in the ghost's own room.
+    if (Number(p.spawn_block) > 0 && RUN.room === DEFAULT_BOSS_ROOM) {
+      RUN.blockers ??= (async () => {
+        const maxHealth = {};
+        await Promise.all(agents.map(async a => {
+          const st = await call('status', { agent: a, brief: true }, 30_000).catch(() => null);
+          maxHealth[a] = Number(st?.health?.max ?? st?.hp?.max ?? 0);
+        }));
+        const b = spawnBlockers(agents, { lightbearer: roles.lightbearer, healers: roles.healers, maxHealth,
+                                          count: Number(p.spawn_block), squares: THRONE_GENERATORS });
+        event('spawn_block', { holders: b });
+        console.log(`  spawn block: ${Object.entries(b).map(([a, q]) => `${a} r${q.row}c${q.col}`).join(', ') || 'nobody'}`);
+        return b;
+      })();
+      const mine = (await RUN.blockers)[agent];
+      if (mine) duty.block = mine;
+    }
 
     // ---- THE DOOR, IN TWO BEATS. Everyone gathers in 38; the Kraanan casters bless their
     // share of the fleet and put super strength on themselves and one buddy; THEN the door
@@ -757,6 +778,19 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
   ];
 }
 
+/**
+ * STAND ON THE SPAWN SQUARE. true when this raider is on its assigned square (after walking back to
+ * it if it had moved); counts the samples on and off it for the report.
+ */
+async function holdSquare(agent, block, tally) {
+  const l = await call('look', { agent }, 40_000).catch(() => null);
+  const me = l?.you;
+  if (me && Number(me.row) === block.row && Number(me.col) === block.col) { tally.block_on = (tally.block_on ?? 0) + 1; return true; }
+  tally.block_off = (tally.block_off ?? 0) + 1;
+  await call('walk_to', { agent, col: block.col, row: block.row }, 60_000).catch(() => {});
+  return false;
+}
+
 /** Hold the room: the ghost first while it lives, then whatever is nearest. */
 async function farmLoop({ agent, p, st, say, duty }) {
   const tally = { swings: 0, kills: 0, retreats: 0, returns: 0, died: false, left: null, killed: {},
@@ -798,10 +832,23 @@ async function farmLoop({ agent, p, st, say, duty }) {
       await buffShare({ agent, duty: { ...duty, bless: [] }, p, where: RUN.room, patient: false });
       continue;
     }
+    // A SPAWN-SQUARE HOLDER stays on its square: back onto it first, then only what is in reach.
+    if (duty?.block && !(await holdSquare(agent, duty.block, tally))) continue;
     const { ghost, others } = await lookAround(agent, p.target);
     if (ghost) RUN.ghostSeen = true; else ghostGone(agent);
     const g = ghost ?? pickFocus(others, p);
     if (!g) { await sleep(3000); continue; }                 // nothing yet: the next one is ~12s off
+    if (duty?.block && (g.distance ?? 99) > 1) {
+      const near = [ghost, ...(others ?? [])].filter(Boolean).find(o => (o.distance ?? 99) <= 1);
+      if (!near) { await sleep(2000); continue; }             // nothing adjacent: hold, do not chase
+      const r = await call('attack', { agent, target: near.id, swings: Number(p.swings) }, 60_000).catch(e => ({ error: e.message }));
+      if (!r?.error) tally.swings += Number(p.swings);
+      for (const m of r?.messages ?? []) {
+        const k = /^You killed (?:the |a |an )?(.+?)\.?$/i.exec(m);
+        if (k) { tally.kills++; tally.killed[k[1]] = (tally.killed[k[1]] ?? 0) + 1; event('kill', { agent, creature: k[1] }); }
+      }
+      continue;
+    }
     // A refusal on reach closes to adjacent before the next swing (raid-action's rule, same
     // 2026-09-25 rehearsal: twenty swings from "distance 2", every one too far away).
     if ((g.distance ?? 99) > (lastTooFar ? 1 : 2)) {
@@ -828,7 +875,7 @@ async function farmLoop({ agent, p, st, say, duty }) {
   await windDown(agent, p);
   RUN.done.add(agent);
   st.farm = tally;
-  event('farm_summary', { agent, ...tally });
+  event('farm_summary', { agent, ...tally, ...(duty?.block ? { block: duty.block } : {}) });
   console.log(`  ${String(agent).padEnd(9)} farm: kills=${tally.kills} swings=${tally.swings} ` +
               `retreats=${tally.retreats} returns=${tally.returns} heals=${tally.heals_landed}/${tally.heals}${tally.died ? ' DIED' : ''}` +
               (tally.left != null ? ` left-to-${tally.left}` : ''));
@@ -858,6 +905,7 @@ async function healLoop({ agent, p, st, say, duty }) {
       await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: RUN.room, patient: false });
       continue;
     }
+    if (duty?.block && !(await holdSquare(agent, duty.block, st.blockTally ??= {}))) continue;
     // Anyone being hit, not only the badly hurt: under heal_below, worst first.
     const h = await medicTick(agent, Number(p.heal_below));
     if (!h) { await sleep(2000); continue; }
@@ -867,7 +915,7 @@ async function healLoop({ agent, p, st, say, duty }) {
   await windDown(agent, p);
   RUN.done.add(agent);
   st.heal_window = { casts: casts.length, landed: casts.filter(c => c.landed).length };
-  event('heal_summary', { agent, ...st.heal_window });
+  event('heal_summary', { agent, ...st.heal_window, ...(duty?.block ? { block: duty.block, ...(st.blockTally ?? {}) } : {}) });
   console.log(`  ${String(agent).padEnd(9)} heals in the window: ${st.heal_window.landed}/${st.heal_window.casts}`);
   return true;
 }
