@@ -1935,6 +1935,51 @@ function fakeKeeper({ world, character = 'Tester' }) {
   return () => { globalThis.fetch = realFetch; };
 }
 
+console.log('\na lapsed lease is taken back, even while the broker cannot answer');
+{
+  // The keeper forgot the claim (renewed: []), and every observe through the broker fails —
+  // rehearsal 28's door. The beat must still reach the keeper, notice, claim again and cancel.
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  fakeBroker({ rooms: { a1: 39 }, positions: { a1: { row: 5, col: 5 } } });
+  const brokerFetch = globalThis.fetch;
+  let brokerDown = false;
+  globalThis.fetch = async (u, o) => {
+    const url = String(u);
+    if (url.includes(':' + KEEPER_PORT + '/live'))
+      return { ok: true, json: async () => ({ agent: 'a1', character: 'Tester', pid: 4242 }) };
+    if (url.includes(':' + KEEPER_PORT + '/action')) {
+      const b = JSON.parse(o.body); calls.push(b.name);
+      if (b.name === 'commander_heartbeat') return { ok: true, json: async () => ({ renewed: [] }) };
+      return { ok: true, json: async () => ({ faculties: { work: {}, movement: {}, economy: {} } }) };
+    }
+    if (url.includes(':' + KEEPER_PORT + '/cancel')) {
+      calls.push('cancel');
+      return { ok: true, json: async () => ({ cancelled: true }) };
+    }
+    if (/127\.0\.0\.1:19\d\d\d\//.test(url)) throw new Error('connection refused');
+    if (brokerDown) throw new Error('broker busy');
+    return brokerFetch(u, o);
+  };
+  const r = await fleetScript({ name: 'lapse', fleet: 'testfleet', agents: ['a1'],
+    steps: [verify(async () => {
+      brokerDown = true;
+      await new Promise(res => setTimeout(res, 1500));
+      brokerDown = false;
+      return true;
+    }, 'waited', 'lapse.wait')],
+    onLog: quiet });
+  globalThis.fetch = realFetch;
+  const claims = calls.filter(c => c === 'commander_claim').length;
+  ok('the heartbeat reached the keeper while the broker was down',
+     calls.includes('commander_heartbeat'), JSON.stringify(calls));
+  ok('and the lapsed claim was taken again', claims >= 2, JSON.stringify(calls));
+  ok('and the walk the keeper started in the gap was cancelled',
+     calls.filter(c => c === 'cancel').length >= 2, JSON.stringify(calls));
+  ok('the errand itself still succeeded', r.results.a1.ok === true,
+     JSON.stringify(r.results.a1).slice(0, 200));
+}
+
 console.log('\ncrawl_to waits an orc out and then walks past it');
 {
   // E is blocked by a BODY for the first two readings and clear afterwards — an orc that

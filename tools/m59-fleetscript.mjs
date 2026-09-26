@@ -1185,6 +1185,16 @@ export const UNSAFE_GUARANTEES = Object.freeze({
               'the fraction was perfect. The engagement ceiling scales with max health and so ' +
               'does the damage a road does to you, so the floor has to be absolute',
   },
+  leaseRetaken: {
+    what: 'a lease that lapsed is claimed again on the next beat, and the heartbeat goes to the ' +
+          'keeper directly rather than waiting on a broker read',
+    since: '2026-09-26',
+    incident: 'the beat renewed only after an observe through the broker, and the keeper renews ' +
+              'only claims it still holds. Rehearsal 28: twenty-two raiders buffing at the ghost ' +
+              'door loaded the broker, the leases lapsed, and every keeper walked its body off on ' +
+              'a sell circuit to Barloque while the script believed it held them — eighteen ' +
+              '"could not get into room 40"',
+  },
   leaseEndsAtDeath: {
     what: 'the faculty lease is handed back the moment the character dies, because movement ' +
           'is the faculty the escape needs',
@@ -2671,7 +2681,36 @@ export async function holdKeeper(ctx, agent, fleet) {
       { faculties: KEEPER_FACULTIES, by: `fleetscript:${ctx.name}` }).catch(() => {});
     ctx.log(agent, why ?? 'gave work, movement and economy back to the keeper');
   };
+  // GUARANTEE: A LEASE THAT LAPSED IS TAKEN BACK, AND THE BEAT DOES NOT WAIT ON THE BROKER.
+  //
+  // The beat used to renew only after a successful `observe` through the BROKER, and the
+  // keeper's heartbeat renews only claims it still holds — an expired one is deleted on the
+  // next read. So three slow broker answers in a row (30 s) lost the lease for good while this
+  // side went on believing it held the body. Rehearsal 28 (2026-09-26): twenty-two raiders
+  // casting door buffs at once, and at 10:35:25 the keepers of the raiders standing at the
+  // ghost's door each walked off on a sell circuit to Barloque (113, 109), through Ukgoth;
+  // eighteen then failed "could not get into room 40". The heartbeat now goes straight to the
+  // keeper every beat, and when it renews less than we hold, the claim is taken again and the
+  // walk the keeper started in the gap is cancelled.
+  const by = `fleetscript:${ctx.name}`;
   const beat = setInterval(() => {
+    if (done) return;
+    keeperCall(who, 'commander_heartbeat', { by, lease_ms: KEEPER_LEASE_MS }).then(async hb => {
+      if (done) return;
+      const renewed = Array.isArray(hb?.renewed) ? hb.renewed : null;
+      if (!renewed || KEEPER_FACULTIES.every(f => renewed.includes(f))) return;
+      const again = await keeperCall(who, 'commander_claim', {
+        faculties: KEEPER_FACULTIES, by, lease_ms: KEEPER_LEASE_MS,
+        why: `fleet errand: ${ctx.name} (lease lapsed, taken back)` }).catch(() => null);
+      const got = Object.keys(again?.faculties ?? {}).filter(f => KEEPER_FACULTIES.includes(f));
+      ctx.log(agent, `the lease had lapsed (renewed ${renewed.join(', ') || 'nothing'}) — ` +
+                     (got.length ? `took ${got.join(', ')} back and stopped whatever the keeper started`
+                                 : 'and the keeper would not give it back'));
+      if (got.length) await fetch(`http://127.0.0.1:${who.port}/cancel`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agent: who.agent, character: who.character, keeper_pid: who.pid }),
+        signal: AbortSignal.timeout(20_000) }).catch(() => {});
+    }).catch(() => {});
     // The read is what makes this a guard rather than a timer, so a failed read must not be
     // mistaken for a death — an unreadable character keeps its lease and the next beat asks
     // again. Only a positive `dead` releases.
@@ -2680,8 +2719,6 @@ export async function holdKeeper(ctx, agent, fleet) {
         return releaseNow('died while held — handing movement back so the keeper can leave ' +
                           'the Underworld, which is a walk and therefore needs the faculty ' +
                           'this lease was holding');
-      return keeperCall(who, 'commander_heartbeat',
-        { by: `fleetscript:${ctx.name}`, lease_ms: KEEPER_LEASE_MS });
     }).catch(() => {});
   }, KEEPER_BEAT_MS);
   beat.unref?.();
