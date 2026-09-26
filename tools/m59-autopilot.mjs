@@ -74,7 +74,7 @@ import { recordEvent } from './m59-ledger.mjs';
 import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills } from './m59-standing-orders.mjs';
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan, cargoWants,
-         reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu } from './m59-chalice.mjs';
+         reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu, folRoomsOf } from './m59-chalice.mjs';
 import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
@@ -8563,7 +8563,7 @@ export class Autopilot {
     // or the room a hand-off was arranged in. A confined holder that could not step out to
     // the station would hold the fleet's only chalice and never hand it to anybody.
     const chaliceRooms = opts?.chalice && this.chaliceCfg
-      ? [this.chaliceCfg.station_room, this.chaliceCfg.post_room, this.chaliceCfg.fol_room, opts.chaliceRoom]
+      ? [this.chaliceCfg.station_room, this.chaliceCfg.post_room, ...folRoomsOf(this.chaliceCfg), opts.chaliceRoom]
           .filter(r => r != null).map(Number)
       : [];
     if (confine?.length && !confine.map(Number).includes(Number(room)) && !chaliceRooms.includes(Number(room))) {
@@ -22321,7 +22321,7 @@ export class Autopilot {
     const menu = deskMenu({ cfg, have, floor, casts: this.chaliceCastsLeft(), cup: !!cup });
     const limits = Object.fromEntries(['human_hold_ms', 'human_max_wait_ms', 'ticket_ttl_ms']
       .map(k => [k, cfg[k]]));
-    try { store.setDesk(me, { menu, room: cfg.post_room ?? cfg.station_room, fol_room: cfg.fol_room, limits }, now); } catch {}
+    try { store.setDesk(me, { menu, room: cfg.post_room ?? cfg.station_room, fol_room: folRoomsOf(cfg)[0] ?? null, limits }, now); } catch {}
   }
 
   /**
@@ -22373,11 +22373,13 @@ export class Autopilot {
    */
   chaliceFolWatch(now = Date.now()) {
     const cfg = this.chaliceCfg;
-    if (!cfg?.fol_room || this.hereRoom() !== cfg.fol_room) return;
+    // ANY ROOM THE HOLDER LIGHTS, each on its own clock and its own tickets (fol_rooms).
+    const here = this.hereRoom();
+    if (!cfg || !folRoomsOf(cfg).includes(here)) return;
     if (this._folLookedAt && now - this._folLookedAt < 10_000) return;
     this._folLookedAt = now;
     const store = this.chaliceStore();
-    if (!folWanted({ cfg, here: this.hereRoom(), fol: store.fol(), now, role: this.chaliceRole() })) return;
+    if (!folWanted({ cfg, here, fol: store.folFor(here), now, role: this.chaliceRole() })) return;
     if (this._folAskedAt && now - this._folAskedAt < 30_000) return;
     this._folAskedAt = now;
     // A PERSON SERVING IS TOLD, ONCE PER `human_tell_gap_ms` FOR THE WHOLE FLEET. Everybody in
@@ -22385,15 +22387,15 @@ export class Autopilot {
     const desk = (() => { try { return servingDesk(store.duty(), cfg, now, store.humans()); } catch { return null; } })();
     const human = !!desk?.human && cfg.human_desk !== false;
     try {
-      store.request(this.who(), { room: cfg.fol_room, kind: 'fol', ttlMs: 120_000,
+      store.request(this.who(), { room: here, kind: 'fol', ttlMs: 120_000,
                                   ...(human ? { server: desk.server } : {}) });
     } catch {}
     if (human) {
       let speak = false;
       try { speak = store.claimTell(`fol:${desk.server.toLowerCase()}`, cfg.human_tell_gap_ms, now); } catch {}
       if (speak) {
-        const waiting = (() => { try { return store.read().tickets.filter(t => t.kind === 'fol' && t.status === 'open').length; } catch { return 1; } })();
-        this.chaliceTell(desk.server, `forces of light (${cfg.fol_room}) — ${waiting} waiting`, { service: 'fol', human: true })
+        const waiting = (() => { try { return store.read().tickets.filter(t => t.kind === 'fol' && t.status === 'open' && (t.room == null || Number(t.room) === here)).length; } catch { return 1; } })();
+        this.chaliceTell(desk.server, `forces of light (${here}) — ${waiting} waiting`, { service: 'fol', human: true })
           .catch(() => {});
       }
     }
@@ -22848,7 +22850,7 @@ export class Autopilot {
     }
     // FORCES OF LIGHT, AFTER ANY RIDE: a traveller at the station is waiting on us now; an
     // unlit room is costing the fleet accuracy, which is real but not a person standing there.
-    if (role === 'holder' && cfg.fol_room != null && this.chaliceFit()) {
+    if (role === 'holder' && folRoomsOf(cfg).length && this.chaliceFit()) {
       const t = store.claimNext(me, { kind: 'fol', ...ttl });
       if (t) return job('fol', 'go', t, { attempts: 0 });
     }
@@ -22929,13 +22931,16 @@ export class Autopilot {
       // ---- forces of light: in the door, cast until it pays, straight back out
       case 'fol:go':
         if (!this.chaliceFit()) { st.stage = 'back'; return true; }
-        return goto(cfg.fol_room, 'cast');
+        // THE ROOM THE TICKET NAMES, when it is one this holder lights; otherwise fol_room. A
+        // person's "fol in 39" must not walk a 20-health caster somewhere nobody configured.
+        st.folRoom = folRoomsOf(cfg).includes(Number(st.room)) ? Number(st.room) : cfg.fol_room;
+        return goto(st.folRoom, 'cast');
       case 'fol:cast': {
         // HURT IS OUT. The post is the refuge; a second cast is never worth a death.
         if (!this.chaliceFit()) { st.stage = 'back'; return true; }
         const r = await this.roomEnchant({ remote: true }).catch(e => ({ cast: false, why: e.message }));
         if (r?.cast) {
-          try { store.litFol({ room: cfg.fol_room, until: Date.now() + r.holdMs, by: me }); } catch {}
+          try { store.litFol({ room: st.folRoom ?? cfg.fol_room, until: Date.now() + r.holdMs, by: me }); } catch {}
           this.chaliceEvent('fol_lit', { holds_ms: r.holdMs, casts_left: r.casts_left, attempts: st.attempts + 1 });
           st.ticket = null; st.stage = 'back';
           return true;
@@ -22945,7 +22950,7 @@ export class Autopilot {
         // four tries, say lit-for-a-while on the shared clock so the occupants stop calling a
         // 20-health character into the room every few seconds, and go back out.
         if (++st.attempts >= 4) {
-          try { store.litFol({ room: cfg.fol_room, until: Date.now() + 60_000, by: me }); } catch {}
+          try { store.litFol({ room: st.folRoom ?? cfg.fol_room, until: Date.now() + 60_000, by: me }); } catch {}
           this.chaliceEvent('fol_unpaid', { why: r?.why ?? 'declined before casting', attempts: st.attempts });
           st.ticket = null; st.stage = 'back';
         }
@@ -23203,8 +23208,8 @@ export class Autopilot {
     // A CHALICE HOLDER WITH A FORCES-OF-LIGHT ROOM casts only there, on request, by stepping
     // in from its post (`chaliceDuty`, job `fol`). Standing at the post it casts nothing —
     // lighting the room it waits in would spend the reagents on nobody.
-    const fol = this.chaliceCfg?.fol_room;
-    if (!remote && fol != null && this.chaliceRole() === 'holder') return;
+    const fol = this.chaliceCfg ? folRoomsOf(this.chaliceCfg).length : 0;
+    if (!remote && fol && this.chaliceRole() === 'holder') return;
     // A posted caster must not spend its supplies in the room it logs into while
     // the operator is still placing it, or after survival evacuates the post.
     if (!remote && this.mode === 'idle' && this.policy.assignedRoom != null

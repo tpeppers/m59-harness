@@ -124,6 +124,11 @@ export const CHALICE_DEFAULTS = Object.freeze({
   // only when a fleetmate standing in it asks -- stepping in, casting until a cast pays, and
   // stepping straight back out. A 20-health caster is safe at the post and not in the room.
   fol_room: null,
+  // MORE ROOMS SERVED THE SAME WAY. Operator, 2026-09-26: "The Ukgoth farmers can also benefit
+  // from forces of light cast by Loial". Each room keeps its own clock (ChaliceStore.folFor) and
+  // its own tickets, and the visit walks to the room the ticket names. `fol_room` stays the
+  // first of them, so every older reader of a single room keeps working. See folRoomsOf.
+  fol_rooms: Object.freeze([]),
   // Ask for a recast this long before the holder's own clock says it lapses.
   fol_lead_ms: 5_000,
   // WHAT THE HOLDER SHOULD CARRY, so the fleet can keep it there instead of the holder
@@ -280,6 +285,15 @@ export function normalizeChalice(cfg = null) {
       out.supply_shops = shops;
       continue;
     }
+    if (k === 'fol_rooms') {
+      const list = [];
+      for (const r of [].concat(v ?? [])) {
+        const n = Number(r);
+        if (Number.isInteger(n) && n > 0) list.push(n); else problems.push(`fol_rooms: ${r} is not a room number`);
+      }
+      out.fol_rooms = [...new Set(list)];
+      continue;
+    }
     if (k === 'post_room' || k === 'fol_room') {
       if (v == null) { out[k] = null; continue; }
       const n = Number(v);
@@ -401,10 +415,16 @@ export function donationPlan({ have = {}, floors = {}, shortfall = {} } = {}) {
  * "lapsed by that clock, or never recorded" is the whole test.
  */
 export function folWanted({ cfg, here, fol = {}, now = Date.now(), role = null } = {}) {
-  if (!cfg?.enabled || cfg.fol_room == null) return false;
+  if (!cfg?.enabled) return false;
   if (role === 'holder') return false;
-  if (Number(here) !== cfg.fol_room) return false;
+  if (!folRoomsOf(cfg).includes(Number(here))) return false;
   return !(Number(fol.until) > now + (cfg.fol_lead_ms ?? 0));
+}
+
+/** Every room the holder lights on request: `fol_room` first, then `fol_rooms`. Pure. */
+export function folRoomsOf(cfg) {
+  return [...new Set([cfg?.fol_room, ...(cfg?.fol_rooms ?? [])]
+    .map(Number).filter(n => Number.isInteger(n) && n > 0))];
 }
 
 /**
@@ -580,7 +600,7 @@ export function deskMenu({ cfg, have = {}, floor = {}, casts = 0, cup = false } 
   for (const s of DESK_SERVICES) {
     if (s.kind === 'uncurse' && cfg?.uncurse === false) continue;
     if (s.kind === 'reveal' && cfg?.reveal === false) continue;
-    if (s.kind === 'fol' && cfg?.fol_room == null) continue;
+    if (s.kind === 'fol' && !folRoomsOf(cfg).length) continue;
     let why = null;
     if (s.kind === 'uncurse' && spare('emerald') < 1) why = 'Req. reagents';
     if (s.kind === 'reveal' && spare('orc tooth') < 3) why = 'Req. reagents';
@@ -867,12 +887,25 @@ export class ChaliceStore {
   // ---- forces of light: the holder's clock, shared so the room's occupants can ask in time
   fol() { return this.read().fol ?? {}; }
 
-  /** Record a lit room and close every open request for it -- one cast answers them all. */
+  /**
+   * ONE CLOCK PER ROOM. The holder lights more than one room now (`fol_rooms`), and a single
+   * record would let lighting 38 tell the occupants of 599 that their room was lit too. The
+   * per-room record wins; the legacy single record answers only for the room it names.
+   */
+  folFor(room) {
+    const s = this.read();
+    const r = Number(room);
+    return s.fol_rooms?.[r] ?? (Number(s.fol?.room) === r ? s.fol : {});
+  }
+
+  /** Record a lit room and close every open request FOR THAT ROOM -- one cast answers them all. */
   litFol({ room, until, by }, now = Date.now()) {
     return this.update(s => {
       s.fol = { room, until, by, at: now };
+      s.fol_rooms = { ...(s.fol_rooms ?? {}), [Number(room)]: { room, until, by, at: now } };
       for (const t of s.tickets)
-        if (t.kind === 'fol' && isLive(t)) Object.assign(t, { status: 'done', updated_at: now, by });
+        if (t.kind === 'fol' && isLive(t) && (t.room == null || Number(t.room) === Number(room)))
+          Object.assign(t, { status: 'done', updated_at: now, by });
       return { ...s.fol };
     }, now);
   }

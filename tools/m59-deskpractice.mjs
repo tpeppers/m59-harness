@@ -48,7 +48,7 @@ export function offeredServices(chalice) {
   const out = [];
   if (chalice.uncurse !== false) out.push('uncurse');
   if (chalice.reveal !== false) out.push('reveal');
-  if (chalice.fol_room != null) out.push('fol');
+  if (chalice.fol_room != null || chalice.fol_rooms?.length) out.push('fol');
   return out;
 }
 

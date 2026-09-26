@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { CHALICE, REFILL_ROOMS, CHALICE_DEFAULTS, normalizeChalice, roleOf, shouldRide,
          servingCharacter, tipPlan, planRoom, ChaliceStore, holderShortfall, donationPlan, folWanted, restockBuyPlan, PVP_TELEPORT_BLOCK_MS,
          reagentFloor, castsAbove, servingDesk, humanMark, HUMAN_FRESH_MS, deskMenu, formatDeskMenu,
-         parseDeskRequest, parseDeskReply, serviceTellText, cargoWants } from './m59-chalice.mjs';
+         parseDeskRequest, parseDeskReply, serviceTellText, cargoWants, folRoomsOf } from './m59-chalice.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.log(`  FAIL: ${what}`); } };
@@ -421,6 +421,42 @@ section('the store: marks, holds, closes, one tell per gap, and nothing lost to 
     eq(store.clearHuman('Loial the Ogier')?.agent, 'hk1', 'unmarked');
     eq(Object.keys(store.humans()).length, 0, 'and gone');
   } finally { rmSync(dir2, { recursive: true, force: true }); }
+}
+
+// FORCES OF LIGHT IN MORE THAN ONE ROOM (2026-09-26): "The Ukgoth farmers can also benefit from
+// forces of light cast by Loial". Each room has its own clock and its own tickets.
+console.log('forces of light in several rooms');
+{
+  const cfg = normalizeChalice({ holder: 'Loial the Ogier', fol_room: 38, fol_rooms: [599, 38, 'x'] });
+  eq(JSON.stringify(folRoomsOf(cfg)), '[38,599]', 'fol_room first, then the extra rooms, once each');
+  ok(cfg.problems.some(p => /fol_rooms: x/.test(p)), 'a nonsense room is reported, not applied');
+  eq(JSON.stringify(folRoomsOf(normalizeChalice({ holder: 'x', fol_room: 38 }))), '[38]', 'one room still works alone');
+  eq(folWanted({ cfg, here: 599, fol: {}, now: 5 }), true, 'an Ukgoth farmer asks for its own room');
+  eq(folWanted({ cfg, here: 39, fol: {}, now: 5 }), false, 'a room nobody configured does not');
+  eq(deskMenu({ cfg: normalizeChalice({ holder: 'x', station_room: 2, fol_rooms: [599] }), have: {}, casts: 5, cup: true })
+       .some(m => m.kind === 'fol'), true, 'extra rooms alone still put forces of light on the menu');
+
+  const dir3 = mkdtempSync(join(tmpdir(), 'chalice-fol-'));
+  try {
+    const store = new ChaliceStore({ directory: dir3, namespace: 'prod' });
+    const t38 = store.request('Kermit', { room: 38, kind: 'fol' }, 1000);
+    const t599 = store.request('Bunsen', { room: 599, kind: 'fol' }, 1000);
+    store.litFol({ room: 38, until: 100_000, by: 'Loial the Ogier' }, 2000);
+    eq(store.ticket(t38.id).status, 'done', 'lighting 38 answers the 38 ticket');
+    eq(store.ticket(t599.id).status, 'open', 'and NOT the Ukgoth one');
+    eq(store.folFor(38).until, 100_000, '38 has its clock');
+    eq(store.folFor(599).until, undefined, '599 has none yet, so its occupants still ask');
+    store.litFol({ room: 599, until: 50_000, by: 'Loial the Ogier' }, 3000);
+    eq(store.folFor(599).until, 50_000, 'each room keeps its own');
+    eq(store.folFor(38).until, 100_000, 'without overwriting the other');
+  } finally { rmSync(dir3, { recursive: true, force: true }); }
+
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok(AP.includes('st.folRoom = folRoomsOf(cfg).includes(Number(st.room)) ? Number(st.room) : cfg.fol_room;'),
+     "the visit walks to the ticket's room only when it is one the holder lights");
+  ok(AP.includes('store.litFol({ room: st.folRoom ?? cfg.fol_room'), 'and records the lit clock for that room');
+  ok(AP.includes('if (!cfg || !folRoomsOf(cfg).includes(here)) return;'), 'occupants of every lit room may ask');
+  ok(AP.includes('...folRoomsOf(this.chaliceCfg), opts.chaliceRoom]'), 'the post confinement admits every lit room');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
