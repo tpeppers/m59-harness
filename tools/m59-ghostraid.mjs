@@ -45,7 +45,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { survivalReport, reportMarkdown, GHOST_ROOM, STAGE_ROOM, assignRoles, raidNeeds, chestPlan } from './m59-ghostraid-lib.mjs';
+import { survivalReport, reportMarkdown, GHOST_ROOM, STAGE_ROOM, assignRoles, raidNeeds, chestPlan, isWeaponName } from './m59-ghostraid-lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
@@ -351,6 +351,7 @@ const fightParams = (cfg, dir, mustered) => ({
   ...(opt('--target') ? { target: opt('--target') } : {}),
   dum_profile: !!cfg.dumUrl,
   checkpoint: !!cfg.checkpoint,
+  ...(opt('--spawn-block') != null ? { spawn_block: Number(opt('--spawn-block')) } : {}),
 });
 
 async function arm(cfg) {
@@ -389,13 +390,19 @@ async function fight(cfg, { composed = false } = {}) {
       ledger: ledgerDir(cfg),
     }, null, 1));
     console.log(`raid directory: ${dir}`);
+    // THE SNAPSHOT THIS RUN WAS BUILT FROM, kept beside it: a replay re-dresses the fleet from it.
+    if (cfg.snapshotFile && fs.existsSync(cfg.snapshotFile)) fs.copyFileSync(cfg.snapshotFile, path.join(dir, 'shadow-snapshot.json'));
+    if (cfg.replayOf) fs.writeFileSync(path.join(dir, 'replay-of.txt'), cfg.replayOf);
   }
   // The DUM raid profile, ON before the script touches anyone (see dumOn) and OFF however this ends.
   const roles = cfg.dumUrl && cfg.commit ? await plan(cfg) : null;
   if (roles) await dumOn(cfg, roles, dir);
   let res;
   try {
-    res = composed
+    res = cfg.replayPositions
+      ? await runPhases(cfg, [{ file: 'raid-place.mjs', params: { positions: JSON.stringify(cfg.replayPositions) } },
+                              { file: 'ghost-raid.mjs', params: fightParams(cfg, dir, true) }])
+      : composed
       ? await runPhases(cfg, [{ file: 'ghost-arm.mjs', params: armParams(cfg) },
                               { file: 'raid-prep.mjs', params: prepParams(cfg) },
                               { file: 'ghost-raid.mjs', params: fightParams(cfg, dir, true) }])
@@ -620,6 +627,64 @@ function buffNote(events) {
  *
  * --skip-rebuild runs the raid against the shadow fleet as it stands.
  */
+/**
+ * REPLAY THE FIGHT FROM A RECORDED RUN'S DOOR (operator, 2026-09-25: reload the at-the-door state
+ * and try just the raid, skipping the preamble). The run's own snapshot, with every clone's pack
+ * and gear replaced by what fleet-state.json recorded at the checkpoint, is written where the
+ * rebuild reads it; the rebuild dresses the shadow fleet to it (--skip-snapshot --trim-items);
+ * raid-place stands each raider where it stood; ghost-raid runs. Monsters and the ghost's clock are
+ * whatever the lab server has now — only a server save (checkpoint.json) restores those.
+ *
+ *   node tools/m59-ghostraid.mjs replay --run substrate/raids/<dir> --fleet shadow --commit [--spawn-block 0]
+ */
+async function replay(cfg) {
+  const { assertLabFleet } = await import('./m59-fleetscript.mjs');
+  assertLabFleet('m59-ghostraid replay');
+  const roster = process.env.M59_STATE_FILE;
+  if (!roster) throw new Error('set M59_STATE_FILE to the shadow roster');
+  const src = opt('--run');
+  if (!src || !fs.existsSync(path.join(src, 'fleet-state.json'))) throw new Error(`--run needs a run directory with fleet-state.json (a rehearsal from 8704a11 on): ${src}`);
+  if (!fs.existsSync(path.join(src, 'shadow-snapshot.json'))) throw new Error(`${src} has no shadow-snapshot.json to re-dress from`);
+  if (cfg.commit && !flag('--allow-dirty')) {
+    const { gitState } = await import('./m59-raidtimes.mjs');
+    if (gitState().dirty) throw new Error('the tree has uncommitted changes — commit first (or --allow-dirty)');
+  }
+  const meta = JSON.parse(fs.readFileSync(path.join(src, 'raid.json'), 'utf8'));
+  const state = JSON.parse(fs.readFileSync(path.join(src, 'fleet-state.json'), 'utf8'));
+  const snap = JSON.parse(fs.readFileSync(path.join(src, 'shadow-snapshot.json'), 'utf8'));
+  const positions = {};
+  for (const c of snap.characters ?? []) {
+    const st = state.agents?.[c.shadow_account];
+    if (!st) continue;
+    c.inventory = st.items ?? c.inventory;
+    c.equipment = st.equipment ?? c.equipment;
+    c.wielding = (st.equipment ?? []).find(e => isWeaponName(e)) ?? c.wielding;
+    c.purse = (st.items ?? []).filter(i => /^shilling/i.test(String(i.name))).reduce((n, i) => n + (Number(i.amount) || 0), 0);
+    if (st.room != null) { c.room = st.room; c.row = st.row ?? c.row; c.col = st.col ?? c.col; }
+    positions[c.shadow_account] = { room: st.room ?? c.room, row: st.row ?? c.row ?? null, col: st.col ?? c.col ?? null };
+  }
+  snap._what = `replay of ${path.basename(src)}: the run's snapshot with each clone's pack and gear from its fleet-state.json`;
+  const snapFile = path.join(path.dirname(path.dirname(roster)), 'shadow-snapshot.json');
+  if (cfg.commit) {
+    if (fs.existsSync(snapFile)) fs.copyFileSync(snapFile, `${snapFile}.before-replay-${Date.now()}`);
+    fs.writeFileSync(snapFile, JSON.stringify(snap, null, 1));
+    const shim = path.join(HERE, 'm59-shadow-run.mjs');
+    const host = process.env.M59_HOST ?? '127.0.0.1', port = process.env.M59_PORT ?? '15959';
+    const args = [shim, '--until', 'play', '--roster', roster, '--server', `${host}:${port}`,
+                  '--admin', `${process.env.M59_ADMIN_HOST ?? host}:${process.env.M59_ADMIN_PORT ?? '19998'}`,
+                  '--http', String(cfg.port), '--dashboard', String(Number(opt('--dashboard', cfg.port + 1))),
+                  '--skip-snapshot', '--no-settle', '--trim-items'];
+    console.log(`re-dressing the shadow fleet from ${path.basename(src)}: node ${args.join(' ')}`);
+    const { spawnSync } = await import('node:child_process');
+    const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
+    if (r.status !== 0) throw new Error(`the re-dress stopped (exit ${r.status}); nothing was fought`);
+  } else {
+    console.log(`replay of ${src}: ${Object.keys(positions).length} raiders would be re-dressed and placed, then ghost-raid runs (pass --commit)`);
+  }
+  return fight({ ...cfg, lab: false, agents: meta.agents, lightbearer: meta.lightbearer ?? cfg.lightbearer,
+                 replayPositions: positions, replayOf: src, snapshotFile: snapFile }, { composed: true });
+}
+
 async function rehearse(cfg) {
   const { assertLabFleet } = await import('./m59-fleetscript.mjs');
   assertLabFleet('m59-ghostraid rehearse');
@@ -708,7 +773,7 @@ async function rehearse(cfg) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
     if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);
   }
-  return fight({ ...cfg, lab: false, checkpoint: true, agents: clones.map(c => c.shadow_account),
+  return fight({ ...cfg, lab: false, checkpoint: true, snapshotFile: snapFile, agents: clones.map(c => c.shadow_account),
                  lightbearer: light?.shadow_account ?? '', startPositions, startStats, startCup },
                { composed: true });
 }
@@ -813,6 +878,7 @@ async function main() {
   if (verb === 'report') return report({ ledger: opt('--ledger') });
   if (verb === 'restore') { const c = configure(); await dumOff(c); return restoreSettings(c); }
   if (verb === 'rehearse') return rehearse(configure());
+  if (verb === 'replay') return replay(configure());
   const cfg = configure();
   if (cfg.lab) { const { assertLabFleet } = await import('./m59-fleetscript.mjs'); assertLabFleet('m59-ghostraid --lab'); }
   if (verb === 'plan') return plan(cfg);
