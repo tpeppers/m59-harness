@@ -145,5 +145,21 @@ console.log('inventorySalePlan: a conjured weapon is never offered');
   ok('the real one is not blocked for being conjured', !/conjured/.test(String(row(41)?.blocked ?? '')));
 }
 
+// EVERY MODE READS ITS WEAPONS (2026-09-26). The sweep lived only in passFarm's farm block, so the
+// troll crew DUM stages IDLE at room 2, and the SURVIVE-mode dedicator, never read one: every
+// weapon `unknown`, no mundane spare to dedicate, and no swap to an enchanted one either.
+{
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const idleAt = src.indexOf("if (this.mode === 'idle') {\n      // A SUSPENDED JOURNEY IS A JOB");
+  const idle = src.slice(idleAt, src.indexOf("hibernate('idle: no job to do')", idleAt));
+  ok('the idle branch sweeps weapon magic before it hibernates',
+     idleAt >= 0 && /this\.sweepWeaponMagic\(\)/.test(idle));
+  const farmStart = src.indexOf('async passFarm(');
+  const farmBlock = src.indexOf("if (this.mode === 'farm') {", farmStart);
+  ok('passFarm sweeps weapon magic before the farm-only block (survive mode)',
+     farmStart >= 0 && /this\.sweepWeaponMagic\(\)/.test(src.slice(farmStart, farmBlock)));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

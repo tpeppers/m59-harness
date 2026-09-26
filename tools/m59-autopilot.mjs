@@ -19007,6 +19007,14 @@ export class Autopilot {
       if (this.suspendedJourney
           && await this.resumeSuspendedJourney(ctx).catch(() => CONTINUE) === HANDLED)
         return HANDLED;
+      // AN IDLE CHARACTER STILL READS ITS WEAPONS. The sweep used to live only inside
+      // passFarm's farm block, and this branch returns before passFarm — so the Ukgoth troll
+      // crew, which DUM stages IDLE at room 2 to be dedicated, never read a single weapon:
+      // every one stayed `unknown`, the dedication rule found no mundane spare to enchant, and
+      // an enchanted weapon handed back would never have been swapped in either. Measured on
+      // prod 2026-09-26: twelve staged, every weapon `unknown`, zero dedications. The sweep is
+      // rate-limited (60 s, two looks, paced) and does not move the character.
+      this.sweepWeaponMagic().catch(() => {});
       if (await this.hibernate('idle: no job to do').catch(() => false)) return HANDLED;
       return HANDLED;
     }
@@ -19421,6 +19429,9 @@ export class Autopilot {
     // A recovery/backoff wait retains its destination. Only an explicit drop or
     // new order releases it for ordinary farming to choose another journey.
     if (resumed === HANDLED || this.suspendedJourney) return HANDLED;
+    // Every mode reads its weapons, not only farm (see the idle branch in passErrand): a
+    // `survive` character — Raphael, the troll crew's dedicator — skips the farm block below.
+    this.sweepWeaponMagic().catch(() => {});
     // 4. Work. Only in farm mode, and only on what we were told to hunt.
     //
     // AND ONLY IF NOBODY ELSE OWNS IT. This is the seam the carve-out is cut along: every
