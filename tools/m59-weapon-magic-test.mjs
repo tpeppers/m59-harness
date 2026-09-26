@@ -159,6 +159,12 @@ console.log('inventorySalePlan: a conjured weapon is never offered');
   const farmBlock = src.indexOf("if (this.mode === 'farm') {", farmStart);
   ok('passFarm sweeps weapon magic before the farm-only block (survive mode)',
      farmStart >= 0 && /this\.sweepWeaponMagic\(\)/.test(src.slice(farmStart, farmBlock)));
+  // The fleet row's `provides` is how DUM finds a dedicator. Without enchant weapon in it,
+  // nobody on the board ever knew the spell (2026-09-26).
+  const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
+  const prov = broker.slice(broker.indexOf('provides: (c.spells || [])'), broker.indexOf('mana_now:', broker.indexOf('provides: (c.spells || [])')));
+  ok("the fleet row's provides carries enchant weapon for the troll dedication",
+     /n === 'enchant weapon'/.test(prov));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

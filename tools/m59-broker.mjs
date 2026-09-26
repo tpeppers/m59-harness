@@ -16585,9 +16585,15 @@ const TOOLS = [
           // arm the whole fleet for nothing; `create food` needs elderberries and
           // herbs, which is exactly what a farmer picks up all day. Neither is karma
           // gated, so anyone can cast them from the day they are made.
+          //
+          // AND `enchant weapon`, the Ukgoth troll crew's dedication (Kraanan level 2). DUM's
+          // trolls rule finds its dedicator by this list, and with only the two creation
+          // spells in it no row ever "knew" enchant weapon: on prod 2026-09-26 Raphael stood
+          // at the stage room with 25 mana, 100 elderberries and enchant weapon 20, and the
+          // rule reported no dedicator for every weapon it could have enchanted.
           provides: (c.spells || [])
             .map(sp => (c.rsc.get(sp.nameRsc) || '').toLowerCase())
-            .filter(n => n === 'create food' || n === 'create weapon'),
+            .filter(n => n === 'create food' || n === 'create weapon' || n === 'enchant weapon'),
           mana_now: v.mana?.value ?? null,
           // What it is up to, in the words a person would use. `time` says which
           // bucket the seconds landed in; this says what is happening.
