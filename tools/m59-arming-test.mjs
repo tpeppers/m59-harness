@@ -193,6 +193,17 @@ console.log('\nlooted armour is worn by an armed character too');
   ap = mk();
   await ap.wearIntoEmptySlots();
   ok('a spare already in the pack is worn without a loot event', ap.asked.length === 1);
+  // SWEETUMS' LOOP. The stub "wears" it but the use list never changes — exactly what a piece
+  // that something else keeps taking off looks like on the next check.
+  const notes = [];
+  ap.note = (what) => notes.push(what);
+  await ap.wearIntoEmptySlots();
+  ok('a piece that came back off is not re-worn on the next check', ap.asked.length === 1,
+     JSON.stringify(ap.asked));
+  ok('...and says so once', notes.filter(n => /keeps coming off/.test(n)).length >= 1);
+  await ap.wearIntoEmptySlots();
+  ok('...only once, not every minute', notes.filter(n => /keeps coming off/.test(n)).length === 2,
+     JSON.stringify(notes));
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('both loot sites call it', (AP.match(/await this\.wearLootedArmour\(looted\);/g) ?? []).length >= 2);
   ok('every farm-mode pass dresses from the pack on a one-minute clock, before the ladder',

@@ -3553,10 +3553,36 @@ export class Autopilot {
       const kind = skills.armourKind(c.rsc.get(o.nameRsc) || '');
       if (kind) wornSlots.add(kind.slot);
     }
-    const empty = skills.ARMOUR_SLOTS.filter(sl => have[sl]?.length && !wornSlots.has(sl));
+    // A PIECE WE PUT ON THAT CAME BACK OFF IS NOT PUT ON AGAIN FOR HALF AN HOUR. Something else
+    // is taking it off — measured on Sweetums 2026-09-25: the shield went on (verified against
+    // the use list) six times in six minutes and was gone again each time, most likely lifted
+    // by the training routine's weapon swap. Re-wearing it every minute is a fight with another
+    // part of this keeper, and the other part wins. Keyed by object id, which is only a
+    // handle, so the memory is short and a renumbered id merely costs one extra attempt.
+    const DRESS_BACKOFF_MS = 30 * 60_000;
+    const dressed = (this.dressedIds ??= new Map());
+    for (const [id, at] of dressed) if (Date.now() - at > DRESS_BACKOFF_MS) dressed.delete(id);
+    const bounced = [];
+    const empty = skills.ARMOUR_SLOTS.filter(sl => {
+      if (!have[sl]?.length || wornSlots.has(sl)) return false;
+      const id = have[sl][0].o.id;
+      if (dressed.has(id)) { bounced.push({ slot: sl, name: have[sl][0].name, id }); return false; }
+      return true;
+    });
+    for (const b of bounced) {
+      if ((this.bounceNoted ??= new Set()).has(b.id)) continue;
+      this.bounceNoted.add(b.id);
+      this.note('armour we put on keeps coming off — leaving it for now', {
+        ...b, retry_after_min: DRESS_BACKOFF_MS / 60_000,
+        why: 'it was worn and verified, then the slot was empty again with the same piece back in ' +
+             'the pack; something else takes it off (a two-handed or training weapon is the usual ' +
+             'cause), so re-wearing it every minute only fights that' });
+    }
     if (!empty.length) return false;
+    const trying = Object.fromEntries(empty.map(sl => [sl, have[sl][0].o.id]));
     // `_wearBest` is a test seam; production always takes skills.wearBest.
     const r = await (this._wearBest ?? skills.wearBest)(this.s, { slots: empty, exclude }).catch(() => null);
+    for (const w of r?.worn ?? []) if (trying[w.slot] != null) dressed.set(trying[w.slot], Date.now());
     if (r?.worn?.length) {
       this.tally.armour_worn = (this.tally.armour_worn || 0) + r.worn.length;
       this.note(what, {
