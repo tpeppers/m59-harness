@@ -494,7 +494,11 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     trips.push(t);
     left = later;
   }
-  if (left.length) log(`  ${agent} armorer: ${left.length} piece(s) left owed (${left.map(l => `${l.kind}->${l.agent ?? 'spare'}`).join(', ')}) — not worth another trip`);
+  // SAY WHY THE ERRAND STOPPED. Rehearsal 26's armorer died on the road home and this line blamed
+  // the extra-trip threshold; a trip that failed (no smith, no road home, a death) says so.
+  const lastFail = trips[trips.length - 1]?.failed ?? null;
+  if (left.length) log(`  ${agent} armorer: ${left.length} piece(s) left owed (${left.map(l => `${l.kind}->${l.agent ?? 'spare'}`).join(', ')}) — ` +
+    (lastFail ? `the trip failed: ${lastFail}` : left.length < Math.max(1, Number(p.extra_trip_min ?? 3)) ? 'not worth another trip' : `no trips left (${p.trips})`));
   return { trips, owed: left };
 }
 
