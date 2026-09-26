@@ -492,7 +492,7 @@ export const script = {
   params: {
     dazzle: { type: 'boolean', default: true, describe: 'the light-bearer dazzles the ghost between lights, if it knows the spell (Dazzle.kod: 3-15 s of no attacking)' },
     dazzle_every_s: { type: 'number', default: 8, describe: 'how often the light-bearer tries a dazzle while a ghost lives (a dazzle already on it is refused for free)' },
-    dazzle_stay: { type: 'boolean', default: false, describe: 'stay in the throne room between dazzles instead of stepping back to the door' },
+    dazzle_stay: { type: 'boolean', default: true, describe: 'while dazzling a live ghost, the light-bearer stays in the throne room (safer with the ghost dazzled and the fleet on it than alone outside); false: step back to the door after each cast' },
     provenance: { type: 'string', default: 'organic', describe: 'how the fleet reached the door: organic (mustered, drawn, bought, dedicated this run) or a replay of a recorded run' },
     valve_before_spawn: { type: 'number', default: 1, describe: 'spawn squares the valve may open before a ghost respawn has been seen (the phase unknown)' },
     prep_close_min: { type: 'string', default: 'auto', describe: 'minutes after a seen spawn to shut the valve and prepare for the next ghost; auto = the fleet\'s measured recommendation (m59-raidtimes --prep-lead), else 95' },
@@ -780,6 +780,7 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
       }
       RUN.light.ready = true;
       await sleep(3000);
+      let staying = () => false;
       const castIn = async why => {
         const o = await observe(agent);
         if (o.dead && await confirmedDead(agent)) return false;
@@ -817,6 +818,9 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         // operator's standing order is the same — wait outside, step in only to cast.
         // OUT BY THE NEAREST DOOR: 38 is one hop, and the throne room is where he dies. Then on to
         // the wait room.
+        // ...UNLESS HE IS DAZZLING THE GHOST (operator, 2026-09-25): with the ghost dazzled and twenty
+        // raiders on it, the throne room is safer than the corridor alone among skeletons.
+        if (staying()) return true;
         await hop(agent, Number(RUN.door), { tries: 6 });
         if (Number(p.light_wait_room) !== Number(RUN.door)) await hop(agent, Number(p.light_wait_room));
         return true;
@@ -828,6 +832,8 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
       const knows = ((await call('spells', { agent }, 40_000).catch(() => null))?.spells ?? [])
         .some(sp => String(sp.name ?? '').toLowerCase() === DAZZLE.spell);
       const dazzleOn = knows && !(p.dazzle === false || p.dazzle === 'false');
+      // STAYING IN: while he is dazzling a live ghost he stays in the throne room.
+      staying = () => dazzleOn && !(p.dazzle_stay === false || p.dazzle_stay === 'false') && RUN.ghostSeen && (RUN.ghostAlive || !RUN.killAt);
       let lastDazzle = 0;
       const dazzles = { landed: 0, already: 0, failed: 0, no_ghost: 0 };
       const dazzleIn = async () => {
@@ -839,13 +845,13 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         if (mana < DAZZLE.mana + (lightSoon ? LIGHT.mana : 0)) return;
         if (Number(o.room) !== RUN.room && !(await hop(agent, RUN.room, { tries: 3 })).ok) return;
         const { ghost } = await lookAround(agent, p.target);
-        if (!ghost) { dazzles.no_ghost++; await hop(agent, Number(RUN.door), { tries: 6 }); return; }
+        if (!ghost) { dazzles.no_ghost++; if (!staying()) await hop(agent, Number(RUN.door), { tries: 6 }); return; }
         await call('rest', { agent, stand: true }, 30_000).catch(() => {});
         const r = await castVerified(agent, DAZZLE.spell, { target: ghost.id, cost: DAZZLE.mana });
         const outcome = r.landed ? 'landed' : /already/i.test(String(r.why ?? '')) ? 'already' : `failed: ${String(r.why ?? r.outcome ?? '').slice(0, 60)}`;
         if (r.landed) dazzles.landed++; else if (outcome === 'already') dazzles.already++; else dazzles.failed++;
         event('dazzle', { outcome });
-        if (!p.dazzle_stay || p.dazzle_stay === 'false') await hop(agent, Number(RUN.door), { tries: 6 });
+        if (!staying()) await hop(agent, Number(RUN.door), { tries: 6 });
       };
       await castIn('opening');
       while (Date.now() < endAt(p)) {
@@ -860,6 +866,15 @@ function lightbearerSteps({ agent, p, say, atDoor, theDoor }) {
         }
         const o = await observe(agent);
         if (o.dead) { event('died', { agent }); break; }
+        if (staying()) {
+          // In the room with the ghost: hurt, he retreats inside it like any raider; otherwise he
+          // stands ready for the next dazzle.
+          if ((o.health ?? 1) < Number(p.light_rest_below) && Number(o.room) === RUN.room) {
+            const where = await retreatInRoom(agent, { ...p, return_at: 0.95 });
+            event('retreat', { agent, health: o.health, to: where.to });
+          } else if (Number(o.room) !== RUN.room) await hop(agent, RUN.room, { tries: 3 });
+          await sleep(1500); continue;
+        }
         if (!RUN.killAt || !(p.light_heals === true || p.light_heals === 'true')) {
           if (Number(o.room) === RUN.room) await hop(agent, Number(p.light_wait_room));
           await sleep(3000); continue;
