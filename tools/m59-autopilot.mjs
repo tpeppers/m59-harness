@@ -3573,10 +3573,14 @@ export class Autopilot {
     }
     // A PIECE WE PUT ON THAT CAME BACK OFF IS NOT PUT ON AGAIN FOR HALF AN HOUR. Something else
     // is taking it off — measured on Sweetums 2026-09-25: the shield went on (verified against
-    // the use list) six times in six minutes and was gone again each time, most likely lifted
-    // by the training routine's weapon swap. Re-wearing it every minute is a fight with another
-    // part of this keeper, and the other part wins. Keyed by object id, which is only a
-    // handle, so the memory is short and a renumbered id merely costs one extra attempt.
+    // the use list) six times in six minutes and was gone again each time. The cause is NOT
+    // established, and it is NOT the weapon: defence and offence are separate decisions in the
+    // game as well as here. A shield and a weapon each take one of two hand slots
+    // (player.kod viHand_space = 2, weapon.kod viUse_amount = 1; no weapon takes two, only
+    // the lute does), and a weapon swap frees hand space by yielding a SAME-KIND item first
+    // (player.kod FreeHandSlotsFor: "swapping one weapon for another does not drop an equipped
+    // shield"). Re-wearing every minute only races whatever it is. Keyed by object id, which
+    // is only a handle, so the memory is short and a renumbered id costs one extra attempt.
     const DRESS_BACKOFF_MS = 30 * 60_000;
     const dressed = (this.dressedIds ??= new Map());
     for (const [id, at] of dressed) if (Date.now() - at > DRESS_BACKOFF_MS) dressed.delete(id);
@@ -3593,8 +3597,9 @@ export class Autopilot {
       this.note('armour we put on keeps coming off — leaving it for now', {
         ...b, retry_after_min: DRESS_BACKOFF_MS / 60_000,
         why: 'it was worn and verified, then the slot was empty again with the same piece back in ' +
-             'the pack; something else takes it off (a two-handed or training weapon is the usual ' +
-             'cause), so re-wearing it every minute only fights that' });
+             'the pack. Something took it off; it was not a weapon change — the server yields a ' +
+             'same-kind hand item first, and no weapon needs two hands. Re-wearing it every ' +
+             'minute would only race whatever did, so it is left and this is worth reading' });
     }
     if (!empty.length) return false;
     const trying = Object.fromEntries(empty.map(sl => [sl, have[sl][0].o.id]));
