@@ -499,6 +499,15 @@ export const script = {
               if (r?.supplied) { bal[from] -= amount; bal[to] += amount; }
             }
           }
+          // MONEY FOR THE WORST CASE (operator, 2026-09-25: maximum robustness). Every line is priced
+          // at the smith's price — a hall line the chests cannot supply becomes a purchase (chain for
+          // a missing leather, a small round shield, a spare hammer) — and whatever the pool cannot
+          // cover is withdrawn in shillings from the guild chests on the same trip, 10 % over.
+          OUTFIT_RUN.drawMoney = {};
+          for (const a of pair.filter(a => bal[a] < 0)) OUTFIT_RUN.drawMoney[a] = Math.ceil(-bal[a] * 1.1);
+          const gap = Object.values(OUTFIT_RUN.drawMoney).reduce((n, x) => n + x, 0);
+          console.log(`  worst case (every line bought at the smith): ${pair.reduce((n, a) => n + bill(a), 0)} sh against ${budget} pooled` +
+                      (gap ? `; ${gap} sh more will be drawn from the guild chests (${Object.entries(OUTFIT_RUN.drawMoney).map(([a, n]) => `${a} ${n}`).join(', ')})` : ' — covered'));
         }
         st.pool = { ...(st.pool ?? {}), armorers: pair };
         return true;
@@ -529,8 +538,9 @@ export const script = {
             const lines = OUTFIT_RUN.plan?.byCarrier?.[agent] ?? [];
             await say(`Armorer: off to the hall and the smith for ${lines.length} piece(s).`);
             try {
+              const money = OUTFIT_RUN.drawMoney?.[agent] ?? 0;
               st.armorer = await armorerErrand({ agent, partner: pair.find(a => a !== agent), holder: cupHolderOf(agents, roles),
-                                                 lines, p, crew: pair.length });
+                                                 lines, p, crew: pair.length, draw: money > 0 ? [{ item: 'shilling', amount: money }] : [] });
             } catch (e) {
               st.armorer = { error: e?.message ?? String(e) };
             } finally {
