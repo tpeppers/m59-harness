@@ -490,6 +490,7 @@ export const script = {
     cost: { risk: 'room 40 is a declared hazard: tusked skeletons are level 100' },
   },
   params: {
+    provenance: { type: 'string', default: 'organic', describe: 'how the fleet reached the door: organic (mustered, drawn, bought, dedicated this run) or a replay of a recorded run' },
     valve_before_spawn: { type: 'number', default: 1, describe: 'spawn squares the valve may open before a ghost respawn has been seen (the phase unknown)' },
     prep_close_min: { type: 'string', default: 'auto', describe: 'minutes after a seen spawn to shut the valve and prepare for the next ghost; auto = the fleet\'s measured recommendation (m59-raidtimes --prep-lead), else 95' },
     prep_ready_health: { type: 'number', default: 0.9, describe: 'prep counts as READY when the room is empty and everyone in it is at this fraction of health' },
@@ -696,6 +697,10 @@ export const script = {
                       health: me?.health ?? me?.vitals?.health ?? null, mana: me?.mana ?? me?.vitals?.mana ?? null,
                       vigor: me?.vigor ?? me?.vitals?.vigor ?? null });
       RUN.geared.add(agent);
+      if (!RUN.supplyWritten && agent === [...RUN.agents].filter(a => a !== p.lightbearer).sort()[0]) {
+        RUN.supplyWritten = true;
+        event('supply', { entries: OUTFIT_RUN.supply ?? [], provenance: p.provenance ?? 'organic' });
+      }
       const expected = RUN.agents.filter(a => a !== p.lightbearer).length;
       const leader = [...RUN.agents].filter(a => a !== p.lightbearer).sort()[0];
       if (p.checkpoint === true || p.checkpoint === 'true') {

@@ -193,6 +193,17 @@ export function packRoom(might, items = []) {
 /** One run's shared state across agents (fleetScript runs them in one process). */
 export const OUTFIT_RUN = { plan: null, delivered: new Map(), done: false, cupHolder: null, log: [] };
 
+/**
+ * WHERE EVERYTHING CAME FROM (operator, 2026-09-25: the hall is being stockpiled for this, and it
+ * would be a shame for prod not to use it). Every withdrawal from the guild chests and every
+ * purchase, by whom and in what role; the battle report's Supply section is built from it.
+ */
+export function supply(agent, role, source, items) {
+  const got = Object.fromEntries(Object.entries(items ?? {}).filter(([, n]) => Number(n) > 0).map(([k, n]) => [k, Number(n)]));
+  if (!Object.keys(got).length) return;
+  (OUTFIT_RUN.supply ??= []).push({ t: Date.now(), agent, role, source, items: got });
+}
+
 const purseOf = items => items.filter(i => /^shilling/i.test(String(i.name ?? '')))
   .reduce((n, i) => n + (Number(i.amount) || 1), 0);
 // FRESH, never the keeper's cached inventory (m59-inventory freshItems).
@@ -255,8 +266,9 @@ export async function buyShare(agent, merchant, lines) {
   }
   const after = await inv(agent);
   const bought = Object.fromEntries(Object.keys(want).map(k => [k, countKind(after, k)]));
+  const purchased = Object.fromEntries(Object.keys(want).map(k => [OUTFIT[k].match.source.replace(/[\^$]/g, '').replace(/\\/g, ''), Math.max(0, countKind(after, k) - countKind(start, k))]));
   if (replies.length) console.log(`  ${agent} buy stopped: ${JSON.stringify(replies).slice(0, 400)}`);
-  return { bought, stopped: replies };
+  return { bought, purchased, stopped: replies };
 }
 
 /** Hand each raider its pieces, by id, and record what arrived. */
@@ -451,6 +463,7 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
       }
       t.withdrew = r?.took ?? {};
       log(`  ${agent} armorer trip ${trip}: from the chests ${JSON.stringify(t.withdrew)}` + (r?.ok ? '' : ` (${r?.why ?? 'refused'})`));
+      supply(agent, 'armorer', 'guild chest', t.withdrew);
     }
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
     if (!at.ok) { t.failed = 'could not reach the smith'; trips.push(t); break; }
@@ -459,6 +472,7 @@ export async function armorerErrand({ agent, partner, holder, lines, p, crew = 2
     const toBuy = [...left.filter(l => l.source !== 'hall'), ...drawn.later.map(l => ({ agent: l.agent, kind: l.kind }))];
     const got = toBuy.length ? await buyShare(agent, p.smith, toBuy) : { bought: {} };
     t.bought = got.bought; t.clamped = got.clamped;
+    supply(agent, 'armorer', 'smith (Barloque)', got.purchased);
     // Only what is actually in the pack is deliverable; the rest waits for the next trip.
     const { now, later } = allocate([...drawn.now.map(({ id, ...l }) => l), ...toBuy], await inv(agent));
     // Home, together, through Ukgoth.
@@ -574,6 +588,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
     out.took = r?.took ?? {}; out.short = r?.short ?? {}; out.ok = !!r?.ok; out.stashed = r?.stashed ?? 0;
     if (!r?.ok) out.why = r?.why ?? r?.error ?? 'no answer';
   }
+  supply(agent, crew?.length ? 'hall rider' : 'rider', 'guild chest', out.took);
   log(`  ${agent} hall draw: ${out.ride}` + (out.stashed ? `; stashed ${out.stashed}` : '') + (out.took ? `; took ${JSON.stringify(out.took)}` : '') +
       (out.short && Object.keys(out.short).length ? `; SHORT ${JSON.stringify(out.short)}` : '') +
       (out.why ? `; REFUSED ${out.why}` : ''));
@@ -598,6 +613,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
         if (ask > 0) { lines.push({ item, amount: ask }); free -= ask * c; }
       }
       out.bought = lines.length ? await buyByName(agent, p.apothecary, lines) : {};
+      supply(agent, 'hall rider', 'apothecary (Joguer)', out.bought);
       log(`  ${agent} bought at the apothecary: ${JSON.stringify(out.bought)}` +
           (out.unbought ? `; NO ROOM for ${JSON.stringify(out.unbought)}` : ''));
     }
@@ -619,6 +635,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
         if (ask > 0) { lines.push({ item, amount: ask }); free -= ask * c; }
       }
       out.bought_gems = lines.length ? await buyByName(agent, p.gem_seller ?? 'Herbutte', lines) : {};
+      supply(agent, 'hall rider', 'gem shop (Herbutte)', out.bought_gems);
       log(`  ${agent} bought at the gem shop: ${JSON.stringify(out.bought_gems)}`);
     }
   }
@@ -630,6 +647,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
     if (at.ok) {
       out.bought_gear = await buyByName(agent, p.smith, gearShort.map(([item, amount]) => ({ item, amount })));
+      supply(agent, 'hall rider', 'smith (Barloque)', out.bought_gear);
       log(`  ${agent} bought at the smith: ${JSON.stringify(out.bought_gear)}`);
     }
   }

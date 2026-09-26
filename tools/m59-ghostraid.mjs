@@ -351,6 +351,7 @@ const fightParams = (cfg, dir, mustered) => ({
   ...(opt('--target') ? { target: opt('--target') } : {}),
   dum_profile: !!cfg.dumUrl,
   checkpoint: !!cfg.checkpoint,
+  provenance: provenanceOf(cfg, true),
   ...(cfg.campNext || flag('--camp-next') ? { camp_next: true } : {}),
   ...(opt('--camp-max') != null ? { camp_max_min: Number(opt('--camp-max')) } : {}),
   ...(opt('--spawn-block') != null ? { spawn_block: Number(opt('--spawn-block')) } : {}),
@@ -372,6 +373,12 @@ async function prep(cfg) {
   return res;
 }
 
+/** How the fleet reached the door, for the report: organic, or loaded from a recorded run. */
+function provenanceOf(cfg, composed) {
+  if (cfg.replayOf) return `replay: the pre-fight state LOADED from ${path.basename(cfg.replayOf)} (fleet-state.json); no muster, hall trips or dedication this run`;
+  return composed ? 'organic: mustered, drawn from the chests, bought and dedicated in this run' : 'fight only: the fleet was already armed when this run began';
+}
+
 async function fight(cfg, { composed = false } = {}) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const dir = path.join(REPO, 'substrate', 'raids', `ghost-${cfg.fleet}-${stamp}`);
@@ -388,6 +395,7 @@ async function fight(cfg, { composed = false } = {}) {
     fs.writeFileSync(path.join(dir, 'raid.json'), JSON.stringify({
       fleet: cfg.fleet, agents: cfg.agents, lightbearer: cfg.lightbearer, healers: cfg.healers,
       minutes: cfg.minutes, lab: cfg.lab, started: new Date().toISOString(), git, composed,
+      provenance: provenanceOf(cfg, composed),
       control_url: process.env.M59_CONTROL_URL, roster: process.env.M59_STATE_FILE ?? null,
       ledger: ledgerDir(cfg),
     }, null, 1));
@@ -555,11 +563,39 @@ export async function report(cfg) {
     meta.lab ? 'LAB RUN: DM conveniences were on (healed/placed/granted/refilled); the fight itself was not assisted' : 'no DM powers were used',
   ];
   fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(rep, null, 1));
-  const md = reportMarkdown(rep, { fleet: meta.fleet, startedIso: entered ? new Date(entered).toISOString() : '', notes }) + gearMarkdown(events);
+  const md = reportMarkdown(rep, { fleet: meta.fleet, startedIso: entered ? new Date(entered).toISOString() : '', notes }) +
+    provenanceMarkdown(meta) + supplyMarkdown(events) + gearMarkdown(events);
   fs.writeFileSync(path.join(dir, 'report.md'), md);
   console.log(md);
   console.log(`written: ${path.join(dir, 'report.md')}`);
   return rep;
+}
+
+function provenanceMarkdown(meta) {
+  return ['', '## Provenance', '', `pre-fight: ${meta.provenance ?? 'unknown (a run from before provenance was recorded)'}`,
+          `code: ${meta.git?.short ?? '?'}${meta.git?.dirty ? ' (dirty)' : ''}`, ''].join(String.fromCharCode(10));
+}
+
+// WHAT WAS TAKEN FROM WHERE (operator, 2026-09-25): the guild hall is being stockpiled for the raid,
+// so the report says how much of the equipment and reagents came out of the chests, and what had to
+// be bought and from whom — per source, per item, and who carried it.
+function supplyMarkdown(events) {
+  const e = events.find(x => x.kind === 'supply');
+  if (!e) return ['', '## Supply', '', 'not recorded (a run from before the supply record, or the checkpoint step did not run)', ''].join(String.fromCharCode(10));
+  const by = new Map();
+  for (const r of e.entries ?? []) {
+    const m = by.get(r.source) ?? { items: {}, who: new Set() };
+    for (const [k, n] of Object.entries(r.items)) m.items[k] = (m.items[k] ?? 0) + n;
+    m.who.add(`${r.agent} (${r.role})`);
+    by.set(r.source, m);
+  }
+  const lines = ['', '## Supply', ''];
+  if (!by.size) lines.push('nothing was drawn or bought this run');
+  for (const [src, m] of [...by].sort((a, b) => (a[0] === 'guild chest' ? -1 : b[0] === 'guild chest' ? 1 : a[0].localeCompare(b[0])))) {
+    lines.push(`- **${src}**: ${Object.entries(m.items).sort().map(([k, n]) => `${n} ${k}`).join(', ')} — by ${[...m.who].join(', ')}`);
+  }
+  lines.push('');
+  return lines.join(String.fromCharCode(10));
 }
 
 // THE GEAR EACH RAIDER TOOK IN (operator, 2026-09-25: mixed leather and chain is fine as long as it
