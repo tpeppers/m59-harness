@@ -5,7 +5,8 @@
 //   node tools/m59-ghostraid-test.mjs
 import { hammerNeed, matchHammers, reagentShortfall, planReagents, assignRoles, countFamily,
          expect, barrier, leave, resetBarriers, survivalReport, reportMarkdown, GHOST_ROOM,
-         isHammer, isBlunt, blessAssignments, buddyAssignments, spawnBlockers, THRONE_GENERATORS } from './m59-ghostraid-lib.mjs';
+         isHammer, isBlunt, blessAssignments, buddyAssignments, spawnBlockers, THRONE_GENERATORS,
+         nextGhostWindow, valveStep, GHOST_CYCLE_S } from './m59-ghostraid-lib.mjs';
 
 let pass = 0, fail = 0;
 {
@@ -18,6 +19,31 @@ let pass = 0, fail = 0;
   ok0(b.h.row === 5 && b.h.col === 3 && b.c.row === 13 && b.c.col === 3, 'each holder gets its own square, in order');
   ok0(Object.keys(spawnBlockers(['a', 'b'], { count: 6 })).length === 2, 'never more holders than raiders');
   ok0(Object.keys(spawnBlockers(['a', 'b'], { count: 0 })).length === 0, 'count 0 is off');
+  ok0(b.h.index === 0 && b.c.index === 2, 'holders carry the order in which the valve opens their squares');
+
+  // The ghost's clock: 7200 s x 90-110 % from a SEEN spawn (throne1.kod:18, :102).
+  const w = nextGhostWindow(0);
+  ok0(GHOST_CYCLE_S === 7200 && w.lo === 6480_000 && w.hi === 7920_000, 'next ghost 108-132 minutes after a seen spawn');
+
+  // The valve: arm at everyone >= 50 %, open while the room is cleared, close under pressure.
+  const cfg = { startAt: 0.5, closeBelow: 0.35, stepMs: 60_000 };
+  let v = valveStep({ open: 0, armed: false, changedAt: 0 }, { minFrac: 0.4, monsters: 0, now: 1000, squares: 6 }, cfg);
+  ok0(!v.armed && v.open === 0, 'not armed while anyone is under half health');
+  v = valveStep(v, { minFrac: 0.6, monsters: 0, now: 2000, squares: 6 }, cfg);
+  ok0(v.armed && v.open === 0, 'arms once everyone is at half or better');
+  v = valveStep(v, { minFrac: 0.8, monsters: 0, now: 30_000, squares: 6 }, cfg);
+  ok0(v.open === 0, 'waits a whole step before opening');
+  v = valveStep(v, { minFrac: 0.8, monsters: 0, now: 70_000, squares: 6 }, cfg);
+  ok0(v.open === 1, 'opens one square when the room is empty and everyone is healthy');
+  v = valveStep(v, { minFrac: 0.8, monsters: 1, now: 140_000, squares: 6 }, cfg);
+  ok0(v.open === 2, 'and another while the fleet keeps up (one alive)');
+  v = valveStep(v, { minFrac: 0.8, monsters: 7, now: 150_000, squares: 6 }, cfg);
+  ok0(v.open === 1, 'closes one when more are alive than it can take (> 2 x open + 2)');
+  v = valveStep(v, { minFrac: 0.3, monsters: 0, now: 160_000, squares: 6 }, cfg);
+  ok0(v.open === 0, 'closes one when a raider is low');
+  let full = { open: 6, armed: true, changedAt: 0 };
+  full = valveStep(full, { minFrac: 0.9, monsters: 0, now: 1e9, squares: 6 }, cfg);
+  ok0(full.open === 6, 'never opens more squares than there are holders');
 }
 const ok = (cond, name) => { if (cond) pass++; else { fail++; console.log(`FAIL ${name}`); } };
 

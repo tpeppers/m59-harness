@@ -35,6 +35,39 @@ export const DOOR_ROOM = 38;           // Castle Victoria — the room the thron
 export const THRONE_GENERATORS = Object.freeze([[5, 3], [9, 2], [13, 3], [5, 9], [9, 10], [13, 9]]);
 
 /**
+ * THE GHOST'S CLOCK (throne1.kod:18, :86-106). GhostTimer fires every GHOST_CYCLE seconds x
+ * random(90,110)% and IMMEDIATELY sets the next timer; SpawnGhost then makes a ghost only if none is
+ * in the room. So the timer never resets on a kill: a spawn seen at T puts the next one in
+ * [T + 0.9 x 7200 s, T + 1.1 x 7200 s]. Only a SEEN spawn (a ghost appearing where there was none)
+ * fixes the phase; a ghost already present when the raid walks in says nothing about it.
+ */
+export const GHOST_CYCLE_S = 7200;
+export const nextGhostWindow = spawnT => ({ lo: spawnT + Math.round(0.9 * GHOST_CYCLE_S * 1000), hi: spawnT + Math.round(1.1 * GHOST_CYCLE_S * 1000) });
+
+/**
+ * THE SPAWN VALVE (operator, 2026-09-25): after the kill, spawn-square holders step off one at a
+ * time so the fleet farms what the room makes — enough to keep killing, never so much it is
+ * overwhelmed. Pure: given the state and one reading, the new number of open squares.
+ *   armed only once everyone in the room is at `startAt` or better;
+ *   CLOSE one when anyone is under `closeBelow` or live monsters exceed 2 x open + 2;
+ *   OPEN one when the room is nearly empty (<= 1 monster), everyone is at `startAt`+, and the last
+ *   change was `stepMs` ago.
+ */
+export function valveStep(v, { minFrac = 1, monsters = 0, now = Date.now(), squares = 6 } = {},
+                          { startAt = 0.5, closeBelow = 0.35, stepMs = 60_000 } = {}) {
+  const out = { ...v };
+  if (!out.armed) { if (minFrac >= startAt) { out.armed = true; out.changedAt = now; } return out; }
+  if (minFrac < closeBelow || monsters > 2 * out.open + 2) {
+    if (out.open > 0) { out.open--; out.changedAt = now; out.why = minFrac < closeBelow ? 'a raider is low' : 'too many alive'; }
+    return out;
+  }
+  if (monsters <= 1 && minFrac >= startAt && now - (out.changedAt ?? 0) >= stepMs && out.open < squares) {
+    out.open++; out.changedAt = now; out.why = 'the room is being cleared';
+  }
+  return out;
+}
+
+/**
  * WHO HOLDS A SPAWN SQUARE: healers first (they stand back anyway and heal from where they are),
  * then the weakest by max health (the raiders a swarm on the ghost can spare), never the light-
  * bearer. -> { agent: { row, col } }, at most `count` of `squares`.
@@ -46,7 +79,7 @@ export function spawnBlockers(agents = [], { lightbearer = '', healers = [], max
     .sort((a, b) => (Number(maxHealth[a]) || 0) - (Number(maxHealth[b]) || 0) || a.localeCompare(b));
   const order = [...hs, ...rest];
   const n = Math.max(0, Math.min(Number(count) || 0, squares.length, order.length));
-  return Object.fromEntries(order.slice(0, n).map((a, i) => [a, { row: squares[i][0], col: squares[i][1] }]));
+  return Object.fromEntries(order.slice(0, n).map((a, i) => [a, { row: squares[i][0], col: squares[i][1], index: i }]));
 }
 export const STAGE_ROOM = 2;           // Outside Castle Victoria — where the raid forms up
 

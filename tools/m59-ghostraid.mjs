@@ -533,6 +533,8 @@ export async function report(cfg) {
     `retreats to room 38: ${events.filter(e => e.kind === 'retreat').length}; walked back in: ${events.filter(e => e.kind === 'return').length}`,
     healNote(events),
     spawnBlockNote(events),
+    valveNote(events),
+    ghostClockNote(events),
     roomNote(events, killAt),
     buffNote(events),
     `ledger read: ${ledger && fs.existsSync(ledger) ? ledger : 'NONE — deaths are only the ones the raid itself saw'}`,
@@ -565,6 +567,24 @@ function gearMarkdown(events) {
   const ck = events.find(e => e.kind === 'checkpoint');
   if (ck) lines.push('', ck.ok ? `checkpoint before the door: \`${ck.name}\` — replay: ${ck.replay.join('; ')}` : `checkpoint NOT taken: ${ck.why}`);
   return lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
+}
+
+function valveNote(events) {
+  const v = events.filter(e => e.kind === 'valve');
+  if (!v.length) return 'spawn valve: never opened';
+  const max = Math.max(...v.map(e => e.open ?? 0));
+  const closes = v.filter((e, i) => i > 0 && (e.open ?? 0) < (v[i - 1].open ?? 0)).length;
+  return `spawn valve: ${v.length} change(s), up to ${max} square(s) open, closed ${closes} time(s) under pressure — ` +
+    v.slice(-6).map(e => `${e.open}${e.why ? ` (${e.why})` : ''}`).join(' → ');
+}
+
+function ghostClockNote(events) {
+  const hhmm = t => new Date(t).toISOString().slice(11, 16);
+  const kills = events.filter(e => e.kind === 'ghost_gone').map(e => hhmm(e.t));
+  const spawns = events.filter(e => e.kind === 'ghost_spawn');
+  const last = spawns[spawns.length - 1];
+  return `ghost clock: killed at ${kills.join(', ') || '—'}; seen spawning at ${spawns.map(e => hhmm(e.t)).join(', ') || 'never (phase unknown)'}` +
+    (last ? `; next due ${hhmm(last.next_lo)}–${hhmm(last.next_hi)} UTC` : '');
 }
 
 function spawnBlockNote(events) {

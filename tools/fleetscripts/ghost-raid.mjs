@@ -42,7 +42,8 @@ import { OUTFIT_RUN } from './ghost-outfit.mjs';
 import { verify, walk, call, castVerified, observe, assertLabFleet } from '../m59-fleetscript.mjs';
 import { script as raidAction } from './raid-action.mjs';
 import { GHOST_ROOM as DEFAULT_BOSS_ROOM, DOOR_ROOM as DEFAULT_DOOR_ROOM, STAGE_ROOM, LIGHT, BLESS, HEAL, STRENGTH, assignRoles, blessAssignments,
-         buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS }
+         buddyAssignments, expect, barrier, leave, isWeaponName, spawnBlockers, THRONE_GENERATORS,
+         nextGhostWindow, valveStep }
   from '../m59-ghostraid-lib.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -57,8 +58,19 @@ const RUN = {
   room: DEFAULT_BOSS_ROOM, door: DEFAULT_DOOR_ROOM,
   sampler: null, samplerStop: false, done: new Set(), agents: [],
   saved: new Map(), restored: new Set(), focus: null, geared: new Set(), checkpoint: null,
+  // The ghost's clock and the spawn valve (see m59-ghostraid-lib GHOST_CYCLE_S, valveStep).
+  ghostAlive: false, spawns: [], kills: [], nextWindow: null,
+  valve: { open: 0, armed: false, changedAt: 0 }, valveLeader: null, valveAt: 0, blockerCount: 0,
 };
 const endAt = p => {
+  // CAMPING FOR THE NEXT GHOST (camp_next): stay until the predicted window has passed, plus a margin
+  // to fight it, capped at camp_max_min after the first kill. With no spawn seen the phase is
+  // unknown, and the cap (>= 132 min) is long enough to see one.
+  if (RUN.killAt && (p.camp_next === true || p.camp_next === 'true')) {
+    const cap = RUN.killAt + Number(p.camp_max_min) * 60_000;
+    const want = RUN.nextWindow ? RUN.nextWindow.hi + 15 * 60_000 : cap;
+    return Math.min(cap, Math.max(RUN.killAt + Number(p.minutes) * 60_000, want));
+  }
   if (RUN.killAt) return RUN.killAt + Number(p.minutes) * 60_000;
   if (RUN.startAt) return RUN.startAt + Number(p.fight_limit_s) * 1000 + Number(p.minutes) * 60_000;
   return Date.now() + 3600_000;
@@ -98,8 +110,15 @@ function event(kind, data = {}) {
 }
 
 function ghostGone(by) {
+  if (RUN.killAt && RUN.ghostAlive) {
+    // A LATER GHOST (a respawn the fleet fought) is gone too: counted, and the valve may reopen.
+    RUN.ghostAlive = false; RUN.kills.push(Date.now());
+    event('ghost_gone', { by, n: RUN.kills.length });
+    console.log(`  *** ghost #${RUN.kills.length} is gone (seen by ${by})`);
+    return;
+  }
   if (RUN.killAt || !RUN.ghostSeen) return;
-  RUN.killAt = Date.now();
+  RUN.killAt = Date.now(); RUN.ghostAlive = false; RUN.kills.push(RUN.killAt);
   event('ghost_gone', { by, after_s: RUN.startAt ? Math.round((RUN.killAt - RUN.startAt) / 1000) : null });
   console.log(`  *** the ghost is gone (seen by ${by}) — farming for the window`);
 }
@@ -351,6 +370,20 @@ async function lookAround(agent, target) {
   const ghost = attackable.find(o => re.test(o.name ?? '')) ?? null;
   const others = attackable.filter(o => !re.test(o.name ?? ''))
     .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99));
+  if (ghost && Number(look?.room?.num ?? look?.room) === RUN.room) {
+    if (!RUN.ghostSeen) RUN.ghostAlive = true;
+    else if (RUN.killAt && !RUN.ghostAlive) {
+      // SEEN SPAWNING: the ghost's timer phase is now known, and with it the next window.
+      RUN.ghostAlive = true;
+      const t = Date.now();
+      RUN.spawns.push(t);
+      RUN.nextWindow = nextGhostWindow(t);
+      RUN.valve = { ...RUN.valve, open: 0, changedAt: t, why: 'the ghost is back' };
+      event('ghost_spawn', { seen_by: agent, next_lo: RUN.nextWindow.lo, next_hi: RUN.nextWindow.hi });
+      console.log(`  *** the ghost has SPAWNED (seen by ${agent}); the next one is due between ` +
+                  `${new Date(RUN.nextWindow.lo).toISOString().slice(11, 16)} and ${new Date(RUN.nextWindow.hi).toISOString().slice(11, 16)} UTC`);
+    }
+  }
   return { ghost, others, room: look?.room ?? null };
 }
 
@@ -431,6 +464,12 @@ export const script = {
     cost: { risk: 'room 40 is a declared hazard: tusked skeletons are level 100' },
   },
   params: {
+    valve: { type: 'boolean', default: true, describe: 'after the kill, open spawn squares one at a time to farm what the room makes (needs spawn_block)' },
+    valve_start: { type: 'number', default: 0.5, describe: 'the valve arms, and opens, only with everyone in the room at this fraction of health or better' },
+    valve_close_below: { type: 'number', default: 0.35, describe: 'close a square when anyone in the room falls under this' },
+    valve_step_s: { type: 'number', default: 60, describe: 'at least this long between opening one square and the next' },
+    camp_next: { type: 'boolean', default: false, describe: 'stay in the throne room for the NEXT ghost: until its predicted window has passed (see GHOST_CYCLE_S)' },
+    camp_max_min: { type: 'number', default: 150, describe: 'camp_next: the longest to stay after the first kill' },
     spawn_block: { type: 'number', default: 6, describe: 'how many of the throne room\'s 6 spawn squares raiders stand on (healers first, then the weakest); 0 = off' },
     checkpoint: { type: 'boolean', default: false, describe: 'rehearsals only: save the (loopback) world once everyone is armed, before the door, for replay' },
     agents: { type: 'agents', required: true },
@@ -528,6 +567,8 @@ export const script = {
         const b = spawnBlockers(agents, { lightbearer: roles.lightbearer, healers: roles.healers, maxHealth,
                                           count: Number(p.spawn_block), squares: THRONE_GENERATORS });
         event('spawn_block', { holders: b });
+        RUN.blockerCount = Object.keys(b).length;
+        RUN.valveLeader = [...agents].filter(a => a !== roles.lightbearer && !b[a]).sort()[0] ?? Object.keys(b)[0] ?? null;
         console.log(`  spawn block: ${Object.entries(b).map(([a, q]) => `${a} r${q.row}c${q.col}`).join(', ') || 'nobody'}`);
         return b;
       })();
@@ -791,6 +832,33 @@ async function holdSquare(agent, block, tally) {
   return false;
 }
 
+/**
+ * THE SPAWN VALVE, once every 15 s by one raider. Shut while the ghost lives and from two minutes
+ * before a predicted ghost window (so the room is quiet for it); otherwise m59-ghostraid-lib
+ * valveStep decides from the lowest health in the room and the live monster count.
+ */
+async function valveTick(agent, p) {
+  if (!(Number(p.spawn_block) > 0) || !(p.valve === true || p.valve === 'true') || Date.now() - RUN.valveAt < 15_000) return;
+  RUN.valveAt = Date.now();
+  const before = RUN.valve.open;
+  const primed = RUN.nextWindow && Date.now() >= RUN.nextWindow.lo - 2 * 60_000 && Date.now() <= RUN.nextWindow.hi + 5 * 60_000;
+  if (!RUN.killAt || RUN.ghostAlive || primed) {
+    RUN.valve = { ...RUN.valve, open: 0, why: RUN.ghostAlive ? 'the ghost is up' : primed ? 'a ghost is due' : 'before the kill' };
+  } else {
+    const rows = (await fleetNow()).filter(r => RUN.agents.includes(r.agent) && r.room === RUN.room && r.frac != null);
+    const minFrac = rows.length ? Math.min(...rows.map(r => r.frac)) : 1;
+    const { others } = await lookAround(agent, p.target);
+    RUN.valve = valveStep(RUN.valve, { minFrac, monsters: others.length, squares: RUN.blockerCount },
+      { startAt: Number(p.valve_start), closeBelow: Number(p.valve_close_below), stepMs: Number(p.valve_step_s) * 1000 });
+    if (RUN.valve.open !== before) {
+      event('valve', { open: RUN.valve.open, monsters: others.length, min_frac: Number(minFrac.toFixed(2)), why: RUN.valve.why });
+      console.log(`  valve: ${RUN.valve.open} of ${RUN.blockerCount} spawn squares open (${others.length} alive, lowest ${Math.round(minFrac * 100)}%) — ${RUN.valve.why}`);
+    }
+    return;
+  }
+  if (RUN.valve.open !== before) event('valve', { open: RUN.valve.open, why: RUN.valve.why });
+}
+
 /** Hold the room: the ghost first while it lives, then whatever is nearest. */
 async function farmLoop({ agent, p, st, say, duty }) {
   const tally = { swings: 0, kills: 0, retreats: 0, returns: 0, died: false, left: null, killed: {},
@@ -832,13 +900,17 @@ async function farmLoop({ agent, p, st, say, duty }) {
       await buffShare({ agent, duty: { ...duty, bless: [] }, p, where: RUN.room, patient: false });
       continue;
     }
-    // A SPAWN-SQUARE HOLDER stays on its square: back onto it first, then only what is in reach.
-    if (duty?.block && !(await holdSquare(agent, duty.block, tally))) continue;
+    if (RUN.valveLeader === agent) await valveTick(agent, p);
+    // A SPAWN-SQUARE HOLDER stays on its square: back onto it first, then only what is in reach —
+    // unless the valve has opened its square, when it fights like anyone else (and comes back when
+    // the valve closes it again).
+    const holding = duty?.block && !(RUN.valve.open > (duty.block.index ?? 0));
+    if (holding && !(await holdSquare(agent, duty.block, tally))) continue;
     const { ghost, others } = await lookAround(agent, p.target);
     if (ghost) RUN.ghostSeen = true; else ghostGone(agent);
     const g = ghost ?? pickFocus(others, p);
     if (!g) { await sleep(3000); continue; }                 // nothing yet: the next one is ~12s off
-    if (duty?.block && (g.distance ?? 99) > 1) {
+    if (holding && (g.distance ?? 99) > 1) {
       const near = [ghost, ...(others ?? [])].filter(Boolean).find(o => (o.distance ?? 99) <= 1);
       if (!near) { await sleep(2000); continue; }             // nothing adjacent: hold, do not chase
       const r = await call('attack', { agent, target: near.id, swings: Number(p.swings) }, 60_000).catch(e => ({ error: e.message }));
@@ -905,7 +977,8 @@ async function healLoop({ agent, p, st, say, duty }) {
       await buffShare({ agent, duty: { ...duty, strength: [] }, p, where: RUN.room, patient: false });
       continue;
     }
-    if (duty?.block && !(await holdSquare(agent, duty.block, st.blockTally ??= {}))) continue;
+    if (RUN.valveLeader === agent) await valveTick(agent, p);
+    if (duty?.block && !(RUN.valve.open > (duty.block.index ?? 0)) && !(await holdSquare(agent, duty.block, st.blockTally ??= {}))) continue;
     // Anyone being hit, not only the badly hurt: under heal_below, worst first.
     const h = await medicTick(agent, Number(p.heal_below));
     if (!h) { await sleep(2000); continue; }
