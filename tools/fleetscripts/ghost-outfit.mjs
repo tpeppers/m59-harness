@@ -569,7 +569,15 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   const ride = holder ? await rideCup(() => chaliceRide(agent, holder, { hall: Number(p.hall) }))
                       : { ok: false, why: 'no cup holder' };
   out.ride = ride.ok ? 'chalice' : `no ride (${ride.why})`;
-  if (ride.ok && share.length) {
+  // NO RIDE IS NOT NO DRAW. Rehearsal 26's reagent runner could not pick up the dropped cup and drew
+  // nothing, which left the whole raid without its sapphires and purple mushrooms. An armorer that
+  // cannot ride already walks to the hall; so does a runner now.
+  if (!ride.ok && share.length && Number(p.hall)) {
+    const w = await hopTo(agent, Number(p.hall), { floor: 0.5 });
+    if (w.ok) { ride.inHall = true; out.ride += ' — walked to the hall'; }
+  }
+  const there = ride.ok || ride.inHall;
+  if (there && share.length) {
     // ONE AT A TIME THROUGH THE HALL. The chest door opens for five seconds on a spoken word
     // (guildh14.kod DOOR_DELAY); riders arriving together contend for it, and on the 2026-09-25
     // rehearsal one was refused 3 of 3 presses as "unable to go anywhere".
@@ -600,7 +608,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   // short walk from the hall; the shortfall is bought there on the way home, before any hammer is
   // dedicated. Reagents only: gear is the smith's job, on the armorers' own trips.
   const buyable = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && /elderberr|herb|orc tooth|mushroom/i.test(k));
-  if (ride.ok && buyable.length && Number(p.reagent_shop)) {
+  if (there && buyable.length && Number(p.reagent_shop)) {
     const at = await hopTo(agent, Number(p.reagent_shop), { floor: 0.5 });
     if (at.ok) {
       // ONLY WHAT FITS. A purchase the pack cannot take is refused whole and silently — the
@@ -625,7 +633,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   // door buffs failed "no mana and no reagents moved" with casters carrying mushrooms and no
   // sapphires. What the chests could not give is bought here, sized to the pack like the rest.
   const gems = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && /sapphire|emerald/i.test(k));
-  if (ride.ok && gems.length && Number(p.gem_shop)) {
+  if (there && gems.length && Number(p.gem_shop)) {
     const at = await hopTo(agent, Number(p.gem_shop), { floor: 0.5 });
     if (at.ok) {
       const r = await roomFor(agent);
@@ -645,7 +653,7 @@ export async function hallDraw({ agent, crew = [], holder, share = [], p, log = 
   // leaves gear to its armorers' own smith trips; a general provisioning run (provision.mjs) buys it
   // here, on the same trip. One piece per exchange, read back (buyShare's rule).
   const gearShort = Object.entries(out.short ?? {}).filter(([k, n]) => n > 0 && !/elderberr|herb|orc tooth|mushroom|emerald|sapphire|ruby|shilling/i.test(k));
-  if (ride.ok && gearShort.length && (p.buy_gear === true || p.buy_gear === 'true') && Number(p.shop_room)) {
+  if (there && gearShort.length && (p.buy_gear === true || p.buy_gear === 'true') && Number(p.shop_room)) {
     const at = await hopTo(agent, Number(p.shop_room), { floor: 0.5 });
     if (at.ok) {
       out.bought_gear = await buyByName(agent, p.smith, gearShort.map(([item, amount]) => ({ item, amount })));
