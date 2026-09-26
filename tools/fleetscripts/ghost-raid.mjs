@@ -740,7 +740,26 @@ export const script = {
       return true;
     }, 'the gear record and checkpoint could not be written', 'raid.checkpoint');
 
-    const steps = i40 >= 0 ? [restFirst, gearAndCheckpoint, ...base.slice(0, i40), atDoor, theDoor, lightGate, ...base.slice(i40)]
+    // IN THROUGH THE DOOR, ALWAYS — AND ON A RETRY TOO. raid-action's entry is a plain walk to the
+    // boss room, and FleetScript retries a step interrupted by a death from wherever the body came
+    // back: on rehearsal 26 the dead raiders asked the router for 54 -> 40, the router has no route
+    // into the throne room except the door, and the keepers "walked without a trap check" into
+    // Ukgoth. This step goes to the door room by the ordinary route first, then hops through.
+    const enterStep = verify(async () => {
+      for (let i = 0; i < 3; i++) {
+        const room = Number((await observe(agent)).room);
+        if (room === RUN.room) return true;
+        if (room !== Number(RUN.door)) {
+          const w = await hop(agent, Number(RUN.door), { tries: 3 });
+          if (!w.ok) continue;
+        }
+        const h = await hop(agent, RUN.room, { tries: 5 });
+        if (h.ok) return true;
+      }
+      return { ok: false, why: `could not get into room ${RUN.room} through the door (${RUN.door})` };
+    }, 'into the boss room through its door', 'raid.enter');
+    const baseIn = i40 >= 0 ? [...base.slice(0, i40), enterStep, ...base.slice(i40 + 1)] : base;
+    const steps = i40 >= 0 ? [restFirst, gearAndCheckpoint, ...baseIn.slice(0, i40), atDoor, theDoor, lightGate, ...baseIn.slice(i40)]
                            : [restFirst, gearAndCheckpoint, atDoor, theDoor, lightGate, ...base];
 
     // The melee loop ends on "the boss is gone from here" — which is the kill, if it saw it.
