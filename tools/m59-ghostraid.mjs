@@ -762,6 +762,7 @@ async function replay(cfg) {
                  replayPositions: positions, replayOf: src, snapshotFile: snapFile }, { composed: true });
 }
 
+const REHEARSAL_PARKED = { agents: [] };
 async function rehearse(cfg) {
   const { assertLabFleet } = await import('./m59-fleetscript.mjs');
   assertLabFleet('m59-ghostraid rehearse');
@@ -789,9 +790,28 @@ async function rehearse(cfg) {
                   // HIM for the cup holder, and the ride failed. A rehearsal must be prod-shaped.
                   '--no-settle', '--trim-items', ...(cfg.commit ? [] : ['--dry'])];
     console.log(`rebuilding the shadow fleet: node ${args.join(' ')}`);
-    const { spawnSync } = await import('node:child_process');
-    const r = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
-    if (r.status !== 0) throw new Error(`the shadow rebuild stopped (exit ${r.status}); the raid was not run`);
+    // PARK EACH CLONE THE MOMENT IT IS IN THE WORLD. The rebuild waits minutes for the fleet to log
+    // in, and every keeper already in game runs free while it waits: rehearsal 25's light-bearer
+    // walked to Barloque on a town trip in that gap and came back without its gems. A parked keeper
+    // still survives (defends, flees, leaves the Underworld) but picks no new errand or fight.
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, args, { stdio: 'inherit', env: process.env });
+    const parked = new Set();
+    let building = true;
+    const parker = (async () => {
+      while (building) {
+        const rows = (await rpc('fleet', {}, 15_000).catch(() => null))?.fleet ?? [];
+        for (const r of rows.filter(r => r.room_num != null && !parked.has(r.agent)))
+          if (await rpc('autopilot', { agent: r.agent, action: 'park', why: 'rehearsal: hold still until the raid takes over' }, 15_000).catch(() => null)) parked.add(r.agent);
+        await new Promise(res => setTimeout(res, 4000));
+      }
+    })();
+    const status = await new Promise(res => child.on('exit', code => res(code)));
+    building = false;
+    await parker;
+    console.log(`  parked ${parked.size} clone(s) as they came into the world`);
+    REHEARSAL_PARKED.agents = [...parked];
+    if (status !== 0) throw new Error(`the shadow rebuild stopped (exit ${status}); the raid was not run`);
   }
   // THE CLONE'S OWN ROSTER. Shadow names follow prod characters, not slot numbers, so the raiders and
   // the light-bearer are read off the snapshot: the clones of prod's raiders, and the clone of hk1.
@@ -828,6 +848,24 @@ async function rehearse(cfg) {
       startStats[c.shadow_account] = { karma: Number.isFinite(karma) ? karma : null, max_mana: Number.isFinite(maxMana) ? maxMana : null };
   }));
   console.log(`prod karma/mana read for ${Object.keys(startStats).length} clone(s)`);
+  // EVERY CLONE IN THE WORLD, OR NOT IN THE RAID. The rebuild waits for most of the fleet, not all
+  // of it; a clone still logging in reads as an empty pack. Five more minutes, parking stragglers
+  // as they arrive, and a clone still absent is left out of this run — and said so.
+  const inWorld = async () => new Set(((await rpc('fleet', {}, 15_000).catch(() => null))?.fleet ?? []).filter(r => r.room_num != null).map(r => r.agent));
+  let here = await inWorld();
+  for (const until = Date.now() + 5 * 60_000; clones.some(c => !here.has(c.shadow_account)) && Date.now() < until;) {
+    await new Promise(res => setTimeout(res, 5000));
+    here = await inWorld();
+    for (const a of here) if (!REHEARSAL_PARKED.agents.includes(a)) {
+      await rpc('autopilot', { agent: a, action: 'park', why: 'rehearsal: hold still until the raid takes over' }, 15_000).catch(() => null);
+      REHEARSAL_PARKED.agents.push(a);
+    }
+  }
+  const absent = clones.filter(c => !here.has(c.shadow_account));
+  if (absent.length) {
+    console.log(`  NOT IN THE WORLD after the rebuild, left out of this run: ${absent.map(c => `${c.shadow_account} (${c.prod_character})`).join(', ')}`);
+    clones.splice(0, clones.length, ...clones.filter(c => here.has(c.shadow_account)));
+  }
   // THE CUP, EVEN WHEN THE SNAPSHOT CAUGHT IT IN FLIGHT. The chalice is passed by dropping it, so a
   // snapshot can land while it lies on a floor and no pack holds it: 2026-09-25 21:09, prod's cup
   // was between two riders and the clone fleet was built without one. On prod the light-bearer
@@ -857,6 +895,9 @@ async function rehearse(cfg) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
     if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);
   }
+  // Unparked at the last moment: the raid takes the hold seconds from now, and a parked keeper would
+  // otherwise sit out the raid's own walks.
+  await Promise.all(clones.map(c => rpc('autopilot', { agent: c.shadow_account, action: 'unpark', why: 'the raid takes over' }, 15_000).catch(() => null)));
   return fight({ ...cfg, lab: false, checkpoint: true, campNext: !flag('--no-camp'), snapshotFile: snapFile, agents: clones.map(c => c.shadow_account),
                  lightbearer: light?.shadow_account ?? '', startPositions, startStats, startCup },
                { composed: true });
