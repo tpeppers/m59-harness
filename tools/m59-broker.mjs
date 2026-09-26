@@ -11580,8 +11580,10 @@ const TOOLS = [
           const cfg = normalizePractice(value);
           if (cfg.problems.length)
             throw new Error(`practice_spells refused: ${cfg.problems.join('; ')}`);
-          const { problems: _problems, ...kept } = cfg;
-          p.policy.practiceSpells = kept;
+          // STORED AS SENT, not as normalised: the keeper normalises on every pass anyway, and a
+          // policy filled out with defaults would never compare equal to the doctrine that asked
+          // for it, so DUM would redeploy the desk on every tick.
+          p.policy.practiceSpells = JSON.parse(JSON.stringify(value));
         }
       }
       if (a.buff_allies !== undefined) {

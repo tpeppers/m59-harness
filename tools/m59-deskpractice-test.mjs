@@ -267,8 +267,8 @@ console.log('\nthe desk is served before it is practised at');
   const duty = body.indexOf('this.chaliceDuty()'), practice = body.indexOf('this.practiceAtDesk()');
   ok('passErrand calls chaliceDuty BEFORE practiceAtDesk', duty >= 0 && practice > duty);
   const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
-  ok('the broker accepts practice_spells and stores policy.practiceSpells',
-     /a\.practice_spells !== undefined/.test(broker) && /p\.policy\.practiceSpells = kept/.test(broker));
+  ok('the broker accepts practice_spells and stores it AS SENT, so a doctrine diff can settle',
+     /a\.practice_spells !== undefined/.test(broker) && /p\.policy\.practiceSpells = JSON\.parse\(JSON\.stringify\(value\)\)/.test(broker));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
