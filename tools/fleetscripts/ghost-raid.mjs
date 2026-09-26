@@ -1,5 +1,18 @@
 // KILL THE GHOST OF FAR'NOHL, THEN HOLD THE THRONE ROOM AND FARM ITS ESCORT FOR HALF AN HOUR.
 //
+// THE CYCLE (operator, 2026-09-25). With camp_next the run is one ghost cycle long: first kill ->
+// one spawn square open (valve_before_spawn) until the ghost is SEEN respawning -> reblock, kill it,
+// start the countdown to the next (108-132 min, GHOST_CYCLE_S) -> the valve may open wide ->
+// at `prep_close_min` after that spawn every square is shut, the room is cleared, and the fleet
+// rests and re-buffs for the next ghost.
+//
+// `prep_close_min` IS A MEASUREMENT OF THIS FLEET, NOT A CONSTANT. Each prep phase logs how long
+// the fleet took to be ready (valve shut -> room empty, everyone >= prep_ready_health) and by how
+// much it beat the ghost, to substrate/raids/prep-lead.jsonl with the fleet, its size and the SHA.
+// `node tools/m59-raidtimes.mjs --prep-lead` turns those into a recommended close time, and this
+// script uses that recommendation when one exists (else 95 min). A different fleet — fewer raiders,
+// weaker, lighter armour — re-derives it the same way, on the shadow fleet, before it matters.
+//
 //   node tools/m59-ghostraid.mjs fight --fleet shadow --lab
 //   node tools/m59-ghostraid.mjs fight --fleet prod
 //
@@ -380,6 +393,17 @@ async function lookAround(agent, target) {
       RUN.nextWindow = nextGhostWindow(t);
       RUN.valve = { ...RUN.valve, open: 0, changedAt: t, why: 'the ghost is back' };
       event('ghost_spawn', { seen_by: agent, next_lo: RUN.nextWindow.lo, next_hi: RUN.nextWindow.hi });
+      if (RUN.prep) {
+        const ep = { t, fleet: process.env.M59_FLEET ?? null, raiders: RUN.agents.length, closed_at: RUN.prep.closedAt,
+                     ready_at: RUN.prep.readyAt, lead_ms: RUN.prep.readyAt ? RUN.prep.readyAt - RUN.prep.closedAt : null,
+                     margin_ms: RUN.prep.readyAt ? t - RUN.prep.readyAt : null, closed_min_after_spawn: RUN.spawns.length > 1
+                       ? Math.round((RUN.prep.closedAt - RUN.spawns[RUN.spawns.length - 2]) / 60_000) : null,
+                     run: RUN.dir ? path.basename(RUN.dir) : null };
+        event('prep_episode', ep);
+        try { fs.appendFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'substrate', 'raids', 'prep-lead.jsonl'), JSON.stringify(ep) + String.fromCharCode(10)); } catch {}
+        console.log(`  prep episode: ready ${ep.lead_ms != null ? Math.round(ep.lead_ms / 60_000) + ' min after closing, ' + Math.round(ep.margin_ms / 60_000) + ' min before the ghost' : 'NOT READY when the ghost came'}`);
+        RUN.prep = null;
+      }
       console.log(`  *** the ghost has SPAWNED (seen by ${agent}); the next one is due between ` +
                   `${new Date(RUN.nextWindow.lo).toISOString().slice(11, 16)} and ${new Date(RUN.nextWindow.hi).toISOString().slice(11, 16)} UTC`);
     }
@@ -464,6 +488,9 @@ export const script = {
     cost: { risk: 'room 40 is a declared hazard: tusked skeletons are level 100' },
   },
   params: {
+    valve_before_spawn: { type: 'number', default: 1, describe: 'spawn squares the valve may open before a ghost respawn has been seen (the phase unknown)' },
+    prep_close_min: { type: 'string', default: 'auto', describe: 'minutes after a seen spawn to shut the valve and prepare for the next ghost; auto = the fleet\'s measured recommendation (m59-raidtimes --prep-lead), else 95' },
+    prep_ready_health: { type: 'number', default: 0.9, describe: 'prep counts as READY when the room is empty and everyone in it is at this fraction of health' },
     valve: { type: 'boolean', default: true, describe: 'after the kill, open spawn squares one at a time to farm what the room makes (needs spawn_block)' },
     valve_start: { type: 'number', default: 0.5, describe: 'the valve arms, and opens, only with everyone in the room at this fraction of health or better' },
     valve_close_below: { type: 'number', default: 0.35, describe: 'close a square when anyone in the room falls under this' },
@@ -840,23 +867,63 @@ async function holdSquare(agent, block, tally) {
 async function valveTick(agent, p) {
   if (!(Number(p.spawn_block) > 0) || !(p.valve === true || p.valve === 'true') || Date.now() - RUN.valveAt < 15_000) return;
   RUN.valveAt = Date.now();
+  const now = Date.now();
   const before = RUN.valve.open;
-  const primed = RUN.nextWindow && Date.now() >= RUN.nextWindow.lo - 2 * 60_000 && Date.now() <= RUN.nextWindow.hi + 5 * 60_000;
-  if (!RUN.killAt || RUN.ghostAlive || primed) {
-    RUN.valve = { ...RUN.valve, open: 0, why: RUN.ghostAlive ? 'the ghost is up' : primed ? 'a ghost is due' : 'before the kill' };
-  } else {
-    const rows = (await fleetNow()).filter(r => RUN.agents.includes(r.agent) && r.room === RUN.room && r.frac != null);
-    const minFrac = rows.length ? Math.min(...rows.map(r => r.frac)) : 1;
-    const { others } = await lookAround(agent, p.target);
-    RUN.valve = valveStep(RUN.valve, { minFrac, monsters: others.length, squares: RUN.blockerCount },
-      { startAt: Number(p.valve_start), closeBelow: Number(p.valve_close_below), stepMs: Number(p.valve_step_s) * 1000 });
-    if (RUN.valve.open !== before) {
-      event('valve', { open: RUN.valve.open, monsters: others.length, min_frac: Number(minFrac.toFixed(2)), why: RUN.valve.why });
-      console.log(`  valve: ${RUN.valve.open} of ${RUN.blockerCount} spawn squares open (${others.length} alive, lowest ${Math.round(minFrac * 100)}%) — ${RUN.valve.why}`);
-    }
-    return;
+  const lastSpawn = RUN.spawns[RUN.spawns.length - 1] ?? null;
+  const closeAt = lastSpawn != null ? lastSpawn + prepCloseMin(p) * 60_000 : null;
+  // THE PHASE. Before the first kill and while a ghost lives: shut. Before a respawn has been seen:
+  // at most valve_before_spawn (1) open. After one: wide, until closeAt; from closeAt: PREP — shut,
+  // clear the room, get ready for the ghost the countdown says is coming.
+  const phase = !RUN.killAt || RUN.ghostAlive ? 'shut'
+    : lastSpawn == null ? 'one'
+    : now < closeAt ? 'wide' : 'prep';
+  if (phase !== RUN.phase) {
+    event('phase', { phase, ...(closeAt ? { close_at: closeAt } : {}), ...(RUN.nextWindow ? { next_lo: RUN.nextWindow.lo, next_hi: RUN.nextWindow.hi } : {}) });
+    console.log(`  phase: ${phase}` + (RUN.nextWindow ? ` (next ghost ${Math.round((RUN.nextWindow.lo - now) / 60_000)}-${Math.round((RUN.nextWindow.hi - now) / 60_000)} min)` : ''));
+    if (phase === 'prep') RUN.prep = { closedAt: now, readyAt: null };
+    RUN.phase = phase;
   }
-  if (RUN.valve.open !== before) event('valve', { open: RUN.valve.open, why: RUN.valve.why });
+  // THE COUNTDOWN, every ten minutes while a ghost is due.
+  if (RUN.nextWindow && now - (RUN.countdownAt ?? 0) > 10 * 60_000 && !RUN.ghostAlive) {
+    RUN.countdownAt = now;
+    console.log(`  countdown: next ghost in ${Math.max(0, Math.round((RUN.nextWindow.lo - now) / 60_000))}-${Math.max(0, Math.round((RUN.nextWindow.hi - now) / 60_000))} min (phase ${phase})`);
+  }
+  const rows = (await fleetNow()).filter(r => RUN.agents.includes(r.agent) && r.room === RUN.room && r.frac != null);
+  const minFrac = rows.length ? Math.min(...rows.map(r => r.frac)) : 1;
+  const { others } = await lookAround(agent, p.target);
+  if (phase === 'shut' || phase === 'prep') {
+    RUN.valve = { ...RUN.valve, open: 0, why: phase === 'prep' ? 'preparing for the next ghost' : RUN.ghostAlive ? 'the ghost is up' : 'before the kill' };
+    // READY: the room is empty and everyone in it is healthy. The lead this took is the fleet's
+    // own number for prep_close_min, and the margin by which it beat the ghost is logged when the
+    // ghost appears.
+    if (phase === 'prep' && RUN.prep && !RUN.prep.readyAt && others.length === 0 && minFrac >= Number(p.prep_ready_health)) {
+      RUN.prep.readyAt = now;
+      event('prep_ready', { closed_at: RUN.prep.closedAt, lead_ms: now - RUN.prep.closedAt });
+      console.log(`  prep: ready ${Math.round((now - RUN.prep.closedAt) / 60_000)} min after the valve shut`);
+    }
+  } else {
+    const squares = phase === 'one' ? Math.min(RUN.blockerCount, Number(p.valve_before_spawn)) : RUN.blockerCount;
+    RUN.valve = valveStep(RUN.valve, { minFrac, monsters: others.length, squares },
+      { startAt: Number(p.valve_start), closeBelow: Number(p.valve_close_below), stepMs: Number(p.valve_step_s) * 1000 });
+    if (RUN.valve.open > squares) RUN.valve = { ...RUN.valve, open: squares };
+  }
+  if (RUN.valve.open !== before) {
+    event('valve', { open: RUN.valve.open, phase, monsters: others.length, min_frac: Number(minFrac.toFixed(2)), why: RUN.valve.why });
+    console.log(`  valve: ${RUN.valve.open} of ${RUN.blockerCount} open (${phase}; ${others.length} alive, lowest ${Math.round(minFrac * 100)}%) — ${RUN.valve.why}`);
+  }
+}
+
+/** Minutes after a seen spawn to shut the valve and prepare: the fleet's measured recommendation, else the param. */
+function prepCloseMin(p) {
+  if (p.prep_close_min != null && String(p.prep_close_min) !== '' && String(p.prep_close_min) !== 'auto') return Number(p.prep_close_min);
+  RUN.prepRec ??= (() => {
+    try {
+      const f = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'substrate', 'raids', 'prep-lead.json');
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      return Number.isFinite(Number(j.recommended_close_min)) ? Number(j.recommended_close_min) : 95;
+    } catch { return 95; }
+  })();
+  return RUN.prepRec;
 }
 
 /** Hold the room: the ghost first while it lives, then whatever is nearest. */
@@ -909,7 +976,12 @@ async function farmLoop({ agent, p, st, say, duty }) {
     const { ghost, others } = await lookAround(agent, p.target);
     if (ghost) RUN.ghostSeen = true; else ghostGone(agent);
     const g = ghost ?? pickFocus(others, p);
-    if (!g) { await sleep(3000); continue; }                 // nothing yet: the next one is ~12s off
+    if (!g) {
+      // PREP WITH AN EMPTY ROOM: sit and recover for the ghost the countdown says is coming. A seated
+      // raider cannot swing — the attack path stands it up the moment one is refused.
+      if (RUN.phase === 'prep') await call('rest', { agent }, 30_000).catch(() => {});
+      await sleep(3000); continue;                           // nothing yet: the next one is ~12s off
+    }
     if (holding && (g.distance ?? 99) > 1) {
       const near = [ghost, ...(others ?? [])].filter(Boolean).find(o => (o.distance ?? 99) <= 1);
       if (!near) { await sleep(2000); continue; }             // nothing adjacent: hold, do not chase

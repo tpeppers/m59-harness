@@ -351,6 +351,8 @@ const fightParams = (cfg, dir, mustered) => ({
   ...(opt('--target') ? { target: opt('--target') } : {}),
   dum_profile: !!cfg.dumUrl,
   checkpoint: !!cfg.checkpoint,
+  ...(cfg.campNext || flag('--camp-next') ? { camp_next: true } : {}),
+  ...(opt('--camp-max') != null ? { camp_max_min: Number(opt('--camp-max')) } : {}),
   ...(opt('--spawn-block') != null ? { spawn_block: Number(opt('--spawn-block')) } : {}),
 });
 
@@ -534,6 +536,7 @@ export async function report(cfg) {
     healNote(events),
     spawnBlockNote(events),
     valveNote(events),
+    prepNote(events),
     ghostClockNote(events),
     roomNote(events, killAt),
     buffNote(events),
@@ -567,6 +570,13 @@ function gearMarkdown(events) {
   const ck = events.find(e => e.kind === 'checkpoint');
   if (ck) lines.push('', ck.ok ? `checkpoint before the door: \`${ck.name}\` — replay: ${ck.replay.join('; ')}` : `checkpoint NOT taken: ${ck.why}`);
   return lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
+}
+
+function prepNote(events) {
+  const eps = events.filter(e => e.kind === 'prep_episode');
+  const phases = events.filter(e => e.kind === 'phase').map(e => `${new Date(e.t).toISOString().slice(11, 16)} ${e.phase}`);
+  return `cycle: ${phases.join(' → ') || 'no phases'}` + (eps.length ? `; prep: ${eps.map(e => e.lead_ms != null
+    ? `ready ${Math.round(e.lead_ms / 60_000)} min after closing, ${Math.round(e.margin_ms / 60_000)} min before the ghost` : 'NOT ready when the ghost came').join('; ')}` : '');
 }
 
 function valveNote(events) {
@@ -793,7 +803,7 @@ async function rehearse(cfg) {
     console.log(`  CLONES THAT LOST THEIR PACK SINCE THE REBUILD (died?): ${lost.join('; ')}`);
     if (!flag('--allow-lost')) throw new Error(`${lost.length} clone(s) are not prod-shaped — run the rehearsal again (the rebuild re-dresses them), or pass --allow-lost`);
   }
-  return fight({ ...cfg, lab: false, checkpoint: true, snapshotFile: snapFile, agents: clones.map(c => c.shadow_account),
+  return fight({ ...cfg, lab: false, checkpoint: true, campNext: !flag('--no-camp'), snapshotFile: snapFile, agents: clones.map(c => c.shadow_account),
                  lightbearer: light?.shadow_account ?? '', startPositions, startStats, startCup },
                { composed: true });
 }

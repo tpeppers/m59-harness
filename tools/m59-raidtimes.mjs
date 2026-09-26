@@ -4,6 +4,7 @@
 //   node tools/m59-raidtimes.mjs                          the history, one line per run, newest last
 //   node tools/m59-raidtimes.mjs --run <dir>              one run: every block, p50/p90/wall, deaths
 //   node tools/m59-raidtimes.mjs --run <dir> --write      reduce it and append it to the history
+//   node tools/m59-raidtimes.mjs --prep-lead [--write]     how early THIS fleet must prepare for a ghost, measured
 //   node tools/m59-raidtimes.mjs --from-log <log> --run <dir> --write
 //                                                          a run from before the step hook: rebuilt
 //                                                          from the rehearsal log's "step N ok" lines
@@ -126,6 +127,22 @@ function printRun(s) {
 async function main() {
   const argv = process.argv.slice(2);
   const opt = n => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : null; };
+  if (argv.includes('--prep-lead')) {
+    // HOW EARLY THIS FLEET MUST START PREPARING FOR A GHOST. From the prep episodes ghost-raid logs
+    // (valve shut -> ready), recommend shutting at 108 min (the earliest a ghost can come) minus the
+    // p90 lead minus a margin. Written to prep-lead.json, which ghost-raid reads (prep_close_min=auto).
+    const eps = readJsonl(path.join(REPO, 'substrate', 'raids', 'prep-lead.jsonl')).filter(e => e.lead_ms != null);
+    const leads = eps.map(e => e.lead_ms / 60_000);
+    const margin = Number(opt('--margin') ?? 3);
+    const p90 = pct(leads, 90);
+    const rec = p90 == null ? 95 : Math.max(60, Math.floor(108 - p90 - margin));
+    const out = { recommended_close_min: rec, episodes: eps.length, lead_p50_min: pct(leads, 50), lead_p90_min: p90, margin_min: margin,
+                  late: readJsonl(path.join(REPO, 'substrate', 'raids', 'prep-lead.jsonl')).filter(e => e.lead_ms == null).length,
+                  basis: 'the fleet that ran these episodes; re-measure on the shadow fleet when the fleet changes', at: new Date().toISOString() };
+    console.log(JSON.stringify(out, null, 1));
+    if (argv.includes('--write')) { fs.writeFileSync(path.join(REPO, 'substrate', 'raids', 'prep-lead.json'), JSON.stringify(out, null, 1)); console.log('written: substrate/raids/prep-lead.json'); }
+    return;
+  }
   const dir = opt('--run');
   if (dir) {
     let steps = null;
