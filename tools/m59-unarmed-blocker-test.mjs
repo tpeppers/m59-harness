@@ -120,5 +120,17 @@ console.log('\nTHE INVARIANT, STATED AS ITSELF');
   ok('and a genuine shortfall is never classified as neither', missed === 0, String(missed));
 }
 
+// NO ROOM IS A REASON TO GO TO TOWN, NOT ONLY TO SAY SO (2026-09-26). The 'room' branch returns
+// HANDLED every pass, which kept passErrand — where the pack-full trip lives — from ever running:
+// Clifford and Rowlf sat unarmed at 99% bulk for hours. The branch must try bankRun first.
+{
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = src.indexOf("if (blocker === 'room') {");
+  const branch = src.slice(at, src.indexOf("this.note('unarmed and cannot hold what the spell would make'", at));
+  ok("the 'room' branch opens the pack-full town trip before it refuses",
+     at >= 0 && /await this\.bankRun\(\)/.test(branch));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

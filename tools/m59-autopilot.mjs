@@ -17144,6 +17144,14 @@ export class Autopilot {
       const blocker = classified.blocker;
       let unblockedWhy = classified.declinedWhy;
       if (blocker === 'room') {
+        // AND THEN DO IT. The remedy below is "a sale, a drop or a hand-over", and the sale is
+        // `bankRun` — which lives in passErrand, a rung this one never lets run, because the
+        // refusal below returns HANDLED every pass. So an unarmed character with a full pack
+        // was a deadlock that only ever described itself: Clifford and Rowlf stood in room 2 on
+        // 2026-09-26 at 2,668 and 2,684 of 2,700 bulk, no weapon, declining a conjure every
+        // second for hours, with 525 emeralds and 258 diamonds aboard that the guild chest wants.
+        // Open the same trip a full pack opens (it rides the chalice home where one is on duty).
+        if (await this.bankRun().catch(() => false)) return HANDLED;
         // NOT A WAIT. Vigor and mana come back on their own; pack space does not, so a
         // `waitFor` here would be a promise nothing intends to keep. Say what has to happen.
         this.doneWaiting?.();
