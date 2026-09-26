@@ -3061,6 +3061,16 @@ export class Autopilot {
     // one as "make room". Holding on a number we do not have is how a character farms until
     // it dies.
     if (!cap?.known || !(cap.weight_max > 0) || cap.load?.exact === false) return null;
+    // UNARMED WITH NO ROOM TO ARM RELEASES IT TOO. Overfarming is "keep killing and trade up",
+    // and a character with no weapon and too little bulk to conjure one cannot kill anything,
+    // so the target is never reached and the hold is permanent: Clifford and Rowlf, room 2,
+    // 2026-09-26, 99% bulk, bankRun opened by passArm and held here every pass. The trip IS
+    // the way back to a weapon.
+    // Only a KNOWN empty hand: an unread equipment list is not an unarmed character.
+    const bulkFree = cap.room_for?.bulk;
+    const eq = this.s?.client?.equipment?.();
+    if (eq?.known && this.wieldedWeaponId(this.s.client) == null && Number.isFinite(bulkFree)
+        && bulkFree < CONJURED_WEAPON_BULK) return null;
     const target = Math.round(this.overfarmScale() * cap.weight_max);
     if (!(lap.sifted < target)) return null;
     return { held: true, sifted: lap.sifted, target,

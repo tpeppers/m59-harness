@@ -288,6 +288,14 @@ section('overfarm usurps the full-pack town trip, which is the whole strategy');
   ok(/!hold/.test(guardAbove("trigger: 'load'") ?? ''), 'while the load trigger is');
   ok(/!hold/.test(guardAbove("trigger: 'stacks'") ?? ''), 'and so is the stack ceiling');
 
+  // AN UNARMED CHARACTER WITH NO ROOM TO ARM CANNOT SIFT (2026-09-26): it kills nothing, so a
+  // hold on it is permanent. Clifford and Rowlf sat in room 2 at 99% bulk with the trip held.
+  const holdFn = autopilot.slice(autopilot.indexOf('  overfarmHoldsTrip() {'),
+                                 autopilot.indexOf('  supplyShortfall() {'));
+  ok(/wieldedWeaponId\(/.test(holdFn) && /bulkFree < CONJURED_WEAPON_BULK\) return null/.test(holdFn),
+     'the hold is released for a known-unarmed character without room to conjure');
+  ok(/eq\?\.known &&/.test(holdFn), 'and only on a KNOWN empty hand, never an unread equipment list');
+
   // A HOLD ON A NUMBER WE DO NOT HAVE WOULD FARM SOMEBODY UNTIL THEY DIED.
   ok(/cap\?\.known \|\| !\(cap\.weight_max > 0\) \|\| cap\.load\?\.exact === false\) return null/.test(autopilot),
      'an unreadable or lower-bound pack ceiling releases the hold');
