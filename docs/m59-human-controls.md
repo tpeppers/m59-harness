@@ -64,6 +64,15 @@ tell the serving bot `services?` for its menu, then the service name (`Remove Cu
 the controls left anybody unserved. Full spec: m59-research
 `design/research-spec-human-service-bot.md`.
 
+### Practising at the desk
+
+A desk character can build its spells in the time between tickets: `practice_spells` on the
+`autopilot` tool (DUM: a station's `practice_spells`) names what to drill, and the keeper casts
+one per `gap_ms` at its post. It **keeps two casts of the dearest service it offers and knows** —
+60 mana on a desk offering Reveal — and the reagents those two casts need, on top of the Rescue
+emeralds, so a practice run can never be why a customer's cast is refused. A ticket always
+outranks a drill. Reserve and choice are pure in `tools/m59-deskpractice.mjs`.
+
 ## Ownership and restart semantics
 
 Keeper order edits become per-bot human overrides in DUM's ignored runtime control

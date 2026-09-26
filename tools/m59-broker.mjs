@@ -45,6 +45,7 @@ import { REAGENT_COOP_SCHEMA, coopConfig } from './m59-reagent-coop.mjs';
 import { ChatControls } from './m59-chat-controls.mjs';
 import { DeskChat } from './m59-desk-chat.mjs';
 import { chaliceStoreFor } from './m59-chalice.mjs';
+import { normalizePractice } from './m59-deskpractice.mjs';
 import { ControlClient } from './m59-control-client.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs';
@@ -10701,6 +10702,19 @@ const TOOLS = [
         mana_floor: { type: 'number',
           description: 'Do not cast below this much mana. Defaults per spell to its cost plus 4.' },
       }, description: 'cast the Kraanan personal enchantments on other players standing in the same room. super strength adds might, and might is the requisite stat for brawling, read live -- so it raises the RECIPIENT improvement chance and its soft cap, not merely its damage; bless adds to-hit, which fills the 75-swing improvement counter faster. Reagents come from the caster own pack (2 mushroom + 1 orc tooth for super strength, 2 mushroom + 2 sapphire for bless) and are counted before each cast. null disables it' },
+      practice_spells: { type: ['object', 'null'], properties: {
+        enabled: { type: 'boolean' },
+        spells: { type: 'array', items: { type: ['string', 'object'] },
+          description: 'What to drill, tried in order. A name, or {name, target: "self"|"none"}; without a target a one-target spell is cast on self.' },
+        reserve_casts: { type: 'number',
+          description: 'Casts of the dearest service this desk offers AND knows, kept back in mana and in reagents. Default 2.' },
+        mana_floor: { type: 'number', description: 'An absolute floor under the derived reserve; the larger wins. Default 0.' },
+        gap_ms: { type: 'number', description: 'One practice cast per this long. Default 20000 (ADVANCEMENT_LIMIT makes faster pointless).' },
+        refused_ms: { type: 'number', description: 'A cast that spent no mana sets that spell aside this long. Default 300000.' },
+        rooms: { type: 'array', items: { type: 'number' },
+          description: 'Where practice is allowed. Default: the assigned room, the chalice post and the station.' },
+        rest_seconds: { type: 'number', description: 'Short mana rest on a held wall while blocked by the reserve. Default 5; 0 never sits.' },
+      }, description: 'PRACTISE SPELLS AT THE DESK. While nothing needs it — no ticket, no errand, no journey, nothing swinging — a posted character casts one practice spell per gap_ms, never moving and never spending the mana or reagents its services need: the reserve is reserve_casts (2) x one cast of the dearest service it both offers (the chalice menu) and knows, from the kod spell catalogue — 60 mana on a desk that offers reveal. A cast that spends no mana was refused in silence and that spell is set aside. See tools/m59-deskpractice.mjs. null disables it' },
       farm_delivery: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' }, herbs_per_farmer: { type: 'number' },
         elderberries_per_farmer: { type: 'number' }, max_recipients: { type: 'number' },
@@ -11554,6 +11568,22 @@ const TOOLS = [
       // SAME SHAPE AS farm_cleanup ABOVE: null is off, and an object must say `enabled`
       // rather than merely existing. Casting on an ally is a real cost -- mana and two
       // reagents a throw -- so being installed has to be a decision somebody made.
+      // SAME SHAPE AGAIN, AND STRICTER: a practice config that would silently drop a key is
+      // refused here, because the thing it protects — the desk's reserve — fails in silence
+      // when it is wrong (a service cast the server refuses reads as `cast: true`).
+      if (a.practice_spells !== undefined) {
+        if (a.practice_spells == null) p.policy.practiceSpells = null;
+        else {
+          const value = a.practice_spells;
+          if (typeof value !== 'object' || Array.isArray(value) || value.enabled !== true)
+            throw new Error('practice_spells must be null or an enabled settings object');
+          const cfg = normalizePractice(value);
+          if (cfg.problems.length)
+            throw new Error(`practice_spells refused: ${cfg.problems.join('; ')}`);
+          const { problems: _problems, ...kept } = cfg;
+          p.policy.practiceSpells = kept;
+        }
+      }
       if (a.buff_allies !== undefined) {
         if (a.buff_allies == null) p.policy.buffAllies = null;
         else {

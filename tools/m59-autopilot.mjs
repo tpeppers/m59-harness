@@ -75,6 +75,7 @@ import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan,
          reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu } from './m59-chalice.mjs';
+import { normalizePractice, offeredServices, deskReserve, choosePractice } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -1830,6 +1831,9 @@ export class Autopilot {
       // inert like its neighbours: holding the spells is not the instruction, being posted
       // as the group's caster is. Shape: { enabled, spells: [...], gap_ms, mana_floor }.
       buffAllies: null,
+      // Practise spells at a post while nothing needs us, keeping back two casts of the desk's
+      // dearest service. null is inert. See m59-deskpractice.mjs and practiceAtDesk().
+      practiceSpells: null,
       // Take reagents from a fleetmate without negotiating. The provider half of a
       // fleet service: null is inert, an object is { enabled, reagents, drop_for_space,
       // min_bulk_free }.
@@ -18806,6 +18810,12 @@ export class Autopilot {
       return HANDLED;
     if (this._holderCargo && await this.chaliceDeliverCargo().catch(e => { this.note('restock delivery failed', { why: e.message }); return false; }))
       return HANDLED;
+    // NOTHING AT THE DESK NEEDS US: PRACTISE, above the reserve the desk is owed. After the duty
+    // on purpose — a ticket always outranks a drill — and it hands the pass back whenever it did
+    // not cast, so a character with nothing to practise behaves exactly as it did before.
+    if (this.policy.practiceSpells && await this.practiceAtDesk().catch(e => {
+      this.note('desk practice failed', { why: e.message }); return false; }))
+      return HANDLED;
     // Acquire shelter even at full health; a stationary caster must not wait for
     // the first hit before finding its post. Survival has already had its turn.
     if (this.isRoomEnchantPost()) {
@@ -23156,6 +23166,96 @@ export class Autopilot {
         holds_for_ms: holdMs, casts_left: left });
       return { cast: true, spell: ench.name, holdMs, casts_left: left };   // one cast a pass
     }
+  }
+
+  // PRACTISE AT THE DESK, NEVER BELOW WHAT THE DESK IS OWED.
+  //
+  // Operator, 2026-09-25: a service character building spells in its idle time, keeping "enough
+  // mana in reserve for 2x casts of its most expensive service". The reserve is DERIVED — from
+  // the chalice menu this character serves and the spells it actually knows — in
+  // m59-deskpractice.mjs, which is pure and pinned by m59-deskpractice-test.mjs. This half does
+  // what only a keeper can: stand up, cast, and read the mana back.
+  //
+  // WHAT IT WILL NOT DO. It never moves the character — practice happens at the post or not at
+  // all. It never casts while a desk job is in flight, an errand or journey owns the body, or
+  // something is swinging. And it never trusts that a cast happened: a cast that spent no mana
+  // was refused in silence (a room already lit, a heal on somebody whole, a resting caster), so
+  // that spell is set aside for `refused_ms` and the next pass tries the next one.
+  //
+  // True only when it did something with the pass — a cast, or a short mana rest on a held
+  // wall while blocked by the reserve. Every other answer hands the pass back unchanged.
+  async practiceAtDesk() {
+    const cfg = normalizePractice(this.policy.practiceSpells);
+    if (!cfg || cfg.enabled === false) return false;
+    if (cfg.problems?.length && this._practiceProblemsSaid !== cfg.problems.join('|')) {
+      this._practiceProblemsSaid = cfg.problems.join('|');
+      this.note('desk practice config problems', { problems: cfg.problems });
+    }
+    // Somebody else, or a job of our own, has the body.
+    if (this.townTrip || this.travelInterrupted?.() || this.suspendedJourney || this.errand
+        || this.parking || (this.inert && !this.inert.travelling) || this.busyStatus?.()
+        || this._chaliceServe || this._holderCargo) return false;
+    const now = Date.now();
+    if (this.frozenUntil && now < this.frozenUntil) return false;
+    if (this._practiceAt && now - this._practiceAt < cfg.gap_ms) return false;
+
+    const chalice = this.chaliceCfg;
+    const rooms = cfg.rooms.length ? cfg.rooms
+      : [this.policy.assignedRoom, chalice?.post_room, chalice?.station_room]
+        .map(Number).filter(n => Number.isInteger(n) && n > 0);
+    if (!rooms.length)
+      return this.declinedCast('practice', 'no post to practise at: set practice rooms, an assigned room, or a chalice post');
+    if (!rooms.includes(this.hereRoom())) return false;
+
+    const s = this.s, c = s.need();
+    const v = c.vitals?.();
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return false;
+    if (this.threat().landing > 0) return false;
+
+    const spells = (c.spells || []).map(sp => ({
+      id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0 }));
+    const role = this.chaliceRole();
+    const services = role === 'holder' || role === 'alternate' ? offeredServices(chalice) : [];
+    const reserve = deskReserve({ practice: cfg, services, known: spells.map(x => x.name),
+                                  keep: this.chaliceReagentFloor() });
+    this._practiceRefused ||= new Map();
+    const choice = choosePractice({ practice: cfg, spells, mana: v?.mana, reserve, now,
+                                    have: (item) => this.reagentOnHand(item),
+                                    refusedUntil: this._practiceRefused });
+    this.practiceState = { at: now, reserve: reserve.mana, reserve_why: reserve.why,
+                           reagents_kept: reserve.reagents, last: choice.why };
+    if (!choice.cast) {
+      // Below the reserve and nothing else in the way: win the mana back, on a held wall only.
+      if (choice.blocked === 'mana' && cfg.rest_seconds > 0 && this.holdWorks()) {
+        const r = await skills.restUntil(s, { health: 0.99, vigor: REST_VIGOR_CAP, mana: 0.95,
+                                              maxSeconds: cfg.rest_seconds });
+        if (r.interrupted) await this.restBroken(this.s.world?.room, this.inReachOfUs());
+        return true;
+      }
+      return this.declinedCast('practice', choice.blocked ?? 'none',
+        { why: choice.why, reserve: reserve.mana, reserve_why: reserve.why });
+    }
+
+    const spell = spells.find(x => x.name === choice.cast.name);
+    const targets = choice.cast.target === 'self' ? [c.selfId] : [];
+    this._practiceAt = now;
+    try { await skills.standToAct(s); } catch {}
+    const manaBefore = c.vitals?.()?.mana?.value ?? null;
+    await s.pacer.submit('cast', () => c.cast(spell.id, targets), 1050);
+    await c.waitFor({ kinds: ['message', 'stat'], timeoutMs: 3000 }).catch(() => ({ events: [] }));
+    const manaAfter = c.vitals?.()?.mana?.value ?? null;
+    const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
+    // UNKNOWN IS NOT REFUSED. Only a reading that proves nothing was spent sets the spell aside.
+    const landed = spent == null ? null : spent > 0;
+    if (landed === false) this._practiceRefused.set(choice.cast.name, now + cfg.refused_ms);
+    if (landed) this.tally.practice_casts = (this.tally.practice_casts || 0) + 1;
+    this.recordCast(choice.cast.name, {
+      ok: landed !== false, target: choice.cast.target === 'self' ? 'self' : null,
+      why: landed === false
+        ? `practice: no mana was spent, so the server refused it; set aside ${Math.round(cfg.refused_ms / 1000)}s`
+        : `${choice.why}; reserve ${reserve.why}`,
+      mana_before: manaBefore, mana_after: manaAfter });
+    return true;
   }
 
   async buffAllies() {
