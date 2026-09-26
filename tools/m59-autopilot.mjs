@@ -3508,12 +3508,41 @@ export class Autopilot {
   // armours and wore none, and because sellable() rightly refuses to sell body armour to a
   // character wearing none ("this is not a spare"), every leather the unarmoured crew looted
   // was unsellable for ever. One wear_best by hand put leather on him and made the second one
-  // a spare. Called from both loot sites; free when the loot held no armour, and
-  // wearArmourIfNeeded itself sends nothing when nothing is missing.
+  // a spare. Called from both loot sites; free when the loot held no armour.
+  //
+  // IT FILLS AN EMPTY SLOT AND NEVER SWAPS, AND IT STANDS DOWN UNDER AN ECONOMY LEASE. Both
+  // at a raid's request (2026-09-25): a raid hands each raider a deliberate outfit and records
+  // it before the door, and holds work and economy while it does. wearArmourIfNeeded swaps
+  // whenever the best-RANKED carried piece is not the worn one — raid chain would come off for
+  // looted leather and the raid's own record would silently stop describing the body. So this
+  // path only covers a slot with nothing in it, and only while economy is the keeper's. DUM
+  // leases work and movement only, so a DUM-directed farmer still puts on what it loots.
   async wearLootedArmour(looted = []) {
     const piece = (looted || []).some(n => skills.armourKind(String(n).replace(/ x\d+$/, '')));
     if (!piece) return false;
-    return this.wearArmourIfNeeded().catch(() => false);
+    if (this.facultyHeld?.('economy')) return false;
+    const c = this.s?.client;
+    const using = skills.equippedNow(c);
+    if (!c || !using) return false;           // no use list: cannot tell what is empty
+    const have = skills.armourOf(c);
+    const wornSlots = new Set();
+    for (const o of c.inventory || []) {
+      if (!using.has(o.id)) continue;
+      const kind = skills.armourKind(c.rsc.get(o.nameRsc) || '');
+      if (kind) wornSlots.add(kind.slot);
+    }
+    const empty = skills.ARMOUR_SLOTS.filter(sl => have[sl]?.length && !wornSlots.has(sl));
+    if (!empty.length) return false;
+    // `_wearBest` is a test seam; production always takes skills.wearBest.
+    const r = await (this._wearBest ?? skills.wearBest)(this.s, { slots: empty }).catch(() => null);
+    if (r?.worn?.length) {
+      this.tally.armour_worn = (this.tally.armour_worn || 0) + r.worn.length;
+      this.note('put on armour we just looted', {
+        worn: r.worn.map(w => `${w.name} (${w.slot})`), empty_slots: empty,
+        why: 'the slot was empty and the piece was in the pack; a character wearing no body ' +
+             'armour can never sell a spare, and one wearing none is hit more' });
+    }
+    return !!r?.worn?.length;
   }
 
   async wearArmourIfNeeded() {

@@ -138,17 +138,43 @@ console.log('\nlooted armour is worn by an armed character too');
 {
   const { Autopilot } = await import('./m59-autopilot.mjs');
   const { readFileSync } = await import('node:fs');
-  const ap = Object.create(Autopilot.prototype);
-  let asked = 0;
-  ap.wearArmourIfNeeded = async () => { asked++; return true; };
+  // A client with an axe worn and, in the pack, a leather armour and a shield. `wearing` adds
+  // names to the use list.
+  const names = { 1: 'axe', 2: 'leather armor', 3: 'small round shield', 4: 'chain armor' };
+  const mk = ({ wearing = ['axe'], carrying = [1, 2, 3], economy = 'keeper' } = {}) => {
+    const ap = Object.create(Autopilot.prototype);
+    ap.policy = {}; ap.tally = {}; ap.note = () => {};
+    ap.facultyHeld = (f) => f === 'economy' && economy !== 'keeper';
+    const ids = Object.keys(names).map(Number).filter(i => carrying.includes(i));
+    ap.s = { client: {
+      inventory: ids.map(id => ({ id, nameRsc: id })),
+      using: new Set(ids.filter(id => wearing.includes(names[id]))),
+      rsc: { get: (id) => names[id] },
+    } };
+    ap.asked = [];
+    ap._wearBest = async (_s, { slots }) => { ap.asked.push(slots); return { worn: slots.map(slot => ({ slot, name: slot })) }; };
+    return ap;
+  };
+
+  let ap = mk();
   await ap.wearLootedArmour(['orc tooth x3', 'scimitar']);
-  ok('loot with no armour in it asks for nothing', asked === 0);
-  await ap.wearLootedArmour(['small round shield', 'orc tooth x3']);
-  ok('a looted shield asks to wear', asked === 1);
-  await ap.wearLootedArmour(['leather armor x2']);
-  ok('an amount suffix does not hide the armour', asked === 2);
+  ok('loot with no armour in it asks for nothing', ap.asked.length === 0);
+  ap = mk();
+  await ap.wearLootedArmour(['leather armor x2', 'orc tooth x3']);
+  ok('an armed character with an empty body and shield slot fills both',
+     ap.asked.length === 1 && ap.asked[0].includes('armour') && ap.asked[0].includes('shield'),
+     JSON.stringify(ap.asked));
+  // THE RAID'S CASE. Chain is worn (a deliberate outfit); looted leather must not replace it.
+  ap = mk({ wearing: ['axe', 'chain armor', 'small round shield'], carrying: [1, 2, 3, 4] });
+  await ap.wearLootedArmour(['leather armor']);
+  ok('a worn slot is never swapped, even for a better-ranked piece', ap.asked.length === 0,
+     JSON.stringify(ap.asked));
+  ap = mk({ economy: 'fleetscript/ghost-raid' });
+  await ap.wearLootedArmour(['leather armor']);
+  ok('under an economy lease (a raid) it stands down entirely', ap.asked.length === 0);
+  ap = mk();
   await ap.wearLootedArmour(undefined);
-  ok('no loot at all is not an error', asked === 2);
+  ok('no loot at all is not an error', ap.asked.length === 0);
   const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
   ok('both loot sites call it', (AP.match(/await this\.wearLootedArmour\(looted\);/g) ?? []).length >= 2);
 }
