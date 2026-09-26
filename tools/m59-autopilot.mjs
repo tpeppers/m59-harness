@@ -3500,6 +3500,22 @@ export class Autopilot {
   // already in the client's cache — armourOf reads the inventory we hold, equippedNow
   // reads the use list the server volunteers — so the common case is arithmetic and
   // sends no request at all. Only an actual mismatch pays for a `use`.
+  // PUT ON ARMOUR THE MOMENT IT IS LOOTED, NOT ONLY WHEN UNARMED.
+  //
+  // wearArmourIfNeeded's only caller was armSelf(), and every armSelf() call is gated on
+  // `!armedForSure()` — so a character with a weapon in hand never put on armour it looted.
+  // Two costs, measured on prod 2026-09-25 in the Icky Cave: Statler carried two leather
+  // armours and wore none, and because sellable() rightly refuses to sell body armour to a
+  // character wearing none ("this is not a spare"), every leather the unarmoured crew looted
+  // was unsellable for ever. One wear_best by hand put leather on him and made the second one
+  // a spare. Called from both loot sites; free when the loot held no armour, and
+  // wearArmourIfNeeded itself sends nothing when nothing is missing.
+  async wearLootedArmour(looted = []) {
+    const piece = (looted || []).some(n => skills.armourKind(String(n).replace(/ x\d+$/, '')));
+    if (!piece) return false;
+    return this.wearArmourIfNeeded().catch(() => false);
+  }
+
   async wearArmourIfNeeded() {
     const c = this.s.client;
     const using = skills.equippedNow(c);
@@ -17408,6 +17424,7 @@ export class Autopilot {
       this.noProgress('fought back without landing a hit');
     }
     this.countLoot(looted);
+    await this.wearLootedArmour(looted);
     return HANDLED;
   }
 
@@ -21011,6 +21028,7 @@ export class Autopilot {
         }
       }
       this.countLoot(looted);
+      await this.wearLootedArmour(looted);
       this.note(f.killed ? 'killed' : (f.died ? 'died' : 'broke off'), {
         target: f.target, rounds: f.rounds, looted,
         landed_hits: f.landed_hits ?? 0,

@@ -131,6 +131,28 @@ console.log('and it says nothing when it has nothing to say');
      armingRefusal({ policy: { bannedWeapons: ['long sword'] }, items: [], ...real }) === null);
 }
 
+// ARMOUR LOOTED BY AN ARMED CHARACTER GOES ON. wearArmourIfNeeded's only caller was armSelf(),
+// which runs only when unarmed — so Statler (axe in hand) carried two leather armours and wore
+// none, and sellable() then refused to sell any body armour to a character wearing none.
+console.log('\nlooted armour is worn by an armed character too');
+{
+  const { Autopilot } = await import('./m59-autopilot.mjs');
+  const { readFileSync } = await import('node:fs');
+  const ap = Object.create(Autopilot.prototype);
+  let asked = 0;
+  ap.wearArmourIfNeeded = async () => { asked++; return true; };
+  await ap.wearLootedArmour(['orc tooth x3', 'scimitar']);
+  ok('loot with no armour in it asks for nothing', asked === 0);
+  await ap.wearLootedArmour(['small round shield', 'orc tooth x3']);
+  ok('a looted shield asks to wear', asked === 1);
+  await ap.wearLootedArmour(['leather armor x2']);
+  ok('an amount suffix does not hide the armour', asked === 2);
+  await ap.wearLootedArmour(undefined);
+  ok('no loot at all is not an error', asked === 2);
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  ok('both loot sites call it', (AP.match(/await this\.wearLootedArmour\(looted\);/g) ?? []).length >= 2);
+}
+
 console.log('');
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
