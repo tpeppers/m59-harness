@@ -22835,6 +22835,19 @@ export class Autopilot {
         if (t) return job('desk', 'go', t, { service: kind });
       }
     }
+    // PRACTICE IN ANOTHER ROOM, LAST OF ALL. Only when no ride, no forces of light and no desk
+    // ticket is waiting, the body is fit, and one cast is affordable above the desk's reserve.
+    // Operator, 2026-09-25: Loial keeps the chalice at 2 and practises dazzle on 38's skeletons
+    // in between. The session is short and bounded, and the cast stage abandons it the moment
+    // anybody asks for the desk, so a rider waits at most one step through the door.
+    if (role === 'holder' && this.chaliceFit()) {
+      const entry = this.practiceSessionDue(now);
+      if (entry) {
+        this._practiceSessionAt = now;
+        return job('practice', 'go', null, { room: entry.room, spell: entry.name,
+          until: now + entry.session_ms, expires: now + entry.session_ms + 120_000 });
+      }
+    }
     if (cup) return null;
     if (role === 'alternate') {
       const relief = store.claimNext(me, { kind: 'relief', ...ttl });
@@ -22914,6 +22927,43 @@ export class Autopilot {
         return true;
       }
       case 'fol:back': case 'fol:home': {
+        const home = cfg.post_room ?? st.back;
+        if (this.hereRoom() === Number(home)) return done();
+        return goto(home, 'home');
+      }
+      // ---- a practice session: through the door, onto a wall, cast, straight back
+      case 'practice:go':
+        if (!this.chaliceFit()) { st.stage = 'back'; return true; }
+        return goto(st.room, 'wall');
+      case 'practice:wall': {
+        if (!this.chaliceFit() || now > st.until) { st.stage = 'back'; return true; }
+        if (!(this.hold && this.holdWorks())) {
+          await this.takeRecoverySpot(`practising ${st.spell} in ${st.room}`).catch(() => null);
+          if (!(this.hold && this.holdWorks())) {
+            // No proven wall to be had: a creature-target cast is never made in the open.
+            if (Date.now() - (st.since ?? now) > 20_000) {
+              this.chaliceEvent('practice_no_wall', { room: st.room, spell: st.spell });
+              st.stage = 'back';
+            }
+            return true;
+          }
+        }
+        st.stage = 'cast'; st.since = Date.now();
+        return true;
+      }
+      case 'practice:cast': {
+        // THE DESK COMES FIRST. Anybody waiting — a ride, forces of light, a desk service, a
+        // relief — ends the session on the spot; so does a hurt body, a lost wall or the clock.
+        const waiting = ['ride', 'fol', 'uncurse', 'reveal', 'relief', 'return']
+          .reduce((n, k) => n + (store.openCount?.(k) ?? 0), 0);
+        if (!this.chaliceFit() || now > st.until || waiting > 0 || !(this.hold && this.holdWorks())) {
+          st.stage = 'back';
+          return true;
+        }
+        await this.practiceAtDesk({ session: st }).catch(() => false);
+        return true;
+      }
+      case 'practice:back': case 'practice:home': {
         const home = cfg.post_room ?? st.back;
         if (this.hereRoom() === Number(home)) return done();
         return goto(home, 'home');
@@ -23218,28 +23268,64 @@ export class Autopilot {
   //
   // True only when it did something with the pass — a cast, or a short mana rest on a held
   // wall while blocked by the reserve. Every other answer hands the pass back unchanged.
-  async practiceAtDesk() {
+  // IS A PRACTICE SESSION IN ANOTHER ROOM DUE, AND COULD IT CAST AT LEAST ONCE? The entry, or null.
+  // The same reserve and the same choice the desk uses, so a session never starts that would
+  // spend what the next customer is owed — it is simply the desk's practice, somewhere else.
+  practiceSessionDue(now = Date.now()) {
     const cfg = normalizePractice(this.policy.practiceSpells);
-    if (!cfg || cfg.enabled === false) return false;
-    if (cfg.problems?.length && this._practiceProblemsSaid !== cfg.problems.join('|')) {
-      this._practiceProblemsSaid = cfg.problems.join('|');
-      this.note('desk practice config problems', { problems: cfg.problems });
+    if (!cfg || cfg.enabled === false) return null;
+    const entry = cfg.spells.find(sp => sp.room != null && sp.room !== this.hereRoom());
+    if (!entry) return null;
+    if (this._practiceSessionAt && now - this._practiceSessionAt < entry.every_ms) return null;
+    const c = this.s?.client;
+    const v = c?.vitals?.();
+    if (!(v?.health?.max > 0) || v.health.value / v.health.max < 0.9) return null;
+    const spells = (c.spells || []).map(sp => ({
+      id: sp.id, name: String(c.rsc.get(sp.nameRsc) || '').toLowerCase(), targets: sp.numTargets ?? 0 }));
+    const role = this.chaliceRole();
+    const services = role === 'holder' || role === 'alternate' ? offeredServices(this.chaliceCfg) : [];
+    const one = { ...cfg, spells: [entry] };
+    const reserve = deskReserve({ practice: one, services, known: spells.map(x => x.name),
+                                  keep: this.chaliceReagentFloor() });
+    const choice = choosePractice({ practice: one, spells, mana: v?.mana, reserve, now,
+                                    have: (item) => this.reagentOnHand(item),
+                                    refusedUntil: this._practiceRefused ?? new Map() });
+    this.practiceSessionState = { at: now, entry: entry.name, room: entry.room, why: choice.why };
+    return choice.cast ? entry : null;
+  }
+
+  // `session` is set only by the chalice holder's practice job (chaliceStep 'practice:cast'): the
+  // body is already in the practice room on a wall, and only the entries for THIS room are cast.
+  async practiceAtDesk({ session = null } = {}) {
+    const loaded = normalizePractice(this.policy.practiceSpells);
+    if (!loaded || loaded.enabled === false) return false;
+    if (loaded.problems?.length && this._practiceProblemsSaid !== loaded.problems.join('|')) {
+      this._practiceProblemsSaid = loaded.problems.join('|');
+      this.note('desk practice config problems', { problems: loaded.problems });
     }
-    // Somebody else, or a job of our own, has the body.
+    // Somebody else, or a job of our own, has the body. A practice SESSION is itself a chalice
+    // job, so it is the one caller allowed past `_chaliceServe`.
     if (this.townTrip || this.travelInterrupted?.() || this.suspendedJourney || this.errand
         || this.parking || (this.inert && !this.inert.travelling) || this.busyStatus?.()
-        || this._chaliceServe || this._holderCargo) return false;
+        || (this._chaliceServe && !session) || this._holderCargo) return false;
     const now = Date.now();
     if (this.frozenUntil && now < this.frozenUntil) return false;
-    if (this._practiceAt && now - this._practiceAt < cfg.gap_ms) return false;
+    if (this._practiceAt && now - this._practiceAt < loaded.gap_ms) return false;
+
+    // WHICH ENTRIES APPLY HERE. An entry with a `room` is practised only in that room and only
+    // inside a session; everything else only at the desk, as before.
+    const here = this.hereRoom();
+    const cfg = { ...loaded, spells: loaded.spells.filter(sp => session
+      ? sp.room === here : (sp.room == null || sp.room === here)) };
+    if (!cfg.spells.length) return false;
 
     const chalice = this.chaliceCfg;
-    const rooms = cfg.rooms.length ? cfg.rooms
+    const rooms = session ? [here] : cfg.rooms.length ? cfg.rooms
       : [this.policy.assignedRoom, chalice?.post_room, chalice?.station_room]
         .map(Number).filter(n => Number.isInteger(n) && n > 0);
     if (!rooms.length)
       return this.declinedCast('practice', 'no post to practise at: set practice rooms, an assigned room, or a chalice post');
-    if (!rooms.includes(this.hereRoom())) return false;
+    if (!rooms.includes(here)) return false;
 
     const s = this.s, c = s.need();
     const v = c.vitals?.();

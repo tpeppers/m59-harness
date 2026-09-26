@@ -336,5 +336,36 @@ console.log('\na one-target spell practised on a creature');
      AP.includes('if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000 : 16_000));'));
 }
 
+// A PRACTICE ROOM THAT IS NOT THE DESK (2026-09-25): Loial keeps the chalice at 2 and practises
+// dazzle on 38's skeletons in bounded sessions between customers.
+console.log('\npractice sessions in another room');
+{
+  const cfg = normalizePractice({ spells: ['purify',
+    { name: 'dazzle', target: 'creature', on: ['skeleton'], room: 38 }] });
+  const dz = cfg.spells.find(s => s.name === 'dazzle');
+  ok('an entry keeps its room, with default session and spacing',
+     dz?.room === 38 && dz.session_ms === 60_000 && dz.every_ms === 180_000, JSON.stringify(dz));
+  ok('a desk entry has no room', cfg.spells.find(s => s.name === 'purify')?.room === undefined);
+  ok('a nonsense room is refused', normalizePractice({ spells: [{ name: 'dazzle', target: 'creature',
+     on: ['skeleton'], room: 'castle' }] }).problems.some(p => /room must be/.test(p)));
+  ok('a session outside its bounds is refused', normalizePractice({ spells: [{ name: 'dazzle',
+     target: 'creature', on: ['skeleton'], room: 38, session_ms: 5 }] }).problems.some(p => /session_ms/.test(p)));
+
+  const { readFileSync } = await import('node:fs');
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const next = AP.slice(AP.indexOf('  chaliceNextJob(cfg, role, cup, store, me, now) {'));
+  const practiceAt = next.indexOf("return job('practice', 'go'");
+  ok('the session is the LAST job: after rides, forces of light and desk tickets',
+     practiceAt > next.indexOf("job('ride', 'go'") && practiceAt > next.indexOf("job('fol', 'go'")
+       && practiceAt > next.indexOf("job('desk', 'go'") && practiceAt < next.indexOf('if (cup) return null;'));
+  const castStage = AP.slice(AP.indexOf("case 'practice:cast': {"), AP.indexOf("case 'practice:back'"));
+  ok('any waiting ticket ends the session', /\['ride', 'fol', 'uncurse', 'reveal', 'relief', 'return'\]/.test(castStage)
+     && castStage.includes('waiting > 0'));
+  ok('...as does losing the wall', castStage.includes('!(this.hold && this.holdWorks())'));
+  ok('the wall stage never casts in the open', AP.includes("this.chaliceEvent('practice_no_wall'"));
+  ok('at the desk, a roomed entry is never cast; in a session only this room\'s entries are',
+     AP.includes('? sp.room === here : (sp.room == null || sp.room === here)'));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

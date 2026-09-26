@@ -156,7 +156,23 @@ export function normalizePractice(cfg) {
           on = [].concat(s?.on ?? []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
           if (!on.length) { out.problems.push(`spells.${name}: target "creature" needs on: [creature names]`); continue; }
         }
-        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}) });
+        // A PRACTICE ROOM THAT IS NOT THE DESK. Operator, 2026-09-25: Loial practises dazzle on
+        // the skeletons of Castle Victoria (38) while keeping the chalice at his post (2), which
+        // has no monsters. An entry with `room` is practised ONLY in that room, and only by a
+        // SESSION: the keeper steps in when nothing at the desk needs it, casts from a proven
+        // wall for at most `session_ms`, and steps back. `every_ms` spaces the sessions.
+        let extra = {};
+        if (typeof s === 'object' && s?.room != null) {
+          const room = Number(s.room);
+          if (!(Number.isInteger(room) && room > 0)) { out.problems.push(`spells.${name}.room must be a room number`); continue; }
+          const within = (v, lo, hi, dflt) => (v == null ? dflt : (Number(v) >= lo && Number(v) <= hi ? Number(v) : null));
+          const session_ms = within(s.session_ms, 10_000, 600_000, 60_000);
+          const every_ms = within(s.every_ms, 30_000, 3_600_000, 180_000);
+          if (session_ms == null) { out.problems.push(`spells.${name}.session_ms must be 10000..600000`); continue; }
+          if (every_ms == null) { out.problems.push(`spells.${name}.every_ms must be 30000..3600000`); continue; }
+          extra = { room, session_ms, every_ms };
+        }
+        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}), ...extra });
       }
       out.spells = list;
       continue;
