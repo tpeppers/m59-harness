@@ -3202,15 +3202,25 @@ export class Autopilot {
             doing: 'un-ban one of them, or hand this character a weapon it may hold' });
       const hoard = this.bannedConjurablesHeld();
       let rouletteCleared = false;
-      if (hoard >= CONJURE_HOARD_LIMIT && reachable.length === 1) {
-        // An explicit single eligible outcome is weapon roulette. Keep real loot,
-        // but discard verified temporary misses so the name-based cap cannot stall it.
+      // LOOT IS NOT A LOST BET. The cap below argues from the spell's odds — "this character has
+      // already banked N results it may not hold" — which is true of summons and false of an
+      // orc's drops. The description check that tells them apart used to run only for
+      // single-outcome weapon roulette, so everywhere else a pile of LOOTED banned weapons
+      // refused the only way to arm, for ever. Measured on prod 2026-09-25: Kermit carrying five
+      // orc scimitars and Scooter four, both banned from scimitars, both bare-handed at full
+      // mana with UNARMED_CANNOT_CAST on every pass. The check now runs whenever the cap is
+      // reached: a verified summon is dropped, an ordinary item stays (it is sale stock) and
+      // stops counting against the cast. Ids already proved ordinary are remembered, so each
+      // piece is looked at once rather than every pass.
+      const knownOrdinary = (this.ordinaryBannedIds ??= new Set());
+      if (hoard >= CONJURE_HOARD_LIMIT) {
         const generation = s.movementGeneration;
         const originalBan = JSON.stringify(bannedNow);
         const cancelled = () => s.movementGeneration !== generation ||
           JSON.stringify(this.bannedWeaponsNow()) !== originalBan;
         const nameOf = o => String(c.rsc?.get?.(o.nameRsc) ?? o.name ?? '').toLowerCase();
         const candidates = (c.inventory ?? []).filter(o =>
+          !knownOrdinary.has(o.id) &&
           CONJURABLE_WEAPONS.some(w => nameOf(o).includes(w)) &&
           bannedNow.some(b => nameOf(o).includes(String(b).toLowerCase())));
         const eligible = o => {
@@ -3221,10 +3231,14 @@ export class Autopilot {
             this.bannedWeaponUseless(nameOf(o));
         };
         const cleanup = await clearConjureHoard(s, candidates, { eligible, cancelled });
-        this.note('cleared ineligible summons for weapon roulette', {
-          target: reachable[0], ...cleanup,
-          why: 'only description-confirmed summons are dropped; ordinary weapons stay in the pack',
-        });
+        for (const id of cleanup.ordinary ?? []) knownOrdinary.add(id);
+        if (candidates.length)
+          this.note(reachable.length === 1 ? 'cleared ineligible summons for weapon roulette'
+                                           : 'sorted banned weapons into summons and loot before arming', {
+            target: reachable.length === 1 ? reachable[0] : undefined, can_make: reachable, ...cleanup,
+            why: 'only description-confirmed summons are dropped; ordinary weapons stay in the ' +
+                 'pack as sale stock and no longer count against the cast',
+          });
         if (cancelled()) return false;
         rouletteCleared = cleanup.cleared;
       }

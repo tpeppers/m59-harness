@@ -29,21 +29,33 @@ const ok = (label, condition, detail = '') => {
 
 // A stand-in carrying only what the guards actually read. Methods are taken off the real
 // prototype, so this tests the shipped code rather than a copy of it.
+// `describe(id)` answers a `look`: a string is the item's description, null is no reply.
+// A summon's description says it "shimmers insubstantially"; an orc's drop does not.
 const rig = ({ style = 'normal', room = 38, assigned = 38, mode = 'farm',
-               banned = null, pack = [] } = {}) => {
+               banned = null, pack = [], describe = () => null } = {}) => {
   const declined = [];
   const notes = [];
+  const looked = [];
   const self = {
     mode,
     policy: { trainingStyle: style, assignedRoom: assigned, bannedWeapons: banned },
     s: {
       world: { room: { num: room } },
+      pacer: { submit: async (_kind, fn) => fn() },
       client: {
+        evSeq: 0,
         inventory: pack.map((name, i) => ({ id: i + 1, nameRsc: i + 1, name })),
         rsc: { get: id => pack[id - 1] ?? '' },
         vitals: () => ({ vigor: { value: 200 }, mana: { value: 100, max: 100 } }),
+        look: (id) => { looked.push(id); },
+        waitFor: async () => {
+          const id = looked[looked.length - 1];
+          const d = describe(id);
+          return { events: d == null ? [] : [{ kind: 'look', id, description: d }] };
+        },
       },
     },
+    looked,
     declinedCast: (spell, why, facts) => { declined.push({ spell, why, facts }); return false; },
     note: (what, facts) => { notes.push({ what, facts }); },
     declined, notes,
@@ -97,9 +109,10 @@ console.log('\n--- makeWeapon refuses before it pays ---');
   ok('banning all seven producible weapons refuses the cast',
      walled.declined[0]?.why === 'every weapon it could make is banned');
 
+  // No look is answered, so nothing can be proved loot: the cap still holds.
   const hoarder = rig({ banned: ['long sword'], pack: Array(24).fill('long sword') });
   await Autopilot.prototype.makeWeapon.call(hoarder, 'test');
-  ok('a hoard of unusable results stops the next cast',
+  ok('a hoard that cannot be proved to be loot still stops the next cast',
      // THE WORDING CHANGED AND THE RULE DID NOT. This counts weapons whose NAME a conjure
      // could also produce, so an orc's dropped hammer counts exactly like one the fleet
      // made — and it said "conjured" about loot. Beaker's three were all orc drops, and
@@ -110,6 +123,22 @@ console.log('\n--- makeWeapon refuses before it pays ---');
   ok('and it names what would still be worth holding',
      /hammer/.test(JSON.stringify(hoarder.declined[0]?.facts?.can_still_make ?? [])),
      'hammer is not banned here, so a supply is the way out');
+
+  // KERMIT AND SCOOTER, prod 2026-09-25: five and four orc scimitars, scimitar banned, bare-handed
+  // at full mana, refused on every pass. Loot is sale stock, not evidence about the spell.
+  const looter = rig({ banned: ['scimitar', 'short sword'], pack: Array(5).fill('scimitar'),
+                       describe: () => 'A curved blade, well balanced and keenly edged.' });
+  await Autopilot.prototype.makeWeapon.call(looter, 'test').catch(() => {});
+  ok('a pile of LOOTED banned weapons no longer refuses the only way to arm',
+     !looter.declined.some(d => d.why === 'already carrying unusable weapons it may not hold'),
+     JSON.stringify(looter.declined.map(d => d.why)));
+  ok('...each piece was looked at to tell loot from a summon', looter.looked.length === 5,
+     `looked ${looter.looked.length}`);
+  ok('...and nothing ordinary was dropped', looter.s.client.inventory.length === 5);
+  const again = looter.looked.length;
+  await Autopilot.prototype.makeWeapon.call(looter, 'test').catch(() => {});
+  ok('...and proved-ordinary pieces are not looked at again next pass', looter.looked.length === again,
+     `looked ${looter.looked.length - again} more`);
 
   const fine = rig({ banned: ['long sword'], pack: ['long sword'] });
   const refusedEarly = await Autopilot.prototype.makeWeapon.call(fine, 'test')
