@@ -201,8 +201,8 @@ console.log('\nlooted armour is worn by an armed character too');
   const farm = AP.slice(AP.indexOf('  async passFarm(ctx) {'));
   ok('...and not inside passFarm, which a resting character never reaches',
      !farm.slice(0, 20000).includes('this.dressedAt'));
-  ok('...and not while anything is in reach',
-     /dressedAt \?\? 0\) > 60_000\s*&& !\(this\.inReachOfUs\?\.\(\)\?\.length\)/.test(AP));
+  ok('...and not while anything is in reach, unless holding a proven wall',
+     AP.includes('&& (!(this.inReachOfUs?.()?.length) || (this.hold && this.holdWorks?.()))'));
 }
 
 console.log('');

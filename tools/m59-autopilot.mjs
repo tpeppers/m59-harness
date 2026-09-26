@@ -14995,10 +14995,13 @@ export class Autopilot {
     // top of passFarm first, and Rizzo showed why that is too late: a character cycling
     // "leaving the wall" / "gave up the safe spot" ends every pass in the rest rung and never
     // reaches passFarm at all, so a chain armour sat in his pack for minutes. Here every pass
-    // sees it. Not while anything is in reach — nobody changes clothes mid-fight. Free when no
-    // slot is empty, never swaps, stands down under an economy lease: see wearIntoEmptySlots.
+    // sees it. Not while anything is in reach — nobody changes clothes mid-fight — UNLESS we are
+    // holding a proven wall, which is by definition a square the things in reach cannot hit.
+    // Without that exception the Icky Cave crew, who spend most passes on walls at the lip of a
+    // pocket with orcs 2.8 squares away on the far side, would essentially never dress. Free
+    // when no slot is empty, never swaps, stands down under an economy lease.
     if (this.mode === 'farm' && Date.now() - (this.dressedAt ?? 0) > 60_000
-        && !(this.inReachOfUs?.()?.length)) {
+        && (!(this.inReachOfUs?.()?.length) || (this.hold && this.holdWorks?.()))) {
       this.dressedAt = Date.now();
       await this.wearIntoEmptySlots('put on armour we were carrying').catch(() => false);
     }
