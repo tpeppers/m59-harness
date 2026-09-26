@@ -538,7 +538,10 @@ export const script = {
             const floor = Object.fromEntries(wants.filter(w => !/shield|armou?r|hammer/i.test(String(w.item))).map(w => [w.item, Number(w.amount) || 0]));
             const keys = new Set([...Object.keys(need), ...Object.keys(floor)]);
             const reagents = [...keys].map(k => ({ item: k, amount: Math.max(floor[k] ?? 0, Math.ceil((need[k] ?? 0) * 1.15) - carried(k)) }))
-              .filter(w => w.amount > 0);
+              .filter(w => w.amount > 0)
+              // SCARCE AND CRITICAL FIRST, BULKY LAST: whatever the pack runs out on is then the least
+              // needed. Rehearsal 25's runner filled on plain mushrooms (5 bulk each) first.
+              .sort((a, b) => RUNNER_ORDER.indexOf(a.item) - RUNNER_ORDER.indexOf(b.item));
             console.log(`  ${agent} runner: drawing ${reagents.map(w => `${w.amount} ${w.item}`).join(', ')}`);
             const room = Object.fromEntries(runners.map(a => { const r = SURVEY.get(a)?.roomFor; return [a, r ? Math.min(r.weight ?? 0, r.bulk ?? 0) : undefined]; }));
             const share = hallSplit(runners, reagents, weighItem, room)[agent] ?? [];
@@ -874,6 +877,7 @@ function runnersOf(agents, p, roles, pair) {
 // apart can disagree about a character walking in — a receiver then waits for a hammer nobody sends.
 // One deadline for the whole fleet's late dedications, set by the first raider to reach them.
 const DRESS_DEADLINE = { at: null };
+const RUNNER_ORDER = ['sapphire', 'emerald', 'purple mushroom', 'orc tooth', 'elderberry', 'herb', 'mushroom'];
 const PRESENT = new Map();
 const presentOnce = (key, agents, room) => {
   if (!PRESENT.has(key)) PRESENT.set(key, presentIn(agents, room));

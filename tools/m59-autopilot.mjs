@@ -2698,7 +2698,7 @@ export class Autopilot {
       return /arrow|bolt/.test(n) && !/water finding/.test(n) && (o.amount ?? 1) > 0;
     });
     const ranked = skills.weaponRanking(c, { banned: null })
-      .filter(r => hasAmmo || !/bow|crossbow|sling/i.test(r.name));
+      .filter(r => hasAmmo || !/\bbow\b|crossbow|sling/i.test(r.name));
     if (!ranked.length) return null;                   // fists it is, and that is an answer
     const pick = ranked[0];
     const eq = await skills.equipBest(this.s, { priority: [pick.name], banned: null })
@@ -23255,7 +23255,7 @@ export class Autopilot {
     // Anything recent that reads like someone asking after the body.
     const since = this.lastDeath.at - 60_000;
     const asks = box.select({ since, limit: 20 })
-      .filter(m => /where|where\?|what room|which room|loc|location/i.test(m.text || ''));
+      .filter(m => /\bwhere\b|\bwhere\?|what room|which room|loc\b|location/i.test(m.text || ''));
     for (const m of asks) {
       if (this.answered?.has(m.id)) continue;
       (this.answered ??= new Set()).add(m.id);
@@ -25364,10 +25364,16 @@ export class Autopilot {
         }
       }
     }
-    const took = {}, short = {};
+    const took = {}, short = {}, diag = {};
+    // TWO PASSES. Rehearsal 25's runner came back with 0 of elderberry, orc teeth, emeralds and purple
+    // mushrooms while the chests held hundreds of each and its pack had room; the first pass's reads
+    // and takes are now recorded per item (`diag`) and anything still short is asked for once more.
+    for (let pass = 0; pass < 2; pass++)
     for (const w of wants) {
+      if (pass === 1 && !(short[String(w.item ?? '')] > 0)) continue;
       const item = String(w.item ?? ''), want = Math.max(0, Number(w.amount) || 0);
       if (!item || !want) continue;
+      const d = diag[item] ??= { chests_read: 0, chests_unread: 0, stacks_seen: 0, tries: 0, refused: 0 };
       const start = await packCount(item);
       let have = start;
       for (const chest of chests) {
@@ -25381,7 +25387,8 @@ export class Autopilot {
         await s.pacer.submit('read', () => c.contents(chest.id)).catch(() => {});
         const reply = await c.waitFor({ since, kinds: ['container', 'message'], timeoutMs: 5000 }).catch(() => null);
         const box = (reply?.events ?? []).find(e => e.kind === 'container');
-        const stacks = (box?.items ?? []).filter(o => same(o.name, item))
+        if (box) d.chests_read++; else d.chests_unread++;
+        const stacks = (box?.items ?? []).filter(o => same(o.name ?? nameOf(o), item))
           .sort((a, b) => (Number(b.amount) || 1) - (Number(a.amount) || 1));
         for (const st of stacks) {
           if (have - start >= want) break;
@@ -25389,23 +25396,27 @@ export class Autopilot {
           // (user.kod:977 -> UserGet #number), so forty teeth come out of a 162-stack as forty.
           // A whole-stack REQ_GET was refused as too heavy on the 2026-09-25 rehearsal: 0 of 40
           // teeth, 15 of 120 elderberry, with the stacks sitting in the chest.
+          d.stacks_seen++;
           const n = Math.min(want - (have - start), Number(st.amount) || 1);
           const spec = dropSpecFor(st, Number(st.amount) >= 1 ? n : null);
           await s.pacer.submit('trade', () => (typeof c.getFromContainer === 'function'
             ? c.getFromContainer(spec) : c.get(st.id))).catch(() => {});
           await new Promise(r => setTimeout(r, 400));
+          d.tries++;
           const now = await packCount(item);
+          if (now <= have) d.refused++;
           // Refused — usually too heavy for what the pack has left. A SMALLER stack may still fit, so
           // try the next one rather than giving up on the chest (stacks are largest first).
           if (now <= have) continue;
           have = now;
         }
       }
-      took[item] = have - start;
-      if (have - start < want) short[item] = want - (have - start);
+      took[item] = (pass === 1 ? (took[item] ?? 0) : 0) + (have - start);
+      const still = want - (pass === 1 ? took[item] : have - start);
+      if (still > 0) short[item] = still; else delete short[item];
     }
-    this.note('hall withdrawal for an errand', { took, short, stashed });
-    return { ok: true, took, short, stashed, chests: chests.length };
+    this.note('hall withdrawal for an errand', { took, short, stashed, diag });
+    return { ok: true, took, short, stashed, chests: chests.length, diag };
   }
 
   /**
