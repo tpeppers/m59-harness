@@ -971,6 +971,20 @@ async function rehearse(cfg) {
       const r = await dm.relocate([c.shadow_name], Number(at.room), { row: at.row, col: at.col, verify: true }).catch(() => null);
       if (r?.moved?.[c.shadow_name]) placed++;
     }
+    // READ BACK, AND PLACE AGAIN. "placed 22 of 22" was logged on rehearsal 26 while shadow19 stood
+    // in Kardde's Canyon a minute later — the relocation's own answer is not where the body is. The
+    // fleet's reading decides, up to three rounds.
+    for (let round = 0; round < 3; round++) {
+      await new Promise(res => setTimeout(res, 5000));
+      const rooms = new Map(((await rpc('fleet', {}, 20_000).catch(() => null))?.fleet ?? []).map(r => [r.agent, Number(r.room_num)]));
+      const off = clones.filter(c => startPositions[c.shadow_account]?.room && rooms.get(c.shadow_account) !== Number(startPositions[c.shadow_account].room));
+      if (!off.length) break;
+      console.log(`  not where prod stands after placing (round ${round + 1}): ${off.map(c => `${c.shadow_account} in ${rooms.get(c.shadow_account)}`).join(', ')} — placing again`);
+      for (const c of off) {
+        const at = startPositions[c.shadow_account];
+        await dm.relocate([c.shadow_name], Number(at.room), { row: at.row, col: at.col, verify: true }).catch(() => null);
+      }
+    }
     console.log(`  placed ${placed} of ${clones.length} clone(s) where prod stands, before the raid's route check`);
   }
   // Unparked at the last moment: the raid takes the hold seconds from now, and a parked keeper would
