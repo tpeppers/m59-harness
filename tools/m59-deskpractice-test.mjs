@@ -15,7 +15,7 @@
 //   * a reserve at or above max mana is said out loud rather than read as "no mana yet".
 import {
   PRACTICE_DEFAULTS, SERVICE_SPELLS, choosePractice, deskReserve, loadCatalogue,
-  normalizePractice, offeredServices, reagentName, spellCost,
+  normalizePractice, offeredServices, reagentName, spellCost, pickCreatureTarget,
 } from './m59-deskpractice.mjs';
 
 let pass = 0, fail = 0;
@@ -295,6 +295,45 @@ console.log('\nthe desk is served before it is practised at');
   const broker = readFileSync(new URL('./m59-broker.mjs', import.meta.url), 'utf8');
   ok('the broker accepts practice_spells and stores it AS SENT, so a doctrine diff can settle',
      /a\.practice_spells !== undefined/.test(broker) && /p\.policy\.practiceSpells = JSON\.parse\(JSON\.stringify\(value\)\)/.test(broker));
+}
+
+// A CREATURE TARGET (2026-09-25): "Have Loial practice dazzle on skeletons from safe spots".
+console.log('\na one-target spell practised on a creature');
+{
+  const bare = normalizePractice({ spells: [{ name: 'dazzle', target: 'creature' }] });
+  ok('target "creature" without on is refused with a reason',
+     bare.spells.length === 0 && bare.problems.some(p => /needs on/.test(p)), JSON.stringify(bare.problems));
+  const cfg = normalizePractice({ spells: [{ name: 'Dazzle', target: 'creature', on: ['Skeleton'] }] });
+  ok('it is kept, lower-cased, with its creature list',
+     cfg.spells[0]?.target === 'creature' && cfg.spells[0]?.on?.[0] === 'skeleton', JSON.stringify(cfg.spells));
+  ok('an unknown target is still refused', normalizePractice({ spells: [{ name: 'x', target: 'orc' }] })
+     .problems.some(p => /self", "none" or "creature/.test(p)));
+
+  const objects = [
+    { id: 1, name: 'skeleton', row: 10, col: 10, attackable: true },
+    { id: 2, name: 'skeleton', row: 11, col: 11, attackable: true },
+    { id: 3, name: 'zombie', row: 10, col: 11, attackable: true },
+    { id: 4, name: 'dead skeleton', row: 10, col: 10, attackable: false },
+    { id: 5, name: 'Skeleton Slayer', row: 10, col: 10, attackable: true, player: true },
+    { id: 6, name: 'battered skeleton', row: 30, col: 30, attackable: true },
+  ];
+  const me = { row: 11, col: 12 };
+  ok('the nearest matching skeleton is chosen', pickCreatureTarget({ objects, on: ['skeleton'], me })?.id === 2);
+  ok('never a player, a corpse or a non-match',
+     ![3, 4, 5].includes(pickCreatureTarget({ objects, on: ['skeleton'], me })?.id));
+  ok('one cast on within the window is skipped for the next',
+     pickCreatureTarget({ objects, on: ['skeleton'], me, recentlyUntil: new Map([[2, 5000]]), now: 1000 })?.id === 1);
+  ok('and becomes eligible again once the window has passed',
+     pickCreatureTarget({ objects, on: ['skeleton'], me, recentlyUntil: new Map([[2, 5000]]), now: 6000 })?.id === 2);
+  ok('nothing matching is null, not a guess', pickCreatureTarget({ objects, on: ['orc'], me }) === null);
+
+  const { readFileSync } = await import('node:fs');
+  const AP = readFileSync(new URL('./m59-autopilot.mjs', import.meta.url), 'utf8');
+  const at = AP.indexOf("if (choice.cast.target === 'creature') {");
+  ok('the keeper casts a creature target only from a proven wall',
+     at > 0 && AP.slice(at, at + 300).includes('if (!(this.hold && this.holdWorks()))'));
+  ok('a refused creature cast sets aside the creature, not the spell',
+     AP.includes('if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000 : 16_000));'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

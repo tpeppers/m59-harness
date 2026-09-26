@@ -143,10 +143,20 @@ export function normalizePractice(cfg) {
         const name = String(typeof s === 'string' ? s : s?.name ?? '').trim().toLowerCase();
         if (!name) { out.problems.push('spells has an unnamed entry'); continue; }
         const target = typeof s === 'object' && s?.target != null ? String(s.target).toLowerCase() : null;
-        if (target != null && target !== 'self' && target !== 'none') {
-          out.problems.push(`spells.${name}.target must be "self" or "none"`); continue;
+        if (target != null && target !== 'self' && target !== 'none' && target !== 'creature') {
+          out.problems.push(`spells.${name}.target must be "self", "none" or "creature"`); continue;
         }
-        list.push({ name, ...(target ? { target } : {}) });
+        // A CREATURE TARGET NAMES WHICH CREATURES. Dazzle (Dazzle.kod CanPayCosts) wants a Battler
+        // that is not the caster and not already dazzled; "any monster in the room" would pick
+        // whatever is nearest, which in a mixed room is not what was asked for. So `on` is
+        // required, and matched as a substring of the creature's name ("skeleton" matches
+        // "skeleton" and not "zombie"; name a full phrase to be stricter).
+        let on = null;
+        if (target === 'creature') {
+          on = [].concat(s?.on ?? []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+          if (!on.length) { out.problems.push(`spells.${name}: target "creature" needs on: [creature names]`); continue; }
+        }
+        list.push({ name, ...(target ? { target } : {}), ...(on ? { on } : {}) });
       }
       out.spells = list;
       continue;
@@ -272,10 +282,36 @@ export function choosePractice({ practice, spells = [], mana = null, have = () =
       continue;
     }
     const target = want.target ?? ((Number(s.targets) || 0) > 0 ? 'self' : 'none');
-    return { cast: { name: want.name, target, mana: cost.mana },
+    return { cast: { name: want.name, target, mana: cost.mana, ...(want.on ? { on: want.on } : {}) },
              why: `practice ${want.name} (${cost.mana} mana, ${mana.value} on hand, ${reserve.mana} kept for the desk)` };
   }
   const manaOnly = tried.length && tried.every(t => /under the \d+ reserve|refused recently|not known/.test(t))
     && tried.some(t => /reserve/.test(t));
   return { cast: null, why: tried.join('; ') || 'nothing to practise', blocked: manaOnly ? 'mana' : 'none' };
+}
+
+/**
+ * WHICH CREATURE TO PRACTISE A ONE-TARGET SPELL ON, or null. Pure.
+ *
+ * Nearest first, because the caster never moves to practise — it stands on its wall — and a
+ * near target is the one most likely in range. Players are never chosen (practising on a person
+ * is an attack on a person), nor corpses ("dead orc"), nor anything not attackable. A creature
+ * cast on within `recentlyUntil` is skipped: dazzle refuses a target that is still dazzled
+ * (Dazzle.kod, "is already dazzled"), and its effect lasts at most 15 s (bound(iDuration,3,15)).
+ *
+ * @param objects        room objects: `{ id, name, row, col, attackable, player }`
+ * @param on             lower-case name fragments, from the practice entry
+ * @param me             `{ row, col }` or null
+ * @param recentlyUntil  Map id -> epoch ms that creature is set aside until
+ */
+export function pickCreatureTarget({ objects = [], on = [], me = null, recentlyUntil = new Map(), now = 0 } = {}) {
+  const want = on.map(x => String(x).toLowerCase());
+  const ok = objects.filter(o => {
+    const n = String(o.name ?? '').toLowerCase();
+    return n && o.attackable && !o.player && !/^dead\b/.test(n)
+      && want.some(w => n.includes(w)) && (recentlyUntil.get(o.id) ?? 0) <= now;
+  });
+  if (!ok.length) return null;
+  const d = o => me ? Math.hypot((o.row ?? 0) - me.row, (o.col ?? 0) - me.col) : 0;
+  return ok.sort((a, b) => d(a) - d(b))[0];
 }

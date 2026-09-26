@@ -10705,7 +10705,7 @@ const TOOLS = [
       practice_spells: { type: ['object', 'null'], properties: {
         enabled: { type: 'boolean' },
         spells: { type: 'array', items: { type: ['string', 'object'] },
-          description: 'What to drill, tried in order. A name, or {name, target: "self"|"none"}; without a target a one-target spell is cast on self.' },
+          description: 'What to drill, tried in order. A name, or {name, target: "self"|"none"|"creature", on: [creature names]}; without a target a one-target spell is cast on self. target "creature" (e.g. dazzle) needs on, is cast only from a proven wall, nearest match first, never on a player or a corpse.' },
         reserve_casts: { type: 'number',
           description: 'Casts of the dearest service this desk offers AND knows, kept back in mana and in reagents. Default 2.' },
         reserve_services: { type: 'array', items: { type: 'string' },

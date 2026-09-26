@@ -75,7 +75,7 @@ import { pendingOrderFor, writeState as writeOrderState, orderPrice, orderSkills
 import { CHALICE, REFILL_ROOMS, GUILD_HALL_ROOM, normalizeChalice, roleOf, sameName, shouldRide,
          tipPlan, planRoom, chaliceStoreFor, folWanted, holderShortfall, donationPlan, servingOrHolder, restockBuyPlan,
          reagentFloor, castsAbove, servingDesk, humanMark, serviceTellText, serviceReplyText, deskMenu } from './m59-chalice.mjs';
-import { normalizePractice, offeredServices, deskReserve, choosePractice } from './m59-deskpractice.mjs';
+import { normalizePractice, offeredServices, deskReserve, choosePractice, pickCreatureTarget } from './m59-deskpractice.mjs';
 import { makeTracker as makeGrindTracker } from './m59-wallgrind.mjs';
 import { recordShelterRun } from './m59-shelter.mjs';
 import { traceLadder, traceDecision } from './m59-keeper-trace.mjs';
@@ -23275,7 +23275,30 @@ export class Autopilot {
     }
 
     const spell = spells.find(x => x.name === choice.cast.name);
-    const targets = choice.cast.target === 'self' ? [c.selfId] : [];
+    // A CREATURE TARGET IS PRACTISED FROM A PROVEN WALL AND NOWHERE ELSE. Operator, 2026-09-25:
+    // "Have Loial practice dazzle on skeletons from safe spots" — a 20-max-health caster in
+    // Castle Victoria. Casting at a skeleton invites it, so the square has to be one that
+    // nothing in reach can hit; an unproven or absent wall declines the cast, never walks.
+    let creature = null;
+    if (choice.cast.target === 'creature') {
+      if (!(this.hold && this.holdWorks())) {
+        this._practiceAt = now;
+        return this.declinedCast('practice', 'not on a proven wall',
+          { spell: choice.cast.name, why: 'a creature-target practice cast is only made from a safe spot' });
+      }
+      this._practiceTargets ||= new Map();
+      const objects = [...(c.room?.objects?.values?.() ?? [])].filter(o => o.id !== c.selfId).map(o => ({
+        id: o.id, name: c.rsc.get(o.nameRsc) || '', row: o.row, col: o.col,
+        attackable: !!(o.flags & OF.ATTACKABLE), player: !!(o.flags & OF.PLAYER) }));
+      creature = pickCreatureTarget({ objects, on: choice.cast.on ?? [], me: c.self,
+                                      recentlyUntil: this._practiceTargets, now });
+      if (!creature) {
+        this._practiceAt = now;
+        return this.declinedCast('practice', `no ${(choice.cast.on ?? []).join('/')} to practise on`,
+          { spell: choice.cast.name, why: 'none in the room, or each was cast on within the last few seconds' });
+      }
+    }
+    const targets = choice.cast.target === 'self' ? [c.selfId] : creature ? [creature.id] : [];
     this._practiceAt = now;
     try { await skills.standToAct(s); } catch {}
     const manaBefore = c.vitals?.()?.mana?.value ?? null;
@@ -23285,12 +23308,18 @@ export class Autopilot {
     const spent = manaBefore != null && manaAfter != null ? manaBefore - manaAfter : null;
     // UNKNOWN IS NOT REFUSED. Only a reading that proves nothing was spent sets the spell aside.
     const landed = spent == null ? null : spent > 0;
-    if (landed === false) this._practiceRefused.set(choice.cast.name, now + cfg.refused_ms);
+    // A REFUSED CREATURE CAST SETS ASIDE THE CREATURE, NOT THE SPELL: "already dazzled" and
+    // "out of reach" are facts about that target, and the next skeleton may take it. A landed one
+    // is set aside for the longest the effect can run (Dazzle.kod bounds it to 15 s) plus a second.
+    if (creature) this._practiceTargets.set(creature.id, now + (landed === false ? 60_000 : 16_000));
+    else if (landed === false) this._practiceRefused.set(choice.cast.name, now + cfg.refused_ms);
     if (landed) this.tally.practice_casts = (this.tally.practice_casts || 0) + 1;
     this.recordCast(choice.cast.name, {
-      ok: landed !== false, target: choice.cast.target === 'self' ? 'self' : null,
+      ok: landed !== false,
+      target: choice.cast.target === 'self' ? 'self' : creature ? `${creature.name} #${creature.id}` : null,
       why: landed === false
-        ? `practice: no mana was spent, so the server refused it; set aside ${Math.round(cfg.refused_ms / 1000)}s`
+        ? (creature ? `practice: no mana was spent on ${creature.name}; that creature is set aside 60s`
+                    : `practice: no mana was spent, so the server refused it; set aside ${Math.round(cfg.refused_ms / 1000)}s`)
         : `${choice.why}; reserve ${reserve.why}`,
       mana_before: manaBefore, mana_after: manaAfter });
     return true;
