@@ -404,6 +404,11 @@ async function fight(cfg, { composed = false } = {}) {
     if (cfg.snapshotFile && fs.existsSync(cfg.snapshotFile)) fs.copyFileSync(cfg.snapshotFile, path.join(dir, 'shadow-snapshot.json'));
     if (cfg.replayOf) fs.writeFileSync(path.join(dir, 'replay-of.txt'), cfg.replayOf);
   }
+  // THE TRACK: where every raider stood, how it was, and what it was ordered to do, every
+  // `--track-s` seconds (10) for the whole run — the input of the raid map (m59-raidmap.mjs), so a
+  // muster or a fight can be watched back minute by minute. One `fleet` call carries every position;
+  // the throne room's monsters come from one raider standing in it.
+  const tracker = cfg.commit ? startTrack(dir, cfg) : null;
   // The DUM raid profile, ON before the script touches anyone (see dumOn) and OFF however this ends.
   const roles = cfg.dumUrl && cfg.commit ? await plan(cfg) : null;
   if (roles) await dumOn(cfg, roles, dir);
@@ -419,6 +424,7 @@ async function fight(cfg, { composed = false } = {}) {
       : await runPhase(cfg, 'ghost-raid.mjs', fightParams(cfg, dir, false));
   } finally {
     if (roles) await dumOff(cfg);
+    if (tracker) await tracker.stop();
   }
   summarise(composed ? 'muster+arm+prep+fight' : 'fight', res);
   if (res) {
@@ -469,6 +475,41 @@ export async function recordDeaths(dir) {
   });
   fs.writeFileSync(path.join(dir, 'deaths.jsonl'), out.map(d => JSON.stringify(d) + NL).join(''));
   console.log(`deaths: ${out.length} in the whole run -> ${path.join(dir, 'deaths.jsonl')}`);
+}
+
+export function startTrack(dir, cfg) {
+  const every = Math.max(3, Number(opt('--track-s', 10))) * 1000;
+  const file = path.join(dir, 'track.jsonl');
+  let stopped = false;
+  const agents = new Set(cfg.agents);
+  const loop = (async () => {
+    const { CURRENT_STEP } = await import('./m59-fleetscript.mjs');
+    while (!stopped) {
+      const t = Date.now();
+      try {
+        const rows = ((await rpc('fleet', {}, 20_000).catch(() => null))?.fleet ?? []).filter(r => agents.has(r.agent));
+        const units = rows.map(r => {
+          const st = CURRENT_STEP.get(r.agent) ?? null;
+          return { agent: r.agent, character: r.character, room: r.room_num ?? null, row: r.position?.row ?? null, col: r.position?.col ?? null,
+                   health: r.health ?? null, mana: r.mana ?? r.mana_now ?? null, vigor: r.vigor ?? null,
+                   activity: r.activity ?? null, last_action: r.last_action ?? null,
+                   step: st ? { script: st.script, label: st.label ?? st.why ?? st.do, to: st.to, since: st.t0 } : null };
+        });
+        // Monsters where the fight is: one look from a raider standing in the boss room.
+        const inBoss = rows.find(r => Number(r.room_num) === GHOST_ROOM);
+        let monsters = null;
+        if (inBoss) {
+          const l = await rpc('look', { agent: inBoss.agent }, 20_000).catch(() => null);
+          monsters = (l?.objects ?? []).filter(o => !o.is_player && (o.can ?? []).includes('attack'))
+            .map(o => ({ name: o.name, row: o.row ?? null, col: o.col ?? null }));
+        }
+        fs.appendFileSync(file, JSON.stringify({ t, units, ...(monsters ? { monsters: { room: GHOST_ROOM, list: monsters } } : {}) }) + NL);
+      } catch { /* a missed sample is a gap in the map, never a stop in the raid */ }
+      const wait = every - (Date.now() - t);
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    }
+  })();
+  return { stop: async () => { stopped = true; await loop.catch(() => {}); } };
 }
 
 function ledgerDir(cfg) {

@@ -1425,6 +1425,14 @@ export const verify = (fn, why, label) => ({ do: 'verify', fn, why, ...(label ? 
  * the run directory and reduces it to p50/p90 per block against the git SHA that ran it — the
  * only way to tell whether a change made the fleet faster or merely different.
  */
+/**
+ * WHAT EACH AGENT IS DOING RIGHT NOW: agent -> {script, at, do, label, why, to, t0}. Set when a step
+ * starts, cleared when it ends. A run's own sampler (m59-ghostraid track.jsonl) reads it to record
+ * each character's current ORDERS beside its position — the "what was it told to do at this moment"
+ * half of a replay.
+ */
+export const CURRENT_STEP = new Map();
+
 export function recordStepTime(ctx, row) {
   const file = process.env.M59_STEP_TIMES;
   if (!file) return;
@@ -4968,7 +4976,10 @@ They are driven by tools/m59-menagerie.mjs and ` +
           continue;
         }
         const stepT0 = Date.now();
+        CURRENT_STEP.set(agent, { script: ctx.name ?? null, at, do: step.do, label: step.label ?? null,
+                                  why: step.why ?? null, to: step.to ?? null, t0: stepT0 });
         const r = await runStep(ctx, agent, step, state);
+        CURRENT_STEP.delete(agent);
         recordStepTime(ctx, { agent, at, do: step.do, label: step.label ?? null, why: step.why ?? null,
                               to: step.to ?? null, t0: stepT0, ms: Date.now() - stepT0, ok: !!r.ok,
                               dead: !!r.dead, outcome: r.outcome ?? null });
